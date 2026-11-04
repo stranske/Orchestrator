@@ -2,13 +2,17 @@
   {
     "break": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_canned_gh_stub_rejects_unexpected_commands",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_canned_gh_stub_rejects_unexpected_commands",
         "exit_code": 1,
-        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_canned_gh_stub_rejects_unexpected_commands - AssertionError: Regex pattern did not match.",
+        "failed": true,
+        "failed_node_ids": [
+          "tests/test_issue843_ranked_coverage.py::test_canned_gh_stub_rejects_unexpected_commands"
+        ],
+        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_canned_gh_stub_rejects_unexpected_commands",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_canned_gh_stub_rejects_unexpected_commands",
-        "seconds": 1.6,
+        "seconds": 1.811,
         "stderr_tail": "",
-        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_______________ test_canned_gh_stub_rejects_unexpected_commands ________________\ntests/test_issue843_ranked_coverage.py:75: in test_canned_gh_stub_rejects_unexpected_commands\n    sweep._selftest_live_revert_scan(int(time.time()))\nsrc/durability_sweep.py:2383: in _selftest_live_revert_scan\n    verdict, calls = classify_with_canned_gh(\nsrc/durability_sweep.py:2362: in classify_with_canned_gh\n    classify_durability(\ntests/test_issue843_ranked_coverage.py:69: in probing_classify\n    with pytest.raises(AssertionError, match=\"unexpected gh call\"):\nE   AssertionError: Regex pattern did not match.\nE     Expected regex: 'unexpected gh call'\nE     Actual message: \"DELIBERATELY-BROKEN: ['gh', 'unexpected', 'shape']\"\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_canned_gh_stub_rejects_unexpected_commands - AssertionError: Regex pattern did not match.\n  Expected regex: 'unexpected gh call'\n  Actual message: \"DELIBERATELY-BROKEN: ['gh', 'unexpected', 'shape']\"\n1 failed in 0.51s\n"
+        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_______________ test_canned_gh_stub_rejects_unexpected_commands ________________\ntests/test_issue843_ranked_coverage.py:75: in test_canned_gh_stub_rejects_unexpected_commands\n    sweep._selftest_live_revert_scan(int(time.time()))\nsrc/durability_sweep.py:2383: in _selftest_live_revert_scan\n    verdict, calls = classify_with_canned_gh(\nsrc/durability_sweep.py:2362: in classify_with_canned_gh\n    classify_durability(\ntests/test_issue843_ranked_coverage.py:69: in probing_classify\n    with pytest.raises(AssertionError, match=\"unexpected gh call\"):\nE   AssertionError: Regex pattern did not match.\nE     Expected regex: 'unexpected gh call'\nE     Actual message: \"DELIBERATELY-BROKEN: ['gh', 'unexpected', 'shape']\"\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_canned_gh_stub_rejects_unexpected_commands\n1 failed in 0.74s\n"
       }
     ],
     "description": "Canned-gh stub must fail on unexpected argv.",
@@ -19,13 +23,15 @@
     "original_sha256": "94237559f591bf1d0db310f4cee414e796912ef8317a8463e48ab42816af64d4",
     "restored_pass": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_canned_gh_stub_rejects_unexpected_commands",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_canned_gh_stub_rejects_unexpected_commands",
         "exit_code": 0,
+        "failed": false,
+        "failed_node_ids": [],
         "failure_excerpt": "",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_canned_gh_stub_rejects_unexpected_commands",
-        "seconds": 1.44,
+        "seconds": 1.811,
         "stderr_tail": "",
-        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.37s\n"
+        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.74s\n"
       }
     ],
     "restored_sha256": "94237559f591bf1d0db310f4cee414e796912ef8317a8463e48ab42816af64d4",
@@ -35,13 +41,17 @@
   {
     "break": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_selftest_pops_absent_orch_state_dir",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_selftest_pops_absent_orch_state_dir",
         "exit_code": 1,
-        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_selftest_pops_absent_orch_state_dir - AssertionError: assert 'ORCH_STATE_DIR' not in environ({'SHELL': '/bin/zsh', 'CODEX_TECTONIC_PATH': '/Applications/ChatGPT.app/Contents/Resources/tectonic/tectonic',...ff', 'ORCH_STATE_DIR': '/Users/teacher/.codex/orchestrator/agent-runtime/vibe/tmp/durability-sweep-selftest-q696nl4n'})",
+        "failed": true,
+        "failed_node_ids": [
+          "tests/test_issue843_ranked_coverage.py::test_selftest_pops_absent_orch_state_dir"
+        ],
+        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_selftest_pops_absent_orch_state_dir",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_selftest_pops_absent_orch_state_dir",
-        "seconds": 1.66,
+        "seconds": 1.932,
         "stderr_tail": "",
-        "stdout_tail": "/tectonic/tectonic',...ff', 'ORCH_STATE_DIR': '/Users/teacher/.codex/orchestrator/agent-runtime/vibe/tmp/durability-sweep-selftest-q696nl4n'})\nE    +  where environ({'SHELL': '/bin/zsh', 'CODEX_TECTONIC_PATH': '/Applications/ChatGPT.app/Contents/Resources/tectonic/tectonic',...ff', 'ORCH_STATE_DIR': '/Users/teacher/.codex/orchestrator/agent-runtime/vibe/tmp/durability-sweep-selftest-q696nl4n'}) = os.environ\n----------------------------- Captured stdout call -----------------------------\ndurability_sweep.py selftest: OK (old clean->durable, revert->reverted, open->reopened, young/ambiguous stay pending, ambiguous closes at the retry horizon, live revert scan covered, searches cached per repo not per PR, and broke_later only on a stated later repair)\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_selftest_pops_absent_orch_state_dir - AssertionError: assert 'ORCH_STATE_DIR' not in environ({'SHELL': '/bin/zsh', 'CODEX_TECTONIC_PATH': '/Applications/ChatGPT.app/Contents/Resources/tectonic/tectonic',...ff', 'ORCH_STATE_DIR': '/Users/teacher/.codex/orchestrator/agent-runtime/vibe/tmp/durability-sweep-selftest-q696nl4n'})\n +  where environ({'SHELL': '/bin/zsh', 'CODEX_TECTONIC_PATH': '/Applications/ChatGPT.app/Contents/Resources/tectonic/tectonic',...ff', 'ORCH_STATE_DIR': '/Users/teacher/.codex/orchestrator/agent-runtime/vibe/tmp/durability-sweep-selftest-q696nl4n'}) = os.environ\n1 failed in 0.54s\n"
+        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n___________________ test_selftest_pops_absent_orch_state_dir ___________________\ntests/test_issue843_ranked_coverage.py:99: in test_selftest_pops_absent_orch_state_dir\n    assert \"ORCH_STATE_DIR\" not in os.environ\nE   AssertionError: assert 'ORCH_STATE_DIR' not in environ({'BASH_ENV': '/Users/teacher/.codex/orchestrator/agent-runtime/gh-guard/bashenv.sh', 'BROWSER_USE_ACCESS_EXECU...f', 'ORCH_STATE_DIR': '/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/durability-sweep-selftest-6sd064nk'})\nE    +  where environ({'BASH_ENV': '/Users/teacher/.codex/orchestrator/agent-runtime/gh-guard/bashenv.sh', 'BROWSER_USE_ACCESS_EXECU...f', 'ORCH_STATE_DIR': '/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/durability-sweep-selftest-6sd064nk'}) = os.environ\n----------------------------- Captured stdout call -----------------------------\ndurability_sweep.py selftest: OK (old clean->durable, revert->reverted, open->reopened, young/ambiguous stay pending, ambiguous closes at the retry horizon, live revert scan covered, searches cached per repo not per PR, and broke_later only on a stated later repair)\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_selftest_pops_absent_orch_state_dir\n1 failed in 0.86s\n"
       }
     ],
     "description": "_selftest must pop ORCH_STATE_DIR when it was unset on entry.",
@@ -52,13 +62,15 @@
     "original_sha256": "94237559f591bf1d0db310f4cee414e796912ef8317a8463e48ab42816af64d4",
     "restored_pass": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_selftest_pops_absent_orch_state_dir",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_selftest_pops_absent_orch_state_dir",
         "exit_code": 0,
+        "failed": false,
+        "failed_node_ids": [],
         "failure_excerpt": "",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_selftest_pops_absent_orch_state_dir",
-        "seconds": 1.552,
+        "seconds": 1.855,
         "stderr_tail": "",
-        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.49s\n"
+        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.82s\n"
       }
     ],
     "restored_sha256": "94237559f591bf1d0db310f4cee414e796912ef8317a8463e48ab42816af64d4",
@@ -68,13 +80,17 @@
   {
     "break": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_router_helpers_cover_edge_returns",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_router_helpers_cover_edge_returns",
         "exit_code": 1,
-        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_router_helpers_cover_edge_returns - assert 0.64 < 0",
+        "failed": true,
+        "failed_node_ids": [
+          "tests/test_issue843_ranked_coverage.py::test_router_helpers_cover_edge_returns"
+        ],
+        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_router_helpers_cover_edge_returns",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_router_helpers_cover_edge_returns",
-        "seconds": 1.378,
+        "seconds": 1.706,
         "stderr_tail": "",
-        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n____________________ test_router_helpers_cover_edge_returns ____________________\ntests/test_issue843_ranked_coverage.py:156: in test_router_helpers_cover_edge_returns\n    assert urgency < 0\nE   assert 0.64 < 0\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_router_helpers_cover_edge_returns - assert 0.64 < 0\n1 failed in 0.33s\n"
+        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n____________________ test_router_helpers_cover_edge_returns ____________________\ntests/test_issue843_ranked_coverage.py:156: in test_router_helpers_cover_edge_returns\n    assert urgency < 0\nE   assert 0.64 < 0\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_router_helpers_cover_edge_returns\n1 failed in 0.67s\n"
       }
     ],
     "description": "_drain_urgency successful path must stay negative.",
@@ -85,13 +101,15 @@
     "original_sha256": "7702a4d6d79d9c5ff13c10d90fa3d3b0c28b15884ed959be84abd228b037c01b",
     "restored_pass": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_router_helpers_cover_edge_returns",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_router_helpers_cover_edge_returns",
         "exit_code": 0,
+        "failed": false,
+        "failed_node_ids": [],
         "failure_excerpt": "",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_router_helpers_cover_edge_returns",
-        "seconds": 1.336,
+        "seconds": 1.668,
         "stderr_tail": "",
-        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.29s\n"
+        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.62s\n"
       }
     ],
     "restored_sha256": "7702a4d6d79d9c5ff13c10d90fa3d3b0c28b15884ed959be84abd228b037c01b",
@@ -101,13 +119,17 @@
   {
     "break": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_router_heartbeat_and_exploration_short_circuits",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_router_heartbeat_and_exploration_short_circuits",
         "exit_code": 1,
-        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_router_heartbeat_and_exploration_short_circuits - AssertionError: assert ((0, 0, 0, 0, 0.0, 0), {'agent': 'codex', 'late': False, 'mode': 'remote'}, 'ok', 0) is None",
+        "failed": true,
+        "failed_node_ids": [
+          "tests/test_issue843_ranked_coverage.py::test_router_heartbeat_and_exploration_short_circuits"
+        ],
+        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_router_heartbeat_and_exploration_short_circuits",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_router_heartbeat_and_exploration_short_circuits",
-        "seconds": 1.584,
+        "seconds": 1.818,
         "stderr_tail": "",
-        "stdout_tail": "None\nE   AssertionError: assert ((0, 0, 0, 0, 0.0, 0), {'agent': 'codex', 'late': False, 'mode': 'remote'}, 'ok', 0) is None\nE    +  where ((0, 0, 0, 0, 0.0, 0), {'agent': 'codex', 'late': False, 'mode': 'remote'}, 'ok', 0) = <function _thompson_exploration_choice at 0x10935e020>([((0, 0, 0, 0, 0.0, 0), {'agent': 'codex', 'late': False, 'mode': 'remote'}, 'ok', 0)], {}, <random.Random object at 0x11e3b0a20>)\nE    +    where <function _thompson_exploration_choice at 0x10935e020> = router._thompson_exploration_choice\nE    +    and   <random.Random object at 0x11e3b0a20> = <class 'random.Random'>(0)\nE    +      where <class 'random.Random'> = random.Random\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_router_heartbeat_and_exploration_short_circuits - AssertionError: assert ((0, 0, 0, 0, 0.0, 0), {'agent': 'codex', 'late': False, 'mode': 'remote'}, 'ok', 0) is None\n +  where ((0, 0, 0, 0, 0.0, 0), {'agent': 'codex', 'late': False, 'mode': 'remote'}, 'ok', 0) = <function _thompson_exploration_choice at 0x10935e020>([((0, 0, 0, 0, 0.0, 0), {'agent': 'codex', 'late': False, 'mode': 'remote'}, 'ok', 0)], {}, <random.Random object at 0x11e3b0a20>)\n +    where <function _thompson_exploration_choice at 0x10935e020> = router._thompson_exploration_choice\n +    and   <random.Random object at 0x11e3b0a20> = <class 'random.Random'>(0)\n +      where <class 'random.Random'> = random.Random\n1 failed in 0.36s\n"
+        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_____________ test_router_heartbeat_and_exploration_short_circuits _____________\ntests/test_issue843_ranked_coverage.py:189: in test_router_heartbeat_and_exploration_short_circuits\n    assert router._thompson_exploration_choice([_scored(\"codex\")], {}, random.Random(0)) is None\nE   AssertionError: assert ((0, 0, 0, 0, 0.0, 0), {'agent': 'codex', 'late': False, 'mode': 'remote'}, 'ok', 0) is None\nE    +  where ((0, 0, 0, 0, 0.0, 0), {'agent': 'codex', 'late': False, 'mode': 'remote'}, 'ok', 0) = <function _thompson_exploration_choice at 0x10bfbc4a0>([((0, 0, 0, 0, 0.0, 0), {'agent': 'codex', 'late': False, 'mode': 'remote'}, 'ok', 0)], {}, <random.Random object at 0x104671420>)\nE    +    where <function _thompson_exploration_choice at 0x10bfbc4a0> = router._thompson_exploration_choice\nE    +    and   <random.Random object at 0x104671420> = <class 'random.Random'>(0)\nE    +      where <class 'random.Random'> = random.Random\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_router_heartbeat_and_exploration_short_circuits\n1 failed in 0.67s\n"
       }
     ],
     "description": "Single-candidate exploration pool must return None.",
@@ -118,13 +140,15 @@
     "original_sha256": "7702a4d6d79d9c5ff13c10d90fa3d3b0c28b15884ed959be84abd228b037c01b",
     "restored_pass": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_router_heartbeat_and_exploration_short_circuits",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_router_heartbeat_and_exploration_short_circuits",
         "exit_code": 0,
+        "failed": false,
+        "failed_node_ids": [],
         "failure_excerpt": "",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_router_heartbeat_and_exploration_short_circuits",
-        "seconds": 1.418,
+        "seconds": 1.699,
         "stderr_tail": "",
-        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.31s\n"
+        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.63s\n"
       }
     ],
     "restored_sha256": "7702a4d6d79d9c5ff13c10d90fa3d3b0c28b15884ed959be84abd228b037c01b",
@@ -134,13 +158,17 @@
   {
     "break": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_router_pacing_choice_edge_branches",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_router_pacing_choice_edge_branches",
         "exit_code": 1,
-        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_router_pacing_choice_edge_branches - AssertionError: assert ('codex' == 'gemini'",
+        "failed": true,
+        "failed_node_ids": [
+          "tests/test_issue843_ranked_coverage.py::test_router_pacing_choice_edge_branches"
+        ],
+        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_router_pacing_choice_edge_branches",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_router_pacing_choice_edge_branches",
-        "seconds": 1.741,
+        "seconds": 1.694,
         "stderr_tail": "",
-        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n___________________ test_router_pacing_choice_edge_branches ____________________\ntests/test_issue843_ranked_coverage.py:204: in test_router_pacing_choice_edge_branches\n    assert picked[1][\"agent\"] == \"gemini\" and decision is None\nE   AssertionError: assert ('codex' == 'gemini'\nE     \nE     - gemini\nE     + codex)\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_router_pacing_choice_edge_branches - AssertionError: assert ('codex' == 'gemini'\n  \n  - gemini\n  + codex)\n1 failed in 0.52s\n"
+        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n___________________ test_router_pacing_choice_edge_branches ____________________\ntests/test_issue843_ranked_coverage.py:204: in test_router_pacing_choice_edge_branches\n    assert picked[1][\"agent\"] == \"gemini\" and decision is None\nE   AssertionError: assert ('codex' == 'gemini'\nE     \nE     - gemini\nE     + codex)\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_router_pacing_choice_edge_branches\n1 failed in 0.67s\n"
       }
     ],
     "description": "Winner outside pacing pools must keep scored[0].",
@@ -151,13 +179,15 @@
     "original_sha256": "7702a4d6d79d9c5ff13c10d90fa3d3b0c28b15884ed959be84abd228b037c01b",
     "restored_pass": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_router_pacing_choice_edge_branches",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_router_pacing_choice_edge_branches",
         "exit_code": 0,
+        "failed": false,
+        "failed_node_ids": [],
         "failure_excerpt": "",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_router_pacing_choice_edge_branches",
-        "seconds": 2.319,
+        "seconds": 1.624,
         "stderr_tail": "",
-        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.52s\n"
+        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.61s\n"
       }
     ],
     "restored_sha256": "7702a4d6d79d9c5ff13c10d90fa3d3b0c28b15884ed959be84abd228b037c01b",
@@ -167,13 +197,17 @@
   {
     "break": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_router_select_unknown_task_and_profile_miss",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_router_select_unknown_task_and_profile_miss",
         "exit_code": 1,
-        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_router_select_unknown_task_and_profile_miss - AssertionError: assert {'agent': 'codex', 'state': 'ok'} is None",
+        "failed": true,
+        "failed_node_ids": [
+          "tests/test_issue843_ranked_coverage.py::test_router_select_unknown_task_and_profile_miss"
+        ],
+        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_router_select_unknown_task_and_profile_miss",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_router_select_unknown_task_and_profile_miss",
-        "seconds": 2.678,
+        "seconds": 1.716,
         "stderr_tail": "",
-        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_______________ test_router_select_unknown_task_and_profile_miss _______________\ntests/test_issue843_ranked_coverage.py:262: in test_router_select_unknown_task_and_profile_miss\n    assert router.select_agent(\"not-a-real-task\", {\"agents\": {}}) is None\nE   AssertionError: assert {'agent': 'codex', 'state': 'ok'} is None\nE    +  where {'agent': 'codex', 'state': 'ok'} = <function select_agent at 0x10a65a3e0>('not-a-real-task', {'agents': {}})\nE    +    where <function select_agent at 0x10a65a3e0> = router.select_agent\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_router_select_unknown_task_and_profile_miss - AssertionError: assert {'agent': 'codex', 'state': 'ok'} is None\n +  where {'agent': 'codex', 'state': 'ok'} = <function select_agent at 0x10a65a3e0>('not-a-real-task', {'agents': {}})\n +    where <function select_agent at 0x10a65a3e0> = router.select_agent\n1 failed in 0.59s\n"
+        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_______________ test_router_select_unknown_task_and_profile_miss _______________\ntests/test_issue843_ranked_coverage.py:262: in test_router_select_unknown_task_and_profile_miss\n    assert router.select_agent(\"not-a-real-task\", {\"agents\": {}}) is None\nE   AssertionError: assert {'agent': 'codex', 'state': 'ok'} is None\nE    +  where {'agent': 'codex', 'state': 'ok'} = <function select_agent at 0x109e34860>('not-a-real-task', {'agents': {}})\nE    +    where <function select_agent at 0x109e34860> = router.select_agent\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_router_select_unknown_task_and_profile_miss\n1 failed in 0.67s\n"
       }
     ],
     "description": "Unknown task types must not select an agent.",
@@ -184,13 +218,15 @@
     "original_sha256": "7702a4d6d79d9c5ff13c10d90fa3d3b0c28b15884ed959be84abd228b037c01b",
     "restored_pass": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_router_select_unknown_task_and_profile_miss",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_router_select_unknown_task_and_profile_miss",
         "exit_code": 0,
+        "failed": false,
+        "failed_node_ids": [],
         "failure_excerpt": "",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_router_select_unknown_task_and_profile_miss",
-        "seconds": 2.841,
+        "seconds": 1.655,
         "stderr_tail": "",
-        "stdout_tail": ".                                                                        [100%]\n1 passed in 1.02s\n"
+        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.62s\n"
       }
     ],
     "restored_sha256": "7702a4d6d79d9c5ff13c10d90fa3d3b0c28b15884ed959be84abd228b037c01b",
@@ -200,13 +236,17 @@
   {
     "break": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_router_learned_ranks_and_plan_failures",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_router_learned_ranks_and_plan_failures",
         "exit_code": 1,
-        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_router_learned_ranks_and_plan_failures - assert False",
+        "failed": true,
+        "failed_node_ids": [
+          "tests/test_issue843_ranked_coverage.py::test_router_learned_ranks_and_plan_failures"
+        ],
+        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_router_learned_ranks_and_plan_failures",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_router_learned_ranks_and_plan_failures",
-        "seconds": 3.279,
+        "seconds": 1.681,
         "stderr_tail": "",
-        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_________________ test_router_learned_ranks_and_plan_failures __________________\ntests/test_issue843_ranked_coverage.py:367: in test_router_learned_ranks_and_plan_failures\n    assert any(r.get(\"reason\") == \"claim_race_lost\" for r in decision.get(\"rejections\", []))\nE   assert False\nE    +  where False = any(<generator object test_router_learned_ranks_and_plan_failures.<locals>.<genexpr> at 0x107321700>)\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_router_learned_ranks_and_plan_failures - assert False\n +  where False = any(<generator object test_router_learned_ranks_and_plan_failures.<locals>.<genexpr> at 0x107321700>)\n1 failed in 0.66s\n"
+        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_________________ test_router_learned_ranks_and_plan_failures __________________\ntests/test_issue843_ranked_coverage.py:367: in test_router_learned_ranks_and_plan_failures\n    assert any(r.get(\"reason\") == \"claim_race_lost\" for r in decision.get(\"rejections\", []))\nE   assert False\nE    +  where False = any(<generator object test_router_learned_ranks_and_plan_failures.<locals>.<genexpr> at 0x10c186810>)\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_router_learned_ranks_and_plan_failures\n1 failed in 0.68s\n"
       }
     ],
     "description": "Lost claim races must surface claim_race_lost rejections.",
@@ -217,13 +257,15 @@
     "original_sha256": "7702a4d6d79d9c5ff13c10d90fa3d3b0c28b15884ed959be84abd228b037c01b",
     "restored_pass": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_router_learned_ranks_and_plan_failures",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_router_learned_ranks_and_plan_failures",
         "exit_code": 0,
+        "failed": false,
+        "failed_node_ids": [],
         "failure_excerpt": "",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_router_learned_ranks_and_plan_failures",
-        "seconds": 3.351,
+        "seconds": 1.673,
         "stderr_tail": "",
-        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.94s\n"
+        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.64s\n"
       }
     ],
     "restored_sha256": "7702a4d6d79d9c5ff13c10d90fa3d3b0c28b15884ed959be84abd228b037c01b",
@@ -233,13 +275,17 @@
   {
     "break": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_router_main_cli_paths",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_router_main_cli_paths",
         "exit_code": 1,
-        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_router_main_cli_paths - assert 'assignments' in {'broken': True}",
+        "failed": true,
+        "failed_node_ids": [
+          "tests/test_issue843_ranked_coverage.py::test_router_main_cli_paths"
+        ],
+        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_router_main_cli_paths - a...",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_router_main_cli_paths",
-        "seconds": 3.517,
+        "seconds": 1.754,
         "stderr_tail": "",
-        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n__________________________ test_router_main_cli_paths __________________________\ntests/test_issue843_ranked_coverage.py:396: in test_router_main_cli_paths\n    assert \"assignments\" in json.loads(capsys.readouterr().out)\nE   assert 'assignments' in {'broken': True}\nE    +  where {'broken': True} = <function loads at 0x104015d00>('{\"broken\": true}\\n')\nE    +    where <function loads at 0x104015d00> = json.loads\nE    +    and   '{\"broken\": true}\\n' = CaptureResult(out='{\"broken\": true}\\n', err='').out\nE    +      where CaptureResult(out='{\"broken\": true}\\n', err='') = readouterr()\nE    +        where readouterr = <_pytest.capture.CaptureFixture object at 0x107a16ed0>.readouterr\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_router_main_cli_paths - assert 'assignments' in {'broken': True}\n +  where {'broken': True} = <function loads at 0x104015d00>('{\"broken\": true}\\n')\n +    where <function loads at 0x104015d00> = json.loads\n +    and   '{\"broken\": true}\\n' = CaptureResult(out='{\"broken\": true}\\n', err='').out\n +      where CaptureResult(out='{\"broken\": true}\\n', err='') = readouterr()\n +        where readouterr = <_pytest.capture.CaptureFixture object at 0x107a16ed0>.readouterr\n1 failed in 0.68s\n"
+        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n__________________________ test_router_main_cli_paths __________________________\ntests/test_issue843_ranked_coverage.py:396: in test_router_main_cli_paths\n    assert \"assignments\" in json.loads(capsys.readouterr().out)\nE   assert 'assignments' in {'broken': True}\nE    +  where {'broken': True} = <function loads at 0x103c11d00>('{\"broken\": true}\\n')\nE    +    where <function loads at 0x103c11d00> = json.loads\nE    +    and   '{\"broken\": true}\\n' = CaptureResult(out='{\"broken\": true}\\n', err='').out\nE    +      where CaptureResult(out='{\"broken\": true}\\n', err='') = readouterr()\nE    +        where readouterr = <_pytest.capture.CaptureFixture object at 0x11120f410>.readouterr\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_router_main_cli_paths - a...\n1 failed in 0.67s\n"
       }
     ],
     "description": "CLI dry-run must emit the real routing decision JSON.",
@@ -250,13 +296,15 @@
     "original_sha256": "7702a4d6d79d9c5ff13c10d90fa3d3b0c28b15884ed959be84abd228b037c01b",
     "restored_pass": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_router_main_cli_paths",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_router_main_cli_paths",
         "exit_code": 0,
+        "failed": false,
+        "failed_node_ids": [],
         "failure_excerpt": "",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_router_main_cli_paths",
-        "seconds": 2.874,
+        "seconds": 1.673,
         "stderr_tail": "",
-        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.56s\n"
+        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.63s\n"
       }
     ],
     "restored_sha256": "7702a4d6d79d9c5ff13c10d90fa3d3b0c28b15884ed959be84abd228b037c01b",
@@ -266,13 +314,17 @@
   {
     "break": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_router_selftest_restores_preset_exploration_env",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_router_selftest_restores_preset_exploration_env",
         "exit_code": 1,
-        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_router_selftest_restores_preset_exploration_env - AssertionError: assert None == '0.33'",
+        "failed": true,
+        "failed_node_ids": [
+          "tests/test_issue843_ranked_coverage.py::test_router_selftest_restores_preset_exploration_env"
+        ],
+        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_router_selftest_restores_preset_exploration_env",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_router_selftest_restores_preset_exploration_env",
-        "seconds": 3.473,
+        "seconds": 1.677,
         "stderr_tail": "",
-        "stdout_tail": "rt os.environ.get(\"ORCH_EXPLORATION_RATE\") == \"0.33\"\nE   AssertionError: assert None == '0.33'\nE    +  where None = get('ORCH_EXPLORATION_RATE')\nE    +    where get = environ({'SHELL': '/bin/zsh', 'CODEX_TECTONIC_PATH': '/Applications/ChatGPT.app/Contents/Resources/tectonic/tectonic',...-of-teacher/pytest-588/test_router_selftest_restores_0/capabilities.json', 'ORCH_EXPLORATION_MODE': 'thompson-hybrid'}).get\nE    +      where environ({'SHELL': '/bin/zsh', 'CODEX_TECTONIC_PATH': '/Applications/ChatGPT.app/Contents/Resources/tectonic/tectonic',...-of-teacher/pytest-588/test_router_selftest_restores_0/capabilities.json', 'ORCH_EXPLORATION_MODE': 'thompson-hybrid'}) = os.environ\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_router_selftest_restores_preset_exploration_env - AssertionError: assert None == '0.33'\n +  where None = get('ORCH_EXPLORATION_RATE')\n +    where get = environ({'SHELL': '/bin/zsh', 'CODEX_TECTONIC_PATH': '/Applications/ChatGPT.app/Contents/Resources/tectonic/tectonic',...-of-teacher/pytest-588/test_router_selftest_restores_0/capabilities.json', 'ORCH_EXPLORATION_MODE': 'thompson-hybrid'}).get\n +      where environ({'SHELL': '/bin/zsh', 'CODEX_TECTONIC_PATH': '/Applications/ChatGPT.app/Contents/Resources/tectonic/tectonic',...-of-teacher/pytest-588/test_router_selftest_restores_0/capabilities.json', 'ORCH_EXPLORATION_MODE': 'thompson-hybrid'}) = os.environ\n1 failed in 0.83s\n"
+        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_____________ test_router_selftest_restores_preset_exploration_env _____________\ntests/test_issue843_ranked_coverage.py:422: in test_router_selftest_restores_preset_exploration_env\n    assert os.environ.get(\"ORCH_EXPLORATION_RATE\") == \"0.33\"\nE   AssertionError: assert None == '0.33'\nE    +  where None = get('ORCH_EXPLORATION_RATE')\nE    +    where get = environ({'BASH_ENV': '/Users/teacher/.codex/orchestrator/agent-runtime/gh-guard/bashenv.sh', 'BROWSER_USE_ACCESS_EXECU...-of-teacher/pytest-722/test_router_selftest_restores_0/capabilities.json', 'ORCH_EXPLORATION_MODE': 'thompson-hybrid'}).get\nE    +      where environ({'BASH_ENV': '/Users/teacher/.codex/orchestrator/agent-runtime/gh-guard/bashenv.sh', 'BROWSER_USE_ACCESS_EXECU...-of-teacher/pytest-722/test_router_selftest_restores_0/capabilities.json', 'ORCH_EXPLORATION_MODE': 'thompson-hybrid'}) = os.environ\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_router_selftest_restores_preset_exploration_env\n1 failed in 0.67s\n"
       }
     ],
     "description": "Preset ORCH_EXPLORATION_* must be restored after _selftest.",
@@ -283,13 +335,15 @@
     "original_sha256": "7702a4d6d79d9c5ff13c10d90fa3d3b0c28b15884ed959be84abd228b037c01b",
     "restored_pass": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_router_selftest_restores_preset_exploration_env",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_router_selftest_restores_preset_exploration_env",
         "exit_code": 0,
+        "failed": false,
+        "failed_node_ids": [],
         "failure_excerpt": "",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_router_selftest_restores_preset_exploration_env",
-        "seconds": 3.255,
+        "seconds": 1.662,
         "stderr_tail": "",
-        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.65s\n"
+        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.63s\n"
       }
     ],
     "restored_sha256": "7702a4d6d79d9c5ff13c10d90fa3d3b0c28b15884ed959be84abd228b037c01b",
@@ -299,13 +353,17 @@
   {
     "break": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_feature_scan_heartbeat_errors_and_unparseable",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_feature_scan_heartbeat_errors_and_unparseable",
         "exit_code": 1,
-        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_feature_scan_heartbeat_errors_and_unparseable - assert (True is False)",
+        "failed": true,
+        "failed_node_ids": [
+          "tests/test_issue843_ranked_coverage.py::test_feature_scan_heartbeat_errors_and_unparseable"
+        ],
+        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_feature_scan_heartbeat_errors_and_unparseable",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_feature_scan_heartbeat_errors_and_unparseable",
-        "seconds": 2.548,
+        "seconds": 1.726,
         "stderr_tail": "",
-        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n______________ test_feature_scan_heartbeat_errors_and_unparseable ______________\ntests/test_issue843_ranked_coverage.py:442: in test_feature_scan_heartbeat_errors_and_unparseable\n    assert ok is False and \"unparseable\" in why\nE   assert (True is False)\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_feature_scan_heartbeat_errors_and_unparseable - assert (True is False)\n1 failed in 0.58s\n"
+        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n______________ test_feature_scan_heartbeat_errors_and_unparseable ______________\ntests/test_issue843_ranked_coverage.py:442: in test_feature_scan_heartbeat_errors_and_unparseable\n    assert ok is False and \"unparseable\" in why\nE   assert (True is False)\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_feature_scan_heartbeat_errors_and_unparseable\n1 failed in 0.69s\n"
       }
     ],
     "description": "Syntax errors must not look reusable.",
@@ -316,13 +374,15 @@
     "original_sha256": "5d2fef298e6b1b4b199382c62b41117f8fed3c26868415b2bb22142ab3d0cc53",
     "restored_pass": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_feature_scan_heartbeat_errors_and_unparseable",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_feature_scan_heartbeat_errors_and_unparseable",
         "exit_code": 0,
+        "failed": false,
+        "failed_node_ids": [],
         "failure_excerpt": "",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_feature_scan_heartbeat_errors_and_unparseable",
-        "seconds": 1.898,
+        "seconds": 1.679,
         "stderr_tail": "",
-        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.34s\n"
+        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.62s\n"
       }
     ],
     "restored_sha256": "5d2fef298e6b1b4b199382c62b41117f8fed3c26868415b2bb22142ab3d0cc53",
@@ -332,13 +392,17 @@
   {
     "break": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_feature_scan_apply_and_format_unlogged",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_feature_scan_apply_and_format_unlogged",
         "exit_code": 1,
-        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_feature_scan_apply_and_format_unlogged - AssertionError: assert ('RULE OF THREE' in '# Feature scan \u2014 reusable structures the registry has never seen\\n\\n  registry entries:    0\\n  qualifying modules:  ...These will be reinvented unless logged (DELIBERATELY-BROKEN):\\n\\n    new-thing                          new_thing.py\\n')",
+        "failed": true,
+        "failed_node_ids": [
+          "tests/test_issue843_ranked_coverage.py::test_feature_scan_apply_and_format_unlogged"
+        ],
+        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_feature_scan_apply_and_format_unlogged",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_feature_scan_apply_and_format_unlogged",
-        "seconds": 1.472,
+        "seconds": 1.73,
         "stderr_tail": "",
-        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_________________ test_feature_scan_apply_and_format_unlogged __________________\ntests/test_issue843_ranked_coverage.py:460: in test_feature_scan_apply_and_format_unlogged\n    assert \"RULE OF THREE\" in text and \"new-thing\" in text\nE   AssertionError: assert ('RULE OF THREE' in '# Feature scan \u2014 reusable structures the registry has never seen\\n\\n  registry entries:    0\\n  qualifying modules:  ...These will be reinvented unless logged (DELIBERATELY-BROKEN):\\n\\n    new-thing                          new_thing.py\\n')\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_feature_scan_apply_and_format_unlogged - AssertionError: assert ('RULE OF THREE' in '# Feature scan \u2014 reusable structures the registry has never seen\\n\\n  registry entries:    0\\n  qualifying modules:  ...These will be reinvented unless logged (DELIBERATELY-BROKEN):\\n\\n    new-thing                          new_thing.py\\n')\n1 failed in 0.37s\n"
+        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_________________ test_feature_scan_apply_and_format_unlogged __________________\ntests/test_issue843_ranked_coverage.py:460: in test_feature_scan_apply_and_format_unlogged\n    assert \"RULE OF THREE\" in text and \"new-thing\" in text\nE   AssertionError: assert ('RULE OF THREE' in '# Feature scan \u2014 reusable structures the registry has never seen\\n\\n  registry entries:    0\\n  qualifying modules:  ...These will be reinvented unless logged (DELIBERATELY-BROKEN):\\n\\n    new-thing                          new_thing.py\\n')\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_feature_scan_apply_and_format_unlogged\n1 failed in 0.67s\n"
       }
     ],
     "description": "Scan report must name RULE OF THREE for unlogged structures.",
@@ -349,13 +413,15 @@
     "original_sha256": "5d2fef298e6b1b4b199382c62b41117f8fed3c26868415b2bb22142ab3d0cc53",
     "restored_pass": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_feature_scan_apply_and_format_unlogged",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_feature_scan_apply_and_format_unlogged",
         "exit_code": 0,
+        "failed": false,
+        "failed_node_ids": [],
         "failure_excerpt": "",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_feature_scan_apply_and_format_unlogged",
-        "seconds": 1.4,
+        "seconds": 1.639,
         "stderr_tail": "",
-        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.31s\n"
+        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.62s\n"
       }
     ],
     "restored_sha256": "5d2fef298e6b1b4b199382c62b41117f8fed3c26868415b2bb22142ab3d0cc53",
@@ -365,13 +431,17 @@
   {
     "break": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_effectiveness_lift_and_main_cli",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_effectiveness_lift_and_main_cli",
         "exit_code": 1,
-        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_effectiveness_lift_and_main_cli - AssertionError: assert 'hurts' == 'helps'",
+        "failed": true,
+        "failed_node_ids": [
+          "tests/test_issue843_ranked_coverage.py::test_effectiveness_lift_and_main_cli"
+        ],
+        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_effectiveness_lift_and_main_cli",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_effectiveness_lift_and_main_cli",
-        "seconds": 1.592,
+        "seconds": 1.685,
         "stderr_tail": "",
-        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_____________________ test_effectiveness_lift_and_main_cli _____________________\ntests/test_issue843_ranked_coverage.py:574: in test_effectiveness_lift_and_main_cli\n    assert row_out[\"verdict\"] == \"helps\"\nE   AssertionError: assert 'hurts' == 'helps'\nE     \nE     - helps\nE     + hurts\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_effectiveness_lift_and_main_cli - AssertionError: assert 'hurts' == 'helps'\n  \n  - helps\n  + hurts\n1 failed in 0.35s\n"
+        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_____________________ test_effectiveness_lift_and_main_cli _____________________\ntests/test_issue843_ranked_coverage.py:574: in test_effectiveness_lift_and_main_cli\n    assert row_out[\"verdict\"] == \"helps\"\nE   AssertionError: assert 'hurts' == 'helps'\nE     \nE     - helps\nE     + hurts\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_effectiveness_lift_and_main_cli\n1 failed in 0.67s\n"
       }
     ],
     "description": "Positive lift on measured arms must read helps.",
@@ -382,13 +452,15 @@
     "original_sha256": "3414f0ecbe839a5074acf248dfa00bd6d674c271c998b73d525d5ca36262d207",
     "restored_pass": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_effectiveness_lift_and_main_cli",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_effectiveness_lift_and_main_cli",
         "exit_code": 0,
+        "failed": false,
+        "failed_node_ids": [],
         "failure_excerpt": "",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_effectiveness_lift_and_main_cli",
-        "seconds": 1.439,
+        "seconds": 1.631,
         "stderr_tail": "",
-        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.32s\n"
+        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.62s\n"
       }
     ],
     "restored_sha256": "3414f0ecbe839a5074acf248dfa00bd6d674c271c998b73d525d5ca36262d207",
@@ -398,13 +470,17 @@
   {
     "break": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_effectiveness_closes_only_connections_it_opened",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_effectiveness_closes_only_connections_it_opened",
         "exit_code": 1,
-        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_effectiveness_closes_only_connections_it_opened - AssertionError: caller-supplied conn must not be closed",
+        "failed": true,
+        "failed_node_ids": [
+          "tests/test_issue843_ranked_coverage.py::test_effectiveness_closes_only_connections_it_opened"
+        ],
+        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_effectiveness_closes_only_connections_it_opened",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_effectiveness_closes_only_connections_it_opened",
-        "seconds": 1.469,
+        "seconds": 1.679,
         "stderr_tail": "",
-        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_____________ test_effectiveness_closes_only_connections_it_opened _____________\ntests/test_issue843_ranked_coverage.py:623: in test_effectiveness_closes_only_connections_it_opened\n    assert borrowed_closed == [], \"caller-supplied conn must not be closed\"\nE   AssertionError: caller-supplied conn must not be closed\nE   assert ['borrowed'] == []\nE     \nE     Left contains one more item: 'borrowed'\nE     \nE     Full diff:\nE     - []\nE     + [\nE     +     'borrowed',\nE     + ]\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_effectiveness_closes_only_connections_it_opened - AssertionError: caller-supplied conn must not be closed\nassert ['borrowed'] == []\n  \n  Left contains one more item: 'borrowed'\n  \n  Full diff:\n  - []\n  + [\n  +     'borrowed',\n  + ]\n1 failed in 0.37s\n"
+        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_____________ test_effectiveness_closes_only_connections_it_opened _____________\ntests/test_issue843_ranked_coverage.py:623: in test_effectiveness_closes_only_connections_it_opened\n    assert borrowed_closed == [], \"caller-supplied conn must not be closed\"\nE   AssertionError: caller-supplied conn must not be closed\nE   assert ['borrowed'] == []\nE     \nE     Left contains one more item: 'borrowed'\nE     Use -v to get more diff\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_effectiveness_closes_only_connections_it_opened\n1 failed in 0.66s\n"
       }
     ],
     "description": "Caller-supplied connections must not be closed by _edge_rows.",
@@ -415,13 +491,15 @@
     "original_sha256": "3414f0ecbe839a5074acf248dfa00bd6d674c271c998b73d525d5ca36262d207",
     "restored_pass": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_effectiveness_closes_only_connections_it_opened",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_effectiveness_closes_only_connections_it_opened",
         "exit_code": 0,
+        "failed": false,
+        "failed_node_ids": [],
         "failure_excerpt": "",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_effectiveness_closes_only_connections_it_opened",
-        "seconds": 1.403,
+        "seconds": 1.633,
         "stderr_tail": "",
-        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.31s\n"
+        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.62s\n"
       }
     ],
     "restored_sha256": "3414f0ecbe839a5074acf248dfa00bd6d674c271c998b73d525d5ca36262d207",
@@ -431,22 +509,30 @@
   {
     "break": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_redirect_record_without_proposal_source_raises",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_redirect_record_without_proposal_source_raises",
         "exit_code": 1,
-        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_redirect_record_without_proposal_source_raises - Failed: DID NOT RAISE ValueError",
+        "failed": true,
+        "failed_node_ids": [
+          "tests/test_issue843_ranked_coverage.py::test_redirect_record_without_proposal_source_raises"
+        ],
+        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_redirect_record_without_proposal_source_raises",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_redirect_record_without_proposal_source_raises",
-        "seconds": 1.531,
+        "seconds": 1.777,
         "stderr_tail": "",
-        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_____________ test_redirect_record_without_proposal_source_raises ______________\ntests/test_issue843_ranked_coverage.py:637: in test_redirect_record_without_proposal_source_raises\n    with pytest.raises(ValueError, match=\"--dispatch or --proposal-json\"):\nE   Failed: DID NOT RAISE ValueError\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_redirect_record_without_proposal_source_raises - Failed: DID NOT RAISE ValueError\n1 failed in 0.45s\n"
+        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_____________ test_redirect_record_without_proposal_source_raises ______________\ntests/test_issue843_ranked_coverage.py:637: in test_redirect_record_without_proposal_source_raises\n    with pytest.raises(ValueError, match=\"--dispatch or --proposal-json\"):\nE   Failed: DID NOT RAISE ValueError\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_redirect_record_without_proposal_source_raises\n1 failed in 0.75s\n"
       },
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_redirect_bare_report_rejection_keeps_else_assert_unreachable",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_redirect_bare_report_rejection_keeps_else_assert_unreachable",
         "exit_code": 1,
-        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_redirect_bare_report_rejection_keeps_else_assert_unreachable - Failed: DID NOT RAISE ValueError",
+        "failed": true,
+        "failed_node_ids": [
+          "tests/test_issue843_ranked_coverage.py::test_redirect_bare_report_rejection_keeps_else_assert_unreachable"
+        ],
+        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_redirect_bare_report_rejection_keeps_else_assert_unreachable",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_redirect_bare_report_rejection_keeps_else_assert_unreachable",
-        "seconds": 1.559,
+        "seconds": 1.804,
         "stderr_tail": "",
-        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n______ test_redirect_bare_report_rejection_keeps_else_assert_unreachable _______\ntests/test_issue843_ranked_coverage.py:653: in test_redirect_bare_report_rejection_keeps_else_assert_unreachable\n    with pytest.raises(ValueError, match=\"--dispatch or --proposal-json\") as caught:\nE   Failed: DID NOT RAISE ValueError\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_redirect_bare_report_rejection_keeps_else_assert_unreachable - Failed: DID NOT RAISE ValueError\n1 failed in 0.46s\n"
+        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n______ test_redirect_bare_report_rejection_keeps_else_assert_unreachable _______\ntests/test_issue843_ranked_coverage.py:653: in test_redirect_bare_report_rejection_keeps_else_assert_unreachable\n    with pytest.raises(ValueError, match=\"--dispatch or --proposal-json\") as caught:\nE   Failed: DID NOT RAISE ValueError\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_redirect_bare_report_rejection_keeps_else_assert_unreachable\n1 failed in 0.75s\n"
       }
     ],
     "description": "Bare redirect reports must be rejected before corpus write.",
@@ -458,22 +544,26 @@
     "original_sha256": "8311beadb29268d03a16a5d8ceeb7f13ba8bd4fc34d172e1e2462b04f0549c0a",
     "restored_pass": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_redirect_record_without_proposal_source_raises",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_redirect_record_without_proposal_source_raises",
         "exit_code": 0,
+        "failed": false,
+        "failed_node_ids": [],
         "failure_excerpt": "",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_redirect_record_without_proposal_source_raises",
-        "seconds": 1.451,
+        "seconds": 1.654,
         "stderr_tail": "",
-        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.33s\n"
+        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.63s\n"
       },
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_redirect_bare_report_rejection_keeps_else_assert_unreachable",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_redirect_bare_report_rejection_keeps_else_assert_unreachable",
         "exit_code": 0,
+        "failed": false,
+        "failed_node_ids": [],
         "failure_excerpt": "",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_redirect_bare_report_rejection_keeps_else_assert_unreachable",
-        "seconds": 1.541,
+        "seconds": 1.648,
         "stderr_tail": "",
-        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.34s\n"
+        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.63s\n"
       }
     ],
     "restored_sha256": "8311beadb29268d03a16a5d8ceeb7f13ba8bd4fc34d172e1e2462b04f0549c0a",
@@ -483,22 +573,30 @@
   {
     "break": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_strategy_invalid_single_arm_raises_before_selftest_assert_false",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_strategy_invalid_single_arm_raises_before_selftest_assert_false",
         "exit_code": 1,
-        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_strategy_invalid_single_arm_raises_before_selftest_assert_false - Failed: DID NOT RAISE ValueError",
+        "failed": true,
+        "failed_node_ids": [
+          "tests/test_issue843_ranked_coverage.py::test_strategy_invalid_single_arm_raises_before_selftest_assert_false"
+        ],
+        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_strategy_invalid_single_arm_raises_before_selftest_assert_false",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_strategy_invalid_single_arm_raises_before_selftest_assert_false",
-        "seconds": 1.524,
+        "seconds": 1.672,
         "stderr_tail": "",
-        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_____ test_strategy_invalid_single_arm_raises_before_selftest_assert_false _____\ntests/test_issue843_ranked_coverage.py:667: in test_strategy_invalid_single_arm_raises_before_selftest_assert_false\n    with pytest.raises(ValueError, match=\"single strategy\"):\nE   Failed: DID NOT RAISE ValueError\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_strategy_invalid_single_arm_raises_before_selftest_assert_false - Failed: DID NOT RAISE ValueError\n1 failed in 0.36s\n"
+        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_____ test_strategy_invalid_single_arm_raises_before_selftest_assert_false _____\ntests/test_issue843_ranked_coverage.py:667: in test_strategy_invalid_single_arm_raises_before_selftest_assert_false\n    with pytest.raises(ValueError, match=\"single strategy\"):\nE   Failed: DID NOT RAISE ValueError\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_strategy_invalid_single_arm_raises_before_selftest_assert_false\n1 failed in 0.66s\n"
       },
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_strategy_remaining_ci_gaps",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_strategy_remaining_ci_gaps",
         "exit_code": 1,
-        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_strategy_remaining_ci_gaps - Failed: DID NOT RAISE ValueError",
+        "failed": true,
+        "failed_node_ids": [
+          "tests/test_issue843_ranked_coverage.py::test_strategy_remaining_ci_gaps"
+        ],
+        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_strategy_remaining_ci_gaps",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_strategy_remaining_ci_gaps",
-        "seconds": 1.486,
+        "seconds": 1.717,
         "stderr_tail": "",
-        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_______________________ test_strategy_remaining_ci_gaps ________________________\ntests/test_issue843_ranked_coverage.py:1245: in test_strategy_remaining_ci_gaps\n    with pytest.raises(ValueError, match=\"single strategy\"):\nE   Failed: DID NOT RAISE ValueError\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_strategy_remaining_ci_gaps - Failed: DID NOT RAISE ValueError\n1 failed in 0.38s\n"
+        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_______________________ test_strategy_remaining_ci_gaps ________________________\ntests/test_issue843_ranked_coverage.py:1245: in test_strategy_remaining_ci_gaps\n    with pytest.raises(ValueError, match=\"single strategy\"):\nE   Failed: DID NOT RAISE ValueError\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_strategy_remaining_ci_gaps\n1 failed in 0.69s\n"
       }
     ],
     "description": "Invalid single-arm shapes must raise before selftest assert False.",
@@ -510,22 +608,26 @@
     "original_sha256": "66a5c04c24020ded562701a88de32f9f97116605690139a1270309840b24fc6c",
     "restored_pass": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_strategy_invalid_single_arm_raises_before_selftest_assert_false",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_strategy_invalid_single_arm_raises_before_selftest_assert_false",
         "exit_code": 0,
+        "failed": false,
+        "failed_node_ids": [],
         "failure_excerpt": "",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_strategy_invalid_single_arm_raises_before_selftest_assert_false",
-        "seconds": 1.378,
+        "seconds": 1.675,
         "stderr_tail": "",
-        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.32s\n"
+        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.65s\n"
       },
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_strategy_remaining_ci_gaps",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_strategy_remaining_ci_gaps",
         "exit_code": 0,
+        "failed": false,
+        "failed_node_ids": [],
         "failure_excerpt": "",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_strategy_remaining_ci_gaps",
-        "seconds": 1.377,
+        "seconds": 1.673,
         "stderr_tail": "",
-        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.32s\n"
+        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.63s\n"
       }
     ],
     "restored_sha256": "66a5c04c24020ded562701a88de32f9f97116605690139a1270309840b24fc6c",
@@ -535,13 +637,17 @@
   {
     "break": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_strategy_coerce_and_normalize_arms_edges",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_strategy_coerce_and_normalize_arms_edges",
         "exit_code": 1,
-        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_strategy_coerce_and_normalize_arms_edges - AssertionError: Regex pattern did not match.",
+        "failed": true,
+        "failed_node_ids": [
+          "tests/test_issue843_ranked_coverage.py::test_strategy_coerce_and_normalize_arms_edges"
+        ],
+        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_strategy_coerce_and_normalize_arms_edges",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_strategy_coerce_and_normalize_arms_edges",
-        "seconds": 1.458,
+        "seconds": 1.695,
         "stderr_tail": "",
-        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n________________ test_strategy_coerce_and_normalize_arms_edges _________________\ntests/test_issue843_ranked_coverage.py:674: in test_strategy_coerce_and_normalize_arms_edges\n    with pytest.raises(ValueError, match=\"invalid agents\"):\nE   AssertionError: Regex pattern did not match.\nE     Expected regex: 'invalid agents'\nE     Actual message: 'DELIBERATELY-BROKEN: 3'\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_strategy_coerce_and_normalize_arms_edges - AssertionError: Regex pattern did not match.\n  Expected regex: 'invalid agents'\n  Actual message: 'DELIBERATELY-BROKEN: 3'\n1 failed in 0.37s\n"
+        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n________________ test_strategy_coerce_and_normalize_arms_edges _________________\ntests/test_issue843_ranked_coverage.py:674: in test_strategy_coerce_and_normalize_arms_edges\n    with pytest.raises(ValueError, match=\"invalid agents\"):\nE   AssertionError: Regex pattern did not match.\nE     Expected regex: 'invalid agents'\nE     Actual message: 'DELIBERATELY-BROKEN: 3'\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_strategy_coerce_and_normalize_arms_edges\n1 failed in 0.68s\n"
       }
     ],
     "description": "_coerce_agents must reject non-list/non-str values.",
@@ -552,13 +658,15 @@
     "original_sha256": "66a5c04c24020ded562701a88de32f9f97116605690139a1270309840b24fc6c",
     "restored_pass": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_strategy_coerce_and_normalize_arms_edges",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_strategy_coerce_and_normalize_arms_edges",
         "exit_code": 0,
+        "failed": false,
+        "failed_node_ids": [],
         "failure_excerpt": "",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_strategy_coerce_and_normalize_arms_edges",
-        "seconds": 1.381,
+        "seconds": 1.652,
         "stderr_tail": "",
-        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.32s\n"
+        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.63s\n"
       }
     ],
     "restored_sha256": "66a5c04c24020ded562701a88de32f9f97116605690139a1270309840b24fc6c",
@@ -568,13 +676,17 @@
   {
     "break": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_strategy_shape_rate_and_open_pr_helpers",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_strategy_shape_rate_and_open_pr_helpers",
         "exit_code": 1,
-        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_strategy_shape_rate_and_open_pr_helpers - Failed: DID NOT RAISE RuntimeError",
+        "failed": true,
+        "failed_node_ids": [
+          "tests/test_issue843_ranked_coverage.py::test_strategy_shape_rate_and_open_pr_helpers"
+        ],
+        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_strategy_shape_rate_and_open_pr_helpers",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_strategy_shape_rate_and_open_pr_helpers",
-        "seconds": 1.389,
+        "seconds": 1.702,
         "stderr_tail": "",
-        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_________________ test_strategy_shape_rate_and_open_pr_helpers _________________\ntests/test_issue843_ranked_coverage.py:719: in test_strategy_shape_rate_and_open_pr_helpers\n    with pytest.raises(RuntimeError, match=\"invalid broke-later\"):\nE   Failed: DID NOT RAISE RuntimeError\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_strategy_shape_rate_and_open_pr_helpers - Failed: DID NOT RAISE RuntimeError\n1 failed in 0.34s\n"
+        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_________________ test_strategy_shape_rate_and_open_pr_helpers _________________\ntests/test_issue843_ranked_coverage.py:719: in test_strategy_shape_rate_and_open_pr_helpers\n    with pytest.raises(RuntimeError, match=\"invalid broke-later\"):\nE   Failed: DID NOT RAISE RuntimeError\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_strategy_shape_rate_and_open_pr_helpers\n1 failed in 0.67s\n"
       }
     ],
     "description": "_shape_rate must validate broke_later_rate bounds.",
@@ -585,13 +697,15 @@
     "original_sha256": "66a5c04c24020ded562701a88de32f9f97116605690139a1270309840b24fc6c",
     "restored_pass": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_strategy_shape_rate_and_open_pr_helpers",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_strategy_shape_rate_and_open_pr_helpers",
         "exit_code": 0,
+        "failed": false,
+        "failed_node_ids": [],
         "failure_excerpt": "",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_strategy_shape_rate_and_open_pr_helpers",
-        "seconds": 1.483,
+        "seconds": 1.637,
         "stderr_tail": "",
-        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.42s\n"
+        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.62s\n"
       }
     ],
     "restored_sha256": "66a5c04c24020ded562701a88de32f9f97116605690139a1270309840b24fc6c",
@@ -601,13 +715,17 @@
   {
     "break": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_strategy_gh_subjects_success_and_pagination",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_strategy_gh_subjects_success_and_pagination",
         "exit_code": 1,
-        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_strategy_gh_subjects_success_and_pagination - Failed: DID NOT RAISE RuntimeError",
+        "failed": true,
+        "failed_node_ids": [
+          "tests/test_issue843_ranked_coverage.py::test_strategy_gh_subjects_success_and_pagination"
+        ],
+        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_strategy_gh_subjects_success_and_pagination",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_strategy_gh_subjects_success_and_pagination",
-        "seconds": 1.437,
+        "seconds": 1.69,
         "stderr_tail": "",
-        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_______________ test_strategy_gh_subjects_success_and_pagination _______________\ntests/test_issue843_ranked_coverage.py:825: in test_strategy_gh_subjects_success_and_pagination\n    with pytest.raises(RuntimeError, match=\"UNKNOWN\"):\nE   Failed: DID NOT RAISE RuntimeError\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_strategy_gh_subjects_success_and_pagination - Failed: DID NOT RAISE RuntimeError\n1 failed in 0.36s\n"
+        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_______________ test_strategy_gh_subjects_success_and_pagination _______________\ntests/test_issue843_ranked_coverage.py:825: in test_strategy_gh_subjects_success_and_pagination\n    with pytest.raises(RuntimeError, match=\"UNKNOWN\"):\nE   Failed: DID NOT RAISE RuntimeError\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_strategy_gh_subjects_success_and_pagination\n1 failed in 0.67s\n"
       }
     ],
     "description": "Incomplete GitHub pagination must surface UNKNOWN.",
@@ -618,13 +736,15 @@
     "original_sha256": "66a5c04c24020ded562701a88de32f9f97116605690139a1270309840b24fc6c",
     "restored_pass": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_strategy_gh_subjects_success_and_pagination",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_strategy_gh_subjects_success_and_pagination",
         "exit_code": 0,
+        "failed": false,
+        "failed_node_ids": [],
         "failure_excerpt": "",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_strategy_gh_subjects_success_and_pagination",
-        "seconds": 1.359,
+        "seconds": 1.652,
         "stderr_tail": "",
-        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.31s\n"
+        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.63s\n"
       }
     ],
     "restored_sha256": "66a5c04c24020ded562701a88de32f9f97116605690139a1270309840b24fc6c",
@@ -634,13 +754,17 @@
   {
     "break": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_strategy_select_subject_and_freeze",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_strategy_select_subject_and_freeze",
         "exit_code": 1,
-        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_strategy_select_subject_and_freeze - AssertionError: Regex pattern did not match.",
+        "failed": true,
+        "failed_node_ids": [
+          "tests/test_issue843_ranked_coverage.py::test_strategy_select_subject_and_freeze"
+        ],
+        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_strategy_select_subject_and_freeze",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_strategy_select_subject_and_freeze",
-        "seconds": 1.414,
+        "seconds": 1.731,
         "stderr_tail": "",
-        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n___________________ test_strategy_select_subject_and_freeze ____________________\ntests/test_issue843_ranked_coverage.py:854: in test_strategy_select_subject_and_freeze\n    with pytest.raises(RuntimeError, match=\"no recurring shape\"):\nE   AssertionError: Regex pattern did not match.\nE     Expected regex: 'no recurring shape'\nE     Actual message: 'issue843-break'\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_strategy_select_subject_and_freeze - AssertionError: Regex pattern did not match.\n  Expected regex: 'no recurring shape'\n  Actual message: 'issue843-break'\n1 failed in 0.35s\n"
+        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n___________________ test_strategy_select_subject_and_freeze ____________________\ntests/test_issue843_ranked_coverage.py:854: in test_strategy_select_subject_and_freeze\n    with pytest.raises(RuntimeError, match=\"no recurring shape\"):\nE   AssertionError: Regex pattern did not match.\nE     Expected regex: 'no recurring shape'\nE     Actual message: 'issue843-break'\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_strategy_select_subject_and_freeze\n1 failed in 0.68s\n"
       }
     ],
     "description": "select_subject must require a recurring fleet shape.",
@@ -651,13 +775,15 @@
     "original_sha256": "66a5c04c24020ded562701a88de32f9f97116605690139a1270309840b24fc6c",
     "restored_pass": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_strategy_select_subject_and_freeze",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_strategy_select_subject_and_freeze",
         "exit_code": 0,
+        "failed": false,
+        "failed_node_ids": [],
         "failure_excerpt": "",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_strategy_select_subject_and_freeze",
-        "seconds": 1.407,
+        "seconds": 1.641,
         "stderr_tail": "",
-        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.31s\n"
+        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.63s\n"
       }
     ],
     "restored_sha256": "66a5c04c24020ded562701a88de32f9f97116605690139a1270309840b24fc6c",
@@ -667,13 +793,17 @@
   {
     "break": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_strategy_normalize_load_read_format_and_prepare",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_strategy_normalize_load_read_format_and_prepare",
         "exit_code": 1,
-        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_strategy_normalize_load_read_format_and_prepare - Failed: DID NOT RAISE ValueError",
+        "failed": true,
+        "failed_node_ids": [
+          "tests/test_issue843_ranked_coverage.py::test_strategy_normalize_load_read_format_and_prepare"
+        ],
+        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_strategy_normalize_load_read_format_and_prepare",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_strategy_normalize_load_read_format_and_prepare",
-        "seconds": 1.405,
+        "seconds": 1.713,
         "stderr_tail": "",
-        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_____________ test_strategy_normalize_load_read_format_and_prepare _____________\ntests/test_issue843_ranked_coverage.py:909: in test_strategy_normalize_load_read_format_and_prepare\n    with pytest.raises(ValueError, match=\"not found\"):\nE   Failed: DID NOT RAISE ValueError\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_strategy_normalize_load_read_format_and_prepare - Failed: DID NOT RAISE ValueError\n1 failed in 0.36s\n"
+        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_____________ test_strategy_normalize_load_read_format_and_prepare _____________\ntests/test_issue843_ranked_coverage.py:909: in test_strategy_normalize_load_read_format_and_prepare\n    with pytest.raises(ValueError, match=\"not found\"):\nE   Failed: DID NOT RAISE ValueError\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_strategy_normalize_load_read_format_and_prepare\n1 failed in 0.69s\n"
       }
     ],
     "description": "load_hypothesis_arms must locate the requested hypothesis id.",
@@ -684,13 +814,15 @@
     "original_sha256": "66a5c04c24020ded562701a88de32f9f97116605690139a1270309840b24fc6c",
     "restored_pass": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_strategy_normalize_load_read_format_and_prepare",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_strategy_normalize_load_read_format_and_prepare",
         "exit_code": 0,
+        "failed": false,
+        "failed_node_ids": [],
         "failure_excerpt": "",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_strategy_normalize_load_read_format_and_prepare",
-        "seconds": 1.378,
+        "seconds": 1.673,
         "stderr_tail": "",
-        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.32s\n"
+        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.63s\n"
       }
     ],
     "restored_sha256": "66a5c04c24020ded562701a88de32f9f97116605690139a1270309840b24fc6c",
@@ -700,13 +832,17 @@
   {
     "break": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_strategy_refresh_and_main_cli",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_strategy_refresh_and_main_cli",
         "exit_code": 1,
-        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_strategy_refresh_and_main_cli - AssertionError: assert 0 == 2",
+        "failed": true,
+        "failed_node_ids": [
+          "tests/test_issue843_ranked_coverage.py::test_strategy_refresh_and_main_cli"
+        ],
+        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_strategy_refresh_and_main_cli",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_strategy_refresh_and_main_cli",
-        "seconds": 1.427,
+        "seconds": 1.717,
         "stderr_tail": "",
-        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n______________________ test_strategy_refresh_and_main_cli ______________________\ntests/test_issue843_ranked_coverage.py:1018: in test_strategy_refresh_and_main_cli\n    assert strategy.main([\"--refresh-result\"]) == 2\nE   AssertionError: assert 0 == 2\nE    +  where 0 = <function main at 0x11a432c00>(['--refresh-result'])\nE    +    where <function main at 0x11a432c00> = strategy.main\n----------------------------- Captured stderr call -----------------------------\n--refresh-result requires --exp-id and cannot prepare a subject\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_strategy_refresh_and_main_cli - AssertionError: assert 0 == 2\n +  where 0 = <function main at 0x11a432c00>(['--refresh-result'])\n +    where <function main at 0x11a432c00> = strategy.main\n1 failed in 0.36s\n"
+        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n______________________ test_strategy_refresh_and_main_cli ______________________\ntests/test_issue843_ranked_coverage.py:1018: in test_strategy_refresh_and_main_cli\n    assert strategy.main([\"--refresh-result\"]) == 2\nE   AssertionError: assert 0 == 2\nE    +  where 0 = <function main at 0x107e07ec0>(['--refresh-result'])\nE    +    where <function main at 0x107e07ec0> = strategy.main\n----------------------------- Captured stderr call -----------------------------\n--refresh-result requires --exp-id and cannot prepare a subject\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_strategy_refresh_and_main_cli\n1 failed in 0.68s\n"
       }
     ],
     "description": "--refresh-result without --exp-id must exit 2 with guidance.",
@@ -717,13 +853,15 @@
     "original_sha256": "66a5c04c24020ded562701a88de32f9f97116605690139a1270309840b24fc6c",
     "restored_pass": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_strategy_refresh_and_main_cli",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_strategy_refresh_and_main_cli",
         "exit_code": 0,
+        "failed": false,
+        "failed_node_ids": [],
         "failure_excerpt": "",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_strategy_refresh_and_main_cli",
-        "seconds": 1.421,
+        "seconds": 1.657,
         "stderr_tail": "",
-        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.32s\n"
+        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.63s\n"
       }
     ],
     "restored_sha256": "66a5c04c24020ded562701a88de32f9f97116605690139a1270309840b24fc6c",
@@ -733,13 +871,17 @@
   {
     "break": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_strategy_remaining_ci_gaps",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_strategy_remaining_ci_gaps",
         "exit_code": 1,
-        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_strategy_remaining_ci_gaps - AssertionError: assert False",
+        "failed": true,
+        "failed_node_ids": [
+          "tests/test_issue843_ranked_coverage.py::test_strategy_remaining_ci_gaps"
+        ],
+        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_strategy_remaining_ci_gaps",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_strategy_remaining_ci_gaps",
-        "seconds": 1.445,
+        "seconds": 1.724,
         "stderr_tail": "",
-        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_______________________ test_strategy_remaining_ci_gaps ________________________\ntests/test_issue843_ranked_coverage.py:1218: in test_strategy_remaining_ci_gaps\n    assert strategy._matches_shape(\nE   AssertionError: assert False\nE    +  where False = <function _matches_shape at 0x10a63dbc0>({'title': 'failure in parser', 'body': '## Acceptance Criteria\\n- must implement the module function', 'labels': ['bug']}, {'key': 'fix|code', 'commit_type': 'fix', 'path_classes': ['code']})\nE    +    where <function _matches_shape at 0x10a63dbc0> = strategy._matches_shape\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_strategy_remaining_ci_gaps - AssertionError: assert False\n +  where False = <function _matches_shape at 0x10a63dbc0>({'title': 'failure in parser', 'body': '## Acceptance Criteria\\n- must implement the module function', 'labels': ['bug']}, {'key': 'fix|code', 'commit_type': 'fix', 'path_classes': ['code']})\n +    where <function _matches_shape at 0x10a63dbc0> = strategy._matches_shape\n1 failed in 0.37s\n"
+        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_______________________ test_strategy_remaining_ci_gaps ________________________\ntests/test_issue843_ranked_coverage.py:1218: in test_strategy_remaining_ci_gaps\n    assert strategy._matches_shape(\nE   AssertionError: assert False\nE    +  where False = <function _matches_shape at 0x10bd8ee80>({'title': 'failure in parser', 'body': '## Acceptance Criteria\\n- must implement the module function', 'labels': ['bug']}, {'key': 'fix|code', 'commit_type': 'fix', 'path_classes': ['code']})\nE    +    where <function _matches_shape at 0x10bd8ee80> = strategy._matches_shape\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_strategy_remaining_ci_gaps\n1 failed in 0.69s\n"
       }
     ],
     "description": "Bug label must infer fix-shaped subjects.",
@@ -750,13 +892,15 @@
     "original_sha256": "66a5c04c24020ded562701a88de32f9f97116605690139a1270309840b24fc6c",
     "restored_pass": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_strategy_remaining_ci_gaps",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_strategy_remaining_ci_gaps",
         "exit_code": 0,
+        "failed": false,
+        "failed_node_ids": [],
         "failure_excerpt": "",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_strategy_remaining_ci_gaps",
-        "seconds": 1.462,
+        "seconds": 1.64,
         "stderr_tail": "",
-        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.34s\n"
+        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.62s\n"
       }
     ],
     "restored_sha256": "66a5c04c24020ded562701a88de32f9f97116605690139a1270309840b24fc6c",
@@ -766,13 +910,17 @@
   {
     "break": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_strategy_build_plan_from_args",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_strategy_build_plan_from_args",
         "exit_code": 1,
-        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_strategy_build_plan_from_args - AssertionError: assert 'issue843-break' == 'H4'",
+        "failed": true,
+        "failed_node_ids": [
+          "tests/test_issue843_ranked_coverage.py::test_strategy_build_plan_from_args"
+        ],
+        "failure_excerpt": "FAILED tests/test_issue843_ranked_coverage.py::test_strategy_build_plan_from_args",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_strategy_build_plan_from_args",
-        "seconds": 1.636,
+        "seconds": 1.703,
         "stderr_tail": "",
-        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n______________________ test_strategy_build_plan_from_args ______________________\ntests/test_issue843_ranked_coverage.py:1319: in test_strategy_build_plan_from_args\n    assert plan[\"hypothesis\"] == \"H4\"\nE   AssertionError: assert 'issue843-break' == 'H4'\nE     \nE     - H4\nE     + issue843-break\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_strategy_build_plan_from_args - AssertionError: assert 'issue843-break' == 'H4'\n  \n  - H4\n  + issue843-break\n1 failed in 0.41s\n"
+        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n______________________ test_strategy_build_plan_from_args ______________________\ntests/test_issue843_ranked_coverage.py:1319: in test_strategy_build_plan_from_args\n    assert plan[\"hypothesis\"] == \"H4\"\nE   AssertionError: assert 'issue843-break' == 'H4'\nE     \nE     - H4\nE     + issue843-break\n=========================== short test summary info ============================\nFAILED tests/test_issue843_ranked_coverage.py::test_strategy_build_plan_from_args\n1 failed in 0.67s\n"
       }
     ],
     "description": "_build_plan_from_args must preserve hypothesis id from file.",
@@ -783,13 +931,15 @@
     "original_sha256": "66a5c04c24020ded562701a88de32f9f97116605690139a1270309840b24fc6c",
     "restored_pass": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_strategy_build_plan_from_args",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_strategy_build_plan_from_args",
         "exit_code": 0,
+        "failed": false,
+        "failed_node_ids": [],
         "failure_excerpt": "",
         "node_id": "tests/test_issue843_ranked_coverage.py::test_strategy_build_plan_from_args",
-        "seconds": 1.563,
+        "seconds": 1.706,
         "stderr_tail": "",
-        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.33s\n"
+        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.66s\n"
       }
     ],
     "restored_sha256": "66a5c04c24020ded562701a88de32f9f97116605690139a1270309840b24fc6c",
@@ -799,13 +949,17 @@
   {
     "break": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_range_lane_rollout_coverage_gaps.py::test_offline_selftest_restores_prior_handoff_and_clears_added_rate",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_range_lane_rollout_coverage_gaps.py::test_offline_selftest_restores_prior_handoff_and_clears_added_rate",
         "exit_code": 1,
-        "failure_excerpt": "FAILED tests/test_range_lane_rollout_coverage_gaps.py::test_offline_selftest_restores_prior_handoff_and_clears_added_rate - KeyError: 'HANDOFF_DIR'",
+        "failed": true,
+        "failed_node_ids": [
+          "tests/test_range_lane_rollout_coverage_gaps.py::test_offline_selftest_restores_prior_handoff_and_clears_added_rate"
+        ],
+        "failure_excerpt": "FAILED tests/test_range_lane_rollout_coverage_gaps.py::test_offline_selftest_restores_prior_handoff_and_clears_added_rate",
         "node_id": "tests/test_range_lane_rollout_coverage_gaps.py::test_offline_selftest_restores_prior_handoff_and_clears_added_rate",
-        "seconds": 3.039,
+        "seconds": 3.24,
         "stderr_tail": "",
-        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n______ test_offline_selftest_restores_prior_handoff_and_clears_added_rate ______\ntests/test_range_lane_rollout_coverage_gaps.py:204: in test_offline_selftest_restores_prior_handoff_and_clears_added_rate\n    assert __import__(\"os\").environ[\"HANDOFF_DIR\"] == str(tmp_path / \"prior-handoff\")\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n<frozen os>:685: in __getitem__\n    ???\nE   KeyError: 'HANDOFF_DIR'\n----------------------------- Captured stdout call -----------------------------\nrange_lane_rollout.py selftest: OK (selected/assigned/dispatched counts, claim/capacity/already-routed diagnostics, guarded dispatch)\n=========================== short test summary info ============================\nFAILED tests/test_range_lane_rollout_coverage_gaps.py::test_offline_selftest_restores_prior_handoff_and_clears_added_rate - KeyError: 'HANDOFF_DIR'\n1 failed in 1.92s\n"
+        "stdout_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n______ test_offline_selftest_restores_prior_handoff_and_clears_added_rate ______\ntests/test_range_lane_rollout_coverage_gaps.py:204: in test_offline_selftest_restores_prior_handoff_and_clears_added_rate\n    assert __import__(\"os\").environ[\"HANDOFF_DIR\"] == str(tmp_path / \"prior-handoff\")\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n<frozen os>:685: in __getitem__\n    ???\nE   KeyError: 'HANDOFF_DIR'\n----------------------------- Captured stdout call -----------------------------\nrange_lane_rollout.py selftest: OK (selected/assigned/dispatched counts, claim/capacity/already-routed diagnostics, guarded dispatch)\n=========================== short test summary info ============================\nFAILED tests/test_range_lane_rollout_coverage_gaps.py::test_offline_selftest_restores_prior_handoff_and_clears_added_rate\n1 failed in 2.21s\n"
       }
     ],
     "description": "_selftest must restore prior HANDOFF_DIR when it was preset.",
@@ -816,13 +970,15 @@
     "original_sha256": "daf9d2fd71f808a11b2f5cf7ef34ef4ef35d5bf49f3c929894d5093a510ac8a0",
     "restored_pass": [
       {
-        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_range_lane_rollout_coverage_gaps.py::test_offline_selftest_restores_prior_handoff_and_clears_added_rate",
+        "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_range_lane_rollout_coverage_gaps.py::test_offline_selftest_restores_prior_handoff_and_clears_added_rate",
         "exit_code": 0,
+        "failed": false,
+        "failed_node_ids": [],
         "failure_excerpt": "",
         "node_id": "tests/test_range_lane_rollout_coverage_gaps.py::test_offline_selftest_restores_prior_handoff_and_clears_added_rate",
-        "seconds": 1.488,
+        "seconds": 2.626,
         "stderr_tail": "",
-        "stdout_tail": ".                                                                        [100%]\n1 passed in 0.39s\n"
+        "stdout_tail": ".                                                                        [100%]\n1 passed in 1.59s\n"
       }
     ],
     "restored_sha256": "daf9d2fd71f808a11b2f5cf7ef34ef4ef35d5bf49f3c929894d5093a510ac8a0",

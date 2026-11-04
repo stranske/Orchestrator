@@ -1,7 +1,7 @@
 # Issue #843 acceptance evidence (closer repair)
 
-Generated: 2026-11-04T00:10:36.264862+00:00
-Git HEAD: `8028a57556612e87574b2b7af628de60ef042613`
+Generated: 2026-11-04T00:54:36.789245+00:00
+Git HEAD: `f1d0d31d0263225c42d767fcc8058e2acb687439`
 Python: `/opt/anaconda3/bin/python3`
 
 ## Reproducible commands
@@ -9,7 +9,7 @@ Python: `/opt/anaconda3/bin/python3`
 Focused baseline (25 added tests):
 
 ```bash
-/opt/anaconda3/bin/python3 -m pytest -q tests/test_issue843_ranked_coverage.py tests/test_range_lane_rollout_coverage_gaps.py
+/opt/anaconda3/bin/python3 scripts/run_issue843_acceptance.py --baseline-only
 ```
 
 Full acceptance runner (baseline + deliberate mutations + receipts):
@@ -18,7 +18,7 @@ Full acceptance runner (baseline + deliberate mutations + receipts):
 /opt/anaconda3/bin/python3 scripts/run_issue843_acceptance.py --write-report
 ```
 
-Combined coverage (CI-equivalent, slow):
+Combined coverage (CI only; do not run the full pipeline locally):
 
 ```bash
 ORCH_STATE_DIR="$(mktemp -d)" ORCH_LOCAL_RUNTIME="$(mktemp -d)" \
@@ -63,16 +63,18 @@ CI uses sharded `python3 src/verify.py --pytest-shard i/6 --coverage` then
 
 ```json
 {
-  "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_canned_gh_stub_rejects_unexpected_commands tests/test_issue843_ranked_coverage.py::test_selftest_pops_absent_orch_state_dir tests/test_issue843_ranked_coverage.py::test_router_helpers_cover_edge_returns tests/test_issue843_ranked_coverage.py::test_router_heartbeat_and_exploration_short_circuits tests/test_issue843_ranked_coverage.py::test_router_pacing_choice_edge_branches tests/test_issue843_ranked_coverage.py::test_router_select_unknown_task_and_profile_miss tests/test_issue843_ranked_coverage.py::test_router_learned_ranks_and_plan_failures tests/test_issue843_ranked_coverage.py::test_router_main_cli_paths tests/test_issue843_ranked_coverage.py::test_router_selftest_restores_preset_exploration_env tests/test_issue843_ranked_coverage.py::test_feature_scan_heartbeat_errors_and_unparseable tests/test_issue843_ranked_coverage.py::test_feature_scan_apply_and_format_unlogged tests/test_issue843_ranked_coverage.py::test_effectiveness_lift_and_main_cli tests/test_issue843_ranked_coverage.py::test_effectiveness_closes_only_connections_it_opened tests/test_issue843_ranked_coverage.py::test_redirect_record_without_proposal_source_raises tests/test_issue843_ranked_coverage.py::test_redirect_bare_report_rejection_keeps_else_assert_unreachable tests/test_issue843_ranked_coverage.py::test_strategy_invalid_single_arm_raises_before_selftest_assert_false tests/test_issue843_ranked_coverage.py::test_strategy_coerce_and_normalize_arms_edges tests/test_issue843_ranked_coverage.py::test_strategy_shape_rate_and_open_pr_helpers tests/test_issue843_ranked_coverage.py::test_strategy_gh_subjects_success_and_pagination tests/test_issue843_ranked_coverage.py::test_strategy_select_subject_and_freeze tests/test_issue843_ranked_coverage.py::test_strategy_normalize_load_read_format_and_prepare tests/test_issue843_ranked_coverage.py::test_strategy_refresh_and_main_cli tests/test_issue843_ranked_coverage.py::test_strategy_remaining_ci_gaps tests/test_issue843_ranked_coverage.py::test_strategy_build_plan_from_args tests/test_range_lane_rollout_coverage_gaps.py::test_offline_selftest_restores_prior_handoff_and_clears_added_rate",
+  "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short --color=no tests/test_issue843_ranked_coverage.py::test_canned_gh_stub_rejects_unexpected_commands tests/test_issue843_ranked_coverage.py::test_selftest_pops_absent_orch_state_dir tests/test_issue843_ranked_coverage.py::test_router_helpers_cover_edge_returns tests/test_issue843_ranked_coverage.py::test_router_heartbeat_and_exploration_short_circuits tests/test_issue843_ranked_coverage.py::test_router_pacing_choice_edge_branches tests/test_issue843_ranked_coverage.py::test_router_select_unknown_task_and_profile_miss tests/test_issue843_ranked_coverage.py::test_router_learned_ranks_and_plan_failures tests/test_issue843_ranked_coverage.py::test_router_main_cli_paths tests/test_issue843_ranked_coverage.py::test_router_selftest_restores_preset_exploration_env tests/test_issue843_ranked_coverage.py::test_feature_scan_heartbeat_errors_and_unparseable tests/test_issue843_ranked_coverage.py::test_feature_scan_apply_and_format_unlogged tests/test_issue843_ranked_coverage.py::test_effectiveness_lift_and_main_cli tests/test_issue843_ranked_coverage.py::test_effectiveness_closes_only_connections_it_opened tests/test_issue843_ranked_coverage.py::test_redirect_record_without_proposal_source_raises tests/test_issue843_ranked_coverage.py::test_redirect_bare_report_rejection_keeps_else_assert_unreachable tests/test_issue843_ranked_coverage.py::test_strategy_invalid_single_arm_raises_before_selftest_assert_false tests/test_issue843_ranked_coverage.py::test_strategy_coerce_and_normalize_arms_edges tests/test_issue843_ranked_coverage.py::test_strategy_shape_rate_and_open_pr_helpers tests/test_issue843_ranked_coverage.py::test_strategy_gh_subjects_success_and_pagination tests/test_issue843_ranked_coverage.py::test_strategy_select_subject_and_freeze tests/test_issue843_ranked_coverage.py::test_strategy_normalize_load_read_format_and_prepare tests/test_issue843_ranked_coverage.py::test_strategy_refresh_and_main_cli tests/test_issue843_ranked_coverage.py::test_strategy_remaining_ci_gaps tests/test_issue843_ranked_coverage.py::test_strategy_build_plan_from_args tests/test_range_lane_rollout_coverage_gaps.py::test_offline_selftest_restores_prior_handoff_and_clears_added_rate",
   "exit_code": 0,
-  "seconds": 1.826,
+  "failed": false,
+  "failed_node_ids": [],
+  "seconds": 3.458,
   "failure_excerpt": "",
-  "stdout_tail": ".........................                                                [100%]\n25 passed in 0.74s\n",
+  "stdout_tail": ".........................                                                [100%]\n25 passed in 2.38s\n",
   "stderr_tail": ""
 }
 ```
 
-## Mutation mapping (one production break per added test)
+## Mutation mapping (every mapped break, including shared tests)
 
 Machine-readable: `docs/evidence/issue-843-acceptance/mutation-receipt.json`
 
@@ -94,6 +96,7 @@ Machine-readable: `docs/evidence/issue-843-acceptance/mutation-receipt.json`
 | `redirect-missing-proposal-guard` | `test_redirect_record_without_proposal_source_raises` | `src/redirect_shadow.py` | 1 | 0 |
 | `redirect-missing-proposal-guard` | `test_redirect_bare_report_rejection_keeps_else_assert_unreachable` | `src/redirect_shadow.py` | 1 | 0 |
 | `strategy-single-arm-guard` | `test_strategy_invalid_single_arm_raises_before_selftest_assert_false` | `src/strategy_experiment.py` | 1 | 0 |
+| `strategy-single-arm-guard` | `test_strategy_remaining_ci_gaps` | `src/strategy_experiment.py` | 1 | 0 |
 | `strategy-invalid-agents` | `test_strategy_coerce_and_normalize_arms_edges` | `src/strategy_experiment.py` | 1 | 0 |
 | `strategy-shape-rate-invalid-bad` | `test_strategy_shape_rate_and_open_pr_helpers` | `src/strategy_experiment.py` | 1 | 0 |
 | `strategy-gh-pagination-unknown` | `test_strategy_gh_subjects_success_and_pagination` | `src/strategy_experiment.py` | 1 | 0 |
@@ -104,13 +107,13 @@ Machine-readable: `docs/evidence/issue-843-acceptance/mutation-receipt.json`
 | `strategy-build-plan-hypothesis` | `test_strategy_build_plan_from_args` | `src/strategy_experiment.py` | 1 | 0 |
 | `range-rollout-restore-handoff` | `test_offline_selftest_restores_prior_handoff_and_clears_added_rate` | `src/range_lane_rollout.py` | 1 | 0 |
 
-## Coverage authority (seven ranked targets)
+## Coverage limits (seven ranked targets)
 
 Ranking source: issue #843 / Orchestrator blended coverage initiative (escaped-defect priority, then churn, then uncovered mass).
 
-| Target | CI missing before (#845 baseline run 39496947363) | After #845 (PR body, Gate run 39505581812 @ `2b96ffc`) | Exclusions |
+| Target | Issue #843 baseline units (statements + branches) | Local after-#845 missing-line estimate | Exclusions |
 |---|---:|---:|---|
-| `range_lane_rollout` | 0 (prior commit) | 0 | — |
+| `range_lane_rollout` | 2 | 0 | — |
 | `durability_sweep` | 3 | 0 | — |
 | `router` | 54 | 0 | — |
 | `feature_scan` | 13 | 0 | — |
@@ -118,5 +121,9 @@ Ranking source: issue #843 / Orchestrator blended coverage initiative (escaped-d
 | `redirect_shadow` | 1 | 1 line (1383 selftest else) | unreachable while bare reports are rejected |
 | `strategy_experiment` | 116 | 1 line (1037 selftest assert False) | unreachable while normalize_arm raises |
 
-Local combined `verify.py --coverage` was not re-run in this repair (runtime budget); Gate coverage on the merge commit remains authoritative (`39512253651` published verify aggregate).
+The after-values are local pytest missing-line estimates recovered from #845, not Gate combined coverage. They omit branch accounting and are not comparable to the issue's baseline units; do not subtract these columns.
+
+The combined reduction toward the approximately 180-unit goal and its numerical shortfall remain UNVERIFIED. Run 39505581812 has no downloadable artifacts; merge run 39512253651 failed and does not establish a successful aggregate. Current PR CI validates the repair but cannot reconstruct a matching historical before/after comparison. No local full-suite or verify pipeline was run.
+
+This is permitted partial delivery under issue #843's explicit partial-PR acceptance clause: preserve the 25 discriminating tests and publish their mutation proof, with the coverage shortfall explicitly unverified. No coverage configuration or thresholds are changed. Excluded residual selftest lines: capability_effectiveness 910/925 are borrowed fake-connection close methods; `_edge_rows` closes only connections it opened, so these methods are unreachable; redirect_shadow 1383 is the else arm after a bare report is required to raise; strategy_experiment 1037 asserts False only if invalid single-arm normalization fails to raise. These are local line exclusions from the completion claim, not proven combined-unit exclusions. The other four targets have no local missing-line exclusions; their combined branch results remain unverified.
 
