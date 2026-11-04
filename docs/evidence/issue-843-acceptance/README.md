@@ -1,7 +1,7 @@
 # Issue #843 acceptance evidence (closer repair)
 
-Generated: 2026-11-04T00:54:36.789245+00:00
-Git HEAD: `f1d0d31d0263225c42d767fcc8058e2acb687439`
+Generated: 2026-11-04T01:05:07.395992+00:00
+Git HEAD: `84a5aefc6123a0122ea82e50e1020f05ebd25166`
 Python: `/opt/anaconda3/bin/python3`
 
 ## Reproducible commands
@@ -67,9 +67,9 @@ CI uses sharded `python3 src/verify.py --pytest-shard i/6 --coverage` then
   "exit_code": 0,
   "failed": false,
   "failed_node_ids": [],
-  "seconds": 3.458,
+  "seconds": 3.28,
   "failure_excerpt": "",
-  "stdout_tail": ".........................                                                [100%]\n25 passed in 2.38s\n",
+  "stdout_tail": ".........................                                                [100%]\n25 passed in 2.21s\n",
   "stderr_tail": ""
 }
 ```
