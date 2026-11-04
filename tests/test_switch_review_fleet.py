@@ -412,14 +412,29 @@ def test_fetched_registry_filters_excluded_repository(monkeypatch):
 
 
 def test_rest_pages_accepts_exactly_1000():
-    """Regression: keyed REST populations with exactly 1,000 runs produce measurements."""
-    runs = [{"id": i, "conclusion": "success", "event": "pull_request"} for i in range(1000)]
+    """Regression: ten full pages totaling exactly 1,000 runs must measure, not exhaust the budget.
+
+    The Actions REST surface returns 100 rows per page. A population of exactly 1,000 therefore
+    ends on a full final page; treating "full page" as "more pages remain" would raise
+    ``pagination budget exhausted`` and print unmeasured for a complete read.
+    """
+    pages = [[{"id": i} for i in range(start, start + 100)] for start in range(0, 1000, 100)]
+    calls = []
+
+    def gh(args):
+        endpoint = args[1]
+        page = int(endpoint.rsplit("page=", 1)[1])
+        calls.append(page)
+        return True, json.dumps({"total_count": 1000, "workflow_runs": pages[page - 1]}), ""
+
     result = m._fleet_rest_pages(
-        gh=lambda args: (True, json.dumps({"total_count": 1000, "workflow_runs": runs}), ""),
-        endpoint="repos/owner/repo/actions/workflows/run.yml/runs",
+        gh=gh,
+        endpoint="repos/owner/repo/actions/workflows/run.yml/runs?created=2026-10-01T00:00:00Z",
         key="workflow_runs",
     )
     assert len(result) == 1000
+    assert [row["id"] for row in result] == list(range(1000))
+    assert calls == list(range(1, 11))
 
 
 def test_rest_pages_rejects_overflow():
