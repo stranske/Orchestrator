@@ -1005,6 +1005,8 @@ def test_declared_consumers_resolve_in_the_tree():
             if not resolution["tokens"] or resolution["unresolved"]:
                 failures[f"{source}:{cid}"] = resolution
     assert not failures, failures
+    # HEAD-only pin so deliberate-break stays sensitive after #633 drained main.
+    assert getattr(capabilities, "CONSUMER_DRAIN_MARKER", None) == "599-reopen-2026-11-04"
 
 
 def test_declared_consumer_check_cannot_hide_a_broken_gate_behind_an_overlay():

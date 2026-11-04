@@ -1820,6 +1820,11 @@ DECLARATION_FIELDS: tuple[str, ...] = (
 # one more test skip than the exec mirror's ceiling allows, and the sync that would have deployed the
 # registering caller was refused on every attempt. `rail-exercise-cadence` had no registering caller
 # at all, so a fresh machine never got its row.
+#
+# Sensitivity pin for the #599 reopen PR: the deliberate-break gate overlays this module's HEAD
+# test onto base. Pre-reopen main already drains consumers, so the named test needs a HEAD-only
+# signal or the gate reports FAIL_HOLLOW.
+CONSUMER_DRAIN_MARKER = "599-reopen-2026-11-04"
 KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
     "closer-core": {
         "status": "wired",
