@@ -15,7 +15,9 @@ const script = path.join(modules, 'adjudicator_retro.py');
 const python = process.env.PYTHON || 'python3';
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
-function world(t) {
+function world(t, rows = [{ case_id: 'original-a', decision: 'needs_more_evidence',
+  backend_run_id: 'original-paid',
+  retry_attempts: [{ retry_attempts: [{ backend_run_id: 'earlier-paid' }] }] }]) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'native-inventory-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   // URI metacharacters must remain part of the selected journal's filename.
@@ -25,9 +27,7 @@ function world(t) {
   const raw = 'private provider response';
   fs.writeFileSync(original, JSON.stringify({
     population: 299,
-    rows: [{ case_id: 'original-a', decision: 'needs_more_evidence',
-      backend_run_id: 'original-paid',
-      retry_attempts: [{ retry_attempts: [{ backend_run_id: 'earlier-paid' }] }] }],
+    rows,
   }));
   const sourceHash = sha256(fs.readFileSync(original));
   const publication = JSON.parse(fs.readFileSync(original, 'utf8'));
@@ -495,6 +495,125 @@ print(json.dumps(later['attempt_id']))
     }
   });
 }
+
+test('inventory CLI prints each mixed-cohort first break without rewriting decisions or paid history', (t) => {
+  const rejection = 'recommended_next_step must not contain mutating execution instructions';
+  function substantive(case_id) {
+    return {
+      case_id, target: 'fixture/repo#1', backend_run_id: `paid-${case_id}`,
+      decision: 'reject_blocker', later_truth: 'PASS',
+      packet: { ground_truth_evidence: {
+        diff_patch: { text: '+private inspected change', revision: 'evaluated' },
+        acceptance_criteria: [{ text: 'Inspect evidence', revision: 'issue-revision' }],
+      } },
+      proposal: {
+        decision: 'reject_blocker', confidence: 'high',
+        rationale: 'Private inspected evidence contradicts the blocker.',
+        ground_truth_refs: ['git-path:proof.txt'],
+        recommended_next_step: 'Inspect the proof before acting.', evidence_gaps: [],
+        evidence_assessment: [{ claim: 'proof missing', status: 'contradicted',
+          evidence_ref: 'git-path:proof.txt', reason: 'Proof contents supplied.' }],
+      },
+    };
+  }
+  const missing = { case_id: 'original-a', decision: 'needs_more_evidence',
+    backend_run_id: 'original-paid',
+    retry_attempts: [{ retry_attempts: [{ backend_run_id: 'earlier-paid',
+      decision: null, cost_usd: null }] }] };
+  const metadata = substantive('metadata');
+  delete metadata.packet.ground_truth_evidence.diff_patch;
+  metadata.errors = [rejection];
+  const invalid = substantive('invalid-proposal');
+  invalid.proposal.recommended_next_step = 'Merge this PR now';
+  const discarded = substantive('discarded-proposal');
+  delete discarded.proposal;
+  discarded.decision = null;
+  discarded.errors = [rejection];
+  const noTruth = substantive('no-truth');
+  noTruth.later_truth = null;
+  const abstention = substantive('abstention');
+  delete abstention.proposal;
+  abstention.decision = 'needs_more_evidence';
+  abstention.later_truth = null;
+  const failed = substantive('backend-error');
+  failed.errors = ['private provider failure', rejection];
+  const mismatch = substantive('mismatch');
+  mismatch.decision = 'uphold_blocker';
+  const rows = [substantive('decided'), missing, metadata, invalid, discarded,
+    noTruth, abstention, failed, mismatch];
+  const w = world(t, rows);
+  const publication = JSON.parse(fs.readFileSync(w.canonical, 'utf8'));
+  // Neither a canonical claim nor a terminal binary receipt supplies independent truth.
+  publication.rows[5].native_projection = { trusted: true, graded: 1, later_truth: 'PASS' };
+  fs.writeFileSync(w.canonical, JSON.stringify(publication));
+  const result = { backend_run_id: 'native-no-truth-paid', proposal: noTruth.proposal,
+    raw_output: JSON.stringify(noTruth.proposal), errors: [] };
+  const receiptId = w.run(['-c', `
+import json, sys
+from pathlib import Path
+import adjudicator_retro as retro
+result = json.loads(sys.argv[3])
+assert not retro.roles.ROLE_REGISTRY['adjudicator'].validate(result['proposal'])
+journal = retro.NativeAttemptJournal(Path(sys.argv[1]))
+attempt = journal.reserve('no-truth', 'evaluated', 'case-digest', sys.argv[2], await_start=True)
+journal.begin_invocation(attempt['attempt_id'], {'run_id': result['backend_run_id']})
+journal.persist_raw(attempt['attempt_id'], {
+    'run_id': result['backend_run_id'], 'output': result['raw_output'],
+})
+journal.validate(attempt['attempt_id'], result)
+print(json.dumps(attempt['attempt_id']))
+`, w.journal, w.sourceHash, JSON.stringify(result)]);
+  const before = w.snapshot();
+  const report = w.run(w.inventoryArgs);
+  assert.deepEqual(report.original_report.case_ids, rows.map((row) => row.case_id));
+  assert.deepEqual(report.row_diagnostics.map((row) => row.retained_first_break), [
+    'fresh_native_authentication_required', 'saved_packet_unavailable',
+    'saved_substantive_evidence_missing', 'saved_proposal_validator_failure',
+    'saved_proposal_validator_failure', 'saved_independent_later_truth_unavailable',
+    'saved_adjudicator_abstention', 'saved_attempt_error', 'saved_decision_proposal_mismatch',
+  ]);
+  assert.deepEqual(report.row_diagnostics.map((row) => row.retained_error_ref), [
+    null, null, 'rows[2].errors[0]', null, 'rows[4].errors[0]', null, null,
+    'rows[7].errors[0]', null,
+  ]);
+  report.row_diagnostics.forEach((diagnostic, index) => {
+    assert.equal(diagnostic.source_row, `rows[${index}]`);
+    assert.equal(diagnostic.case_id, rows[index].case_id);
+    assert.equal(diagnostic.retained_decision, rows[index].decision);
+    assert.equal(diagnostic.retained_later_truth, rows[index].later_truth ?? null);
+    assert.equal(diagnostic.dispatch_authorized, false);
+    assert.equal(Object.hasOwn(diagnostic, 'graded'), false);
+    assert.match(diagnostic.evidence_scope, /not fresh collection or truth/);
+    assert.equal(diagnostic.native_first_break, index === 1 ? 'unresolved_native_attempt'
+      : index === 5 ? 'fresh_native_receipt_authentication_required'
+        : 'fresh_native_collection_required');
+    assert.deepEqual(diagnostic.unresolved_native_attempts, index === 1 ? [{
+      attempt_id: w.ids[0], state: 'reserved', matches_original_source: true, outcome: 'UNKNOWN',
+    }] : []);
+  });
+  assert.deepEqual(report.original_paid_attempts, rows.flatMap((row) => [
+    { case_id: row.case_id, backend_run_id: row.backend_run_id },
+    ...(row === missing ? [{ case_id: row.case_id, backend_run_id: 'earlier-paid' }] : []),
+  ]));
+  assert.equal(report.paid_identity_summary.original_records, 10);
+  assert.equal(report.paid_identity_summary.union_unique, 13);
+  const retained = report.native_journal.attempts.find((row) => row.attempt_id === receiptId);
+  assert.equal(retained.state, 'validated');
+  assert.equal(retained.receipt_authority, 'not_authenticated_by_inventory');
+  assert.equal(report.canonical_report.retained_summary.graded, 29);
+  assert.equal(report.canonical_report.summary_authority, 'not_authenticated_by_inventory');
+  assert.equal(report.dispatch_authorized, false);
+  assert.match(report.historical_observations, /^unavailable/);
+  for (const payload of [result.raw_output, noTruth.proposal.rationale,
+    'private provider failure', 'private inspected change']) {
+    assert.equal(JSON.stringify(report).includes(payload), false);
+  }
+  assert.deepEqual(w.snapshot(), before);
+  assert.deepEqual(JSON.parse(fs.readFileSync(w.original, 'utf8')).rows, rows);
+  for (const name of ['absent-state', 'absent-runtime', 'absent-brain.sqlite']) {
+    assert.equal(fs.existsSync(path.join(w.root, name)), false);
+  }
+});
 
 test('native inventory rejects dispatch and retry before touching a live WAL journal', (t) => {
   const w = world(t);

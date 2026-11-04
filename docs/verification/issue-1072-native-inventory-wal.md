@@ -137,3 +137,34 @@ commit because approval is required and this run's policy is `never`. No commit
 or push was made. The same approval policy rejected the blocker comment and
 `needs-human` label. PR #1081 was rechecked open with `draft=false` at the
 revision above.
+
+## Mixed original-row first-break CLI verification
+
+Checked on 2026-11-04 against checkout
+`826e318f9bf94da418ebc7284607809365d27774`. A new native inventory integration
+test supplies nine original rows covering a decided row, missing packet,
+substantive-evidence gap, invalid proposal, discarded proposal with a recorded
+validator rejection, absent later truth, abstention, provider error and proposal
+mismatch. The real CLI retains each row's first break, original decision,
+recursive paid history and explicit UNKNOWN reservation. A native producer's
+terminal binary receipt and a retained canonical projection cannot supply the
+missing independent truth. Report, database and WAL hashes remain unchanged.
+
+Validation: the combined inventory JavaScript suites pass all 43 tests;
+diagnostic unittests pass 32 and replay/publication unittests pass seven.
+JavaScript syntax and `git diff --check` pass. Two independent temporary-source
+mutations, skipping substantive-evidence diagnosis or independent-truth diagnosis,
+both cause the new regression to fail. No repository Python files changed.
+
+These are fixture results. The configured canonical report, outcomes database,
+runtime and default mirror are absent; authentic original report and journal
+locations remain unavailable. The full retrospective pytest command with
+`-m "not slow"` cannot start because pytest is unavailable. No dispatch, canonical
+refresh, historical proof or live-shadow decision is claimed; no operational
+checkbox is complete.
+
+Staging failed because `.git/index.lock` is on a read-only filesystem. Automatic
+approval review rejected the connected GitHub file commit, blocker comment and
+`needs-human` label because approval is required and this run's policy is `never`.
+No commit or push was made. PR #1081 was observed open with `draft=false` at the
+checkout revision above.
