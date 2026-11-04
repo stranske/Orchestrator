@@ -210,3 +210,114 @@ test('invalid arguments and manifests produce no partial ledger or Brain writes'
     assert.deepEqual(fs.readFileSync(options.db), before);
   }
 });
+
+function savedReport(options, rows) {
+  const file = path.join(options.root, 'saved-report.json');
+  fs.writeFileSync(file, JSON.stringify({ rows, summary: { cost_usd: 999 } }));
+  return file;
+}
+
+test('saved report joins the complete dispute identity and binds unverified claims to retained bytes', (t) => {
+  const requested = [identity('one'), identity('other-target', 'fixture/repo#2'),
+    { ...identity('one'), adjudicated_verdict: 'FAIL' }, identity('missing')];
+  const options = world(t, requested);
+  const rows = [
+    { ...requested[1], cost_usd: 4 },
+    { ...requested[0], role_run_id: 'role:one', backend_run_id: 'backend:one',
+      decision: 'reject_blocker', cost_usd: 0,
+      packet: { target: requested[0].target, ground_truth_evidence: { head_sha: 'a'.repeat(40) } } },
+    { ...requested[2], role_run_id: 'role:fail', cost_usd: null, error: 'Missing bound evidence' },
+    identity('one', 'fixture/repo#99'),
+  ];
+  const report = savedReport(options, rows);
+  const before = [options.db, options.manifest, report].map((file) => fs.readFileSync(file));
+  const filesBefore = fs.readdirSync(options.root);
+  const ledger = caseGaps({ ...options, report });
+  assert.deepEqual(ledger.cases.map((row) => row.saved_report_evidence?.row_index), [1, 0, 2, undefined]);
+  const evidence = ledger.cases[0].saved_report_evidence;
+  assert.equal(evidence.status, 'unverified_saved_report_row');
+  assert.equal(evidence.report.path, report);
+  assert.equal(evidence.report.sha256, createHash('sha256').update(before[2]).digest('hex'));
+  assert.equal(evidence.row_sha256, createHash('sha256').update(JSON.stringify(rows[1])).digest('hex'));
+  assert.equal(evidence.reported_source_revision, 'a'.repeat(40));
+  assert.equal(evidence.reported_role_run_id, 'role:one');
+  assert.equal(evidence.reported_backend_run_id, 'backend:one');
+  assert.equal(evidence.reported_decision, 'reject_blocker');
+  assert.equal(evidence.reported_cost_usd, 0, 'reported zero is retained without admitting it as measured');
+  for (const row of ledger.cases) {
+    for (const field of ['source_revision', 'shadow_result', 'role_run_provenance', 'cost_usd']) {
+      assert.equal(row[field], 'UNKNOWN');
+    }
+  }
+  assert.ok(ledger.cases[2].evidence_gaps.includes('saved_case_error'));
+  assert.ok(ledger.cases[2].evidence_gaps.includes('saved_backend_run_id_missing'));
+  assert.equal(ledger.cases[2].saved_report_evidence.reported_cost_usd, 'UNKNOWN');
+  assert.ok(ledger.cases[3].evidence_gaps.includes('saved_case_missing'));
+  assert.equal(ledger.saved_report_snapshot.row_count, 4);
+  assert.equal(ledger.saved_report_snapshot.matched_case_count, 3);
+  assert.equal(ledger.saved_report_snapshot.unmatched_row_count, 1);
+  assert.equal(ledger.saved_report_snapshot.persisted_records_verified, false);
+  assert.equal(ledger.requested_cohort_verified, false);
+  assert.equal(ledger.operational_acceptance_complete, false);
+  assert.match(ledger.limitations.join('\n'), /persisted role records and measured costs remain unverified/);
+  assert.deepEqual(fs.readdirSync(options.root), filesBefore);
+  const cli = invoke(options, ['--report', report]);
+  assert.equal(cli.status, 0, cli.stderr);
+  assert.deepEqual(JSON.parse(cli.stdout), ledger);
+  assert.deepEqual([options.db, options.manifest, report].map((file) => fs.readFileSync(file)), before);
+});
+
+test('ambiguous saved rows and owner-excluded cases cannot contribute execution claims', (t) => {
+  const requested = [identity('duplicate'), identity('excluded', 'stranske/Collab-Admin#1')];
+  const options = world(t, requested);
+  const report = savedReport(options, [requested[0], { ...requested[0], role_run_id: 'other' },
+    { ...requested[1], role_run_id: 'excluded-role', cost_usd: 100 }]);
+  const ledger = caseGaps({ ...options, report });
+  assert.ok(ledger.cases[0].evidence_gaps.includes('saved_case_ambiguous'));
+  assert.equal(ledger.cases[0].saved_report_evidence, undefined);
+  assert.equal(ledger.cases[1].saved_report_evidence, undefined);
+  assert.deepEqual(ledger.cases[1].evidence_gaps, ['owner_excluded_repository']);
+  assert.equal(ledger.saved_report_snapshot.matched_case_count, 0);
+  assert.equal(ledger.saved_report_snapshot.unmatched_row_count, 3);
+  assert.equal(JSON.stringify(ledger).includes('excluded-role'), false);
+});
+
+test('mismatched packets, invalid revisions and invalid costs remain specific gaps', (t) => {
+  const options = world(t, [identity('one')]);
+  for (const packet of [undefined,
+    { target: 'fixture/repo#2', ground_truth_evidence: { head_sha: 'a'.repeat(40) } },
+    { target: 'fixture/repo#1', ground_truth_evidence: { head_sha: 'abc123' } }]) {
+    for (const cost_usd of [null, -1, '2.5']) {
+      const report = savedReport(options, [{ ...identity('one'), packet, cost_usd }]);
+      const row = caseGaps({ ...options, report }).cases[0];
+      assert.equal(row.saved_report_evidence.reported_source_revision, 'UNKNOWN');
+      assert.equal(row.saved_report_evidence.reported_cost_usd, 'UNKNOWN');
+      assert.ok(row.evidence_gaps.includes('source_revision_unavailable'));
+      assert.ok(row.evidence_gaps.includes('saved_role_run_id_missing'));
+      assert.ok(row.evidence_gaps.includes('measured_cost_not_verified'));
+      assert.equal(row.evidence_gaps.includes('saved_packet_target_missing'), !packet);
+      assert.equal(row.evidence_gaps.includes('saved_packet_target_mismatch'), packet?.target === 'fixture/repo#2');
+    }
+  }
+});
+
+test('invalid saved reports and run-only manifests fail without partial output or writes', (t) => {
+  const options = world(t, [identity('one')]);
+  const report = savedReport(options, []);
+  const before = fs.readFileSync(options.db);
+  for (const text of ['{broken', 'null', '{}', '{"rows":[null]}', '{"rows":[{"run_id":"one"}]}']) {
+    fs.writeFileSync(report, text);
+    const result = invoke(options, ['--report', report]);
+    assert.equal(result.status, 1);
+    assert.equal(result.stdout, '');
+    assert.deepEqual(fs.readFileSync(options.db), before);
+    assert.equal(fs.readFileSync(report, 'utf8'), text);
+  }
+  fs.writeFileSync(report, JSON.stringify({ rows: [identity('one')] }));
+  fs.writeFileSync(options.manifest, JSON.stringify({ schema_version: 1, cases: [identity('one')] }));
+  const result = invoke(options, ['--report', report]);
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, '');
+  assert.match(result.stderr, /requires a schema_version 2 dispute manifest/);
+  assert.deepEqual(fs.readFileSync(options.db), before);
+});
