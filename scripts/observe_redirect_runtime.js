@@ -5,7 +5,9 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+// Share the bounded asynchronous launcher; synchronous screens can report EPERM
+// alongside a zero child exit on restricted hosts. Real process errors still fail.
+const { runCommand } = require('./verify_redirect_merged_revision');
 
 const digest = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
 const identity = (value) => typeof value === 'string' && value ? digest(value) : null;
@@ -117,7 +119,7 @@ function recordedSwitchReview(input) {
   }
 }
 
-function observe({ runtime, stateDir = runtime, python = 'python3', env = process.env, run = spawnSync }) {
+async function observe({ runtime, stateDir = runtime, python = 'python3', env = process.env, run = runCommand }) {
   const result = {
     observed_at: new Date().toISOString(),
     status: 'unavailable',
@@ -180,7 +182,7 @@ function observe({ runtime, stateDir = runtime, python = 'python3', env = proces
     ORCH_REDIRECT_SHADOW_CORPUS: files.corpus, ORCH_CAPABILITY_HEARTBEATS: '0' };
   delete childEnv.PYTHONPATH;
   delete childEnv.PYTHONHOME;
-  const execution = run(python, ['-B', source, '--screen', '--json', '--corpus', files.corpus,
+  const execution = await run(python, ['-B', source, '--screen', '--json', '--corpus', files.corpus,
     '--stage2-plan', files.plan, '--report-dir', reportDir], {
     env: childEnv, encoding: 'utf8', timeout: 30000, maxBuffer: 4 * 1024 * 1024,
   });
@@ -241,16 +243,18 @@ function observe({ runtime, stateDir = runtime, python = 'python3', env = proces
   return result;
 }
 
-function main(args = process.argv.slice(2)) {
+async function main(args = process.argv.slice(2)) {
   if (args.length < 1 || args.length > 3 || args.some((arg) => arg.startsWith('--'))) {
     console.error('Usage: node scripts/observe_redirect_runtime.js <owner-runtime> [state-dir] [python-path]');
     return 2;
   }
-  const result = observe({ runtime: path.resolve(args[0]),
+  const result = await observe({ runtime: path.resolve(args[0]),
     stateDir: path.resolve(args[1] || args[0]), python: args[2] });
-  console.log(JSON.stringify(result, null, 2));
+  // Restricted hosts can lose asynchronous pipe writes even with a clean exit.
+  // Finish emitting the receipt before returning its CLI disposition.
+  fs.writeFileSync(process.stdout.fd, `${JSON.stringify(result, null, 2)}\n`);
   return result.status === 'observed' ? 0 : 1;
 }
 
-if (require.main === module) process.exitCode = main();
+if (require.main === module) main().then((code) => { process.exitCode = code; });
 module.exports = { observe, main, sourceTreeState };

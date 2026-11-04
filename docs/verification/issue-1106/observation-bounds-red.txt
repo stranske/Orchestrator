@@ -1,0 +1,29 @@
+✖ real observation preserves held claims and the corpus daily cap with an armed process flag (751.555774ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 767.597492
+
+✖ failing tests:
+
+test at tests/test_observe_redirect_runtime.js:415:1
+✖ real observation preserves held claims and the corpus daily cap with an armed process flag (751.555774ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  1 !== 0
+  
+      at capture (/home/runner/work/Orchestrator/Orchestrator/tests/test_observe_redirect_runtime.js:432:12)
+      at async TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_observe_redirect_runtime.js:451:3)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
