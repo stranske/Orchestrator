@@ -1,0 +1,34 @@
+{
+  "observed_at": "2026-11-03T22:50:17.366367+00:00",
+  "executable": "/tmp/issue-1106-python/bin/python3",
+  "base_executable": "/opt/hostedtoolcache/Python/3.14.8/x64/bin/python3.14",
+  "version": "3.14.8 (main, Oct  1 2026, 02:39:56) [GCC 15.2.0]",
+  "pytest_version": "9.1.1",
+  "pytest_file": "/tmp/issue-1106-python/lib/python3.14/site-packages/pytest/__init__.py",
+  "dependency_source": "Existing runner pip HTTP cache wheels installed offline into a temporary venv of the repository-selected Python; no repository dependencies changed.",
+  "wheels": [
+    {
+      "name": "iniconfig-2.3.1-py3-none-any.whl",
+      "sha256": "9121e2c1fdb355232495be3194c8dfe87ccc2d5dee45947b78e68f499790d7a7"
+    },
+    {
+      "name": "packaging-26.3-py3-none-any.whl",
+      "sha256": "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c"
+    },
+    {
+      "name": "pluggy-1.7.0-py3-none-any.whl",
+      "sha256": "7dd7b0d8832ba3cb632c306926ded123429211b83641b35dc5c41ad2d34f9bec"
+    },
+    {
+      "name": "pygments-2.21.0-py3-none-any.whl",
+      "sha256": "2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9"
+    },
+    {
+      "name": "pytest-9.1.1-py3-none-any.whl",
+      "sha256": "37a86b45efb9a47a61a36449063e8e18d0cab3161329fc099eb21783169c4f0c"
+    }
+  ],
+  "verifier_sha256": "5ed0613a51c047ed917b036fd69b4b4f62e69a13369c0762bb03b9d2bce25a70",
+  "source_revision": "e86313cb6f1f6f047896b5c1bbb5d9c3c68d339e",
+  "note": "Before receipt uses the unmodified merged verifier; after receipt uses the launcher repair in this change against the same merged archive."
+}
