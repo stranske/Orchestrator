@@ -615,6 +615,87 @@ print(json.dumps(attempt['attempt_id']))
   }
 });
 
+test('inventory CLI locates incomplete evidence despite retained decisions and completeness claims', (t) => {
+  const patch = { text: '+private inspected change', revision: 'evaluated' };
+  const criterion = { text: 'Private acceptance criterion', revision: 'issue-revision' };
+  const variants = [
+    ['patch-absent', undefined, [criterion]],
+    ['patch-null', null, [criterion]],
+    ['patch-string', '+private inspected change', [criterion]],
+    ['patch-empty', {}, [criterion]],
+    ['patch-blank-text', { ...patch, text: ' \t\n' }, [criterion]],
+    ['patch-nontext', { ...patch, text: ['private inspected change'] }, [criterion]],
+    ['patch-no-revision', { text: patch.text }, [criterion]],
+    ['patch-blank-revision', { ...patch, revision: ' \t' }, [criterion]],
+    ['patch-nonstring-revision', { ...patch, revision: 42 }, [criterion]],
+    ['patch-truncated', { ...patch, truncated: true }, [criterion]],
+    ['criteria-absent', patch, undefined],
+    ['criteria-null', patch, null],
+    ['criteria-object', patch, criterion],
+    ['criteria-empty', patch, []],
+    ['criteria-null-member', patch, [criterion, null]],
+    ['criteria-string-member', patch, ['Private acceptance criterion', criterion]],
+    ['criteria-blank-text', patch, [criterion, { ...criterion, text: ' \n' }]],
+    ['criteria-nontext', patch, [{ ...criterion, text: 42 }, criterion]],
+    ['criteria-no-revision', patch, [criterion, { text: criterion.text }]],
+    ['criteria-blank-revision', patch, [{ ...criterion, revision: ' \t' }, criterion]],
+    ['criteria-nonstring-revision', patch, [criterion, { ...criterion, revision: 42 }]],
+    ['complete-uphold', patch, [criterion]],
+    ['complete-reject', patch, [criterion, { ...criterion, revision: 'other-issue-revision' }]],
+  ];
+  const rows = variants.map(([name, diff_patch, acceptance_criteria], index) => ({
+    // Include a real unresolved reservation on a row with a retained decision.
+    case_id: index === 0 ? 'original-a' : name,
+    target: 'fixture/repo#1', backend_run_id: `original-paid-${name}`,
+    decision: index % 2 ? 'uphold_blocker' : 'reject_blocker',
+    later_truth: index % 2 ? 'FAIL' : 'PASS',
+    packet: { metadata_only: false, ground_truth_evidence: {
+      diff_patch, acceptance_criteria,
+      qualification: { trusted: true, complete: true },
+    } },
+    retry_attempts: [{ backend_run_id: `earlier-paid-${name}`, decision: 'needs_more_evidence' }],
+  }));
+  const w = world(t, rows);
+  // JSON omits absent fields; compare against the actual retained representation.
+  const saved = JSON.parse(fs.readFileSync(w.original, 'utf8'));
+  const before = w.snapshot();
+  const report = w.run(w.inventoryArgs);
+  assert.equal(report.row_diagnostics.length, variants.length);
+  assert.deepEqual(report.original_report.case_ids, rows.map((row) => row.case_id));
+  report.row_diagnostics.forEach((diagnostic, index) => {
+    const name = variants[index][0];
+    assert.equal(diagnostic.retained_first_break, name.startsWith('complete-')
+      ? 'fresh_native_authentication_required' : 'saved_substantive_evidence_missing', name);
+    assert.equal(diagnostic.retained_decision, rows[index].decision, name);
+    assert.equal(diagnostic.retained_later_truth, rows[index].later_truth, name);
+    assert.equal(diagnostic.source_row, `rows[${index}]`, name);
+    assert.equal(diagnostic.retained_error_ref, null, name);
+    assert.equal(diagnostic.native_first_break, index === 0
+      ? 'unresolved_native_attempt' : 'fresh_native_collection_required', name);
+    assert.deepEqual(diagnostic.unresolved_native_attempts, index === 0 ? [{
+      attempt_id: w.ids[0], state: 'reserved', matches_original_source: true, outcome: 'UNKNOWN',
+    }] : [], name);
+    assert.equal(diagnostic.dispatch_authorized, false, name);
+    assert.equal(Object.hasOwn(diagnostic, 'graded'), false, name);
+  });
+  assert.deepEqual(report.original_paid_attempts, rows.flatMap((row) => [
+    { case_id: row.case_id, backend_run_id: row.backend_run_id },
+    { case_id: row.case_id, backend_run_id: row.retry_attempts[0].backend_run_id },
+  ]));
+  assert.equal(report.paid_identity_summary.original_records, rows.length * 2);
+  assert.equal(report.paid_identity_summary.union_unique, rows.length * 2 + 2);
+  assert.equal(report.dispatch_authorized, false);
+  assert.equal(report.canonical_report.summary_authority, 'not_authenticated_by_inventory');
+  for (const payload of [patch.text, criterion.text]) {
+    assert.equal(JSON.stringify(report).includes(payload), false);
+  }
+  assert.deepEqual(w.snapshot(), before);
+  assert.deepEqual(JSON.parse(fs.readFileSync(w.original, 'utf8')), saved);
+  for (const name of ['absent-state', 'absent-runtime', 'absent-brain.sqlite']) {
+    assert.equal(fs.existsSync(path.join(w.root, name)), false);
+  }
+});
+
 test('native inventory rejects dispatch and retry before touching a live WAL journal', (t) => {
   const w = world(t);
   const before = w.snapshot();

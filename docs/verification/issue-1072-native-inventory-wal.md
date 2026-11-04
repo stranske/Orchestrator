@@ -168,3 +168,34 @@ approval review rejected the connected GitHub file commit, blocker comment and
 `needs-human` label because approval is required and this run's policy is `never`.
 No commit or push was made. PR #1081 was observed open with `draft=false` at the
 checkout revision above.
+
+## Incomplete substantive evidence across original rows
+
+Checked on 2026-11-04 against checkout
+`27723244f2619d03a6b3407f5a2a23546305f120`. A new real-CLI regression covers
+23 original rows: 21 incomplete patch/criteria combinations and two complete
+controls. Missing, blank, malformed, unrevisioned and truncated evidence remains
+the first retained break despite completeness/qualification claims. Both binary
+decisions, later-truth labels, original and earlier paid identities, and an
+unresolved reservation remain separately visible. Inventory leaves the original,
+canonical report, database and WAL unchanged and exposes no private evidence.
+
+Validation: the two inventory JavaScript suites pass all 44 tests; diagnostic
+unittests pass 32 and replay/publication unittests pass seven. JavaScript syntax
+and `git diff --check` pass. In separate temporary source copies, accepting a
+truncated patch or replacing the all-criteria check with any-criterion acceptance
+each makes the new regression fail. No repository Python files changed.
+
+These remain fixture results. The configured canonical report, independent
+outcomes database and default execution mirror are absent. Authentic original
+report/journal locations and live reader bindings were not supplied. The full
+retrospective pytest command with `-m "not slow"` cannot start because pytest is
+unavailable; package installation also failed. No production diagnosis, dispatch,
+canonical refresh, October 18 proof or next-20 decision is claimed. No operational
+checkbox is complete.
+
+Staging failed because Git metadata is read-only. Automatic approval review
+rejected the connected GitHub file commit because it requires approval and this
+run's policy is `never`. The same review rejected the blocker comment and
+`needs-human` label. No commit or push was made. PR #1081 was rechecked open
+with `draft=false` at the checkout revision above.
