@@ -1,0 +1,57 @@
+{
+  "observed_at": "2026-11-03T23:30:31.177Z",
+  "context": "hosted_runner_completion_tracking_validation; no new owner-host observation",
+  "node": "v24.22.2",
+  "tests": {
+    "command": "node --test --test-isolation=none tests/test_redirect_completion_tracking.js tests/test_redirect_stall_provenance.js tests/test_verify_redirect_merged_revision.js tests/test_observe_redirect_runtime.js tests/test_redirect_recovered_receipt.js",
+    "exit_code": 0,
+    "passed": 51,
+    "failed": 0,
+    "skipped": 0,
+    "output": "completion-tracking-node-tests.txt"
+  },
+  "reconciliation": {
+    "complete": false,
+    "body_update": {
+      "content": [
+        {
+          "type": "text",
+          "text": "MCP tool call requires approval, but approval policy is never"
+        }
+      ],
+      "isError": true
+    },
+    "blocker_comment": {
+      "content": [
+        {
+          "type": "text",
+          "text": "MCP tool call requires approval, but approval policy is never"
+        }
+      ],
+      "isError": true
+    },
+    "needs_human_label": {
+      "content": [
+        {
+          "type": "text",
+          "text": "MCP tool call requires approval, but approval policy is never"
+        }
+      ],
+      "isError": true
+    },
+    "proposed_body": "proposed-pr-body.md",
+    "verified_pr": {
+      "url": "https://github.com/stranske/Orchestrator/pull/1107",
+      "state": "open",
+      "draft": false,
+      "head_sha": "9d22d44eabb3c12a479175132a2de56b9c9fa8be",
+      "active_closure_present": true
+    }
+  },
+  "limitations": [
+    "The retained offline execution evidence was validated, not rerun.",
+    "No new owner-host artifacts or real stall were observed; retained owner-host counts remain unknown.",
+    "Historical inspection and real-stall acceptance remain unmet.",
+    "No workflow, deployed flag, cadence, writer lock or daily cap was changed."
+  ]
+}

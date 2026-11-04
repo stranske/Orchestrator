@@ -5,7 +5,30 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { execFile } = require('node:child_process');
+
+// Some restricted hosts report EPERM from spawnSync even after a successful
+// child exit. Use the asynchronous launcher, retaining real errors and bounds.
+function runCommand(command, args, options) {
+  return new Promise((resolve) => {
+    const { input, ...settings } = options;
+    let inputError;
+    const child = execFile(command, args, {
+      ...settings, encoding: settings.encoding || 'buffer',
+    }, (error, stdout, stderr) => {
+      const failure = error || inputError;
+      const processError = failure && typeof failure.code !== 'number';
+      resolve({
+        status: failure ? (typeof failure.code === 'number' ? failure.code : null) : 0,
+        signal: failure?.signal || null,
+        error: processError ? { code: failure.code || (failure.killed ? 'ETIMEDOUT' : 'PROCESS_ERROR') } : undefined,
+        stdout, stderr,
+      });
+    });
+    child.stdin?.on('error', (error) => { inputError = error; });
+    child.stdin?.end(input);
+  });
+}
 
 const focusedFiles = [
   'tests/test_redirect_chain_gate.py',
@@ -19,7 +42,7 @@ const namedNodes = [
 // No workflow or installed operational state is copied into the scratch tree.
 const archivePaths = ['src', 'tests', 'pyproject.toml'];
 
-function verify({ repository, revision, python = 'python3', run = spawnSync }) {
+async function verify({ repository, revision, python = 'python3', run = runCommand }) {
   const receipt = {
     observed_at: new Date().toISOString(),
     status: 'blocked',
@@ -35,17 +58,17 @@ function verify({ repository, revision, python = 'python3', run = spawnSync }) {
   const git = (args) => run('git', ['-C', repository, ...args], {
     encoding: 'utf8', timeout: 30000, maxBuffer: 64 * 1024 * 1024,
   });
-  const main = git(['rev-parse', '--verify', 'refs/remotes/origin/main^{commit}']);
+  const main = await git(['rev-parse', '--verify', 'refs/remotes/origin/main^{commit}']);
   if (main.status !== 0) {
     receipt.reason = 'merged_main_reference_unavailable';
     return receipt;
   }
   receipt.merged_main_sha = main.stdout.trim();
-  if (git(['merge-base', '--is-ancestor', revision, receipt.merged_main_sha]).status !== 0) {
+  if ((await git(['merge-base', '--is-ancestor', revision, receipt.merged_main_sha])).status !== 0) {
     receipt.reason = 'revision_not_on_merged_main';
     return receipt;
   }
-  const archive = run('git', ['-C', repository, 'archive', '--format=tar', revision, ...archivePaths], {
+  const archive = await run('git', ['-C', repository, 'archive', '--format=tar', revision, ...archivePaths], {
     timeout: 30000, maxBuffer: 64 * 1024 * 1024,
   });
   if (archive.status !== 0) {
@@ -60,7 +83,7 @@ function verify({ repository, revision, python = 'python3', run = spawnSync }) {
     const runtime = path.join(scratch, 'runtime');
     fs.mkdirSync(checkout);
     fs.mkdirSync(runtime);
-    const extracted = run('tar', ['-xf', '-', '-C', checkout], {
+    const extracted = await run('tar', ['-xf', '-', '-C', checkout], {
       input: archive.stdout, timeout: 30000,
     });
     if (extracted.status !== 0) {
@@ -79,8 +102,8 @@ function verify({ repository, revision, python = 'python3', run = spawnSync }) {
       ORCH_REDIRECT_APPLY_BOOTSTRAP: '0',
       ORCH_CAPABILITY_HEARTBEATS: '0',
     };
-    const execute = (name, args) => {
-      const result = run(python, ['-B', ...args], {
+    const execute = async (name, args) => {
+      const result = await run(python, ['-B', ...args], {
         cwd: checkout, env, encoding: 'utf8', timeout: 60000, maxBuffer: 4 * 1024 * 1024,
       });
       const row = {
@@ -91,12 +114,12 @@ function verify({ repository, revision, python = 'python3', run = spawnSync }) {
       receipt.executions.push(row);
       return row;
     };
-    const interpreter = execute('interpreter', [
+    const interpreter = await execute('interpreter', [
       '-c', 'import json, sys; print(json.dumps({"executable": sys.executable, "version": sys.version}))',
     ]);
-    const named = execute('named_tests', ['-m', 'pytest', ...namedNodes, '--color=no', '-v', '-m', 'not slow']);
-    const focused = execute('focused_files', ['-m', 'pytest', ...focusedFiles, '--color=no', '-v', '-m', 'not slow']);
-    const replay = execute('offline_replay', [
+    const named = await execute('named_tests', ['-m', 'pytest', ...namedNodes, '--color=no', '-v', '-m', 'not slow']);
+    const focused = await execute('focused_files', ['-m', 'pytest', ...focusedFiles, '--color=no', '-v', '-m', 'not slow']);
+    const replay = await execute('offline_replay', [
       'src/redirect_apply.py', '--replay-stalls', 'tests/fixtures/redirect_stalls',
     ]);
     const cleanExit = (row) => row.exit_code === 0 && !row.signal && !row.error_code;
@@ -133,15 +156,15 @@ function verify({ repository, revision, python = 'python3', run = spawnSync }) {
   }
 }
 
-function main(args = process.argv.slice(2)) {
+async function main(args = process.argv.slice(2)) {
   if (args.length < 1 || args.length > 2) {
     console.error('Usage: node scripts/verify_redirect_merged_revision.js <full-merged-sha> [python-path]');
     return 2;
   }
-  const receipt = verify({ repository: path.resolve(__dirname, '..'), revision: args[0], python: args[1] });
+  const receipt = await verify({ repository: path.resolve(__dirname, '..'), revision: args[0], python: args[1] });
   console.log(JSON.stringify(receipt, null, 2));
   return receipt.status === 'verified' ? 0 : 1;
 }
 
-if (require.main === module) process.exitCode = main();
-module.exports = { verify, main };
+if (require.main === module) main().then((code) => { process.exitCode = code; });
+module.exports = { verify, main, runCommand };
