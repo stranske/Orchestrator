@@ -1085,7 +1085,7 @@ RESERVATION_DRAIN_BRIDGE_ROLE_MANIFEST = (
     / "fixtures/semantic_api_reference/current_reservation_drain_bridge_role_v1.json"
 )
 RESERVATION_DRAIN_BRIDGE_ROLE_SHA256 = (
-    "936a59dce6baf480e3816398a5cdc803010e4e176a5afbf5aaaed89178bdb80a"
+    "bd6e352583a730360285130c6ce60576f2c6695e89dc6e820790d7ebc97939c9"
 )
 
 
@@ -1538,7 +1538,7 @@ DIAGNOSTICS_REVIEW_MANIFEST = (
     Path(__file__).parent
     / "fixtures/semantic_api_reference/current_reservation_diagnostics_review_v1.json"
 )
-DIAGNOSTICS_REVIEW_SHA256 = "eab91866278a03d73571552b72ca59082b7bea7b39eac893dffb4b1d07ef1999"
+DIAGNOSTICS_REVIEW_SHA256 = "67fef98b1fc73893efa93137252c4a6dd2d73b93532c98afbbcde8f77ae25fee"
 
 
 def diagnostics_review_reference():
