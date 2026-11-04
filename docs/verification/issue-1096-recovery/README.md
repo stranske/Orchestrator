@@ -1,5 +1,14 @@
 # Acceptance evidence recovery for #1096
 
+## Requested retry recovery dispositions, 2026-11-04 UTC
+
+Supplied manifest identities now receive a specific recovery disposition, with
+recorded failures separated from unresolved causes and observed evidence gaps.
+Primary decisions, UNKNOWN truth and historical paid attempts remain intact.
+All 126 focused regressions pass. [Results and limitations](recovery-dispositions/results.md)
+bind the source commit and test logs. Only fixture manifests were exercised;
+original retry reconciliation and operational acceptance remain incomplete.
+
 ## Retained retry identity validation, 2026-11-04 UTC
 
 The inventory now refuses nested attempts whose explicit case, run, target or

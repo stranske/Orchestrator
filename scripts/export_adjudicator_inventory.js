@@ -491,8 +491,56 @@ function reportInventory({ report, observedAt, evidenceClass, evidenceReference,
   };
 }
 
-// Reconcile identities only. A saved decision/truth pair, native marker, paid
-// locator or a perfect manifest match cannot authenticate an actual outcome.
+// Select a recovery step, not a causal explanation for an unrecorded failure.
+// The primary saved attempt owns the disposition. Historical retry errors and
+// truth must not replace its decision or lend it missing grading evidence.
+function retainedRecovery(observation) {
+  const packet = observation.packet_evidence_observation;
+  const receipt = observation.native_receipt_locator;
+  const truth = observation.later_truth_observation;
+  const gaps = [
+    ...packet.blocking_reasons.map(({ code, location }) => ({ stage: 'packet_evidence',
+      code, evidence_locations: [location], next_evidence_step: packet.next_evidence_step })),
+    // Even a validated locator has not authenticated a receipt in this reader.
+    { stage: 'native_receipt', code: receipt.status, evidence_locations: [observation.location],
+      next_evidence_step: receipt.next_evidence_step },
+    { stage: 'independent_later_truth', code: truth.status, evidence_locations: [truth.location],
+      next_evidence_step: truth.next_evidence_step },
+  ];
+  const failure = observation.first_broken_step;
+  let step;
+  let basis = 'observed_evidence_gap';
+  if (failure.status !== 'not_recorded') {
+    basis = failure.status === 'recorded' ? 'recorded_failure' : 'unresolved_retained_failure';
+    step = { stage: failure.stage, code: failure.code || 'retained_failure_cause_unresolved',
+      evidence_locations: failure.evidence_locations,
+      next_evidence_step: 'inspect_primary_failure_evidence_before_any_retry' };
+  } else if (observation.retained_result === 'no_retained_decision' && observation.backend_run_id) {
+    // An apparent paid attempt without a result must be recovered before any
+    // evidence collection could be interpreted as permission to dispatch again.
+    step = gaps.find((item) => item.stage === 'native_receipt');
+  } else if (observation.retained_result === 'unrecognized_retained_decision') {
+    step = { stage: 'attempt_completion', code: observation.retained_result,
+      evidence_locations: [observation.location], next_evidence_step: observation.next_evidence_step };
+  } else if (packet.floor_applies) {
+    const packetGaps = gaps.filter((item) => item.stage === 'packet_evidence');
+    step = { ...packetGaps[0], codes: packetGaps.map((item) => item.code),
+      evidence_locations: packetGaps.flatMap((item) => item.evidence_locations) };
+  } else if (observation.retained_result !== 'retained_binary_decision') {
+    step = { stage: observation.retained_result === 'retained_abstention'
+      ? 'material_evidence' : 'attempt_completion', code: observation.retained_result,
+      evidence_locations: [observation.location], next_evidence_step: observation.next_evidence_step };
+  } else {
+    step = gaps.find((item) => item.stage === 'native_receipt');
+  }
+  return { recovery_disposition: { status: 'blocked', basis, stage: step.stage,
+    codes: step.codes || [step.code], evidence_locations: step.evidence_locations,
+    next_evidence_step: step.next_evidence_step }, grading_evidence_gaps: gaps };
+}
+
+// A saved decision/truth pair, native marker, paid locator or a perfect manifest
+// match cannot authenticate an outcome. Identity gaps cannot borrow diagnostics
+// from conflicting or ambiguous candidates.
 function reconcileRetainedRows(cases, manifest, observations) {
   const exact = (requested, row) => requested.target === row.target &&
     (manifest.schema_version === 1 ||
@@ -529,13 +577,20 @@ function reconcileRetainedRows(cases, manifest, observations) {
         status = 'identity_mismatch'; reasons = ['requested_verdict_mismatch'];
       }
     }
-    return { ...item, status, reasons,
+    const retainedLocations = (matches.length ? matches : candidates).map((row) => row.location);
+    const recovery = matches.length === 1
+      ? retainedRecovery(observations.find((row) => row.location === matches[0].location))
+      : { recovery_disposition: { status: 'blocked', basis: 'retained_identity_gap',
+        stage: 'identity_recovery', codes: reasons, evidence_locations: retainedLocations,
+        next_evidence_step: 'recover_unique_requested_row_before_using_attempt_evidence' },
+      grading_evidence_gaps: null };
+    return { ...item, status, reasons, ...recovery,
       // Ambiguous/conflicting rows cannot lend their failures to a requested
       // identity. A unique match still authenticates neither outcome nor truth.
       retained_attempt_locations: matches.length === 1
         ? observations.filter((row) => row.case_id === matches[0].case_id)
           .map((row) => row.location) : [],
-      retained_locations: (matches.length ? matches : candidates).map((row) => row.location) };
+      retained_locations: retainedLocations };
   });
   return { scope: 'supplied_manifest_against_retained_report_only',
     identity_scope: manifest.schema_version === 2 ? 'dispute' : 'run_target',

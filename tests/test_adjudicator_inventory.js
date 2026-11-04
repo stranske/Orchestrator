@@ -687,6 +687,127 @@ test('retained report CLI matches supplied manifests without authenticating save
     'only the test harness output captures may be created');
 });
 
+test('requested recovery dispositions explain identity gaps without borrowing candidate outcomes', (t) => {
+  const { root, saved, options } = retainedReport(t);
+  const identity = (run_id) => ({ run_id, target: 'owner/repo#1',
+    verifier_verdict: 'NON_PASS', adjudicated_verdict: 'PASS' });
+  saved.rows = [
+    { ...identity('ambiguous'), case_id: 'a', error: 'packet requires gate runs' },
+    { ...identity('ambiguous'), case_id: 'b', decision: 'reject_blocker' },
+    { ...identity('changed'), case_id: 'c', target: 'owner/repo#2' },
+  ];
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const manifest = manifestFile(root, ['missing', 'ambiguous', 'changed'].map(identity), 2);
+  const result = reportInventory({ ...options, manifest });
+  for (const row of result.manifest_reconciliation.cases) {
+    assert.equal(row.grading_evidence_gaps, null, 'unbound candidates cannot establish grading gaps');
+    assert.deepEqual(row.recovery_disposition, {
+      status: 'blocked', basis: 'retained_identity_gap', stage: 'identity_recovery',
+      codes: row.reasons, evidence_locations: row.retained_locations,
+      next_evidence_step: 'recover_unique_requested_row_before_using_attempt_evidence',
+    });
+  }
+});
+
+test('requested recovery keeps recorded failures separate from missing packet and truth evidence', (t) => {
+  const { root, saved, options } = retainedReport(t);
+  const identity = { run_id: 'original', target: 'owner/repo#1',
+    verifier_verdict: 'NON_PASS', adjudicated_verdict: 'PASS' };
+  const scenarios = [
+    [{ error: 'backend exit=1 private diagnostic', errors: [
+      'could not parse a JSON adjudication proposal from the backend output'] },
+    'recorded_failure', 'backend_execution', 'backend_nonzero_exit'],
+    [{ error: 'private unexplained failure' },
+      'unresolved_retained_failure', null, 'retained_failure_cause_unresolved'],
+    [{ decision: 'reject_blocker', error: 'packet requires gate runs' },
+      'unresolved_retained_failure', null, 'retained_failure_cause_unresolved'],
+    [{}, 'observed_evidence_gap', 'packet_evidence', 'packet_missing_or_invalid'],
+    [{ packet: completePacket() },
+      'observed_evidence_gap', 'attempt_completion', 'no_retained_decision'],
+    [{ decision: 'private unrecognized decision' },
+      'observed_evidence_gap', 'attempt_completion', 'unrecognized_retained_decision'],
+    [{ packet: completePacket(), decision: 'needs_more_evidence' },
+      'observed_evidence_gap', 'material_evidence', 'retained_abstention'],
+    [{ packet: completePacket(), decision: 'reject_blocker', later_truth: 'PASS' },
+      'observed_evidence_gap', 'native_receipt', 'backend_identity_not_recorded'],
+  ];
+  const manifest = manifestFile(root, [identity], 2);
+  for (const [fields, basis, stage, code] of scenarios) {
+    saved.rows = [{ ...identity, case_id: 'case-a', ...fields }];
+    fs.writeFileSync(options.report, JSON.stringify(saved));
+    const result = reportInventory({ ...options, manifest });
+    const disposition = result.manifest_reconciliation.cases[0].recovery_disposition;
+    assert.equal(disposition.status, 'blocked');
+    assert.equal(disposition.basis, basis);
+    assert.equal(disposition.stage, stage);
+    assert.ok(disposition.codes.includes(code));
+    assert.ok(disposition.evidence_locations.length > 0);
+    assert.ok(disposition.next_evidence_step);
+    assert.ok(result.manifest_reconciliation.cases[0].grading_evidence_gaps.some((gap) =>
+      gap.stage === 'independent_later_truth'));
+    assert.equal(result.manifest_reconciliation.authenticated_outcomes_verified, false);
+    assert.equal(result.dispatch_authorized, false);
+    assert.ok(!JSON.stringify({ disposition,
+      gaps: result.manifest_reconciliation.cases[0].grading_evidence_gaps }).includes('private'));
+  }
+});
+
+test('decided requested rows retain their outcome and UNKNOWN while historical retry failures stay separate', (t) => {
+  const { root, saved, options } = nativeJournal(t);
+  const identity = { run_id: 'original', target: 'owner/repo#1',
+    verifier_verdict: 'NON_PASS', adjudicated_verdict: 'PASS' };
+  saved.rows = [{ ...identity, case_id: 'case-a', packet: completePacket(),
+    decision: 'reject_blocker', later_truth: 'UNKNOWN', backend_run_id: 'native-provider',
+    retry_error: 'packet requires gate runs', retry_attempts: [{
+      backend_run_id: 'primary', error: 'backend exit=1', later_truth: 'PASS' }] }];
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const manifest = manifestFile(root, [identity], 2);
+  const inputs = [options.report, options.journal, manifest];
+  const before = inputs.map((file) => fs.readFileSync(file));
+  const result = execute(root, process.execPath, [script, '--report', options.report,
+    '--journal', options.journal, '--manifest', manifest, '--observed-at', String(now),
+    '--evidence-class', options.evidenceClass, '--evidence-reference', options.evidenceReference]);
+  assert.equal(result.status, 0, result.stderr);
+  const observed = JSON.parse(result.stdout);
+  const requested = observed.manifest_reconciliation.cases[0];
+  assert.deepEqual(requested.recovery_disposition, {
+    status: 'blocked', basis: 'observed_evidence_gap', stage: 'native_receipt',
+    codes: ['matched_locator'], evidence_locations: ['rows[0]'],
+    next_evidence_step: 'reauthenticate_with_native_projection_before_grading',
+  });
+  assert.deepEqual(requested.grading_evidence_gaps.map((item) => item.stage),
+    ['native_receipt', 'independent_later_truth']);
+  assert.equal(requested.grading_evidence_gaps[1].code, 'unknown');
+  assert.equal(requested.grading_evidence_gaps[1].next_evidence_step,
+    'preserve_UNKNOWN_until_independent_truth_available');
+  assert.equal(observed.cases[0].retained_decision, 'reject_blocker');
+  assert.equal(observed.cases[0].retained_later_truth, 'UNKNOWN');
+  assert.equal(observed.retained_attempt_observations[1].first_broken_step.stage, 'backend_execution');
+  assert.equal(observed.paid_attempts.length, 2);
+  assert.equal(observed.manifest_reconciliation.authenticated_outcomes_verified, false);
+  assert.deepEqual(inputs.map((file) => fs.readFileSync(file)), before);
+});
+
+test('possible paid attempts require completion recovery before packet recollection', (t) => {
+  const { root, saved, options } = nativeJournal(t);
+  const identity = { run_id: 'original', target: 'owner/repo#1',
+    verifier_verdict: 'NON_PASS', adjudicated_verdict: 'PASS' };
+  const manifest = manifestFile(root, [identity], 2);
+  for (const backend of ['primary', 'started-provider', 'missing-provider']) {
+    saved.rows = [{ ...identity, case_id: 'case-a', backend_run_id: backend }];
+    fs.writeFileSync(options.report, JSON.stringify(saved));
+    const result = reportInventory({ ...options, manifest });
+    const recovery = result.manifest_reconciliation.cases[0].recovery_disposition;
+    assert.equal(recovery.stage, 'native_receipt');
+    assert.equal(recovery.next_evidence_step, {
+      primary: 'resume_native_validation_without_redispatch',
+      'started-provider': 'UNKNOWN_recover_provider_receipt_before_any_retry',
+      'missing-provider': 'recover_native_receipt_without_redispatch',
+    }[backend]);
+    assert.equal(result.dispatch_authorized, false);
+  }
+});
+
 test('legacy report manifest keeps verdict ambiguity visible and empty requests cannot complete accounting', (t) => {
   const { root, saved, options } = retainedReport(t);
   saved.rows = ['NON_PASS', 'FAIL'].map((verifier_verdict, index) => ({

@@ -356,6 +356,15 @@
       "dispatch_performed": false,
       "canonical_publication_performed": false,
       "limitation": "Conflicting saved retry identities are refused; original requested identities and authenticated operational evidence remain unavailable."
+    },
+    "requested_recovery_dispositions": {
+      "checked_at": "2026-11-04T01:12:23.013Z",
+      "source_commit": "97e6396add872214bf09e81d9e48c1443546d672",
+      "validation": "recovery-dispositions/validation.json",
+      "results": "recovery-dispositions/results.md",
+      "original_retry_manifest_recovered": false,
+      "authenticated_outcomes_verified": false,
+      "operational_task_checkboxes_completed": 0
     }
   },
   "mirror_synchronization": [
