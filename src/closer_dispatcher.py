@@ -11799,34 +11799,40 @@ def _load_admission_terminal_plan_cache(pipeline_path):
 
 def _save_admission_terminal_plan_cache(pipeline_path, cache):
     path = _admission_terminal_plan_cache_path(pipeline_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_suffix(".tmp")
-    temp.write_text(json.dumps(cache, sort_keys=True, indent=2) + "\n")
-    temp.replace(path)
+    import tempfile
+
+    temp = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as handle:
+            temp = Path(handle.name)
+            handle.write(json.dumps(cache, sort_keys=True, indent=2) + "\n")
+        temp.replace(path)
+    except OSError:
+        # Cache persistence is optional; never change the observed drain grade.
+        pass
+    finally:
+        if temp is not None:
+            try:
+                temp.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def _terminal_plan_cache_key(target, revision):
     return f"{target}:{revision}"
 
 
-# Local owner refusals are cheap to recompute. Caching them would latch a
-# reservation as undrainable after the recorded owner exits while the GitHub
-# snapshot revision is unchanged.
-_LOCAL_OWNER_PLAN_REASONS = frozenset(
-    {
-        "owner_still_alive",
-        "owner_liveness_unknown",
-        "owner_identity_unknown",
-        "owner_process_group_unknown",
-    }
-)
+# No current refusal is solely a function of the remote snapshot: all can
+# depend on local advertisements, locks, transport or native writer state.
+_REVISION_STABLE_PLAN_REASONS = frozenset()
 
 
 def _probe_snapshot_revision(target):
     """Cheap revision probe for cache identity; never raises into diagnostics."""
     try:
         snapshot = GitHub(deadline=time.time() + 30).snapshot(target)
-    except (OSError, RuntimeError, TypeError, ValueError, AttributeError, AssertionError):
+    except Exception:
         return None
     if not isinstance(snapshot, dict):
         return None
@@ -11859,12 +11865,7 @@ def _cacheable_terminal_plan(plan):
     reasons = [str(reason) for reason in plan.get("reasons") or [] if reason]
     if not reasons:
         return False
-    return not any(
-        reason in _LOCAL_OWNER_PLAN_REASONS
-        or reason == "live_reconciliation_holder"
-        or reason.startswith("native_writer_not_terminal:")
-        for reason in reasons
-    )
+    return all(reason in _REVISION_STABLE_PLAN_REASONS for reason in reasons)
 
 
 def _cached_terminal_plan(pipeline_path, target, cache, observe_calls):

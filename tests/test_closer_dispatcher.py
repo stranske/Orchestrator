@@ -5814,11 +5814,11 @@ def test_expired_admission_diagnostics_reports_unmeasured_separately(tmp_path, m
     adapter._expired_admission_diagnostics(pipeline_path)
     assert observe_calls["count"] == 3
     adapter._expired_admission_diagnostics(pipeline_path)
-    assert observe_calls["count"] == 3
+    assert observe_calls["count"] == 6
 
     revision["value"] = "rev-2"
     adapter._expired_admission_diagnostics(pipeline_path)
-    assert observe_calls["count"] == 6
+    assert observe_calls["count"] == 9
 
 
 def test_terminal_plan_cache_does_not_latch_live_owner_refusal(tmp_path, monkeypatch):
@@ -6764,3 +6764,41 @@ def test_drain_pass2_noninteger_blocking_is_unmeasured():
     )
     assert result["status"] == "unmeasured"
     assert result["reservation_cleared"] is False
+
+
+@pytest.mark.parametrize("failure", ["mkdir", "replace", "probe", "transient"])
+def test_cache_failure_recovery_preserves_plan(tmp_path, monkeypatch, failure):
+    import closer_resources
+
+    calls = []
+
+    def plan(*args, **kwargs):
+        calls.append(1)
+        if failure == "transient" and len(calls) == 1:
+            return {"eligible": False, "reasons": ["advertisement_changed_under_locks"]}
+        return {"eligible": True, "reasons": []}
+
+    monkeypatch.setattr(closer_resources, "plan_terminal_reconciliation", plan)
+    if failure == "probe":
+
+        def snapshot(_target):
+            raise KeyError("data")
+
+        monkeypatch.setattr(adapter, "GitHub", lambda **kw: SimpleNamespace(snapshot=snapshot))
+    else:
+        monkeypatch.setattr(adapter, "_probe_snapshot_revision", lambda target: "same-revision")
+    if failure in {"mkdir", "replace"}:
+
+        def fail(*args, **kwargs):
+            raise OSError("read-only or competing cache writer")
+
+        monkeypatch.setattr(Path, failure, fail)
+    cache, observations = {}, {}
+    first, _ = adapter._cached_terminal_plan(
+        tmp_path / "pipeline.json", TARGET, cache, observations
+    )
+    second, _ = adapter._cached_terminal_plan(
+        tmp_path / "pipeline.json", TARGET, cache, observations
+    )
+    assert first["eligible"] is (failure != "transient")
+    assert second["eligible"] is True
