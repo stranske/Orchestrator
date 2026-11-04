@@ -409,3 +409,108 @@ def test_fetched_registry_filters_excluded_repository(monkeypatch):
     assert len(calls) == 1
     assert calls[0][0] == "api"
     assert calls[0][1].endswith("/maint-68-sync-consumer-repos.yml")
+
+
+def test_rest_pages_accepts_exactly_1000():
+    """Regression: keyed REST populations with exactly 1,000 runs produce measurements."""
+    runs = [{"id": i, "conclusion": "success", "event": "pull_request"} for i in range(1000)]
+    result = m._fleet_rest_pages(
+        gh=lambda args: (True, json.dumps({"total_count": 1000, "workflow_runs": runs}), ""),
+        endpoint="repos/owner/repo/actions/workflows/run.yml/runs",
+        key="workflow_runs",
+    )
+    assert len(result) == 1000
+
+
+def test_rest_pages_rejects_overflow():
+    """Regression: keyed REST populations exceeding 1000 are rejected."""
+    runs = [{"id": i} for i in range(1000)]
+    with pytest.raises(ValueError, match="exceeds the 1000-result API ceiling"):
+        m._fleet_rest_pages(
+            gh=lambda args: (True, json.dumps({"total_count": 1001, "workflow_runs": runs}), ""),
+            endpoint="repos/owner/repo/actions/workflows/run.yml/runs",
+            key="workflow_runs",
+        )
+
+
+def test_rest_pages_rejects_incomplete_population():
+    """Regression: incomplete populations are rejected even at 1000."""
+    pages = [[{"id": i} for i in range(j * 100, (j + 1) * 100)] for j in range(9)]
+    pages.append([{"id": i} for i in range(900, 999)])  # Last page with 99 items
+    call_count = [0]
+
+    def gh(args):
+        page_num = call_count[0]
+        call_count[0] += 1
+        return True, json.dumps({"total_count": 1000, "workflow_runs": pages[page_num]}), ""
+
+    with pytest.raises(ValueError, match="incomplete population"):
+        m._fleet_rest_pages(
+            gh=gh,
+            endpoint="repos/owner/repo/actions/workflows/run.yml/runs",
+            key="workflow_runs",
+        )
+
+
+def test_agent_cohort_includes_vibe_and_copilot():
+    """Regression: supported agent identities include vibe and copilot."""
+    now = 1800000000
+    vibe_pr = sample_pr(now)
+    vibe_pr["headRefName"] = "vibe/issue-3"
+    copilot_pr = sample_pr(now)
+    copilot_pr["headRefName"] = "copilot/issue-4"
+    labeled_vibe = copy.deepcopy(vibe_pr)
+    labeled_vibe["headRefName"] = "arbitrary"
+    labeled_vibe["labels"] = connection([{"name": "agent:vibe"}])
+    labeled_copilot = copy.deepcopy(copilot_pr)
+    labeled_copilot["headRefName"] = "arbitrary"
+    labeled_copilot["labels"] = connection([{"name": "agent:copilot"}])
+    conn = {
+        **connection([vibe_pr, copilot_pr, labeled_vibe, labeled_copilot]),
+        "issueCount": 4,
+    }
+    result = m._fleet_agent_prs(
+        now=now, repos=["o/r"], gh=lambda args: (True, json.dumps({"data": {"search": conn}}), "")
+    )
+    assert len(result) == 4
+    assert all(pr in result for pr in [vibe_pr, copilot_pr, labeled_vibe, labeled_copilot])
+
+
+def test_released_flow_recovers_missing_closes_reference():
+    """Regression: reopened approved issues are represented via explicit fetch."""
+    now = 1800000000
+    pr = sample_pr(now, merged=now - 3600)
+    pr["closingIssuesReferences"] = connection([])
+    calls = []
+
+    def gh(args):
+        calls.append(args)
+        if args[0] == "issue":
+            return True, '{"number":3,"labels":{"nodes":[{"name":"repo-review-approved"}],"pageInfo":{"hasNextPage":false}}}', ""
+        return False, "", "unexpected call"
+
+    value = m._fleet_released_flow(now=now, prs=[pr], gh=gh)
+    assert "48h mean opened=" in value
+    assert calls == [["issue", "view", "3", "--repo", "o/r", "--json", "number,labels"]]
+
+
+def test_released_flow_fails_without_gh_for_missing_reference():
+    """Regression: failed recovery yields unmeasured."""
+    now = 1800000000
+    pr = sample_pr(now, merged=now - 3600)
+    pr["closingIssuesReferences"] = connection([])
+    with pytest.raises(ValueError, match="gh would need explicit fetch"):
+        m._fleet_released_flow(now=now, prs=[pr], gh=None)
+
+
+def test_released_flow_missing_reference_without_label_is_unmeasured():
+    """Regression: recovered issue without repo-review-approved label skips PR."""
+    now = 1800000000
+    pr = sample_pr(now, merged=now - 3600)
+    pr["closingIssuesReferences"] = connection([])
+
+    def gh(args):
+        return True, '{"number":3,"labels":{"nodes":[{"name":"other-label"}],"pageInfo":{"hasNextPage":false}}}', ""
+
+    value = m._fleet_released_flow(now=now, prs=[pr], gh=gh)
+    assert "48h mean opened=0/day merged=0/day" in value

@@ -863,6 +863,8 @@ def _fleet_rest_pages(gh, endpoint: str, key: str | None = None) -> list[dict]:
             if key and len(rows) != payload["total_count"]:
                 raise ValueError("gh incomplete population")
             return rows
+        if key and len(rows) == payload["total_count"]:
+            return rows
     raise ValueError("gh pagination budget exhausted; would need a narrower query")
 
 
@@ -969,11 +971,13 @@ def _fleet_agent_prs(*, now: int, gh, repos: list[str]) -> list[dict]:
                             "gemini",
                             "aider",
                             "muse",
+                            "vibe",
+                            "copilot",
                         )
                     }
                 )
                 or re.match(
-                    r"(?:codex|claude|claude-code|cursor|gemini|aider|muse|orch|orchestrator)/issue-",
+                    r"(?:codex|claude|claude-code|cursor|gemini|aider|muse|orch|orchestrator|vibe|copilot)/issue-",
                     branch,
                 )
             ):
@@ -1056,14 +1060,40 @@ def _fleet_close_latency(*, now: int, prs: list[dict], gh) -> str:
     return f"{median} (48h merges; n={len(minutes)}, still open={pending}, closed before merge={before_merge})"
 
 
-def _fleet_released_flow(*, now: int, prs: list[dict]) -> str:
+def _fleet_released_flow(*, now: int, prs: list[dict], gh=None) -> str:
     opened: dict[str, int] = {}
     merged: dict[str, int] = {}
     for pr in prs:
+        repo = pr["repository"]["nameWithOwner"]
+        numbers = set(
+            re.findall(r"^\s*closes[ \t]+#(\d+)\b", pr["body"], re.IGNORECASE | re.MULTILINE)
+        )
+        refs = pr["closingIssuesReferences"]["nodes"]
+        if pr["closingIssuesReferences"]["pageInfo"]["hasNextPage"]:
+            raise ValueError("gh closing issue references truncated")
+        ref_numbers = {str(issue["number"]) for issue in refs if issue["repository"]["nameWithOwner"] == repo}
+        missing = numbers - ref_numbers
+        for number in sorted(missing):
+            if gh is None:
+                raise ValueError("gh would need explicit fetch to recover missing issue reference")
+            issue = _fleet_json(
+                gh,
+                [
+                    "issue",
+                    "view",
+                    number,
+                    "--repo",
+                    repo,
+                    "--json",
+                    "number,labels",
+                ],
+            )
+            refs = [*refs, {**issue, "repository": {"nameWithOwner": repo}}]
         if not any(
             "repo-review-approved" in _fleet_labels(issue)
-            for issue in pr["closingIssuesReferences"]["nodes"]
+            for issue in refs
             if issue["repository"]["nameWithOwner"] != _FLEET_EXCLUDED_REPO
+            and str(issue["number"]) in numbers
         ):
             continue
         for timestamp, counts in ((pr["createdAt"], opened), (pr["mergedAt"], merged)):
@@ -1183,7 +1213,7 @@ def fleet_delivery_measures(
     )
     measure(
         "Released-issue agent PR flow",
-        lambda: with_prs(_fleet_released_flow),
+        lambda: with_prs(lambda **kwargs: _fleet_released_flow(**kwargs, gh=gh)),
         "observed GitHub PRs + current issue labels; agent metadata cohort",
     )
     return rows
