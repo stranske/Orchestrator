@@ -837,7 +837,10 @@ print(json.dumps({
     assert.ok(call.args[1].includes('gate-run'));
     assert.equal(call.kwargs.isolate, true, 'retrospective transport must isolate execution');
     assert.equal(call.kwargs.mode, 'full');
-    assert.equal(call.kwargs.timeout, 180);
+    // The shared retrospective/role budget is 600 seconds. Check the persisted
+    // receipt too: the report must describe the budget actually sent to transport.
+    assert.equal(call.kwargs.timeout, 600);
+    assert.equal(result.second.rows[index].dispatch_timeout_s, call.kwargs.timeout);
     assert.equal(call.kwargs.cwd, path.dirname(path.join(
       w.root, 'state/capability-program/adjudicator-retro.json',
     )));
@@ -1177,9 +1180,10 @@ print(json.dumps({"first": first, "second": second, "resumed": resumed,
   assert.deepEqual(report.summary, {
     cases: 4, adjudicated: 0, proposed_decisions: 2, metadata_only_cases: 4,
     graded: 0, agree: 0, disagree: 0,
+    advice_graded: 0, advice_agree: 0, advice_disagree: 0, retry_pending: 2,
     agreement_rate: null, merge_rule_agreement_rate: null,
-    cost_usd: 4.75, cost_measured_cases: 4, cost_per_case: 1.1875,
-    cost_attempted_cases: 4, cost_imputed_cases: 0, cost_unmeasured_cases: 0,
+    cost_usd: 4.75, cost_measured_cases: 3, cost_per_case: 4.75 / 3,
+    cost_attempted_cases: 4, cost_imputed_cases: 0, cost_unmeasured_cases: 1,
     cost_scale: 'list_price_usd', estimated_cost_usd: 4.75,
   });
   assert.deepEqual(report.proposal_comparison, {
@@ -1187,10 +1191,10 @@ print(json.dumps({"first": first, "second": second, "resumed": resumed,
     compared: 2, pending_truth: 0, missing_merge_disposition: 0, abstained: 1, unassessed: 1,
     agree: 1, disagree: 1, agreement_rate: 0.5,
     merge_rule_agree: 0, merge_rule_disagree: 2, merge_rule_agreement_rate: 0,
-    cost_usd: 4.75, cost_measured_cases: 4, cost_per_case: 1.1875,
+    cost_usd: 4.75, cost_measured_cases: 3, cost_per_case: 4.75 / 3,
   });
   assert.equal(report.rows[2].decision, 'needs_more_evidence');
-  assert.equal(report.rows[2].cost_usd, 0, 'a measured zero still belongs in the cost denominator');
+  assert.equal(report.rows[2].cost_usd, null, 'zero-dollar telemetry stays unmeasured');
   assert.equal(report.rows[3].decision, undefined);
   assert.ok(report.rows[3].errors.some((error) => error.includes('could not parse')));
   assert.equal(report.rows[3].cost_usd, 0.75, 'a failed response still incurs its measured cost');
@@ -1610,9 +1614,10 @@ test('retro CLI preserves raw proposals without grading metadata and refreshes m
   assert.deepEqual(summary, {
     cases: 6, adjudicated: 0, proposed_decisions: 4, metadata_only_cases: 6,
     graded: 0, agree: 0, disagree: 0,
+    advice_graded: 0, advice_agree: 0, advice_disagree: 0, retry_pending: 2,
     agreement_rate: null, merge_rule_agreement_rate: null,
-    cost_usd: 4.5, cost_measured_cases: 4, cost_per_case: 1.125,
-    cost_attempted_cases: 5, cost_imputed_cases: 0, cost_unmeasured_cases: 1,
+    cost_usd: 4.5, cost_measured_cases: 3, cost_per_case: 1.5,
+    cost_attempted_cases: 5, cost_imputed_cases: 0, cost_unmeasured_cases: 2,
     cost_scale: 'list_price_usd', estimated_cost_usd: 4.5,
   });
   const report = w.report();
@@ -1621,7 +1626,7 @@ test('retro CLI preserves raw proposals without grading metadata and refreshes m
     compared: 3, pending_truth: 1, missing_merge_disposition: 0, abstained: 1, unassessed: 1,
     agree: 2, disagree: 1, agreement_rate: 2 / 3,
     merge_rule_agree: 1, merge_rule_disagree: 2, merge_rule_agreement_rate: 1 / 3,
-    cost_usd: 4.5, cost_measured_cases: 4, cost_per_case: 1.125,
+    cost_usd: 4.5, cost_measured_cases: 3, cost_per_case: 1.5,
   });
   assert.deepEqual(report.rows.map((row) => row.proposal_comparison), [
     { verdict: 'PASS', agrees: true, merge_rule_agrees: true },
@@ -1642,7 +1647,7 @@ test('retro CLI preserves raw proposals without grading metadata and refreshes m
   assert.equal(report.rows[0].raw_shadow_verdict, 'PASS');
   assert.equal(report.rows[1].raw_shadow_verdict, 'FAIL');
   assert.equal(report.rows[2].cost_usd, null, 'ledger placeholders are not measured costs');
-  assert.equal(report.rows[3].cost_usd, 0, 'a measured zero still counts in the denominator');
+  assert.equal(report.rows[3].cost_usd, null, 'zero-dollar telemetry stays unmeasured');
   assert.equal(report.rows[3].later_truth, null, 'pending durability must stay ungraded');
   assert.deepEqual(w.brain(), before, 'refresh must not write outcomes or dispatch role runs');
   const { line, rendered } = w.run(['-c', `
@@ -1658,8 +1663,9 @@ rendered = switch_review.format_report({
 print(json.dumps({"line": line, "rendered": rendered}))
 `]);
   assert.equal(line, 'adjudicator shadow: cases 6, agree 0, disagree 0, cost 4.5 '
-    + '(graded 0; costs measured 4; cost measured 4 of 5, imputed 0, unmeasured 1; '
-    + 'estimated accounted USD 4.5; scale list_price_usd)');
+    + '(graded 0; costs measured 3; cost measured 3 of 5, imputed 0, unmeasured 2; '
+    + 'estimated accounted USD 4.5; scale list_price_usd; retry pending 2; '
+    + 'advice graded 0 (agree 0, disagree 0))');
   assert.equal(rendered.split('\n').filter((text) => text === line).length, 1);
 });
 
@@ -1779,6 +1785,7 @@ with ExitStack() as stack:
         "held_off": [], "on_but_idle": [],
     }))
     stack.enter_context(patch.object(runtime_ac_gate, "shadow_summary", return_value=None))
+    stack.enter_context(patch.object(runtime_ac_gate, "post_merge_summary", return_value=None))
     for name, value in {
         "stale_runners": [], "adversarial_shape_population": {},
         "mirror_drift": {"status": "ok"}, "fleet_gates": {},
@@ -1799,7 +1806,9 @@ with ExitStack() as stack:
         else:
             path.write_text(payload)
         before = snapshot()
-        report = switch_review.review(now=1800000000, env={"ORCH_VALUE_CHAIN_MONITOR": "0"})
+        # The feature-goal reader owns unrelated history writes; isolate that reader.
+        report = switch_review.review(now=1800000000, env={"ORCH_VALUE_CHAIN_MONITOR": "0"},
+                                      feature_goals_fn=lambda _now: {})
         rendered = switch_review.format_report(report)
         assert snapshot() == before, "weekly review changed saved state"
         assert all(mock.call_count == 0 for mock in forbidden), "weekly review replayed evidence"
@@ -1811,16 +1820,20 @@ print(json.dumps(results))
   const knownLines = {
     measured: 'adjudicator shadow: cases 4, agree 2, disagree 1, cost 1.25 '
       + '(graded 3; costs measured 4; cost measured 4 of 4, imputed 0, unmeasured 0; '
-      + 'estimated accounted USD UNMEASURED; scale list_price_usd)',
+      + 'estimated accounted USD UNMEASURED; scale list_price_usd; retry pending UNKNOWN; '
+      + 'advice graded UNKNOWN)',
     measured_zero: 'adjudicator shadow: cases 1, agree 0, disagree 0, cost 0 '
       + '(graded 0; costs measured 1; cost measured 1 of 1, imputed 0, unmeasured 0; '
-      + 'estimated accounted USD 0; scale list_price_usd)',
+      + 'estimated accounted USD 0; scale list_price_usd; retry pending 1; '
+      + 'advice graded 0 (agree 0, disagree 0))',
     partial_cost: 'adjudicator shadow: cases 3, agree 0, disagree 0, cost 1.25 '
       + '(graded 0; costs measured 2; cost measured 2 of 2, imputed 0, unmeasured 0; '
-      + 'estimated accounted USD 1.25; scale list_price_usd)',
+      + 'estimated accounted USD 1.25; scale list_price_usd; retry pending 1; '
+      + 'advice graded 0 (agree 0, disagree 0))',
     unmeasured: 'adjudicator shadow: cases 0, agree 0, disagree 0, cost UNKNOWN '
       + '(graded 0; costs measured 0; cost measured 0 of 0, imputed 0, unmeasured 0; '
-      + 'estimated accounted USD UNMEASURED; scale list_price_usd)',
+      + 'estimated accounted USD UNMEASURED; scale list_price_usd; retry pending UNKNOWN; '
+      + 'advice graded UNKNOWN)',
   };
   for (const result of results) {
     const expected = knownLines[result.fixture]
@@ -1851,9 +1864,10 @@ print(json.dumps(True))
   assert.deepEqual(summary, {
     cases: 6, adjudicated: 0, proposed_decisions: 4, metadata_only_cases: 6,
     graded: 0, agree: 0, disagree: 0,
+    advice_graded: 0, advice_agree: 0, advice_disagree: 0, retry_pending: 2,
     agreement_rate: null, merge_rule_agreement_rate: null,
-    cost_usd: 5.25, cost_measured_cases: 5, cost_per_case: 1.05,
-    cost_attempted_cases: 5, cost_imputed_cases: 0, cost_unmeasured_cases: 0,
+    cost_usd: 5.25, cost_measured_cases: 4, cost_per_case: 1.3125,
+    cost_attempted_cases: 5, cost_imputed_cases: 0, cost_unmeasured_cases: 1,
     cost_scale: 'list_price_usd', estimated_cost_usd: 5.25,
   });
   assert.deepEqual(w.report().summary, summary);
@@ -1862,7 +1876,7 @@ print(json.dumps(True))
     compared: 4, pending_truth: 0, missing_merge_disposition: 0, abstained: 1, unassessed: 1,
     agree: 2, disagree: 2, agreement_rate: 0.5,
     merge_rule_agree: 2, merge_rule_disagree: 2, merge_rule_agreement_rate: 0.5,
-    cost_usd: 5.25, cost_measured_cases: 5, cost_per_case: 1.05,
+    cost_usd: 5.25, cost_measured_cases: 4, cost_per_case: 1.3125,
   });
   assert.deepEqual(w.report().rows.map((row) => [row.case_id, row.role_run_id]), identities);
   assert.deepEqual(w.brain(), before);
@@ -1886,7 +1900,7 @@ print(json.dumps(True))
     compared: 2, pending_truth: 1, missing_merge_disposition: 1, abstained: 1, unassessed: 1,
     agree: 1, disagree: 1, agreement_rate: 0.5,
     merge_rule_agree: 2, merge_rule_disagree: 0, merge_rule_agreement_rate: 1,
-    cost_usd: 5.25, cost_measured_cases: 5, cost_per_case: 1.05,
+    cost_usd: 5.25, cost_measured_cases: 4, cost_per_case: 1.3125,
   });
   assert.equal(w.report().rows[0].merge_rule_verdict, null);
   assert.equal(w.report().rows[0].proposal_comparison.agrees, null);
@@ -1911,7 +1925,7 @@ print(json.dumps(True))
   assert.equal(initial.rows[4].decision, 'needs_more_evidence');
   assert.equal(initial.rows[4].cost_usd, null, 'an incomplete ledger cost stays unmeasured');
   assert.equal(initial.summary.cost_usd, 4);
-  assert.equal(initial.summary.cost_measured_cases, 3);
+  assert.equal(initial.summary.cost_measured_cases, 2);
 
   // The original dispute has already aged out of the replay window. Losing
   // its outcome must not stop late telemetry for the paid abstention.
@@ -1936,17 +1950,18 @@ print(json.dumps(True))
     w.refresh();
     const report = w.report();
     const abstention = report.rows[4];
-    assert.equal(abstention.cost_usd, cost);
+    assert.equal(abstention.cost_usd, cost === 0 ? null : cost);
     assert.equal(abstention.later_truth, null);
     assert.equal(abstention.merge_rule_verdict, null);
     assert.deepEqual(abstention.proposal_comparison,
       { verdict: null, agrees: null, merge_rule_agrees: null });
     const expectedCosts = {
-      cost_usd: 4 + cost, cost_measured_cases: 4, cost_per_case: (4 + cost) / 4,
+      cost_usd: 4 + cost, cost_measured_cases: cost === 0 ? 2 : 3,
+      cost_per_case: (4 + cost) / (cost === 0 ? 2 : 3),
     };
     assert.deepEqual(report.summary, {
       ...initial.summary, ...expectedCosts,
-      cost_unmeasured_cases: 1,
+      cost_unmeasured_cases: cost === 0 ? 3 : 2,
       estimated_cost_usd: 4 + cost,
     });
     assert.deepEqual(report.proposal_comparison,
@@ -2014,7 +2029,9 @@ with feedback._conn() as conn:
 print(json.dumps(True))
 `]);
   for (const [cost, source, expected] of [
-    [0, 'ccusage', 0],
+    // Whole-run accounting requires positive dollars; a zero-dollar ccusage
+    // row is incomplete telemetry and must remain explicitly unmeasured.
+    [0, 'ccusage', null],
     [2, 'ccusage', 2],
     [7, 'ledger', null],
     [null, null, null],
@@ -2098,13 +2115,13 @@ with feedback._conn() as conn:
     conn.execute("DELETE FROM costs WHERE run_id='backend-1'")
 print(json.dumps(True))
 `]);
-  const partial = checkCosts(0.5, 2, 0.25);
+  const partial = checkCosts(0.5, 1, 0.5);
   assert.equal(partial.rows[0].cost_usd, null);
   assert.equal(partial.rows[1].cost_usd, null);
-  assert.equal(partial.rows[3].cost_usd, 0, 'measured zero belongs in the cost denominator');
+  assert.equal(partial.rows[3].cost_usd, null, 'zero-dollar telemetry stays unmeasured');
   assert.equal(partial.rows[4].cost_usd, 0.5, 'abstaining still incurs a measured case cost');
 
-  // A measured zero differs from the absence of any measured costs.
+  // Zero-dollar telemetry cannot preserve the last positive measured cost.
   w.run(['-c', `
 import json
 import feedback
@@ -2112,7 +2129,7 @@ with feedback._conn() as conn:
     conn.execute("UPDATE costs SET source='ledger' WHERE run_id='backend-4'")
 print(json.dumps(True))
 `]);
-  checkCosts(0, 1, 0);
+  checkCosts(null, 0, null);
   w.run(['-c', `
 import json
 import feedback
@@ -2132,7 +2149,7 @@ with feedback._conn() as conn:
     conn.execute("INSERT INTO costs(run_id,cost_usd,source) VALUES ('backend-1',2.5,'ccusage')")
 print(json.dumps(True))
 `]);
-  const restored = checkCosts(4.5, 4, 1.125);
+  const restored = checkCosts(4.5, 3, 1.5);
   assert.deepEqual(restored.proposal_comparison, initial.proposal_comparison);
 });
 
@@ -2204,7 +2221,7 @@ print(json.dumps(True))
     compared: 3, pending_truth: 0, missing_merge_disposition: 1, abstained: 1, unassessed: 1,
     agree: 3, disagree: 0, agreement_rate: 1,
     merge_rule_agree: 2, merge_rule_disagree: 1, merge_rule_agreement_rate: 2 / 3,
-    cost_usd: 4.5, cost_measured_cases: 4, cost_per_case: 1.125,
+    cost_usd: 4.5, cost_measured_cases: 3, cost_per_case: 1.5,
   });
   assert.deepEqual(initial.rows.map((row) => row.proposal_comparison), [
     { verdict: 'PASS', agrees: true, merge_rule_agrees: true },
@@ -2307,6 +2324,7 @@ test('retro CLI publishes an empty report without inventing agreement or cost', 
   assert.deepEqual(summary, {
     cases: 0, adjudicated: 0, proposed_decisions: 0, metadata_only_cases: 0,
     graded: 0, agree: 0, disagree: 0,
+    advice_graded: 0, advice_agree: 0, advice_disagree: 0, retry_pending: 0,
     agreement_rate: null, merge_rule_agreement_rate: null,
     cost_usd: null, cost_measured_cases: 0, cost_per_case: null,
     cost_attempted_cases: 0, cost_imputed_cases: 0, cost_unmeasured_cases: 0,
@@ -2384,7 +2402,7 @@ print(json.dumps(True))
     compared: 1, pending_truth: 3, missing_merge_disposition: 0, abstained: 1, unassessed: 1,
     agree: 0, disagree: 1, agreement_rate: 0,
     merge_rule_agree: 0, merge_rule_disagree: 1, merge_rule_agreement_rate: 0,
-    cost_usd: 4.5, cost_measured_cases: 4, cost_per_case: 1.125,
+    cost_usd: 4.5, cost_measured_cases: 3, cost_per_case: 1.5,
   });
   for (const index of [0, 1]) {
     assert.equal(unjudged.rows[index].later_truth, null);
