@@ -378,6 +378,7 @@
       "tests/test_closer_semantic_gap_eligibility.py",
       "tests/test_closer_sonnet_reviewed_record.py",
       "tests/test_closer_verification_prepost_no_start.py",
+      "tests/test_consumer_drain_marker.py",
       "tests/test_consumer_sync_artifact_ingest_coverage_gaps.py",
       "tests/test_consumer_sync_shadow.py",
       "tests/test_core_sibling_skip_ceiling.py",
