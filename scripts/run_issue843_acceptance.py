@@ -12,6 +12,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import tempfile
 import time
@@ -373,6 +374,13 @@ def restore_file(path: Path, original: bytes, expected_sha: str) -> None:
             artifact.unlink(missing_ok=True)
 
 
+def scrub_output(text: str) -> str:
+    # Pytest can print a truncated environ repr with no closing delimiter. Scrub
+    # before tail truncation, and retain subsequent FAILED summary lines.
+    text = re.sub(r"environ\(\{[^\n]*", "environ({<redacted>})", text)
+    return text.replace(str(Path.home()), "~")
+
+
 def run_pytest(
     python: str, node_ids: tuple[str, ...], *, extra_env: dict[str, str] | None = None
 ) -> dict:
@@ -411,9 +419,9 @@ def run_pytest(
         "failed": mapped_failure,
         "failed_node_ids": failed_nodes,
         "seconds": round(time.perf_counter() - started, 3),
-        "failure_excerpt": failure_line[:500],
-        "stdout_tail": (proc.stdout or "")[-1500:],
-        "stderr_tail": (proc.stderr or "")[-1500:],
+        "failure_excerpt": scrub_output(failure_line)[:500],
+        "stdout_tail": scrub_output(proc.stdout or "")[-1500:],
+        "stderr_tail": scrub_output(proc.stderr or "")[-1500:],
     }
 
 

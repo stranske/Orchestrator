@@ -251,3 +251,31 @@ def test_selected_interpreter_failure_does_not_fall_back(tmp_path, monkeypatch):
     selected = tmp_path / "selected-python"
     selected.touch(mode=0o700)
     assert runner.resolve_python(str(selected)) == str(selected)
+
+
+@pytest.mark.parametrize("closing", ["})", "... truncated"])
+def test_stored_output_redacts_environment_before_truncation(monkeypatch, closing):
+    monkeypatch.setattr(Path, "home", lambda: Path("/private-home"))
+    failed = f"FAILED {NODE} - AssertionError at /private-home/example.py\n"
+    output = (
+        "E assert environ({'PRIVATE_VALUE': 'sensitive-value', 'HOME': '/private-home'"
+        + closing
+        + "\n"
+        + failed
+        + "padding\n" * 500
+    )
+    monkeypatch.setattr(
+        runner.subprocess,
+        "run",
+        lambda *a, **kw: subprocess.CompletedProcess(a, 1, output, output),
+    )
+    result = runner.run_pytest("selected-python", (NODE,))
+    assert result["failed"]
+    assert result["failed_node_ids"] == [NODE, NODE]
+    assert "~/example.py" in result["failure_excerpt"]
+    for key in ("failure_excerpt", "stdout_tail", "stderr_tail"):
+        assert "sensitive-value" not in result[key]
+        assert "/private-home" not in result[key]
+    scrubbed = runner.scrub_output(output)
+    assert "environ({<redacted>})" in scrubbed
+    assert f"FAILED {NODE}" in scrubbed
