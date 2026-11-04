@@ -119,6 +119,17 @@ def test_sandbox_probe_unavailable_is_false(monkeypatch, failure):
     assert dispatcher._sandbox_has_network("assess") is False
 
 
+def test_sandbox_probe_dns_succeeds_but_connection_fails(monkeypatch):
+    """Regression test: DNS resolution succeeds but connection to api.github.com:443 fails."""
+
+    def run(*_args, **_kwargs):
+        # Simulate probe command exiting with error (e.g., connection refused after DNS success)
+        return SimpleNamespace(returncode=1, stdout="", stderr="Connection refused")
+
+    monkeypatch.setattr(dispatcher.subprocess, "run", run)
+    assert dispatcher._sandbox_has_network("assess") is False
+
+
 def test_sandbox_report_counts_each_run_once_and_network_incomplete(tmp_path):
     ledger = tmp_path / "ledger.ndjson"
     log = tmp_path / "dispatch.log"

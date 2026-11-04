@@ -699,7 +699,7 @@ ASSESS_SANDBOX_FALLBACK_LOG = (
 def _sandbox_has_network(
     mode: str, *, codex_binary: str = "codex", cwd: Path | None = None
 ) -> bool:
-    """Bounded DNS probe INSIDE the same Codex sandbox policy, without an LLM call.
+    """Bounded connection probe INSIDE the same Codex sandbox policy, without an LLM call.
 
     Extends the existing offload rail, not a new capability. A failed/unsupported
     sandbox launch is also unusable for network reads, so it takes the same fallback.
@@ -715,7 +715,7 @@ def _sandbox_has_network(
                 "--",
                 sys.executable,
                 "-c",
-                "import socket; socket.getaddrinfo('api.github.com', 443)",
+                "import socket; s=socket.socket(); s.settimeout(2); s.connect(('api.github.com', 443)); s.close()",
             ],
             capture_output=True,
             cwd=cwd,
