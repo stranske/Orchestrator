@@ -122,10 +122,22 @@ def test_catalog_and_model_fallbacks_fail_closed_without_a_probe(monkeypatch, tm
         "session_id": None,
         "result_text": None,
     }
-    assert adapters.agy_log_for("name.") == Path("name..agy.log")
     cache = tmp_path / "broken.json"
     cache.write_text('{"ts":"bad","models":["x"]}')
     assert adapters._cached_catalog("bad", 1, cache, need_pairs=False) is None
+
+
+def test_agy_log_for_appends_suffix_when_with_suffix_refuses(monkeypatch):
+    original = Path.with_suffix
+
+    def with_suffix(self, suffix):
+        if suffix == adapters.AGY_LOG_SUFFIX and self.name == "name.":
+            raise ValueError("simulated with_suffix refusal")
+        return original(self, suffix)
+
+    monkeypatch.setattr(Path, "with_suffix", with_suffix)
+    assert adapters.agy_log_for("name.") == Path("name..agy.log")
+    assert adapters.agy_log_for("/tmp/run.log") == Path("/tmp/run.agy.log")
 
 
 def test_model_selection_preserves_family_and_ceiling(monkeypatch):
