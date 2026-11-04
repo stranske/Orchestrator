@@ -6710,6 +6710,32 @@ def test_native_writer_refusal_reobserved_on_unchanged_revision(tmp_path, monkey
     assert len(calls) == 2
 
 
+def test_lock_contention_refusal_reobserved_on_unchanged_revision(tmp_path, monkeypatch):
+    import closer_resources
+
+    monkeypatch.setattr(adapter, "_probe_snapshot_revision", lambda target: "same-revision")
+    calls = []
+
+    def plan(*args, **kwargs):
+        calls.append(1)
+        return {
+            "eligible": len(calls) > 1,
+            "reasons": ["live_reconciliation_holder"] if len(calls) == 1 else [],
+        }
+
+    monkeypatch.setattr(closer_resources, "plan_terminal_reconciliation", plan)
+    cache, observations = {}, {}
+    first, _ = adapter._cached_terminal_plan(
+        tmp_path / "pipeline.json", TARGET, cache, observations
+    )
+    second, _ = adapter._cached_terminal_plan(
+        tmp_path / "pipeline.json", TARGET, cache, observations
+    )
+    assert first["eligible"] is False
+    assert second["eligible"] is True
+    assert len(calls) == 2
+
+
 @pytest.mark.parametrize(
     "grader,check",
     [

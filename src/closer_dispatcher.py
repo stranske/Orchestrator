@@ -11860,7 +11860,9 @@ def _cacheable_terminal_plan(plan):
     if not reasons:
         return False
     return not any(
-        reason in _LOCAL_OWNER_PLAN_REASONS or reason.startswith("native_writer_not_terminal:")
+        reason in _LOCAL_OWNER_PLAN_REASONS
+        or reason == "live_reconciliation_holder"
+        or reason.startswith("native_writer_not_terminal:")
         for reason in reasons
     )
 
