@@ -12,8 +12,8 @@ import argparse
 import hashlib
 import json
 import os
-import shutil
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -23,6 +23,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 EVIDENCE_DIR = REPO_ROOT / "docs" / "evidence" / "issue-843-acceptance"
 RECEIPT_JSON = EVIDENCE_DIR / "mutation-receipt.json"
 REPORT_MD = EVIDENCE_DIR / "README.md"
+PYTEST_TIMEOUT_SECONDS = 90
 
 FOCUSED_TESTS = (
     "tests/test_issue843_ranked_coverage.py",
@@ -328,43 +329,42 @@ MUTATIONS: tuple[MutationSpec, ...] = (
 
 
 def resolve_python(explicit: str | None) -> str:
-    candidates = [
-        explicit,
-        os.environ.get("ORCH_STANDARD_PYTHON"),
-        "/opt/anaconda3/bin/python3",
-        shutil.which("python3"),
-    ]
-    for cand in candidates:
-        if not cand:
-            continue
-        path = Path(cand)
-        if path.is_file() and os.access(path, os.X_OK):
-            return str(path)
-    raise SystemExit("no usable Python interpreter found")
+    selected = explicit or os.environ.get("ORCH_STANDARD_PYTHON")
+    if not selected and os.environ.get("VIRTUAL_ENV"):
+        selected = str(Path(os.environ["VIRTUAL_ENV"]) / "bin" / "python")
+    selected = selected or "/opt/anaconda3/bin/python3"
+    path = Path(selected)
+    if not path.is_file() or not os.access(path, os.X_OK):
+        raise SystemExit(f"selected Python interpreter unavailable: {selected}")
+    return str(path)
 
 
-def sha256_text(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+def sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
 
 
-def apply_mutation(path: Path, spec: MutationSpec) -> tuple[str, str]:
-    original = path.read_text(encoding="utf-8")
-    if spec.old not in original:
+def apply_mutation(path: Path, spec: MutationSpec) -> tuple[bytes, str]:
+    original = path.read_bytes()
+    original_text = original.decode("utf-8")
+    if spec.old not in original_text:
         raise ValueError(f"{spec.mutation_id}: needle missing in {path}")
     if spec.replace == "all":
-        mutated = original.replace(spec.old, spec.new)
+        mutated = original_text.replace(spec.old, spec.new)
     else:
-        mutated = original.replace(spec.old, spec.new, 1)
-    path.write_text(mutated, encoding="utf-8")
-    return original, sha256_text(original)
+        mutated = original_text.replace(spec.old, spec.new, 1)
+    try:
+        path.write_bytes(mutated.encode("utf-8"))
+    except BaseException:
+        restore_file(path, original, sha256_bytes(original))
+        raise
+    return original, sha256_bytes(original)
 
 
-def restore_file(path: Path, original: str, expected_sha: str) -> None:
-    if sha256_text(original) != expected_sha:
+def restore_file(path: Path, original: bytes, expected_sha: str) -> None:
+    if sha256_bytes(original) != expected_sha:
         raise RuntimeError(f"original bytes sha256 mismatch for {path}")
-    path.write_text(original, encoding="utf-8")
-    restored = path.read_text(encoding="utf-8")
-    if restored != original:
+    path.write_bytes(original)
+    if sha256_bytes(path.read_bytes()) != expected_sha:
         raise RuntimeError(f"restore failed for {path}")
     cache = path.parent / "__pycache__"
     if cache.is_dir():
@@ -379,29 +379,37 @@ def run_pytest(
     env = os.environ.copy()
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env["PYTHONPATH"] = str(REPO_ROOT / "src") + os.pathsep + env.get("PYTHONPATH", "")
-    env.setdefault("ORCH_STATE_DIR", str(REPO_ROOT / ".issue843-tmp-state"))
-    env.setdefault("ORCH_LOCAL_RUNTIME", str(REPO_ROOT / ".issue843-tmp-runtime"))
     if extra_env:
         env.update(extra_env)
-    cmd = [python, "-m", "pytest", "-q", "--tb=short", *node_ids]
+    cmd = [python, "-m", "pytest", "-q", "--tb=short", "--color=no", *node_ids]
     started = time.perf_counter()
-    proc = subprocess.run(
-        cmd,
-        cwd=REPO_ROOT,
-        env=env,
-        capture_output=True,
-        text=True,
-    )
+    with tempfile.TemporaryDirectory(prefix="issue843-pytest-") as runtime:
+        # Override even caller-provided values before pytest imports any modules.
+        env["ORCH_STATE_DIR"] = str(Path(runtime) / "state")
+        env["ORCH_LOCAL_RUNTIME"] = str(Path(runtime) / "runtime")
+        proc = subprocess.run(
+            cmd,
+            cwd=REPO_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=PYTEST_TIMEOUT_SECONDS,
+        )
     combined = (proc.stdout or "") + (proc.stderr or "")
-    failure_line = ""
-    for line in combined.splitlines():
-        if "AssertionError" in line or "FAILED" in line or "Error" in line:
-            failure_line = line.strip()
+    output_lines = combined.splitlines()
+    failed_nodes = [line.split()[1] for line in output_lines if line.startswith("FAILED ")]
+    has_errors = any(line.startswith("ERROR ") for line in output_lines)
+    mapped_failure = (
+        proc.returncode == 1 and not has_errors and all(node in failed_nodes for node in node_ids)
+    )
+    failure_line = next((line for line in output_lines if line.startswith("FAILED ")), "")
     if not failure_line and proc.returncode != 0:
         failure_line = combined.strip().splitlines()[-1] if combined.strip() else "nonzero exit"
     return {
         "command": " ".join(cmd),
         "exit_code": proc.returncode,
+        "failed": mapped_failure,
+        "failed_node_ids": failed_nodes,
         "seconds": round(time.perf_counter() - started, 3),
         "failure_excerpt": failure_line[:500],
         "stdout_tail": (proc.stdout or "")[-1500:],
@@ -410,14 +418,7 @@ def run_pytest(
 
 
 def run_focused_baseline(python: str) -> dict:
-    return run_pytest(
-        python,
-        ISSUE843_ADDED_NODE_IDS,
-        extra_env={
-            "ORCH_STATE_DIR": str(REPO_ROOT / ".issue843-acceptance-state"),
-            "ORCH_LOCAL_RUNTIME": str(REPO_ROOT / ".issue843-acceptance-runtime"),
-        },
-    )
+    return run_pytest(python, ISSUE843_ADDED_NODE_IDS)
 
 
 def run_mutations(python: str, *, limit: int | None = None) -> list[dict]:
@@ -431,8 +432,11 @@ def run_mutations(python: str, *, limit: int | None = None) -> list[dict]:
             for node_id in spec.node_ids:
                 break_runs.append({"node_id": node_id, **run_pytest(python, (node_id,))})
             for run in break_runs:
-                if run["exit_code"] == 0:
-                    raise SystemExit(f"{spec.mutation_id} did not fail {run['node_id']} (exit 0)")
+                if run["exit_code"] != 1 or not run["failed"]:
+                    raise SystemExit(
+                        f"{spec.mutation_id} did not fail {run['node_id']} as a mapped test failure "
+                        f"(exit {run['exit_code']})"
+                    )
             restore_file(path, original, original_sha)
             restore_runs = []
             for node_id in spec.node_ids:
@@ -448,7 +452,7 @@ def run_mutations(python: str, *, limit: int | None = None) -> list[dict]:
                 "target": spec.rel_path,
                 "description": spec.description,
                 "original_sha256": original_sha,
-                "restored_sha256": sha256_text(path.read_text(encoding="utf-8")),
+                "restored_sha256": sha256_bytes(path.read_bytes()),
                 "break": break_runs,
                 "restored_pass": restore_runs,
                 "verdict": "PASS",
@@ -467,8 +471,42 @@ def write_report(
     receipts: list[dict],
     git_head: str,
 ) -> None:
-    EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
-    RECEIPT_JSON.write_text(json.dumps(receipts, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    # Validate the complete proof before touching either published evidence file.
+    expected = {spec.mutation_id: spec for spec in MUTATIONS}
+    mapped_nodes = {node for spec in MUTATIONS for node in spec.node_ids}
+    if mapped_nodes != set(ISSUE843_ADDED_NODE_IDS) or baseline["exit_code"] != 0:
+        raise ValueError("incomplete node mapping or failing baseline")
+    seen = set()
+    for receipt in receipts:
+        mutation_id = receipt["mutation_id"]
+        spec = expected.get(mutation_id)
+        if (
+            mutation_id in seen
+            or spec is None
+            or (tuple(receipt["node_ids"]) != spec.node_ids or receipt["target"] != spec.rel_path)
+        ):
+            raise ValueError("incomplete or duplicate mutation mapping")
+        seen.add(mutation_id)
+        if receipt["verdict"] != "PASS" or (
+            receipt["original_sha256"] != receipt["restored_sha256"]
+        ):
+            raise ValueError("invalid restoration receipt")
+        for node in receipt["node_ids"]:
+            broken = [run for run in receipt["break"] if run["node_id"] == node]
+            restored = [run for run in receipt["restored_pass"] if run["node_id"] == node]
+            if (
+                len(broken) != 1
+                or len(restored) != 1
+                or not (
+                    broken[0]["exit_code"] == 1
+                    and broken[0]["failed"]
+                    and node in broken[0]["failed_node_ids"]
+                    and restored[0]["exit_code"] == 0
+                )
+            ):
+                raise ValueError("missing mapped failure or restored pass")
+    if seen != set(expected):
+        raise ValueError("incomplete mutation mapping")
     pr845 = PR845_RECEIPTS
     lines = [
         "# Issue #843 acceptance evidence (closer repair)",
@@ -482,8 +520,7 @@ def write_report(
         "Focused baseline (25 added tests):",
         "",
         "```bash",
-        f"{python} -m pytest -q tests/test_issue843_ranked_coverage.py "
-        "tests/test_range_lane_rollout_coverage_gaps.py",
+        f"{python} scripts/run_issue843_acceptance.py --baseline-only",
         "```",
         "",
         "Full acceptance runner (baseline + deliberate mutations + receipts):",
@@ -492,7 +529,7 @@ def write_report(
         f"{python} scripts/run_issue843_acceptance.py --write-report",
         "```",
         "",
-        "Combined coverage (CI-equivalent, slow):",
+        "Combined coverage (CI only; do not run the full pipeline locally):",
         "",
         "```bash",
         'ORCH_STATE_DIR="$(mktemp -d)" ORCH_LOCAL_RUNTIME="$(mktemp -d)" \\',
@@ -514,38 +551,34 @@ def write_report(
         json.dumps(baseline, indent=2),
         "```",
         "",
-        "## Mutation mapping (one production break per added test)",
+        "## Mutation mapping (every mapped break, including shared tests)",
         "",
         f"Machine-readable: `{RECEIPT_JSON.relative_to(REPO_ROOT)}`",
         "",
         "| mutation_id | node_id(s) | target | break exit | restored pass |",
         "|---|---|---|---:|---:|",
     ]
-    node_to_mutation = {}
     for receipt in receipts:
         for node_id in receipt["node_ids"]:
-            node_to_mutation[node_id] = receipt
-    for node_id in ISSUE843_ADDED_NODE_IDS:
-        receipt = node_to_mutation[node_id]
-        break_exit = next(r["exit_code"] for r in receipt["break"] if r["node_id"] == node_id)
-        restore_exit = next(
-            r["exit_code"] for r in receipt["restored_pass"] if r["node_id"] == node_id
-        )
-        lines.append(
-            f"| `{receipt['mutation_id']}` | `{node_id.split('::')[-1]}` | "
-            f"`{receipt['target']}` | {break_exit} | {restore_exit} |"
-        )
+            break_exit = next(r["exit_code"] for r in receipt["break"] if r["node_id"] == node_id)
+            restore_exit = next(
+                r["exit_code"] for r in receipt["restored_pass"] if r["node_id"] == node_id
+            )
+            lines.append(
+                f"| `{receipt['mutation_id']}` | `{node_id.split('::')[-1]}` | "
+                f"`{receipt['target']}` | {break_exit} | {restore_exit} |"
+            )
     lines.extend(
         [
             "",
-            "## Coverage authority (seven ranked targets)",
+            "## Coverage limits (seven ranked targets)",
             "",
             "Ranking source: issue #843 / Orchestrator blended coverage initiative "
             "(escaped-defect priority, then churn, then uncovered mass).",
             "",
-            "| Target | CI missing before (#845 baseline run 39496947363) | After #845 (PR body, Gate run 39505581812 @ `2b96ffc`) | Exclusions |",
+            "| Target | Issue #843 baseline units (statements + branches) | Local after-#845 missing-line estimate | Exclusions |",
             "|---|---:|---:|---|",
-            "| `range_lane_rollout` | 0 (prior commit) | 0 | — |",
+            "| `range_lane_rollout` | 2 | 0 | — |",
             "| `durability_sweep` | 3 | 0 | — |",
             "| `router` | 54 | 0 | — |",
             "| `feature_scan` | 13 | 0 | — |",
@@ -553,12 +586,35 @@ def write_report(
             "| `redirect_shadow` | 1 | 1 line (1383 selftest else) | unreachable while bare reports are rejected |",
             "| `strategy_experiment` | 116 | 1 line (1037 selftest assert False) | unreachable while normalize_arm raises |",
             "",
-            "Local combined `verify.py --coverage` was not re-run in this repair (runtime budget); "
-            "Gate coverage on the merge commit remains authoritative (`39512253651` published verify aggregate).",
+            "The after-values are local pytest missing-line estimates recovered from #845, "
+            "not Gate combined coverage. They omit branch accounting and are not comparable "
+            "to the issue's baseline units; do not subtract these columns.",
+            "",
+            "The combined reduction toward the approximately 180-unit goal and its numerical "
+            "shortfall remain UNVERIFIED. Run 39505581812 has no downloadable artifacts; "
+            "merge run 39512253651 failed and does not establish a successful aggregate. "
+            "Current PR CI validates the repair but cannot reconstruct a matching historical "
+            "before/after comparison. No local full-suite or verify pipeline was run.",
+            "",
+            "This is permitted partial delivery under issue #843's explicit partial-PR "
+            "acceptance clause: preserve the 25 discriminating tests and publish their "
+            "mutation proof, with the coverage shortfall explicitly unverified. No coverage "
+            "configuration or thresholds are changed. Excluded residual selftest lines: "
+            "capability_effectiveness 910/925 are borrowed fake-connection close methods; "
+            "`_edge_rows` closes only connections it opened, so these methods are unreachable; redirect_shadow "
+            "1383 is the else arm after a bare report is required to raise; "
+            "strategy_experiment 1037 asserts False only if invalid single-arm normalization "
+            "fails to raise. These are local line exclusions from the completion claim, "
+            "not proven combined-unit exclusions. The other four targets have no local "
+            "missing-line exclusions; their combined branch results remain unverified.",
             "",
         ]
     )
-    REPORT_MD.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    report = "\n".join(lines) + "\n"
+    receipt_json = json.dumps(receipts, indent=2, sort_keys=True) + "\n"
+    EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
+    RECEIPT_JSON.write_text(receipt_json, encoding="utf-8")
+    REPORT_MD.write_text(report, encoding="utf-8")
 
 
 def git_head() -> str:
@@ -582,6 +638,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--mutations-only", action="store_true")
     parser.add_argument("--limit", type=int, help="run only the first N mutation specs (debug)")
     args = parser.parse_args(argv)
+    if args.limit is not None and args.limit < 1:
+        parser.error("--limit must be a positive integer")
+    if args.limit is not None and args.write_report:
+        parser.error("--limit cannot be combined with --write-report (evidence would be partial)")
 
     python = resolve_python(args.python)
     if args.baseline_only:
