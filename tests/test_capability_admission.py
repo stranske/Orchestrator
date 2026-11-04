@@ -116,6 +116,132 @@ def test_waivers_are_bounded_not_just_dated():
     assert not problems, f"illegitimate waivers: {problems}"
 
 
+def test_waiver_validation_and_consumer_symbol_resolution_cover_invalid_inputs(monkeypatch):
+    """A waiver needs both human rationale and a genuinely bounded expiry.
+
+    Static consumer resolution must also follow a class path rather than accepting
+    a same-named symbol elsewhere in the module.
+    """
+    now = 1_700_000_000
+    monkeypatch.setattr(admission, "_now", lambda: now)
+    monkeypatch.setattr(
+        admission,
+        "WAIVERS",
+        {
+            "no-reason": {"expires": now + 1},
+            "no-expiry": {"reason": "temporary"},
+            "unbounded": {"reason": "temporary", "expires": now + 91 * 86400},
+        },
+    )
+    assert admission.waiver_problems() == [
+        "no-reason: no reason",
+        "no-expiry: no expiry",
+        "unbounded: expiry is 91d out, beyond the 90d limit — that is a permanent exemption "
+        "wearing a deadline",
+    ]
+    text = """\
+class Expected:
+    async def consume(self):
+        pass
+
+thing: int = 1
+"""
+    assert admission._python_symbol_defined(text, "Expected.consume")
+    assert admission._python_symbol_defined(text, "thing")
+    assert not admission._python_symbol_defined(text, "Expected.missing")
+    assert not admission._python_symbol_defined("not valid python(", "anything")
+
+
+def test_admission_context_and_commitments_fail_closed_without_live_state(monkeypatch, tmp_path):
+    """Unreadable monitor/audit inputs remain named findings or skipped, never live I/O."""
+    import feedback
+    import value_chain_monitor as monitor
+
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    monkeypatch.setattr(
+        monitor, "acted_on_index", lambda *_args: (_ for _ in ()).throw(OSError("unreadable"))
+    )
+    admission._ACTED_ON_CACHE.clear()
+    context = admission.acted_on_context({"capability-a": {}}, now=1_700_000_000)
+    assert context["acted_on"] is None
+    assert context["acted_on_reason"].startswith("OSError: unreadable")
+
+    audits = tmp_path / "audits"
+    audits.mkdir()
+    monkeypatch.setattr(admission, "AUDITS", audits)
+    (tmp_path / "good.py").write_text("# see 2026-01-02-thing-PLAN.md\n")
+    (tmp_path / "bad.py").write_text(
+        "# see 2026-01-02-missing.md\nORCH_THING_TRIAL_UNTIL=2020-01-01\n"
+    )
+    report = admission.commitments(root=tmp_path)
+    assert report["dangling_citations"][0]["record"] == "2026-01-02-missing.md"
+    assert report["overdue_without_record"][0]["var"] == "ORCH_THING_TRIAL_UNTIL"
+    assert not report["clean"]
+
+
+def test_format_report_preserves_blocking_and_drainable_diagnostics():
+    """The human report must retain every diagnosis that tells an operator what to drain."""
+    report = {
+        "admitted": 0,
+        "total": 1,
+        "enforced_total": 1,
+        "enforced_failing": ["capability-a"],
+        "legacy_debt": ["capability-a"],
+        "rows": [
+            {
+                "capability_id": "capability-a",
+                "missing": ["fixture"],
+                "checks": {"fixture": {"detail": "add the fixture"}},
+            }
+        ],
+        "findability": {
+            "failing": ["capability-a"],
+            "total": 1,
+            "by_cause": {"unbound": ["capability-a"]},
+            "blocking": ["capability-a"],
+            "deferred": [],
+            "drainable": ["capability-a"],
+            "bound_unconsulted_surfaces": ["tick"],
+            "consult_sites_drifted": [{"surface": "tick", "why": "missing", "caller": "x.py"}],
+            "consult_sites_unverified": [{"surface": "weekly"}],
+            "not_checked": "external caller unavailable",
+        },
+        "consumers": {
+            "total": 1,
+            "by_class": {
+                "acting": [],
+                "grace": [],
+                "exercise_bound": [],
+                "unmeasured": [],
+                "not_invoked": [],
+                "not_acting": ["capability-a"],
+                "prose": [],
+                "unresolved": [],
+                "undeclared": [],
+            },
+            "blocking": ["capability-a"],
+            "deferred": [],
+            "drainable": ["capability-a"],
+            "drained": False,
+        },
+        "commitments": {
+            "clean": False,
+            "dangling_citations": [{"file": "x.py", "line": 2, "record": "2026-01-02-missing.md"}],
+            "overdue_without_record": [
+                {"file": "x.py", "line": 3, "var": "ORCH_X_UNTIL", "date": "2020-01-01"}
+            ],
+        },
+    }
+    rendered = admission.format_report(report)
+    for expected in (
+        "ENFORCED FAILURES",
+        "surfaces bound but never consulted: tick",
+        "DRIFT tick",
+        "NOT ACTING",
+    ):
+        assert expected in rendered
+
+
 def test_safety_guard_exemption_is_declared_and_narrow():
     """The kill-switch exemption for a CONFINEMENT must stay opt-in, justified, and small.
 
