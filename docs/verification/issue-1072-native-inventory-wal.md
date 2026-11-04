@@ -199,3 +199,35 @@ rejected the connected GitHub file commit because it requires approval and this
 run's policy is `never`. The same review rejected the blocker comment and
 `needs-human` label. No commit or push was made. PR #1081 was rechecked open
 with `draft=false` at the checkout revision above.
+
+## Saved proposal contract failures before missing truth
+
+Checked on 2026-11-04 against checkout
+`5685a7027804d3fed1adc2baf8b17665340054f7`. A new real-CLI regression
+exercises 20 saved proposal contract failures, including malformed decisions,
+references and evidence assessments, forbidden terminal keys and conditional
+mutation commands. Three valid proposal controls reach the independent-truth
+break or abstention instead. All rows lack later truth; validator failures must
+remain the earlier break. Decisions, recursive paid histories and the native
+UNKNOWN reservation survive, while private evidence and proposals stay absent
+from diagnostics. Original, canonical, journal and WAL hashes remain unchanged.
+
+Validation: the combined inventory JavaScript suites pass all 45 tests;
+diagnostic unittests pass 32 and replay/publication unittests pass seven.
+JavaScript syntax and `git diff --check` pass. Removing only the diagnostic
+proposal-validator branch in a temporary source copy makes the new test fail,
+reporting missing later truth instead of the required validator failure.
+No repository Python files changed.
+
+These are fixture results. The configured canonical report, independent outcomes
+database and runtime are absent. Authentic original report/journal locations
+and live reader bindings remain unavailable. The full retrospective pytest
+command with `-m "not slow"` cannot start because pytest is absent; package
+installation fails because PyPI DNS resolution is unavailable. No production
+diagnosis, dispatch, canonical refresh, October 18 proof or next-20 observation
+is claimed, and no operational checkbox is complete.
+
+Staging fails on the read-only `.git/index.lock` location. Automatic approval
+review rejects the connected GitHub file commit, blocker comment and
+`needs-human` label because approval is required and policy is `never`.
+No commit or push was made.

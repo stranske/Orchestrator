@@ -696,6 +696,103 @@ test('inventory CLI locates incomplete evidence despite retained decisions and c
   }
 });
 
+test('inventory CLI diagnoses saved proposal contract failures before missing later truth', (t) => {
+  const proposal = {
+    decision: 'reject_blocker', confidence: 'high',
+    rationale: 'Private supplied evidence contradicts the blocker.',
+    ground_truth_refs: ['git-path:proof.txt'],
+    recommended_next_step: 'Inspect the proof before acting.', evidence_gaps: [],
+    evidence_assessment: [{ claim: 'Private proof missing', status: 'contradicted',
+      evidence_ref: 'git-path:proof.txt', reason: 'Private proof contents supplied.' }],
+  };
+  const variants = [
+    ['non-object', 'private unparsed response'],
+    ['array', []],
+    ['empty-object', {}],
+    ['decision', { ...proposal, decision: ['reject_blocker'] }],
+    ['confidence', { ...proposal, confidence: 'certain' }],
+    ['rationale', { ...proposal, rationale: ' \t' }],
+    ['next-step', { ...proposal, recommended_next_step: '' }],
+    ['mutation', { ...proposal, recommended_next_step: 'If checks pass, merge this PR now.' }],
+    ['terminal-key', { ...proposal, merge: true }],
+    ['unexpected-key', { ...proposal, private_extra: 'private unrecognized field' }],
+    ['refs-shape', { ...proposal, ground_truth_refs: 'git-path:proof.txt' }],
+    ['refs-blank', { ...proposal, ground_truth_refs: ['git-path:proof.txt', ' '] }],
+    ['binary-no-refs', { ...proposal, ground_truth_refs: [] }],
+    ['gaps-shape', { ...proposal, evidence_gaps: {} }],
+    ['assessment-empty', { ...proposal, evidence_assessment: [] }],
+    ['assessment-member', { ...proposal, evidence_assessment: [null] }],
+    ['assessment-status', { ...proposal, evidence_assessment: [
+      { ...proposal.evidence_assessment[0], status: ['contradicted'] },
+    ] }],
+    ['assessment-ref', { ...proposal, evidence_assessment: [
+      { ...proposal.evidence_assessment[0], evidence_ref: 42 },
+    ] }],
+    ['assessment-reason', { ...proposal, evidence_assessment: [
+      { ...proposal.evidence_assessment[0], reason: '' },
+    ] }],
+    ['abstention-no-gap', { ...proposal, decision: 'needs_more_evidence' }],
+  ];
+  const invalidCount = variants.length;
+  variants.push(
+    ['valid-reject', proposal],
+    ['valid-uphold', { ...proposal, decision: 'uphold_blocker' }],
+    ['valid-abstention', { ...proposal, decision: 'needs_more_evidence',
+      evidence_gaps: ['Private independent evidence is missing.'] }],
+  );
+  const rows = variants.map(([name, savedProposal], index) => ({
+    case_id: index === 0 ? 'original-a' : name,
+    target: 'fixture/repo#1', backend_run_id: `original-paid-${name}`,
+    decision: typeof savedProposal?.decision === 'string' ? savedProposal.decision : 'reject_blocker',
+    // Every row lacks independent truth. Proposal failures must be located first;
+    // valid binary controls must reach the truth break instead of a validator break.
+    later_truth: null, proposal: savedProposal,
+    packet: { ground_truth_evidence: {
+      diff_patch: { text: '+private inspected change', revision: 'evaluated' },
+      acceptance_criteria: [{ text: 'Private criterion', revision: 'issue-revision' }],
+    } },
+    retry_attempts: [{ retry_attempts: [{ backend_run_id: `earlier-paid-${name}` }] }],
+  }));
+  const w = world(t, rows);
+  const before = w.snapshot();
+  const report = w.run(w.inventoryArgs);
+  assert.equal(report.row_diagnostics.length, variants.length);
+  assert.deepEqual(report.original_report.case_ids, rows.map((row) => row.case_id));
+  report.row_diagnostics.forEach((diagnostic, index) => {
+    const name = variants[index][0];
+    assert.equal(diagnostic.retained_first_break, index < invalidCount
+      ? 'saved_proposal_validator_failure' : name === 'valid-abstention'
+        ? 'saved_adjudicator_abstention' : 'saved_independent_later_truth_unavailable', name);
+    assert.equal(diagnostic.retained_decision, rows[index].decision, name);
+    assert.equal(diagnostic.retained_later_truth, null, name);
+    assert.equal(diagnostic.retained_error_ref, null, name);
+    assert.equal(diagnostic.source_row, `rows[${index}]`, name);
+    assert.equal(diagnostic.native_first_break, index === 0
+      ? 'unresolved_native_attempt' : 'fresh_native_collection_required', name);
+    assert.deepEqual(diagnostic.unresolved_native_attempts, index === 0 ? [{
+      attempt_id: w.ids[0], state: 'reserved', matches_original_source: true, outcome: 'UNKNOWN',
+    }] : [], name);
+    assert.equal(diagnostic.dispatch_authorized, false, name);
+    assert.equal(Object.hasOwn(diagnostic, 'graded'), false, name);
+  });
+  assert.deepEqual(report.original_paid_attempts, rows.flatMap((row) => [
+    { case_id: row.case_id, backend_run_id: row.backend_run_id },
+    { case_id: row.case_id, backend_run_id: row.retry_attempts[0].retry_attempts[0].backend_run_id },
+  ]));
+  assert.equal(report.paid_identity_summary.original_records, rows.length * 2);
+  assert.equal(report.paid_identity_summary.union_unique, rows.length * 2 + 2);
+  assert.equal(report.dispatch_authorized, false);
+  assert.equal(report.canonical_report.summary_authority, 'not_authenticated_by_inventory');
+  assert.match(report.historical_observations, /^unavailable/);
+  assert.equal(JSON.stringify(report).includes('Private'), false);
+  assert.equal(JSON.stringify(report).includes('private'), false);
+  assert.deepEqual(w.snapshot(), before);
+  assert.deepEqual(JSON.parse(fs.readFileSync(w.original, 'utf8')).rows, rows);
+  for (const name of ['absent-state', 'absent-runtime', 'absent-brain.sqlite']) {
+    assert.equal(fs.existsSync(path.join(w.root, name)), false);
+  }
+});
+
 test('native inventory rejects dispatch and retry before touching a live WAL journal', (t) => {
   const w = world(t);
   const before = w.snapshot();
