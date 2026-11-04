@@ -486,7 +486,11 @@ def test_released_flow_recovers_missing_closes_reference():
     def gh(args):
         calls.append(args)
         if args[0] == "issue":
-            return True, '{"number":3,"labels":{"nodes":[{"name":"repo-review-approved"}],"pageInfo":{"hasNextPage":false}}}', ""
+            return (
+                True,
+                '{"number":3,"labels":{"nodes":[{"name":"repo-review-approved"}],"pageInfo":{"hasNextPage":false}}}',
+                "",
+            )
         return False, "", "unexpected call"
 
     value = m._fleet_released_flow(now=now, prs=[pr], gh=gh)
@@ -510,7 +514,11 @@ def test_released_flow_missing_reference_without_label_is_unmeasured():
     pr["closingIssuesReferences"] = connection([])
 
     def gh(args):
-        return True, '{"number":3,"labels":{"nodes":[{"name":"other-label"}],"pageInfo":{"hasNextPage":false}}}', ""
+        return (
+            True,
+            '{"number":3,"labels":{"nodes":[{"name":"other-label"}],"pageInfo":{"hasNextPage":false}}}',
+            "",
+        )
 
     value = m._fleet_released_flow(now=now, prs=[pr], gh=gh)
     assert "48h mean opened=0/day merged=0/day" in value

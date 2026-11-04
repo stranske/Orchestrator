@@ -50,6 +50,7 @@ import base64
 import json
 import math
 import os
+import re
 import sqlite3
 import statistics
 import subprocess
@@ -1058,7 +1059,9 @@ def _fleet_released_flow(*, now: int, prs: list[dict], gh=None) -> str:
         refs = pr["closingIssuesReferences"]["nodes"]
         if pr["closingIssuesReferences"]["pageInfo"]["hasNextPage"]:
             raise ValueError("gh closing issue references truncated")
-        ref_numbers = {str(issue["number"]) for issue in refs if issue["repository"]["nameWithOwner"] == repo}
+        ref_numbers = {
+            str(issue["number"]) for issue in refs if issue["repository"]["nameWithOwner"] == repo
+        }
         missing = numbers - ref_numbers
         for number in sorted(missing):
             if gh is None:
