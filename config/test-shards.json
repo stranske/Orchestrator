@@ -216,6 +216,7 @@
       "tests/test_tick_completion_ping.py",
       "tests/test_tick_summary.py",
       "tests/test_tracked_test_inputs.py",
+      "tests/test_transport_qualification_corpus.py",
       "tests/test_utc_epoch.py",
       "tests/test_ux_review_adversary.py",
       "tests/test_value_chain_monitor.py",
