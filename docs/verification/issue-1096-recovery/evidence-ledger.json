@@ -374,6 +374,22 @@
       "original_retry_manifest_recovered": false,
       "authenticated_outcomes_verified": false,
       "operational_task_checkboxes_completed": 0
+    },
+    "native_receipt_consistency_followup": {
+      "checked_at": "2026-11-04T04:18:04.323736+00:00",
+      "source_commit": "bd84c68e06ef5ef02ce6a2bfe3966ab42ab0b9b5",
+      "plan": "native-consistency-followup/plan.md",
+      "checks": "native-consistency-followup/acceptance-run/checks.json",
+      "validation": "native-consistency-followup/validation.json",
+      "results": "native-consistency-followup/results.md",
+      "focused_passed": 143,
+      "required_tests_passed": false,
+      "original_retry_reconciliation_complete": false,
+      "task_checkboxes_verified_complete": 0,
+      "paid_dispatches": 0,
+      "canonical_publications": 0,
+      "mirror_writes": 0,
+      "limitation": "Fixture receipt consistency checks only; authenticated outcomes and original operational acceptance remain unverified."
     }
   },
   "mirror_synchronization": [

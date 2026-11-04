@@ -1,5 +1,15 @@
 # Acceptance evidence recovery for #1096
 
+## Native receipt consistency recovery, 2026-11-04 UTC
+
+Observed binary results with missing or contradictory backend identity/raw output
+now remain in unresolved native case recovery. Exact journal/result comparisons
+expose evidence gaps without authenticating outcomes or granting retry permission.
+All 143 focused checks pass; three new controls fail against the prior source.
+[Results and limitations](native-consistency-followup/results.md) bind the source,
+test output and bounded required-test attempt. Original retry reconciliation and
+operational acceptance remain incomplete; no task checkbox is newly complete.
+
 ## Native validation outcome recovery, 2026-11-04 UTC
 
 The inventory now retains failed results and abstentions stored under native

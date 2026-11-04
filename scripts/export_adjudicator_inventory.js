@@ -253,10 +253,10 @@ function attemptObservation(attempt, caseId, location) {
 // Journal validation means parsing finished, not that the outcome was binary
 // or successful. Observe saved diagnostics without publishing provider material
 // or pretending to perform the native receipt validator's authentication.
-function nativeValidationObservation(text, location) {
+function nativeValidationObservation(text, location, record) {
   const base = { location, stored_text_sha256: typeof text === 'string'
     ? createHash('sha256').update(text).digest('hex') : null,
-  retained_result: null, first_broken_step: null };
+  retained_result: null, first_broken_step: null, receipt_binding_gaps: [] };
   if (text === null || text === undefined) return { ...base, status: 'not_recorded' };
   let result;
   try { result = JSON.parse(text); } catch { return { ...base, status: 'invalid_json' }; }
@@ -266,8 +266,25 @@ function nativeValidationObservation(text, location) {
   // Native role results store the candidate decision in proposal. In particular,
   // a baseline/advisory decision cannot replace a failed or absent proposal.
   const observed = attemptObservation({ ...result, decision: result.proposal?.decision }, null, location);
+  // Mirror the journal/result equalities required by _valid_native_receipt.
+  // Presence alone cannot bind a binary proposal to the stored invocation.
+  // Compare raw text exactly; parsing, trimming or normalizing it would hide a
+  // different receipt. Consistency still does not authenticate provider output,
+  // validate the proposal schema, bind its case contract or establish a grade.
+  const bindingGaps = [];
+  if (typeof result.backend_run_id !== 'string' || !result.backend_run_id.trim()) {
+    bindingGaps.push('validation_backend_identity_missing');
+  } else if (typeof record.backend_run_id === 'string' && record.backend_run_id.trim() &&
+      result.backend_run_id !== record.backend_run_id) {
+    bindingGaps.push('validation_backend_identity_mismatch');
+  }
+  if (typeof result.raw_output !== 'string') {
+    bindingGaps.push('validation_raw_output_missing_or_invalid');
+  } else if (record.raw_response !== null && result.raw_output !== record.raw_response) {
+    bindingGaps.push('validation_raw_output_mismatch');
+  }
   return { ...base, status: 'observed', retained_result: observed.retained_result,
-    first_broken_step: observed.first_broken_step };
+    first_broken_step: observed.first_broken_step, receipt_binding_gaps: bindingGaps };
 }
 
 // Observe native receipt locators in one read-only SQLite snapshot. This does
@@ -295,11 +312,11 @@ function journalInventory(journal) {
       'SELECT attempt_id,case_id,material_revision,case_digest,state,backend_run_id,' +
       'report_sha256,created_at,updated_at,' +
       '(raw_response IS NOT NULL) AS raw_receipt_present,' +
-      '(validated_json IS NOT NULL) AS validation_present,validated_json FROM native_attempts ' +
+      '(validated_json IS NOT NULL) AS validation_present,validated_json,raw_response FROM native_attempts ' +
       'ORDER BY created_at,attempt_id').all().map((item, index) => {
-      const { validated_json, ...locator } = item;
+      const { validated_json, raw_response, ...locator } = item;
       const validation = nativeValidationObservation(validated_json,
-        `pre_dispatch.native_journal.attempts[${index}].validated_json`);
+        `pre_dispatch.native_journal.attempts[${index}].validated_json`, item);
       const gaps = [];
       if (['raw_persisted', 'validated'].includes(item.state)) {
         if (!item.raw_receipt_present) gaps.push('raw_response_missing');
@@ -309,6 +326,7 @@ function journalInventory(journal) {
         if (item.state === 'validated' && validation.status !== 'observed') {
           gaps.push(`validation_result_${validation.status}`);
         }
+        if (item.state === 'validated') gaps.push(...validation.receipt_binding_gaps);
       }
       let recoveryStep = steps.get(item.state) || 'unrecognized_state_requires_native_review';
       if (gaps.length) {

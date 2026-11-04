@@ -1012,6 +1012,115 @@ test('binary validation still requires receipt presence and remains unauthentica
   assert.equal(result.dispatch_authorized, false);
 });
 
+test('native binary results with inconsistent receipt fields remain unresolved', (t) => {
+  const { root, saved, journal, options } = nativeJournal(t);
+  const identity = { run_id: 'original', target: 'owner/repo#1' };
+  saved.rows = [{ ...identity, case_id: 'case-a', backend_run_id: 'native-provider',
+    decision: 'reject_blocker', later_truth: 'UNKNOWN' }];
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const manifest = manifestFile(root, [identity]);
+  const scenarios = [
+    ['backend_run_id', undefined, 'validation_backend_identity_missing'],
+    ['backend_run_id', null, 'validation_backend_identity_missing'],
+    ['backend_run_id', 42, 'validation_backend_identity_missing'],
+    ['backend_run_id', ' ', 'validation_backend_identity_missing'],
+    ['backend_run_id', 'private different backend', 'validation_backend_identity_mismatch'],
+    ['backend_run_id', 'native-provider ', 'validation_backend_identity_mismatch'],
+    ['raw_output', undefined, 'validation_raw_output_missing_or_invalid'],
+    ['raw_output', null, 'validation_raw_output_missing_or_invalid'],
+    ['raw_output', { text: 'private raw response' }, 'validation_raw_output_missing_or_invalid'],
+    ['raw_output', '', 'validation_raw_output_mismatch'],
+    ['raw_output', 'private raw response\n', 'validation_raw_output_mismatch'],
+    ['raw_output', 'private different response', 'validation_raw_output_mismatch'],
+  ];
+  for (const [field, value, code] of scenarios) {
+    const validation = { proposal: { decision: 'reject_blocker' }, errors: [],
+      backend_run_id: 'native-provider', raw_output: 'private raw response', [field]: value };
+    const connection = new DatabaseSync(journal);
+    connection.prepare("UPDATE native_attempts SET validated_json=? WHERE attempt_id='e'")
+      .run(JSON.stringify(validation));
+    connection.close();
+    const inputs = [options.report, journal, manifest];
+    const before = inputs.map((file) => fs.readFileSync(file));
+    const result = reportInventory({ ...options, manifest });
+    const attempt = result.pre_dispatch.native_journal.attempts.find((row) => row.attempt_id === 'e');
+    assert.deepEqual(attempt.receipt_evidence_gaps, [code], `${field}: ${value}`);
+    assert.equal(attempt.validation_observation.retained_result, 'retained_binary_decision');
+    assert.equal(attempt.recovery_step, 'recover_missing_native_receipt_evidence_without_redispatch');
+    assert.deepEqual(result.manifest_reconciliation.cases[0].native_case_recovery
+      .unresolved_attempts.find((row) => row.attempt_id === 'e').receipt_evidence_gaps, [code]);
+    const locator = result.retained_attempt_observations[0].native_receipt_locator;
+    assert.deepEqual(locator.attempts[0].receipt_evidence_gaps, [code]);
+    assert.equal(locator.authenticated, false);
+    assert.ok(result.pre_dispatch.stop_reasons.includes('native_receipt_evidence_missing'));
+    assert.equal(result.cases[0].retained_decision, 'reject_blocker');
+    assert.equal(result.cases[0].retained_later_truth, 'UNKNOWN');
+    assert.equal(result.dispatch_authorized, false);
+    assert.equal(result.manifest_reconciliation.authenticated_outcomes_verified, false);
+    assert.ok(!JSON.stringify(result).includes('private'));
+    assert.deepEqual(inputs.map((file) => fs.readFileSync(file)), before);
+  }
+});
+
+test('native receipt consistency compares exact stored text without parsing provider output', (t) => {
+  const { root, saved, journal, options } = nativeJournal(t);
+  const identity = { run_id: 'original', target: 'owner/repo#1' };
+  saved.rows = [{ ...identity, case_id: 'case-a' }];
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const manifest = manifestFile(root, [identity]);
+  for (const text of ['', 'private non-JSON response', 'private café\r\n', 'private cafe\u0301\n']) {
+    const connection = new DatabaseSync(journal);
+    const result = JSON.stringify({ proposal: { decision: 'reject_blocker' }, errors: [],
+      backend_run_id: 'native-provider', raw_output: text });
+    connection.prepare("UPDATE native_attempts SET raw_response=?,validated_json=? WHERE attempt_id='e'")
+      .run(text, result);
+    connection.close();
+    const observed = reportInventory({ ...options, manifest });
+    const attempt = observed.pre_dispatch.native_journal.attempts.find((row) => row.attempt_id === 'e');
+    assert.deepEqual(attempt.validation_observation.receipt_binding_gaps, []);
+    assert.deepEqual(attempt.receipt_evidence_gaps, []);
+    assert.ok(!observed.manifest_reconciliation.cases[0].native_case_recovery.unresolved_attempts
+      .some((row) => row.attempt_id === 'e'));
+    assert.equal(attempt.recovery_step, 'reauthenticate_with_native_projection_before_grading');
+    assert.equal(observed.receipt_authority, 'not_authenticated_by_inventory');
+    assert.equal(observed.dispatch_authorized, false);
+    assert.ok(!JSON.stringify(observed).includes('private'));
+  }
+});
+
+test('native receipt consistency CLI retains both mismatches without leaking or changing inputs', (t) => {
+  const { root, saved, journal, options } = nativeJournal(t);
+  const identity = { run_id: 'original', target: 'owner/repo#1' };
+  saved.rows = [{ ...identity, case_id: 'case-a', backend_run_id: 'native-provider',
+    retry_attempts: [{ backend_run_id: 'primary' }] }];
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const manifest = manifestFile(root, [identity]);
+  const connection = new DatabaseSync(journal);
+  connection.prepare("UPDATE native_attempts SET validated_json=? WHERE attempt_id='e'")
+    .run(JSON.stringify({ proposal: { decision: 'reject_blocker' }, errors: [],
+      backend_run_id: 'private conflicting id', raw_output: 'private conflicting output' }));
+  connection.close();
+  const inputs = [options.report, journal, manifest];
+  const before = inputs.map((file) => fs.readFileSync(file));
+  const result = execute(root, process.execPath, [script, '--report', options.report,
+    '--journal', journal, '--manifest', manifest, '--observed-at', String(now),
+    '--evidence-class', options.evidenceClass, '--evidence-reference', options.evidenceReference]);
+  assert.equal(result.status, 0, result.stderr);
+  const observed = JSON.parse(result.stdout);
+  assert.deepEqual(observed, reportInventory({ ...options, manifest }));
+  const locator = observed.retained_attempt_observations[0].native_receipt_locator;
+  assert.deepEqual(locator.attempts[0].receipt_evidence_gaps,
+    ['validation_backend_identity_mismatch', 'validation_raw_output_mismatch']);
+  assert.equal(locator.next_evidence_step, 'recover_missing_native_receipt_evidence_without_redispatch');
+  assert.equal(observed.retained_attempt_observations[1].native_receipt_locator.next_evidence_step,
+    'resume_native_validation_without_redispatch', 'a mismatched result cannot taint another attempt');
+  assert.equal(observed.paid_identity_summary.unique, 2);
+  assert.equal(observed.manifest_reconciliation.authenticated_outcomes_verified, false);
+  assert.equal(observed.dispatch_authorized, false);
+  assert.ok(!result.stdout.includes('private'));
+  assert.deepEqual(inputs.map((file) => fs.readFileSync(file)), before);
+});
+
 test('legacy report manifest keeps verdict ambiguity visible and empty requests cannot complete accounting', (t) => {
   const { root, saved, options } = retainedReport(t);
   saved.rows = ['NON_PASS', 'FAIL'].map((verifier_verdict, index) => ({
@@ -1080,7 +1189,7 @@ function nativeJournal(t) {
     ['d', 'raw_persisted', 'primary', 'private raw response', null],
     ['e', 'validated', 'native-provider', 'private raw response',
       JSON.stringify({ proposal: { decision: 'reject_blocker', rationale: 'private proposal' },
-        errors: [] })],
+        backend_run_id: 'native-provider', raw_output: 'private raw response', errors: [] })],
     ['f', 'unrecognized', null, null, null],
   ]) insert.run(id, 'case-a', `revision-${id}`, 'digest', state, backend, 'source-hash',
     now - 1, now, raw, validation);
