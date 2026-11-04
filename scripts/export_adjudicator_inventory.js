@@ -16,7 +16,7 @@ const OWNER_EXCLUDED_REPOSITORIES = ['stranske/Collab-Admin'];
 function ownerExcluded(target) {
   return typeof target === 'string' && target.includes('#') &&
     OWNER_EXCLUDED_REPOSITORIES.some((repo) =>
-      target.slice(0, target.indexOf('#')).toLowerCase() === repo.toLowerCase());
+      target.slice(0, target.indexOf('#')).trim().toLowerCase() === repo.toLowerCase());
 }
 
 function integer(value, name, minimum) {
@@ -184,11 +184,15 @@ function inventory({ db, observedAt, days = 90, expectedCount = 71, manifest }) 
   let rows;
   try {
     connection = new DatabaseSync(report.database, { readOnly: true });
+    // Use the same identity boundary for SQL reads and manifest reconciliation.
+    // SQLite trim() alone does not strip tabs or Unicode whitespace.
+    connection.function('owner_excluded_repository', { deterministic: true },
+      (target) => Number(ownerExcluded(target)));
     // One statement supplies a consistent snapshot for counts and exclusions.
     // Apply the owner boundary before joining outcome evidence. For permitted
     // runs, SQL preserves the Python reader's null and comparison semantics.
     // Unmatched outcomes cannot establish target or window membership.
-    const excludedRepository = `lower(substr(target,1,instr(target,'#')-1)) IN (${OWNER_EXCLUDED_REPOSITORIES.map(() => '?').join(',')})`;
+    const excludedRepository = 'owner_excluded_repository(target)';
     rows = connection.prepare(`
       WITH permitted_runs AS MATERIALIZED (
         SELECT run_id,target,ts FROM runs
@@ -212,8 +216,7 @@ function inventory({ db, observedAt, days = 90, expectedCount = 71, manifest }) 
       SELECT *,ts >= ? AS in_window,
              verifier_verdict = adjudicated_verdict AS verdicts_agree
       FROM population ORDER BY ts DESC,run_id
-    `).all(...OWNER_EXCLUDED_REPOSITORIES.map((repo) => repo.toLowerCase()),
-      ...OWNER_EXCLUDED_REPOSITORIES.map((repo) => repo.toLowerCase()), cutoff);
+    `).all(cutoff);
   } catch (error) {
     report.evidence_gaps.push({ kind: 'brain_unavailable', detail: error.message });
     return reconcile(report, requestedManifest);

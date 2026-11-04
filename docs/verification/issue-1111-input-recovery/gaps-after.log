@@ -1,0 +1,14 @@
+✔ gap export preserves every dispute and explicit UNKNOWN execution evidence without writes (62.776957ms)
+✔ owner-excluded evidence is never evaluated and remains an identity-only gap (53.351704ms)
+✔ schema 1 retains requested identities and unknown counts with an unavailable Brain (44.40077ms)
+✔ schema 2 retains requested identities and unknown counts with an unavailable Brain (44.20951ms)
+✔ an empty supplied manifest cannot claim recovery or hide the missing requested slots (4.539846ms)
+✔ invalid arguments and manifests produce no partial ledger or Brain writes (308.362548ms)
+ℹ tests 6
+ℹ suites 0
+ℹ pass 6
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 524.961832

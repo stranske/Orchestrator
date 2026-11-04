@@ -113,12 +113,13 @@ test('gap export preserves every dispute and explicit UNKNOWN execution evidence
 });
 
 test('owner-excluded evidence is never evaluated and remains an identity-only gap', (t) => {
-  const requested = [identity('excluded', 'StRaNsKe/CoLlAb-AdMiN#1'), identity('allowed')];
+  const excludedTarget = '\tStRaNsKe/CoLlAb-AdMiN\u00a0#1 ';
+  const requested = [identity('excluded', excludedTarget), identity('allowed')];
   const options = world(t, requested);
   const connection = new DatabaseSync(options.db);
+  connection.prepare('INSERT INTO runs VALUES (?,?,?)').run('excluded', excludedTarget, now);
   connection.exec(`
-    INSERT INTO runs VALUES ('excluded','StRaNsKe/CoLlAb-AdMiN#1',${now}),
-                            ('allowed','fixture/repo#1',${now});
+    INSERT INTO runs VALUES ('allowed','fixture/repo#1',${now});
     ALTER TABLE runs RENAME TO run_rows;
     CREATE VIEW runs AS SELECT run_id,target,
       CASE WHEN run_id='excluded' THEN json_extract('unreadable','$') ELSE ts END AS ts
@@ -151,7 +152,7 @@ test('owner-excluded evidence is never evaluated and remains an identity-only ga
 
 for (const version of [1, 2]) {
   test(`schema ${version} retains requested identities and unknown counts with an unavailable Brain`, (t) => {
-    const requested = [identity('missing'), identity('excluded', 'stranske/Collab-Admin#2')];
+    const requested = [identity('missing'), identity('excluded', '\u2003stranske/Collab-Admin\t#2')];
     const options = world(t, requested, version);
     fs.unlinkSync(options.db);
     options.expectedCount = 71;

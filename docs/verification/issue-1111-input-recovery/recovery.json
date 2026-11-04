@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "authenticated_transport": "GitHub connector",
+  "remote_repositories_read": [
+    "stranske/Orchestrator"
+  ],
+  "revision_resolution": {
+    "url": "https://api.github.com/repos/stranske/Orchestrator/commits/c88282b",
+    "sha": "c88282b063d6b79efbac2103e5769166ea7b27f2",
+    "tree": "978e6465677857e41f1de247e7a87e4b96799d35",
+    "commit_date": "2026-10-04T18:48:50Z"
+  },
+  "audit_search": {
+    "query": "2026-10-04-rarely-used-capabilities-audit",
+    "repository": "stranske/Orchestrator",
+    "results": [
+      {
+        "url": "https://github.com/stranske/Orchestrator/blob/e58ba8e23abbe5d7888f3bca94796fe07ffdb427/docs/verification/issue-1104-cohort-recovery/reconciliation.json",
+        "path": "docs/verification/issue-1104-cohort-recovery/reconciliation.json"
+      }
+    ]
+  },
+  "boundary": "Authenticated remote statements and revision identity only; no original cohort manifest, Brain rows, or audit bytes recovered.",
+  "recorded_at": "2026-11-03T23:59:08.408978+00:00",
+  "base_revision": "43e88676c08ea1a98f74873fb4045ca571b9b9d0",
+  "source_readback": {
+    "path": "../issue-1104-cohort-recovery/source-428.json",
+    "sha256": "f79a14ac35dd9b1270205575740b66d856342244c89e77367bda92f51fab6812",
+    "comparison": "Fresh issue URL, author and body and all 22 comment URLs, authors and bodies match the retained snapshot exactly.",
+    "comments_retrieved": 22
+  },
+  "original_cohort": {
+    "requested_count": 71,
+    "authenticated_original_identity_count": 0,
+    "unidentified_requested_slots": 71,
+    "requested_cohort_verified": false,
+    "original_audit_bytes": "UNKNOWN",
+    "original_audit_repository_location": "UNKNOWN",
+    "historical_71_95_122_membership_mapping": "UNKNOWN"
+  },
+  "owner_boundary": {
+    "remote_repositories_read": [
+      "stranske/Orchestrator"
+    ],
+    "excluded_repositories": [
+      "stranske/Collab-Admin"
+    ],
+    "excluded_repository_inspected": false
+  }
+}
