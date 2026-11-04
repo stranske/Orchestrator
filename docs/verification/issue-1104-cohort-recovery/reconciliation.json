@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-11-03T21:46:35.981101+00:00",
+  "scope": "original requested cohort recovery; incomplete",
+  "requested_count": 71,
+  "authenticated_original_identities": [],
+  "authenticated_original_identity_count": 0,
+  "unidentified_requested_slots": 71,
+  "requested_cohort_verified": false,
+  "original_source_revision": {
+    "reported_short_revision": "c88282b",
+    "full_revision": "UNKNOWN",
+    "source": "https://github.com/stranske/Orchestrator/issues/428"
+  },
+  "source_snapshot": {
+    "path": "source-428.json",
+    "sha256": "f79a14ac35dd9b1270205575740b66d856342244c89e77367bda92f51fab6812",
+    "issue_author": "stranske",
+    "comments_retrieved": 22
+  },
+  "later_reference_not_admitted_to_original_cohort": {
+    "run_id": "keepalive:stranske/Orchestrator#445:codex",
+    "target": "stranske/Orchestrator#445",
+    "source": "https://github.com/stranske/Orchestrator/issues/428#issuecomment-6132211923",
+    "original_cohort_membership": "UNKNOWN",
+    "verifier_verdict": "UNKNOWN",
+    "adjudicated_verdict": "UNKNOWN",
+    "reason": "Later observer reference does not establish membership or verdict pair in the October 4 requested snapshot."
+  },
+  "aggregate_discrepancies": [
+    {
+      "source": "https://github.com/stranske/Orchestrator/issues/428",
+      "reported_count": 71,
+      "kind": "original request",
+      "identities_recoverable_from_this_source": 0
+    },
+    {
+      "source": "docs/verification/issue-428-adjudicator-shadow.md",
+      "reported_count": 95,
+      "kind": "later live 90-day population",
+      "difference_from_requested": 24,
+      "membership_mapping": "UNKNOWN"
+    },
+    {
+      "source": "https://github.com/stranske/Orchestrator/issues/428#issuecomment-6016716712",
+      "reported_count": 122,
+      "kind": "later live population",
+      "difference_from_requested": 51,
+      "membership_mapping": "UNKNOWN"
+    },
+    {
+      "source": "docs/evidence/issue-428-metadata-floor-20261006/private-replay-summary.json",
+      "reported_count": 37,
+      "reported_population": 122,
+      "kind": "later saved summary",
+      "original_cohort_overlap": "UNKNOWN"
+    }
+  ],
+  "owner_boundary": {
+    "excluded_repositories": [
+      "stranske/Collab-Admin"
+    ],
+    "policy_sources": [
+      {
+        "path": "src/feature_goals.py",
+        "sha256": "8fa5df572e3aec50e114ad0a44aaaf3ff8d2d440d5c768d8d22e6fabf02d3e47"
+      },
+      {
+        "path": "scripts/stage_reviewed_repo_publisher_exclusion.py",
+        "sha256": "56b014fc757a6afd390b7aea03eea412b1f900dad245ad2da3ad53c287dc2769"
+      }
+    ],
+    "remote_repositories_inspected_this_round": [
+      "stranske/Orchestrator"
+    ],
+    "excluded_repository_inspected": false,
+    "original_cohort_excluded_identities": "UNKNOWN",
+    "original_cohort_exclusion_count": null,
+    "complete_owner_permitted_inventory_recovered": false
+  },
+  "runner_inventory": {
+    "path": "runner-inventory.json",
+    "sha256": "dc21e02f76144fc994eb0c038b59c134021824a665b17b324085626305f0302f",
+    "status": "unavailable",
+    "population_count": null,
+    "included_count": null,
+    "excluded_count": null,
+    "count_delta": null
+  },
+  "evidence_gaps": [
+    {
+      "kind": "original_identity_manifest_unavailable",
+      "detail": "All 71 requested slots remain unidentified. No identity list appears in the retrieved originating issue and its 22 comments; later references are not membership proof."
+    },
+    {
+      "kind": "original_audit_bytes_unavailable",
+      "reported_path": "Code/Audits/Orchestrator/2026-10-04-rarely-used-capabilities-audit.md",
+      "detail": "The originating issue cites an external local audit path; original bytes are absent from this checkout and its authenticated repository location is unknown."
+    },
+    {
+      "kind": "original_brain_unavailable",
+      "detail": "The runner default Brain cannot be opened; an unavailable store is not an observed zero-case inventory."
+    },
+    {
+      "kind": "permitted_inventory_unavailable",
+      "detail": "No complete owner-permitted inventory was recovered; only the documented exclusion boundary was verified locally."
+    },
+    {
+      "kind": "historical_population_mapping_unavailable",
+      "detail": "No identity mapping accounts for the 71/95/122 population differences or the original overlap of the saved 37 cases."
+    }
+  ],
+  "task_complete": false
+}

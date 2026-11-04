@@ -1,0 +1,16 @@
+{
+  "assessed_origin_main": "e86313cb6f1f6f047896b5c1bbb5d9c3c68d339e",
+  "head": "8970ad68a4f5033ca1de3603fedfb22b28f049fc",
+  "floor_byte_identical": true,
+  "local_floor_sha256": "780186ee0caf07002daac988ecbd91c4d58efb8e1957adb164c8ebae25d0f849",
+  "origin_main_floor_sha256": "780186ee0caf07002daac988ecbd91c4d58efb8e1957adb164c8ebae25d0f849",
+  "source_matches_assessed_main": {
+    "src/rate_incidents.py": true,
+    "src/feedback.py": true,
+    "tests/test_rate_incidents.py": true,
+    "tests/test_rate_incidents_expiry.py": true,
+    "tests/test_relay_pacing_feedback.py": true,
+    "tests/test_value_chain_preflight_cli.js": true,
+    "src/capability_admission.py": true
+  }
+}

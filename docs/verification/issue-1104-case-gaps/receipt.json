@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-11-03T22:03:23.531869+00:00",
+  "scope": "supplied-manifest gap exporter; synthetic validation only",
+  "evaluated_parent": "b98989f89238f6159e059abe6fe06db96bde38d3",
+  "source_sha256": {
+    "scripts/export_adjudicator_case_gaps.js": "fc91a3aeafea1328647652279ecfc2aa7cceb5e8d6e62371f4e4fe3d2708ee53",
+    "tests/test_adjudicator_case_gaps.js": "cbe1e880bb01c344a93b0b0f7034c589900939ae52f7d90ccf1f5a749ab92628",
+    "scripts/export_adjudicator_inventory.js": "8487feb1b033fb9b1c831018100ff81bd26f2294fdd12e366c60995f5ac39684",
+    "tests/test_adjudicator_retro.py": "b44fd6756915069d6a5dc492eecda268053a711899b81decc9d27f8c9793fda2",
+    "docs/verification/issue-1104-cohort-recovery/source-428.json": "f79a14ac35dd9b1270205575740b66d856342244c89e77367bda92f51fab6812"
+  },
+  "node": "v24.22.2",
+  "python": {
+    "executable": "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+    "version": "3.14.10"
+  },
+  "checks": {
+    "focused": {
+      "command": [
+        "node",
+        "tests/test_adjudicator_case_gaps.js"
+      ],
+      "exit": 0,
+      "passed": 6,
+      "log": "focused.log",
+      "log_sha256": "d1ebc2d22eaa22efb3fdc1a25bd40ae34747c429e06d57066179dbfd9e340201"
+    },
+    "related": {
+      "command": [
+        "node",
+        "--test",
+        "tests/test_adjudicator_case_gaps.js",
+        "tests/test_adjudicator_inventory.js",
+        "tests/test_adjudicator_retrospective_batch.js",
+        "tests/test_adjudicator_receipts.js",
+        "tests/test_adjudicator_completion.js"
+      ],
+      "exit": 0,
+      "passed_files": 5,
+      "log": "tests.log",
+      "log_sha256": "18daa777e4f6938fa65ccbd2ccb7a8c16291208080f7ea938b1394ddd769cf85"
+    },
+    "named_acceptance_attempt": {
+      "command": [
+        "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+        "-m",
+        "pytest",
+        "-m",
+        "not slow",
+        "tests/test_adjudicator_retro.py::test_packet_builder_needs_target_finding_and_ground_truth",
+        "tests/test_adjudicator_retro.py::test_retro_records_verdicts_without_changing_outcomes",
+        "tests/test_adjudicator_retro.py::test_closer_lane_offers_the_adjudicator_only_on_a_contested_verdict"
+      ],
+      "exit": 1,
+      "reason": "pytest unavailable; no tests collected or run",
+      "log": "named-acceptance-attempt.log",
+      "log_sha256": "f0dbac0c2508ce31a001ff3f12403c192088997ec3c0bae870a337f703f90152"
+    }
+  },
+  "original_requested_cohort": {
+    "requested_count": 71,
+    "authenticated_identities_recovered": 0,
+    "unidentified_requested_slots": 71,
+    "per_case_original_export": "NOT RUN: authenticated identity manifest unavailable",
+    "prior_reconciliation": "../issue-1104-cohort-recovery/reconciliation.json"
+  },
+  "task_complete": false,
+  "operational_acceptance_complete": false,
+  "publication": {
+    "pr": 1105,
+    "state": "open",
+    "isDraft": false,
+    "checkbox_update": "Rejected: connector writes require approval; policy is never",
+    "proposed_body": "/tmp/issue-1104-reconciled-pr-body.md",
+    "remote_duplicate_generator_task_still_unchecked": true,
+    "workspace_commit": "Blocked: .git/index.lock is on a read-only filesystem",
+    "transfer_directory": "/tmp/issue-1104-case-gaps-delivery"
+  }
+}

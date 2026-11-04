@@ -1,0 +1,77 @@
+{
+  "scope": "manufactured runner control, no production state",
+  "node": "v24.22.1",
+  "collector_sha256": "50a9cb0d20bc4dba2420af932c0bef1e74500095d92abfad18ac49bae0a2ed83",
+  "launcher_sha256": "5ed0613a51c047ed917b036fd69b4b4f62e69a13369c0762bb03b9d2bce25a70",
+  "source_tree": {
+    "status": "read",
+    "sha256": "831ba16464daca08d02179948b4f374c460c22a7394246ccdea970ebcc262b82",
+    "files": 237
+  },
+  "runtime_unchanged": true,
+  "result": {
+    "observed_at": "2026-11-03T23:04:02.615Z",
+    "status": "observed",
+    "operational_acceptance": "not_established",
+    "historical_replay_receipt": "not_established",
+    "blocking": {
+      "synced_outcomes_needed": 10,
+      "disagreements_needed": 3
+    },
+    "drainable": 0,
+    "candidates": 0,
+    "process_flag": null,
+    "flag_scope": "invoking_process_only; deployed_tick_flag_not_established",
+    "artifacts": {
+      "corpus": {
+        "status": "read",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "mtime": "2026-11-03T23:04:02.613Z"
+      },
+      "plan": {
+        "status": "read",
+        "sha256": "74b4070ee77ddb994ff1ac1a9c57d38fbd9092dc2106ffb6f627e2fb08380438",
+        "mtime": "2026-11-03T23:04:02.613Z"
+      },
+      "sweep": {
+        "status": "missing"
+      },
+      "success": {
+        "status": "missing"
+      },
+      "failure": {
+        "status": "missing"
+      },
+      "log": {
+        "status": "missing"
+      },
+      "switch_review": {
+        "status": "missing"
+      },
+      "report_dir": {
+        "status": "missing"
+      },
+      "screen_sources": {
+        "status": "read",
+        "sha256": "831ba16464daca08d02179948b4f374c460c22a7394246ccdea970ebcc262b82",
+        "files": 237
+      }
+    },
+    "limitations": [],
+    "recorded_switch_review": {
+      "status": "missing"
+    },
+    "recorded_lineage": [],
+    "screen_source_sha256": "aba6e9354521d05caa83864b288fddff81371761f8589a340988f39a229915e4",
+    "screen_execution": {
+      "exit_code": 0,
+      "signal": null,
+      "error_code": null
+    },
+    "population": {
+      "supervisor": "current",
+      "sweep": "missing"
+    },
+    "refusals": []
+  }
+}

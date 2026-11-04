@@ -1,0 +1,69 @@
+{
+  "scope": "manufactured runner control, no production state",
+  "node": "v24.22.1",
+  "collector_sha256": "4d87c50f5262df9fdf6fd63614e64a29e7089c326b95b90bb09ccc0177a11226",
+  "source_tree": {
+    "status": "read",
+    "sha256": "831ba16464daca08d02179948b4f374c460c22a7394246ccdea970ebcc262b82",
+    "files": 237
+  },
+  "result": {
+    "observed_at": "2026-11-03T23:01:29.494Z",
+    "status": "unavailable",
+    "operational_acceptance": "not_established",
+    "historical_replay_receipt": "not_established",
+    "blocking": null,
+    "drainable": null,
+    "candidates": null,
+    "process_flag": null,
+    "flag_scope": "invoking_process_only; deployed_tick_flag_not_established",
+    "artifacts": {
+      "corpus": {
+        "status": "read",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "mtime": "2026-11-03T23:01:29.493Z"
+      },
+      "plan": {
+        "status": "read",
+        "sha256": "d14c8740b965b5f9aeffc4a07a6e8d7be362d5b537129e78e4feb0d6abc63848",
+        "mtime": "2026-11-03T23:01:29.493Z"
+      },
+      "sweep": {
+        "status": "missing"
+      },
+      "success": {
+        "status": "missing"
+      },
+      "failure": {
+        "status": "missing"
+      },
+      "log": {
+        "status": "missing"
+      },
+      "switch_review": {
+        "status": "missing"
+      },
+      "report_dir": {
+        "status": "missing"
+      },
+      "screen_sources": {
+        "status": "read",
+        "sha256": "831ba16464daca08d02179948b4f374c460c22a7394246ccdea970ebcc262b82",
+        "files": 237
+      }
+    },
+    "limitations": [
+      "screen_execution_failed"
+    ],
+    "recorded_switch_review": {
+      "status": "missing"
+    },
+    "recorded_lineage": [],
+    "screen_source_sha256": "aba6e9354521d05caa83864b288fddff81371761f8589a340988f39a229915e4",
+    "screen_execution": {
+      "exit_code": 0,
+      "signal": null,
+      "error_code": "EPERM"
+    }
+  }
+}

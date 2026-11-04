@@ -1959,7 +1959,7 @@ def _source_check(binding: JSON) -> str:
 
 
 def _interrupted_release_plan(state_dir: Path, job: str) -> JSON:
-    """Read-only proof that a STAGED reservation belongs to a run interrupted before its verify ended.
+    """Read-only death/idle proof for a staged or retained-uncertain reservation.
 
     `run_job` writes a non-terminal `finish` (status `uncertain`, receipt saved) as soon as its child
     exits and before it returns any exit code. A row still `staged`, with no receipt, therefore
@@ -1967,6 +1967,8 @@ def _interrupted_release_plan(state_dir: Path, job: str) -> JSON:
     Descendants are proven stopped the way abort reconciliation proves it: the recorded owner PID,
     child PGID and sealed release parent are dead, and the independent ps/lsof probe finds nothing
     referencing the owned root. Any doubt raises StorageBlocked and the reservation stays charged.
+    Uncertain rows require a matching non-terminal receipt; their roots and prior receipts remain
+    as evidence. Releasing future-growth charge is not verification or reclaimed disk space.
     """
     if not state_dir.is_absolute() or state_dir.is_symlink() or not state_dir.is_dir():
         raise StorageBlocked("invalid storage state directory")
@@ -1979,10 +1981,35 @@ def _interrupted_release_plan(state_dir: Path, job: str) -> JSON:
         row = ledger["jobs"][job]
     except (KeyError, TypeError) as error:
         raise StorageBlocked("recorded storage reservation is unavailable") from error
-    if not isinstance(row, dict) or row.get("status") != "staged":
-        raise StorageBlocked("only a staged reservation can be released as interrupted")
+    if not isinstance(row, dict) or row.get("status") not in {"staged", "uncertain"}:
+        raise StorageBlocked(
+            "only a staged or uncertain reservation can be released as interrupted"
+        )
     receipt_path = state_dir / "receipts" / f"{job}.json"
-    if receipt_path.exists() or receipt_path.is_symlink():
+    prior_receipt_sha256 = None
+    if row["status"] == "uncertain":
+        _, prior, _ = _read_private_json_once(receipt_path, label="uncertain storage receipt")
+        if not isinstance(prior, dict) or prior.get("status") not in {
+            "retained_uncertain",
+            "cleanup_pending",
+            "not_started_cleanup_pending",
+        }:
+            raise StorageBlocked("uncertain reservation has no retained non-terminal receipt")
+        if prior.get("job") != job or any(
+            prior.get(key) != row.get(key)
+            for key in (
+                "root",
+                "root_identity",
+                "owner_pid",
+                "child_pgid",
+                "owner_token_sha256",
+                "stage_source_binding_sha256",
+                "source_identity",
+            )
+        ):
+            raise StorageBlocked("uncertain receipt does not bind the reservation")
+        prior_receipt_sha256 = _json_digest(prior)
+    elif receipt_path.exists() or receipt_path.is_symlink():
         raise StorageBlocked(
             "a storage receipt exists: the run reached completion; reconcile it instead"
         )
@@ -2047,7 +2074,7 @@ def _interrupted_release_plan(state_dir: Path, job: str) -> JSON:
             if prior_retirement
             else "finish_terminal_root_absent"
         )
-    elif source_check == "unchanged":
+    elif source_check == "unchanged" and row["status"] == "staged":
         action = "retire_root_finish_terminal"
     else:
         action = "finish_terminal_retain_root"
@@ -2064,13 +2091,15 @@ def _interrupted_release_plan(state_dir: Path, job: str) -> JSON:
         "prior_retirement": prior_retirement,
         "source_check": source_check,
         "receipt_path": str(receipt_path),
+        "reservation_status": row["status"],
+        "prior_receipt_sha256": prior_receipt_sha256,
         "action": action,
     }
     return {**body, "sha256": _json_digest(body)}
 
 
 def plan_interrupted_release(state_dir: Path, job: str) -> JSON:
-    """Side-effect-free plan for one interrupted, staged reservation."""
+    """Side-effect-free plan for one interrupted staged/uncertain reservation."""
     with _nonblocking_owner_lock(state_dir / f"{job}.owner"):
         return _interrupted_release_plan(state_dir, job)
 
@@ -2080,6 +2109,11 @@ def _apply_interrupted_release_locked(state_dir: Path, job: str, plan: JSON) -> 
     preserved: list[str] = []
     root = Path(plan["root"])
     action = plan["action"]
+    prior = None
+    if plan.get("prior_receipt_sha256") is not None:
+        _, prior, _ = _read_private_json_once(Path(plan["receipt_path"]), label="uncertain receipt")
+        if _json_digest(prior) != plan["prior_receipt_sha256"]:
+            raise StorageBlocked("uncertain receipt changed before apply")
     if action == "retire_root_finish_terminal":
         _, owner, _ = _read_private_json_once(root / "owner.json", label="owned root marker")
         preserved = retire(
@@ -2106,6 +2140,11 @@ def _apply_interrupted_release_locked(state_dir: Path, job: str, plan: JSON) -> 
         "calibration_updated": False,
         "observation": "interrupted before its verify ended; no exit code was ever returned to the parent",
     }
+    if prior is not None:
+        receipt["prior_receipt"] = prior
+        receipt["observation"] = (
+            "owner and descendants stopped; uncertain evidence preserved, not verified"
+        )
     Reservations(state_dir, root.parent, floor=0).finish(
         job,
         receipt,
@@ -2134,7 +2173,7 @@ def apply_interrupted_release(state_dir: Path, job: str, *, expected_plan_sha256
 
 
 def release_interrupted(state_dir: Path, *, apply: bool) -> JSON:
-    """Every staged reservation: released (or releasable) vs held, each held one with its reason.
+    """Staged/uncertain reservations: released (or releasable) vs held, with reasons.
 
     The drain for reservations nothing else can finish. It reports the blocking quantity (staged
     reservations and their charged bytes) beside the drainable one, so a stuck charge is visible.
@@ -2147,14 +2186,18 @@ def release_interrupted(state_dir: Path, *, apply: bool) -> JSON:
     _, ledger, _ = _read_private_json_once(ledger_path, label="reservation ledger")
     jobs = {job: row for job, row in (ledger.get("jobs") or {}).items() if isinstance(row, dict)}
     staged = sorted(job for job, row in jobs.items() if row.get("status") == "staged")
+    uncertain = sorted(job for job, row in jobs.items() if row.get("status") == "uncertain")
+    candidates = sorted(staged + uncertain)
     report: JSON = {
         "staged": len(staged),
-        "charged_bytes": sum(int(jobs[job].get("remaining") or 0) for job in staged),
+        "charged_bytes": sum(int(jobs[job].get("remaining") or 0) for job in candidates),
         "released": [],
         "releasable": [],
         "held": [],
     }
-    for job in staged:
+    if uncertain:
+        report["uncertain"] = len(uncertain)
+    for job in candidates:
         try:
             with _nonblocking_owner_lock(state_dir / f"{job}.owner"):
                 plan = _interrupted_release_plan(state_dir, job)

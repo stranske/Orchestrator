@@ -1,0 +1,123 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-11-04T00:12:11.507Z",
+  "parent_revision": "ee0ffdd489f3268c128bc4e1f8c4969d574381cc",
+  "source_commit": "2162e8e7e4cb6cbe3c354f15bb80bcfef79db33e",
+  "source_sha256": {
+    "scripts/export_adjudicator_case_gaps.js": "1fb82058641bb28ad83b8a919455b62322d2a36b82832aee1baa0e956f8025e4",
+    "tests/test_adjudicator_case_gaps.js": "051934ca3365893c5511a166c9e5b86969dfbb2afa04691f0aacd0e5271460fb"
+  },
+  "runtime": {
+    "node": "v24.22.2",
+    "python": "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+    "pytest": "unavailable"
+  },
+  "checks": [
+    {
+      "command": "node tests/test_adjudicator_case_gaps.js",
+      "phase": "baseline",
+      "exit_code": 0,
+      "passed": 6,
+      "log": "baseline.log"
+    },
+    {
+      "command": "node tests/test_adjudicator_case_gaps.js",
+      "phase": "final tests with parent exporter in isolated temporary tree",
+      "exit_code": 1,
+      "passed": 6,
+      "failed": 4,
+      "log": "parent-regressions.log.gz"
+    },
+    {
+      "command": "node tests/test_adjudicator_case_gaps.js",
+      "phase": "final",
+      "exit_code": 0,
+      "passed": 10,
+      "log": "gaps-after.log"
+    },
+    {
+      "command": "node --test tests/test_adjudicator_case_gaps.js tests/test_adjudicator_inventory.js tests/test_adjudicator_retrospective_batch.js tests/test_adjudicator_closer_shadow.js tests/test_adjudicator_receipts.js tests/test_adjudicator_completion.js",
+      "exit_code": 0,
+      "passed_files": 6,
+      "log": "related.log"
+    },
+    {
+      "command": "node --test-name-pattern='dispute inventory|retro saves Gate gaps' tests/test_adjudicator_retro_cli.js",
+      "exit_code": 0,
+      "passed": 8,
+      "log": "reader-and-gate.log"
+    },
+    {
+      "command": "node --check scripts/export_adjudicator_case_gaps.js",
+      "exit_code": 0
+    },
+    {
+      "command": "node --check tests/test_adjudicator_case_gaps.js",
+      "exit_code": 0
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "artifacts": {
+    "README.md": {
+      "bytes": 4419,
+      "sha256": "00ee659eadcf846d7e0b17bfc371504fff220298bc0e768d396b3a1d54561fcf"
+    },
+    "baseline.log": {
+      "bytes": 714,
+      "sha256": "5cf20622d6a6b9a21685610c57d53859a663c5376c8c5737a9ac867b63e27d40"
+    },
+    "gaps-after.log": {
+      "bytes": 1123,
+      "sha256": "6f39e7a04d2c0d074eedabf084840c7e8815959badf8c43f5abd112c9454f185"
+    },
+    "parent-regressions.log.gz": {
+      "bytes": 1270,
+      "sha256": "c6a5fec015efeb70d8559560112075c3c56cb9f391a5af47f6386e20dc2e61db"
+    },
+    "proposed-blocker-comment.md": {
+      "bytes": 657,
+      "sha256": "91d13d5cccc8a50f8f1368c1cdb9457cadc4f3a80188aec606f704822bc982c5"
+    },
+    "proposed-pr-body.md": {
+      "bytes": 11887,
+      "sha256": "e2269363ac9f2be9e2df30df8db7e25c093aa38b88af9a2eb828bc23cc8552e0"
+    },
+    "publication.json": {
+      "bytes": 1567,
+      "sha256": "c58604f63477e8dba1e2005b0406f22f63eb1a6be8990cbca8b4fc3c9f6c4040"
+    },
+    "reader-and-gate.log": {
+      "bytes": 993,
+      "sha256": "124458e901d56d04181b506b48f4011d0edfa86fea15d5a94dea55aa02d2e802"
+    },
+    "related.log": {
+      "bytes": 466,
+      "sha256": "3a097e26ba5acced2b9bff18a03bba8d09355a6dc18e123870442035210bd402"
+    },
+    "source-commit.patch.gz": {
+      "bytes": 4444,
+      "sha256": "f1cbe93ce133e0736d1e97dd84d5d5e6184743c16a946cdf34ece44f03d651bd"
+    }
+  },
+  "completed_task_checkboxes": 0,
+  "operational_acceptance_complete": false,
+  "not_established": [
+    "authenticated original identities",
+    "permitted persisted inventory",
+    "persisted role and cost reconciliation",
+    "three named pytest passes and specified mutation/restoration receipts",
+    "real contested closer observation",
+    "saved summary and switch-review reconciliation",
+    "individual dispositions of 16 retained CLI failures",
+    "remote metadata publication"
+  ],
+  "delivery": {
+    "checkout_branch_advanced": false,
+    "reason": "Git metadata mounted read-only",
+    "commit_patch": "source-commit.patch.gz",
+    "compression": "gzip preserves original source patch and parent regression log bytes"
+  }
+}
