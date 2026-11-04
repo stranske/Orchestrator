@@ -250,35 +250,6 @@ def test_failed_repository_fetch_does_not_starve_later_refresh_batches(tmp_path,
     assert rows == [(f"run-{n:03d}", "o/broken" if n < 50 else "o/healthy", n) for n in range(51)]
 
 
-def test_global_control_exception_preserves_backoff_without_fetching_other_repos(
-    tmp_path, monkeypatch
-):
-    import closer_evidence
-
-    class ControlStop(Exception, closer_evidence.RoundControlException):
-        pass
-
-    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
-    monkeypatch.setattr(
-        sweep,
-        "_missing_verifier_runs",
-        lambda: [
-            ("a", "o/rate-limited", 1),
-            ("b", "o/other", 2),
-        ],
-    )
-    calls = []
-
-    def fetch(repo, _numbers):
-        calls.append(repo)
-        raise ControlStop("authoritative capacity wait")
-
-    result = sweep.refresh_verifier_verdicts(_fetch_fn=fetch)
-    assert calls == ["o/rate-limited"]
-    assert result["verifier_checked"] == 1 and result["verifier_remaining"] == 1
-    assert result["verifier_recorded"] == 0
-
-
 def test_legacy_mapping_change_cannot_validate_a_different_checkout(tmp_path, monkeypatch):
     old = tmp_path / "old"
     new = tmp_path / "new"

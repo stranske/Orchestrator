@@ -346,10 +346,6 @@ def refresh_verifier_verdicts(*, dry_run: bool = False, _fetch_fn=None) -> dict:
             )
         except Exception as exc:
             fetch_errors[repo] = type(exc).__name__
-            import closer_evidence
-
-            if closer_evidence._is_round_control_exception(exc):
-                break
     attempted = [row for row in rows if row[1] in attempted_repos]
     recorded = 0
     for run_id, repo, number in rows:
