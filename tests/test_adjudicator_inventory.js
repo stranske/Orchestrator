@@ -396,6 +396,91 @@ const retainedRefusals = [
     'round_boundary_refused_dispatch'],
 ];
 
+const nativeRefusals = [
+  ['original report changed before native projection', 'native_source_report_changed'],
+  ['native admission requires a freshly issued collected case', 'native_collected_case_required'],
+  ['collected capability does not bind the original case', 'native_original_case_binding_mismatch'],
+  ['native admission only resumes an original abstention', 'native_original_not_abstained'],
+  ['native case already has a validated binary decision', 'native_binary_decision_already_recorded'],
+  ...['reserved', 'in_flight', 'raw_persisted', 'validated', 'validated_binary'].map((state) =>
+    [`native revision already reserved: ${state}`, `native_revision_already_${state}`]),
+];
+
+test('current native retry refusals identify admission breaks without inventing paid attempts', (t) => {
+  const { saved, options } = retainedReport(t);
+  saved.rows = nativeRefusals.map(([error], i) => ({ case_id: `case-${i}`,
+    target: `owner/repo#${i}`, error }));
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const before = fs.readFileSync(options.report);
+  const result = reportInventory(options);
+  for (const [i, row] of result.retained_attempt_observations.entries()) {
+    assert.deepEqual(row.first_broken_step, { status: 'recorded', stage: 'dispatch_admission',
+      code: nativeRefusals[i][1], message_origin: 'repository_emitter',
+      evidence_locations: [`rows[${i}].error`] });
+    assert.equal(row.backend_run_id, null);
+  }
+  assert.deepEqual(result.paid_attempts, []);
+  assert.equal(result.dispatch_authorized, false);
+  assert.equal(result.requested_cohort_verified, false);
+  assert.deepEqual(fs.readFileSync(options.report), before);
+});
+
+test('native refusal classification rejects changed prose and mixed admission or execution claims', (t) => {
+  const { saved, options } = retainedReport(t);
+  const attempts = nativeRefusals.flatMap(([error]) => [
+    { error: `earlier note: ${error}` }, { error: `${error} private suffix` },
+    { error, errors: ['backend exit=124 private execution error'] },
+    { error, decision: 'reject_blocker' },
+    { error, errors: [retainedRefusals[0][0]] },
+  ]);
+  attempts.push({ error: 'native revision already reserved: private_unknown_state' },
+    { error: nativeRefusals[0][0], errors: [nativeRefusals[1][0]] },
+    { errors: ['native revision already reserved: reserved',
+      'native revision already reserved: in_flight'] });
+  saved.rows = attempts.map((row, i) => ({ ...row, case_id: `case-${i}`,
+    target: `owner/repo#${i}` }));
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const result = reportInventory(options);
+  for (const row of result.retained_attempt_observations) {
+    assert.equal(row.first_broken_step.status, 'unresolved');
+    assert.equal(row.first_broken_step.stage, null);
+  }
+  assert.ok(!JSON.stringify(result).includes('private'));
+  assert.equal(result.dispatch_authorized, false);
+});
+
+test('requested retry CLI preserves parent decisions and exposes separate native admission breaks', (t) => {
+  const { root, saved, options } = retainedReport(t);
+  const identity = { run_id: 'original', target: 'owner/repo#1' };
+  const error = 'native revision already reserved: in_flight';
+  saved.rows = [{ ...identity, case_id: 'case-a', decision: 'reject_blocker',
+    later_truth: 'UNKNOWN', backend_run_id: 'original-paid', retry_error: error,
+    retry_attempts: [{ error: nativeRefusals[2][0], backend_run_id: 'historical-paid' }] }];
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const manifest = manifestFile(root, [identity]);
+  const inputs = [options.report, manifest];
+  const before = inputs.map((file) => fs.readFileSync(file));
+  const cli = execute(root, process.execPath, [script, '--report', options.report,
+    '--manifest', manifest, '--observed-at', String(now),
+    '--evidence-class', options.evidenceClass, '--evidence-reference', options.evidenceReference]);
+  assert.equal(cli.status, 0, cli.stderr);
+  const result = JSON.parse(cli.stdout);
+  assert.deepEqual(result, reportInventory({ ...options, manifest }));
+  const [parent, retry] = result.retained_attempt_observations;
+  assert.equal(parent.first_broken_step.status, 'not_recorded');
+  assert.equal(parent.later_retry_broken_step.code, 'native_revision_already_in_flight');
+  assert.deepEqual(parent.later_retry_broken_step.evidence_locations, ['rows[0].retry_error']);
+  assert.equal(retry.first_broken_step.code, 'native_original_case_binding_mismatch');
+  assert.equal(result.cases[0].retained_decision, 'reject_blocker');
+  assert.equal(result.cases[0].retained_later_truth, 'UNKNOWN');
+  assert.equal(result.paid_identity_summary.unique, 2);
+  assert.equal(result.manifest_reconciliation.authenticated_outcomes_verified, false);
+  assert.deepEqual(result.manifest_reconciliation.cases[0].retained_attempt_locations,
+    ['rows[0]', 'rows[0].retry_attempts[0]']);
+  assert.equal(result.dispatch_authorized, false);
+  assert.deepEqual(inputs.map((file) => fs.readFileSync(file)), before);
+});
+
 test('exact retained launcher refusals explain admission without claiming a backend attempt', (t) => {
   const { saved, options } = retainedReport(t);
   saved.rows = retainedRefusals.map(([error], i) => ({

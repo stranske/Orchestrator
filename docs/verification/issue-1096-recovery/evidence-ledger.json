@@ -390,6 +390,28 @@
       "canonical_publications": 0,
       "mirror_writes": 0,
       "limitation": "Fixture receipt consistency checks only; authenticated outcomes and original operational acceptance remain unverified."
+    },
+    "native_admission_followup": {
+      "checked_at": "2026-11-04T05:10:28.329756+00:00",
+      "source_commit": "c80d78d65510c4022a8dde9a7961d1d71f492b6a",
+      "checkout_parent": "5435e6ad526c2f6ad4450d743d3dd4650591ea7f",
+      "plan": "native-admission-followup/plan.md",
+      "results": "native-admission-followup/results.md",
+      "validation": "native-admission-followup/validation.json",
+      "checks": "native-admission-followup/acceptance-run/checks.json",
+      "focused_checks_passed": 146,
+      "required_tests_passed": false,
+      "original_retry_reconciliation_complete": false,
+      "operational_acceptance_verified": false,
+      "task_checkboxes_newly_verified_complete": 0,
+      "limitation": "Exact-message diagnostics and fixture controls only; original requested retry manifest, authenticated receipts and independent current truth remain unavailable.",
+      "blocker_comment": "rejected_connector_requires_approval_policy_never",
+      "needs_human_label": "rejected_connector_requires_approval_policy_never",
+      "pr_readiness": {
+        "number": 1097,
+        "state": "open",
+        "isDraft": false
+      }
     }
   },
   "mirror_synchronization": [

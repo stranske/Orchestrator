@@ -62,11 +62,27 @@ const retainedLauncherRefusals = new Map([
     'round_boundary_refused_dispatch'],
 ]);
 
+// Exact pre-invocation refusals from adjudicator_retro.admit_collected_retry.
+// A refusal can coexist with prior paid history; it proves neither a new
+// invocation nor that the journal's recorded state has been authenticated.
+const nativeAdmissionRefusals = new Map([
+  ['original report changed before native projection', 'native_source_report_changed'],
+  ['native admission requires a freshly issued collected case', 'native_collected_case_required'],
+  ['collected capability does not bind the original case', 'native_original_case_binding_mismatch'],
+  ['native admission only resumes an original abstention', 'native_original_not_abstained'],
+  ['native case already has a validated binary decision', 'native_binary_decision_already_recorded'],
+  ...['reserved', 'in_flight', 'raw_persisted', 'validated', 'validated_binary'].map((state) =>
+    [`native revision already reserved: ${state}`, `native_revision_already_${state}`]),
+]);
+
 function failureMessage(value) {
   if (typeof value !== 'string') return null;
   if (failureMessages.has(value)) return failureMessages.get(value);
   if (retainedLauncherRefusals.has(value)) {
     return ['dispatch_admission', retainedLauncherRefusals.get(value), 2.5, 'retained_launcher'];
+  }
+  if (nativeAdmissionRefusals.has(value)) {
+    return ['dispatch_admission', nativeAdmissionRefusals.get(value), 2.5];
   }
   // The roles emitter prefixes nonzero backend exits. Do not infer timeout,
   // cost, invocation completion or provider failure details from the suffix.
@@ -83,10 +99,10 @@ function firstRetainedBreak(fields, conflict = false) {
   if (conflict || fields.some((item) => !item.classification)) {
     return { status: 'unresolved', ...empty };
   }
-  const refusal = fields.find((item) => item.classification[3] === 'retained_launcher');
+  const refusal = fields.find((item) => item.classification[0] === 'dispatch_admission');
   // A refusal alongside execution/validation errors (or a different refusal)
   // does not establish which attempt those fields describe. Do not invent an
-  // ordering between historical launcher fields and repository-emitted errors.
+  // ordering between separate admissions or admission and execution fields.
   if (refusal && fields.some((item) =>
     item.classification[1] !== refusal.classification[1])) {
     return { status: 'unresolved', ...empty };

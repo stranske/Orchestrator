@@ -1,5 +1,14 @@
 # Acceptance evidence recovery for #1096
 
+## Native retry admission diagnostics, 2026-11-04 UTC
+
+Exact current native retry refusal messages now identify recorded admission
+breaks, including changed source reports, original-case binding and reserved
+revisions. Conflicting fields stay unresolved; parent decisions and paid history
+remain separate. All 146 focused checks pass. [Results and limitations](native-admission-followup/results.md)
+bind the source and failed required Python test attempt. Original retry
+reconciliation and operational acceptance remain incomplete; no new task is complete.
+
 ## Native receipt consistency recovery, 2026-11-04 UTC
 
 Observed binary results with missing or contradictory backend identity/raw output
