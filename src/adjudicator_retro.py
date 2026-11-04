@@ -567,6 +567,7 @@ def diagnose_original_rows(rows: list[dict], attempts: list[dict]) -> list[dict]
     for index, row in enumerate(rows):
         packet = row.get("packet")
         ground = packet.get("ground_truth_evidence") if isinstance(packet, dict) else None
+        evidence_gap = _packet_evidence_gap(ground) if isinstance(ground, dict) else None
         proposal = row.get("proposal")
         decision = row.get("decision")
         error_ref = None
@@ -586,7 +587,7 @@ def diagnose_original_rows(rows: list[dict], attempts: list[dict]) -> list[dict]
             error_ref = f"rows[{index}].error"
         if not isinstance(ground, dict):
             first_break = "saved_packet_unavailable"
-        elif _packet_metadata_only(ground):
+        elif evidence_gap is not None:
             first_break = "saved_substantive_evidence_missing"
         elif error_ref is not None:
             first_break = attempt_break
@@ -630,6 +631,14 @@ def diagnose_original_rows(rows: list[dict], attempts: list[dict]) -> list[dict]
                 "retained_decision": decision,
                 "retained_later_truth": row.get("later_truth"),
                 "retained_first_break": first_break,
+                "retained_evidence_gap": (
+                    {
+                        "ref": f"rows[{index}].packet.ground_truth_evidence.{evidence_gap[0]}",
+                        "reason": evidence_gap[1],
+                    }
+                    if evidence_gap is not None
+                    else None
+                ),
                 "retained_error_ref": error_ref,
                 "native_first_break": native_break,
                 "unresolved_native_attempts": [
@@ -1286,31 +1295,32 @@ def disputes(*, db: Path | None = None, now: int | None = None, days: int = 90) 
         ]
 
 
-def _packet_metadata_only(ground_truth: dict) -> bool:
+def _packet_evidence_gap(ground_truth: dict) -> tuple[str, str] | None:
+    """Locate the first evidence-floor failure without returning evidence contents."""
     patch = ground_truth.get("diff_patch")
-    patch_text = patch.get("text") if isinstance(patch, dict) else ""
-    has_patch = (
-        isinstance(patch, dict)
-        and isinstance(patch_text, str)
-        and bool(patch_text.strip())
-        and isinstance(patch.get("revision"), str)
-        and bool(patch["revision"].strip())
-        and not patch.get("truncated", False)
-    )
+    if not isinstance(patch, dict):
+        return "diff_patch", "missing_or_invalid_object"
+    for field in ("text", "revision"):
+        value = patch.get(field)
+        if not isinstance(value, str) or not value.strip():
+            return f"diff_patch.{field}", "missing_or_blank_string"
+    if patch.get("truncated", False):
+        return "diff_patch.truncated", "truncated_patch"
     criteria = ground_truth.get("acceptance_criteria")
-    has_criteria = (
-        isinstance(criteria, list)
-        and bool(criteria)
-        and all(
-            isinstance(item, dict)
-            and isinstance(item.get("text"), str)
-            and bool(item["text"].strip())
-            and isinstance(item.get("revision"), str)
-            and bool(item["revision"].strip())
-            for item in criteria
-        )
-    )
-    return not (has_patch and has_criteria)
+    if not isinstance(criteria, list) or not criteria:
+        return "acceptance_criteria", "missing_or_empty_list"
+    for index, item in enumerate(criteria):
+        if not isinstance(item, dict):
+            return f"acceptance_criteria[{index}]", "missing_or_invalid_object"
+        for field in ("text", "revision"):
+            value = item.get(field)
+            if not isinstance(value, str) or not value.strip():
+                return f"acceptance_criteria[{index}].{field}", "missing_or_blank_string"
+    return None
+
+
+def _packet_metadata_only(ground_truth: dict) -> bool:
+    return _packet_evidence_gap(ground_truth) is not None
 
 
 def _row_metadata_only(row: dict) -> bool:

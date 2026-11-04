@@ -576,6 +576,10 @@ print(json.dumps(attempt['attempt_id']))
     null, null, 'rows[2].errors[0]', null, 'rows[4].errors[0]', null, null,
     'rows[7].errors[0]', null,
   ]);
+  assert.deepEqual(report.row_diagnostics.map((row) => row.retained_evidence_gap), [
+    null, null, { ref: 'rows[2].packet.ground_truth_evidence.diff_patch',
+      reason: 'missing_or_invalid_object' }, null, null, null, null, null, null,
+  ], 'an earlier evidence gap remains specific despite a later validator rejection');
   report.row_diagnostics.forEach((diagnostic, index) => {
     assert.equal(diagnostic.source_row, `rows[${index}]`);
     assert.equal(diagnostic.case_id, rows[index].case_id);
@@ -640,8 +644,39 @@ test('inventory CLI locates incomplete evidence despite retained decisions and c
     ['criteria-no-revision', patch, [criterion, { text: criterion.text }]],
     ['criteria-blank-revision', patch, [{ ...criterion, revision: ' \t' }, criterion]],
     ['criteria-nonstring-revision', patch, [criterion, { ...criterion, revision: 42 }]],
+    ['patch-before-criteria', undefined, [null]],
+    ['first-criterion-before-later', patch, [
+      { ...criterion, text: '' }, { ...criterion, revision: '' },
+    ]],
     ['complete-uphold', patch, [criterion]],
     ['complete-reject', patch, [criterion, { ...criterion, revision: 'other-issue-revision' }]],
+  ];
+  const expectedGaps = [
+    ['diff_patch', 'missing_or_invalid_object'],
+    ['diff_patch', 'missing_or_invalid_object'],
+    ['diff_patch', 'missing_or_invalid_object'],
+    ['diff_patch.text', 'missing_or_blank_string'],
+    ['diff_patch.text', 'missing_or_blank_string'],
+    ['diff_patch.text', 'missing_or_blank_string'],
+    ['diff_patch.revision', 'missing_or_blank_string'],
+    ['diff_patch.revision', 'missing_or_blank_string'],
+    ['diff_patch.revision', 'missing_or_blank_string'],
+    ['diff_patch.truncated', 'truncated_patch'],
+    ['acceptance_criteria', 'missing_or_empty_list'],
+    ['acceptance_criteria', 'missing_or_empty_list'],
+    ['acceptance_criteria', 'missing_or_empty_list'],
+    ['acceptance_criteria', 'missing_or_empty_list'],
+    ['acceptance_criteria[1]', 'missing_or_invalid_object'],
+    ['acceptance_criteria[0]', 'missing_or_invalid_object'],
+    ['acceptance_criteria[1].text', 'missing_or_blank_string'],
+    ['acceptance_criteria[0].text', 'missing_or_blank_string'],
+    ['acceptance_criteria[1].revision', 'missing_or_blank_string'],
+    ['acceptance_criteria[0].revision', 'missing_or_blank_string'],
+    ['acceptance_criteria[1].revision', 'missing_or_blank_string'],
+    ['diff_patch', 'missing_or_invalid_object'],
+    ['acceptance_criteria[0].text', 'missing_or_blank_string'],
+    null,
+    null,
   ];
   const rows = variants.map(([name, diff_patch, acceptance_criteria], index) => ({
     // Include a real unresolved reservation on a row with a retained decision.
@@ -666,6 +701,10 @@ test('inventory CLI locates incomplete evidence despite retained decisions and c
     const name = variants[index][0];
     assert.equal(diagnostic.retained_first_break, name.startsWith('complete-')
       ? 'fresh_native_authentication_required' : 'saved_substantive_evidence_missing', name);
+    const gap = expectedGaps[index];
+    assert.deepEqual(diagnostic.retained_evidence_gap, gap === null ? null : {
+      ref: `rows[${index}].packet.ground_truth_evidence.${gap[0]}`, reason: gap[1],
+    }, name);
     assert.equal(diagnostic.retained_decision, rows[index].decision, name);
     assert.equal(diagnostic.retained_later_truth, rows[index].later_truth, name);
     assert.equal(diagnostic.source_row, `rows[${index}]`, name);

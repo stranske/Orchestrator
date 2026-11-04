@@ -231,3 +231,34 @@ Staging fails on the read-only `.git/index.lock` location. Automatic approval
 review rejects the connected GitHub file commit, blocker comment and
 `needs-human` label because approval is required and policy is `never`.
 No commit or push was made.
+
+## Specific retained evidence locations
+
+Checked on 2026-11-04 against checkout
+`5ced88edf88e0f4dd90e5d18b80d999d27d918a2`. Missing substantive evidence now
+has a `retained_evidence_gap` with its original-row field reference and a fixed
+reason. The evidence floor and diagnostic share the same predicate. Patch shape,
+text, revision and truncation are checked before the ordered acceptance criteria;
+complete evidence has no gap. No evidence contents are included in this field.
+
+The real inventory CLI regression checks 25 evidence cases, including simultaneous
+patch/criteria failures and failures in multiple criteria. Its mixed-cohort test
+also checks that a missing patch remains the first break before a recorded
+validator rejection. Decisions, independent-truth claims, original paid history
+and UNKNOWN reservations remain retained; original, canonical, database and WAL
+bytes remain unchanged. Running the evidence regression against the original
+source fails because the field reference and reason are absent.
+
+These are fixture results. Current checks find the default canonical report,
+independent outcomes database and runtime absent. Authentic original report and
+journal locations remain unavailable, so production diagnosis, retries,
+publication and live-shadow observations remain unverified and unchecked.
+Black and pytest are unavailable; package installation failed. The required Black
+format/check commands and full retrospective pytest command cannot run. No Python
+changes may be committed until the required formatting gate passes.
+
+Validation: all 45 inventory integration tests, 32 diagnostic unittests and seven
+replay/publication unittests pass. JavaScript syntax and `git diff --check` pass.
+No commit or push was made. Automatic approval review rejected the blocker
+comment and `needs-human` label because they require approval and this run's
+policy is `never`.
