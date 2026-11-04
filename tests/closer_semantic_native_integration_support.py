@@ -48,6 +48,10 @@ def current_receiver_reference():
     admitted = drain["function_delta"]["_main_admitted"]
     assert current["native_top_level_ast"]["_main_admitted"] == admitted["before"]
     current["native_top_level_ast"]["_main_admitted"] = admitted["after"]
+    for name, change in diagnostics_review_reference()["function_delta"].items():
+        if name in current["native_top_level_ast"]:
+            assert current["native_top_level_ast"][name] == change["before"]
+            current["native_top_level_ast"][name] = change["after"]
     return current
 
 
@@ -275,6 +279,7 @@ def integrated_native_source_reference():
     for filename, change in reservation_drain_latch_reference()["files"].items():
         assert original[filename] == change["before_file_sha256"]
         original[filename] = change["after_file_sha256"]
+    original["closer_dispatcher.py"] = diagnostics_review_reference()["after_file_sha256"]
     return original
 
 
@@ -737,6 +742,7 @@ def reservation_drain_latch_reference():
 
 def before_reservation_drain_latch_source(raw, filename):
     """Restore the exact capacity-recovery dispatcher beneath the drain-latch successor."""
+    raw = before_diagnostics_review_source(raw, filename)
     change = reservation_drain_latch_reference()["files"].get(filename)
     if change is None:
         return raw
@@ -770,6 +776,7 @@ def before_capacity_pre_effect_recovery_source(raw, filename):
 
 def _undo_capacity_era_dispatcher_if_present(source):
     """Undo drain-latch and/or capacity recovery only when those bytes are still present."""
+    source = before_diagnostics_review_source(source.encode(), "closer_dispatcher.py").decode()
     digest = hashlib.sha256(source.encode()).hexdigest()
     drain = reservation_drain_latch_reference()["files"]["closer_dispatcher.py"]
     capacity = capacity_pre_effect_recovery_reference()["files"]["closer_dispatcher.py"]
@@ -1525,3 +1532,31 @@ def before_scoped_capacity_source(source):
     restored = restored.replace(validation["after_fragment"], validation["before_fragment"], 1)
     assert hashlib.sha256(restored.encode()).hexdigest() == change["before_file_sha256"]
     return restored
+
+
+DIAGNOSTICS_REVIEW_MANIFEST = (
+    Path(__file__).parent
+    / "fixtures/semantic_api_reference/current_reservation_diagnostics_review_v1.json"
+)
+DIAGNOSTICS_REVIEW_SHA256 = "eab91866278a03d73571552b72ca59082b7bea7b39eac893dffb4b1d07ef1999"
+
+
+def diagnostics_review_reference():
+    raw = DIAGNOSTICS_REVIEW_MANIFEST.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == DIAGNOSTICS_REVIEW_SHA256
+    value = json.loads(raw)
+    assert value["schema"] == "reservation-diagnostics-review-successor/v1"
+    assert (
+        value["before_file_sha256"]
+        == reservation_drain_latch_reference()["files"]["closer_dispatcher.py"]["after_file_sha256"]
+    )
+    return value
+
+
+def before_diagnostics_review_source(raw, filename):
+    if filename != "closer_dispatcher.py":
+        return raw
+    change = diagnostics_review_reference()
+    if hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]:
+        return change["before_source_utf8"].encode()
+    return raw

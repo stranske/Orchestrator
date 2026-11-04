@@ -5785,6 +5785,7 @@ def test_expired_admission_diagnostics_reports_unmeasured_separately(tmp_path, m
 
     monkeypatch.setattr(adapter, "ADMISSION_DIAGNOSTICS_BUDGET_SECONDS", 120.0)
     observe_calls = {"count": 0}
+    revision = {"value": "rev-1"}
 
     def counting_plan(state_path, *, target, observe=None):
         observe_calls["count"] += 1
@@ -5792,7 +5793,7 @@ def test_expired_admission_diagnostics_reports_unmeasured_separately(tmp_path, m
             "schema": closer_resources.TERMINAL_RECONCILIATION_SCHEMA,
             "eligible": False,
             "advertisements": [],
-            "reasons": ["native_writer_not_terminal:synthetic"],
+            "reasons": ["retained-evidence-unavailable"],
             "acceptance_authority": False,
             "global_stop_authority": False,
             "effect_retry_authority": False,
@@ -5803,13 +5804,21 @@ def test_expired_admission_diagnostics_reports_unmeasured_separately(tmp_path, m
         adapter,
         "GitHub",
         lambda *, deadline: SimpleNamespace(
-            snapshot=lambda _target: {"revision": "rev-1", "kind": "pr", "state": "MERGED"}
+            snapshot=lambda _target: {
+                "revision": revision["value"],
+                "kind": "pr",
+                "state": "MERGED",
+            }
         ),
     )
     adapter._expired_admission_diagnostics(pipeline_path)
     assert observe_calls["count"] == 3
     adapter._expired_admission_diagnostics(pipeline_path)
     assert observe_calls["count"] == 3
+
+    revision["value"] = "rev-2"
+    adapter._expired_admission_diagnostics(pipeline_path)
+    assert observe_calls["count"] == 6
 
 
 def test_terminal_plan_cache_does_not_latch_live_owner_refusal(tmp_path, monkeypatch):
@@ -6673,3 +6682,59 @@ def test_inert_cli_guard_refuses_unowned_paths_before_write(
     else:
         assert not guard.exists()
     assert inert_caller.world.events["auth"] == 0
+
+
+def test_native_writer_refusal_reobserved_on_unchanged_revision(tmp_path, monkeypatch):
+    import closer_resources
+
+    monkeypatch.setattr(adapter, "_probe_snapshot_revision", lambda target: "same-revision")
+    calls = []
+
+    def plan(*args, **kwargs):
+        calls.append(1)
+        return {
+            "eligible": len(calls) > 1,
+            "reasons": ["native_writer_not_terminal:synthetic"] if len(calls) == 1 else [],
+        }
+
+    monkeypatch.setattr(closer_resources, "plan_terminal_reconciliation", plan)
+    cache, observations = {}, {}
+    first, _ = adapter._cached_terminal_plan(
+        tmp_path / "pipeline.json", TARGET, cache, observations
+    )
+    second, _ = adapter._cached_terminal_plan(
+        tmp_path / "pipeline.json", TARGET, cache, observations
+    )
+    assert first["eligible"] is False
+    assert second["eligible"] is True
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize(
+    "grader,check",
+    [
+        (adapter.reservation_drain_pass_number, adapter.RESERVATION_DRAIN_PASS_CHECK_TS),
+        (adapter.reservation_drain_pass2_number, adapter.RESERVATION_DRAIN_PASS2_CHECK_TS),
+    ],
+)
+def test_drain_grading_preserves_unmeasured_reservations(grader, check):
+    result = grader(
+        {
+            "blocking_reservations": 0,
+            "drainable_reservations": 0,
+            "unmeasured_reservations": 1,
+            "authority": True,
+        },
+        now=check,
+    )
+    assert result["status"] == "unmeasured"
+    assert result["reservation_cleared"] is False
+
+
+def test_drain_pass2_noninteger_blocking_is_unmeasured():
+    result = adapter.reservation_drain_pass2_number(
+        {"blocking_reservations": "0", "drainable_reservations": 0, "authority": True},
+        now=adapter.RESERVATION_DRAIN_PASS2_CHECK_TS,
+    )
+    assert result["status"] == "unmeasured"
+    assert result["reservation_cleared"] is False

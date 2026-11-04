@@ -11692,6 +11692,7 @@ def reservation_drain_pass_number(receipt, *, now=None):
         and isinstance(drainable, int)
         and not isinstance(blocking, bool)
         and not isinstance(drainable, bool)
+        and receipt.get("unmeasured_reservations", 0) == 0
         and (blocking == 0 or drainable == blocking)
     )
     result = {
@@ -11704,6 +11705,10 @@ def reservation_drain_pass_number(receipt, *, now=None):
         "reason": f"check date {RESERVATION_DRAIN_PASS_CHECK_LABEL} not reached",
     }
     if stamp < RESERVATION_DRAIN_PASS_CHECK_TS:
+        return result
+    if receipt.get("unmeasured_reservations", 0) != 0:
+        result["status"] = "unmeasured"
+        result["reason"] = "unmeasured reservations remain"
         return result
     if not isinstance(blocking, int) or isinstance(blocking, bool):
         result["status"] = "unmeasured"
@@ -11737,6 +11742,7 @@ def reservation_drain_pass2_number(receipt, *, now=None):
         and isinstance(drainable, int)
         and not isinstance(blocking, bool)
         and not isinstance(drainable, bool)
+        and receipt.get("unmeasured_reservations", 0) == 0
         and (blocking == 0 or drainable == blocking)
     )
     result = {
@@ -11749,6 +11755,10 @@ def reservation_drain_pass2_number(receipt, *, now=None):
         "reason": f"check date {RESERVATION_DRAIN_PASS2_CHECK_LABEL} not reached",
     }
     if stamp < RESERVATION_DRAIN_PASS2_CHECK_TS:
+        return result
+    if receipt.get("unmeasured_reservations", 0) != 0:
+        result["status"] = "unmeasured"
+        result["reason"] = "unmeasured reservations remain"
         return result
     if not isinstance(blocking, int) or isinstance(blocking, bool):
         result["status"] = "unmeasured"
@@ -11849,7 +11859,10 @@ def _cacheable_terminal_plan(plan):
     reasons = [str(reason) for reason in plan.get("reasons") or [] if reason]
     if not reasons:
         return False
-    return not all(reason in _LOCAL_OWNER_PLAN_REASONS for reason in reasons)
+    return not any(
+        reason in _LOCAL_OWNER_PLAN_REASONS or reason.startswith("native_writer_not_terminal:")
+        for reason in reasons
+    )
 
 
 def _cached_terminal_plan(pipeline_path, target, cache, observe_calls):
