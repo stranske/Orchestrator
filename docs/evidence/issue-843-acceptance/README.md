@@ -1,21 +1,21 @@
 # Issue #843 acceptance evidence (closer repair)
 
-Generated: 2026-11-03T07:42:02.604517+00:00
-Git HEAD: `af6aec214ca3c957775a7bbd280bfbdee457876a`
-Python: `/Users/teacher/.codex/python-bin/python3`
+Generated: 2026-11-04T00:10:36.264862+00:00
+Git HEAD: `8028a57556612e87574b2b7af628de60ef042613`
+Python: `/opt/anaconda3/bin/python3`
 
 ## Reproducible commands
 
 Focused baseline (25 added tests):
 
 ```bash
-/Users/teacher/.codex/python-bin/python3 -m pytest -q tests/test_issue843_ranked_coverage.py tests/test_range_lane_rollout_coverage_gaps.py
+/opt/anaconda3/bin/python3 -m pytest -q tests/test_issue843_ranked_coverage.py tests/test_range_lane_rollout_coverage_gaps.py
 ```
 
 Full acceptance runner (baseline + deliberate mutations + receipts):
 
 ```bash
-/Users/teacher/.codex/python-bin/python3 scripts/run_issue843_acceptance.py --write-report
+/opt/anaconda3/bin/python3 scripts/run_issue843_acceptance.py --write-report
 ```
 
 Combined coverage (CI-equivalent, slow):
@@ -63,11 +63,11 @@ CI uses sharded `python3 src/verify.py --pytest-shard i/6 --coverage` then
 
 ```json
 {
-  "command": "/Users/teacher/.codex/python-bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_canned_gh_stub_rejects_unexpected_commands tests/test_issue843_ranked_coverage.py::test_selftest_pops_absent_orch_state_dir tests/test_issue843_ranked_coverage.py::test_router_helpers_cover_edge_returns tests/test_issue843_ranked_coverage.py::test_router_heartbeat_and_exploration_short_circuits tests/test_issue843_ranked_coverage.py::test_router_pacing_choice_edge_branches tests/test_issue843_ranked_coverage.py::test_router_select_unknown_task_and_profile_miss tests/test_issue843_ranked_coverage.py::test_router_learned_ranks_and_plan_failures tests/test_issue843_ranked_coverage.py::test_router_main_cli_paths tests/test_issue843_ranked_coverage.py::test_router_selftest_restores_preset_exploration_env tests/test_issue843_ranked_coverage.py::test_feature_scan_heartbeat_errors_and_unparseable tests/test_issue843_ranked_coverage.py::test_feature_scan_apply_and_format_unlogged tests/test_issue843_ranked_coverage.py::test_effectiveness_lift_and_main_cli tests/test_issue843_ranked_coverage.py::test_effectiveness_closes_only_connections_it_opened tests/test_issue843_ranked_coverage.py::test_redirect_record_without_proposal_source_raises tests/test_issue843_ranked_coverage.py::test_redirect_bare_report_rejection_keeps_else_assert_unreachable tests/test_issue843_ranked_coverage.py::test_strategy_invalid_single_arm_raises_before_selftest_assert_false tests/test_issue843_ranked_coverage.py::test_strategy_coerce_and_normalize_arms_edges tests/test_issue843_ranked_coverage.py::test_strategy_shape_rate_and_open_pr_helpers tests/test_issue843_ranked_coverage.py::test_strategy_gh_subjects_success_and_pagination tests/test_issue843_ranked_coverage.py::test_strategy_select_subject_and_freeze tests/test_issue843_ranked_coverage.py::test_strategy_normalize_load_read_format_and_prepare tests/test_issue843_ranked_coverage.py::test_strategy_refresh_and_main_cli tests/test_issue843_ranked_coverage.py::test_strategy_remaining_ci_gaps tests/test_issue843_ranked_coverage.py::test_strategy_build_plan_from_args tests/test_range_lane_rollout_coverage_gaps.py::test_offline_selftest_restores_prior_handoff_and_clears_added_rate",
+  "command": "/opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_issue843_ranked_coverage.py::test_canned_gh_stub_rejects_unexpected_commands tests/test_issue843_ranked_coverage.py::test_selftest_pops_absent_orch_state_dir tests/test_issue843_ranked_coverage.py::test_router_helpers_cover_edge_returns tests/test_issue843_ranked_coverage.py::test_router_heartbeat_and_exploration_short_circuits tests/test_issue843_ranked_coverage.py::test_router_pacing_choice_edge_branches tests/test_issue843_ranked_coverage.py::test_router_select_unknown_task_and_profile_miss tests/test_issue843_ranked_coverage.py::test_router_learned_ranks_and_plan_failures tests/test_issue843_ranked_coverage.py::test_router_main_cli_paths tests/test_issue843_ranked_coverage.py::test_router_selftest_restores_preset_exploration_env tests/test_issue843_ranked_coverage.py::test_feature_scan_heartbeat_errors_and_unparseable tests/test_issue843_ranked_coverage.py::test_feature_scan_apply_and_format_unlogged tests/test_issue843_ranked_coverage.py::test_effectiveness_lift_and_main_cli tests/test_issue843_ranked_coverage.py::test_effectiveness_closes_only_connections_it_opened tests/test_issue843_ranked_coverage.py::test_redirect_record_without_proposal_source_raises tests/test_issue843_ranked_coverage.py::test_redirect_bare_report_rejection_keeps_else_assert_unreachable tests/test_issue843_ranked_coverage.py::test_strategy_invalid_single_arm_raises_before_selftest_assert_false tests/test_issue843_ranked_coverage.py::test_strategy_coerce_and_normalize_arms_edges tests/test_issue843_ranked_coverage.py::test_strategy_shape_rate_and_open_pr_helpers tests/test_issue843_ranked_coverage.py::test_strategy_gh_subjects_success_and_pagination tests/test_issue843_ranked_coverage.py::test_strategy_select_subject_and_freeze tests/test_issue843_ranked_coverage.py::test_strategy_normalize_load_read_format_and_prepare tests/test_issue843_ranked_coverage.py::test_strategy_refresh_and_main_cli tests/test_issue843_ranked_coverage.py::test_strategy_remaining_ci_gaps tests/test_issue843_ranked_coverage.py::test_strategy_build_plan_from_args tests/test_range_lane_rollout_coverage_gaps.py::test_offline_selftest_restores_prior_handoff_and_clears_added_rate",
   "exit_code": 0,
-  "seconds": 1.099,
+  "seconds": 1.826,
   "failure_excerpt": "",
-  "stdout_tail": ".........................                                                [100%]\n25 passed in 0.42s\n",
+  "stdout_tail": ".........................                                                [100%]\n25 passed in 0.74s\n",
   "stderr_tail": ""
 }
 ```
