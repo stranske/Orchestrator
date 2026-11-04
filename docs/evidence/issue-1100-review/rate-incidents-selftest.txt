@@ -1,0 +1,2 @@
+rate_incidents.py selftest: OK
+exit_code=0

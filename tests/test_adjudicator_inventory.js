@@ -15,6 +15,97 @@ const script = path.join(repo, 'scripts/export_adjudicator_inventory.js');
 const now = 2000000000;
 const cutoff = now - 90 * 86400;
 
+test('owner exclusions are accounted for without reading excluded outcome evidence', (t) => {
+  const { root, db } = world(t);
+  const connection = new DatabaseSync(db);
+  connection.exec(`
+    INSERT INTO runs VALUES
+      ('excluded', 'StRaNsKe/CoLlAb-AdMiN#1', ${now}),
+      ('allowed', 'stranske/Orchestrator#1', ${now}),
+      ('lookalike', 'stranske/Collab-Admin-archive#1', ${now});
+    ALTER TABLE runs RENAME TO run_rows;
+    CREATE VIEW runs AS SELECT run_id,target,
+      CASE WHEN run_id='excluded' THEN json_extract('unreadable', '$')
+           ELSE ts END AS ts FROM run_rows;
+    ALTER TABLE outcomes RENAME TO outcome_rows;
+    INSERT INTO outcome_rows VALUES
+      ('excluded','NON_PASS','PASS',1,'durable',${now}),
+      ('allowed','NON_PASS','PASS',1,'durable',${now}),
+      ('lookalike','NON_PASS','PASS',1,'durable',${now});
+    CREATE VIEW outcomes AS SELECT run_id,
+      CASE WHEN run_id='excluded' THEN json_extract('unreadable', '$')
+           ELSE verifier_verdict END AS verifier_verdict,
+      adjudicated_verdict,merged,durability,durability_checked_ts FROM outcome_rows;
+  `);
+  assert.throws(() => connection.prepare(
+    "SELECT verifier_verdict FROM outcomes WHERE run_id='excluded'").get(), /malformed JSON/,
+  'the fixture must fail if excluded evidence is evaluated');
+  assert.throws(() => connection.prepare(
+    "SELECT ts FROM runs WHERE run_id='excluded'").get(), /malformed JSON/,
+  'excluded timestamps must not be evaluated either');
+  connection.close();
+  const requested = ['excluded', 'allowed', 'lookalike'].map((run_id) => ({
+    run_id, target: run_id === 'excluded' ? 'StRaNsKe/CoLlAb-AdMiN#1' :
+      run_id === 'allowed' ? 'stranske/Orchestrator#1' : 'stranske/Collab-Admin-archive#1',
+    verifier_verdict: 'NON_PASS', adjudicated_verdict: 'PASS',
+  }));
+  const manifest = manifestFile(root, requested, 2);
+  const before = fs.readFileSync(db);
+  const manifestBefore = fs.readFileSync(manifest);
+  const report = inventory({ db, observedAt: now, expectedCount: 3, manifest });
+  assert.equal(report.status, 'available');
+  assert.deepEqual(report.owner_excluded_repositories, ['stranske/Collab-Admin']);
+  assert.equal(report.population_count, 3);
+  assert.equal(report.included_count, 2);
+  assert.equal(report.excluded_count, 1);
+  assert.equal(report.count_delta, -1);
+  assert.deepEqual(report.exclusions, [{ run_id: 'excluded', target: requested[0].target,
+    reasons: ['owner_excluded_repository'] }]);
+  assert.deepEqual(report.manifest_reconciliation.cases, requested.map((item, i) => ({
+    ...item, status: i === 0 ? 'excluded' : 'included',
+    reasons: i === 0 ? ['owner_excluded_repository'] : [],
+  })));
+  assert.equal(report.manifest_reconciliation.exact_match, false);
+  assert.equal(report.requested_cohort_verified, false);
+  assert.ok(report.evidence_gaps.some((gap) => gap.kind === 'inventory_count_discrepancy'));
+  assert.ok(report.evidence_gaps.some((gap) => gap.kind === 'requested_case_evidence_gap' &&
+    gap.run_id === 'excluded' && gap.reasons.includes('owner_excluded_repository')));
+  fs.writeFileSync(path.join(root, 'stdout'), '');
+  fs.writeFileSync(path.join(root, 'stderr'), '');
+  const files = fs.readdirSync(root);
+  const result = execute(root, process.execPath, [script, '--db', db,
+    '--observed-at', String(now), '--expected-count', '3', '--manifest', manifest]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), report);
+  assert.deepEqual(fs.readFileSync(db), before);
+  assert.deepEqual(fs.readFileSync(manifest), manifestBefore);
+  assert.deepEqual(fs.readdirSync(root), files, 'no reports or SQLite sidecars created');
+});
+
+test('requested owner exclusions remain explicit with missing or contradictory inventory', (t) => {
+  const { root, db } = world(t);
+  seed(db, [['reused-run', now, 'NON_PASS', 'PASS']]);
+  const requested = ['reused-run', 'absent'].map((run_id) => ({
+    run_id, target: 'stranske/Collab-Admin#7',
+    verifier_verdict: 'NON_PASS', adjudicated_verdict: 'PASS',
+  }));
+  for (const version of [1, 2]) {
+    const manifest = manifestFile(root, requested, version);
+    for (const candidate of [db, path.join(root, 'unavailable.db')]) {
+      const report = inventory({ db: candidate, observedAt: now, expectedCount: 2, manifest });
+      assert.deepEqual(report.manifest_reconciliation.cases, requested.map((item) => ({
+        run_id: item.run_id, target: item.target,
+        ...(version === 2 ? { verifier_verdict: item.verifier_verdict,
+          adjudicated_verdict: item.adjudicated_verdict } : {}),
+        status: 'excluded', reasons: ['owner_excluded_repository'],
+      })));
+      assert.equal(report.manifest_reconciliation.exact_match, false);
+      assert.equal(report.requested_cohort_verified, false);
+      assert.equal(fs.existsSync(path.join(root, 'unavailable.db')), false);
+    }
+  }
+});
+
 function world(t, schema = true) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'adjudicator-inventory-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
