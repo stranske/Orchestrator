@@ -1,0 +1,36 @@
+✖ switch review reads and renders saved adjudicator evidence without replay or writes (606.880219ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 614.029447
+
+✖ failing tests:
+
+test at ../../../../../tmp/issue-1111-weekly-diagnostic.js:1737:1
+✖ switch review reads and renders saved adjudicator evidence without replay or writes (606.880219ms)
+  AssertionError [ERR_ASSERTION]: Traceback (most recent call last):
+    File "<string>", line 76, in <module>
+      assert not any(counts), f"weekly review replayed evidence: {counts}"
+             ^^^^^^^^^^^^^^^
+  AssertionError: weekly review replayed evidence: [0, 0, 0, 0, 1]
+  
+  
+  1 !== 0
+  
+      at Object.run (/tmp/issue-1111-weekly-diagnostic.js:175:14)
+      at TestContext.<anonymous> (/tmp/issue-1111-weekly-diagnostic.js:1739:21)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
