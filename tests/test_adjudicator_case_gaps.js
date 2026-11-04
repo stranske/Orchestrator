@@ -343,6 +343,203 @@ function persistedWorld(t, { target = 'fixture/repo#1', role = 'adjudicator',
   return { options, record };
 }
 
+function addRetries(options, attempts) {
+  const report = JSON.parse(fs.readFileSync(options.report));
+  report.rows[0].retry_attempts = attempts;
+  fs.writeFileSync(options.report, JSON.stringify(report));
+  return report.rows[0];
+}
+
+function retryClaim(id, extra = {}) {
+  return { ...identity('one'), role_run_id: `role:${id}`, backend_run_id: `backend:${id}`,
+    decision: 'needs_more_evidence', cost_usd: null,
+    packet: { target: 'fixture/repo#1', ground_truth_evidence: { head_sha: 'b'.repeat(40) } },
+    ...extra };
+}
+
+function retryRecord(options, id, cost, source = 'ccusage') {
+  const connection = new DatabaseSync(options.db);
+  connection.prepare('INSERT INTO runs (run_id,target,ts,role_name,agent,decomposition) VALUES (?,?,0,?,?,?)')
+    .run(`role:${id}`, 'fixture/repo#1', 'adjudicator', 'gemini', JSON.stringify({
+      role: 'adjudicator', backend_run_id: `backend:${id}`, action: 'needs_more_evidence',
+    }));
+  if (cost !== undefined) connection.prepare('INSERT INTO costs VALUES (?,?,?)')
+    .run(`backend:${id}`, cost, source);
+  connection.close();
+}
+
+test('retained nested attempts bind their own rows and persisted receipts without becoming cases', (t) => {
+  const { options } = persistedWorld(t);
+  retryRecord(options, 'prior', 2.5);
+  retryRecord(options, 'zero', 0);
+  retryRecord(options, 'absent');
+  const nested = retryClaim('zero', { retry_attempts: [retryClaim('absent')] });
+  const saved = addRetries(options, [retryClaim('prior', { cost_usd: 2.5 }), nested]);
+  const inputs = [options.db, options.manifest, options.report];
+  const before = inputs.map((file) => fs.readFileSync(file));
+  const files = fs.readdirSync(options.root);
+  const ledger = caseGaps(options);
+  const row = ledger.cases[0];
+  const attempts = row.saved_retry_attempts;
+  assert.deepEqual(attempts.map((attempt) => attempt.retry_path), [[0], [1], [1, 0]]);
+  assert.deepEqual(attempts.map((attempt) => attempt.saved_report_evidence.retry_path), [[0], [1], [1, 0]]);
+  assert.deepEqual(attempts.map((attempt) => attempt.persisted_role_evidence.backend_cost.cost_usd),
+    [2.5, 'UNKNOWN', 'UNKNOWN']);
+  assert.ok(attempts[1].evidence_gaps.includes('persisted_cost_not_measured'));
+  assert.ok(attempts[2].evidence_gaps.includes('persisted_cost_missing'));
+  assert.equal(attempts[0].saved_report_evidence.row_index, 0);
+  assert.equal(attempts[0].saved_report_evidence.row_sha256, createHash('sha256')
+    .update(JSON.stringify(saved.retry_attempts[0])).digest('hex'));
+  assert.equal(attempts[1].saved_report_evidence.row_sha256, createHash('sha256')
+    .update(JSON.stringify(nested)).digest('hex'));
+  assert.equal(attempts[0].saved_report_evidence.report.sha256, createHash('sha256')
+    .update(before[2]).digest('hex'));
+  for (const attempt of attempts) {
+    assert.equal(attempt.status, 'evidence_gap');
+    assert.ok(attempt.evidence_gaps.includes('source_revision_not_bound_to_persisted_role'));
+    for (const field of ['source_revision', 'shadow_result', 'role_run_provenance', 'cost_usd']) {
+      assert.equal(attempt[field], 'UNKNOWN');
+    }
+  }
+  assert.equal(ledger.supplied_case_count, 1);
+  assert.equal(ledger.evidence_gap_count, 1);
+  assert.equal(ledger.saved_report_snapshot.row_count, 1);
+  assert.equal(ledger.requested_cohort_verified, false);
+  assert.equal(ledger.operational_acceptance_complete, false);
+  assert.deepEqual(inputs.map((file) => fs.readFileSync(file)), before);
+  assert.deepEqual(fs.readdirSync(options.root), files, 'retry reads create no SQLite sidecars');
+  const cli = invoke(options, ['--report', options.report, '--persisted-roles']);
+  assert.equal(cli.status, 0, cli.stderr);
+  assert.deepEqual(JSON.parse(cli.stdout), ledger);
+  const optOut = caseGaps({ ...options, persistedRoles: false }).cases[0];
+  assert.ok(optOut.saved_retry_attempts[0].saved_report_evidence);
+  assert.equal(optOut.saved_retry_attempts[0].persisted_role_evidence, undefined);
+  assert.ok(optOut.saved_retry_attempts[0].evidence_gaps.includes('persisted_role_record_not_verified'));
+});
+
+test('retry lookup cannot borrow identity from its parent or a different dispute', (t) => {
+  const { options } = persistedWorld(t);
+  retryRecord(options, 'foreign', 2.5);
+  const incomplete = retryClaim('foreign');
+  delete incomplete.verifier_verdict;
+  addRetries(options, [incomplete,
+    retryClaim('foreign', { run_id: 'another' }),
+    retryClaim('foreign', { target: 'fixture/repo#2' }),
+    retryClaim('foreign', { verifier_verdict: 'PASS' }),
+    retryClaim('foreign', { adjudicated_verdict: 'FAIL' })]);
+  const connection = new DatabaseSync(options.db);
+  connection.exec(`ALTER TABLE runs RENAME TO run_rows;
+    CREATE VIEW runs AS SELECT run_id,target,ts,role_name,agent,
+      CASE WHEN run_id='role:foreign' THEN json_extract('unreadable','$') ELSE decomposition END AS decomposition
+      FROM run_rows;`);
+  connection.close();
+  const attempts = caseGaps(options).cases[0].saved_retry_attempts;
+  assert.deepEqual(attempts.map((row) => row.evidence_gaps), [
+    ['saved_retry_identity_missing'], ...Array.from({ length: 4 }, () => ['saved_retry_identity_mismatch']),
+  ]);
+  for (const row of attempts) {
+    assert.equal(row.saved_report_evidence, undefined);
+    assert.equal(row.persisted_role_evidence, undefined);
+    assert.equal(row.cost_usd, 'UNKNOWN');
+  }
+});
+
+test('excluded retry identities withhold case execution claims before role or cost reads', (t) => {
+  const { options } = persistedWorld(t);
+  const excluded = retryClaim('excluded', {
+    target: '\tStRaNsKe/CoLlAb-AdMiN\u00a0#9',
+    retry_attempts: [retryClaim('hidden')],
+  });
+  addRetries(options, [retryClaim('prior', { retry_attempts: [excluded] })]);
+  const connection = new DatabaseSync(options.db);
+  connection.exec(`ALTER TABLE runs RENAME TO run_rows;
+    CREATE VIEW runs AS SELECT run_id,target,ts,json_extract('unreadable','$') AS role_name,
+      agent,json_extract('unreadable','$') AS decomposition FROM run_rows;
+    ALTER TABLE costs RENAME TO cost_rows;
+    CREATE VIEW costs AS SELECT run_id,json_extract('unreadable','$') AS cost_usd,source FROM cost_rows;`);
+  connection.close();
+  const before = fs.readFileSync(options.db);
+  const row = caseGaps(options).cases[0];
+  assert.equal(row.saved_report_evidence, undefined, 'parent digest would serialize excluded history');
+  assert.equal(row.persisted_role_evidence, undefined);
+  assert.ok(row.evidence_gaps.includes('saved_retry_owner_excluded'));
+  assert.deepEqual(row.saved_retry_attempts.map((attempt) => attempt.retry_path), [[0], [0, 0]]);
+  assert.deepEqual(row.saved_retry_attempts[1].evidence_gaps, ['owner_excluded_repository']);
+  for (const attempt of row.saved_retry_attempts) {
+    assert.equal(attempt.saved_report_evidence, undefined);
+    assert.equal(attempt.persisted_role_evidence, undefined);
+  }
+  assert.deepEqual(fs.readFileSync(options.db), before);
+});
+
+test('a retry backend exclusion prevents its cost read while preserving the current role receipt', (t) => {
+  const { options } = persistedWorld(t);
+  retryRecord(options, 'prior', 2.5);
+  addRetries(options, [retryClaim('prior')]);
+  const connection = new DatabaseSync(options.db);
+  connection.exec(`INSERT INTO runs (run_id,target,ts) VALUES
+      ('backend:prior','stranske/Collab-Admin#9',0);
+    ALTER TABLE costs RENAME TO cost_rows;
+    CREATE VIEW costs AS SELECT run_id,
+      CASE WHEN run_id='backend:prior' THEN json_extract('unreadable','$') ELSE cost_usd END AS cost_usd,
+      source FROM cost_rows;`);
+  assert.throws(() => connection.prepare("SELECT cost_usd FROM costs WHERE run_id='backend:prior'").get(), /malformed JSON/);
+  connection.close();
+  const before = fs.readFileSync(options.db);
+  const row = caseGaps(options).cases[0];
+  assert.equal(row.persisted_role_evidence.backend_cost.cost_usd, 1.5);
+  const retry = row.saved_retry_attempts[0];
+  assert.ok(retry.evidence_gaps.includes('persisted_backend_owner_excluded'));
+  assert.equal(retry.persisted_role_evidence.role_run_id, 'role:prior');
+  assert.equal(retry.persisted_role_evidence.backend_cost, undefined);
+  assert.equal(retry.cost_usd, 'UNKNOWN');
+  assert.deepEqual(fs.readFileSync(options.db), before);
+});
+
+test('malformed retry histories retain specific paths while valid siblings remain recoverable', (t) => {
+  const { options } = persistedWorld(t);
+  const row = addRetries(options, [null, [], 'invalid', retryClaim('missing', { retry_attempts: null })]);
+  let output = caseGaps(options).cases[0];
+  assert.deepEqual(output.saved_retry_history_gaps, [
+    { retry_path: [2], kind: 'saved_retry_attempt_invalid' },
+    { retry_path: [1], kind: 'saved_retry_attempt_invalid' },
+    { retry_path: [0], kind: 'saved_retry_attempt_invalid' },
+    { retry_path: [3], kind: 'saved_retry_history_invalid' },
+  ]);
+  assert.equal(output.saved_retry_attempts.length, 1);
+  assert.deepEqual(output.saved_retry_attempts[0].retry_path, [3]);
+  assert.ok(output.saved_retry_attempts[0].evidence_gaps.includes('persisted_role_missing'));
+  assert.ok(output.evidence_gaps.includes('saved_retry_history_invalid'));
+  row.retry_attempts = 'invalid';
+  fs.writeFileSync(options.report, JSON.stringify({ rows: [row] }));
+  output = caseGaps(options).cases[0];
+  assert.deepEqual(output.saved_retry_attempts, []);
+  assert.deepEqual(output.saved_retry_history_gaps, [{ retry_path: [], kind: 'saved_retry_history_invalid' }]);
+});
+
+test('retry claims retain individual unavailable-store gaps without creating a Brain', (t) => {
+  const { options } = persistedWorld(t);
+  addRetries(options, [retryClaim('prior')]);
+  const connection = new DatabaseSync(options.db);
+  connection.exec('ALTER TABLE runs DROP COLUMN role_name');
+  connection.close();
+  let output = caseGaps(options).cases[0].saved_retry_attempts[0];
+  assert.ok(output.evidence_gaps.includes('persisted_role_missing'));
+  // Use an existing role identity to exercise the unavailable schema, too.
+  addRetries(options, [retryClaim('one')]);
+  output = caseGaps(options).cases[0].saved_retry_attempts[0];
+  assert.ok(output.evidence_gaps.includes('persisted_role_store_unavailable'));
+  fs.unlinkSync(options.db);
+  const result = invoke(options, ['--report', options.report, '--persisted-roles']);
+  assert.equal(result.status, 2);
+  const ledger = JSON.parse(result.stdout);
+  output = ledger.cases[0].saved_retry_attempts[0];
+  assert.ok(output.evidence_gaps.includes('persisted_role_store_unavailable'));
+  assert.equal(output.cost_usd, 'UNKNOWN');
+  assert.equal(ledger.inventory_snapshot.population_count, null);
+  assert.equal(fs.existsSync(options.db), false);
+});
+
 test('opt-in persisted links retain role and cost digests without claiming revision or cohort proof', (t) => {
   const { options, record } = persistedWorld(t);
   const inputs = [options.db, options.manifest, options.report];
@@ -514,6 +711,7 @@ test('persisted role CLI flag requires a saved report and produces no partial ou
 
 test('persisted lookup reads the production role recorder and agrees with production cost grading', (t) => {
   const { options } = persistedWorld(t);
+  addRetries(options, [retryClaim('prior', { cost_usd: 2.5 })]);
   fs.unlinkSync(options.db);
   const out = fs.openSync(path.join(options.root, 'production-stdout'), 'w');
   const err = fs.openSync(path.join(options.root, 'production-stderr'), 'w');
@@ -528,15 +726,22 @@ feedback.record_role_run(
     backend_run_id='backend:one', action='uphold_blocker',
     decision_source='adjudicator_agent', source='retrospective',
 )
+feedback.record_role_run(
+    'role:prior', 'adjudicator', 'fixture/repo#1', 'gemini',
+    backend_run_id='backend:prior', action='needs_more_evidence',
+    decision_source='adjudicator_agent', source='retrospective',
+)
 with feedback._conn() as conn:
     conn.execute("INSERT INTO runs(run_id,target,ts) VALUES ('one','fixture/repo#1',?)", (int(time.time()),))
     conn.execute("INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict) VALUES ('one','NON_PASS','PASS')")
     conn.execute("INSERT INTO costs(run_id,cost_usd,source) VALUES ('backend:one',1.5,'ccusage')")
+    conn.execute("INSERT INTO costs(run_id,cost_usd,source) VALUES ('backend:prior',2.5,'ccusage')")
 positive = feedback.role_cost_report('backend:one', 'gemini')
+prior = feedback.role_cost_report('backend:prior', 'gemini')
 with feedback._conn() as conn:
     conn.execute("UPDATE costs SET cost_usd=0 WHERE run_id='backend:one'")
 zero = feedback.role_cost_report('backend:one', 'gemini')
-print(json.dumps({'positive': positive, 'zero': zero}))
+print(json.dumps({'positive': positive, 'zero': zero, 'prior': prior}))
 `], {
       cwd: options.root, timeout: 30000, stdio: ['ignore', out, err],
       env: { PATH: process.env.PATH,
@@ -565,5 +770,13 @@ print(json.dumps({'positive': positive, 'zero': zero}))
   assert.equal(positive.persisted_role_evidence.decision, 'uphold_blocker');
   assert.equal(positive.source_revision, 'UNKNOWN');
   assert.equal(positive.role_run_provenance, 'UNKNOWN');
+  const retry = positive.saved_retry_attempts[0];
+  assert.deepEqual(retry.retry_path, [0]);
+  assert.equal(retry.persisted_role_evidence.role_run_id, 'role:prior');
+  assert.equal(retry.persisted_role_evidence.decision, 'needs_more_evidence');
+  assert.equal(retry.persisted_role_evidence.backend_cost.cost_usd, grades.prior.cost_usd);
+  assert.equal(grades.prior.status, 'measured');
+  assert.equal(retry.role_run_provenance, 'UNKNOWN');
+  assert.equal(retry.cost_usd, 'UNKNOWN');
   assert.deepEqual(fs.readFileSync(options.db), positiveBefore);
 });

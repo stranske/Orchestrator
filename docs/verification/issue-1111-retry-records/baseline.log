@@ -1,0 +1,11 @@
+✔ tests/test_adjudicator_case_gaps.js (991.284697ms)
+✔ tests/test_adjudicator_inventory.js (2711.137217ms)
+✔ tests/test_adjudicator_summary.js (16407.993581ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 16468.451761

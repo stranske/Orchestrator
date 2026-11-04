@@ -1,0 +1,17 @@
+{
+  "commit": "6382a77925244cc2fdfe7a3b6efc18ea2be86d6c",
+  "parent": "c9d15c9452cbf69d96b88f1f94e48d4f94b318bd",
+  "changed_paths": [
+    "scripts/export_adjudicator_case_gaps.js",
+    "tests/test_adjudicator_case_gaps.js"
+  ],
+  "git_metadata": "/tmp/issue-1111-retry-delivery.git",
+  "repository_branch_advanced": false,
+  "reason": "git add failed creating .git/index.lock on a read-only filesystem",
+  "patch": "source-commit.patch.gz",
+  "patch_sha256": "e2cca959dfae18c430331e6c6c69001591c6879b65094c6e09afdc5b86e7ffbd",
+  "transfer_patch_apply_check_exit": 0,
+  "committed_source_matches_workspace": true,
+  "source_commit_in_merged_pr": false,
+  "source_commit_published": false
+}

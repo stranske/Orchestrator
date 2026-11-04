@@ -33,12 +33,7 @@ function readSavedReport(file) {
       sha256: createHash('sha256').update(bytes).digest('hex') } };
 }
 
-function savedCaseEvidence(identity, saved) {
-  const matches = saved.byIdentity.get(identityKey(identity)) || [];
-  if (matches.length !== 1) return {
-    evidence_gaps: [matches.length ? 'saved_case_ambiguous' : 'saved_case_missing'],
-  };
-  const { row, index } = matches[0];
+function savedAttemptEvidence(row, identity, reference) {
   const packetTarget = row.packet?.target;
   const packetMatches = packetTarget === identity.target;
   const head = packetMatches ? row.packet?.ground_truth_evidence?.head_sha : undefined;
@@ -47,7 +42,7 @@ function savedCaseEvidence(identity, saved) {
   // Preserve the claims for recovery, without promoting them to verified fields.
   return {
     saved_report_evidence: {
-      status: 'unverified_saved_report_row', report: saved.reference, row_index: index,
+      status: 'unverified_saved_report_row', ...reference,
       row_sha256: createHash('sha256').update(JSON.stringify(row)).digest('hex'),
       reported_source_revision: revision,
       reported_role_run_id: nonblank(row.role_run_id) ? row.role_run_id : 'UNKNOWN',
@@ -66,6 +61,73 @@ function savedCaseEvidence(identity, saved) {
       'shadow_result_not_verified', 'persisted_role_record_not_verified', 'measured_cost_not_verified',
     ],
   };
+}
+
+function savedCaseEvidence(identity, saved) {
+  const matches = saved.byIdentity.get(identityKey(identity)) || [];
+  if (matches.length !== 1) return {
+    evidence_gaps: [matches.length ? 'saved_case_ambiguous' : 'saved_case_missing'],
+  };
+  const { row, index } = matches[0];
+  const reference = { report: saved.reference, row_index: index };
+  const entries = [];
+  const historyGaps = [];
+  // Keep retry paths distinct from case identities. A retained attempt is not
+  // another requested case, and nested history must not silently disappear.
+  const pending = [{ row, retryPath: [] }];
+  let excluded = false;
+  while (pending.length) {
+    const current = pending.pop();
+    if (current.retryPath.length) entries.push(current);
+    if (ownerExcluded(current.row?.target)) {
+      excluded = true;
+      // Neither execution fields nor descendants of an excluded identity are read.
+      continue;
+    }
+    if (!Object.hasOwn(current.row || {}, 'retry_attempts')) continue;
+    const history = current.row.retry_attempts;
+    if (!Array.isArray(history)) {
+      historyGaps.push({ retry_path: current.retryPath, kind: 'saved_retry_history_invalid' });
+      continue;
+    }
+    for (let i = history.length - 1; i >= 0; i--) {
+      const attempt = history[i];
+      const retryPath = [...current.retryPath, i];
+      if (!attempt || typeof attempt !== 'object' || Array.isArray(attempt)) {
+        historyGaps.push({ retry_path: retryPath, kind: 'saved_retry_attempt_invalid' });
+      } else pending.push({ row: attempt, retryPath });
+    }
+  }
+  // A parent row digest serializes its entire history. Withhold all execution
+  // claims for a case containing an excluded retry, including that digest.
+  const result = excluded ? { evidence_gaps: ['saved_retry_owner_excluded'] }
+    : savedAttemptEvidence(row, identity, reference);
+  if (!Object.hasOwn(row, 'retry_attempts')) return result;
+  result.saved_retry_attempts = entries.map(({ row: attempt, retryPath }) => {
+    const attemptIdentity = Object.fromEntries(identityFields.map((field) =>
+      [field, nonblank(attempt[field]) ? attempt[field] : 'UNKNOWN']));
+    let evidence;
+    if (ownerExcluded(attempt.target)) {
+      evidence = { evidence_gaps: ['owner_excluded_repository'] };
+    } else if (excluded) {
+      evidence = { evidence_gaps: ['saved_retry_owner_excluded'] };
+    } else if (identityFields.some((field) => !nonblank(attempt[field]))) {
+      evidence = { evidence_gaps: ['saved_retry_identity_missing'] };
+    } else if (identityKey(attempt) !== identityKey(identity)) {
+      evidence = { evidence_gaps: ['saved_retry_identity_mismatch'] };
+    } else {
+      evidence = savedAttemptEvidence(attempt, identity, { ...reference, retry_path: retryPath });
+    }
+    return { ...attemptIdentity, retry_path: retryPath, status: 'evidence_gap',
+      source_revision: 'UNKNOWN', shadow_result: 'UNKNOWN',
+      role_run_provenance: 'UNKNOWN', cost_usd: 'UNKNOWN', ...evidence };
+  });
+  if (historyGaps.length) {
+    result.saved_retry_history_gaps = historyGaps;
+    result.evidence_gaps.push('saved_retry_history_invalid');
+  }
+  if (entries.length) result.evidence_gaps.push('saved_retry_execution_not_verified');
+  return result;
 }
 
 // A saved role ID is only a lookup hint. Read identity before metadata and
@@ -141,12 +203,18 @@ function persistedRoleEvidence(connection, row) {
 }
 
 function attachPersistedRoles(db, cases) {
+  const records = cases.filter((row) =>
+    !row.inventory_reasons.includes('owner_excluded_repository'));
+  for (const row of cases) {
+    // Only exact-dispute retry claims may provide persisted lookup hints.
+    records.push(...(row.saved_retry_attempts || []).filter((attempt) =>
+      attempt.saved_report_evidence));
+  }
   let connection;
   try {
     connection = new DatabaseSync(db, { readOnly: true });
     connection.exec('BEGIN');
-    for (const row of cases) {
-      if (row.inventory_reasons.includes('owner_excluded_repository')) continue;
+    for (const row of records) {
       let evidence;
       try { evidence = persistedRoleEvidence(connection, row); } catch {
         evidence = { evidence_gaps: ['persisted_role_store_unavailable'] };
@@ -158,11 +226,7 @@ function attachPersistedRoles(db, cases) {
       row.evidence_gaps.push(...evidence.evidence_gaps);
     }
   } catch {
-    for (const row of cases) {
-      if (!row.inventory_reasons.includes('owner_excluded_repository')) {
-        row.evidence_gaps.push('persisted_role_store_unavailable');
-      }
-    }
+    for (const row of records) row.evidence_gaps.push('persisted_role_store_unavailable');
   } finally {
     if (connection) connection.close();
   }
@@ -195,6 +259,8 @@ function caseGaps(options) {
       role_run_provenance: 'UNKNOWN',
       cost_usd: 'UNKNOWN',
       ...(evidence?.saved_report_evidence ? { saved_report_evidence: evidence.saved_report_evidence } : {}),
+      ...(evidence?.saved_retry_attempts ? { saved_retry_attempts: evidence.saved_retry_attempts } : {}),
+      ...(evidence?.saved_retry_history_gaps ? { saved_retry_history_gaps: evidence.saved_retry_history_gaps } : {}),
       evidence_gaps: excluded
         ? ['owner_excluded_repository']
         : [...reasons, ...(evidence?.evidence_gaps || ['shadow_evidence_not_collected'])],
@@ -234,6 +300,8 @@ function caseGaps(options) {
       'Owner-excluded repositories require no further inspection; their identities are retained for accounting only.',
       ...(cases.length === 0 ? ['No supplied identities; no per-case operational acceptance is established.'] : []),
       ...(options.persistedRoles ? ['Persisted role matches and backend cost receipts do not establish original dispute membership, execution revision or a verified shadow result.'] : []),
+      ...(cases.some((row) => row.saved_retry_attempts?.length || row.saved_retry_history_gaps?.length)
+        ? ['Retained retry attempts are accounted separately from requested cases; their execution and original dispute binding remain unverified.'] : []),
     ],
   };
 }

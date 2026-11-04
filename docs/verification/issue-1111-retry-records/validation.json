@@ -1,0 +1,184 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-11-04T01:56:55.863Z",
+  "parent_revision": "c9d15c9452cbf69d96b88f1f94e48d4f94b318bd",
+  "source_test_commit": "6382a77925244cc2fdfe7a3b6efc18ea2be86d6c",
+  "scope": "Partial task 2: retained retry report claims and persisted role/cost references; no original cohort or execution revision authentication",
+  "task_reconciliation": {
+    "completed_checkboxes": 0,
+    "total_checkboxes": 26,
+    "operational_acceptance_complete": false
+  },
+  "interpreter": "/opt/hostedtoolcache/Python/3.14.8/x64/bin/python3",
+  "python_version": "Python 3.14.8",
+  "node": "v24.22.0",
+  "source_hashes": {
+    "scripts/export_adjudicator_case_gaps.js": {
+      "evaluated_sha256": "cf8acfe43101853c9058a86c39aa1647472d8b7ce0f6a9168e7a17d71db66719",
+      "parent_sha256": "0f73f47df5c9d52549929c3c532579642fec4542feba72c421c767754126c9c0"
+    },
+    "tests/test_adjudicator_case_gaps.js": {
+      "evaluated_sha256": "0bb59a587a4ae5c96914766a622ffa46854ebfad5fbdf324a8675b4543b40721",
+      "parent_sha256": "0268b39a4c0a77d2fc26b37ea45055330b4475b0e933d43cca121707c0e941bd"
+    },
+    "src/adjudicator_retro.py": {
+      "evaluated_sha256": "ee172f96ddf0ca56f6c06fcf18bdaacccece5381de61a9896006d0b16a8fb0b8",
+      "unchanged_from_parent": true,
+      "verification": "git diff --name-only shows only the two JavaScript files"
+    },
+    "src/feedback.py": {
+      "evaluated_sha256": "eafa930ec4cea9a239bc03a91a00b2ca7c618c40629690658f8276417946412d",
+      "unchanged_from_parent": true,
+      "verification": "git diff --name-only shows only the two JavaScript files"
+    },
+    "src/verifier_evidence.py": {
+      "evaluated_sha256": "19b2342b6d9b4d097f6fef6b76089f54903dfbe36946dac6fa7467dec3afff59",
+      "unchanged_from_parent": true,
+      "verification": "git diff --name-only shows only the two JavaScript files"
+    }
+  },
+  "checks": {
+    "original_baseline": {
+      "command": "node --test tests/test_adjudicator_case_gaps.js tests/test_adjudicator_inventory.js tests/test_adjudicator_summary.js",
+      "exit": 0,
+      "passed_files": 3,
+      "log": "baseline.log"
+    },
+    "parent_regressions": {
+      "command": "node /tmp/issue-1111-retry-parent/tests/test_adjudicator_case_gaps.js",
+      "exit": 1,
+      "tests": 25,
+      "passed": 18,
+      "failed": 7,
+      "log": "parent.log.gz",
+      "source": "parent exporter in temporary tree, candidate tests and unchanged production Python",
+      "specified_safety_mutation": false
+    },
+    "expanded": {
+      "command": "node tests/test_adjudicator_case_gaps.js",
+      "exit": 0,
+      "tests": 25,
+      "passed": 25,
+      "failed": 0,
+      "skipped": 0,
+      "log": "expanded.log"
+    },
+    "related": {
+      "command": "node --test tests/test_adjudicator_case_gaps.js tests/test_adjudicator_inventory.js tests/test_adjudicator_summary.js tests/test_adjudicator_retrospective_batch.js tests/test_adjudicator_closer_shadow.js tests/test_adjudicator_receipts.js tests/test_adjudicator_completion.js",
+      "exit": 0,
+      "passed_files": 7,
+      "log": "related.log"
+    },
+    "full_cli": {
+      "command": "node tests/test_adjudicator_retro_cli.js",
+      "exit": 1,
+      "tests": 67,
+      "passed": 65,
+      "failed": 2,
+      "skipped": 0,
+      "failures": [
+        "retro collects complete gate pages before shadow dispatch: numeric-run-order",
+        "retro collects complete gate pages before shadow dispatch: numeric-attempt-order"
+      ],
+      "log": "cli.log.gz",
+      "prior_dispositions": "../issue-1111-cli-failures/dispositions.json"
+    },
+    "named_pytest": {
+      "command": "python3 -m pytest tests/test_adjudicator_retro.py::test_packet_builder_needs_target_finding_and_ground_truth tests/test_adjudicator_retro.py::test_retro_records_verdicts_without_changing_outcomes tests/test_adjudicator_retro.py::test_closer_lane_offers_the_adjudicator_only_on_a_contested_verdict -m \"not slow\" -v",
+      "exit": 1,
+      "tests_executed": 0,
+      "reason": "No module named pytest",
+      "specified_mutations_performed": false,
+      "log": "named-attempt.log"
+    },
+    "syntax": {
+      "commands": [
+        "node --check scripts/export_adjudicator_case_gaps.js",
+        "node --check tests/test_adjudicator_case_gaps.js"
+      ],
+      "exit": 0
+    },
+    "whitespace": {
+      "command": "git diff --check",
+      "exit": 0
+    },
+    "black_gate": {
+      "applicable": false,
+      "python_files_changed": false,
+      "black_available": false
+    },
+    "inventory": {
+      "command": "node scripts/export_adjudicator_inventory.js --db /home/runner/.codex/orchestrator/feedback/orchestrator.db --observed-at 1793757029",
+      "exit": 2,
+      "log": "runner-inventory.json",
+      "owner_excluded_repositories_accessed": false
+    }
+  },
+  "artifacts": {
+    "README.md": {
+      "sha256": "7a85c930d95241443503bbecb9da9d087ea0d7c4ed4d980c5cbb73b32f4b0d39",
+      "bytes": 5143
+    },
+    "baseline.log": {
+      "sha256": "d9354ce4562823a294471b0cf8c572b621bc805da01578d965705ad48c376426",
+      "bytes": 283
+    },
+    "cli.log.gz": {
+      "sha256": "72abaab52470ac9ca59a3c346313effe9a5d0c1d6863614be226fe69961a1312",
+      "bytes": 2347,
+      "uncompressed_sha256": "e71fc657ac935b5a367e8ce36ed0bc6c7c6fc63dc43e8a5429ed0b48ac51cb44"
+    },
+    "expanded.log": {
+      "sha256": "98ac50547c65b414c78763de55b80cdc976a7a2c003a013f07ca66b721ca9920",
+      "bytes": 2595
+    },
+    "named-attempt.log": {
+      "sha256": "b42f39dcd355244f95f7aaa5b5f8a170efaf813490d508234969b85e25a275d7",
+      "bytes": 75
+    },
+    "parent.log.gz": {
+      "sha256": "745af2195e573a37d6f2584ecaab3eea2ab4225e8d1c6dab6b7fed927e439d69",
+      "bytes": 2099,
+      "uncompressed_sha256": "a8c9c1103f1a99ff13e59734c5b38746cf8b0718c86e377a8f86d43e6e56be1e"
+    },
+    "proposed-comment-before-merge.md": {
+      "sha256": "686a60b41e5011266245ed5e2ca55fab1348bf7f90e74b07cdc123741fc73047",
+      "bytes": 1033
+    },
+    "proposed-pr-body-before-merge.md": {
+      "sha256": "cd3554524276ce49b9ff913f07d2becf9717c3697af08d041ba101c69930475f",
+      "bytes": 11243
+    },
+    "publication.json": {
+      "sha256": "75cd7be2e4d5354909ac789fdf76d9fc1cd9daa6837a5b0b42155214d3f63dc6",
+      "bytes": 32614
+    },
+    "related.log": {
+      "sha256": "c09bb98d168e2760e593ddde70fbf341dcefb859e5a7b9181698f6934acc06d8",
+      "bytes": 518
+    },
+    "runner-inventory.json": {
+      "sha256": "d949b91aba778a6cc05bfa0863b3d3058be82b787a9289f716055b549e574e1f",
+      "bytes": 928
+    },
+    "runner-inventory.stderr": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "source-commit.patch.gz": {
+      "sha256": "e2cca959dfae18c430331e6c6c69001591c6879b65094c6e09afdc5b86e7ffbd",
+      "bytes": 5778,
+      "uncompressed_sha256": "3cb8b1f278c29c69788973c8ba8f0dbc3c20222314b23de4606e19a8a8603bd8"
+    }
+  },
+  "remote_boundary": {
+    "pr": 1112,
+    "merged_externally": true,
+    "merged_head": "c9d15c9452cbf69d96b88f1f94e48d4f94b318bd",
+    "includes_this_source_commit": false,
+    "source_issue": 1111,
+    "source_issue_state": "closed",
+    "open_successor_verified": false,
+    "publication_blocked": true
+  }
+}

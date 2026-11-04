@@ -1,0 +1,33 @@
+✔ gap export preserves every dispute and explicit UNKNOWN execution evidence without writes (33.215954ms)
+✔ owner-excluded evidence is never evaluated and remains an identity-only gap (29.325409ms)
+✔ schema 1 retains requested identities and unknown counts with an unavailable Brain (27.12438ms)
+✔ schema 2 retains requested identities and unknown counts with an unavailable Brain (25.66479ms)
+✔ an empty supplied manifest cannot claim recovery or hide the missing requested slots (4.401559ms)
+✔ invalid arguments and manifests produce no partial ledger or Brain writes (189.539091ms)
+✔ saved report joins the complete dispute identity and binds unverified claims to retained bytes (27.09983ms)
+✔ ambiguous saved rows and owner-excluded cases cannot contribute execution claims (1.19468ms)
+✔ mismatched packets, invalid revisions and invalid costs remain specific gaps (4.036783ms)
+✔ invalid saved reports and run-only manifests fail without partial output or writes (150.470117ms)
+✔ retained nested attempts bind their own rows and persisted receipts without becoming cases (30.478164ms)
+✔ retry lookup cannot borrow identity from its parent or a different dispute (2.076989ms)
+✔ excluded retry identities withhold case execution claims before role or cost reads (1.880842ms)
+✔ a retry backend exclusion prevents its cost read while preserving the current role receipt (2.030174ms)
+✔ malformed retry histories retain specific paths while valid siblings remain recoverable (2.12554ms)
+✔ retry claims retain individual unavailable-store gaps without creating a Brain (26.156836ms)
+✔ opt-in persisted links retain role and cost digests without claiming revision or cohort proof (27.100749ms)
+✔ persisted lookup requires the complete role, target, backend and decision identity (7.996181ms)
+✔ missing role identities, ambiguous claims and missing stores have individual gaps (30.167519ms)
+✔ persisted costs follow the production whole-run policy and expose saved cost discrepancies (10.710349ms)
+✔ excluded role target is rejected before metadata is evaluated (1.817766ms)
+✔ excluded backend identity prevents cost reads (1.730778ms)
+✔ excluded requested identities trigger no persisted role or cost evidence reads (1.619083ms)
+✔ persisted role CLI flag requires a saved report and produces no partial output (24.720169ms)
+✔ persisted lookup reads the production role recorder and agrees with production cost grading (178.06312ms)
+ℹ tests 25
+ℹ suites 0
+ℹ pass 25
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 846.555781
