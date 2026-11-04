@@ -365,6 +365,15 @@
       "original_retry_manifest_recovered": false,
       "authenticated_outcomes_verified": false,
       "operational_task_checkboxes_completed": 0
+    },
+    "native_case_recovery_followup": {
+      "checked_at": "2026-11-04T02:46:26.864777+00:00",
+      "source_commit": "de594803fc09b553bc7fbe19c0acb978eacb8e7a",
+      "validation": "native-case-followup/validation.json",
+      "results": "native-case-followup/results.md",
+      "original_retry_manifest_recovered": false,
+      "authenticated_outcomes_verified": false,
+      "operational_task_checkboxes_completed": 0
     }
   },
   "mirror_synchronization": [

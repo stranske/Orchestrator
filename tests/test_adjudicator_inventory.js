@@ -808,6 +808,96 @@ test('possible paid attempts require completion recovery before packet recollect
   }
 });
 
+test('requested rows expose unresolved native case attempts even without backend identities', (t) => {
+  const { root, saved, options } = nativeJournal(t);
+  const identity = { run_id: 'original', target: 'owner/repo#1',
+    verifier_verdict: 'NON_PASS', adjudicated_verdict: 'PASS' };
+  saved.rows = [{ ...identity, case_id: 'case-a', decision: 'reject_blocker',
+    later_truth: 'UNKNOWN', retry_attempts: [{ backend_run_id: 'primary' }] }];
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const manifest = manifestFile(root, [identity], 2);
+  const inputs = [options.report, options.journal, manifest];
+  const before = inputs.map((file) => fs.readFileSync(file));
+  const result = reportInventory({ ...options, manifest });
+  const recovery = result.manifest_reconciliation.cases[0].native_case_recovery;
+  assert.equal(recovery.status, 'observed');
+  assert.equal(recovery.scope, 'case_only_not_retained_attempt_binding');
+  assert.deepEqual(recovery.unresolved_attempts.map(({ attempt_id, state,
+    backend_run_id, next_evidence_step, location }) =>
+    [attempt_id, state, backend_run_id, next_evidence_step, location]), [
+    ['a', 'reserved', null, 'producer_must_prove_invocation_never_started',
+      'pre_dispatch.native_journal.attempts[0]'],
+    ['b', 'in_flight', null, 'UNKNOWN_recover_provider_receipt_before_any_retry',
+      'pre_dispatch.native_journal.attempts[1]'],
+    ['c', 'in_flight', 'started-provider', 'UNKNOWN_recover_provider_receipt_before_any_retry',
+      'pre_dispatch.native_journal.attempts[2]'],
+    ['d', 'raw_persisted', 'primary', 'resume_native_validation_without_redispatch',
+      'pre_dispatch.native_journal.attempts[3]'],
+    ['f', 'unrecognized', null, 'unrecognized_state_requires_native_review',
+      'pre_dispatch.native_journal.attempts[5]'],
+  ]);
+  assert.equal(recovery.next_evidence_step, 'recover_native_case_attempts_before_any_fresh_dispatch');
+  assert.equal(result.retained_attempt_observations[0].native_receipt_locator.status,
+    'backend_identity_not_recorded', 'case evidence must not impersonate a bound receipt');
+  assert.equal(result.cases[0].retained_decision, 'reject_blocker');
+  assert.equal(result.cases[0].retained_later_truth, 'UNKNOWN');
+  assert.equal(result.paid_attempts.length, 1, 'journal locators do not invent report paid identities');
+  assert.equal(result.dispatch_authorized, false);
+  assert.equal(result.manifest_reconciliation.authenticated_outcomes_verified, false);
+  assert.ok(!JSON.stringify(result).includes('private'));
+  const cli = execute(root, process.execPath, [script, '--report', options.report,
+    '--journal', options.journal, '--manifest', manifest, '--observed-at', String(now),
+    '--evidence-class', options.evidenceClass, '--evidence-reference', options.evidenceReference]);
+  assert.equal(cli.status, 0, cli.stderr);
+  assert.deepEqual(JSON.parse(cli.stdout), result);
+  assert.deepEqual(inputs.map((file) => fs.readFileSync(file)), before);
+});
+
+test('native case recovery separates unavailable journals from no observed unresolved attempts', (t) => {
+  const { root, saved, options } = nativeJournal(t);
+  const identity = { run_id: 'original', target: 'owner/repo#1' };
+  saved.rows = [{ ...identity, case_id: 'case-a' }];
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const manifest = manifestFile(root, [identity]);
+  const observe = (journal) => reportInventory({ ...options, journal, manifest })
+    .manifest_reconciliation.cases[0].native_case_recovery;
+  for (const journal of [undefined, path.join(root, 'missing.sqlite3')]) {
+    const unavailable = observe(journal);
+    assert.equal(unavailable.status, 'journal_unavailable');
+    assert.equal(unavailable.unresolved_attempts, null);
+    assert.equal(unavailable.next_evidence_step, 'recover_native_journal_without_redispatch');
+  }
+  assert.equal(fs.existsSync(path.join(root, 'missing.sqlite3')), false);
+  const connection = new DatabaseSync(options.journal);
+  connection.exec("DELETE FROM native_attempts WHERE state <> 'validated'");
+  connection.close();
+  assert.deepEqual(observe(options.journal), {
+    scope: 'case_only_not_retained_attempt_binding', status: 'observed',
+    unresolved_attempts: [], next_evidence_step: null,
+  });
+  const writer = new DatabaseSync(options.journal);
+  writer.exec("UPDATE native_attempts SET state = 'in_flight'");
+  writer.close();
+  saved.rows[0].case_id = 'case-b';
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  assert.deepEqual(observe(options.journal).unresolved_attempts, [],
+    'another case cannot lend its journal attempts');
+});
+
+test('unbound requested identities cannot borrow native case recovery from candidate rows', (t) => {
+  const { root, saved, options } = nativeJournal(t);
+  const identity = (run_id) => ({ run_id, target: 'owner/repo#1' });
+  saved.rows = [{ ...identity('ambiguous'), case_id: 'case-a' },
+    { ...identity('ambiguous'), case_id: 'case-b' },
+    { ...identity('changed'), case_id: 'case-c', target: 'owner/repo#2' }];
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const manifest = manifestFile(root, ['ambiguous', 'changed', 'missing'].map(identity));
+  const result = reportInventory({ ...options, manifest });
+  for (const row of result.manifest_reconciliation.cases) {
+    assert.equal(row.native_case_recovery, null);
+  }
+});
+
 test('legacy report manifest keeps verdict ambiguity visible and empty requests cannot complete accounting', (t) => {
   const { root, saved, options } = retainedReport(t);
   saved.rows = ['NON_PASS', 'FAIL'].map((verifier_verdict, index) => ({

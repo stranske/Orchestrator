@@ -1,5 +1,15 @@
 # Acceptance evidence recovery for #1096
 
+## Case-level native recovery, 2026-11-04 UTC
+
+Uniquely matched requested retry identities now expose unresolved native journal
+attempts for their case, including invocations without backend IDs. These remain
+separate from backend-bound receipt locators and primary attempt dispositions.
+All 137 focused checks pass; three new controls fail against the prior source.
+[Results and limitations](native-case-followup/results.md) bind the source and
+test evidence. Original retry reconciliation and operational acceptance remain
+incomplete; no operational checkbox is newly complete.
+
 ## Requested retry recovery dispositions, 2026-11-04 UTC
 
 Supplied manifest identities now receive a specific recovery disposition, with

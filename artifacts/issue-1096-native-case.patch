@@ -1,0 +1,746 @@
+From de594803fc09b553bc7fbe19c0acb978eacb8e7a Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Wed, 4 Nov 2026 02:45:54 +0000
+Subject: [PATCH 1/2] fix(retro): expose unresolved native case attempts for
+ requested retries
+
+---
+ .../native-case-followup/plan.md              | 27 ++++++
+ scripts/export_adjudicator_inventory.js       | 30 ++++++-
+ tests/test_adjudicator_inventory.js           | 90 +++++++++++++++++++
+ 3 files changed, 145 insertions(+), 2 deletions(-)
+ create mode 100644 docs/verification/issue-1096-recovery/native-case-followup/plan.md
+
+diff --git a/docs/verification/issue-1096-recovery/native-case-followup/plan.md b/docs/verification/issue-1096-recovery/native-case-followup/plan.md
+new file mode 100644
+index 0000000..b71c344
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/native-case-followup/plan.md
+@@ -0,0 +1,27 @@
++# Case-level native recovery plan
++
++Recorded 2026-11-04 UTC before execution on checkout `fd62737`.
++The first unchecked retry task remains blocked on original manifest recovery,
++authenticated native receipts, independent truth and live writer ownership.
++Read-only inspection of issues #1072, #1096 and the original #579 receipt found
++references, not the original 21-row manifest. Bounded Dropbox title searches for
++the original-results, original-before, continuation-meta and paid-lineage files
++did not recover those artifacts. Search absence is not proof of deletion.
++
++Implement case-level unresolved native journal locators for uniquely matched
++supplied retry identities. Include reservations, invocations without backend IDs,
++persisted raw responses and unrecognized states. Keep these separate from
++backend-bound receipt matches and the primary saved attempt's disposition.
++Case identity alone cannot bind a journal attempt to a retained invocation.
++Ambiguous requested identities cannot borrow candidate journal evidence.
++
++Run `node --test tests/test_adjudicator_inventory.js` before and after the fix;
++expect the new controls to fail before implementation and all inventory controls
++to pass afterward. Then run the acceptance-runner and evidence-ledger regressions,
++syntax and whitespace checks. Preserve commands, logs and source hashes.
++
++Stop after local fixture verification; do not invoke a provider, publish a
++canonical report, change production storage, or construct a replacement cohort.
++The selected CI Python 3.14 interpreter still lacks pytest; prior required-test
++failures remain unresolved and are not rerun solely for this JavaScript change.
++No operational acceptance checkbox can be completed from fixture results.
+diff --git a/scripts/export_adjudicator_inventory.js b/scripts/export_adjudicator_inventory.js
+index d47d3c3..0d15512 100644
+--- a/scripts/export_adjudicator_inventory.js
++++ b/scripts/export_adjudicator_inventory.js
+@@ -452,7 +452,7 @@ function reportInventory({ report, observedAt, evidenceClass, evidenceReference,
+   const preDispatch = preDispatchInventory(saved, paid, journal);
+   reconcileNativeLocators(observations, preDispatch.native_journal);
+   const reconciliation = requestedManifest
+-    ? reconcileRetainedRows(cases, requestedManifest, observations) : null;
++    ? reconcileRetainedRows(cases, requestedManifest, observations, preDispatch.native_journal) : null;
+   if (!fs.readFileSync(report).equals(bytes)) {
+     throw new Error('report changed during inventory');
+   }
+@@ -538,10 +538,34 @@ function retainedRecovery(observation) {
+     next_evidence_step: step.next_evidence_step }, grading_evidence_gaps: gaps };
+ }
+ 
++// A native invocation can start before it has a backend id. Recover all
++// unresolved attempts for this uniquely identified case, across material
++// revisions, without pretending that case identity binds a retained invocation
++// to one of these journal attempts. Validated receipts still need authentication
++// through the existing native path; their locators are inventoried separately.
++function nativeCaseRecovery(caseId, journal) {
++  const scope = 'case_only_not_retained_attempt_binding';
++  if (journal.status !== 'available') {
++    return { scope, status: 'journal_unavailable', unresolved_attempts: null,
++      next_evidence_step: 'recover_native_journal_without_redispatch' };
++  }
++  const unresolved = journal.attempts.flatMap((attempt, index) => {
++    if (attempt.case_id !== caseId || attempt.state === 'validated') return [];
++    const { attempt_id, material_revision, state, backend_run_id,
++      raw_receipt_present, validation_present, recovery_step } = attempt;
++    return [{ location: `pre_dispatch.native_journal.attempts[${index}]`,
++      attempt_id, material_revision, state, backend_run_id,
++      raw_receipt_present, validation_present, next_evidence_step: recovery_step }];
++  });
++  return { scope, status: 'observed', unresolved_attempts: unresolved,
++    next_evidence_step: unresolved.length
++      ? 'recover_native_case_attempts_before_any_fresh_dispatch' : null };
++}
++
+ // A saved decision/truth pair, native marker, paid locator or a perfect manifest
+ // match cannot authenticate an outcome. Identity gaps cannot borrow diagnostics
+ // from conflicting or ambiguous candidates.
+-function reconcileRetainedRows(cases, manifest, observations) {
++function reconcileRetainedRows(cases, manifest, observations, journal) {
+   const exact = (requested, row) => requested.target === row.target &&
+     (manifest.schema_version === 1 ||
+       (requested.verifier_verdict === row.verifier_verdict &&
+@@ -585,6 +609,8 @@ function reconcileRetainedRows(cases, manifest, observations) {
+         next_evidence_step: 'recover_unique_requested_row_before_using_attempt_evidence' },
+       grading_evidence_gaps: null };
+     return { ...item, status, reasons, ...recovery,
++      native_case_recovery: matches.length === 1
++        ? nativeCaseRecovery(matches[0].case_id, journal) : null,
+       // Ambiguous/conflicting rows cannot lend their failures to a requested
+       // identity. A unique match still authenticates neither outcome nor truth.
+       retained_attempt_locations: matches.length === 1
+diff --git a/tests/test_adjudicator_inventory.js b/tests/test_adjudicator_inventory.js
+index 9992b0c..5206faa 100644
+--- a/tests/test_adjudicator_inventory.js
++++ b/tests/test_adjudicator_inventory.js
+@@ -808,6 +808,96 @@ test('possible paid attempts require completion recovery before packet recollect
+   }
+ });
+ 
++test('requested rows expose unresolved native case attempts even without backend identities', (t) => {
++  const { root, saved, options } = nativeJournal(t);
++  const identity = { run_id: 'original', target: 'owner/repo#1',
++    verifier_verdict: 'NON_PASS', adjudicated_verdict: 'PASS' };
++  saved.rows = [{ ...identity, case_id: 'case-a', decision: 'reject_blocker',
++    later_truth: 'UNKNOWN', retry_attempts: [{ backend_run_id: 'primary' }] }];
++  fs.writeFileSync(options.report, JSON.stringify(saved));
++  const manifest = manifestFile(root, [identity], 2);
++  const inputs = [options.report, options.journal, manifest];
++  const before = inputs.map((file) => fs.readFileSync(file));
++  const result = reportInventory({ ...options, manifest });
++  const recovery = result.manifest_reconciliation.cases[0].native_case_recovery;
++  assert.equal(recovery.status, 'observed');
++  assert.equal(recovery.scope, 'case_only_not_retained_attempt_binding');
++  assert.deepEqual(recovery.unresolved_attempts.map(({ attempt_id, state,
++    backend_run_id, next_evidence_step, location }) =>
++    [attempt_id, state, backend_run_id, next_evidence_step, location]), [
++    ['a', 'reserved', null, 'producer_must_prove_invocation_never_started',
++      'pre_dispatch.native_journal.attempts[0]'],
++    ['b', 'in_flight', null, 'UNKNOWN_recover_provider_receipt_before_any_retry',
++      'pre_dispatch.native_journal.attempts[1]'],
++    ['c', 'in_flight', 'started-provider', 'UNKNOWN_recover_provider_receipt_before_any_retry',
++      'pre_dispatch.native_journal.attempts[2]'],
++    ['d', 'raw_persisted', 'primary', 'resume_native_validation_without_redispatch',
++      'pre_dispatch.native_journal.attempts[3]'],
++    ['f', 'unrecognized', null, 'unrecognized_state_requires_native_review',
++      'pre_dispatch.native_journal.attempts[5]'],
++  ]);
++  assert.equal(recovery.next_evidence_step, 'recover_native_case_attempts_before_any_fresh_dispatch');
++  assert.equal(result.retained_attempt_observations[0].native_receipt_locator.status,
++    'backend_identity_not_recorded', 'case evidence must not impersonate a bound receipt');
++  assert.equal(result.cases[0].retained_decision, 'reject_blocker');
++  assert.equal(result.cases[0].retained_later_truth, 'UNKNOWN');
++  assert.equal(result.paid_attempts.length, 1, 'journal locators do not invent report paid identities');
++  assert.equal(result.dispatch_authorized, false);
++  assert.equal(result.manifest_reconciliation.authenticated_outcomes_verified, false);
++  assert.ok(!JSON.stringify(result).includes('private'));
++  const cli = execute(root, process.execPath, [script, '--report', options.report,
++    '--journal', options.journal, '--manifest', manifest, '--observed-at', String(now),
++    '--evidence-class', options.evidenceClass, '--evidence-reference', options.evidenceReference]);
++  assert.equal(cli.status, 0, cli.stderr);
++  assert.deepEqual(JSON.parse(cli.stdout), result);
++  assert.deepEqual(inputs.map((file) => fs.readFileSync(file)), before);
++});
++
++test('native case recovery separates unavailable journals from no observed unresolved attempts', (t) => {
++  const { root, saved, options } = nativeJournal(t);
++  const identity = { run_id: 'original', target: 'owner/repo#1' };
++  saved.rows = [{ ...identity, case_id: 'case-a' }];
++  fs.writeFileSync(options.report, JSON.stringify(saved));
++  const manifest = manifestFile(root, [identity]);
++  const observe = (journal) => reportInventory({ ...options, journal, manifest })
++    .manifest_reconciliation.cases[0].native_case_recovery;
++  for (const journal of [undefined, path.join(root, 'missing.sqlite3')]) {
++    const unavailable = observe(journal);
++    assert.equal(unavailable.status, 'journal_unavailable');
++    assert.equal(unavailable.unresolved_attempts, null);
++    assert.equal(unavailable.next_evidence_step, 'recover_native_journal_without_redispatch');
++  }
++  assert.equal(fs.existsSync(path.join(root, 'missing.sqlite3')), false);
++  const connection = new DatabaseSync(options.journal);
++  connection.exec("DELETE FROM native_attempts WHERE state <> 'validated'");
++  connection.close();
++  assert.deepEqual(observe(options.journal), {
++    scope: 'case_only_not_retained_attempt_binding', status: 'observed',
++    unresolved_attempts: [], next_evidence_step: null,
++  });
++  const writer = new DatabaseSync(options.journal);
++  writer.exec("UPDATE native_attempts SET state = 'in_flight'");
++  writer.close();
++  saved.rows[0].case_id = 'case-b';
++  fs.writeFileSync(options.report, JSON.stringify(saved));
++  assert.deepEqual(observe(options.journal).unresolved_attempts, [],
++    'another case cannot lend its journal attempts');
++});
++
++test('unbound requested identities cannot borrow native case recovery from candidate rows', (t) => {
++  const { root, saved, options } = nativeJournal(t);
++  const identity = (run_id) => ({ run_id, target: 'owner/repo#1' });
++  saved.rows = [{ ...identity('ambiguous'), case_id: 'case-a' },
++    { ...identity('ambiguous'), case_id: 'case-b' },
++    { ...identity('changed'), case_id: 'case-c', target: 'owner/repo#2' }];
++  fs.writeFileSync(options.report, JSON.stringify(saved));
++  const manifest = manifestFile(root, ['ambiguous', 'changed', 'missing'].map(identity));
++  const result = reportInventory({ ...options, manifest });
++  for (const row of result.manifest_reconciliation.cases) {
++    assert.equal(row.native_case_recovery, null);
++  }
++});
++
+ test('legacy report manifest keeps verdict ambiguity visible and empty requests cannot complete accounting', (t) => {
+   const { root, saved, options } = retainedReport(t);
+   saved.rows = ['NON_PASS', 'FAIL'].map((verifier_verdict, index) => ({
+-- 
+2.56.0
+
+
+From 2f88c96d884f538bc5f93de50f5f0d9b469b3022 Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Wed, 4 Nov 2026 02:47:22 +0000
+Subject: [PATCH 2/2] docs(retro): retain native case recovery validation and
+ blockers
+
+---
+ .../issue-1096-recovery/README.md             |  10 ++
+ .../issue-1096-recovery/evidence-ledger.json  |   9 ++
+ .../native-case-followup/inventory.log        |  86 +++++++++++
+ .../native-case-followup/ledger-audit.json    |   9 ++
+ .../native-case-followup/ledger.log           |  34 +++++
+ .../prior-source-controls.log                 | 133 ++++++++++++++++++
+ .../native-case-followup/results.md           |  45 ++++++
+ .../native-case-followup/runner.log           |  41 ++++++
+ .../native-case-followup/validation.json      |  79 +++++++++++
+ 9 files changed, 446 insertions(+)
+ create mode 100644 docs/verification/issue-1096-recovery/native-case-followup/inventory.log
+ create mode 100644 docs/verification/issue-1096-recovery/native-case-followup/ledger-audit.json
+ create mode 100644 docs/verification/issue-1096-recovery/native-case-followup/ledger.log
+ create mode 100644 docs/verification/issue-1096-recovery/native-case-followup/prior-source-controls.log
+ create mode 100644 docs/verification/issue-1096-recovery/native-case-followup/results.md
+ create mode 100644 docs/verification/issue-1096-recovery/native-case-followup/runner.log
+ create mode 100644 docs/verification/issue-1096-recovery/native-case-followup/validation.json
+
+diff --git a/docs/verification/issue-1096-recovery/README.md b/docs/verification/issue-1096-recovery/README.md
+index 5931811..4225779 100644
+--- a/docs/verification/issue-1096-recovery/README.md
++++ b/docs/verification/issue-1096-recovery/README.md
+@@ -1,5 +1,15 @@
+ # Acceptance evidence recovery for #1096
+ 
++## Case-level native recovery, 2026-11-04 UTC
++
++Uniquely matched requested retry identities now expose unresolved native journal
++attempts for their case, including invocations without backend IDs. These remain
++separate from backend-bound receipt locators and primary attempt dispositions.
++All 137 focused checks pass; three new controls fail against the prior source.
++[Results and limitations](native-case-followup/results.md) bind the source and
++test evidence. Original retry reconciliation and operational acceptance remain
++incomplete; no operational checkbox is newly complete.
++
+ ## Requested retry recovery dispositions, 2026-11-04 UTC
+ 
+ Supplied manifest identities now receive a specific recovery disposition, with
+diff --git a/docs/verification/issue-1096-recovery/evidence-ledger.json b/docs/verification/issue-1096-recovery/evidence-ledger.json
+index ec7c653..1001429 100644
+--- a/docs/verification/issue-1096-recovery/evidence-ledger.json
++++ b/docs/verification/issue-1096-recovery/evidence-ledger.json
+@@ -365,6 +365,15 @@
+       "original_retry_manifest_recovered": false,
+       "authenticated_outcomes_verified": false,
+       "operational_task_checkboxes_completed": 0
++    },
++    "native_case_recovery_followup": {
++      "checked_at": "2026-11-04T02:46:26.864777+00:00",
++      "source_commit": "de594803fc09b553bc7fbe19c0acb978eacb8e7a",
++      "validation": "native-case-followup/validation.json",
++      "results": "native-case-followup/results.md",
++      "original_retry_manifest_recovered": false,
++      "authenticated_outcomes_verified": false,
++      "operational_task_checkboxes_completed": 0
+     }
+   },
+   "mirror_synchronization": [
+diff --git a/docs/verification/issue-1096-recovery/native-case-followup/inventory.log b/docs/verification/issue-1096-recovery/native-case-followup/inventory.log
+new file mode 100644
+index 0000000..481a38e
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/native-case-followup/inventory.log
+@@ -0,0 +1,86 @@
++✔ packet floor diagnostics match the production rule without trusting saved flags (747.378077ms)
++✔ packet diagnostics identify missing and clipped evidence separately on parent and retries (1.618926ms)
++✔ report CLI carries packet floor locators through unique requested-row reconciliation (38.99208ms)
++✔ report recovery preserves ordered rows, recursive paid history and conflicting counts (1.703615ms)
++✔ report recovery rejects missing input without initializing runtime state (1.179759ms)
++✔ attempt observations bind nested failure fields without exposing private error text (1.678888ms)
++✔ saved decisions survive failed retries and remain distinct from independent truth (1.213934ms)
++✔ failure field hashes detect changed evidence even when retained classifications match (1.293523ms)
++✔ later-truth diagnostics distinguish absence, UNKNOWN, binary claims and invalid values (2.330323ms)
++✔ parent and retry truth remain separate without deriving truth from a decision (1.083428ms)
++✔ changed binary truth changes its evidence hash without authenticating either value (1.009579ms)
++✔ recorded failure stages explain collection, execution and validation breaks on real message shapes (1.027012ms)
++✔ unknown and contradictory failure prose cannot borrow a recognized stage (0.967029ms)
++✔ exact retained launcher refusals explain admission without claiming a backend attempt (0.934899ms)
++✔ launcher refusal matching rejects changed prose and contradictory attempt fields (1.072457ms)
++✔ later launcher refusals preserve the parent decision and prior paid history (0.768185ms)
++✔ later retries and persistence breaks cannot replace the parent attempt failure or decision (1.201961ms)
++✔ report recovery refuses malformed and ambiguous retained identities (2.697284ms)
++✔ nested retries cannot borrow a root identity when their saved identities conflict (3.636851ms)
++✔ explicit retry identities must be verifiable while compact histories remain intact (4.144015ms)
++✔ CLI refuses cross-case retries before emitting manifest or native receipt matches (47.644681ms)
++✔ report recovery requires explicit attribution and a valid check time (0.769788ms)
++✔ report recovery aborts if the input changes during observation (1.031481ms)
++✔ retained report reconciliation preserves requested order and explains every identity gap (2.326938ms)
++✔ retained report CLI matches supplied manifests without authenticating saved outcomes (40.698013ms)
++✔ requested recovery dispositions explain identity gaps without borrowing candidate outcomes (1.203765ms)
++✔ requested recovery keeps recorded failures separate from missing packet and truth evidence (4.030282ms)
++✔ decided requested rows retain their outcome and UNKNOWN while historical retry failures stay separate (48.934375ms)
++✔ possible paid attempts require completion recovery before packet recollection (11.31588ms)
++✔ requested rows expose unresolved native case attempts even without backend identities (57.546243ms)
++✔ native case recovery separates unavailable journals from no observed unresolved attempts (13.010985ms)
++✔ unbound requested identities cannot borrow native case recovery from candidate rows (9.091442ms)
++✔ legacy report manifest keeps verdict ambiguity visible and empty requests cannot complete accounting (1.571115ms)
++✔ report reconciliation refuses malformed or changing manifests without replacing evidence (1.255932ms)
++✔ report CLI never combines historical recovery with dispatch or current Brain selection (218.864664ms)
++✔ native receipt locators bind both case and backend identity for each retained attempt (12.276869ms)
++✔ missing native identities and receipts remain gaps rather than borrowing another attempt (10.597925ms)
++✔ reused native backend identities remain ambiguous even when one candidate matches the case (10.089913ms)
++✔ pre-dispatch inventory reconciles report and native locators without exposing payloads (12.778447ms)
++✔ all validated native rows still require authentication, independent truth and live writer proof (8.565892ms)
++✔ missing native evidence remains unavailable and never means zero attempts (0.74442ms)
++✔ an observed empty journal cannot establish writer ownership or authorize spending (7.996311ms)
++✔ an active journal writer does not make a read-only snapshot claim ownership (8.477565ms)
++✔ foreign and incomplete journals are refused without schema repair (3.828722ms)
++✔ report without native marker still cannot authorize generic retry (0.683706ms)
++✔ journal CLI stays read-only and requires explicit report attribution (83.022953ms)
++✔ owner exclusions are accounted for without reading excluded outcome evidence: mixed case (52.754218ms)
++✔ owner exclusions are accounted for without reading excluded outcome evidence: spaces (55.274947ms)
++✔ owner exclusions are accounted for without reading excluded outcome evidence: tabs and newlines (49.521664ms)
++✔ owner exclusions are accounted for without reading excluded outcome evidence: Unicode whitespace (57.870879ms)
++✔ requested owner exclusions remain explicit with missing or contradictory inventory: "stranske/Collab-Admin#7" (8.276519ms)
++✔ requested owner exclusions remain explicit with missing or contradictory inventory: "\tstranske/Collab-Admin #7" (6.880806ms)
++✔ inventory exports every synthetic dispute and every exclusion without writes (947.981496ms)
++✔ inventory preserves the fixed cutoff and reports a count discrepancy (8.131124ms)
++✔ inventory distinguishes missing evidence from a complete cohort (2.724128ms)
++✔ inventory distinguishes schema-less evidence from a complete cohort (0.798718ms)
++✔ inventory distinguishes empty evidence from a complete cohort (2.871414ms)
++✔ inventory distinguishes incomplete-schema evidence from a complete cohort (5.405759ms)
++✔ inventory CLI exports JSON, signals unavailable evidence and rejects replay options (225.710529ms)
++✔ matching 71 identities bind the supplied manifest bytes without claiming historical acceptance (152.230328ms)
++✔ equal inventory counts expose substituted identities, exclusions and absent requested runs (12.721606ms)
++✔ a requested run on another target cannot satisfy case identity (5.911535ms)
++✔ inventory accounts for outcomes without run records as unavailable evidence (48.140457ms)
++✔ an outcomes-only Brain is available with exclusions, rather than an observed empty store (4.799319ms)
++✔ manifest retains every requested identity when Brain is empty (3.916915ms)
++✔ manifest retains every requested identity when Brain is unavailable (3.235026ms)
++✔ manifest count discrepancy prevents an exact match even when all supplied identities match (6.203893ms)
++✔ manifest CLI preserves input bytes, rejects malformed identities and signals unavailable Brain (506.046857ms)
++✔ version 2 reconciles all 71 dispute identities without claiming historical provenance (144.945338ms)
++✔ version 2 exposes substituted verdicts NON_PASS/FAIL despite matching run and count (43.57715ms)
++✔ version 2 exposes substituted verdicts FAIL_HOLLOW/PASS despite matching run and count (44.823838ms)
++✔ version 2 exposes substituted verdicts PASS/FAIL despite matching run and count (41.55598ms)
++✔ version 2 retains different disputes on one run and rejects duplicate dispute identities (6.029731ms)
++✔ version 2 preserves full identities for excluded, missing and unavailable cases (41.311702ms)
++✔ version 2 rejects malformed verdicts before publishing any inventory (510.259064ms)
++✔ version 2 distinguishes unavailable verdict evidence from contradictory verdicts (54.224194ms)
++✔ version 2 retains an observed target mismatch when verdict evidence is unavailable (4.419927ms)
++✔ missing stored targets remain eligible disputes with explicit unavailable identity evidence (854.362196ms)
++ℹ tests 78
++ℹ suites 0
++ℹ pass 78
++ℹ fail 0
++ℹ cancelled 0
++ℹ skipped 0
++ℹ todo 0
++ℹ duration_ms 5363.241954
+diff --git a/docs/verification/issue-1096-recovery/native-case-followup/ledger-audit.json b/docs/verification/issue-1096-recovery/native-case-followup/ledger-audit.json
+new file mode 100644
+index 0000000..1f96ef7
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/native-case-followup/ledger-audit.json
+@@ -0,0 +1,9 @@
++{
++  "schema_version": 1,
++  "ledger_sha256": "30d1b6f29874222cdcd1ebcce441ca44be38afe1d3f07dda943e2bdfcee7de8a",
++  "audit_scope": "recovery_attribution_and_local_artifact_integrity",
++  "attribution_and_artifact_checks_passed": true,
++  "operational_acceptance_verified": false,
++  "external_references_authenticated": false,
++  "source_revision_bindings_verified": false
++}
+diff --git a/docs/verification/issue-1096-recovery/native-case-followup/ledger.log b/docs/verification/issue-1096-recovery/native-case-followup/ledger.log
+new file mode 100644
+index 0000000..bc9f75f
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/native-case-followup/ledger.log
+@@ -0,0 +1,34 @@
++✔ published recovery ledger is attributable without establishing operational acceptance (28.828398ms)
++✔ rejects modified evidence instead of trusting the recorded result: named-tests.log (36.29019ms)
++✔ rejects modified evidence instead of trusting the recorded result: interpreter-followup/runner-after.log (34.754921ms)
++✔ rejects modified evidence instead of trusting the recorded result: pre-dispatch-observation.json (27.93671ms)
++✔ rejects changed hash-map evidence: plan.md (26.311922ms)
++✔ rejects missing hash-map evidence: plan.md (34.502686ms)
++✔ rejects changed hash-map evidence: results.md (36.475037ms)
++✔ rejects missing hash-map evidence: results.md (32.431007ms)
++✔ rejects missing evidence even when its parent receipt says it passed (17.447733ms)
++✔ rejects a missing checksum on a referenced log: null (32.644579ms)
++✔ rejects a missing checksum on a referenced log: undefined (23.487538ms)
++✔ audits JUnit bytes and refuses an absent JUnit checksum (40.974995ms)
++✔ refuses evidence outside the ledger directory: relative (21.271919ms)
++✔ refuses evidence outside the ledger directory: absolute (17.66448ms)
++✔ refuses evidence outside the ledger directory: symlink (17.470495ms)
++✔ does not equate a historical backup with the canonical report (28.514237ms)
++✔ rejects a retained row count substituted for the saved population (23.475636ms)
++✔ rejects merged historical/current categories (43.864963ms)
++✔ rejects missing dated limitations (36.751194ms)
++✔ rejects missing disclosure (46.600763ms)
++✔ rejects missing October 18 disclosure (46.630592ms)
++✔ rejects advice grade substitution (35.435387ms)
++✔ rejects unproved acceptance (23.090862ms)
++✔ rejects replacement cohort count (38.484008ms)
++✔ rejects mirror identity substitution (36.078151ms)
++✔ rejects historical dispatch substitution (28.94081ms)
++ℹ tests 26
++ℹ suites 0
++ℹ pass 26
++ℹ fail 0
++ℹ cancelled 0
++ℹ skipped 0
++ℹ todo 0
++ℹ duration_ms 829.602304
+diff --git a/docs/verification/issue-1096-recovery/native-case-followup/prior-source-controls.log b/docs/verification/issue-1096-recovery/native-case-followup/prior-source-controls.log
+new file mode 100644
+index 0000000..84674f6
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/native-case-followup/prior-source-controls.log
+@@ -0,0 +1,133 @@
++✔ packet floor diagnostics match the production rule without trusting saved flags (751.349057ms)
++✔ packet diagnostics identify missing and clipped evidence separately on parent and retries (1.458003ms)
++✔ report CLI carries packet floor locators through unique requested-row reconciliation (36.878569ms)
++✔ report recovery preserves ordered rows, recursive paid history and conflicting counts (1.725927ms)
++✔ report recovery rejects missing input without initializing runtime state (1.226337ms)
++✔ attempt observations bind nested failure fields without exposing private error text (1.608265ms)
++✔ saved decisions survive failed retries and remain distinct from independent truth (1.268026ms)
++✔ failure field hashes detect changed evidence even when retained classifications match (1.299955ms)
++✔ later-truth diagnostics distinguish absence, UNKNOWN, binary claims and invalid values (2.334431ms)
++✔ parent and retry truth remain separate without deriving truth from a decision (1.115979ms)
++✔ changed binary truth changes its evidence hash without authenticating either value (1.010982ms)
++✔ recorded failure stages explain collection, execution and validation breaks on real message shapes (1.004559ms)
++✔ unknown and contradictory failure prose cannot borrow a recognized stage (0.906756ms)
++✔ exact retained launcher refusals explain admission without claiming a backend attempt (1.026562ms)
++✔ launcher refusal matching rejects changed prose and contradictory attempt fields (1.144423ms)
++✔ later launcher refusals preserve the parent decision and prior paid history (0.843387ms)
++✔ later retries and persistence breaks cannot replace the parent attempt failure or decision (1.163699ms)
++✔ report recovery refuses malformed and ambiguous retained identities (3.023597ms)
++✔ nested retries cannot borrow a root identity when their saved identities conflict (3.92827ms)
++✔ explicit retry identities must be verifiable while compact histories remain intact (4.590237ms)
++✔ CLI refuses cross-case retries before emitting manifest or native receipt matches (45.689729ms)
++✔ report recovery requires explicit attribution and a valid check time (0.791449ms)
++✔ report recovery aborts if the input changes during observation (1.037782ms)
++✔ retained report reconciliation preserves requested order and explains every identity gap (2.327088ms)
++✔ retained report CLI matches supplied manifests without authenticating saved outcomes (40.670291ms)
++✔ requested recovery dispositions explain identity gaps without borrowing candidate outcomes (1.18559ms)
++✔ requested recovery keeps recorded failures separate from missing packet and truth evidence (3.759642ms)
++✔ decided requested rows retain their outcome and UNKNOWN while historical retry failures stay separate (49.271944ms)
++✔ possible paid attempts require completion recovery before packet recollection (11.224775ms)
++✖ requested rows expose unresolved native case attempts even without backend identities (12.304004ms)
++✖ native case recovery separates unavailable journals from no observed unresolved attempts (8.270651ms)
++✖ unbound requested identities cannot borrow native case recovery from candidate rows (9.592304ms)
++✔ legacy report manifest keeps verdict ambiguity visible and empty requests cannot complete accounting (1.444167ms)
++✔ report reconciliation refuses malformed or changing manifests without replacing evidence (1.395175ms)
++✔ report CLI never combines historical recovery with dispatch or current Brain selection (227.904136ms)
++✔ native receipt locators bind both case and backend identity for each retained attempt (8.195743ms)
++✔ missing native identities and receipts remain gaps rather than borrowing another attempt (8.443677ms)
++✔ reused native backend identities remain ambiguous even when one candidate matches the case (8.919408ms)
++✔ pre-dispatch inventory reconciles report and native locators without exposing payloads (8.989436ms)
++✔ all validated native rows still require authentication, independent truth and live writer proof (9.761181ms)
++✔ missing native evidence remains unavailable and never means zero attempts (1.247527ms)
++✔ an observed empty journal cannot establish writer ownership or authorize spending (12.800851ms)
++✔ an active journal writer does not make a read-only snapshot claim ownership (10.311484ms)
++✔ foreign and incomplete journals are refused without schema repair (4.402711ms)
++✔ report without native marker still cannot authorize generic retry (2.001315ms)
++✔ journal CLI stays read-only and requires explicit report attribution (84.292076ms)
++✔ owner exclusions are accounted for without reading excluded outcome evidence: mixed case (46.929782ms)
++✔ owner exclusions are accounted for without reading excluded outcome evidence: spaces (47.705073ms)
++✔ owner exclusions are accounted for without reading excluded outcome evidence: tabs and newlines (53.192254ms)
++✔ owner exclusions are accounted for without reading excluded outcome evidence: Unicode whitespace (49.585169ms)
++✔ requested owner exclusions remain explicit with missing or contradictory inventory: "stranske/Collab-Admin#7" (8.033922ms)
++✔ requested owner exclusions remain explicit with missing or contradictory inventory: "\tstranske/Collab-Admin #7" (6.364592ms)
++✔ inventory exports every synthetic dispute and every exclusion without writes (950.791498ms)
++✔ inventory preserves the fixed cutoff and reports a count discrepancy (9.083352ms)
++✔ inventory distinguishes missing evidence from a complete cohort (3.304165ms)
++✔ inventory distinguishes schema-less evidence from a complete cohort (0.783619ms)
++✔ inventory distinguishes empty evidence from a complete cohort (3.547091ms)
++✔ inventory distinguishes incomplete-schema evidence from a complete cohort (4.49553ms)
++✔ inventory CLI exports JSON, signals unavailable evidence and rejects replay options (210.999867ms)
++✔ matching 71 identities bind the supplied manifest bytes without claiming historical acceptance (141.912424ms)
++✔ equal inventory counts expose substituted identities, exclusions and absent requested runs (14.460976ms)
++✔ a requested run on another target cannot satisfy case identity (5.876209ms)
++✔ inventory accounts for outcomes without run records as unavailable evidence (53.099304ms)
++✔ an outcomes-only Brain is available with exclusions, rather than an observed empty store (4.784995ms)
++✔ manifest retains every requested identity when Brain is empty (3.693886ms)
++✔ manifest retains every requested identity when Brain is unavailable (3.542222ms)
++✔ manifest count discrepancy prevents an exact match even when all supplied identities match (5.770815ms)
++✔ manifest CLI preserves input bytes, rejects malformed identities and signals unavailable Brain (498.891366ms)
++✔ version 2 reconciles all 71 dispute identities without claiming historical provenance (132.95904ms)
++✔ version 2 exposes substituted verdicts NON_PASS/FAIL despite matching run and count (47.887482ms)
++✔ version 2 exposes substituted verdicts FAIL_HOLLOW/PASS despite matching run and count (53.676199ms)
++✔ version 2 exposes substituted verdicts PASS/FAIL despite matching run and count (41.886573ms)
++✔ version 2 retains different disputes on one run and rejects duplicate dispute identities (5.193148ms)
++✔ version 2 preserves full identities for excluded, missing and unavailable cases (41.315447ms)
++✔ version 2 rejects malformed verdicts before publishing any inventory (515.640022ms)
++✔ version 2 distinguishes unavailable verdict evidence from contradictory verdicts (50.091687ms)
++✔ version 2 retains an observed target mismatch when verdict evidence is unavailable (3.762344ms)
++✔ missing stored targets remain eligible disputes with explicit unavailable identity evidence (855.37808ms)
++ℹ tests 78
++ℹ suites 0
++ℹ pass 75
++ℹ fail 3
++ℹ cancelled 0
++ℹ skipped 0
++ℹ todo 0
++ℹ duration_ms 5285.743183
++
++✖ failing tests:
++
++test at ../../../../../tmp/issue1096-native-case-red-CPDCQ2/tests/test_adjudicator_inventory.js:811:1
++✖ requested rows expose unresolved native case attempts even without backend identities (12.304004ms)
++  TypeError: Cannot read properties of undefined (reading 'status')
++      at TestContext.<anonymous> (/tmp/issue1096-native-case-red-CPDCQ2/tests/test_adjudicator_inventory.js:823:25)
++      at Test.runInAsyncScope (node:async_hooks:227:14)
++      at Test.run (node:internal/test_runner/test:1402:25)
++      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
++      at Test.postRun (node:internal/test_runner/test:1542:19)
++      at Test.run (node:internal/test_runner/test:1467:12)
++      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
++
++test at ../../../../../tmp/issue1096-native-case-red-CPDCQ2/tests/test_adjudicator_inventory.js:856:1
++✖ native case recovery separates unavailable journals from no observed unresolved attempts (8.270651ms)
++  TypeError: Cannot read properties of undefined (reading 'status')
++      at TestContext.<anonymous> (/tmp/issue1096-native-case-red-CPDCQ2/tests/test_adjudicator_inventory.js:866:30)
++      at Test.runInAsyncScope (node:async_hooks:227:14)
++      at Test.run (node:internal/test_runner/test:1402:25)
++      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
++      at Test.postRun (node:internal/test_runner/test:1542:19)
++      at Test.run (node:internal/test_runner/test:1467:12)
++      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
++
++test at ../../../../../tmp/issue1096-native-case-red-CPDCQ2/tests/test_adjudicator_inventory.js:887:1
++✖ unbound requested identities cannot borrow native case recovery from candidate rows (9.592304ms)
++  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
++  + actual - expected
++  
++  + undefined
++  - null
++  
++      at TestContext.<anonymous> (/tmp/issue1096-native-case-red-CPDCQ2/tests/test_adjudicator_inventory.js:897:12)
++      at Test.runInAsyncScope (node:async_hooks:227:14)
++      at Test.run (node:internal/test_runner/test:1402:25)
++      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
++      at Test.postRun (node:internal/test_runner/test:1542:19)
++      at Test.run (node:internal/test_runner/test:1467:12)
++      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
++    generatedMessage: true,
++    code: 'ERR_ASSERTION',
++    actual: undefined,
++    expected: null,
++    operator: 'strictEqual',
++    diff: 'simple'
++  }
+diff --git a/docs/verification/issue-1096-recovery/native-case-followup/results.md b/docs/verification/issue-1096-recovery/native-case-followup/results.md
+new file mode 100644
+index 0000000..5239a7c
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/native-case-followup/results.md
+@@ -0,0 +1,45 @@
++# Case-level native recovery results
++
++Checked 2026-11-04 UTC. Source commit `de594803fc09b553bc7fbe19c0acb978eacb8e7a`
++has checkout `fd627376680615b9652134106ee1f4fd8cb6f159` as parent.
++The retained-report inventory now supplies `native_case_recovery` for each
++uniquely matched requested identity. It lists unresolved native reservations,
++in-flight attempts (including those without backend IDs), persisted raw responses
++and unrecognized states for that case, with journal locations and recovery steps.
++Material revisions remain separate. Validated attempts still require native
++authentication; an empty unresolved list is not dispatch permission.
++
++These are case-level recovery candidates, not bindings to a retained invocation.
++Backend receipt locators and the primary saved attempt's recovery disposition
++remain separate. Ambiguous, missing and conflicting manifest identities receive
++no candidate evidence. Unavailable journals produce null unresolved lists,
++distinct from an available journal with no observed unresolved attempts.
++Saved decisions, UNKNOWN truth and recursive paid history remain intact.
++
++All [137 focused checks](validation.json) pass: 78 inventory, 33 acceptance-runner
++and 26 ledger regressions. The three new controls fail against the prior source
++with 75 existing controls passing. They verify CLI output, journal locators,
++missing backend IDs, state handling, identity isolation, unavailable storage,
++and byte-for-byte preservation of reports, journals and manifests. Syntax and
++whitespace checks pass. No Python files changed. Required Python acceptance is
++still blocked before collection by missing pytest in the selected interpreter;
++fixture results do not establish accepted deployment identity.
++
++The [pre-execution plan](plan.md) records the bounded search and local verification.
++The original requested retry manifest, authenticated receipts and independent
++current truth remain unavailable, as do accepted/deployed/mirror bindings,
++live writer ownership and the original fixed next-20 membership. Raw October 18
++proof remains unavailable separately from its retained dated observation.
++Original retry reconciliation, eligible retries, intermediate graded >=25,
++canonical graded >=29 and the fixed-cohort decisions remain incomplete.
++No task checkbox was completed. No provider call, production write, canonical
++publication or mirror synchronization occurred.
++
++PR #1097 was checked open with `isDraft=false` at checkout head `fd627376`.
++The connector rejected the blocker comment and `needs-human` label because
++they require approval while this run's approval policy is `never`. Neither
++remote change was applied. Normal staging failed because checkout `.git` is
++read-only. Source and evidence commits are preserved in
++`/tmp/issue1096-native-case-git-434rpe_u/repo.git`; the reviewable handoff is
++[the applyable patch](../../../../artifacts/issue-1096-native-case.patch).
++The checkout branch itself is unchanged.
+diff --git a/docs/verification/issue-1096-recovery/native-case-followup/runner.log b/docs/verification/issue-1096-recovery/native-case-followup/runner.log
+new file mode 100644
+index 0000000..4785e8a
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/native-case-followup/runner.log
+@@ -0,0 +1,41 @@
++✔ records exact commands, source hashes, complete JUnit and logs for both checks (458.444957ms)
++✔ full-suite success requires the complete collected identities: {"omitExtra":true} (338.048199ms)
++✔ full-suite success requires the complete collected identities: {"duplicateExtra":true} (350.505036ms)
++✔ full-suite success requires the complete collected identities: {"collectionFailure":true} (431.158789ms)
++✔ full-suite success requires the complete collected identities: {"collectionEmpty":true} (431.379389ms)
++✔ full-suite success requires the complete collected identities: {"collectionDuplicate":true} (344.325318ms)
++✔ missing pytest preserves two failures and cannot complete acceptance (181.792927ms)
++✔ preserves JUnit reader failures: {"parserFailure":true} (229.645134ms)
++✔ preserves JUnit reader failures: {"parserInvalidJson":true} (227.067078ms)
++✔ preserves JUnit reader failures: {"malformed":true} (378.550321ms)
++✔ refuses a successful claim for incomplete evidence: {"noXml":true} (173.391801ms)
++✔ refuses a successful claim for incomplete evidence: {"malformed":true} (356.386153ms)
++✔ refuses a successful claim for incomplete evidence: {"empty":true} (346.346418ms)
++✔ refuses a successful claim for incomplete evidence: {"incomplete":true} (312.302739ms)
++✔ refuses a successful claim for incomplete evidence: {"duplicate":true} (316.936278ms)
++✔ refuses a successful claim for incomplete evidence: {"skipped":true} (315.033177ms)
++✔ refuses a successful claim for incomplete evidence: {"foreign":true} (312.664312ms)
++✔ refuses a successful claim for incomplete evidence: {"exit":1} (320.057128ms)
++✔ source changes during execution invalidate otherwise passing checks (303.269812ms)
++✔ timeout preserves both failed checks without retrying either command (1591.020192ms)
++✔ refuses revision mismatch, modified tracked inputs and untracked inputs before execution (39.105538ms)
++✔ refuses uncommitted test execution input: conftest.py (26.647963ms)
++✔ refuses uncommitted test execution input: pytest.ini (26.530266ms)
++✔ refuses uncommitted test execution input: setup.cfg (26.239604ms)
++✔ refuses uncommitted test execution input: scripts/run_adjudicator_acceptance.js (26.847891ms)
++✔ requires explicit interpreter/revision/bounds and never overwrites a receipt (175.944436ms)
++✔ refuses ignored execution inputs before running pytest: tests/conftest.py (33.142186ms)
++✔ refuses ignored execution inputs before running pytest: src/local_override.py (32.360505ms)
++✔ refuses ignored execution inputs before running pytest: tests/fixtures/local-evidence.json (32.444983ms)
++✔ refuses ignored execution inputs before running pytest: src/legacy.pyc (32.161683ms)
++✔ refuses ignored execution inputs before running pytest: tests/__pycache__/conftest.py (32.824428ms)
++✔ ordinary ignored Python and pytest caches do not invalidate source receipts (318.797378ms)
++✔ ignored inputs introduced during execution invalidate otherwise passing checks (312.509823ms)
++ℹ tests 33
++ℹ suites 0
++ℹ pass 33
++ℹ fail 0
++ℹ cancelled 0
++ℹ skipped 0
++ℹ todo 0
++ℹ duration_ms 8844.638766
+diff --git a/docs/verification/issue-1096-recovery/native-case-followup/validation.json b/docs/verification/issue-1096-recovery/native-case-followup/validation.json
+new file mode 100644
+index 0000000..a71bc43
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/native-case-followup/validation.json
+@@ -0,0 +1,79 @@
++{
++  "schema_version": 1,
++  "checked_at": "2026-11-04T02:46:26.864777+00:00",
++  "evidence_class": "local_fixture_regressions",
++  "source_commit": "de594803fc09b553bc7fbe19c0acb978eacb8e7a",
++  "source_parent": "fd627376680615b9652134106ee1f4fd8cb6f159",
++  "git_metadata": "/tmp/issue1096-native-case-git-434rpe_u/repo.git",
++  "node_version": "v24.22.2",
++  "source_sha256": {
++    "scripts/export_adjudicator_inventory.js": "c2da5a3cd6edbd5a4b772d771a3eb1dae1b7d77ea184eae4c5129346626947d2",
++    "tests/test_adjudicator_inventory.js": "aa769a538ab8e75ddd3fb1e7b9cf549cc5c367bdbc5704a8cd17c93f18523119"
++  },
++  "checks": [
++    {
++      "command": [
++        "node",
++        "tests/test_adjudicator_inventory.js"
++      ],
++      "log": "inventory.log",
++      "log_sha256": "0ea03eaa733487d363ee81532cccd5009982c96489ab9aa798a7b715ed6f4425",
++      "passed": 78,
++      "failed": 0
++    },
++    {
++      "command": [
++        "node",
++        "tests/test_adjudicator_acceptance_runner.js"
++      ],
++      "log": "runner.log",
++      "log_sha256": "38495969980b41261531a9c7f062cb8e6d50f6fbc04979adde74643c522ec083",
++      "passed": 33,
++      "failed": 0
++    },
++    {
++      "command": [
++        "node",
++        "tests/test_adjudicator_evidence_ledger.js"
++      ],
++      "log": "ledger.log",
++      "log_sha256": "44c26d9dba1b6e7ddc796dd1718c43bb12fb8c1e08c8f1c38bf65eb0aee11266",
++      "passed": 26,
++      "failed": 0
++    }
++  ],
++  "prior_source_controls": {
++    "source_revision": "fd627376680615b9652134106ee1f4fd8cb6f159",
++    "test_source_sha256": "aa769a538ab8e75ddd3fb1e7b9cf549cc5c367bdbc5704a8cd17c93f18523119",
++    "log": "prior-source-controls.log",
++    "log_sha256": "68dfe7209424308a24578d3e216157227ad76c0c84434c748908fa60d5f91381",
++    "passed": 75,
++    "failed": 3,
++    "scope": "prior inventory source with new tests in a temporary fixture checkout"
++  },
++  "passed": 137,
++  "required_python_tests": "not_rerun; selected Python 3.14.10 has no pytest; prior required-test receipts remain failed before collection",
++  "accepted_deployment_verified": false,
++  "original_retry_manifest_recovered": false,
++  "authenticated_outcomes_verified": false,
++  "original_retry_reconciliation_complete": false,
++  "operational_task_checkboxes_completed": 0,
++  "provider_calls": 0,
++  "production_dispatches": 0,
++  "canonical_publications": 0,
++  "blocker_comment": "rejected_connector_requires_approval_policy_never",
++  "needs_human_label": "rejected_connector_requires_approval_policy_never",
++  "pr_readiness": {
++    "checked_at": "2026-11-04T02:46:26.772Z",
++    "number": 1097,
++    "state": "open",
++    "isDraft": false,
++    "head": "fd627376680615b9652134106ee1f4fd8cb6f159"
++  },
++  "syntax_checks_passed": true,
++  "whitespace_check_passed": true,
++  "ledger_audit": {
++    "path": "ledger-audit.json",
++    "sha256": "a473619726bcb713f8a8f72e9fd84e72f640bd91a6d897352d60a79b25f617c5"
++  }
++}
+-- 
+2.56.0
+

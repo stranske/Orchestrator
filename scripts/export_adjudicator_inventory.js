@@ -452,7 +452,7 @@ function reportInventory({ report, observedAt, evidenceClass, evidenceReference,
   const preDispatch = preDispatchInventory(saved, paid, journal);
   reconcileNativeLocators(observations, preDispatch.native_journal);
   const reconciliation = requestedManifest
-    ? reconcileRetainedRows(cases, requestedManifest, observations) : null;
+    ? reconcileRetainedRows(cases, requestedManifest, observations, preDispatch.native_journal) : null;
   if (!fs.readFileSync(report).equals(bytes)) {
     throw new Error('report changed during inventory');
   }
@@ -538,10 +538,34 @@ function retainedRecovery(observation) {
     next_evidence_step: step.next_evidence_step }, grading_evidence_gaps: gaps };
 }
 
+// A native invocation can start before it has a backend id. Recover all
+// unresolved attempts for this uniquely identified case, across material
+// revisions, without pretending that case identity binds a retained invocation
+// to one of these journal attempts. Validated receipts still need authentication
+// through the existing native path; their locators are inventoried separately.
+function nativeCaseRecovery(caseId, journal) {
+  const scope = 'case_only_not_retained_attempt_binding';
+  if (journal.status !== 'available') {
+    return { scope, status: 'journal_unavailable', unresolved_attempts: null,
+      next_evidence_step: 'recover_native_journal_without_redispatch' };
+  }
+  const unresolved = journal.attempts.flatMap((attempt, index) => {
+    if (attempt.case_id !== caseId || attempt.state === 'validated') return [];
+    const { attempt_id, material_revision, state, backend_run_id,
+      raw_receipt_present, validation_present, recovery_step } = attempt;
+    return [{ location: `pre_dispatch.native_journal.attempts[${index}]`,
+      attempt_id, material_revision, state, backend_run_id,
+      raw_receipt_present, validation_present, next_evidence_step: recovery_step }];
+  });
+  return { scope, status: 'observed', unresolved_attempts: unresolved,
+    next_evidence_step: unresolved.length
+      ? 'recover_native_case_attempts_before_any_fresh_dispatch' : null };
+}
+
 // A saved decision/truth pair, native marker, paid locator or a perfect manifest
 // match cannot authenticate an outcome. Identity gaps cannot borrow diagnostics
 // from conflicting or ambiguous candidates.
-function reconcileRetainedRows(cases, manifest, observations) {
+function reconcileRetainedRows(cases, manifest, observations, journal) {
   const exact = (requested, row) => requested.target === row.target &&
     (manifest.schema_version === 1 ||
       (requested.verifier_verdict === row.verifier_verdict &&
@@ -585,6 +609,8 @@ function reconcileRetainedRows(cases, manifest, observations) {
         next_evidence_step: 'recover_unique_requested_row_before_using_attempt_evidence' },
       grading_evidence_gaps: null };
     return { ...item, status, reasons, ...recovery,
+      native_case_recovery: matches.length === 1
+        ? nativeCaseRecovery(matches[0].case_id, journal) : null,
       // Ambiguous/conflicting rows cannot lend their failures to a requested
       // identity. A unique match still authenticates neither outcome nor truth.
       retained_attempt_locations: matches.length === 1
