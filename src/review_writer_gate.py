@@ -106,9 +106,10 @@ def _completion(comments, reservation, pr):
     return False
 
 
-def _child_terminal(jobs, provider):
+def _child_terminal(jobs, provider, parent_status=None):
     found = False
     all_terminal = True
+    provider_jobs = []
     for job in jobs:
         if not isinstance(job, dict):
             continue
@@ -122,6 +123,8 @@ def _child_terminal(jobs, provider):
         named_writer = re.search(
             rf"\brun\s+{re.escape(provider)}\b", str(job.get("name", "")), re.I
         )
+        if named_writer:
+            provider_jobs.append(job)
         if named_writer and job.get("status") in {"queued", "in_progress"} and not (run and push):
             return False, "implementation child queued/in progress without step evidence"
         if run and push:
@@ -130,6 +133,16 @@ def _child_terminal(jobs, provider):
                 all_terminal = False
     if found and all_terminal:
         return True, "actual implementation and push terminal"
+    if found and not all_terminal:
+        return False, "implementation child queued/failed"
+    if parent_status == "completed":
+        if not provider_jobs:
+            return True, "implementation child skipped (terminal)"
+        if all(
+            j.get("status") == "completed" and j.get("conclusion") == "skipped"
+            for j in provider_jobs
+        ):
+            return True, "implementation child skipped (terminal)"
     return False, (
         "implementation child absent or skipped"
         if not found
@@ -195,7 +208,9 @@ def writer_terminality(
                 "reason": f"reservation {rid} attempt identity mismatch",
                 "evidence": evidence,
             }
-        child_ok, child_reason = _child_terminal(jobs, provider)
+        child_ok, child_reason = _child_terminal(
+            jobs, provider, parent_status=run.get("status") if isinstance(run, dict) else None
+        )
         completion = _completion(comments, record, pr_number)
         evidence.append(
             {

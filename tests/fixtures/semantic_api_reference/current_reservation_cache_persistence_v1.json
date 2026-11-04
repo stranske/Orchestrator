@@ -1,0 +1,37 @@
+{
+  "schema": "reservation-cache-persistence-source-successor/v1",
+  "before_file_sha256": "2568d02d1b329c91e1da58f2c57ae962a68ef7f5c6e76dc437480708d6524613",
+  "after_file_sha256": "40a4f2d9529b6b35e071b75b2e34d77f119ab2bfe02bff409ec1a4a499b32977",
+  "function_delta": {
+    "_save_admission_terminal_plan_cache": {
+      "before": "9933bb49eadfbe0e8ba0ed32f56243ed71d05516913815c33e001b3ce5206a89",
+      "after": "6811a11552863cf4d3e4cc93a9fa8e3fc27052d1f11c320e5e3bbcd7e43ebca5"
+    },
+    "_probe_snapshot_revision": {
+      "before": "7e865512efa89d23e0b305b1c419e8f4ef573d8510d1625a8d53c25477787888",
+      "after": "0a306067db8b57434a4e2398117b8291f673833528a6a1724580557b644360ab"
+    },
+    "_cacheable_terminal_plan": {
+      "before": "6bf76a8839efb93a61b0668c691f646814ddef45f6c4f88a1b3f25d57ff04647",
+      "after": "fc826fc47a497b5590aeeadfacac686265f97b24fe49ceb1777c9081bd6cd254"
+    }
+  },
+  "historical_reversal": [
+    {
+      "before_fragment": "def _save_admission_terminal_plan_cache(pipeline_path, cache):\n    path = _admission_terminal_plan_cache_path(pipeline_path)\n    path.parent.mkdir(parents=True, exist_ok=True)\n    temp = path.with_suffix(\".tmp\")\n    temp.write_text(json.dumps(cache, sort_keys=True, indent=2) + \"\\n\")\n    temp.replace(path)",
+      "after_fragment": "def _save_admission_terminal_plan_cache(pipeline_path, cache):\n    path = _admission_terminal_plan_cache_path(pipeline_path)\n    import tempfile\n\n    temp = None\n    try:\n        path.parent.mkdir(parents=True, exist_ok=True)\n        with tempfile.NamedTemporaryFile(mode=\"w\", dir=path.parent, delete=False) as handle:\n            temp = Path(handle.name)\n            handle.write(json.dumps(cache, sort_keys=True, indent=2) + \"\\n\")\n        temp.replace(path)\n    except OSError:\n        # Cache persistence is optional; never change the observed drain grade.\n        pass\n    finally:\n        if temp is not None:\n            try:\n                temp.unlink(missing_ok=True)\n            except OSError:\n                pass"
+    },
+    {
+      "before_fragment": "def _probe_snapshot_revision(target):\n    \"\"\"Cheap revision probe for cache identity; never raises into diagnostics.\"\"\"\n    try:\n        snapshot = GitHub(deadline=time.time() + 30).snapshot(target)\n    except (OSError, RuntimeError, TypeError, ValueError, AttributeError, AssertionError):\n        return None\n    if not isinstance(snapshot, dict):\n        return None\n    revision = snapshot.get(\"revision\")\n    if not revision or revision == \"unknown\":\n        return None\n    return revision",
+      "after_fragment": "def _probe_snapshot_revision(target):\n    \"\"\"Cheap revision probe for cache identity; never raises into diagnostics.\"\"\"\n    try:\n        snapshot = GitHub(deadline=time.time() + 30).snapshot(target)\n    except Exception:\n        return None\n    if not isinstance(snapshot, dict):\n        return None\n    revision = snapshot.get(\"revision\")\n    if not revision or revision == \"unknown\":\n        return None\n    return revision"
+    },
+    {
+      "before_fragment": "def _cacheable_terminal_plan(plan):\n    if not isinstance(plan, dict):\n        return False\n    if plan.get(\"eligible\") is True:\n        return True\n    reasons = [str(reason) for reason in plan.get(\"reasons\") or [] if reason]\n    if not reasons:\n        return False\n    return not any(\n        reason in _LOCAL_OWNER_PLAN_REASONS\n        or reason == \"live_reconciliation_holder\"\n        or reason.startswith(\"native_writer_not_terminal:\")\n        for reason in reasons\n    )",
+      "after_fragment": "def _cacheable_terminal_plan(plan):\n    if not isinstance(plan, dict):\n        return False\n    if plan.get(\"eligible\") is True:\n        return True\n    reasons = [str(reason) for reason in plan.get(\"reasons\") or [] if reason]\n    if not reasons:\n        return False\n    return all(reason in _REVISION_STABLE_PLAN_REASONS for reason in reasons)"
+    },
+    {
+      "before_fragment": "# Local owner refusals are cheap to recompute. Caching them would latch a\n# reservation as undrainable after the recorded owner exits while the GitHub\n# snapshot revision is unchanged.\n_LOCAL_OWNER_PLAN_REASONS = frozenset(\n    {\n        \"owner_still_alive\",\n        \"owner_liveness_unknown\",\n        \"owner_identity_unknown\",\n        \"owner_process_group_unknown\",\n    }\n)",
+      "after_fragment": "# No current refusal is solely a function of the remote snapshot: all can\n# depend on local advertisements, locks, transport or native writer state.\n_REVISION_STABLE_PLAN_REASONS: frozenset[str] = frozenset()"
+    }
+  ]
+}
