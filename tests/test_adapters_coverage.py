@@ -111,6 +111,35 @@ def test_model_id_for_label_prefers_catalog_and_refuses_unknown_when_catalog_rea
     )
 
 
+def test_catalog_and_model_fallbacks_fail_closed_without_a_probe(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        adapters, "advertised_catalog", lambda _agent: (_ for _ in ()).throw(OSError())
+    )
+    assert adapters.model_id_for_label("gemini", "") is None
+    assert adapters.model_id_for_label("gemini", "not a model!") is None
+    assert adapters.observed_model_from_stream("{bad}\n[]\n") == {
+        "model_label": None,
+        "session_id": None,
+        "result_text": None,
+    }
+    assert adapters.agy_log_for("name.") == Path("name..agy.log")
+    cache = tmp_path / "broken.json"
+    cache.write_text('{"ts":"bad","models":["x"]}')
+    assert adapters._cached_catalog("bad", 1, cache, need_pairs=False) is None
+
+
+def test_model_selection_preserves_family_and_ceiling(monkeypatch):
+    assert adapters._auto_resolve("cursor", "full", "x", ["gemini-4-flash-high"]) is None
+    assert (
+        adapters._auto_resolve("gemini", "full", "gemini-3-pro-high", ["gemini-4-flash-high"])
+        is None
+    )
+    monkeypatch.setenv("ORCH_GEMINI_MAX_TIER", "mid")
+    assert adapters.tier_ceiling("gemini") == "mid"
+    assert adapters.effective_tier("gemini", "full") == "mid"
+    assert adapters.effective_tier("gemini", "unknown") == "unknown"
+
+
 def test_agy_path_label_and_stream_parsers_are_defensive():
     assert adapters.agy_log_for(None) is None
     assert adapters.agy_log_for("/tmp/run.log") == Path("/tmp/run.agy.log")
