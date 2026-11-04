@@ -125,6 +125,18 @@ def test_sweep_reports_then_releases_the_interrupted_reservation_and_retires_its
     assert again == {"staged": 0, "charged_bytes": 0, "released": [], "releasable": [], "held": []}
 
 
+def test_staged_single_job_apply_requires_the_exact_plan(interrupted):
+    plan = storage.plan_interrupted_release(interrupted["state"], JOB)
+    assert plan["action"] == "retire_root_finish_terminal"
+    with pytest.raises(storage.StorageBlocked, match="plan changed"):
+        storage.apply_interrupted_release(interrupted["state"], JOB, expected_plan_sha256="0" * 64)
+    assert JOB in _ledger(interrupted)
+    out = storage.apply_interrupted_release(
+        interrupted["state"], JOB, expected_plan_sha256=plan["sha256"]
+    )
+    assert out["status"] == "released" and JOB not in _ledger(interrupted)
+
+
 def test_single_job_apply_requires_the_exact_plan(interrupted):
     _uncertain(interrupted)
     plan = storage.plan_interrupted_release(interrupted["state"], JOB)
