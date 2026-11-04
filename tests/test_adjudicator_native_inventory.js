@@ -832,6 +832,86 @@ test('inventory CLI diagnoses saved proposal contract failures before missing la
   }
 });
 
+test('inventory CLI keeps recursive retry outcomes separate from original row diagnoses', (t) => {
+  const decided = {
+    target: 'fixture/repo#1', decision: 'reject_blocker', later_truth: 'PASS',
+    packet: { ground_truth_evidence: {
+      diff_patch: { text: '+private original patch', revision: 'evaluated' },
+      acceptance_criteria: [{ text: 'Private original criterion', revision: 'issue-revision' }],
+    } },
+    proposal: {
+      decision: 'reject_blocker', confidence: 'high',
+      rationale: 'Private original evidence contradicts the blocker.',
+      ground_truth_refs: ['git-path:proof.txt'],
+      recommended_next_step: 'Inspect the proof before acting.', evidence_gaps: [],
+      evidence_assessment: [{ claim: 'Private proof missing', status: 'contradicted',
+        evidence_ref: 'git-path:proof.txt', reason: 'Private proof supplied.' }],
+    },
+  };
+  const failed = { decision: null, later_truth: null, errors: ['Private retry failure'] };
+  const rows = [
+    { ...failed, case_id: 'original-a', target: decided.target, backend_run_id: 'original-failed',
+      // Even a nested complete result cannot supply the original's missing packet.
+      retry_attempts: [{ ...failed, backend_run_id: 'retry-failed', retry_attempts: [
+        { ...decided, backend_run_id: 'nested-decided' },
+      ] }] },
+    { ...decided, case_id: 'original-decided', backend_run_id: 'original-decided-paid',
+      // A later failed attempt cannot erase an original decision or its truth label.
+      retry_attempts: [{ ...failed, backend_run_id: 'later-failed', retry_attempts: [
+        { ...failed, backend_run_id: 'nested-failed' },
+      ] }] },
+  ];
+  const w = world(t, rows);
+  const before = w.snapshot();
+  const report = w.run(w.inventoryArgs);
+  assert.deepEqual(report.original_report.case_ids, ['original-a', 'original-decided']);
+  assert.equal(report.row_diagnostics.length, 2, 'retry attempts are not additional original cases');
+  assert.deepEqual(report.row_diagnostics.map((item) => ({
+    case_id: item.case_id, target: item.target, source_row: item.source_row,
+    decision: item.retained_decision, truth: item.retained_later_truth,
+    first_break: item.retained_first_break, error_ref: item.retained_error_ref,
+  })), [
+    { case_id: 'original-a', target: decided.target, source_row: 'rows[0]',
+      decision: null, truth: null, first_break: 'saved_packet_unavailable',
+      error_ref: 'rows[0].errors[0]' },
+    { case_id: 'original-decided', target: decided.target, source_row: 'rows[1]',
+      decision: 'reject_blocker', truth: 'PASS',
+      first_break: 'fresh_native_authentication_required', error_ref: null },
+  ]);
+  assert.deepEqual(report.original_paid_attempts, [
+    { case_id: 'original-a', backend_run_id: 'original-failed' },
+    { case_id: 'original-a', backend_run_id: 'retry-failed' },
+    { case_id: 'original-a', backend_run_id: 'nested-decided' },
+    { case_id: 'original-decided', backend_run_id: 'original-decided-paid' },
+    { case_id: 'original-decided', backend_run_id: 'later-failed' },
+    { case_id: 'original-decided', backend_run_id: 'nested-failed' },
+  ]);
+  assert.deepEqual(report.paid_identity_summary, {
+    original_records: 6, original_unique: 6, native_records: 2, native_unique: 2,
+    union_unique: 8, overlapping_backend_ids: [],
+  });
+  assert.equal(report.row_diagnostics[0].native_first_break, 'unresolved_native_attempt');
+  assert.deepEqual(report.row_diagnostics[0].unresolved_native_attempts, [{
+    attempt_id: w.ids[0], state: 'reserved', matches_original_source: true, outcome: 'UNKNOWN',
+  }]);
+  assert.equal(report.row_diagnostics[1].native_first_break, 'fresh_native_collection_required');
+  assert.deepEqual(report.row_diagnostics[1].unresolved_native_attempts, []);
+  for (const diagnostic of report.row_diagnostics) {
+    assert.equal(diagnostic.dispatch_authorized, false);
+    assert.equal(Object.hasOwn(diagnostic, 'graded'), false);
+  }
+  assert.equal(report.canonical_report.summary_authority, 'not_authenticated_by_inventory');
+  assert.equal(report.dispatch_authorized, false);
+  assert.match(report.historical_observations, /^unavailable/);
+  assert.equal(JSON.stringify(report).includes('Private'), false);
+  assert.equal(JSON.stringify(report).includes('private'), false);
+  assert.deepEqual(w.snapshot(), before);
+  assert.deepEqual(JSON.parse(fs.readFileSync(w.original, 'utf8')).rows, rows);
+  for (const name of ['absent-state', 'absent-runtime', 'absent-brain.sqlite']) {
+    assert.equal(fs.existsSync(path.join(w.root, name)), false);
+  }
+});
+
 test('native inventory rejects dispatch and retry before touching a live WAL journal', (t) => {
   const w = world(t);
   const before = w.snapshot();
