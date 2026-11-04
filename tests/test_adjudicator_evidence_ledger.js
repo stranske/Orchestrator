@@ -45,6 +45,18 @@ for (const log of ['named-tests.log', 'interpreter-followup/runner-after.log',
   });
 }
 
+for (const name of ['plan.md', 'results.md']) {
+  for (const mode of ['changed', 'missing']) {
+    test(`rejects ${mode} hash-map evidence: ${name}`, (t) => {
+      const options = fixture(t);
+      const file = path.join(options.directory, 'retry-identity-followup', name);
+      if (mode === 'changed') fs.appendFileSync(file, '\nchanged\n');
+      else fs.unlinkSync(file);
+      assert.throws(() => auditLedger(options.file), /SHA-256 mismatch|ENOENT/);
+    });
+  }
+}
+
 test('rejects missing evidence even when its parent receipt says it passed', (t) => {
   const options = fixture(t);
   fs.unlinkSync(path.join(options.directory, 'acceptance-run/runner-tests.log'));

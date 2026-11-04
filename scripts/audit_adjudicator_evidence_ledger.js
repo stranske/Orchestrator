@@ -51,6 +51,16 @@ function auditLedger(file) {
     // older source manifest to today's checkout or treat it as a deployment.
     function visit(value) {
       if (!value || typeof value !== 'object') return;
+      if (Object.hasOwn(value, 'evidence_sha256')) {
+        const hashes = value.evidence_sha256;
+        requireValue(hashes && typeof hashes === 'object' && !Array.isArray(hashes),
+          'Evidence SHA-256 map must be an object');
+        if (hashes && typeof hashes === 'object' && !Array.isArray(hashes)) {
+          for (const [reference, expected] of Object.entries(hashes)) {
+            checkHash(reference, expected, directory);
+          }
+        }
+      }
       for (const key of ['log', 'junit', 'real_input_observation']) {
         if (Object.hasOwn(value, key) &&
             (key !== 'junit' || value[key] !== null || value[`${key}_sha256`] !== null)) {
