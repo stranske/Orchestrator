@@ -1,0 +1,70 @@
+{
+  "scope": "Synthetic closer-hook regression only; no real contested disposition or named pytest acceptance claim.",
+  "evaluated_parent": "75048c080e82ef99eb212bcea2bcdbd6ab1f1c82",
+  "source_sha256": {
+    "src/merge_guard.py": "c5e9a7115434b1f17afedcb0a04e31161bd98d9e1301cf7d1a136494350c03fd",
+    "src/roles.py": "4a5e729f4bf797ea448f18c14df69696e3df3bcaaf046729c039099ae7cc3dd7",
+    "src/feedback.py": "eafa930ec4cea9a239bc03a91a00b2ca7c618c40629690658f8276417946412d",
+    "tests/test_adjudicator_closer_shadow.js": "9e8ccfdc1e44dceda32f9cc99dde9b505707e4bb3138b8d5fa0176c456ce28fb"
+  },
+  "operational_acceptance_complete": false,
+  "checks": {
+    "closer": {
+      "command": [
+        "node",
+        "tests/test_adjudicator_closer_shadow.js"
+      ],
+      "exit": 0,
+      "log": "green.log.gz",
+      "uncompressed_sha256": "b37951c85b6f7b9826c48642e8c59d1602a6a552ba76e1f056a56b9590d0fcd0"
+    },
+    "restored": {
+      "command": [
+        "node",
+        "tests/test_adjudicator_closer_shadow.js"
+      ],
+      "exit": 0,
+      "log": "restored.log.gz",
+      "uncompressed_sha256": "d5658f1bdcc366e3f9824c9c846ddf6ddafda620a3ebcf7fcd290fb4734b9fa2"
+    }
+  },
+  "controls": [
+    {
+      "command": [
+        "node",
+        "tests/test_adjudicator_closer_shadow.js"
+      ],
+      "exit": 1,
+      "log": "attempt-noop-outcome-write.log.gz",
+      "uncompressed_sha256": "0497f1c070845838e3edd37e5af3844145f6fbcbb364ef453141cfd0e24fbfdc",
+      "name": "attempt-noop-outcome-write",
+      "mutated_file": "src/roles.py",
+      "mutated_sha256": "e6bcbe06fd1efcff15c09cdd9072e0bf5cd3b096d66378ffa93cd53f4c84abf6"
+    },
+    {
+      "command": [
+        "node",
+        "tests/test_adjudicator_closer_shadow.js"
+      ],
+      "exit": 1,
+      "log": "invoke-on-agreement.log.gz",
+      "uncompressed_sha256": "c1c3639096ce3a7b5fc483ec445dc281336af0fa83aab9247f1f92535b6d0afd",
+      "name": "invoke-on-agreement",
+      "mutated_file": "src/roles.py",
+      "mutated_sha256": "206f73ac5e0490f56042206c9b3c7cd7532de49473dab78bad7259006948c3d7"
+    },
+    {
+      "command": [
+        "node",
+        "tests/test_adjudicator_closer_shadow.js"
+      ],
+      "exit": 1,
+      "log": "omit-closer-hook.log.gz",
+      "uncompressed_sha256": "6af802aebd0d9fef277892121404cf1b404eae4d5f0ce8eb1391786a7bffc3ce",
+      "name": "omit-closer-hook",
+      "mutated_file": "src/merge_guard.py",
+      "mutated_sha256": "62a22803c09107c4b3de197b6dd715a6abaf7f761e8516a639ffd5c519e091d3"
+    }
+  ],
+  "restoration_byte_identical": true
+}

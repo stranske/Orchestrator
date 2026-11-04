@@ -1,0 +1,12 @@
+✔ a pre-deployment decision exiting later does not satisfy the deployment window (1026.846564ms)
+✔ an importer failure retains the explicit round and provider incident for recovery (763.022017ms)
+✔ an explicit exit remains a boundary for later legacy adjacency (796.643866ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2605.069548
+exit_code=0

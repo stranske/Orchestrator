@@ -2,7 +2,7 @@
 
 Acceptance report for the fifteen tests in `tests/test_issue828_coverage.py` and
 `tests/test_issue828_round2_coverage.py`. Production code is unchanged; this document
-records break-and-revert proof, combined-coverage accounting, and usage-guard isolation.
+records break-and-revert proof, separately labeled coverage evidence, and usage-guard isolation.
 
 ## Per-test break-and-revert
 
@@ -53,7 +53,7 @@ Full module restore run:
   `reason == "guard_config_invalid"`; `main report --fail-on-alert` exit `2`; JSON and write-report
   paths return `0` with expected `health_status`.
 
-## Combined coverage (six ranked targets)
+## Coverage evidence (six ranked targets; checked 2026-11-03)
 
 **Issue #828 ranked baseline (Gate combined ranking at issue open):** uncovered statements+branches
 per target — `keepalive_outcomes` 74, `issue_quality` 25, `experiment_recovery` 29,
@@ -71,33 +71,88 @@ pytest-only missing **lines** on the six modules (not branches, not selftest sub
 | `src/rail_exercise.py` | 89 |
 | `src/research_usage_guard.py` | 76 |
 
-**Partial delivery vs ~180 combined units:** PR #833 added fifteen hermetic tests but did not fully
-close ranked combined gaps on targets 1–3 and 6; targets 4–5 were advanced earlier on that PR branch.
-Remaining mass on `capability_compiler` and `rail_exercise` is largely `--selftest`, CLI, and
-live-shadow paths that pytest-only tables under-count; combined `verify.py --coverage` is required
-for honest statement+branch totals (see PR body for current-main measurement output).
+**Saved main measurement (`verify.py --coverage`, 2026-11-03, reported exit 0, ~92m wall):**
+pytest plus selftest subprocess coverage, with **statement-only counters**. This is a historical
+measurement recorded by PR #1069, not a fresh run or an isolated measurement of PR #833's effect.
 
-**Unfinished target notes:**
+| Module | Saved combined-run missing statements |
+|--------|--------------------------------------:|
+| `src/keepalive_outcomes.py` | 45 |
+| `src/issue_quality.py` | 5 |
+| `src/experiment_recovery.py` | 9 |
+| `src/capability_compiler.py` | 10 |
+| `src/rail_exercise.py` | 20 |
+| `src/research_usage_guard.py` | 27 |
+| **Six-target total** | **116** |
 
-- **`capability_compiler.py`:** Ten ranked units at issue open; still ten missing lines in Gate #833
-  pytest report. Hermetic tests live in `tests/test_issue807_capability_compiler_*.py`; residual
-  units need combined selftest/CLI instrumentation, not more issue-828 module tests.
-- **`rail_exercise.py`:** Twenty ranked units at issue open; eighty-nine missing pytest lines post-#833
-  because coordinator exercise and sandbox subprocess paths dominate; issue-828 tests only cover
-  `_break_ok` contract edges in `tests/test_issue828_coverage.py`.
+Evidence: the existing local artifact
+`/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__828__opener/coverage.json`,
+coverage.py `7.16.2`, timestamp `2026-11-03T03:37:08.681390`. Its metadata explicitly says
+`branch_coverage: false`; neither file summaries nor totals contain branch counters. Repository-wide
+totals are 122005 statements, 103064 covered lines, 18941 missing lines (84.5% statement coverage).
+The artifact is local and is not added by this documentation-only repair; the relevant counters
+are transcribed above for review.
 
-**Current main combined (`verify.py --coverage`, 2026-11-03, exit 0, ~92m wall):** missing
-statements per target from merged `coverage.json` (this run’s JSON has no branch counters):
+**Exact achieved statements+branches delta: UNKNOWN. Exact shortfall against ~180 units: UNKNOWN.**
+The issue-open ranking preserves only aggregate statements+branches misses, without a split into
+statements and branches or the underlying historical branch report. The saved Gate excerpt preserves
+pytest line misses only; the later combined-run JSON did not collect branch coverage. No matching
+historical before/after statements+branches counters are available in these retained reports.
+Missing branch evidence cannot be reconstructed from line misses. The later main snapshot also
+includes intervening changes (for example, keepalive has 983 statements versus 978 in Gate #833),
+so these snapshots do not isolate PR #833's contribution. No subtraction across these measurements
+is valid, and no exact achieved-unit or remaining-unit claim is made.
 
-| Module | Issue ranked s+b (before) | Combined missing stmts (after) | Δ |
-|--------|-------------------------:|-------------------------------:|---:|
-| `src/keepalive_outcomes.py` | 74 | 45 | 29 |
-| `src/issue_quality.py` | 25 | 5 | 20 |
-| `src/experiment_recovery.py` | 29 | 9 | 20 |
-| `src/capability_compiler.py` | 10 | 10 | 0 |
-| `src/rail_exercise.py` | 20 | 20 | 0 |
-| `src/research_usage_guard.py` | 49 | 27 | 22 |
-| **Six-target total** | **207** | **116** | **91** |
+**Partial delivery:** PR #833 delivered fifteen hermetic tests, with per-test mutation evidence
+retained above. Those tests exercise selected recovery, rail validation, attribution/ingestion,
+issue-quality and usage-guard behavior; they do not demonstrate full coverage of the ranked targets
+or attainment of the ~180-unit goal. All six have statement gaps in the saved combined-run report,
+and their residual branch gaps are unknown. No suite was rerun to manufacture a comparable metric.
 
-**max(0, 180 − 91) = 89** units still short of the ~180 combined-unit campaign delta
-(using statement misses as the measurable combined proxy here; ranked baseline counted s+b).
+**Unfinished target notes (functions and counts from the saved combined-run snapshot):**
+
+- **`keepalive_outcomes.py` — 45 missing statements:** Tests inject PR, dispatch, policy and
+  attribution evidence, and stub CLI ingestion. Residuals include default GitHub/backfill batching,
+  registry and fetch error handling, existing-outcome skips, dry-run non-agent accounting, verifier
+  recording and shadow-error paths. The injected paths do not establish these default adapters and
+  failure cases; the saved report gives no residual branch count.
+- **`issue_quality.py` — 5 missing statements:** Tests exercise parse failures, parallel-fetch
+  errors and human output with `build_report` stubbed. Residuals are the default `_run_json`
+  delegation, invalid linked-number handling, an empty parallel-fetch return and a skipped record.
+  Selected malformed inputs do not exercise every fallback; branch completeness remains unknown.
+- **`experiment_recovery.py` — 9 missing statements:** Tests inject GitHub spec fetching and
+  recovery dependencies, and stub `plan` for CLI output. Seven residual statements are in `_spec_for`'s
+  default subprocess fetch/JSON/error path; two are in `restore_experiment`'s exception handler.
+  These adapters and failure handling are not established by the injected cases; the gap is not
+  simply a CLI/apply tail, and no branch total was retained.
+- **`capability_compiler.py` — 10 missing statements:** Existing hermetic coverage includes
+  `tests/test_issue807_capability_compiler_*.py`. Saved residuals include a workflow-rail skip,
+  missing skill-frontmatter name, package-hash and strict-schema failures, duplicate-role and
+  selector validation, and role/playbook candidate returns and validation. These remain unexercised
+  even in the saved combined run; equal numeric counts in differently measured reports do not
+  establish an unchanged gap or that additional selftest instrumentation alone would close it.
+- **`rail_exercise.py` — 20 missing statements:** Issue-828 tests cover `_break_ok` contract edges.
+  Residuals include contract-load errors, command-expansion fallbacks, subprocess timeout handling,
+  an expected-marker success, contract rejection, recording/advisor failures, a selftest fallback
+  and CLI heartbeat errors. These coordinator, sandbox and error paths exceed the selected contract
+  tests. The saved combined run already includes selftests; its statement count cannot be equated
+  to the issue-open statements+branches count.
+- **`research_usage_guard.py` — 27 missing statements:** The test uses an empty temporary ledger,
+  injects `conn`, forces invalid configuration, and stubs CLI report functions. Residuals include
+  schema setup, observation/read errors, numeric-limit validation, connection cleanup, budget/share
+  alerts and blocking, malformed report JSON, `BUDGET_BLOCKED` health and default output-path
+  selection. Empty-ledger and stubbed report cases do not establish those populated-ledger and
+  default-resource paths; residual branches were not measured.
+
+## Documentation repair verification
+
+Outcome 1: separately labeled evidence, with exact delta and shortfall UNKNOWN and limitations
+explained for all six targets. Check date: 2026-11-03. Reuse the saved report; do not rerun the suite.
+
+```sh
+/opt/anaconda3/bin/python3 -m json.tool /Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__828__opener/coverage.json > /private/tmp/issue828-coverage.pretty.json
+git diff --check
+```
+
+Both commands exit 0 with no stdout. Final document inspection confirms there is no mixed-metric
+subtraction or exact delta/shortfall claim. No production code or tests changed.
