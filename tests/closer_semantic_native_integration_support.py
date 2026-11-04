@@ -1573,7 +1573,7 @@ DIAGNOSTICS_REVIEW_MANIFEST = (
     Path(__file__).parent
     / "fixtures/semantic_api_reference/current_reservation_diagnostics_review_v1.json"
 )
-DIAGNOSTICS_REVIEW_SHA256 = "b4c91cde7c821cbfb8523d6132b724c322f5ed0987d504e39c8f49e60d2041ce"
+DIAGNOSTICS_REVIEW_SHA256 = "67fef98b1fc73893efa93137252c4a6dd2d73b93532c98afbbcde8f77ae25fee"
 
 
 def diagnostics_review_reference():
