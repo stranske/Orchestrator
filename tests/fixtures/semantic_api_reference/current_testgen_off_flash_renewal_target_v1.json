@@ -35,5 +35,7 @@
     "closer_local_tool_confinement.py": "5152c424069a58d6cf4f93ce43cf2a2c22d81a38e3ffb0cd03d21b179c40365f",
     "config/closer_role_selection.json": "266263f0a44319b08400fb7f3c1a7e93004b338f0548ea2b70e859332777afbf"
   },
-  "status": "awaiting_owner_host_canary"
+  "status": "successor_enrolled",
+  "successor_qualification_id": "sonnet-current-role-qualification:ad6c6597e492cb4696be462fb75d2dbea14b1873d7fbab4079d1fa1e3597dd9d",
+  "successor_record_sha256": "85068c50cbbdaa2dfd0aaf72cf0fa66e04f103f8b9cda6f90d9c54f20097b4b7"
 }
