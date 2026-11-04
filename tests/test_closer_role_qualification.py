@@ -370,9 +370,14 @@ def test_reviewed_strong_records_preserve_history_and_select_latest_after_expiry
         "contract_sha256"
     ] == ("e27810baa6b79d0f8efb11e49bf57c6dcd59bb04c9c329e55237422464fb2c4a")
     bridge_id = "sonnet-current-role-qualification:7be42fa46b23bbf5ae9a5021e03fa7fc1aec9375ad2bd2705990f815f20962ae"
-    assert roles.ROLE_QUALIFICATIONS[bridge_id]["production_model_contract"] == (
-        dispatcher._controlled_model_contract("closer_exception")
+    # This is a historical bridge, not a mutable projection of the current
+    # router/dispatcher contract.  The #1039 source change must require a new
+    # qualification rather than silently retargeting this reviewed record.
+    bridge_contract = roles.ROLE_QUALIFICATIONS[bridge_id]["production_model_contract"]
+    assert bridge_contract["contract_sha256"] == (
+        "e86a4f1f99a028b7b6939da89062c6122e949f364bc8792217531c92276dd96f"
     )
+    assert bridge_contract != dispatcher._controlled_model_contract("closer_exception")
     assert current["evidence_refs"] == [
         {
             "reference": "retained-native-evidence:sha256:82ff806f22863e3f5fca5a942c2cdc666f100a6cfbb922f7f066b8e807ffb20e",
