@@ -305,5 +305,5 @@ function main() {
   }
 }
 
-module.exports = { inventory };
+module.exports = { inventory, ownerExcluded };
 if (require.main === module) main();

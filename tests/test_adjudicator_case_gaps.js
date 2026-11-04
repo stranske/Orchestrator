@@ -321,3 +321,249 @@ test('invalid saved reports and run-only manifests fail without partial output o
   assert.match(result.stderr, /requires a schema_version 2 dispute manifest/);
   assert.deepEqual(fs.readFileSync(options.db), before);
 });
+
+function persistedWorld(t, { target = 'fixture/repo#1', role = 'adjudicator',
+  metadata, cost = 1.5, source = 'ccusage', backendTarget } = {}) {
+  const options = world(t, [identity('one')]);
+  const connection = new DatabaseSync(options.db);
+  connection.exec('ALTER TABLE runs ADD COLUMN role_name TEXT; ALTER TABLE runs ADD COLUMN agent TEXT; ALTER TABLE runs ADD COLUMN decomposition TEXT; CREATE TABLE costs (run_id TEXT PRIMARY KEY,cost_usd REAL,source TEXT);');
+  const record = { run_id: 'role:one', target, role_name: role, agent: 'gemini',
+    decomposition: metadata === undefined ? JSON.stringify({ role: 'adjudicator',
+      backend_run_id: 'backend:one', action: 'uphold_blocker' }) : metadata };
+  connection.prepare('INSERT INTO runs (run_id,target,ts,role_name,agent,decomposition) VALUES (?,?,0,?,?,?)')
+    .run(record.run_id, record.target, record.role_name, record.agent, record.decomposition);
+  if (backendTarget) connection.prepare('INSERT INTO runs (run_id,target,ts) VALUES (?,?,0)')
+    .run('backend:one', backendTarget);
+  connection.prepare('INSERT INTO costs VALUES (?,?,?)').run('backend:one', cost, source);
+  connection.close();
+  options.report = savedReport(options, [{ ...identity('one'), role_run_id: 'role:one',
+    backend_run_id: 'backend:one', decision: 'uphold_blocker', cost_usd: 1.5,
+    packet: { target: 'fixture/repo#1', ground_truth_evidence: { head_sha: 'a'.repeat(40) } } }]);
+  options.persistedRoles = true;
+  return { options, record };
+}
+
+test('opt-in persisted links retain role and cost digests without claiming revision or cohort proof', (t) => {
+  const { options, record } = persistedWorld(t);
+  const inputs = [options.db, options.manifest, options.report];
+  const before = inputs.map((file) => fs.readFileSync(file));
+  const files = fs.readdirSync(options.root);
+  const ledger = caseGaps(options);
+  const row = ledger.cases[0];
+  assert.deepEqual(row.persisted_role_evidence, {
+    status: 'matched_role_record_only', role_run_id: 'role:one', target: 'fixture/repo#1',
+    agent: 'gemini', backend_run_id: 'backend:one', decision: 'uphold_blocker',
+    record_sha256: createHash('sha256').update(JSON.stringify(record)).digest('hex'),
+    source_revision: 'UNKNOWN', original_dispute_binding_verified: false,
+    backend_cost: { status: 'measured_whole_run_receipt', cost_usd: 1.5, source: 'ccusage',
+      record_sha256: createHash('sha256').update(JSON.stringify({ run_id: 'backend:one',
+        cost_usd: 1.5, source: 'ccusage' })).digest('hex') },
+  });
+  assert.ok(row.evidence_gaps.includes('source_revision_not_bound_to_persisted_role'));
+  assert.ok(!row.evidence_gaps.includes('persisted_role_record_not_verified'));
+  for (const field of ['source_revision', 'shadow_result', 'role_run_provenance', 'cost_usd']) {
+    assert.equal(row[field], 'UNKNOWN', `a persisted ID alone cannot establish case-level ${field}`);
+  }
+  assert.equal(ledger.operational_acceptance_complete, false);
+  assert.equal(ledger.requested_cohort_verified, false);
+  assert.equal(ledger.saved_report_snapshot.persisted_records_verified, false);
+  assert.equal(ledger.saved_report_snapshot.persisted_role_lookup_requested, true);
+  assert.deepEqual(fs.readdirSync(options.root), files, 'read-only transaction creates no sidecars');
+  const cli = invoke(options, ['--report', options.report, '--persisted-roles']);
+  assert.equal(cli.status, 0, cli.stderr);
+  assert.deepEqual(JSON.parse(cli.stdout), ledger);
+  assert.deepEqual(inputs.map((file) => fs.readFileSync(file)), before);
+  assert.deepEqual(caseGaps({ ...options, persistedRoles: false }),
+    caseGaps({ ...options, persistedRoles: undefined }), 'existing opt-out output is preserved');
+});
+
+test('persisted lookup requires the complete role, target, backend and decision identity', (t) => {
+  const variants = [
+    [{ target: 'fixture/repo#2' }, 'persisted_role_target_mismatch'],
+    [{ role: 'redirect' }, 'persisted_role_kind_mismatch'],
+    [{ metadata: '{bad' }, 'persisted_role_metadata_invalid'],
+    [{ metadata: 'null' }, 'persisted_role_metadata_invalid'],
+    [{ metadata: '{"role":"redirect"}' }, 'persisted_role_metadata_invalid'],
+    [{ metadata: '{"role":"adjudicator","backend_run_id":"another"}' }, 'persisted_backend_run_id_mismatch'],
+    [{ metadata: '{"role":"adjudicator","backend_run_id":"backend:one","action":"reject_blocker"}' }, 'persisted_role_decision_mismatch'],
+  ];
+  for (const [variant, gap] of variants) {
+    const { options } = persistedWorld(t, variant);
+    const row = caseGaps(options).cases[0];
+    assert.ok(row.evidence_gaps.includes(gap), gap);
+    assert.equal(row.persisted_role_evidence, undefined);
+    assert.ok(row.evidence_gaps.includes('persisted_role_record_not_verified'));
+  }
+});
+
+test('missing role identities, ambiguous claims and missing stores have individual gaps', (t) => {
+  const { options } = persistedWorld(t);
+  const report = JSON.parse(fs.readFileSync(options.report));
+  const saved = report.rows[0];
+  for (const [row, gap] of [
+    [{ ...saved, role_run_id: 'missing' }, 'persisted_role_missing'],
+    [{ ...saved, role_run_id: null }, 'persisted_role_lookup_identity_unavailable'],
+    [{ ...saved, backend_run_id: null }, 'persisted_backend_run_id_mismatch'],
+    [{ ...saved, decision: null }, 'persisted_role_decision_mismatch'],
+  ]) {
+    fs.writeFileSync(options.report, JSON.stringify({ rows: [row] }));
+    const output = caseGaps(options).cases[0];
+    assert.ok(output.evidence_gaps.includes(gap), gap);
+    assert.equal(output.persisted_role_evidence, undefined);
+  }
+  fs.writeFileSync(options.report, JSON.stringify({ rows: [saved, saved] }));
+  const ambiguous = caseGaps(options).cases[0];
+  assert.ok(ambiguous.evidence_gaps.includes('saved_case_ambiguous'));
+  assert.equal(ambiguous.persisted_role_evidence, undefined);
+  fs.writeFileSync(options.report, JSON.stringify(report));
+  const connection = new DatabaseSync(options.db);
+  connection.exec('ALTER TABLE runs DROP COLUMN role_name');
+  connection.close();
+  assert.ok(caseGaps(options).cases[0].evidence_gaps.includes('persisted_role_store_unavailable'));
+  fs.unlinkSync(options.db);
+  const unavailable = invoke(options, ['--report', options.report, '--persisted-roles']);
+  assert.equal(unavailable.status, 2);
+  assert.ok(JSON.parse(unavailable.stdout).cases[0].evidence_gaps.includes('persisted_role_store_unavailable'));
+  assert.equal(fs.existsSync(options.db), false, 'unavailable store must not be initialized');
+});
+
+test('persisted costs follow the production whole-run policy and expose saved cost discrepancies', (t) => {
+  for (const [cost, source, measured] of [
+    [1.5, 'ccusage', true], [2.5, 'ccusage', true],
+    [0, 'ccusage', false], [-1, 'ccusage', false], [null, 'ccusage', false],
+    [1.5, 'ledger', false], [1.5, 'untrusted', false],
+  ]) {
+    const { options } = persistedWorld(t, { cost, source });
+    const row = caseGaps(options).cases[0];
+    const receipt = row.persisted_role_evidence.backend_cost;
+    assert.equal(receipt.status, measured ? 'measured_whole_run_receipt' : 'unknown');
+    assert.equal(receipt.cost_usd, measured ? cost : 'UNKNOWN');
+    assert.equal(row.evidence_gaps.includes('persisted_cost_not_measured'), !measured);
+    assert.equal(row.evidence_gaps.includes('saved_cost_differs_from_persisted_receipt'), measured && cost !== 1.5);
+    assert.equal(row.cost_usd, 'UNKNOWN');
+  }
+  const { options } = persistedWorld(t);
+  const connection = new DatabaseSync(options.db);
+  connection.exec('DELETE FROM costs');
+  assert.ok(caseGaps(options).cases[0].evidence_gaps.includes('persisted_cost_missing'));
+  connection.exec('DROP TABLE costs');
+  connection.close();
+  const row = caseGaps(options).cases[0];
+  assert.ok(row.evidence_gaps.includes('persisted_cost_store_unavailable'));
+  assert.equal(row.persisted_role_evidence.backend_cost.status, 'unknown');
+});
+
+test('excluded role target is rejected before metadata is evaluated', (t) => {
+  const { options } = persistedWorld(t, { target: '\tStRaNsKe/CoLlAb-AdMiN\u00a0#9' });
+  const connection = new DatabaseSync(options.db);
+  connection.exec(`ALTER TABLE runs RENAME TO run_rows;
+    CREATE VIEW runs AS SELECT run_id,target,ts,role_name,agent,
+      CASE WHEN run_id='role:one' THEN json_extract('unreadable','$') ELSE decomposition END AS decomposition
+      FROM run_rows;`);
+  assert.throws(() => connection.prepare("SELECT decomposition FROM runs WHERE run_id='role:one'").get(), /malformed JSON/);
+  connection.close();
+  const before = fs.readFileSync(options.db);
+  const row = caseGaps(options).cases[0];
+  assert.ok(row.evidence_gaps.includes('persisted_role_target_mismatch'));
+  assert.equal(row.persisted_role_evidence, undefined);
+  assert.deepEqual(fs.readFileSync(options.db), before);
+});
+
+test('excluded backend identity prevents cost reads', (t) => {
+  const { options } = persistedWorld(t, { backendTarget: '\tStRaNsKe/CoLlAb-AdMiN\u00a0#9' });
+  const connection = new DatabaseSync(options.db);
+  connection.exec(`ALTER TABLE costs RENAME TO cost_rows;
+    CREATE VIEW costs AS SELECT run_id,json_extract('unreadable','$') AS cost_usd,source FROM cost_rows;`);
+  assert.throws(() => connection.prepare('SELECT cost_usd FROM costs').get(), /malformed JSON/);
+  connection.close();
+  const before = fs.readFileSync(options.db);
+  const row = caseGaps(options).cases[0];
+  assert.ok(row.evidence_gaps.includes('persisted_backend_owner_excluded'));
+  assert.equal(row.persisted_role_evidence.backend_cost, undefined);
+  assert.deepEqual(fs.readFileSync(options.db), before);
+});
+
+test('excluded requested identities trigger no persisted role or cost evidence reads', (t) => {
+  const { options } = persistedWorld(t);
+  const requested = identity('one', 'stranske/Collab-Admin#1');
+  fs.writeFileSync(options.manifest, JSON.stringify({ schema_version: 2, cases: [requested] }));
+  fs.writeFileSync(options.report, JSON.stringify({ rows: [{ ...requested,
+    role_run_id: 'role:one', backend_run_id: 'backend:one' }] }));
+  const connection = new DatabaseSync(options.db);
+  connection.exec(`ALTER TABLE runs RENAME TO run_rows;
+    CREATE VIEW runs AS SELECT run_id,target,ts,json_extract('unreadable','$') AS role_name,
+      agent,json_extract('unreadable','$') AS decomposition FROM run_rows;
+    ALTER TABLE costs RENAME TO cost_rows;
+    CREATE VIEW costs AS SELECT run_id,json_extract('unreadable','$') AS cost_usd,source FROM cost_rows;`);
+  connection.close();
+  const row = caseGaps(options).cases[0];
+  assert.deepEqual(row.evidence_gaps, ['owner_excluded_repository']);
+  assert.equal(row.persisted_role_evidence, undefined);
+});
+
+test('persisted role CLI flag requires a saved report and produces no partial output', (t) => {
+  const options = world(t, [identity('one')]);
+  const before = fs.readFileSync(options.db);
+  assert.throws(() => caseGaps({ ...options, persistedRoles: true }), /requires --report/);
+  const result = invoke(options, ['--persisted-roles']);
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, '');
+  assert.match(result.stderr, /requires --report/);
+  assert.deepEqual(fs.readFileSync(options.db), before);
+});
+
+test('persisted lookup reads the production role recorder and agrees with production cost grading', (t) => {
+  const { options } = persistedWorld(t);
+  fs.unlinkSync(options.db);
+  const out = fs.openSync(path.join(options.root, 'production-stdout'), 'w');
+  const err = fs.openSync(path.join(options.root, 'production-stderr'), 'w');
+  let child;
+  try {
+    child = spawnSync(process.env.PYTHON || 'python3', ['-c', `
+import json
+import time
+import feedback
+feedback.record_role_run(
+    'role:one', 'adjudicator', 'fixture/repo#1', 'gemini',
+    backend_run_id='backend:one', action='uphold_blocker',
+    decision_source='adjudicator_agent', source='retrospective',
+)
+with feedback._conn() as conn:
+    conn.execute("INSERT INTO runs(run_id,target,ts) VALUES ('one','fixture/repo#1',?)", (int(time.time()),))
+    conn.execute("INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict) VALUES ('one','NON_PASS','PASS')")
+    conn.execute("INSERT INTO costs(run_id,cost_usd,source) VALUES ('backend:one',1.5,'ccusage')")
+positive = feedback.role_cost_report('backend:one', 'gemini')
+with feedback._conn() as conn:
+    conn.execute("UPDATE costs SET cost_usd=0 WHERE run_id='backend:one'")
+zero = feedback.role_cost_report('backend:one', 'gemini')
+print(json.dumps({'positive': positive, 'zero': zero}))
+`], {
+      cwd: options.root, timeout: 30000, stdio: ['ignore', out, err],
+      env: { PATH: process.env.PATH,
+        PYTHONPATH: path.resolve(__dirname, '../src'), PYTHONDONTWRITEBYTECODE: '1',
+        ORCH_STATE_DIR: path.join(options.root, 'state'),
+        ORCH_LOCAL_RUNTIME: path.join(options.root, 'runtime'),
+        ORCH_FEEDBACK_DB: options.db,
+        ORCH_CAPABILITIES_PATH: path.join(options.root, 'capabilities.json') },
+    });
+  } finally { fs.closeSync(out); fs.closeSync(err); }
+  assert.ifError(child.error);
+  assert.equal(child.status, 0, fs.readFileSync(path.join(options.root, 'production-stderr'), 'utf8'));
+  const grades = JSON.parse(fs.readFileSync(path.join(options.root, 'production-stdout')));
+  const zeroBefore = fs.readFileSync(options.db);
+  const zero = caseGaps(options).cases[0];
+  assert.equal(zero.persisted_role_evidence.backend_cost.cost_usd, 'UNKNOWN');
+  assert.equal(grades.zero.status, 'unmeasured');
+  assert.deepEqual(fs.readFileSync(options.db), zeroBefore);
+  const connection = new DatabaseSync(options.db);
+  connection.exec("UPDATE costs SET cost_usd=1.5 WHERE run_id='backend:one'");
+  connection.close();
+  const positiveBefore = fs.readFileSync(options.db);
+  const positive = caseGaps(options).cases[0];
+  assert.equal(positive.persisted_role_evidence.backend_cost.cost_usd, grades.positive.cost_usd);
+  assert.equal(grades.positive.status, 'measured');
+  assert.equal(positive.persisted_role_evidence.decision, 'uphold_blocker');
+  assert.equal(positive.source_revision, 'UNKNOWN');
+  assert.equal(positive.role_run_provenance, 'UNKNOWN');
+  assert.deepEqual(fs.readFileSync(options.db), positiveBefore);
+});
