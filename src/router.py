@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
 import os
 import random
 import sys
@@ -41,7 +40,6 @@ from typing import Any, NotRequired, Tuple, TypedDict, Union
 import adapters
 import capabilities
 import claims
-import closer_role_selection
 import execution_profiles
 import feedback
 
@@ -96,7 +94,6 @@ class RouteSpec(TypedDict):
     agents: list[RouteEntry]
     neutral_prior: NotRequired[bool]
     reasoning_efforts: NotRequired[list[str]]
-    closer_role: NotRequired[str]
     permission_modes: NotRequired[list[str]]
 
 
@@ -234,38 +231,6 @@ ROUTE_TABLE: dict = {
     },
 }
 
-# Closer requirements describe the work, not a preferred provider. These cells
-# get equal priors in the existing learner; allocations are temporary decisions.
-for _closer_task, _closer_role in {
-    "closer_interpret": "bounded_classification",
-    "closer_exception": "strong_criterion_adjudication",
-    "closer_repair": "constrained_repair",
-}.items():
-    ROUTE_TABLE[_closer_task] = {
-        "role": "code" if _closer_task == "closer_repair" else "review",
-        "neutral_prior": True,
-        "closer_role": _closer_role,
-        "permission_modes": (
-            ["workspace-write"]
-            if _closer_task == "closer_repair"
-            else ["workspace-write", "read-only"]
-        ),
-        "agents": [
-            {
-                "agent": agent,
-                # A compatibility hint for mode-only consumers, not a profile/model
-                # preference. Exact selected profiles retain their own model/effort.
-                "mode": (
-                    "composer"
-                    if agent == "cursor"
-                    else "cheap" if _closer_task == "closer_interpret" else "mid"
-                ),
-                "late": False,
-            }
-            for agent in ("codex", "claude", "gemini", "muse", "cursor", "vibe")
-        ],
-    }
-
 # The public route table remains a generic mapping for compatibility with its existing consumers;
 # this private view records the invariant enforced by the static table above.
 _ROUTE_TABLE_TYPED: dict[str, RouteSpec] = ROUTE_TABLE
@@ -297,30 +262,7 @@ def _route_profiles(
     entry: RouteEntry,
     spec: RouteSpec,
     transport: str,
-    *,
-    category=None,
-    selection_policy=None,
-    independent_of_provider=None,
 ) -> list[dict]:
-    role = spec.get("closer_role")
-    if role is not None:
-        import closer_role_qualification as roles
-
-        return [
-            profile
-            for profile in closer_role_selection.candidates_for_agent(
-                entry["agent"],
-                role,
-                transport,
-                category,
-                policy=selection_policy,
-                independent_of_provider=independent_of_provider,
-            )
-            if adapters.automatic_profile_within_cap(profile)
-            and roles.is_runtime_qualified(profile, role)
-            and profile.get("permission_mode")
-            in spec.get("permission_modes", [profile.get("permission_mode")])
-        ]
     efforts = spec.get("reasoning_efforts")
     if efforts is None:
         return _automatic_profiles(entry, transport=transport)
@@ -687,28 +629,6 @@ def select_agent(
         return None
     load = load or {}
     neutral = bool(spec.get("neutral_prior"))
-    selection_policy = None
-    if neutral:
-        try:
-            selection_policy = closer_role_selection.load_policy()
-            if (
-                closer_role_selection.category_spec(
-                    spec["closer_role"], closer_category, selection_policy
-                )
-                is None
-            ):
-                return None
-        except (OSError, ValueError, TypeError, KeyError) as error:
-            # Policy contents, paths and exception messages are not diagnostic data.
-            failure_kind = next(
-                kind.__name__
-                for kind in (OSError, ValueError, TypeError, KeyError)
-                if isinstance(error, kind)
-            )
-            logging.getLogger(__name__).warning(
-                "closer selection policy unavailable (%s)", failure_kind
-            )
-            return None
     if neutral and learned is None:
         learned = {
             entry["agent"]: {"rank": 0, "n_obs": 0, "posterior": 0.5, "score": 0.5}
@@ -741,9 +661,6 @@ def select_agent(
             entry,
             spec,
             profile_transport,
-            category=closer_category,
-            selection_policy=selection_policy,
-            independent_of_provider=independent_of_provider,
         )
         if neutral and not agent_profiles:
             continue
@@ -883,9 +800,6 @@ def select_agent(
         entry,
         spec,
         profile_transport,
-        category=closer_category,
-        selection_policy=selection_policy,
-        independent_of_provider=independent_of_provider,
     )
     if (
         entry["agent"] == "gemini"
@@ -970,14 +884,6 @@ def select_agent(
         if not envelope["selected_profile_id"]:
             return None
         selected = execution_profiles.get_profile(envelope["selected_profile_id"])
-        if neutral:
-            scope = closer_role_selection.quality_scope(
-                selected, spec["closer_role"], closer_category, policy=selection_policy
-            )
-            if scope is None:
-                return None
-            result["closer_selection"] = scope
-            result["requested_provider"] = selected["provider"]
         result.update(
             {
                 "selected_profile_id": selected["profile_id"],
