@@ -470,6 +470,9 @@ CONSUMER_CLASSES = (
     "not_invoked",
     "not_acting",
     "prose",
+    # Explicit finding: no local acting rail exists. Distinct from accidental prose so the
+    # CONSUMERS line can reach prose 0 / missing 0 while DRAINABLE still equals this count (#599).
+    "consumer_missing",
     "unresolved",
     "undeclared",
 )
@@ -604,6 +607,17 @@ def consumer_class(cap: dict, ctx: dict) -> tuple[str, bool, str]:
         return "undeclared", False, "no consumer declared (the fifth part names the field)"
     res = consumer_resolution(cap, module_dir=ctx.get("module_dir"), repo_root=ctx.get("repo_root"))
     if not res["tokens"]:
+        # consumer_missing is a reviewed finding ("no rail acts"), not undrained accidental prose.
+        # Still fails the tenth part (finding ≠ waiver); only the CONSUMERS class label differs.
+        if cap.get("consumer_missing") is True:
+            return (
+                "consumer_missing",
+                False,
+                (
+                    "no local acting consumer (consumer_missing); leave the declaration, do not "
+                    "invent a rail — this is drainable finding debt, not accidental prose"
+                ),
+            )
         return (
             "prose",
             False,
@@ -705,9 +719,19 @@ def consumer_report(ledger: dict, ctx: dict, rows: list[dict]) -> dict:
             r["capability_id"] for r in rows if "consumer_acts" in r["blocking"] and r["enforced"]
         ],
         "deferred": [r["capability_id"] for r in rows if "consumer_acts" in r["deferred"]],
-        # A declaration edit each: no code, no evidence to wait for.
-        "drainable": sorted(classes["prose"] + classes["unresolved"] + classes["undeclared"]),
-        "drained": not any(classes[c] for c in ("not_acting", "prose", "unresolved", "undeclared")),
+        # A declaration edit each: no code, no evidence to wait for. After the #599 drain,
+        # DRAINABLE should equal the reviewed consumer_missing findings (plus any leftover
+        # accidental prose / unresolved / undeclared).
+        "drainable": sorted(
+            classes["prose"]
+            + classes["consumer_missing"]
+            + classes["unresolved"]
+            + classes["undeclared"]
+        ),
+        "drained": not any(
+            classes[c]
+            for c in ("not_acting", "prose", "consumer_missing", "unresolved", "undeclared")
+        ),
     }
 
 
@@ -1230,7 +1254,7 @@ def format_report(rep: dict) -> str:
         by = {name: len(ids) for name, ids in cons["by_class"].items()}
         out += [
             "",
-            f"  CONSUMERS (10th): {cons['total'] - by['prose'] - by['unresolved'] - by['undeclared']}"
+            f"  CONSUMERS (10th): {cons['total'] - by['prose'] - by['consumer_missing'] - by['unresolved'] - by['undeclared']}"
             f" of {cons['total']} declare a consumer this tree can find — acting (capability-level) "
             f"{by['acting']}, "
             f"in grace {by['grace']}, not invoked {by['not_invoked']}, exercise-bound "
@@ -1238,7 +1262,8 @@ def format_report(rep: dict) -> str:
             f"                   not acting (trailing window) {by['not_acting']} (blocking {len(cons['blocking'])}, "
             f"pre-cutoff debt {len(cons['deferred'])}); prose {by['prose']}, missing "
             f"{by['unresolved']}, undeclared {by['undeclared']} — DRAINABLE {len(cons['drainable'])} "
-            "(a declaration edit each)",
+            "(a declaration edit each)"
+            + (f"; consumer_missing {by['consumer_missing']}" if by["consumer_missing"] else ""),
         ]
         if cons["drained"]:
             out.append(

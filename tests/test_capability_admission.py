@@ -216,6 +216,7 @@ def test_format_report_preserves_blocking_and_drainable_diagnostics():
                 "not_invoked": [],
                 "not_acting": ["capability-a"],
                 "prose": [],
+                "consumer_missing": [],
                 "unresolved": [],
                 "undeclared": [],
             },
@@ -988,6 +989,7 @@ def test_an_act_outside_the_trailing_window_is_not_acting_now(monkeypatch, tmp_p
 def test_declared_consumers_resolve_in_the_tree():
     """A reviewed binding names defined rails; an absent consumer stays explicit debt."""
     failures = {}
+    missing = []
     # Inspect both sources: merging tables first could hide a broken gate behind an overlay.
     for source, declarations in (
         ("KNOWN_GATES", capabilities.KNOWN_GATES),
@@ -1001,10 +1003,15 @@ def test_declared_consumers_resolve_in_the_tree():
                 assert str(
                     declaration.get("notes") or ""
                 ).strip(), f"{source}:{cid}: explain the absent consumer"
+                # Marked absence must still fail the tenth part as consumer_missing, not prose.
+                cls, ok, _ = admission.consumer_class({**declaration, "capability_id": cid}, {})
+                assert cls == "consumer_missing" and not ok, (source, cid, cls)
+                missing.append(cid)
                 continue
             if not resolution["tokens"] or resolution["unresolved"]:
                 failures[f"{source}:{cid}"] = resolution
     assert not failures, failures
+    assert missing == ["docs-drift-fix-agent"], missing
     # HEAD-only pin so deliberate-break stays sensitive after #633 drained main.
     assert getattr(capabilities, "CONSUMER_DRAIN_MARKER", None) == "599-reopen-2026-11-04"
 
@@ -1061,7 +1068,10 @@ def test_missing_consumer_declaration_survives_reconciliation_without_acceptance
     assert row["status"] == "active"
     assert row["outcome_links"] == []
     cls, ok, detail = admission.consumer_class(row, {})
-    assert cls == "prose" and not ok, detail
+    # Reviewed absence is its own class so the CONSUMERS line can print prose 0 while
+    # DRAINABLE still equals the consumer_missing count (issue #599 pass number).
+    assert cls == "consumer_missing" and not ok, detail
+    assert "consumer_missing" in detail
     assert row["event_history"][0] == {"type": "invocation", "timestamp": 1}
     assert not capabilities._reconcile_known_declarations(ledger, 3)
 
@@ -1082,7 +1092,8 @@ def test_missing_consumer_declaration_survives_reconciliation_without_acceptance
         assert ("consumer_acts" in verdict["blocking"]) is enforced, verdict
         assert ("consumer_acts" in verdict["deferred"]) is not enforced, verdict
         consumers = admission.consumer_report(dated_ledger, ctx, [verdict])
-        assert consumers["by_class"]["prose"] == [cid], consumers
+        assert consumers["by_class"]["consumer_missing"] == [cid], consumers
+        assert consumers["by_class"]["prose"] == [], consumers
         assert consumers["drainable"] == [cid] and not consumers["drained"], consumers
         assert consumers["blocking"] == ([cid] if enforced else []), consumers
         assert consumers["deferred"] == ([] if enforced else [cid]), consumers
