@@ -243,3 +243,79 @@ def test_the_tick_gate_reads_core_with_a_real_call_and_sees_a_mid_tick_exhaustio
         "the gate asked the exempt endpoint for core, whose fresh 5000/5000 reads every exhaustion "
         f"as headroom: {calls}"
     )
+
+
+def test_default_gh_runner_ignores_retired_finite_pool(ledger, tmp_path, monkeypatch):
+    """Retirement integration: use a real old binding and the unchanged default runner."""
+    import closer_resources
+    import dispatcher
+
+    binary_dir = tmp_path / "bin"
+    binary_dir.mkdir()
+    output = (
+        "HTTP/1.1 200 OK\n"
+        "x-ratelimit-resource: core\n"
+        "x-ratelimit-limit: 5000\n"
+        "x-ratelimit-remaining: 42\n"
+        "x-ratelimit-reset: 2000000000\n\n"
+        '{"retired_pool_ignored": true}\n'
+    )
+    binary = binary_dir / "gh"
+    binary.write_text(f"#!{sys.executable}\nimport sys\nsys.stdout.write({output!r})\n")
+    binary.chmod(0o700)
+    monkeypatch.setenv("PATH", str(binary_dir), prepend=":")
+    original_runner = gh_capacity.gh_run.__kwdefaults__["runner"]
+    assert original_runner is subprocess.run
+    original_popen = subprocess.Popen
+    calls, timeouts = [], []
+
+    def observe_popen(*args, **kwargs):
+        calls.append((args, kwargs))
+        child = original_popen(*args, **kwargs)
+        communicate = child.communicate
+
+        def observe_communicate(*args, **kwargs):
+            timeouts.append(kwargs.get("timeout"))
+            return communicate(*args, **kwargs)
+
+        child.communicate = observe_communicate
+        return child
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("retired finite-pool dispatch/callback was invoked")
+
+    binding = {"frontier_id": "retired-test-frontier", "target": "fixture/repo#1"}
+    with closer_resources.pool_slot(
+        tmp_path / "pool",
+        "io",
+        1,
+        deadline=time.time() + 10,
+        finite_frontier=True,
+        reservation={
+            "reservation_id": "retired-test",
+            **binding,
+            "agent": "github",
+            "profile_id": "github-api",
+        },
+    ):
+        assert closer_resources.finite_pool_current_binding() == binding
+        with monkeypatch.context() as transport:
+            transport.setattr(subprocess, "Popen", observe_popen)
+            transport.setattr(dispatcher, "run_observed_offload", forbidden)
+            for name in (
+                "finite_pool_prepare_request",
+                "finite_pool_process_started",
+                "finite_pool_process_finished",
+            ):
+                transport.setattr(closer_resources, name, forbidden)
+            rc, body = gh_capacity.gh_run(["api", "repos/fixture/repo"], timeout_s=9)
+            assert (rc, body) == (0, {"retired_pool_ignored": True})
+            assert gh_capacity.gh_run.__kwdefaults__["runner"] is original_runner
+            assert len(calls) == 1
+            args, kwargs = calls[0]
+            assert args == (["gh", "api", "--include", "repos/fixture/repo"],)
+            assert kwargs["stdout"] == kwargs["stderr"] == subprocess.PIPE
+            assert kwargs["text"] is True
+            assert timeouts == [9]
+    assert closer_resources.finite_pool_current_binding() is None
+    assert gh_capacity._latest_ledger("core")["remaining"] == 42
