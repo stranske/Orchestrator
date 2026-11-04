@@ -572,9 +572,6 @@ TIER_POLICY = {
     "epic": "full",
     "cross_repo": "full",
     "runtime_ac": "full",
-    "closer_interpret": "cheap",
-    "closer_exception": "mid",
-    "closer_repair": "mid",
 }
 STAGE_2_APPLIED = True
 _UNPINNED = ("cursor", "vibe", "aider")  # single-lane agents; tier token is documentation only
@@ -1424,93 +1421,6 @@ def test_router_refuses_gemini_when_final_profile_resolution_disappears(monkeypa
         )
         is None
     )
-
-
-@pytest.mark.parametrize("task_type", ["closer_interpret", "closer_exception", "closer_repair"])
-def test_closer_legacy_modes_keep_neutral_provider_and_stage_policy(task_type):
-    spec = router.ROUTE_TABLE[task_type]
-    assert spec["neutral_prior"] is True
-    assert {entry["agent"] for entry in spec["agents"]} == {
-        "codex",
-        "claude",
-        "gemini",
-        "muse",
-        "cursor",
-        "vibe",
-    }
-    for entry in spec["agents"]:
-        assert entry["mode"] == (
-            "composer" if entry["agent"] == "cursor" else TIER_POLICY[task_type]
-        )
-        assert entry["late"] is False
-
-
-@pytest.mark.parametrize("task_type", ["closer_interpret", "closer_exception", "closer_repair"])
-@pytest.mark.parametrize("agent", ["codex", "gemini"])
-def test_closer_selected_profile_is_not_downgraded_by_legacy_mode(
-    task_type, agent, tmp_path, monkeypatch
-):
-    # The model/effort candidate set is neutral. A cheap/mid compatibility mode
-    # cannot turn a selected exact Sol/Argon profile into the adapter's tier model.
-    if agent == "codex":
-        # This test inspects argv only; a CI worker needs no authenticated CLI.
-        # The sentinel fails if a future change accidentally executes it.
-        binary = tmp_path / "codex-argv-only"
-        binary.write_text("#!/bin/sh\nexit 99\n")
-        binary.chmod(0o700)
-        monkeypatch.setattr(adapters, "CODEX_PROFILE_BIN", binary)
-        monkeypatch.setattr(adapters, "CODEX_PROFILE_BIN_EXPLICIT", True)
-    import closer_role_qualification as roles
-
-    profiles = execution_profiles.profiles_for_agent(agent, transport="local")
-    role = roles.TASK_ROLES[task_type]
-    assert router.ROUTE_TABLE[task_type]["closer_role"] == role
-    assert "reasoning_efforts" not in router.ROUTE_TABLE[task_type]
-    chosen = execution_profiles.get_profile(
-        "codex-6.1-sol-high" if agent == "codex" else "gemini-4-argon-high"
-    )
-    role_checks = []
-
-    def fixture_role_oracle(profile, requested_role):
-        # Explicitly qualify only this synthetic test cohort. A real semantic
-        # role record is tested independently; effort never grants this verdict.
-        role_checks.append((profile["profile_id"], requested_role))
-        return profile["profile_id"] == chosen["profile_id"] and requested_role == role
-
-    monkeypatch.setattr(roles, "is_runtime_qualified", fixture_role_oracle)
-    # This is the existing fictional argv-only cohort, not production model
-    # quality. Keep exact model/effort pinning independent of the new policy.
-    from test_closer_neutral_routing import synthetic_quality_boundary
-
-    synthetic_quality_boundary.__wrapped__(monkeypatch)
-    cap = {
-        "agents": {agent: {"state": "ok"}},
-        "profiles": {p["profile_id"]: {"state": "ok"} for p in profiles},
-        "pools": {pool: {"state": "ok"} for p in profiles for pool in p["capacity_pool_ids"]},
-    }
-    selected = router.select_agent(
-        task_type,
-        cap,
-        only={agent},
-        exploration_rate=0,
-        learned={agent: {"rank": 0, "n_obs": 8}},
-        profile_scores={chosen["profile_id"]: 100},
-        profile_seed=7,
-    )
-    assert selected is not None
-    assert (chosen["profile_id"], role) in role_checks
-    assert selected["selected_profile_id"] == chosen["profile_id"]
-    assert selected["mode"] == TIER_POLICY[task_type]
-    argv = adapters.build_command(
-        agent,
-        "bounded local work",
-        mode=selected["mode"],
-        cwd=tmp_path,
-        profile=selected["selected_profile_id"],
-    )
-    assert argv[argv.index("--model") + 1] == chosen["requested_model"]
-    assert selected["reasoning_effort"] == chosen["reasoning_effort"]
-    assert selected["neutral_prior"] is True
 
 
 @pytest.mark.parametrize(

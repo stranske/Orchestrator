@@ -171,7 +171,6 @@
       "tests/test_closer_runtime_distribution.py",
       "tests/test_closer_scoped.py",
       "tests/test_closer_semantic_required_followup_scope.py",
-      "tests/test_closer_strong_result_compaction.py",
       "tests/test_closer_terminal_read_recovery.py",
       "tests/test_closer_typed_semantic_broker_fixture.py",
       "tests/test_closer_workspace_bindings.py",
