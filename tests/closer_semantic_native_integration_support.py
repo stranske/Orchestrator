@@ -280,6 +280,9 @@ def integrated_native_source_reference():
         assert original[filename] == change["before_file_sha256"]
         original[filename] = change["after_file_sha256"]
     original["closer_dispatcher.py"] = diagnostics_review_reference()["after_file_sha256"]
+    successor = cache_persistence_reference()
+    assert original["closer_dispatcher.py"] == successor["before_file_sha256"]
+    original["closer_dispatcher.py"] = successor["after_file_sha256"]
     return original
 
 
@@ -1588,7 +1591,36 @@ def diagnostics_review_reference():
 def before_diagnostics_review_source(raw, filename):
     if filename != "closer_dispatcher.py":
         return raw
+    successor = cache_persistence_reference()
+    if hashlib.sha256(raw).hexdigest() == successor["after_file_sha256"]:
+        for reversal in successor["historical_reversal"]:
+            after = reversal["after_fragment"].encode()
+            before = reversal["before_fragment"].encode()
+            assert raw.count(after) == 1
+            raw = raw.replace(after, before, 1)
+        assert hashlib.sha256(raw).hexdigest() == successor["before_file_sha256"]
     change = diagnostics_review_reference()
     if hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]:
         return change["before_source_utf8"].encode()
     return raw
+
+
+def cache_persistence_reference():
+    path = (
+        Path(__file__).parent
+        / "fixtures/semantic_api_reference/current_reservation_cache_persistence_v1.json"
+    )
+    raw = path.read_bytes()
+    assert (
+        hashlib.sha256(raw).hexdigest()
+        == "297b95c08034deae3d1f032d1064f1d275f71e7f2eddd310a9c87e669280e14c"
+    )
+    value = json.loads(raw)
+    assert value["schema"] == "reservation-cache-persistence-source-successor/v1"
+    assert value["before_file_sha256"] == diagnostics_review_reference()["after_file_sha256"]
+    assert set(value["function_delta"]) == {
+        "_save_admission_terminal_plan_cache",
+        "_probe_snapshot_revision",
+        "_cacheable_terminal_plan",
+    }
+    return value
