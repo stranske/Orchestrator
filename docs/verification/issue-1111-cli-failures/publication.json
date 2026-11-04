@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-11-04T00:26:54.011Z",
+  "reviewed_commits": [
+    "cffc0da8fcc538ba364caa1dcf70e7bad6812890",
+    "ee0ffdd489f3268c128bc4e1f8c4969d574381cc",
+    "43e88676c08ea1a98f74873fb4045ca571b9b9d0"
+  ],
+  "task_reconciliation": {
+    "completed_checkboxes": 0,
+    "total_checkboxes": 26,
+    "reason": "Prior tooling and retained synthetic checks do not recover the authenticated original cohort or operational inputs. Named pytest controls remain unavailable. The 16-failure task is advanced but source defects remain."
+  },
+  "source_readback": {
+    "url": "https://github.com/stranske/Orchestrator/issues/1111",
+    "state": "open",
+    "updated_at": "2026-11-03T23:53:05Z"
+  },
+  "attempts": [
+    {
+      "action": "Publish unchanged checkbox reconciliation",
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "MCP tool call requires approval, but approval policy is never"
+          }
+        ],
+        "isError": true
+      }
+    },
+    {
+      "action": "Replace PR auto-closing preamble with References #1111",
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "MCP tool call requires approval, but approval policy is never"
+          }
+        ],
+        "isError": true
+      }
+    },
+    {
+      "action": "Reply to active review comment 4461981453",
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "MCP tool call requires approval, but approval policy is never"
+          }
+        ],
+        "isError": true
+      }
+    },
+    {
+      "action": "Add needs-human to issue #1111",
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "MCP tool call requires approval, but approval policy is never"
+          }
+        ],
+        "isError": true
+      }
+    }
+  ],
+  "remote_mutations_completed": false,
+  "completion_metadata_reconciled": false,
+  "pr_readback": {
+    "url": "https://github.com/stranske/Orchestrator/pull/1112",
+    "number": 1112,
+    "state": "open",
+    "isDraft": false,
+    "head": "cffc0da8fcc538ba364caa1dcf70e7bad6812890",
+    "branch": "codex/issue-1111",
+    "auto_closing_reference_remains": true,
+    "unchecked": 26,
+    "checked": 0
+  },
+  "review_thread": {
+    "id": "PRRT_kwDOUAH6nM6zYzJv",
+    "comment_id": 4461981453,
+    "is_resolved": false,
+    "disposition": "Body correction remains blocked by publication approval; do not self-resolve."
+  }
+}
