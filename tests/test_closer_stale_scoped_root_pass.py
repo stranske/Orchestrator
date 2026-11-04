@@ -293,20 +293,77 @@ def test_stale_scoped_root_pass_unmeasured_without_reason():
         assert row["status"] == "unmeasured", receipt
 
 
-def test_stale_scoped_root_pass_ignores_bool_reservation_counts():
-    """Bool must not count as an int reservation measurement."""
-    passed = grade.stale_scoped_root_pass_number(
-        {
-            "authority": False,
-            "reason": "other",
-            "blocking_reservations": True,
-            "drainable_reservations": False,
-        },
+def test_changed_reason_without_valid_reservation_counts_is_unmeasured():
+    """An unread drain measurement cannot rule out the successor latch."""
+    counts = [
+        {},
+        {"blocking_reservations": 11},
+        {"drainable_reservations": 0},
+    ]
+    for field in ("blocking_reservations", "drainable_reservations"):
+        for invalid in (None, True, False, -1, "0", 0.0):
+            counts.append({"blocking_reservations": 0, "drainable_reservations": 0, field: invalid})
+    for measurement in counts:
+        receipt = {"authority": False, "reason": "admission_deadline_expired", **measurement}
+        result = grade.stale_scoped_root_pass_number(receipt, now=CHECK_AT, merged_at=MERGED_AT)
+        assert result["status"] == "unmeasured", receipt
+        assert result["grade_reason"] == "reservation drain counts unavailable"
+        assert result["next_break_issue"] is None
+
+
+def test_unread_reservation_counts_preserve_authority_and_prior_stop_evidence():
+    for receipt, expected in (
+        ({"authority": True, "reason": "ok"}, "pass"),
+        ({"authority": False, "reason": grade.PRIOR_STOP_LATCH_REASON}, "fail"),
+    ):
+        result = grade.stale_scoped_root_pass_number(receipt, now=CHECK_AT, merged_at=MERGED_AT)
+        assert result["status"] == expected
+
+
+def test_cli_unread_reservation_counts_cannot_pass_single_or_batch(tmp_path):
+    path = tmp_path / "unread-counts.json"
+    path.write_text(
+        json.dumps({"authority": False, "reason": "admission_deadline_expired"}),
+        encoding="utf-8",
+    )
+    (tmp_path / "empty.json").write_text("{}", encoding="utf-8")
+    for source in (path, tmp_path):
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(MODULE),
+                str(source),
+                "--now",
+                str(CHECK_AT),
+                "--merged-at",
+                str(MERGED_AT),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 78, result.stdout
+        assert json.loads(result.stdout)["status"] == "unmeasured"
+
+
+def test_batch_unread_counts_do_not_outrank_a_measured_next_break():
+    aggregate = grade.grade_receipts(
+        [
+            {"authority": False, "reason": "admission_deadline_expired"},
+            {
+                "authority": False,
+                "reason": "admission_deadline_expired",
+                "blocking_reservations": 11,
+                "drainable_reservations": 0,
+            },
+        ],
         now=CHECK_AT,
         merged_at=MERGED_AT,
+        sources=["unread.json", "drain.json"],
     )
-    assert passed["status"] == "pass"
-    assert passed["next_break_issue"] is None
+    assert aggregate["status"] == "next_break"
+    assert aggregate["next_break_issue"] == 1049
+    assert aggregate["winning_source"] == "drain.json"
 
 
 def test_grade_receipts_at_least_one_pass_wins_over_older_failures():

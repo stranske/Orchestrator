@@ -8,7 +8,7 @@ grade machine-checkable once a receipt JSON is in hand.
 Pass: ``authority is True``, or ``reason`` is a non-empty string other than
 ``prior_run_has_no_valid_stop`` and the receipt is not still stuck on the
 reservation-drain latch named by #1049.
-If reservation diagnostics failed, a changed reason alone is unmeasured;
+If reservation diagnostics failed or their counts are unread, a changed reason alone is unmeasured;
 it cannot exclude that successor latch.
 
 Next break (not #1050 completion): ``reason`` has left
@@ -55,10 +55,13 @@ def _nonneg_int(value: Any) -> int | None:
     return value
 
 
-def _reservation_drain_stuck(receipt: Mapping[str, Any]) -> bool:
+def _reservation_drain_stuck(receipt: Mapping[str, Any]) -> bool | None:
+    """Return whether drain is blocked, or None when its counts are unread."""
     blocking = _nonneg_int(receipt.get("blocking_reservations"))
     drainable = _nonneg_int(receipt.get("drainable_reservations"))
-    return blocking is not None and drainable is not None and blocking > 0 and drainable != blocking
+    if blocking is None or drainable is None:
+        return None
+    return blocking > 0 and drainable != blocking
 
 
 def stale_scoped_root_pass_number(
@@ -129,7 +132,12 @@ def stale_scoped_root_pass_number(
         result.update(status="unmeasured", grade_reason="reservation drain diagnostics unavailable")
         return result
 
-    if _reservation_drain_stuck(row):
+    drain_stuck = _reservation_drain_stuck(row)
+    if drain_stuck is None:
+        result.update(status="unmeasured", grade_reason="reservation drain counts unavailable")
+        return result
+
+    if drain_stuck:
         result.update(
             status="next_break",
             grade_reason=(
