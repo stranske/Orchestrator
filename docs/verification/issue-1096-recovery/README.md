@@ -1,5 +1,15 @@
 # Acceptance evidence recovery for #1096
 
+## Native validation outcome recovery, 2026-11-04 UTC
+
+The inventory now retains failed results and abstentions stored under native
+journal state `validated`, with sanitized failure diagnostics and missing receipt
+fields. State alone cannot establish a binary outcome. All 140 focused checks
+pass; three new controls fail against the prior implementation.
+[Results and limitations](native-validation-followup/results.md) bind the code
+commit and test evidence. Original retry reconciliation and operational
+acceptance remain incomplete; no task checkbox is newly complete.
+
 ## Case-level native recovery, 2026-11-04 UTC
 
 Uniquely matched requested retry identities now expose unresolved native journal

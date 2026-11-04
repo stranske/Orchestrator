@@ -898,6 +898,120 @@ test('unbound requested identities cannot borrow native case recovery from candi
   }
 });
 
+test('validated native failures and abstentions remain visible with their first recorded break', (t) => {
+  const { root, saved, journal, options } = nativeJournal(t);
+  const identity = { run_id: 'original', target: 'owner/repo#1' };
+  saved.rows = [{ ...identity, case_id: 'case-a', decision: 'reject_blocker',
+    later_truth: 'UNKNOWN', backend_run_id: 'native-provider' }];
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const manifest = manifestFile(root, [identity]);
+  const scenarios = [
+    [{ errors: ['backend exit=1 private diagnostic',
+      'could not parse a JSON adjudication proposal from the backend output'] },
+    'retained_run_failure', 'recorded', 'backend_execution'],
+    [{ proposal: { decision: 'needs_more_evidence' }, errors: [] },
+      'retained_abstention', 'not_recorded', null],
+    [{ proposal: { decision: 'reject_blocker' }, errors: ['private failure'] },
+      'conflicting_retained_decision_and_failure', 'unresolved', null],
+    [{ proposal: { decision: 'private unknown decision' }, errors: [] },
+      'unrecognized_retained_decision', 'not_recorded', null],
+    [{ proposal: null, errors: [] }, 'no_retained_decision', 'not_recorded', null],
+  ];
+  for (const [validation, status, breakStatus, stage] of scenarios) {
+    const text = JSON.stringify({ ...validation, raw_output: 'private raw response' });
+    const connection = new DatabaseSync(journal);
+    connection.prepare("UPDATE native_attempts SET validated_json=? WHERE attempt_id='e'").run(text);
+    connection.close();
+    const inputs = [options.report, journal, manifest];
+    const before = inputs.map((file) => fs.readFileSync(file));
+    const result = reportInventory({ ...options, manifest });
+    const attempt = result.pre_dispatch.native_journal.attempts.find((row) => row.attempt_id === 'e');
+    const observed = attempt.validation_observation;
+    assert.equal(observed.status, 'observed');
+    assert.equal(observed.retained_result, status);
+    assert.equal(observed.stored_text_sha256, createHash('sha256').update(text).digest('hex'));
+    assert.equal(observed.first_broken_step.status, breakStatus);
+    assert.equal(observed.first_broken_step.stage, stage);
+    if (breakStatus === 'recorded') {
+      assert.deepEqual(observed.first_broken_step.evidence_locations,
+        ['pre_dispatch.native_journal.attempts[4].validated_json.errors[0]']);
+    }
+    const requested = result.manifest_reconciliation.cases[0];
+    const unresolved = requested.native_case_recovery.unresolved_attempts;
+    assert.deepEqual(unresolved.find((row) => row.attempt_id === 'e').validation_observation, observed);
+    assert.deepEqual(result.retained_attempt_observations[0].native_receipt_locator
+      .attempts[0].validation_observation, observed);
+    assert.ok(result.pre_dispatch.stop_reasons.includes('native_validation_results_require_recovery'));
+    assert.equal(result.cases[0].retained_decision, 'reject_blocker');
+    assert.equal(result.cases[0].retained_later_truth, 'UNKNOWN');
+    assert.equal(result.dispatch_authorized, false);
+    assert.equal(result.manifest_reconciliation.authenticated_outcomes_verified, false);
+    assert.ok(!JSON.stringify(result).includes('private'));
+    const cli = execute(root, process.execPath, [script, '--report', options.report,
+      '--journal', journal, '--manifest', manifest, '--observed-at', String(now),
+      '--evidence-class', options.evidenceClass, '--evidence-reference', options.evidenceReference]);
+    assert.equal(cli.status, 0, cli.stderr);
+    assert.deepEqual(JSON.parse(cli.stdout), result);
+    assert.deepEqual(inputs.map((file) => fs.readFileSync(file)), before);
+  }
+});
+
+test('malformed or missing native validation evidence cannot disappear behind validated state', (t) => {
+  const { root, saved, journal, options } = nativeJournal(t);
+  const identity = { run_id: 'original', target: 'owner/repo#1' };
+  saved.rows = [{ ...identity, case_id: 'case-a' }];
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const manifest = manifestFile(root, [identity]);
+  for (const [value, status] of [[null, 'not_recorded'], ['private invalid json', 'invalid_json'],
+    ['null', 'invalid_shape'], ['[]', 'invalid_shape'], ['"private"', 'invalid_shape']]) {
+    const connection = new DatabaseSync(journal);
+    connection.prepare("UPDATE native_attempts SET validated_json=? WHERE attempt_id='e'").run(value);
+    connection.close();
+    const result = reportInventory({ ...options, manifest });
+    const attempt = result.manifest_reconciliation.cases[0].native_case_recovery
+      .unresolved_attempts.find((row) => row.attempt_id === 'e');
+    assert.ok(attempt, 'validated state must not hide missing or unreadable results');
+    assert.equal(attempt.validation_observation.status, status);
+    assert.equal(attempt.next_evidence_step, 'recover_missing_native_receipt_evidence_without_redispatch');
+    assert.ok(result.pre_dispatch.stop_reasons.includes('native_receipt_evidence_missing'));
+    assert.ok(!JSON.stringify(result).includes('private'));
+    assert.equal(result.dispatch_authorized, false);
+  }
+});
+
+test('binary validation still requires receipt presence and remains unauthenticated', (t) => {
+  const { root, saved, journal, options } = nativeJournal(t);
+  const identity = { run_id: 'original', target: 'owner/repo#1' };
+  saved.rows = [{ ...identity, case_id: 'case-a', backend_run_id: 'native-provider' }];
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const manifest = manifestFile(root, [identity]);
+  for (const [column, value, code] of [['raw_response', null, 'raw_response_missing'],
+    ['backend_run_id', null, 'backend_identity_missing'],
+    ['backend_run_id', ' ', 'backend_identity_missing']]) {
+    const connection = new DatabaseSync(journal);
+    connection.prepare(`UPDATE native_attempts SET ${column}=? WHERE attempt_id='e'`).run(value);
+    connection.close();
+    const result = reportInventory({ ...options, manifest });
+    const unresolved = result.manifest_reconciliation.cases[0].native_case_recovery.unresolved_attempts;
+    const attempt = unresolved.find((row) => row.attempt_id === 'e');
+    assert.ok(attempt, 'a saved binary proposal cannot replace missing receipt fields');
+    assert.equal(attempt.validation_observation.retained_result, 'retained_binary_decision');
+    assert.ok(attempt.receipt_evidence_gaps.includes(code));
+    assert.equal(attempt.next_evidence_step, 'recover_missing_native_receipt_evidence_without_redispatch');
+  }
+  const connection = new DatabaseSync(journal);
+  connection.prepare("UPDATE native_attempts SET raw_response=?,backend_run_id=? WHERE attempt_id='e'")
+    .run('private raw response', 'native-provider');
+  connection.close();
+  const result = reportInventory({ ...options, manifest });
+  assert.ok(!result.manifest_reconciliation.cases[0].native_case_recovery.unresolved_attempts
+    .some((row) => row.attempt_id === 'e'));
+  const locator = result.retained_attempt_observations[0].native_receipt_locator;
+  assert.equal(locator.authenticated, false);
+  assert.equal(locator.next_evidence_step, 'reauthenticate_with_native_projection_before_grading');
+  assert.equal(result.dispatch_authorized, false);
+});
+
 test('legacy report manifest keeps verdict ambiguity visible and empty requests cannot complete accounting', (t) => {
   const { root, saved, options } = retainedReport(t);
   saved.rows = ['NON_PASS', 'FAIL'].map((verifier_verdict, index) => ({
@@ -964,7 +1078,9 @@ function nativeJournal(t) {
     ['b', 'in_flight', null, null, null],
     ['c', 'in_flight', 'started-provider', null, null],
     ['d', 'raw_persisted', 'primary', 'private raw response', null],
-    ['e', 'validated', 'native-provider', 'private raw response', '{"private":"proposal"}'],
+    ['e', 'validated', 'native-provider', 'private raw response',
+      JSON.stringify({ proposal: { decision: 'reject_blocker', rationale: 'private proposal' },
+        errors: [] })],
     ['f', 'unrecognized', null, null, null],
   ]) insert.run(id, 'case-a', `revision-${id}`, 'digest', state, backend, 'source-hash',
     now - 1, now, raw, validation);

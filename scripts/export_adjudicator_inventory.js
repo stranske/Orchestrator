@@ -250,6 +250,26 @@ function attemptObservation(attempt, caseId, location) {
     ...retainedBreaks(attempt, location, (binary || abstained) && runFailed) };
 }
 
+// Journal validation means parsing finished, not that the outcome was binary
+// or successful. Observe saved diagnostics without publishing provider material
+// or pretending to perform the native receipt validator's authentication.
+function nativeValidationObservation(text, location) {
+  const base = { location, stored_text_sha256: typeof text === 'string'
+    ? createHash('sha256').update(text).digest('hex') : null,
+  retained_result: null, first_broken_step: null };
+  if (text === null || text === undefined) return { ...base, status: 'not_recorded' };
+  let result;
+  try { result = JSON.parse(text); } catch { return { ...base, status: 'invalid_json' }; }
+  if (!result || typeof result !== 'object' || Array.isArray(result)) {
+    return { ...base, status: 'invalid_shape' };
+  }
+  // Native role results store the candidate decision in proposal. In particular,
+  // a baseline/advisory decision cannot replace a failed or absent proposal.
+  const observed = attemptObservation({ ...result, decision: result.proposal?.decision }, null, location);
+  return { ...base, status: 'observed', retained_result: observed.retained_result,
+    first_broken_step: observed.first_broken_step };
+}
+
 // Observe native receipt locators in one read-only SQLite snapshot. This does
 // not instantiate NativeAttemptJournal, parse provider output, authenticate a
 // decision, acquire the publication lock, or establish live writer ownership.
@@ -275,12 +295,33 @@ function journalInventory(journal) {
       'SELECT attempt_id,case_id,material_revision,case_digest,state,backend_run_id,' +
       'report_sha256,created_at,updated_at,' +
       '(raw_response IS NOT NULL) AS raw_receipt_present,' +
-      '(validated_json IS NOT NULL) AS validation_present FROM native_attempts ' +
-      'ORDER BY created_at,attempt_id').all().map((item) => ({ ...item,
-      raw_receipt_present: Boolean(item.raw_receipt_present),
-      validation_present: Boolean(item.validation_present),
-      recovery_step: steps.get(item.state) || 'unrecognized_state_requires_native_review',
-    }));
+      '(validated_json IS NOT NULL) AS validation_present,validated_json FROM native_attempts ' +
+      'ORDER BY created_at,attempt_id').all().map((item, index) => {
+      const { validated_json, ...locator } = item;
+      const validation = nativeValidationObservation(validated_json,
+        `pre_dispatch.native_journal.attempts[${index}].validated_json`);
+      const gaps = [];
+      if (['raw_persisted', 'validated'].includes(item.state)) {
+        if (!item.raw_receipt_present) gaps.push('raw_response_missing');
+        if (typeof item.backend_run_id !== 'string' || !item.backend_run_id.trim()) {
+          gaps.push('backend_identity_missing');
+        }
+        if (item.state === 'validated' && validation.status !== 'observed') {
+          gaps.push(`validation_result_${validation.status}`);
+        }
+      }
+      let recoveryStep = steps.get(item.state) || 'unrecognized_state_requires_native_review';
+      if (gaps.length) {
+        recoveryStep = 'recover_missing_native_receipt_evidence_without_redispatch';
+      } else if (item.state === 'validated' && validation.retained_result !== 'retained_binary_decision') {
+        recoveryStep = validation.retained_result === 'retained_abstention'
+          ? 'recover_fresh_collected_evidence_before_any_retry'
+          : 'inspect_native_validation_result_before_any_retry';
+      }
+      return { ...locator, raw_receipt_present: Boolean(item.raw_receipt_present),
+        validation_present: Boolean(item.validation_present), validation_observation: validation,
+        receipt_evidence_gaps: gaps, recovery_step: recoveryStep };
+    });
     return { ...base, status: 'available', attempts };
   } catch {
     // SQLite messages and raw payloads can contain private provider material.
@@ -325,6 +366,11 @@ function preDispatchInventory(saved, paid, journal) {
       ...((native.attempts || []).some((item) =>
         !['reserved', 'in_flight', 'raw_persisted', 'validated'].includes(item.state))
         ? ['unrecognized_native_state_requires_review'] : []),
+      ...((native.attempts || []).some((item) => item.receipt_evidence_gaps.length)
+        ? ['native_receipt_evidence_missing'] : []),
+      ...((native.attempts || []).some((item) => item.state === 'validated' &&
+        item.validation_observation.retained_result !== 'retained_binary_decision')
+        ? ['native_validation_results_require_recovery'] : []),
       'live_writer_ownership_unverified', 'accepted_deployed_mirror_bindings_unverified',
       'immutable_source_and_case_qualification_unverified',
       'native_receipt_authentication_and_independent_truth_required',
@@ -370,8 +416,9 @@ function reconcileNativeLocators(observations, journal) {
     observation.native_receipt_locator = { status, authenticated: false,
       next_evidence_step: nextStep,
       attempts: candidates.map(({ attempt_id, case_id, material_revision, state,
-        raw_receipt_present, validation_present }) => ({ attempt_id, case_id, material_revision,
-        state, raw_receipt_present, validation_present })) };
+        raw_receipt_present, validation_present, validation_observation, receipt_evidence_gaps }) =>
+        ({ attempt_id, case_id, material_revision, state, raw_receipt_present, validation_present,
+          validation_observation, receipt_evidence_gaps })) };
   }
 }
 
@@ -541,8 +588,9 @@ function retainedRecovery(observation) {
 // A native invocation can start before it has a backend id. Recover all
 // unresolved attempts for this uniquely identified case, across material
 // revisions, without pretending that case identity binds a retained invocation
-// to one of these journal attempts. Validated receipts still need authentication
-// through the existing native path; their locators are inventoried separately.
+// to one of these journal attempts. A validated state can contain a failure or
+// abstention. Observed binary results still need native authentication; their
+// locators are inventoried separately when receipt fields are present.
 function nativeCaseRecovery(caseId, journal) {
   const scope = 'case_only_not_retained_attempt_binding';
   if (journal.status !== 'available') {
@@ -550,12 +598,16 @@ function nativeCaseRecovery(caseId, journal) {
       next_evidence_step: 'recover_native_journal_without_redispatch' };
   }
   const unresolved = journal.attempts.flatMap((attempt, index) => {
-    if (attempt.case_id !== caseId || attempt.state === 'validated') return [];
+    if (attempt.case_id !== caseId || (attempt.state === 'validated' &&
+        attempt.validation_observation.retained_result === 'retained_binary_decision' &&
+        !attempt.receipt_evidence_gaps.length)) return [];
     const { attempt_id, material_revision, state, backend_run_id,
-      raw_receipt_present, validation_present, recovery_step } = attempt;
+      raw_receipt_present, validation_present, validation_observation,
+      receipt_evidence_gaps, recovery_step } = attempt;
     return [{ location: `pre_dispatch.native_journal.attempts[${index}]`,
       attempt_id, material_revision, state, backend_run_id,
-      raw_receipt_present, validation_present, next_evidence_step: recovery_step }];
+      raw_receipt_present, validation_present, validation_observation,
+      receipt_evidence_gaps, next_evidence_step: recovery_step }];
   });
   return { scope, status: 'observed', unresolved_attempts: unresolved,
     next_evidence_step: unresolved.length
