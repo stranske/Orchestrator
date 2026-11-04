@@ -11825,7 +11825,7 @@ def _terminal_plan_cache_key(target, revision):
 
 # No current refusal is solely a function of the remote snapshot: all can
 # depend on local advertisements, locks, transport or native writer state.
-_REVISION_STABLE_PLAN_REASONS = frozenset()
+_REVISION_STABLE_PLAN_REASONS: frozenset[str] = frozenset()
 
 
 def _probe_snapshot_revision(target):
