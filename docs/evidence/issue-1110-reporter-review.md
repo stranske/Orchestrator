@@ -122,3 +122,53 @@ in the working tree.
 The follow-up `needs-human` label and blocker comment were also rejected by the
 connector with `MCP tool call requires approval, but approval policy is never`;
 neither was published.
+
+## Raw-log reconciliation follow-up, 2026-11-05
+
+Added optional `--pacing-log /path/to/retained/relay-pacing.log` to the existing
+reporter. Top-level counts still describe persisted explicit decisions. The
+additional `raw_reconciliation` population includes validated explicit raw
+decisions absent from Brain, with exact IDs, raw facts, decision timestamps,
+persisted round IDs and exit timestamps, accepted edge IDs, and the input log's
+SHA-256. Missing persisted decisions and disagreements with persisted facts are
+reported explicitly. Conflicting reuse of an ID cannot earn an accepted join;
+identical repeated records are deduplicated. Missing requested logs fail closed.
+
+The input must be a retained log captured with the Brain snapshot. Reading two
+live files does not make them atomic. This comparison excludes legacy and invalid
+lines (with an excluded-line count), and uses persisted rounds rather than raw
+exit logs. It does not verify deployment provenance or establish production
+acceptance. No additional task checkbox is complete.
+
+Four added fixture cases failed against the previous implementation. A fifth
+case was subsequently added for parser validation. After implementation,
+validation passed:
+
+```text
+node --test --test-isolation=none tests/test_relay_acceptance_cli.js tests/test_value_chain_preflight_cli.js
+tests 35; pass 35; fail 0; skipped 0; exit 0
+node --check scripts/report_relay_join_window.js
+node --check tests/test_relay_acceptance_cli.js
+git diff --check
+```
+
+The WAL snapshot/read-only test now also exercises raw reconciliation. Production
+pacing/exit logs and Brain remain absent at the resolved runner paths. Pytest and
+`/opt/anaconda3/bin/python3` remain unavailable, so this is not a passing
+repository-wide test/verifier result. No Python files changed.
+
+The currently assessed local `origin/main` is
+`d227431f8bf6fff1105395445c52c3505432b766`. Unlike the earlier assessed revision,
+its floor is **not** byte-identical to the working floor. Its SHA-256 is
+`e75503f1365cbb2cdd45e4c6269b678e809b3063d0dd8922b6c49f53acba9214`;
+the working SHA-256 remains
+`00d01689a9b9f6604f94ffc8f48ac723c32142c159edcf616d846739c0b655ec`.
+The floor was not changed. Production attribution remains unresolved against
+the original `2026-11-04T08:16:32Z` deadline; any later success is late recovery.
+GitHub reports PR #1132 open and ready (`draft=false`).
+
+Delivery was attempted after validation. `git add` failed with exit 128 because
+`.git/index.lock` cannot be created on the read-only filesystem. The connector
+rejected remote tree creation, `needs-human` labeling, and the blocker comment
+with `MCP tool call requires approval, but approval policy is never`. No commit,
+push, label, or comment was applied; source and tests remain in the working tree.

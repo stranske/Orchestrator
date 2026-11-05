@@ -56,13 +56,14 @@ function world(t) {
   }
   return {
     root, log, tail,
-    report(end, start = deployment) {
-      return reportWindow({ db: path.join(root, 'brain.db'), start, end });
+    report(end, start = deployment, pacingLog) {
+      return reportWindow({ db: path.join(root, 'brain.db'), start, end, pacingLog });
     },
-    reportCli(end) {
+    reportCli(end, pacingLog) {
       return JSON.parse(run([
         path.join(repo, 'scripts', 'report_relay_join_window.js'),
         '--db', path.join(root, 'brain.db'), '--start', String(deployment), '--end', String(end),
+        ...(pacingLog ? ['--pacing-log', pacingLog] : []),
       ], process.execPath));
     },
     append(id, ts) {
@@ -142,6 +143,124 @@ test('a pre-deployment decision exiting later does not satisfy the deployment wi
   ]);
   assert.equal(JSON.parse(completed.rounds[1].causal_context_json).relay_decision_id,
     'after-deployment');
+});
+
+test('raw reconciliation exposes an unpersisted decision despite positive persisted joins', (t) => {
+  const w = world(t);
+  w.append('joined', deployment + 10);
+  const joined = w.exit('joined', deployment + 20);
+  w.append('Missing.+:[1]', deployment + 30);
+  const missing = w.exit('Missing.+:[1]', deployment + 40);
+  w.append('pending', deployment + 50);
+  const db = new DatabaseSync(path.join(w.root, 'brain.db'));
+  try {
+    db.prepare("UPDATE completion_events SET producer='foreign' WHERE run_id=?")
+      .run('relay-pacing:id:Missing.+:[1]');
+  } finally {
+    db.close();
+  }
+  const before = ['brain.db', 'relay-pacing.log'].map((f) => fs.readFileSync(path.join(w.root, f)));
+  const report = w.reportCli(deployment + 60, w.log);
+  assert.equal(report.status, 'available');
+  assert.equal(report.accepted_window_joins, 1);
+  const raw = report.raw_reconciliation;
+  assert.equal(raw.window_decisions, 3);
+  assert.equal(raw.matching_completed_exit_decisions, 2);
+  assert.equal(raw.accepted_window_joins, 1);
+  assert.equal(raw.unaccounted_completed_exit_decisions, 1);
+  assert.deepEqual(raw.decisions.map((d) => [d.raw_decision_id, d.decision_ts,
+    d.status, d.completed_rounds.map((r) => [r.decision_id, r.ts])]), [
+    ['joined', deployment + 10, 'accepted_join', [[joined.decision_id, deployment + 20]]],
+    ['Missing.+:[1]', deployment + 30, 'missing_persisted_decision',
+      [[missing.decision_id, deployment + 40]]],
+    ['pending', deployment + 50, 'missing_persisted_decision', []],
+  ]);
+  assert.deepEqual(raw.decisions[1].accepted_edge_ids, []);
+  assert.equal(raw.pacing_log_sha256, require('node:crypto').createHash('sha256')
+    .update(before[1]).digest('hex'));
+  assert.deepEqual(w.report(deployment + 60, deployment, w.log), report);
+  assert.deepEqual(['brain.db', 'relay-pacing.log'].map((f) =>
+    fs.readFileSync(path.join(w.root, f))), before);
+});
+
+test('raw facts must agree with the persisted decision before an accepted join is credited', (t) => {
+  const w = world(t);
+  w.append('changed', deployment + 10);
+  w.exit('changed', deployment + 20);
+  const original = fs.readFileSync(w.log, 'utf8');
+  for (const changed of [
+    original.replace('lane=opener', 'lane=closer'),
+    original.replace('chosen=claude_code', 'chosen=cursor'),
+    original.replace(new Date((deployment + 10) * 1000).toISOString().replace('.000Z', 'Z'),
+      new Date((deployment + 11) * 1000).toISOString().replace('.000Z', 'Z')),
+  ]) {
+    fs.writeFileSync(w.log, changed);
+    const report = w.report(deployment + 20, deployment, w.log);
+    assert.equal(report.accepted_window_joins, 1);
+    assert.equal(report.raw_reconciliation.accepted_window_joins, 0);
+    assert.equal(report.raw_reconciliation.decisions[0].status, 'persisted_decision_mismatch');
+    assert.deepEqual(report.raw_reconciliation.decisions[0].accepted_edge_ids, []);
+  }
+});
+
+test('raw reconciliation filters the window and rejects conflicting reuse of an exact ID', (t) => {
+  const w = world(t);
+  w.append('before', deployment - 1);
+  w.append('boundary', deployment);
+  w.exit('boundary', deployment + 10);
+  w.append('at-end', deployment + 20);
+  w.append('after', deployment + 21);
+  const original = fs.readFileSync(w.log, 'utf8');
+  const boundary = original.split('\n').find((line) => line.includes('decision_id=boundary '));
+  fs.appendFileSync(w.log, `${boundary}\ninvalid trailing prose\n`);
+  let raw = w.report(deployment + 20, deployment, w.log).raw_reconciliation;
+  assert.deepEqual(raw.decisions.map((d) => d.raw_decision_id), ['boundary', 'at-end']);
+  assert.equal(raw.accepted_window_joins, 1);
+  fs.appendFileSync(w.log, `${boundary.replace('chosen=claude_code', 'chosen=cursor')}\n`);
+  raw = w.report(deployment + 20, deployment, w.log).raw_reconciliation;
+  assert.equal(raw.decisions[0].status, 'ambiguous_raw_decisions');
+  assert.equal(raw.decisions[0].raw_records.length, 2);
+  assert.equal(raw.accepted_window_joins, 0);
+  assert.deepEqual(raw.decisions[0].accepted_edge_ids, []);
+});
+
+test('a requested unavailable pacing log fails closed without changing stored state', (t) => {
+  const w = world(t);
+  w.append('joined', deployment + 10);
+  w.exit('joined', deployment + 20);
+  const absent = path.join(w.root, 'absent.log');
+  const report = w.report(deployment + 20, deployment, absent);
+  assert.equal(report.status, 'unavailable');
+  assert.equal(report.accepted_window_joins, null);
+  assert.equal(report.raw_reconciliation, null);
+  assert.equal(report.errors.length, 1);
+  assert.equal(fs.existsSync(absent), false);
+});
+
+test('invalid and legacy pacing lines cannot enter the explicit raw reconciliation population', (t) => {
+  const w = world(t);
+  w.append('eligible', deployment);
+  w.exit('eligible', deployment + 10);
+  const line = fs.readFileSync(w.log, 'utf8').trim();
+  const excluded = [
+    line.replace(/2026-11-03/, '2026-02-30'),
+    line.replace('source=codex', 'source=unknown'),
+    line.replace('lane=opener', 'lane=unknown'),
+    line.replace('candidates=claude_code,cursor', 'candidates=claude_code,unknown'),
+    line.replace('chosen=claude_code', 'chosen=codex'),
+    line.replace('fallback=no', 'fallback=maybe'),
+    line.replace(/weights=\S+ /, ''),
+    line.replace('decision_id=eligible', 'decision_id='),
+    line.replace('decision_id=eligible ', ''),
+    line.replace('decision_id=eligible', `decision_id=${'x'.repeat(178)}`),
+    `${line} incomplete`,
+  ];
+  fs.appendFileSync(w.log, `${excluded.join('\n')}\n`);
+  const raw = w.report(deployment + 10, deployment, w.log).raw_reconciliation;
+  assert.equal(raw.window_decisions, 1);
+  assert.equal(raw.accepted_window_joins, 1);
+  assert.equal(raw.excluded_lines, excluded.length);
+  assert.equal(raw.decisions[0].raw_decision_id, 'eligible');
 });
 
 test('an importer failure retains the explicit round and provider incident for recovery', (t) => {
@@ -512,12 +631,13 @@ test('report reads one snapshot across a concurrent WAL commit and preserves sto
       }
       return originalPrepare.call(this, sql);
     });
-    const snapshot = w.report(deployment + 20);
+    const snapshot = w.report(deployment + 20, deployment, w.log);
     prepare.mock.restore();
     assert.equal(committed, true);
     assert.equal(snapshot.status, 'available');
     assert.equal(snapshot.cumulative_accepted_bindings_present, 1);
     assert.equal(snapshot.accepted_window_joins, 1);
+    assert.equal(snapshot.raw_reconciliation.accepted_window_joins, 1);
     assert.equal(snapshot.decisions[0].completed_rounds[0].decision_id, completed.decision_id);
 
     // A fresh read sees the committed corruption. Reporting neither repairs it
@@ -525,13 +645,14 @@ test('report reads one snapshot across a concurrent WAL commit and preserves sto
     const bytes = () => ['brain.db', 'brain.db-wal', 'relay-pacing.log'].map((file) =>
       fs.readFileSync(path.join(w.root, file)));
     const before = bytes();
-    const fresh = w.report(deployment + 20);
+    const fresh = w.report(deployment + 20, deployment, w.log);
     assert.equal(fresh.status, 'available');
     assert.equal(fresh.window_decisions, 1);
     assert.equal(fresh.matching_completed_exit_decisions, 1);
     assert.equal(fresh.accepted_window_joins, 0);
     assert.equal(fresh.missing_join_decisions, 1);
-    assert.deepEqual(w.report(deployment + 20), fresh);
+    assert.equal(fresh.raw_reconciliation.unaccounted_completed_exit_decisions, 1);
+    assert.deepEqual(w.report(deployment + 20, deployment, w.log), fresh);
     assert.deepEqual(bytes(), before);
   } finally {
     writer.close();
