@@ -1,9 +1,10 @@
 """Isolated CSV/JSON canary fixture for the controlled Closer corrective test.
 
-JSON export is ``json.dumps`` of the input rows. CSV export writes the fixed
-fields ``name`` and ``score`` with CRLF record endings, one record per input.
-Empty input returns the header alone. This module is fixture code, not
-production functionality.
+JSON export is ``json.dumps`` of the input rows and preserves round-trip
+behavior for the fixed fields ``name`` and ``score``. CSV export writes those
+fields with the header ``name,score``, CRLF record endings, and one record per
+input. Empty input returns the header alone. Unsupported formats raise
+``ValueError``. This module is fixture code, not production functionality.
 """
 
 import csv
