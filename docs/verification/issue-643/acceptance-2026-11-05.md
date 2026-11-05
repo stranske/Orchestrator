@@ -53,3 +53,54 @@ the 2026-11-04 evidence.
 The production pass-number criterion remains open: the owner's sync and dated
 #575 readback must establish real advised and graded counts and agreement
 against 0.75. No production deployment, paid work, or milestone is claimed.
+
+## Durable recovery and truth readback follow-up
+
+The real-role-adapter integration cases now drain all five disputes, remove the
+JSON report, and verify recovery from Brain events without another checkout,
+backend invocation, or completion event. They then set judged durability on the
+original outcomes and reconcile with the live dispatch switch off. The weekly
+renderer reports five graded cases, three agreements, two disagreements, and
+`agreement 0.600 against 0.75; active shadow`. The low sample remains active;
+the existing twenty-grade retirement rule is unchanged. Both dispatch and truth
+reconciliation are checked for unchanged merge inputs.
+
+Fresh verification:
+
+```text
+node --test --test-isolation=none --test-name-pattern 'live shadow real role adapter' tests/test_adjudicator_retro_cli.js
+3 passed, 0 failed
+
+PYTHONPATH=src python -m unittest discover -s tests -p test_adjudicator_live_receipts.py -v
+1 passed
+
+PYTHONPATH=src python -m unittest discover -s tests -p test_adjudicator_live_disputes.py -v
+6 passed
+
+python src/adjudicator_live.py --selftest
+adjudicator_live selftest OK
+
+node --test --test-isolation=none tests/test_adjudicator_retro_cli.js
+68 passed, 2 failed
+```
+
+The two full-module failures remain the previously documented numeric Gate
+ordering scenarios. An independent run using the unchanged HEAD test file also
+fails those two scenarios; no existing test was skipped or disabled.
+
+A temporary negative control replaced event recovery with an empty result in
+the integration fixture. The default-budget case failed at the new recovery
+assertion (`0 !== 5`). The fixture was restored before delivery. This supplements
+the earlier duplicate-exclusion negative control; it is not the named pytest
+test, which remains unavailable on this runner. Installing pytest and Black
+again failed because the package index cannot be resolved. This follow-up edits
+only JavaScript and this evidence file; it changes no Python files.
+
+PR #1129's full reconciled body is saved at
+`/tmp/issue-643-reconciled-pr-body.md`. All implementation tasks and the four
+fixture acceptance criteria are checked based on the committed evidence and
+fresh verification. The production pass-number criterion remains unchecked.
+The attempted remote update was denied because approval is required and this
+run cannot obtain approval. The PR was open and ready for review at inspection.
+The repository's read-only Git metadata again prevented staging; delivery uses
+a temporary-checkout commit and an exported patch.

@@ -203,6 +203,7 @@ for (const [name, flags, expected] of [
     const w = world(t);
     const result = w.run(['-c', `
 import json
+import os
 import sys
 import time
 from contextlib import contextmanager
@@ -211,6 +212,7 @@ from unittest.mock import patch
 import adjudicator_live as live
 import feedback
 import roles
+import switch_review
 
 flags = json.loads(sys.argv[1])
 root = Path.cwd()
@@ -276,6 +278,38 @@ with (
     first_calls = provider.call_count
     # The next daily pass drains capped work, without replaying paid decisions.
     second = live.run_live(**{**options, "now": now + 86401})
+    third = live.run_live(**{**options, "now": now + 172801})
+    merge_inputs_unchanged = merge_inputs() == before
+    recovered = graded = rendered = None
+    if live.report_path().exists():
+        with feedback._conn() as conn:
+            receipts_before = conn.execute(
+                "SELECT event_id,payload_json FROM completion_events "
+                "WHERE producer='role-adjudicator' ORDER BY event_id").fetchall()
+        # Simulate loss of the JSON cache in a fresh caller. Durable events must
+        # recover all decisions without another checkout, provider call or receipt.
+        live.report_path().unlink()
+        recovered = live.run_live(**{**options, "now": now + 172802})
+        with feedback._conn() as conn:
+            assert conn.execute(
+                "SELECT event_id,payload_json FROM completion_events "
+                "WHERE producer='role-adjudicator' ORDER BY event_id"
+            ).fetchall() == receipts_before, "cache loss duplicated advice receipts"
+            conn.execute(
+                "UPDATE outcomes SET durability=CASE "
+                "WHEN run_id IN ('dispute-1','dispute-3','dispute-5') THEN 'durable' "
+                "ELSE 'broke_later' END,durability_checked_ts=?", (now + 172803,))
+        truth_inputs = merge_inputs()
+        # The kill switch stops dispatch while judged truth remains gradeable.
+        with patch.dict(os.environ, {live.LIVE_SWITCH: "0"}):
+            graded = live.reconcile_live()
+            rendered = switch_review.format_report({
+                "review_days": 7, "raise_count": 0, "held_off": [],
+                "on_but_idle": [], "unconditioned": [],
+                "mirror_drift": {"status": "ok"},
+                "adjudicator_live": live.weekly_evidence(),
+            })
+        assert merge_inputs() == truth_inputs, "truth grading changed merge inputs"
     final_calls = provider.call_count
     routes = routing.call_count
 
@@ -286,14 +320,17 @@ with feedback._conn() as conn:
     records = conn.execute(
         "SELECT COUNT(*) FROM runs WHERE role_name='adjudicator'").fetchone()[0]
 print(json.dumps({"first": first["advised"], "second": second["advised"],
+                  "third": third["advised"], "recovered": recovered,
+                  "graded": graded, "rendered": rendered,
                   "first_calls": first_calls, "final_calls": final_calls,
                   "routes": routes, "checkouts": checkouts, "events": events,
-                  "records": records, "merge_inputs_unchanged": merge_inputs() == before}))
+                  "records": records, "merge_inputs_unchanged": merge_inputs_unchanged}))
 `, JSON.stringify(flags)]);
     assert.equal(result.first, expected);
     assert.equal(result.first_calls, expected, 'the budget must reach the paid backend');
     assert.equal(result.second, expected ? Math.min(expected, 5 - expected) : 0);
-    const total = result.first + result.second;
+    assert.equal(result.third, expected ? 5 - result.first - result.second : 0);
+    const total = result.first + result.second + result.third;
     assert.equal(result.final_calls, total);
     assert.equal(result.routes, total);
     assert.equal(result.records, total, 'real role telemetry must be recorded');
@@ -308,6 +345,20 @@ print(json.dumps({"first": first["advised"], "second": second["advised"],
       assert.match(receipt.certification.digest, /^[a-f0-9]{64}$/);
     }
     assert.equal(result.merge_inputs_unchanged, true);
+    if (expected) {
+      assert.equal(result.recovered.attempted, 0, 'cache loss must not repeat paid work');
+      assert.equal(result.recovered.summary.advised, total);
+      assert.equal(result.graded.summary.graded, total);
+      assert.equal(result.graded.summary.agree, 3);
+      assert.equal(result.graded.summary.disagree, 2);
+      assert.equal(result.graded.summary.merge_rule_agree, 3);
+      assert.ok(result.rendered.includes(
+        'live: disputes 5, advised 5, uncertified 0, graded 5 (agree 3, disagree 2)',
+      ));
+      assert.ok(result.rendered.includes('agreement 0.600 against 0.75; active shadow'));
+    } else {
+      assert.equal(result.recovered, null, 'disabled dispatch must not create a report');
+    }
   });
 }
 
