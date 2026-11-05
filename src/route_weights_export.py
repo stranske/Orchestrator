@@ -1099,6 +1099,29 @@ def publish_document(
         print(
             f"unchanged published_age={_age_text(published_age)}/floor={PUBLISH_REFRESH_FLOOR_S}s"
         )
+        # #932: idempotent recovery on unchanged-publication path.
+        # Use verified publication provenance (the published document's generated_at) as the
+        # deployment instant, not the current retry time. If provenance cannot be established,
+        # record_hosted_exploration_deploy will return None and preserve an existing valid stamp.
+        if published is not None:
+            try:
+                deploy_instant = int(
+                    dt.datetime.fromisoformat(published["generated_at"].replace("Z", "+00:00")).timestamp()
+                )
+            except (KeyError, TypeError, ValueError, AttributeError):
+                deploy_instant = None
+            try:
+                record_hosted_exploration_deploy(
+                    published, state_dir, now=deploy_instant
+                )
+            except OSError as exc:
+                # Unchanged publication: stamp persistence failure is non-fatal.
+                # Emit diagnostic and continue; an existing valid stamp is preserved.
+                print(
+                    f"[deployment-stamp] unchanged path: failed to write hosted-exploration "
+                    f"deploy stamp: {exc}",
+                    file=sys.stderr,
+                )
         return False
     if refresh:
         print(f"refresh published_age={_age_text(published_age)}/floor={PUBLISH_REFRESH_FLOOR_S}s")
@@ -1108,6 +1131,25 @@ def publish_document(
         print(
             f"unchanged published_age={_age_text(published_age)}/floor={PUBLISH_REFRESH_FLOOR_S}s"
         )
+        # #932: idempotent recovery on refresh path when document is unchanged.
+        # Use the published document's timestamp as the deployment instant.
+        if published is not None:
+            try:
+                deploy_instant = int(
+                    dt.datetime.fromisoformat(published["generated_at"].replace("Z", "+00:00")).timestamp()
+                )
+            except (KeyError, TypeError, ValueError, AttributeError):
+                deploy_instant = None
+            try:
+                record_hosted_exploration_deploy(
+                    document, state_dir, now=deploy_instant
+                )
+            except OSError as exc:
+                print(
+                    f"[deployment-stamp] refresh path: failed to write hosted-exploration "
+                    f"deploy stamp: {exc}",
+                    file=sys.stderr,
+                )
         return False
     subprocess.run(["git", "-C", str(canonical), "add", str(EXPORT_PATH)], check=True)
     identity = (
@@ -1129,7 +1171,15 @@ def publish_document(
         ["git", "-C", str(canonical), "push", "origin", f"HEAD:{EXPORT_BRANCH}"], check=True
     )
     # #932: first publish without hosted-unrunnable challengers starts the pass clock.
-    record_hosted_exploration_deploy(document, state_dir)
+    try:
+        record_hosted_exploration_deploy(document, state_dir)
+    except OSError as exc:
+        # Successful remote publication remains successful even if local deployment-stamp
+        # persistence fails. Emit an explicit diagnostic and continue.
+        print(
+            f"[deployment-stamp] failed to write hosted-exploration deploy stamp: {exc}",
+            file=sys.stderr,
+        )
     return True
 
 

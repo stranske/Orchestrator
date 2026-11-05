@@ -61,8 +61,8 @@ document = export.build_document(database, include_capacity=False)
 document["exploration"]["rate"] = float(sys.argv[4])
 record = export.record_hosted_exploration_deploy
 # Control only the stamp's clock; retain the real writer and Git publication.
-def record_at(document, state_dir):
-    return record(document, state_dir, now=int(sys.argv[5]))
+def record_at(document, state_dir, *, now=None):
+    return record(document, state_dir, now=int(sys.argv[5]) if now is None else now)
 with patch.object(export.provision, "ensure_canonical", return_value=checkout), \\
      patch.object(export, "record_hosted_exploration_deploy", side_effect=record_at):
     changed = export.publish_document(document, state_dir=state, db_path=database)

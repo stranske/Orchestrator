@@ -44,6 +44,11 @@ def publication(tmp_path, monkeypatch):
     git(tmp_path, "init", "--bare", "--initial-branch=main", str(remote))
     checkout = tmp_path / "checkout"
     git(tmp_path, "clone", str(remote), str(checkout))
+    # Use isolated state under tmp_path to prevent tests from creating or altering
+    # deployment evidence outside temporary test state.
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    monkeypatch.setenv("ORCH_STATE_DIR", str(state_dir))
     document = {
         "generated_at": "2033-05-18T03:33:20Z",
         "source_version": 1,
@@ -58,14 +63,14 @@ def publication(tmp_path, monkeypatch):
     git(checkout, "push", "origin", f"HEAD:{export.EXPORT_BRANCH}")
     monkeypatch.setattr(export.provision, "ensure_canonical", lambda *a: checkout)
     monkeypatch.setattr(export, "_now", lambda: "2033-05-18T03:33:20Z")
-    return document, remote, checkout, git
+    return document, remote, checkout, git, state_dir
 
 
 @pytest.mark.parametrize("initial,new", [("ok", "warn"), ("ok", "shed"), ("shed", "ok")])
 def test_blip_holds_and_two_ticks_publish_in_either_direction(
     publication, local_capacity, tmp_path, monkeypatch, capsys, initial, new
 ):
-    document, remote, checkout, git = publication
+    document, remote, checkout, git, _state_dir = publication
     document["capacity"]["codex"]["state"] = initial
     (checkout / export.EXPORT_PATH).write_text(json.dumps(document))
     git(checkout, "add", ".")
@@ -172,7 +177,7 @@ def test_lag_cli_is_read_only(local_capacity, tmp_path, monkeypatch, capsys, mod
 
 
 def test_read_publication_uses_remote_branch_without_touching_checkout(publication):
-    document, remote, checkout, git = publication
+    document, remote, checkout, git, _state_dir = publication
     before = git(checkout, "status", "--porcelain")
     assert export.read_published_export(remote_url=str(remote)) == document
     assert git(checkout, "status", "--porcelain") == before
@@ -180,7 +185,7 @@ def test_read_publication_uses_remote_branch_without_touching_checkout(publicati
 
 @pytest.mark.parametrize("malformed", [None, [], {"codex": "invalid"}])
 def test_publication_repairs_malformed_capacity_baseline(publication, tmp_path, malformed):
-    document, remote, checkout, git = publication
+    document, remote, checkout, git, _state_dir = publication
     broken = {**document, "capacity": malformed}
     (checkout / export.EXPORT_PATH).write_text(json.dumps(broken))
     git(checkout, "add", ".")
@@ -222,7 +227,7 @@ VOLATILE = (
 
 @pytest.mark.parametrize("field", VOLATILE)
 def test_pacing_diagnostic_only_change_never_pushes(publication, field):
-    document, remote, checkout, git = publication
+    document, remote, checkout, git, _state_dir = publication
     document["capacity"]["codex"]["pacing"] = {field: 1}
     target = checkout / export.EXPORT_PATH
     target.write_text(json.dumps(document))
@@ -259,7 +264,7 @@ def test_actual_pacing_clock_only_drift_is_nonsemantic():
 def test_weights_can_publish_while_entire_capacity_row_is_held(
     publication, local_capacity, tmp_path, monkeypatch
 ):
-    document, remote, checkout, git = publication
+    document, remote, checkout, git, _state_dir = publication
     observe(local_capacity, tmp_path, "shed", NOW)
     real_damp = export.damp_capacity_states
     monkeypatch.setattr(
@@ -338,7 +343,7 @@ python3() {{
 
 
 def _seed(publication, document):
-    _, _, checkout, git = publication
+    _, _, checkout, git, _state_dir = publication
     (checkout / export.EXPORT_PATH).write_text(json.dumps(document))
     git(checkout, "add", ".")
     git(checkout, "commit", "-m", "pacing baseline")
@@ -368,7 +373,7 @@ def test_period_and_reset_bank_changes_push(publication, field, new):
 def test_24_hour_ledger_shape_replay_only_refreshes_once(publication, monkeypatch, capsys):
     import datetime as dt
 
-    document, remote, _, git = publication
+    document, remote, _, git, _state_dir = publication
 
     def iso(now):
         return dt.datetime.fromtimestamp(now, dt.timezone.utc).isoformat().replace("+00:00", "Z")
@@ -491,7 +496,7 @@ def test_lag_threshold_and_hold(local_capacity, tmp_path, monkeypatch, capsys, a
 )
 def test_period_end_tolerance_is_against_published_baseline(publication, delta, loud):
     assert export.PERIOD_END_TOLERANCE_S >= 3600
-    document, remote, _, git = publication
+    document, remote, _, git, _state_dir = publication
     document["capacity"]["codex"]["pacing"] = {"period_end": NOW + 86400}
     _seed(publication, document)
     before = copy.deepcopy(document)
@@ -527,7 +532,7 @@ def test_missing_local_snapshot_prints_unmeasured_age(
 
 @pytest.mark.parametrize("generated", [None, "invalid"])
 def test_unmeasured_published_age_refreshes(publication, tmp_path, capsys, generated):
-    document, remote, _, git = publication
+    document, remote, _, git, _state_dir = publication
     if generated is None:
         document.pop("generated_at")
     else:
