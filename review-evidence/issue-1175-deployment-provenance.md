@@ -144,3 +144,39 @@ therefore remains unchanged. The checkout's read-only `.git` also prevents a
 local commit; the tested edits are retained in the working tree and committed in
 `/tmp/orchestrator-1175-cli-recovery`, with a handoff patch at
 `/tmp/orchestrator-1175-cli-recovery.patch`.
+
+## Remote verification failure and reconciliation (2026-11-05)
+
+Reviewed all six branch commits through `98bb251`: seven files differ from the
+base, rather than the reported 34. The first publication task is checked in the
+PR's automated summary, but no verified production publication receipt has been
+retained. Implementing a recorder does not complete that task; it should be
+unchecked in both task lists. The two conditional instrumentation/reporting
+tasks can stay checked, including in the duplicate list, because those extensions
+remain absent. No production observation or named pytest acceptance task is done.
+
+Extended the real CLI publication recovery test to make the bare remote
+unavailable while a valid marked commit remains cached in `origin` refs. Before
+any receipt exists, the CLI must refuse without creating one. After a receipt
+exists, the same failure must preserve its bytes and modification time. Restoring
+the remote allows verification to recover the original receipt without a new
+publication. All state remains in temporary directories; no Python files changed.
+
+The CLI suite passes all 24 tests; the deployment unittest suite passes all 15;
+the report suite passes all 5. The new regression also rejects a disposable copy
+of the recorder with its mandatory fetch removed. JavaScript syntax and diff
+whitespace checks pass.
+
+The production database, verified production audit record, and required Anaconda
+interpreter remain absent. Pytest and Black are unavailable, and installing them
+fails because `pypi.org` cannot resolve. The observation must wait until both
+2026-11-08 and fourteen days after verified deployment. No substitute fixture
+count or deployment timestamp is claimed.
+
+PR-body reconciliation, the blocker comment, and the `needs-human` label were
+rejected with `MCP tool call requires approval, but approval policy is never`.
+Remote task checkboxes therefore remain unchanged.
+
+The main checkout rejects Git index writes (`Read-only file system`). The tested
+JavaScript and evidence changes are committed in `/tmp/orchestrator-1175-remote-verification-gicb0w62`,
+with a handoff patch at `/tmp/orchestrator-1175-remote-verification.patch`. The main working tree retains the same edits.

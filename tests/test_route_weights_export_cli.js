@@ -43,7 +43,7 @@ const invalidProvenance = [
   ['blank audit evidence', { ...validProvenance, deployment_evidence: '  ' }, /deployment_evidence/],
 ];
 
-test('deployment CLI recovers a failed receipt write after an unchanged real publication', async (t) => {
+test('deployment CLI recovers fetch and receipt failures after an unchanged real publication', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'route-deployment-recovery-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const home = path.join(root, 'home');
@@ -132,6 +132,33 @@ print("publication_result=" + str(published))
   assert.notEqual(provenance.published_commit, initial);
   fs.writeFileSync(audit, JSON.stringify(provenance));
 
+  // Cached origin refs cannot establish that a publication is still remote.
+  // Exercise real fetch failure both before and after a receipt is retained.
+  async function refuseUnavailableRemote() {
+    const offline = path.join(root, 'offline.git');
+    const before = fs.existsSync(receipt) ? fs.readFileSync(receipt) : null;
+    const modified = before === null ? null : fs.statSync(receipt, { bigint: true }).mtimeNs;
+    assert.equal(await git(checkout, 'rev-parse', `origin/${branch}`), provenance.published_commit);
+    fs.renameSync(remote, offline);
+    try {
+      const refused = await record();
+      assert.equal(refused.status, 1, refused.stderr);
+      assert.equal(refused.stdout, '', 'a failed fetch must not print a successful receipt');
+      assert.match(refused.stderr, /deployment provenance refused:.*fetch/);
+      assert.doesNotMatch(refused.stderr, /Traceback/);
+      if (before === null) {
+        assert.equal(fs.existsSync(receipt), false, 'cached refs must not create provenance');
+      } else {
+        assert.deepEqual(fs.readFileSync(receipt), before);
+        assert.equal(fs.statSync(receipt, { bigint: true }).mtimeNs, modified);
+      }
+      assert.equal(await git(checkout, 'rev-parse', `origin/${branch}`), provenance.published_commit);
+    } finally {
+      fs.renameSync(offline, remote);
+    }
+  }
+  await refuseUnavailableRemote();
+
   // A directory at the atomic-write path causes an actual filesystem failure,
   // including when running as root, without changing permissions or mocking I/O.
   const blockedWrite = path.join(state, `.${path.basename(receipt)}.tmp`);
@@ -159,6 +186,7 @@ print("publication_result=" + str(published))
   assert.deepEqual(JSON.parse(fs.readFileSync(receipt, 'utf8')), recorded);
   const before = fs.readFileSync(receipt);
   const modified = fs.statSync(receipt, { bigint: true }).mtimeNs;
+  await refuseUnavailableRemote();
   const repeated = await record();
   assert.equal(repeated.status, 0, repeated.stderr);
   assert.deepEqual(JSON.parse(repeated.stdout), recorded);
