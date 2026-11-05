@@ -405,3 +405,135 @@ test('an accepted flag cannot substitute for matching round facts and relay outc
     db.close();
   }
 });
+
+test('relay outcome lane and chosen agent must agree with the attributed decision', async (t) => {
+  for (const [field, value] of [['lane', 'closer'], ['chosen', 'cursor']]) {
+    await t.test(field, (t) => {
+      const w = world(t);
+      w.append('outcome-facts', deployment + 10);
+      const completed = w.exit('outcome-facts', deployment + 20);
+      assert.equal(w.report(deployment + 20).accepted_window_joins, 1);
+      const db = new DatabaseSync(path.join(w.root, 'brain.db'));
+      try {
+        const original = db.prepare('SELECT payload_json FROM completion_events WHERE run_id=?')
+          .get(completed.decision_id).payload_json;
+        // Keep IDs, timestamps, round facts and the accepted edge intact.
+        db.prepare('UPDATE completion_events SET payload_json=json_set(payload_json,?,?) WHERE run_id=?')
+          .run(`$.relay_pacing.${field}`, value, completed.decision_id);
+        const report = w.report(deployment + 20);
+        assert.equal(report.status, 'available');
+        assert.equal(report.cumulative_accepted_bindings_present, 1);
+        assert.equal(report.matching_completed_exit_decisions, 1);
+        assert.equal(report.accepted_window_joins, 0);
+        assert.equal(report.missing_join_decisions, 1);
+        assert.equal(report.decisions[0].status, 'missing_accepted_join');
+        assert.deepEqual(report.decisions[0].accepted_edge_ids, []);
+        db.prepare('UPDATE completion_events SET payload_json=? WHERE run_id=?')
+          .run(original, completed.decision_id);
+        assert.equal(w.report(deployment + 20).accepted_window_joins, 1);
+      } finally {
+        db.close();
+      }
+    });
+  }
+});
+
+test('report eligibility includes both endpoints and excludes adjacent decisions', (t) => {
+  const w = world(t);
+  const end = deployment + 30;
+  w.append('before-start', deployment - 1);
+  w.exit('before-start', deployment);
+  w.append('at-start', deployment);
+  w.exit('at-start', deployment + 1);
+  w.append('at-end', end);
+  w.exit('at-end', end);
+  w.append('after-end', end + 1);
+  w.exit('after-end', end + 1);
+
+  const report = w.report(end);
+  assert.equal(report.cumulative_accepted_bindings_present, 4);
+  assert.equal(report.window_decisions, 2);
+  assert.equal(report.accepted_window_joins, 2);
+  assert.deepEqual(report.decisions.map((d) => [d.raw_decision_id, d.decision_ts]), [
+    ['at-start', deployment], ['at-end', end],
+  ]);
+  const instant = w.report(end, end);
+  assert.equal(instant.window_decisions, 1);
+  assert.equal(instant.accepted_window_joins, 1);
+  assert.equal(instant.decisions[0].raw_decision_id, 'at-end');
+});
+
+test('raw IDs are matched literally with case and punctuation preserved', (t) => {
+  const w = world(t);
+  const firstId = 'Decision.+:[1]';
+  const secondId = 'decision.+:[1]';
+  w.append(firstId, deployment + 10);
+  w.append(secondId, deployment + 11);
+  const second = w.exit(secondId, deployment + 20);
+  const first = w.exit(firstId, deployment + 21);
+  const report = w.report(deployment + 21);
+  assert.equal(report.accepted_window_joins, 2);
+  assert.deepEqual(report.decisions.map((d) => [
+    d.raw_decision_id, d.source_run_id, d.completed_rounds[0].decision_id,
+  ]), [
+    [firstId, `relay-pacing:id:${firstId}`, first.decision_id],
+    [secondId, `relay-pacing:id:${secondId}`, second.decision_id],
+  ]);
+  const db = new DatabaseSync(path.join(w.root, 'brain.db'));
+  try {
+    db.prepare('UPDATE routing_decisions_v2 SET causal_context_json=? WHERE decision_id=?')
+      .run(JSON.stringify({ relay_decision_id: `${firstId}-suffix` }), first.decision_id);
+    const mismatch = w.report(deployment + 21);
+    assert.equal(mismatch.accepted_window_joins, 1);
+    assert.equal(mismatch.decisions[0].status, 'no_completed_exit');
+    assert.deepEqual(mismatch.decisions[0].accepted_edge_ids, []);
+    assert.equal(mismatch.decisions[1].completed_rounds[0].decision_id, second.decision_id);
+  } finally {
+    db.close();
+  }
+});
+
+test('report reads one snapshot across a concurrent WAL commit and preserves stored bytes', (t) => {
+  const w = world(t);
+  w.append('snapshot-decision', deployment + 10);
+  const completed = w.exit('snapshot-decision', deployment + 20);
+  const writer = new DatabaseSync(path.join(w.root, 'brain.db'));
+  try {
+    assert.equal(writer.prepare('PRAGMA journal_mode=WAL').get().journal_mode, 'wal');
+    const originalPrepare = DatabaseSync.prototype.prepare;
+    let committed = false;
+    // Commit on a separate connection after the first count read, before
+    // reading decisions. No report implementation or data read is stubbed.
+    const prepare = t.mock.method(DatabaseSync.prototype, 'prepare', function (sql) {
+      if (!committed && this !== writer && sql.includes('SELECT event_id,run_id,created_ts')) {
+        writer.prepare("UPDATE completion_events SET producer='foreign' WHERE run_id=?")
+          .run(completed.decision_id);
+        committed = true;
+      }
+      return originalPrepare.call(this, sql);
+    });
+    const snapshot = w.report(deployment + 20);
+    prepare.mock.restore();
+    assert.equal(committed, true);
+    assert.equal(snapshot.status, 'available');
+    assert.equal(snapshot.cumulative_accepted_bindings_present, 1);
+    assert.equal(snapshot.accepted_window_joins, 1);
+    assert.equal(snapshot.decisions[0].completed_rounds[0].decision_id, completed.decision_id);
+
+    // A fresh read sees the committed corruption. Reporting neither repairs it
+    // nor writes the main database, WAL contents, or raw pacing log.
+    const bytes = () => ['brain.db', 'brain.db-wal', 'relay-pacing.log'].map((file) =>
+      fs.readFileSync(path.join(w.root, file)));
+    const before = bytes();
+    const fresh = w.report(deployment + 20);
+    assert.equal(fresh.status, 'available');
+    assert.equal(fresh.window_decisions, 1);
+    assert.equal(fresh.matching_completed_exit_decisions, 1);
+    assert.equal(fresh.accepted_window_joins, 0);
+    assert.equal(fresh.missing_join_decisions, 1);
+    assert.deepEqual(w.report(deployment + 20), fresh);
+    assert.deepEqual(bytes(), before);
+  } finally {
+    writer.close();
+  }
+});

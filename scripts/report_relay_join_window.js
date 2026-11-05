@@ -76,6 +76,8 @@ function reportWindow({ db, start, end }) {
         AND json_extract(target.payload_json,'$.relay_pacing.round_id')=ie.target_run_id
         AND json_extract(target.payload_json,'$.relay_pacing.decision_id')=?
         AND json_extract(target.payload_json,'$.relay_pacing.exit_status')=?
+        AND json_extract(target.payload_json,'$.relay_pacing.lane')=?
+        AND json_extract(target.payload_json,'$.relay_pacing.chosen')=?
         AND json_extract(target.payload_json,'$.relay_pacing.status')
           IN ('completed','failed','rate-limited')
       ORDER BY ie.edge_id
@@ -99,7 +101,8 @@ function reportWindow({ db, start, end }) {
           status = 'completed_exit_mismatch';
         } else {
           edges = joined.all(source.event_id, source.run_id, round.decision_id,
-            capability, version, start, end, round.ts, facts.decision_id, round.exit_status)
+            capability, version, start, end, round.ts, facts.decision_id, round.exit_status,
+            facts.lane, facts.chosen)
             .map((row) => row.edge_id);
           status = edges.length ? 'accepted_join' : 'missing_accepted_join';
         }
