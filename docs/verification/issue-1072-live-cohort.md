@@ -167,3 +167,41 @@ was checked open with `draft=false` at the revision above.
 Normal staging failed on the read-only `.git/index.lock`. The source, tests and
 this note are preserved in an isolated local commit and transferable
 `/tmp/orchestrator-live-cohort-retry-dates/change.bundle` and `change.patch`.
+
+## Failed role-record persistence
+
+Checked on 2026-11-05 against `2df49bad30c95745de3de84862c571e2868a2215`
+plus this change. The observer now reports `role_record_write_failed` when
+the native live writer retains `role_record_error`. It preserves the paid
+decision, backend locator and attempt date, but an accompanying role locator
+cannot override the recorded write failure or increase the binary decision
+count. Private error text and the unwritten role-record payload stay omitted.
+
+Both regressions failed against the previous observer. The isolated native
+`run_live` fixture retains a paid response with a failed role write, makes no
+second provider call, and produces the explicit persistence gap without
+inventing a role receipt. Another fixture drops from 15 to 14 retained decisions
+on the failure, then returns to 15 when a later supplied report clears it,
+preserving decision and attempt identity. These fixtures do not authenticate
+production evidence or perform role-record recovery.
+
+All 124 live-cohort, inventory and native-inventory JavaScript tests pass;
+the diagnostic and replay-revision unittest suites pass all 39 tests.
+JavaScript syntax and `git diff --check` pass. No Python files changed.
+`python3 -m pytest tests/test_adjudicator_retro.py -m 'not slow'` remains blocked
+because pytest is absent.
+
+The default runtime, Brain, live report and canonical report remain unavailable.
+The original fixed next-20 manifest was not recovered from the checkout or
+source issue discussion. The retained October 18 observation linked above was
+re-read: it reports zero live advice and two failed cases. Raw authenticated
+historical receipts remain unavailable. No dispatch, canonical publication,
+mirror synchronization or operational checkbox completion is claimed.
+
+Staging failed on the read-only `.git/index.lock`. The source, tests and this
+note are preserved in a separate local commit and transferable
+`/tmp/orchestrator-live-role-persistence/change.bundle` and `change.patch`.
+PR #1081 was checked open with `draft=false`. Approval checks rejected the
+blocker comment and `needs-human` label because GitHub writes require approval
+while this run's policy is `never`. Neither was published; no remote checkbox
+was changed.

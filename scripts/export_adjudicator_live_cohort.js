@@ -116,6 +116,10 @@ function liveCohort({ manifest, expectedManifestHash, manifestReference, report,
     if (row.attempts !== undefined && !attemptProvenanceValid) {
       gaps.push('attempt_provenance_invalid');
     }
+    // A paid decision can survive a failed Brain write. Preserve its decision
+    // and backend locator below, but do not treat a conflicting saved role
+    // locator as a persisted receipt or hide the original persistence break.
+    if (row.role_record_error) gaps.push('role_record_write_failed');
     if (!nonblank(row.role_run_id)) gaps.push('role_receipt_locator_missing');
     else if (receiptUses.role_run_id.get(row.role_run_id) !== 1) gaps.push('role_receipt_locator_reused');
     if (!nonblank(row.backend_run_id)) gaps.push('backend_receipt_locator_missing');

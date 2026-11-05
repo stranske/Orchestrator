@@ -248,6 +248,102 @@ test('malformed saved retry counts block decisions without inventing attempt pro
   assert.equal(result.cases[8].status, 'retained_binary_decision');
 });
 
+test('a retained role-write failure cannot supply the fifteenth dated decision', (t) => {
+  const w = world(t);
+  for (const item of w.saved.rows.slice(15)) {
+    item.decision = item.proposal.decision = item.disposition = 'needs_more_evidence';
+  }
+  w.save();
+  assert.equal(liveCohort(w.options).retained_binary_decisions, 15);
+  // Even a saved locator cannot contradict an explicit failed Brain write.
+  w.saved.rows[14].role_record_error = 'private database write failure';
+  w.save();
+  const before = [w.options.manifest, w.options.report].map((file) => fs.readFileSync(file));
+  const out = cli(w);
+  assert.equal(out.status, 0, out.stderr);
+  const result = JSON.parse(out.stdout);
+  assert.equal(result.retained_binary_decisions, 14);
+  assert.deepEqual(result.cases[14].gaps, ['role_record_write_failed']);
+  assert.equal(result.cases[14].status, 'blocked');
+  assert.equal(result.cases[14].retained_report_row.decision, 'reject_blocker');
+  assert.equal(result.cases[14].retained_report_row.role_run_id, 'role-14');
+  assert.equal(result.dispatch_receipts_authenticated, false);
+  assert.equal(result.operational_acceptance_complete, false);
+  assert.ok(!out.stdout.includes('private'));
+  assert.deepEqual([w.options.manifest, w.options.report].map((file) => fs.readFileSync(file)), before);
+  // A later retained report can clear the failure without changing the paid
+  // decision, its attempt date or backend identity. This observer only reads it.
+  w.saved.rows[14].role_record_error = null;
+  w.save();
+  const recovered = liveCohort(w.options);
+  assert.equal(recovered.retained_binary_decisions, 15);
+  assert.deepEqual(recovered.cases[14].gaps, []);
+  for (const field of ['decision', 'attempted_at', 'role_run_id', 'backend_run_id']) {
+    assert.equal(recovered.cases[14].retained_report_row[field],
+      result.cases[14].retained_report_row[field]);
+  }
+});
+
+test('native paid decisions retain the role persistence break without redispatch or fabricated receipts', (t) => {
+  const w = world(t);
+  const generated = execute(w.root, process.env.PYTHON || 'python3', ['-c', `
+import sys
+from contextlib import contextmanager
+from pathlib import Path
+import adjudicator_live as live
+import feedback
+root, now = Path(sys.argv[1]), int(sys.argv[2])
+(root / 'live.json').unlink()
+feedback.DB_PATH = root / 'brain.db'
+sha = live._toy_repository(root)
+with feedback._conn() as connection:
+    connection.execute('INSERT INTO runs(run_id,ts,target) VALUES (?,?,?)',
+        ('fixture-0', now, 'fixture/repo#1'))
+    connection.execute('INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged) '
+        'VALUES (?,?,?,1)', ('fixture-0', 'NON_PASS', 'PASS'))
+@contextmanager
+def provider(target, head):
+    assert head == sha
+    yield root / 'repo'
+calls = []
+def runner(**kwargs):
+    calls.append(kwargs['source'])
+    return {'backend_run_id': 'paid-backend', 'role_run_id': None,
+        'role_record_error': 'private database write failure',
+        'role_record': {'run_id': 'unwritten-role', 'proposal': 'private role payload'},
+        'proposal': {'decision': 'reject_blocker', 'rationale': 'private paid response'},
+        'advisory_plan': {'decision': 'reject_blocker'}, 'errors': []}
+options = dict(path=root / 'live.json', db=feedback.DB_PATH, now=now + 1, env={},
+    evidence_reader=lambda _: live._evidence_for(sha), runner=runner, provider=provider,
+    snapshot_reader=lambda _: {'number': 1, 'headRefOid': sha, 'body': live.AC_BODY},
+    github_reader=lambda _: {'total_count': 0, 'check_runs': []})
+first = live.run_live(**options)
+assert first['attempted'] == 1 and first['rows'][0]['decision'] == 'reject_blocker'
+assert first['rows'][0]['role_record_error'] == 'private database write failure'
+assert live.run_live(**options)['attempted'] == 0 and calls == ['live']
+`, w.root, String(now - 2)]);
+  assert.equal(generated.status, 0, generated.stderr);
+  const inputs = [w.options.manifest, w.options.report, path.join(w.root, 'brain.db')];
+  const before = inputs.map((file) => fs.readFileSync(file));
+  const out = cli(w);
+  assert.equal(out.status, 0, out.stderr);
+  const result = JSON.parse(out.stdout);
+  const item = result.cases[0];
+  assert.equal(result.retained_binary_decisions, 0);
+  assert.equal(item.status, 'blocked');
+  assert.deepEqual(item.gaps, ['role_record_write_failed', 'role_receipt_locator_missing']);
+  assert.equal(item.retained_report_row.decision, 'reject_blocker');
+  assert.equal(item.retained_report_row.role_run_id, null);
+  assert.equal(item.retained_report_row.backend_run_id, 'paid-backend');
+  assert.equal(item.retained_report_row.attempts, 1);
+  assert.equal(item.retained_report_row.attempted_at, new Date((now - 1) * 1000).toISOString());
+  assert.ok(result.cases.slice(1).every((entry) => entry.gaps[0] === 'fixed_member_row_missing'));
+  assert.equal(result.operational_acceptance_complete, false);
+  assert.ok(!out.stdout.includes('private'));
+  assert.ok(!out.stdout.includes('unwritten-role'));
+  assert.deepEqual(inputs.map((file) => fs.readFileSync(file)), before);
+});
+
 test('historical and current report sources stay distinct from the date of a new read', (t) => {
   const w = world(t);
   const historicalAt = Date.parse('2026-10-18T12:00:00Z') / 1000;
