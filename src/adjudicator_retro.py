@@ -979,7 +979,9 @@ def disputes(*, db: Path | None = None, now: int | None = None, days: int = 90) 
                 "o.merged,o.durability,o.durability_checked_ts FROM runs r JOIN outcomes o "
                 "USING(run_id) WHERE r.ts>=? AND o.verifier_verdict IS NOT NULL "
                 "AND o.adjudicated_verdict IS NOT NULL "
-                "AND o.verifier_verdict!=o.adjudicated_verdict ORDER BY r.ts DESC,r.run_id",
+                "AND o.verifier_verdict!=o.adjudicated_verdict "
+                "AND lower(r.target) NOT LIKE 'stranske/collab-admin#%' "
+                "ORDER BY r.ts DESC,r.run_id",
                 ((now if now is not None else int(time.time())) - days * 86400,),
             )
         ]
@@ -1026,7 +1028,8 @@ def live_disputes(
             {
                 row[0]
                 for row in conn.execute(
-                    "SELECT DISTINCT r.target FROM completion_events e JOIN runs r "
+                    "SELECT DISTINCT COALESCE(json_extract(e.payload_json, '$.live_shadow.target'), "
+                    "r.target) FROM completion_events e LEFT JOIN runs r "
                     "ON r.run_id=e.run_id "
                     "WHERE e.producer='role-adjudicator' AND e.phase='live_shadow_advice'"
                 )

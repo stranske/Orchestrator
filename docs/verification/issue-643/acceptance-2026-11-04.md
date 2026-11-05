@@ -1,0 +1,68 @@
+# Issue 643 live shadow acceptance — 2026-11-04
+
+Outcome: a new certified dispute produces one advisory completion event, a second
+pass produces none, and judged durability produces exactly:
+
+`adjudicator live: disputes 1, advised 1, uncertified 0, graded 1 (agree 1, disagree 0)`
+
+Command (repository has no selected virtual environment):
+
+```sh
+/opt/anaconda3/bin/python3 -m pytest tests/test_adjudicator_retro.py -k 'test_live_shadow_adjudicates_a_new_dispute_once_and_grades_on_truth or test_live_shadow_never_adjudicates_an_uncertified_case or test_live_shadow_writes_no_merge_input'
+```
+
+Result: 3 passed, 72 deselected. These are private-Brain tests with a stubbed
+collector and role backend, not production advice or production grading.
+
+The collector-issued case is checked again at advice persistence. Advice and
+uncertified reasons use bounded completion-event payloads, with separate advice
+run identities so original outcome/influence inputs are untouched. Brain receipts
+recover advice after report loss. The report's writer lock serializes dispatch and
+reconciliation; when busy, the drain is reading the last saved weekly report.
+
+`duplicate-advice-red.txt` records removal of the already-advised exclusion:
+`AssertionError: second run wrote duplicate advice events`, `assert 2 == 1`.
+`duplicate-advice-restored.txt` records the restored named test passing and the
+exact live line above. `focused-green.txt` records the related focused suites.
+The full suite was not run locally.
+
+Truth reconciliation runs before dispatch, after the durability sweep through
+`orchestrate.sh`'s existing adjudicator-live cadence, and via `--reconcile` even
+when dispatch is switched off or GitHub capacity is unavailable. Below 0.75 on at
+least 20 graded cases, it writes a dated sticky retirement receipt and disables
+further live dispatch. Grading and weekly reads remain available while retired.
+The private retirement test exercises 19 versus 20 graded cases and refusal to
+dispatch after retirement. It is not evidence of production retirement.
+
+## Sync and weekly integration
+
+The owner's `~/.codex/bin/orch-sync-mirror.sh` calls the repository's
+`scripts/build_exec_mirror.sh`; that builder copies `src/*.py` and `orchestrate.sh`.
+The existing cadence registry contains `adjudicator-live`, and the existing
+`switch_review.py --text-out` live field now consumes dated weekly evidence,
+including agreement against 0.75 and retirement status. No additional installer,
+schedule, capability row, or merge authority was added. Rollback uses
+`ORCH_ADJUDICATOR_LIVE_SHADOW=0`; retained advice still supports truth grading.
+
+The concurrent keepalive writer completed successfully before its commit
+369a3a01 was fast-forwarded into this worktree. Its live selection work is retained;
+its event target lookup now also supports the independent advice run identities.
+
+The collection floor changes from 14196 to 14207: six preserved keepalive tests
+plus five new live tests. Expected passed changes from 14194 to 14205; all ceilings
+are unchanged. These totals are derived from the test delta, not an observed
+full-suite pass. CI must verify the combined result.
+
+## Outstanding operational acceptance
+
+Production deployment, live advice and the #575 weekly milestone remain UNKNOWN.
+This run did not sync the protected live mirror or invoke production model work.
+No production advice, graded cases, agreement, or retirement is claimed by the
+private tests.
+
+After the owner's next ordinary sync of the delivered source, dated #575 weekly
+evidence must show advised A > 0 within seven days and graded G >= 20 by
+2026-11-08, report agreement against 0.75, and record any required retirement.
+Those future real disputes and durability outcomes cannot be manufactured by a
+coding agent. The issue's operational acceptance must remain open until that
+readback exists.

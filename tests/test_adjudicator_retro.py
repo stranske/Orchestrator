@@ -1094,3 +1094,188 @@ def test_retry_pending_reproduces_the_original_skip_rule():
                     shape,
                 )
         assert retro._retry_pending(None, retry=retry) is False
+
+
+@pytest.fixture
+def live_shadow(private_brain, tmp_path, monkeypatch):
+    """Private Brain, collector issuance and role backend; no GitHub or paid dispatch."""
+    from contextlib import contextmanager
+    import adjudicator_live as live
+
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    calls = []
+
+    @contextmanager
+    def checkout(*_args):
+        yield tmp_path
+
+    def collector(entry, *_args, **_kwargs):
+        entry["collection_requirements"] = {"source_paths": ["proof.py"]}
+        return roles._issue_collected_case(
+            {"target": entry["target"], "metadata_only": False}, 10000
+        )
+
+    def backend(**kwargs):
+        assert isinstance(kwargs["case"], roles.CollectedAdjudicationCase)
+        assert kwargs["source"] == "live" and kwargs["dispatch"]
+        calls.append(kwargs)
+        return {
+            "backend": "stub",
+            "backend_run_id": "backend-one",
+            "proposal": proposal(),
+            "errors": [],
+        }
+
+    monkeypatch.setattr(live, "certify", collector)
+    with sqlite3.connect(private_brain) as conn:
+        conn.execute("UPDATE outcomes SET durability='pending',durability_checked_ts=NULL")
+    return (
+        live,
+        calls,
+        dict(
+            db=private_brain,
+            path=tmp_path / "live.json",
+            provider=checkout,
+            evidence_reader=lambda row: {
+                **evidence(row),
+                "ground_truth_evidence": {
+                    **evidence(row)["ground_truth_evidence"],
+                    "merge_sha": "a" * 40,
+                    "head_sha": "a" * 40,
+                },
+            },
+            snapshot_reader=lambda _: {},
+            runner=backend,
+            env={},
+        ),
+    )
+
+
+def _live_events(db):
+    with sqlite3.connect(db) as conn:
+        return conn.execute(
+            "SELECT phase,payload_json FROM completion_events " "WHERE producer='role-adjudicator'"
+        ).fetchall()
+
+
+def test_live_shadow_adjudicates_a_new_dispute_once_and_grades_on_truth(live_shadow):
+    live, calls, options = live_shadow
+    first = live.run_live(**options)
+    assert first["advised"] == 1
+    assert len(_live_events(options["db"])) == 1
+    live.run_live(**options)
+    assert len(_live_events(options["db"])) == 1, "second run wrote duplicate advice events"
+    assert len(calls) == 1
+    # Losing the JSON cache must not permit a second paid call.
+    options["path"].unlink()
+    live.run_live(**options)
+    assert len(_live_events(options["db"])) == 1
+    assert len(calls) == 1
+    with sqlite3.connect(options["db"]) as conn:
+        conn.execute(
+            "UPDATE outcomes SET durability='broke_later',durability_checked_ts=?",
+            (int(time.time()),),
+        )
+    report = live.reconcile_live(db=options["db"], path=options["path"])
+    assert report["summary"]["graded"] == report["summary"]["agree"] == 1
+    line = live.weekly_line(options["path"])
+    assert "live: disputes 1, advised 1, uncertified 0, graded 1" in line
+    print(line)
+    assert "agreement 1.000 against 0.75" in live.weekly_evidence(
+        db=options["db"], path=options["path"]
+    )
+
+
+def test_live_shadow_never_adjudicates_an_uncertified_case(live_shadow, monkeypatch):
+    live, calls, options = live_shadow
+
+    def refuse(*_args, **_kwargs):
+        raise ValueError("missing immutable source")
+
+    monkeypatch.setattr(live, "certify", refuse)
+    result = live.run_live(**options)
+    assert result["uncertified"] == 1 and not calls
+    events = _live_events(options["db"])
+    assert len(events) == 1 and events[0][0] == "live_shadow_uncertified"
+    assert "missing immutable source" in events[0][1]
+    assert "uncertified 1" in live.weekly_line(options["path"])
+
+
+def test_live_shadow_writes_no_merge_input(live_shadow):
+    live, _, options = live_shadow
+
+    def merge_inputs():
+        with sqlite3.connect(options["db"]) as conn:
+            # Whole outcome and original run rows cover verdicts, CI, merged and input context.
+            return (
+                conn.execute("SELECT * FROM outcomes ORDER BY run_id").fetchall(),
+                conn.execute("SELECT * FROM runs ORDER BY run_id").fetchall(),
+            )
+
+    with sqlite3.connect(options["db"]) as conn:
+        conn.execute(
+            "INSERT INTO influence_edges "
+            "(edge_id,schema_version,target_run_id,influence_type,influence_id,accepted,created_ts,metadata_hash) "
+            "VALUES ('gate-input',1,'original','role','adjudicator',1,1,'fixture')"
+        )
+    before = merge_inputs()
+    with sqlite3.connect(options["db"]) as conn:
+        edges = conn.execute("SELECT * FROM influence_edges").fetchall()
+    live.run_live(**options)
+    live.reconcile_live(db=options["db"], path=options["path"])
+    assert merge_inputs() == before
+    with sqlite3.connect(options["db"]) as conn:
+        assert conn.execute("SELECT * FROM influence_edges").fetchall() == edges
+
+
+def test_live_shadow_retires_below_rule_only_after_twenty_grades(live_shadow):
+    live, calls, options = live_shadow
+    live.run_live(**options)
+    saved = json.loads(options["path"].read_text())
+    original = saved["rows"][0]
+    with sqlite3.connect(options["db"]) as conn:
+        conn.execute(
+            "UPDATE outcomes SET durability='durable',durability_checked_ts=?", (int(time.time()),)
+        )
+        for i in range(1, 20):
+            conn.execute(
+                "INSERT INTO runs(run_id,ts,target) VALUES (?,?,?)",
+                (f"grade-{i}", int(time.time()), f"owner/repo#{i+1}"),
+            )
+            conn.execute(
+                "INSERT INTO outcomes(run_id,durability,durability_checked_ts) VALUES (?,'durable',?)",
+                (f"grade-{i}", int(time.time())),
+            )
+    saved["rows"] = [
+        {
+            **original,
+            "case_id": original["case_id"] if i == 0 else f"case-{i}",
+            "run_id": "original" if i == 0 else f"grade-{i}",
+        }
+        for i in range(19)
+    ]
+    options["path"].write_text(json.dumps(saved))
+    assert not live.reconcile_live(db=options["db"], path=options["path"])["retirement"]
+    saved["rows"].append({**original, "case_id": "case-19", "run_id": "grade-19"})
+    options["path"].write_text(json.dumps(saved))
+    report = live.reconcile_live(db=options["db"], path=options["path"])
+    assert report["retirement"]["graded"] >= 20
+    assert report["retirement"]["agreement"] < 0.75
+    assert live.run_live(**options)["disabled"]
+    assert len(calls) == 1
+    assert "retired" in live.weekly_evidence(db=options["db"], path=options["path"])
+
+
+def test_live_shadow_cli_reconciles_with_dispatch_switched_off(live_shadow, monkeypatch):
+    live, calls, options = live_shadow
+    live.run_live(**options)
+    monkeypatch.setattr(live, "report_path", lambda: options["path"])
+    monkeypatch.setenv(live.LIVE_SWITCH, "0")
+    with sqlite3.connect(options["db"]) as conn:
+        conn.execute(
+            "UPDATE outcomes SET durability='broke_later',durability_checked_ts=?",
+            (int(time.time()),),
+        )
+    assert live.main(["--reconcile"]) == 0
+    assert json.loads(options["path"].read_text())["summary"]["graded"] == 1
+    assert len(calls) == 1

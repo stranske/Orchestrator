@@ -1801,7 +1801,7 @@ def review(
         "review_loop": review_round_snapshot(),
         "adjudicator_shadow": adjudicator_retro.weekly_line(),
         # The live arm (M2 live, #643): new disputes certified and advised once, graded on truth.
-        "adjudicator_live": adjudicator_live.weekly_line(),
+        "adjudicator_live": adjudicator_live.weekly_evidence(),
         "adversarial_shape": adversarial_shape_population(now=now),
         "value_chain": value_chain,
         "runtime_ac_shadow": runtime_ac_shadow,

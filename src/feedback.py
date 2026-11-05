@@ -539,6 +539,7 @@ MAX_COMPLETION_LIST_ITEMS = 32
 MAX_COMPLETION_STRING_CHARS = 256
 MAX_COMPLETION_ARTIFACTS = 16
 COMPLETION_PAYLOAD_FIELDS = {
+    "live_shadow",
     "closer_stage",
     "relay_pacing",
     "changed_path_classes",
@@ -595,6 +596,8 @@ VALID_COMPLETION_EVENT_TYPES = {
     "panel",
 }
 VALID_COMPLETION_PHASES = {
+    "live_shadow_advice",
+    "live_shadow_uncertified",
     "post_merge_recheck",
     "trigger",
     "decision",
@@ -660,6 +663,22 @@ VALID_COMPLETION_STATUSES = {
     "unknown",
 }
 COMPLETION_NESTED_FIELDS = {
+    "live_shadow": {
+        "run_id",
+        "case_id",
+        "target",
+        "source",
+        "decision",
+        "disposition",
+        "backend",
+        "backend_run_id",
+        "cost_usd",
+        "certification",
+        "merge_rule_verdict",
+        "attempted_at",
+        "attempts",
+        "proposal",
+    },
     "relay_pacing": {
         "source",
         "chosen",
@@ -1919,6 +1938,7 @@ def _sanitize_completion_payload(payload: dict | None) -> tuple[dict, str, int]:
 def _normalize_completion_producer(producer: str) -> str:
     value = str(producer or "").strip().lower().replace("-", "_")
     aliases = {
+        "role_adjudicator": "role-adjudicator",
         "feedback.execution_attempt": "feedback.execution_attempt",
         "feedback.record_run": "feedback.record_run",
         "feedback.record_outcome": "feedback.record_outcome",
@@ -2117,15 +2137,18 @@ def record_completion_event(
     payload: dict | None = None,
     event_id: str | None = None,
     timestamp: int | None = None,
+    db: Path | None = None,
 ) -> dict:
     """Persist one bounded/redacted event in the existing feedback Brain."""
     # ~120 completion events/day; coalesced daily for the same reason as feedback-store. Placed on
     # the PUBLIC entrypoint rather than `_record_completion_event_in_conn`, so the internal helper
     # (called several times inside a single record_run) stays free of ledger work.
-    _capability_daily_heartbeat(
-        "completion-event-lineage", "invocation", ref="record_completion_event"
-    )
-    with _conn() as c:
+    if db is None:
+        _capability_daily_heartbeat(
+            "completion-event-lineage", "invocation", ref="record_completion_event"
+        )
+    # Explicit private Brains already have the schema; never initialize or touch the global DB.
+    with _conn() if db is None else sqlite3.connect(db) as c:
         return _record_completion_event_in_conn(
             c,
             run_id,

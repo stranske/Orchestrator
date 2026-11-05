@@ -34,9 +34,11 @@ import json
 import os
 import re
 import shlex
+import sqlite3
 import subprocess
 import sys
 import time
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable
@@ -450,6 +452,113 @@ def _load_rows(path: Path) -> list[dict]:
     return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
 
 
+def _event_rows(db: Path | None = None) -> list[dict]:
+    """Recover advice/refusals from the private or production Brain, without writes."""
+    with sqlite3.connect(f"file:{(db or feedback.DB_PATH).resolve()}?mode=ro", uri=True) as conn:
+        return [
+            json.loads(raw)["live_shadow"]
+            for (raw,) in conn.execute(
+                "SELECT payload_json FROM completion_events WHERE producer='role-adjudicator' "
+                "AND phase IN ('live_shadow_advice','live_shadow_uncertified') "
+                "AND validation_status!='rejected' ORDER BY created_ts,event_id"
+            )
+        ]
+
+
+def _persist_live_event(
+    entry: dict, db: Path | None, case: roles.CollectedAdjudicationCase | None = None
+) -> None:
+    if "proposal" in entry:
+        roles._collected_snapshot(case)  # issuance and digest rechecked at persistence
+        entry["certification"]["digest"] = case._digest
+    phase = "live_shadow_advice" if "proposal" in entry else "live_shadow_uncertified"
+    keys = (
+        "run_id",
+        "case_id",
+        "target",
+        "source",
+        "decision",
+        "disposition",
+        "backend",
+        "backend_run_id",
+        "cost_usd",
+        "certification",
+        "merge_rule_verdict",
+        "attempted_at",
+        "attempts",
+    )
+    receipt = {key: entry[key] for key in keys if key in entry}
+    if "proposal" in entry:
+        receipt["proposal"] = {"decision": entry["decision"]}
+    result = feedback.record_completion_event(
+        "adjudicator-live:" + entry["case_id"],
+        event_type="role",
+        phase=phase,
+        producer="role-adjudicator",
+        event_id="event:live-shadow:" + uuid.uuid4().hex,
+        payload={"live_shadow": receipt},
+        db=db,
+    )
+    if result["validation_status"] == "rejected":
+        raise ValueError("live advice event rejected at persistence")
+
+
+@contextmanager
+def _live_lock(path: Path):
+    import fcntl
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.with_suffix(".lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError(
+                "blocking=live writer; drainable=read last weekly report; retry after writer exits"
+            ) from exc
+        yield
+
+
+def reconcile_live(*, db: Path | None = None, path: Path | None = None) -> dict:
+    path = path or report_path()
+    with _live_lock(path):
+        return _reconcile_live(db=db, path=path)
+
+
+def _reconcile_live(*, db: Path | None = None, path: Path | None = None) -> dict:
+    """No dispatch: refresh truth after durability and retain a sticky retirement receipt."""
+    path = path or report_path()
+    previous = json.loads(path.read_text()) if path.exists() else {}
+    rows = previous.get("rows", [])
+    by_id = {row["case_id"]: row for row in rows}
+    for row in _event_rows(db):
+        by_id.setdefault(row["case_id"], row)
+    rows = list(by_id.values())
+    _refresh_live_truth(rows, db)
+    summary = live_summary(rows)
+    retirement = previous.get("retirement")
+    rate = summary["agree"] / summary["graded"] if summary["graded"] else None
+    if not retirement and summary["graded"] >= 20 and rate < 0.75:
+        retirement = {
+            "retired_at": int(time.time()),
+            "graded": summary["graded"],
+            "agreement": rate,
+            "rule": 0.75,
+            "role": "role-adjudicator",
+        }
+    report = {
+        **previous,
+        "generated_at": int(time.time()),
+        "rows": rows,
+        "population": previous.get("population", len(rows)),
+        "summary": summary,
+        "agreement": rate,
+        "rule": 0.75,
+        "retirement": retirement,
+    }
+    _write_report(path, report)
+    return report
+
+
 MAX_ATTEMPTS = (
     3  # a case whose provisioning or role run failed is retried on later runs, this many in all
 )
@@ -462,7 +571,15 @@ def _final(row: dict) -> bool:
     return int(row.get("attempts") or 1) >= MAX_ATTEMPTS
 
 
-def run_live(
+def run_live(**kwargs) -> dict:
+    """Serialize a report's read/dispatch/write cycle; never release an uncertain paid run."""
+    if not enabled(kwargs.get("env")):
+        return {"disabled": True, "attempted": 0, "advised": 0, "uncertified": 0}
+    with _live_lock(kwargs.get("path") or report_path()):
+        return _run_live(**kwargs)
+
+
+def _run_live(
     *,
     limit: int | None = None,
     dispatch: bool = True,
@@ -488,16 +605,24 @@ def run_live(
     runner = runner or roles.run_adjudicator_agent
     provider = provider or _exact_head_checkout
     snapshot_reader = snapshot_reader or pr_snapshot
-    rows = _load_rows(path)
+    reconciled = _reconcile_live(db=db, path=path)
+    if reconciled.get("retirement"):
+        return {**reconciled, "disabled": True, "attempted": 0, "advised": 0, "uncertified": 0}
+    rows = reconciled["rows"]
     saved = {row.get("case_id"): row for row in rows if _final(row)}
     retrying = {row.get("case_id"): row for row in rows if not _final(row)}
-    population = retro.disputes(db=db, now=now)
+    advised_targets = {row.get("target") for row in rows if "proposal" in row}
+    population = [
+        row
+        for row in retro.disputes(db=db, now=now)
+        if row.get("target", "").split("#")[0].lower() != "stranske/collab-admin"
+    ]
     attempted = advised = uncertified = 0
     for dispute in population:
         if attempted >= limit:
             break
         case_id = retro._case_id(dispute)
-        if case_id in saved:
+        if case_id in saved or dispute["target"] in advised_targets:
             continue
         attempted += 1
         earlier = retrying.pop(case_id, None)
@@ -520,6 +645,7 @@ def run_live(
             "cost_usd": None,
             "dispatch_timeout_s": timeout,
         }
+        case = None
         try:
             entry["packet"] = retro.build_packet(dispute, reader(dispute))
             sha = retro._case_evaluated_sha(entry)
@@ -587,6 +713,8 @@ def run_live(
             # Provisioning, an evidence read or the role run failed, not the case: the row is
             # kept with its error and retried by later runs until MAX_ATTEMPTS, then it is final.
             entry["error"] = str(exc)[:300]
+        if "proposal" in entry or (entry.get("certification") or {}).get("status") == "uncertified":
+            _persist_live_event(entry, db, case)
         rows.append(entry)
         if _final(entry):
             saved[case_id] = entry
@@ -608,6 +736,7 @@ def run_live(
             "rows": rows,
         },
     )
+    _reconcile_live(db=db, path=path)
     return {
         "disabled": False,
         "attempted": attempted,
@@ -693,6 +822,32 @@ def _exact_head_checkout(target: str, sha: str):
 
     with provision.temporary_exact_head_worktree(target, sha) as worktree:
         yield worktree
+
+
+def weekly_evidence(*, db: Path | None = None, path: Path | None = None) -> str:
+    """Dated #575 evidence; reconciliation spends no provider capacity, even while retired."""
+    from datetime import datetime, timezone
+
+    path = path or report_path()
+    if not path.exists():
+        return weekly_line(path) + "; agreement UNKNOWN against 0.75; retirement UNKNOWN"
+    report = json.loads(path.read_text())
+    rows = report.get("rows", [])
+    _refresh_live_truth(rows, db)
+    summary = live_summary(rows)
+    rate = summary["agree"] / summary["graded"] if summary["graded"] else None
+    agreement = "UNKNOWN" if rate is None else f"{rate:.3f}"
+    retired = "retired" if report.get("retirement") else "active shadow"
+    date = datetime.now(timezone.utc).date().isoformat()
+    line = (
+        f"adjudicator live: disputes {report.get('population', len(rows))}, "
+        f"advised {summary['advised']}, uncertified {summary['uncertified']}, "
+        f"graded {summary['graded']} (agree {summary['agree']}, disagree {summary['disagree']})"
+    )
+    return (
+        f"{date} {line}; agreement {agreement} against 0.75; "
+        f"{retired}; blocking=dispatch retired or switched off; drainable=durability grading"
+    )
 
 
 def weekly_line(path: Path | None = None) -> str:
@@ -806,7 +961,7 @@ def _selftest() -> None:
 
             @contextmanager
             def provider(target, head):
-                assert target == "owner/repo#1" and head == sha
+                assert target in {"owner/repo#1", "owner/repo#2"} and head == sha
                 yield str(root / "repo")
 
             snapshot = {"number": 1, "headRefOid": sha, "body": AC_BODY}
@@ -844,7 +999,7 @@ def _selftest() -> None:
             # A body with no explicit acceptance criteria cannot be certified: recorded, no dispatch.
             with feedback._conn() as conn:
                 conn.execute(
-                    "INSERT INTO runs(run_id,ts,target) VALUES ('live-2',?,'owner/repo#1')",
+                    "INSERT INTO runs(run_id,ts,target) VALUES ('live-2',?,'owner/repo#2')",
                     (now - 1,),
                 )
                 conn.execute(
@@ -882,6 +1037,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--no-dispatch", action="store_true", help="certify and record, never ask the role"
     )
+    parser.add_argument(
+        "--reconcile",
+        action="store_true",
+        help="grade durability without dispatch, including when switched off",
+    )
     parser.add_argument("--line", action="store_true", help="print the weekly line and exit")
     parser.add_argument(
         "--enabled",
@@ -892,6 +1052,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.selftest:
         _selftest()
+        return 0
+    if args.reconcile:
+        result = reconcile_live()
+        print(json.dumps({k: v for k, v in result.items() if k != "rows"}, default=str))
         return 0
     if args.line:
         print(weekly_line())

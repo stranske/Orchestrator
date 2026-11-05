@@ -558,10 +558,10 @@ def test_weekly_review_prints_the_live_line(world, monkeypatch):
         }
     )
     assert "adjudicator live: disputes 1, advised 1, uncertified 0, graded 0" in rendered
-    # Deliberate break, in place: without the case-id dedup the same dispute is advised again.
+    # The Brain receipt, rather than the report cache, prevents duplicate advice.
     world["path"].write_text(json.dumps({"rows": [], "summary": {}, "population": 1}))
     again = live.run_live(**world["common"])
-    assert again["attempted"] == 1 and len(world["calls"]) == 2
+    assert again["attempted"] == 0 and len(world["calls"]) == 1
 
 
 def test_a_failed_role_run_is_retried_up_to_the_cap_and_counted_as_failed(world):

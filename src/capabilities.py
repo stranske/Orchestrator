@@ -580,7 +580,11 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
         "downstream_consumer": "switch_review.py:format_report consumes agreement and cost summaries",
         "notes": "dedup 2026-10-05: existing roles.run_adjudicator_agent and feedback.record_role_run reused; extend retrospective evidence and closer eligibility, no new capability or outcome store; 2026-10-07: collector and role case JSON already exist; extend immutable collected-byte input preparation with whole-packet budget, retain semantic admission floor",
         "learning_sink": "feedback role runs and linked outcomes",
-        "gate_reason": "adjudication remains advisory",
+        "rollback": {
+            "env": {"ORCH_ADJUDICATOR_LIVE_SHADOW": "0"},
+            "drain": "retain advice and reconcile durability without dispatch",
+        },
+        "gate_reason": "adjudication remains advisory; live dispatch retires below 0.75 on n >= 20",
         "gate_evidence": "role cannot directly merge, close, or relabel",
         "evidence_threshold": "linked adjudications demonstrate calibrated value",
     },
