@@ -609,6 +609,54 @@ def test_a_provisioning_failure_is_an_error_not_a_refusal(world):
     assert world["calls"] == [] and not live._final(row)
 
 
+def test_m2_pass_clause_is_the_weekly_check_reading():
+    """#575 reads advised, the 2026-11-08 grade target, agreement against 0.75, and retirement."""
+    pending = live.m2_pass_clause(
+        {"advised": 1, "graded": 1, "agree": 1, "merge_rule_agree": 0}, today="2026-11-05"
+    )
+    assert "advised>0 MET" in pending
+    assert "graded 1 of 20 by 2026-11-08 PENDING" in pending
+    assert "agreement 1.000 against 0.75" in pending
+    assert "merge-rule 0.000" in pending
+    assert "SHORT" in live.m2_pass_clause(
+        {"advised": 1, "graded": 19, "agree": 19, "merge_rule_agree": 10}, today="2026-11-08"
+    )
+    met = live.m2_pass_clause(
+        {"advised": 20, "graded": 20, "agree": 16, "merge_rule_agree": 15}, today="2026-11-08"
+    )
+    assert "graded 20 of 20 by 2026-11-08 MET" in met
+    assert "agreement 0.800 against 0.75" in met
+    assert "merge-rule 0.750" in met
+    retired = live.m2_pass_clause(
+        {"advised": 20, "graded": 20, "agree": 10, "merge_rule_agree": 15}, today="2026-11-05"
+    )
+    assert "RETIRED" in retired
+    assert "agreement 0.500 against 0.75" in retired
+    # Exactly the merge rule stays active. One step under it retires.
+    assert "MET" in live.m2_pass_clause(
+        {"advised": 20, "graded": 20, "agree": 15, "merge_rule_agree": 15}, today="2026-11-08"
+    )
+    assert "advised>0 PENDING" in live.m2_pass_clause(None, today="2026-11-05")
+    assert "graded UNKNOWN of 20 by 2026-11-08 PENDING" in live.m2_pass_clause(
+        None, today="2026-11-09"
+    )
+
+
+def test_weekly_evidence_carries_the_pass_reading_beside_the_live_line(world):
+    live.run_live(**world["common"])
+    checked = feedback.DURABILITY_DETECTION_SINCE + 10
+    with feedback._conn() as conn:
+        conn.execute(
+            "UPDATE outcomes SET durability='broke_later', durability_checked_ts=? WHERE run_id='live-1'",
+            (checked,),
+        )
+    evidence = live.weekly_evidence(db=feedback.DB_PATH, path=world["path"], today="2026-11-05")
+    assert "live: disputes 1, advised 1, uncertified 0, graded 1 (agree 1, disagree 0)" in evidence
+    assert "agreement 1.000 against 0.75; active shadow" in evidence
+    assert "M2 live pass: advised>0 MET; graded 1 of 20 by 2026-11-08 PENDING" in evidence
+    assert "merge-rule 0.000" in evidence
+
+
 def test_weekly_readers_survive_a_bad_report_and_an_unreadable_brain(tmp_path):
     path = tmp_path / "live.json"
     path.write_text("[]")

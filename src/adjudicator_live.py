@@ -50,6 +50,12 @@ import roles
 LIVE_SWITCH = "ORCH_ADJUDICATOR_LIVE_SHADOW"
 LIVE_LIMIT = "ORCH_ADJUDICATOR_LIVE_LIMIT"
 DEFAULT_LIMIT = 3
+# M2 live (#643), the number the weekly check on #575 reads. The 0.75 bar is the merge
+# rule's agreement on the retrospective cohort. Below it, once 20 live rows are graded,
+# dispatch stops; short of 20 on the deadline the pool is recorded short, not retired.
+GRADE_TARGET = 20
+GRADE_DEADLINE = "2026-11-08"
+MERGE_RULE = 0.75
 OFF_WORDS = frozenset({"0", "false", "no", "off"})
 CHECK_RUN_PAGE_SIZE = 100
 CHECK_RUN_LOG_TAIL_BYTES = 4_096
@@ -555,12 +561,17 @@ def _reconcile_live(*, db: Path | None = None, path: Path | None = None) -> dict
     summary = live_summary(rows)
     retirement = previous.get("retirement")
     rate = summary["agree"] / summary["graded"] if summary["graded"] else None
-    if not retirement and summary["graded"] >= 20 and rate is not None and rate < 0.75:
+    if (
+        not retirement
+        and summary["graded"] >= GRADE_TARGET
+        and rate is not None
+        and rate < MERGE_RULE
+    ):
         retirement = {
             "retired_at": int(time.time()),
             "graded": summary["graded"],
             "agreement": rate,
-            "rule": 0.75,
+            "rule": MERGE_RULE,
             "role": "role-adjudicator",
         }
     report = {
@@ -570,7 +581,7 @@ def _reconcile_live(*, db: Path | None = None, path: Path | None = None) -> dict
         "population": previous.get("population", len(rows)),
         "summary": summary,
         "agreement": rate,
-        "rule": 0.75,
+        "rule": MERGE_RULE,
         "retirement": retirement,
     }
     _write_report(path, report)
@@ -866,14 +877,68 @@ def _exact_head_checkout(target: str, sha: str):
         yield worktree
 
 
-def weekly_evidence(*, db: Path | None = None, path: Path | None = None) -> str:
+def _retirement_due(summary: dict, report: dict) -> bool:
+    """Sticky receipt, or the same threshold reconcile_live would write on this summary."""
+    if report.get("retirement"):
+        return True
+    graded = summary.get("graded") or 0
+    if graded < GRADE_TARGET:
+        return False
+    return summary["agree"] / graded < MERGE_RULE
+
+
+def m2_pass_clause(summary: dict | None, *, today: str | None = None, retired: bool = False) -> str:
+    """The #575 check's M2 live verdict: advised, graded-by-date, agreement, merge rule.
+
+    ``today`` is an ISO date so a test can stand on either side of ``GRADE_DEADLINE``.
+    A missing summary stays pending: absence is not a failed pass number.
+    """
+    from datetime import datetime, timezone
+
+    today = today or datetime.now(timezone.utc).date().isoformat()
+    if not summary:
+        return (
+            "M2 live pass: advised>0 PENDING; "
+            f"graded UNKNOWN of {GRADE_TARGET} by {GRADE_DEADLINE} PENDING; "
+            f"agreement UNKNOWN against {MERGE_RULE}; merge-rule UNKNOWN"
+        )
+    advised = int(summary.get("advised") or 0)
+    graded = int(summary.get("graded") or 0)
+    rate = (summary.get("agree") or 0) / graded if graded else None
+    rule_hits = summary.get("merge_rule_agree")
+    rule_rate = (rule_hits or 0) / graded if graded and rule_hits is not None else None
+    if retired or (graded >= GRADE_TARGET and rate is not None and rate < MERGE_RULE):
+        grade_state = "RETIRED"
+    elif graded >= GRADE_TARGET:
+        grade_state = "MET"
+    elif today >= GRADE_DEADLINE:
+        grade_state = "SHORT"
+    else:
+        grade_state = "PENDING"
+    agreement = "UNKNOWN" if rate is None else f"{rate:.3f}"
+    rule = "UNKNOWN" if rule_rate is None else f"{rule_rate:.3f}"
+    return (
+        f"M2 live pass: advised>0 {'MET' if advised > 0 else 'PENDING'}; "
+        f"graded {graded} of {GRADE_TARGET} by {GRADE_DEADLINE} {grade_state}; "
+        f"agreement {agreement} against {MERGE_RULE}; merge-rule {rule}"
+    )
+
+
+def weekly_evidence(
+    *, db: Path | None = None, path: Path | None = None, today: str | None = None
+) -> str:
     """Dated #575 evidence; reconciliation spends no provider capacity, even while retired."""
     from datetime import datetime, timezone
 
     line = weekly_line(path) if path is not None else weekly_line()
     path = path or report_path()
+    today = today or datetime.now(timezone.utc).date().isoformat()
     if not path.exists():
-        return line + "; agreement UNKNOWN against 0.75; retirement UNKNOWN"
+        return (
+            line
+            + "; agreement UNKNOWN against 0.75; retirement UNKNOWN; "
+            + m2_pass_clause(None, today=today)
+        )
     try:
         report = json.loads(path.read_text())
         if not isinstance(report, dict):
@@ -882,11 +947,16 @@ def weekly_evidence(*, db: Path | None = None, path: Path | None = None) -> str:
         _refresh_live_truth(rows, db)
         summary = live_summary(rows)
     except (OSError, ValueError, KeyError, TypeError, AttributeError, sqlite3.Error):
-        return line + "; agreement UNKNOWN against 0.75; retirement UNKNOWN"
+        return (
+            line
+            + "; agreement UNKNOWN against 0.75; retirement UNKNOWN; "
+            + m2_pass_clause(None, today=today)
+        )
     rate = summary["agree"] / summary["graded"] if summary["graded"] else None
     agreement = "UNKNOWN" if rate is None else f"{rate:.3f}"
-    retired = "retired" if report.get("retirement") else "active shadow"
-    date = datetime.now(timezone.utc).date().isoformat()
+    due = _retirement_due(summary, report)
+    retired = "retired" if due else "active shadow"
+    date = today
     line = (
         f"adjudicator live: disputes {report.get('population', len(rows))}, "
         f"advised {summary['advised']}, uncertified {summary['uncertified']}, "
@@ -894,7 +964,8 @@ def weekly_evidence(*, db: Path | None = None, path: Path | None = None) -> str:
     )
     return (
         f"{date} {line}; agreement {agreement} against 0.75; "
-        f"{retired}; blocking=dispatch retired or switched off; drainable=durability grading"
+        f"{retired}; blocking=dispatch retired or switched off; drainable=durability grading; "
+        + m2_pass_clause(summary, today=today, retired=due)
     )
 
 

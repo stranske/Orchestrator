@@ -1366,7 +1366,11 @@ def test_live_shadow_retires_below_rule_only_after_twenty_grades(live_shadow):
     assert report["retirement"]["agreement"] < 0.75
     assert live.run_live(**options)["disabled"]
     assert len(calls) == 1
-    assert "retired" in live.weekly_evidence(db=options["db"], path=options["path"])
+    evidence = live.weekly_evidence(db=options["db"], path=options["path"], today="2026-11-05")
+    assert "retired" in evidence
+    assert "M2 live pass:" in evidence
+    assert "graded 20 of 20 by 2026-11-08 RETIRED" in evidence
+    assert "agreement 0.000 against 0.75" in evidence
 
 
 def test_live_shadow_cli_reconciles_with_dispatch_switched_off(live_shadow, monkeypatch):
