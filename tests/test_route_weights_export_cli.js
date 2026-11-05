@@ -193,6 +193,87 @@ with sqlite3.connect(sys.argv[1]) as connection:
     await grade(0, 'pass', 4);
   });
 
+test('invalid deployment stamps cannot pass against an otherwise passing Brain; repair recovers',
+  async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hosted-pass-deploy-stamp-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const database = path.join(root, 'brain.db');
+    const state = path.join(root, 'state');
+    fs.mkdirSync(state);
+    const stampPath = path.join(state, 'hosted-exploration-deploy.json');
+    const env = { ...process.env, PYTHONPATH: modules, PYTHONDONTWRITEBYTECODE: '1',
+      ORCH_STATE_DIR: state, ORCH_FEEDBACK_DB: database };
+    const initialized = await run(process.env.PYTHON || 'python3', ['-c', `
+import sqlite3
+import sys
+import route_weights_export as export
+with sqlite3.connect(sys.argv[1]) as connection:
+    connection.execute("CREATE TABLE agent_switches "
+                       "(switched_ts INTEGER, delegation_source TEXT)")
+    connection.executemany("INSERT INTO agent_switches VALUES (?, ?)", [
+        (export.HOSTED_EXPLORATION_PASS_CHECK_TS - offset, "route_weights_exploration")
+        for offset in range(1, 5)
+    ])
+`, database], { cwd: repo, env });
+    assert.equal(initialized.status, 0, initialized.stderr);
+    const brainBefore = fs.readFileSync(database);
+
+    async function grades() {
+      const result = await run(process.env.PYTHON || 'python3', ['-c', `
+import json
+import route_weights_export as export
+print(json.dumps([export.hosted_exploration_pass_number(
+    now=export.HOSTED_EXPLORATION_PASS_CHECK_TS + offset) for offset in (-1, 0)]))
+`], { cwd: repo, env });
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(fs.readFileSync(database), brainBefore, 'grading must not write the Brain');
+      return JSON.parse(result.stdout);
+    }
+
+    const invalid = [
+      ['missing', null],
+      ['invalid-json', '{broken'],
+      ['null-document', 'null'],
+      ['array-document', '[]'],
+      ['absent-timestamp', '{}'],
+      ['null-timestamp', '{"deploy_ts":null}'],
+      ['boolean-timestamp', '{"deploy_ts":true}'],
+      ['string-timestamp', '{"deploy_ts":"1700000000"}'],
+      ['fractional-timestamp', '{"deploy_ts":1700000000.5}'],
+      ['negative-timestamp', '{"deploy_ts":-1}'],
+    ];
+    for (const [name, content] of invalid) {
+      if (content !== null) fs.writeFileSync(stampPath, content);
+      const [before, due] = await grades();
+      assert.equal(before.status, 'pending', name);
+      assert.equal(due.status, 'unmeasured', name);
+      for (const report of [before, due]) {
+        assert.equal(report.deploy_ts, null, name);
+        assert.equal(report.switches, null, name);
+        assert.match(report.reason, /deploy stamp absent/, name);
+      }
+      assert.deepEqual(fs.readdirSync(root).sort(), ['brain.db', 'state']);
+      if (content === null) assert.deepEqual(fs.readdirSync(state), []);
+      else {
+        assert.equal(fs.readFileSync(stampPath, 'utf8'), content,
+          `${name}: read-only grading must preserve invalid deployment evidence`);
+        assert.deepEqual(fs.readdirSync(state), ['hosted-exploration-deploy.json']);
+      }
+    }
+
+    const validStamp = '{"deploy_ts":1700000000}';
+    fs.writeFileSync(stampPath, validStamp);
+    const [before, due] = await grades();
+    assert.equal(before.status, 'pending');
+    assert.equal(due.status, 'pass');
+    for (const report of [before, due]) {
+      assert.equal(report.deploy_ts, 1700000000);
+      assert.equal(report.switches, 4);
+    }
+    assert.equal(fs.readFileSync(stampPath, 'utf8'), validStamp,
+      'recovery must use the supplied deployment time without rewriting it');
+  });
+
 for (const source of ['missing', 'corrupt', 'missing-switches-table']) {
   test(`hosted pass number reports ${source} Brain as unmeasured without creating or repairing it`,
     async (t) => {
