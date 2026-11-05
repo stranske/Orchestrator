@@ -2,7 +2,7 @@ F
 =================================== FAILURES ===================================
 _____ test_live_shadow_adjudicates_a_new_dispute_once_and_grades_on_truth ______
 
-live_shadow = (<module 'adjudicator_live' from '/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__1129__closer/sr...ow.<locals>.checkout at 0x1083296c0>, 'evidence_reader': <function live_shadow.<locals>.<lambda> at 0x1083298a0>, ...})
+live_shadow = (<module 'adjudicator_live' from '/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__1129__closer/sr...ow.<locals>.checkout at 0x114389620>, 'evidence_reader': <function live_shadow.<locals>.<lambda> at 0x114389800>, ...})
 
     def test_live_shadow_adjudicates_a_new_dispute_once_and_grades_on_truth(live_shadow):
         live, calls, options = live_shadow
@@ -13,10 +13,10 @@ live_shadow = (<module 'adjudicator_live' from '/Users/teacher/.codex/orchestrat
 >       assert len(_live_events(options["db"])) == 1, "second run wrote duplicate advice events"
 E       AssertionError: second run wrote duplicate advice events
 E       assert 2 == 1
-E        +  where 2 = len([('live_shadow_advice', '{"live_shadow":{"attempted_at":1793837756,"attempts":1,"backend":"stub","backend_run_id":"bac...rdict":"PASS","proposal":{"decision":"uphold_blocker"},"run_id":"original","source":"live","target":"owner/repo#1"}}')])
-E        +    where [('live_shadow_advice', '{"live_shadow":{"attempted_at":1793837756,"attempts":1,"backend":"stub","backend_run_id":"bac...rdict":"PASS","proposal":{"decision":"uphold_blocker"},"run_id":"original","source":"live","target":"owner/repo#1"}}')] = _live_events(PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-880/test_live_shadow_adjudicates_a0/brain.db'))
+E        +  where 2 = len([('live_shadow_advice', '{"live_shadow":{"attempted_at":1793839291,"attempts":1,"backend":"stub","backend_run_id":"bac...rdict":"PASS","proposal":{"decision":"uphold_blocker"},"run_id":"original","source":"live","target":"owner/repo#1"}}')])
+E        +    where [('live_shadow_advice', '{"live_shadow":{"attempted_at":1793839291,"attempts":1,"backend":"stub","backend_run_id":"bac...rdict":"PASS","proposal":{"decision":"uphold_blocker"},"run_id":"original","source":"live","target":"owner/repo#1"}}')] = _live_events(PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-911/test_live_shadow_adjudicates_a0/brain.db'))
 
-tests/test_adjudicator_retro.py:1167: AssertionError
+tests/test_adjudicator_retro.py:1181: AssertionError
 =========================== short test summary info ============================
 FAILED tests/test_adjudicator_retro.py::test_live_shadow_adjudicates_a_new_dispute_once_and_grades_on_truth
-1 failed, 74 deselected in 0.50s
+1 failed, 80 deselected in 0.39s

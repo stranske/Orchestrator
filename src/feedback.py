@@ -664,6 +664,7 @@ VALID_COMPLETION_STATUSES = {
 }
 COMPLETION_NESTED_FIELDS = {
     "live_shadow": {
+        "dispute_ts",
         "run_id",
         "case_id",
         "target",

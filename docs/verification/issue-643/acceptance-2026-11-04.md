@@ -18,6 +18,15 @@ A strengthened existing collector test first failed with source `retrospective`
 in a live packet. Qualification now preserves the live source on certified live
 rows, so backend records use the same provenance as the advice event.
 
+The live runner calls `live_disputes` with an explicit initial cutoff of the
+previous 24 hours and requires unknown later truth before new dispatch. Older
+pending rows and already-graded rows are not backfilled as live advice. The named
+test includes both historical distractors; before the correction it printed
+`assert 3 == 1`. The cursor drains eligible cases oldest first, overlaps the last
+processed second for safe deduplication, and retains capped/failed work across
+later wall-clock runs. The dispatch-budget test proves the remaining two of five
+cases are handled on the following day.
+
 The collector-issued case is checked again at advice persistence. Advice and
 uncertified reasons use bounded completion-event payloads, with separate advice
 run identities so original outcome/influence inputs are untouched. Brain receipts
@@ -75,3 +84,6 @@ evidence must show advised A > 0 within seven days and graded G >= 20 by
 Those future real disputes and durability outcomes cannot be manufactured by a
 coding agent. The issue's operational acceptance must remain open until that
 readback exists.
+
+Follow-up outside the acceptance push: the older-head CodeRabbit review also
+reported docstring coverage. No unrelated docstring cleanup was attempted.

@@ -1130,6 +1130,19 @@ def live_shadow(private_brain, tmp_path, monkeypatch):
     monkeypatch.setattr(live, "certify", collector)
     with sqlite3.connect(private_brain) as conn:
         conn.execute("UPDATE outcomes SET durability='pending',durability_checked_ts=NULL")
+        for run_id, ts, durability in (
+            ("old-pending", int(time.time()) - 2 * 86400, "pending"),
+            ("already-truth", int(time.time()), "durable"),
+        ):
+            conn.execute(
+                "INSERT INTO runs(run_id,ts,target) VALUES (?,?,?)",
+                (run_id, ts, "owner/repo#90" if run_id == "old-pending" else "owner/repo#91"),
+            )
+            conn.execute(
+                "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged,durability,durability_checked_ts) "
+                "VALUES (?,'NON_PASS','PASS',1,?,?)",
+                (run_id, durability, int(time.time())),
+            )
     return (
         live,
         calls,
@@ -1232,6 +1245,10 @@ def test_live_shadow_default_runner_obeys_dispatch_budget(
             )
     result = live.run_live(**options)
     assert result["attempted"] == result["advised"] == len(calls) == expected
+    if configured is None:
+        # Capped work survives the next day's wall clock; no pending dispute is skipped.
+        again = live.run_live(**{**options, "now": int(time.time()) + 86400})
+        assert again["advised"] == 2 and len(calls) == 5
     for call in calls:
         assert call["timeout"] == retro.DISPATCH_TIMEOUT_S == 600
         assert call["cwd"] == str(options["path"].parent)

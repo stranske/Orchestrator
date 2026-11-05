@@ -990,9 +990,13 @@ def disputes(*, db: Path | None = None, now: int | None = None, days: int = 90) 
 def live_disputes(
     *,
     since_ts: int | None = None,
-    limit: int = 3,
+    limit: int | None = 3,
     db: Path | None = None,
     now: int | None = None,
+    oldest_first: bool = False,
+    ungraded_only: bool = False,
+    excluded_case_ids: set[str] | None = None,
+    known_advised_targets: set[str] | None = None,
 ) -> list[dict]:
     """New disputes in the existing cohort, excluding PRs already advised live.
 
@@ -1000,7 +1004,7 @@ def live_disputes(
     A first run has no checkpoint and reads the usual 90-day dispute cohort.
     Selection never advances the checkpoint or initializes/migrates the Brain.
     """
-    if limit <= 0:
+    if limit is not None and limit <= 0:
         return []
     if since_ts is None:
         state = Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex/orchestrator")) / (
@@ -1037,9 +1041,18 @@ def live_disputes(
             if has_events
             else set()
         )
-    return [
-        row for row in population if row["ts"] > since_ts and row["target"] not in advised_targets
-    ][:limit]
+    advised_targets.update(known_advised_targets or ())
+    selected = [
+        row
+        for row in population
+        if row["ts"] > since_ts
+        and row["target"] not in advised_targets
+        and _case_id(row) not in (excluded_case_ids or ())
+        and (not ungraded_only or later_truth(row) is None)
+    ]
+    if oldest_first:
+        selected.sort(key=lambda row: (row["ts"], row["run_id"]))
+    return selected[:limit]
 
 
 def _packet_metadata_only(ground_truth: dict) -> bool:

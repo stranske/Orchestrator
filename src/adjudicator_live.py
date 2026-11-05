@@ -486,6 +486,7 @@ def _persist_live_event(
         "merge_rule_verdict",
         "attempted_at",
         "attempts",
+        "dispute_ts",
     )
     receipt = {key: entry[key] for key in keys if key in entry}
     if "proposal" in entry:
@@ -616,20 +617,29 @@ def _run_live(
     if reconciled.get("retirement"):
         return {**reconciled, "disabled": True, "attempted": 0, "advised": 0, "uncertified": 0}
     rows = reconciled["rows"]
-    saved = {row.get("case_id"): row for row in rows if _final(row)}
+    saved = {row.get("case_id"): row for row in rows if _final(row) and "proposal" not in row}
     retrying = {row.get("case_id"): row for row in rows if not _final(row)}
-    advised_targets = {row.get("target") for row in rows if "proposal" in row}
-    population = [
-        row
-        for row in retro.disputes(db=db, now=now)
-        if row.get("target", "").split("#")[0].lower() != "stranske/collab-admin"
-    ]
+    since_ts = reconciled.get("selection_since_ts", now - 86400)
+    population = retro.live_disputes(
+        db=db,
+        now=now,
+        since_ts=since_ts,
+        limit=None,
+        oldest_first=True,
+        ungraded_only=True,
+        excluded_case_ids=set(saved),
+        known_advised_targets={row["target"] for row in rows if "proposal" in row},
+    )
+    population_count = len(
+        {row["case_id"] for row in rows} | {retro._case_id(row) for row in population}
+    )
+    advised_targets = set()  # same-batch dedup; prior advice is excluded by live_disputes
     attempted = advised = uncertified = 0
     for dispute in population:
         if attempted >= limit:
             break
         case_id = retro._case_id(dispute)
-        if case_id in saved or dispute["target"] in advised_targets:
+        if dispute["target"] in advised_targets:
             continue
         attempted += 1
         earlier = retrying.pop(case_id, None)
@@ -641,6 +651,7 @@ def _run_live(
             "target": dispute["target"],
             "source": "live",
             "attempted_at": now,
+            "dispute_ts": dispute["ts"],
             "first_attempted_at": (
                 earlier.get("first_attempted_at", earlier.get("attempted_at")) if earlier else now
             ),
@@ -716,7 +727,12 @@ def _run_live(
             else:
                 entry["certification"] = {"status": "uncertified", "reason": str(exc)[:300]}
                 uncertified += 1
-        except (OSError, RuntimeError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        except (
+            OSError,
+            RuntimeError,
+            subprocess.CalledProcessError,
+            subprocess.TimeoutExpired,
+        ) as exc:
             # Provisioning, an evidence read or the role run failed, not the case: the row is
             # kept with its error and retried by later runs until MAX_ATTEMPTS, then it is final.
             entry["error"] = str(exc)[:300]
@@ -735,12 +751,19 @@ def _run_live(
     # fact itself (`certification`), grades the advice itself, and labels the number `live`.
     _refresh_live_truth(rows, db)
     summary = live_summary(rows)
+    pending_ts = [row["dispute_ts"] for row in rows if not _final(row) and "dispute_ts" in row]
+    processed_ts = [row["dispute_ts"] for row in rows if "dispute_ts" in row]
+    if pending_ts:
+        since_ts = min(pending_ts) - 1
+    elif processed_ts:
+        since_ts = max(since_ts, max(processed_ts) - 1)
     _write_report(
         path,
         {
             "schema": "adjudicator-live/v1",
             "generated_at": now,
-            "population": len(population),
+            "selection_since_ts": since_ts,
+            "population": population_count,
             "summary": summary,
             "rows": rows,
         },
@@ -751,7 +774,7 @@ def _run_live(
         "attempted": attempted,
         "advised": advised,
         "uncertified": uncertified,
-        "population": len(population),
+        "population": population_count,
         "summary": summary,
         "rows": rows,
     }
