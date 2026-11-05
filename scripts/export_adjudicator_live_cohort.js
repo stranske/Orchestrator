@@ -107,6 +107,15 @@ function liveCohort({ manifest, expectedManifestHash, manifestReference, report,
           row.first_attempted_at > row.attempted_at))) {
       gaps.push('attempt_or_report_date_invalid');
     }
+    // Native retries replace the latest row, retaining only the first date and
+    // counter. Keep those saved claims separate from the latest receipt date;
+    // neither the counter nor a fresh observation recovers earlier receipts.
+    const attemptProvenanceValid = Number.isSafeInteger(row.attempts) && row.attempts >= 1 &&
+      timestamp(row.first_attempted_at) && timestamp(row.attempted_at) &&
+      row.first_attempted_at <= row.attempted_at;
+    if (row.attempts !== undefined && !attemptProvenanceValid) {
+      gaps.push('attempt_provenance_invalid');
+    }
     if (!nonblank(row.role_run_id)) gaps.push('role_receipt_locator_missing');
     else if (receiptUses.role_run_id.get(row.role_run_id) !== 1) gaps.push('role_receipt_locator_reused');
     if (!nonblank(row.backend_run_id)) gaps.push('backend_receipt_locator_missing');
@@ -119,6 +128,10 @@ function liveCohort({ manifest, expectedManifestHash, manifestReference, report,
         decision: ['uphold_blocker', 'reject_blocker', 'needs_more_evidence'].includes(row.decision)
           ? row.decision : null,
         attempted_at: timestamp(row.attempted_at) ? iso(row.attempted_at) : null,
+        first_attempted_at: timestamp(row.first_attempted_at) ? iso(row.first_attempted_at) : null,
+        attempts: attemptProvenanceValid ? row.attempts : null,
+        evaluated_sha: /^[a-f0-9]{40}$/.test(row.certification?.evaluated_sha || '')
+          ? row.certification.evaluated_sha : null,
         role_run_id: nonblank(row.role_run_id) ? row.role_run_id : null,
         backend_run_id: nonblank(row.backend_run_id) ? row.backend_run_id : null } };
   });

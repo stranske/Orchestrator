@@ -152,6 +152,102 @@ test('later report changes preserve fixed membership, unavailable members and re
   assert.ok(!JSON.stringify(second).includes('private'));
 });
 
+test('native retries retain fixed membership and date the latest receipt separately from the first attempt', (t) => {
+  const w = world(t);
+  const generated = execute(w.root, process.env.PYTHON || 'python3', ['-c', `
+import json, sys
+from contextlib import contextmanager
+from pathlib import Path
+import adjudicator_live as live
+import feedback
+root, now = Path(sys.argv[1]), int(sys.argv[2])
+(root / 'live.json').unlink()
+feedback.DB_PATH = root / 'brain.db'
+sha = live._toy_repository(root)
+with feedback._conn() as connection:
+    for n in range(20):
+        connection.execute('INSERT INTO runs(run_id,ts,target) VALUES (?,?,?)',
+            (f'fixture-{n}', now - n, 'fixture/repo#1'))
+        connection.execute('INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged) '
+            'VALUES (?,?,?,1)', (f'fixture-{n}', 'NON_PASS', 'PASS'))
+@contextmanager
+def provider(target, head):
+    assert head == sha
+    yield root / 'repo'
+calls = []
+def runner(**kwargs):
+    assert kwargs['source'] == 'live'
+    n = len(calls)
+    calls.append(n)
+    result = {'backend_run_id': f'backend-{n}', 'role_run_id': f'role-{n}', 'errors': []}
+    if 15 <= n < 20:
+        result['errors'] = ['backend exit=1 fixture failure']
+    else:
+        result['proposal'] = {'decision': 'reject_blocker', 'rationale': 'private fixture response'}
+        result['advisory_plan'] = {'decision': 'reject_blocker'}
+    return result
+options = dict(path=root / 'live.json', db=feedback.DB_PATH, env={},
+    evidence_reader=lambda _: live._evidence_for(sha), runner=runner, provider=provider,
+    snapshot_reader=lambda _: {'number': 1, 'headRefOid': sha, 'body': live.AC_BODY},
+    github_reader=lambda _: {'total_count': 0, 'check_runs': []})
+first = live.run_live(limit=20, now=now - 60, **options)
+assert first['attempted'] == 20 and first['summary']['advised'] == 15
+(root / 'before-retry.json').write_bytes((root / 'live.json').read_bytes())
+second = live.run_live(limit=20, now=now - 1, **options)
+assert second['attempted'] == 5 and len(calls) == 25
+assert live.run_live(limit=20, now=now, **options)['attempted'] == 0
+assert len(calls) == 25
+assert first['rows'][:15] == second['rows'][:15]
+assert all(item['later_truth'] is None for item in second['rows'])
+`, w.root, String(now - 1)]);
+  assert.equal(generated.status, 0, generated.stderr);
+  const before = liveCohort({ ...w.options, report: path.join(w.root, 'before-retry.json') });
+  const reportBytes = fs.readFileSync(w.options.report);
+  const manifestBytes = fs.readFileSync(w.options.manifest);
+  const result = JSON.parse(cli(w).stdout);
+  assert.equal(before.retained_binary_decisions, 15);
+  assert.equal(result.retained_binary_decisions, 20);
+  assert.equal(result.manifest.sha256, before.manifest.sha256);
+  assert.deepEqual(result.cases.map((item) => item.run_id), w.cases.map((item) => item.run_id));
+  for (const [index, item] of result.cases.entries()) {
+    const receipt = item.retained_report_row;
+    assert.equal(receipt.attempts, index < 15 ? 1 : 2);
+    assert.equal(receipt.first_attempted_at, new Date((now - 61) * 1000).toISOString());
+    assert.equal(receipt.attempted_at,
+      new Date((index < 15 ? now - 61 : now - 2) * 1000).toISOString());
+    assert.match(receipt.evaluated_sha, /^[a-f0-9]{40}$/);
+    if (index < 15) assert.deepEqual(receipt, before.cases[index].retained_report_row);
+    else {
+      assert.notEqual(receipt.role_run_id, before.cases[index].retained_report_row.role_run_id);
+      assert.notEqual(receipt.backend_run_id, before.cases[index].retained_report_row.backend_run_id);
+    }
+  }
+  assert.equal(result.dispatch_receipts_authenticated, false);
+  assert.equal(result.operational_acceptance_complete, false);
+  assert.deepEqual(fs.readFileSync(w.options.report), reportBytes);
+  assert.deepEqual(fs.readFileSync(w.options.manifest), manifestBytes);
+  assert.ok(!JSON.stringify(result).includes('private'));
+});
+
+test('malformed saved retry counts block decisions without inventing attempt provenance', (t) => {
+  const w = world(t);
+  const invalid = [null, 0, -1, 1.5, '2', true, Number.MAX_SAFE_INTEGER + 1];
+  invalid.forEach((value, index) => { w.saved.rows[index].attempts = value; });
+  w.saved.rows[7].attempts = 2;
+  delete w.saved.rows[7].first_attempted_at;
+  w.save();
+  const result = liveCohort(w.options);
+  assert.equal(result.retained_binary_decisions, 12);
+  for (const item of result.cases.slice(0, 8)) {
+    assert.ok(item.gaps.includes('attempt_provenance_invalid'));
+    assert.equal(item.retained_report_row.attempts, null);
+  }
+  assert.equal(result.cases[7].retained_report_row.first_attempted_at, null);
+  // Older reports without a saved counter do not acquire an invented count.
+  assert.equal(result.cases[8].retained_report_row.attempts, null);
+  assert.equal(result.cases[8].status, 'retained_binary_decision');
+});
+
 test('historical and current report sources stay distinct from the date of a new read', (t) => {
   const w = world(t);
   const historicalAt = Date.parse('2026-10-18T12:00:00Z') / 1000;

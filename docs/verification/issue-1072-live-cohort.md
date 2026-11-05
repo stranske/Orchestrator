@@ -135,3 +135,35 @@ Staging was refused because `.git/index.lock` is on a read-only filesystem.
 The tested source, tests and this note are preserved in a separate local commit
 and transferable `/tmp/orchestrator-live-cohort-targets/change.bundle` and
 `change.patch`; the working files remain available to the automation runner.
+
+## Dated retry observations
+
+Checked on 2026-11-05 against `69329cc8bc481e1ccdf05958b8629c39d4b41480`
+plus this change. Report-row locators now retain the native writer's saved
+`first_attempted_at`, `attempts` and certification `evaluated_sha` alongside
+the latest attempt date and role/backend locators. Invalid supplied counters
+or counters without valid first/latest attempt dates block the decision.
+An absent legacy counter stays null; no earlier receipt is reconstructed.
+
+Both new tests fail against the prior observer. The native two-pass fixture
+first retains 15 decisions and five backend failures, then retries only those
+five. It verifies the same pinned 20 identities, unchanged initial decisions,
+distinct retry receipt locators and dates, and no third-pass dispatch. Its
+later truth remains absent, and authentication/acceptance flags remain false.
+These are isolated fixture results, not production evidence.
+
+All 122 JavaScript live-cohort/inventory/native-inventory tests pass, as do
+32 diagnostic and seven replay/publication unittest tests. Syntax and whitespace
+checks pass. No Python files changed. The required retrospective pytest command
+with `-m 'not slow'` cannot start because pytest is absent.
+
+The configured runtime directory remains absent, and original fixed membership
+and native production reports were not recovered from the checkout or source
+issue discussion. The linked October 18 observation above was re-read: it
+reports zero live advice and two failed cases. Raw authenticated historical
+receipts remain unavailable. No operational task is marked complete. PR #1081
+was checked open with `draft=false` at the revision above.
+
+Normal staging failed on the read-only `.git/index.lock`. The source, tests and
+this note are preserved in an isolated local commit and transferable
+`/tmp/orchestrator-live-cohort-retry-dates/change.bundle` and `change.patch`.
