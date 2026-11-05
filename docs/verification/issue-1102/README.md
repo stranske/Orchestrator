@@ -127,3 +127,61 @@ Each break was applied only in `tests/issue1102_coverage_evidence.py`, then the 
 | `test_every_remaining_head_statement_has_its_own_limit` | replace a head-statement limit with `"short"` | exit 1, `assert False` | exit 0 |
 | `test_real_input_acceptance_matches_the_recorded_outcome_within_two_minutes` | record `useful=true` for the empty-ledger call | exit 1, outcome dict mismatch | exit 0 |
 | `test_committed_report_matches_the_renderer_and_names_the_artifacts` | call unmeasured branches a measured zero in the report | exit 1, rendered report no longer matches this file | exit 0 |
+
+## Successor path tests
+
+These tests are in `tests/test_capability_advisor_coverage.py`. They execute the Gate-head
+statements a caller can reach. They are not a new `coverage.json`, so they are not added to
+the Gate reduction of 29. Issue #647 ranked `src/capability_advisor.py` first; the paths below
+are the head statements that ranking left uncovered.
+
+Reached by this successor, named by the behavior in the head report (some lines moved after
+`d477734`):
+
+- Dispatcher import failure: head 201-202, current 201-202. `test_dispatcher_import_failure_degrades_direct_entry`
+- Fact-missing import failure: head 533-534, current 533-534. `test_propensity_import_failure_records_nothing`
+- Auto-decline import failure: head 3013-3014, current 3058-3059. Same test.
+- Classification-miss rank failure: head 700-701, current 700-701. `test_classification_miss_survives_unreadable_propensity`
+- Classified rank failure: head 935 and 938, current 935 and 938. `test_classified_advice_survives_unreadable_propensity`
+- `binding_promotion` index write: head 1684, current 1719. `test_promoted_index_keeps_binding_promotion_events`
+- Guarded-consult cleanup failure: head 2206-2207, current 2248-2249. `test_guarded_consult_swallows_alarm_cleanup_failure`
+- SIGALRM handler: head 2211, current 2253. `test_consult_expiry_handler_raises_timeout`
+- Successful phase row: head 2228, current 2270. `test_format_phase_consult_renders_a_successful_phase`
+- Marker cap: head 2703, current 2748. `test_observable_surface_stops_once_six_markers_are_found`
+- Unregistered repo-fact probe: head 2790, current 2835. `test_unregistered_repo_fact_probe_stays_unevaluated`
+- CLI with no task: head 5578, current 5623. `test_cli_without_a_task_exits_with_the_three_ways_in`
+
+Remaining head statements that this successor does not execute. Each limit is the current line.
+`test_selftest_only_paths_stay_recorded_as_limits` pins the token on that line.
+
+- `src/capability_advisor.py:3860` — else restores a pre-seeded t-howto entry; the selftest pops the key when it was absent, and production never pre-seeds that key
+- `src/capability_advisor.py:3958` — else restores a pre-seeded t-concept entry; same pop-versus-restore split as t-howto
+- `src/capability_advisor.py:4253` — else restores a pre-seeded t-contra entry inside _selftest_contraindications
+- `src/capability_advisor.py:4590` — else restores a pre-seeded t-empty entry inside _selftest_bindings
+- `src/capability_advisor.py:4651` — else restores a pre-seeded t-surface entry inside _selftest_bindings
+- `src/capability_advisor.py:5160` — else restores a pre-seeded t-precond entry inside _selftest_preconditions
+- `src/capability_advisor.py:3993` — _selftest_front_door returns at the ledger-row gate unless offload, codemod-campaign, and testgen-lane are already registered; those rows are machine-local, and a stand-in ledger would not satisfy the real matcher assertions
+- `src/capability_advisor.py:5296` — the loop body is the tail of _selftest_findability, after that function has checked every consult-site caller; a copied assert would not execute these lines, and running the selftest section is the module selftest rather than a focused path test
+
+## Deliberate breaks for the successor path tests
+
+Each break was applied only in `tests/test_capability_advisor_coverage.py`, then the file was restored to its original bytes. The command for every row was:
+
+`python3 -m pytest -q tests/test_capability_advisor_coverage.py -m "not slow" --tb=line -k <test>`
+
+Checked 2026-11-05. Every broken run exited 1. Every restored rerun exited 0.
+
+| Test | Break | Failing result | Restored result |
+| --- | --- | --- | --- |
+| `test_dispatcher_import_failure_degrades_direct_entry` | expect no import attempts | exit 1, `assert [] == ['dispatcher', 'dispatcher']` | exit 0 |
+| `test_propensity_import_failure_records_nothing` | expect no import attempts | exit 1, `assert [] == ['capability_propensity', 'capability_propensity']` | exit 0 |
+| `test_classification_miss_survives_unreadable_propensity` | expect confidence `high` | exit 1, `assert 'binding_only' == 'high'` | exit 0 |
+| `test_classified_advice_survives_unreadable_propensity` | expect `useful` true | exit 1, `assert False is True` | exit 0 |
+| `test_promoted_index_keeps_binding_promotion_events` | expect reason `unused` | exit 1, index diff `'used by hand'` | exit 0 |
+| `test_guarded_consult_swallows_alarm_cleanup_failure` | expect no alarm calls | exit 1, `assert [] == [35, 0]` | exit 0 |
+| `test_consult_expiry_handler_raises_timeout` | expect message `not the timeout` | exit 1, regex did not match `capability phase consult exceeded 30s` | exit 0 |
+| `test_format_phase_consult_renders_a_successful_phase` | require `FAILED` in a success row | exit 1, `assert 'FAILED' in` the success line | exit 0 |
+| `test_observable_surface_stops_once_six_markers_are_found` | expect 1 marker | exit 1, `assert 6 == 1` | exit 0 |
+| `test_unregistered_repo_fact_probe_stays_unevaluated` | expect `requirement_met` false | exit 1, `assert None is False` | exit 0 |
+| `test_cli_without_a_task_exits_with_the_three_ways_in` | expect exit code 0 | exit 1, `assert 2 == 0` | exit 0 |
+| `test_selftest_only_paths_stay_recorded_as_limits` | point the t-howto limit at line 9999 | exit 1, `IndexError: list index out of range` | exit 0 |
