@@ -21,7 +21,9 @@ rows, so backend records use the same provenance as the advice event.
 The collector-issued case is checked again at advice persistence. Advice and
 uncertified reasons use bounded completion-event payloads, with separate advice
 run identities so original outcome/influence inputs are untouched. Brain receipts
-recover advice after report loss. The report's writer lock serializes dispatch and
+recover advice after report loss and override stale failed-attempt caches after
+an event-commit/report-replace crash. The strengthened named test first printed
+`stale report overrode durable advice` (two events) before this correction. The report's writer lock serializes dispatch and
 reconciliation; when busy, the drain is reading the last saved weekly report.
 
 `duplicate-advice-red.txt` records removal of the already-advised exclusion:

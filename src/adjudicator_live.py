@@ -531,7 +531,14 @@ def _reconcile_live(*, db: Path | None = None, path: Path | None = None) -> dict
     rows = previous.get("rows", [])
     by_id = {row["case_id"]: row for row in rows}
     for row in _event_rows(db):
-        by_id.setdefault(row["case_id"], row)
+        # The event commit precedes the report replace; a stale failed report cannot win.
+        previous_row = by_id.get(row["case_id"], {})
+        merged = {**previous_row, **row}
+        if previous_row.get("proposal") and previous_row["proposal"].get("decision") == row.get(
+            "decision"
+        ):
+            merged["proposal"] = previous_row["proposal"]
+        by_id[row["case_id"]] = merged
     rows = list(by_id.values())
     _refresh_live_truth(rows, db)
     summary = live_summary(rows)
@@ -715,6 +722,8 @@ def _run_live(
             entry["error"] = str(exc)[:300]
         if "proposal" in entry or (entry.get("certification") or {}).get("status") == "uncertified":
             _persist_live_event(entry, db, case)
+            if "proposal" in entry:
+                advised_targets.add(entry["target"])
         rows.append(entry)
         if _final(entry):
             saved[case_id] = entry

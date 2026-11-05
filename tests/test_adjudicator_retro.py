@@ -1166,6 +1166,13 @@ def test_live_shadow_adjudicates_a_new_dispute_once_and_grades_on_truth(live_sha
     live.run_live(**options)
     assert len(_live_events(options["db"])) == 1, "second run wrote duplicate advice events"
     assert len(calls) == 1
+    # A crash after the event commit can leave an older failed attempt in the cache.
+    stale = json.loads(options["path"].read_text())
+    for key in ("proposal", "decision", "disposition", "shadow_verdict"):
+        stale["rows"][0].pop(key, None)
+    options["path"].write_text(json.dumps(stale))
+    live.run_live(**options)
+    assert len(_live_events(options["db"])) == 1, "stale report overrode durable advice"
     # Losing the JSON cache must not permit a second paid call.
     options["path"].unlink()
     live.run_live(**options)
@@ -1202,7 +1209,7 @@ def test_live_shadow_never_adjudicates_an_uncertified_case(live_shadow, monkeypa
 
 
 def test_live_shadow_writes_no_merge_input(live_shadow):
-    live, _, options = live_shadow
+    live, calls, options = live_shadow
 
     def merge_inputs():
         with sqlite3.connect(options["db"]) as conn:
@@ -1218,12 +1225,22 @@ def test_live_shadow_writes_no_merge_input(live_shadow):
             "(edge_id,schema_version,target_run_id,influence_type,influence_id,accepted,created_ts,metadata_hash) "
             "VALUES ('gate-input',1,'original','role','adjudicator',1,1,'fixture')"
         )
+    with sqlite3.connect(options["db"]) as conn:
+        conn.execute(
+            "INSERT INTO runs(run_id,ts,target) VALUES ('same-pr',?,'owner/repo#1')",
+            (int(time.time()),),
+        )
+        conn.execute(
+            "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged) "
+            "VALUES ('same-pr','NON_PASS','PASS',1)"
+        )
     before = merge_inputs()
     with sqlite3.connect(options["db"]) as conn:
         edges = conn.execute("SELECT * FROM influence_edges").fetchall()
     live.run_live(**options)
     live.reconcile_live(db=options["db"], path=options["path"])
     assert merge_inputs() == before
+    assert len(calls) == 1, "same target advised twice within one batch"
     with sqlite3.connect(options["db"]) as conn:
         assert conn.execute("SELECT * FROM influence_edges").fetchall() == edges
 
