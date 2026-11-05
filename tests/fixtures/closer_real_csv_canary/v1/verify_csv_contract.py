@@ -14,8 +14,10 @@ are not that proof either. A keepalive completion that only observed this head
 after starting on an earlier revision is reported and is not worker or
 publication proof for this head. The same rule applies to the owned delivery
 head: a keepalive receipt that started earlier and only observed that head is
-not a worker completion of it and is not closer publication proof. The command
-does not change the default contract exit.
+not a worker completion of it and is not closer publication proof. A reduced
+publication comment is not the stored producer record. Custody JSON is read
+when that record's schema sits inside the object. The command does not change
+the default contract exit.
 """
 
 from __future__ import annotations
@@ -166,6 +168,77 @@ _VERIFIER_WORKFLOW = "agents-verifier.yml"
 _VERIFY_LABELS = ("verify:checkbox", "verify:evaluate", "verify:compare")
 _RUNNER_RECEIPT_SCHEMA = "runner-completion-receipt/v1"
 _REPOSITORY = "stranske/Orchestrator"
+# Stored by closer_coding_publication_io.retain_confirmed_result. A smaller comment is not that record.
+_PUBLICATION_SCHEMA = "closer-confirmed-existing-pr-publication/v1"
+_RESULT_REFERENCE_SCHEMA = "closer-owned-pr-publication-result-reference/v1"
+_AUTHORITY_FLAGS = (
+    "git_execution_authorized",
+    "native_publication_authorized",
+    "provider_execution_authorized",
+    "act_authorized",
+    "global_stop_valid",
+    "acceptance_authorized",
+    "domain_completed",
+    "merge_authorized",
+    "source_closure_authorized",
+    "retry_authorized",
+)
+_STORED_PUBLICATION_KEYS = frozenset(
+    {
+        "schema",
+        "request",
+        "original",
+        "findings",
+        "required_tests",
+        "pr",
+        "commit",
+        "ref",
+        "provenance",
+        *_AUTHORITY_FLAGS,
+    }
+)
+_OWNED_PR_KEYS = frozenset(
+    {
+        "repository",
+        "repository_id",
+        "pr_number",
+        "pr_node_id",
+        "issue_node_id",
+        "owner_login",
+        "owner_id",
+        "writer_login",
+        "writer_id",
+        "head_repo_id",
+        "base_repo_id",
+        "head_ref",
+        "head_oid",
+        "base_ref",
+        "base_oid",
+        "body_sha256",
+        "state",
+        "is_draft",
+        "is_merged",
+        "closing_issue_node_ids",
+    }
+)
+_NATIVE_COMMIT_KEYS = frozenset({"repository_id", "oid", "tree_oid", "parent_oids"})
+_NATIVE_REF_KEYS = frozenset({"repository_id", "ref", "oid", "object_type"})
+_PROVENANCE_KEYS = frozenset(
+    {
+        "handoff_reference",
+        "coding_terminal_reference",
+        "publication_origin_reference",
+        "io_admission_reference",
+        "io_operation_sha256",
+        "push_ack_sha256",
+        "native_readback_sha256",
+        "index_binding_sha256",
+        "original_admission_sha256",
+        "original_operation_sha256",
+        "source_closure_sha256",
+        "scope_issue",
+    }
+)
 
 
 def _marked_objects(text, marker):
@@ -409,103 +482,221 @@ def _comment_body(comment):
     return comment.get("body", "") if isinstance(comment, dict) else comment
 
 
+def _positive_int(value):
+    return type(value) is int and 0 < value <= 2**53 - 1
+
+
+def _sha256_text(value):
+    return isinstance(value, str) and re.fullmatch(r"[a-f0-9]{64}", value) is not None
+
+
+def _publication_objects(text):
+    """Read marker-prefixed records and custody JSON whose schema is inside the object."""
+    found = []
+    for event in _marked_objects(text, _PUBLICATION_SCHEMA):
+        if isinstance(event, dict):
+            found.append(event)
+    cursor = 0
+    while True:
+        brace = text.find("{", cursor)
+        if brace < 0:
+            break
+        try:
+            event, consumed = json.JSONDecoder().raw_decode(text[brace:])
+        except json.JSONDecodeError:
+            cursor = brace + 1
+            continue
+        if consumed <= 0:
+            cursor = brace + 1
+            continue
+        cursor = brace + consumed
+        if isinstance(event, dict) and event.get("schema") == _PUBLICATION_SCHEMA:
+            found.append(event)
+    return found
+
+
+def _reference_ok(reference, schema, prefix):
+    return (
+        isinstance(reference, dict)
+        and reference.get("schema") == schema
+        and _sha256_text(reference.get("sha256"))
+        and reference.get("name") == prefix + reference["sha256"] + ".json"
+    )
+
+
+def _optional_result_reference(value):
+    extra = set(value) - set(_STORED_PUBLICATION_KEYS)
+    if extra not in (set(), {"publication_result_reference"}):
+        return False
+    if not set(_STORED_PUBLICATION_KEYS) <= set(value):
+        return False
+    if not extra:
+        return True
+    return _reference_ok(
+        value.get("publication_result_reference"),
+        _RESULT_REFERENCE_SCHEMA,
+        "publication-result-",
+    )
+
+
+def _producer_publication(value, corrective_sha):
+    """Accept the stored result shape only. A reduced comment is not custody."""
+    if (
+        not isinstance(value, dict)
+        or value.get("schema") != _PUBLICATION_SCHEMA
+        or not _optional_result_reference(value)
+        or any(value.get(flag) is not False for flag in _AUTHORITY_FLAGS)
+        or type(value.get("request")) is not dict
+        or type(value.get("original")) is not dict
+        or type(value.get("findings")) is not list
+        or type(value.get("required_tests")) is not list
+    ):
+        return False
+    pr = value.get("pr")
+    commit = value.get("commit")
+    ref = value.get("ref")
+    provenance = value.get("provenance")
+    if not all(isinstance(item, dict) for item in (pr, commit, ref, provenance)):
+        return False
+    if set(pr) != set(_OWNED_PR_KEYS) or set(commit) != set(_NATIVE_COMMIT_KEYS):
+        return False
+    if set(ref) != set(_NATIVE_REF_KEYS):
+        return False
+    provenance_extra = set(provenance) - set(_PROVENANCE_KEYS)
+    if provenance_extra not in (set(), {"publication_result_reference"}):
+        return False
+    if not set(_PROVENANCE_KEYS) <= set(provenance):
+        return False
+    if provenance_extra and not _reference_ok(
+        provenance.get("publication_result_reference"),
+        _RESULT_REFERENCE_SCHEMA,
+        "publication-result-",
+    ):
+        return False
+    number = str(pr.get("pr_number"))
+    repo_id = pr.get("repository_id")
+    parent_oids = commit.get("parent_oids")
+    scope = provenance.get("scope_issue")
+    if (
+        type(pr.get("pr_number")) is not int
+        or number not in (_CORRECTIVE_PR, _OWNED_DELIVERY_PR)
+        or pr.get("repository") != _REPOSITORY.lower()
+        or pr.get("owner_login") != "stranske"
+        or pr.get("writer_login") != "stranske"
+        or pr.get("owner_id") != 23046322
+        or pr.get("writer_id") != 23046322
+        or not _positive_int(repo_id)
+        or pr.get("head_repo_id") != repo_id
+        or pr.get("base_repo_id") != repo_id
+        or pr.get("head_oid") != corrective_sha
+        or pr.get("state") != "open"
+        or pr.get("is_draft") is not False
+        or pr.get("is_merged") is not False
+        or not isinstance(pr.get("pr_node_id"), str)
+        or not pr["pr_node_id"]
+        or not isinstance(pr.get("issue_node_id"), str)
+        or not pr["issue_node_id"]
+        or pr.get("closing_issue_node_ids") != [pr["issue_node_id"]]
+        or not isinstance(pr.get("head_ref"), str)
+        or not pr["head_ref"]
+        or not isinstance(pr.get("base_ref"), str)
+        or not pr["base_ref"]
+        or pr["base_ref"] == pr["head_ref"]
+        or not _sha40(pr.get("base_oid"))
+        or not _sha256_text(pr.get("body_sha256"))
+        or commit.get("repository_id") != repo_id
+        or commit.get("oid") != corrective_sha
+        or not _sha40(commit.get("tree_oid"))
+        or type(parent_oids) is not list
+        or not parent_oids
+        or any(not _sha40(item) for item in parent_oids)
+        or ref.get("repository_id") != repo_id
+        or ref.get("oid") != corrective_sha
+        or ref.get("ref") != "refs/heads/" + pr["head_ref"]
+        or ref.get("object_type") != "commit"
+        or type(scope) is not dict
+        or set(scope) != {"number", "node_id", "body_sha256"}
+        or not _positive_int(scope.get("number"))
+        or not isinstance(scope.get("node_id"), str)
+        or not scope["node_id"]
+        or not _sha256_text(scope.get("body_sha256"))
+    ):
+        return False
+    references = {
+        "handoff_reference": (
+            "closer-publication-source-handoff-reference/v1",
+            "publication-source-handoff-",
+        ),
+        "coding_terminal_reference": (
+            "closer-coding-worker-terminal-reference/v1",
+            "coding-worker-terminal-",
+        ),
+        "publication_origin_reference": (
+            "closer-native-owned-pr-publication-origin-reference/v1",
+            "native-publication-origin-",
+        ),
+        "io_admission_reference": (
+            "closer-publication-io-admission-reference/v1",
+            "publication-io-admission-",
+        ),
+    }
+    for key, (schema, prefix) in references.items():
+        if not _reference_ok(provenance.get(key), schema, prefix):
+            return False
+    for key in (
+        "io_operation_sha256",
+        "push_ack_sha256",
+        "native_readback_sha256",
+        "index_binding_sha256",
+        "original_admission_sha256",
+        "original_operation_sha256",
+        "source_closure_sha256",
+    ):
+        if not _sha256_text(provenance.get(key)):
+            return False
+    # Same canonical bytes as the producer's native readback digest.
+    try:
+        readback = {
+            "schema": "closer-owned-pr-readback-data/v1",
+            "pr": pr,
+            "commit": commit,
+            "ref": ref,
+            "native_publication_authorized": False,
+        }
+        digest = hashlib.sha256(
+            json.dumps(
+                readback,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode()
+        ).hexdigest()
+    except (TypeError, ValueError):
+        return False
+    return provenance.get("native_readback_sha256") == digest
+
+
 def _publication_tied(comments, corrective_sha):
     """Read confirmed publisher records, never pre-publication DATA or SHA prose.
 
-    retain_confirmed_result in closer_coding_publication_io issues this shape;
-    its native writer is the owned PR author (stranske), not github-actions.
-    Local custody is not published by that producer as GitHub comments. Until
-    the lane exposes a genuine record, its absence here remains incomplete.
+    retain_confirmed_result stores this shape in local custody. Its native writer
+    is the owned PR author (stranske), not github-actions. A reduced comment is
+    not that record. Custody JSON is recognized when the schema is inside the
+    object. Until a genuine record is exposed, its absence remains incomplete.
     """
     if not corrective_sha or corrective_sha in (_PARTIAL_HEAD, _PARTIAL_MERGE):
         return False
-    marker = "closer-confirmed-existing-pr-publication/v1"
     for comment in comments:
         if not isinstance(comment, dict):
             continue
-        for value in _marked_objects(comment.get("body", ""), marker):
+        for value in _publication_objects(comment.get("body") or ""):
             pr = value.get("pr")
-            commit = value.get("commit")
-            ref = value.get("ref")
-            provenance = value.get("provenance")
-            if not all(isinstance(item, dict) for item in (pr, commit, ref, provenance)):
+            number = str(pr.get("pr_number")) if isinstance(pr, dict) else ""
+            if number not in (_CORRECTIVE_PR, _OWNED_DELIVERY_PR):
                 continue
-            number = str(pr.get("pr_number"))
-            if (
-                value.get("schema") != marker
-                or number not in (_CORRECTIVE_PR, _OWNED_DELIVERY_PR)
-                or not _native_comment(comment, number, ("stranske",))
-                or pr.get("repository") != _REPOSITORY.lower()
-                or pr.get("owner_login") != "stranske"
-                or pr.get("writer_login") != "stranske"
-                or pr.get("owner_id") != 23046322
-                or pr.get("writer_id") != 23046322
-                or pr.get("head_oid") != corrective_sha
-                or commit.get("oid") != corrective_sha
-                or ref.get("oid") != corrective_sha
-                or ref.get("ref") != "refs/heads/" + str(pr.get("head_ref"))
-                or ref.get("object_type") != "commit"
-            ):
+            if not _native_comment(comment, number, ("stranske",)):
                 continue
-            references = {
-                "handoff_reference": (
-                    "closer-publication-source-handoff-reference/v1",
-                    "publication-source-handoff-",
-                ),
-                "coding_terminal_reference": (
-                    "closer-coding-worker-terminal-reference/v1",
-                    "coding-worker-terminal-",
-                ),
-                "publication_origin_reference": (
-                    "closer-native-owned-pr-publication-origin-reference/v1",
-                    "native-publication-origin-",
-                ),
-                "io_admission_reference": (
-                    "closer-publication-io-admission-reference/v1",
-                    "publication-io-admission-",
-                ),
-            }
-            valid = True
-            for key, (schema, prefix) in references.items():
-                reference = provenance.get(key)
-                if not (
-                    isinstance(reference, dict)
-                    and reference.get("schema") == schema
-                    and re.fullmatch(r"[a-f0-9]{64}", str(reference.get("sha256")))
-                    and reference.get("name") == prefix + reference["sha256"] + ".json"
-                ):
-                    valid = False
-            for key in (
-                "io_operation_sha256",
-                "push_ack_sha256",
-                "native_readback_sha256",
-                "index_binding_sha256",
-                "original_admission_sha256",
-                "original_operation_sha256",
-                "source_closure_sha256",
-            ):
-                if not re.fullmatch(r"[a-f0-9]{64}", str(provenance.get(key))):
-                    valid = False
-            # Same canonical bytes as the producer's native readback digest.
-            try:
-                readback = {
-                    "schema": "closer-owned-pr-readback-data/v1",
-                    "pr": pr,
-                    "commit": commit,
-                    "ref": ref,
-                    "native_publication_authorized": False,
-                }
-                digest = hashlib.sha256(
-                    json.dumps(
-                        readback,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                        allow_nan=False,
-                    ).encode()
-                ).hexdigest()
-            except (TypeError, ValueError):
-                continue
-            if valid and provenance.get("native_readback_sha256") == digest:
+            if _producer_publication(value, corrective_sha):
                 return True
     return False
 
@@ -837,7 +1028,8 @@ def _format_report(assessment, corrective_sha, local_head, verifier_runs=(), ear
     else:
         lines.append(
             "closer_publication_proof_for_corrective_head: MISSING "
-            "no validated confirmed publisher record for the corrective head; local custody not observed"
+            "no stored retain_confirmed_result record for the corrective head; "
+            "local custody not observed; a reduced comment is not that record"
         )
     markers = assessment.get("publication_markers") or []
     if markers:
@@ -922,7 +1114,8 @@ def _format_report(assessment, corrective_sha, local_head, verifier_runs=(), ear
         else:
             lines.append(
                 "owned_delivery_publication: MISSING "
-                "no validated confirmed publisher record for the owned delivery head"
+                "no stored retain_confirmed_result record for the owned delivery head; "
+                "a reduced comment is not that record"
             )
         if owned_head != corrective_sha:
             owned_completions = assessment.get("owned_worker_completions") or []
@@ -2236,14 +2429,156 @@ def _self_check():
         "url": decision_url,
         "body": pub["schema"] + " " + json.dumps(pub),
     }
-    if not (_publication_tied([publication], corrective)):
-        raise AssertionError("self-check regression: 2136")
+    if _publication_tied([publication], corrective):
+        raise AssertionError("reduced publication comment counted as producer custody")
     if not (not _publication_tied([dict(publication, author="github-actions[bot]")], corrective)):
         raise AssertionError("self-check regression: 2137")
     if not (not _publication_tied([dict(publication, url=partial_url)], corrective)):
         raise AssertionError("self-check regression: 2138")
     if not (not _publication_tied([dict(publication, body=tied)], corrective)):
         raise AssertionError("self-check regression: 2139")
+
+    def stored_publication(head):
+        repo_id = 1
+        owned_pr = {
+            "repository": _REPOSITORY.lower(),
+            "repository_id": repo_id,
+            "pr_number": 1168,
+            "pr_node_id": "PR_1168",
+            "issue_node_id": "I_983",
+            "owner_login": "stranske",
+            "owner_id": 23046322,
+            "writer_login": "stranske",
+            "writer_id": 23046322,
+            "head_repo_id": repo_id,
+            "base_repo_id": repo_id,
+            "head_ref": "cursor/issue-983",
+            "head_oid": head,
+            "base_ref": "main",
+            "base_oid": "e" * 40,
+            "body_sha256": "c" * 64,
+            "state": "open",
+            "is_draft": False,
+            "is_merged": False,
+            "closing_issue_node_ids": ["I_983"],
+        }
+        native_commit = {
+            "repository_id": repo_id,
+            "oid": head,
+            "tree_oid": "f" * 40,
+            "parent_oids": ["1" * 40],
+        }
+        native_ref = {
+            "repository_id": repo_id,
+            "ref": "refs/heads/cursor/issue-983",
+            "oid": head,
+            "object_type": "commit",
+        }
+        provenance = {
+            "scope_issue": {
+                "number": 983,
+                "node_id": "I_983",
+                "body_sha256": "d" * 64,
+            }
+        }
+        for key, schema, prefix in (
+            (
+                "handoff_reference",
+                "closer-publication-source-handoff-reference/v1",
+                "publication-source-handoff-",
+            ),
+            (
+                "coding_terminal_reference",
+                "closer-coding-worker-terminal-reference/v1",
+                "coding-worker-terminal-",
+            ),
+            (
+                "publication_origin_reference",
+                "closer-native-owned-pr-publication-origin-reference/v1",
+                "native-publication-origin-",
+            ),
+            (
+                "io_admission_reference",
+                "closer-publication-io-admission-reference/v1",
+                "publication-io-admission-",
+            ),
+        ):
+            provenance[key] = {
+                "schema": schema,
+                "sha256": "a" * 64,
+                "name": prefix + ("a" * 64) + ".json",
+            }
+        for key in (
+            "io_operation_sha256",
+            "push_ack_sha256",
+            "native_readback_sha256",
+            "index_binding_sha256",
+            "original_admission_sha256",
+            "original_operation_sha256",
+            "source_closure_sha256",
+        ):
+            provenance[key] = "b" * 64
+        record = {
+            "schema": _PUBLICATION_SCHEMA,
+            "request": {"kind": "self-check"},
+            "original": {"kind": "self-check"},
+            "findings": [],
+            "required_tests": [],
+            "pr": owned_pr,
+            "commit": native_commit,
+            "ref": native_ref,
+            "provenance": provenance,
+        }
+        for flag in _AUTHORITY_FLAGS:
+            record[flag] = False
+        record["provenance"]["native_readback_sha256"] = hashlib.sha256(
+            json.dumps(
+                {
+                    "schema": "closer-owned-pr-readback-data/v1",
+                    "pr": owned_pr,
+                    "commit": native_commit,
+                    "ref": native_ref,
+                    "native_publication_authorized": False,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode()
+        ).hexdigest()
+        return record
+
+    pub = stored_publication(corrective)
+    publication = {
+        "author": "stranske",
+        "url": decision_url,
+        "body": pub["schema"] + " " + json.dumps(pub),
+    }
+    if not _publication_tied([publication], corrective):
+        raise AssertionError("stored publication record was dropped")
+    if not _publication_tied([dict(publication, body=json.dumps(pub))], corrective):
+        raise AssertionError("custody JSON publication record was dropped")
+    authorized = json.loads(json.dumps(pub))
+    authorized["native_publication_authorized"] = True
+    if _publication_tied([dict(publication, body=json.dumps(authorized))], corrective):
+        raise AssertionError("authority flag counted as confirmed publication")
+    merged_snapshot = json.loads(json.dumps(pub))
+    merged_snapshot["pr"]["is_merged"] = True
+    merged_snapshot["provenance"]["native_readback_sha256"] = hashlib.sha256(
+        json.dumps(
+            {
+                "schema": "closer-owned-pr-readback-data/v1",
+                "pr": merged_snapshot["pr"],
+                "commit": merged_snapshot["commit"],
+                "ref": merged_snapshot["ref"],
+                "native_publication_authorized": False,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode()
+    ).hexdigest()
+    if _publication_tied([dict(publication, body=json.dumps(merged_snapshot))], corrective):
+        raise AssertionError("merged publication snapshot counted as the open producer record")
     changed_head = json.loads(json.dumps(pub))
     changed_head["pr"]["head_oid"] = []
     if not (
