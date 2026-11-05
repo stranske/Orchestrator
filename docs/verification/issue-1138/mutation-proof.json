@@ -121,7 +121,7 @@
       "test": "test_callers_of_uses_text_fallback_when_driver_does_not_parse",
       "production": "src/capability_activation_audit.py::_callers_of",
       "before": "hit = bool(re.search(rf\"\\b{re.escape(module_stem)}\\.{re.escape(fn)}\\s*\\(\", text))",
-      "deliberate_break": "hit = True",
+      "deliberate_break": "hit = False",
       "command": [
         "/opt/anaconda3/bin/python3",
         "-B",
@@ -131,10 +131,10 @@
         "tests/test_coverage_round_1138.py::test_callers_of_uses_text_fallback_when_driver_does_not_parse"
       ],
       "red_exit": 1,
-      "red_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n________ test_callers_of_uses_text_fallback_when_driver_does_not_parse _________\n\ntmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-947/test_callers_of_uses_text_fall0')\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1079d6300>\n\n    def test_callers_of_uses_text_fallback_when_driver_does_not_parse(tmp_path, monkeypatch):\n        driver = tmp_path / \"broken_driver.py\"\n        driver.write_text(\"import foo\\nfoo.bar(\\n\")\n        monkeypatch.setattr(audit, \"DRIVER_MODULES\", (\"broken_driver.py\",))\n        monkeypatch.setattr(audit, \"_driver_path\", lambda name: driver)\n>       assert audit._callers_of(\"foo\", {\"run\"}) == []\nE       AssertionError: assert ['broken_driver.py:run'] == []\nE         \nE         Left contains one more item: 'broken_driver.py:run'\nE         Use -v to get more diff\n\ntests/test_coverage_round_1138.py:161: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_callers_of_uses_text_fallback_when_driver_does_not_parse\n1 failed in 0.31s\n",
+      "red_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n________ test_callers_of_uses_text_fallback_when_driver_does_not_parse _________\n\ntmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-1006/test_callers_of_uses_text_fall0')\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x11110e750>\n\n    def test_callers_of_uses_text_fallback_when_driver_does_not_parse(tmp_path, monkeypatch):\n        driver = tmp_path / \"broken_driver.py\"\n        driver.write_text(\"import foo\\nfoo.run(\\n\")\n        monkeypatch.setattr(audit, \"DRIVER_MODULES\", (\"broken_driver.py\",))\n        monkeypatch.setattr(audit, \"_driver_path\", lambda name: driver)\n>       assert audit._callers_of(\"foo\", {\"run\"}) == [\"broken_driver.py:run\"]\nE       AssertionError: assert [] == ['broken_driver.py:run']\nE         \nE         Right contains one more item: 'broken_driver.py:run'\nE         Use -v to get more diff\n\ntests/test_coverage_round_1138.py:160: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_callers_of_uses_text_fallback_when_driver_does_not_parse\n1 failed in 0.44s\n",
       "restored_exit": 0,
-      "restored_output": ".                                                                        [100%]\n1 passed in 0.28s\n",
-      "seconds": 2.57
+      "restored_output": ".                                                                        [100%]\n1 passed in 0.33s\n",
+      "seconds": 3.14
     },
     {
       "test": "test_default_test_paths_and_looks_like_test_filters",
@@ -178,7 +178,7 @@
       "test": "test_experiment_identity_summary_tolerates_bad_run_metadata",
       "production": "src/periodic_report.py::_experiment_identity_summary",
       "before": "except (TypeError, json.JSONDecodeError):\n            metadata = {}",
-      "deliberate_break": "except (TypeError, json.JSONDecodeError):\n            raise",
+      "deliberate_break": "except (TypeError, json.JSONDecodeError):\n            metadata = {\"experiment_arm_id\": \"invented\", \"experiment_member_id\": \"invented\"}",
       "command": [
         "/opt/anaconda3/bin/python3",
         "-B",
@@ -188,10 +188,10 @@
         "tests/test_coverage_round_1138.py::test_experiment_identity_summary_tolerates_bad_run_metadata"
       ],
       "red_exit": 1,
-      "red_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_________ test_experiment_identity_summary_tolerates_bad_run_metadata __________\n\n    def test_experiment_identity_summary_tolerates_bad_run_metadata():\n        feedback.record_run(\n            \"e1\",\n            \"o/r#1\",\n            \"implement\",\n            \"codex\",\n            experiment_id=\"exp-1\",\n            routing_metadata=\"{not-json\",\n        )\n>       summary = periodic_report._experiment_identity_summary(30)\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\ntests/test_coverage_round_1138.py:414: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \nsrc/periodic_report.py:130: in _experiment_identity_summary\n    metadata = json.loads(raw_metadata) if raw_metadata else {}\n               ^^^^^^^^^^^^^^^^^^^^^^^^\n/opt/anaconda3/lib/python3.12/json/__init__.py:346: in loads\n    return _default_decoder.decode(s)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n/opt/anaconda3/lib/python3.12/json/decoder.py:337: in decode\n    obj, end = self.raw_decode(s, idx=_w(s, 0).end())\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\nself = <json.decoder.JSONDecoder object at 0x10336c320>, s = '{not-json'\nidx = 0\n\n    def raw_decode(self, s, idx=0):\n        \"\"\"Decode a JSON document from ``s`` (a ``str`` beginning with\n        a JSON document) and return a 2-tuple of the Python\n        representation and the index in ``s`` where the document ended.\n    \n        This can be used to decode a JSON document from a string that may\n        have extraneous data at the end.\n    \n        \"\"\"\n        try:\n>           obj, end = self.scan_once(s, idx)\n                       ^^^^^^^^^^^^^^^^^^^^^^\nE           json.decoder.JSONDecodeError: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)\n\n/opt/anaconda3/lib/python3.12/json/decoder.py:353: JSONDecodeError\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_experiment_identity_summary_tolerates_bad_run_metadata\n1 failed in 0.58s\n",
+      "red_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_________ test_experiment_identity_summary_tolerates_bad_run_metadata __________\n\n    def test_experiment_identity_summary_tolerates_bad_run_metadata():\n        feedback.record_run(\n            \"e1\",\n            \"o/r#1\",\n            \"implement\",\n            \"codex\",\n            experiment_id=\"exp-1\",\n            routing_metadata=\"{not-json\",\n        )\n        summary = periodic_report._experiment_identity_summary(30)\n        assert summary[\"implementation_arms\"] == []\n>       assert summary[\"missing_arm_outcomes\"] == []\nE       AssertionError: assert [{'experiment..._evaluation'}] == []\nE         \nE         Left contains one more item: {'experiment_id': 'exp-1', 'arm_id': 'invented', 'members': ['invented'], 'reason': 'no_exact_arm_evaluation'}\nE         Use -v to get more diff\n\ntests/test_coverage_round_1138.py:417: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_experiment_identity_summary_tolerates_bad_run_metadata\n1 failed in 0.41s\n",
       "restored_exit": 0,
-      "restored_output": ".                                                                        [100%]\n1 passed in 0.39s\n",
-      "seconds": 3.51
+      "restored_output": ".                                                                        [100%]\n1 passed in 0.33s\n",
+      "seconds": 2.72
     },
     {
       "test": "test_fetch_issue_body_returns_none_when_gh_fails",
@@ -648,6 +648,46 @@
       "restored_exit": 0,
       "restored_output": ".                                                                        [100%]\n1 passed in 0.28s\n",
       "seconds": 2.67
+    }
+  ],
+  "earlier_proofs_before_assertion_strengthening": [
+    {
+      "test": "test_callers_of_uses_text_fallback_when_driver_does_not_parse",
+      "production": "src/capability_activation_audit.py::_callers_of",
+      "before": "hit = bool(re.search(rf\"\\b{re.escape(module_stem)}\\.{re.escape(fn)}\\s*\\(\", text))",
+      "deliberate_break": "hit = True",
+      "command": [
+        "/opt/anaconda3/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_coverage_round_1138.py::test_callers_of_uses_text_fallback_when_driver_does_not_parse"
+      ],
+      "red_exit": 1,
+      "red_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n________ test_callers_of_uses_text_fallback_when_driver_does_not_parse _________\n\ntmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-947/test_callers_of_uses_text_fall0')\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1079d6300>\n\n    def test_callers_of_uses_text_fallback_when_driver_does_not_parse(tmp_path, monkeypatch):\n        driver = tmp_path / \"broken_driver.py\"\n        driver.write_text(\"import foo\\nfoo.bar(\\n\")\n        monkeypatch.setattr(audit, \"DRIVER_MODULES\", (\"broken_driver.py\",))\n        monkeypatch.setattr(audit, \"_driver_path\", lambda name: driver)\n>       assert audit._callers_of(\"foo\", {\"run\"}) == []\nE       AssertionError: assert ['broken_driver.py:run'] == []\nE         \nE         Left contains one more item: 'broken_driver.py:run'\nE         Use -v to get more diff\n\ntests/test_coverage_round_1138.py:161: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_callers_of_uses_text_fallback_when_driver_does_not_parse\n1 failed in 0.31s\n",
+      "restored_exit": 0,
+      "restored_output": ".                                                                        [100%]\n1 passed in 0.28s\n",
+      "seconds": 2.57
+    },
+    {
+      "test": "test_experiment_identity_summary_tolerates_bad_run_metadata",
+      "production": "src/periodic_report.py::_experiment_identity_summary",
+      "before": "except (TypeError, json.JSONDecodeError):\n            metadata = {}",
+      "deliberate_break": "except (TypeError, json.JSONDecodeError):\n            raise",
+      "command": [
+        "/opt/anaconda3/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_coverage_round_1138.py::test_experiment_identity_summary_tolerates_bad_run_metadata"
+      ],
+      "red_exit": 1,
+      "red_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_________ test_experiment_identity_summary_tolerates_bad_run_metadata __________\n\n    def test_experiment_identity_summary_tolerates_bad_run_metadata():\n        feedback.record_run(\n            \"e1\",\n            \"o/r#1\",\n            \"implement\",\n            \"codex\",\n            experiment_id=\"exp-1\",\n            routing_metadata=\"{not-json\",\n        )\n>       summary = periodic_report._experiment_identity_summary(30)\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\ntests/test_coverage_round_1138.py:414: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \nsrc/periodic_report.py:130: in _experiment_identity_summary\n    metadata = json.loads(raw_metadata) if raw_metadata else {}\n               ^^^^^^^^^^^^^^^^^^^^^^^^\n/opt/anaconda3/lib/python3.12/json/__init__.py:346: in loads\n    return _default_decoder.decode(s)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n/opt/anaconda3/lib/python3.12/json/decoder.py:337: in decode\n    obj, end = self.raw_decode(s, idx=_w(s, 0).end())\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\nself = <json.decoder.JSONDecoder object at 0x10336c320>, s = '{not-json'\nidx = 0\n\n    def raw_decode(self, s, idx=0):\n        \"\"\"Decode a JSON document from ``s`` (a ``str`` beginning with\n        a JSON document) and return a 2-tuple of the Python\n        representation and the index in ``s`` where the document ended.\n    \n        This can be used to decode a JSON document from a string that may\n        have extraneous data at the end.\n    \n        \"\"\"\n        try:\n>           obj, end = self.scan_once(s, idx)\n                       ^^^^^^^^^^^^^^^^^^^^^^\nE           json.decoder.JSONDecodeError: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)\n\n/opt/anaconda3/lib/python3.12/json/decoder.py:353: JSONDecodeError\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_experiment_identity_summary_tolerates_bad_run_metadata\n1 failed in 0.58s\n",
+      "restored_exit": 0,
+      "restored_output": ".                                                                        [100%]\n1 passed in 0.39s\n",
+      "seconds": 3.51
     }
   ]
 }

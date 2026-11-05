@@ -49,7 +49,9 @@ python3 src/verify.py --aggregate shard-evidence --coverage --floor-may-lag
 CI uses Python 3.14 and VERIFY_PYTEST_WORKERS=4. Combined coverage includes pytest and
 module selftests. The configuration has branch_coverage=false: missing units here are
 statements, not measured branches. Exact updated-head deltas and shortfall are recorded in
-the PR body after CI publishes its artifact; a missing artifact is UNKNOWN, not zero.
+the PR body after CI publishes its artifact. Record all six reductions, their combined
+delta and the shortfall from 180 before closing the issue. If the artifact is missing,
+record UNKNOWN and keep the issue open until coverage progress is measured.
 
 Target order is inherited from issue #1138's Orchestrator ranking (escaped-defect priority,
 then churn, then uncovered mass), not independently reranked or chosen by file size. The
@@ -67,3 +69,7 @@ experiment-launch and metadata paths are not covered by it. repo_knowledge has b
 registry migration, export, suggestion, retrieval and CLI paths beyond its four tests.
 These paths are not asserted to be dead or impossible to fake; this is partial delivery.
 Floors, skip ceilings, dependency pins and production behavior are unchanged.
+
+Post-push review strengthened the caller fallback to prove a positive exact caller and a
+negative nonmatching function, and the malformed metadata test to require empty arm and
+missing-outcome lists. Both changed tests received fresh targeted mutation proofs.

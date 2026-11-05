@@ -154,10 +154,11 @@ def test_absent_entrypoint_note_returns_diagnostic_when_report_raises(monkeypatc
 
 def test_callers_of_uses_text_fallback_when_driver_does_not_parse(tmp_path, monkeypatch):
     driver = tmp_path / "broken_driver.py"
-    driver.write_text("import foo\nfoo.bar(\n")
+    driver.write_text("import foo\nfoo.run(\n")
     monkeypatch.setattr(audit, "DRIVER_MODULES", ("broken_driver.py",))
     monkeypatch.setattr(audit, "_driver_path", lambda name: driver)
-    assert audit._callers_of("foo", {"run"}) == []
+    assert audit._callers_of("foo", {"run"}) == ["broken_driver.py:run"]
+    assert audit._callers_of("foo", {"missing"}) == []
 
 
 def test_heartbeat_reachable_credits_dispatcher_lane_capabilities(monkeypatch):
@@ -412,7 +413,8 @@ def test_experiment_identity_summary_tolerates_bad_run_metadata():
         routing_metadata="{not-json",
     )
     summary = periodic_report._experiment_identity_summary(30)
-    assert "implementation_arms" in summary
+    assert summary["implementation_arms"] == []
+    assert summary["missing_arm_outcomes"] == []
 
 
 def test_process_action_covers_each_work_type():
