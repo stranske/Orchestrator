@@ -198,6 +198,7 @@ class FleetDeliveryTests(unittest.TestCase):
     def test_opener_failure_does_not_stop_other_rows(self):
         for failure in (FileNotFoundError(), subprocess.TimeoutExpired("opener", 30)):
             with self.subTest(failure=type(failure).__name__):
+
                 def fail(*args, **kwargs):
                     raise failure
 
@@ -217,9 +218,7 @@ class FleetDeliveryTests(unittest.TestCase):
                 return True, "not JSON", ""
             return self.gh(args, **kwargs)
 
-        report = review.fleet_delivery_measures(
-            now=self.now, gh_fn=gh, opener_runner=self.opener
-        )
+        report = review.fleet_delivery_measures(now=self.now, gh_fn=gh, opener_runner=self.opener)
         self.assertEqual(report["rows"]["gate_cancellations"]["reason"], "gh invalid JSON response")
         self.assertIsNotNone(report["rows"]["released_flow"]["value"])
 
