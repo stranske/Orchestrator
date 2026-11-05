@@ -273,3 +273,27 @@ evidence are committed in a writable clone under
 `/tmp/orchestrator-1175-independent-contracts-*`; the handoff patch is
 `/tmp/orchestrator-1175-independent-contracts.patch`. The main working tree retains
 the same edits.
+
+## Retained-receipt integrity verification (2026-11-05)
+
+Added six real CLI subtests for changed audit timestamps/evidence, conflicting
+receipt epochs, missing receipt evidence, null receipts, and truncated receipt
+JSON. Each case refuses without changing receipt bytes or modification time,
+creating an atomic-write file, or publishing. Restoring the original fixture
+evidence recovers the original receipt without changing the remote branch.
+All state stays in temporary directories; no Python files changed.
+
+Verification: `node tests/test_route_weights_export_cli.js` passed all 38 tests;
+the deployment unittest suite passed all 15. JavaScript syntax and diff whitespace
+checks pass. The production database and verified production deployment receipt
+remain unavailable. Observation still requires both 2026-11-08 and fourteen days
+after verified deployment. No additional task checkbox is complete; the checked
+publication task remains premature. The Anaconda interpreter, pytest, and Black
+are unavailable, so this run cannot verify the named pytest acceptance commands.
+
+PR #1176 was confirmed open and ready for review. Adding `needs-human` and posting
+the blocker comment were rejected with `MCP tool call requires approval, but
+approval policy is never`; remote metadata remains unchanged. The main checkout's
+Git index is read-only. The tested changes are retained here and committed in
+`/tmp/orchestrator-1175-receipt-integrity-0UjvnW`, with a handoff patch at
+`/tmp/orchestrator-1175-receipt-integrity.patch`.

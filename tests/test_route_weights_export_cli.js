@@ -396,6 +396,55 @@ print("publication_result=" + str(published))
   assert.deepEqual(JSON.parse(originalAfterRecovery.stdout), recorded);
   assert.deepEqual(fs.readFileSync(receipt), retained);
   assert.equal(await git(remote, 'rev-parse', branch), laterCommit);
+
+  // The same verified commit does not authorize replacing its retained audit
+  // or silently repairing a damaged receipt. Either could reset observation.
+  const conflicts = [
+    ['changed audit timestamp', { ...provenance, deployed_at: document.generated_at }, retained],
+    ['changed audit evidence', {
+      ...provenance, deployment_evidence: 'different-publication-audit/successful-push',
+    }, retained],
+    ['conflicting receipt epoch', provenance,
+      JSON.stringify({ ...recorded, deployed_epoch: recorded.deployed_epoch + 1 })],
+    ['missing receipt evidence', provenance,
+      JSON.stringify({ ...recorded, deployment_evidence: undefined })],
+    ['null receipt', provenance, 'null\n'],
+    ['truncated receipt', provenance, '{'],
+  ];
+  for (const [name, attemptedAudit, retainedReceipt] of conflicts) {
+    await t.test(`preserves deployment boundary with ${name}`, async () => {
+      fs.writeFileSync(audit, JSON.stringify(attemptedAudit));
+      fs.writeFileSync(receipt, retainedReceipt);
+      const saved = fs.readFileSync(receipt);
+      const savedModified = fs.statSync(receipt, { bigint: true }).mtimeNs;
+      try {
+        const refused = await record();
+        assert.equal(refused.status, 1, refused.stderr);
+        assert.equal(refused.stdout, '');
+        assert.match(refused.stderr, /deployment provenance refused:/);
+        assert.match(refused.stderr, name === 'truncated receipt'
+          ? /Expecting property name/ : /refusing to replace the first recorded deployment/);
+        assert.doesNotMatch(refused.stderr, /Traceback/);
+        assert.deepEqual(fs.readFileSync(receipt), saved);
+        assert.equal(fs.statSync(receipt, { bigint: true }).mtimeNs, savedModified);
+        assert.equal(fs.existsSync(blockedWrite), false, 'refusal must precede atomic writes');
+        assert.equal(await git(remote, 'rev-parse', branch), laterCommit);
+      } finally {
+        // Recovery requires restoring the original evidence, not another push.
+        fs.writeFileSync(audit, JSON.stringify(provenance));
+        fs.writeFileSync(receipt, retained);
+      }
+      const restoredModified = fs.statSync(receipt, { bigint: true }).mtimeNs;
+      const recoveredReceipt = await record();
+      assert.equal(recoveredReceipt.status, 0, recoveredReceipt.stderr);
+      assert.deepEqual(JSON.parse(recoveredReceipt.stdout), recorded);
+      assert.deepEqual(fs.readFileSync(receipt), retained);
+      assert.equal(fs.statSync(receipt, { bigint: true }).mtimeNs, restoredModified);
+      assert.equal(await git(remote, 'rev-parse', branch), laterCommit);
+      assert.equal(fs.existsSync(database), false);
+      assert.deepEqual(fs.readdirSync(home), []);
+    });
+  }
   assert.equal(fs.existsSync(database), false);
   assert.deepEqual(fs.readdirSync(home), []);
 });
