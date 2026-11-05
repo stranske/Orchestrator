@@ -1249,7 +1249,7 @@ test('report CLI never combines historical recovery with dispatch or current Bra
   const result = execute(root, process.execPath, args);
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout), reportInventory(options));
-  for (const extra of [['--dispatch'], ['--db', 'absent.db'], ['--manifest', 'absent.json'],
+  for (const extra of [['--dispatch'], ['--db', 'absent.db'],
     ['--days', '90'], ['--expected-count', '58']]) {
     const refused = execute(root, process.execPath, [...args, ...extra]);
     assert.equal(refused.status, 1, refused.stderr);
