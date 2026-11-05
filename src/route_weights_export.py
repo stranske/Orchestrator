@@ -1111,9 +1111,7 @@ def publish_document(
             except (KeyError, TypeError, ValueError, AttributeError):
                 deploy_instant = None
             try:
-                record_hosted_exploration_deploy(
-                    published, state_dir, now=deploy_instant
-                )
+                record_hosted_exploration_deploy(published, state_dir, now=deploy_instant)
             except OSError as exc:
                 # Unchanged publication: stamp persistence failure is non-fatal.
                 # Emit diagnostic and continue; an existing valid stamp is preserved.
@@ -1141,9 +1139,7 @@ def publish_document(
             except (KeyError, TypeError, ValueError, AttributeError):
                 deploy_instant = None
             try:
-                record_hosted_exploration_deploy(
-                    document, state_dir, now=deploy_instant
-                )
+                record_hosted_exploration_deploy(document, state_dir, now=deploy_instant)
             except OSError as exc:
                 print(
                     f"[deployment-stamp] refresh path: failed to write hosted-exploration "

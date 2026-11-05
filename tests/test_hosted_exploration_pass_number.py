@@ -292,6 +292,7 @@ def test_exploration_gate_fallback_on_exploration_report_error(tmp_path, monkeyp
     # Force exploration_review.build_report to raise an exception
     def failing_build_report(**kw):
         raise RuntimeError("simulated error")
+
     monkeypatch.setattr(exploration_review, "build_report", failing_build_report)
     gate = switch_review._exploration_gate()
     assert gate["status"] == "exploration_report_error"
@@ -323,6 +324,7 @@ def test_format_report_with_exploration_gate_suspect(tmp_path, monkeypatch):
     # Force exploration report error
     def failing_build_report(**kw):
         raise ValueError("test error")
+
     monkeypatch.setattr(exploration_review, "build_report", failing_build_report)
     rendered = switch_review.format_report(
         {
