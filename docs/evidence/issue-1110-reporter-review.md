@@ -66,3 +66,59 @@ be created on the read-only filesystem. The GitHub source-commit attempt,
 label, comment or remote checkbox update was applied. The code, tests and this
 review record remain in the working tree for an authorized write channel.
 GitHub reported PR #1132 open with `draft=false`; it was not converted or closed.
+
+## Baseline preflight follow-up, 2026-11-05
+
+Reviewed `84051b3` before continuing. Its reporter fix and regression cases support
+the completed reporter-review task; none of the production acceptance criteria
+can be checked off. The duplicate review checkbox in the PR's full issue text
+still needs alignment. The connector rejected that update because it requires
+approval and the run's approval policy is `never`.
+
+The production observation task remains blocked by unavailable host records.
+For the next independent validation task, exported `src/`, `tests/`,
+`pyproject.toml` and `.verify-floor.json` directly from assessed `origin/main`
+`27ed52260d05b7f3178c1e3393ac90a42e742f66` into
+`/tmp/issue1110-assessed-main` using `git archive`. Ran:
+
+```text
+node --test --test-isolation=none /tmp/issue1110-assessed-main/tests/test_value_chain_preflight_cli.js
+tests 12; pass 8; fail 4; skipped 0; exit 1
+```
+
+[Raw baseline output](issue-1110-preflight-baseline.log) confirms exactly the
+four previously reported failures. The two successful-design tests omit
+`consumer_acts` from the expected check roster; the missing-consumer and
+all-missing-declarations tests omit it from the expected failures. The baseline
+already enforces this tenth requirement. These test expectations and the
+admission implementation were byte-identical between the assessed baseline
+and the starting PR head.
+
+Updated the CLI tests to require the tenth check and both missing-consumer
+failures. Added a case requiring a nonempty but unresolved consumer to fail
+`consumer_acts` while still passing `outcome_path`, retaining all unverified
+implementation obligations and checking read-only behavior. No admission
+implementation or verification threshold was changed.
+
+```text
+node --test --test-isolation=none tests/test_value_chain_preflight_cli.js tests/test_relay_acceptance_cli.js
+tests 30; pass 30; fail 0; skipped 0; exit 0
+node --check tests/test_value_chain_preflight_cli.js
+git diff --check
+```
+
+[Raw combined output](issue-1110-preflight-relay-green.log) is focused validation,
+not a passing repository-wide result. `python3 -m pytest -m 'not slow'` still
+exits 1 with `No module named pytest`. No Python files changed. The floor remains
+byte-identical to the assessed baseline with the SHA-256 recorded above.
+The validation task remains unchecked until repository tests and `src/verify.py`
+terminate successfully. Production timestamps and deadline attribution remain
+unresolved; any success after `2026-11-04T08:16:32Z` is late recovery.
+
+At `2026-11-05T01:21:14Z`, staging the changed test returned exit 128 because
+`.git/index.lock` could not be created on the read-only filesystem. No commit or
+push was possible through the local Git channel. The changes remain available
+in the working tree.
+The follow-up `needs-human` label and blocker comment were also rejected by the
+connector with `MCP tool call requires approval, but approval policy is never`;
+neither was published.

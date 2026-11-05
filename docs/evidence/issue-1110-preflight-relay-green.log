@@ -1,0 +1,39 @@
+✔ a pre-deployment decision exiting later does not satisfy the deployment window (763.713363ms)
+✔ an importer failure retains the explicit round and provider incident for recovery (595.016516ms)
+✔ an explicit exit remains a boundary for later legacy adjacency (579.997019ms)
+✔ interleaved decisions retain exact attribution while an unfinished decision stays pending (813.756217ms)
+✔ a completed exit after the deadline cannot establish an outcome before the deadline (583.320189ms)
+✔ the deployment boundary excludes an earlier decision despite both exits being in-window (584.74606ms)
+✔ the report separates cumulative bindings from completed joins in the selected window (740.729224ms)
+✔ positive window totals do not conceal a matching completed exit with no accepted join (575.300095ms)
+✔ ambiguous persisted exits cannot be reported as an attributable accepted join (378.487834ms)
+✔ unavailable Brain reports unknown counts without creating a database (1.429446ms)
+✔ an accepted flag cannot substitute for matching round facts and relay outcome evidence (257.566998ms)
+▶ relay outcome lane and chosen agent must agree with the attributed decision
+  ✔ lane (272.614951ms)
+  ✔ chosen (256.092709ms)
+✔ relay outcome lane and chosen agent must agree with the attributed decision (529.302354ms)
+✔ report eligibility includes both endpoints and excludes adjacent decisions (917.485048ms)
+✔ raw IDs are matched literally with case and punctuation preserved (477.174736ms)
+✔ report reads one snapshot across a concurrent WAL commit and preserves stored bytes (259.433477ms)
+✔ value-chain preflight CLI accepts the stated task and all ten admission parts (299.65954ms)
+✔ value-chain preflight CLI accepts a spec file without modifying its bytes (503.680707ms)
+✔ value-chain preflight CLI names a missing dedup requirement (297.921106ms)
+✔ value-chain preflight CLI rejects a missing consumer (259.137108ms)
+✔ value-chain preflight CLI rejects a missing learning sink (300.221683ms)
+✔ value-chain preflight CLI rejects a missing kill switch (294.318852ms)
+✔ value-chain preflight CLI rejects a missing rollback (300.865308ms)
+✔ value-chain preflight CLI rejects a missing review cadence (295.927554ms)
+✔ value-chain preflight CLI reports every missing declaration in one result (264.824446ms)
+✔ value-chain preflight CLI rejects a declared consumer absent from the tree (270.522092ms)
+✔ value-chain preflight CLI rejects findability with a missing exercise category (298.812825ms)
+✔ value-chain preflight CLI rejects findability with a missing exercise rationale (296.383627ms)
+✔ value-chain preflight CLI rejects findability with a missing obsolete exemption (302.290937ms)
+ℹ tests 30
+ℹ suites 0
+ℹ pass 30
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 12065.144694
