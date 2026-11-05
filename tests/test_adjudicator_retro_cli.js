@@ -192,6 +192,125 @@ function world(t) {
   };
 }
 
+// Exercise the live caller through the real certifier, role validator and Brain
+// recorder. Only GitHub reads, backend selection and the paid provider are fixtures.
+for (const [name, flags, expected] of [
+  ['default budget', {}, 3],
+  ['configured budget', { ORCH_ADJUDICATOR_LIVE_LIMIT: '2' }, 2],
+  ['kill switch', { ORCH_ADJUDICATOR_LIVE_SHADOW: '0' }, 0],
+]) {
+  test(`live shadow real role adapter honors ${name} and preserves merge inputs`, (t) => {
+    const w = world(t);
+    const result = w.run(['-c', `
+import json
+import sys
+import time
+from contextlib import contextmanager
+from pathlib import Path
+from unittest.mock import patch
+import adjudicator_live as live
+import feedback
+import roles
+
+flags = json.loads(sys.argv[1])
+root = Path.cwd()
+sha = live._toy_repository(root)
+now = int(time.time())
+with feedback._conn() as conn:
+    for number in range(1, 6):
+        conn.execute("INSERT INTO runs(run_id,ts,target) VALUES (?,?,?)",
+                     (f"dispute-{number}", now, f"owner/repo#{number}"))
+        conn.execute(
+            "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged) "
+            "VALUES (?,'NON_PASS','PASS',1)", (f"dispute-{number}",))
+
+def merge_inputs():
+    with feedback._conn() as conn:
+        return {
+            "outcomes": conn.execute("SELECT * FROM outcomes ORDER BY run_id").fetchall(),
+            "runs": conn.execute("SELECT * FROM runs WHERE run_id LIKE 'dispute-%' "
+                                 "ORDER BY run_id").fetchall(),
+            "influence": conn.execute("SELECT * FROM influence_edges").fetchall(),
+        }
+
+before = merge_inputs()
+checkouts = []
+
+@contextmanager
+def checkout(target, evaluated_sha):
+    assert evaluated_sha == sha
+    checkouts.append(target)
+    yield root / "repo"
+
+def backend(agent, prompt, **kwargs):
+    assert agent == "gemini"
+    assert kwargs["timeout"] == 600
+    assert kwargs["cwd"] == str(root / "repo")
+    assert not kwargs["isolate"], "live dispatch was treated as a retrospective replay"
+    assert sha in prompt and '"source": "live"' in prompt
+    proposal = {
+        "decision": "reject_blocker", "confidence": "high",
+        "rationale": "The collected source contradicts the disputed finding.",
+        "evidence_assessment": [{"claim": "Missing proof", "status": "contradicted",
+            "evidence_ref": "git-path:proof.txt", "reason": "The proof is supplied."}],
+        "ground_truth_refs": ["git-path:proof.txt"],
+        "recommended_next_step": "Inspect the collected proof.", "evidence_gaps": [],
+    }
+    return {"run_id": f"provider-{len(checkouts)}", "exit": 0,
+            "output": json.dumps(proposal)}
+
+options = dict(
+    env=flags, now=now + 1, provider=checkout,
+    evidence_reader=lambda _: live._evidence_for(sha),
+    snapshot_reader=lambda target: {"number": int(target.split("#")[1]),
+                                    "headRefOid": sha, "body": live.AC_BODY},
+    github_reader=lambda _: {"total_count": 1, "check_runs": [
+        {"id": 1, "head_sha": sha, "name": "unit", "conclusion": "success"}]},
+)
+with (
+    patch.object(roles, "route_role", return_value={"agent": "gemini"}) as routing,
+    patch.object(roles, "_role_capability_event"),
+    patch.object(roles.dispatcher, "offload", side_effect=backend) as provider,
+):
+    first = live.run_live(**options)
+    first_calls = provider.call_count
+    # The next daily pass drains capped work, without replaying paid decisions.
+    second = live.run_live(**{**options, "now": now + 86401})
+    final_calls = provider.call_count
+    routes = routing.call_count
+
+with feedback._conn() as conn:
+    events = [json.loads(row[0])["live_shadow"] for row in conn.execute(
+        "SELECT payload_json FROM completion_events WHERE producer='role-adjudicator' "
+        "AND phase='live_shadow_advice' AND validation_status='accepted'")]
+    records = conn.execute(
+        "SELECT COUNT(*) FROM runs WHERE role_name='adjudicator'").fetchone()[0]
+print(json.dumps({"first": first["advised"], "second": second["advised"],
+                  "first_calls": first_calls, "final_calls": final_calls,
+                  "routes": routes, "checkouts": checkouts, "events": events,
+                  "records": records, "merge_inputs_unchanged": merge_inputs() == before}))
+`, JSON.stringify(flags)]);
+    assert.equal(result.first, expected);
+    assert.equal(result.first_calls, expected, 'the budget must reach the paid backend');
+    assert.equal(result.second, expected ? Math.min(expected, 5 - expected) : 0);
+    const total = result.first + result.second;
+    assert.equal(result.final_calls, total);
+    assert.equal(result.routes, total);
+    assert.equal(result.records, total, 'real role telemetry must be recorded');
+    assert.equal(result.checkouts.length, total);
+    assert.equal(new Set(result.checkouts).size, total, 'a target must never be replayed');
+    assert.equal(result.events.length, total, 'each paid decision needs one durable advice receipt');
+    for (const receipt of result.events) {
+      assert.equal(receipt.source, 'live');
+      assert.equal(receipt.backend, 'gemini');
+      assert.equal(receipt.decision, 'reject_blocker');
+      assert.equal(receipt.certification.status, 'certified');
+      assert.match(receipt.certification.digest, /^[a-f0-9]{64}$/);
+    }
+    assert.equal(result.merge_inputs_unchanged, true);
+  });
+}
+
 // These representative inputs exercise the validator without claiming to be the
 // six rejected proposals from the operator's unavailable historical report.
 test('adjudicator validator distinguishes recommendation prose from mutation commands', (t) => {
