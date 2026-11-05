@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 import test_capability_admission as gate
 
+import capability_admission as admission
+
 FIXTURE_CHECKS = (
     "test_an_act_outside_the_trailing_window_is_not_acting_now",
     "test_consumer_acting_is_the_trailing_window_not_a_first_invocation_deadline",
@@ -14,6 +16,20 @@ FIXTURE_CHECKS = (
     "test_consumer_acts_needs_a_symbol_this_tree_can_find",
     "test_consumer_report_excludes_waived_rows_and_names_the_drained_states",
 )
+
+
+def test_consumer_symbol_resolution_rejects_wrong_nesting_and_accepts_shell():
+    """A declaration is useful only when its exact callable exists in the named file."""
+    source = "class Right:\n    def run(self): pass\n\ndef run(): pass\n"
+    assert admission.consumer_tokens("x.py:Right.run and x.sh:launch") == [
+        ("x.py", "Right.run"),
+        ("x.sh", "launch"),
+    ]
+    assert admission._python_symbol_defined(source, "Right.run")
+    assert not admission._python_symbol_defined(source, "Wrong.run")
+    assert not admission._python_symbol_defined("not python(", "run")
+    assert admission._symbol_defined("function launch() { :; }", "launch", shell=True)
+    assert not admission._symbol_defined("launch_other() { :; }", "launch", shell=True)
 
 
 def test_actual_no_verdict_main_executes_all_six_and_cleans_fixtures(monkeypatch, tmp_path, capsys):

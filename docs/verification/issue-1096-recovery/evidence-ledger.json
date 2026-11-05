@@ -1,0 +1,716 @@
+{
+  "schema_version": 1,
+  "checked_date": "2026-11-04",
+  "source_issue": "https://github.com/stranske/Orchestrator/issues/1096",
+  "acceptance_complete": false,
+  "revision_identity": {
+    "local_checkout": "27fa292335fcb3da15f203ab37ae1004d5cd2db2",
+    "accepted_source": {
+      "status": "unverified",
+      "historical_candidate_pr": "https://github.com/stranske/Orchestrator/pull/638",
+      "candidate_merge_sha": "1a6f5a7e0f08aa7b28a37dd56c7c53831c3bbce2",
+      "limitation": "Merged source is identifiable; current installed acceptance and byte identity are not observed."
+    },
+    "current_deployed_revision": {
+      "status": "unavailable"
+    },
+    "current_mirror_revision": {
+      "status": "unavailable"
+    },
+    "canonical_report": {
+      "status": "bytes_recovered_authentication_unverified",
+      "path": "~/.codex/orchestrator/capability-program/adjudicator-retro.json",
+      "historically_reported_sha256": "f4117a581b36e02925511fd70e6f8a6debda5ed073ab80b6301906eb29d7d56a",
+      "historically_reported_source_sha256": "8a6649a27bb5ee05001cc580691a98aa26404f0f3a0c85d845ada9e6046a069c",
+      "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6229128915",
+      "current_readback_sha256": "f4117a581b36e02925511fd70e6f8a6debda5ed073ab80b6301906eb29d7d56a",
+      "readback": "authoritative-input-readback/acquisition.json"
+    }
+  },
+  "historical_observations": [
+    {
+      "date": "2026-10-14T12:27:14Z",
+      "class": "recovered_report_text",
+      "reference": "dropbox:id:tDSHdCztYNUAAAAAADfgrw@65de8f715bb690369d613",
+      "inventory": "historical-inventory.json",
+      "retained_population": 40,
+      "retained_rows": 58,
+      "retained_graded": 0,
+      "recursive_paid_records": 38,
+      "limitation": "This earlier backup is not the later immutable 58-case native source; no substitution is permitted."
+    },
+    {
+      "date": "2026-10-17",
+      "class": "retained_publication_observation",
+      "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6229128915",
+      "reported_graded": 1,
+      "reported_agree": 1,
+      "reported_original_paid_identities": 108,
+      "reported_native_paid_identities": 2,
+      "limitation": "Publication receipt described in the comment; journal and published bytes not recovered."
+    },
+    {
+      "date": "2026-10-18",
+      "class": "retained_scheduled_observation",
+      "reference": "https://github.com/stranske/Orchestrator/issues/575#issuecomment-6251544073",
+      "corroborating_audit_reference": "dropbox:id:tDSHdCztYNUAAAAAADaI7Q",
+      "saved_graded": 1,
+      "generic_in_memory_recount_graded": 0,
+      "advice_graded": 2,
+      "live_graded": 0,
+      "live_advised": 0,
+      "live_failed": 2,
+      "identified_live_failures": [
+        "stranske/Pension-Data#973",
+        "stranske/Inv-Man-Intake#1030"
+      ],
+      "limitation": "Dated observation recovered. Raw October 18 Brain snapshot, native authentication receipts and fixed next-20 membership proof remain unavailable. Generic recount is not native canonical regrading."
+    },
+    {
+      "date": "2026-10-22T15:35Z",
+      "class": "retained_read_only_recount",
+      "reference": "https://github.com/stranske/Orchestrator/issues/575#issuecomment-6344712055",
+      "corroborating_audit_reference": "dropbox:id:tDSHdCztYNUAAAAAADzH6A",
+      "saved_graded": 1,
+      "generic_in_memory_recount_graded": 0,
+      "saved_advice_graded": 2,
+      "recount_advice_graded": 4,
+      "independent_truth_checked_at": "2026-10-22T01:17:59Z",
+      "reported_truth": [
+        {
+          "target": "stranske/Orchestrator#587",
+          "truth": "FAIL"
+        },
+        {
+          "target": "stranske/Orchestrator#590",
+          "truth": "FAIL"
+        },
+        {
+          "target": "stranske/Orchestrator#589",
+          "truth": null
+        }
+      ],
+      "limitation": "Historical reported truth only; no fresh Brain query or authenticated native publication."
+    }
+  ],
+  "current_observations": {
+    "report_acquisition": {
+      "file_id": "id:tDSHdCztYNUAAAAAADfgrw",
+      "revision": "65de8f715bb690369d613",
+      "source_path": "/Learning/Code/Audits/Orchestrator/2026-10-15-w2-followups/regrade/adjudicator-retro-BEFORE-2026-10-15T2256Z.json",
+      "metadata_server_modified": "2026-10-15T22:56:59Z",
+      "metadata_size": 2386539,
+      "extracted_local_size": 2386541,
+      "extracted_local_sha256": "e55a63bd4f458d3c747f7d14321aa4fa81ed34731ab8add3bf6aba920ad262b1",
+      "byte_identity": "unverified; text-extractor output differs in size from source metadata",
+      "raw_report_committed": false
+    },
+    "checks": "checks.json",
+    "real_input_command_and_stop_rule": "README.md",
+    "production_runtime_paths_present": false,
+    "recovered_unmerged_work": [
+      {
+        "commit": "a7098f817130fd2b01e1b2a9dff929d4ecaace0a",
+        "content": "Python pre-dispatch inventory and 19 controls",
+        "status": "inspected, not accepted/deployed or applied by this run"
+      },
+      {
+        "commit": "f65e6525fe765e57d9fef5c50a95bd32d70903d1",
+        "content": "retained-row diagnostics",
+        "status": "inspected, not accepted/deployed or applied by this run"
+      }
+    ],
+    "prior_runner_artifact": {
+      "run_id": 41616434725,
+      "artifact_id": 13222981265,
+      "github_archive_sha256": "22e550142cdcbe9ba4829d4620b62e4f056f01d144673a46176b356e4e7e81ef",
+      "status": "GitHub artifact located; ZIP returned as remote file reference, not inspected locally"
+    },
+    "pre_dispatch_followup": {
+      "checked_at": "2026-11-03T18:51:58.245Z",
+      "observation": "pre-dispatch-observation.json",
+      "checks": "pre-dispatch-checks.json",
+      "plan": "pre-dispatch-plan.md",
+      "results": "pre-dispatch-results.md",
+      "historical_input_sha256": "e55a63bd4f458d3c747f7d14321aa4fa81ed34731ab8add3bf6aba920ad262b1",
+      "inventory_tests_passed": 40,
+      "module_selftest_checks_passed": 23,
+      "evidence_tests_passed": 11,
+      "named_and_full_pytest_status": "blocked_before_collection_missing_pytest",
+      "native_journal": "unavailable",
+      "live_writer_ownership": "unverified",
+      "task_checkboxes_verified_complete": 0,
+      "pr_body_correction": "rejected_connector_requires_approval_policy_never",
+      "checks_sha256": "8092128f1df021cdcffcc8c71f57f6023e52d6c246e8f4f3ace52ddcad1339c9",
+      "checks_bindings": {}
+    },
+    "required_test_followup": {
+      "checked_at": "2026-11-03T19:06:14.708Z",
+      "evaluated_revision": "42ee516d3219c98129a9f4837a1edd35937148d8",
+      "source_parent": "0ecb2c1102b7043b74f905774d91b485d7d7fe27",
+      "plan": "acceptance-test-plan.md",
+      "checks": "acceptance-run/checks.json",
+      "runner_validation": "acceptance-run/runner-validation.json",
+      "selected_interpreter": "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python",
+      "source_unchanged": true,
+      "named_tests_exit_code": 1,
+      "retrospective_suite_exit_code": 1,
+      "pytest_status": "blocked_before_collection_missing_pytest",
+      "accepted_deployment_verified": false,
+      "required_tests_passed": false,
+      "task_checkboxes_verified_complete": 0,
+      "limitation": "Revision-bound runner evidence only; accepted deployment binding remains unverified.",
+      "blocker_comment": "rejected_connector_requires_approval_policy_never",
+      "needs_human_label": "rejected_connector_requires_approval_policy_never",
+      "pr_readiness": {
+        "number": 1097,
+        "state": "open",
+        "isDraft": false
+      },
+      "checks_sha256": "565025a768386e09934c9edb06830f52def9ce022b7e393b337f9d5497dbfcba",
+      "checks_bindings": {
+        "evaluated_revision": "evaluated_revision",
+        "required_tests_passed": "required_tests_passed"
+      },
+      "runner_validation_sha256": "7841392b8a4de5d1bdeded2c2dc53133b2e0e6c59e9d7a4a4e9fe67f1f6a8a49",
+      "runner_validation_bindings": {
+        "evaluated_revision": "evaluated_revision"
+      }
+    },
+    "suite_completeness_followup": {
+      "checked_at": "2026-11-03T19:28:57.268Z",
+      "evaluated_revision": "b2e375553429ab2f632b41214e02f904204b9fa2",
+      "source_parent": "bfee009c368dd170682524924dd7e3a58678d1ee",
+      "plan": "suite-completeness-plan.md",
+      "checks": "suite-completeness-run/checks.json",
+      "runner_validation": "suite-completeness-run/runner-validation.json",
+      "runner_tests_passed": 23,
+      "collection_exit_code": 1,
+      "named_tests_exit_code": 1,
+      "retrospective_suite_exit_code": 1,
+      "source_unchanged": true,
+      "required_tests_passed": false,
+      "accepted_deployment_verified": false,
+      "pytest_status": "blocked_before_collection_missing_pytest",
+      "bounded_install_attempt": "no_available_distribution",
+      "task_checkboxes_verified_complete": 0,
+      "blocker_comment": "rejected_connector_requires_approval_policy_never",
+      "needs_human_label": "rejected_connector_requires_approval_policy_never",
+      "source_commit_storage": "isolated_git_directory_because_checkout_metadata_is_read_only",
+      "limitation": "Runner regression tests verify evidence validation only; no operational acceptance established.",
+      "checks_sha256": "ea088007c9611735fd5f08a72fa421a1f43d8750fbe2e4a9be6abef85103dd57",
+      "checks_bindings": {
+        "evaluated_revision": "evaluated_revision",
+        "required_tests_passed": "required_tests_passed"
+      },
+      "runner_validation_sha256": "de7b3a093450b23822742ffc8507214b9373732e86d9ff31b7dd6d78c871182a",
+      "runner_validation_source_revision": "b2e375553429ab2f632b41214e02f904204b9fa2",
+      "runner_validation_exit_code": 0,
+      "runner_validation_bindings": {
+        "source_revision": "runner_validation_source_revision",
+        "exit_code": "runner_validation_exit_code"
+      }
+    },
+    "interpreter_portability_followup": {
+      "checked_at": "2026-11-03T19:43:14.177Z",
+      "evaluated_revision": "96dde1810f56562e0e23af6f0e603b3e48e7728a",
+      "source_parent": "1ecef8633d696c6e3b1ad864572dad65bea132dc",
+      "plan": "interpreter-followup/plan.md",
+      "checks": "interpreter-followup/acceptance-run/checks.json",
+      "validation": "interpreter-followup/validation.json",
+      "runner_regressions_before": {
+        "passed": 16,
+        "failed": 7
+      },
+      "runner_regressions_after": {
+        "passed": 26,
+        "failed": 0
+      },
+      "inventory_tests_passed": 40,
+      "selected_interpreter": "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+      "source_unchanged": true,
+      "pytest_status": "blocked_before_collection_missing_pytest",
+      "required_tests_passed": false,
+      "accepted_deployment_verified": false,
+      "task_checkboxes_newly_verified_complete": 0,
+      "pr_body_update": "rejected_connector_requires_approval_policy_never",
+      "pr_readiness": {
+        "number": 1097,
+        "state": "open",
+        "isDraft": false
+      },
+      "limitation": "Test-double regressions and failed real commands only. No deployment, native grade, retry outcome or live-cohort acceptance established.",
+      "checks_sha256": "ac206b01d063840618204cc6e837c2a7a8ac68a6a84c6d089cae27a72aff8fe5",
+      "checks_bindings": {
+        "evaluated_revision": "evaluated_revision",
+        "required_tests_passed": "required_tests_passed"
+      },
+      "validation_sha256": "e8c26e6cd8f44e0efe4dd337ca3ea222a56efd0eda4cdcd1000078034cffae17",
+      "validation_bindings": {
+        "evaluated_revision": "evaluated_revision",
+        "required_tests_passed": "required_tests_passed"
+      }
+    },
+    "ledger_audit_followup": {
+      "checked_at": "2026-11-03T19:57:12.856565+00:00",
+      "evaluated_revision": "ff02e2e756f61828862b206c1a3795b1b3182b17",
+      "checks": "ledger-audit-tests/checks.json",
+      "validation": "ledger-audit/validation.json",
+      "audit_command": [
+        "node",
+        "scripts/audit_adjudicator_evidence_ledger.js",
+        "--ledger",
+        "docs/verification/issue-1096-recovery/evidence-ledger.json"
+      ],
+      "plan": "ledger-audit-plan.md",
+      "regressions_passed": 88,
+      "required_tests_passed": false,
+      "operational_acceptance_verified": false,
+      "pr_body_update": "rejected_connector_requires_approval_policy_never",
+      "blocker_comment": "rejected_connector_requires_approval_policy_never",
+      "needs_human_label": "rejected_connector_requires_approval_policy_never",
+      "limitation": "Recovery attribution and local receipt hashes only; no external authentication or source/deployment binding.",
+      "checks_sha256": "d725c97b9ed48f4092ae90209389732fb21d0c783de0d5c17fe19518df6f8612",
+      "checks_evaluated_revision": "d84ae822cb6181d53e9a993712807dfc49fd41a5",
+      "checks_bindings": {
+        "evaluated_revision": "checks_evaluated_revision",
+        "required_tests_passed": "required_tests_passed"
+      },
+      "validation_sha256": "4f87713cb004e479b4a2637368cf9eba1a4a3b013f7400d03b4e7c383194d91b",
+      "validation_bindings": {
+        "evaluated_revision": "evaluated_revision"
+      }
+    },
+    "retry_manifest_followup": {
+      "checked_at": "2026-11-03T20:14:57.185353+00:00",
+      "evaluated_revision": "ebf5f3b1bd998e2f4f8ce8cff6fda7b5055079b2",
+      "checks": "retry-manifest-followup/acceptance-run/checks.json",
+      "required_test_revision": "191dfb9f5bbc27a357cef8b5f16ad306f5eb3f45",
+      "validation": "retry-manifest-followup/validation.json",
+      "plan": "retry-manifest-followup/plan.md",
+      "original_manifest_recovered": false,
+      "limitation": "Fixture-verified identity matching only. Required pytest execution remains blocked before collection; accepted deployment and original retry manifest remain unverified.",
+      "checks_sha256": "4a785fa6ef2640f8d4186977b8e4a974119bea645e68783066c5e6c5b1ec7cba",
+      "checks_evaluated_revision": "191dfb9f5bbc27a357cef8b5f16ad306f5eb3f45",
+      "checks_required_tests_passed": false,
+      "checks_bindings": {
+        "evaluated_revision": "checks_evaluated_revision",
+        "required_tests_passed": "checks_required_tests_passed"
+      },
+      "validation_sha256": "07a889e3d1fcfdf53afdccd96178bf8b0476a2a35e6c9998363fb1cb093cc6b0",
+      "validation_bindings": {
+        "evaluated_revision": "evaluated_revision"
+      }
+    },
+    "retained_attempt_diagnostics_followup": {
+      "checked_at": "2026-11-03T20:30:34.741698+00:00",
+      "evaluated_revision": "eac39f3eb8b6a1a59457d39a6ceeb0e5bcfc3275",
+      "plan": "attempt-diagnostics-plan.md",
+      "checks": "attempt-diagnostics/acceptance-run/checks.json",
+      "validation": "attempt-diagnostics/validation.json",
+      "historical_acquisition": "attempt-diagnostics/historical-acquisition.json",
+      "required_tests_passed": false,
+      "newly_completed_tasks": 0,
+      "limitation": "Fixture-verified failure field locations, hashes and retained result classification only. Re-fetched historical report was counted in memory, not run through the new CLI. Original requested retry manifest, native authentication and deployment binding remain unavailable.",
+      "checks_sha256": "2ceace7de118355b21ca84372518f2f75f7e3ba515ca50c09a16d6f9ef7eb159",
+      "checks_evaluated_revision": "6749ae79c00be3c9362a01ce117e46dc304d931e",
+      "checks_bindings": {
+        "evaluated_revision": "checks_evaluated_revision",
+        "required_tests_passed": "required_tests_passed"
+      },
+      "validation_sha256": "c8821898c3c707a32199fbf492174ba5a85b2f1e5e37b76c253c1a448140f2bd",
+      "validation_bindings": {
+        "evaluated_revision": "evaluated_revision",
+        "required_tests_passed": "required_tests_passed"
+      },
+      "historical_acquisition_sha256": "dd3fd4438b913fab7927b0428d55be2d402d59aab416f5e11b782bcce31c23f3",
+      "historical_acquisition_bindings": {}
+    },
+    "failure_stage_followup": {
+      "checked_at": "2026-11-03T20:46:06Z",
+      "source_commit": "0699e4d4b9517142f427d3c54a94add3560a2a73",
+      "source_parent": "baa8250ae599ec23514a8a21c0c515943db1bddd",
+      "checks": "failure-stage-followup/acceptance-run/checks.json",
+      "validation": "failure-stage-followup/validation.json",
+      "historical_input_scope": "selected_identity_and_failure_fields_from_earlier_extracted_backup",
+      "recorded_stages": 9,
+      "unresolved_attempt_failures": 25,
+      "no_recorded_attempt_failure": 30,
+      "original_retry_manifest_recovered": false,
+      "authenticated_outcomes_verified": false,
+      "task_checkboxes_newly_verified_complete": 0,
+      "checks_sha256": "5ffb3ca4f8e100a44b9aadbaf8e94816dd7228e99bf2a2baaf55e36857133e13",
+      "checks_evaluated_revision": "baa8250ae599ec23514a8a21c0c515943db1bddd",
+      "checks_required_tests_passed": false,
+      "checks_bindings": {
+        "evaluated_revision": "checks_evaluated_revision",
+        "required_tests_passed": "checks_required_tests_passed"
+      },
+      "validation_sha256": "53ddf21838250b4df772ddc888214ca641bf35fc97a2ec8f10b75c1e0da61023",
+      "validation_required_tests_passed": false,
+      "validation_bindings": {
+        "source_commit": "source_commit",
+        "required_tests_passed": "validation_required_tests_passed"
+      }
+    },
+    "dispatch_refusal_followup": {
+      "checked_at": "2026-11-03T21:38:20.654Z",
+      "source_commit": "17a86642dd506b9f45938b252d1649699e8634f7",
+      "source_parent": "441f22ebb3550d88c42061d85fa1275cd1da8116",
+      "plan": "dispatch-refusal-followup/plan.md",
+      "checks": "dispatch-refusal-followup/acceptance-run/checks.json",
+      "validation": "dispatch-refusal-followup/validation.json",
+      "historical_input_scope": "selected_retained_historical_fields_only",
+      "retained_refusal_occurrences": 36,
+      "primary_failed_provider_refusals": 8,
+      "later_failed_provider_refusals": 11,
+      "primary_round_boundary_refusals": 17,
+      "original_retry_manifest_recovered": false,
+      "authenticated_outcomes_verified": false,
+      "required_tests_passed": false,
+      "task_checkboxes_newly_verified_complete": 0,
+      "limitation": "Exact retained refusal messages only. The earlier 58-row backup is not the immutable native source or fixed cohort. No authenticated completion, current truth, canonical grade, accepted deployment or live writer ownership is established. No new provider call or production write occurred.",
+      "blocker_comment": "rejected_connector_requires_approval_policy_never",
+      "needs_human_label": "rejected_connector_requires_approval_policy_never",
+      "pr_readiness": {
+        "checked_at": "2026-11-03T21:39:56.909Z",
+        "number": 1097,
+        "state": "open",
+        "isDraft": false,
+        "head": "441f22ebb3550d88c42061d85fa1275cd1da8116"
+      },
+      "checks_sha256": "778fc5bcb2f30bcb4b5847915adeaa634d8bac6e4fcad2a5ec93a2a313697a0f",
+      "checks_evaluated_revision": "441f22ebb3550d88c42061d85fa1275cd1da8116",
+      "checks_bindings": {
+        "evaluated_revision": "checks_evaluated_revision",
+        "required_tests_passed": "required_tests_passed"
+      },
+      "validation_sha256": "f03c30687248073b336a8381314e879ea5b90fe8f0f7b5083bdf8627154be6e4",
+      "validation_bindings": {
+        "source_commit": "source_commit",
+        "required_tests_passed": "required_tests_passed"
+      }
+    },
+    "ignored_input_followup": {
+      "checked_date": "2026-11-03",
+      "class": "repository_test_input_binding",
+      "source_revision": "a4e8c0c800839088b63df4b8cff5935c689b8d7b",
+      "plan": "ignored-input-followup/plan.md",
+      "checks": "ignored-input-followup/acceptance-run/checks.json",
+      "validation": "ignored-input-followup/validation-ledger-bound.json",
+      "limitation": "Runner controls pass, but pytest is unavailable before collection. Accepted deployment binding remains unverified; no task newly completed.",
+      "checks_sha256": "c6b63845a37a5b7cec286cb1e2cf688dd892c730bb854cd705e7b60ebede906d",
+      "checks_evaluated_revision": "a4e8c0c800839088b63df4b8cff5935c689b8d7b",
+      "checks_required_tests_passed": false,
+      "checks_bindings": {
+        "evaluated_revision": "checks_evaluated_revision",
+        "required_tests_passed": "checks_required_tests_passed"
+      },
+      "validation_sha256": "bbf3a5da68fc3d7b271d81ee59cdb87d5f5dc1490afd93d91f6b5cb4d9ab44d1",
+      "validation_required_tests_passed": false,
+      "validation_bindings": {
+        "source_revision": "source_revision",
+        "required_tests_passed": "validation_required_tests_passed"
+      }
+    },
+    "retained_truth_followup": {
+      "checked_at": "2026-11-03T22:18:46.055133+00:00",
+      "source_commit": "e81b3e77c0ad615eeed479fb8f1e566cdec073c0",
+      "source_parent": "9c00d5bda5a429e48310a2bd5e7b27c4f5b30fba",
+      "plan": "truth-followup/plan.md",
+      "checks": "truth-followup/acceptance-run/checks.json",
+      "validation": "truth-followup/validation.json",
+      "historical_input_scope": "committed_selected_historical_fields_only",
+      "saved_binary_decisions_without_recorded_truth": 5,
+      "required_tests_passed": false,
+      "authenticated_outcomes_verified": false,
+      "original_retry_manifest_recovered": false,
+      "task_checkboxes_newly_verified_complete": 0,
+      "limitation": "Retained truth diagnostics only. Missing and UNKNOWN truth are not retry permission; binary values are not authenticated independent truth or grades.",
+      "checks_sha256": "0996652aa66888fba753384a9f687f45c918e2470bdcd938f7138004fe5a674a",
+      "checks_evaluated_revision": "9c00d5bda5a429e48310a2bd5e7b27c4f5b30fba",
+      "checks_bindings": {
+        "evaluated_revision": "checks_evaluated_revision",
+        "required_tests_passed": "required_tests_passed"
+      },
+      "validation_sha256": "93c31105782cde91f7bfb1288804b5a6f2461cc5c79e452eff305a44d2773227",
+      "validation_bindings": {
+        "source_commit": "source_commit",
+        "required_tests_passed": "required_tests_passed"
+      }
+    },
+    "packet_floor_followup": {
+      "checked_at": "2026-11-03T23:15:26.334842+00:00",
+      "source_commit": "b2151b6912b8c36e76013fb36d186b1f2fa67557",
+      "source_parent": "8bef6a28fce7b4eecbaa3fc08016d7bb505742b5",
+      "plan": "packet-floor-followup/plan.md",
+      "checks": "packet-floor-followup/acceptance-run/checks.json",
+      "validation": "packet-floor-followup/validation.json",
+      "historical_acquisition": "packet-floor-followup/historical-acquisition.json",
+      "required_tests_passed": false,
+      "authenticated_outcomes_verified": false,
+      "original_retry_manifest_recovered": false,
+      "task_checkboxes_newly_verified_complete": 0,
+      "limitation": "Fixture-verified packet floor diagnostics with production rule comparison. Historical field counts only; no new CLI execution on original report bytes, original retry identities, authenticated receipt, current truth or canonical grade.",
+      "blocker_comment": "rejected_connector_requires_approval_policy_never",
+      "needs_human_label": "rejected_connector_requires_approval_policy_never",
+      "checks_sha256": "644c21e4b6fcf384221e74857dc7dada427c761675ad73748003442f2cb51f17",
+      "checks_evaluated_revision": "8bef6a28fce7b4eecbaa3fc08016d7bb505742b5",
+      "checks_bindings": {
+        "evaluated_revision": "checks_evaluated_revision",
+        "required_tests_passed": "required_tests_passed"
+      },
+      "validation_sha256": "a20e2ddc8fb66b6e09a3d3b61374abbb825cbc2d05832778c371a714763aaa17",
+      "validation_bindings": {
+        "source_commit": "source_commit",
+        "required_tests_passed": "required_tests_passed"
+      },
+      "historical_acquisition_sha256": "ca075ecee6ab463fea95226ff64367503ce54a6e2d6d4f0874dabd94a147bb13",
+      "historical_acquisition_bindings": {}
+    },
+    "retry_identity_followup": {
+      "checked_at": "2026-11-04T00:22:48.917Z",
+      "source_revision": "f0acc6900ba1f860d02868f61da987a4afa0a592",
+      "parent_revision": "ba918d748be8dc58d50741734a2930a10a20ad69",
+      "validation": "retry-identity-followup/validation.json",
+      "checks": "retry-identity-followup/acceptance-run/checks.json",
+      "plan": "retry-identity-followup/plan.md",
+      "results": "retry-identity-followup/results.md",
+      "inventory_tests_passed": 67,
+      "runner_tests_passed": 33,
+      "ledger_tests_passed": 22,
+      "required_tests_passed": false,
+      "accepted_deployment_verified": false,
+      "new_acceptance_checkboxes_complete": 0,
+      "original_retry_task_complete": false,
+      "dispatch_performed": false,
+      "canonical_publication_performed": false,
+      "limitation": "Conflicting saved retry identities are refused; original requested identities and authenticated operational evidence remain unavailable.",
+      "validation_sha256": "ef28f88a8dddf2a537fbda278939eddf748d36ea813b921175b0205bc54e1a40",
+      "validation_bindings": {
+        "source_revision": "source_revision",
+        "required_tests_passed": "required_tests_passed"
+      },
+      "checks_sha256": "8b293b4237f8f4381618f260895f16c44205a526c199e614b8686b2f96808f5d",
+      "checks_evaluated_revision": "ba918d748be8dc58d50741734a2930a10a20ad69",
+      "checks_bindings": {
+        "evaluated_revision": "checks_evaluated_revision",
+        "required_tests_passed": "required_tests_passed"
+      }
+    },
+    "requested_recovery_dispositions": {
+      "checked_at": "2026-11-04T01:12:23.013Z",
+      "source_commit": "97e6396add872214bf09e81d9e48c1443546d672",
+      "validation": "recovery-dispositions/validation.json",
+      "results": "recovery-dispositions/results.md",
+      "original_retry_manifest_recovered": false,
+      "authenticated_outcomes_verified": false,
+      "operational_task_checkboxes_completed": 0,
+      "validation_sha256": "fa5bb1aafce8f1459aca6a30e7a3177bd479777d93327f970b905464df1ea0cb",
+      "validation_evaluated_source_commit": "97e6396add872214bf09e81d9e48c1443546d672",
+      "validation_passed": 126,
+      "validation_bindings": {
+        "evaluated_source_commit": "validation_evaluated_source_commit",
+        "passed": "validation_passed"
+      }
+    },
+    "native_case_recovery_followup": {
+      "checked_at": "2026-11-04T02:46:26.864777+00:00",
+      "source_commit": "de594803fc09b553bc7fbe19c0acb978eacb8e7a",
+      "validation": "native-case-followup/validation.json",
+      "results": "native-case-followup/results.md",
+      "original_retry_manifest_recovered": false,
+      "authenticated_outcomes_verified": false,
+      "operational_task_checkboxes_completed": 0,
+      "validation_sha256": "de48efc4603751951c8dc285a6b6b3b3b9dd1543e3ddd216b93231b570f26f19",
+      "validation_passed": 137,
+      "validation_bindings": {
+        "source_commit": "source_commit",
+        "passed": "validation_passed"
+      }
+    },
+    "native_receipt_consistency_followup": {
+      "checked_at": "2026-11-04T04:18:04.323736+00:00",
+      "source_commit": "bd84c68e06ef5ef02ce6a2bfe3966ab42ab0b9b5",
+      "plan": "native-consistency-followup/plan.md",
+      "checks": "native-consistency-followup/acceptance-run/checks.json",
+      "validation": "native-consistency-followup/validation.json",
+      "results": "native-consistency-followup/results.md",
+      "focused_passed": 143,
+      "required_tests_passed": false,
+      "original_retry_reconciliation_complete": false,
+      "task_checkboxes_verified_complete": 0,
+      "paid_dispatches": 0,
+      "canonical_publications": 0,
+      "mirror_writes": 0,
+      "limitation": "Fixture receipt consistency checks only; authenticated outcomes and original operational acceptance remain unverified.",
+      "checks_sha256": "8c6d957b06e4d96c2a40c1cdc2b4428587789744af165c389e0df4ecff275ad7",
+      "checks_evaluated_revision": "bd84c68e06ef5ef02ce6a2bfe3966ab42ab0b9b5",
+      "checks_bindings": {
+        "evaluated_revision": "checks_evaluated_revision",
+        "required_tests_passed": "required_tests_passed"
+      },
+      "validation_sha256": "8fb149042a3bdbf7c541071999480ca06f4e2dbe8c2f10d4f524b120ece68426",
+      "validation_bindings": {
+        "source_commit": "source_commit"
+      }
+    },
+    "native_admission_followup": {
+      "checked_at": "2026-11-04T05:10:28.329756+00:00",
+      "source_commit": "c80d78d65510c4022a8dde9a7961d1d71f492b6a",
+      "checkout_parent": "5435e6ad526c2f6ad4450d743d3dd4650591ea7f",
+      "plan": "native-admission-followup/plan.md",
+      "results": "native-admission-followup/results.md",
+      "validation": "native-admission-followup/validation.json",
+      "checks": "native-admission-followup/acceptance-run/checks.json",
+      "focused_checks_passed": 146,
+      "required_tests_passed": false,
+      "original_retry_reconciliation_complete": false,
+      "operational_acceptance_verified": false,
+      "task_checkboxes_newly_verified_complete": 0,
+      "limitation": "Exact-message diagnostics and fixture controls only; original requested retry manifest, authenticated receipts and independent current truth remain unavailable.",
+      "blocker_comment": "rejected_connector_requires_approval_policy_never",
+      "needs_human_label": "rejected_connector_requires_approval_policy_never",
+      "pr_readiness": {
+        "number": 1097,
+        "state": "open",
+        "isDraft": false
+      },
+      "validation_sha256": "b5f5c7cab8e5d7e15c3379ec45cf053c2fa8be5e1e70b9492f32a668c79ee8b4",
+      "validation_bindings": {
+        "source_commit": "source_commit",
+        "required_tests_passed": "required_tests_passed"
+      },
+      "checks_sha256": "95f009b924007b7b76122916706389d82e55b46527abfc6e85400483ebfa609f",
+      "checks_evaluated_revision": "c80d78d65510c4022a8dde9a7961d1d71f492b6a",
+      "checks_bindings": {
+        "evaluated_revision": "checks_evaluated_revision",
+        "required_tests_passed": "required_tests_passed"
+      }
+    },
+    "receipt_binding_followup": {
+      "plan": "receipt-binding-followup/plan.md",
+      "checks": "receipt-binding-followup/acceptance-run/checks.json",
+      "validation": "receipt-binding-followup/validation-ledger-bound.json",
+      "limitation": "Historical receipt binding controls only; no operational acceptance.",
+      "checks_sha256": "4d9acea35ba490b6a5ea1e194ada87fb00a05be7dd28517998217dcb4f26fd49",
+      "checks_evaluated_revision": "408fc9a3cdb169d4d6b3bd65bc58924f52803c8a",
+      "checks_required_tests_passed": false,
+      "checks_bindings": {
+        "evaluated_revision": "checks_evaluated_revision",
+        "required_tests_passed": "checks_required_tests_passed"
+      },
+      "validation_sha256": "85dbc13afcecc6d92a04a028fa74be0d833dcc3234f00f6dacca8aa00cdeaf50",
+      "validation_source_revision": "e4ce3eef4749b469657f6f56a94934436c886a8d",
+      "validation_required_tests_passed": false,
+      "validation_bindings": {
+        "source_revision": "validation_source_revision",
+        "required_tests_passed": "validation_required_tests_passed"
+      }
+    },
+    "checks_sha256": "05816252eda6b4f6090fba490c40b95a0be5879c71dff564c22c6e28cd708a0b",
+    "checks_checkout_revision": "27fa292335fcb3da15f203ab37ae1004d5cd2db2",
+    "checks_bindings": {
+      "checkout_revision": "checks_checkout_revision"
+    },
+    "authoritative_input_readback": {
+      "historical_acquisition": "authoritative-input-readback/acquisition.json",
+      "historical_acquisition_sha256": "b1216e4fda4e3caf29e1e3cc473d9b0afb1b8bc05d5a19f1ab83d19499e0f1d3",
+      "historical_acquisition_bindings": {},
+      "original_retry_identities_recovered": 21,
+      "historical_first_broken_steps": 21,
+      "limitation": "Original historical result rows recovered, not current authenticated outcomes or permission to retry.",
+      "validation": "authoritative-input-readback/validation.json",
+      "validation_sha256": "f198f64c4062951e58d401eebfb657ce0bc39e33c30e5781fb1c3d998fd29ad1",
+      "validation_bindings": {}
+    }
+  },
+  "mirror_synchronization": [
+    {
+      "class": "historical_sync_observation",
+      "date": "2026-10-16",
+      "source_revision_abbreviated": "a84e363",
+      "generation": "d162b38b59a44334b07c107890fcaf5a",
+      "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6205949903"
+    },
+    {
+      "class": "historical_sync_observation",
+      "date": "2026-10-18",
+      "generation": "ef3f4323",
+      "source_module_revision_lower_bound_abbreviated": "6528dff",
+      "stale_source_clone_head_abbreviated": "8033646",
+      "reference": "https://github.com/stranske/Orchestrator/issues/575#issuecomment-6251544073",
+      "limitation": "Module comparison and generation reference only; no exact whole-tree revision proved."
+    },
+    {
+      "class": "current_sync_observation",
+      "status": "unavailable",
+      "writes_performed": 0
+    }
+  ],
+  "dispatch_receipts": {
+    "current_run": {
+      "provider_calls": 0,
+      "production_dispatches": 0,
+      "canonical_publications": 0,
+      "live_writer_ownership": "unverified; do not take over"
+    },
+    "historical_receipt_index": [
+      {
+        "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6168601695",
+        "requested_original_rows": 21,
+        "description": "One timeout, one stale merge-bound verifier, 19 failed-provider refusals; row-by-row retained artifacts referenced, not fully recovered."
+      },
+      {
+        "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6205949903",
+        "attempts": 27,
+        "dispatches": 27,
+        "graded": 0
+      },
+      {
+        "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6217948095",
+        "attempts": 11,
+        "dispatches": 11,
+        "graded": 0
+      },
+      {
+        "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6229128915",
+        "backend_run_id": "offload:codex:1792208003430286000",
+        "decision": "reject_blocker",
+        "native_case_target": "stranske/Orchestrator#478",
+        "limitation": "Reported receipt identity only, not a recovered authenticated journal row."
+      }
+    ]
+  },
+  "fixed_next_20": {
+    "status": "unavailable",
+    "manifest": null,
+    "verified_members_with_decisions": null,
+    "limitation": "Aggregate scheduled observations and named failed live cases do not establish fixed membership. No replacement cohort selected."
+  },
+  "grade_thresholds": {
+    "intermediate_graded_25": "not_verified",
+    "canonical_graded_29": "not_verified",
+    "advice_graded_is_substitute": false
+  },
+  "missing_evidence": [
+    "Current accepted source/deployed/mirror byte bindings; historical binding to 28f12766 is insufficient",
+    "Immutable native source report matching 8a6649a27bb5ee05001cc580691a98aa26404f0f3a0c85d845ada9e6046a069c: original-report-frozen.json at the prior native launcher path is ENOENT",
+    "Authenticated canonical publication and native journal/qualification join: canonical and journal bytes found; original frozen source and qualified-input-report.json unavailable at recorded paths",
+    "Current authenticated outcomes for original 21 retry identities: historical identity-bound first broken steps recovered in authoritative-input-readback/original-21-results.json",
+    "Raw authenticated October 18 acceptance proof (a dated scheduled observation was recovered)",
+    "Previously fixed next-20 manifest and at least 15 dated decisions; original membership not recovered",
+    "Current live writer ownership"
+  ],
+  "local_task_reconciliation": {
+    "recovery_complete": false,
+    "pre_execution_inventory_complete": true,
+    "required_tests_complete": false,
+    "original_retry_reconciliation_complete": false,
+    "canonical_grade_thresholds_complete": false,
+    "fixed_next_20_complete": false,
+    "evidence_ledger_publication_complete": true,
+    "evidence_attribution_and_missing_proof_disclosure_complete": true,
+    "remote_checkboxes_updated": false
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "evidence_class": "historical_snapshot",
+  "evidence_reference": "selected-fields projection of dropbox:id:tDSHdCztYNUAAAAAADfgrw@65de8f715bb690369d613; not original report bytes",
+  "observed_at": 1793746114,
+  "selected_fields_sha256": "c87598737485b19011318f369fdafc204d9f9d7732f3420f5e5cd39964885bd8",
+  "selected_fields_bytes": 30531,
+  "case_count": 58,
+  "attempt_count": 64,
+  "paid_identity_summary": {
+    "records": 38,
+    "unique": 38,
+    "repeated": []
+  },
+  "native_locator_status_counts": {
+    "journal_unavailable": 38,
+    "backend_identity_not_recorded": 26
+  },
+  "original_retry_manifest_available": false,
+  "native_journal_observed": false,
+  "authenticated_outcomes_verified": false,
+  "dispatch_authorized": false,
+  "original_retry_task_complete": false
+}

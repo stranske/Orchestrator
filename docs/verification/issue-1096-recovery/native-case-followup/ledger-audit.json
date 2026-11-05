@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "ledger_sha256": "30d1b6f29874222cdcd1ebcce441ca44be38afe1d3f07dda943e2bdfcee7de8a",
+  "audit_scope": "recovery_attribution_and_local_artifact_integrity",
+  "attribution_and_artifact_checks_passed": true,
+  "operational_acceptance_verified": false,
+  "external_references_authenticated": false,
+  "source_revision_bindings_verified": false
+}

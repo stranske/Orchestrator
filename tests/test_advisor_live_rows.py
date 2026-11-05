@@ -17,10 +17,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import advisor_hermetic
 import pytest
 
-import capabilities
-import capability_advisor as ca
+_modules = advisor_hermetic.import_under_temporary_runtime("capabilities", "capability_advisor")
+capabilities = _modules["capabilities"]
+ca = _modules["capability_advisor"]
 
 SURFACE = "t-live-rows"
 BINDING = {

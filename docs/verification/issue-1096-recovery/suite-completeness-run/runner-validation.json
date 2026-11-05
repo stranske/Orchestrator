@@ -1,0 +1,12 @@
+{
+  "checked_at": "2026-11-03T19:29:25.939Z",
+  "source_revision": "b2e375553429ab2f632b41214e02f904204b9fa2",
+  "command": [
+    "/opt/hostedtoolcache/node/24.22.1/x64/bin/node",
+    "tests/test_adjudicator_acceptance_runner.js"
+  ],
+  "exit_code": 0,
+  "log": "runner-tests.log",
+  "log_sha256": "3cc75fe7aa2e6cc3964eaeeb032f50170839b9843e71f53699b9489107daf502",
+  "acceptance_evidence": false
+}
