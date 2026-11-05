@@ -75,3 +75,40 @@ uncommitted because the mandatory Black gate cannot run. The full available-Pyth
 verification attempt was interrupted without a verdict. GitHub rejected both the
 blocker comment and `needs-human` label because tool approval is required but the
 run's approval policy is `never`. PR #1130 was confirmed open with `draft=false`.
+
+## Repeatable mutation control — 2026-11-05 08:35Z
+
+`scripts/verify_fleet_delivery_mutation.js` now copies the reader and fixtures to a
+private temporary tree, runs the named fail-open test, wraps the Gate reader to
+swallow its error and return `0%`, requires that exact assertion failure, restores
+the original source bytes, and requires the test to pass again. It refuses to
+count missing tools, skipped tests, unrelated failures, or timeouts as evidence.
+Cleanup and restoration also run when verification fails. The checkout is never
+mutated. The interpreter can be selected with `PYTHON`; otherwise the verifier
+requires the issue's `/opt/anaconda3/bin/python3`.
+
+- [x] `PYTHON=python3 node scripts/verify_fleet_delivery_mutation.js --unittest`: baseline passed,
+  mutation detected, restored test passed using available Python 3.14.9.
+- [x] `node --test --test-isolation=none tests/test_verify_fleet_delivery_mutation.js`:
+  all three tests passed, including the real mutation and failed-run restoration.
+- [x] All 25 existing fleet tests pass via unittest; the module selftest passes.
+- [x] The runner CLI printed all five rows at `2026-11-05T08:35:38+00:00`, with
+  explicit GitHub connectivity and missing-helper results. This is a runner smoke
+  check, not the selected-interpreter live-machine acceptance.
+- [ ] `PYTHON=python3 node scripts/verify_fleet_delivery_mutation.js` (pytest mode):
+  blocked by missing pytest, correctly reported as a failure.
+- [ ] Required pytest, Black, selected-interpreter full verification, and
+  live-machine acceptance remain unavailable. PyPI DNS resolution failed when
+  attempting to install the missing tools. `src/verify.py --pytest-shard 1/6`
+  exited 1 because pytest is missing; the full verification attempt was interrupted
+  without a verdict.
+
+Only JavaScript and this evidence note changed in this follow-up. No Python
+source or formatting configuration changed, and no collection floor was adjusted.
+
+The requested source commit was attempted but Git could not create
+`.git/index.lock`: the Git directory is read-only in this run. The new JavaScript
+files and this note remain in the working tree. Attempts to post the blocker
+comment and add `needs-human` to PR #1130 were also rejected because tool approval
+is required and this run's approval policy is `never`. The connector confirmed
+PR #1130 is open with `draft=false`.
