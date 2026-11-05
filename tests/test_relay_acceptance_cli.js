@@ -385,6 +385,51 @@ test('raw reconciliation filters the window and rejects conflicting reuse of an 
   assert.deepEqual(raw.decisions[0].accepted_edge_ids, []);
 });
 
+test('conflicting raw decisions retain in-window completion obligations in either record order', (t) => {
+  const w = world(t);
+  w.append('joined', deployment);
+  w.exit('joined', deployment + 5);
+  w.append('conflicting', deployment + 10);
+  const completed = w.exit('conflicting', deployment + 20);
+  const lines = fs.readFileSync(w.log, 'utf8').trim().split('\n');
+  const joined = lines.find((line) => line.includes('decision_id=joined '));
+  const matching = lines.find((line) => line.includes('decision_id=conflicting '));
+  const mismatch = matching.replace('chosen=claude_code', 'chosen=cursor');
+  const beforeWindow = matching.replace(matching.split(' ')[0],
+    new Date((deployment - 1) * 1000).toISOString().replace('.000Z', 'Z'));
+  const exits = path.join(w.root, 'relay-exits.log');
+  fs.writeFileSync(exits, exitLine('joined', deployment + 5)
+    + exitLine('conflicting', deployment + 20));
+  for (const [records, eligible] of [
+    [[matching, mismatch], true],
+    [[mismatch, matching], true],
+    [[beforeWindow, mismatch], false],
+    [[mismatch, beforeWindow], false],
+  ]) {
+    fs.writeFileSync(w.log, [joined, ...records, ''].join('\n'));
+    const files = [path.join(w.root, 'brain.db'), w.log, exits];
+    const before = files.map((file) => fs.readFileSync(file));
+    for (const exitLog of [undefined, exits]) {
+      const report = w.report(deployment + 20, deployment, w.log, exitLog);
+      assert.equal(report.status, 'available');
+      assert.equal(report.accepted_window_joins, 2);
+      const raw = report.raw_reconciliation;
+      assert.equal(raw.window_decisions, 2);
+      assert.equal(raw.accepted_window_joins, 1);
+      assert.equal(raw.matching_completed_exit_decisions, 1 + Number(eligible));
+      assert.equal(raw.unaccounted_completed_exit_decisions, Number(eligible));
+      const conflict = raw.decisions[1];
+      assert.equal(conflict.status, 'ambiguous_raw_decisions');
+      assert.equal(conflict.matching_completed_exit, eligible);
+      assert.equal(conflict.raw_records.length, 2);
+      assert.equal(conflict.completed_rounds[0].decision_id, completed.decision_id);
+      assert.deepEqual(conflict.accepted_edge_ids, []);
+      if (exitLog) assert.equal(conflict.exit_reconciliation_status, 'ambiguous_raw_decisions');
+    }
+    assert.deepEqual(files.map((file) => fs.readFileSync(file)), before);
+  }
+});
+
 test('a requested unavailable pacing log fails closed without changing stored state', (t) => {
   const w = world(t);
   w.append('joined', deployment + 10);

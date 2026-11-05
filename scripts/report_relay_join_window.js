@@ -99,7 +99,8 @@ function reconcileRawLog(pacingLog, start, end, sources, decisions, byId, exitLo
   const rows = [];
   for (const [id, records] of byRawId) {
     const rawRecords = [...records.values()];
-    const raw = rawRecords.find((r) => r.decision_ts >= start);
+    const windowRecords = rawRecords.filter((r) => r.decision_ts >= start);
+    const raw = windowRecords[0];
     if (!raw) continue;
     const saved = persisted.get(id);
     const rounds = byId.get(id) || [];
@@ -120,12 +121,13 @@ function reconcileRawLog(pacingLog, start, end, sources, decisions, byId, exitLo
       source_run_id: `relay-pacing:id:${id}`,
       persisted_decision_ts: saved?.decision_ts ?? null,
       status,
-      // A matching completion remains an obligation even when duplicate exits
-      // prevent a unique accepted join. Do not hide ambiguity from omission totals.
-      matching_completed_exit: rawRecords.length === 1 && rounds.some((round) =>
-        Number.isSafeInteger(round.exit_status) && round.ts >= raw.decision_ts
-        && round.lane === raw.facts.lane
-        && round.agent === raw.facts.chosen.replace('claude_code', 'claude')),
+      // A matching completion remains an obligation even when conflicting raw
+      // decisions or duplicate exits prevent a unique accepted join. Earlier
+      // raw records can establish ambiguity, but not an in-window obligation.
+      matching_completed_exit: windowRecords.some((record) => rounds.some((round) =>
+        Number.isSafeInteger(round.exit_status) && round.ts >= record.decision_ts
+        && round.lane === record.facts.lane
+        && round.agent === record.facts.chosen.replace('claude_code', 'claude'))),
       completed_rounds: rounds,
       accepted_edge_ids: status === 'accepted_join' ? saved.accepted_edge_ids : [],
     };
@@ -133,10 +135,10 @@ function reconcileRawLog(pacingLog, start, end, sources, decisions, byId, exitLo
       const matches = exitsById.get(id) || [];
       const exit = matches[0];
       const round = rounds[0];
-      const eligible = rawRecords.length === 1 && matches.some((candidate) =>
-        candidate.exit_ts >= raw.decision_ts && candidate.lane === raw.facts.lane
+      const eligible = windowRecords.some((record) => matches.some((candidate) =>
+        candidate.exit_ts >= record.decision_ts && candidate.lane === record.facts.lane
         && candidate.agent.replace('claude_code', 'claude')
-          === raw.facts.chosen.replace('claude_code', 'claude'));
+          === record.facts.chosen.replace('claude_code', 'claude')));
       let exitStatus;
       if (rawRecords.length > 1) exitStatus = 'ambiguous_raw_decisions';
       else if (!matches.length) exitStatus = 'no_raw_exit';
@@ -186,7 +188,7 @@ function reconcileRawLog(pacingLog, start, end, sources, decisions, byId, exitLo
       'Use a retained pacing log captured with the Brain snapshot; separate live files are not atomic.',
       exits ? 'Raw exit trailers are compared with persisted rounds; duplicate trailers remain ambiguous.'
         : 'Completed rounds are persisted Brain records; raw exit logs require separate verification.',
-      'Completed-exit counts include ambiguous matches; accepted joins still require unique attribution.',
+      'Completed-exit counts include ambiguous decisions and exits; accepted joins still require unique attribution.',
       'Deployment provenance and consistent capture of the retained logs and Brain require separate verification.',
     ],
   };

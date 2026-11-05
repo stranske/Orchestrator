@@ -244,3 +244,33 @@ Local staging failed because `.git/index.lock` is on a read-only filesystem.
 The GitHub connector also rejected tree creation, `needs-human` labeling and
 the blocker comment with `MCP tool call requires approval, but approval policy
 is never`. No commit, push, label or comment was applied.
+
+## Conflicting raw-decision omission counts, 2026-11-05
+
+Reviewed the five preceding keepalive commits and reconciled PR #1132's body:
+both reporter-review checkboxes are already complete; no other task is verified.
+The source issue's operator comment explicitly parks production acceptance until
+a production-capable seat is available. No production evidence bundle is linked.
+
+Fixed a further omission-count defect in raw reconciliation: conflicting records
+for an exact ID suppressed its matching-completion obligation. Matching now checks
+every in-window variant, in both persisted-round and raw-exit comparisons. Earlier
+variants still establish ambiguity but cannot establish an in-window obligation.
+Ambiguous IDs retain their raw facts and round IDs and earn no accepted join.
+
+The regression failed before the fix (`matching_completed_exit_decisions` was 1
+instead of 2). After implementation, the combined relay/preflight CLI suites pass
+**41 tests**, exit 0. The case checks both record orders, excludes completions
+matching only pre-window facts, and verifies database/log bytes remain unchanged.
+Node syntax checks and `git diff --check` pass. No Python files changed.
+
+No operational checkbox is completed. Assessed local `origin/main` remains
+`b69ff474d3a87a271a7345874bcfc19b03a736bf`; the unchanged floor still differs,
+with both SHA-256 values recorded in the preceding section. Pytest and the
+production interpreter remain unavailable. Attribution remains unresolved against
+`2026-11-04T08:16:32Z`; any attributable success after it is late recovery.
+
+Delivery failed: `git add` could not create `.git/index.lock` on the read-only
+filesystem, so no commit was created. The `needs-human` label and blocker-comment
+calls were rejected with `MCP tool call requires approval, but approval policy is
+never`; neither was published. Source, tests and this note remain uncommitted.
