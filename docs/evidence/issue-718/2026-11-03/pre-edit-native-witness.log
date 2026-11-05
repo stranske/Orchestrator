@@ -1,0 +1,11 @@
+Outcome: successful native held-branch provisioning in both lanes (unmocked _live_holder_pids).
+Checked: 2026-11-03
+Interpreter: /opt/anaconda3/bin/python3
+Command: ORCH_PROVISION_NATIVE_ACCEPTANCE=1 python3 -m pytest tests/test_provision_reclaim.py::test_native_clean_idle_holder_is_reclaimed -v
+
+Post-edit: tests now always collected, skip without ORCH_PROVISION_NATIVE_ACCEPTANCE=1.
+With env var: 2 passed (closer, opener lanes).
+Without env var: 2 skipped.
+
+provision: reclaimed stale worktree .../holder holding pr-head (closer)
+provision: reclaimed stale worktree .../holder holding orchestrator/issue-718 (opener)

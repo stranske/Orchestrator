@@ -1,0 +1,16 @@
+# verify.py
+
+  tree:       checkout
+  state:      private copy, deleted after the run — ledger 25.8 MB; Brain 137.5 MB
+  time:       pytest 46m18s, selftests 50s (8 at a time), gates 55s
+  pytest:     14074 passed, 487 failed, 147 skipped total (103/19 max core-sibling; 44/31 max other) (14702 collected; floor 14702)
+  selftests:  125 of 127 modules ran, 0/7 max skipped
+  activation audit   ok  CAN FIRE:   49 of 49 live  (100%)
+  recurrence replay  ok  WOULD FIRE:  49 of 54
+  set coverage       ok  all 10 capability-set coverage checks passed over ALL 50 ledger capabilities (--roster for the per-capability table); 10 of 10 verdicts from this run's pytest
+  admission          ok  all 24 admission checks passed — 13 enforced, 19 legacy debt, commitments clean (24 of 24 verdicts from this run's pytest)
+  ledger validate    ok  "valid": true
+  declared:   all 19 rows this tree declares are registered in the ledger judged
+  entrypoints: 1 of 50 ledger row(s) declare code ABSENT from this tree — closer-core -> /Users/teacher/.codex/closer-core/closer_core.py (not found in any sibling checkout). WAIT-OR-MERGE, not retire/waive.
+  mypy ratchet: 0/0 max of 237 module(s) exempt, 237 checked — fully drained
+
