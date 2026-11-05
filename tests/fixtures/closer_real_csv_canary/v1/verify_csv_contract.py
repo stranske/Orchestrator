@@ -19,10 +19,12 @@ from __future__ import annotations
 
 import base64
 import csv
+import hashlib
 import importlib.util
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import traceback
@@ -173,7 +175,9 @@ def _marked_objects(text, marker):
             break
         payload = text[found + len(marker) :]
         brace = payload.find("{")
-        if brace < 0:
+        boundary = payload.find("-->")
+        next_marker = payload.find(marker)
+        if brace < 0 or any(0 <= end < brace for end in (boundary, next_marker)):
             cursor = found + len(marker)
             continue
         try:
@@ -261,11 +265,7 @@ def _summarize_corpus(event):
 
 def _corpus_from_comment(record, corrective_sha):
     """Accept only the native verifier's own pull-request comment."""
-    if (record.get("author") or "") not in _TRUSTED_VERIFIER_AUTHORS:
-        return []
-    url = str(record.get("url") or "")
-    prefix = f"https://github.com/{_REPOSITORY}/pull/{_CORRECTIVE_PR}#issuecomment-"
-    if not url.lower().startswith(prefix.lower()):
+    if not _native_comment(record, _CORRECTIVE_PR, _TRUSTED_VERIFIER_AUTHORS):
         return []
     return [
         _summarize_corpus(event)
@@ -276,11 +276,7 @@ def _corpus_from_comment(record, corrective_sha):
 
 def _partial_corpus_from_comment(record):
     """Accept only the native verifier's own comment on the partial pull request."""
-    if (record.get("author") or "") not in _TRUSTED_VERIFIER_AUTHORS:
-        return []
-    url = str(record.get("url") or "")
-    prefix = f"https://github.com/{_REPOSITORY}/pull/{_PARTIAL_PR}#issuecomment-"
-    if not url.lower().startswith(prefix.lower()):
+    if not _native_comment(record, _PARTIAL_PR, _TRUSTED_VERIFIER_AUTHORS):
         return []
     return [
         _summarize_corpus(event)
@@ -290,7 +286,7 @@ def _partial_corpus_from_comment(record):
 
 
 def _event_bound_to(event, sha):
-    return sha in {event.get("head_sha"), event.get("evaluated_sha")}
+    return sha in (event.get("head_sha"), event.get("evaluated_sha"))
 
 
 def _is_outcome(event):
@@ -332,18 +328,147 @@ def _classify_events(events, corrective_sha):
     return partial, corrective
 
 
+def _native_comment(record, number, authors):
+    return (
+        record.get("author") in authors
+        and re.fullmatch(
+            re.escape(f"https://github.com/{_REPOSITORY}/pull/{number}#issuecomment-")
+            + r"[1-9][0-9]*",
+            str(record.get("url") or ""),
+        )
+        is not None
+    )
+
+
+def _events_from_comment(record, number, head, merge):
+    if not _native_comment(record, number, _TRUSTED_VERIFIER_AUTHORS):
+        return []
+    return [
+        event
+        for event in _verifier_events(record["body"])
+        if event.get("repo") == _REPOSITORY.lower()
+        and str(event.get("pr")) == str(number)
+        and isinstance(head, str)
+        and re.fullmatch(r"[a-f0-9]{40}", head)
+        and isinstance(merge, str)
+        and re.fullmatch(r"[a-f0-9]{40}", merge)
+        and event.get("head_sha") == head
+        and event.get("evaluated_sha") == merge
+        and _positive_identifier(event.get("run_id"))
+        and _positive_identifier(event.get("run_attempt"))
+        and event.get("status") in ("pending", "incomplete")
+    ]
+
+
+def _comment_body(comment):
+    return comment.get("body", "") if isinstance(comment, dict) else comment
+
+
 def _publication_tied(comments, corrective_sha):
-    if not corrective_sha or corrective_sha in {_PARTIAL_HEAD, _PARTIAL_MERGE}:
+    """Read confirmed publisher records, never pre-publication DATA or SHA prose.
+
+    retain_confirmed_result in closer_coding_publication_io issues this shape;
+    its native writer is the owned PR author (stranske), not github-actions.
+    Local custody is not published by that producer as GitHub comments. Until
+    the lane exposes a genuine record, its absence here remains incomplete.
+    """
+    if not corrective_sha or corrective_sha in (_PARTIAL_HEAD, _PARTIAL_MERGE):
         return False
-    for body in comments:
-        if corrective_sha in body and any(marker in body for marker in _PUBLICATION_MARKERS):
-            return True
+    marker = "closer-confirmed-existing-pr-publication/v1"
+    for comment in comments:
+        if not isinstance(comment, dict):
+            continue
+        for value in _marked_objects(comment.get("body", ""), marker):
+            pr = value.get("pr")
+            commit = value.get("commit")
+            ref = value.get("ref")
+            provenance = value.get("provenance")
+            if not all(isinstance(item, dict) for item in (pr, commit, ref, provenance)):
+                continue
+            number = str(pr.get("pr_number"))
+            if (
+                value.get("schema") != marker
+                or number not in (_CORRECTIVE_PR, _OWNED_DELIVERY_PR)
+                or not _native_comment(comment, number, ("stranske",))
+                or pr.get("repository") != _REPOSITORY.lower()
+                or pr.get("owner_login") != "stranske"
+                or pr.get("writer_login") != "stranske"
+                or pr.get("owner_id") != 23046322
+                or pr.get("writer_id") != 23046322
+                or pr.get("head_oid") != corrective_sha
+                or commit.get("oid") != corrective_sha
+                or ref.get("oid") != corrective_sha
+                or ref.get("ref") != "refs/heads/" + str(pr.get("head_ref"))
+                or ref.get("object_type") != "commit"
+            ):
+                continue
+            references = {
+                "handoff_reference": (
+                    "closer-publication-source-handoff-reference/v1",
+                    "publication-source-handoff-",
+                ),
+                "coding_terminal_reference": (
+                    "closer-coding-worker-terminal-reference/v1",
+                    "coding-worker-terminal-",
+                ),
+                "publication_origin_reference": (
+                    "closer-native-owned-pr-publication-origin-reference/v1",
+                    "native-publication-origin-",
+                ),
+                "io_admission_reference": (
+                    "closer-publication-io-admission-reference/v1",
+                    "publication-io-admission-",
+                ),
+            }
+            valid = True
+            for key, (schema, prefix) in references.items():
+                reference = provenance.get(key)
+                if not (
+                    isinstance(reference, dict)
+                    and reference.get("schema") == schema
+                    and re.fullmatch(r"[a-f0-9]{64}", str(reference.get("sha256")))
+                    and reference.get("name") == prefix + reference["sha256"] + ".json"
+                ):
+                    valid = False
+            for key in (
+                "io_operation_sha256",
+                "push_ack_sha256",
+                "native_readback_sha256",
+                "index_binding_sha256",
+                "original_admission_sha256",
+                "original_operation_sha256",
+                "source_closure_sha256",
+            ):
+                if not re.fullmatch(r"[a-f0-9]{64}", str(provenance.get(key))):
+                    valid = False
+            # Same canonical bytes as the producer's native readback digest.
+            try:
+                readback = {
+                    "schema": "closer-owned-pr-readback-data/v1",
+                    "pr": pr,
+                    "commit": commit,
+                    "ref": ref,
+                    "native_publication_authorized": False,
+                }
+                digest = hashlib.sha256(
+                    json.dumps(
+                        readback,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        allow_nan=False,
+                    ).encode()
+                ).hexdigest()
+            except (TypeError, ValueError):
+                continue
+            if valid and provenance.get("native_readback_sha256") == digest:
+                return True
     return False
 
 
 def _publication_markers(comments):
     found = []
-    for body in comments:
+    for comment in comments:
+        body = _comment_body(comment)
         for marker in _PUBLICATION_MARKERS:
             if marker in body and marker not in found:
                 found.append(marker)
@@ -392,17 +517,15 @@ def _keepalive_for_head(comments, corrective_sha):
     observed_only = []
     if not corrective_sha or corrective_sha in {_PARTIAL_HEAD, _PARTIAL_MERGE}:
         return completions, reservations, observed_only
-    for body in comments:
-        for kind, blob in _receipt_blobs(body):
+    for comment in comments:
+        for kind, blob in _receipt_blobs(_comment_body(comment)):
             payload = _decode_receipt(blob)
             if payload is None:
                 continue
             record = payload.get("record")
             if not isinstance(record, dict):
                 record = payload
-            started = {record.get("head_sha"), payload.get("head_sha")}
-            started.discard(None)
-            owns = corrective_sha in started
+            owns = corrective_sha in (record.get("head_sha"), payload.get("head_sha"))
             observed = record.get("observed_head_sha")
             if owns:
                 if kind == "completion":
@@ -653,7 +776,7 @@ def _format_report(assessment, corrective_sha, local_head, verifier_runs=(), ear
     else:
         lines.append(
             "closer_publication_proof_for_corrective_head: MISSING "
-            "no closer-publication marker in the chain comments contains the corrective head"
+            "no validated confirmed publisher record for the corrective head; local custody not observed"
         )
     markers = assessment.get("publication_markers") or []
     if markers:
@@ -732,7 +855,7 @@ def _format_report(assessment, corrective_sha, local_head, verifier_runs=(), ear
         else:
             lines.append(
                 "owned_delivery_publication: MISSING "
-                "no closer-publication marker contains the owned delivery head"
+                "no validated confirmed publisher record for the owned delivery head"
             )
         if owned_head != corrective_sha:
             owned_completions = assessment.get("owned_worker_completions") or []
@@ -1075,15 +1198,24 @@ def _observe_chain(fetch):
         page = _comment_records(fetch, number)
         for record in page:
             body = record["body"]
-            comments.append(body)
-            events.extend(_verifier_events(body))
+            comments.append(record)
+            subject = _record_named(records, "pr", str(number))
+            events.extend(
+                _events_from_comment(
+                    record, number, subject.get("head_sha"), subject.get("merge_sha")
+                )
+            )
             verdicts = _verdict_lines(body)
             if str(number) == _PARTIAL_PR:
                 partial_verdicts.extend(verdicts)
                 partial_corpus.extend(_partial_corpus_from_comment(record))
             elif str(number) == _CORRECTIVE_PR and corrective_sha in body:
                 corrective_verdicts.extend(verdicts)
-                corpus.extend(_corpus_from_comment(record, corrective_sha))
+                corpus.extend(
+                    decision
+                    for decision in _corpus_from_comment(record, corrective_sha)
+                    if decision["evaluated_sha"] == subject.get("merge_sha")
+                )
     corrective_pr = _corrective_record(records)
     runs = _bound_verifier_runs(fetch, corrective_sha, corrective_pr.get("merge_sha") or "")
     commits = _pull_commit_shas(fetch, int(_CORRECTIVE_PR))
@@ -1171,8 +1303,8 @@ def _self_check():
     if _classify_events([done], _PARTIAL_HEAD)[1]:
         raise AssertionError("partial sha was accepted as a corrective outcome")
     tied = "<!-- closer-publication-source-handoff/v3 --> " + corrective
-    if not _publication_tied([tied], corrective):
-        raise AssertionError("publication marker tied to the corrective head was ignored")
+    if _publication_tied([tied], corrective):
+        raise AssertionError("unstructured handoff was accepted as publication")
     if _publication_tied(["closer-publication-source-handoff/v3 " + _PARTIAL_MERGE], corrective):
         raise AssertionError("partial publication text was credited to the corrective head")
     if _publication_tied(["closer-publication-source-handoff/v3"], corrective):
@@ -1550,7 +1682,7 @@ def _self_check():
         corrective,
     )
     ready, ready_code = _format_report(present, corrective, corrective)
-    if ready_code != 0 or "completion: evidence present" not in ready:
+    if ready_code != 2 or "completion: evidence incomplete" not in ready:
         raise AssertionError("complete synthetic evidence did not report present")
     if "publication_markers_observed: closer-publication-source-handoff/v3" not in ready:
         raise AssertionError("tied publication marker was not named")
@@ -1582,11 +1714,11 @@ def _self_check():
         corrective,
         [{"id": 1, "event": "pull_request_target", "status": "completed", "conclusion": "skipped"}],
     )
-    if corpus_code != 0 or "corrective_corpus_decision: verdict=PASS" not in corpus_text:
+    if corpus_code != 2 or "corrective_corpus_decision: verdict=PASS" not in corpus_text:
         raise AssertionError("trusted corpus decision did not count")
     if (
         "agents_verifier_run: id=1" not in corpus_text
-        or "completion: evidence present" not in corpus_text
+        or "completion: evidence incomplete" not in corpus_text
     ):
         raise AssertionError("a skipped verifier run changed the corpus decision")
     ancestor = "a" * 40
@@ -1637,7 +1769,7 @@ def _self_check():
     if "native_verify_for_corrective_head: PRESENT" in earlier_text:
         raise AssertionError("earlier skipped verifier run counted as a native outcome")
     kept_text, kept_code = _format_report(corpus_only, corrective, corrective, (), earlier_only)
-    if kept_code != 0 or "completion: evidence present" not in kept_text:
+    if kept_code != 2 or "completion: evidence incomplete" not in kept_text:
         raise AssertionError("earlier skipped verifier run removed a complete decision")
     owned_head = "b" * 40
     owned_assessment = _assess(
@@ -1667,15 +1799,11 @@ def _self_check():
         corrective,
     )
     owned_text, owned_code = _format_report(owned_assessment, corrective, corrective)
-    if (
-        owned_code != 2
-        or owned_assessment["publication"]
-        or not owned_assessment["owned_publication"]
-    ):
+    if owned_code != 2 or owned_assessment["publication"] or owned_assessment["owned_publication"]:
         raise AssertionError("owned delivery publication completed the corrective head")
-    if "owned_delivery_publication: PRESENT" not in owned_text:
+    if "owned_delivery_publication: MISSING" not in owned_text:
         raise AssertionError("owned delivery publication was not reported")
-    if "not accepted for corrective pr " + _CORRECTIVE_PR not in owned_text:
+    if "closer_publication_proof_for_corrective_head: MISSING" not in owned_text:
         raise AssertionError("owned delivery publication was accepted for the corrective head")
     if "owned_delivery_worker: none" not in owned_text:
         raise AssertionError("absent owned delivery worker was not reported")
@@ -1864,12 +1992,157 @@ def _self_check():
                         "title": "test: chain",
                         "labels": [{"name": "test"}],
                         "head": {"sha": corrective, "ref": "cursor/issue-983"},
+                        "merged": True,
+                        "merge_commit_sha": "e" * 40,
                     }
                 ).encode(),
             )
         if "/issues/" in path:
             return 200, json.dumps({"title": "test: chain", "labels": [{"name": "test"}]}).encode()
         raise AssertionError("unexpected fetch " + path)
+
+    state = dict(
+        valid_state,
+        repo=_REPOSITORY.lower(),
+        run_attempt="1",
+        evaluated_sha="e" * 40,
+        status="incomplete",
+    )
+    raw_state = "<!-- " + _VERIFIER_MARKER + json.dumps(state) + " -->"
+    for malformed in ([], {}):
+        assert not _event_bound_to({"head_sha": malformed, "evaluated_sha": malformed}, corrective)
+        malformed_receipt = dict(receipt, head_sha=malformed, record={"head_sha": malformed})
+        malformed_body = (
+            "<!-- runner-completion:cursor:1168:v1 base64:"
+            + (base64.b64encode(json.dumps(malformed_receipt).encode()).decode())
+            + " -->"
+        )
+        assert _keepalive_for_head([malformed_body], corrective) == ([], [], [])
+
+    def observation_with(body, author="github-actions[bot]", url=decision_url):
+        def fetch(path):
+            if f"/issues/{_CORRECTIVE_PR}/comments" in path:
+                return (
+                    200,
+                    json.dumps(
+                        [
+                            {
+                                "body": body,
+                                "user": {"login": author},
+                                "html_url": url,
+                            }
+                        ]
+                    ).encode(),
+                )
+            return fake_fetch(path)
+
+        return _observe_chain(fetch)
+
+    two = raw_state + "\n" + raw_state
+    assert len(observation_with(two)[1]) == 2
+    assert len(observation_with(_VERIFIER_MARKER + "{broken} -->\n" + raw_state)[1]) == 1
+    assert not observation_with(_VERIFIER_MARKER + "no opening brace -->")[1]
+    assert not observation_with(raw_state, author="attacker")[1]
+    assert not observation_with(raw_state, url=partial_url)[1]
+    assert not observation_with(raw_state, url=decision_url + "forged")[1]
+    for field, value in (
+        ("head_sha", []),
+        ("evaluated_sha", {}),
+        ("repo", "other/repo"),
+        ("pr", "984"),
+        ("run_attempt", []),
+        ("schema", "forged/v1"),
+    ):
+        forged = "<!-- " + _VERIFIER_MARKER + json.dumps(dict(state, **{field: value})) + " -->"
+        assert not observation_with(forged)[1]
+
+    # Network-free publication provenance checks; these values are test data only.
+    pub = {
+        "schema": "closer-confirmed-existing-pr-publication/v1",
+        "pr": {
+            "pr_number": 1168,
+            "repository": _REPOSITORY.lower(),
+            "owner_login": "stranske",
+            "writer_login": "stranske",
+            "owner_id": 23046322,
+            "writer_id": 23046322,
+            "head_oid": corrective,
+            "head_ref": "cursor/issue-983",
+        },
+        "commit": {"oid": corrective},
+        "ref": {"oid": corrective, "ref": "refs/heads/cursor/issue-983", "object_type": "commit"},
+        "provenance": {},
+    }
+    for key, schema, prefix in (
+        (
+            "handoff_reference",
+            "closer-publication-source-handoff-reference/v1",
+            "publication-source-handoff-",
+        ),
+        (
+            "coding_terminal_reference",
+            "closer-coding-worker-terminal-reference/v1",
+            "coding-worker-terminal-",
+        ),
+        (
+            "publication_origin_reference",
+            "closer-native-owned-pr-publication-origin-reference/v1",
+            "native-publication-origin-",
+        ),
+        (
+            "io_admission_reference",
+            "closer-publication-io-admission-reference/v1",
+            "publication-io-admission-",
+        ),
+    ):
+        pub["provenance"][key] = {
+            "schema": schema,
+            "sha256": "a" * 64,
+            "name": prefix + "a" * 64 + ".json",
+        }
+    for key in (
+        "io_operation_sha256",
+        "push_ack_sha256",
+        "native_readback_sha256",
+        "index_binding_sha256",
+        "original_admission_sha256",
+        "original_operation_sha256",
+        "source_closure_sha256",
+    ):
+        pub["provenance"][key] = "b" * 64
+    pub["provenance"]["native_readback_sha256"] = hashlib.sha256(
+        json.dumps(
+            {
+                "schema": "closer-owned-pr-readback-data/v1",
+                "pr": pub["pr"],
+                "commit": pub["commit"],
+                "ref": pub["ref"],
+                "native_publication_authorized": False,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode()
+    ).hexdigest()
+    publication = {
+        "author": "stranske",
+        "url": decision_url,
+        "body": pub["schema"] + " " + json.dumps(pub),
+    }
+    assert _publication_tied([publication], corrective)
+    assert not _publication_tied([dict(publication, author="github-actions[bot]")], corrective)
+    assert not _publication_tied([dict(publication, url=partial_url)], corrective)
+    assert not _publication_tied([dict(publication, body=tied)], corrective)
+    changed_head = json.loads(json.dumps(pub))
+    changed_head["pr"]["head_oid"] = []
+    assert not _publication_tied(
+        [dict(publication, body=pub["schema"] + " " + json.dumps(changed_head))], corrective
+    )
+    damaged = json.loads(json.dumps(pub))
+    damaged["provenance"]["coding_terminal_reference"]["sha256"] = []
+    assert not _publication_tied(
+        [dict(publication, body=pub["schema"] + " " + json.dumps(damaged))], corrective
+    )
 
     observed = _observe_chain(fake_fetch)
     if observed[6] != [_summarize_corpus(decision)] or observed[7][0]["conclusion"] != "skipped":
