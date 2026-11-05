@@ -1671,7 +1671,11 @@ def test_build_report_treats_corrupt_pattern_artifacts_as_empty(monkeypatch, iso
         return subprocess.CompletedProcess(argv, 127, "", "not started")
 
     monkeypatch.setattr(subprocess, "run", runner)
-    report = periodic_report.build_report(window_days=1, probe_langsmith_artifacts=False)
+    report = periodic_report.build_report(
+        window_days=1,
+        probe_langsmith_artifacts=False,
+        capabilities_path=isolated_runtime / "capabilities.json",
+    )
     miner = report["pattern_miner"]
     assert miner["status"] == {}
     assert miner["inventory"]["emitted_candidate_count"] == 0

@@ -1,5 +1,10 @@
 # Issue 1138 continuation acceptance
 
+Current issue #1156 repair evidence is in the final section below. Earlier sections
+are historical reports at their named commits and runner environments; their pending
+statements do not describe this repair. Final-head CI is recorded in the repair PR
+acceptance record after the evidence commit, avoiding a self-referential SHA claim.
+
 Checked 2026-11-04 America/Chicago (2026-11-05 UTC).
 
 Outcome: all 34 existing tests must fail on a targeted production break and pass after
@@ -266,3 +271,315 @@ comment to PR #1160 were refused for the same reason. No commit, remote code upd
 label, or comment was created. Continue in a writable Git checkout with a
 pytest-capable interpreter, commit the runner, and execute the command above before
 claiming fresh mutation evidence.
+
+## Issue 1156 closer repair: real acceptance (2026-11-05 UTC)
+
+Outcome: all four remaining acceptance criteria evidenced. Command pair below plus
+`PYTHON=/opt/anaconda3/bin/python3 node scripts/verify_issue_1138_mutation.js`,
+the two artifact-lock experiments, and final-head CI in the repair PR print the
+outcome. Stop rule: two attempts per failing experiment or 30 minutes total;
+report the first broken command and its output if reached.
+
+Selected interpreter: `/opt/anaconda3/bin/python3` (Python 3.12.2, pytest 9.1.1).
+No virtual environment is explicitly selected in this checkout. The earlier
+acceptance interpreter was a disposable `.venv/bin/python` (Python 3.14.3), whose
+checkout has already been removed; it is not reused or silently substituted.
+
+The complete prior acceptance transcript cannot be recovered: the deployed
+`closer_core.run_evidence` returns only `str(gate)[:1500]`, and
+`provision.temporary_exact_head_worktree` removes the checkout in `finally`.
+The surviving target record ends during AC1-TEST1's passing output, hiding the
+actual failing check. Its overall FAIL remains unattributed. Fresh complete
+results below replace that uncertainty for these required commands; they do not
+retroactively explain the old FAIL.
+
+The first current coverage-module run at `321f572a4bc3cf733cd6c9ee97d66d684886a14f`
+printed the isolation failure below. The only necessary correction passes a
+capabilities path under the test's temporary runtime to `build_report`, so the
+corrupt-artifact test no longer attempts the live capabilities ledger lock.
+PR #1160's correction and runner are retained. No production correction was needed.
+
+<details>
+<summary>Initial failing command and complete output (exit 1)</summary>
+
+```sh
+/opt/anaconda3/bin/python3 -m pytest -q tests/test_coverage_round_1138.py
+```
+
+```text
+...................................................................F.... [ 91%]
+.......                                                                  [100%]
+=================================== FAILURES ===================================
+_________ test_build_report_treats_corrupt_pattern_artifacts_as_empty __________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x112480f20>
+isolated_runtime = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-1036/test_build_report_treats_corru0')
+
+    def test_build_report_treats_corrupt_pattern_artifacts_as_empty(monkeypatch, isolated_runtime):
+        state = isolated_runtime / "state"
+        state.mkdir()
+        (state / "pattern-miner-status.json").write_text("{not-json")
+        (state / "pattern-miner-inventory.json").write_text("{also-not")
+
+        def runner(argv, *args, **kwargs):
+            return subprocess.CompletedProcess(argv, 127, "", "not started")
+
+        monkeypatch.setattr(subprocess, "run", runner)
+>       report = periodic_report.build_report(window_days=1, probe_langsmith_artifacts=False)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_coverage_round_1138.py:1674:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src/periodic_report.py:1795: in build_report
+    "capabilities": capabilities.summary(capabilities_path or capabilities.REG, create=False),
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/capabilities.py:2900: in summary
+    capabilities = load(path, create=True) if create else load_declared(path)
+                                                          ^^^^^^^^^^^^^^^^^^^
+src/capabilities.py:2423: in load_declared
+    capabilities = load(path, create=False)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^
+src/capabilities.py:2343: in load
+    with _locked(path, shared=True):
+/opt/anaconda3/lib/python3.12/contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src/capabilities.py:1305: in _locked
+    with lock_path.open("a+") as handle:
+         ^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = PosixPath('/Users/teacher/.codex/orchestrator/capabilities.json.lock')
+mode = 'a+', buffering = -1, encoding = 'locale', errors = None, newline = None
+
+    def open(self, mode='r', buffering=-1, encoding=None,
+             errors=None, newline=None):
+        """
+        Open the file pointed by this path and return a file object, as
+        the built-in open() function does.
+        """
+        if "b" not in mode:
+            encoding = io.text_encoding(encoding)
+>       return io.open(self, mode, buffering, encoding, errors, newline)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       PermissionError: [Errno 1] Operation not permitted: '/Users/teacher/.codex/orchestrator/capabilities.json.lock'
+
+/opt/anaconda3/lib/python3.12/pathlib.py:1013: PermissionError
+=========================== short test summary info ============================
+FAILED tests/test_coverage_round_1138.py::test_build_report_treats_corrupt_pattern_artifacts_as_empty
+1 failed, 78 passed in 3.98s
+
+```
+</details>
+
+### Required targets at corrected source/test commit
+
+Measured Git SHA: `d068c59fff0529d915211560c286f9bf621237cf`. These runs occurred after committing the
+correction and before the documentation-only evidence commit. They are evidence
+for this measured SHA, not the later PR head.
+
+```text
+$ /opt/anaconda3/bin/python3 -m pytest -q tests/test_coverage_round_1138.py
+........................................................................ [ 91%]
+.......                                                                  [100%]
+79 passed in 2.81s
+exit 0
+
+$ /opt/anaconda3/bin/python3 -m pytest -q tests/test_verify_sharding.py::test_shard_lists_partition_every_collected_test_exactly_once
+.                                                                        [100%]
+1 passed in 10.98s
+exit 0
+```
+
+The pre-commit retry also passed: `79 passed in 2.73s`; the first sharding run
+on the original main commit passed: `1 passed in 28.09s`.
+
+### Corrected corrupt-artifact production mutation
+
+```text
+$ PYTHON=/opt/anaconda3/bin/python3 node scripts/verify_issue_1138_mutation.js
+tests/test_coverage_round_1138.py::test_build_report_treats_corrupt_pattern_artifacts_as_empty: baseline passed; mutation failed; restored passed; evidence appended
+exit 0
+```
+
+The appended real `followup_runs` entry in
+[mutation-proof-pass3.json](mutation-proof-pass3.json) records measured SHA
+`d068c59fff0529d915211560c286f9bf621237cf`, the exact single-test command and full
+baseline, mutation and restored outputs. Historical cases are unchanged.
+The mutation changes only `pattern_status = {}` to
+`pattern_status = {"broken": True}`. It fails at `assert miner["status"] == {}`
+with `AssertionError: assert {'broken': True} == {}`. Baseline and restored runs
+both exit 0; the intended mutation exits 1.
+
+Production source SHA-256 before / after restoration: `8f84bd0fce5ec046d68bbae9ca2ae2c9c4aec04e6ac728e9c312e4e04d315470` / `8f84bd0fce5ec046d68bbae9ca2ae2c9c4aec04e6ac728e9c312e4e04d315470`.
+Test SHA-256 before / after: `f7cd686974888ac8ddb8e312e7913f608fdb9425784812d00949c50c47a96161` / `f7cd686974888ac8ddb8e312e7913f608fdb9425784812d00949c50c47a96161`.
+
+### Independent artifact-lock corruptions
+
+Disposable writable checkout: `/private/tmp/orchestrator-1156-artifact-proof`,
+a shared clone checked out detached at the measured SHA above. Each experiment
+runs its named test before mutation, changes exactly the identified field,
+requires exit 1 at its corresponding assertion, restores original artifact bytes
+in `finally`, compares bytes, then requires the same test to exit 0.
+The two changes are separate: neither corrupted artifact is present during the
+other experiment. JSON indentation may change temporarily; restored bytes match
+exactly. No coverage-record mutations are retained.
+
+The artifact-lock fields exercised are `head-ea6255b-combined.json:gain`, asserted
+by `assert gain == record["gain"] == 296`, and
+`head-ecb0707-combined.json:gain_vs_base`, asserted by
+`assert record["gain_vs_base"] == prior["gain"] == 296`. These experiments demonstrate
+those two gain locks; they do not claim a mutation of every other assertion in
+the tests (provenance, missing-line lists, source text, and repo-wide arithmetic).
+
+#### `test_published_head_measurement_matches_ranked_source_lines`
+
+Record: `docs/verification/issue-1138/head-ea6255b-combined.json`; field `gain`: 296 → 297.
+
+```sh
+/opt/anaconda3/bin/python3 -m pytest -q tests/test_coverage_round_1138.py::test_published_head_measurement_matches_ranked_source_lines
+```
+
+baseline (exit 0):
+
+```text
+.                                                                        [100%]
+1 passed in 0.97s
+```
+
+red (exit 1):
+
+```text
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________ test_published_head_measurement_matches_ranked_source_lines __________
+
+    def test_published_head_measurement_matches_ranked_source_lines():
+        """The ea6255b combined artifact's six-target gain is 296, and the 21 lines it still misses are these source lines."""
+        record_path = (
+            paths.REPO_ROOT / "docs" / "verification" / "issue-1138" / "head-ea6255b-combined.json"
+        )
+        record = json.loads(record_path.read_text())
+        assert record["measured_head_sha"] == "ea6255b9c477f9abe31c81d3ef6ec48b3e023bb0"
+        assert record["base_sha"] == "555c1f1cf0ac8a6fb3e64d4081ecf952df126021"
+        assert record["run_id"] == 41975530292
+        assert record["artifact_id"] == 13391989393
+        assert record["branch_coverage"] is False
+
+        order = list(_MEASURED_MODULES)
+        assert list(record["targets"]) == order
+        gain = 0
+        still = 0
+        base_missing = 0
+        for name, module in _MEASURED_MODULES.items():
+            row = record["targets"][name]
+            assert row["base_missing"] - row["head_missing"] == row["gain"]
+            assert len(row["still_missing"]) == row["head_missing"]
+            gain += row["gain"]
+            still += row["head_missing"]
+            base_missing += row["base_missing"]
+            source = Path(module.__file__).read_text().splitlines()
+            for item in row["still_missing"]:
+                assert source[item["line"] - 1] == item["text"]
+        assert base_missing == record["base_missing"] == 317
+        assert still == record["head_missing"] == 21
+>       assert gain == record["gain"] == 296
+E       assert 296 == 297
+
+tests/test_coverage_round_1138.py:1975: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_coverage_round_1138.py::test_published_head_measurement_matches_ranked_source_lines
+1 failed in 0.35s
+```
+
+green (exit 0):
+
+```text
+.                                                                        [100%]
+1 passed in 0.28s
+```
+
+SHA-256 before: `1afe14f1040e2ec219737fb261686def8e2ad3da62c3c672ba0f3da80a0cb469`.
+
+SHA-256 corrupted: `9314c9fa5b82680e636605b819a5f08c85ced4f31ab6d0b9c244fb9d276e29a8`.
+
+SHA-256 restored: `1afe14f1040e2ec219737fb261686def8e2ad3da62c3c672ba0f3da80a0cb469`.
+
+#### `test_current_head_remeasurement_keeps_ranked_gaps_inside_selftests`
+
+Record: `docs/verification/issue-1138/head-ecb0707-combined.json`; field `gain_vs_base`: 296 → 297.
+
+```sh
+/opt/anaconda3/bin/python3 -m pytest -q tests/test_coverage_round_1138.py::test_current_head_remeasurement_keeps_ranked_gaps_inside_selftests
+```
+
+baseline (exit 0):
+
+```text
+.                                                                        [100%]
+1 passed in 0.62s
+```
+
+red (exit 1):
+
+```text
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______ test_current_head_remeasurement_keeps_ranked_gaps_inside_selftests ______
+
+    def test_current_head_remeasurement_keeps_ranked_gaps_inside_selftests():
+        """ecb0707's gate artifact keeps the six-target gain at 296.
+
+        The 21 statements still missing on that artifact are the same source lines as
+        ea6255b, each inside a selftest function. The repo-wide shift is the three
+        files main moved under the pull request, not the ranked targets.
+        """
+        directory = paths.REPO_ROOT / "docs" / "verification" / "issue-1138"
+        record = json.loads((directory / "head-ecb0707-combined.json").read_text())
+        prior = json.loads((directory / "head-ea6255b-combined.json").read_text())
+        assert record["measured_head_sha"] == "ecb0707b0a8acf7cd5dbd8a1de122829ea2e39ac"
+        assert record["prior_measured_sha"] == prior["measured_head_sha"]
+        assert record["run_id"] == 41979128986
+        assert record["artifact_id"] == 13393447683
+        assert record["prior_artifact_id"] == prior["artifact_id"] == 13391989393
+        assert record["branch_coverage"] is False
+>       assert record["gain_vs_base"] == prior["gain"] == 296
+E       assert 297 == 296
+
+tests/test_coverage_round_1138.py:2014: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_coverage_round_1138.py::test_current_head_remeasurement_keeps_ranked_gaps_inside_selftests
+1 failed in 0.32s
+```
+
+green (exit 0):
+
+```text
+.                                                                        [100%]
+1 passed in 0.69s
+```
+
+SHA-256 before: `93d0e827be0c8184aa2662033becb77b90e959bf634f77d11a61f10f7ae73180`.
+
+SHA-256 corrupted: `1fb4d66be14ee3d3e198755adcb7f92b77dd139c774a233829494843af4670fb`.
+
+SHA-256 restored: `93d0e827be0c8184aa2662033becb77b90e959bf634f77d11a61f10f7ae73180`.
+
+### Restoration and delivery boundary
+
+`git diff --exit-code -- src` passed in the repair checkout after the production
+mutation. `git diff --name-only` was empty in the disposable checkout after both
+artifact experiments. The final repair diff changes only this README, the appended
+mutation evidence, and the demonstrated capabilities-path correction in the test.
+Dependency pins, production source, and both coverage records are unchanged.
+
+Only the provisioned `closer-r1/issue-1156` matched `git branch --list
+'closer*/issue-1156'`, and it initially equalled current main. There were no missing
+local-branch commits to merge, keep, or discard. The historical #1160 PR-body
+completion claims for evidence were unsupported; this repair's checklist records
+only observed evidence. Historical reports above remain intact.
+
+Final-head pytest shards and aggregate results belong in the repair PR acceptance
+record, keyed to its exact commit SHA and workflow/job URLs. They are pending at
+the time this evidence is committed; the PR record must be updated from real CI
+before the fourth criterion can be claimed complete.
