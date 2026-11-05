@@ -289,7 +289,7 @@ def _event_bound_to(event, sha):
     return sha in (event.get("head_sha"), event.get("evaluated_sha"))
 
 
-def _is_outcome(event):
+def _non_pending_state(event):
     status = event.get("status")
     return isinstance(status, str) and status not in {"", "pending"}
 
@@ -306,7 +306,7 @@ def _summarize_event(event):
 
 
 def _classify_events(events, corrective_sha):
-    """Keep partial-merge verifier events out of the corrected-head result."""
+    """Separate diagnostic states by revision; only corpus decisions prove completion."""
     partial = []
     corrective = []
     rejected_partial_sha = corrective_sha in {_PARTIAL_HEAD, _PARTIAL_MERGE}
@@ -322,7 +322,7 @@ def _classify_events(events, corrective_sha):
             and not rejected_partial_sha
             and _event_bound_to(event, corrective_sha)
             and str(event.get("pr")) == _CORRECTIVE_PR
-            and _is_outcome(event)
+            and _non_pending_state(event)
         ):
             corrective.append(summary)
     return partial, corrective
@@ -683,7 +683,7 @@ def _format_report(assessment, corrective_sha, local_head, verifier_runs=(), ear
     if local_head and corrective_sha and local_head != corrective_sha:
         lines.append("local_head_matches_corrective_pr: no")
     partial_events = assessment["partial"]
-    partial_outcomes = [event for event in partial_events if _is_outcome(event)]
+    partial_outcomes = [event for event in partial_events if _non_pending_state(event)]
     partial_pending = len(partial_events) - len(partial_outcomes)
     if partial_events or assessment["partial_verdicts"]:
         lines.append(
@@ -719,14 +719,8 @@ def _format_report(assessment, corrective_sha, local_head, verifier_runs=(), ear
             "partial_corpus_decision: none_observed "
             "no trusted verifier-corpus-decision/v1 on PR 984 is bound to the partial head and merge"
         )
-    if assessment["corrective"] or assessment["corpus"]:
+    if assessment["corpus"]:
         lines.append("native_verify_for_corrective_head: PRESENT")
-        for event in assessment["corrective"]:
-            lines.append(
-                "corrective_verifier_event: "
-                + f"status={event['status']} run_id={event['run_id']} "
-                + f"head={event['head_sha']} evaluated={event['evaluated_sha']}"
-            )
         for decision in assessment["corpus"]:
             lines.append(
                 "corrective_corpus_decision: "
@@ -737,9 +731,15 @@ def _format_report(assessment, corrective_sha, local_head, verifier_runs=(), ear
     else:
         lines.append(
             "native_verify_for_corrective_head: MISSING "
-            "no trusted verifier-corpus-decision/v1 or non-pending "
-            "verifier-event-state/v1 on PR 1168 is bound to its head"
+            "no trusted verifier-corpus-decision/v1 on PR 1168 is bound to its head and merge"
         )
+    for event in assessment["corrective"]:
+        lines.append(
+            "corrective_verifier_state_not_completion_proof: "
+            + f"status={event['status']} run_id={event['run_id']} "
+            + f"head={event['head_sha']} evaluated={event['evaluated_sha']}"
+        )
+
     for verdict in assessment["corrective_verdicts"]:
         lines.append(f"unstructured_verdict: {verdict} not accepted as native proof")
     if verifier_runs:
@@ -902,7 +902,7 @@ def _format_report(assessment, corrective_sha, local_head, verifier_runs=(), ear
             )
     else:
         lines.append("test_labeled_chain: PRESENT")
-    native_present = bool(assessment["corrective"] or assessment["corpus"])
+    native_present = bool(assessment["corpus"])
     # Completion requires this head's own decision and publication marker.
     complete = native_present and assessment["publication"] and not assessment["unlabeled"]
     lines.append("completion: evidence present" if complete else "completion: evidence incomplete")
@@ -1294,7 +1294,7 @@ def _self_check():
         head_sha=corrective,
         evaluated_sha=corrective,
     )
-    done = dict(pending, status="complete", failure_cause=None)
+    done = dict(pending, status="incomplete", failure_cause="validated_no_evaluation")
     partial_only, accepted = _classify_events([partial_event, pending, done], corrective)
     if len(partial_only) != 1 or partial_only[0]["status"] != "incomplete":
         raise AssertionError("partial verifier outcome was dropped or misread")
@@ -1302,12 +1302,22 @@ def _self_check():
         raise AssertionError("corrected-head verifier outcome was not isolated")
     if _classify_events([done], _PARTIAL_HEAD)[1]:
         raise AssertionError("partial sha was accepted as a corrective outcome")
+
+    def publication_comment(body):
+        return {
+            "body": body,
+            "author": "stranske",
+            "url": f"https://github.com/{_REPOSITORY}/pull/{_CORRECTIVE_PR}#issuecomment-99",
+        }
+
     tied = "<!-- closer-publication-source-handoff/v3 --> " + corrective
-    if _publication_tied([tied], corrective):
+    if _publication_tied([publication_comment(tied)], corrective):
         raise AssertionError("unstructured handoff was accepted as publication")
-    if _publication_tied(["closer-publication-source-handoff/v3 " + _PARTIAL_MERGE], corrective):
+    if _publication_tied(
+        [publication_comment("closer-publication-source-handoff/v3 " + _PARTIAL_MERGE)], corrective
+    ):
         raise AssertionError("partial publication text was credited to the corrective head")
-    if _publication_tied(["closer-publication-source-handoff/v3"], corrective):
+    if _publication_tied([publication_comment("closer-publication-source-handoff/v3")], corrective):
         raise AssertionError("untied publication marker counted as proof")
     receipt = {
         "schema": _RUNNER_RECEIPT_SCHEMA,
@@ -1322,7 +1332,7 @@ def _self_check():
         + base64.b64encode(json.dumps(receipt).encode()).decode()
         + " -->"
     )
-    if _publication_tied([receipt_body], corrective):
+    if _publication_tied([publication_comment(receipt_body)], corrective):
         raise AssertionError("keepalive receipt counted as publication proof")
     blocked = _assess(
         [],
@@ -1643,7 +1653,7 @@ def _self_check():
     valid_state = {
         "schema": "verifier-event-state/v1",
         "pr": _CORRECTIVE_PR,
-        "status": "complete",
+        "status": "incomplete",
         "run_id": "1",
         "head_sha": corrective,
         "evaluated_sha": corrective,
@@ -1683,7 +1693,7 @@ def _self_check():
     )
     ready, ready_code = _format_report(present, corrective, corrective)
     if ready_code != 2 or "completion: evidence incomplete" not in ready:
-        raise AssertionError("complete synthetic evidence did not report present")
+        raise AssertionError("incomplete diagnostic states incorrectly reported completion")
     if "publication_markers_observed: closer-publication-source-handoff/v3" not in ready:
         raise AssertionError("tied publication marker was not named")
     corpus_only = _assess(
@@ -1770,7 +1780,7 @@ def _self_check():
         raise AssertionError("earlier skipped verifier run counted as a native outcome")
     kept_text, kept_code = _format_report(corpus_only, corrective, corrective, (), earlier_only)
     if kept_code != 2 or "completion: evidence incomplete" not in kept_text:
-        raise AssertionError("earlier skipped verifier run removed a complete decision")
+        raise AssertionError("earlier skipped verifier run changed the incomplete outcome")
     owned_head = "b" * 40
     owned_assessment = _assess(
         [],
@@ -2010,14 +2020,18 @@ def _self_check():
     )
     raw_state = "<!-- " + _VERIFIER_MARKER + json.dumps(state) + " -->"
     for malformed in ([], {}):
-        assert not _event_bound_to({"head_sha": malformed, "evaluated_sha": malformed}, corrective)
+        if not (
+            not _event_bound_to({"head_sha": malformed, "evaluated_sha": malformed}, corrective)
+        ):
+            raise AssertionError("self-check regression: 2017")
         malformed_receipt = dict(receipt, head_sha=malformed, record={"head_sha": malformed})
         malformed_body = (
             "<!-- runner-completion:cursor:1168:v1 base64:"
             + (base64.b64encode(json.dumps(malformed_receipt).encode()).decode())
             + " -->"
         )
-        assert _keepalive_for_head([malformed_body], corrective) == ([], [], [])
+        if not (_keepalive_for_head([malformed_body], corrective) == ([], [], [])):
+            raise AssertionError("self-check regression: 2024")
 
     def observation_with(body, author="github-actions[bot]", url=decision_url):
         def fetch(path):
@@ -2039,12 +2053,18 @@ def _self_check():
         return _observe_chain(fetch)
 
     two = raw_state + "\n" + raw_state
-    assert len(observation_with(two)[1]) == 2
-    assert len(observation_with(_VERIFIER_MARKER + "{broken} -->\n" + raw_state)[1]) == 1
-    assert not observation_with(_VERIFIER_MARKER + "no opening brace -->")[1]
-    assert not observation_with(raw_state, author="attacker")[1]
-    assert not observation_with(raw_state, url=partial_url)[1]
-    assert not observation_with(raw_state, url=decision_url + "forged")[1]
+    if not (len(observation_with(two)[1]) == 2):
+        raise AssertionError("self-check regression: 2046")
+    if not (len(observation_with(_VERIFIER_MARKER + "{broken} -->\n" + raw_state)[1]) == 1):
+        raise AssertionError("self-check regression: 2047")
+    if not (not observation_with(_VERIFIER_MARKER + "no opening brace -->")[1]):
+        raise AssertionError("self-check regression: 2048")
+    if not (not observation_with(raw_state, author="attacker")[1]):
+        raise AssertionError("self-check regression: 2049")
+    if not (not observation_with(raw_state, url=partial_url)[1]):
+        raise AssertionError("self-check regression: 2050")
+    if not (not observation_with(raw_state, url=decision_url + "forged")[1]):
+        raise AssertionError("self-check regression: 2051")
     for field, value in (
         ("head_sha", []),
         ("evaluated_sha", {}),
@@ -2054,7 +2074,8 @@ def _self_check():
         ("schema", "forged/v1"),
     ):
         forged = "<!-- " + _VERIFIER_MARKER + json.dumps(dict(state, **{field: value})) + " -->"
-        assert not observation_with(forged)[1]
+        if not (not observation_with(forged)[1]):
+            raise AssertionError("self-check regression: 2061")
 
     # Network-free publication provenance checks; these values are test data only.
     pub = {
@@ -2129,20 +2150,53 @@ def _self_check():
         "url": decision_url,
         "body": pub["schema"] + " " + json.dumps(pub),
     }
-    assert _publication_tied([publication], corrective)
-    assert not _publication_tied([dict(publication, author="github-actions[bot]")], corrective)
-    assert not _publication_tied([dict(publication, url=partial_url)], corrective)
-    assert not _publication_tied([dict(publication, body=tied)], corrective)
+    if not (_publication_tied([publication], corrective)):
+        raise AssertionError("self-check regression: 2136")
+    if not (not _publication_tied([dict(publication, author="github-actions[bot]")], corrective)):
+        raise AssertionError("self-check regression: 2137")
+    if not (not _publication_tied([dict(publication, url=partial_url)], corrective)):
+        raise AssertionError("self-check regression: 2138")
+    if not (not _publication_tied([dict(publication, body=tied)], corrective)):
+        raise AssertionError("self-check regression: 2139")
     changed_head = json.loads(json.dumps(pub))
     changed_head["pr"]["head_oid"] = []
-    assert not _publication_tied(
-        [dict(publication, body=pub["schema"] + " " + json.dumps(changed_head))], corrective
+    if not (
+        not _publication_tied(
+            [dict(publication, body=pub["schema"] + " " + json.dumps(changed_head))], corrective
+        )
+    ):
+        raise AssertionError("self-check regression: 2142")
+    complete_records = [
+        {"kind": "pr", "name": "1168", "title": "test: chain", "labels": ["test"], "present": True}
+    ]
+    complete = _assess(
+        [], [publication], complete_records, corrective, corpus=[_summarize_corpus(decision)]
     )
+    complete_text, complete_code = _format_report(complete, corrective, corrective)
+    if complete_code != 0 or "completion: evidence present" not in complete_text:
+        raise AssertionError("validated native decision and publication did not complete")
+    diagnostic_only = _assess([done], [publication], complete_records, corrective)
+    diagnostic_text, diagnostic_code = _format_report(diagnostic_only, corrective, corrective)
+    if (
+        diagnostic_code != 2
+        or "native_verify_for_corrective_head: PRESENT" in diagnostic_text
+        or "corrective_verifier_state_not_completion_proof:" not in diagnostic_text
+    ):
+        raise AssertionError("incomplete verifier state was credited as native completion proof")
+    partial_publication = json.loads(json.dumps(pub))
+    partial_publication["pr"]["head_oid"] = _PARTIAL_MERGE
+    if _publication_tied(
+        [publication_comment(pub["schema"] + " " + json.dumps(partial_publication))], corrective
+    ):
+        raise AssertionError("partial structured publication counted for the corrective head")
     damaged = json.loads(json.dumps(pub))
     damaged["provenance"]["coding_terminal_reference"]["sha256"] = []
-    assert not _publication_tied(
-        [dict(publication, body=pub["schema"] + " " + json.dumps(damaged))], corrective
-    )
+    if not (
+        not _publication_tied(
+            [dict(publication, body=pub["schema"] + " " + json.dumps(damaged))], corrective
+        )
+    ):
+        raise AssertionError("self-check regression: 2163")
 
     observed = _observe_chain(fake_fetch)
     if observed[6] != [_summarize_corpus(decision)] or observed[7][0]["conclusion"] != "skipped":
