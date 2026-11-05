@@ -2978,8 +2978,13 @@ def test_validator_binds_assignment_and_deadline(tmp_path):
 
 def test_validator_rejects_live_uncertain_action(tmp_path):
     path = tmp_path / "pipeline.json"
+    # invoke() records deadline_exhausted (deferred) when the act has not started
+    # by the round budget. On a loaded shard that budget is wall time spent in
+    # prepare/interpret, so a 2s clock expires before the unknown act is seen.
+    # Hold the scheduler clock still so the exception stays an uncertain action.
+    frozen = time.time()
     cb = callbacks(act=lambda t, c: (_ for _ in ()).throw(RuntimeError("unknown")))
-    receipt = run(path, ["a"], cb, seconds=2)
+    receipt = run(path, ["a"], cb, seconds=2, now=lambda: frozen)
     assert receipt["targets"]["a"]["status"] == "uncertain"
     doc = json.loads(path.read_text())
     run_id = next(iter(doc["runs"]))
