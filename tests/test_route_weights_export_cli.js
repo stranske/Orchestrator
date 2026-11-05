@@ -70,7 +70,49 @@ print("RESULT=" + json.dumps({"published": changed}))
 `, checkout, env.ORCH_FEEDBACK_DB, state, String(rate), String(stampTime)],
     { cwd: repo, env });
   }
-  return { checkout, remote, state, git, publish };
+  return { checkout, remote, state, git, publish, env };
+}
+
+for (const mode of ['preview', 'local-export', 'publish-disabled']) {
+  test(`${mode} does not start the hosted acceptance clock before a real push`, async (t) => {
+    const { remote, state, git, publish, env } = await publicationFixture(t);
+    const python = process.env.PYTHON || 'python3';
+    const initialized = await run(python, ['-c', `
+import sys
+from pathlib import Path
+import route_weights_export as export
+export._fixture_db(Path(sys.argv[1]))
+print(sys.executable)
+`, env.ORCH_FEEDBACK_DB], { cwd: repo, env });
+    assert.equal(initialized.status, 0, initialized.stderr);
+    const brainBefore = fs.readFileSync(env.ORCH_FEEDBACK_DB);
+    const stampPath = path.join(state, 'hosted-exploration-deploy.json');
+    const args = [path.join(modules, 'route_weights_export.py')];
+    if (mode === 'preview') args.push('--preview-exploration-window');
+    if (mode === 'publish-disabled') args.push('--publish');
+    // Keep live capacity probes from invoking installed provider clients.
+    const result = await run(initialized.stdout.trim(), args,
+      { cwd: repo, env: { ...env, PATH: state, ORCH_ROUTE_WEIGHTS_PUBLISH: '0',
+        ORCH_CAPABILITY_HEARTBEATS: '0' } });
+    assert.equal(result.status, 0, result.stderr);
+    if (mode === 'preview') {
+      assert.equal(fs.existsSync(path.join(state, 'route-weights-export.json')), false);
+    } else {
+      assert.equal(fs.existsSync(path.join(state, 'route-weights-export.json')), true);
+    }
+    if (mode === 'publish-disabled') assert.match(result.stdout, /publish blocked/);
+    assert.deepEqual(fs.readFileSync(env.ORCH_FEEDBACK_DB), brainBefore);
+    assert.equal(fs.existsSync(stampPath), false,
+      'local export activity must not supply a deployment date to the acceptance query');
+    assert.equal(await git(['--git-dir', remote, 'for-each-ref', '--format=%(refname)',
+      'refs/heads/exports/route-weights']), '');
+
+    const pushed = await publish(0.2, 1700000200);
+    assert.equal(pushed.status, 0, pushed.stderr);
+    assert.match(pushed.stdout, /RESULT=\{"published": true\}/);
+    assert.equal(JSON.parse(fs.readFileSync(stampPath, 'utf8')).deploy_ts, 1700000200,
+      'only the successful remote publication starts the acceptance query window');
+  });
 }
 
 test('real export pushes start the hosted pass clock once; unchanged exports retain it',
