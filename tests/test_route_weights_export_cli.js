@@ -22,6 +22,107 @@ function run(command, args, options = {}) {
   });
 }
 
+async function publicationFixture(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hosted-pass-publish-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const checkout = path.join(root, 'checkout');
+  const remote = path.join(root, 'remote.git');
+  const state = path.join(root, 'state');
+  fs.mkdirSync(checkout);
+  const env = { ...process.env, PYTHONPATH: modules, PYTHONDONTWRITEBYTECODE: '1',
+    ORCH_STATE_DIR: state, ORCH_LOCAL_RUNTIME: state,
+    ORCH_FEEDBACK_DB: path.join(root, 'weights.db') };
+  async function git(args) {
+    const result = await run('git', args, { cwd: checkout, env });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  }
+  await git(['init', '--bare', remote]);
+  await git(['init', '--initial-branch=main']);
+  await git(['config', 'user.name', 'Route Export Test']);
+  await git(['config', 'user.email', 'route-export-test@example.invalid']);
+  fs.writeFileSync(path.join(checkout, 'README.md'), 'Local publication fixture\n');
+  await git(['add', 'README.md']);
+  await git(['commit', '-m', 'Initialize local publication fixture']);
+  await git(['remote', 'add', 'origin', remote]);
+  await git(['push', 'origin', 'main']);
+
+  async function publish(rate, stampTime) {
+    return run(process.env.PYTHON || 'python3', ['-c', `
+import json
+import sys
+from pathlib import Path
+from unittest.mock import patch
+import route_weights_export as export
+checkout, database, state = map(Path, sys.argv[1:4])
+if not database.exists():
+    export._fixture_db(database)
+document = export.build_document(database, include_capacity=False)
+document["exploration"]["rate"] = float(sys.argv[4])
+record = export.record_hosted_exploration_deploy
+# Control only the stamp's clock; retain the real writer and Git publication.
+def record_at(document, state_dir):
+    return record(document, state_dir, now=int(sys.argv[5]))
+with patch.object(export.provision, "ensure_canonical", return_value=checkout), \\
+     patch.object(export, "record_hosted_exploration_deploy", side_effect=record_at):
+    changed = export.publish_document(document, state_dir=state, db_path=database)
+print("RESULT=" + json.dumps({"published": changed}))
+`, checkout, env.ORCH_FEEDBACK_DB, state, String(rate), String(stampTime)],
+    { cwd: repo, env });
+  }
+  return { checkout, remote, state, git, publish };
+}
+
+test('real export pushes start the hosted pass clock once; unchanged exports retain it',
+  async (t) => {
+    const { remote, state, git, publish } = await publicationFixture(t);
+    const stampPath = path.join(state, 'hosted-exploration-deploy.json');
+    assert.equal(fs.existsSync(stampPath), false);
+    const first = await publish(0.2, 1700000000);
+    assert.equal(first.status, 0, first.stderr);
+    assert.match(first.stdout, /RESULT=\{"published": true\}/);
+    const stamp = fs.readFileSync(stampPath);
+    assert.equal(JSON.parse(stamp).deploy_ts, 1700000000);
+    const firstHead = await git(['--git-dir', remote, 'rev-parse', 'refs/heads/exports/route-weights']);
+    const firstExport = JSON.parse(await git(['--git-dir', remote, 'show',
+      'refs/heads/exports/route-weights:config/route-weights.json']));
+    assert.equal(firstExport.exploration.rate, 0.2);
+    assert.ok(Object.values(firstExport.exploration.challengers)
+      .every((agent) => agent === null || agent === 'cursor' || agent === 'codex'));
+
+    const unchanged = await publish(0.2, 1700000100);
+    assert.equal(unchanged.status, 0, unchanged.stderr);
+    assert.match(unchanged.stdout, /RESULT=\{"published": false\}/);
+    assert.equal(await git(['--git-dir', remote, 'rev-parse',
+      'refs/heads/exports/route-weights']), firstHead);
+    assert.deepEqual(fs.readFileSync(stampPath), stamp);
+
+    const changed = await publish(0.3, 1700000200);
+    assert.equal(changed.status, 0, changed.stderr);
+    assert.match(changed.stdout, /RESULT=\{"published": true\}/);
+    assert.notEqual(await git(['--git-dir', remote, 'rev-parse',
+      'refs/heads/exports/route-weights']), firstHead);
+    const changedExport = JSON.parse(await git(['--git-dir', remote, 'show',
+      'refs/heads/exports/route-weights:config/route-weights.json']));
+    assert.equal(changedExport.exploration.rate, 0.3);
+    assert.deepEqual(fs.readFileSync(stampPath), stamp,
+      'later deployments must not reset the acceptance query lower bound');
+  });
+
+test('a rejected real export push leaves the hosted deployment unmeasured', async (t) => {
+  const { checkout, remote, state, git, publish } = await publicationFixture(t);
+  fs.writeFileSync(path.join(remote, 'hooks', 'pre-receive'), '#!/bin/sh\nexit 1\n',
+    { mode: 0o755 });
+  const result = await publish(0.2, 1700000000);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /pre-receive hook declined/);
+  assert.equal(fs.existsSync(path.join(state, 'hosted-exploration-deploy.json')), false,
+    'a local commit must not count as deployment when the remote rejects it');
+  assert.equal(fs.existsSync(path.join(checkout, 'config', 'route-weights.json')), true);
+  assert.equal(await git(['--git-dir', remote, 'for-each-ref', '--format=%(refname)',
+    'refs/heads/exports/route-weights']), '');
+});
+
 test('hosted pass number counts only switches strictly after deployment without writing the Brain',
   async (t) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hosted-pass-number-'));
