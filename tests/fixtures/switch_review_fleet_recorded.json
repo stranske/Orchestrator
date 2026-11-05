@@ -1,0 +1,46 @@
+{
+  "source": "https://api.github.com/repos/stranske/Orchestrator/pulls/1130",
+  "recorded_at": "2026-11-05",
+  "pr": {
+    "number": 1130,
+    "created_at": "2026-11-05T00:10:17Z",
+    "merged_at": null,
+    "updated_at": "2026-11-05T00:14:08Z",
+    "labels": [
+      {
+        "id": 11914455286,
+        "node_id": "LA_kwDOUAH6nM8AAAACxigo9g",
+        "url": "https://api.github.com/repos/stranske/Orchestrator/labels/agent:codex",
+        "name": "agent:codex",
+        "description": "Assign to Codex agent",
+        "color": "0e8a16",
+        "default": false,
+        "archived_at": null,
+        "archived_by": null
+      },
+      {
+        "id": 11914455501,
+        "node_id": "LA_kwDOUAH6nM8AAAACxigpzQ",
+        "url": "https://api.github.com/repos/stranske/Orchestrator/labels/agents:keepalive",
+        "name": "agents:keepalive",
+        "description": "Enable keepalive monitoring on PR",
+        "color": "1d76db",
+        "default": false,
+        "archived_at": null,
+        "archived_by": null
+      },
+      {
+        "id": 11914456151,
+        "node_id": "LA_kwDOUAH6nM8AAAACxigsVw",
+        "url": "https://api.github.com/repos/stranske/Orchestrator/labels/autofix",
+        "name": "autofix",
+        "description": "Let bots format/lint automatically",
+        "color": "0366d6",
+        "default": false,
+        "archived_at": null,
+        "archived_by": null
+      }
+    ]
+  },
+  "gh_failure": "unmeasured: error connecting to api.github.com check your internet connection or https://githubstatus.com"
+}
