@@ -9,6 +9,7 @@ command does not change the default contract exit.
 
 from __future__ import annotations
 
+import base64
 import csv
 import importlib.util
 import io
@@ -148,6 +149,8 @@ _CORPUS_MARKER = "verifier-corpus-decision/v1 "
 _TRUSTED_VERIFIER_AUTHORS = {"github-actions", "github-actions[bot]"}
 _PROVIDER_VERDICTS = {"PASS", "CONCERNS", "FAIL", "NON_PASS"}
 _VERIFIER_WORKFLOW = "agents-verifier.yml"
+_VERIFY_LABELS = ("verify:checkbox", "verify:evaluate", "verify:compare")
+_RUNNER_RECEIPT_SCHEMA = "runner-completion-receipt/v1"
 _REPOSITORY = "stranske/Orchestrator"
 
 
@@ -298,6 +301,82 @@ def _publication_tied(comments, corrective_sha):
     return False
 
 
+def _publication_markers(comments):
+    found = []
+    for body in comments:
+        for marker in _PUBLICATION_MARKERS:
+            if marker in body and marker not in found:
+                found.append(marker)
+    return found
+
+
+def _decode_receipt(blob):
+    padded = blob + ("=" * ((4 - len(blob) % 4) % 4))
+    try:
+        payload = json.loads(base64.b64decode(padded, validate=True))
+    except (json.JSONDecodeError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _receipt_blobs(text):
+    """Split keepalive receipt comments without treating their payload as proof."""
+    found = []
+    cursor = 0
+    prefix = "<!-- runner-"
+    while True:
+        start = text.find(prefix, cursor)
+        if start < 0:
+            break
+        kind_end = text.find(":", start + len(prefix))
+        kind = text[start + len(prefix) : kind_end] if kind_end > start else ""
+        blob_at = text.find("base64:", start)
+        end = text.find(" -->", start)
+        if kind not in {"completion", "reservation"} or blob_at < 0 or end < 0 or blob_at > end:
+            cursor = start + len(prefix)
+            continue
+        found.append((kind, text[blob_at + len("base64:") : end].strip()))
+        cursor = end + 4
+    return found
+
+
+def _keepalive_for_head(comments, corrective_sha):
+    """Keepalive receipts name a worker run. They are not Verify or publication."""
+    completions = []
+    reservations = []
+    if not corrective_sha or corrective_sha in {_PARTIAL_HEAD, _PARTIAL_MERGE}:
+        return completions, reservations
+    for body in comments:
+        for kind, blob in _receipt_blobs(body):
+            payload = _decode_receipt(blob)
+            if payload is None:
+                continue
+            record = payload.get("record")
+            if not isinstance(record, dict):
+                record = payload
+            heads = {
+                record.get("head_sha"),
+                record.get("observed_head_sha"),
+                payload.get("head_sha"),
+            }
+            if corrective_sha not in heads:
+                continue
+            if kind == "completion":
+                if payload.get("schema") != _RUNNER_RECEIPT_SCHEMA:
+                    continue
+                completions.append(str(record.get("status") or ""))
+            else:
+                reservations.append(str(record.get("status") or ""))
+    return completions, reservations
+
+
+def _corrective_record(records):
+    for record in records:
+        if record.get("kind") == "pr" and str(record.get("name")) == _CORRECTIVE_PR:
+            return record
+    return {}
+
+
 def _text_labeled_test(title, labels):
     folded = (title or "").lstrip().lower()
     if folded.startswith("test:") or folded.startswith("test "):
@@ -367,6 +446,7 @@ def _assess(
             labeled = _text_labeled_test(record.get("title"), record.get("labels") or [])
         if not labeled:
             unlabeled.append(record)
+    completions, reservations = _keepalive_for_head(comments, corrective_sha)
     return {
         "partial": partial,
         "corrective": corrective,
@@ -374,6 +454,10 @@ def _assess(
         "corrective_verdicts": list(corrective_verdicts),
         "corpus": list(corpus),
         "publication": _publication_tied(comments, corrective_sha),
+        "publication_markers": _publication_markers(comments),
+        "keepalive_completions": completions,
+        "keepalive_reservations": reservations,
+        "corrective_pr": _corrective_record(records),
         "unlabeled": unlabeled,
         "branch_labels": branch_labels,
     }
@@ -461,6 +545,48 @@ def _format_report(assessment, corrective_sha, local_head, verifier_runs=()):
             "closer_publication_proof_for_corrective_head: MISSING "
             "no closer-publication marker in the chain comments contains the corrective head"
         )
+    markers = assessment.get("publication_markers") or []
+    if markers:
+        lines.append("publication_markers_observed: " + ",".join(markers))
+    else:
+        lines.append("publication_markers_observed: none")
+    completions = assessment.get("keepalive_completions") or []
+    reservations = assessment.get("keepalive_reservations") or []
+    if completions or reservations:
+        lines.append(
+            "keepalive_runner_for_corrective_head: "
+            + f"completions={len(completions)} reservations={len(reservations)} "
+            + "not accepted as native verify or publication proof"
+        )
+    else:
+        lines.append(
+            "keepalive_runner_for_corrective_head: none "
+            "for this head; a keepalive receipt would not be publication proof"
+        )
+    corrective_pr = assessment.get("corrective_pr") or {}
+    if "merged" in corrective_pr:
+        if corrective_pr["merged"]:
+            lines.append(
+                "corrective_pr_merged: yes merge_sha="
+                + (corrective_pr.get("merge_sha") or "missing")
+            )
+        else:
+            lines.append("corrective_pr_merged: no")
+            lines.append(
+                "native_verify_blocker: PR "
+                + _CORRECTIVE_PR
+                + " is unmerged; Agents Verifier refuses an unmerged pull request"
+            )
+    if corrective_pr:
+        labels = [str(label) for label in (corrective_pr.get("labels") or [])]
+        verify_labels = [label for label in _VERIFY_LABELS if label in labels]
+        if verify_labels:
+            lines.append("verify_label_on_corrective_pr: " + ",".join(verify_labels))
+        else:
+            lines.append(
+                "verify_label_on_corrective_pr: absent "
+                + "verify:checkbox, verify:evaluate, verify:compare"
+            )
     for item in assessment.get("branch_labels") or []:
         if item["via"]:
             lines.append(f"branch_label: {item['name']} labeled=yes via={item['via']}")
@@ -595,6 +721,22 @@ def _verifier_workflow_runs(fetch, sha):
     return bound
 
 
+def _bound_verifier_runs(fetch, corrective_sha, merge_sha):
+    """A run on the partial merge is not evidence for the corrected head.
+
+    After a real merge, workflow_dispatch records the default-branch SHA. That
+    SHA can be this PR's merge commit. The partial merge commit stays excluded.
+    """
+    runs = _verifier_workflow_runs(fetch, corrective_sha)
+    if not merge_sha or merge_sha in {corrective_sha, _PARTIAL_HEAD, _PARTIAL_MERGE}:
+        return runs
+    seen = {run["id"] for run in runs}
+    for run in _verifier_workflow_runs(fetch, merge_sha):
+        if run["id"] not in seen:
+            runs.append(run)
+    return runs
+
+
 def _label_names(document):
     return [
         label.get("name")
@@ -620,7 +762,7 @@ def _pull_record(fetch, number):
     document = _decode_json(status, raw, f"pull {number}")
     head = document.get("head") or {}
     ref = head.get("ref") if isinstance(head, dict) else ""
-    return {
+    record = {
         "kind": "pr",
         "name": str(number),
         "title": document.get("title") or "",
@@ -628,6 +770,13 @@ def _pull_record(fetch, number):
         "present": True,
         "head_ref": ref if isinstance(ref, str) else "",
     }
+    if isinstance(document.get("merged"), bool):
+        merge_sha = document.get("merge_commit_sha")
+        record["merged"] = document["merged"] is True
+        record["merge_sha"] = (
+            merge_sha if isinstance(merge_sha, str) and len(merge_sha) == 40 else ""
+        )
+    return record
 
 
 def _pull_head(fetch, number):
@@ -686,7 +835,8 @@ def _observe_chain(fetch):
             elif str(number) == _CORRECTIVE_PR and corrective_sha in body:
                 corrective_verdicts.extend(verdicts)
                 corpus.extend(_corpus_from_comment(record, corrective_sha))
-    runs = _verifier_workflow_runs(fetch, corrective_sha)
+    corrective_pr = _corrective_record(records)
+    runs = _bound_verifier_runs(fetch, corrective_sha, corrective_pr.get("merge_sha") or "")
     return (
         corrective_sha,
         events,
@@ -765,6 +915,46 @@ def _self_check():
         raise AssertionError("partial publication text was credited to the corrective head")
     if _publication_tied(["closer-publication-source-handoff/v3"], corrective):
         raise AssertionError("untied publication marker counted as proof")
+    receipt = {
+        "schema": _RUNNER_RECEIPT_SCHEMA,
+        "record": {
+            "head_sha": corrective,
+            "observed_head_sha": corrective,
+            "status": "completed",
+        },
+    }
+    receipt_body = (
+        "<!-- runner-completion:cursor:1168:v1 base64:"
+        + base64.b64encode(json.dumps(receipt).encode()).decode()
+        + " -->"
+    )
+    if _publication_tied([receipt_body], corrective):
+        raise AssertionError("keepalive receipt counted as publication proof")
+    blocked = _assess(
+        [],
+        [receipt_body],
+        [
+            {
+                "kind": "pr",
+                "name": "1168",
+                "title": "test: chain",
+                "labels": ["test"],
+                "present": True,
+                "merged": False,
+                "merge_sha": "",
+            }
+        ],
+        corrective,
+    )
+    blocked_text, blocked_code = _format_report(blocked, corrective, corrective)
+    if blocked_code != 2 or blocked["publication"]:
+        raise AssertionError("keepalive receipt completed the canary")
+    if "native_verify_blocker: PR 1168 is unmerged" not in blocked_text:
+        raise AssertionError("unmerged verifier blocker was not reported")
+    if "keepalive_runner_for_corrective_head: completions=1" not in blocked_text:
+        raise AssertionError("keepalive receipt bound to the head was not reported")
+    if "not accepted as native verify or publication proof" not in blocked_text:
+        raise AssertionError("keepalive receipt was accepted as proof")
     if not _text_labeled_test("test: chain", []) or not _text_labeled_test("Work", ["test"]):
         raise AssertionError("visible test label was missed")
     if _text_labeled_test("Controlled Closer E2E", ["agent:cursor"]):
@@ -799,6 +989,10 @@ def _self_check():
         raise AssertionError("missing corrective verify was not reported")
     if "closer_publication_proof_for_corrective_head: MISSING" not in text:
         raise AssertionError("missing publication proof was not reported")
+    if "publication_markers_observed: none" not in text:
+        raise AssertionError("absent publication marker was not reported")
+    if "verify_label_on_corrective_pr: absent" not in text:
+        raise AssertionError("missing verify label was not reported")
     if "partial_merge_satisfies_criterion: no" not in text:
         raise AssertionError("partial merge was not excluded")
     if "unlabeled: branch cursor/issue-983" not in text:
@@ -978,6 +1172,8 @@ def _self_check():
     ready, ready_code = _format_report(present, corrective, corrective)
     if ready_code != 0 or "completion: evidence present" not in ready:
         raise AssertionError("complete synthetic evidence did not report present")
+    if "publication_markers_observed: closer-publication-source-handoff/v3" not in ready:
+        raise AssertionError("tied publication marker was not named")
     corpus_only = _assess(
         [],
         [tied],
@@ -1089,6 +1285,72 @@ def _self_check():
         raise AssertionError("observed corpus decision was not reported")
     if "closer_publication_proof_for_corrective_head: MISSING" not in observed_text:
         raise AssertionError("observed chain invented publication proof")
+
+    merge_only = "m" * 40
+
+    def run_fetch(path):
+        sha = path.split("head_sha=")[-1].split("&")[0]
+        if sha == _PARTIAL_MERGE:
+            raise AssertionError("partial merge was queried as the corrective verifier run")
+        if sha == corrective:
+            payload = {"workflow_runs": []}
+        elif sha == merge_only:
+            payload = {
+                "workflow_runs": [
+                    {
+                        "id": 9,
+                        "event": "workflow_dispatch",
+                        "status": "completed",
+                        "conclusion": "success",
+                        "head_sha": merge_only,
+                    }
+                ]
+            }
+        else:
+            raise AssertionError("unexpected verifier query " + path)
+        return 200, json.dumps(payload).encode()
+
+    if _bound_verifier_runs(run_fetch, corrective, _PARTIAL_MERGE):
+        raise AssertionError("partial merge run was credited to the corrective head")
+    bound_runs = _bound_verifier_runs(run_fetch, corrective, merge_only)
+    if bound_runs != [
+        {
+            "id": 9,
+            "event": "workflow_dispatch",
+            "status": "completed",
+            "conclusion": "success",
+        }
+    ]:
+        raise AssertionError("corrective merge commit run was not observed")
+    run_text, run_code = _format_report(
+        _assess(
+            [],
+            [],
+            [
+                {
+                    "kind": "pr",
+                    "name": "1168",
+                    "title": "test: chain",
+                    "labels": ["verify:evaluate"],
+                    "present": True,
+                    "merged": True,
+                    "merge_sha": merge_only,
+                }
+            ],
+            corrective,
+        ),
+        corrective,
+        corrective,
+        bound_runs,
+    )
+    if run_code != 2 or "a run is not a decision" not in run_text:
+        raise AssertionError("a verifier run was treated as a decision")
+    if "corrective_pr_merged: yes merge_sha=" + merge_only not in run_text:
+        raise AssertionError("merged corrective PR was not reported")
+    if "verify_label_on_corrective_pr: verify:evaluate" not in run_text:
+        raise AssertionError("verify label was not reported")
+    if "native_verify_for_corrective_head: PRESENT" in run_text:
+        raise AssertionError("merge-commit run counted as a native outcome")
 
     def full_page(_path):
         return (
