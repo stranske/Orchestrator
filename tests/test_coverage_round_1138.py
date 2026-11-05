@@ -9,6 +9,7 @@ import os
 import socket
 import subprocess
 import sys
+import time
 import types
 from pathlib import Path
 
@@ -720,3 +721,932 @@ def test_main_cli_errors_for_incomplete_suggest_flags(capsys):
     assert "--repo owner/repo" in capsys.readouterr().err
     assert repo_knowledge.main(["--suggest-from-pr"]) == 2
     assert repo_knowledge.main(["--approve-suggestion"]) == 2
+
+
+# ----- second pass: remaining CI-missing statements -------------------------
+
+
+def test_break_transcript_states_indeterminate_node_attribution():
+    text = local_verify.break_transcript(
+        {
+            "verdict": "PASS",
+            "base_ref": "main",
+            "worktree": "/tmp/wt",
+            "green": {"cmd": "pytest", "returncode": 0, "stdout_tail": "", "stderr_tail": ""},
+            "red": {"cmd": "pytest", "returncode": 1, "stdout_tail": "fail", "stderr_tail": ""},
+            "node_verdict": "INDETERMINATE",
+            "hollow_nodes": [],
+            "node_analysis": {"reason": "no node ids", "counts": {}},
+        }
+    )
+    assert "Per-node attribution unavailable" in text
+    assert "no node ids" in text
+
+
+def test_extract_base_returns_git_archive_error(monkeypatch, tmp_path):
+    failed = subprocess.CompletedProcess(["git"], 1, b"", b"archive denied\n")
+    monkeypatch.setattr(local_verify, "_git", lambda *_a, **_k: failed)
+    err = local_verify._extract_base(tmp_path, "main", tmp_path / "dest")
+    assert err == "archive denied"
+
+
+def test_pytest_failure_cause_defaults_to_test_failure_when_classifier_raises(monkeypatch):
+    import testgen_gate
+
+    def explode(*_a, **_k):
+        raise RuntimeError("classifier down")
+
+    monkeypatch.setattr(testgen_gate, "pytest_failure_cause", explode)
+    cause = local_verify._pytest_failure_cause(
+        {"returncode": 1, "stdout_tail": "", "stderr_tail": ""}
+    )
+    assert cause == {"test_failure": True, "cause": "a test failed", "remedy": ""}
+
+
+def test_verify_errors_when_no_test_paths_are_detected(monkeypatch, tmp_path):
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    monkeypatch.setattr(local_verify, "_changed_paths", lambda *_a, **_k: ["src/m.py"])
+    result = local_verify.verify(worktree, test_cmd="pytest -q")
+    assert result["verdict"] == "ERROR"
+    assert result["error"] == "no test paths supplied or detected"
+
+
+def test_verify_errors_when_base_extraction_fails(monkeypatch, tmp_path):
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    monkeypatch.setattr(local_verify, "_changed_paths", lambda *_a, **_k: ["src/m.py"])
+    monkeypatch.setattr(
+        local_verify, "_run", lambda *_a, **_k: {"ok": True, "cmd": "pytest", "returncode": 0}
+    )
+    monkeypatch.setattr(local_verify, "_extract_base", lambda *_a, **_k: "archive failed")
+    result = local_verify.verify(worktree, test_cmd="pytest -q", test_paths=["tests/t.py"])
+    assert result["verdict"] == "ERROR"
+    assert result["error"] == "archive failed"
+    assert result["red"] is None
+
+
+def test_verify_records_indeterminate_node_reason(monkeypatch, tmp_path):
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    calls = {"n": 0}
+
+    def run(*_a, **_k):
+        calls["n"] += 1
+        return {"ok": calls["n"] == 1, "cmd": "pytest", "returncode": 0 if calls["n"] == 1 else 1}
+
+    monkeypatch.setattr(local_verify, "_changed_paths", lambda *_a, **_k: ["src/m.py"])
+    monkeypatch.setattr(local_verify, "_run", run)
+    monkeypatch.setattr(local_verify, "_extract_base", lambda *_a, **_k: None)
+    monkeypatch.setattr(local_verify, "_copy_candidate_paths", lambda *_a, **_k: ["tests/t.py"])
+    monkeypatch.setattr(
+        local_verify,
+        "_analyse_nodes",
+        lambda *_a, **_k: {
+            "verdict": "INDETERMINATE",
+            "hollow_nodes": [],
+            "reason": "parser unavailable",
+            "counts": {"nodes": 1},
+        },
+    )
+    result = local_verify.verify(worktree, test_cmd="pytest -q", test_paths=["tests/t.py"])
+    assert result["verdict"] == "PASS"
+    assert "per-node attribution unavailable: parser unavailable" in result["reason"]
+
+
+def test_capability_heartbeat_swallows_recorder_failure(monkeypatch):
+    import capabilities
+
+    def explode(*_a, **_k):
+        raise RuntimeError("heartbeat down")
+
+    monkeypatch.setattr(capabilities, "production_heartbeat", explode)
+    local_verify._capability_heartbeat()
+    repo_knowledge._capability_heartbeat()
+
+
+def test_sibling_checkouts_skips_root_that_does_not_resolve(monkeypatch, isolated_runtime):
+    root = isolated_runtime / "checkout"
+    root.mkdir()
+    here = root / "src"
+    here.mkdir()
+    monkeypatch.setattr(audit, "_repo_root", lambda: root)
+    monkeypatch.setattr(audit, "HERE", here)
+    real_resolve = Path.resolve
+
+    def patched(self, *args, **kwargs):
+        if self == root:
+            raise OSError("dangling")
+        return real_resolve(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", patched)
+    assert audit.sibling_checkouts() == []
+
+
+def test_callers_of_text_matches_unparseable_wildcard_driver(tmp_path, monkeypatch):
+    driver = tmp_path / "broken_driver.py"
+    driver.write_text("foo.\n")
+    monkeypatch.setattr(audit, "DRIVER_MODULES", ("broken_driver.py",))
+    monkeypatch.setattr(audit, "_driver_path", lambda _name: driver)
+    assert audit._callers_of("foo", set()) == ["broken_driver.py"]
+
+
+def test_external_caller_rejects_bad_declaration_and_unnamed_workflow(tmp_path):
+    rejected = audit.external_caller({"external_caller": "nope", "entrypoint": "/tmp/x.py:run"})
+    assert rejected["exists"] is False
+    assert "must name a path and function" in rejected["detail"]
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    entry = outside / "entry.py"
+    caller = outside / "caller.py"
+    entry.write_text("def run():\n    pass\n")
+    caller.write_text("def run():\n    pass\n")
+    invalid = audit.external_caller(
+        {
+            "external_caller": {"path": str(caller), "function": "not-valid"},
+            "entrypoint": str(entry),
+        }
+    )
+    assert invalid["exists"] is False
+    assert "function is invalid" in invalid["detail"]
+
+    unnamed = audit.external_caller(
+        {"matcher": {"kind": "ci_workflow", "name": ""}, "entrypoint": "noslash"}
+    )
+    assert unnamed == {
+        "exists": False,
+        "detail": "matcher or entrypoint does not name a repo/workflow",
+    }
+
+
+def test_heartbeat_reachable_survives_dispatcher_and_bridge_failures(monkeypatch):
+    monkeypatch.setitem(sys.modules, "dispatcher", types.SimpleNamespace())
+    monkeypatch.setitem(sys.modules, "capability_outcome_bridge", types.SimpleNamespace())
+    reach = audit.heartbeat_reachable({"capability_id": "not-a-lane", "entrypoint": ""})
+    assert reach["status"] == "no_local_entrypoint"
+
+
+def test_write_label_cache_ignores_unlink_failure_after_replace_failure(
+    monkeypatch, isolated_runtime
+):
+    path = isolated_runtime / "state" / "labels.json"
+    real_unlink = Path.unlink
+
+    def fail_replace(*_a, **_k):
+        raise OSError("disk full")
+
+    def fail_unlink(self, *args, **kwargs):
+        if self.name.startswith("labels.json."):
+            raise OSError("unlink failed")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(os, "replace", fail_replace)
+    monkeypatch.setattr(Path, "unlink", fail_unlink)
+    audit._write_label_cache(path, {"generated_at": 1, "repos": {}, "read_at": {}, "unread": {}})
+    assert not path.exists()
+
+
+def test_audit_capability_notes_when_cross_repo_caller_has_landed(monkeypatch):
+    monkeypatch.setattr(
+        audit,
+        "heartbeat_reachable",
+        lambda _cap: {"status": "no_local_entrypoint", "detail": "Workflows/scripts/run.py"},
+    )
+    monkeypatch.setattr(
+        audit,
+        "entrypoint_presence",
+        lambda _cap: {"state": audit.ENTRYPOINT_EXTERNAL, "found_in": []},
+    )
+    monkeypatch.setattr(
+        audit,
+        "external_caller",
+        lambda _cap: {"exists": True, "repo": "Workflows", "workflow": "ci"},
+    )
+    row = audit.audit_capability(
+        "ext-landed",
+        {
+            "status": "active",
+            "matcher": {"kind": "ci_workflow", "name": "ci"},
+            "entrypoint": "Workflows/scripts/run.py",
+        },
+        emittable=set(),
+        templates=set(),
+        label_index={"repos": {}, "read_at": {}, "unknown": []},
+    )
+    assert any(
+        "caller present: Workflows/.github/workflows/ci.yml" in note for note in row["notes"]
+    )
+    assert "entrypoint_external" not in row["defects"]
+
+
+def test_positive_int_accepts_a_positive_value():
+    assert periodic_report._positive_int("4") == 4
+
+
+def test_render_fleet_six_marks_unmeasured_merge_time():
+    section = {
+        "windows": {"7": {}, "28": {}},
+        "time_to_merge": {
+            "windows": {
+                "7": {
+                    "codex": {
+                        "n_with_facts": 0,
+                        "n_merged": 2,
+                        "median_hours": None,
+                        "p90_hours": None,
+                    }
+                },
+                "28": {},
+            }
+        },
+    }
+    rendered = "\n".join(periodic_report.render_fleet_six(section))
+    assert "codex unmeasured (0/2 facts)" in rendered
+
+
+def test_process_improvement_counts_other_failure_durability():
+    feedback.record_run(
+        "proc-1", "o/r#1", "implement", "codex", work_type="tooling", ts=int(time.time())
+    )
+    feedback.record_outcome("proc-1", durability="broke_later", notes="tooling broke later")
+    summary = periodic_report._process_improvement_summary(30)
+    tooling = next(row for row in summary["signals"] if row["work_type"] == "tooling")
+    assert tooling["other_failure_count"] == 1
+    assert tooling["failure_count"] == 1
+
+
+def test_keepalive_supervisor_disables_live_when_stage2_is_not_ready(monkeypatch, isolated_runtime):
+    corpus = isolated_runtime / "corpus.json"
+    corpus.write_text("{}")
+    monkeypatch.setattr(
+        periodic_report.keepalive_shadow,
+        "summarize",
+        lambda _path: {
+            "ready_for_ab": True,
+            "failure_outcomes": 9,
+            "meaningful_disagreements": 4,
+            "readiness_target": 10,
+        },
+    )
+    monkeypatch.setattr(
+        periodic_report,
+        "_redirect_stage2_summary",
+        lambda *_a, **_k: {
+            "ready_for_supervised_apply": False,
+            "recommendation": "collect more proposals",
+            "summary": {},
+        },
+    )
+    summary = periodic_report._keepalive_supervisor_summary(corpus)
+    assert summary["status"] == "armed_for_layered_ab_review"
+    assert summary["recommendation"] == ("collect more proposals; live supervisor remains disabled")
+
+
+def test_hypothesis_summary_returns_empty_when_loader_fails(monkeypatch, isolated_runtime):
+    def explode(*_a, **_k):
+        raise json.JSONDecodeError("bad", "x", 0)
+
+    monkeypatch.setattr(periodic_report.research_scheduler, "load_hypotheses", explode)
+    summary = periodic_report._hypothesis_summary(isolated_runtime / "hypotheses.json")
+    assert summary["hypotheses"] == []
+    assert summary["status_counts"] == {}
+
+
+def _human_report_with_remaining_branches() -> dict:
+    return {
+        "db_path": "/tmp/db",
+        "window_days": 7,
+        "dataset": {"table_counts": {"runs": 1}, "route_weights_version": 2},
+        "route_weights": {
+            "tasks": [
+                {
+                    "task_type": "implement",
+                    "cold_start": True,
+                    "prior_order": ["codex"],
+                    "learned_order": [],
+                    "note": "cold",
+                },
+                {
+                    "task_type": "review",
+                    "prior_order": ["codex"],
+                    "learned_order": ["codex"],
+                    "previous_order": ["gemini"],
+                    "note": "learned-note",
+                    "rows": [],
+                },
+            ]
+        },
+        "rail_exercise": {
+            "available": True,
+            "tree": "checkout",
+            "totals": {
+                "contracts": 2,
+                "passed": 2,
+                "broke-correctly": 0,
+                "failed": 0,
+                "skipped": 0,
+            },
+        },
+        "experiments": {
+            "implementation_arms": [],
+            "missing_arm_outcomes": [],
+            "evaluator_identities": [],
+        },
+        "exploration_policy": {},
+        "outcomes": {"window_days": 7, "total": 0, "rollup": {}, "by_task_agent_verdict": []},
+        "process_improvement": {"signals": [], "work_type_rollup": []},
+        "production_flow": {},
+        "keepalive_supervisor": {
+            "status": "hold",
+            "summary": {},
+            "thresholds": {},
+            "recommendation": "wait",
+            "stage2_proposal_corpus": {"status": "off", "summary": {}},
+        },
+        "costs_traces": {
+            "window_days": 7,
+            "costs_by_source": [],
+            "trace_status_counts": [],
+            "traces_by_source": [],
+        },
+        "hypotheses": {"status_counts": {}, "hypotheses": []},
+        "owner_questions": [],
+        "evidence": {
+            "window_days": 7,
+            "open_gaps_by_recurrence": [],
+            "proposals": [],
+            "evidence_types": {"counts_by_status": {}},
+            "schema_growth": {
+                "clustered_proposals": [{"name": "gapkind", "recurrence": 4, "ref_count": 2}],
+                "active_type_review": {"active": []},
+            },
+        },
+        "dry_seams": {
+            "overall": "warn",
+            "status_counts": {},
+            "findings": [],
+            "completion_event_health": {},
+            "outcome_gap_summary": {
+                "total_runs_without_outcome": 2,
+                "categories": [{"category": "missing", "count": 2, "actionable": 1}],
+            },
+        },
+        "role_activation": {"roles": {}},
+        "evidence_approval": {
+            "applied": False,
+            "name": "t",
+            "gap": "g",
+            "recurrence": 1,
+            "min_recurrence": 3,
+            "eligible": False,
+            "gaps_marked": 0,
+            "evidence_type_status": "proposed",
+            "blocked_reason": "below recurrence",
+        },
+    }
+
+
+def test_format_human_covers_rail_route_and_gap_branches():
+    text = periodic_report.format_human(_human_report_with_remaining_branches())
+    assert "rail exercise: tree=checkout" in text
+    assert "implement: COLD_START" in text
+    assert "note: cold" in text
+    assert "note: learned-note" in text
+    assert "clustered proposal: gapkind" in text
+    assert "outcome gap: missing" in text
+    assert "blocked: below recurrence" in text
+
+
+def test_main_requires_from_gap_and_renders_snapshot_text(monkeypatch, isolated_runtime, capsys):
+    with pytest.raises(SystemExit) as missing_gap:
+        periodic_report.main(["--approve-evidence-type", "t"])
+    assert missing_gap.value.code != 0
+    assert "--approve-evidence-type requires --from-gap" in capsys.readouterr().err
+
+    snap = isolated_runtime / "snap.json"
+    snap.write_text("{}")
+    monkeypatch.setattr(
+        periodic_report,
+        "build_report_from_snapshot",
+        lambda *_a, **_k: {"snapshot_path": str(snap.resolve())},
+    )
+    monkeypatch.setattr(periodic_report, "format_human", lambda _report: "HUMAN-REPORT")
+    assert periodic_report.main(["--snapshot-json", str(snap)]) == 0
+    rendered = capsys.readouterr().out
+    assert "HUMAN-REPORT" in rendered
+    assert f"source: snapshot {snap.resolve()}" in rendered
+
+
+def test_main_approves_evidence_from_snapshot_and_rejects_live_value_error(
+    monkeypatch, isolated_runtime, capsys
+):
+    snap = isolated_runtime / "snap.json"
+    snap.write_text("{}")
+    temp_db = isolated_runtime / "snap.db"
+    temp_db.write_text("")
+    monkeypatch.setattr(
+        periodic_report,
+        "build_report_from_snapshot",
+        lambda *_a, **_k: {"snapshot_path": str(snap), "fleet_six": None},
+    )
+    monkeypatch.setattr(periodic_report, "_load_snapshot_into_temp_db", lambda *_a, **_k: temp_db)
+    monkeypatch.setattr(
+        feedback, "approve_evidence_type", lambda *_a, **_k: {"applied": False, "name": "t"}
+    )
+    assert (
+        periodic_report.main(
+            [
+                "--snapshot-json",
+                str(snap),
+                "--json",
+                "--approve-evidence-type",
+                "t",
+                "--from-gap",
+                "gap",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["evidence_approval"]["name"] == "t"
+    assert temp_db.exists() is False
+
+    monkeypatch.setattr(periodic_report, "build_report", lambda **_k: {"window_days": 7})
+
+    def explode(*_a, **_k):
+        raise ValueError("not eligible")
+
+    monkeypatch.setattr(feedback, "approve_evidence_type", explode)
+    with pytest.raises(SystemExit) as rejected:
+        periodic_report.main(["--approve-evidence-type", "t", "--from-gap", "gap"])
+    assert rejected.value.code != 0
+    assert "not eligible" in capsys.readouterr().err
+
+
+def _research_plan():
+    return {
+        "planned": [
+            {
+                "item": {"target": "o/r#9", "task_type": "implement"},
+                "task_type": "implement",
+                "arms": ["codex"],
+                "pools": [],
+            }
+        ],
+        "skipped": [],
+        "producer_cells": [],
+    }
+
+
+def _stub_research_runtime(monkeypatch):
+    monkeypatch.setattr(tick.claims, "reap_stale", lambda: None)
+    monkeypatch.setattr(tick.claims, "active_claims", lambda: {})
+    monkeypatch.setattr(tick.claims, "claim", lambda *_a, **_k: True)
+    monkeypatch.setattr(tick.claims, "release", lambda *_a, **_k: None)
+    monkeypatch.setattr(tick.claims, "update_metadata", lambda *_a, **_k: None)
+    monkeypatch.setattr(tick.experiment_producer, "trial_defaults", lambda **_k: None)
+    monkeypatch.setattr(tick.experiment_producer, "trial_verdict", lambda: None)
+    monkeypatch.setattr(tick.experiment_producer, "trial_launch_hold", lambda: None)
+    monkeypatch.setattr(tick.experiment_producer, "build_plan", lambda *_a, **_k: _research_plan())
+    monkeypatch.setattr(tick.research_subjects, "record_event", lambda *_a, **_k: None)
+    monkeypatch.setattr(tick.research_subjects, "record_subject", lambda *_a, **_k: None)
+    monkeypatch.setattr(tick.research_subjects, "assess_candidate", lambda **_k: {"eligible": True})
+    monkeypatch.setattr(
+        tick.research_subjects,
+        "subject_identity",
+        lambda *_a, **_k: {"subject_id": "s1", "subject_family_id": "f1", "base_sha": "id-sha"},
+    )
+    monkeypatch.setattr(tick, "_fetch_issue_body", lambda *_a, **_k: "spec body")
+    monkeypatch.setattr(tick.capabilities, "production_heartbeat", lambda *_a, **_k: None)
+
+
+def test_research_tick_skips_when_producer_draw_does_not_fire(monkeypatch):
+    _stub_research_runtime(monkeypatch)
+    monkeypatch.setattr(tick.experiment_producer, "cadence_draw", lambda *_a, **_k: {"fire": False})
+    monkeypatch.setenv("ORCH_EXPERIMENT_PRODUCER", "1")
+    out = tick.research_tick([], {}, dry_run=False, env=os.environ.copy())
+    assert out["planned"][0]["draw"] == {"fire": False}
+    assert out["active"] is False
+    assert "active_status" not in out["planned"][0]
+
+
+def test_research_tick_treats_corrupt_meta_base_sha_as_missing(monkeypatch, isolated_runtime):
+    _stub_research_runtime(monkeypatch)
+    exp_dir = isolated_runtime / "exp"
+    exp_dir.mkdir()
+    (exp_dir / "meta.json").write_text("{")
+    monkeypatch.setattr(tick.exp_abcd, "exp_paths", lambda _exp: exp_dir)
+    monkeypatch.setattr(
+        tick.research_scheduler, "build_research_plan", lambda *_a, **_k: _research_plan()
+    )
+    monkeypatch.setenv("ORCH_RESEARCH_ARM", "1")
+    out = tick.research_tick(
+        [], {}, dry_run=False, env=os.environ.copy(), prepare_fn=lambda *_a, **_k: {}
+    )
+    assert out["planned"][0]["active_status"] == "launched"
+    assert out["planned"][0]["base_sha"] == "id-sha"
+    assert out["launched"] == [{}]
+
+
+def test_research_tick_records_frozen_test_launch_failure(monkeypatch):
+    _stub_research_runtime(monkeypatch)
+    monkeypatch.setattr(tick.experiment_producer, "cadence_draw", lambda *_a, **_k: {"fire": True})
+    monkeypatch.setattr(tick.experiment_producer, "record_skip", lambda *_a, **_k: None)
+    monkeypatch.setattr(tick.experiment_producer, "test_class", lambda _spec: "unit")
+    monkeypatch.setattr(tick.experiment_producer, "issue_status", lambda *_a, **_k: {"ok": True})
+    monkeypatch.setenv("ORCH_EXPERIMENT_PRODUCER", "1")
+
+    def prepare(*_a, **_k):
+        raise tick.experiment_producer.FrozenTestError("frozen tests")
+
+    out = tick.research_tick([], {}, dry_run=False, env=os.environ.copy(), prepare_fn=prepare)
+    assert out["planned"][0]["active_status"] == "failed"
+    assert out["planned"][0]["error"] == "frozen tests"
+    assert out["active"] is False
+
+
+def test_reseed_ignores_non_dict_contraindication_identity():
+    merged = repo_knowledge._reseed_section(
+        ["not-a-dict"],
+        [{"capability": "cap-a", "reason": "new"}],
+        section=repo_knowledge.CONTRAINDICATION_SECTION,
+    )
+    assert merged == ["not-a-dict", {"capability": "cap-a", "reason": "new"}]
+
+
+def test_migrate_replaces_superseded_string_gotcha():
+    reg = {
+        "schema_version": 1,
+        "repos": {
+            "stranske/Trend_Model_Project": {
+                "summary": "instance summary",
+                "gotchas": ["Use phase-3 as the base for opener work; do not assume main."],
+            }
+        },
+    }
+    assert repo_knowledge._migrate(reg) is True
+    gotchas = reg["repos"]["stranske/Trend_Model_Project"]["gotchas"]
+    assert gotchas[0]["text"] == repo_knowledge._TREND_BASE_GOTCHA
+    assert reg["schema_version"] == repo_knowledge.SEED_SCHEMA_VERSION
+
+
+def test_load_keeps_migrated_registry_when_save_fails(monkeypatch, isolated_runtime):
+    path = isolated_runtime / "registry.json"
+    path.write_text(json.dumps({"schema_version": 1, "repos": {}}))
+
+    def fail_save(*_a, **_k):
+        raise OSError("read-only")
+
+    monkeypatch.setattr(repo_knowledge, "save", fail_save)
+    loaded = repo_knowledge.load(path)
+    assert loaded["schema_version"] == repo_knowledge.SEED_SCHEMA_VERSION
+    assert "stranske/Workflows" in loaded["repos"]
+
+
+def test_playbook_filters_and_empty_context(isolated_runtime):
+    reg = isolated_runtime / "registry.json"
+    repo_knowledge.save(
+        {
+            "schema_version": repo_knowledge.SEED_SCHEMA_VERSION,
+            "repos": {
+                "o/r": {
+                    repo_knowledge.CONTRAINDICATION_SECTION: [
+                        "nope",
+                        {"capability": "", "reason": "missing"},
+                        {"capability": "offload", "reason": "breaks", "instead": "stay local"},
+                    ]
+                },
+                "o/empty": {"summary": "   "},
+            },
+        },
+        reg,
+    )
+    assert list(repo_knowledge.contraindications_for("o/r", path=reg)) == ["offload"]
+    assert repo_knowledge._applies({"lanes": ["opener"]}, task_type=None, lane="closer") is False
+    lines = repo_knowledge._contraindication_lines((repo_knowledge.load(reg)["repos"]["o/r"]))
+    assert lines == ["offload: breaks Instead: stay local"]
+    assert repo_knowledge.context_for("o/empty", path=reg) == ""
+    records = repo_knowledge._playbook_memory_records("o/r", task_type=None, lane=None, path=reg)
+    assert any(row["section"] == repo_knowledge.CONTRAINDICATION_SECTION for row in records)
+
+
+def test_export_limit_and_agents_update_edges(monkeypatch, isolated_runtime):
+    lines = repo_knowledge._export_section_lines(
+        "Gotchas", [{"text": f"rule {i}"} for i in range(3)], max_items=1
+    )
+    assert "2 additional approved rule" in lines[-1]
+    assert repo_knowledge._limit_lines(["a", "b", "c", "d"], 2) == ["a", "b"]
+    assert repo_knowledge._replace_managed_section("keep", "") == ("keep", False)
+
+    missing = isolated_runtime / "missing-repo"
+    with pytest.raises(FileNotFoundError, match="repo path not found"):
+        repo_knowledge.update_agents_md(missing, repo="o/r")
+
+    root = isolated_runtime / "repo"
+    root.mkdir()
+    monkeypatch.setattr(repo_knowledge, "_repo_from_git_remote", lambda _root: "")
+    with pytest.raises(ValueError, match="--repo is required"):
+        repo_knowledge.update_agents_md(root)
+
+    reg = isolated_runtime / "registry.json"
+    repo_knowledge.save({"schema_version": repo_knowledge.SEED_SCHEMA_VERSION, "repos": {}}, reg)
+    preview = repo_knowledge.update_agents_md(root, repo="o/missing", path=reg)
+    assert preview["changed"] is False
+    assert preview["reason"] == "no approved repo playbook entry"
+
+
+def test_validate_agents_and_current_refs(monkeypatch, isolated_runtime):
+    root = isolated_runtime / "repo"
+    root.mkdir()
+    reg = isolated_runtime / "registry.json"
+    monkeypatch.setattr(repo_knowledge, "_repo_from_git_remote", lambda _root: "")
+    with pytest.raises(ValueError, match="--repo is required"):
+        repo_knowledge.validate_agents_md_export(root, path=reg)
+
+    repo_knowledge.save(
+        {"schema_version": repo_knowledge.SEED_SCHEMA_VERSION, "repos": {}},
+        reg,
+    )
+    absent = repo_knowledge.validate_agents_md_export(root, repo="o/empty", path=reg)
+    assert absent["status"] == "absent"
+    assert absent["errors"] == ["AGENTS.md not found"]
+
+    (root / "AGENTS.md").write_text(
+        f"{repo_knowledge.AGENTS_EXPORT_START}\nold\n{repo_knowledge.AGENTS_EXPORT_END}\n"
+    )
+    stale = repo_knowledge.validate_agents_md_export(root, repo="o/empty", path=reg)
+    assert any("no approved playbook" in warning for warning in stale["warnings"])
+
+    repo_knowledge.save(
+        {
+            "schema_version": repo_knowledge.SEED_SCHEMA_VERSION,
+            "repos": {
+                "o/r": {
+                    "summary": "See `https://example.com/a` and `docs/missing.md`",
+                    "validation": [
+                        {
+                            "text": "check",
+                            "rule_id": "r1",
+                            "current_refs": [{"path": "nope.md"}],
+                        }
+                    ],
+                }
+            },
+        },
+        reg,
+    )
+    (root / "AGENTS.md").unlink()
+    missing = repo_knowledge.validate_agents_md_export(root, repo="o/r", path=reg)
+    assert "AGENTS.md not found" in missing["errors"]
+    assert "managed Orchestrator section missing" in missing["errors"]
+    assert any("nope.md" in warning for warning in missing["warnings"])
+    assert any("docs/missing.md" in warning for warning in missing["warnings"])
+
+    not_dir = isolated_runtime / "file.txt"
+    not_dir.write_text("x")
+    assert repo_knowledge.validate_current_refs(not_dir, [{"path": "a"}])["errors"] == [
+        "repo root not found"
+    ]
+    outside = isolated_runtime / "outside.txt"
+    outside.write_text("secret")
+    (root / "link.md").symlink_to(outside)
+    escaped = repo_knowledge.validate_current_refs(root, [{"path": "link.md"}])
+    assert any(error.startswith("unsafe current path:") for error in escaped["errors"])
+
+    readme = root / "README.md"
+    readme.write_text("def symbol():\n    pass\n")
+    real_read = Path.read_text
+
+    def unreadable(self, *args, **kwargs):
+        if self == readme:
+            raise OSError("unreadable")
+        return real_read(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", unreadable)
+    unread = repo_knowledge.validate_current_refs(root, [{"path": "README.md", "symbol": "symbol"}])
+    assert unread["errors"] == ["unreadable current path: README.md"]
+
+
+def test_suggestion_merge_memory_and_rule_edges(monkeypatch, isolated_runtime):
+    assert repo_knowledge._token_similarity("a", "b") == 0.0
+    target = {"evidence": "old"}
+    repo_knowledge._merge_field(
+        target, {"evidence": "new"}, field="evidence", list_field="evidences", joiner="; "
+    )
+    assert target["evidences"] == ["old", "new"]
+    assert target["evidence"] == "old; new"
+
+    suggestions: list[dict] = []
+    seen: set[str] = set()
+    repo_knowledge._append_suggestion(
+        suggestions, seen, set(), {"candidate_text": "too short"}, max_per_repo=1
+    )
+    assert suggestions == []
+    long = "Use the documented postgres migration path for this repository."
+    repo_knowledge._append_suggestion(
+        suggestions, seen, set(), {"candidate_text": long, "evidence": "e1"}, max_per_repo=1
+    )
+    repo_knowledge._append_suggestion(
+        suggestions,
+        seen,
+        set(),
+        {"candidate_text": "Another distinct suggestion that should be dropped at the cap."},
+        max_per_repo=1,
+    )
+    assert len(suggestions) == 1
+    assert repo_knowledge._clean_doc_line("```python") == ""
+    assert repo_knowledge._clean_doc_line("| table |") == ""
+
+    reg = isolated_runtime / "registry.json"
+    repo_knowledge.save(
+        {
+            "schema_version": repo_knowledge.SEED_SCHEMA_VERSION,
+            "repos": {
+                "o/r": {
+                    "summary": "Repo summary text",
+                    "gotchas": [
+                        {"text": ""},
+                        {"text": "same meaning", "content_hash": "sha256:abc"},
+                    ],
+                }
+            },
+        },
+        reg,
+    )
+    assert repo_knowledge.managed_rule_duplicate("o/r", "unused", "sha256:nope", path=reg) is None
+    hashed = repo_knowledge.managed_rule_duplicate("o/r", "different words", "sha256:abc", path=reg)
+    assert hashed["reason"] == "duplicate content hash"
+    with pytest.raises(ValueError, match="invalid managed rule section"):
+        repo_knowledge.install_managed_rule(
+            {"repo": "o/r", "section": "not-a-section", "text": "x", "content_hash": "h"},
+            path=reg,
+        )
+
+    bundle = isolated_runtime / "bundle.json"
+    bundle.write_text("[]")
+    with pytest.raises(ValueError, match="JSON object"):
+        repo_knowledge.update_capability_bundle(bundle, {"rule_id": "r"})
+    bundle.write_text(json.dumps({"orchestrator_repo_playbook_rules": []}))
+    with pytest.raises(ValueError, match="playbook rules must be an object"):
+        repo_knowledge.update_capability_bundle(bundle, {"rule_id": "r"})
+
+    assert repo_knowledge._memory_match(set(), "")["score"] == 0.0
+    assert repo_knowledge._memory_match(set(), "text", base=0.2)["score"] == 0.2
+    assert (
+        repo_knowledge._memory_item_visible({"lanes": ["opener"]}, task_type=None, lane="closer")
+        is False
+    )
+    assert (
+        repo_knowledge._memory_scope_match(
+            {"task_type": "review"}, task_type="implement", lane=None
+        )
+        is False
+    )
+    assert (
+        repo_knowledge._memory_scope_match({"lane": "opener"}, task_type=None, lane="closer")
+        is False
+    )
+
+    skipped = repo_knowledge._run_memory_from_snapshot(
+        {
+            "runs": [
+                {"run_id": "other", "target": "other/repo#1", "task_type": "review"},
+                {"run_id": "blank", "target": "o/r#2", "task_type": "implement"},
+                {"run_id": "boom", "target": "boom#3", "task_type": "implement"},
+            ],
+            "outcomes": [
+                {"run_id": "missing", "notes": "This outcome note is long enough to keep."},
+                {"run_id": "other", "notes": "This outcome note is long enough to keep."},
+                {"run_id": "blank", "notes": "   "},
+                {"run_id": "boom", "notes": "This outcome note is long enough to keep."},
+            ],
+        },
+        "o/r",
+    )
+    assert skipped == []
+
+    def flaky(target):
+        if str(target).startswith("boom"):
+            raise ValueError("bad target")
+        return repo_knowledge.repo_for(str(target or "").split()[0])
+
+    monkeypatch.setattr(repo_knowledge, "_repo_for_suggestion_target", flaky)
+    raised = repo_knowledge._run_memory_from_snapshot(
+        {
+            "runs": [{"run_id": "boom", "target": "boom#3", "task_type": "implement"}],
+            "outcomes": [{"run_id": "boom", "notes": "This outcome note is long enough to keep."}],
+        },
+        "o/r",
+    )
+    assert raised == []
+
+    found = repo_knowledge.search_repo_memory(
+        "o/r",
+        task_type="implement",
+        path=reg,
+        snapshot={
+            "runs": [{"run_id": "rev", "target": "o/r#1", "task_type": "review"}],
+            "outcomes": [
+                {
+                    "run_id": "rev",
+                    "notes": "Review-only note that must stay out of implement search.",
+                }
+            ],
+        },
+    )
+    assert all(row.get("task_type") != "review" for row in found)
+
+    with pytest.raises(ValueError, match="suggestion repo is required"):
+        repo_knowledge.approve_suggestion({}, path=reg)
+    with pytest.raises(ValueError, match="candidate_text is required"):
+        repo_knowledge.approve_suggestion({"repo": "o/r", "candidate_text": ""}, path=reg)
+    with pytest.raises(ValueError, match="section must be one of"):
+        repo_knowledge.approve_suggestion(
+            {
+                "repo": "o/r",
+                "candidate_text": "Use the documented postgres migration path for this repository.",
+            },
+            section="nope",
+            path=reg,
+        )
+
+    suggestions_path = isolated_runtime / "suggestions.json"
+    suggestions_path.write_text('{"not": "a list"}')
+    with pytest.raises(ValueError, match="JSON list"):
+        repo_knowledge._load_suggestion_file(suggestions_path, 0)
+    suggestions_path.write_text("[]")
+    with pytest.raises(IndexError, match="out of range"):
+        repo_knowledge._load_suggestion_file(suggestions_path, 0)
+    suggestions_path.write_text(json.dumps([{"repo": "o/r"}]))
+    assert repo_knowledge._load_suggestion_file(suggestions_path, 0)["repo"] == "o/r"
+
+
+def test_iter_doc_files_honors_caps_and_skip_rules(isolated_runtime):
+    root = isolated_runtime / "docs-root"
+    root.mkdir()
+    (root / "README.md").write_text("readme")
+    (root / "notes.md").write_text("notes")
+    (root / "BRIEF_skip.md").write_text("skip")
+    (root / "image.png").write_text("no")
+    docs = root / "docs"
+    docs.mkdir()
+    (docs / "a.md").write_text("a")
+    (docs / "BRIEF_x.md").write_text("b")
+    skipped = docs / "node_modules"
+    skipped.mkdir()
+    (skipped / "c.md").write_text("c")
+
+    capped = repo_knowledge._iter_doc_files(root, max_files=1, include_root_docs=True)
+    assert [path.name for path in capped] == ["README.md"]
+    names = {
+        path.name
+        for path in repo_knowledge._iter_doc_files(root, max_files=100, include_root_docs=True)
+    }
+    assert "README.md" in names and "notes.md" in names and "a.md" in names
+    assert "BRIEF_skip.md" not in names
+    assert "BRIEF_x.md" not in names
+    assert "c.md" not in names
+    assert "image.png" not in names
+    stopped = repo_knowledge._iter_doc_files(root, max_files=2, include_root_docs=True)
+    assert [path.name for path in stopped] == ["README.md", "notes.md"]
+
+
+def test_main_covers_suggestion_success_and_context_usage(monkeypatch, isolated_runtime, capsys):
+    monkeypatch.setattr(
+        repo_knowledge,
+        "suggest_from_review_json",
+        lambda *_a, **kwargs: {"max": kwargs["max_per_repo"]},
+    )
+    assert (
+        repo_knowledge.main(
+            ["--suggest-from-review-json", "comments.json", "--repo", "o/r", "--max", "3"]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out) == {"max": 3}
+
+    monkeypatch.setattr(repo_knowledge, "suggest_from_pr_comments", lambda *_a, **_k: {"pr": True})
+    assert repo_knowledge.main(["--suggest-from-pr", "o/r#4", "--max", "2"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"pr": True}
+
+    suggestion = isolated_runtime / "suggestions.json"
+    suggestion.write_text(
+        json.dumps(
+            [
+                {
+                    "repo": "o/r",
+                    "candidate_text": "Use the documented postgres migration path for this repository.",
+                }
+            ]
+        )
+    )
+    monkeypatch.setattr(repo_knowledge, "approve_suggestion", lambda *_a, **_k: {"applied": False})
+    assert repo_knowledge.main(["--approve-suggestion", str(suggestion), "--index", "0"]) == 0
+    assert json.loads(capsys.readouterr().out)["applied"] is False
+
+    assert repo_knowledge.main([]) == 2
+    assert "usage:" in capsys.readouterr().err
+    monkeypatch.setattr(repo_knowledge, "context_for", lambda *_a, **_k: "PLAYBOOK")
+    assert repo_knowledge.main(["o/r", "implement", "opener"]) == 0
+    assert capsys.readouterr().out.strip() == "PLAYBOOK"

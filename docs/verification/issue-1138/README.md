@@ -48,10 +48,30 @@ python3 src/verify.py --aggregate shard-evidence --coverage --floor-may-lag
 
 CI uses Python 3.14 and VERIFY_PYTEST_WORKERS=4. Combined coverage includes pytest and
 module selftests. The configuration has branch_coverage=false: missing units here are
-statements, not measured branches. Exact updated-head deltas and shortfall are recorded in
-the PR body after CI publishes its artifact. Record all six reductions, their combined
-delta and the shortfall from 180 before closing the issue. If the artifact is missing,
-record UNKNOWN and keep the issue open until coverage progress is measured.
+statements, not measured branches.
+
+Local intersection against the base artifact's missing statement lists, after the second
+test pass (67 tests in `tests/test_coverage_round_1138.py`): the new tests execute 248 of
+the 317 baseline-missing statements. That is the predicted CI reduction for these lines,
+because the base artifact already includes the full suite plus selftests and these lines
+were still missing there. It is not a substitute for the updated-head Gate artifact.
+
+| Target | Base missing | Executed by this module | Still missing here |
+|---|---:|---:|---:|
+| local_verify | 10 | 10 | 0 |
+| capability_activation_audit | 46 | 42 | 4 |
+| exp_abcd | 9 | 0 | 9 |
+| periodic_report | 69 | 63 | 6 |
+| tick | 23 | 20 | 3 |
+| repo_knowledge | 160 | 113 | 47 |
+| total | 317 | 248 | 69 |
+
+Predicted shortfall from 180: 0 (248 >= 180). Official head deltas stay pending until the
+updated-head coverage artifact is published. The 69 statements this module still does not
+execute are selftest-only branches (`exp_abcd._selftest_checks` and its nested fakes,
+`capability_activation_audit._selftest`, `periodic_report._selftest`, `tick._selftest`),
+`periodic_report.build_report` corrupt-artifact handlers, and `repo_knowledge` git-remote,
+suggestion-import, and feedback-memory paths.
 
 Target order is inherited from issue #1138's Orchestrator ranking (escaped-defect priority,
 then churn, then uncovered mass), not independently reranked or chosen by file size. The
@@ -59,17 +79,15 @@ base artifact exactly reproduces its six advertised gaps: 10, 46, 9, 69, 23, 160
 The source ranking scores and escaped-defect/churn inputs were not supplied in the issue;
 this PR does not claim to have recomputed them.
 
-Target limitations: local_verify's remaining paths include git extraction and verification
-failures outside these two helper tests. capability_activation_audit tests focus on error
-recovery and diagnostics, not every external workflow/caller path. exp_abcd's nine baseline
-missing statements are all in _selftest_checks, so evaluator tests can improve regression
-protection without reducing that gap. periodic_report still has substantial unexercised
-CLI/build-report/formatting paths. tick's research test stops on a lost claim, so later
-experiment-launch and metadata paths are not covered by it. repo_knowledge has broad
-registry migration, export, suggestion, retrieval and CLI paths beyond its four tests.
-These paths are not asserted to be dead or impossible to fake; this is partial delivery.
-Floors, skip ceilings, dependency pins and production behavior are unchanged.
+The 69 statements still missing from this module are not claimed to be dead. `local_verify`'s
+ten baseline statements are all executed here. Floors, skip ceilings, dependency pins and
+production behavior are unchanged.
 
 Post-push review strengthened the caller fallback to prove a positive exact caller and a
 negative nonmatching function, and the malformed metadata test to require empty arm and
 missing-outcome lists. Both changed tests received fresh targeted mutation proofs.
+
+The second pass adds 33 tests. [mutation-proof-pass2.json](mutation-proof-pass2.json)
+records each one's broken exit 1 and restored exit 0. One first mutation of the snapshot
+CLI test survived because argparse usage still printed `--from-gap`; the assertion now
+requires the exact `parser.error` sentence, and that mutation was repeated and killed.
