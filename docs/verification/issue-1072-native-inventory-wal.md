@@ -291,3 +291,27 @@ independent outcomes database at
 remain absent. Authentic original/journal locations and live reader bindings
 remain unavailable. No production diagnosis, retry, publication, October 18
 proof or next-20 decision is claimed; no operational checkbox is completed.
+
+## Retained report and manifest location pins
+
+Checked on 2026-11-05 against checkout
+`68b3d8667f89dcd6237f94486c3f39f15844d764`. The retained-report inventory
+now checks resolved paths, device IDs and inode IDs around its content reads.
+Replacing a report or manifest with identical bytes, retargeting its symlink,
+or removing it during the final read aborts the observation. All six new
+regressions failed before the fix and pass afterward; a subsequent stable
+observation preserves paid-history accounting and does not authorize dispatch.
+
+Validation: all 109 combined JavaScript inventory tests and 32 diagnostic
+unittests pass. JavaScript syntax and `git diff --check` pass. No Python files
+changed. The required retrospective pytest command with `-m "not slow"` cannot
+start because pytest is absent, and dependency installation failed.
+
+These remain fixture results. The default runtime directory, canonical report
+and independent outcomes database are absent; authentic original report and
+journal locations and deployed/mirror live bindings remain unavailable. No
+operational checkbox is completed. Staging fails because `.git/index.lock`
+cannot be created on the read-only filesystem, so no commit or push was made.
+
+Automatic approval review rejected the blocker comment and `needs-human` label
+because the GitHub mutations require approval and this run's policy is `never`.

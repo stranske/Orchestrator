@@ -1242,6 +1242,57 @@ test('report reconciliation refuses malformed or changing manifests without repl
   assert.equal(reportInventory(options).manifest_reconciliation, null);
 });
 
+for (const input of ['report', 'manifest']) {
+  for (const change of ['atomic replacement', 'symlink retarget', 'removal']) {
+    test(`report inventory rejects ${input} ${change} even with identical bytes`, (t) => {
+      const { root, options } = retainedReport(t);
+      const manifest = manifestFile(root, [{ run_id: 'original', target: 'owner/repo#1' }]);
+      const selected = input === 'report' ? options.report : manifest;
+      const original = `${selected}.original`;
+      const replacement = `${selected}.replacement`;
+      const bytes = fs.readFileSync(selected);
+      fs.writeFileSync(replacement, bytes);
+      if (change === 'symlink retarget') {
+        fs.renameSync(selected, original);
+        fs.symlinkSync(original, selected);
+      }
+      const read = fs.readFileSync;
+      let observations = 0;
+      fs.readFileSync = function observed(file, ...args) {
+        // Change the selected file during the final content read. The bytes
+        // alone still match, so both sides of that read need location checks.
+        if (file === selected && ++observations === 2) {
+          if (change === 'symlink retarget') {
+            fs.unlinkSync(selected);
+            fs.symlinkSync(replacement, selected);
+          } else if (change === 'atomic replacement') {
+            fs.renameSync(replacement, selected);
+          } else {
+            const retained = read(file, ...args);
+            fs.unlinkSync(selected);
+            return retained;
+          }
+        }
+        return read(file, ...args);
+      };
+      try {
+        assert.throws(() => reportInventory({ ...options, manifest }),
+          new RegExp(`${input} location changed during inventory`));
+      } finally {
+        fs.readFileSync = read;
+      }
+      assert.equal(observations, 2);
+      if (change === 'removal') fs.writeFileSync(selected, bytes);
+      const later = reportInventory({ ...options, manifest });
+      assert.equal(later.report_sha256, createHash('sha256')
+        .update(fs.readFileSync(options.report)).digest('hex'));
+      assert.equal(later.paid_identity_summary.records, 4);
+      assert.equal(later.dispatch_authorized, false);
+      assert.deepEqual(fs.readFileSync(selected), bytes);
+    });
+  }
+}
+
 test('report CLI never combines historical recovery with dispatch or current Brain selection', (t) => {
   const { root, options } = retainedReport(t);
   const args = [script, '--report', options.report, '--observed-at', String(now),

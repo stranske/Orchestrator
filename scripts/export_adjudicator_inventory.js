@@ -456,6 +456,27 @@ function reconcileNativeLocators(observations, journal) {
   }
 }
 
+// Equal bytes cannot detect a replaced file or a retargeted symlink. Keep the
+// selected report/manifest bound to one location across all content reads.
+function pinFileLocation(file, label) {
+  if (typeof file !== 'string' || !file.trim()) throw new Error(`${label} path is required`);
+  const resolved = fs.realpathSync(file);
+  const { dev, ino } = fs.statSync(resolved, { bigint: true });
+  return () => {
+    let current;
+    let stat;
+    try {
+      current = fs.realpathSync(file);
+      stat = fs.statSync(current, { bigint: true });
+    } catch {
+      throw new Error(`${label} location changed during inventory`);
+    }
+    if (current !== resolved || stat.dev !== dev || stat.ino !== ino) {
+      throw new Error(`${label} location changed during inventory`);
+    }
+  };
+}
+
 function reportInventory({ report, observedAt, evidenceClass, evidenceReference, journal, manifest }) {
   integer(observedAt, 'observedAt', 0);
   if (typeof report !== 'string' || !report.trim()) throw new Error('report is required');
@@ -465,8 +486,15 @@ function reportInventory({ report, observedAt, evidenceClass, evidenceReference,
   if (typeof evidenceReference !== 'string' || !evidenceReference.trim()) {
     throw new Error('evidenceReference is required');
   }
+  const checkReportLocation = pinFileLocation(report, 'report');
+  const checkManifestLocation = manifest === undefined ? null : pinFileLocation(manifest, 'manifest');
+  const checkLocations = () => {
+    checkReportLocation();
+    if (checkManifestLocation) checkManifestLocation();
+  };
   const requestedManifest = manifest === undefined ? null : readManifest(manifest);
   const bytes = fs.readFileSync(report);
+  checkLocations();
   const saved = JSON.parse(bytes);
   if (!saved || !Array.isArray(saved.rows)) throw new Error('report requires a rows array');
   const seen = new Set();
@@ -534,6 +562,7 @@ function reportInventory({ report, observedAt, evidenceClass, evidenceReference,
   reconcileNativeLocators(observations, preDispatch.native_journal);
   const reconciliation = requestedManifest
     ? reconcileRetainedRows(cases, requestedManifest, observations, preDispatch.native_journal) : null;
+  checkLocations();
   if (!fs.readFileSync(report).equals(bytes)) {
     throw new Error('report changed during inventory');
   }
@@ -541,6 +570,7 @@ function reportInventory({ report, observedAt, evidenceClass, evidenceReference,
       requestedManifest.sha256) {
     throw new Error('manifest changed during inventory');
   }
+  checkLocations();
   return {
     schema_version: 1,
     scope: 'retained_report_only', evidence_class: evidenceClass,
