@@ -44,6 +44,117 @@ const invalidProvenance = [
   ['blank audit evidence', { ...validProvenance, deployment_evidence: '  ' }, /deployment_evidence/],
 ];
 
+const invalidPublishedContracts = [
+  ['missing challengers', (doc) => { delete doc.exploration.challengers; }, /contract is malformed/],
+  ['array challengers', (doc) => { doc.exploration.challengers = []; }, /contract is malformed/],
+  ['missing task', (doc) => { delete doc.exploration.challengers.review; }, /contract is malformed/],
+  ['extra task', (doc) => { doc.exploration.challengers.unknown = 'codex'; }, /contract is malformed/],
+  ['hosted-unrunnable challenger', (doc) => { doc.exploration.challengers.review = 'gemini'; }, /contract is malformed/],
+  ['non-string challenger', (doc) => { doc.exploration.challengers.review = []; }, /contract is malformed/],
+  ['missing generation time', (doc) => { delete doc.generated_at; }, /generated_at/],
+  ['malformed generation time', (doc) => { doc.generated_at = 'yesterday'; }, /generated_at/],
+];
+
+// Each case needs its own history: an earlier malformed marked artifact would
+// otherwise stop verification before the defect under test is reached.
+for (const [name, corrupt, diagnostic] of invalidPublishedContracts) {
+  test(`deployment CLI refuses ${name} even after a later repair`, async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'route-invalid-publication-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const home = path.join(root, 'home');
+    const state = path.join(root, 'state');
+    const repositories = path.join(root, 'repos');
+    const checkout = path.join(repositories, 'stranske__Orchestrator');
+    const remote = path.join(root, 'remote.git');
+    const audit = path.join(root, 'audit.json');
+    const receipt = path.join(state, 'route-weights-challenger-deployment.json');
+    const database = path.join(root, 'absent.db');
+    for (const directory of [home, state, repositories]) fs.mkdirSync(directory);
+    const env = {
+      PATH: process.env.PATH,
+      HOME: home,
+      PYTHONPATH: modules,
+      PYTHONDONTWRITEBYTECODE: '1',
+      ORCH_STATE_DIR: state,
+      ORCH_LOCAL_RUNTIME: path.join(root, 'runtime'),
+      ORCH_REPOS_DIR: repositories,
+      ORCH_FEEDBACK_DB: database,
+      ORCH_CAPABILITIES_PATH: path.join(root, 'capabilities.json'),
+      HANDOFF_DIR: path.join(root, 'handoff'),
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_AUTHOR_NAME: 'Deployment Test',
+      GIT_AUTHOR_EMAIL: 'deploy@example.invalid',
+      GIT_COMMITTER_NAME: 'Deployment Test',
+      GIT_COMMITTER_EMAIL: 'deploy@example.invalid',
+    };
+    async function git(directory, ...args) {
+      const result = await run('git', ['-C', directory, ...args], { env });
+      assert.equal(result.status, 0, result.stderr);
+      return result.stdout.trim();
+    }
+    const branch = 'exports/route-weights';
+    const artifact = path.join(checkout, 'config', 'route-weights.json');
+    await git(root, 'init', '--bare', '--initial-branch=main', remote);
+    await git(root, 'clone', remote, checkout);
+    const valid = {
+      generated_at: '2026-11-04T10:00:00Z',
+      exploration: {
+        challenger_filter: 'hosted-runnable-alternatives/v1',
+        challengers: Object.fromEntries(
+          ['implement', 'review', 'testgen', 'mechanical', 'codemod', 'cross_repo']
+            .map((task) => [task, 'codex'])),
+      },
+    };
+    const invalid = structuredClone(valid);
+    corrupt(invalid);
+    async function publishFixture(document) {
+      fs.mkdirSync(path.dirname(artifact), { recursive: true });
+      fs.writeFileSync(artifact, JSON.stringify(document));
+      await git(checkout, 'add', '.');
+      await git(checkout, 'commit', '-m', 'publication fixture');
+      await git(checkout, 'push', 'origin', `HEAD:${branch}`);
+      return git(remote, 'rev-parse', branch);
+    }
+    async function refuse(commit, retained) {
+      fs.writeFileSync(audit, JSON.stringify({
+        published_commit: commit,
+        deployed_at: '2026-11-04T11:00:00Z',
+        deployment_evidence: 'fixture-publication-audit/successful-push',
+      }));
+      const modified = retained === null ? null : fs.statSync(receipt, { bigint: true }).mtimeNs;
+      const result = await run(process.env.PYTHON || 'python3', [
+        path.join(modules, 'route_weights_export.py'),
+        '--record-challenger-deployment', audit, '--state-dir', state,
+      ], { cwd: root, env });
+      assert.equal(result.status, 1, result.stderr);
+      assert.equal(result.stdout, '');
+      assert.match(result.stderr, /deployment provenance refused:/);
+      assert.match(result.stderr, diagnostic);
+      assert.doesNotMatch(result.stderr, /Traceback/);
+      if (retained === null) {
+        assert.equal(fs.existsSync(receipt), false);
+      } else {
+        assert.equal(fs.readFileSync(receipt, 'utf8'), retained);
+        assert.equal(fs.statSync(receipt, { bigint: true }).mtimeNs, modified);
+      }
+    }
+    const first = await publishFixture(invalid);
+    await refuse(first, null);
+    const repaired = await publishFixture(valid);
+    assert.notEqual(first, repaired);
+    for (const retained of [null, '{"earlier_receipt":"preserve"}\n']) {
+      if (retained !== null) fs.writeFileSync(receipt, retained);
+      // Neither the invalid original nor the repaired tip establishes a valid
+      // first publication. A later repair must not reset the observation clock.
+      await refuse(first, retained);
+      await refuse(repaired, retained);
+    }
+    assert.equal(await git(remote, 'rev-parse', branch), repaired);
+    assert.equal(fs.existsSync(database), false);
+    assert.deepEqual(fs.readdirSync(home), []);
+  });
+}
+
 test('deployment CLI recovers fetch and receipt failures after an unchanged real publication', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'route-deployment-recovery-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

@@ -236,3 +236,40 @@ with `MCP tool call requires approval, but approval policy is never`. The checko
 also rejects Git index writes as read-only. The tested changes are retained in
 the working tree and committed in `/tmp/orchestrator-1175-shallow-history-EHIk6w`,
 with a handoff patch at `/tmp/orchestrator-1175-shallow-history.patch`.
+
+## Independent malformed-publication verification (2026-11-05)
+
+Reviewed branch history through `baa5d11`: seven files differ from the base,
+rather than the reported 34. The malformed-challenger unittest shares history
+between cases, so the first malformed artifact can mask the remaining inputs.
+Added eight independent CLI regressions, each with its own temporary bare remote,
+checkout, home, state, and audit. Cases cover missing/array challengers, missing or
+extra task keys, hosted-unrunnable/non-string challengers, and missing/malformed
+generation timestamps. Each refuses the original publication and a later repaired
+artifact, both without a receipt and with an existing receipt that must remain
+byte-identical with the same modification time. No production state is used.
+
+Verification: the CLI suite passes all 32 tests; the deployment unittest suite
+passes all 15; the report suite passes all five. JavaScript syntax and diff checks
+pass. Removing the exact challenger task-set guard in a disposable exporter copy
+makes both the missing-task and extra-task regressions fail at their assertions.
+No Python changes are included in this round.
+
+Reconciliation remains blocked remotely: the publication task must be unchecked
+in both copies until a verified production receipt exists. Both conditional
+helper/reporting tasks can be checked because those extensions remain absent.
+Named pytest acceptance checks cannot be verified here: the Anaconda interpreter,
+pytest, and Black are absent. A proposed reconciled body, leaving those named
+checks unchecked, is retained at `/tmp/orchestrator-1175-reconciled-pr-body.md`.
+
+The PR-body update, blocker comment, and `needs-human` label were rejected with
+`MCP tool call requires approval, but approval policy is never`. PR #1176 remains
+open and ready for review. No new production task is complete: the production
+database and verified deployment audit are absent, and observation requires both
+2026-11-08 and fourteen days after the verified deployment instant.
+
+The checkout's Git index is read-only. This round's JavaScript test changes and
+evidence are committed in a writable clone under
+`/tmp/orchestrator-1175-independent-contracts-*`; the handoff patch is
+`/tmp/orchestrator-1175-independent-contracts.patch`. The main working tree retains
+the same edits.
