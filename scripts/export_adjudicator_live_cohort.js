@@ -10,7 +10,11 @@ const { ownerExcluded } = require('./export_adjudicator_inventory');
 
 const identityFields = ['run_id', 'target', 'verifier_verdict', 'adjudicated_verdict'];
 const nonblank = (value) => typeof value === 'string' && Boolean(value.trim());
-const key = (row) => JSON.stringify(identityFields.map((field) => row[field]));
+// Match run_live's native dispute identity. Including target in this key would
+// hide conflicting targets behind separate lookups for the same native case.
+const disputeKey = (row) => JSON.stringify([
+  row.run_id, row.verifier_verdict, row.adjudicated_verdict,
+]);
 const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const timestamp = (value) => Number.isSafeInteger(value) && value >= 0 &&
   Number.isFinite(new Date(value * 1000).getTime());
@@ -45,7 +49,7 @@ function liveCohort({ manifest, expectedManifestHash, manifestReference, report,
       throw new Error('manifest cases require full, disputed verdict identities');
     }
     // Match the native run + verdict-pair identity even across conflicting targets.
-    const dispute = JSON.stringify([row.run_id, row.verifier_verdict, row.adjudicated_verdict]);
+    const dispute = disputeKey(row);
     if (seen.has(dispute)) throw new Error('duplicate fixed manifest dispute');
     seen.add(dispute);
     return Object.fromEntries(identityFields.map((field) => [field, row[field]]));
@@ -61,14 +65,14 @@ function liveCohort({ manifest, expectedManifestHash, manifestReference, report,
     throw new Error('expected the native adjudicator-live/v1 report');
   }
   const rows = saved?.rows || [];
-  const byIdentity = new Map();
+  const byDispute = new Map();
   const receiptUses = { role_run_id: new Map(), backend_run_id: new Map() };
   for (const [index, row] of rows.entries()) {
     // Exclusions precede any execution evidence access.
     if (ownerExcluded(row.target)) continue;
-    const matches = byIdentity.get(key(row)) || [];
+    const matches = byDispute.get(disputeKey(row)) || [];
     matches.push({ row, index });
-    byIdentity.set(key(row), matches);
+    byDispute.set(disputeKey(row), matches);
     for (const [field, uses] of Object.entries(receiptUses)) {
       if (nonblank(row[field])) uses.set(row[field], (uses.get(row[field]) || 0) + 1);
     }
@@ -78,7 +82,10 @@ function liveCohort({ manifest, expectedManifestHash, manifestReference, report,
     const base = { ...identity, checked_at: iso(observedAt),
       status: 'unavailable', retained_report_row: null };
     if (ownerExcluded(identity.target)) return { ...base, gaps: ['owner_excluded_repository'] };
-    const matches = byIdentity.get(key(identity)) || [];
+    const matches = byDispute.get(disputeKey(identity)) || [];
+    if (matches.some(({ row }) => row.target !== identity.target)) {
+      return { ...base, status: 'blocked', gaps: ['live_target_mismatch'] };
+    }
     if (!saved || matches.length !== 1) return { ...base, gaps: [!saved
       ? 'live_report_unavailable' : matches.length ? 'ambiguous_live_rows' : 'fixed_member_row_missing'] };
     const { row, index } = matches[0];

@@ -98,3 +98,40 @@ production decision, dispatch or task completion is claimed by this change.
 Staging failed because the checkout's Git metadata is read-only. The focused
 source, tests and note are preserved in a separate commit and transferable
 `/tmp/orchestrator-live-cohort-attribution/change.bundle` and `change.patch`.
+
+## Conflicting native dispute targets
+
+Checked on 2026-11-05 against `bf194ef4678386a1275a27473ee2685c80b0cc51`
+plus this change. The observer now groups report rows by the native
+`adjudicator_retro._case_identity` (run and verdict pair), then checks targets.
+A row for a different target blocks that member with `live_target_mismatch`,
+even when another row matches the manifest and has distinct receipt locators.
+It cannot supply a decision or a selected report-row receipt. Separate verdict
+pairs on one run remain separate obligations; owner exclusions still precede
+dispute and execution evidence access.
+
+The new regression fails against the old observer (`15 != 14`) and passes with
+the fix in either report-row order. It preserves all 20 pinned identities and
+both input files. An additional access-trap test verifies excluded aliases do
+not expose dispute or receipt fields. All 120 tests pass across the live-cohort,
+inventory and native-inventory JavaScript suites; the diagnostic and replay
+unittest suites pass 32 and seven tests. JavaScript syntax and `git diff --check`
+pass. No Python file changed. The required
+`python3 -m pytest tests/test_adjudicator_retro.py -m 'not slow'` command cannot
+start because pytest is absent.
+
+The configured local runtime, Brain and report files remain unavailable.
+GitHub issue/comment reads and connected Dropbox searches for the live report
+and cohort did not recover a fixed next-20 manifest or raw production receipts.
+The retained October 18 observation linked above was re-read: it reports zero
+live advice and two failed certified cases. This is historical aggregate
+evidence, separately attributable from today's fixture verification; it supplies
+neither cohort membership nor authenticated receipts. No dispatch, canonical
+refresh, mirror synchronization or operational task completion is claimed.
+The live-cohort checkbox remains unchecked. PR #1081 was observed open and
+`draft=false` at the revision above.
+
+Staging was refused because `.git/index.lock` is on a read-only filesystem.
+The tested source, tests and this note are preserved in a separate local commit
+and transferable `/tmp/orchestrator-live-cohort-targets/change.bundle` and
+`change.patch`; the working files remain available to the automation runner.

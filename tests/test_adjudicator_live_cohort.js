@@ -244,8 +244,66 @@ test('changed identities and ambiguous duplicates cannot lend a decision to a fi
   const result = liveCohort(w.options);
   assert.equal(result.retained_binary_decisions, 17);
   assert.deepEqual(result.cases.slice(0, 3).map((item) => item.gaps),
-    [['fixed_member_row_missing'], ['fixed_member_row_missing'], ['ambiguous_live_rows']]);
+    [['live_target_mismatch'], ['fixed_member_row_missing'], ['ambiguous_live_rows']]);
   assert.ok(result.cases.slice(0, 3).every((item) => item.retained_report_row === null));
+});
+
+test('conflicting targets for one native dispute cannot supply the fifteenth decision', (t) => {
+  const w = world(t);
+  for (const item of w.saved.rows.slice(15)) {
+    item.decision = item.proposal.decision = item.disposition = 'needs_more_evidence';
+  }
+  w.save();
+  assert.equal(liveCohort(w.options).retained_binary_decisions, 15);
+  // run_live indexes cases by run + verdict pair, independently of target.
+  // Distinct receipt locators must not hide a second target for that same case.
+  w.saved.rows.push({ ...row(0), target: 'fixture/other#2',
+    role_run_id: 'conflicting-role', backend_run_id: 'conflicting-backend' });
+  for (const reverse of [false, true]) {
+    if (reverse) w.saved.rows.reverse();
+    w.save();
+    const before = [w.options.manifest, w.options.report].map((file) => fs.readFileSync(file));
+    const out = cli(w);
+    assert.equal(out.status, 0, out.stderr);
+    const result = JSON.parse(out.stdout);
+    assert.equal(result.retained_binary_decisions, 14);
+    assert.equal(result.cases[0].status, 'blocked');
+    assert.deepEqual(result.cases[0].gaps, ['live_target_mismatch']);
+    assert.equal(result.cases[0].retained_report_row, null);
+    assert.deepEqual(result.cases.map((item) => item.run_id), w.cases.map((item) => item.run_id));
+    assert.equal(result.operational_acceptance_complete, false);
+    assert.ok(!out.stdout.includes('conflicting-role'));
+    assert.ok(!out.stdout.includes('conflicting-backend'));
+    assert.deepEqual([w.options.manifest, w.options.report].map((file) => fs.readFileSync(file)), before);
+  }
+});
+
+test('owner-excluded target aliases do not expose execution fields or affect allowed members', (t) => {
+  const w = world(t);
+  const excluded = { ...identity(0), target: 'STRANSKE/Collab-Admin#2' };
+  w.saved.rows.push(excluded);
+  w.save();
+  const read = fs.readFileSync;
+  const parse = JSON.parse;
+  // This read trap exercises the in-memory report after JSON parsing. Excluded
+  // rows must be discarded before accessing their dispute or receipt fields.
+  JSON.parse = function (bytes, ...args) {
+    const parsed = parse(bytes, ...args);
+    if (parsed?.schema === 'adjudicator-live/v1') {
+      for (const field of ['run_id', 'role_run_id', 'backend_run_id']) {
+        Object.defineProperty(parsed.rows.at(-1), field, {
+          get() { throw new Error('excluded execution evidence accessed'); },
+        });
+      }
+    }
+    return parsed;
+  };
+  try {
+    const before = read(w.options.report);
+    const result = liveCohort(w.options);
+    assert.equal(result.retained_binary_decisions, 20);
+    assert.deepEqual(read(w.options.report), before);
+  } finally { JSON.parse = parse; }
 });
 
 test('saved summary, retrospective decisions and incomplete or conflicting receipts never count', (t) => {
