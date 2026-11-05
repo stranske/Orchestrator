@@ -22,6 +22,113 @@ function run(command, args, options = {}) {
   });
 }
 
+test('hosted pass number counts only switches strictly after deployment without writing the Brain',
+  async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hosted-pass-number-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const database = path.join(root, 'Brain #?.db');
+    const state = path.join(root, 'state');
+    const env = { ...process.env, PYTHONPATH: modules, PYTHONDONTWRITEBYTECODE: '1',
+      ORCH_STATE_DIR: state, ORCH_FEEDBACK_DB: database };
+    const initialized = await run(process.env.PYTHON || 'python3', ['-c', `
+import sqlite3
+import sys
+from pathlib import Path
+import route_weights_export as export
+deploy = export.HOSTED_EXPLORATION_PASS_CHECK_TS - 14 * 86400
+export.record_hosted_exploration_deploy(
+    {"exploration": {"challengers": {"implement": "cursor"}}},
+    Path(sys.argv[2]), now=deploy)
+with sqlite3.connect(sys.argv[1]) as connection:
+    connection.execute("CREATE TABLE agent_switches "
+                       "(switched_ts INTEGER, source TEXT, delegation_source TEXT)")
+    connection.executemany("INSERT INTO agent_switches VALUES (?, ?, ?)", [
+        (deploy - 1, "policy", "route_weights_exploration"),
+        (deploy, "policy", "route_weights_exploration"),
+        (deploy + 1, "policy", "route_weights_exploration"),
+        (deploy + 2, "label", "route_weights_exploration"),
+        (deploy + 3, "policy", "route_weights_exploration"),
+        (deploy + 4, "route_weights_exploration", "route_weights"),
+    ])
+`, database, state], { cwd: repo, env });
+    assert.equal(initialized.status, 0, initialized.stderr);
+
+    async function grade(offset, expectedStatus, expectedCount) {
+      const before = fs.readFileSync(database);
+      const stampPath = path.join(state, 'hosted-exploration-deploy.json');
+      const stampBefore = fs.readFileSync(stampPath);
+      const result = await run(process.env.PYTHON || 'python3', ['-c', `
+import json
+import sys
+import route_weights_export as export
+print(json.dumps(export.hosted_exploration_pass_number(
+    now=export.HOSTED_EXPLORATION_PASS_CHECK_TS + int(sys.argv[1]))))
+`, String(offset)], { cwd: repo, env });
+      assert.equal(result.status, 0, result.stderr);
+      const report = JSON.parse(result.stdout);
+      assert.equal(report.status, expectedStatus);
+      assert.equal(report.switches, expectedCount);
+      assert.equal(report.min_switches, 4);
+      assert.equal(report.deploy_ts, JSON.parse(stampBefore).deploy_ts);
+      assert.deepEqual(fs.readFileSync(database), before, 'grading must keep the Brain read-only');
+      assert.deepEqual(fs.readFileSync(stampPath), stampBefore, 'grading must retain deployment time');
+      assert.deepEqual(fs.readdirSync(root).sort(), ['Brain #?.db', 'state']);
+      assert.deepEqual(fs.readdirSync(state), ['hosted-exploration-deploy.json']);
+    }
+
+    await grade(-1, 'pending', 3);
+    await grade(0, 'fail', 3);
+    const switched = await run(process.env.PYTHON || 'python3', ['-c', `
+import sqlite3
+import sys
+import route_weights_export as export
+with sqlite3.connect(sys.argv[1]) as connection:
+    connection.execute("INSERT INTO agent_switches VALUES (?, ?, ?)",
+                       (export.HOSTED_EXPLORATION_PASS_CHECK_TS - 1,
+                        "policy", "route_weights_exploration"))
+`, database], { cwd: repo, env });
+    assert.equal(switched.status, 0, switched.stderr);
+    await grade(-1, 'pending', 4);
+    await grade(0, 'pass', 4);
+  });
+
+for (const source of ['missing', 'corrupt', 'missing-switches-table']) {
+  test(`hosted pass number reports ${source} Brain as unmeasured without creating or repairing it`,
+    async (t) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hosted-pass-unmeasured-'));
+      t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+      const database = path.join(root, 'Brain #?.db');
+      const env = { ...process.env, PYTHONPATH: modules, PYTHONDONTWRITEBYTECODE: '1',
+        ORCH_STATE_DIR: path.join(root, 'absent-state'), ORCH_FEEDBACK_DB: database };
+      if (source === 'corrupt') fs.writeFileSync(database, 'not a SQLite database\n');
+      if (source === 'missing-switches-table') {
+        const initialized = await run(process.env.PYTHON || 'python3', ['-c', `
+import sqlite3
+import sys
+with sqlite3.connect(sys.argv[1]) as connection:
+    connection.execute("CREATE TABLE unrelated (value INTEGER)")
+`, database], { cwd: repo, env });
+        assert.equal(initialized.status, 0, initialized.stderr);
+      }
+      const before = source === 'missing' ? null : fs.readFileSync(database);
+      const result = await run(process.env.PYTHON || 'python3', ['-c', `
+import json
+import route_weights_export as export
+print(json.dumps(export.hosted_exploration_pass_number(
+    deploy_ts=export.HOSTED_EXPLORATION_PASS_CHECK_TS - 14 * 86400,
+    now=export.HOSTED_EXPLORATION_PASS_CHECK_TS)))
+`], { cwd: repo, env });
+      assert.equal(result.status, 0, result.stderr);
+      const report = JSON.parse(result.stdout);
+      assert.equal(report.status, 'unmeasured');
+      assert.equal(report.switches, null);
+      assert.match(report.reason, /unreadable/);
+      if (before === null) assert.equal(fs.existsSync(database), false);
+      else assert.deepEqual(fs.readFileSync(database), before);
+      assert.deepEqual(fs.readdirSync(root), before === null ? [] : ['Brain #?.db']);
+    });
+}
+
 // Exercise argument parsing, the real process exit, and stderr without pytest
 // fixtures. A Git tripwire proves that refusal precedes publication activity.
 for (const source of ['missing', 'empty', 'wrong-db', 'empty-table', 'below-threshold']) {
