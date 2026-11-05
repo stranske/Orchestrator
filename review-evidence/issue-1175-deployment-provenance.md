@@ -112,3 +112,35 @@ and ready for review before this round's attempted metadata mutations.
 The checkout's `.git` remains read-only. This round's JavaScript test and evidence
 are committed in `/tmp/orchestrator-1175-report-edges`, with a handoff patch at
 `/tmp/orchestrator-1175-report-edges.patch`; the main working tree retains the edits.
+
+## Recorder CLI recovery verification (2026-11-05)
+
+Added an end-to-end case to `tests/test_route_weights_export_cli.js` that uses
+the real provisioning, Git fetch/push, `publish_document`, and recorder CLI with
+a temporary bare remote. It rejects an unmarked publication, publishes the real
+filter contract, and forces receipt creation to fail by placing a directory at
+the atomic-write path. The CLI returns failure without a receipt or traceback,
+while the successfully published commit remains on the remote. After removing
+the obstruction, an unchanged `publish_document` call and recorder CLI retry
+recover the original audit timestamp and commit. Repeating the CLI preserves
+both receipt bytes and modification time without republishing. No I/O or
+publication functions are mocked; the feedback database remains absent and the
+isolated home directory stays empty.
+
+This is fixture verification, not production deployment evidence. No additional
+task checkbox is complete. The production database is absent, and the observation
+must still wait until both 2026-11-08 and fourteen days after verified deployment.
+The required Anaconda interpreter is absent; the available Python also lacks
+pytest, so the named pytest acceptance check remains unverified. No Python files
+were changed in this round.
+
+Verification: the CLI suite passed all 24 tests; the deployment unittest suite
+passed all 15 tests; `node --check tests/test_route_weights_export_cli.js` and
+`git diff --check` passed. PR #1176 was confirmed open and ready for review.
+
+Attempts to add `needs-human` and post the blocker comment were rejected with
+`MCP tool call requires approval, but approval policy is never`. Remote metadata
+therefore remains unchanged. The checkout's read-only `.git` also prevents a
+local commit; the tested edits are retained in the working tree and committed in
+`/tmp/orchestrator-1175-cli-recovery`, with a handoff patch at
+`/tmp/orchestrator-1175-cli-recovery.patch`.

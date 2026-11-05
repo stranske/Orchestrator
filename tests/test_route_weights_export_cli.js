@@ -43,6 +43,132 @@ const invalidProvenance = [
   ['blank audit evidence', { ...validProvenance, deployment_evidence: '  ' }, /deployment_evidence/],
 ];
 
+test('deployment CLI recovers a failed receipt write after an unchanged real publication', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'route-deployment-recovery-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const home = path.join(root, 'home');
+  const state = path.join(root, 'state');
+  const remote = path.join(root, 'remote.git');
+  const repositories = path.join(root, 'repos');
+  const checkout = path.join(repositories, 'stranske__Orchestrator');
+  const database = path.join(root, 'absent.db');
+  const audit = path.join(root, 'audit.json');
+  const receipt = path.join(state, 'route-weights-challenger-deployment.json');
+  for (const directory of [home, state, repositories]) fs.mkdirSync(directory);
+  const env = {
+    PATH: process.env.PATH,
+    HOME: home,
+    PYTHONPATH: modules,
+    PYTHONDONTWRITEBYTECODE: '1',
+    ORCH_STATE_DIR: state,
+    ORCH_LOCAL_RUNTIME: path.join(root, 'runtime'),
+    ORCH_REPOS_DIR: repositories,
+    ORCH_FEEDBACK_DB: database,
+    ORCH_CAPABILITIES_PATH: path.join(root, 'capabilities.json'),
+    HANDOFF_DIR: path.join(root, 'handoff'),
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_AUTHOR_NAME: 'Deployment Test',
+    GIT_AUTHOR_EMAIL: 'deploy@example.invalid',
+    GIT_COMMITTER_NAME: 'Deployment Test',
+    GIT_COMMITTER_EMAIL: 'deploy@example.invalid',
+  };
+  async function git(directory, ...args) {
+    const result = await run('git', ['-C', directory, ...args], { env });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  }
+  const python = process.env.PYTHON || 'python3';
+  const branch = 'exports/route-weights';
+  const artifact = path.join(checkout, 'config', 'route-weights.json');
+  await git(root, 'init', '--bare', '--initial-branch=main', remote);
+  await git(root, 'clone', remote, checkout);
+  const document = {
+    generated_at: new Date(Date.now() - 3600000).toISOString().replace(/\.\d{3}Z$/, 'Z'),
+    source_version: 1,
+    task_types: { implement: { evidence_ok: true } },
+  };
+  fs.mkdirSync(path.dirname(artifact), { recursive: true });
+  fs.writeFileSync(artifact, JSON.stringify(document));
+  await git(checkout, 'add', '.');
+  await git(checkout, 'commit', '-m', 'unmarked publication fixture');
+  await git(checkout, 'push', 'origin', `HEAD:${branch}`);
+  const initial = await git(remote, 'rev-parse', branch);
+  const provenance = {
+    published_commit: initial,
+    deployed_at: new Date(Date.now() - 1800000).toISOString().replace(/\.\d{3}Z$/, 'Z'),
+    deployment_evidence: 'fixture-publication-audit/successful-push',
+  };
+  const record = () => run(python, [
+    path.join(modules, 'route_weights_export.py'),
+    '--record-challenger-deployment', audit, '--state-dir', state,
+  ], { cwd: root, env });
+  fs.writeFileSync(audit, JSON.stringify(provenance));
+  const unmarked = await record();
+  assert.equal(unmarked.status, 1, unmarked.stderr);
+  assert.match(unmarked.stderr, /first verified challenger-filter publication/);
+  assert.equal(fs.existsSync(receipt), false);
+
+  // Build the real filter contract, then exercise publish_document and provisioning
+  // against the isolated bare remote. Neither publication nor recording is mocked.
+  const publish = () => run(python, ['-c', `
+import json
+import sys
+from pathlib import Path
+import route_weights_export as export
+document = json.loads(sys.argv[1])
+document["exploration"] = export._exploration_block(
+    1,
+    {task: [] for task in export.CONSUMER_TASK_TYPES},
+    {task: {"ranking": []} for task in export.CONSUMER_TASK_TYPES},
+    100,
+)
+published = export.publish_document(document, state_dir=Path(sys.argv[2]))
+print("publication_result=" + str(published))
+`, JSON.stringify(document), state], { cwd: root, env });
+  const published = await publish();
+  assert.equal(published.status, 0, published.stderr);
+  assert.match(published.stdout, /publication_result=True/);
+  provenance.published_commit = await git(remote, 'rev-parse', branch);
+  assert.notEqual(provenance.published_commit, initial);
+  fs.writeFileSync(audit, JSON.stringify(provenance));
+
+  // A directory at the atomic-write path causes an actual filesystem failure,
+  // including when running as root, without changing permissions or mocking I/O.
+  const blockedWrite = path.join(state, `.${path.basename(receipt)}.tmp`);
+  fs.mkdirSync(blockedWrite);
+  const failed = await record();
+  assert.equal(failed.status, 1, failed.stderr);
+  assert.equal(failed.stdout, '');
+  assert.match(failed.stderr, /deployment provenance refused:.*[Ii]s a directory/);
+  assert.doesNotMatch(failed.stderr, /Traceback/);
+  assert.equal(fs.existsSync(receipt), false);
+  assert.equal(await git(remote, 'rev-parse', branch), provenance.published_commit);
+  fs.rmdirSync(blockedWrite);
+
+  const unchanged = await publish();
+  assert.equal(unchanged.status, 0, unchanged.stderr);
+  assert.match(unchanged.stdout, /publication_result=False/);
+  const recovered = await record();
+  assert.equal(recovered.status, 0, recovered.stderr);
+  const recorded = JSON.parse(recovered.stdout);
+  assert.equal(recorded.published_commit, provenance.published_commit);
+  assert.equal(recorded.deployed_at, provenance.deployed_at);
+  assert.equal(recorded.deployed_epoch, Date.parse(provenance.deployed_at) / 1000);
+  assert.equal(recorded.deployment_evidence, provenance.deployment_evidence);
+  assert.equal(recorded.generated_at, document.generated_at);
+  assert.deepEqual(JSON.parse(fs.readFileSync(receipt, 'utf8')), recorded);
+  const before = fs.readFileSync(receipt);
+  const modified = fs.statSync(receipt, { bigint: true }).mtimeNs;
+  const repeated = await record();
+  assert.equal(repeated.status, 0, repeated.stderr);
+  assert.deepEqual(JSON.parse(repeated.stdout), recorded);
+  assert.deepEqual(fs.readFileSync(receipt), before);
+  assert.equal(fs.statSync(receipt, { bigint: true }).mtimeNs, modified);
+  assert.equal(await git(remote, 'rev-parse', branch), provenance.published_commit);
+  assert.equal(fs.existsSync(database), false, 'publication must not create a feedback database');
+  assert.deepEqual(fs.readdirSync(home), [], 'the live state fallback must stay unused');
+});
+
 for (const [name, provenance, diagnostic] of invalidProvenance) {
   test(`deployment provenance CLI refuses ${name} without side effects`, async (t) => {
     const interpreter = await run(process.env.PYTHON || 'python3', ['-c',
