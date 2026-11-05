@@ -460,7 +460,7 @@ CONSUMER_ACTS_ENFORCED_FROM = (
 CONSUMER_GRACE_SECONDS = 14 * 86400
 REQUIREMENT_ENFORCED_FROM["consumer_acts"] = CONSUMER_ACTS_ENFORCED_FROM
 CONSUMER_TOKEN_RE = re.compile(
-    r"([A-Za-z0-9_][A-Za-z0-9_./-]*\.(?:py|sh)):([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)"
+    r"([A-Za-z0-9_./-][A-Za-z0-9_./-]*\.(?:py|sh)):([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)"
 )
 CONSUMER_CLASSES = (
     "acting",
