@@ -228,6 +228,33 @@ def test_break_transcript_quotes_invalid_demonstration_and_safe_fence():
     assert "All 1 candidate nodes fail" in transcript
 
 
+def test_overlay_helpers_cover_absent_and_invalid_proof_shapes(monkeypatch, tmp_path):
+    """The reporter must not call a missing red run or empty overlay a valid proof."""
+    assert local_verify.uncopied_test_paths({"test_paths": ["tests/a.py"]}) == []
+    assert not local_verify._path_covered("tests/a.py", ["", "src"])
+    assert not local_verify.overlay_covers_every_change({"red": {}})
+    assert not local_verify.overlay_covers_every_change(
+        {"red": {"returncode": 1}, "changed_paths": None, "copied_test_paths": []}
+    )
+    monkeypatch.setattr(
+        local_verify,
+        "_run_argv",
+        lambda *_a, **_k: ({"returncode": 5}, ""),
+    )
+    empty = local_verify._analyse_nodes(tmp_path, "pytest", ["tests/a.py"], 7)
+    assert empty["verdict"] == "INDETERMINATE" and "collected no tests" in empty["reason"]
+    transcript = local_verify.break_transcript(
+        {
+            "error": "archive failed",
+            "base_ref": "main",
+            "worktree": "/w",
+            "green": None,
+            "red": None,
+        }
+    )
+    assert "could not complete" in transcript and "(the run did not happen)" in transcript
+
+
 def test_changed_paths_and_candidate_copy_handle_rename_and_directories(monkeypatch, tmp_path):
     worktree = tmp_path / "worktree"
     worktree.mkdir()
