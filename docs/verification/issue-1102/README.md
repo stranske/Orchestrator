@@ -218,3 +218,34 @@ Checked 2026-11-05. Every broken run exited 1. Every restored rerun exited 0.
 | `test_advisor_tests_use_temporary_runtime_roots_and_captured_defaults` | require state and runtime to be the same directory | exit 1, `assert .../state == .../runtime` | exit 0 |
 | `test_fresh_import_binds_temporary_roots_then_restores_the_process` | require the fresh ledger path to sit outside the temporary runtime | exit 1, `assert not True` | exit 0 |
 | `test_changed_files_record_matches_the_suite` | look for a heading the record does not contain | exit 1, `assert '## Missing heading' in` the report | exit 0 |
+
+## External-operation guard
+
+Checked 2026-11-05. PR #1082's guard is the audit hook in the merged closer repair: it records an attempt, then raises, and the per-test fixture fails if the record is still there after the test. Python cannot remove an audit hook, so that proposal cannot show the process callables restored. `tests/advisor_external_guard.py` keeps the record-before-raise behavior and the alias coverage of the hook. The hook returns immediately while no guard is on the stack. `subprocess.Popen`, `subprocess.run`, the other subprocess helpers, `os.system`, and the socket and `urlopen` entry points are patched on a private `MonkeyPatch`. Closing the guard restores those callables and then fails if an unexpected attempt remains, including an attempt whose `ExternalOperation` the caller caught. Attempts inside `expected()` are self-checks. `urllib.Request` is not adopted: CPython emits it when a `Request` object is constructed, before any connection. `test_advisor_hermetic.py` is outside the suite because it starts a real interpreter.
+
+The suite fixture is `advisor_external_guard` in `tests/conftest.py`. The local process and socket patches in the advisor tests were removed so they cannot shadow it.
+
+Command:
+
+`python3 -m pytest -q tests/test_advisor_external_guard.py tests/test_capability_advisor_coverage.py tests/test_capability_advisor_cli_context.py tests/test_capability_advisor_selftest_regressions.py tests/test_capability_advisor_auto_decline.py tests/test_capability_advisor_reach.py tests/test_advisor_failure_boundaries.py tests/test_advisor_hermetic.py tests/test_advisor_live_rows.py tests/test_advisor_ranking_failure.py -m "not slow" --tb=line`
+
+Result: 95 passed, 5 subtests passed, in 5.33s. The run printed `external-operation attempts: 0 unexpected`.
+
+## Deliberate breaks for the guard self-checks
+
+Each break was applied only in `tests/test_advisor_external_guard.py`, then the file was restored to its original bytes. The command for every row was:
+
+`python3 -m pytest -q tests/test_advisor_external_guard.py -m "not slow" --tb=line -k <test>`
+
+Checked 2026-11-05. Every broken run exited 1. Every restored rerun exited 0.
+
+| Test | Break | Failing result | Restored result |
+| --- | --- | --- | --- |
+| `test_guard_scope_is_the_capability_advisor_suite` | treat `test_advisor_hermetic.py` as in the guard suite | exit 1, `assert False` | exit 0 |
+| `test_suite_guard_patches_the_import_time_entry_points` | require the saved `Popen` not to be the import-time callable | exit 1, `assert <class 'subprocess.Popen'> is not _REAL_POPEN` | exit 0 |
+| `test_process_and_network_operations_are_blocked_and_recorded` | require the patch record to say `audit` | exit 1, `assert 'patch' == 'audit'` | exit 0 |
+| `test_expected_self_checks_are_not_unexpected_attempts` | require the self-check attempt to be unexpected | exit 1, `assert True is False` | exit 0 |
+| `test_swallowed_attempt_fails_through_the_record_while_expected_attempts_do_not` | expect the swallowed failure to name `subprocess.Popen` | exit 1, pytest regex mismatch, message still names `subprocess.run` | exit 0 |
+| `test_prebound_popen_records_via_the_audit_hook_before_starting` | require the pre-bound alias to record `via: patch` | exit 1, attempt dict diff (`audit` vs `patch`) | exit 0 |
+| `test_test_monkeypatch_undo_does_not_remove_the_guard` | require `undo()` to leave a different `Popen` | exit 1, `assert blocked is not blocked` | exit 0 |
+| `test_close_restores_patched_callables_and_disarms_the_audit_hook` | require `Popen` to stay patched after close | exit 1, `assert <class 'subprocess.Popen'> is not _REAL_POPEN` | exit 0 |
