@@ -1,0 +1,268 @@
+{
+  "schema_version": 1,
+  "ledger_sha256": "209a23339e2e6c538745fee0d7bd354f19f1452b2202c18cd81912f82879c3e2",
+  "audit_scope": "recovery_attribution_and_local_artifact_integrity",
+  "attribution_and_artifact_checks_passed": true,
+  "operational_acceptance_verified": false,
+  "external_references_authenticated": false,
+  "source_revision_bindings_verified": false,
+  "artifacts": [
+    {
+      "path": "historical-inventory.json",
+      "sha256": "76c494a94885bc8972f8c3594cce5cd86d0dc0700738be748ebf4dee433f2b2e"
+    },
+    {
+      "path": "checks.json",
+      "sha256": "05816252eda6b4f6090fba490c40b95a0be5879c71dff564c22c6e28cd708a0b"
+    },
+    {
+      "path": "named-tests.log",
+      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
+    },
+    {
+      "path": "retrospective-suite.log",
+      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
+    },
+    {
+      "path": "inventory-tests.log",
+      "sha256": "ed03419ab03622a5c0f206c7bf545cc0ebfc7c356208dbc2316917b6ff9a0d89"
+    },
+    {
+      "path": "adjudicator-selftest.log",
+      "sha256": "3f227862f8d1e7b2c35195efe7205621f73d3033db5a3ca88e1e7c24021e1109"
+    },
+    {
+      "path": "pre-dispatch-checks.json",
+      "sha256": "8092128f1df021cdcffcc8c71f57f6023e52d6c246e8f4f3ace52ddcad1339c9"
+    },
+    {
+      "path": "pre-dispatch-observation.json",
+      "sha256": "64a5cabcd1e8596edc149b88640af53ec177a424fc0d91de7f7ce69c5ac869ef"
+    },
+    {
+      "path": "pre-dispatch-inventory-tests.log",
+      "sha256": "4fb63c981a296c529f43135d6978d1c13f07f50744e825a2e6a7aad1020e6389"
+    },
+    {
+      "path": "pre-dispatch-named-tests.log",
+      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
+    },
+    {
+      "path": "pre-dispatch-retrospective-suite.log",
+      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
+    },
+    {
+      "path": "pre-dispatch-adjudicator-selftest.log",
+      "sha256": "3f227862f8d1e7b2c35195efe7205621f73d3033db5a3ca88e1e7c24021e1109"
+    },
+    {
+      "path": "pre-dispatch-evidence-tests.log",
+      "sha256": "f554d9e1907fbaae8b4ee178cdba6800fa893149d1e3874f2495b84a304c9007"
+    },
+    {
+      "path": "acceptance-run/checks.json",
+      "sha256": "565025a768386e09934c9edb06830f52def9ce022b7e393b337f9d5497dbfcba"
+    },
+    {
+      "path": "acceptance-run/named-tests.log",
+      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
+    },
+    {
+      "path": "acceptance-run/retrospective-suite.log",
+      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
+    },
+    {
+      "path": "acceptance-run/runner-validation.json",
+      "sha256": "7841392b8a4de5d1bdeded2c2dc53133b2e0e6c59e9d7a4a4e9fe67f1f6a8a49"
+    },
+    {
+      "path": "acceptance-run/runner-tests.log",
+      "sha256": "aa2704887818edeadc0807135cdec575ea7d3b8020426c2c12adb9ee549ed890"
+    },
+    {
+      "path": "acceptance-run/inventory-tests.log",
+      "sha256": "601a69001b966f0d629439f87f7b8e2b2b775e4db20fe526c70774be676d85b9"
+    },
+    {
+      "path": "suite-completeness-run/checks.json",
+      "sha256": "ea088007c9611735fd5f08a72fa421a1f43d8750fbe2e4a9be6abef85103dd57"
+    },
+    {
+      "path": "suite-completeness-run/named-tests.log",
+      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
+    },
+    {
+      "path": "suite-completeness-run/retrospective-suite.log",
+      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
+    },
+    {
+      "path": "suite-completeness-run/collection.log",
+      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
+    },
+    {
+      "path": "suite-completeness-run/runner-validation.json",
+      "sha256": "de7b3a093450b23822742ffc8507214b9373732e86d9ff31b7dd6d78c871182a"
+    },
+    {
+      "path": "suite-completeness-run/runner-tests.log",
+      "sha256": "3cc75fe7aa2e6cc3964eaeeb032f50170839b9843e71f53699b9489107daf502"
+    },
+    {
+      "path": "interpreter-followup/acceptance-run/checks.json",
+      "sha256": "ac206b01d063840618204cc6e837c2a7a8ac68a6a84c6d089cae27a72aff8fe5"
+    },
+    {
+      "path": "interpreter-followup/acceptance-run/named-tests.log",
+      "sha256": "f0dbac0c2508ce31a001ff3f12403c192088997ec3c0bae870a337f703f90152"
+    },
+    {
+      "path": "interpreter-followup/acceptance-run/retrospective-suite.log",
+      "sha256": "f0dbac0c2508ce31a001ff3f12403c192088997ec3c0bae870a337f703f90152"
+    },
+    {
+      "path": "interpreter-followup/acceptance-run/collection.log",
+      "sha256": "f0dbac0c2508ce31a001ff3f12403c192088997ec3c0bae870a337f703f90152"
+    },
+    {
+      "path": "interpreter-followup/validation.json",
+      "sha256": "e8c26e6cd8f44e0efe4dd337ca3ea222a56efd0eda4cdcd1000078034cffae17"
+    },
+    {
+      "path": "interpreter-followup/runner-before.log",
+      "sha256": "9e4e49f09dd87eaf38593f93cc9db74dadc1100950090a665ed33b373e55c222"
+    },
+    {
+      "path": "interpreter-followup/runner-after.log",
+      "sha256": "e93ec3a61ab3bcd22d90cef6766e8a9f5628aa539262fca9c283c38a8eff460e"
+    },
+    {
+      "path": "interpreter-followup/inventory.log",
+      "sha256": "33c5929820fd97d8c37bef0317d1991f2d4b9b548492c1e2feaee4b23ed3ab1f"
+    },
+    {
+      "path": "ledger-audit-tests/checks.json",
+      "sha256": "d725c97b9ed48f4092ae90209389732fb21d0c783de0d5c17fe19518df6f8612"
+    },
+    {
+      "path": "ledger-audit-tests/named-tests.log",
+      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
+    },
+    {
+      "path": "ledger-audit-tests/retrospective-suite.log",
+      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
+    },
+    {
+      "path": "ledger-audit-tests/collection.log",
+      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
+    },
+    {
+      "path": "ledger-audit/validation.json",
+      "sha256": "4f87713cb004e479b4a2637368cf9eba1a4a3b013f7400d03b4e7c383194d91b"
+    },
+    {
+      "path": "ledger-audit/ledger-tests.log",
+      "sha256": "59c5b1e47bd0aad737fe781d9c99876f263214771c6c1349ce6d9e8fcf135d7d"
+    },
+    {
+      "path": "ledger-audit/runner-tests.log",
+      "sha256": "2090b3cb904438679be4851c7cb83b46e28b4262b3eb6dd63df609a9d6d4b177"
+    },
+    {
+      "path": "ledger-audit/inventory-tests.log",
+      "sha256": "a7a4da16604b151003196e81589efc75805395dde38f887f25f670524d95f85d"
+    },
+    {
+      "path": "retry-manifest-followup/acceptance-run/checks.json",
+      "sha256": "4a785fa6ef2640f8d4186977b8e4a974119bea645e68783066c5e6c5b1ec7cba"
+    },
+    {
+      "path": "retry-manifest-followup/acceptance-run/named-tests.log",
+      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
+    },
+    {
+      "path": "retry-manifest-followup/acceptance-run/retrospective-suite.log",
+      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
+    },
+    {
+      "path": "retry-manifest-followup/acceptance-run/collection.log",
+      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
+    },
+    {
+      "path": "retry-manifest-followup/validation.json",
+      "sha256": "07a889e3d1fcfdf53afdccd96178bf8b0476a2a35e6c9998363fb1cb093cc6b0"
+    },
+    {
+      "path": "retry-manifest-followup/inventory-tests.log",
+      "sha256": "7f6b2dfbb09e1b4a876e51d0aa21d8ddd4165ba3eea0f5ff20607b9027e8904e"
+    },
+    {
+      "path": "retry-manifest-followup/runner-tests.log",
+      "sha256": "00233874760733193b2e2e89d05c85cfae619714933e51f45707255bb5b8f0f1"
+    },
+    {
+      "path": "retry-manifest-followup/ledger-tests.log",
+      "sha256": "6e97b661615b98a3fca0cc5288237b7010cfdcbd0da121e24d796e085e9b9d76"
+    }
+  ],
+  "external_references": [
+    {
+      "category": "historical_observations",
+      "reference": "dropbox:id:tDSHdCztYNUAAAAAADfgrw@65de8f715bb690369d613",
+      "authenticated_by_audit": false
+    },
+    {
+      "category": "historical_observations",
+      "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6229128915",
+      "authenticated_by_audit": false
+    },
+    {
+      "category": "historical_observations",
+      "reference": "https://github.com/stranske/Orchestrator/issues/575#issuecomment-6251544073",
+      "authenticated_by_audit": false
+    },
+    {
+      "category": "historical_observations",
+      "reference": "https://github.com/stranske/Orchestrator/issues/575#issuecomment-6344712055",
+      "authenticated_by_audit": false
+    },
+    {
+      "category": "mirror_synchronization",
+      "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6205949903",
+      "authenticated_by_audit": false
+    },
+    {
+      "category": "mirror_synchronization",
+      "reference": "https://github.com/stranske/Orchestrator/issues/575#issuecomment-6251544073",
+      "authenticated_by_audit": false
+    },
+    {
+      "category": "dispatch_receipts",
+      "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6168601695",
+      "authenticated_by_audit": false
+    },
+    {
+      "category": "dispatch_receipts",
+      "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6205949903",
+      "authenticated_by_audit": false
+    },
+    {
+      "category": "dispatch_receipts",
+      "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6217948095",
+      "authenticated_by_audit": false
+    },
+    {
+      "category": "dispatch_receipts",
+      "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6229128915",
+      "authenticated_by_audit": false
+    }
+  ],
+  "missing_evidence": [
+    "Current accepted source/deployed/mirror byte bindings",
+    "Immutable native source report matching 8a6649a27bb5ee05001cc580691a98aa26404f0f3a0c85d845ada9e6046a069c",
+    "Canonical publication bytes and native journal/qualification manifests",
+    "Identity-bound original requested 21 retry rows and outcomes",
+    "Raw authenticated October 18 acceptance proof (a dated scheduled observation was recovered)",
+    "Previously fixed next-20 manifest and at least 15 dated decisions",
+    "Current live writer ownership"
+  ]
+}

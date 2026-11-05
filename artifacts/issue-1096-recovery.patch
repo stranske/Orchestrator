@@ -1,0 +1,1713 @@
+From 0be242f2f2fbfa533741f7665fbcd215836d1d0c Mon Sep 17 00:00:00 2001
+From: Codex <codex@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 18:39:09 +0000
+Subject: [PATCH] feat(adjudicator): recover retained report inventory and
+ dated evidence
+
+---
+ .../issue-1096-recovery/README.md             |  90 ++
+ .../adjudicator-selftest.log                  |   1 +
+ .../issue-1096-recovery/checks.json           |  69 ++
+ .../issue-1096-recovery/evidence-ledger.json  | 205 ++++
+ .../historical-inventory.json                 | 938 ++++++++++++++++++
+ .../issue-1096-recovery/inventory-tests.log   |  40 +
+ .../issue-1096-recovery/named-tests.log       |   1 +
+ .../retrospective-suite.log                   |   1 +
+ scripts/export_adjudicator_inventory.js       | 111 ++-
+ tests/test_adjudicator_inventory.js           | 121 ++-
+ 10 files changed, 1573 insertions(+), 4 deletions(-)
+ create mode 100644 docs/verification/issue-1096-recovery/README.md
+ create mode 100644 docs/verification/issue-1096-recovery/adjudicator-selftest.log
+ create mode 100644 docs/verification/issue-1096-recovery/checks.json
+ create mode 100644 docs/verification/issue-1096-recovery/evidence-ledger.json
+ create mode 100644 docs/verification/issue-1096-recovery/historical-inventory.json
+ create mode 100644 docs/verification/issue-1096-recovery/inventory-tests.log
+ create mode 100644 docs/verification/issue-1096-recovery/named-tests.log
+ create mode 100644 docs/verification/issue-1096-recovery/retrospective-suite.log
+
+diff --git a/docs/verification/issue-1096-recovery/README.md b/docs/verification/issue-1096-recovery/README.md
+new file mode 100644
+index 0000000..bc34634
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/README.md
+@@ -0,0 +1,90 @@
++# Acceptance evidence recovery for #1096
++
++The first task is advanced, not complete. Current deployed/mirror revisions,
++the immutable native source and journal, live writer ownership, and the previously
++fixed next-20 manifest have not been recovered. Do not replace that manifest with
++a newly selected cohort. No production dispatch or publication is authorized by
++this inventory.
++
++## Recorded before the real-input inventory
++
++Check date: 2026-11-03 UTC. Selected repository interpreter:
++`/opt/hostedtoolcache/Python/3.14.9/x64/bin/python` (the CI major/minor).
++Local checkout: `27fa292335fcb3da15f203ab37ae1004d5cd2db2`. This is the
++implementation/test source under inspection, not an accepted deployment claim.
++
++Recovered input: Dropbox file `id:tDSHdCztYNUAAAAAADfgrw`, revision
++`65de8f715bb690369d613`, at
++`/Learning/Code/Audits/Orchestrator/2026-10-15-w2-followups/regrade/adjudicator-retro-BEFORE-2026-10-15T2256Z.json`.
++It was fetched through the connected Dropbox text extractor into a private local
++temporary file. Its file metadata records 2,386,539 bytes. The local file hash
++binds the extracted text; extraction does not establish original byte identity.
++The private report contains provider material and is not committed here.
++
++Command to execute once, with the measured UTC UNIX time replacing CHECK_TIME:
++
++```sh
++node scripts/export_adjudicator_inventory.js \
++  --report /tmp/issue-1096-recovered-historical-report.json \
++  --observed-at CHECK_TIME \
++  --evidence-class historical_snapshot \
++  --evidence-reference 'dropbox:id:tDSHdCztYNUAAAAAADfgrw@65de8f715bb690369d613'
++```
++
++Expected result: 58 retained rows in saved order, 38 unique recursive paid
++identities, retained population 40 and retained graded 0. The disagreement
++between population and rows must remain visible. This snapshot is dated by its
++own `generated_at`, separately from the October 15 backup and November 3 recovery.
++It cannot establish which 40 cases formed the initially requested cohort.
++
++Bounded stop rule: one local read-only inventory, no provider invocation, Brain
++read, native journal initialization, canonical overwrite, or mirror write. Stop
++on malformed/duplicate case identities or changing input. Missing production
++artifacts remain unavailable. A successful inventory is not operational acceptance.
++
++The requested `--dispatch --retry --limit 21` is not executed: the retained
++canonical publication requires the existing authenticated native admission and
++publication path, its immutable source/journal/qualification manifests, fresh
++independent truth, and reconciliation with the live writer. Neither an old
++completion note nor this runner's empty runtime directory proves current writer
++ownership. No new paid attempt is justified from this snapshot alone.
++
++## Observed result and remaining gaps
++
++The one real-input inventory matched the expectations above. Its output is in
++`historical-inventory.json`; `evidence-ledger.json` separates recovered historical
++observations, this run's observations, historical mirror synchronization, and
++historical dispatch references. Raw native authentication receipts are still
++unavailable. The local extracted file is 2,386,541 bytes, two more than the remote
++file metadata: its SHA-256 binds local extracted text only.
++
++October 18 is **not wholly missing**. The dated
++[tracker observation](https://github.com/stranske/Orchestrator/issues/575#issuecomment-6251544073)
++and the connected capability-program audit record both report saved graded 1,
++generic in-memory recount graded 0, advice graded 2, and live graded 0. The raw
++Brain snapshot, native receipt authentication, and fixed next-20 membership
++proof for that date were not recovered. The generic recount does not replace
++the native canonical grade. The October 22 follow-up separately reports advice
++graded 4 against the still-stale saved advice count 2. Neither is graded >=25
++or >=29 evidence.
++
++The historical canonical publication reference is SHA-256
++`f4117a581b36e02925511fd70e6f8a6debda5ed073ab80b6301906eb29d7d56a`,
++with immutable source
++`8a6649a27bb5ee05001cc580691a98aa26404f0f3a0c85d845ada9e6046a069c`.
++That later source has 108 original paid identities plus two native ones according
++to its retained observation. It is not the earlier recovered snapshot with 38
++paid identities. Those counts must not be substituted for one another.
++
++Checks and source hashes are bound in `checks.json`. Inventory regressions and
++the existing Python module selftest pass. The four named pytest nodes and full
++retrospective suite both fail before collection because pytest is absent.
++Installing it was attempted and failed on blocked network name resolution.
++No Python files changed; the Python pre-commit Black condition does not apply.
++No acceptance checkbox is marked complete by these partial results.
++
++The runner refused normal staging with `.git/index.lock: Read-only file system`.
++The source, tests and receipts are committed using an isolated Git directory
++under `/tmp/issue-1096-review-commit`, with this checkout as its work tree and
++the exact checkout HEAD as parent. The accompanying format-patch is available
++at `artifacts/issue-1096-recovery.patch`. The automation branch itself is unchanged.
+diff --git a/docs/verification/issue-1096-recovery/adjudicator-selftest.log b/docs/verification/issue-1096-recovery/adjudicator-selftest.log
+new file mode 100644
+index 0000000..a005dd4
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/adjudicator-selftest.log
+@@ -0,0 +1 @@
++adjudicator_retro selftest: 23 checks passed
+diff --git a/docs/verification/issue-1096-recovery/checks.json b/docs/verification/issue-1096-recovery/checks.json
+new file mode 100644
+index 0000000..8127e0c
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/checks.json
+@@ -0,0 +1,69 @@
++{
++  "checked_at": "2026-11-03T18:37:07.185557+00:00",
++  "checkout_revision": "27fa292335fcb3da15f203ab37ae1004d5cd2db2",
++  "accepted_deployment_verified": false,
++  "interpreter": "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python",
++  "python_version": "3.14.9 (main, Oct 21 2026, 14:48:41) [GCC 15.2.0]",
++  "checks": [
++    {
++      "name": "named-tests",
++      "command": [
++        "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python",
++        "-m",
++        "pytest",
++        "-m",
++        "not slow",
++        "-q",
++        "tests/test_adjudicator_retro.py::test_build_packet_includes_diff_and_acceptance_criteria",
++        "tests/test_adjudicator_retro.py::test_adjudicator_validator_accepts_recommendation_prose",
++        "tests/test_adjudicator_retro.py::test_floor_still_demotes_a_metadata_only_packet",
++        "tests/test_adjudicator_retro.py::test_abstained_row_is_reattempted_when_the_packet_gains_diff_and_criteria"
++      ],
++      "exit_code": 1,
++      "log": "named-tests.log",
++      "log_sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "name": "retrospective-suite",
++      "command": [
++        "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python",
++        "-m",
++        "pytest",
++        "tests/test_adjudicator_retro.py",
++        "-m",
++        "not slow",
++        "-q"
++      ],
++      "exit_code": 1,
++      "log": "retrospective-suite.log",
++      "log_sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "name": "inventory-tests",
++      "command": [
++        "node",
++        "tests/test_adjudicator_inventory.js"
++      ],
++      "exit_code": 0,
++      "log": "inventory-tests.log",
++      "log_sha256": "ed03419ab03622a5c0f206c7bf545cc0ebfc7c356208dbc2316917b6ff9a0d89"
++    },
++    {
++      "name": "adjudicator-selftest",
++      "command": [
++        "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python",
++        "src/adjudicator_retro.py",
++        "--selftest"
++      ],
++      "exit_code": 0,
++      "log": "adjudicator-selftest.log",
++      "log_sha256": "3f227862f8d1e7b2c35195efe7205621f73d3033db5a3ca88e1e7c24021e1109"
++    }
++  ],
++  "source_sha256": {
++    "src/adjudicator_retro.py": "ee172f96ddf0ca56f6c06fcf18bdaacccece5381de61a9896006d0b16a8fb0b8",
++    "tests/test_adjudicator_retro.py": "b44fd6756915069d6a5dc492eecda268053a711899b81decc9d27f8c9793fda2",
++    "scripts/export_adjudicator_inventory.js": "1dc240099a3f25e0ef63af0984b8638ef5c6eabc08723376098385f439b56cc3",
++    "tests/test_adjudicator_inventory.js": "55992b7a2a06c6ba01c87879604757a8a47a955aa987cd0d95fd4fed289a5a43"
++  }
++}
+diff --git a/docs/verification/issue-1096-recovery/evidence-ledger.json b/docs/verification/issue-1096-recovery/evidence-ledger.json
+new file mode 100644
+index 0000000..f13f729
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/evidence-ledger.json
+@@ -0,0 +1,205 @@
++{
++  "schema_version": 1,
++  "checked_date": "2026-11-03",
++  "source_issue": "https://github.com/stranske/Orchestrator/issues/1096",
++  "acceptance_complete": false,
++  "revision_identity": {
++    "local_checkout": "27fa292335fcb3da15f203ab37ae1004d5cd2db2",
++    "accepted_source": {
++      "status": "unverified",
++      "historical_candidate_pr": "https://github.com/stranske/Orchestrator/pull/638",
++      "candidate_merge_sha": "1a6f5a7e0f08aa7b28a37dd56c7c53831c3bbce2",
++      "limitation": "Merged source is identifiable; current installed acceptance and byte identity are not observed."
++    },
++    "current_deployed_revision": {
++      "status": "unavailable"
++    },
++    "current_mirror_revision": {
++      "status": "unavailable"
++    },
++    "canonical_report": {
++      "status": "historical_reference_only",
++      "path": "~/.codex/orchestrator/capability-program/adjudicator-retro.json",
++      "historically_reported_sha256": "f4117a581b36e02925511fd70e6f8a6debda5ed073ab80b6301906eb29d7d56a",
++      "historically_reported_source_sha256": "8a6649a27bb5ee05001cc580691a98aa26404f0f3a0c85d845ada9e6046a069c",
++      "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6229128915"
++    }
++  },
++  "historical_observations": [
++    {
++      "date": "2026-10-14T12:27:14Z",
++      "class": "recovered_report_text",
++      "reference": "dropbox:id:tDSHdCztYNUAAAAAADfgrw@65de8f715bb690369d613",
++      "inventory": "historical-inventory.json",
++      "retained_population": 40,
++      "retained_rows": 58,
++      "retained_graded": 0,
++      "recursive_paid_records": 38,
++      "limitation": "This earlier backup is not the later immutable 58-case native source; no substitution is permitted."
++    },
++    {
++      "date": "2026-10-17",
++      "class": "retained_publication_observation",
++      "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6229128915",
++      "reported_graded": 1,
++      "reported_agree": 1,
++      "reported_original_paid_identities": 108,
++      "reported_native_paid_identities": 2,
++      "limitation": "Publication receipt described in the comment; journal and published bytes not recovered."
++    },
++    {
++      "date": "2026-10-18",
++      "class": "retained_scheduled_observation",
++      "reference": "https://github.com/stranske/Orchestrator/issues/575#issuecomment-6251544073",
++      "corroborating_audit_reference": "dropbox:id:tDSHdCztYNUAAAAAADaI7Q",
++      "saved_graded": 1,
++      "generic_in_memory_recount_graded": 0,
++      "advice_graded": 2,
++      "live_graded": 0,
++      "live_advised": 0,
++      "live_failed": 2,
++      "identified_live_failures": [
++        "stranske/Pension-Data#973",
++        "stranske/Inv-Man-Intake#1030"
++      ],
++      "limitation": "Dated observation recovered. Raw October 18 Brain snapshot, native authentication receipts and fixed next-20 membership proof remain unavailable. Generic recount is not native canonical regrading."
++    },
++    {
++      "date": "2026-10-22T15:35Z",
++      "class": "retained_read_only_recount",
++      "reference": "https://github.com/stranske/Orchestrator/issues/575#issuecomment-6344712055",
++      "corroborating_audit_reference": "dropbox:id:tDSHdCztYNUAAAAAADzH6A",
++      "saved_graded": 1,
++      "generic_in_memory_recount_graded": 0,
++      "saved_advice_graded": 2,
++      "recount_advice_graded": 4,
++      "independent_truth_checked_at": "2026-10-22T01:17:59Z",
++      "reported_truth": [
++        {
++          "target": "stranske/Orchestrator#587",
++          "truth": "FAIL"
++        },
++        {
++          "target": "stranske/Orchestrator#590",
++          "truth": "FAIL"
++        },
++        {
++          "target": "stranske/Orchestrator#589",
++          "truth": null
++        }
++      ],
++      "limitation": "Historical reported truth only; no fresh Brain query or authenticated native publication."
++    }
++  ],
++  "current_observations": {
++    "report_acquisition": {
++      "file_id": "id:tDSHdCztYNUAAAAAADfgrw",
++      "revision": "65de8f715bb690369d613",
++      "source_path": "/Learning/Code/Audits/Orchestrator/2026-10-15-w2-followups/regrade/adjudicator-retro-BEFORE-2026-10-15T2256Z.json",
++      "metadata_server_modified": "2026-10-15T22:56:59Z",
++      "metadata_size": 2386539,
++      "extracted_local_size": 2386541,
++      "extracted_local_sha256": "e55a63bd4f458d3c747f7d14321aa4fa81ed34731ab8add3bf6aba920ad262b1",
++      "byte_identity": "unverified; text-extractor output differs in size from source metadata",
++      "raw_report_committed": false
++    },
++    "checks": "checks.json",
++    "real_input_command_and_stop_rule": "README.md",
++    "production_runtime_paths_present": false,
++    "recovered_unmerged_work": [
++      {
++        "commit": "a7098f817130fd2b01e1b2a9dff929d4ecaace0a",
++        "content": "Python pre-dispatch inventory and 19 controls",
++        "status": "inspected, not accepted/deployed or applied by this run"
++      },
++      {
++        "commit": "f65e6525fe765e57d9fef5c50a95bd32d70903d1",
++        "content": "retained-row diagnostics",
++        "status": "inspected, not accepted/deployed or applied by this run"
++      }
++    ],
++    "prior_runner_artifact": {
++      "run_id": 41616434725,
++      "artifact_id": 13222981265,
++      "github_archive_sha256": "22e550142cdcbe9ba4829d4620b62e4f056f01d144673a46176b356e4e7e81ef",
++      "status": "GitHub artifact located; ZIP returned as remote file reference, not inspected locally"
++    }
++  },
++  "mirror_synchronization": [
++    {
++      "class": "historical_sync_observation",
++      "date": "2026-10-16",
++      "source_revision_abbreviated": "a84e363",
++      "generation": "d162b38b59a44334b07c107890fcaf5a",
++      "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6205949903"
++    },
++    {
++      "class": "historical_sync_observation",
++      "date": "2026-10-18",
++      "generation": "ef3f4323",
++      "source_module_revision_lower_bound_abbreviated": "6528dff",
++      "stale_source_clone_head_abbreviated": "8033646",
++      "reference": "https://github.com/stranske/Orchestrator/issues/575#issuecomment-6251544073",
++      "limitation": "Module comparison and generation reference only; no exact whole-tree revision proved."
++    },
++    {
++      "class": "current_sync_observation",
++      "status": "unavailable",
++      "writes_performed": 0
++    }
++  ],
++  "dispatch_receipts": {
++    "current_run": {
++      "provider_calls": 0,
++      "production_dispatches": 0,
++      "canonical_publications": 0,
++      "live_writer_ownership": "unverified; do not take over"
++    },
++    "historical_receipt_index": [
++      {
++        "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6168601695",
++        "requested_original_rows": 21,
++        "description": "One timeout, one stale merge-bound verifier, 19 failed-provider refusals; row-by-row retained artifacts referenced, not fully recovered."
++      },
++      {
++        "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6205949903",
++        "attempts": 27,
++        "dispatches": 27,
++        "graded": 0
++      },
++      {
++        "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6217948095",
++        "attempts": 11,
++        "dispatches": 11,
++        "graded": 0
++      },
++      {
++        "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6229128915",
++        "backend_run_id": "offload:codex:1792208003430286000",
++        "decision": "reject_blocker",
++        "native_case_target": "stranske/Orchestrator#478",
++        "limitation": "Reported receipt identity only, not a recovered authenticated journal row."
++      }
++    ]
++  },
++  "fixed_next_20": {
++    "status": "unavailable",
++    "manifest": null,
++    "verified_members_with_decisions": null,
++    "limitation": "Aggregate scheduled observations and named failed live cases do not establish fixed membership. No replacement cohort selected."
++  },
++  "grade_thresholds": {
++    "intermediate_graded_25": "not_verified",
++    "canonical_graded_29": "not_verified",
++    "advice_graded_is_substitute": false
++  },
++  "missing_evidence": [
++    "Current accepted source/deployed/mirror byte bindings",
++    "Immutable native source report matching 8a6649a27bb5ee05001cc580691a98aa26404f0f3a0c85d845ada9e6046a069c",
++    "Canonical publication bytes and native journal/qualification manifests",
++    "Identity-bound original requested 21 retry rows and outcomes",
++    "Raw authenticated October 18 acceptance proof (a dated scheduled observation was recovered)",
++    "Previously fixed next-20 manifest and at least 15 dated decisions",
++    "Current live writer ownership"
++  ]
++}
+diff --git a/docs/verification/issue-1096-recovery/historical-inventory.json b/docs/verification/issue-1096-recovery/historical-inventory.json
+new file mode 100644
+index 0000000..f3f1da4
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/historical-inventory.json
+@@ -0,0 +1,938 @@
++{
++  "schema_version": 1,
++  "scope": "retained_report_only",
++  "evidence_class": "historical_snapshot",
++  "evidence_reference": "dropbox:id:tDSHdCztYNUAAAAAADfgrw@65de8f715bb690369d613",
++  "observed_at": 1793730961,
++  "report_path": "/tmp/issue-1096-recovered-historical-report.json",
++  "report_sha256": "e55a63bd4f458d3c747f7d14321aa4fa81ed34731ab8add3bf6aba920ad262b1",
++  "report_byte_length": 2386541,
++  "retained_generated_at": 1791980834,
++  "retained_population": 40,
++  "retained_summary": {
++    "cases": 58,
++    "adjudicated": 0,
++    "proposed_decisions": 19,
++    "metadata_only_cases": 58,
++    "graded": 0,
++    "agree": 0,
++    "disagree": 0,
++    "agreement_rate": null,
++    "merge_rule_agreement_rate": null,
++    "cost_usd": null,
++    "cost_attempted_cases": 32,
++    "cost_imputed_cases": 32,
++    "cost_unmeasured_cases": 0,
++    "cost_scale": "list_price_usd",
++    "estimated_cost_usd": 17.034467099885187,
++    "cost_measured_cases": 0,
++    "cost_per_case": null
++  },
++  "native_publication_present": false,
++  "cases": [
++    {
++      "case_id": "dc56d3f817373c4ba91a6c6aeb86eb9bfa85865fd3c20336e753b88b0dbbebd5",
++      "target": "stranske/Orchestrator#458",
++      "location": "rows[0]",
++      "run_id": "keepalive:stranske/Orchestrator#458:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": "reject_blocker",
++      "retained_later_truth": "FAIL",
++      "retained_error_present": false,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "07a141fae1fd2f2e1525897935ef093cc01b665cb29a2c50ec8848a77152ca0b",
++      "target": "stranske/Orchestrator#446",
++      "location": "rows[1]",
++      "run_id": "keepalive:stranske/Orchestrator#446:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": "reject_blocker",
++      "retained_later_truth": "FAIL",
++      "retained_error_present": false,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "14bb0141017ad111a51386095994f8c499311e735c607b27333b0fed268743e5",
++      "target": "stranske/Workflows#3748",
++      "location": "rows[2]",
++      "run_id": "keepalive:stranske/Workflows#3748:none",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": "reject_blocker",
++      "retained_later_truth": "PASS",
++      "retained_error_present": false,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "4fef6b5e3688f7713837878f3bd0e2c3d85c8383e85a20cb7433d932961f05af",
++      "target": "stranske/Manager-Database#1751",
++      "location": "rows[3]",
++      "run_id": "keepalive:stranske/Manager-Database#1751:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": "reject_blocker",
++      "retained_later_truth": "PASS",
++      "retained_error_present": false,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "2ff8a43f6c3a628cd0b31f963cf7193cbe0aae84eb59b9f972a31b44153ec464",
++      "target": "stranske/Orchestrator#443",
++      "location": "rows[4]",
++      "run_id": "keepalive:stranske/Orchestrator#443:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": "reject_blocker",
++      "retained_later_truth": "PASS",
++      "retained_error_present": false,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "0c7a5700d772df4a5d4cd03e84342475401c6caf33940ebf5995d181086d2efa",
++      "target": "stranske/Orchestrator#456",
++      "location": "rows[5]",
++      "run_id": "keepalive:stranske/Orchestrator#456:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": "reject_blocker",
++      "retained_later_truth": "PASS",
++      "retained_error_present": false,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "d7397039ec9efc9f2a611efa8cff829a1c079e9874c2745a3cdaa52a53b0af81",
++      "target": "stranske/Orchestrator#414",
++      "location": "rows[6]",
++      "run_id": "keepalive:stranske/Orchestrator#414:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": "reject_blocker",
++      "retained_later_truth": null,
++      "retained_error_present": false,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "afd30da1584df1b933711d17348ad2449cac90491095b6ae5bcedac261c0a1f1",
++      "target": "stranske/Workflows#3772",
++      "location": "rows[7]",
++      "run_id": "keepalive:stranske/Workflows#3772:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": null,
++      "retained_later_truth": "PASS",
++      "retained_error_present": true,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "9ab1c0c6a06eb0be33acf87720ca46bcbc4b6da7957d79e816030d161388ed1a",
++      "target": "stranske/Orchestrator#485",
++      "location": "rows[8]",
++      "run_id": "keepalive:stranske/Orchestrator#485:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": "reject_blocker",
++      "retained_later_truth": null,
++      "retained_error_present": false,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "492f957d9a4fd477ee97f458d71ee87e8e14cde9d09ffb153f488e9dbc42ac02",
++      "target": "stranske/Orchestrator#484",
++      "location": "rows[9]",
++      "run_id": "keepalive:stranske/Orchestrator#484:claude",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": "reject_blocker",
++      "retained_later_truth": null,
++      "retained_error_present": false,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "d0451358e26471e342f4b2fdb93ce02e912dd0f414b003d921aaa1fbf8a09081",
++      "target": "stranske/Workflows#3767",
++      "location": "rows[10]",
++      "run_id": "keepalive:stranske/Workflows#3767:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": "reject_blocker",
++      "retained_later_truth": "PASS",
++      "retained_error_present": false,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "4082e9c2a2bc82c61065470e0d05fec18bc3e1190314d25f61f1e21045bcf74f",
++      "target": "stranske/Workflows#3769",
++      "location": "rows[11]",
++      "run_id": "keepalive:stranske/Workflows#3769:none",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": "reject_blocker",
++      "retained_later_truth": "FAIL",
++      "retained_error_present": false,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "3a74d31c7041ef63dc7db6f830877dc1d1d72a78e434076a54bd08fb52816ab9",
++      "target": "stranske/Orchestrator#468",
++      "location": "rows[12]",
++      "run_id": "keepalive:stranske/Orchestrator#468:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": "reject_blocker",
++      "retained_later_truth": null,
++      "retained_error_present": false,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "2bde35dd815a347068d51e8d44493fc635d15bfeafd756c2328e6c8418a938f5",
++      "target": "stranske/Orchestrator#475",
++      "location": "rows[13]",
++      "run_id": "keepalive:stranske/Orchestrator#475:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": "reject_blocker",
++      "retained_later_truth": "PASS",
++      "retained_error_present": false,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "c0255daf58c35dc6dbf9690783964a28d2853838efdbd47e167c63c37f6b5739",
++      "target": "stranske/Orchestrator#477",
++      "location": "rows[14]",
++      "run_id": "keepalive:stranske/Orchestrator#477:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": null,
++      "retained_later_truth": "PASS",
++      "retained_error_present": true,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "c53289cd21ec4997f40d03facbf51f75794c4150f9ff9839983dcec85aee85d5",
++      "target": "stranske/Orchestrator#469",
++      "location": "rows[15]",
++      "run_id": "keepalive:stranske/Orchestrator#469:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": "reject_blocker",
++      "retained_later_truth": null,
++      "retained_error_present": false,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "44e85dfcdd64335e346a7132a927917e61846910b9ca04e81e346a654c5e88a5",
++      "target": "stranske/Orchestrator#478",
++      "location": "rows[16]",
++      "run_id": "keepalive:stranske/Orchestrator#478:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": null,
++      "retained_later_truth": "PASS",
++      "retained_error_present": true,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "d880ad7abb0729067f5a72e71928e0036f0f970785d78a5e63dbef8f3a682604",
++      "target": "stranske/Orchestrator#467",
++      "location": "rows[17]",
++      "run_id": "keepalive:stranske/Orchestrator#467:cursor",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": "needs_more_evidence",
++      "retained_later_truth": "PASS",
++      "retained_error_present": false,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "bf078dca610277353e79e28d7f62693d5f6f9236551e0c1ac1d8a44800d642ab",
++      "target": "stranske/Workflows#3764",
++      "location": "rows[18]",
++      "run_id": "keepalive:stranske/Workflows#3764:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": null,
++      "retained_later_truth": "FAIL",
++      "retained_error_present": true,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "523f3f55d9f384ecc5fe12d8dde4c9040c71607bbb5775a0d28df5c608107e99",
++      "target": "stranske/Orchestrator#473",
++      "location": "rows[19]",
++      "run_id": "keepalive:stranske/Orchestrator#473:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": "needs_more_evidence",
++      "retained_later_truth": "PASS",
++      "retained_error_present": false,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "d583afb7c56b931343d2454023ac99eb66963ffac5d29ec47e0d60700680df05",
++      "target": "stranske/Orchestrator#474",
++      "location": "rows[20]",
++      "run_id": "keepalive:stranske/Orchestrator#474:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": "needs_more_evidence",
++      "retained_later_truth": "PASS",
++      "retained_error_present": false,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "76288bb67aff7a8db7d2a5f5c647b864af73e0629b028c07c146e81739a9c64b",
++      "target": "stranske/Orchestrator#472",
++      "location": "rows[21]",
++      "run_id": "keepalive:stranske/Orchestrator#472:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": "needs_more_evidence",
++      "retained_later_truth": "PASS",
++      "retained_error_present": false,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "584acf2416195efde43cf4df15aebfd9ae43f0a1202dcab552d54b3c75b1e37d",
++      "target": "stranske/Orchestrator#471",
++      "location": "rows[22]",
++      "run_id": "keepalive:stranske/Orchestrator#471:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": "needs_more_evidence",
++      "retained_later_truth": "PASS",
++      "retained_error_present": false,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "dfccaa2f511f87f64adf1ef237a865141d7b9e25ffc67700e0ead2160c437f2e",
++      "target": "stranske/Orchestrator#470",
++      "location": "rows[23]",
++      "run_id": "keepalive:stranske/Orchestrator#470:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": "needs_more_evidence",
++      "retained_later_truth": "PASS",
++      "retained_error_present": false,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "cc872bb0e729e8209d81a618e46f1a1399d5e9af482a0dcb0d8018c4cba7d55b",
++      "target": "stranske/Workflows#3756",
++      "location": "rows[24]",
++      "run_id": "keepalive:stranske/Workflows#3756:none",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": null,
++      "retained_later_truth": null,
++      "retained_error_present": true,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "1f7c00d08df7b5fea0801b6e0dcb006c08f157396582f05afc87f8e6ddaf9604",
++      "target": "stranske/Orchestrator#461",
++      "location": "rows[25]",
++      "run_id": "keepalive:stranske/Orchestrator#461:claude",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": null,
++      "retained_later_truth": "FAIL",
++      "retained_error_present": true,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "15b6120aa5b8d25e481e7339703ed0ee4ac36e65c684fc66285cfe3f921c1395",
++      "target": "stranske/Workflows#3759",
++      "location": "rows[26]",
++      "run_id": "keepalive:stranske/Workflows#3759:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": "needs_more_evidence",
++      "retained_later_truth": "PASS",
++      "retained_error_present": false,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "20b55da1130e68a4e519d79fcb2408d8aad62434ea60ce85de9f43511b8584e0",
++      "target": "stranske/Orchestrator#464",
++      "location": "rows[27]",
++      "run_id": "keepalive:stranske/Orchestrator#464:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": "needs_more_evidence",
++      "retained_later_truth": "PASS",
++      "retained_error_present": false,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "05ffc5fb2ffa8a2c2236c3b3daf2be6f29377a7f52524a6e3a77a8fe6b6b22e1",
++      "target": "stranske/Orchestrator#466",
++      "location": "rows[28]",
++      "run_id": "keepalive:stranske/Orchestrator#466:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": "needs_more_evidence",
++      "retained_later_truth": "PASS",
++      "retained_error_present": false,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "969408d1bfba59699c294e57b7fc2dbaff9134a18424cd6dc07840accf1c18da",
++      "target": "stranske/Orchestrator#465",
++      "location": "rows[29]",
++      "run_id": "keepalive:stranske/Orchestrator#465:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": null,
++      "retained_later_truth": null,
++      "retained_error_present": true,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "e0d9ae56aa6fd869a9386c25faca3c182492f150b419494c8c0ca5922accb672",
++      "target": "stranske/Orchestrator#463",
++      "location": "rows[30]",
++      "run_id": "keepalive:stranske/Orchestrator#463:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": "needs_more_evidence",
++      "retained_later_truth": "PASS",
++      "retained_error_present": false,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "5410abf87e93df308e8c633230776c74a0a8d7b10f6d155236bd2d1f4108c3ad",
++      "target": "stranske/Workflows#3753",
++      "location": "rows[31]",
++      "run_id": "keepalive:stranske/Workflows#3753:none",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": "needs_more_evidence",
++      "retained_later_truth": "PASS",
++      "retained_error_present": false,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "926d24eedb92a2369269ee5fd1ae903528cd9ea58ef9d2c19dfe05b8d89bc7ae",
++      "target": "stranske/Orchestrator#457",
++      "location": "rows[32]",
++      "run_id": "keepalive:stranske/Orchestrator#457:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": "reject_blocker",
++      "retained_later_truth": "PASS",
++      "retained_error_present": false,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "5811f1bda13f38544f84194bb6e9ed44bbce721d0f60f862da342a649c84595b",
++      "target": "stranske/Workflows#3754",
++      "location": "rows[33]",
++      "run_id": "keepalive:stranske/Workflows#3754:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": "reject_blocker",
++      "retained_later_truth": "FAIL",
++      "retained_error_present": false,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "26b4ea99e625a3484c8bf5bcb8e68f931550a46b01ff48c72db60408eb7e9d94",
++      "target": "stranske/Workflows#3750",
++      "location": "rows[34]",
++      "run_id": "keepalive:stranske/Workflows#3750:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": "reject_blocker",
++      "retained_later_truth": "PASS",
++      "retained_error_present": false,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "067c30a21223920b43609a71894a1d95876a35bd04e3a6a69776cf6e41f417ed",
++      "target": "stranske/Orchestrator#445",
++      "location": "rows[35]",
++      "run_id": "keepalive:stranske/Orchestrator#445:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": "reject_blocker",
++      "retained_later_truth": "PASS",
++      "retained_error_present": false,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "a92fe42979e12ed9115eab947561ab07647d9581fbf6962bea8af7114632896b",
++      "target": "stranske/Workflows#3749",
++      "location": "rows[36]",
++      "run_id": "keepalive:stranske/Workflows#3749:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": "reject_blocker",
++      "retained_later_truth": "PASS",
++      "retained_error_present": false,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "7bc3efdad7d67c6252efd96cf1bf5899ab5b11135beafee82a514c92d46f9f01",
++      "target": "stranske/Deliverable-Render#82",
++      "location": "rows[37]",
++      "run_id": "keepalive:stranske/Deliverable-Render#82:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": null,
++      "retained_later_truth": null,
++      "retained_error_present": true,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "94ba2a422838643f6417add4ec0d7ed616633833e38a5885e12aaf5cc761c36f",
++      "target": "stranske/Deliverable-Render#80",
++      "location": "rows[38]",
++      "run_id": "keepalive:stranske/Deliverable-Render#80:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": null,
++      "retained_later_truth": null,
++      "retained_error_present": true,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "79c014c56576c49181fa10a9f799fd007ecebf7653246d836321b813dd2301a6",
++      "target": "stranske/Workflows#3875",
++      "location": "rows[39]",
++      "run_id": "keepalive:stranske/Workflows#3875:none",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": null,
++      "retained_later_truth": null,
++      "retained_error_present": true,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "f2744c7cdd7e5262de9e4ceb2e2e92464f8eb06b4e6ca32825893c3debd9a073",
++      "target": "stranske/Orchestrator#597",
++      "location": "rows[40]",
++      "run_id": "keepalive:stranske/Orchestrator#597:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": null,
++      "retained_later_truth": null,
++      "retained_error_present": true,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "e11a460dc127a84ba3edd724d6ffcc580214b5c67ba2b1710b89bbe3452e47c7",
++      "target": "stranske/Orchestrator#588",
++      "location": "rows[41]",
++      "run_id": "keepalive:stranske/Orchestrator#588:claude",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": null,
++      "retained_later_truth": null,
++      "retained_error_present": true,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "f57ee84df61f9b1204f05ecc0013f6206a1c29c5b06d9927c5570d8673313a66",
++      "target": "stranske/Orchestrator#595",
++      "location": "rows[42]",
++      "run_id": "keepalive:stranske/Orchestrator#595:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": null,
++      "retained_later_truth": null,
++      "retained_error_present": true,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "9f45f7163b41d571dd7667e4f7fa81241c5ee08c37816f2818081ffb691e1e7f",
++      "target": "stranske/Orchestrator#591",
++      "location": "rows[43]",
++      "run_id": "keepalive:stranske/Orchestrator#591:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": null,
++      "retained_later_truth": null,
++      "retained_error_present": true,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "76c5be487fb21a51f64cb250e5b70fcf043cbb2f9544e3d4f772d3eb89a09b92",
++      "target": "stranske/Orchestrator#592",
++      "location": "rows[44]",
++      "run_id": "keepalive:stranske/Orchestrator#592:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": null,
++      "retained_later_truth": null,
++      "retained_error_present": true,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "be86abfcd24f2416632467396b78419e33e4917247fed537653150b4e1c6cbf2",
++      "target": "stranske/Orchestrator#594",
++      "location": "rows[45]",
++      "run_id": "keepalive:stranske/Orchestrator#594:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": null,
++      "retained_later_truth": null,
++      "retained_error_present": true,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "7b36755327028d1944bccda90da18da7d0d3b44d5ec157d7d3098a3055433002",
++      "target": "stranske/Orchestrator#589",
++      "location": "rows[46]",
++      "run_id": "keepalive:stranske/Orchestrator#589:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": null,
++      "retained_later_truth": null,
++      "retained_error_present": true,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "90305f8964a8e768480b4d33bc7257fea2440d2d9467767634a3e33c8d512669",
++      "target": "stranske/Orchestrator#590",
++      "location": "rows[47]",
++      "run_id": "keepalive:stranske/Orchestrator#590:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": null,
++      "retained_later_truth": null,
++      "retained_error_present": true,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "6e5de75fe3a50596907edb4aede24aaf689f53ecc7639175baffd7b8396e2b06",
++      "target": "stranske/Orchestrator#587",
++      "location": "rows[48]",
++      "run_id": "keepalive:stranske/Orchestrator#587:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": null,
++      "retained_later_truth": null,
++      "retained_error_present": true,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "0f773a0c9302ba7cebb3d0dc8f89d2bfd05dac0511c4570206d788d4449dc413",
++      "target": "stranske/Orchestrator#586",
++      "location": "rows[49]",
++      "run_id": "keepalive:stranske/Orchestrator#586:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": null,
++      "retained_later_truth": null,
++      "retained_error_present": true,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "3b1c392387c7ad0c33c189004ae639e048dda3d03867cbb6a4fb68fd55f719a7",
++      "target": "stranske/Deliverable-Render#78",
++      "location": "rows[50]",
++      "run_id": "keepalive:stranske/Deliverable-Render#78:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": null,
++      "retained_later_truth": null,
++      "retained_error_present": true,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "82ccd20156f37673644fc6fae36ee850fe7955892761b07d982468079e64c052",
++      "target": "stranske/Workflows#3874",
++      "location": "rows[51]",
++      "run_id": "keepalive:stranske/Workflows#3874:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": null,
++      "retained_later_truth": null,
++      "retained_error_present": true,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "e490fc33a4580456329bac982e23f4e6f526fae2279762ca953a9f20d2037059",
++      "target": "stranske/Counter_Risk#1152",
++      "location": "rows[52]",
++      "run_id": "keepalive:stranske/Counter_Risk#1152:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": null,
++      "retained_later_truth": null,
++      "retained_error_present": true,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "b96bc60269f5e897a0a6d33ac43e258726f988b225f3af2caa777e1e7e361ca7",
++      "target": "stranske/Counter_Risk#1150",
++      "location": "rows[53]",
++      "run_id": "keepalive:stranske/Counter_Risk#1150:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": null,
++      "retained_later_truth": null,
++      "retained_error_present": true,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "67858e41354f0a936c6056ca5def8bda5679f9444327a9e6dd23b978d42ed2c4",
++      "target": "stranske/Workflows#3871",
++      "location": "rows[54]",
++      "run_id": "keepalive:stranske/Workflows#3871:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": null,
++      "retained_later_truth": null,
++      "retained_error_present": true,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "a69eb2efb184002ce7e2c6ad7b71f6443f1348ad292c878150e6544c682cbac9",
++      "target": "stranske/Orchestrator#570",
++      "location": "rows[55]",
++      "run_id": "keepalive:stranske/Orchestrator#570:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": null,
++      "retained_later_truth": null,
++      "retained_error_present": true,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "97a31f3f98def6920a870c106eaf28667a75a9f0cd9f722d08a61a91c36c18a7",
++      "target": "stranske/Orchestrator#573",
++      "location": "rows[56]",
++      "run_id": "keepalive:stranske/Orchestrator#573:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": null,
++      "retained_later_truth": null,
++      "retained_error_present": true,
++      "native_projection_present": false
++    },
++    {
++      "case_id": "b6b26c9f0eebbd5a7211ff1cea641df853e6f97a9e4de31253a030e8e7600ef6",
++      "target": "stranske/Orchestrator#568",
++      "location": "rows[57]",
++      "run_id": "keepalive:stranske/Orchestrator#568:codex",
++      "verifier_verdict": "NON_PASS",
++      "adjudicated_verdict": "PASS",
++      "retained_decision": null,
++      "retained_later_truth": null,
++      "retained_error_present": true,
++      "native_projection_present": false
++    }
++  ],
++  "case_count": 58,
++  "paid_attempts": [
++    {
++      "case_id": "dc56d3f817373c4ba91a6c6aeb86eb9bfa85865fd3c20336e753b88b0dbbebd5",
++      "backend_run_id": "offload:gemini:1791199180693032000",
++      "location": "rows[0]"
++    },
++    {
++      "case_id": "07a141fae1fd2f2e1525897935ef093cc01b665cb29a2c50ec8848a77152ca0b",
++      "backend_run_id": "offload:gemini:1791199491873065000",
++      "location": "rows[1]"
++    },
++    {
++      "case_id": "14bb0141017ad111a51386095994f8c499311e735c607b27333b0fed268743e5",
++      "backend_run_id": "offload:gemini:1791199531808936000",
++      "location": "rows[2]"
++    },
++    {
++      "case_id": "4fef6b5e3688f7713837878f3bd0e2c3d85c8383e85a20cb7433d932961f05af",
++      "backend_run_id": "offload:gemini:1791199585086934000",
++      "location": "rows[3]"
++    },
++    {
++      "case_id": "2ff8a43f6c3a628cd0b31f963cf7193cbe0aae84eb59b9f972a31b44153ec464",
++      "backend_run_id": "offload:gemini:1791199633328958000",
++      "location": "rows[4]"
++    },
++    {
++      "case_id": "0c7a5700d772df4a5d4cd03e84342475401c6caf33940ebf5995d181086d2efa",
++      "backend_run_id": "offload:gemini:1791199088477569000",
++      "location": "rows[5]"
++    },
++    {
++      "case_id": "d7397039ec9efc9f2a611efa8cff829a1c079e9874c2745a3cdaa52a53b0af81",
++      "backend_run_id": "offload:gemini:1791199355831889000",
++      "location": "rows[6]"
++    },
++    {
++      "case_id": "9ab1c0c6a06eb0be33acf87720ca46bcbc4b6da7957d79e816030d161388ed1a",
++      "backend_run_id": "offload:gemini:1791289901905524000",
++      "location": "rows[8]"
++    },
++    {
++      "case_id": "492f957d9a4fd477ee97f458d71ee87e8e14cde9d09ffb153f488e9dbc42ac02",
++      "backend_run_id": "offload:gemini:1791289952278060000",
++      "location": "rows[9]"
++    },
++    {
++      "case_id": "d0451358e26471e342f4b2fdb93ce02e912dd0f414b003d921aaa1fbf8a09081",
++      "backend_run_id": "offload:gemini:1791289989250716000",
++      "location": "rows[10]"
++    },
++    {
++      "case_id": "4082e9c2a2bc82c61065470e0d05fec18bc3e1190314d25f61f1e21045bcf74f",
++      "backend_run_id": "offload:gemini:1791290019591073000",
++      "location": "rows[11]"
++    },
++    {
++      "case_id": "3a74d31c7041ef63dc7db6f830877dc1d1d72a78e434076a54bd08fb52816ab9",
++      "backend_run_id": "offload:gemini:1791290140351965000",
++      "location": "rows[12]"
++    },
++    {
++      "case_id": "2bde35dd815a347068d51e8d44493fc635d15bfeafd756c2328e6c8418a938f5",
++      "backend_run_id": "offload:gemini:1791290198612222000",
++      "location": "rows[13]"
++    },
++    {
++      "case_id": "c0255daf58c35dc6dbf9690783964a28d2853838efdbd47e167c63c37f6b5739",
++      "backend_run_id": "offload:gemini:1791290239657061000",
++      "location": "rows[14].retry_attempts[0]"
++    },
++    {
++      "case_id": "c53289cd21ec4997f40d03facbf51f75794c4150f9ff9839983dcec85aee85d5",
++      "backend_run_id": "offload:gemini:1791290266140836000",
++      "location": "rows[15]"
++    },
++    {
++      "case_id": "44e85dfcdd64335e346a7132a927917e61846910b9ca04e81e346a654c5e88a5",
++      "backend_run_id": "offload:gemini:1791290283334579000",
++      "location": "rows[16].retry_attempts[0]"
++    },
++    {
++      "case_id": "d880ad7abb0729067f5a72e71928e0036f0f970785d78a5e63dbef8f3a682604",
++      "backend_run_id": "offload:codex:1791290909657304000",
++      "location": "rows[17]"
++    },
++    {
++      "case_id": "bf078dca610277353e79e28d7f62693d5f6f9236551e0c1ac1d8a44800d642ab",
++      "backend_run_id": "offload:codex:1791290951843211000",
++      "location": "rows[18].retry_attempts[0]"
++    },
++    {
++      "case_id": "523f3f55d9f384ecc5fe12d8dde4c9040c71607bbb5775a0d28df5c608107e99",
++      "backend_run_id": "offload:codex:1791290989093567000",
++      "location": "rows[19]"
++    },
++    {
++      "case_id": "d583afb7c56b931343d2454023ac99eb66963ffac5d29ec47e0d60700680df05",
++      "backend_run_id": "offload:codex:1791291019784465000",
++      "location": "rows[20]"
++    },
++    {
++      "case_id": "76288bb67aff7a8db7d2a5f5c647b864af73e0629b028c07c146e81739a9c64b",
++      "backend_run_id": "offload:codex:1791291053615999000",
++      "location": "rows[21]"
++    },
++    {
++      "case_id": "584acf2416195efde43cf4df15aebfd9ae43f0a1202dcab552d54b3c75b1e37d",
++      "backend_run_id": "offload:codex:1791307558106777000",
++      "location": "rows[22]"
++    },
++    {
++      "case_id": "dfccaa2f511f87f64adf1ef237a865141d7b9e25ffc67700e0ead2160c437f2e",
++      "backend_run_id": "offload:codex:1791307595850460000",
++      "location": "rows[23]"
++    },
++    {
++      "case_id": "cc872bb0e729e8209d81a618e46f1a1399d5e9af482a0dcb0d8018c4cba7d55b",
++      "backend_run_id": "offload:codex:1791307631629708000",
++      "location": "rows[24].retry_attempts[0]"
++    },
++    {
++      "case_id": "1f7c00d08df7b5fea0801b6e0dcb006c08f157396582f05afc87f8e6ddaf9604",
++      "backend_run_id": "offload:codex:1791307663046867000",
++      "location": "rows[25].retry_attempts[0]"
++    },
++    {
++      "case_id": "15b6120aa5b8d25e481e7339703ed0ee4ac36e65c684fc66285cfe3f921c1395",
++      "backend_run_id": "offload:codex:1791307699323841000",
++      "location": "rows[26]"
++    },
++    {
++      "case_id": "20b55da1130e68a4e519d79fcb2408d8aad62434ea60ce85de9f43511b8584e0",
++      "backend_run_id": "offload:codex:1791307796942455000",
++      "location": "rows[27]"
++    },
++    {
++      "case_id": "05ffc5fb2ffa8a2c2236c3b3daf2be6f29377a7f52524a6e3a77a8fe6b6b22e1",
++      "backend_run_id": "offload:codex:1791307834387822000",
++      "location": "rows[28]"
++    },
++    {
++      "case_id": "969408d1bfba59699c294e57b7fc2dbaff9134a18424cd6dc07840accf1c18da",
++      "backend_run_id": "offload:codex:1791307866037254000",
++      "location": "rows[29].retry_attempts[0]"
++    },
++    {
++      "case_id": "e0d9ae56aa6fd869a9386c25faca3c182492f150b419494c8c0ca5922accb672",
++      "backend_run_id": "offload:codex:1791307905011949000",
++      "location": "rows[30]"
++    },
++    {
++      "case_id": "5410abf87e93df308e8c633230776c74a0a8d7b10f6d155236bd2d1f4108c3ad",
++      "backend_run_id": "offload:codex:1791307952886313000",
++      "location": "rows[31]"
++    },
++    {
++      "case_id": "926d24eedb92a2369269ee5fd1ae903528cd9ea58ef9d2c19dfe05b8d89bc7ae",
++      "backend_run_id": "offload:gemini:1791318175585166000",
++      "location": "rows[32]"
++    },
++    {
++      "case_id": "5811f1bda13f38544f84194bb6e9ed44bbce721d0f60f862da342a649c84595b",
++      "backend_run_id": "offload:gemini:1791318272577011000",
++      "location": "rows[33]"
++    },
++    {
++      "case_id": "26b4ea99e625a3484c8bf5bcb8e68f931550a46b01ff48c72db60408eb7e9d94",
++      "backend_run_id": "offload:gemini:1791318296391632000",
++      "location": "rows[34]"
++    },
++    {
++      "case_id": "067c30a21223920b43609a71894a1d95876a35bd04e3a6a69776cf6e41f417ed",
++      "backend_run_id": "offload:gemini:1791318345726259000",
++      "location": "rows[35]"
++    },
++    {
++      "case_id": "a92fe42979e12ed9115eab947561ab07647d9581fbf6962bea8af7114632896b",
++      "backend_run_id": "offload:gemini:1791318365537550000",
++      "location": "rows[36]"
++    },
++    {
++      "case_id": "7bc3efdad7d67c6252efd96cf1bf5899ab5b11135beafee82a514c92d46f9f01",
++      "backend_run_id": "offload:gemini:1791980537173148000",
++      "location": "rows[37]"
++    },
++    {
++      "case_id": "f2744c7cdd7e5262de9e4ceb2e2e92464f8eb06b4e6ca32825893c3debd9a073",
++      "backend_run_id": "offload:gemini:1791979959400381000",
++      "location": "rows[40]"
++    }
++  ],
++  "paid_identity_summary": {
++    "records": 38,
++    "unique": 38,
++    "repeated": []
++  },
++  "receipt_authority": "not_authenticated_by_inventory",
++  "requested_cohort_verified": false,
++  "dispatch_authorized": false,
++  "evidence_gaps": [
++    "original_cohort_provenance_unverified",
++    "native_journal_not_observed",
++    "independent_current_truth_not_observed",
++    "deployed_and_mirror_revisions_not_observed",
++    "fixed_next_20_manifest_not_observed"
++  ]
++}
+diff --git a/docs/verification/issue-1096-recovery/inventory-tests.log b/docs/verification/issue-1096-recovery/inventory-tests.log
+new file mode 100644
+index 0000000..c0ec4f0
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/inventory-tests.log
+@@ -0,0 +1,40 @@
++✔ report recovery preserves ordered rows, recursive paid history and conflicting counts (5.220798ms)
++✔ report recovery rejects missing input without initializing runtime state (0.93487ms)
++✔ report recovery refuses malformed and ambiguous retained identities (2.789561ms)
++✔ report recovery requires explicit attribution and a valid check time (0.693285ms)
++✔ report recovery aborts if the input changes during observation (1.04101ms)
++✔ report CLI never combines historical recovery with dispatch or current Brain selection (205.561677ms)
++✔ inventory exports every synthetic dispute and every exclusion without writes (474.731215ms)
++✔ inventory preserves the fixed cutoff and reports a count discrepancy (7.593414ms)
++✔ inventory distinguishes missing evidence from a complete cohort (2.636854ms)
++✔ inventory distinguishes schema-less evidence from a complete cohort (0.897409ms)
++✔ inventory distinguishes empty evidence from a complete cohort (2.922492ms)
++✔ inventory distinguishes incomplete-schema evidence from a complete cohort (3.329106ms)
++✔ inventory CLI exports JSON, signals unavailable evidence and rejects replay options (212.850505ms)
++✔ matching 71 identities bind the supplied manifest bytes without claiming historical acceptance (127.813345ms)
++✔ equal inventory counts expose substituted identities, exclusions and absent requested runs (9.868256ms)
++✔ a requested run on another target cannot satisfy case identity (4.93495ms)
++✔ inventory accounts for outcomes without run records as unavailable evidence (45.730246ms)
++✔ an outcomes-only Brain is available with exclusions, rather than an observed empty store (4.502296ms)
++✔ manifest retains every requested identity when Brain is empty (3.295857ms)
++✔ manifest retains every requested identity when Brain is unavailable (2.731499ms)
++✔ manifest count discrepancy prevents an exact match even when all supplied identities match (4.755943ms)
++✔ manifest CLI preserves input bytes, rejects malformed identities and signals unavailable Brain (494.883553ms)
++✔ version 2 reconciles all 71 dispute identities without claiming historical provenance (113.54083ms)
++✔ version 2 exposes substituted verdicts NON_PASS/FAIL despite matching run and count (40.751293ms)
++✔ version 2 exposes substituted verdicts FAIL_HOLLOW/PASS despite matching run and count (44.320492ms)
++✔ version 2 exposes substituted verdicts PASS/FAIL despite matching run and count (44.190014ms)
++✔ version 2 retains different disputes on one run and rejects duplicate dispute identities (5.294988ms)
++✔ version 2 preserves full identities for excluded, missing and unavailable cases (40.372491ms)
++✔ version 2 rejects malformed verdicts before publishing any inventory (493.393031ms)
++✔ version 2 distinguishes unavailable verdict evidence from contradictory verdicts (47.907284ms)
++✔ version 2 retains an observed target mismatch when verdict evidence is unavailable (3.719151ms)
++✔ missing stored targets remain eligible disputes with explicit unavailable identity evidence (452.586719ms)
++ℹ tests 32
++ℹ suites 0
++ℹ pass 32
++ℹ fail 0
++ℹ cancelled 0
++ℹ skipped 0
++ℹ todo 0
++ℹ duration_ms 2916.335628
+diff --git a/docs/verification/issue-1096-recovery/named-tests.log b/docs/verification/issue-1096-recovery/named-tests.log
+new file mode 100644
+index 0000000..7d7a543
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/named-tests.log
+@@ -0,0 +1 @@
++/opt/hostedtoolcache/Python/3.14.9/x64/bin/python: No module named pytest
+diff --git a/docs/verification/issue-1096-recovery/retrospective-suite.log b/docs/verification/issue-1096-recovery/retrospective-suite.log
+new file mode 100644
+index 0000000..7d7a543
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/retrospective-suite.log
+@@ -0,0 +1 @@
++/opt/hostedtoolcache/Python/3.14.9/x64/bin/python: No module named pytest
+diff --git a/scripts/export_adjudicator_inventory.js b/scripts/export_adjudicator_inventory.js
+index 62e2634..22da690 100644
+--- a/scripts/export_adjudicator_inventory.js
++++ b/scripts/export_adjudicator_inventory.js
+@@ -3,7 +3,8 @@
+ // Read-only snapshot of the Brain selection used by adjudicator_retro.disputes,
+ // plus explicit exclusions for runs or outcomes missing their matching row.
+ // Requires Node >=22.13 (built-in SQLite). JSON goes to stdout; callers choose
+-// where to preserve it. This tool never opens the retrospective report or roles.
++// where to preserve it. The separate --report mode inventories retained report
++// bytes, including recursive paid history, without opening Brain or roles.
+ const path = require('node:path');
+ const fs = require('node:fs');
+ const { createHash } = require('node:crypto');
+@@ -21,6 +22,92 @@ function hasTarget(row) {
+   return typeof row.target === 'string' && Boolean(row.target.trim());
+ }
+ 
++function reportInventory({ report, observedAt, evidenceClass, evidenceReference }) {
++  integer(observedAt, 'observedAt', 0);
++  if (typeof report !== 'string' || !report.trim()) throw new Error('report is required');
++  if (!['historical_snapshot', 'current_snapshot'].includes(evidenceClass)) {
++    throw new Error('evidenceClass must be historical_snapshot or current_snapshot');
++  }
++  if (typeof evidenceReference !== 'string' || !evidenceReference.trim()) {
++    throw new Error('evidenceReference is required');
++  }
++  const bytes = fs.readFileSync(report);
++  const saved = JSON.parse(bytes);
++  if (!saved || !Array.isArray(saved.rows)) throw new Error('report requires a rows array');
++  const seen = new Set();
++  const paid = [];
++  const cases = saved.rows.map((row, index) => {
++    if (!row || typeof row.case_id !== 'string' || !row.case_id.trim() || !hasTarget(row)) {
++      throw new Error(`rows[${index}] requires nonblank case_id and target`);
++    }
++    if (seen.has(row.case_id)) throw new Error(`duplicate case_id at rows[${index}]`);
++    seen.add(row.case_id);
++    // Iterative pre-order traversal preserves every retained receipt locator,
++    // including repeated paid identities. It never turns retries into cases.
++    const stack = [{ attempt: row, location: `rows[${index}]` }];
++    while (stack.length) {
++      const { attempt, location } = stack.pop();
++      if (!attempt || typeof attempt !== 'object' || Array.isArray(attempt)) {
++        throw new Error(`invalid attempt at ${location}`);
++      }
++      if (attempt.backend_run_id !== undefined && attempt.backend_run_id !== null) {
++        if (typeof attempt.backend_run_id !== 'string' || !attempt.backend_run_id.trim()) {
++          throw new Error(`invalid backend_run_id at ${location}`);
++        }
++        paid.push({ case_id: row.case_id, backend_run_id: attempt.backend_run_id, location });
++      }
++      const history = attempt.retry_attempts === undefined ? [] : attempt.retry_attempts;
++      if (!Array.isArray(history)) throw new Error(`invalid retry_attempts at ${location}`);
++      for (let child = history.length - 1; child >= 0; child -= 1) {
++        stack.push({ attempt: history[child], location: `${location}.retry_attempts[${child}]` });
++      }
++    }
++    return {
++      case_id: row.case_id, target: row.target, location: `rows[${index}]`,
++      run_id: row.run_id ?? null,
++      verifier_verdict: row.verifier_verdict ?? null,
++      adjudicated_verdict: row.adjudicated_verdict ?? null,
++      retained_decision: row.decision ?? null,
++      retained_later_truth: row.later_truth ?? null,
++      retained_error_present: Boolean(row.error || row.errors?.length),
++      native_projection_present: Object.hasOwn(row, 'native_projection'),
++    };
++  });
++  const identities = new Map();
++  for (const item of paid) {
++    const occurrences = identities.get(item.backend_run_id) || [];
++    occurrences.push(item.location);
++    identities.set(item.backend_run_id, occurrences);
++  }
++  if (!fs.readFileSync(report).equals(bytes)) {
++    throw new Error('report changed during inventory');
++  }
++  return {
++    schema_version: 1,
++    scope: 'retained_report_only', evidence_class: evidenceClass,
++    evidence_reference: evidenceReference, observed_at: observedAt,
++    report_path: path.resolve(report), report_sha256: createHash('sha256').update(bytes).digest('hex'),
++    report_byte_length: bytes.length,
++    retained_generated_at: saved.generated_at ?? null,
++    retained_population: saved.population ?? null,
++    retained_summary: saved.summary ?? null,
++    native_publication_present: Object.hasOwn(saved, 'native_publication'),
++    cases, case_count: cases.length, paid_attempts: paid,
++    paid_identity_summary: {
++      records: paid.length, unique: identities.size,
++      repeated: [...identities].filter(([, locations]) => locations.length > 1)
++        .map(([backend_run_id, locations]) => ({ backend_run_id, locations })),
++    },
++    // Retained summaries can be stale or contradictory. No summary, source
++    // label, saved native projection or matching count authenticates a grade.
++    receipt_authority: 'not_authenticated_by_inventory',
++    requested_cohort_verified: false, dispatch_authorized: false,
++    evidence_gaps: ['original_cohort_provenance_unverified', 'native_journal_not_observed',
++      'independent_current_truth_not_observed', 'deployed_and_mirror_revisions_not_observed',
++      'fixed_next_20_manifest_not_observed'],
++  };
++}
++
+ function readManifest(file) {
+   if (typeof file !== 'string' || !file.trim()) throw new Error('manifest path is required');
+   const bytes = fs.readFileSync(file);
+@@ -246,8 +333,11 @@ function inventory({ db, observedAt, days = 90, expectedCount = 71, manifest })
+ 
+ function main() {
+   try {
+-    const { values } = parseArgs({ options: {
++    const { values, tokens } = parseArgs({ tokens: true, options: {
+       db: { type: 'string' },
++      report: { type: 'string' },
++      'evidence-class': { type: 'string' },
++      'evidence-reference': { type: 'string' },
+       'observed-at': { type: 'string' },
+       days: { type: 'string', default: '90' },
+       'expected-count': { type: 'string', default: '71' },
+@@ -255,9 +345,24 @@ function main() {
+       help: { type: 'boolean', short: 'h' },
+     } });
+     if (values.help) {
++      process.stdout.write('Report recovery: node scripts/export_adjudicator_inventory.js --report SAVED_JSON --observed-at UNIX_SECONDS --evidence-class historical_snapshot --evidence-reference SOURCE_REFERENCE\nRetained rows and paid identities only; no grade authentication or dispatch.\n');
+       process.stdout.write('Usage: node scripts/export_adjudicator_inventory.js --db BRAIN --observed-at UNIX_SECONDS [--days 90] [--expected-count 71] [--manifest JSON_FILE]\nManifest: {"schema_version":2,"cases":[{"run_id":"...","target":"owner/repo#N","verifier_verdict":"NON_PASS","adjudicated_verdict":"PASS"}]}.\nVersion 1 accepts run_id and target only; it cannot detect changed verdicts.\nJSON is written to stdout. No replay, dispatch or outcome writes.\n');
+       return;
+     }
++    if (values.report) {
++      if (tokens.some((item) => ['db', 'days', 'expected-count', 'manifest'].includes(item.name))) {
++        throw new Error('--report cannot combine with Brain window or manifest options');
++      }
++      const result = reportInventory({
++        report: values.report, observedAt: Number(values['observed-at']),
++        evidenceClass: values['evidence-class'], evidenceReference: values['evidence-reference'],
++      });
++      process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
++      return;
++    }
++    if (values['evidence-class'] || values['evidence-reference']) {
++      throw new Error('--evidence-class and --evidence-reference require --report');
++    }
+     if (!values.db || !values['observed-at']) {
+       throw new Error('--db and --observed-at are required');
+     }
+@@ -274,5 +379,5 @@ function main() {
+   }
+ }
+ 
+-module.exports = { inventory };
++module.exports = { inventory, reportInventory };
+ if (require.main === module) main();
+diff --git a/tests/test_adjudicator_inventory.js b/tests/test_adjudicator_inventory.js
+index c46c855..c7d3e5b 100644
+--- a/tests/test_adjudicator_inventory.js
++++ b/tests/test_adjudicator_inventory.js
+@@ -8,13 +8,132 @@ const { spawnSync } = require('node:child_process');
+ const { createHash } = require('node:crypto');
+ const { DatabaseSync } = require('node:sqlite');
+ const { test } = require('node:test');
+-const { inventory } = require('../scripts/export_adjudicator_inventory');
++const { inventory, reportInventory } = require('../scripts/export_adjudicator_inventory');
+ 
+ const repo = path.resolve(__dirname, '..');
+ const script = path.join(repo, 'scripts/export_adjudicator_inventory.js');
+ const now = 2000000000;
+ const cutoff = now - 90 * 86400;
+ 
++function retainedReport(t) {
++  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'adjudicator-retained-'));
++  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
++  const report = path.join(root, 'historical.json');
++  const saved = { generated_at: now - 86400, population: 40,
++    summary: { cases: 58, graded: 1, advice_graded: 2 },
++    native_publication: { source_report_sha256: 'retained-claim' },
++    rows: [
++      { case_id: 'case-a', target: 'owner/repo#1', decision: 'needs_more_evidence',
++        backend_run_id: 'primary', raw_output: 'private backend response',
++        error: 'private error detail', native_projection: { graded: 29 },
++        retry_attempts: [{ backend_run_id: 'prior',
++          retry_attempts: [{ backend_run_id: 'oldest' }] }] },
++      { case_id: 'case-b', target: 'owner/repo#2', decision: 'reject_blocker',
++        later_truth: 'PASS', backend_run_id: 'prior' },
++    ] };
++  fs.writeFileSync(report, JSON.stringify(saved));
++  return { root, saved, options: { report, observedAt: now,
++    evidenceClass: 'historical_snapshot', evidenceReference: 'retained-source-reference' } };
++}
++
++test('report recovery preserves ordered rows, recursive paid history and conflicting counts', (t) => {
++  const { root, options } = retainedReport(t);
++  const before = fs.readFileSync(options.report);
++  const files = fs.readdirSync(root);
++  const result = reportInventory(options);
++  assert.deepEqual(result.cases.map(({ case_id }) => case_id), ['case-a', 'case-b']);
++  assert.equal(result.retained_population, 40);
++  assert.equal(result.case_count, 2, 'derive rows from evidence, never retained population/summary');
++  assert.deepEqual(result.retained_summary, { cases: 58, graded: 1, advice_graded: 2 });
++  assert.equal(result.report_sha256, createHash('sha256').update(before).digest('hex'));
++  assert.equal(result.report_byte_length, before.length);
++  assert.equal(result.retained_generated_at, now - 86400);
++  assert.equal(result.observed_at, now, 'recovery time is separate from the retained observation');
++  assert.deepEqual(result.paid_attempts.map((item) => item.backend_run_id),
++    ['primary', 'prior', 'oldest', 'prior']);
++  assert.deepEqual(result.paid_identity_summary, { records: 4, unique: 3, repeated: [
++    { backend_run_id: 'prior', locations: ['rows[0].retry_attempts[0]', 'rows[1]'] },
++  ] });
++  assert.equal(result.cases[0].retained_error_present, true);
++  assert.equal(result.cases[1].retained_error_present, false);
++  assert.equal(result.cases[1].retained_later_truth, 'PASS');
++  assert.equal(result.native_publication_present, true);
++  assert.equal(result.cases[0].native_projection_present, true);
++  assert.equal(result.receipt_authority, 'not_authenticated_by_inventory');
++  assert.equal(result.requested_cohort_verified, false);
++  assert.equal(result.dispatch_authorized, false);
++  assert.equal(Object.hasOwn(result, 'graded'), false, 'saved claims cannot create fresh grades');
++  assert.ok(result.evidence_gaps.includes('native_journal_not_observed'));
++  assert.ok(!JSON.stringify(result).includes('private'));
++  assert.deepEqual(fs.readFileSync(options.report), before);
++  assert.deepEqual(fs.readdirSync(root), files, 'inventory creates no runtime files');
++});
++
++test('report recovery rejects missing input without initializing runtime state', (t) => {
++  const { root, options } = retainedReport(t);
++  const missing = path.join(root, 'missing', 'report.json');
++  assert.throws(() => reportInventory({ ...options, report: missing }), /ENOENT/);
++  assert.equal(fs.existsSync(path.dirname(missing)), false);
++});
++
++test('report recovery refuses malformed and ambiguous retained identities', (t) => {
++  const { saved, options } = retainedReport(t);
++  for (const change of [
++    (value) => { value.rows = {}; },
++    (value) => { value.rows[0] = null; },
++    (value) => { value.rows[1].case_id = 'case-a'; },
++    (value) => { value.rows[0].target = ''; },
++    (value) => { value.rows[0].retry_attempts = {}; },
++    (value) => { value.rows[0].retry_attempts[0].retry_attempts = [null]; },
++    (value) => { value.rows[0].backend_run_id = {}; },
++  ]) {
++    const malformed = structuredClone(saved);
++    change(malformed);
++    fs.writeFileSync(options.report, JSON.stringify(malformed));
++    assert.throws(() => reportInventory(options), /rows|case_id|retry_attempts|attempt|backend/);
++  }
++});
++
++test('report recovery requires explicit attribution and a valid check time', (t) => {
++  const { options } = retainedReport(t);
++  for (const overrides of [{ observedAt: NaN }, { observedAt: -1 },
++    { evidenceClass: 'authenticated' }, { evidenceReference: '' }]) {
++    assert.throws(() => reportInventory({ ...options, ...overrides }));
++  }
++});
++
++test('report recovery aborts if the input changes during observation', (t) => {
++  const { options } = retainedReport(t);
++  const read = fs.readFileSync;
++  let observations = 0;
++  fs.readFileSync = function observed(file, ...args) {
++    if (file === options.report && ++observations === 2) {
++      fs.writeFileSync(file, '{"rows":[]}');
++    }
++    return read(file, ...args);
++  };
++  try {
++    assert.throws(() => reportInventory(options), /changed during inventory/);
++  } finally {
++    fs.readFileSync = read;
++  }
++});
++
++test('report CLI never combines historical recovery with dispatch or current Brain selection', (t) => {
++  const { root, options } = retainedReport(t);
++  const args = [script, '--report', options.report, '--observed-at', String(now),
++    '--evidence-class', options.evidenceClass, '--evidence-reference', options.evidenceReference];
++  const result = execute(root, process.execPath, args);
++  assert.equal(result.status, 0, result.stderr);
++  assert.deepEqual(JSON.parse(result.stdout), reportInventory(options));
++  for (const extra of [['--dispatch'], ['--db', 'absent.db'], ['--manifest', 'absent.json'],
++    ['--days', '90'], ['--expected-count', '58']]) {
++    const refused = execute(root, process.execPath, [...args, ...extra]);
++    assert.equal(refused.status, 1, refused.stderr);
++    assert.equal(refused.stdout, '', 'refusal must not publish a partial inventory');
++  }
++});
++
+ function world(t, schema = true) {
+   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'adjudicator-inventory-'));
+   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+-- 
+2.56.0
+

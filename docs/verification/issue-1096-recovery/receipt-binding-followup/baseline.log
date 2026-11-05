@@ -1,0 +1,11 @@
+✔ tests/test_adjudicator_acceptance_runner.js (8478.928896ms)
+✔ tests/test_adjudicator_evidence_ledger.js (421.892208ms)
+✔ tests/test_adjudicator_inventory.js (4553.820213ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 8490.593993

@@ -1,0 +1,47 @@
+{
+  "git_directory": "/tmp/issue1096-packet-git-7bx5apif/repo.git",
+  "source_parent": "8bef6a28fce7b4eecbaa3fc08016d7bb505742b5",
+  "source_commit": "b2151b6912b8c36e76013fb36d186b1f2fa67557",
+  "checked_at": "2026-11-03T23:15:26.334842+00:00",
+  "regression_command": [
+    "node",
+    "--test",
+    "--test-isolation=none",
+    "tests/test_adjudicator_inventory.js",
+    "tests/test_adjudicator_acceptance_runner.js",
+    "tests/test_adjudicator_evidence_ledger.js"
+  ],
+  "regression_tests": {
+    "passed": 119,
+    "failed": 0,
+    "skipped": 0
+  },
+  "negative_controls": {
+    "passed": 0,
+    "failed": 3
+  },
+  "production_rule_comparison_packet_shapes": 37,
+  "regression_logs": {
+    "baseline.log": {
+      "sha256": "649e85ec25092302eee5e9fc7cf605f5094809be4108100810089da79bcfe093"
+    },
+    "negative-controls.log": {
+      "sha256": "2cefcb9196996c631fe57ca8d79aac834844f375837f53e024e269da24834797"
+    },
+    "regressions.log": {
+      "sha256": "c2ae11a9291f6877ee19999fa132745bffa431208f910c1ccf4447e17e9e68cb"
+    }
+  },
+  "source_sha256": {
+    "scripts/export_adjudicator_inventory.js": "3448241bb8e48a68ad98c9e4294a2c8e0067d9553a4f41c28da4cdded45a259a",
+    "tests/test_adjudicator_inventory.js": "68de3110f125e7246e6043959ca3fd806ba63b2bb7aca41f45d589cb8d59a6a4"
+  },
+  "python_files_changed": false,
+  "required_tests_passed": false,
+  "accepted_deployment_verified": false,
+  "newly_completed_tasks": 0,
+  "blocker_comment": "rejected_connector_requires_approval_policy_never",
+  "needs_human_label": "rejected_connector_requires_approval_policy_never",
+  "javascript_syntax_check_passed": true,
+  "whitespace_check_passed": true
+}

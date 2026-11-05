@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "source_revision": "a4e8c0c800839088b63df4b8cff5935c689b8d7b",
+  "accepted_deployment_verified": false,
+  "required_tests_passed": false,
+  "negative_control": {
+    "command": [
+      "node",
+      "tests/test_adjudicator_acceptance_runner.js"
+    ],
+    "exit_code": 1,
+    "failed_new_controls": 5,
+    "log": "runner-negative-controls.log",
+    "log_sha256": "8f878084959a537a07818f105ede61d4d679b662f681c4eacd5502c5a2ac60fa"
+  },
+  "regression_logs": {
+    "runner-tests.log": {
+      "command": [
+        "node",
+        "tests/test_adjudicator_acceptance_runner.js"
+      ],
+      "exit_code": 0,
+      "passed": 33,
+      "sha256": "7917c68b0539195a2aeca9a1b1f18c0d1f1f43bc3c86cb77819b1c51a92b0184"
+    },
+    "inventory-tests.log": {
+      "command": [
+        "node",
+        "tests/test_adjudicator_inventory.js"
+      ],
+      "exit_code": 0,
+      "passed": 53,
+      "sha256": "049af90a8268f2a817c53a7775bab4a8e17d074cf8ad7860afd83405aef403c0"
+    },
+    "ledger-tests.log": {
+      "command": [
+        "node",
+        "tests/test_adjudicator_evidence_ledger.js"
+      ],
+      "exit_code": 0,
+      "passed": 22,
+      "sha256": "5e65368c6c20d366a5f5bc546c65a8219918db07cf496e14d8a648029e7d3b29"
+    }
+  },
+  "plan": "plan.md",
+  "plan_sha256": "75b2cdbd7ed52421b3c309f521c1996c04e9c02ec78d729496331def2c3e4474",
+  "operational_acceptance_verified": false,
+  "pr_body_update": "rejected_requires_approval_policy_never",
+  "pr_readiness": {
+    "pr": 1097,
+    "state": "open",
+    "draft": false,
+    "head_sha": "1ae4e735d996af6069a943f7958cb1d8c93412da"
+  },
+  "historical_validation": "validation.json",
+  "historical_validation_sha256": "9d69bfbf549fab21a98bf9e4c9965697d1421679f98fbd986109c952dbb25b39",
+  "correction_checked_date": "2026-11-04",
+  "correction_scope": "Hash binding and checklist correction only; historical runs are unchanged.",
+  "task_reconciliation": "task-reconciliation.md",
+  "task_reconciliation_sha256": "cc1ddda2f0d341eb62107e5ed6b5b5e61289f20f0c5b92c3ac63810a6baade7a"
+}
