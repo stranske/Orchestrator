@@ -26,6 +26,8 @@ def _row(name: str, task_type: str) -> dict:
 
 def test_advisor_front_door_runs_against_a_hermetic_registered_ledger(monkeypatch, tmp_path):
     """Real task signals must reach their named capability and render usable advice."""
+    # Propensity ranking must not emit heartbeats to the import-time live ledger.
+    monkeypatch.delenv("ORCH_CAPABILITY_HEARTBEATS", raising=False)
     ledger = tmp_path / "capabilities.json"
     capabilities.save(
         {
