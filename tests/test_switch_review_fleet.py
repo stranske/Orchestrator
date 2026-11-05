@@ -22,7 +22,6 @@ from unittest.mock import patch
 import backlog
 import switch_review as review
 
-
 FIXTURE = Path(__file__).parent / "fixtures" / "switch_review_fleet.json"
 
 
