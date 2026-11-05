@@ -30,7 +30,7 @@ controls pass 33/33, inventory controls 53/53, and ledger controls 22/22. These
 test-double controls do not substitute for running the actual Python suite.
 
 Recent commits and existing receipts were reviewed before implementation.
-Only the four previously completed distinct deliverables remain complete;
+Only the three previously completed distinct deliverables remain complete;
 duplicate checkboxes require reconciliation as recorded in
 `task-reconciliation.md`. The connector rejected the remote PR-body update
 because it requires approval while the current policy is `never`.

@@ -43,7 +43,8 @@ function auditLedger(file) {
     const artifact = local(reference, directory);
     requireValue(sha256(artifact.content) === expected, `SHA-256 mismatch for ${reference}`);
   }
-  function receipt(reference) {
+  function receipt(reference, expected, bindings, entry) {
+    checkHash(reference, expected);
     const { target, content } = local(reference);
     const directory = path.dirname(target);
     const saved = JSON.parse(content);
@@ -78,6 +79,22 @@ function auditLedger(file) {
         }
         if (key !== 'source_sha256') visit(item);
       }
+    }
+    // Bind only explicitly corresponding fields. A follow-up's validation and
+    // earlier required-test run can legitimately evaluate different revisions.
+    const fields = ['evaluated_revision', 'source_revision', 'source_commit',
+      'evaluated_source_commit', 'checkout_revision', 'required_tests_passed', 'passed', 'exit_code'];
+    requireValue(bindings && typeof bindings === 'object' && !Array.isArray(bindings),
+      `Missing field bindings for ${reference}`);
+    for (const field of fields.filter((field) => Object.hasOwn(saved, field))) {
+      const ledgerField = bindings?.[field];
+      requireValue(nonblank(ledgerField) && Object.hasOwn(entry, ledgerField) &&
+        entry[ledgerField] === saved[field],
+      `Ledger/receipt disagreement for ${reference}: ${field}`);
+    }
+    for (const field of Object.keys(bindings || {})) {
+      requireValue(fields.includes(field) && Object.hasOwn(saved, field),
+        `Unknown receipt binding for ${reference}: ${field}`);
     }
     visit(saved);
     for (const [log, observation] of Object.entries(saved.regression_logs || {})) {
@@ -132,18 +149,16 @@ function auditLedger(file) {
   const current = ledger.current_observations;
   requireValue(current && !Array.isArray(current) && typeof current === 'object' &&
     nonblank(current.checks), 'Current observations need their own check receipt');
-  const receipts = new Set();
   function collect(value) {
     if (!value || typeof value !== 'object') return;
     for (const [key, item] of Object.entries(value)) {
-      if (['checks', 'validation', 'runner_validation'].includes(key)) {
+      if (['checks', 'validation', 'runner_validation', 'historical_acquisition'].includes(key)) {
         requireValue(nonblank(item), `Current ${key} needs a receipt path`);
-        if (nonblank(item)) receipts.add(item);
+        if (nonblank(item)) receipt(item, value[`${key}_sha256`], value[`${key}_bindings`], value);
       } else collect(item);
     }
   }
   collect(current);
-  for (const reference of receipts) receipt(reference);
 
   requireValue(Array.isArray(ledger.mirror_synchronization) &&
     ledger.mirror_synchronization.length > 0, 'Mirror synchronization must remain separate');

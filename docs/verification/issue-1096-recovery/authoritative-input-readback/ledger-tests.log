@@ -1,0 +1,48 @@
+✔ published recovery ledger is attributable without establishing operational acceptance (39.973125ms)
+✔ rejects modified evidence instead of trusting the recorded result: named-tests.log (77.586334ms)
+✔ rejects modified evidence instead of trusting the recorded result: interpreter-followup/runner-after.log (71.563375ms)
+✔ rejects modified evidence instead of trusting the recorded result: pre-dispatch-observation.json (71.95225ms)
+✔ rejects changed hash-map evidence: plan.md (69.246625ms)
+✔ rejects missing hash-map evidence: plan.md (65.5195ms)
+✔ rejects changed hash-map evidence: results.md (69.678167ms)
+✔ rejects missing hash-map evidence: results.md (64.7155ms)
+✔ rejects missing evidence even when its parent receipt says it passed (56.899ms)
+✔ rejects a missing checksum on a referenced log: null (71.669125ms)
+✔ rejects a missing checksum on a referenced log: undefined (66.357209ms)
+✔ audits JUnit bytes and refuses an absent JUnit checksum (83.93175ms)
+✔ refuses evidence outside the ledger directory: relative (60.449041ms)
+✔ refuses evidence outside the ledger directory: absolute (58.386167ms)
+✔ refuses evidence outside the ledger directory: symlink (54.990791ms)
+✔ does not equate a historical backup with the canonical report (72.55975ms)
+✔ rejects a retained row count substituted for the saved population (74.330584ms)
+✔ rejects merged historical/current categories (72.295916ms)
+✔ rejects missing dated limitations (70.802333ms)
+✔ rejects missing disclosure (68.788ms)
+✔ rejects missing October 18 disclosure (64.452292ms)
+✔ rejects advice grade substitution (64.308ms)
+✔ rejects unproved acceptance (68.339167ms)
+✔ rejects replacement cohort count (64.157ms)
+✔ rejects mirror identity substitution (64.970917ms)
+✔ rejects historical dispatch substitution (70.154042ms)
+✔ rejects changed pinned receipt/acquisition: checks.json (65.499ms)
+✔ rejects missing pinned receipt/acquisition: checks.json (49.4795ms)
+✔ rejects changed pinned receipt/acquisition: receipt-binding-followup/validation.json (64.609ms)
+✔ rejects missing pinned receipt/acquisition: receipt-binding-followup/validation.json (65.1475ms)
+✔ rejects changed pinned receipt/acquisition: attempt-diagnostics/historical-acquisition.json (66.580667ms)
+✔ rejects missing pinned receipt/acquisition: attempt-diagnostics/historical-acquisition.json (55.7595ms)
+✔ rejects changed pinned receipt/acquisition: packet-floor-followup/historical-acquisition.json (66.784334ms)
+✔ rejects missing pinned receipt/acquisition: packet-floor-followup/historical-acquisition.json (57.449708ms)
+✔ rejects receipt disagreement even with a valid receipt pin: evaluated_revision (69.8595ms)
+✔ rejects ledger disagreement even with a valid receipt pin: evaluated_revision (67.104916ms)
+✔ rejects receipt disagreement even with a valid receipt pin: required_tests_passed (68.986959ms)
+✔ rejects ledger disagreement even with a valid receipt pin: required_tests_passed (68.736416ms)
+✔ requires explicit receipt pin and correspondence: checks_sha256 (66.0335ms)
+✔ requires explicit receipt pin and correspondence: checks_bindings (68.377791ms)
+ℹ tests 40
+ℹ suites 0
+ℹ pass 40
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2706.02

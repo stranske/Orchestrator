@@ -2,10 +2,10 @@
 
 Checked 2026-11-03 against recent commits through `1ae4e73` and the published
 recovery evidence. The PR's primary checklist already checks the following
-three tasks and one acceptance criterion. Its duplicate Full Issue Text
+two tasks and one acceptance criterion. Its duplicate Full Issue Text
 checklist still leaves them unchecked. Apply the same verified state there:
 
-- [x] Recover existing external acceptance artifacts first; identify the accepted source, deployed and mirror revisions, canonical report, original retrospective rows, and previously fixed next-20 cohort. Explicitly record unavailable historical evidence, including October 18.
+- [ ] Recover existing external acceptance artifacts first; identify the accepted source, deployed and mirror revisions, canonical report, original retrospective rows, and previously fixed next-20 cohort. Explicitly record unavailable historical evidence, including October 18.
 - [x] Record the real-input acceptance command, expected outcome, check date, and bounded stop rule before execution. Inventory receipts and paid attempts, and reconcile retry dispatch with existing native publication protections and live writer ownership.
 - [x] Publish an evidence ledger that separately attributes historical observations, current observations, mirror synchronization, and dispatch receipts.
 - [x] Evidence types remain separately attributable, and missing historical proof is explicitly disclosed.

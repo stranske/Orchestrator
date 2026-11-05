@@ -1,0 +1,62 @@
+{
+  "checked_date": "2026-11-04",
+  "scope": "Read-only artifact recovery, no native admission or publication",
+  "external_artifacts": [
+    {
+      "role": "canonical_publication",
+      "location": "/Users/teacher/.codex/orchestrator/capability-program/adjudicator-retro.json",
+      "bytes": 14575286,
+      "observed_sha256": "f4117a581b36e02925511fd70e6f8a6debda5ed073ab80b6301906eb29d7d56a",
+      "status": "bytes_read_only; authority_not_authenticated"
+    },
+    {
+      "role": "authentication_journal",
+      "location": "/Users/teacher/.codex/automations/imi-merge-verify-closer/work/native579/attempts.sqlite",
+      "bytes": 1052672,
+      "observed_sha256": "bb3bcb83bf7e13e697a0ee069a9528968d0699aeeea93d44a7af67b33344e15c",
+      "status": "bytes_read_only; authority_not_authenticated"
+    },
+    {
+      "role": "historical_deployment_binding",
+      "location": "/Users/teacher/.codex/automations/imi-merge-verify-closer/work/20261014T1205Z-native/native-deployed-module-bindings.json",
+      "bytes": 2545,
+      "observed_sha256": "63d917f54110f1f1a00a63523aaf8f391a72f1cd8369ac464ec1ce187c8567a5",
+      "status": "bytes_read_only; authority_not_authenticated"
+    },
+    {
+      "role": "qualification_478",
+      "location": "/Users/teacher/.codex/automations/imi-merge-verify-closer/work/20261016T0621Z/478-supporting-qualification.json",
+      "bytes": 6624,
+      "observed_sha256": "411d20b46c5e7bf25675c95782ca04d2a2ee74a652e7cb8c0f9df292f80fa580",
+      "status": "bytes_read_only; authority_not_authenticated"
+    },
+    {
+      "role": "immutable_native_source",
+      "location": "/Users/teacher/.codex/automations/imi-merge-verify-closer/work/20261016T1728Z-579/original-report-frozen.json",
+      "status": "unavailable",
+      "error": "ENOENT"
+    },
+    {
+      "role": "qualified_input_478",
+      "location": "/Users/teacher/.codex/automations/imi-merge-verify-closer/work/20261016T0202Z/qualification-recovery/478/qualified-input-report.json",
+      "status": "unavailable",
+      "error": "ENOENT"
+    }
+  ],
+  "original_21_source_location": "/Users/teacher/.codex/automations/imi-merge-verify-closer/work/20261014T1205Z-native/579-original-results.json",
+  "original_21_results": "original-21-results.json",
+  "original_21_results_sha256": "d60eca6dc09185c99b94f7dd3fc4f4dfe13ab37873cfcae97f2acf4fa2c79e4d",
+  "original_21_identified": 21,
+  "original_21_with_recorded_first_broken_step": 21,
+  "original_21_checked_date": "2026-10-14 (historical run; re-read 2026-11-04)",
+  "limitations": [
+    "Native journal bytes located but not authenticated against missing immutable source and qualified input; no SQLite write or schema initialization performed.",
+    "Saved canonical summary graded=1; no authenticated intermediate >=25 or canonical >=29 evidence.",
+    "Historical deployed binding names 28f12766e84818508b37173a86e0be5817bfb0a2, not a current accepted/deployed/mirror binding.",
+    "No original fixed next-20 manifest was found in the recorded source locations. No replacement membership is inferred.",
+    "Raw authenticated October 18 proof remains unavailable."
+  ],
+  "provider_calls": 0,
+  "production_dispatches": 0,
+  "canonical_publications": 0
+}

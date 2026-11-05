@@ -83,6 +83,9 @@ test('audits JUnit bytes and refuses an absent JUnit checksum', (t) => {
   checks.checks[0].junit = 'result.xml';
   checks.checks[0].junit_sha256 = createHash('sha256').update(xml).digest('hex');
   fs.writeFileSync(file, JSON.stringify(checks));
+  options.ledger.current_observations.checks_sha256 = createHash('sha256')
+    .update(fs.readFileSync(file)).digest('hex');
+  options.save();
   assert.equal(auditLedger(options.file).operational_acceptance_verified, false);
   delete checks.checks[0].junit_sha256;
   fs.writeFileSync(file, JSON.stringify(checks));
@@ -149,5 +152,48 @@ for (const [name, mutate, message] of [
     mutate(options.ledger);
     options.save();
     assert.throws(() => auditLedger(options.file), message);
+  });
+}
+
+for (const reference of ['checks.json', 'receipt-binding-followup/validation.json',
+  'attempt-diagnostics/historical-acquisition.json',
+  'packet-floor-followup/historical-acquisition.json']) {
+  for (const mode of ['changed', 'missing']) {
+    test(`rejects ${mode} pinned receipt/acquisition: ${reference}`, (t) => {
+      const options = fixture(t);
+      const file = path.join(options.directory, reference);
+      if (mode === 'missing') fs.unlinkSync(file);
+      else fs.appendFileSync(file, '\n ');
+      assert.throws(() => auditLedger(options.file), /SHA-256 mismatch|ENOENT/);
+    });
+  }
+}
+
+for (const field of ['evaluated_revision', 'required_tests_passed']) {
+  for (const side of ['receipt', 'ledger']) {
+    test(`rejects ${side} disagreement even with a valid receipt pin: ${field}`, (t) => {
+      const options = fixture(t);
+      const entry = options.ledger.current_observations.required_test_followup;
+      const file = path.join(options.directory, entry.checks);
+      if (side === 'ledger') {
+        entry[entry.checks_bindings[field]] = field === 'required_tests_passed' ? true : '0'.repeat(40);
+      } else {
+        const receipt = JSON.parse(fs.readFileSync(file));
+        receipt[field] = field === 'required_tests_passed' ? true : '0'.repeat(40);
+        fs.writeFileSync(file, JSON.stringify(receipt));
+        entry.checks_sha256 = createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+      }
+      options.save();
+      assert.throws(() => auditLedger(options.file), /Ledger\/receipt disagreement/);
+    });
+  }
+}
+
+for (const key of ['checks_sha256', 'checks_bindings']) {
+  test(`requires explicit receipt pin and correspondence: ${key}`, (t) => {
+    const options = fixture(t);
+    delete options.ledger.current_observations.required_test_followup[key];
+    options.save();
+    assert.throws(() => auditLedger(options.file), /Missing.*SHA-256|Missing field bindings|disagreement/);
   });
 }
