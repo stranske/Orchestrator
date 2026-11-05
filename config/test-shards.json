@@ -14,6 +14,7 @@
     "tests/test_python_floor.py",
     "tests/test_storage_abort_reconciliation.py",
     "tests/test_storage_interrupted_release.py",
+    "tests/test_switch_review_fleet.py",
     "tests/test_testgen_off_flash_renewal_target.py",
     "tests/test_verify_failure_evidence.py"
   ],
@@ -427,6 +428,7 @@
       "tests/test_strategy_result_recording.py",
       "tests/test_strategy_review_sequence.py",
       "tests/test_switch_review_bootstrap_drain.py",
+      "tests/test_switch_review_fleet.py",
       "tests/test_switch_review_mirror_drift.py",
       "tests/test_switch_review_strategy_line.py",
       "tests/test_transport_qualification.py",
