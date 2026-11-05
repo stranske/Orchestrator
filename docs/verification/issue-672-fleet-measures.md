@@ -112,3 +112,33 @@ files and this note remain in the working tree. Attempts to post the blocker
 comment and add `needs-human` to PR #1130 were also rejected because tool approval
 is required and this run's approval policy is `never`. The connector confirmed
 PR #1130 is open with `draft=false`.
+
+## Single-test mutation evidence — 2026-11-05 09:53Z
+
+The mutation verifier previously accepted pytest output containing the selected
+test result alongside additional passed or failed tests. It now requires exactly
+one result count, matching the selected test's expected verdict. A new JavaScript
+regression reproduced the false acceptance before the fix and passed afterward;
+it checks both baseline and deliberate-failure output. No Python files changed.
+
+- [x] `node --test --test-isolation=none tests/test_verify_fleet_delivery_mutation.js`:
+  four tests passed, including the real reader mutation and byte-for-byte restoration.
+- [x] `PYTHON=python3 node scripts/verify_fleet_delivery_mutation.js --unittest`:
+  the named Python test passed, failed on the deliberate measured `0%`, and passed
+  after restoration. This completes the deliberate-break check using the available
+  Python 3.14.10 interpreter; it does not establish selected-interpreter acceptance.
+- [x] All 25 fleet tests passed via unittest; `src/switch_review.py --selftest` passed.
+- [x] The available-interpreter CLI smoke check printed all five rows at
+  `2026-11-05T09:53:18+00:00` in `/tmp/orch-fleet-live-current.txt`. GitHub read errors
+  and the missing opener helper were explicitly unmeasured.
+- [ ] Selected-interpreter full verification and live-machine acceptance remain
+  blocked: `/opt/anaconda3/bin/python3` is absent. The available interpreter lacks
+  pytest, so both pytest-mode mutation verification and `src/verify.py --pytest-shard 1/6`
+  exited 1. The fixture suite's unittest run is not a pytest or full-verification pass.
+
+The requested source/test commit was attempted after `git diff --check` passed,
+but Git could not create `.git/index.lock` because the Git directory is read-only.
+The two JavaScript changes and this evidence update remain uncommitted.
+The blocker comment and `needs-human` label were also rejected: the GitHub tools
+require approval and this run's approval policy is `never`. The connector confirmed
+PR #1130 remains open with `draft=false`.

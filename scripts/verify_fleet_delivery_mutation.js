@@ -28,8 +28,9 @@ function requireVerdict(result, runner, failed) {
   if (runner === 'pytest') {
     const node = `tests/${testModule}.py::${testClass}::${testName}`;
     assert.ok(output.includes(`${node} ${failed ? 'FAILED' : 'PASSED'}`), output);
-    assert.match(output, failed ? /\b1 failed\b/ : /\b1 passed\b/);
-    assert.doesNotMatch(output, /\b\d+ (?:error|skipped|xfailed|xpassed|deselected)/i);
+    const counts = [...output.matchAll(/\b(\d+) (passed|failed|errors?|skipped|xfailed|xpassed|deselected)\b/gi)];
+    assert.deepEqual(counts.map((match) => [Number(match[1]), match[2].toLowerCase()]),
+      [[1, failed ? 'failed' : 'passed']], output);
   } else {
     const name = `${testName} (${testModule}.${testClass}.${testName})`;
     assert.ok(output.includes(`${name} ... ${failed ? 'FAIL' : 'ok'}`), output);

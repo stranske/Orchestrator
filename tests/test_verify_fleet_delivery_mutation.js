@@ -28,6 +28,24 @@ test('missing tools, skipped tests and unrelated failures cannot count as mutati
   }
 });
 
+test('pytest evidence must report only the one selected test', () => {
+  const node = 'tests/test_switch_review_fleet.py::FleetDeliveryTests::test_failed_gate_read_is_not_a_number';
+  for (const failed of [false, true]) {
+    const status = failed ? 1 : 0;
+    const verdict = failed ? 'FAILED' : 'PASSED';
+    const count = failed ? '1 failed' : '1 passed';
+    const assertion = failed ? "\nAssertionError: '0%' is not None" : '';
+    const output = `${node} ${verdict} [100%]${assertion}\n${count}`;
+    requireVerdict({ status, signal: null, stdout: output }, 'pytest', failed);
+    // A matching assertion in a larger run is insufficient proof of the selected control.
+    for (const extra of ['1 passed', '1 failed', '2 passed', '2 failed']) {
+      assert.throws(() => requireVerdict({
+        status, signal: null, stdout: `${output}, ${extra}`,
+      }, 'pytest', failed), `accepted ${count}, ${extra}`);
+    }
+  }
+});
+
 test('a blocked mutation run restores the original source bytes', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-mutation-restoration-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
