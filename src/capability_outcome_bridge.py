@@ -81,7 +81,9 @@ def _tagged_capability_ids(run_id: str, row: dict) -> list[str]:
             raw = json.loads(raw)
         except (ValueError, TypeError):
             return []
-    return [str(c) for c in (raw or []) if c]
+    if not isinstance(raw, list):
+        return []
+    return [str(c) for c in raw if c]
 
 
 _FLEET_DELIVERABLE_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[1-9][0-9]*$")
