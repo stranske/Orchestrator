@@ -214,3 +214,33 @@ read-only filesystem. The GitHub connector rejected tree creation, `needs-human`
 labeling and the blocker comment with `MCP tool call requires approval, but
 approval policy is never`. No new commit or remote update was applied. Final
 readback confirms PR #1132 is open with `draft=false` at `2a255d2`.
+
+## Ambiguous-exit omission counts, 2026-11-05
+
+Fixed a reconciliation summary defect: duplicate completed exits correctly
+prevented an accepted join, but also removed the decision from both the matching
+completion and unaccounted-completion counts. Raw reconciliation now counts a
+decision with any matching completed exit as an obligation, while retaining the
+existing unique-attribution requirement for acceptance. Duplicate raw trailers
+and duplicate persisted rounds remain explicitly ambiguous and earn no join.
+
+The changed duplicate-trailer assertion and new positive-total regression both
+failed before the fix. After the fix, the combined relay/preflight CLI suites
+pass **40 tests**, exit 0. The regression covers identical and different duplicate
+trailers, duplicate persisted rounds, a mismatched trailer preceding a matching
+one, wholly mismatched agents, retained round IDs, and unchanged database/log
+bytes. Node syntax checks and `git diff --check` pass. No Python files changed.
+
+No additional task is complete. Production records remain unavailable, and pytest
+is absent; installation in an isolated environment could not obtain pytest.
+There is no passing repository-test/verifier result. Assessed local `origin/main`
+is `b69ff474d3a87a271a7345874bcfc19b03a736bf`; its floor SHA-256 is
+`d9640632d10dbebbf82c1de1a4623fcfc2fddfc1ab280533732bab3abb51e1ed`.
+The unchanged working floor still hashes to
+`00d01689a9b9f6604f94ffc8f48ac723c32142c159edcf616d846739c0b655ec`,
+so byte equality is false. Deadline attribution remains unresolved without
+production timestamps; success after `2026-11-04T08:16:32Z` is late recovery.
+Local staging failed because `.git/index.lock` is on a read-only filesystem.
+The GitHub connector also rejected tree creation, `needs-human` labeling and
+the blocker comment with `MCP tool call requires approval, but approval policy
+is never`. No commit, push, label or comment was applied.

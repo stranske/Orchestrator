@@ -190,7 +190,7 @@ test('accepted persisted joins require unique raw exits with matching timestamp 
   const original = exitLine('exact', deployment + 20);
   for (const [line, reason, eligible] of [
     ['', 'no_raw_exit', false],
-    [original + original, 'ambiguous_raw_exits', false],
+    [original + original, 'ambiguous_raw_exits', true],
     [exitLine('exact', deployment + 9), 'raw_exit_mismatch', false],
     [exitLine('exact', deployment + 20, 0, 'cursor'), 'raw_exit_mismatch', false],
     [exitLine('exact', deployment + 20, 0, 'claude', 'closer'), 'raw_exit_mismatch', false],
@@ -215,6 +215,52 @@ test('accepted persisted joins require unique raw exits with matching timestamp 
   assert.equal(ambiguous.accepted_window_joins, 0);
   assert.equal(ambiguous.unaccounted_completed_exit_decisions, 1);
   assert.equal(ambiguous.decisions[0].exit_reconciliation_status, 'ambiguous_completed_exits');
+});
+
+test('ambiguous exits remain unaccounted despite positive accepted join totals', (t) => {
+  const w = world(t);
+  w.append('joined', deployment);
+  w.exit('joined', deployment + 5);
+  w.append('ambiguous', deployment + 10);
+  const first = w.exit('ambiguous', deployment + 20);
+  const second = w.exit('ambiguous', deployment + 21);
+  const exits = path.join(w.root, 'relay-exits.log');
+  const good = exitLine('joined', deployment + 5);
+  const original = exitLine('ambiguous', deployment + 20);
+  const files = ['brain.db', 'relay-pacing.log'];
+  const before = files.map((f) => fs.readFileSync(path.join(w.root, f)));
+  for (const trailers of [
+    null, // Persisted-round comparison must also retain the ambiguous obligation.
+    original + original, // Even identical duplicate trailers prevent attribution.
+    original + exitLine('ambiguous', deployment + 21),
+    exitLine('ambiguous', deployment + 20, 0, 'cursor') + original,
+  ]) {
+    if (trailers !== null) fs.writeFileSync(exits, good + trailers);
+    const raw = w.report(deployment + 21, deployment, w.log,
+      trailers === null ? undefined : exits).raw_reconciliation;
+    assert.equal(raw.window_decisions, 2);
+    assert.equal(raw.matching_completed_exit_decisions, 2);
+    assert.equal(raw.accepted_window_joins, 1);
+    assert.equal(raw.unaccounted_completed_exit_decisions, 1);
+    const ambiguous = raw.decisions[1];
+    assert.equal(ambiguous.matching_completed_exit, true);
+    assert.equal(ambiguous.status, 'ambiguous_completed_exits');
+    if (trailers !== null) {
+      assert.equal(ambiguous.exit_reconciliation_status, 'ambiguous_raw_exits');
+      assert.equal(ambiguous.raw_exit_records.length, 2);
+    }
+    assert.deepEqual(ambiguous.completed_rounds.map((r) => r.decision_id),
+      [first.decision_id, second.decision_id]);
+    assert.deepEqual(ambiguous.accepted_edge_ids, []);
+  }
+  // Multiple trailers without a single matching agent are not completed-exit evidence.
+  fs.writeFileSync(exits, good + exitLine('ambiguous', deployment + 20, 0, 'cursor')
+    + exitLine('ambiguous', deployment + 21, 0, 'cursor'));
+  const mismatch = w.report(deployment + 21, deployment, w.log, exits).raw_reconciliation;
+  assert.equal(mismatch.matching_completed_exit_decisions, 1);
+  assert.equal(mismatch.unaccounted_completed_exit_decisions, 0);
+  assert.equal(mismatch.decisions[1].matching_completed_exit, false);
+  assert.deepEqual(files.map((f) => fs.readFileSync(path.join(w.root, f))), before);
 });
 
 test('raw exit reconciliation preserves exact IDs and window boundaries and excludes invalid lines', (t) => {
