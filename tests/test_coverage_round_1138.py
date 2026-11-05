@@ -1650,3 +1650,285 @@ def test_main_covers_suggestion_success_and_context_usage(monkeypatch, isolated_
     monkeypatch.setattr(repo_knowledge, "context_for", lambda *_a, **_k: "PLAYBOOK")
     assert repo_knowledge.main(["o/r", "implement", "opener"]) == 0
     assert capsys.readouterr().out.strip() == "PLAYBOOK"
+
+
+def _empty_registry(path):
+    repo_knowledge.save(
+        {"schema_version": repo_knowledge.SEED_SCHEMA_VERSION, "repos": {}},
+        path,
+    )
+
+
+def test_build_report_treats_corrupt_pattern_artifacts_as_empty(monkeypatch, isolated_runtime):
+    import adapters
+
+    state = isolated_runtime / "state"
+    state.mkdir()
+    (state / "pattern-miner-status.json").write_text("{not-json")
+    (state / "pattern-miner-inventory.json").write_text("{also-not")
+    spawned = []
+
+    def runner(argv, *args, **kwargs):
+        spawned.append(list(argv) if isinstance(argv, (list, tuple)) else [str(argv)])
+        return subprocess.CompletedProcess(argv, 127, "", "not started")
+
+    monkeypatch.setattr(subprocess, "run", runner)
+    monkeypatch.setattr(adapters, "advertised_models", lambda *_a, **_k: [])
+    report = periodic_report.build_report(window_days=1, probe_langsmith_artifacts=False)
+    miner = report["pattern_miner"]
+    assert miner["status"] == {}
+    assert miner["inventory"]["emitted_candidate_count"] == 0
+    assert miner["inventory"]["expired_candidate_count"] == 0
+    assert miner["inventory"]["tombstone_count"] == 0
+    assert spawned, "catalog probes must hit the stub"
+    assert all(
+        cmd and cmd[0] in {"codex", "claude", "cursor-agent", "npx", "agy"} for cmd in spawned
+    )
+
+
+def test_managed_rule_duplicate_flags_fuzzy_playbook_meaning(isolated_runtime):
+    reg = isolated_runtime / "registry.json"
+    existing = "Always run the documented postgres migration before deploying this service."
+    repo_knowledge.save(
+        {
+            "schema_version": repo_knowledge.SEED_SCHEMA_VERSION,
+            "repos": {
+                "o/r": {
+                    "gotchas": [{"text": existing, "content_hash": "sha256:existing"}],
+                }
+            },
+        },
+        reg,
+    )
+    queried = "Always run the documented postgres migration before deploying the service."
+    assert queried.lower() != existing.lower()
+    found = repo_knowledge.managed_rule_duplicate("o/r", queried, "sha256:other", path=reg)
+    assert found["reason"] == "duplicate playbook meaning"
+    assert found["section"] == "gotchas"
+    assert found["item"]["text"] == existing
+
+
+def test_repo_from_git_remote_parses_github_and_rejects_other_remotes(
+    monkeypatch, isolated_runtime
+):
+    root = isolated_runtime / "checkout"
+    root.mkdir()
+    scripts = iter(
+        [
+            "git@github.com:octo/widgets.git\n",
+            "https://github.com/octo/widgets\n",
+            "\n",
+            "https://gitlab.com/octo/widgets.git\n",
+        ]
+    )
+    seen = []
+
+    def runner(argv, **kwargs):
+        seen.append(list(argv))
+        return subprocess.CompletedProcess(argv, 0, next(scripts), "")
+
+    monkeypatch.setattr(subprocess, "run", runner)
+    assert repo_knowledge._repo_from_git_remote(root) == "octo/widgets"
+    assert repo_knowledge._repo_from_git_remote(root) == "octo/widgets"
+    assert repo_knowledge._repo_from_git_remote(root) == ""
+    assert repo_knowledge._repo_from_git_remote(root) == ""
+    assert [cmd[:3] for cmd in seen] == [["git", "-C", str(root)]] * 4
+    assert all(cmd[3:] == ["config", "--get", "remote.origin.url"] for cmd in seen)
+
+
+def test_suggest_from_docs_requires_directory_and_repo(monkeypatch, isolated_runtime):
+    with pytest.raises(FileNotFoundError, match="repo docs root not found"):
+        repo_knowledge.suggest_from_docs(isolated_runtime / "missing-docs", repo="o/r")
+
+    root = isolated_runtime / "empty-docs"
+    root.mkdir()
+
+    def runner(argv, **kwargs):
+        return subprocess.CompletedProcess(argv, 1, "", "no origin")
+
+    monkeypatch.setattr(subprocess, "run", runner)
+    with pytest.raises(ValueError, match="--repo is required"):
+        repo_knowledge.suggest_from_docs(root)
+
+
+def test_suggest_from_docs_skips_unreadable_empty_blocks_and_stops_at_cap(
+    monkeypatch, isolated_runtime
+):
+    reg = isolated_runtime / "registry.json"
+    _empty_registry(reg)
+    root = isolated_runtime / "docs-repo"
+    docs = root / "docs"
+    docs.mkdir(parents=True)
+    secret = docs / "a-secret.md"
+    secret.write_text("Agents must not be read.\n")
+    notes = docs / "b-notes.md"
+    notes.write_text(
+        "\n".join(
+            [
+                "- **",
+                "- Agents must record the postgres migration before deploy.",
+                "- Operators must never skip the rollback note before release.",
+            ]
+        )
+        + "\n"
+    )
+    real_read = Path.read_text
+
+    def unreadable(self, *args, **kwargs):
+        if self == secret:
+            raise OSError("unreadable")
+        return real_read(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", unreadable)
+    found = repo_knowledge.suggest_from_docs(root, repo="o/r", path=reg, max_per_repo=1)
+    assert len(found) == 1
+    assert "postgres migration" in found[0]["candidate_text"]
+    assert "rollback" not in found[0]["candidate_text"]
+    assert found[0]["evidence"].startswith("docs/b-notes.md:")
+
+
+def test_review_payload_skips_noise_and_honors_the_cap(isolated_runtime):
+    reg = isolated_runtime / "registry.json"
+    _empty_registry(reg)
+    payload = [
+        "not-a-record",
+        {"body": "Thanks for taking a look at the patch.", "path": "noise.py"},
+        {
+            "body": "Agents must record the postgres migration before deploy.",
+            "path": "migrate.py",
+            "html_url": "https://example.test/1",
+        },
+        {"body": "Operators must never skip the rollback note before release.", "path": "b.py"},
+    ]
+    found = repo_knowledge.suggest_from_review_payload(
+        payload, repo="o/r", path=reg, max_per_repo=1
+    )
+    assert len(found) == 1
+    assert "postgres migration" in found[0]["candidate_text"]
+    assert found[0]["evidence"] == "migrate.py https://example.test/1"
+    assert found[0]["author"] is None
+
+
+def test_suggest_from_pr_comments_reports_bad_targets_and_payloads(isolated_runtime):
+    reg = isolated_runtime / "registry.json"
+    _empty_registry(reg)
+    calls = []
+
+    def missing_cli(argv, **kwargs):
+        calls.append(list(argv))
+        raise FileNotFoundError("gh")
+
+    with pytest.raises(ValueError, match="owner/repo#N"):
+        repo_knowledge.suggest_from_pr_comments("o/r", path=reg, runner=missing_cli)
+    assert calls == []
+    with pytest.raises(RuntimeError, match="gh CLI"):
+        repo_knowledge.suggest_from_pr_comments("o/r#4", path=reg, runner=missing_cli)
+    assert calls and calls[0][:2] == ["gh", "api"]
+
+    def empty_stdout(argv, **kwargs):
+        calls.append(list(argv))
+        return subprocess.CompletedProcess(argv, 0, "  ", "")
+
+    calls.clear()
+    assert repo_knowledge.suggest_from_pr_comments("o/r#4", path=reg, runner=empty_stdout) == []
+    assert len(calls) == 3
+
+    def bad_json(argv, **kwargs):
+        return subprocess.CompletedProcess(argv, 0, "{", "")
+
+    assert repo_knowledge.suggest_from_pr_comments("o/r#4", path=reg, runner=bad_json) == []
+
+
+def test_suggest_from_snapshot_skips_outcomes_that_cannot_become_rules(
+    monkeypatch, isolated_runtime
+):
+    reg = isolated_runtime / "registry.json"
+    _empty_registry(reg)
+    real = repo_knowledge._repo_for_suggestion_target
+
+    def flaky(target):
+        if str(target).startswith("bad"):
+            raise ValueError("bad target")
+        return real(target)
+
+    monkeypatch.setattr(repo_knowledge, "_repo_for_suggestion_target", flaky)
+    signal = "Agents must record the postgres migration before deploying."
+    snapshot = isolated_runtime / "snap.json"
+    snapshot.write_text(
+        json.dumps(
+            {
+                "runs": [
+                    {"run_id": "keep", "target": "o/r#1", "task_type": "implement"},
+                    {"run_id": "blank", "target": "o/r#2", "task_type": "implement"},
+                    {"run_id": "prose", "target": "o/r#3", "task_type": "implement"},
+                    {"run_id": "bad", "target": "bad#4", "task_type": "implement"},
+                ],
+                "outcomes": [
+                    {"run_id": "missing", "notes": signal, "adjudicated_verdict": "FAIL"},
+                    {"run_id": "blank", "notes": "   ", "adjudicated_verdict": "FAIL"},
+                    {
+                        "run_id": "prose",
+                        "notes": "The afternoon review finished on time and the notes stayed short.",
+                        "adjudicated_verdict": "PASS",
+                        "durability": "durable",
+                    },
+                    {"run_id": "bad", "notes": signal, "adjudicated_verdict": "FAIL"},
+                    {"run_id": "keep", "notes": signal, "adjudicated_verdict": "FAIL"},
+                ],
+            }
+        )
+    )
+    found = repo_knowledge.suggest_from_snapshot(snapshot, path=reg, max_per_repo=5)
+    assert [row["run_id"] for row in found] == ["keep"]
+    assert found[0]["repo"] == "o/r"
+    assert found[0]["suggested_section"] == "gotchas"
+
+
+def test_memory_score_is_zero_when_text_has_no_tokens():
+    assert repo_knowledge._memory_match({"postgres"}, "???") == {
+        "score": 0.0,
+        "matched_terms": [],
+        "coverage": 0.0,
+    }
+    score = repo_knowledge._score_memory_text(
+        {"postgres", "migration"},
+        "postgres migration must be documented before deploy",
+    )
+    assert score > 0
+
+
+def test_feedback_memory_keeps_matching_notes_and_swallows_query_errors(monkeypatch):
+    feedback.record_run("keep", "o/r#1", "implement", "codex")
+    feedback.record_outcome(
+        "keep",
+        adjudicated_verdict="FAIL",
+        notes="Migration must be recorded before deploy.",
+    )
+    feedback.record_run("other", "other/repo#2", "implement", "codex")
+    feedback.record_outcome(
+        "other",
+        notes="This other repo note must stay out of the result.",
+    )
+    feedback.record_run("bad", "bad#3", "implement", "codex")
+    feedback.record_outcome(
+        "bad",
+        notes="Agents must not keep a note whose target cannot be parsed.",
+    )
+    real = repo_knowledge._repo_for_suggestion_target
+
+    def flaky(target):
+        if str(target).startswith("bad"):
+            raise ValueError("bad target")
+        return real(target)
+
+    monkeypatch.setattr(repo_knowledge, "_repo_for_suggestion_target", flaky)
+    rows = repo_knowledge._run_memory_from_feedback("o/r")
+    assert [row["run_id"] for row in rows] == ["keep"]
+    assert rows[0]["repo"] == "o/r"
+    assert "Migration must be recorded" in rows[0]["text"]
+
+    def broken(*_args, **_kwargs):
+        raise RuntimeError("brain unreadable")
+
+    monkeypatch.setattr(feedback, "_conn", broken)
+    assert repo_knowledge._run_memory_from_feedback("o/r") == []

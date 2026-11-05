@@ -91,3 +91,52 @@ The second pass adds 33 tests. [mutation-proof-pass2.json](mutation-proof-pass2.
 records each one's broken exit 1 and restored exit 0. One first mutation of the snapshot
 CLI test survived because argparse usage still printed `--from-gap`; the assertion now
 requires the exact `parser.error` sentence, and that mutation was repeated and killed.
+
+## Third pass
+
+Ten more tests cover the production paths the second pass still missed:
+`periodic_report.build_report` corrupt pattern-miner artifacts, and `repo_knowledge`
+fuzzy playbook duplicates, git-remote parsing, doc and review suggestion filters,
+PR-comment payload failures, snapshot skips, tokenless memory scores, and feedback-memory
+query failures. Each failed under a real production replacement and passed after
+restoration ([mutation-proof-pass3.json](mutation-proof-pass3.json)). No production
+change remains.
+
+Local intersection against the same base artifact, 77 tests in this module:
+
+| Target | Base missing | Executed by this module | Still missing here |
+|---|---:|---:|---:|
+| local_verify | 10 | 10 | 0 |
+| capability_activation_audit | 46 | 42 | 4 |
+| exp_abcd | 9 | 0 | 9 |
+| periodic_report | 69 | 67 | 2 |
+| tick | 23 | 20 | 3 |
+| repo_knowledge | 160 | 157 | 3 |
+| total | 317 | 296 | 21 |
+
+Predicted shortfall from 180: 0 (296 >= 180). This is the same intersection method that
+matched the `88df4821` artifact's 88/88 gain. It is still not the Gate artifact for this
+head.
+
+The 21 statements this module does not execute are inside `_selftest` bodies, and the
+combined baseline already runs those selftests without reaching them:
+
+- `exp_abcd.py` 3158, 3170, 3179, 3301, 3473, 3548, 3618, 3772, 3774: environment-restore
+  `else` branches taken only when the variable was already set, nested fake-completion
+  and fake-`Popen.kill` helpers, and assertion-failure raises.
+- `capability_activation_audit.py` 2432-2433, 2436, 2448: the live-ledger
+  `docs-drift-fix-agent` check and the `ORCH_FLEET_ROOT`-already-set restore. CI
+  bootstraps an empty ledger and does not set that variable.
+- `periodic_report.py` 2998, 3119: the selftest's own `AssertionError` and
+  verdict-consistency assert, taken only when the selftest's expectation fails.
+- `tick.py` 897, 1289, 1293: restores of `ORCH_DISPATCH_LANE`, `ORCH_EXPLORATION_RATE`,
+  and `HANDOFF_DIR` when those variables were already set. The unset branches are the
+  ones the selftest runs.
+- `repo_knowledge.py` 1994-1995: loop body over `provision.BASE_BRANCH_OVERRIDES`, which
+  is an empty dict, so the body cannot run. Line 2490 is the selftest's
+  `AssertionError` when a stubbed `gh` failure is not surfaced; the production
+  `RuntimeError` is covered by `test_suggest_from_pr_comments_reports_bad_targets_and_payloads`.
+
+Running those `_selftest` functions from pytest would re-enter non-hermetic setup
+(real ledger lookups, nested subprocess fakes, and assertion failures of the selftest
+itself). They are not a separate production behavior to score.
