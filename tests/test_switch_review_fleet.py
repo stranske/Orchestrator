@@ -290,6 +290,48 @@ class FleetDeliveryTests(unittest.TestCase):
         self.assertEqual(len(rows), 101)
         self.assertIn("page=2", calls[1][1])
 
+        old = copy.deepcopy(self.data["prs"][0])
+        old["updated_at"] = "2026-11-01T00:00:00Z"
+        recent = self.data["prs"][0]
+        for pages in (
+            [[old, recent]],
+            [[recent, old, recent]],
+            [[{**recent, "updated_at": "2026-11-04T11:00:00Z"}] * 100, [recent]],
+        ):
+            with self.subTest(pages=len(pages), first=pages[0][0]["updated_at"]):
+                responses = iter(pages)
+                with self.assertRaisesRegex(review._FleetReadError, "descending updated PR order"):
+                    review._fleet_recent_prs(
+                        lambda args: (True, json.dumps(next(responses)), ""),
+                        "stranske/Orchestrator",
+                        self.now,
+                    )
+
+        # An old row cannot hide a newer row and turn the report into a numeric undercount.
+        self.data["prs"] = [old, recent]
+        rows = self.measure()["rows"]
+        for key in ("merge_to_close", "released_flow"):
+            self.assertIsNone(rows[key]["value"])
+            self.assertIn("descending updated PR order", rows[key]["reason"])
+        self.assertEqual(len(rows), 5)
+        self.assertIsNotNone(rows["oldest_canary"]["value"])
+        self.assertIsNotNone(rows["opener_cap"]["value"])
+
+        # Equal timestamps and the exact 48-hour boundary remain valid. Stop without
+        # another API read once a fully validated page reaches older PRs.
+        boundary = {**recent, "updated_at": "2026-11-03T00:00:00Z"}
+        batch = [recent] * 98 + [boundary, old]
+        calls = []
+
+        def gh_at_boundary(args):
+            calls.append(args)
+            self.assertEqual(len(calls), 1)
+            return True, json.dumps(batch), ""
+
+        rows = review._fleet_recent_prs(gh_at_boundary, "stranske/Orchestrator", self.now)
+        self.assertEqual(len(rows), 99)
+        self.assertEqual(rows[-1], boundary)
+
     def test_pr_pagination_budget_is_not_reported_as_complete(self):
         batch = [self.data["prs"][0]] * 100
         with self.assertRaisesRegex(review._FleetReadError, "complete updated PR pagination"):

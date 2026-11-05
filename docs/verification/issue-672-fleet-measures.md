@@ -290,3 +290,29 @@ because `.git` is read-only. The JavaScript implementation, regression tests, an
 these notes remain uncommitted. Checklist correction, `needs-human` labeling, and
 the blocker comment were each rejected with `MCP tool call requires approval,
 but approval policy is never`. No protected files or tracked Python files changed.
+
+## PR pagination ordering — 2026-11-05 16:32Z
+
+The first implementation task had a silent truncation path: an old `updated_at`
+row could stop the PR reader before a later recent row. The reader now validates
+descending timestamps within and across pages before trusting the 48-hour cutoff.
+Disordered responses leave both PR measures unmeasured and retain the other rows.
+The expanded existing pagination regression failed before the fix and passes
+afterward, including equal timestamps and the exact window boundary. The suite
+still contains 25 test methods; no collection floor changed.
+
+All 25 fleet unittest tests, the module selftest, and the isolated mutation and
+restoration controls for all five readers passed using available Python.
+`PYTHON=python3 node scripts/verify_fleet_delivery_live.js
+/tmp/orch-672-pagination-evidence` verified five explicitly unmeasured rows at
+`2026-11-05T16:32:45.215Z`. This is runner smoke evidence, not selected-interpreter
+live acceptance. `git diff --check` passed.
+
+Black formatting and the required repository-wide check could not run because
+Black is absent. Installing Black and pytest failed; pytest remains absent too.
+`/opt/anaconda3/bin/python3 src/verify.py` could not run because that interpreter
+is absent. The mandatory Black gate prevents committing the Python changes.
+No task was newly marked complete. GitHub rejected the unsupported full-verification
+checkbox correction, blocker comment, and `needs-human` label with
+`MCP tool call requires approval, but approval policy is never`.
+PR #1130 was confirmed open with `draft=false`.

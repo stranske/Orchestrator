@@ -489,6 +489,7 @@ def _fleet_gate_cancellations(gh, now: int) -> dict:
 def _fleet_recent_prs(gh, repo: str, now: int) -> list[dict]:
     """Complete updated population; no search ceiling or fixed `pr list --limit`."""
     rows: list[dict] = []
+    oldest_updated: int | None = None
     for page in range(1, 11):
         batch = _fleet_json(
             gh,
@@ -501,9 +502,16 @@ def _fleet_recent_prs(gh, repo: str, now: int) -> list[dict]:
         if not isinstance(batch, list):
             raise _FleetReadError("gh PR list is not an array")
         for pr in batch:
-            if _fleet_stamp(pr["updated_at"]) < now - 48 * 3600:
-                return rows
-            rows.append(pr)
+            updated = _fleet_stamp(pr["updated_at"])
+            if oldest_updated is not None and updated > oldest_updated:
+                raise _FleetReadError("would need consistent descending updated PR order")
+            oldest_updated = updated
+            if updated >= now - 48 * 3600:
+                rows.append(pr)
+        # Validate the whole page before trusting its cutoff. An old row followed
+        # by a recent one must not silently truncate either PR measurement.
+        if oldest_updated is not None and oldest_updated < now - 48 * 3600:
+            return rows
         if len(batch) < 100:
             return rows
     raise _FleetReadError("would need complete updated PR pagination beyond 1000 rows per repo")
