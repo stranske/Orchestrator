@@ -548,6 +548,7 @@ def test_the_kill_switch_and_the_limit_hold(world):
 def test_weekly_review_prints_the_live_line(world, monkeypatch):
     live.run_live(**world["common"])
     monkeypatch.setattr(live, "report_path", lambda: world["path"])
+    evidence = live.weekly_evidence(db=feedback.DB_PATH, path=world["path"], today="2026-11-05")
     rendered = switch_review.format_report(
         {
             "review_days": 7,
@@ -556,10 +557,13 @@ def test_weekly_review_prints_the_live_line(world, monkeypatch):
             "on_but_idle": [],
             "unconditioned": [],
             "mirror_drift": {"status": "ok"},
-            "adjudicator_live": live.weekly_line(),
+            "adjudicator_live": evidence,
         }
     )
     assert "adjudicator live: disputes 1, advised 1, uncertified 0, graded 0" in rendered
+    assert "M2 live pass: advised>0 MET" in rendered
+    assert "advised-window 7d by " in rendered
+    assert " UNOPENED" not in rendered
     # The Brain receipt, rather than the report cache, prevents duplicate advice.
     world["path"].write_text(json.dumps({"rows": [], "summary": {}, "population": 1}))
     again = live.run_live(**world["common"])
@@ -637,9 +641,59 @@ def test_m2_pass_clause_is_the_weekly_check_reading():
         {"advised": 20, "graded": 20, "agree": 15, "merge_rule_agree": 15}, today="2026-11-08"
     )
     assert "advised>0 PENDING" in live.m2_pass_clause(None, today="2026-11-05")
+    assert "advised-window 7d by UNKNOWN UNOPENED" in live.m2_pass_clause(None, today="2026-11-05")
     assert "graded UNKNOWN of 20 by 2026-11-08 PENDING" in live.m2_pass_clause(
         None, today="2026-11-09"
     )
+    # No stored open time: the count still reads, and the window stays UNKNOWN.
+    assert "advised-window 7d by UNKNOWN UNKNOWN" in live.m2_pass_clause(
+        {"advised": 0, "graded": 0, "agree": 0, "merge_rule_agree": 0}, today="2026-11-05"
+    )
+    opened = 1_793_836_800  # 2026-11-05 00:00:00 UTC
+    on_time = live.m2_pass_clause(
+        {"advised": 1, "graded": 0, "agree": 0, "merge_rule_agree": 0},
+        today="2026-11-12",
+        window_opened_at=opened,
+        first_advised_at=opened + 6 * 86400,
+    )
+    assert "advised>0 MET" in on_time
+    assert "advised-window 7d by 2026-11-12 MET" in on_time
+    waiting = live.m2_pass_clause(
+        {"advised": 0, "graded": 0, "agree": 0, "merge_rule_agree": 0},
+        today="2026-11-12",
+        window_opened_at=opened,
+    )
+    assert "advised>0 PENDING" in waiting
+    assert "advised-window 7d by 2026-11-12 PENDING" in waiting
+    missed = live.m2_pass_clause(
+        {"advised": 0, "graded": 0, "agree": 0, "merge_rule_agree": 0},
+        today="2026-11-13",
+        window_opened_at=opened,
+    )
+    assert "advised>0 MISSED" in missed
+    assert "advised-window 7d by 2026-11-12 MISSED" in missed
+    late = live.m2_pass_clause(
+        {"advised": 1, "graded": 0, "agree": 0, "merge_rule_agree": 0},
+        today="2026-11-13",
+        window_opened_at=opened,
+        first_advised_at=opened + 8 * 86400,
+    )
+    assert "advised>0 MISSED" in late
+    assert "advised-window 7d by 2026-11-12 MISSED" in late
+
+
+def test_the_seven_day_clock_opens_once_and_survives_reconciliation(world):
+    live.run_live(**world["common"])
+    report = json.loads(world["path"].read_text())
+    assert type(report["window_opened_at"]) is int and report["window_opened_at"] > 0
+    assert report["first_advised_at"] == world["common"]["now"]
+    live.reconcile_live(db=feedback.DB_PATH, path=world["path"])
+    again = json.loads(world["path"].read_text())
+    assert again["window_opened_at"] == report["window_opened_at"]
+    assert again["first_advised_at"] == report["first_advised_at"]
+    evidence = live.weekly_evidence(db=feedback.DB_PATH, path=world["path"], today="2026-11-05")
+    assert "advised-window 7d by " in evidence
+    assert "advised>0 MET" in evidence
 
 
 def test_weekly_evidence_carries_the_pass_reading_beside_the_live_line(world):

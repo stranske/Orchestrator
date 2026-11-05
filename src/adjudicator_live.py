@@ -53,8 +53,11 @@ DEFAULT_LIMIT = 3
 # M2 live (#643), the number the weekly check on #575 reads. The 0.75 bar is the merge
 # rule's agreement on the retrospective cohort. Below it, once 20 live rows are graded,
 # dispatch stops; short of 20 on the deadline the pool is recorded short, not retired.
+# Advised A > 0 is due within ADVISED_WINDOW_DAYS of the first live report write, which
+# is the first evidence the synced step ran. The deadline date is inclusive.
 GRADE_TARGET = 20
 GRADE_DEADLINE = "2026-11-08"
+ADVISED_WINDOW_DAYS = 7
 MERGE_RULE = 0.75
 OFF_WORDS = frozenset({"0", "false", "no", "off"})
 CHECK_RUN_PAGE_SIZE = 100
@@ -584,6 +587,7 @@ def _reconcile_live(*, db: Path | None = None, path: Path | None = None) -> dict
         "rule": MERGE_RULE,
         "retirement": retirement,
     }
+    _carry_pass_clock(report, prior=previous, now=report["generated_at"])
     _write_report(path, report)
     return report
 
@@ -778,17 +782,16 @@ def _run_live(
         since_ts = min(pending_ts) - 1
     elif processed_ts:
         since_ts = max(since_ts, max(processed_ts) - 1)
-    _write_report(
-        path,
-        {
-            "schema": "adjudicator-live/v1",
-            "generated_at": now,
-            "selection_since_ts": since_ts,
-            "population": population_count,
-            "summary": summary,
-            "rows": rows,
-        },
-    )
+    written = {
+        "schema": "adjudicator-live/v1",
+        "generated_at": now,
+        "selection_since_ts": since_ts,
+        "population": population_count,
+        "summary": summary,
+        "rows": rows,
+    }
+    _carry_pass_clock(written, prior=reconciled, now=now)
+    _write_report(path, written)
     _reconcile_live(db=db, path=path)
     return {
         "disabled": False,
@@ -862,6 +865,93 @@ def live_summary(rows: list[dict]) -> dict:
     }
 
 
+def _carry_pass_clock(report: dict, *, prior: dict | None, now: int) -> None:
+    """Keep the seven-day advice clock stable across a report replace.
+
+    The window opens on the first write. Later replaces must not move it to
+    ``generated_at``, which every run refreshes. The first advice stamp is the
+    earliest decided row, so a late decision cannot hide behind a rewrite.
+    """
+    prior = prior or {}
+    opened = report.get("window_opened_at")
+    if type(opened) is not int or opened < 0:
+        opened = prior.get("window_opened_at")
+    if type(opened) is not int or opened < 0:
+        stamps = [
+            row["attempted_at"]
+            for row in report.get("rows") or []
+            if isinstance(row, dict)
+            and type(row.get("attempted_at")) is int
+            and row["attempted_at"] >= 0
+        ]
+        prior_generated = prior.get("generated_at")
+        if stamps:
+            opened = min(stamps)
+        elif type(prior_generated) is int and prior_generated >= 0:
+            opened = prior_generated
+        else:
+            opened = now
+    report["window_opened_at"] = opened
+    first = report.get("first_advised_at")
+    if type(first) is not int or first < 0:
+        first = prior.get("first_advised_at")
+    if type(first) is not int or first < 0:
+        decided = [
+            row["attempted_at"]
+            for row in report.get("rows") or []
+            if isinstance(row, dict)
+            and row.get("decision") in {"uphold_blocker", "reject_blocker"}
+            and type(row.get("attempted_at")) is int
+            and row["attempted_at"] >= 0
+        ]
+        first = min(decided) if decided else None
+    if type(first) is int:
+        report["first_advised_at"] = first
+
+
+def _utc_date(stamp: int) -> str:
+    from datetime import datetime, timezone
+
+    return datetime.fromtimestamp(stamp, timezone.utc).date().isoformat()
+
+
+def _date_plus(iso: str, days: int) -> str:
+    from datetime import date, timedelta
+
+    return (date.fromisoformat(iso) + timedelta(days=days)).isoformat()
+
+
+def advised_window_clause(
+    summary: dict | None,
+    *,
+    today: str,
+    window_opened_at: int | None = None,
+    first_advised_at: int | None = None,
+) -> tuple[str, str]:
+    """The #575 seven-day advice reading: state, then ``advised-window 7d by DATE STATE``.
+
+    A missing summary has not been synced into a report, so the window is UNOPENED
+    rather than missed. A report with no stored open time keeps the count-only
+    advised state and marks the window UNKNOWN. Advice counts as in-window only
+    when its first stamp falls on or before the inclusive deadline.
+    """
+    prefix = f"advised-window {ADVISED_WINDOW_DAYS}d by "
+    if not summary:
+        return "PENDING", prefix + "UNKNOWN UNOPENED"
+    advised = int(summary.get("advised") or 0)
+    if type(window_opened_at) is not int or window_opened_at < 0:
+        state = "MET" if advised > 0 else "PENDING"
+        return state, prefix + "UNKNOWN UNKNOWN"
+    deadline = _date_plus(_utc_date(window_opened_at), ADVISED_WINDOW_DAYS)
+    if advised > 0:
+        if type(first_advised_at) is not int or first_advised_at < 0:
+            return "MET", f"{prefix}{deadline} UNKNOWN"
+        state = "MET" if _utc_date(first_advised_at) <= deadline else "MISSED"
+        return state, f"{prefix}{deadline} {state}"
+    state = "PENDING" if today <= deadline else "MISSED"
+    return state, f"{prefix}{deadline} {state}"
+
+
 def _write_report(path: Path, report: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     staged = path.with_suffix(".tmp")
@@ -887,22 +977,37 @@ def _retirement_due(summary: dict, report: dict) -> bool:
     return summary["agree"] / graded < MERGE_RULE
 
 
-def m2_pass_clause(summary: dict | None, *, today: str | None = None, retired: bool = False) -> str:
+def m2_pass_clause(
+    summary: dict | None,
+    *,
+    today: str | None = None,
+    retired: bool = False,
+    window_opened_at: int | None = None,
+    first_advised_at: int | None = None,
+) -> str:
     """The #575 check's M2 live verdict: advised, graded-by-date, agreement, merge rule.
 
-    ``today`` is an ISO date so a test can stand on either side of ``GRADE_DEADLINE``.
-    A missing summary stays pending: absence is not a failed pass number.
+    ``today`` is an ISO date so a test can stand on either side of ``GRADE_DEADLINE``
+    and the seven-day advice window. A missing summary stays pending: absence is
+    not a failed pass number. The trailing ``advised-window`` clause is the
+    within-7-days reading; it does not replace the graded-by-2026-11-08 reading.
     """
     from datetime import datetime, timezone
 
     today = today or datetime.now(timezone.utc).date().isoformat()
+    advised_state, window = advised_window_clause(
+        summary,
+        today=today,
+        window_opened_at=window_opened_at,
+        first_advised_at=first_advised_at,
+    )
     if not summary:
         return (
-            "M2 live pass: advised>0 PENDING; "
+            f"M2 live pass: advised>0 {advised_state}; "
             f"graded UNKNOWN of {GRADE_TARGET} by {GRADE_DEADLINE} PENDING; "
-            f"agreement UNKNOWN against {MERGE_RULE}; merge-rule UNKNOWN"
+            f"agreement UNKNOWN against {MERGE_RULE}; merge-rule UNKNOWN; "
+            f"{window}"
         )
-    advised = int(summary.get("advised") or 0)
     graded = int(summary.get("graded") or 0)
     rate = (summary.get("agree") or 0) / graded if graded else None
     rule_hits = summary.get("merge_rule_agree")
@@ -918,9 +1023,10 @@ def m2_pass_clause(summary: dict | None, *, today: str | None = None, retired: b
     agreement = "UNKNOWN" if rate is None else f"{rate:.3f}"
     rule = "UNKNOWN" if rule_rate is None else f"{rule_rate:.3f}"
     return (
-        f"M2 live pass: advised>0 {'MET' if advised > 0 else 'PENDING'}; "
+        f"M2 live pass: advised>0 {advised_state}; "
         f"graded {graded} of {GRADE_TARGET} by {GRADE_DEADLINE} {grade_state}; "
-        f"agreement {agreement} against {MERGE_RULE}; merge-rule {rule}"
+        f"agreement {agreement} against {MERGE_RULE}; merge-rule {rule}; "
+        f"{window}"
     )
 
 
@@ -962,10 +1068,18 @@ def weekly_evidence(
         f"advised {summary['advised']}, uncertified {summary['uncertified']}, "
         f"graded {summary['graded']} (agree {summary['agree']}, disagree {summary['disagree']})"
     )
+    opened = report.get("window_opened_at")
+    first_advised = report.get("first_advised_at")
     return (
         f"{date} {line}; agreement {agreement} against 0.75; "
         f"{retired}; blocking=dispatch retired or switched off; drainable=durability grading; "
-        + m2_pass_clause(summary, today=today, retired=due)
+        + m2_pass_clause(
+            summary,
+            today=today,
+            retired=due,
+            window_opened_at=opened if type(opened) is int else None,
+            first_advised_at=first_advised if type(first_advised) is int else None,
+        )
     )
 
 
