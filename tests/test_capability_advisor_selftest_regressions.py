@@ -1,37 +1,15 @@
-"""Hermetic regression tests for advisor selftest cleanup and prerequisite gates."""
+"""Hermetic regression tests for advisor selftest cleanup and prerequisite gates.
+
+Process and network calls are blocked by the suite guard in ``tests/conftest.py``.
+"""
 
 from __future__ import annotations
-
-import socket
-import subprocess
 
 import advisor_hermetic
 import pytest
 
 _modules = advisor_hermetic.import_under_temporary_runtime("capability_advisor")
 advisor = _modules["capability_advisor"]
-
-
-@pytest.fixture(autouse=True)
-def isolated_runtime_and_external_calls(monkeypatch):
-    """These selftests must never start a process.
-
-    Ledger and repo-knowledge paths are bound at import. ``advisor_hermetic`` sets the temporary
-    roots before that import and the conftest fixture repoints the captured defaults, so this
-    fixture only blocks the process and socket calls.
-    """
-    attempted = []
-
-    def forbid_external(*args, **kwargs):
-        attempted.append((args, kwargs))
-        pytest.fail("advisor selftest regression attempted external I/O")
-
-    monkeypatch.setattr(subprocess, "run", forbid_external)
-    monkeypatch.setattr(subprocess, "Popen", forbid_external)
-    monkeypatch.setattr(socket, "socket", forbid_external)
-    monkeypatch.setattr(socket, "create_connection", forbid_external)
-    yield
-    assert attempted == []
 
 
 @pytest.mark.parametrize(
