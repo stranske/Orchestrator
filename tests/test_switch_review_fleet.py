@@ -137,11 +137,35 @@ class FleetDeliveryTests(unittest.TestCase):
                 self.assertTrue(rows[key]["reason"].startswith("gh HTTP 403"))
                 self.assertIsNotNone(rows["opener_cap"]["value"])
 
-    def test_failed_canary_repo_does_not_print_a_partial_oldest(self):
+    def test_failed_or_malformed_canary_repo_does_not_print_a_partial_oldest(self):
         self.failed = {"repos/stranske/trip-planner/pulls"}
         rows = self.measure()["rows"]
         self.assertIsNone(rows["oldest_canary"]["value"])
         self.assertIsNotNone(rows["released_flow"]["value"])
+        self.failed.clear()
+        repo = "stranske/trip-planner"
+        for payload in ([], {}, [None], [{}], [[], {}]):
+            with self.subTest(payload=payload):
+                self.data["canary_prs"][repo] = payload
+                section = self.measure()
+                row = section["rows"]["oldest_canary"]
+                self.assertIsNone(row["value"])
+                self.assertEqual(row["evidence_class"], "unmeasured")
+                self.assertIn("complete paginated canary PR arrays", row["reason"])
+                report = {
+                    "generated_at": self.now,
+                    "review_days": 7,
+                    "held_off": [],
+                    "on_but_idle": [],
+                    "unconditioned": [],
+                    "raise_count": 0,
+                    "fleet_delivery_measures": section,
+                }
+                text = review.format_report(report)
+                for name in review.FLEET_DELIVERY_NAMES.values():
+                    self.assertEqual(text.count(name + ":"), 1)
+                self.assertIn("unmeasured — would need complete paginated canary PR arrays", text)
+                self.assertIn("opened 2/day, merged 1.5/day", text)
 
     def test_canary_drafts_and_later_pages_are_included(self):
         row = self.measure()["rows"]["oldest_canary"]

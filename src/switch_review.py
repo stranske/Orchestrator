@@ -606,6 +606,14 @@ def _fleet_oldest_canary(gh, now: int) -> dict:
             gh,
             ["api", f"repos/{repo}/pulls?state=open&per_page=100", "--paginate", "--slurp"],
         )
+        # A complete empty REST population is `[[]]`. Missing or malformed pages
+        # cannot establish absence, or an oldest PR from the remaining canaries.
+        if (
+            not isinstance(pages, list)
+            or not pages
+            or any(not isinstance(page, list) for page in pages)
+        ):
+            raise _FleetReadError(f"would need complete paginated canary PR arrays for {repo}")
         for page in pages:
             for pr in page:
                 if pr["head"]["ref"].startswith("sync/workflows-"):

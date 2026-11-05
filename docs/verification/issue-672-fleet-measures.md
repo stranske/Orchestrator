@@ -51,3 +51,27 @@ Fixtures distinguish recorded REST/config projections and the observed shell
 GitHub error from synthetic measurement examples. Offline fixtures establish
 reader behavior, not production campaign measurements. No live acceptance or
 full-suite task is marked complete.
+
+## Runner follow-up — 2026-11-05
+
+The canary reader now rejects missing or malformed paginated PR arrays. Before
+the fix, four malformed responses produced an oldest age from only the remaining
+canaries. The expanded existing regression covers five malformed responses and
+checks that all five text rows survive while the released-flow row retains its
+measured value. Valid empty populations (`[[]]`) still report measured absence.
+The fleet suite still contains 25 test methods; no collection floor was changed.
+
+- [x] All 25 fleet tests pass via unittest; the module selftest passes.
+- [x] The deliberate Gate error-swallowing mutation returns `0%` and makes
+  `test_failed_gate_read_is_not_a_number` fail; restoring the source makes it pass.
+- [x] Malformed-reader and failed-read text-output tests retain all five rows.
+- [ ] Required pytest, Black, full verification, and live-machine acceptance.
+
+The runner CLI smoke check at `2026-11-05T06:08:10+00:00` printed all five rows,
+explicitly unmeasured for unavailable GitHub/helper reads. The selected Anaconda
+interpreter and a selected virtual environment remain absent. Pytest and Black
+are unavailable, and installation failed on PyPI DNS; Python changes remain
+uncommitted because the mandatory Black gate cannot run. The full available-Python
+verification attempt was interrupted without a verdict. GitHub rejected both the
+blocker comment and `needs-human` label because tool approval is required but the
+run's approval policy is `never`. PR #1130 was confirmed open with `draft=false`.
