@@ -559,9 +559,7 @@ def _fleet_pr_measures(gh, now: int, repos: list[str], *, flow: bool) -> dict:
             refs = (
                 {
                     str(n)
-                    for n in _pr_issue_refs(
-                        repo, {**pr, "headRefName": _fleet_head_ref(pr, "PR")}
-                    )
+                    for n in _pr_issue_refs(repo, {**pr, "headRefName": _fleet_head_ref(pr, "PR")})
                 }
                 if flow
                 else set(re.findall(r"\bCloses\s+#([1-9]\d*)\b", pr["body"] or "", re.I))
