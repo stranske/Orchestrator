@@ -22,6 +22,83 @@ function run(command, args, options = {}) {
   });
 }
 
+const validProvenance = {
+  published_commit: 'a'.repeat(40),
+  deployed_at: '2026-11-05T00:00:00Z',
+  deployment_evidence: 'publication-audit/run-123/successful-push',
+};
+const invalidProvenance = [
+  ['missing file', undefined, /No such file/],
+  ['invalid JSON', '{', /Expecting property name/],
+  ['null provenance', 'null', /provenance must be an object/],
+  ['array provenance', '[]', /provenance must be an object/],
+  ['missing commit', { ...validProvenance, published_commit: undefined }, /full Git commit SHA/],
+  ['abbreviated commit', { ...validProvenance, published_commit: 'a'.repeat(7) }, /full Git commit SHA/],
+  ['missing deployment time', { ...validProvenance, deployed_at: undefined }, /deployed_at/],
+  ['malformed deployment time', { ...validProvenance, deployed_at: 'yesterday' }, /deployed_at/],
+  ['date without instant', { ...validProvenance, deployed_at: '2026-11-05' }, /deployed_at/],
+  ['timezone missing', { ...validProvenance, deployed_at: '2026-11-05T00:00:00' }, /deployed_at/],
+  ['future deployment', { ...validProvenance, deployed_at: '9999-01-01T00:00:00Z' }, /in the future/],
+  ['missing audit evidence', { ...validProvenance, deployment_evidence: undefined }, /deployment_evidence/],
+  ['blank audit evidence', { ...validProvenance, deployment_evidence: '  ' }, /deployment_evidence/],
+];
+
+for (const [name, provenance, diagnostic] of invalidProvenance) {
+  test(`deployment provenance CLI refuses ${name} without side effects`, async (t) => {
+    const interpreter = await run(process.env.PYTHON || 'python3', ['-c',
+      'import sys; print(sys.executable)']);
+    assert.equal(interpreter.status, 0, interpreter.stderr);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'route-deployment-cli-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const bin = path.join(root, 'bin');
+    const home = path.join(root, 'home');
+    const state = path.join(root, 'state');
+    const audit = path.join(root, 'audit.json');
+    const gitLog = path.join(root, 'git.log');
+    const receipt = path.join(state, 'route-weights-challenger-deployment.json');
+    for (const directory of [bin, home, state]) fs.mkdirSync(directory);
+    fs.writeFileSync(path.join(bin, 'git'),
+      '#!/bin/sh\nprintf "%s\\n" "$*" >> "$ROUTE_EXPORT_GIT_LOG"\nexit 99\n',
+      { mode: 0o755 });
+    if (provenance !== undefined) {
+      fs.writeFileSync(audit, typeof provenance === 'string'
+        ? provenance : JSON.stringify(provenance));
+    }
+    const env = {
+      PATH: bin,
+      HOME: home,
+      PYTHONPATH: modules,
+      PYTHONDONTWRITEBYTECODE: '1',
+      ORCH_STATE_DIR: state,
+      ORCH_LOCAL_RUNTIME: path.join(root, 'runtime'),
+      ORCH_FEEDBACK_DB: path.join(root, 'absent.db'),
+      ORCH_CAPABILITIES_PATH: path.join(root, 'capabilities.json'),
+      HANDOFF_DIR: path.join(root, 'handoff'),
+      ROUTE_EXPORT_GIT_LOG: gitLog,
+    };
+    // Invalid input must neither create a receipt nor replace an earlier one.
+    for (const existing of [false, true]) {
+      const before = `${JSON.stringify(validProvenance)}\n`;
+      if (existing) fs.writeFileSync(receipt, before);
+      const result = await run(interpreter.stdout.trim(), [
+        path.join(modules, 'route_weights_export.py'),
+        '--record-challenger-deployment', audit, '--state-dir', state,
+      ], { cwd: repo, env });
+      assert.equal(result.signal, null, result.stderr);
+      assert.equal(result.status, 1, result.stderr);
+      assert.equal(result.stdout, '', 'refusal must not print a successful receipt');
+      assert.match(result.stderr, /deployment provenance refused:/);
+      assert.match(result.stderr, diagnostic);
+      assert.doesNotMatch(result.stderr, /Traceback/);
+      assert.equal(fs.existsSync(gitLog), false, 'invalid provenance must stop before Git');
+      assert.deepEqual(fs.readdirSync(state), existing ? [path.basename(receipt)] : []);
+      if (existing) assert.equal(fs.readFileSync(receipt, 'utf8'), before);
+      assert.equal(fs.existsSync(env.ORCH_FEEDBACK_DB), false);
+      assert.deepEqual(fs.readdirSync(home), [], 'the live state fallback must stay unused');
+    }
+  });
+}
+
 // Exercise argument parsing, the real process exit, and stderr without pytest
 // fixtures. A Git tripwire proves that refusal precedes publication activity.
 for (const source of ['missing', 'empty', 'wrong-db', 'empty-table', 'below-threshold']) {
