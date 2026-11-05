@@ -273,11 +273,52 @@ class FleetDeliveryTests(unittest.TestCase):
                 lambda args: (True, json.dumps(batch), ""), "stranske/Orchestrator", self.now
             )
 
-    def test_missing_timestamps_do_not_become_measured_zero(self):
+    def test_missing_pr_evidence_does_not_become_measured_zero(self):
         self.data["prs"][0]["created_at"] = None
         row = self.measure()["rows"]["released_flow"]
         self.assertIsNone(row["value"])
         self.assertIn("UTC GitHub timestamp", row["reason"])
+
+        original = json.loads(FIXTURE.read_text())
+        missing = object()
+        for target in ("PR", "issue"):
+            for labels in (
+                missing,
+                None,
+                {},
+                "agent:codex",
+                [None],
+                [{}],
+                [{"name": ""}],
+                [{"name": 1}],
+                [False],
+            ):
+                with self.subTest(target=target, labels=labels):
+                    self.data = copy.deepcopy(original)
+                    record = self.data["prs"][0] if target == "PR" else self.data["issues"]["1"]
+                    if labels is missing:
+                        del record["labels"]
+                    else:
+                        record["labels"] = labels
+                    rows = self.measure()["rows"]
+                    self.assertEqual(len(rows), 5)
+                    row = rows["released_flow"]
+                    self.assertIsNone(row["value"])
+                    self.assertEqual(row["evidence_class"], "unmeasured")
+                    self.assertIn(f"complete GitHub {target} labels", row["reason"])
+                    self.assertIsNotNone(rows["oldest_canary"]["value"])
+                    self.assertIsNotNone(rows["opener_cap"]["value"])
+                    if target == "PR":
+                        self.assertIsNone(rows["merge_to_close"]["value"])
+                    else:
+                        self.assertIn("median 15 min", rows["merge_to_close"]["value"])
+            for labels in ([], [{"name": "other"}], ["other"]):
+                with self.subTest(target=target, valid_labels=labels):
+                    self.data = copy.deepcopy(original)
+                    record = self.data["prs"][0] if target == "PR" else self.data["issues"]["1"]
+                    record["labels"] = labels
+                    row = self.measure()["rows"]["released_flow"]
+                    self.assertIn("opened 1.5/day, merged 1/day", row["value"])
 
     def test_text_output_retains_five_rows_with_partial_failure(self):
         self.failed.add("/actions/")

@@ -188,3 +188,34 @@ files remain uncommitted. The blocker-comment and `needs-human` label attempts
 were also rejected because approval is required and unavailable. The connector
 reconfirmed PR #1130 is open with `draft=false` at handoff. No Python files or
 collection floors changed.
+
+## Complete label evidence — 2026-11-05 10:20Z
+
+The first implementation task still had a measurement defect: absent or malformed
+PR ownership labels and issue approval labels were silently treated as absence,
+yielding undercounted numeric flow results. The extended missing-evidence regression
+reproduced this before the fix. `src/switch_review.py` now requires complete label
+lists for the classification each reader uses. Explicit empty lists remain valid;
+closure latency does not require issue approval labels. The existing regression
+now covers missing/null labels, malformed lists and entries, valid empty/nonmatching
+labels, and preservation of all five rows. The suite still has 25 test methods;
+no collection floor changed.
+
+- [x] All 25 fleet tests pass under unittest; the module selftest passes.
+- [x] The isolated Gate error-swallowing mutation was detected, the original source
+  was restored, and the named test passed again using available Python.
+- [x] All 10 JavaScript live/mutation verifier tests pass.
+- [x] Available-Python CLI smoke evidence at `2026-11-05T10:20:24+00:00` retains
+  all five rows, explicitly unmeasured for GitHub connectivity and the missing
+  opener helper. Receipt: `/tmp/orch-672-label-evidence/check.json`.
+- [ ] Required pytest, selected-interpreter full verification, and selected-interpreter
+  live acceptance: pytest is missing and `/opt/anaconda3/bin/python3` is absent.
+- [ ] Python commit: both the formatting command and required repository-wide Black
+  check exit 127 because Black is missing. Package installation also failed.
+  The pre-commit gate forbids committing these Python changes until Black passes.
+
+`git diff --check` passes. The checklist correction, blocker comment, and
+`needs-human` label were attempted but rejected because the GitHub tools require
+approval and this run's approval policy is `never`. The checked pytest/full-verification
+claim in the PR summary remains unsupported. PR #1130 was confirmed open with
+`draft=false`. No workflow files changed.

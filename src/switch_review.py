@@ -509,15 +509,25 @@ def _fleet_recent_prs(gh, repo: str, now: int) -> list[dict]:
     raise _FleetReadError("would need complete updated PR pagination beyond 1000 rows per repo")
 
 
+def _fleet_labels(record: dict, subject: str) -> list[str]:
+    """Distinguish an explicitly empty label list from missing classification evidence."""
+    labels = record.get("labels")
+    if isinstance(labels, list):
+        names = [label.get("name") if isinstance(label, dict) else label for label in labels]
+        if all(isinstance(name, str) and name.strip() for name in names):
+            return names
+    raise _FleetReadError(f"would need complete GitHub {subject} labels")
+
+
 def _fleet_pr_measures(gh, now: int, repos: list[str], *, flow: bool) -> dict:
-    from backlog import _has_agent_label, _labels, _pr_issue_refs
+    from backlog import _has_agent_label, _pr_issue_refs
 
     intervals = []
     opened = merged = pending = preclosed = 0
     issues = {}
     for repo in repos:
         for pr in _fleet_recent_prs(gh, repo, now):
-            if not _has_agent_label(_labels(pr)):
+            if not _has_agent_label(_fleet_labels(pr, "PR")):
                 continue
             merged_at = _fleet_stamp(pr["merged_at"]) if pr["merged_at"] else None
             created_at = _fleet_stamp(pr["created_at"])
@@ -545,8 +555,10 @@ def _fleet_pr_measures(gh, now: int, repos: list[str], *, flow: bool) -> dict:
                 issue = issues[key]
                 if "pull_request" in issue:
                     raise _FleetReadError("would need Closes references resolving to issues")
-                released |= "repo-review-approved" in _labels(issue)
-                if flow or merged_at is None:
+                if flow:
+                    released |= "repo-review-approved" in _fleet_labels(issue, "issue")
+                    continue
+                if merged_at is None:
                     continue
                 if issue["state"] == "open":
                     pending += 1
