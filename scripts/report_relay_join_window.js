@@ -188,9 +188,11 @@ function reconcileRawLog(pacingLog, start, end, sources, decisions, byId, exitLo
     accepted_window_joins: rows.filter((r) => r.status === 'accepted_join').length,
     unaccounted_completed_exit_decisions: rows.filter((r) =>
       r.matching_completed_exit && r.status !== 'accepted_join').length,
+    unmatched_persisted_decisions: decisions.filter((d) => !windowIds.has(d.raw_decision_id)),
     decisions: rows,
     limitations: [
       'Legacy, malformed and ID-less lines are excluded; conflicting raw IDs cannot earn joins.',
+      'Unmatched persisted decisions have no validated in-window raw pacing record for their exact ID.',
       'Use a retained pacing log captured with the Brain snapshot; separate live files are not atomic.',
       exits ? 'Raw exit trailers are compared with persisted rounds; duplicate trailers remain ambiguous.'
         : 'Completed rounds are persisted Brain records; raw exit logs require separate verification.',

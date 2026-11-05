@@ -344,6 +344,49 @@ test('raw reconciliation exposes an unpersisted decision despite positive persis
     fs.readFileSync(path.join(w.root, f))), before);
 });
 
+test('raw reconciliation exposes persisted decisions absent from the retained window log', (t) => {
+  const w = world(t);
+  w.append('retained', deployment);
+  w.exit('retained', deployment + 5);
+  w.append('Missing.+:[1]', deployment + 10);
+  const missing = w.exit('Missing.+:[1]', deployment + 20);
+  const lines = fs.readFileSync(w.log, 'utf8').trim().split('\n');
+  const retained = lines.find((line) => line.includes('decision_id=retained '));
+  const absent = lines.find((line) => line.includes('decision_id=Missing.+:[1] '));
+  const exits = path.join(w.root, 'relay-exits.log');
+  fs.writeFileSync(exits, exitLine('retained', deployment + 5)
+    + exitLine('Missing.+:[1]', deployment + 20));
+  for (const replacement of [
+    '',
+    absent.replace('decision_id=Missing.+:[1]', 'decision_id=prefix-Missing.+:[1]'),
+    absent.replace(absent.split(' ')[0],
+      new Date((deployment - 1) * 1000).toISOString().replace('.000Z', 'Z')),
+    absent.replace('source=codex', 'source=invalid'),
+    absent.replace(absent.split(' ')[0],
+      new Date((deployment + 21) * 1000).toISOString().replace('.000Z', 'Z')),
+  ]) {
+    fs.writeFileSync(w.log, `${retained}\n${replacement}\n`);
+    const files = [path.join(w.root, 'brain.db'), w.log, exits];
+    const before = files.map((file) => fs.readFileSync(file));
+    for (const exitLog of [undefined, exits]) {
+      const report = w.report(deployment + 20, deployment, w.log, exitLog);
+      assert.equal(report.status, 'available');
+      assert.equal(report.accepted_window_joins, 2);
+      const raw = report.raw_reconciliation;
+      assert.equal(raw.accepted_window_joins, 1);
+      assert.deepEqual(raw.unmatched_persisted_decisions,
+        report.decisions.filter((d) => d.raw_decision_id === 'Missing.+:[1]'));
+      assert.equal(raw.unmatched_persisted_decisions[0].completed_rounds[0].decision_id,
+        missing.decision_id);
+      assert.equal(raw.unmatched_persisted_decisions[0].accepted_edge_ids.length, 1);
+    }
+    assert.deepEqual(files.map((file) => fs.readFileSync(file)), before);
+  }
+  fs.writeFileSync(w.log, `${lines.join('\n')}\n`);
+  assert.deepEqual(w.reportCli(deployment + 20, w.log, exits)
+    .raw_reconciliation.unmatched_persisted_decisions, []);
+});
+
 test('raw facts must agree with the persisted decision before an accepted join is credited', (t) => {
   const w = world(t);
   w.append('changed', deployment + 10);

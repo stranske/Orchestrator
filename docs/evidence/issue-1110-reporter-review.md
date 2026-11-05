@@ -301,3 +301,34 @@ Staging failed because `.git/index.lock` is on a read-only filesystem; no commit
 was created. Publishing the `needs-human` label and blocker comment was rejected
 with `MCP tool call requires approval, but approval policy is never`. These edits
 remain in the workspace for an authorized write channel.
+
+## Missing retained pacing records, 2026-11-05
+
+Raw reconciliation now exposes `unmatched_persisted_decisions`: persisted window
+decisions whose exact IDs have no validated in-window pacing record. A truncated
+or wrong-window retained log previously omitted these discrepancies from the raw
+report. The new list retains the persisted decision timestamps, round IDs and
+accepted edges, without crediting them as raw-log-backed joins.
+
+The regression failed before implementation. Afterward, the relay/preflight CLI
+suites pass **43 tests**, exit 0; Node syntax checks and `git diff --check` pass.
+The case exercises absent, prefixed-ID, pre-window, malformed and post-window
+records with and without raw exits, restoration of the full log, CLI output, and
+unchanged database/log bytes. No Python files changed.
+
+No operational checkbox is complete. Production logs and Brain are absent at the
+default paths, with no configured overrides or production bundle supplied. Pytest
+is unavailable (`python3 -m pytest -m 'not slow'` exits 1), as is the production
+interpreter. Assessed local `origin/main` is
+`c39bdadb0c98e6cdf351ca309f80fa249c8f7029`; its floor SHA-256 is
+`709e394751291fb1a4b8b245d9b83707d6c1d744bbc3d4624eca284092d7d6f5`.
+The unchanged working floor SHA-256 remains
+`00d01689a9b9f6604f94ffc8f48ac723c32142c159edcf616d846739c0b655ec`;
+byte equality is false. Production attribution remains unresolved against
+`2026-11-04T08:16:32Z`; any attributable success afterward is late recovery.
+
+Delivery failed: `git add` could not create `.git/index.lock` on the read-only
+filesystem. The connector also rejected the `needs-human` label and blocker
+comment because approval is required but the run's approval policy is `never`.
+No commit, label or comment was created. PR #1132 remains open and ready
+(`draft=false`) at `da6018393e0e58d8d073ce81811e34a5017276fd`.
