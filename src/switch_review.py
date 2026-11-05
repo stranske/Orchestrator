@@ -490,6 +490,7 @@ def _fleet_recent_prs(gh, repo: str, now: int) -> list[dict]:
     """Complete updated population; no search ceiling or fixed `pr list --limit`."""
     rows: list[dict] = []
     oldest_updated: int | None = None
+    seen: set[int] = set()
     for page in range(1, 11):
         batch = _fleet_json(
             gh,
@@ -506,6 +507,14 @@ def _fleet_recent_prs(gh, repo: str, now: int) -> list[dict]:
             if oldest_updated is not None and updated > oldest_updated:
                 raise _FleetReadError("would need consistent descending updated PR order")
             oldest_updated = updated
+            number = pr.get("number")
+            if type(number) is not int or number <= 0:
+                raise _FleetReadError("would need complete GitHub PR numbers")
+            # PRs can move between pages while GitHub handles separate requests.
+            # Deduplicating hides that the same shift may also have omitted a PR.
+            if number in seen:
+                raise _FleetReadError("would need consistent non-overlapping PR pages")
+            seen.add(number)
             if updated >= now - 48 * 3600:
                 rows.append(pr)
         # Validate the whole page before trusting its cutoff. An old row followed

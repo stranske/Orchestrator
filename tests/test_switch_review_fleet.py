@@ -278,7 +278,7 @@ class FleetDeliveryTests(unittest.TestCase):
         self.assertIsNotNone(rows["released_flow"]["value"])
 
     def test_recent_pr_pagination_reaches_second_page(self):
-        first = [copy.deepcopy(self.data["prs"][0]) for _ in range(100)]
+        first = [{**self.data["prs"][0], "number": n} for n in range(100, 200)]
         responses = iter([first, [self.data["prs"][1]]])
         calls = []
 
@@ -291,12 +291,16 @@ class FleetDeliveryTests(unittest.TestCase):
         self.assertIn("page=2", calls[1][1])
 
         old = copy.deepcopy(self.data["prs"][0])
+        old["number"] = 99
         old["updated_at"] = "2026-11-01T00:00:00Z"
         recent = self.data["prs"][0]
         for pages in (
             [[old, recent]],
             [[recent, old, recent]],
-            [[{**recent, "updated_at": "2026-11-04T11:00:00Z"}] * 100, [recent]],
+            [
+                [{**pr, "updated_at": "2026-11-04T11:00:00Z"} for pr in first],
+                [recent],
+            ],
         ):
             with self.subTest(pages=len(pages), first=pages[0][0]["updated_at"]):
                 responses = iter(pages)
@@ -320,7 +324,7 @@ class FleetDeliveryTests(unittest.TestCase):
         # Equal timestamps and the exact 48-hour boundary remain valid. Stop without
         # another API read once a fully validated page reaches older PRs.
         boundary = {**recent, "updated_at": "2026-11-03T00:00:00Z"}
-        batch = [recent] * 98 + [boundary, old]
+        batch = first[:98] + [{**boundary, "number": 200}, {**old, "number": 201}]
         calls = []
 
         def gh_at_boundary(args):
@@ -330,14 +334,48 @@ class FleetDeliveryTests(unittest.TestCase):
 
         rows = review._fleet_recent_prs(gh_at_boundary, "stranske/Orchestrator", self.now)
         self.assertEqual(len(rows), 99)
-        self.assertEqual(rows[-1], boundary)
+        self.assertEqual(rows[-1], {**boundary, "number": 200})
+
+        # Updated-order pagination can overlap when a PR moves during the read.
+        # Neither a duplicate on one page nor at a page boundary proves a full population.
+        for pages in ([[recent, recent]], [first, [first[-1]]]):
+            with self.subTest(overlapping_pages=len(pages)):
+                responses = iter(pages)
+                with self.assertRaisesRegex(review._FleetReadError, "non-overlapping PR pages"):
+                    review._fleet_recent_prs(
+                        lambda args: (True, json.dumps(next(responses)), ""),
+                        "stranske/Orchestrator",
+                        self.now,
+                    )
+
+        self.data["prs"] = [recent, recent]
+        section = self.measure()
+        for key in ("merge_to_close", "released_flow"):
+            self.assertIsNone(section["rows"][key]["value"])
+            self.assertIn("non-overlapping PR pages", section["rows"][key]["reason"])
+        self.assertEqual(len(section["rows"]), 5)
+        self.assertIsNotNone(section["rows"]["oldest_canary"]["value"])
+        self.assertIsNotNone(section["rows"]["opener_cap"]["value"])
+
+        for number in (None, False, 0, -1, "10"):
+            with self.subTest(invalid_pr_number=number):
+                with self.assertRaisesRegex(review._FleetReadError, "complete GitHub PR numbers"):
+                    review._fleet_recent_prs(
+                        lambda args: (True, json.dumps([{**recent, "number": number}]), ""),
+                        "stranske/Orchestrator",
+                        self.now,
+                    )
 
     def test_pr_pagination_budget_is_not_reported_as_complete(self):
-        batch = [self.data["prs"][0]] * 100
+        def gh(args):
+            page = int(args[1].rsplit("page=", 1)[1])
+            batch = [
+                {**self.data["prs"][0], "number": n} for n in range(page * 100, (page + 1) * 100)
+            ]
+            return True, json.dumps(batch), ""
+
         with self.assertRaisesRegex(review._FleetReadError, "complete updated PR pagination"):
-            review._fleet_recent_prs(
-                lambda args: (True, json.dumps(batch), ""), "stranske/Orchestrator", self.now
-            )
+            review._fleet_recent_prs(gh, "stranske/Orchestrator", self.now)
 
     def test_missing_pr_evidence_does_not_become_measured_zero(self):
         self.data["prs"][0]["created_at"] = None

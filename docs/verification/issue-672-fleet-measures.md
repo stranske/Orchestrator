@@ -1,5 +1,33 @@
 # Fleet delivery measures — 2026-11-05 runner check
 
+## PR pagination overlap check — 2026-11-05 19:04Z
+
+The updated-PR reader now rejects duplicate PR numbers within or between pages,
+and missing or invalid PR numbers. An overlap can accompany omitted rows when PRs
+move during pagination, so deduplicating would not establish a complete population.
+Both PR measures become explicitly unmeasured; the other three rows survive.
+Existing pagination fixtures now use distinct PR numbers. No collection count changed.
+
+The expanded regression failed before the fix: the duplicated PR produced a
+numeric median, and neither same-page nor cross-page duplicates raised an error.
+After the fix all 25 fleet unittest cases pass. The module selftest and all 14
+JavaScript live/mutation verifier tests also pass, including the deliberate
+error-swallowing controls and source restoration. `git diff --check` passes.
+
+Available-Python CLI receipt: `/tmp/orch-fleet-round-1130/check.json`, checked at
+`2026-11-05T19:04:17.955Z`. All five rows appear, explicitly unmeasured for GitHub
+connectivity errors or the unavailable opener helper. This is runner evidence;
+selected-interpreter live-machine acceptance remains incomplete.
+
+Black formatting and its required repository-wide check cannot run because Black
+is absent; installation attempts failed. Python changes therefore remain
+uncommitted under the mandatory pre-commit gate. Pytest is also absent. The
+selected `/opt/anaconda3/bin/python3` is absent, so both its `src/verify.py` and
+live CLI commands fail before executing. No additional task checkbox is complete.
+The GitHub connector rejected the blocker comment and `needs-human` label because
+approval is required and this run's policy is `never`. Its read confirmed PR #1130
+is open with `draft=false`.
+
 Implemented `fleet_delivery_measures()` and production CLI collection in
 `src/switch_review.py`. JSON and readable output share one snapshot. Each reader
 fails independently; one unreadable repository prevents a partial population from
