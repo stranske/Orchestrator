@@ -2,8 +2,9 @@
 
 Invoke this file directly. It is not a pytest module and defines no test items.
 ``--chain-evidence`` reads the public issue, branch and PR chain and reports
-whether native Verify and closer publication proof are tied to the corrected
-head. It does not change the default contract exit.
+whether a trusted native verifier decision and closer publication proof are
+tied to the corrected head. A free-text verdict line is not that proof. The
+command does not change the default contract exit.
 """
 
 from __future__ import annotations
@@ -143,29 +144,106 @@ _PUBLICATION_MARKERS = (
     "closer-publication-baseline-data/v2",
 )
 _VERIFIER_MARKER = "verifier-event-state/v1 "
+_CORPUS_MARKER = "verifier-corpus-decision/v1 "
+_TRUSTED_VERIFIER_AUTHORS = {"github-actions", "github-actions[bot]"}
+_PROVIDER_VERDICTS = {"PASS", "CONCERNS", "FAIL", "NON_PASS"}
+_VERIFIER_WORKFLOW = "agents-verifier.yml"
 _REPOSITORY = "stranske/Orchestrator"
 
 
-def _verifier_events(text):
-    events = []
+def _marked_objects(text, marker):
+    """Decode marker JSON objects. A broken marker does not hide a later one."""
+    found_objects = []
     cursor = 0
     while True:
-        found = text.find(_VERIFIER_MARKER, cursor)
+        found = text.find(marker, cursor)
         if found < 0:
             break
-        payload = text[found + len(_VERIFIER_MARKER) :]
+        payload = text[found + len(marker) :]
         brace = payload.find("{")
         if brace < 0:
-            break
+            cursor = found + len(marker)
+            continue
         try:
             event, consumed = json.JSONDecoder().raw_decode(payload[brace:])
         except json.JSONDecodeError:
-            cursor = found + len(_VERIFIER_MARKER)
+            cursor = found + len(marker)
             continue
-        if isinstance(event, dict) and event.get("schema") == "verifier-event-state/v1":
-            events.append(event)
-        cursor = found + len(_VERIFIER_MARKER) + brace + consumed
-    return events
+        if isinstance(event, dict):
+            found_objects.append(event)
+        cursor = found + len(marker) + brace + consumed
+    return found_objects
+
+
+def _verifier_events(text):
+    return [
+        event
+        for event in _marked_objects(text, _VERIFIER_MARKER)
+        if event.get("schema") == "verifier-event-state/v1"
+    ]
+
+
+def _positive_identifier(value):
+    text = str(value or "")
+    return bool(text) and text.isdigit() and not text.startswith("0")
+
+
+def _corpus_verdict_ok(event):
+    providers = event.get("provider_verdicts")
+    if (
+        not _positive_identifier(event.get("run_id"))
+        or not _positive_identifier(event.get("run_attempt"))
+        or not isinstance(providers, list)
+        or not providers
+        or len(providers) > 16
+        or any(not isinstance(item, str) or item not in _PROVIDER_VERDICTS for item in providers)
+        or type(event.get("ci_failed")) is not bool
+    ):
+        return False
+    expected = (
+        "PASS"
+        if not event["ci_failed"] and all(item == "PASS" for item in providers)
+        else "NON_PASS"
+    )
+    return event.get("verdict") == expected
+
+
+def _valid_corpus_decision(event, corrective_sha):
+    """A terminal decision counts only for this corrective head, never the partial merge."""
+    return (
+        isinstance(event, dict)
+        and event.get("schema") == "verifier-corpus-decision/v1"
+        and str(event.get("repo") or "").lower() == _REPOSITORY.lower()
+        and str(event.get("pr")) == _CORRECTIVE_PR
+        and event.get("head_sha") == corrective_sha
+        and corrective_sha not in {_PARTIAL_HEAD, _PARTIAL_MERGE}
+        and _corpus_verdict_ok(event)
+    )
+
+
+def _summarize_corpus(event):
+    return {
+        "verdict": event.get("verdict"),
+        "run_id": event.get("run_id"),
+        "run_attempt": event.get("run_attempt"),
+        "head_sha": event.get("head_sha"),
+        "evaluated_sha": event.get("evaluated_sha"),
+    }
+
+
+def _corpus_from_comment(record, corrective_sha):
+    """Accept only the native verifier's own pull-request comment."""
+    if (record.get("author") or "") not in _TRUSTED_VERIFIER_AUTHORS:
+        return []
+    url = str(record.get("url") or "")
+    prefix = f"https://github.com/{_REPOSITORY}/pull/{_CORRECTIVE_PR}#issuecomment-"
+    if not url.lower().startswith(prefix.lower()):
+        return []
+    return [
+        _summarize_corpus(event)
+        for event in _marked_objects(record.get("body") or "", _CORPUS_MARKER)
+        if _valid_corpus_decision(event, corrective_sha)
+    ]
 
 
 def _event_bound_to(event, sha):
@@ -268,7 +346,15 @@ def _verdict_lines(text):
     return []
 
 
-def _assess(events, comments, records, corrective_sha, partial_verdicts=(), corrective_verdicts=()):
+def _assess(
+    events,
+    comments,
+    records,
+    corrective_sha,
+    partial_verdicts=(),
+    corrective_verdicts=(),
+    corpus=(),
+):
     partial, corrective = _classify_events(events, corrective_sha)
     unlabeled = []
     branch_labels = []
@@ -286,13 +372,14 @@ def _assess(events, comments, records, corrective_sha, partial_verdicts=(), corr
         "corrective": corrective,
         "partial_verdicts": list(partial_verdicts),
         "corrective_verdicts": list(corrective_verdicts),
+        "corpus": list(corpus),
         "publication": _publication_tied(comments, corrective_sha),
         "unlabeled": unlabeled,
         "branch_labels": branch_labels,
     }
 
 
-def _format_report(assessment, corrective_sha, local_head):
+def _format_report(assessment, corrective_sha, local_head, verifier_runs=()):
     lines = [
         "chain-evidence",
         f"repository: {_REPOSITORY}",
@@ -329,7 +416,7 @@ def _format_report(assessment, corrective_sha, local_head):
             )
     else:
         lines.append("partial_native_verify: none_observed")
-    if assessment["corrective"] or assessment["corrective_verdicts"]:
+    if assessment["corrective"] or assessment["corpus"]:
         lines.append("native_verify_for_corrective_head: PRESENT")
         for event in assessment["corrective"]:
             lines.append(
@@ -337,12 +424,35 @@ def _format_report(assessment, corrective_sha, local_head):
                 + f"status={event['status']} run_id={event['run_id']} "
                 + f"head={event['head_sha']} evaluated={event['evaluated_sha']}"
             )
-        for verdict in assessment["corrective_verdicts"]:
-            lines.append(f"corrective_verifier_verdict: {verdict}")
+        for decision in assessment["corpus"]:
+            lines.append(
+                "corrective_corpus_decision: "
+                + f"verdict={decision['verdict']} run_id={decision['run_id']} "
+                + f"attempt={decision['run_attempt']} head={decision['head_sha']} "
+                + f"evaluated={decision['evaluated_sha']}"
+            )
     else:
         lines.append(
             "native_verify_for_corrective_head: MISSING "
-            "no non-pending verifier-event-state on PR 1168 is bound to its head"
+            "no trusted verifier-corpus-decision/v1 or non-pending "
+            "verifier-event-state/v1 on PR 1168 is bound to its head"
+        )
+    for verdict in assessment["corrective_verdicts"]:
+        lines.append(f"unstructured_verdict: {verdict} not accepted as native proof")
+    if verifier_runs:
+        lines.append(
+            "agents_verifier_workflow_for_corrective_head: observed; a run is not a decision"
+        )
+        for run in verifier_runs:
+            lines.append(
+                "agents_verifier_run: "
+                + f"id={run['id']} event={run['event']} status={run['status']} "
+                + f"conclusion={run['conclusion']}"
+            )
+    else:
+        lines.append(
+            "agents_verifier_workflow_for_corrective_head: NONE "
+            "no Agents Verifier run is bound to this head; it runs after merge"
         )
     if assessment["publication"]:
         lines.append("closer_publication_proof_for_corrective_head: PRESENT")
@@ -366,7 +476,7 @@ def _format_report(assessment, corrective_sha, local_head):
             )
     else:
         lines.append("test_labeled_chain: PRESENT")
-    native_present = bool(assessment["corrective"] or assessment["corrective_verdicts"])
+    native_present = bool(assessment["corrective"] or assessment["corpus"])
     complete = native_present and assessment["publication"] and not assessment["unlabeled"]
     lines.append("completion: evidence present" if complete else "completion: evidence incomplete")
     return "\n".join(lines), 0 if complete else 2
@@ -411,6 +521,8 @@ def _live_fetch(path):
             return response.status, response.read()
     except urllib.error.HTTPError as exc:
         return exc.code, exc.read()
+    except OSError as exc:
+        raise _ObservationError(f"GitHub request failed for {path}: {exc}") from exc
 
 
 def _decode_json(status, raw, label):
@@ -422,9 +534,11 @@ def _decode_json(status, raw, label):
         raise _ObservationError(f"{label} was not JSON") from exc
 
 
-def _comment_bodies(fetch, number):
-    bodies = []
-    for page in range(1, 6):
+def _comment_records(fetch, number):
+    """Read every comment page. A full last page is an observation failure, not absence."""
+    records = []
+    max_pages = 5
+    for page in range(1, max_pages + 1):
         status, raw = fetch(
             f"/repos/{_REPOSITORY}/issues/{number}/comments?per_page=100&page={page}"
         )
@@ -432,11 +546,53 @@ def _comment_bodies(fetch, number):
         if not isinstance(batch, list):
             raise _ObservationError(f"comments for {number} were not a list")
         for item in batch:
-            if isinstance(item, dict):
-                bodies.append(item.get("body") or "")
+            if not isinstance(item, dict):
+                continue
+            user = item.get("user")
+            author = user.get("login") if isinstance(user, dict) else ""
+            records.append(
+                {
+                    "body": item.get("body") or "",
+                    "author": author or "",
+                    "url": item.get("html_url") or "",
+                }
+            )
         if len(batch) < 100:
-            break
-    return bodies
+            return records
+    raise _ObservationError(f"comments for {number} exceeded {max_pages} pages")
+
+
+def _verifier_workflow_runs(fetch, sha):
+    if not sha or sha in {_PARTIAL_HEAD, _PARTIAL_MERGE}:
+        return []
+    status, raw = fetch(
+        "/repos/"
+        + _REPOSITORY
+        + "/actions/workflows/"
+        + _VERIFIER_WORKFLOW
+        + "/runs?head_sha="
+        + sha
+        + "&per_page=20"
+    )
+    if status == 404:
+        return []
+    document = _decode_json(status, raw, "agents verifier runs")
+    runs = document.get("workflow_runs") if isinstance(document, dict) else None
+    if not isinstance(runs, list):
+        raise _ObservationError("agents verifier runs were not a list")
+    bound = []
+    for run in runs:
+        if not isinstance(run, dict) or run.get("head_sha") != sha:
+            continue
+        bound.append(
+            {
+                "id": run.get("id"),
+                "event": run.get("event"),
+                "status": run.get("status"),
+                "conclusion": run.get("conclusion"),
+            }
+        )
+    return bound
 
 
 def _label_names(document):
@@ -517,17 +673,30 @@ def _observe_chain(fetch):
     events = []
     partial_verdicts = []
     corrective_verdicts = []
+    corpus = []
     for number in _CHAIN_ISSUES + _CHAIN_PRS:
-        bodies = _comment_bodies(fetch, number)
-        comments.extend(bodies)
-        for body in bodies:
+        page = _comment_records(fetch, number)
+        for record in page:
+            body = record["body"]
+            comments.append(body)
             events.extend(_verifier_events(body))
             verdicts = _verdict_lines(body)
             if str(number) == _PARTIAL_PR:
                 partial_verdicts.extend(verdicts)
             elif str(number) == _CORRECTIVE_PR and corrective_sha in body:
                 corrective_verdicts.extend(verdicts)
-    return corrective_sha, events, comments, records, partial_verdicts, corrective_verdicts
+                corpus.extend(_corpus_from_comment(record, corrective_sha))
+    runs = _verifier_workflow_runs(fetch, corrective_sha)
+    return (
+        corrective_sha,
+        events,
+        comments,
+        records,
+        partial_verdicts,
+        corrective_verdicts,
+        corpus,
+        runs,
+    )
 
 
 def _report_chain_evidence():
@@ -539,6 +708,8 @@ def _report_chain_evidence():
             records,
             partial_verdicts,
             corrective_verdicts,
+            corpus,
+            runs,
         ) = _observe_chain(_live_fetch)
     except _ObservationError as exc:
         print(f"chain-evidence observation failed: {exc}", file=sys.stderr)
@@ -551,9 +722,11 @@ def _report_chain_evidence():
             corrective_sha,
             partial_verdicts,
             corrective_verdicts,
+            corpus,
         ),
         corrective_sha,
         _local_head(),
+        runs,
     )
     print(text)
     return code
@@ -724,10 +897,63 @@ def _self_check():
     held_text, held_code = _format_report(held, corrective, corrective)
     if held_code != 2 or "partial_verifier_verdict: FAIL" not in held_text:
         raise AssertionError("partial FAIL verdict was accepted or dropped")
-    if "native_verify_for_corrective_head: PRESENT" not in held_text:
-        raise AssertionError("corrective prose verdict was ignored")
+    if "native_verify_for_corrective_head: PRESENT" in held_text:
+        raise AssertionError("free-text verdict counted as native proof")
+    if "unstructured_verdict: PASS not accepted as native proof" not in held_text:
+        raise AssertionError("free-text verdict was not reported")
     if "closer_publication_proof_for_corrective_head: MISSING" not in held_text:
         raise AssertionError("a verdict replaced missing publication proof")
+    if "agents_verifier_workflow_for_corrective_head: NONE" not in held_text:
+        raise AssertionError("absent verifier run was not reported")
+    decision = {
+        "schema": "verifier-corpus-decision/v1",
+        "repo": _REPOSITORY,
+        "pr": _CORRECTIVE_PR,
+        "head_sha": corrective,
+        "evaluated_sha": "e" * 40,
+        "run_id": "40603448727",
+        "run_attempt": "1",
+        "verdict": "PASS",
+        "ci_failed": False,
+        "provider_verdicts": ["PASS"],
+    }
+    decision_body = "<!-- verifier-corpus-decision/v1 " + json.dumps(decision) + " -->"
+    decision_url = f"https://github.com/{_REPOSITORY}/pull/{_CORRECTIVE_PR}#issuecomment-99"
+    trusted = {
+        "body": decision_body,
+        "author": "github-actions[bot]",
+        "url": decision_url,
+    }
+    if _corpus_from_comment(trusted, corrective) != [_summarize_corpus(decision)]:
+        raise AssertionError("trusted corpus decision was dropped")
+    if _corpus_from_comment(dict(trusted, author="coderabbitai[bot]"), corrective):
+        raise AssertionError("untrusted corpus decision counted as native proof")
+    if _corpus_from_comment(dict(trusted, body="**Verdict:** PASS " + corrective), corrective):
+        raise AssertionError("free-text verdict counted as a corpus decision")
+    if _valid_corpus_decision(dict(decision, verdict="NON_PASS"), corrective):
+        raise AssertionError("derived verdict mismatch was accepted")
+    if _valid_corpus_decision(dict(decision, head_sha=_PARTIAL_HEAD), _PARTIAL_HEAD):
+        raise AssertionError("partial head was accepted as a corrective decision")
+    valid_state = {
+        "schema": "verifier-event-state/v1",
+        "pr": _CORRECTIVE_PR,
+        "status": "complete",
+        "run_id": "1",
+        "head_sha": corrective,
+        "evaluated_sha": corrective,
+    }
+    blob = (
+        "<!-- verifier-event-state/v1 {not-json} -->\n"
+        "<!-- verifier-event-state/v1 no-brace -->\n"
+        + "<!-- verifier-event-state/v1 "
+        + json.dumps(valid_state)
+        + " -->\n"
+        + "<!-- verifier-event-state/v1 "
+        + json.dumps(dict(valid_state, run_id="2"))
+        + " -->"
+    )
+    if [event["run_id"] for event in _verifier_events(blob)] != ["1", "2"]:
+        raise AssertionError("verifier marker scan dropped a later event")
     present = _assess(
         [done],
         [tied],
@@ -752,6 +978,153 @@ def _self_check():
     ready, ready_code = _format_report(present, corrective, corrective)
     if ready_code != 0 or "completion: evidence present" not in ready:
         raise AssertionError("complete synthetic evidence did not report present")
+    corpus_only = _assess(
+        [],
+        [tied],
+        [
+            {
+                "kind": "pr",
+                "name": "1168",
+                "title": "test: chain",
+                "labels": ["test"],
+                "present": True,
+            },
+            {
+                "kind": "branch",
+                "name": "codex/test-csv-followup-988-open",
+                "title": "",
+                "labels": [],
+                "present": True,
+            },
+        ],
+        corrective,
+        corpus=[_summarize_corpus(decision)],
+    )
+    corpus_text, corpus_code = _format_report(
+        corpus_only,
+        corrective,
+        corrective,
+        [{"id": 1, "event": "pull_request_target", "status": "completed", "conclusion": "skipped"}],
+    )
+    if corpus_code != 0 or "corrective_corpus_decision: verdict=PASS" not in corpus_text:
+        raise AssertionError("trusted corpus decision did not count")
+    if (
+        "agents_verifier_run: id=1" not in corpus_text
+        or "completion: evidence present" not in corpus_text
+    ):
+        raise AssertionError("a skipped verifier run changed the corpus decision")
+
+    def fake_fetch(path):
+        if "/comments" in path:
+            if f"/issues/{_CORRECTIVE_PR}/comments" in path and "page=1" in path:
+                return (
+                    200,
+                    json.dumps(
+                        [
+                            {
+                                "body": decision_body,
+                                "user": {"login": "github-actions[bot]"},
+                                "html_url": decision_url,
+                            }
+                        ]
+                    ).encode(),
+                )
+            return 200, b"[]"
+        if "/actions/workflows/" in path:
+            return (
+                200,
+                json.dumps(
+                    {
+                        "workflow_runs": [
+                            {
+                                "id": 42073591202,
+                                "event": "pull_request_target",
+                                "status": "completed",
+                                "conclusion": "skipped",
+                                "head_sha": corrective,
+                            }
+                        ]
+                    }
+                ).encode(),
+            )
+        if "/branches/" in path:
+            branch_name = urllib.parse.unquote(path.rstrip("/").split("/")[-1])
+            visible = branch_name
+            if branch_name == "codex/issue-983-declared-csv-canary":
+                visible = "codex/test-issue-983-declared-csv-canary"
+            return 200, json.dumps({"name": visible, "commit": {"sha": corrective}}).encode()
+        if "/pulls/" in path:
+            return (
+                200,
+                json.dumps(
+                    {
+                        "title": "test: chain",
+                        "labels": [{"name": "test"}],
+                        "head": {"sha": corrective, "ref": "cursor/issue-983"},
+                    }
+                ).encode(),
+            )
+        if "/issues/" in path:
+            return 200, json.dumps({"title": "test: chain", "labels": [{"name": "test"}]}).encode()
+        raise AssertionError("unexpected fetch " + path)
+
+    observed = _observe_chain(fake_fetch)
+    if observed[6] != [_summarize_corpus(decision)] or observed[7][0]["conclusion"] != "skipped":
+        raise AssertionError("chain observation dropped the corpus decision or the verifier run")
+    observed_text, observed_code = _format_report(
+        _assess(
+            observed[1],
+            observed[2],
+            observed[3],
+            observed[0],
+            observed[4],
+            observed[5],
+            observed[6],
+        ),
+        observed[0],
+        observed[0],
+        observed[7],
+    )
+    if observed_code != 2 or "native_verify_for_corrective_head: PRESENT" not in observed_text:
+        raise AssertionError("observed corpus decision was not reported")
+    if "closer_publication_proof_for_corrective_head: MISSING" not in observed_text:
+        raise AssertionError("observed chain invented publication proof")
+
+    def full_page(_path):
+        return (
+            200,
+            json.dumps([{"body": "x", "user": {"login": "x"}, "html_url": ""}] * 100).encode(),
+        )
+
+    try:
+        _comment_records(full_page, 1168)
+    except _ObservationError as exc:
+        if "exceeded" not in str(exc):
+            raise
+    else:
+        raise AssertionError("exhausted comment pages were treated as complete")
+    had_token = os.environ.get("GITHUB_TOKEN")
+    os.environ["GITHUB_TOKEN"] = had_token or "self-check"
+    original_open = urllib.request.urlopen
+
+    def explode(*_args, **_kwargs):
+        raise TimeoutError("timed out")
+
+    urllib.request.urlopen = explode
+    try:
+        try:
+            _live_fetch("/repos/" + _REPOSITORY + "/pulls/" + _CORRECTIVE_PR)
+        except _ObservationError as exc:
+            if "GitHub request failed" not in str(exc):
+                raise
+        else:
+            raise AssertionError("timeout was not reported as an observation failure")
+    finally:
+        urllib.request.urlopen = original_open
+        if had_token is None:
+            os.environ.pop("GITHUB_TOKEN", None)
+        else:
+            os.environ["GITHUB_TOKEN"] = had_token
     print("chain-evidence self-check ok")
     return 0
 
