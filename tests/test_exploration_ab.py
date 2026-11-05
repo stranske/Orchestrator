@@ -245,7 +245,12 @@ def test_export_carries_a_policy_version_and_one_sampled_challenger_per_task_typ
                         row["agent"]
                         for row in router.ROUTE_TABLE[task_type]["agents"]
                         if not row["late"]
-                    } & (router.KEEPALIVE_AGENTS - router.RESERVE_AGENTS - router.BACKUP_AGENTS)
+                    } & (
+                        router.KEEPALIVE_AGENTS
+                        - router.RESERVE_AGENTS
+                        - router.BACKUP_AGENTS
+                        - route_weights_export.HOSTED_UNRUNNABLE_AGENTS
+                    )
                     assert challenger in allowed - {"cursor"}
                     expected = (
                         "gemini" if mode == "thompson-hybrid" and "gemini" in allowed else "codex"
