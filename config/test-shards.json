@@ -11,6 +11,7 @@
   "untimed_modules": [
     "tests/test_closer_correction_owner.py",
     "tests/test_gemini_flash_routing.py",
+    "tests/test_hosted_exploration_pass_number.py",
     "tests/test_python_floor.py",
     "tests/test_storage_abort_reconciliation.py",
     "tests/test_storage_interrupted_release.py",
@@ -612,6 +613,7 @@
       "tests/test_firing_silence_invocations.py",
       "tests/test_fleet_shapes.py",
       "tests/test_gh_auth_preflight.py",
+      "tests/test_hosted_exploration_pass_number.py",
       "tests/test_improvement_log.py",
       "tests/test_keepalive_ingest_fetch.py",
       "tests/test_keepalive_outcomes_gap_coverage.py",

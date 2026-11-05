@@ -791,7 +791,7 @@ def test_publication_identity_falls_back_to_exporter(tmp_path, monkeypatch):
         return subprocess.CompletedProcess(argv, 0, "")
 
     with patch.object(export.subprocess, "run", side_effect=run) as commands:
-        assert export.publish_document(document, db_path=database)
+        assert export.publish_document(document, db_path=database, state_dir=tmp_path)
     commits = [call.args[0] for call in commands.call_args_list if "commit" in call.args[0]]
     assert commits[0][-1] == (
         f"chore: export route weights (db={database.resolve()} "
