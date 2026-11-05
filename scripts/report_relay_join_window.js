@@ -58,7 +58,8 @@ function reconcileRawLog(pacingLog, start, end, sources, decisions, byId, exitLo
   const byRawId = new Map();
   const agents = new Set(['codex', 'claude', 'claude_code', 'cursor', 'muse']);
   let excludedLines = 0;
-  for (const line of bytes.toString('utf8').split(/\r?\n/).filter((s) => s.trim())) {
+  for (const [index, line] of bytes.toString('utf8').split(/\r?\n/).entries()) {
+    if (!line.trim()) continue;
     const [stamp, ...parts] = line.trim().split(/\s+/);
     const fields = Object.create(null);
     if (parts.some((part) => !part.includes('='))) { excludedLines++; continue; }
@@ -86,7 +87,12 @@ function reconcileRawLog(pacingLog, start, end, sources, decisions, byId, exitLo
     facts.fallback = fields.fallback === 'yes';
     const record = { decision_ts: ts, facts };
     if (!byRawId.has(id)) byRawId.set(id, new Map());
-    byRawId.get(id).set(JSON.stringify(record), record);
+    const records = byRawId.get(id);
+    // Deduplicate decision facts, while retaining every original occurrence
+    // so the comparison can be audited against the hashed pacing input.
+    const key = JSON.stringify(record);
+    if (!records.has(key)) records.set(key, { ...record, occurrences: [] });
+    records.get(key).occurrences.push({ line_number: index + 1, raw_line: line });
   }
   const persisted = new Map(decisions.map((d) => [d.raw_decision_id, d]));
   const events = new Map(sources.map((s) => [s.event_id, s]));

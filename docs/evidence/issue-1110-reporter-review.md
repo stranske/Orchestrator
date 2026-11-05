@@ -274,3 +274,30 @@ Delivery failed: `git add` could not create `.git/index.lock` on the read-only
 filesystem, so no commit was created. The `needs-human` label and blocker-comment
 calls were rejected with `MCP tool call requires approval, but approval policy is
 never`; neither was published. Source, tests and this note remain uncommitted.
+
+## Pacing-line provenance, 2026-11-05
+
+Reviewed the preceding six keepalive changes and PR #1132's current body. Both
+reporter-review checkboxes are already checked; no additional checkbox is supported.
+The optional raw reconciliation now retains `occurrences` for each distinct pacing
+record, with original line text and one-based line numbers in the hashed input.
+Identical decision facts still deduplicate, including whitespace variants, while
+conflicting facts still prevent attribution. This supports auditing omissions
+against retained inputs; it does not establish deployment or production acceptance.
+
+The new regression failed before implementation because occurrences were absent.
+Afterward, the combined relay/preflight CLI suites pass **42 tests**, exit 0.
+The case verifies CRLF input, blank and excluded lines, repeated and conflicting
+records, CLI output, linked round/exit facts, and unchanged database/log bytes.
+Node syntax checks and `git diff --check` pass. No Python files changed.
+
+Production logs and Brain remain absent, and no installed Python interpreter has
+pytest. The floor remains unchanged and differs from assessed local `origin/main`
+`b69ff474d3a87a271a7345874bcfc19b03a736bf` (hashes recorded above). Production
+attribution remains unresolved against `2026-11-04T08:16:32Z`; any attributable
+success after that deadline is late recovery. All operational checkboxes remain open.
+
+Staging failed because `.git/index.lock` is on a read-only filesystem; no commit
+was created. Publishing the `needs-human` label and blocker comment was rejected
+with `MCP tool call requires approval, but approval policy is never`. These edits
+remain in the workspace for an authorized write channel.

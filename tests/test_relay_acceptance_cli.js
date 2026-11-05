@@ -364,6 +364,52 @@ test('raw facts must agree with the persisted decision before an accepted join i
   }
 });
 
+test('raw pacing provenance retains original lines and duplicate occurrences without changing attribution', (t) => {
+  const w = world(t);
+  w.append('Pacing.+:[1]', deployment + 10);
+  const completed = w.exit('Pacing.+:[1]', deployment + 20);
+  const original = fs.readFileSync(w.log, 'utf8').trim();
+  const spaced = `  ${original.replace(' source=', '  source=')}  `;
+  const conflict = original.replace('chosen=claude_code', 'chosen=cursor');
+  const exits = path.join(w.root, 'relay-exits.log');
+  fs.writeFileSync(exits, exitLine('Pacing.+:[1]', deployment + 20));
+  for (const conflicting of [false, true]) {
+    const lines = ['', 'unrelated log prose', original, '', spaced, original,
+      ...(conflicting ? [conflict] : [])];
+    fs.writeFileSync(w.log, `${lines.join('\r\n')}\r\n`);
+    const files = [w.log, exits, path.join(w.root, 'brain.db')];
+    const before = files.map((file) => fs.readFileSync(file));
+    const report = w.reportCli(deployment + 20, w.log, exits);
+    assert.equal(report.status, 'available');
+    const raw = report.raw_reconciliation;
+    assert.equal(raw.window_decisions, 1);
+    assert.equal(raw.excluded_lines, 1);
+    assert.equal(raw.matching_completed_exit_decisions, 1);
+    assert.equal(raw.accepted_window_joins, Number(!conflicting));
+    assert.equal(raw.unaccounted_completed_exit_decisions, Number(conflicting));
+    const row = raw.decisions[0];
+    assert.equal(row.raw_decision_id, 'Pacing.+:[1]');
+    assert.equal(row.status, conflicting ? 'ambiguous_raw_decisions' : 'accepted_join');
+    assert.equal(row.raw_records.length, conflicting ? 2 : 1);
+    assert.equal(row.raw_records[0].decision_ts, deployment + 10);
+    assert.deepEqual(row.raw_records[0].occurrences, [
+      { line_number: 3, raw_line: original },
+      { line_number: 5, raw_line: spaced },
+      { line_number: 6, raw_line: original },
+    ]);
+    if (conflicting) assert.deepEqual(row.raw_records[1].occurrences,
+      [{ line_number: 7, raw_line: conflict }]);
+    for (const record of row.raw_records) {
+      for (const occurrence of record.occurrences) {
+        assert.equal(lines[occurrence.line_number - 1], occurrence.raw_line);
+      }
+    }
+    assert.equal(row.completed_rounds[0].decision_id, completed.decision_id);
+    assert.equal(row.raw_exit_records[0].exit_ts, deployment + 20);
+    assert.deepEqual(files.map((file) => fs.readFileSync(file)), before);
+  }
+});
+
 test('raw reconciliation filters the window and rejects conflicting reuse of an exact ID', (t) => {
   const w = world(t);
   w.append('before', deployment - 1);
