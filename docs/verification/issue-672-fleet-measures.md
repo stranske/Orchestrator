@@ -255,3 +255,38 @@ rejected with `MCP tool call requires approval, but approval policy is never`.
 The unsupported checked pytest/full-verification claim therefore remains on the
 PR. No protected files changed, and no Python commit was attempted past the
 failed mandatory formatting gate.
+
+## All-reader mutation controls — 2026-11-05 12:02Z
+
+The first implementation and rendering tasks require Python changes, but this
+runner still lacks the mandatory Black formatter. No tracked Python files were
+changed this round. The next feasible verification task now has broader evidence:
+`scripts/verify_fleet_delivery_mutation.js --all-readers` checks all five reader
+paths, mutating the two PR-measure arms independently. Each control runs its
+existing fixture test before mutation, catches a deliberate numeric result after
+a read failure, restores the source bytes, and reruns the test successfully.
+Unittest subtest failures must all name the selected method; missing tools,
+unrelated failures, skips, and malformed verdicts remain rejected.
+
+- [x] All five reader mutations were detected and the restored tests passed under
+  the available Python via the JavaScript regression test's
+  `runIsolated(['--all-readers', '--unittest'], ...)` call.
+- [x] `node --test --test-isolation=none tests/test_verify_fleet_delivery_mutation.js
+  tests/test_verify_fleet_delivery_live.js`: all 14 tests passed, including real
+  mutation runs and byte-for-byte restoration after a runner exception.
+- [x] `PYTHONPATH=src python3 -m unittest discover -s tests
+  -p test_switch_review_fleet.py -q`: all 25 fleet tests passed.
+- [ ] Required pytest and selected-interpreter full verification remain blocked:
+  pytest is absent and `/opt/anaconda3/bin/python3 src/verify.py` exits 127 because
+  the requested interpreter is absent. The pytest-mode all-reader checker rejects
+  the missing test runner rather than reporting mutation success.
+- [ ] Selected-interpreter live-machine acceptance remains unverified.
+
+PR #1130 was confirmed open and ready for review. The checked pytest/full-verification
+claim in its summary is unsupported by this runner's evidence and should be unchecked.
+
+The commit attempt failed before staging: `.git/index.lock` could not be created
+because `.git` is read-only. The JavaScript implementation, regression tests, and
+these notes remain uncommitted. Checklist correction, `needs-human` labeling, and
+the blocker comment were each rejected with `MCP tool call requires approval,
+but approval policy is never`. No protected files or tracked Python files changed.
