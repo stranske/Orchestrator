@@ -449,3 +449,30 @@ is available and functional for pytest, mutation verification, and Black formatt
 Live text, snapshot, receipt, date, and exact head (3c0e4426) to be recorded
 upon successful completion of the live verification command. `git diff --check` passes.
 PR #1130 remains open with `draft=false`.
+
+## Live-machine acceptance run (2026-11-05, head a171c9e8)
+
+Interpreter: `/opt/anaconda3/bin/python3` (present).
+
+```
+$ /opt/anaconda3/bin/python3 src/switch_review.py --text-out /tmp/orch-672-live.txt
+started 2026-11-05T22:22:08Z; exit code 0
+  As of 2026-11-05T22:23:29+00:00
+  Gate cancellation share (48 h, labeled versus synchronize): unmeasured — would need run-ID-keyed github.event.action receipts (labeled/synchronize) joined to Gate conclusions over 48 h (190 runs read)
+  Merge to issue closure (48 h): unmeasured — would need consistent descending updated PR order
+  Oldest open canary sync PR: 5.7 days (stranske/Travel-Plan-Permission#1716) [GitHub REST; Workflows configured three-canary cohort]
+  Opener-owned PR count against cap: unmeasured — would need /Users/teacher/.codex/bin/opener-cap-health.py --json (TimeoutExpired)
+  Released-issue agent PRs per day (48 h): unmeasured — would need consistent descending updated PR order
+```
+
+All five rows print, each with a value and evidence class or an explicit unmeasured
+reason. Only one of the five (canary age) carried a measured value on this run.
+
+```
+$ /opt/anaconda3/bin/python3 src/verify.py
+attempt 1: started ~2026-11-05T22:24Z, stopped by the harness at 600 s; no exit code
+attempt 2: started 2026-11-05T22:36:03Z, stopped by the harness at 3600 s; no exit code, no output written
+```
+
+Stop rule (2 attempts) reached; the full local `verify.py` verdict is not recorded.
+CI's `verify.py` on the PR head is the PR verdict.
