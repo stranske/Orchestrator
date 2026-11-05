@@ -1,0 +1,57 @@
+{
+  "date": "2026-11-05",
+  "reviewed_commit": "26cd4b777d9205b56592a8d13210ed983d1911a0",
+  "verified_by": [
+    "node tests/test_issue_771_mutation_replay.js",
+    "node tests/test_issue_771_ci_evidence.js",
+    "node scripts/verify_issue_771_ci.js"
+  ],
+  "pr_read": {
+    "tool": "github.get_pr_info",
+    "arguments": {
+      "pr_number": 1143,
+      "repository_full_name": "stranske/Orchestrator"
+    },
+    "result": {
+      "url": "https://github.com/stranske/Orchestrator/pull/1143",
+      "state": "closed",
+      "merged": true,
+      "draft": false,
+      "closed_at": "2026-11-05T05:32:50Z",
+      "merged_at": "2026-11-05T05:32:50Z",
+      "merge_commit_sha": "1d9f3b80cbe29a71775370a6417f88769f997067"
+    }
+  },
+  "completed_task_numbers": [
+    1,
+    4,
+    5,
+    6,
+    9,
+    10,
+    14,
+    15,
+    19,
+    20
+  ],
+  "incomplete_task_numbers": [
+    2,
+    3,
+    7,
+    8,
+    11,
+    12,
+    13,
+    16,
+    17,
+    18
+  ],
+  "numbering": "Sequential numbering across Tasks (1-5), Additional PR tasks (6-15), Acceptance Criteria (16-20), including duplicates.",
+  "evidence": {
+    "1,6": "ci/manifest.json; ci/job-117832439061.log; ci/job-117832552676.log; mutations/replay-validation/ci-verifier.stdout.txt",
+    "4,9,14,19": "EVIDENCE.md#coverage-measurement-and-comparability; coverage/records.json; coverage/job-117832439523.log",
+    "5,10,15,20": "EVIDENCE.md#acceptance-checklist; EVIDENCE.md#historical-ranking-provenance; issue-771.json"
+  },
+  "pr_body_update": "Not performed: PR #1143 is merged and closed. Its historical body still has unchecked tasks. Updating a closed PR cannot meet the required open/non-draft handoff invariant; this local reconciliation records verified progress without reopening or altering a merged PR.",
+  "new_mutation_work": "Prepared historical mutation plan and tested replay script only; no mutation runtime criterion is marked complete."
+}

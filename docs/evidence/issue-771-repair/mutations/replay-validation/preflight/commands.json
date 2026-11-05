@@ -1,0 +1,20 @@
+[
+  {
+    "label": "head",
+    "command": [
+      "git",
+      "rev-parse",
+      "HEAD"
+    ],
+    "cwd": "/tmp/issue-771-replay-preflight",
+    "started_at": "2026-11-05T06:07:07.905Z",
+    "finished_at": "2026-11-05T06:07:07.908Z",
+    "exit_code": 0,
+    "signal": null,
+    "error": null,
+    "stdout": "head.stdout.txt",
+    "stderr": "head.stderr.txt",
+    "stdout_sha256": "50631739fd9279857b4f8914d560cce0179a24f340464d33237d18700ab54ef6",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+]

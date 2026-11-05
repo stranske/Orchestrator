@@ -1,0 +1,52 @@
+{
+  "commit": "18ad97a054dab7f6039dd42c8131bee04267748b",
+  "source": "src/feedback.py",
+  "source_blob_sha": "5cdb301107b1e8167b18578b0842917c14a5dd97",
+  "test_source": "tests/test_feedback_registry_queries.py",
+  "test_blob_sha": "e4f448e592e65b9625f393c783d6fae447e0b924",
+  "retrieval_date": "2026-11-05",
+  "transport": "github.fetch_file",
+  "transport_arguments": {
+    "repository_full_name": "stranske/Orchestrator",
+    "path": "src/feedback.py",
+    "ref": "18ad97a054dab7f6039dd42c8131bee04267748b"
+  },
+  "status": "Prepared mutations; no historical test execution claimed.",
+  "mutations": [
+    {
+      "test_id": "test_run_queries_keep_pending_and_mode_scopes_distinct",
+      "function_name": "runs_needing_outcome",
+      "before": "q += \" AND r.mode=?\"",
+      "after": "q += \" AND r.mode<>?\"",
+      "reason": "Invert the requested mode filter."
+    },
+    {
+      "test_id": "test_snapshot_json_exports_initialized_tables_to_the_requested_path",
+      "function_name": "snapshot_json",
+      "before": "\"rows\": {t: len(v) for t, v in dump.items()}",
+      "after": "\"rows\": {t: len(v) + 1 for t, v in dump.items()}",
+      "reason": "Overstate exported row counts by one."
+    },
+    {
+      "test_id": "test_evidence_registry_normalizes_citations_and_retires_unused_rows",
+      "function_name": "normalize_evidence_type_citations",
+      "before": "key = name.lower()",
+      "after": "key = name",
+      "reason": "Remove case-insensitive citation deduplication."
+    },
+    {
+      "test_id": "test_evidence_proposals_and_approval_require_recurrence_then_reactivate",
+      "function_name": "approve_evidence_type",
+      "before": "eligible = recurrence >= min_recurrence",
+      "after": "eligible = recurrence > min_recurrence",
+      "reason": "Reject recurrence exactly at the approval threshold."
+    },
+    {
+      "test_id": "test_role_selector_metrics_preserve_no_match_and_rejection_signals",
+      "function_name": "role_activation_metrics",
+      "before": "for key in (\"matched\", \"disagreement\"):",
+      "after": "for key in (\"matched\", \"invoked\", \"disagreement\"):",
+      "reason": "Restore the original invoked double-counting defect."
+    }
+  ]
+}

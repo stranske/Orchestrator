@@ -1,0 +1,36 @@
+[
+  {
+    "label": "replay-tests",
+    "command": [
+      "/opt/hostedtoolcache/node/24.22.1/x64/bin/node",
+      "tests/test_issue_771_mutation_replay.js"
+    ],
+    "cwd": "/home/runner/work/Orchestrator/Orchestrator",
+    "started_at": "2026-11-05T06:08:04.456Z",
+    "finished_at": "2026-11-05T06:08:04.555Z",
+    "exit_code": 0,
+    "signal": null,
+    "error": null,
+    "stdout": "replay-tests.stdout.txt",
+    "stderr": "replay-tests.stderr.txt",
+    "stdout_sha256": "7a3afc2c2b06dd9549901f7aa32cde3fa2f8c6cbc2b6f01bef514a780c340162",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "label": "ci-tests",
+    "command": [
+      "/opt/hostedtoolcache/node/24.22.1/x64/bin/node",
+      "tests/test_issue_771_ci_evidence.js"
+    ],
+    "cwd": "/home/runner/work/Orchestrator/Orchestrator",
+    "started_at": "2026-11-05T06:08:04.556Z",
+    "finished_at": "2026-11-05T06:08:04.626Z",
+    "exit_code": 0,
+    "signal": null,
+    "error": null,
+    "stdout": "ci-tests.stdout.txt",
+    "stderr": "ci-tests.stderr.txt",
+    "stdout_sha256": "343dd6a3c92f7ce44a9ac00fc2b52b43d15309efbec982dd6abd707e21a93d54",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+]

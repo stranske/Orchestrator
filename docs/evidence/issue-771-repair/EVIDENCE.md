@@ -6,10 +6,16 @@
 
 This record distinguishes recovered CI history from local verification performed for this follow-up. The earlier completed checklist was unsupported and has been replaced. No historical mutation execution or controlled coverage comparison is claimed.
 
+### Reconciliation of the previous iteration
+
+Commit `26cd4b777d9205b56592a8d13210ed983d1911a0` preserved the CI records and corrected the coverage accounting. Re-running the offline CI verifier and its tests confirmed the completed follow-up items below. [Reconciliation records](reconciliation.json) map those results to the duplicated task numbers in the supplied task list: **10 of 20 entries** have supporting evidence. This does not mean all acceptance criteria are satisfied.
+
+The GitHub service reports PR #1143 as **merged and closed**, with `draft=false`. Its body was not updated: a merged PR cannot meet the required open/non-draft handoff invariant. The local checklist and reconciliation record preserve the verified progress; no PR was created or changed in this round.
+
 ## Follow-up tasks
 
 - [x] Identify the two original-head workflow runs and pytest jobs and preserve their logs, metadata, retrieval commands, results, and dates: [CI manifest](ci/manifest.json), [failed shell retrievals](ci/gh-attempts.json), and the index below. The connected GitHub service recovered the logs after shell networking failed.
-- [ ] Recover complete mutation failure/restoration pairs for all five original tests. [Source inspection](mutations/source-inspection.json) identifies the exact five tests; runtime proof remains blocked.
+- [ ] Recover complete mutation failure/restoration pairs for all five original tests. [Source inspection](mutations/source-inspection.json) identifies the exact five tests. The [prepared mutation plan](mutations/plan.json) and [tested replay script](../../../scripts/replay_issue_771_mutations.js) advance reproduction, but runtime proof remains blocked.
 - [ ] Recover or reproduce a controlled baseline/post-change coverage comparison. [Partial coverage records](coverage/records.json) preserve matching configuration and one post-change measurement, with the missing baseline and branch results explicitly unknown.
 - [x] Remove invalid coverage arithmetic and the uncovered-majority claim; report only the [observed statement measurement and limitations](#coverage-measurement-and-comparability).
 - [x] Replace unsupported completion claims with linked evidence and retain [unknown historical ranking provenance](#historical-ranking-provenance).
@@ -80,6 +86,22 @@ The earlier abbreviated assertions and claimed restored passes were not complete
 Three later tests in the current module are outside the original population: `test_model_epoch_cost_telemetry_and_review_rounds_are_isolated`, `test_learning_population_and_cost_telemetry_reject_incomplete_or_implausible_data`, and `test_owner_questions_and_work_item_subject_preserve_scope_and_expiry`. They must be excluded from any isolated reproduction or attribution comparison.
 
 Local blockers are recorded with separate stdout/stderr in [source-inspection.json](mutations/source-inspection.json): `git show 18ad97a:tests/test_feedback_registry_queries.py` cannot resolve the original head in the local object database (exit **128**), and the available Python interpreter cannot import pytest (exit **1**). Installing pytest/Black/coverage into a temporary virtual environment failed because PyPI DNS was unavailable. No deliberate mutation was applied, and no restored pass is claimed. A connected-service source retrieval is source inspection, not runtime verification.
+
+### Prepared mutation replay (new follow-up work)
+
+The connected GitHub service recovered `src/feedback.py` at the original commit, Git blob **`5cdb301107b1e8167b18578b0842917c14a5dd97`**. The complete five target functions, their starting lines, and source identity are preserved in [historical-functions.json](mutations/historical-functions.json). [plan.json](mutations/plan.json) records the exact retrieval arguments and five replacements: invert the mode predicate, overstate snapshot row counts, remove case-insensitive citation deduplication, reject recurrence at its threshold, and reinstate invoked double-counting. Each replacement matches exactly once within its historical function. These are newly prepared mutations, not recovered execution records.
+
+The repository-specific [replay script](../../../scripts/replay_issue_771_mutations.js) requires a separate clean checkout at the literal original commit and checks both production/test Git blob identities before changing anything. It checks the five collected node IDs, requires an initial five-pass result, then saves each patch, named assertion failure, byte restoration hash, clean Git diff, and restored one-pass result. It restores the source in a `finally` block and requires a final five-pass result and clean checkout. Commands use argument arrays, include `-m "not slow"`, and retain separate stdout/stderr, timestamps, exit codes, signals, and errors. Output must be a new directory outside the historical checkout. Its manifest stays incomplete if any prerequisite or pair fails.
+
+On a host with that checkout and pytest installed in the selected interpreter, the invocation is:
+
+```text
+node scripts/replay_issue_771_mutations.js /path/to/isolated-historical-checkout /path/to/selected-python /path/to/new-mutation-records
+```
+
+The [12 replay tests](../../../tests/test_issue_771_mutation_replay.js), plus the nine existing CI verifier tests, report **21 passed / zero failed** in the preserved [replay output](mutations/replay-validation/unit-tests/replay-tests.stdout.txt) and [CI verifier test output](mutations/replay-validation/unit-tests/ci-tests.stdout.txt), with [commands and exit codes](mutations/replay-validation/unit-tests/commands.json). Test doubles exercise restoration and rejection behavior; they are not executions of the original Python tests. The recorder also has a real subprocess test for separate stdout/stderr, exit status, argument boundaries, and missing executables.
+
+[Validation commands and results](mutations/replay-validation/commands.json) retain fresh `git show` (exit **128**) and pytest availability (exit **1**) probes. A no-checkout temporary Git clone was used only to exercise the [rejected preflight](mutations/replay-validation/preflight/manifest.json): its actual head was `26cd4b7…`, so replay exited **1** before any source mutation or pytest execution. No historical checkout or original test run is claimed by that probe. All five runtime mutation rows above remain incomplete.
 
 ## Coverage measurement and comparability
 

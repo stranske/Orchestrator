@@ -1,0 +1,95 @@
+[
+  {
+    "label": "replay-tests",
+    "command": [
+      "/opt/hostedtoolcache/node/24.22.1/x64/bin/node",
+      "--test",
+      "tests/test_issue_771_mutation_replay.js",
+      "tests/test_issue_771_ci_evidence.js"
+    ],
+    "cwd": "/home/runner/work/Orchestrator/Orchestrator",
+    "started_at": "2026-11-05T06:07:07.680Z",
+    "finished_at": "2026-11-05T06:07:07.828Z",
+    "exit_code": 0,
+    "signal": null,
+    "error": null,
+    "stdout": "replay-tests.stdout.txt",
+    "stderr": "replay-tests.stderr.txt",
+    "stdout_sha256": "cc29fbf0d9022d378994e156f468a25049fb1346a0637e28998eea68893fc376",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "label": "ci-verifier",
+    "command": [
+      "/opt/hostedtoolcache/node/24.22.1/x64/bin/node",
+      "scripts/verify_issue_771_ci.js"
+    ],
+    "cwd": "/home/runner/work/Orchestrator/Orchestrator",
+    "started_at": "2026-11-05T06:07:07.828Z",
+    "finished_at": "2026-11-05T06:07:07.860Z",
+    "exit_code": 0,
+    "signal": null,
+    "error": null,
+    "stdout": "ci-verifier.stdout.txt",
+    "stderr": "ci-verifier.stderr.txt",
+    "stdout_sha256": "aff179eae64ace3774a64a7a20c8dc92776ef6612bf8d4921137c16ca98c8c8b",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "label": "historical-git-show",
+    "command": [
+      "git",
+      "show",
+      "18ad97a:tests/test_feedback_registry_queries.py"
+    ],
+    "cwd": "/home/runner/work/Orchestrator/Orchestrator",
+    "started_at": "2026-11-05T06:07:07.861Z",
+    "finished_at": "2026-11-05T06:07:07.863Z",
+    "exit_code": 128,
+    "signal": null,
+    "error": null,
+    "stdout": "historical-git-show.stdout.txt",
+    "stderr": "historical-git-show.stderr.txt",
+    "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stderr_sha256": "d06bd1fa4ba36631422209423684bc535ebcacb892731d59714a948683c8db61"
+  },
+  {
+    "label": "pytest-probe",
+    "command": [
+      "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3",
+      "-m",
+      "pytest",
+      "--version"
+    ],
+    "cwd": "/home/runner/work/Orchestrator/Orchestrator",
+    "started_at": "2026-11-05T06:07:07.864Z",
+    "finished_at": "2026-11-05T06:07:07.877Z",
+    "exit_code": 1,
+    "signal": null,
+    "error": null,
+    "stdout": "pytest-probe.stdout.txt",
+    "stderr": "pytest-probe.stderr.txt",
+    "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stderr_sha256": "3c62bade513fb2347fe3e5a9f91901d9e1bbf2d4a19bbd59d2863c1cdf42e10a"
+  },
+  {
+    "label": "historical-replay-preflight",
+    "command": [
+      "/opt/hostedtoolcache/node/24.22.1/x64/bin/node",
+      "scripts/replay_issue_771_mutations.js",
+      "/tmp/issue-771-replay-preflight",
+      "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3",
+      "/home/runner/work/Orchestrator/Orchestrator/docs/evidence/issue-771-repair/mutations/replay-validation/preflight"
+    ],
+    "cwd": "/home/runner/work/Orchestrator/Orchestrator",
+    "started_at": "2026-11-05T06:07:07.877Z",
+    "finished_at": "2026-11-05T06:07:07.913Z",
+    "exit_code": 1,
+    "signal": null,
+    "error": null,
+    "stdout": "historical-replay-preflight.stdout.txt",
+    "stderr": "historical-replay-preflight.stderr.txt",
+    "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stderr_sha256": "5957a89c6a90ab90d39aa3b01e1c4523fe9bdb01cbe4affd63b1aa8cc1c34b4e"
+  }
+]
