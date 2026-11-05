@@ -716,7 +716,7 @@ def _run_live(
             else:
                 entry["certification"] = {"status": "uncertified", "reason": str(exc)[:300]}
                 uncertified += 1
-        except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
+        except (OSError, RuntimeError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
             # Provisioning, an evidence read or the role run failed, not the case: the row is
             # kept with its error and retried by later runs until MAX_ATTEMPTS, then it is final.
             entry["error"] = str(exc)[:300]

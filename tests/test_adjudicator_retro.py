@@ -3,6 +3,7 @@
 import hashlib
 import json
 import sqlite3
+import subprocess
 import time
 
 import pytest
@@ -1206,6 +1207,73 @@ def test_live_shadow_never_adjudicates_an_uncertified_case(live_shadow, monkeypa
     assert len(events) == 1 and events[0][0] == "live_shadow_uncertified"
     assert "missing immutable source" in events[0][1]
     assert "uncertified 1" in live.weekly_line(options["path"])
+
+
+@pytest.mark.parametrize("configured,expected", [(None, 3), ("2", 2), ("0", 0), ("bad", 3)])
+def test_live_shadow_default_runner_obeys_dispatch_budget(
+    live_shadow, monkeypatch, configured, expected
+):
+    live, calls, options = live_shadow
+    backend = options.pop("runner")
+    monkeypatch.setattr(roles, "run_adjudicator_agent", backend)
+    if configured is not None:
+        options["env"][live.LIVE_LIMIT] = configured
+    with sqlite3.connect(options["db"]) as conn:
+        for number in range(2, 6):
+            run_id = f"new-dispute-{number}"
+            conn.execute(
+                "INSERT INTO runs(run_id,ts,target) VALUES (?,?,?)",
+                (run_id, int(time.time()), f"owner/repo#{number}"),
+            )
+            conn.execute(
+                "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged) "
+                "VALUES (?,'NON_PASS','PASS',1)",
+                (run_id,),
+            )
+    result = live.run_live(**options)
+    assert result["attempted"] == result["advised"] == len(calls) == expected
+    for call in calls:
+        assert call["timeout"] == retro.DISPATCH_TIMEOUT_S == 600
+        assert call["cwd"] == str(options["path"].parent)
+        assert call["source"] == "live" and call["dispatch"] is True
+        roles._collected_snapshot(call["case"])
+
+
+def test_live_shadow_zero_switch_prevents_collection_and_default_runner(live_shadow, monkeypatch):
+    live, calls, options = live_shadow
+    options.pop("runner")
+    options["env"][live.LIVE_SWITCH] = "0"
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("disabled live shadow must not collect evidence or dispatch")
+
+    monkeypatch.setattr(roles, "run_adjudicator_agent", forbidden)
+    options["evidence_reader"] = forbidden
+    assert live.run_live(**options)["disabled"] is True
+    assert not calls and not options["path"].exists()
+    assert _live_events(options["db"]) == []
+
+
+def test_live_shadow_timeout_is_saved_and_retried_within_the_cap(live_shadow, monkeypatch):
+    live, calls, options = live_shadow
+    backend = options.pop("runner")
+
+    def timeout(**kwargs):
+        raise subprocess.TimeoutExpired("adjudicator backend", kwargs["timeout"])
+
+    monkeypatch.setattr(roles, "run_adjudicator_agent", timeout)
+    first = live.run_live(**options)
+    assert first["attempted"] == 1 and first["advised"] == first["uncertified"] == 0
+    row = first["rows"][0]
+    assert row["certification"]["status"] == "certified"
+    assert "600 seconds" in row["error"] and row["attempts"] == 1
+    assert json.loads(options["path"].read_text())["summary"]["retrying"] == 1
+    assert _live_events(options["db"]) == []
+    monkeypatch.setattr(roles, "run_adjudicator_agent", backend)
+    retried = live.run_live(**options)
+    assert retried["attempted"] == retried["advised"] == len(calls) == 1
+    assert retried["rows"][0]["attempts"] == 2
+    assert len(_live_events(options["db"])) == 1
 
 
 def test_live_shadow_writes_no_merge_input(live_shadow):
