@@ -175,7 +175,10 @@ def test_agy_path_label_and_stream_parsers_are_defensive():
     assert adapters.agy_log_for("/tmp/run.log") == Path("/tmp/run.agy.log")
     assert adapters.agy_log_for("/tmp/run.agy.log") == Path("/tmp/run.agy.log")
     assert adapters.model_label_from_agy_log('label="first"\nlabel="last"') is None
-    log = 'Propagating selected model override to backend: label="first"\nPropagating selected model override to backend: label="last"'
+    log = (
+        'Propagating selected model override to backend: label="first"\n'
+        'Propagating selected model override to backend: label="last"'
+    )
     assert adapters.model_label_from_agy_log(log) == "last"
     stream = "\n".join(
         [

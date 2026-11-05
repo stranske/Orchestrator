@@ -124,7 +124,10 @@ def test_analyse_nodes_marks_hollow_and_inconclusive_nodes(monkeypatch, tmp_path
         "_run_argv",
         lambda *_args, **_kwargs: (
             report,
-            "tests/a.py::test_real FAILED\ntests/a.py::test_old PASSED\ntests/a.py::test_skip SKIPPED\n",
+            (
+                "tests/a.py::test_real FAILED\ntests/a.py::test_old PASSED\n"
+                "tests/a.py::test_skip SKIPPED\n"
+            ),
         ),
     )
     result = local_verify._analyse_nodes(tmp_path, "python -m pytest", ["tests/a.py"], 12)
