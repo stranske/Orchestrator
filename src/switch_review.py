@@ -50,6 +50,7 @@ import base64
 import json
 import math
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -1843,6 +1844,17 @@ def review(
         "worktree_git_refusals": worktree_git_refusals(),
         "raise_count": len(due) + len(quiet),
     }
+    try:
+        rep["assess_sandbox_fallback"] = assess_sandbox_fallback_report(now=now)
+    except Exception as exc:  # noqa: BLE001 — a report still names an unreadable ledger
+        rep["assess_sandbox_fallback"] = {
+            "status": "unmeasured",
+            "reason": f"{type(exc).__name__}: {exc}",
+            "window_days": ASSESS_SANDBOX_WINDOW_DAYS,
+            "fallback_runs": None,
+            "network_caused_assess_incompletions": None,
+            "window_complete": False,
+        }
     # FYI only, never counted in `raise_count`, and outside the graded projection
     # (capability_propensity.TICK_FINDING_FIELDS["switch-review"]), so it mints no verdict.
     if credential_exposure_report is not None:
@@ -2125,6 +2137,182 @@ def review_loop_share_line(rows) -> str:
     return f"  review loop first-pass MERGE-WHEN-GREEN: {accepted}/{len(first)} ({accepted / len(first):.0%})"
 
 
+# Explicit seven-day interval for the assess-sandbox fallback. Not a rolling default
+# hidden in a call site: the report names this many days, and a window that has not
+# elapsed stays unverified rather than printing a success zero.
+ASSESS_SANDBOX_WINDOW_DAYS = 7
+_ASSESS_NETWORK_FAILURE_PATTERNS = (
+    r"could not resolve host",
+    r"no such host",
+    r"name or service not known",
+    r"temporary failure in name resolution",
+    r"nodename nor servname",
+    r"lookup api\.github\.com",
+    r"connection refused",
+    r"connection reset",
+    r"network is unreachable",
+    r"no route to host",
+    r"failed to connect",
+    r"error connecting to api\.github\.com",
+    r"i/o timeout",
+    r"connection timed out",
+    r"curl: \(6\)",
+    r"curl: \(7\)",
+    r"curl: \(28\)",
+    r"dial tcp",
+    r"probe exceeded",
+)
+
+
+def _parse_window_start(value: str) -> int:
+    text = value.strip()
+    if re.fullmatch(r"\d+", text):
+        return int(text)
+    parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return int(parsed.timestamp())
+
+
+def _assess_text_is_network(text: str) -> bool:
+    return any(
+        re.search(pattern, text, re.IGNORECASE) for pattern in _ASSESS_NETWORK_FAILURE_PATTERNS
+    )
+
+
+def assess_sandbox_fallback_report(
+    *,
+    ledger_path: Path | str | None = None,
+    now: int | None = None,
+    since: int | None = None,
+) -> dict:
+    """Count fallback runs and network-caused assess incompletions over seven days.
+
+    A missing ledger is unmeasured, never zero. An assess failure whose log cannot
+    be read, and a window that has not elapsed, stay unverified: neither is a
+    success. `since` is the implementation-merge instant; without it the window
+    is the seven days ending at `now`, which has elapsed.
+    """
+    window_days = ASSESS_SANDBOX_WINDOW_DAYS
+    now_ts = int(time.time()) if now is None else int(now)
+    if since is None:
+        start = now_ts - window_days * 86400
+        end = now_ts
+        window_complete = True
+    else:
+        start = int(since)
+        end = start + window_days * 86400
+        window_complete = now_ts >= end
+    if ledger_path is None:
+        import adapters
+
+        path = adapters.LEDGER
+    else:
+        path = Path(ledger_path)
+    report = {
+        "window_days": window_days,
+        "window_start": start,
+        "window_end": end,
+        "now": now_ts,
+        "window_complete": window_complete,
+        "ledger": str(path),
+    }
+    if not path.is_file():
+        return {
+            **report,
+            "status": "unmeasured",
+            "reason": "capacity ledger absent",
+            "fallback_runs": None,
+            "network_caused_assess_incompletions": None,
+            "unclassifiable": None,
+            "malformed_rows": None,
+        }
+    fallback_ids: set[str] = set()
+    network = 0
+    unclassifiable = 0
+    malformed = 0
+    limit = min(now_ts, end)
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            malformed += 1
+            continue
+        if not isinstance(row, dict):
+            malformed += 1
+            continue
+        stamp = row.get("ts")
+        if type(stamp) is not int or not start <= stamp <= limit:
+            continue
+        if row.get("sandbox_fallback") is True and isinstance(row.get("run_id"), str):
+            fallback_ids.add(row["run_id"])
+        if row.get("event") != "complete" or row.get("mode") != "assess":
+            continue
+        error = str(row.get("error") or "")
+        exit_code = row.get("exit")
+        incomplete = "offload_incomplete" in error.lower() or exit_code not in (0, None)
+        if not incomplete:
+            continue
+        log_text = ""
+        log_readable = False
+        log_file = row.get("log_file")
+        if isinstance(log_file, str) and log_file:
+            try:
+                log_text = Path(log_file).read_text(encoding="utf-8", errors="replace")[:262144]
+                log_readable = True
+            except OSError:
+                log_readable = False
+        evidence = f"{error}\n{log_text}"
+        if _assess_text_is_network(evidence):
+            network += 1
+        elif log_readable:
+            continue
+        else:
+            unclassifiable += 1
+    reasons = []
+    if malformed:
+        reasons.append(f"{malformed} malformed ledger row(s)")
+    if unclassifiable:
+        reasons.append(f"{unclassifiable} assess incompletion(s) lack classifiable evidence")
+    if not window_complete:
+        reasons.append("seven-day window has not elapsed")
+    if reasons:
+        status = "unverified"
+        reason = "; ".join(reasons)
+    else:
+        status = "measured"
+        reason = ""
+    return {
+        **report,
+        "status": status,
+        "reason": reason,
+        "fallback_runs": len(fallback_ids),
+        "network_caused_assess_incompletions": network,
+        "unclassifiable": unclassifiable,
+        "malformed_rows": malformed,
+    }
+
+
+def format_assess_sandbox_fallback(section: dict) -> str:
+    """One line: the seven-day counts, and unverified/unmeasured when that is the truth."""
+    days = section.get("window_days", ASSESS_SANDBOX_WINDOW_DAYS)
+
+    def _num(key: str) -> str:
+        value = section.get(key)
+        return str(value) if type(value) is int else "unmeasured"
+
+    line = (
+        f"  assess sandbox fallback ({days}d): fallback_runs {_num('fallback_runs')}; "
+        f"network-caused assess incompletions {_num('network_caused_assess_incompletions')}"
+    )
+    status = section.get("status") or "unmeasured"
+    if status != "measured":
+        line += f"; {status}: {section.get('reason') or 'evidence incomplete'}"
+    return line
+
+
 def format_report(rep: dict) -> str:
     lines = [
         "# Switch review — held switches must be revisited, not forgotten",
@@ -2133,6 +2321,8 @@ def format_report(rep: dict) -> str:
         f"  due for a decision: {rep['raise_count']}",
         "",
     ]
+    if rep.get("assess_sandbox_fallback"):
+        lines += [format_assess_sandbox_fallback(rep["assess_sandbox_fallback"]), ""]
     lines += [comparative_routing_line(rep), ""]
     loop = rep.get("review_loop") or {}
     if loop.get("status") == "measured":
@@ -3131,9 +3321,27 @@ def main(argv: list[str]) -> int:
         ),
     )
     ap.add_argument("--selftest", action="store_true")
+    ap.add_argument(
+        "--assess-sandbox-fallback",
+        action="store_true",
+        help="print fallback runs and network-caused assess incompletions for the seven-day window",
+    )
+    ap.add_argument(
+        "--since",
+        help="window start as unix seconds or ISO-8601 (the implementation merge instant)",
+    )
+    ap.add_argument("--ledger", help="capacity-ledger.ndjson to read")
+    ap.add_argument("--now", type=int, help="unix seconds the window clock uses")
     args = ap.parse_args(argv)
     if args.selftest:
         _selftest()
+        return 0
+    if args.assess_sandbox_fallback:
+        since = _parse_window_start(args.since) if args.since else None
+        section = assess_sandbox_fallback_report(ledger_path=args.ledger, now=args.now, since=since)
+        print(
+            json.dumps(section, indent=2) if args.json else format_assess_sandbox_fallback(section)
+        )
         return 0
     if args.env == "process":
         env = dict(os.environ)

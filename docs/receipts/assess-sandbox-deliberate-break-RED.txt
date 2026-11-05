@@ -1,0 +1,70 @@
+$ /opt/hostedtoolcache/Python/3.14.9/x64/bin/python3 -m pytest tests/test_dispatcher_offload.py -k sandbox_network_failure_falls_back
+# mutation: src/dispatcher.py::_sandbox_has_network returned True immediately
+# exit 1
+# failure names workspace-write and the fallback preamble as absent; command kept --sandbox read-only
+# reverted before the green rerun in assess-sandbox-pytest-GREEN.txt
+
+============================= test session starts ==============================
+platform linux -- Python 3.14.9, pytest-9.2.0, pluggy-1.7.0
+rootdir: /home/runner/work/Orchestrator/Orchestrator
+configfile: pyproject.toml
+plugins: langsmith-0.14.17, anyio-4.16.0, platformdirs-4.14.5
+collected 12 items / 11 deselected / 1 selected
+
+tests/test_dispatcher_offload.py F                                       [100%]
+CI_STORAGE_DIAGNOSTIC {"exitstatus": 1, "finish": {"filesystem": {"free_bytes": 92134604800, "free_inodes": 17648604}, "quota": {"status": "unsupported"}, "schema": "pytest-owned-storage/v1", "status": "observed", "tree": {"allocated_bytes_seen": 98304, "bounded": false, "entries_seen": 25, "inaccessible": 0, "largest_owned_children": [["test_sandbox_network_failure_f0", 90112], ["test_sandbox_network_failure_fcurrent", 4096], ["worktree-git0", 4096], ["worktree-gitcurrent", 0]], "logical_file_bytes_seen": 9724, "status": "complete"}}, "start": {"filesystem": {"free_bytes": 92134707200, "free_inodes": 17648629}, "quota": {"status": "unsupported"}, "schema": "pytest-owned-storage/v1", "status": "observed", "tree": {"allocated_bytes_seen": 4096, "bounded": false, "entries_seen": 1, "inaccessible": 0, "largest_owned_children": [[".lock", 4096]], "logical_file_bytes_seen": 4, "status": "complete"}}}
+
+=================================== FAILURES ===================================
+__________ test_sandbox_network_failure_falls_back_to_workspace_write __________
+tests/test_dispatcher_offload.py:204: in test_sandbox_network_failure_falls_back_to_workspace_write
+    assert "workspace-write" in shell and PREAMBLE in shell, (
+E   AssertionError: workspace-write and the fallback preamble are absent
+E     export PATH="/opt/homebrew/bin:/home/runner/.local/bin:/home/runner/.cursor/bin:$PATH"; unset HTTP_PROXY HTTPS_PROXY ALL_PROXY FTP_PROXY NO_PROXY http_proxy https_proxy all_proxy ftp_proxy no_proxy; export ORCH_REAL_HOME=/home/runner; export ORCH_AGENT_RUNTIME=/tmp/pytest-of-runner/pytest-2/test_sandbox_network_failure_f0/agent-runtime/codex; export XDG_CACHE_HOME=/tmp/pytest-of-runner/pytest-2/test_sandbox_network_failure_f0/agent-runtime/codex/.cache; export XDG_CONFIG_HOME=/tmp/pytest-of-runner/pytest-2/test_sandbox_network_failure_f0/agent-runtime/codex/.config; export XDG_DATA_HOME=/tmp/pytest-of-runner/pytest-2/test_sandbox_network_failure_f0/agent-runtime/codex/.local/share; export TMPDIR=/tmp/pytest-of-runner/pytest-2/test_sandbox_network_failure_f0/agent-runtime/codex/tmp; export GH_CONFIG_DIR=/home/runner/.config/gh; export ORCH_GH_GUARD_REAL_ZDOTDIR=/home/runner; export ZDOTDIR=/tmp/pytest-of-runner/pytest-2/test_sandbox_network_failure_f0/agent-runtime/gh-guard/zdotdir; unset ORCH_GH_GUARD_PREV_BASH_ENV; export BASH_ENV=/tmp/pytest-of-runner/pytest-2/test_sandbox_network_failure_f0/agent-runtime/gh-guard/bashenv.sh; export PATH=/tmp/pytest-of-runner/pytest-2/test_sandbox_network_failure_f0/agent-runtime/gh-guard/bin:"$PATH"; codex exec --skip-git-repo-check --cd /tmp/pytest-of-runner/pytest-2/test_sandbox_network_failure_f0 --sandbox read-only -c 'model_reasoning_effort="medium"' 'You are Codex, a reasoning + implementation seat. Verify before claiming done; surface risks and unknowns rather than papering over them.
+E     
+E     CRITICAL-EVALUATOR STANCE (non-negotiable): Your job is correct judgment, not agreement. Evaluate
+E     claims, designs, and instructions on the merits before agreeing — including the orchestrator'"'"'s and the
+E     user'"'"'s. When something is wrong, weaker than an alternative, or missing, say so plainly and lead with the
+E     strongest objection. Separate "this is correct" from "I'"'"'ll do as asked." State your confidence and what
+E     would change your mind; flag what you are unsure of. Do not soften a real problem to be agreeable, and do
+E     not manufacture disagreement to seem rigorous — calibrated dissent, not maximal.
+E     
+E     Run gh api rate_limit and print the JSON.
+E     
+E     OFFLOAD WORKSPACE RULES:
+E     - Non-git workspace: do not try to create commits, branches, pushes, or PRs.
+E     - This is a synchronous offload; return the useful result to the orchestrator in stdout.
+E     - Do not return progress updates, future-tense promises, or '"'"'I will inspect later'"'"' status. Finish the requested deliverable before exiting.
+E     - If you cannot complete the offload in this invocation, print exactly OFFLOAD_INCOMPLETE: <reason> and stop.
+E     - Do not run git commit or git push from an offload. On GitHub, do not open, merge or close pull requests, close issues, edit labels, or post comments or reviews. Reading with gh is fine.
+E     - If you edit files, keep changes inside the current workspace and report changed paths.
+E     - Product-level owner decision needed? Print one line OWNER_QUESTION: {"question": "...", "default": "...", "expires_days": 7} and PROCEED with your default — never wait.'
+E   assert ('workspace-write' in 'export PATH="/opt/homebrew/bin:/home/runner/.local/bin:/home/runner/.cursor/bin:$PATH"; unset HTTP_PROXY HTTPS_PROXY ...OWNER_QUESTION: {"question": "...", "default": "...", "expires_days": 7} and PROCEED with your default — never wait.\'')
+=============================== warnings summary ===============================
+../../../../../opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/site-packages/langsmith/_internal/_beta_decorator.py:92: 13 warnings
+  /opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/site-packages/langsmith/_internal/_beta_decorator.py:92: DeprecationWarning: 'asyncio.iscoroutinefunction' is deprecated and slated for removal in Python 3.16; use inspect.iscoroutinefunction() instead
+    if asyncio.iscoroutinefunction(func):
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_dispatcher_offload.py::test_sandbox_network_failure_falls_back_to_workspace_write - AssertionError: workspace-write and the fallback preamble are absent
+  export PATH="/opt/homebrew/bin:/home/runner/.local/bin:/home/runner/.cursor/bin:$PATH"; unset HTTP_PROXY HTTPS_PROXY ALL_PROXY FTP_PROXY NO_PROXY http_proxy https_proxy all_proxy ftp_proxy no_proxy; export ORCH_REAL_HOME=/home/runner; export ORCH_AGENT_RUNTIME=/tmp/pytest-of-runner/pytest-2/test_sandbox_network_failure_f0/agent-runtime/codex; export XDG_CACHE_HOME=/tmp/pytest-of-runner/pytest-2/test_sandbox_network_failure_f0/agent-runtime/codex/.cache; export XDG_CONFIG_HOME=/tmp/pytest-of-runner/pytest-2/test_sandbox_network_failure_f0/agent-runtime/codex/.config; export XDG_DATA_HOME=/tmp/pytest-of-runner/pytest-2/test_sandbox_network_failure_f0/agent-runtime/codex/.local/share; export TMPDIR=/tmp/pytest-of-runner/pytest-2/test_sandbox_network_failure_f0/agent-runtime/codex/tmp; export GH_CONFIG_DIR=/home/runner/.config/gh; export ORCH_GH_GUARD_REAL_ZDOTDIR=/home/runner; export ZDOTDIR=/tmp/pytest-of-runner/pytest-2/test_sandbox_network_failure_f0/agent-runtime/gh-guard/zdotdir; unset ORCH_GH_GUARD_PREV_BASH_ENV; export BASH_ENV=/tmp/pytest-of-runner/pytest-2/test_sandbox_network_failure_f0/agent-runtime/gh-guard/bashenv.sh; export PATH=/tmp/pytest-of-runner/pytest-2/test_sandbox_network_failure_f0/agent-runtime/gh-guard/bin:"$PATH"; codex exec --skip-git-repo-check --cd /tmp/pytest-of-runner/pytest-2/test_sandbox_network_failure_f0 --sandbox read-only -c 'model_reasoning_effort="medium"' 'You are Codex, a reasoning + implementation seat. Verify before claiming done; surface risks and unknowns rather than papering over them.
+  
+  CRITICAL-EVALUATOR STANCE (non-negotiable): Your job is correct judgment, not agreement. Evaluate
+  claims, designs, and instructions on the merits before agreeing — including the orchestrator'"'"'s and the
+  user'"'"'s. When something is wrong, weaker than an alternative, or missing, say so plainly and lead with the
+  strongest objection. Separate "this is correct" from "I'"'"'ll do as asked." State your confidence and what
+  would change your mind; flag what you are unsure of. Do not soften a real problem to be agreeable, and do
+  not manufacture disagreement to seem rigorous — calibrated dissent, not maximal.
+  
+  Run gh api rate_limit and print the JSON.
+  
+  OFFLOAD WORKSPACE RULES:
+  - Non-git workspace: do not try to create commits, branches, pushes, or PRs.
+  - This is a synchronous offload; return the useful result to the orchestrator in stdout.
+  - Do not return progress updates, future-tense promises, or '"'"'I will inspect later'"'"' status. Finish the requested deliverable before exiting.
+  - If you cannot complete the offload in this invocation, print exactly OFFLOAD_INCOMPLETE: <reason> and stop.
+  - Do not run git commit or git push from an offload. On GitHub, do not open, merge or close pull requests, close issues, edit labels, or post comments or reviews. Reading with gh is fine.
+  - If you edit files, keep changes inside the current workspace and report changed paths.
+  - Product-level owner decision needed? Print one line OWNER_QUESTION: {"question": "...", "default": "...", "expires_days": 7} and PROCEED with your default — never wait.'
+assert ('workspace-write' in 'export PATH="/opt/homebrew/bin:/home/runner/.local/bin:/home/runner/.cursor/bin:$PATH"; unset HTTP_PROXY HTTPS_PROXY ...OWNER_QUESTION: {"question": "...", "default": "...", "expires_days": 7} and PROCEED with your default — never wait.\'')
+================ 1 failed, 11 deselected, 13 warnings in 0.26s =================

@@ -701,6 +701,185 @@ def _is_transient_network_failure(
     return any(re.search(pattern, text, re.IGNORECASE) for pattern in _TRANSIENT_NETWORK_PATTERNS)
 
 
+# One probe attempt. The clock starts when the probe is entered and covers process
+# startup plus the `gh api rate_limit` call inside the selected sandbox. There is no
+# retry: a timeout is a network failure, and an auth/API answer is not.
+# Recorded 2026-11-05 before this existed: host `gh api rate_limit` succeeded
+# (core remaining 4733) while assess argv was `--sandbox read-only` and nothing on
+# main probed or fell back. See docs/receipts/assess-sandbox-network-baseline-2026-11-05.md.
+SANDBOX_NETWORK_PROBE_TIMEOUT_S = 5.0
+ASSESS_FALLBACK_PREAMBLE = "Do not create, modify or delete any file; print your answer to stdout"
+ASSESS_FALLBACK_DIAGNOSTIC = (
+    "offload: assess sandbox has no network; running read-only brief in workspace-write sandbox"
+)
+_PROBE_DNS_PATTERNS = (
+    r"could not resolve host",
+    r"no such host",
+    r"name or service not known",
+    r"temporary failure in name resolution",
+    r"nodename nor servname",
+    r"curl: \(6\)",
+    r"lookup api\.github\.com",
+)
+_PROBE_CONNECTION_PATTERNS = (
+    r"connection refused",
+    r"connection reset",
+    r"network is unreachable",
+    r"no route to host",
+    r"failed to connect",
+    r"error connecting to api\.github\.com",
+    r"i/o timeout",
+    r"connection timed out",
+    r"tls handshake",
+    r"curl: \(7\)",
+    r"curl: \(28\)",
+    r"dial tcp",
+)
+_PROBE_AUTH_API_PATTERNS = (
+    r"\bHTTP [45]\d\d\b",
+    r"bad credentials",
+    r"requires authentication",
+    r"gh auth login",
+    r"authentication failed",
+    r"unauthorized",
+    r"\b401\b",
+    r"\b403\b",
+)
+
+
+def _sandbox_probe_command(offload_argv: list[str]) -> list[str]:
+    """`gh api rate_limit` under the sandbox named by the offload argv.
+
+    This is Codex's `sandbox` subcommand, not a host DNS lookup: `--sandbox` and
+    `--cd` are copied from the command the assess offload is about to run.
+    """
+    binary = offload_argv[0] if offload_argv else "codex"
+    sandbox = "read-only"
+    cd = None
+    if "--sandbox" in offload_argv:
+        index = offload_argv.index("--sandbox")
+        if index + 1 < len(offload_argv):
+            sandbox = offload_argv[index + 1]
+    if "--cd" in offload_argv:
+        index = offload_argv.index("--cd")
+        if index + 1 < len(offload_argv):
+            cd = offload_argv[index + 1]
+    command = [str(binary), "sandbox", "--sandbox", str(sandbox)]
+    if cd is not None:
+        command += ["--cd", str(cd)]
+    return command + ["--", "gh", "api", "rate_limit"]
+
+
+def _probe_json_has_rate(text: str) -> bool:
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    candidates = [raw]
+    start, end = raw.find("{"), raw.rfind("}")
+    if start >= 0 and end > start:
+        candidates.append(raw[start : end + 1])
+    for candidate in candidates:
+        try:
+            payload = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict) and (
+            isinstance(payload.get("rate"), dict) or isinstance(payload.get("resources"), dict)
+        ):
+            return True
+    return False
+
+
+def _classify_sandbox_probe(returncode: int, stdout: str, stderr: str) -> dict:
+    """Timeout is decided by the caller. DNS and connection are networkless.
+
+    An authentication or API rejection means the sandbox reached GitHub, so it
+    must not select the workspace-write fallback.
+    """
+    text = f"{stdout}\n{stderr}"
+    detail = text.strip()[:300]
+    if _probe_json_has_rate(stdout) or _probe_json_has_rate(text):
+        return {"has_network": True, "classification": "available", "detail": "gh api rate_limit"}
+    if any(re.search(pattern, text, re.IGNORECASE) for pattern in _PROBE_AUTH_API_PATTERNS):
+        return {"has_network": True, "classification": "auth_or_api", "detail": detail}
+    if any(re.search(pattern, text, re.IGNORECASE) for pattern in _PROBE_DNS_PATTERNS):
+        return {"has_network": False, "classification": "dns", "detail": detail}
+    if any(re.search(pattern, text, re.IGNORECASE) for pattern in _PROBE_CONNECTION_PATTERNS):
+        return {"has_network": False, "classification": "connection", "detail": detail}
+    if returncode == 0:
+        return {"has_network": True, "classification": "available", "detail": "probe exit 0"}
+    return {"has_network": True, "classification": "unclassified", "detail": detail}
+
+
+def _sandbox_network_available(verdict) -> bool:
+    """True when the probe says the sandbox can reach the network.
+
+    A boolean `True` is treated as availability so a deliberate break that
+    returns True skips the fallback. Only an explicit network failure falls back.
+    """
+    if isinstance(verdict, dict):
+        return bool(verdict.get("has_network"))
+    return bool(verdict)
+
+
+def _sandbox_has_network(offload_argv: list[str], *, cwd: str) -> dict:
+    """Probe GitHub from inside the sandbox selected for this offload.
+
+    One attempt. The subprocess timeout is whatever remains of a five-second
+    total clock measured from entry. Timeout, DNS failure, and connection
+    failure are networkless. Authentication and API rejection are not. A probe
+    that cannot start is not evidence of a networkless sandbox.
+    """
+    started = time.monotonic()
+    command = _sandbox_probe_command(offload_argv)
+
+    def _timeout(detail: str) -> dict:
+        return {
+            "has_network": False,
+            "classification": "timeout",
+            "detail": detail,
+            "command": command,
+            "elapsed_s": time.monotonic() - started,
+        }
+
+    remaining = SANDBOX_NETWORK_PROBE_TIMEOUT_S - (time.monotonic() - started)
+    if remaining <= 0:
+        return _timeout("probe clock exhausted before start")
+    try:
+        proc = subprocess.run(
+            command,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=remaining,
+            stdin=subprocess.DEVNULL,
+        )
+    except subprocess.TimeoutExpired:
+        return _timeout(f"probe exceeded {SANDBOX_NETWORK_PROBE_TIMEOUT_S:.0f}s")
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {
+            "has_network": True,
+            "classification": "probe_unstarted",
+            "detail": f"{type(exc).__name__}: {exc}"[:300],
+            "command": command,
+            "elapsed_s": time.monotonic() - started,
+        }
+    elapsed = time.monotonic() - started
+    if elapsed > SANDBOX_NETWORK_PROBE_TIMEOUT_S:
+        return _timeout(f"probe returned after {elapsed:.3f}s")
+    verdict = _classify_sandbox_probe(proc.returncode, proc.stdout or "", proc.stderr or "")
+    verdict["command"] = command
+    verdict["elapsed_s"] = elapsed
+    return verdict
+
+
+def _assess_fallback_refusal(profile: dict | None) -> str | None:
+    """Why workspace-write is forbidden, or None when the profile permits it."""
+    if profile and profile.get("permission_mode") == "read-only":
+        return f"restricted profile {profile.get('profile_id')}"
+    return None
+
+
 def _offload_incomplete_reason(
     output: str, *, progress_only: bool = True, codex_stream: bool = False
 ) -> str | None:
@@ -3340,6 +3519,8 @@ def offload(
     researches. Big-context reading (summarize 200 pages -> gemini) is ONE use, and naming only
     that use in this docstring is part of how callers came to believe it was the only one.
     `mode="assess"` narrows to a no-write sandbox when that is what you want; the default does not.
+    A codex assess whose read-only sandbox has no network falls back to workspace-write, with a
+    no-write preamble, only when the profile permits that sandbox (`_sandbox_has_network`).
 
     Exactly two things do not transfer, and neither is about how big or code-shaped the task is:
     FLEET ACTIONS (claim/PR/label — that is `delegate`, below), and FIRST-PERSON OBSERVATION,
@@ -3645,26 +3826,23 @@ def offload(
         }
     muse_prompt = adapters.muse_prompt_file(command_prompt) if agent == "muse" else None
     data_only_options: _DataOnlyCommandOptions = {"data_only": True} if data_only else {}
-    argv = (
-        adapters.build_command(
-            agent,
-            command_prompt,
-            mode,
+
+    def _offload_argv(prompt_text: str, *, sandbox_mode: str | None = None) -> list:
+        shared = dict(
             cwd=run_cwd,
-            profile=profile,
             transport="offload",
             prompt_via_stdin=prompt_via_stdin,
-            **data_only_options,
             prompt_file=muse_prompt,
             write_roots=boundary[1][1:] if boundary and agent == "codex" else None,
+            sandbox_mode=sandbox_mode,
+            **data_only_options,
         )
-        if profile
-        else adapters.build_command(
+        if profile:
+            return adapters.build_command(agent, prompt_text, mode, profile=profile, **shared)
+        return adapters.build_command(
             agent,
-            command_prompt,
+            prompt_text,
             mode,
-            cwd=run_cwd,
-            transport="offload",
             reasoning_effort=(
                 execution_profiles.get_profile(
                     execution_profiles.default_codex_profile("offload", mode)
@@ -3672,12 +3850,62 @@ def offload(
                 if agent == "codex"
                 else None
             ),
-            prompt_via_stdin=prompt_via_stdin,
-            **data_only_options,
-            prompt_file=muse_prompt,
-            write_roots=boundary[1][1:] if boundary and agent == "codex" else None,
+            **shared,
         )
-    )  # raises ValueError on unknown agent
+
+    argv = _offload_argv(command_prompt)  # raises ValueError on unknown agent
+    sandbox_network = None
+    sandbox_fallback = False
+    # Codex assess only. Other agents have no read-only sandbox whose network differs
+    # from workspace-write, and a host-side probe would not be this child's network.
+    if agent == "codex" and mode == "assess" and not data_only and controlled is None:
+        sandbox_network = _sandbox_has_network(argv, cwd=str(run_cwd))
+        if not _sandbox_network_available(sandbox_network):
+            refusal = _assess_fallback_refusal(profile)
+            if refusal:
+                message = (
+                    "offload: assess sandbox has no network; workspace-write fallback "
+                    f"refused by {refusal}"
+                )
+                print(message, file=sys.stderr)
+                return {
+                    "agent": agent,
+                    "exit": 2,
+                    "output": "",
+                    "run_id": None,
+                    "error": message,
+                    "sandbox": "read-only",
+                    "sandbox_fallback": False,
+                    "sandbox_network": (
+                        sandbox_network
+                        if isinstance(sandbox_network, dict)
+                        else {"has_network": False}
+                    ),
+                    "process_started": False,
+                }
+            prepared_prompt = f"{ASSESS_FALLBACK_PREAMBLE}\n\n{prepared_prompt}"
+            command_prompt = "" if prompt_via_stdin else prepared_prompt
+            try:
+                argv = _offload_argv(command_prompt, sandbox_mode="workspace-write")
+            except (adapters.WorkspaceRefused, ValueError) as exc:
+                message = (
+                    "offload: assess sandbox has no network; workspace-write fallback "
+                    f"refused by restricted profile: {exc}"
+                )
+                print(message, file=sys.stderr)
+                return {
+                    "agent": agent,
+                    "exit": 2,
+                    "output": "",
+                    "run_id": None,
+                    "error": message,
+                    "sandbox": "read-only",
+                    "sandbox_fallback": False,
+                    "sandbox_network": sandbox_network,
+                    "process_started": False,
+                }
+            sandbox_fallback = True
+            print(ASSESS_FALLBACK_DIAGNOSTIC, file=sys.stderr)
     if controlled is not None:
         import closer_data_only_execution as execution
         import closer_role_qualification as roles
@@ -3849,6 +4077,7 @@ def offload(
         propensity=1.0 if profile else None,
         # Present only on a relocated run, so relocations are countable from the ledger alone.
         workspace_relocated_from=relocated["requested"] if relocated else None,
+        sandbox_fallback=True if sandbox_fallback else None,
     )
 
     def _record_offload_run() -> None:
@@ -3947,6 +4176,8 @@ def offload(
                 f"[orchestrator] WORKSPACE RELOCATED: {relocated['reason']}; this run writes only "
                 f"in its own scratch workspace {relocated['workspace']}\n"
             )
+        if sandbox_fallback:
+            fh.write(f"[orchestrator] {ASSESS_FALLBACK_DIAGNOSTIC}\n")
     max_network_retries = (
         max(0, _env_int("ORCH_OFFLOAD_NETWORK_RETRIES", 1))
         if max_network_retries is None
@@ -3994,6 +4225,7 @@ def offload(
             policy_version=execution_profiles.PROFILE_POLICY_VERSION if profile else None,
             propensity=1.0 if profile else None,
             credentials_redacted=sum(redaction_counts.values()) or None,
+            sandbox_fallback=True if sandbox_fallback else None,
         )
         # Only close what was opened -- reaching for a row deliberately not created is how a
         # "stop recording this" change quietly becomes a crash.
@@ -5110,6 +5342,14 @@ def offload(
         except Exception as exc:
             print(f"warn: rate-incident recording failed for {agent}: {exc}", file=sys.stderr)
     _coding_session_runtime.bound_result(sys._getframe(), out)
+    out["sandbox_fallback"] = bool(sandbox_fallback)
+    if agent == "codex" and mode == "assess" and not data_only:
+        out["sandbox"] = "workspace-write" if sandbox_fallback else "read-only"
+        if isinstance(sandbox_network, dict):
+            out["sandbox_network"] = {
+                "classification": sandbox_network.get("classification"),
+                "has_network": sandbox_network.get("has_network"),
+            }
     return out
 
 

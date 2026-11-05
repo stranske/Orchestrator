@@ -2061,8 +2061,12 @@ def build_command(
     prompt_file: str | Path | None = None,
     write_roots: list[str] | None = None,
     data_only: bool = False,
+    sandbox_mode: str | None = None,
 ):
     """Construct the CLI argv for one agent. `mode` is agent-specific.
+
+    sandbox_mode: codex only. When set, that sandbox is emitted and the outer-seat
+    bypass is not substituted for it. A read-only profile cannot be widened.
 
     write_roots: a codex run under a caller's write boundary (`write_boundary_roots`) also gets
     exactly these directories, each with `--add-dir`. A run that cannot honour them refuses: the
@@ -2108,6 +2112,22 @@ def build_command(
         requested_model = selected_profile["requested_model"]
         mode = mode if mode is not None else selected_profile.get("legacy_adapter_mode")
     if agent == "codex":
+        if sandbox_mode is not None:
+            if sandbox_mode not in {"read-only", "workspace-write"}:
+                raise ValueError(f"unsupported sandbox {sandbox_mode}")
+            # Checked before the profile binary so a restricted profile refuses
+            # without needing a Codex executable on PATH.
+            if (
+                selected_profile is not None
+                and selected_profile["permission_mode"] == "read-only"
+                and sandbox_mode != "read-only"
+            ):
+                raise ValueError(
+                    "restricted profile "
+                    f"{selected_profile['profile_id']} cannot widen to {sandbox_mode}"
+                )
+            if permission_mode == "read-only" and sandbox_mode != "read-only":
+                raise ValueError(f"explicit read-only permission cannot widen to {sandbox_mode}")
         cmd = [
             profile_codex_binary() if selected_profile else "codex",
             "exec",
@@ -2120,7 +2140,12 @@ def build_command(
         # the parent seatbelt remains authoritative. It must never defeat an
         # explicit read-only narrowing: in that case keep the child sandbox and
         # fail closed if macOS refuses nested seatbelt application.
-        if codex_bypass_inner_sandbox() and mode != "assess" and permission_mode != "read-only":
+        # An explicit sandbox_mode (the assess network fallback) is also not
+        # replaced by the bypass: the caller asked for that sandbox argument.
+        if sandbox_mode is not None:
+            sandbox = sandbox_mode
+            cmd += ["--sandbox", sandbox]
+        elif codex_bypass_inner_sandbox() and mode != "assess" and permission_mode != "read-only":
             sandbox = None
             cmd += ["--dangerously-bypass-approvals-and-sandbox"]
         else:
