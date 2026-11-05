@@ -262,3 +262,32 @@ replay/publication unittests pass. JavaScript syntax and `git diff --check` pass
 No commit or push was made. Automatic approval review rejected the blocker
 comment and `needs-human` label because they require approval and this run's
 policy is `never`.
+
+## Native receipt lifecycle and original first breaks
+
+Checked on 2026-11-05 against checkout
+`4ecbb19745f577feae14c557b5140727260e2f6e`. Two new real-CLI regressions
+observe matching-source and foreign-source attempts through native reservation,
+invocation, raw persistence and validation. A retained binary decision with no
+independent later truth keeps that first break at every stage. Unresolved
+attempts remain UNKNOWN, including foreign attempts. A terminal validator
+rejection requires receipt review and cannot supply the original's missing truth.
+Recursive original paid identities remain visible; overlap with native identities
+is accounted for without counting the same backend identity twice in the union.
+Reports, main database and persisted WAL bytes remain unchanged by inventory;
+SQLite may create an empty WAL after producer cleanup has checkpointed it.
+
+Both inventory JavaScript suites pass all 48 tests. Independently filtering foreign attempts out
+of diagnostics or ignoring missing later truth in temporary source copies makes
+the new regression fail. The 32 diagnostic and seven replay/publication unittest
+cases also pass. JavaScript syntax and `git diff --check` pass. No Python files
+changed. The full retrospective pytest command with `-m "not slow"` cannot start
+because pytest is unavailable; installing pytest and Black failed.
+
+These are fixture observations. The configured canonical report at
+`/home/runner/.codex/orchestrator/capability-program/adjudicator-retro.json`,
+independent outcomes database at
+`/home/runner/.codex/orchestrator/feedback/orchestrator.db` and runtime directory
+remain absent. Authentic original/journal locations and live reader bindings
+remain unavailable. No production diagnosis, retry, publication, October 18
+proof or next-20 decision is claimed; no operational checkbox is completed.

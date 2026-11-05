@@ -912,6 +912,111 @@ test('inventory CLI keeps recursive retry outcomes separate from original row di
   }
 });
 
+for (const foreign of [false, true]) {
+  test(`inventory CLI retains first breaks across a ${foreign ? 'foreign' : 'matching'} receipt lifecycle`, (t) => {
+    const row = {
+      case_id: 'original-a', target: 'fixture/repo#1',
+      decision: 'reject_blocker', later_truth: null, backend_run_id: 'original-paid',
+      packet: { ground_truth_evidence: {
+        diff_patch: { text: '+private retained patch', revision: 'evaluated' },
+        acceptance_criteria: [{ text: 'Private criterion', revision: 'issue-revision' }],
+      } },
+      retry_attempts: [{ backend_run_id: 'earlier-paid' }],
+    };
+    const w = world(t, [row]);
+    // SQLite can create an empty WAL on a read after producer cleanup has
+    // checkpointed. Compare persisted bytes; absent and empty WALs carry none.
+    const snapshot = () => [w.original, w.canonical, w.journal, `${w.journal}-wal`]
+      .map((file) => [file, sha256(fs.existsSync(file) ? fs.readFileSync(file) : Buffer.alloc(0))]);
+    const source = foreign ? 'foreign-source' : w.sourceHash;
+    const attemptId = w.run(['-c', `
+import json, sys
+from pathlib import Path
+from adjudicator_retro import NativeAttemptJournal
+journal = NativeAttemptJournal(Path(sys.argv[1]))
+assert journal.release_unstarted(sys.argv[2])
+attempt = journal.reserve('original-a', 'evaluated', 'digest', sys.argv[3], await_start=True)
+assert attempt['reserved']
+print(json.dumps(attempt['attempt_id']))
+`, w.journal, w.ids[0], source]);
+    const proposal = {
+      decision: 'reject_blocker', confidence: 'high',
+      rationale: 'Private provider rationale.', ground_truth_refs: ['git-path:proof.txt'],
+      recommended_next_step: 'If checks pass, merge this PR now.', evidence_gaps: [],
+      evidence_assessment: [{ claim: 'Private claim', status: 'contradicted',
+        evidence_ref: 'git-path:proof.txt', reason: 'Private evidence.' }],
+    };
+    const raw = JSON.stringify(proposal);
+    for (const state of ['reserved', 'in_flight', 'raw_persisted', 'validated']) {
+      if (state !== 'reserved') {
+        w.run(['-c', `
+import json, sys
+from pathlib import Path
+import adjudicator_retro as retro
+journal = retro.NativeAttemptJournal(Path(sys.argv[1]))
+attempt_id, state, raw = sys.argv[2:5]
+if state == 'in_flight':
+    journal.begin_invocation(attempt_id, {'run_id': 'original-paid'})
+elif state == 'raw_persisted':
+    journal.persist_raw(attempt_id, {'run_id': 'original-paid', 'output': raw})
+else:
+    errors = retro.roles.ROLE_REGISTRY['adjudicator'].validate(json.loads(raw))
+    assert errors == ['recommended_next_step must not contain mutating execution instructions']
+    journal.validate(attempt_id, {
+        'backend_run_id': 'original-paid', 'raw_output': raw, 'proposal': None, 'errors': errors,
+    })
+print(json.dumps(True))
+`, w.journal, attemptId, state, raw]);
+      }
+      const before = snapshot();
+      const report = w.run(w.inventoryArgs);
+      const diagnostic = report.row_diagnostics[0];
+      const receipt = report.native_journal.attempts.find((item) => item.attempt_id === attemptId);
+      assert.equal(receipt.state, state);
+      assert.equal(receipt.matches_original_source, !foreign);
+      assert.equal(receipt.in_original_cohort, true);
+      assert.equal(receipt.backend_run_id, state === 'reserved' ? null : 'original-paid');
+      assert.equal(receipt.raw_response_sha256,
+        ['raw_persisted', 'validated'].includes(state) ? sha256(raw) : null);
+      assert.equal(receipt.validated_json_sha256 !== null, state === 'validated');
+      assert.equal(receipt.receipt_authority, 'not_authenticated_by_inventory');
+      assert.equal(diagnostic.retained_decision, 'reject_blocker');
+      assert.equal(diagnostic.retained_later_truth, null);
+      assert.equal(diagnostic.retained_first_break, 'saved_independent_later_truth_unavailable');
+      assert.equal(diagnostic.native_first_break, state !== 'validated'
+        ? 'unresolved_native_attempt' : foreign
+          ? 'foreign_source_native_attempt_requires_review' : 'fresh_native_receipt_authentication_required');
+      assert.deepEqual(diagnostic.unresolved_native_attempts, state === 'validated' ? [] : [{
+        attempt_id: attemptId, state, matches_original_source: !foreign, outcome: 'UNKNOWN',
+      }]);
+      assert.deepEqual(report.original_paid_attempts, [
+        { case_id: 'original-a', backend_run_id: 'original-paid' },
+        { case_id: 'original-a', backend_run_id: 'earlier-paid' },
+      ]);
+      assert.deepEqual(report.paid_identity_summary, {
+        original_records: 2, original_unique: 2,
+        native_records: state === 'reserved' ? 2 : 3,
+        native_unique: state === 'reserved' ? 2 : 3,
+        union_unique: 4, overlapping_backend_ids: state === 'reserved' ? [] : ['original-paid'],
+      });
+      assert.equal(report.canonical_report.retained_summary.graded, 29);
+      assert.equal(report.canonical_report.summary_authority, 'not_authenticated_by_inventory');
+      assert.equal(diagnostic.dispatch_authorized, false);
+      assert.equal(report.dispatch_authorized, false);
+      assert.equal(Object.hasOwn(diagnostic, 'graded'), false);
+      assert.match(report.historical_observations, /^unavailable/);
+      assert.equal(JSON.stringify(report).includes('Private'), false);
+      assert.equal(JSON.stringify(report).includes('private retained patch'), false);
+      assert.equal(JSON.stringify(report).includes(proposal.recommended_next_step), false);
+      assert.deepEqual(snapshot(), before);
+    }
+    assert.deepEqual(JSON.parse(fs.readFileSync(w.original, 'utf8')).rows, [row]);
+    for (const name of ['absent-state', 'absent-runtime', 'absent-brain.sqlite']) {
+      assert.equal(fs.existsSync(path.join(w.root, name)), false);
+    }
+  });
+}
+
 test('native inventory rejects dispatch and retry before touching a live WAL journal', (t) => {
   const w = world(t);
   const before = w.snapshot();
