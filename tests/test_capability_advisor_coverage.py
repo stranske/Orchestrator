@@ -10,14 +10,17 @@ import os
 import sys
 from pathlib import Path
 
+import advisor_hermetic
 import pytest
 
-import capabilities
-import capability_advisor as advisor
+_modules = advisor_hermetic.import_under_temporary_runtime("capabilities", "capability_advisor")
+capabilities = _modules["capabilities"]
+advisor = _modules["capability_advisor"]
 
-# The live runtime directories as this process found them, before the guard below replaces them.
-# The checkout itself may sit under the live state dir (agents work in its `worktrees/`), so the
-# checkout is exempt: reading source is not reading runtime state.
+# The live runtime directories as this process found them, after the import-time redirect above
+# has put any path that import captured back. The checkout itself may sit under the live state dir
+# (agents work in its `worktrees/`), so the checkout is exempt: reading source is not reading
+# runtime state.
 _LIVE_RUNTIME_ROOTS = tuple(
     {
         Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex" / "orchestrator")).resolve(),
@@ -29,8 +32,10 @@ _LIVE_RUNTIME_ROOTS = tuple(
     }
 )
 # pytest's own temporary root is exempt too: an agent's TMPDIR can itself sit under the live
-# runtime dir, and every redirected path below lives there.
+# runtime dir, and every redirected path below lives there. The hermetic root is exempt for the
+# same reason when TMPDIR itself is the live state dir.
 _EXEMPT_ROOTS: list[Path] = [Path(__file__).resolve().parent.parent]
+_EXEMPT_ROOTS.append(advisor_hermetic.root().resolve())
 # Every process-start and network boundary the exercised code could reach, by audit event rather
 # than by helper, so an agent launch through any wrapper (dispatcher, fleet_shapes' `gh`, os.system,
 # posix_spawn) is caught the same way.
@@ -80,28 +85,20 @@ sys.addaudithook(_guard)
 
 @pytest.fixture(scope="module", autouse=True)
 def isolated_runtime_and_external_calls(tmp_path_factory):
-    """Redirect both runtime directories and arm the external-operation recorder for the module.
+    """Arm the external-operation recorder for this module.
 
-    `capabilities` resolved its ledger path when it was imported, before any fixture could run, so
-    the import-time constants are repointed too; the audit hook then proves no read reached the
-    live directories by any path that was resolved earlier. The guard is a MonkeyPatch of its own,
-    so no test's `monkeypatch` can undo it mid-test.
+    ``advisor_hermetic`` sets ``ORCH_STATE_DIR`` and ``ORCH_LOCAL_RUNTIME`` before the import and
+    the conftest fixture repoints paths already captured then. This recorder only proves no read
+    reached the live directories. It is not a MonkeyPatch, so a test's ``monkeypatch`` cannot
+    disarm it.
     """
     global _attempted
-    root = tmp_path_factory.mktemp("advisor-coverage")
     _EXEMPT_ROOTS.append(tmp_path_factory.getbasetemp().resolve())
-    guard = pytest.MonkeyPatch()
-    guard.setenv("ORCH_STATE_DIR", str(root / "state"))
-    guard.setenv("ORCH_LOCAL_RUNTIME", str(root / "runtime"))
-    guard.setenv(capabilities.LEDGER_PATH_ENV, str(root / "runtime" / "capabilities.json"))
-    guard.setattr(capabilities, "LOCAL_RUNTIME", root / "runtime")
-    guard.setattr(capabilities, "REG", root / "runtime" / "capabilities.json")
     _attempted = []
     try:
         yield _attempted
     finally:
         attempted, _attempted = _attempted, None
-        guard.undo()
         del _EXEMPT_ROOTS[1:]
     assert attempted == []
 

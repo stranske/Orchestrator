@@ -185,3 +185,36 @@ Checked 2026-11-05. Every broken run exited 1. Every restored rerun exited 0.
 | `test_unregistered_repo_fact_probe_stays_unevaluated` | expect `requirement_met` false | exit 1, `assert None is False` | exit 0 |
 | `test_cli_without_a_task_exits_with_the_three_ways_in` | expect exit code 0 | exit 1, `assert 2 == 0` | exit 0 |
 | `test_selftest_only_paths_stay_recorded_as_limits` | point the t-howto limit at line 9999 | exit 1, `IndexError: list index out of range` | exit 0 |
+
+## Temporary runtime roots
+
+Checked 2026-11-05. The capability-advisor suite sets `ORCH_STATE_DIR` and `ORCH_LOCAL_RUNTIME` to a temporary directory's `state` and `runtime` children before importing `capability_advisor`. Paths already captured at import, including `capabilities.REG` and function defaults such as `capabilities.save`'s ledger path, are repointed for each test and restored when the test ends.
+
+Files changed:
+
+- `tests/advisor_hermetic.py`
+- `tests/conftest.py`
+- `tests/test_advisor_failure_boundaries.py`
+- `tests/test_advisor_hermetic.py`
+- `tests/test_advisor_live_rows.py`
+- `tests/test_advisor_ranking_failure.py`
+- `tests/test_capability_advisor_auto_decline.py`
+- `tests/test_capability_advisor_cli_context.py`
+- `tests/test_capability_advisor_coverage.py`
+- `tests/test_capability_advisor_reach.py`
+- `tests/test_capability_advisor_selftest_regressions.py`
+
+## Deliberate breaks for the temporary-runtime tests
+
+Each break was applied only in `tests/test_advisor_hermetic.py`, then the file was restored to its original bytes. The command for every row was:
+
+`python3 -m pytest -q tests/test_advisor_hermetic.py -m "not slow" --tb=line -k <test>`
+
+Checked 2026-11-05. Every broken run exited 1. Every restored rerun exited 0.
+
+| Test | Break | Failing result | Restored result |
+| --- | --- | --- | --- |
+| `test_environment_is_assigned_before_the_advisor_import` | require the import to precede the environment assignment | exit 1, `assert 164 > 236` | exit 0 |
+| `test_advisor_tests_use_temporary_runtime_roots_and_captured_defaults` | require state and runtime to be the same directory | exit 1, `assert .../state == .../runtime` | exit 0 |
+| `test_fresh_import_binds_temporary_roots_then_restores_the_process` | require the fresh ledger path to sit outside the temporary runtime | exit 1, `assert not True` | exit 0 |
+| `test_changed_files_record_matches_the_suite` | look for a heading the record does not contain | exit 1, `assert '## Missing heading' in` the report | exit 0 |
