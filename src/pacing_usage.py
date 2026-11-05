@@ -11,8 +11,10 @@ Mixed-agent ccusage totals are never silently attributed to Codex or Claude.
 
 from __future__ import annotations
 
+import bisect
 import hashlib
 import json
+import math
 import os
 import statistics
 import sys
@@ -27,6 +29,9 @@ STATE_DIR = Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex/orchestr
 RESETS_FILE = STATE_DIR / "capacity-resets.json"
 CALIBRATION_FILE = STATE_DIR / "capacity-calibration.json"
 CLAUDE_USAGE = Path.home() / "Library/Application Support/Claude/plan-usage-history.json"
+CLAUDE_USAGE_MAX_AGE_SECONDS = pacing.CLAUDE_USAGE_MAX_AGE_SECONDS
+CLAUDE_PROJECTS = Path(os.environ.get("ORCH_CLAUDE_PROJECTS", Path.home() / ".claude/projects"))
+HANDOFF = Path.home() / ".codex/handoff"
 SNAPSHOTS = Path.home() / ".codex/usage-snapshots"
 CODEX_SESSIONS = Path.home() / ".codex/sessions"
 ROLLOUT_FILE_LIMIT = 300
@@ -559,6 +564,211 @@ def observed_agents(snapshots: list[dict], ts: float) -> dict | None:
     return max(matches, key=lambda s: s["ts"])["agents"] if matches else None
 
 
+def claude_token_events(
+    root: Path, start: float, now: float, *, stats: dict | None = None
+) -> list[dict]:
+    """Read ccusage's timestamped Claude input; cache sanitized per-file totals.
+
+    Re-read changed files in full so truncation, rotation and streaming updates
+    cannot reuse an obsolete offset. Unchanged historical files need no JSONL read.
+    Cache all timestamps so moving the observation clock never hides future rows.
+    """
+    root_key = hashlib.sha256(str(root.resolve()).encode()).hexdigest()
+    cache_path = Path(tempfile.gettempdir()) / f"orch-claude-events-{os.getuid()}-{root_key}.json"
+    cache = read_json(cache_path)
+    cached = cache.get("files", {}) if isinstance(cache, dict) and cache.get("version") == 1 else {}
+    cached = cached if isinstance(cached, dict) else {}
+    events = {}
+    updated = {}
+    files_read = files_cached = 0
+    for path in sorted(root.glob("**/*.jsonl")):
+        try:
+            stat = path.stat()
+            identity = [stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns]
+            prior = cached.get(str(path), {})
+            if prior.get("identity") == identity:
+                rows = prior["rows"]
+                files_cached += 1
+            else:
+                file_events = {}
+                files_read += 1
+                with path.open(encoding="utf-8", errors="replace") as stream:
+                    for line in stream:
+                        if '"usage"' not in line:
+                            continue
+                        try:
+                            row = json.loads(line)
+                            ts = pacing.timestamp(row.get("timestamp"))
+                            message = row.get("message") or {}
+                            usage = message.get("usage") or {}
+                            if row.get("type") != "assistant" or ts is None:
+                                continue
+                            fields = (
+                                "input_tokens",
+                                "output_tokens",
+                                "cache_creation_input_tokens",
+                                "cache_read_input_tokens",
+                            )
+                            values = [usage.get(k, 0) for k in fields]
+                            if not usage or not all(
+                                isinstance(v, (int, float)) and math.isfinite(v) and v >= 0
+                                for v in values
+                            ):
+                                continue
+                            key = (message.get("id"), row.get("requestId"))
+                            if not key[0]:
+                                continue
+                            file_events[key] = dict(
+                                agent="claude", ts=ts, totalTokens=sum(values), message_key=key
+                            )
+                        except (ValueError, TypeError, AttributeError):
+                            continue
+                rows = list(file_events.values())
+            updated[str(path)] = dict(identity=identity, rows=rows)
+            for row in rows:
+                if start <= row["ts"] <= now:
+                    events[tuple(row["message_key"])] = {
+                        k: v for k, v in row.items() if k != "message_key"
+                    }
+        except OSError:
+            continue
+    if files_read or set(updated) != set(cached):
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", dir=cache_path.parent, delete=False
+            ) as stream:
+                temporary = Path(stream.name)
+                json.dump(dict(version=1, files=updated), stream, allow_nan=False)
+            temporary.replace(cache_path)
+        except OSError:
+            print(
+                "FYI Claude event cache unavailable; source scan remains authoritative",
+                file=sys.stderr,
+            )
+    if stats is not None:
+        stats.update(files_read=files_read, files_cached=files_cached)
+    return sorted(events.values(), key=lambda r: r["ts"])
+
+
+def claude_window(rows: list[dict], start: float, end: float, observed_at: float) -> dict:
+    """Build a Claude-only ccusage sample from timestamped, possibly mixed rows."""
+    tokens = sum(
+        r["totalTokens"]
+        for r in rows
+        if r.get("agent") == "claude"
+        and (ts := pacing.timestamp(r.get("ts"))) is not None
+        and start <= ts <= min(end, observed_at)
+    )
+    return dict(agent="claude", period_start=start, period_end=end, ts=observed_at, tokens=tokens)
+
+
+def claude_bounds(ts: float, end=None) -> tuple[float, float]:
+    """The Claude week containing ``ts``, rolled from the authoritative end when known."""
+    finish = pacing.timestamp(end)
+    if finish is None:
+        finish = pacing.CLAUDE_RESET_ANCHOR
+    finish += math.floor((ts - finish) / pacing.PERIOD_SECONDS) * pacing.PERIOD_SECONDS
+    if finish <= ts:
+        finish += pacing.PERIOD_SECONDS
+    return finish - pacing.PERIOD_SECONDS, finish
+
+
+def claude_pair_cap(
+    desktop: list[dict],
+    events: list[dict],
+    start: float,
+    end: float,
+    now: float,
+    authoritative_end=None,
+    provider: list[dict] | None = None,
+) -> tuple[float | None, int]:
+    # One prefix sum serves every contemporaneous observation. Historical pairs
+    # must not each rescan the entire token history on a capacity read.
+    ordered = sorted((r for r in events if r.get("agent") == "claude"), key=lambda r: r["ts"])
+    times = [r["ts"] for r in ordered]
+    prefix = [0]
+    for event in ordered:
+        prefix.append(prefix[-1] + event["totalTokens"])
+    estimates = []
+    seen = set()
+    for row in desktop:
+        ts = row["t"] / 1000
+        fraction = row["u"]["sd"] / 100
+        if ts > now or fraction <= 0 or ts in seen:
+            continue
+        seen.add(ts)
+        bounds = claude_bounds(ts, authoritative_end)
+        total = (
+            prefix[bisect.bisect_right(times, ts)] - prefix[bisect.bisect_left(times, bounds[0])]
+        )
+        if total > 0:
+            estimates.append(total / fraction)
+    cap = statistics.median(estimates) if estimates else None
+    # Raw tokens are not a fixed provider quota: model/cache mixes change. Bound
+    # the historical desktop estimate with the newest matching-window provider
+    # pair. Taking a minimum across the whole week would extrapolate an early
+    # model mix indefinitely (real data falsely exceeded 100% at provider 55%).
+    for row in sorted(provider or [], key=lambda r: r["ts"], reverse=True):
+        ts = row["ts"]
+        fraction = row["used_fraction"]
+        if not start <= ts <= now or row["period_end"] != end or fraction <= 0:
+            continue
+        total = prefix[bisect.bisect_right(times, ts)] - prefix[bisect.bisect_left(times, start)]
+        if total > 0:
+            bound = total / fraction
+            cap = min(cap, bound) if cap is not None else bound
+            break
+    return cap, len(estimates)
+
+
+def produce_claude_sample(
+    now: float,
+    desktop: list[dict],
+    destination: Path,
+    root: Path,
+    authoritative_end=None,
+    provider: list[dict] | None = None,
+) -> tuple[dict | None, float | None, int]:
+    start, end = claude_bounds(now, authoritative_end)
+    # A bounded cache keeps repeated reports stable and avoids rescanning logs on
+    # every capacity read. Source changes invalidate it immediately.
+    metadata = []
+    for p in sorted(root.glob("**/*.jsonl")):
+        try:
+            stat = p.stat()
+        except OSError:
+            continue  # Rotated away between glob and stat; the scan skips it too.
+        metadata.append((str(p), stat.st_mtime_ns, stat.st_size))
+    signature = hashlib.sha256(
+        json.dumps([metadata, desktop, provider], sort_keys=True).encode()
+    ).hexdigest()
+    cached = read_json(destination) or {}
+    if (
+        cached.get("signature") == signature
+        and cached.get("period_start") == start
+        and cached.get("period_end") == end
+        and 0 <= now - cached.get("ts", 0) < pacing.TICK_SECONDS
+    ):
+        return cached, cached.get("cap_estimate"), cached.get("cap_pair_count", 0)
+    earliest = min([start] + [claude_bounds(r["t"] / 1000, authoritative_end)[0] for r in desktop])
+    events = claude_token_events(root, earliest, now)
+    if not events and not provider:
+        return None, None, 0
+    sample = claude_window(events, start, end, now)
+    cap, pairs = claude_pair_cap(desktop, events, start, end, now, authoritative_end, provider)
+    sample.update(signature=signature, cap_estimate=cap, cap_pair_count=pairs)
+    # Keep this producer in writable runtime state, never mutate desktop/ccusage originals.
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(mode="w", dir=destination.parent, delete=False) as stream:
+            temporary = Path(stream.name)
+            json.dump(sample, stream, allow_nan=False)
+        temporary.replace(destination)
+    except OSError as exc:
+        print(f"FYI Claude fallback sample could not be persisted: {exc}", file=sys.stderr)
+    return sample, cap, pairs
+
+
 def usage(
     pool: str,
     now: float,
@@ -567,7 +777,10 @@ def usage(
     claude_path: Path = CLAUDE_USAGE,
     sessions: Path | None = None,
     poll_dir: Path | None = None,
+    handoff: Path | None = None,
+    claude_projects: Path | None = None,
 ) -> dict:
+    del handoff  # accepted for call-site compatibility; unused by the reader
     polled = polled_usage(pool, now, poll_dir)
     candidates = []
     if polled["ts"] is not None and (
@@ -578,9 +791,23 @@ def usage(
         observed = codex_rollout_usage(CODEX_SESSIONS if sessions is None else sessions, now)
         if observed is not None:
             candidates.append(observed)
+    # A valid poll's (rolled) reset time stays authoritative even when its usage is
+    # stale or describes the old week; the fallback is aligned to it.
+    authoritative_end = (
+        polled["period_end"]
+        if polled["poll"].get("valid")
+        else calibration.get("claude_period_end")
+    )
+    produced = None
+    pair_cap = None
+    pair_count = 0
+    desktop_age = None
+    desktop_ts = None
+    provider = []
     if pool == "claude":
         data = read_json(claude_path) or {}
-        rows = data.get("samples", [])
+        rows = data.get("samples", []) if isinstance(data, dict) else []
+        rows = rows if isinstance(rows, list) else []
         valid = [
             r
             for r in rows
@@ -588,11 +815,16 @@ def usage(
             and isinstance(r.get("t"), (int, float))
             and isinstance(r.get("u"), dict)
             and isinstance(r["u"].get("sd"), (int, float))
+            and math.isfinite(r["t"])
+            and 0 <= r["t"] / 1000 <= now
+            and 0 <= r["u"]["sd"] <= 100
         ]
         if valid:
             row = max(valid, key=lambda r: r["t"])
             ts = row["t"] / 1000
-            if 0 <= row["u"]["sd"] <= 100 and ts <= now:
+            desktop_ts = ts
+            desktop_age = now - ts
+            if desktop_age <= CLAUDE_USAGE_MAX_AGE_SECONDS:
                 candidates.append(
                     dict(
                         used_fraction=(
@@ -601,7 +833,7 @@ def usage(
                             or ts >= polled["period_end"] - pacing.PERIOD_SECONDS
                             else None
                         ),
-                        period_end=polled.get("period_end"),
+                        period_end=authoritative_end,
                         ts=ts,
                         short_used_fraction=(
                             row["u"]["fh"] / 100
@@ -609,9 +841,47 @@ def usage(
                             and 0 <= row["u"]["fh"] <= 100
                             else None
                         ),
-                        source="claude-desktop:plan-usage-history.json:u.sd",
+                        source="claude-desktop",
+                        sample_age_s=desktop_age,
+                        desktop_sample_age_s=desktop_age,
+                        desktop_sample_ts=desktop_ts,
                     )
                 )
+        root = CLAUDE_PROJECTS if claude_projects is None else claude_projects
+        cache_key = hashlib.sha256(str(root.resolve()).encode()).hexdigest()
+        destination = (
+            Path(tempfile.gettempdir()) / f"orch-claude-ccusage-{os.getuid()}-{cache_key}.json"
+        )
+        # Produce the fallback sample whenever desktop is missing/stale so pair-cap
+        # calibration is available even if a fresher poll later wins selection.
+        if not any(
+            c.get("source") == "claude-desktop" and c.get("used_fraction") is not None
+            for c in candidates
+        ):
+            directory = POLL_DIR if poll_dir is None else poll_dir
+            start, end = claude_bounds(now, authoritative_end)
+            for observation in [polled] + [
+                polled_usage("claude", now, data=r)
+                for r in read_poll_tail(directory / "claude-usage.ndjson")
+            ]:
+                if (
+                    observation.get("ts") is not None
+                    and start <= observation["ts"] <= now
+                    and observation.get("used_fraction") is not None
+                    and observation.get("period_end") == end
+                ):
+                    provider.append(
+                        {k: observation[k] for k in ("ts", "used_fraction", "period_end")}
+                    )
+            produced, pair_cap, pair_count = produce_claude_sample(
+                now, valid, destination, root, authoritative_end, provider
+            )
+        # Only a measured, fresh weekly reading may outrank the fallback.
+        candidates = [
+            c
+            for c in candidates
+            if c.get("used_fraction") is not None and now - c["ts"] <= CLAUDE_USAGE_MAX_AGE_SECONDS
+        ]
     if candidates:
         selected = dict(max(candidates, key=lambda r: r["ts"]))
         selected["poll"] = polled["poll"]
@@ -642,8 +912,59 @@ def usage(
                 selected[key] = sorted(set(changes[key] + rollout.get(key, [])))
             if rollout.get("scan"):
                 selected["scan"] = rollout["scan"]
+        if desktop_age is not None:
+            selected.setdefault("desktop_sample_age_s", desktop_age)
+            selected.setdefault("desktop_sample_ts", desktop_ts)
+            if selected.get("ts") is not None:
+                selected.setdefault("sample_age_s", now - selected["ts"])
         return selected
     cap = calibration.get(f"{pool}_weekly_token_cap")
+    cap_source = "calibration-file"
+    if pool == "claude":
+        if pair_cap is not None:
+            # Desktop-pair estimates cannot override a lower valid calibrated cap.
+            # Retain pair-derived fallback only when calibration is unavailable.
+            if (
+                cap is None
+                or not isinstance(cap, (int, float))
+                or not math.isfinite(cap)
+                or cap <= 0
+            ):
+                cap = pair_cap
+                cap_source = "provider-bounded-token-pairs" if provider else "desktop-token-pairs"
+            # else: keep the calibrated cap authoritative (even if pair_cap would be lower)
+        elif not isinstance(cap, (int, float)) or not math.isfinite(cap) or cap <= 0:
+            cap = calibration.get("claude_published_weekly_token_cap")
+            cap_source = "plan-published"
+        if not isinstance(cap, (int, float)) or not math.isfinite(cap) or cap <= 0:
+            cap = None
+            cap_source = "unavailable (0 pairs)"
+        if produced is not None:
+            # Even incomplete local logs must not erase already observed usage.
+            # This floor expires at the provider's exact reset boundary. It is a
+            # lower bound, not a fresh provider reading or a guarantee about unseen use.
+            provider_floor = max((r["used_fraction"] for r in provider), default=0)
+            return dict(
+                used_fraction=(
+                    max(produced["tokens"] / cap if cap else 0, provider_floor)
+                    if cap or provider
+                    else None
+                ),
+                ts=produced["ts"],
+                source="ccusage-fallback",
+                poll=polled["poll"],
+                weekly_tokens=produced["tokens"],
+                period_start=produced["period_start"],
+                period_end=produced["period_end"],
+                sample_age_s=now - produced["ts"],
+                desktop_sample_age_s=desktop_age,
+                desktop_sample_ts=desktop_ts,
+                token_cap=cap,
+                cap_source=cap_source,
+                cap_pair_count=pair_count,
+                provider_used_floor=provider_floor,
+                provider_sample_ts=max((r["ts"] for r in provider), default=None),
+            )
     paths = []
     unreadable = 0
     try:
@@ -661,6 +982,28 @@ def usage(
         if not rows:
             continue
         row = max(rows, key=lambda r: r["period_start"])
+        age = now - mtime
+        if pool == "claude":
+            # Calendar-week buckets cannot stand in for this account's anchored
+            # subscription week, and an old snapshot cannot become fresh on read.
+            week = claude_bounds(now, authoritative_end)
+            if abs(row["period_start"] - week[0]) > 1 or age < 0:
+                continue
+            return dict(
+                used_fraction=row["tokens"] / cap if cap else None,
+                ts=mtime,
+                source="ccusage-fallback",
+                poll=polled["poll"],
+                weekly_tokens=row["tokens"],
+                period_start=row["period_start"],
+                period_end=week[1],
+                sample_age_s=age,
+                desktop_sample_age_s=desktop_age,
+                desktop_sample_ts=desktop_ts,
+                token_cap=cap,
+                cap_source=cap_source,
+                cap_pair_count=pair_count,
+            )
         if not isinstance(cap, (int, float)) or cap <= 0:
             return dict(
                 used_fraction=None,
@@ -686,6 +1029,20 @@ def usage(
             poll=polled["poll"],
             weekly_tokens=row["tokens"],
             period_start=row["period_start"],
+        )
+    if pool == "claude":
+        return dict(
+            used_fraction=None,
+            ts=None,
+            source="ccusage-fallback",
+            poll=polled["poll"],
+            period_end=authoritative_end,
+            sample_age_s=None,
+            desktop_sample_age_s=desktop_age,
+            desktop_sample_ts=desktop_ts,
+            token_cap=cap,
+            cap_source=cap_source,
+            fallback_reason="no Claude-only snapshot aligned to the subscription week",
         )
     return dict(used_fraction=None, ts=None, source="none", poll=polled["poll"])
 
@@ -881,7 +1238,14 @@ def integrate(
         datum = (
             dict(usage_data[pool])
             if usage_data is not None
-            else usage(pool, now, source_calibration, snapshots=SNAPSHOTS, claude_path=CLAUDE_USAGE)
+            else usage(
+                pool,
+                now,
+                source_calibration,
+                snapshots=SNAPSHOTS,
+                claude_path=CLAUDE_USAGE,
+                handoff=handoff,
+            )
         )
         poll = datum.get("poll") or polled_usage(pool, now)["poll"]
         datum["poll"] = poll
@@ -910,10 +1274,19 @@ def integrate(
                 "using fresh poll; expiries=" + str([e["expires"] for e in entries or []])
             )
         # A recording tick can lower the calibrated cap before integration.
-        if datum.get("source", "").startswith("ccusage-calibrated"):
+        # Allow a newly lower calibrated cap to reduce desktop-token-pairs token_cap.
+        if datum.get("source", "").startswith("ccusage-calibrated") or (
+            datum.get("source") == "ccusage-fallback" and datum.get("token_cap") is not None
+        ):
             cap = source_calibration.get(f"{pool}_weekly_token_cap")
-            if isinstance(cap, (int, float)) and cap > 0:
-                datum["used_fraction"] = datum["weekly_tokens"] / cap
+            if isinstance(cap, (int, float)) and math.isfinite(cap) and cap > 0:
+                if datum.get("token_cap") is not None:
+                    cap = min(cap, datum["token_cap"])
+                    datum["token_cap"] = cap
+                if datum.get("weekly_tokens") is not None:
+                    datum["used_fraction"] = max(
+                        datum["weekly_tokens"] / cap, datum.get("provider_used_floor", 0)
+                    )
         if datum.get("scan"):
             messages.append(
                 "FYI codex rollout scan: " + ", ".join(f"{k}={v}" for k, v in datum["scan"].items())
@@ -950,7 +1323,7 @@ def integrate(
         sample = dict(agent=pool, recorded_at=now, **datum)
         sample.setdefault("period_start", start)
         pool_samples = [r for r in samples if r.get("agent") == pool and r.get("ts") is not None]
-        if datum["ts"] is not None and now - datum["ts"] <= pacing.STALE_AFTER_SECONDS:
+        if datum["ts"] is not None and now - datum["ts"] <= pacing.usage_max_age(pool):
             # Fresh percent observations sampled on ticks measure flat spend too;
             # source_ts retains the app observation time so freshness cannot be forged.
             sample.update(source_ts=datum["ts"], ts=now)
@@ -993,6 +1366,17 @@ def integrate(
             used_fraction=datum["used_fraction"],
             source=datum["source"],
         )
+        for key in (
+            "desktop_sample_ts",
+            "token_cap",
+            "cap_source",
+            "cap_pair_count",
+            "provider_used_floor",
+            "provider_sample_ts",
+            "fallback_reason",
+        ):
+            if key in datum:
+                row[key] = datum[key]
         # Infrastructure/auth/explicit shed markers remain authoritative.
         agent = agents[pool]
         ranks = {"ok": 0, "warn": 1, "shed": 2}
@@ -1106,6 +1490,28 @@ def report(
             if "shed" in (agent.get("state"), row.get("state"), routed_agent.get("state"))
             else ""
         )
+        source_detail = ""
+        if pool == "claude":
+            age = now - row["ts"] if row.get("ts") is not None else None
+            desktop_ts = row.get("desktop_sample_ts")
+            desktop_age = int(now - desktop_ts) if desktop_ts is not None else "unknown"
+            source_detail = (
+                f"sample_age_s={int(age) if age is not None else 'unknown'} "
+                f"desktop_sample_age_s={desktop_age} "
+            )
+            if row.get("source") == "ccusage-fallback":
+                source_detail += (
+                    f"cap: {row.get('token_cap') if row.get('token_cap') is not None else 'unavailable (0 pairs)'} "
+                    f"pairs={row.get('cap_pair_count', 0)} "
+                    f"token_cap={measured(row.get('token_cap'))} "
+                    f"cap_source={row.get('cap_source', 'unknown')} "
+                    f"fallback_reason={row.get('fallback_reason', 'desktop missing, invalid or stale')} "
+                )
+                if row.get("provider_sample_ts") is not None:
+                    source_detail += (
+                        f"provider_used_floor={measured(row.get('provider_used_floor'))} "
+                        f"provider_sample_age_s={int(now - row['provider_sample_ts'])} "
+                    )
         lines.append(
             f"pool {pool}: u={measured(row.get('used_fraction'))} "
             f"ũ={measured(row.get('projected_fraction'))} "
@@ -1123,8 +1529,9 @@ def report(
             f"report_weight={computed}{difference} "
             f"w_p_prev→w_p={prior}→{computed}{step_note} "
             f"resets={row.get('resets_available') if row.get('resets_available') is not None else 'unknown'} source={row.get('source', 'none')} "
+            f"{source_detail}"
             f"T1={row.get('period_end')} reset_expiries={row.get('reset_expiries')} "
-            f"ts={row.get('ts')} stale={row.get('ts') is not None and now - row['ts'] > pacing.STALE_AFTER_SECONDS}; "
+            f"ts={row.get('ts')} stale={row.get('ts') is not None and now - row['ts'] > pacing.usage_max_age(pool)}; "
             f"{row.get('reason', 'usage unmeasured; clears on fresh usage/period sample')}{shed_note}"
         )
         final = final_usage(snapshots, pool, now)
@@ -1158,7 +1565,7 @@ def final_usage(snapshots: list[dict], pool: str, now: float) -> dict | None:
     for snap in snapshots:
         p = (snap.get("agents", {}).get(pool) or {}).get("pacing") or {}
         end = p.get("period_end")
-        if end is not None and end <= now and 0 <= end - snap["ts"] <= pacing.STALE_AFTER_SECONDS:
+        if end is not None and end <= now and 0 <= end - snap["ts"] <= pacing.usage_max_age(pool):
             if p.get("used_fraction") is not None and not p.get("stale"):
                 finals.append(p)
     if not finals:

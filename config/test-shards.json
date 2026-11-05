@@ -68,6 +68,7 @@
       "tests/test_issue1025_feedback_boundaries.py",
       "tests/test_issue1025_gate_delta.py",
       "tests/test_issue1025_remaining_gaps.py",
+      "tests/test_coverage_round_1138.py",
       "tests/test_coverage_round_881.py",
       "tests/test_coverage_wp_roles.py",
       "tests/test_dispatcher_controlled_data_only.py",

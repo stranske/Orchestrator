@@ -1,0 +1,65 @@
+{
+  "checked_at": "2026-11-04T03:15:18.411Z",
+  "git_dir": "/tmp/issue1096-native-validation-git-7jtp1W/repo.git",
+  "source_commit": "c6730889c4b446aaa33e11dcee2761b4e4f3c581",
+  "checkout_parent": "21e5f87cf5a69c448009ad111e6f7a455069d005",
+  "source_sha256": {
+    "scripts/export_adjudicator_inventory.js": "e60fde756da0db0ebb00a7e2eda1ae6024eec83b35ac76ba930c2a8afeedfdd2",
+    "tests/test_adjudicator_inventory.js": "16a6e9ec8b674e1e58d72621c5a46dd488cec6bb69b614764535cc48c0ddb401"
+  },
+  "checks": [
+    {
+      "command": "node tests/test_adjudicator_inventory.js",
+      "exit_status": 1,
+      "passed": 78,
+      "failed": 3,
+      "phase": "prior source with added regression tests",
+      "log": "prior-source-controls.log",
+      "log_sha256": "36fc68a44d1624d76ed2b8ea948c3b1d82adaa561187c1e5249164cfe2d5ec82"
+    },
+    {
+      "command": "node tests/test_adjudicator_inventory.js",
+      "exit_status": 0,
+      "passed": 81,
+      "failed": 0,
+      "phase": "implemented source",
+      "log": "inventory.log",
+      "log_sha256": "1fbb7a9c05739120b3a8f15274fcb7aeb8905955d61d9fe7f8e077d840d4a5c0"
+    },
+    {
+      "command": "node tests/test_adjudicator_acceptance_runner.js",
+      "exit_status": 0,
+      "passed": 33,
+      "failed": 0,
+      "phase": "implemented source",
+      "log": "runner.log",
+      "log_sha256": "3c8145fc9542b6497551696be17743dc57e777dd14a574fa9ed5fe36320508b6"
+    },
+    {
+      "command": "node tests/test_adjudicator_evidence_ledger.js",
+      "exit_status": 0,
+      "passed": 26,
+      "failed": 0,
+      "phase": "implemented source",
+      "log": "ledger.log",
+      "log_sha256": "59c435edb41bdcd8b651d4425775526570161529e4f24934db5cc65574dfbc9e"
+    }
+  ],
+  "focused_passed": 140,
+  "additional_checks": [
+    "node --check scripts/export_adjudicator_inventory.js",
+    "node --check tests/test_adjudicator_inventory.js",
+    "git diff --check"
+  ],
+  "ledger_audit": {
+    "command": "node scripts/audit_adjudicator_evidence_ledger.js --ledger docs/verification/issue-1096-recovery/evidence-ledger.json",
+    "exit_status": 0,
+    "output": "ledger-audit.json",
+    "sha256": "accbba12894902fc262dce8fa0285c315f1caabcf433b4a0291a7f96ae43a18a"
+  },
+  "required_python_acceptance": "not established: selected interpreter lacks pytest; prior required-test failures remain open",
+  "original_retry_reconciliation_complete": false,
+  "operational_acceptance_complete": false,
+  "dispatch_authorized": false,
+  "paid_dispatches": 0
+}

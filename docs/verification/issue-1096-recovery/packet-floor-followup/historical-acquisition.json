@@ -1,0 +1,22 @@
+{
+  "checked_at": "2026-11-03T23:15:26.201Z",
+  "evidence_class": "historical_extracted_field_counts",
+  "file_id": "id:tDSHdCztYNUAAAAAADfgrw",
+  "source_path": "/Learning/Code/Audits/Orchestrator/2026-10-15-w2-followups/regrade/adjudicator-retro-BEFORE-2026-10-15T2256Z.json",
+  "source_server_modified": "2026-10-15T22:56:59Z",
+  "counts": {
+    "rows": 58,
+    "attempts": 64,
+    "packet_recorded": 46,
+    "ground_recorded": 46,
+    "diff_patch_recorded": 10,
+    "nonempty_diff_text": 10,
+    "clipped_diff_patch": 4,
+    "nonempty_criteria_array": 0
+  },
+  "raw_report_saved": false,
+  "cli_executed_on_original_report": false,
+  "original_byte_identity_verified": false,
+  "original_retry_manifest_recovered": false,
+  "limitation": "Field counts of the earlier extracted backup only; not the later immutable native report, original requested retry cohort or authenticated outcomes."
+}
