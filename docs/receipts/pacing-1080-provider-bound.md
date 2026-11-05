@@ -16,7 +16,17 @@ Gate run 41960109886, head 8e539072, explicitly reports Black would reformat
 `src/pacing_usage.py` and `tests/test_pacing_usage.py`. Format only those files.
 Its pytest workers also exit 4 and report zero tests, with no explanatory
 assertion in the log or JUnit artifact. A passing separate CI aggregate does
-not dispose of that Gate failure. No dependency pin is changed here.
+not dispose of that Gate failure. No dependency pin is edited here.
+
+Run 41967738321 reproduces the startup failure. Comparing its tested merge
+tree (2044a8f) with the head's Gate matrix identifies 19 missing test paths:
+the head manifest still names tests retired on main, whereas the merged
+manifest is already correct. Gate builds the matrix from the head but tests
+the merge tree. Merge current main into the existing branch to align those
+inputs without changing the finished pacing implementation. The resulting
+tree before this evidence update is identical to the CI-verified merge tree;
+its Gate matrix has 618 unique modules and zero missing paths. Retain upstream
+authors and dependency-pin ownership; do not hand-edit pins or shared workflows.
 
 ## Real-input reproduction and correction
 

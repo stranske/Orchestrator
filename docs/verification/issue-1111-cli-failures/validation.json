@@ -1,0 +1,165 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-11-04T00:28:53.426661+00:00",
+  "parent_revision": "cffc0da8fcc538ba364caa1dcf70e7bad6812890",
+  "source_test_commit": "d4e00a9b47655c2391854c32283ae9334e4f09c5",
+  "checkout_branch_advanced": false,
+  "scope": "Partial task 6: exactly 16 retained failures reconciled, 14 test-drift repairs verified, two production finding-origin failures retained. No operational acceptance claim.",
+  "python": "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3",
+  "node": "v24.22.1",
+  "source_hashes": {
+    "src/adjudicator_retro.py": {
+      "evaluated_sha256": "ee172f96ddf0ca56f6c06fcf18bdaacccece5381de61a9896006d0b16a8fb0b8",
+      "parent_sha256": "ee172f96ddf0ca56f6c06fcf18bdaacccece5381de61a9896006d0b16a8fb0b8"
+    },
+    "src/capability_advisor.py": {
+      "evaluated_sha256": "fe2f2d0dda2b684d61d42c6aba3952b8a5e5d0d1504c9cbebeca9616109208d5",
+      "parent_sha256": "fe2f2d0dda2b684d61d42c6aba3952b8a5e5d0d1504c9cbebeca9616109208d5"
+    },
+    "src/feedback.py": {
+      "evaluated_sha256": "eafa930ec4cea9a239bc03a91a00b2ca7c618c40629690658f8276417946412d",
+      "parent_sha256": "eafa930ec4cea9a239bc03a91a00b2ca7c618c40629690658f8276417946412d"
+    },
+    "src/verifier_evidence.py": {
+      "evaluated_sha256": "19b2342b6d9b4d097f6fef6b76089f54903dfbe36946dac6fa7467dec3afff59",
+      "parent_sha256": "19b2342b6d9b4d097f6fef6b76089f54903dfbe36946dac6fa7467dec3afff59"
+    },
+    "src/switch_review.py": {
+      "evaluated_sha256": "7ec3abaaf7a0622e6ba7ad50635a6eb6c4a8ae9be90b1ebc792c74fe326ba6b9",
+      "parent_sha256": "7ec3abaaf7a0622e6ba7ad50635a6eb6c4a8ae9be90b1ebc792c74fe326ba6b9"
+    },
+    "src/runtime_ac_gate.py": {
+      "evaluated_sha256": "aca54b320674dbc02c655d6b2a0b449a6f33878d7e34d52d74da9be8f124a4fb",
+      "parent_sha256": "aca54b320674dbc02c655d6b2a0b449a6f33878d7e34d52d74da9be8f124a4fb"
+    },
+    "tests/test_adjudicator_retro_cli.js": {
+      "evaluated_sha256": "d8aafa9e3a98a38c035e8143d9e21ffa21191bf9562c2354c3da78692ed7fabe",
+      "parent_sha256": "2b2eea6b16fae226639cda30498f716bc0f95441518eb97f868e8f81a2badd6f"
+    }
+  },
+  "checks": {
+    "full_before": {
+      "command": "node tests/test_adjudicator_retro_cli.js",
+      "exit": 1,
+      "passed": 51,
+      "failed": 16
+    },
+    "full_final": {
+      "command": "node tests/test_adjudicator_retro_cli.js",
+      "exit": 1,
+      "passed": 65,
+      "failed": 2,
+      "skipped": 0,
+      "tests": 67
+    },
+    "related": {
+      "command": "node --test tests/test_adjudicator_case_gaps.js tests/test_adjudicator_inventory.js tests/test_adjudicator_retrospective_batch.js tests/test_adjudicator_closer_shadow.js tests/test_adjudicator_receipts.js tests/test_adjudicator_completion.js",
+      "exit": 0,
+      "passed_files": 6
+    },
+    "selftest": {
+      "command": "python3 src/adjudicator_retro.py --selftest",
+      "exit": 0,
+      "checks": 23
+    },
+    "evidence": {
+      "command": "PYTHONPATH=src python3 -m unittest discover -s tests -p test_adjudicator_retro_evidence.py",
+      "exit": 0,
+      "passed": 11
+    },
+    "named_pytest": {
+      "command": "python3 -m pytest tests/test_adjudicator_retro.py::test_packet_builder_needs_target_finding_and_ground_truth tests/test_adjudicator_retro.py::test_retro_records_verdicts_without_changing_outcomes tests/test_adjudicator_retro.py::test_closer_lane_offers_the_adjudicator_only_on_a_contested_verdict -m \"not slow\" -v",
+      "exit": 1,
+      "reason": "No module named pytest",
+      "tests_executed": 0,
+      "specified_mutations_performed": false
+    },
+    "syntax": {
+      "command": "node --check tests/test_adjudicator_retro_cli.js",
+      "exit": 0
+    },
+    "whitespace": {
+      "command": "git diff --check",
+      "exit": 0
+    },
+    "black_gate": {
+      "status": "not_applicable_to_delivered_change",
+      "reason": "No .py files changed. Black is unavailable, which blocks a committed Python repair for the two source defects under this run pre-commit requirement."
+    }
+  },
+  "artifacts": {
+    "baseline.log.gz": {
+      "sha256": "e6b7d25b60a5223a2b5e589e555391a5d2f237ff611b480587522e7f34dda028",
+      "uncompressed_sha256": "fa835ec33be98cf2c47a7c4278019a59c8a3bb39428311c7fa3fde75bd784cf1",
+      "uncompressed_bytes": 25261
+    },
+    "final.log.gz": {
+      "sha256": "7e4992d10196ec94c869292c1ce65e5e020e8022a3a76a11ddce16f0eb495d66",
+      "uncompressed_sha256": "9a6774bdb04940e4abbff849d2b7f792e9c43a3fa75c02c3fd1b373d28edbb94",
+      "uncompressed_bytes": 8533
+    },
+    "focused-six.log": {
+      "sha256": "c29dd96fc2669aa127751c792d79b01adbafa9357bbefbbe0c4b52f883356951",
+      "uncompressed_sha256": "c29dd96fc2669aa127751c792d79b01adbafa9357bbefbbe0c4b52f883356951",
+      "uncompressed_bytes": 673
+    },
+    "weekly-after.log": {
+      "sha256": "621e639f4deaa6f8cca58c94cf618964a75c609afbd7f156affd0d769ebf5f5b",
+      "uncompressed_sha256": "621e639f4deaa6f8cca58c94cf618964a75c609afbd7f156affd0d769ebf5f5b",
+      "uncompressed_bytes": 218
+    },
+    "diagnostic.log.gz": {
+      "sha256": "c0dc20c4378dd703cedea6e05c18773a8f16d691e6f43dd52184c3961aeedfe5",
+      "uncompressed_sha256": "47964c4c2857b6f197df77926446cdcc4951de82e1bcf0db7679ce20da436741",
+      "uncompressed_bytes": 4917
+    },
+    "weekly-diagnostic.log": {
+      "sha256": "b6610349281a10af9732543b65cbffc8e6a872213b89cd93cc811931edbb7bb3",
+      "uncompressed_sha256": "b6610349281a10af9732543b65cbffc8e6a872213b89cd93cc811931edbb7bb3",
+      "uncompressed_bytes": 1252
+    },
+    "related.log": {
+      "sha256": "e0dcf2f88a7b8df7dd7628cc2e356aa19167e4dd64e9b900a34952eca1a14f49",
+      "uncompressed_sha256": "e0dcf2f88a7b8df7dd7628cc2e356aa19167e4dd64e9b900a34952eca1a14f49",
+      "uncompressed_bytes": 465
+    },
+    "selftest.log": {
+      "sha256": "3f227862f8d1e7b2c35195efe7205621f73d3033db5a3ca88e1e7c24021e1109",
+      "uncompressed_sha256": "3f227862f8d1e7b2c35195efe7205621f73d3033db5a3ca88e1e7c24021e1109",
+      "uncompressed_bytes": 45
+    },
+    "evidence-unittest.log.gz": {
+      "sha256": "f6a66b2c5a704919f63ad9dc96bcd332aa071db225cf8ef237949ea2d2783bdf",
+      "uncompressed_sha256": "a4aadcba48379bdd8a18cef8cb5ab9988e4e9e2a1e9a79aaee7f24997fc85be3",
+      "uncompressed_bytes": 19482
+    },
+    "named-attempt.log": {
+      "sha256": "3c62bade513fb2347fe3e5a9f91901d9e1bbf2d4a19bbd59d2863c1cdf42e10a",
+      "uncompressed_sha256": "3c62bade513fb2347fe3e5a9f91901d9e1bbf2d4a19bbd59d2863c1cdf42e10a",
+      "uncompressed_bytes": 75
+    },
+    "source-commit.patch": {
+      "sha256": "6c4f30dd5b35dfde9478c1c7b88668a5b55405fe08a159a6b94b89453870864a",
+      "bytes": 15357
+    },
+    "diagnostic.patch": {
+      "sha256": "cb824292a39ddf22ca1846a4a3a9b6dfc3e3389730ee0d12f1b584a2899b3356",
+      "bytes": 3166
+    },
+    "dispositions.json": {
+      "sha256": "d78f92b6a117924531ef23e016fefb3b447129759277b9195e31a1cd27c7f03e",
+      "bytes": 20372
+    }
+  },
+  "completed_checkboxes": 0,
+  "operational_acceptance_complete": false,
+  "not_completed": [
+    "original authenticated cohort and owner-permitted persisted inventory",
+    "case/revision/role/cost reconciliation",
+    "three named pytest controls and two requested source mutations",
+    "real closer observation",
+    "saved summary and actual switch-review operational reconciliation",
+    "two retained numeric-order source failures",
+    "authorized metadata publication and reviewer disposition"
+  ]
+}

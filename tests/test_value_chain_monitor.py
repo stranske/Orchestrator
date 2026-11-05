@@ -766,7 +766,16 @@ def _check_latest_demand_and_windowed_activity(tmp_path):
     assert monitor.situation_count("closer-core", {"closer_core": counts}) == 20
     rows[-2] = _closer_round(CLOSER_NOW, ("complete", "followup"), fleet=30)
     counts = monitor._closer_core_rounds(CLOSER_NOW, _closer_journal(tmp_path, rows))
-    assert counts == {"demand": 32, "invocation_count": 2, "usable": 9}
+    # Both latest items repeat targets that already received a usable action.
+    assert counts == {"demand": 32, "invocation_count": 2, "usable": 7}
+    fleet_round = _closer_round(CLOSER_NOW, ("complete", "followup"), fleet=98)
+    fleet_round["summary"] = (
+        "closer-core fleet: targets 7; handled 105; fleet demand 98 (read errors 0; scope fleet)"
+    )
+    fleet_round["items"][1]["target"] = "o/r#new"
+    rows[-2] = fleet_round
+    counts = monitor._closer_core_rounds(CLOSER_NOW, _closer_journal(tmp_path, rows))
+    assert counts == {"demand": 105, "invocation_count": 2, "usable": 8}
 
 
 def _check_unread_or_incomplete_rounds_are_unmeasured(tmp_path, damage):

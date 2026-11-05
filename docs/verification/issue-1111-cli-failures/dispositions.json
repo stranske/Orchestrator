@@ -1,0 +1,520 @@
+{
+  "schema_version": 1,
+  "retained_count": 16,
+  "retained_receipt": "docs/verification/issue-1074-retrospective-batch/receipt.json",
+  "retained_uncompressed_sha256": "401e40fd9a3a156cd6cb96d0ad0d3042c2c20687305d4eadb3657868675b5ceb",
+  "repaired_and_passing": 14,
+  "source_failures_remaining": 2,
+  "task_complete": false,
+  "entries": [
+    {
+      "id": 1,
+      "test_name": "retro CLI compares both rules on the same cases with mixed merge dispositions",
+      "disposition": "repaired_test_drift",
+      "explanation": "The shared comparison cohort and agreement checks remain intact. Only the stale cost denominator changes to three positive receipts totaling 4.5, average 1.5; the zero receipt remains unmeasured.",
+      "retained_failure": {
+        "path": "docs/verification/issue-1074-retrospective-batch/baseline-cli.log.gz",
+        "line": 62,
+        "outcome": "failed"
+      },
+      "fresh_baseline": {
+        "path": "baseline.log.gz",
+        "line": 62,
+        "outcome": "failed"
+      },
+      "candidate_check": {
+        "command": "node tests/test_adjudicator_retro_cli.js",
+        "path": "final.log.gz",
+        "line": 62,
+        "outcome": "passed"
+      },
+      "source_evidence": [
+        "src/feedback.py:4535",
+        "src/adjudicator_retro.py:1488",
+        "src/adjudicator_retro.py:2583"
+      ],
+      "related_passing_checks": [],
+      "followup": null
+    },
+    {
+      "id": 2,
+      "test_name": "retro CLI preserves raw proposals without grading metadata and refreshes measured costs",
+      "disposition": "repaired_test_drift",
+      "explanation": "Five attempts contain three positive measured costs totaling 4.5, two unknown costs and six metadata-only cases. The real rendered line includes retry pending 2 and advice graded 0.",
+      "retained_failure": {
+        "path": "docs/verification/issue-1074-retrospective-batch/baseline-cli.log.gz",
+        "line": 48,
+        "outcome": "failed"
+      },
+      "fresh_baseline": {
+        "path": "baseline.log.gz",
+        "line": 48,
+        "outcome": "failed"
+      },
+      "candidate_check": {
+        "command": "node tests/test_adjudicator_retro_cli.js",
+        "path": "final.log.gz",
+        "line": 48,
+        "outcome": "passed"
+      },
+      "source_evidence": [
+        "src/feedback.py:4535",
+        "src/adjudicator_retro.py:1488",
+        "src/adjudicator_retro.py:2583"
+      ],
+      "related_passing_checks": [],
+      "followup": null
+    },
+    {
+      "id": 3,
+      "test_name": "retro CLI publishes an empty report without inventing agreement or cost",
+      "disposition": "repaired_test_drift",
+      "explanation": "The exact empty summary omitted the added advice_graded, advice_agree, advice_disagree and retry_pending fields. All four must be zero; existing assertions still require no invented cost/agreement, no rows and unchanged Brain.",
+      "retained_failure": {
+        "path": "docs/verification/issue-1074-retrospective-batch/baseline-cli.log.gz",
+        "line": 64,
+        "outcome": "failed"
+      },
+      "fresh_baseline": {
+        "path": "baseline.log.gz",
+        "line": 64,
+        "outcome": "failed"
+      },
+      "candidate_check": {
+        "command": "node tests/test_adjudicator_retro_cli.js",
+        "path": "final.log.gz",
+        "line": 64,
+        "outcome": "passed"
+      },
+      "source_evidence": [
+        "src/adjudicator_retro.py:1567",
+        "tests/test_adjudicator_retro_cli.js:2327"
+      ],
+      "related_passing_checks": [],
+      "followup": null
+    },
+    {
+      "id": 4,
+      "test_name": "retro CLI refreshes late abstention costs after its outcome leaves the Brain",
+      "disposition": "repaired_test_drift",
+      "explanation": "Initial positive costs are two totaling 4. A late zero receipt stays unknown; a late 3 receipt raises the count to three totaling 7. Deleted outcomes and role identities remain unchanged and abstention never enters binary agreement.",
+      "retained_failure": {
+        "path": "docs/verification/issue-1074-retrospective-batch/baseline-cli.log.gz",
+        "line": 58,
+        "outcome": "failed"
+      },
+      "fresh_baseline": {
+        "path": "baseline.log.gz",
+        "line": 58,
+        "outcome": "failed"
+      },
+      "candidate_check": {
+        "command": "node tests/test_adjudicator_retro_cli.js",
+        "path": "final.log.gz",
+        "line": 58,
+        "outcome": "passed"
+      },
+      "source_evidence": [
+        "src/feedback.py:4535",
+        "src/adjudicator_retro.py:1488",
+        "src/adjudicator_retro.py:2583"
+      ],
+      "related_passing_checks": [],
+      "followup": null
+    },
+    {
+      "id": 5,
+      "test_name": "retro CLI refreshes late invalid-response costs without grading or redispatch",
+      "disposition": "repaired_test_drift",
+      "explanation": "A zero ccusage receipt is incomplete, so the paid invalid attempt stays unmeasured. Positive complete receipts count, ledger and missing receipts do not. All role identities, parser errors, agreement denominators and Brain bytes are still checked.",
+      "retained_failure": {
+        "path": "docs/verification/issue-1074-retrospective-batch/baseline-cli.log.gz",
+        "line": 59,
+        "outcome": "failed"
+      },
+      "fresh_baseline": {
+        "path": "baseline.log.gz",
+        "line": 59,
+        "outcome": "failed"
+      },
+      "candidate_check": {
+        "command": "node tests/test_adjudicator_retro_cli.js",
+        "path": "final.log.gz",
+        "line": 59,
+        "outcome": "passed"
+      },
+      "source_evidence": [
+        "src/feedback.py:4535",
+        "src/adjudicator_retro.py:1488",
+        "src/adjudicator_retro.py:2583"
+      ],
+      "related_passing_checks": [],
+      "followup": null
+    },
+    {
+      "id": 6,
+      "test_name": "retro CLI removes stale comparisons until durability is judged again",
+      "disposition": "repaired_test_drift",
+      "explanation": "The durability detection boundary, withdrawn and restored comparisons and unchanged Brain checks remain active. Cost accounting uses the three positive receipts totaling 4.5, average 1.5 rather than including the zero receipt.",
+      "retained_failure": {
+        "path": "docs/verification/issue-1074-retrospective-batch/baseline-cli.log.gz",
+        "line": 66,
+        "outcome": "failed"
+      },
+      "fresh_baseline": {
+        "path": "baseline.log.gz",
+        "line": 66,
+        "outcome": "failed"
+      },
+      "candidate_check": {
+        "command": "node tests/test_adjudicator_retro_cli.js",
+        "path": "final.log.gz",
+        "line": 66,
+        "outcome": "passed"
+      },
+      "source_evidence": [
+        "src/feedback.py:4535",
+        "src/adjudicator_retro.py:1488",
+        "src/adjudicator_retro.py:2583"
+      ],
+      "related_passing_checks": [],
+      "followup": null
+    },
+    {
+      "id": 7,
+      "test_name": "retro CLI reuses saved cases when later durability and costs arrive",
+      "disposition": "repaired_test_drift",
+      "explanation": "Late 0.75 receipt raises measured costs to four totaling 5.25, with one zero-dollar unknown and average 1.3125. Report/Brain identity, repeat-refresh and changed-truth checks remain active.",
+      "retained_failure": {
+        "path": "docs/verification/issue-1074-retrospective-batch/baseline-cli.log.gz",
+        "line": 57,
+        "outcome": "failed"
+      },
+      "fresh_baseline": {
+        "path": "baseline.log.gz",
+        "line": 57,
+        "outcome": "failed"
+      },
+      "candidate_check": {
+        "command": "node tests/test_adjudicator_retro_cli.js",
+        "path": "final.log.gz",
+        "line": 57,
+        "outcome": "passed"
+      },
+      "source_evidence": [
+        "src/feedback.py:4535",
+        "src/adjudicator_retro.py:1488",
+        "src/adjudicator_retro.py:2583"
+      ],
+      "related_passing_checks": [],
+      "followup": null
+    },
+    {
+      "id": 8,
+      "test_name": "retro CLI withdraws stale costs without changing the comparison cohort",
+      "disposition": "repaired_test_drift",
+      "explanation": "After two positive receipts are withdrawn, only the 0.5 abstention is measured. Its withdrawal leaves no measured cost; the zero receipt cannot preserve a measured denominator. Restoring positive receipts recovers three costs totaling 4.5 without redispatch or cohort changes.",
+      "retained_failure": {
+        "path": "docs/verification/issue-1074-retrospective-batch/baseline-cli.log.gz",
+        "line": 60,
+        "outcome": "failed"
+      },
+      "fresh_baseline": {
+        "path": "baseline.log.gz",
+        "line": 60,
+        "outcome": "failed"
+      },
+      "candidate_check": {
+        "command": "node tests/test_adjudicator_retro_cli.js",
+        "path": "final.log.gz",
+        "line": 60,
+        "outcome": "passed"
+      },
+      "source_evidence": [
+        "src/feedback.py:4535",
+        "src/adjudicator_retro.py:1488",
+        "src/adjudicator_retro.py:2583"
+      ],
+      "related_passing_checks": [],
+      "followup": null
+    },
+    {
+      "id": 9,
+      "test_name": "retro bounded batches count paid abstentions and invalid responses outside agreement rates",
+      "disposition": "repaired_test_drift",
+      "explanation": "Four paid attempts contain three positive measured costs totaling 4.75 and one zero-dollar unknown; average is 4.75/3, unmeasured 1, retry pending 2 and no accepted/advice grading.",
+      "retained_failure": {
+        "path": "docs/verification/issue-1074-retrospective-batch/baseline-cli.log.gz",
+        "line": 24,
+        "outcome": "failed"
+      },
+      "fresh_baseline": {
+        "path": "baseline.log.gz",
+        "line": 24,
+        "outcome": "failed"
+      },
+      "candidate_check": {
+        "command": "node tests/test_adjudicator_retro_cli.js",
+        "path": "final.log.gz",
+        "line": 24,
+        "outcome": "passed"
+      },
+      "source_evidence": [
+        "src/feedback.py:4535",
+        "src/adjudicator_retro.py:1488",
+        "src/adjudicator_retro.py:2583"
+      ],
+      "related_passing_checks": [],
+      "followup": null
+    },
+    {
+      "id": 10,
+      "test_name": "retro collects complete gate pages before shadow dispatch: numeric-attempt-order",
+      "disposition": "source_defect_unresolved",
+      "explanation": "The real selector chooses the NON_PASS marker, but fetch_evidence compares the full result from the complete comment set with a singleton-comment result. Their _lifecycle_history arrays differ. The diagnostic retains merge-bound verifier finding comment unavailable after one request; three requests were required.",
+      "retained_failure": {
+        "path": "docs/verification/issue-1074-retrospective-batch/baseline-cli.log.gz",
+        "line": 39,
+        "outcome": "failed"
+      },
+      "fresh_baseline": {
+        "path": "baseline.log.gz",
+        "line": 39,
+        "outcome": "failed"
+      },
+      "candidate_check": {
+        "command": "node tests/test_adjudicator_retro_cli.js",
+        "path": "final.log.gz",
+        "line": 39,
+        "outcome": "failed"
+      },
+      "source_evidence": [
+        "src/adjudicator_retro.py:1168",
+        "src/adjudicator_retro.py:1177",
+        "src/verifier_evidence.py:269"
+      ],
+      "related_passing_checks": [
+        {
+          "test_name": "retro collects complete gate pages before shadow dispatch: complete",
+          "path": "final.log.gz",
+          "line": 25,
+          "outcome": "passed"
+        },
+        {
+          "test_name": "retro collects complete gate pages before shadow dispatch: invalid-newer-pass",
+          "path": "final.log.gz",
+          "line": 40,
+          "outcome": "passed"
+        },
+        {
+          "test_name": "retro collects complete gate pages before shadow dispatch: untrusted-newer-pass",
+          "path": "final.log.gz",
+          "line": 41,
+          "outcome": "passed"
+        },
+        {
+          "test_name": "retro collects complete gate pages before shadow dispatch: wrong-url-newer-pass",
+          "path": "final.log.gz",
+          "line": 42,
+          "outcome": "passed"
+        }
+      ],
+      "followup": "Repair origin matching while preserving trusted author, subject and selected verdict identity; run both numeric cases plus the complete pagination and rejected-marker cases. Python edits require the unavailable Black gate first."
+    },
+    {
+      "id": 11,
+      "test_name": "retro collects complete gate pages before shadow dispatch: numeric-run-order",
+      "disposition": "source_defect_unresolved",
+      "explanation": "The real selector chooses the NON_PASS marker, but fetch_evidence compares the full result from the complete comment set with a singleton-comment result. Their _lifecycle_history arrays differ. The diagnostic retains merge-bound verifier finding comment unavailable after one request; three requests were required.",
+      "retained_failure": {
+        "path": "docs/verification/issue-1074-retrospective-batch/baseline-cli.log.gz",
+        "line": 38,
+        "outcome": "failed"
+      },
+      "fresh_baseline": {
+        "path": "baseline.log.gz",
+        "line": 38,
+        "outcome": "failed"
+      },
+      "candidate_check": {
+        "command": "node tests/test_adjudicator_retro_cli.js",
+        "path": "final.log.gz",
+        "line": 38,
+        "outcome": "failed"
+      },
+      "source_evidence": [
+        "src/adjudicator_retro.py:1168",
+        "src/adjudicator_retro.py:1177",
+        "src/verifier_evidence.py:269"
+      ],
+      "related_passing_checks": [
+        {
+          "test_name": "retro collects complete gate pages before shadow dispatch: complete",
+          "path": "final.log.gz",
+          "line": 25,
+          "outcome": "passed"
+        },
+        {
+          "test_name": "retro collects complete gate pages before shadow dispatch: invalid-newer-pass",
+          "path": "final.log.gz",
+          "line": 40,
+          "outcome": "passed"
+        },
+        {
+          "test_name": "retro collects complete gate pages before shadow dispatch: untrusted-newer-pass",
+          "path": "final.log.gz",
+          "line": 41,
+          "outcome": "passed"
+        },
+        {
+          "test_name": "retro collects complete gate pages before shadow dispatch: wrong-url-newer-pass",
+          "path": "final.log.gz",
+          "line": 42,
+          "outcome": "passed"
+        }
+      ],
+      "followup": "Repair origin matching while preserving trusted author, subject and selected verdict identity; run both numeric cases plus the complete pagination and rejected-marker cases. Python edits require the unavailable Black gate first."
+    },
+    {
+      "id": 12,
+      "test_name": "retro dispatch records shadow roles without writing outcomes (newest PR #1)",
+      "disposition": "repaired_test_drift",
+      "explanation": "The 180-second expectation predates the shared 600-second budget. The repaired assertions require both transport timeout 600 and equal dispatch_timeout_s in each persisted case, retaining role/run, raw proposal and unchanged-outcome checks.",
+      "retained_failure": {
+        "path": "docs/verification/issue-1074-retrospective-batch/baseline-cli.log.gz",
+        "line": 15,
+        "outcome": "failed"
+      },
+      "fresh_baseline": {
+        "path": "baseline.log.gz",
+        "line": 15,
+        "outcome": "failed"
+      },
+      "candidate_check": {
+        "command": "node tests/test_adjudicator_retro_cli.js",
+        "path": "final.log.gz",
+        "line": 15,
+        "outcome": "passed"
+      },
+      "source_evidence": [
+        "src/adjudicator_retro.py:64",
+        "tests/test_adjudicator_retro_cli.js:840"
+      ],
+      "related_passing_checks": [],
+      "followup": null
+    },
+    {
+      "id": 13,
+      "test_name": "retro dispatch records shadow roles without writing outcomes (newest PR #2)",
+      "disposition": "repaired_test_drift",
+      "explanation": "The 180-second expectation predates the shared 600-second budget. The repaired assertions require both transport timeout 600 and equal dispatch_timeout_s in each persisted case, retaining role/run, raw proposal and unchanged-outcome checks.",
+      "retained_failure": {
+        "path": "docs/verification/issue-1074-retrospective-batch/baseline-cli.log.gz",
+        "line": 17,
+        "outcome": "failed"
+      },
+      "fresh_baseline": {
+        "path": "baseline.log.gz",
+        "line": 17,
+        "outcome": "failed"
+      },
+      "candidate_check": {
+        "command": "node tests/test_adjudicator_retro_cli.js",
+        "path": "final.log.gz",
+        "line": 17,
+        "outcome": "passed"
+      },
+      "source_evidence": [
+        "src/adjudicator_retro.py:64",
+        "tests/test_adjudicator_retro_cli.js:840"
+      ],
+      "related_passing_checks": [],
+      "followup": null
+    },
+    {
+      "id": 14,
+      "test_name": "retro replays each persisted dispute on the same PR (newest run 1)",
+      "disposition": "repaired_test_drift",
+      "explanation": "The 180-second expectation predates the shared 600-second budget. The repaired assertions require both transport timeout 600 and equal dispatch_timeout_s in each persisted case, retaining role/run, raw proposal and unchanged-outcome checks.",
+      "retained_failure": {
+        "path": "docs/verification/issue-1074-retrospective-batch/baseline-cli.log.gz",
+        "line": 16,
+        "outcome": "failed"
+      },
+      "fresh_baseline": {
+        "path": "baseline.log.gz",
+        "line": 16,
+        "outcome": "failed"
+      },
+      "candidate_check": {
+        "command": "node tests/test_adjudicator_retro_cli.js",
+        "path": "final.log.gz",
+        "line": 16,
+        "outcome": "passed"
+      },
+      "source_evidence": [
+        "src/adjudicator_retro.py:64",
+        "tests/test_adjudicator_retro_cli.js:840"
+      ],
+      "related_passing_checks": [],
+      "followup": null
+    },
+    {
+      "id": 15,
+      "test_name": "retro replays each persisted dispute on the same PR (newest run 2)",
+      "disposition": "repaired_test_drift",
+      "explanation": "The 180-second expectation predates the shared 600-second budget. The repaired assertions require both transport timeout 600 and equal dispatch_timeout_s in each persisted case, retaining role/run, raw proposal and unchanged-outcome checks.",
+      "retained_failure": {
+        "path": "docs/verification/issue-1074-retrospective-batch/baseline-cli.log.gz",
+        "line": 18,
+        "outcome": "failed"
+      },
+      "fresh_baseline": {
+        "path": "baseline.log.gz",
+        "line": 18,
+        "outcome": "failed"
+      },
+      "candidate_check": {
+        "command": "node tests/test_adjudicator_retro_cli.js",
+        "path": "final.log.gz",
+        "line": 18,
+        "outcome": "passed"
+      },
+      "source_evidence": [
+        "src/adjudicator_retro.py:64",
+        "tests/test_adjudicator_retro_cli.js:840"
+      ],
+      "related_passing_checks": [],
+      "followup": null
+    },
+    {
+      "id": 16,
+      "test_name": "switch review reads and renders saved adjudicator evidence without replay or writes",
+      "disposition": "repaired_test_isolation_and_rendering",
+      "explanation": "Diagnostics identified feature-goals-history.jsonl from the unrelated default feature-goal reader and feedback._conn from runtime_ac_gate.post_merge_summary. The test now injects the feature-goal reader and isolates post-merge reporting while keeping the real retrospective reader/renderer and all forbidden-call and byte-equality assertions. Expected strings now retain explicit retry and advice counts, or UNKNOWN for older summaries.",
+      "retained_failure": {
+        "path": "docs/verification/issue-1074-retrospective-batch/baseline-cli.log.gz",
+        "line": 56,
+        "outcome": "failed"
+      },
+      "fresh_baseline": {
+        "path": "baseline.log.gz",
+        "line": 56,
+        "outcome": "failed"
+      },
+      "candidate_check": {
+        "command": "node tests/test_adjudicator_retro_cli.js",
+        "path": "final.log.gz",
+        "line": 56,
+        "outcome": "passed"
+      },
+      "source_evidence": [
+        "src/switch_review.py:1847",
+        "src/runtime_ac_gate.py:645",
+        "src/adjudicator_retro.py:2583"
+      ],
+      "related_passing_checks": [],
+      "followup": null
+    }
+  ]
+}

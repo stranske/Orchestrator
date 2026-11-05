@@ -1,0 +1,28 @@
+{
+  "base_commit": "32dca156478f1e87131d05a7bd9b2cec154b814e",
+  "current_model_contract_sha256": "45aa2790e4afb9b40b6718ad9827b809ef9b19e819e7eb01f0bb4b6413fcb6c2",
+  "new_qualification_id": "sonnet-current-role-qualification:ad6c6597e492cb4696be462fb75d2dbea14b1873d7fbab4079d1fa1e3597dd9d",
+  "provider_report_ref": {
+    "path": "/Users/teacher/.codex/handoff/dispatch-logs/sonnet-role-qualification/ad6c6597e492cb4696be462fb75d2dbea14b1873d7fbab4079d1fa1e3597dd9d.result.json",
+    "sha256": "73812618610c53651e6b60a57747dcc5313f61d2cb14cb3bc4a7e94b5a917c57"
+  },
+  "role_module": {
+    "after_file_sha256": "860c73038a75811d8ff8514a052015264a9794a3304538586bd7306711685840",
+    "after_module_ast_sha256": "972a5171433eacd8862daac7978129e611c8c68d8fe8d5b04bbebdfc10f34522",
+    "assignment_delta": {
+      "ROLE_QUALIFICATIONS": {
+        "added_value_ast_sha256": "b5e0c4733be375c3186a74cf0331128e08b610c90aecbd49b1bdfa5a5bcec9d9",
+        "after_ast_sha256": "81bf13fca80cc78ab4c88ec12775cd3f039636e7d7785f634b577fbb4b7b9f23",
+        "before_ast_sha256": "57a1c99f554885f2c2481320131e02a9d0954836a18f5540a95051b26fe349a1"
+      },
+      "ROLE_QUALIFICATION_SUPERSEDES": {
+        "added_value_ast_sha256": "2cbb9c1f569d60d150629be12bc75d1b72bc46b9667097d2ca95847c5a2eb74b",
+        "after_ast_sha256": "a7a5cecc9d58acda17f1dcf7f545932aeff9adb5cddee174bf2e6d16d19cd326",
+        "before_ast_sha256": "a5a6b045054ca6b77db59199a57e0fe8fa2625c27de235abec27d80110c05b00"
+      }
+    },
+    "before_file_sha256": "940155b2ffb2e52bc88b7364548452e8d5acbd1ab4e826aae333ac27fe87c7d0",
+    "before_module_ast_sha256": "51c7a0e1415a28f7be4e08211becaadff87a58a7f33afd12499b4941a4a9dcaa"
+  },
+  "schema": "closer-testgen-off-flash-role-successor/v1"
+}

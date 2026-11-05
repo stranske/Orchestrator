@@ -42,6 +42,16 @@ def current_receiver_reference():
     assert current["native_top_level_ast"]["main"] == main["before"]
     current["top_level_ast"]["main"] = main["after"]
     current["native_top_level_ast"]["main"] = main["after"]
+    # Native entry pins see the live #1049 `_main_admitted`; historical semantic
+    # audits undo the drain-latch successor first and keep the main982 AST.
+    drain = reservation_drain_latch_reference()["files"]["closer_dispatcher.py"]
+    admitted = drain["function_delta"]["_main_admitted"]
+    assert current["native_top_level_ast"]["_main_admitted"] == admitted["before"]
+    current["native_top_level_ast"]["_main_admitted"] = admitted["after"]
+    for name, change in diagnostics_review_reference()["function_delta"].items():
+        if name in current["native_top_level_ast"]:
+            assert current["native_top_level_ast"][name] == change["before"]
+            current["native_top_level_ast"][name] = change["after"]
     return current
 
 
@@ -266,6 +276,13 @@ def integrated_native_source_reference():
         else:
             assert filename == "closer_correction_source_record.py"
         original[filename] = change["after_file_sha256"]
+    for filename, change in reservation_drain_latch_reference()["files"].items():
+        assert original[filename] == change["before_file_sha256"]
+        original[filename] = change["after_file_sha256"]
+    original["closer_dispatcher.py"] = diagnostics_review_reference()["after_file_sha256"]
+    successor = cache_persistence_reference()
+    assert original["closer_dispatcher.py"] == successor["before_file_sha256"]
+    original["closer_dispatcher.py"] = successor["after_file_sha256"]
     return original
 
 
@@ -687,8 +704,65 @@ def before_completed_invitation_read_source(raw, filename):
     return raw
 
 
+RESERVATION_DRAIN_LATCH_MANIFEST = (
+    Path(__file__).parent
+    / "fixtures/semantic_api_reference/current_reservation_drain_latch_v1.json"
+)
+RESERVATION_DRAIN_LATCH_SHA256 = "bc5e0b4d270429c1e659bcc027a7fd509fa8bc634c27f5c0d4eef312e709be0c"
+
+
+def reservation_drain_latch_reference():
+    """Append #1049 reservation-drain latch successor above capacity recovery."""
+    raw = RESERVATION_DRAIN_LATCH_MANIFEST.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == RESERVATION_DRAIN_LATCH_SHA256
+    value = json.loads(raw)
+    assert value["schema"] == "reservation-drain-latch-source-successor/v1"
+    change = value["files"]["closer_dispatcher.py"]
+    prior = capacity_pre_effect_recovery_reference()["files"]["closer_dispatcher.py"]
+    assert change["before_file_sha256"] == prior["after_file_sha256"]
+    assert change["before_module_ast_sha256"] == prior["after_module_ast_sha256"]
+    assert set(value["files"]) == {"closer_dispatcher.py"}
+    assert set(change["function_delta"]) == {
+        "_admission_terminal_plan_cache_path",
+        "_cacheable_terminal_plan",
+        "_cached_terminal_plan",
+        "_expired_admission_diagnostics",
+        "_load_admission_terminal_plan_cache",
+        "_main_admitted",
+        "_plan_snapshot_revision",
+        "_probe_snapshot_revision",
+        "_save_admission_terminal_plan_cache",
+        "_terminal_plan_cache_key",
+        "reservation_drain_pass2_number",
+    }
+    assert set(change["constant_delta"]) == {
+        "RESERVATION_DRAIN_PASS2_CHECK_LABEL",
+        "RESERVATION_DRAIN_PASS2_CHECK_TS",
+        "_LOCAL_OWNER_PLAN_REASONS",
+    }
+    return value
+
+
+def before_reservation_drain_latch_source(raw, filename):
+    """Restore the exact capacity-recovery dispatcher beneath the drain-latch successor."""
+    raw = before_diagnostics_review_source(raw, filename)
+    change = reservation_drain_latch_reference()["files"].get(filename)
+    if change is None:
+        return raw
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest == change["before_file_sha256"]:
+        return raw
+    if digest != change["after_file_sha256"]:
+        # Already reversed past this successor (capacity-before or older).
+        return raw
+    raw = change["before_source_utf8"].encode()
+    assert hashlib.sha256(raw).hexdigest() == change["before_file_sha256"]
+    return raw
+
+
 def before_capacity_pre_effect_recovery_source(raw, filename):
     """Keep historical assertions exact beneath separately attested successors."""
+    raw = before_reservation_drain_latch_source(raw, filename)
     raw = before_completed_invitation_read_source(raw, filename)
     raw = before_source_pre_effect_readmission_source(raw, filename)
     change = capacity_pre_effect_recovery_reference()["files"].get(filename)
@@ -703,13 +777,22 @@ def before_capacity_pre_effect_recovery_source(raw, filename):
     return raw
 
 
-def before_dispatcher_bytecode_bootstrap(source):
-    """Undo only the exact sealed-runtime bootstrap successor for old audits."""
+def _undo_capacity_era_dispatcher_if_present(source):
+    """Undo drain-latch and/or capacity recovery only when those bytes are still present."""
+    source = before_diagnostics_review_source(source.encode(), "closer_dispatcher.py").decode()
+    digest = hashlib.sha256(source.encode()).hexdigest()
+    drain = reservation_drain_latch_reference()["files"]["closer_dispatcher.py"]
     capacity = capacity_pre_effect_recovery_reference()["files"]["closer_dispatcher.py"]
-    if hashlib.sha256(source.encode()).hexdigest() == capacity["after_file_sha256"]:
-        source = before_capacity_pre_effect_recovery_source(
+    if digest in {drain["after_file_sha256"], capacity["after_file_sha256"]}:
+        return before_capacity_pre_effect_recovery_source(
             source.encode(), "closer_dispatcher.py"
         ).decode()
+    return source
+
+
+def before_dispatcher_bytecode_bootstrap(source):
+    """Undo only the exact sealed-runtime bootstrap successor for old audits."""
+    source = _undo_capacity_era_dispatcher_if_present(source)
     change = dispatcher_bytecode_bootstrap_reference()["files"]["closer_dispatcher.py"]
     assert hashlib.sha256(source.encode()).hexdigest() == change["after_file_sha256"]
     reversal = change["historical_reversal"]
@@ -721,11 +804,7 @@ def before_dispatcher_bytecode_bootstrap(source):
 
 def before_initial_b_observability_dispatcher(source):
     """Reverse only the exact reviewed initial-B dispatcher successor for old audits."""
-    capacity = capacity_pre_effect_recovery_reference()["files"]["closer_dispatcher.py"]
-    if hashlib.sha256(source.encode()).hexdigest() == capacity["after_file_sha256"]:
-        source = before_capacity_pre_effect_recovery_source(
-            source.encode(), "closer_dispatcher.py"
-        ).decode()
+    source = _undo_capacity_era_dispatcher_if_present(source)
     bootstrap = dispatcher_bytecode_bootstrap_reference()["files"]["closer_dispatcher.py"]
     if hashlib.sha256(source.encode()).hexdigest() == bootstrap["after_file_sha256"]:
         source = before_dispatcher_bytecode_bootstrap(source)
@@ -1004,8 +1083,57 @@ def capacity_bridge_role_reference():
     return value
 
 
-def assert_capacity_bridge_role_successor(raw):
-    reference = capacity_bridge_role_reference()
+RESERVATION_DRAIN_BRIDGE_ROLE_MANIFEST = (
+    Path(__file__).parent
+    / "fixtures/semantic_api_reference/current_reservation_drain_bridge_role_v1.json"
+)
+RESERVATION_DRAIN_BRIDGE_ROLE_SHA256 = (
+    "bd6e352583a730360285130c6ce60576f2c6695e89dc6e820790d7ebc97939c9"
+)
+
+
+def reservation_drain_bridge_role_reference():
+    raw = RESERVATION_DRAIN_BRIDGE_ROLE_MANIFEST.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == RESERVATION_DRAIN_BRIDGE_ROLE_SHA256
+    value = json.loads(raw)
+    assert value["schema"] == "reservation-drain-bridge-role-successor/v1"
+    assert (
+        value["role_module"]["before_file_sha256"]
+        == capacity_bridge_role_reference()["role_module"]["after_file_sha256"]
+    )
+    assert value["bridged_qualification_id"] == (
+        "sonnet-current-role-qualification:c6a57e37d7839ca227306d33b94b0ce3672b1eb3260bded3363e61932c774a4a"
+    )
+    assert set(value["role_module"]["assignment_delta"]) == {"ROLE_QUALIFICATIONS"}
+    return value
+
+
+def testgen_off_flash_role_reference():
+    """#1039: reviewed successor for the router.py/dispatcher.py contract."""
+    path = (
+        Path(__file__).parent
+        / "fixtures/semantic_api_reference/current_testgen_off_flash_role_successor_v1.json"
+    )
+    raw = path.read_bytes()
+    assert (
+        hashlib.sha256(raw).hexdigest()
+        == "bacb615a07b7dbc6feb67b964b80bef6600e2ff1392fb63f29991a38b7bf2309"
+    )
+    value = json.loads(raw)
+    assert value["schema"] == "closer-testgen-off-flash-role-successor/v1"
+    assert (
+        value["role_module"]["before_file_sha256"]
+        == capacity_bridge_role_reference()["role_module"]["after_file_sha256"]
+    )
+    assert set(value["role_module"]["assignment_delta"]) == {
+        "ROLE_QUALIFICATIONS",
+        "ROLE_QUALIFICATION_SUPERSEDES",
+    }
+    return value
+
+
+def assert_capacity_bridge_role_successor(raw, reference=None):
+    reference = capacity_bridge_role_reference() if reference is None else reference
     change = reference["role_module"]
     assert hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]
     tree = ast.parse(raw)
@@ -1035,10 +1163,55 @@ def assert_capacity_bridge_role_successor(raw):
     assert fingerprint(tree) == change["before_module_ast_sha256"]
 
 
+def assert_reservation_drain_bridge_role_successor(raw):
+    """Undo only the #1049 live-contract bridge hash refresh, then capacity bridge."""
+    reference = reservation_drain_bridge_role_reference()
+    change = reference["role_module"]
+    assert hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]
+    tree = ast.parse(raw)
+    assert fingerprint(tree) == change["after_module_ast_sha256"]
+    registry = next(
+        n
+        for n in tree.body
+        if isinstance(n, ast.AnnAssign) and getattr(n.target, "id", None) == "ROLE_QUALIFICATIONS"
+    )
+    delta = change["assignment_delta"]["ROLE_QUALIFICATIONS"]
+    assert fingerprint(registry) == delta["after_ast_sha256"]
+    record = next(
+        value
+        for key, value in zip(registry.value.keys, registry.value.values)
+        if isinstance(key, ast.Constant) and key.value == reference["bridged_qualification_id"]
+    )
+    assert fingerprint(record) == delta["bridged_record_after_ast_sha256"]
+    text = raw.decode()
+    for reversal in change["historical_reversal"]:
+        after = reversal["after_fragment"]
+        before = reversal["before_fragment"]
+        assert text.count(after) >= 1
+        text = text.replace(after, before)
+    restored = text.encode()
+    assert hashlib.sha256(restored).hexdigest() == change["before_file_sha256"]
+    assert_capacity_bridge_role_successor(restored)
+
+
 def assert_reviewed_role_registry_successor(source=None):
     """Pin the reviewed record while preserving every other module AST statement."""
     change = publication_admission_reference()["reviewed_native_followups"]["role_registry"]
     raw = source_path("closer_role_qualification.py").read_bytes() if source is None else source
+    successor = testgen_off_flash_role_reference()
+    if hashlib.sha256(raw).hexdigest() == successor["role_module"]["after_file_sha256"]:
+        assert_capacity_bridge_role_successor(raw, successor)
+        assert (
+            successor["role_module"]["before_module_ast_sha256"]
+            == capacity_bridge_role_reference()["role_module"]["after_module_ast_sha256"]
+        )
+        return
+    if (
+        hashlib.sha256(raw).hexdigest()
+        == reservation_drain_bridge_role_reference()["role_module"]["after_file_sha256"]
+    ):
+        assert_reservation_drain_bridge_role_successor(raw)
+        return
     if (
         hashlib.sha256(raw).hexdigest()
         == capacity_bridge_role_reference()["role_module"]["after_file_sha256"]
@@ -1394,3 +1567,60 @@ def before_scoped_capacity_source(source):
     restored = restored.replace(validation["after_fragment"], validation["before_fragment"], 1)
     assert hashlib.sha256(restored.encode()).hexdigest() == change["before_file_sha256"]
     return restored
+
+
+DIAGNOSTICS_REVIEW_MANIFEST = (
+    Path(__file__).parent
+    / "fixtures/semantic_api_reference/current_reservation_diagnostics_review_v1.json"
+)
+DIAGNOSTICS_REVIEW_SHA256 = "67fef98b1fc73893efa93137252c4a6dd2d73b93532c98afbbcde8f77ae25fee"
+
+
+def diagnostics_review_reference():
+    raw = DIAGNOSTICS_REVIEW_MANIFEST.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == DIAGNOSTICS_REVIEW_SHA256
+    value = json.loads(raw)
+    assert value["schema"] == "reservation-diagnostics-review-successor/v1"
+    assert (
+        value["before_file_sha256"]
+        == reservation_drain_latch_reference()["files"]["closer_dispatcher.py"]["after_file_sha256"]
+    )
+    return value
+
+
+def before_diagnostics_review_source(raw, filename):
+    if filename != "closer_dispatcher.py":
+        return raw
+    successor = cache_persistence_reference()
+    if hashlib.sha256(raw).hexdigest() == successor["after_file_sha256"]:
+        for reversal in successor["historical_reversal"]:
+            after = reversal["after_fragment"].encode()
+            before = reversal["before_fragment"].encode()
+            assert raw.count(after) == 1
+            raw = raw.replace(after, before, 1)
+        assert hashlib.sha256(raw).hexdigest() == successor["before_file_sha256"]
+    change = diagnostics_review_reference()
+    if hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]:
+        return change["before_source_utf8"].encode()
+    return raw
+
+
+def cache_persistence_reference():
+    path = (
+        Path(__file__).parent
+        / "fixtures/semantic_api_reference/current_reservation_cache_persistence_v1.json"
+    )
+    raw = path.read_bytes()
+    assert (
+        hashlib.sha256(raw).hexdigest()
+        == "297b95c08034deae3d1f032d1064f1d275f71e7f2eddd310a9c87e669280e14c"
+    )
+    value = json.loads(raw)
+    assert value["schema"] == "reservation-cache-persistence-source-successor/v1"
+    assert value["before_file_sha256"] == diagnostics_review_reference()["after_file_sha256"]
+    assert set(value["function_delta"]) == {
+        "_save_admission_terminal_plan_cache",
+        "_probe_snapshot_revision",
+        "_cacheable_terminal_plan",
+    }
+    return value

@@ -10,6 +10,15 @@ const { createHash } = require('node:crypto');
 const { DatabaseSync } = require('node:sqlite');
 const { parseArgs } = require('node:util');
 
+// Owner boundary also recorded in feature_goals.py and the reviewed publisher
+// exclusion stage. Read identities for accounting, never this repo's outcomes.
+const OWNER_EXCLUDED_REPOSITORIES = ['stranske/Collab-Admin'];
+function ownerExcluded(target) {
+  return typeof target === 'string' && target.includes('#') &&
+    OWNER_EXCLUDED_REPOSITORIES.some((repo) =>
+      target.slice(0, target.indexOf('#')).trim().toLowerCase() === repo.toLowerCase());
+}
+
 function integer(value, name, minimum) {
   if (!Number.isSafeInteger(value) || value < minimum) {
     throw new Error(`${name} must be a safe integer >= ${minimum}`);
@@ -71,7 +80,9 @@ function reconcile(report, manifest) {
     const row = observed.get(item.run_id);
     let status;
     let reasons;
-    if (report.status === 'unavailable') {
+    if (ownerExcluded(item.target) || row?.reasons?.includes('owner_excluded_repository')) {
+      status = 'excluded'; reasons = ['owner_excluded_repository'];
+    } else if (report.status === 'unavailable') {
       status = 'unavailable'; reasons = ['brain_unavailable'];
     } else if (!row) {
       status = 'missing'; reasons = ['requested_run_missing'];
@@ -157,6 +168,7 @@ function inventory({ db, observedAt, days = 90, expectedCount = 71, manifest }) 
     orphaned_outcome_count: null,
     count_delta: null,
     requested_cohort_verified: false,
+    owner_excluded_repositories: [...OWNER_EXCLUDED_REPOSITORIES],
     manifest_reconciliation: null,
     cases: null,
     exclusions: null,
@@ -172,22 +184,34 @@ function inventory({ db, observedAt, days = 90, expectedCount = 71, manifest }) 
   let rows;
   try {
     connection = new DatabaseSync(report.database, { readOnly: true });
+    // Use the same identity boundary for SQL reads and manifest reconciliation.
+    // SQLite trim() alone does not strip tabs or Unicode whitespace.
+    connection.function('owner_excluded_repository', { deterministic: true },
+      (target) => Number(ownerExcluded(target)));
     // One statement supplies a consistent snapshot for counts and exclusions.
-    // SQL computes eligibility with the same null and comparison semantics as
-    // the Python reader. Inventory both sides: the Brain schema permits an
-    // outcome with no run, whose target and window membership remain unknown.
+    // Apply the owner boundary before joining outcome evidence. For permitted
+    // runs, SQL preserves the Python reader's null and comparison semantics.
+    // Unmatched outcomes cannot establish target or window membership.
+    const excludedRepository = 'owner_excluded_repository(target)';
     rows = connection.prepare(`
-      WITH population AS (
+      WITH permitted_runs AS MATERIALIZED (
+        SELECT run_id,target,ts FROM runs
+        WHERE NOT coalesce(${excludedRepository},0)
+      ), population AS (
         SELECT r.run_id,r.target,r.ts,o.verifier_verdict,o.adjudicated_verdict,
                o.merged,o.durability,o.durability_checked_ts,
-               1 AS has_run,o.run_id IS NOT NULL AS has_outcome
-        FROM runs r LEFT JOIN outcomes o USING(run_id)
+               1 AS has_run,o.run_id IS NOT NULL AS has_outcome,
+               0 AS repository_excluded
+        FROM permitted_runs r LEFT JOIN outcomes o USING(run_id)
         UNION ALL
         SELECT o.run_id,NULL,NULL,o.verifier_verdict,o.adjudicated_verdict,
-               o.merged,o.durability,o.durability_checked_ts,0,1
+               o.merged,o.durability,o.durability_checked_ts,0,1,0
         FROM outcomes o WHERE NOT EXISTS (
           SELECT 1 FROM runs r WHERE r.run_id=o.run_id
         )
+        UNION ALL
+        SELECT run_id,target,NULL,NULL,NULL,NULL,NULL,NULL,1,0,1
+        FROM runs WHERE ${excludedRepository}
       )
       SELECT *,ts >= ? AS in_window,
              verifier_verdict = adjudicated_verdict AS verdicts_agree
@@ -204,7 +228,14 @@ function inventory({ db, observedAt, days = 90, expectedCount = 71, manifest }) 
   let orphanedOutcomes = 0;
   for (const item of rows) {
     const { has_run: hasRun, has_outcome: hasOutcome, in_window: inWindow,
-      verdicts_agree: verdictsAgree, ...row } = item;
+      verdicts_agree: verdictsAgree, repository_excluded: repositoryExcluded, ...row } = item;
+    if (repositoryExcluded) {
+      const identity = { run_id: row.run_id, target: row.target };
+      exclusions.push({ ...identity, reasons: ['owner_excluded_repository'] });
+      report.evidence_gaps.push({ kind: 'owner_excluded_repository', ...identity,
+        detail: 'Identity retained for accounting only; outcome and timestamp evidence were not read.' });
+      continue;
+    }
     const reasons = [];
     if (!hasRun) {
       reasons.push('missing_run');
@@ -255,7 +286,7 @@ function main() {
       help: { type: 'boolean', short: 'h' },
     } });
     if (values.help) {
-      process.stdout.write('Usage: node scripts/export_adjudicator_inventory.js --db BRAIN --observed-at UNIX_SECONDS [--days 90] [--expected-count 71] [--manifest JSON_FILE]\nManifest: {"schema_version":2,"cases":[{"run_id":"...","target":"owner/repo#N","verifier_verdict":"NON_PASS","adjudicated_verdict":"PASS"}]}.\nVersion 1 accepts run_id and target only; it cannot detect changed verdicts.\nJSON is written to stdout. No replay, dispatch or outcome writes.\n');
+      process.stdout.write('Usage: node scripts/export_adjudicator_inventory.js --db BRAIN --observed-at UNIX_SECONDS [--days 90] [--expected-count 71] [--manifest JSON_FILE]\nManifest: {"schema_version":2,"cases":[{"run_id":"...","target":"owner/repo#N","verifier_verdict":"NON_PASS","adjudicated_verdict":"PASS"}]}.\nVersion 1 accepts run_id and target only; it cannot detect changed verdicts.\nOwner-excluded repositories retain identity-only exclusions; their outcomes are not read.\nJSON is written to stdout. No replay, dispatch or outcome writes.\n');
       return;
     }
     if (!values.db || !values['observed-at']) {
@@ -274,5 +305,5 @@ function main() {
   }
 }
 
-module.exports = { inventory };
+module.exports = { inventory, ownerExcluded };
 if (require.main === module) main();

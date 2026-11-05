@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-11-04T00:41:27.199Z",
+  "reviewed_commits": [
+    "1021c9074bc2a60160204a08389323574127e251",
+    "cffc0da8fcc538ba364caa1dcf70e7bad6812890",
+    "ee0ffdd489f3268c128bc4e1f8c4969d574381cc"
+  ],
+  "task_reconciliation": {
+    "completed_checkboxes": 0,
+    "total_checkboxes": 26,
+    "reason": "Existing tooling receipts do not satisfy any full operational task. Original cohort and permitted persisted inputs remain unavailable; the named acceptance experiments cannot run without pytest."
+  },
+  "attempts": [
+    {
+      "action": "Replace Closes #1111 with References #1111, preserving all 26 unchecked items",
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "MCP tool call requires approval, but approval policy is never"
+          }
+        ],
+        "isError": true
+      }
+    },
+    {
+      "action": "Reply to active review comment 4461981453",
+      "result": {
+        "status": "fulfilled",
+        "value": {
+          "content": [
+            {
+              "type": "text",
+              "text": "MCP tool call requires approval, but approval policy is never"
+            }
+          ],
+          "isError": true
+        }
+      }
+    },
+    {
+      "action": "Add needs-human to issue #1111",
+      "result": {
+        "status": "fulfilled",
+        "value": {
+          "content": [
+            {
+              "type": "text",
+              "text": "MCP tool call requires approval, but approval policy is never"
+            }
+          ],
+          "isError": true
+        }
+      }
+    }
+  ],
+  "remote_mutations_completed": false,
+  "completion_metadata_reconciled": false,
+  "active_review_thread": {
+    "id": "PRRT_kwDOUAH6nM6zYzJv",
+    "comment_id": 4461981453,
+    "is_resolved": false,
+    "finding_valid_at_head": "1021c9074bc2a60160204a08389323574127e251"
+  },
+  "proposed_body": "proposed-pr-body.md",
+  "readback": "metadata-readbacks.json.gz"
+}
+
