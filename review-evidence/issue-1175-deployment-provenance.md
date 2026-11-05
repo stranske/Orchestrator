@@ -297,3 +297,28 @@ approval policy is never`; remote metadata remains unchanged. The main checkout'
 Git index is read-only. The tested changes are retained here and committed in
 `/tmp/orchestrator-1175-receipt-integrity-0UjvnW`, with a handoff patch at
 `/tmp/orchestrator-1175-receipt-integrity.patch`.
+
+## Export-branch merge provenance verification (2026-11-05)
+
+Added a real CLI regression that rejects a valid filter commit while local, after
+publication to another branch, and after becoming the export merge's second
+parent. It also rejects the unpublished merge, then records the published merge
+with the explicit audit timestamp. All repositories and state are temporary;
+recording does not change the remote branch or create a feedback database.
+
+Verification: all 39 CLI tests, 15 deployment unittest tests, and five report
+tests pass. Removing first-parent traversal in a disposable exporter copy fails
+the new regression by incorrectly accepting the side-branch commit. JavaScript
+syntax and diff whitespace checks pass. No Python files changed.
+
+No new acceptance checkbox is complete. The production database, verified
+deployment audit, Anaconda interpreter, pytest, and Black remain unavailable.
+Production observation requires both 2026-11-08 and fourteen days after verified
+deployment. The publication checkbox still lacks production evidence. PR #1176
+was confirmed open and ready for review. The main Git index is read-only; the
+commit is retained in `/tmp/orchestrator-1175-merge-provenance-*` and the handoff
+patch is `/tmp/orchestrator-1175-merge-provenance.patch`.
+
+The PR checkbox correction, blocker comment, and `needs-human` label were rejected
+with `MCP tool call requires approval, but approval policy is never`. Remote
+metadata remains unchanged.

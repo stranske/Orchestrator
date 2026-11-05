@@ -155,6 +155,116 @@ for (const [name, corrupt, diagnostic] of invalidPublishedContracts) {
   });
 }
 
+test('deployment CLI records the export merge rather than an unpublished or side-branch commit', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'route-deployment-merge-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const home = path.join(root, 'home');
+  const state = path.join(root, 'state');
+  const repositories = path.join(root, 'repos');
+  const checkout = path.join(repositories, 'stranske__Orchestrator');
+  const remote = path.join(root, 'remote.git');
+  const audit = path.join(root, 'audit.json');
+  const receipt = path.join(state, 'route-weights-challenger-deployment.json');
+  const database = path.join(root, 'absent.db');
+  for (const directory of [home, state, repositories]) fs.mkdirSync(directory);
+  const env = {
+    PATH: process.env.PATH,
+    HOME: home,
+    PYTHONPATH: modules,
+    PYTHONDONTWRITEBYTECODE: '1',
+    ORCH_STATE_DIR: state,
+    ORCH_LOCAL_RUNTIME: path.join(root, 'runtime'),
+    ORCH_REPOS_DIR: repositories,
+    ORCH_FEEDBACK_DB: database,
+    ORCH_CAPABILITIES_PATH: path.join(root, 'capabilities.json'),
+    HANDOFF_DIR: path.join(root, 'handoff'),
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_AUTHOR_NAME: 'Deployment Test',
+    GIT_AUTHOR_EMAIL: 'deploy@example.invalid',
+    GIT_COMMITTER_NAME: 'Deployment Test',
+    GIT_COMMITTER_EMAIL: 'deploy@example.invalid',
+  };
+  async function git(directory, ...args) {
+    const result = await run('git', ['-C', directory, ...args], { env });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  }
+  const branch = 'exports/route-weights';
+  const artifact = path.join(checkout, 'config', 'route-weights.json');
+  const document = {
+    generated_at: '2026-11-04T10:00:00Z',
+    exploration: {
+      challenger_filter: 'hosted-runnable-alternatives/v1',
+      challengers: Object.fromEntries(
+        ['implement', 'review', 'testgen', 'mechanical', 'codemod', 'cross_repo']
+          .map((task) => [task, 'codex'])),
+    },
+  };
+  await git(root, 'init', '--bare', '--initial-branch=main', remote);
+  await git(root, 'clone', remote, checkout);
+  fs.mkdirSync(path.dirname(artifact), { recursive: true });
+  fs.writeFileSync(artifact, JSON.stringify({ generated_at: document.generated_at }));
+  await git(checkout, 'add', '.');
+  await git(checkout, 'commit', '-m', 'unmarked export fixture');
+  await git(checkout, 'switch', '-c', branch);
+  await git(checkout, 'push', 'origin', branch);
+  const initial = await git(remote, 'rev-parse', branch);
+
+  // A valid artifact exists locally, then on another remote branch. Neither
+  // establishes a publication on the export branch named in the receipt.
+  await git(checkout, 'switch', '-c', 'filter-candidate');
+  fs.writeFileSync(artifact, JSON.stringify(document));
+  await git(checkout, 'add', '.');
+  await git(checkout, 'commit', '-m', 'candidate filter fixture');
+  const candidate = await git(checkout, 'rev-parse', 'HEAD');
+  const record = async (commit) => {
+    fs.writeFileSync(audit, JSON.stringify({
+      published_commit: commit,
+      deployed_at: '2026-11-04T11:00:00Z',
+      deployment_evidence: 'fixture-publication-audit/successful-push',
+    }));
+    return run(process.env.PYTHON || 'python3', [
+      path.join(modules, 'route_weights_export.py'),
+      '--record-challenger-deployment', audit, '--state-dir', state,
+    ], { cwd: root, env });
+  };
+  const refuse = async (commit) => {
+    const result = await record(commit);
+    assert.equal(result.status, 1, result.stderr);
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr, /not the first verified challenger-filter publication/);
+    assert.doesNotMatch(result.stderr, /Traceback/);
+    assert.deepEqual(fs.readdirSync(state), []);
+  };
+  await refuse(candidate);
+  await git(checkout, 'push', 'origin', 'filter-candidate');
+  await refuse(candidate);
+  assert.equal(await git(remote, 'rev-parse', branch), initial);
+
+  // A merge is the first commit exposing the filter on the export branch.
+  // The candidate is now reachable, but it was never the published branch tip.
+  await git(checkout, 'switch', branch);
+  await git(checkout, 'merge', '--no-ff', 'filter-candidate', '-m', 'export filter fixture');
+  const merged = await git(checkout, 'rev-parse', 'HEAD');
+  assert.notEqual(merged, candidate);
+  await refuse(merged);
+  await git(checkout, 'push', 'origin', branch);
+  assert.equal(await git(remote, 'rev-parse', `${branch}^2`), candidate);
+  await refuse(candidate);
+  const accepted = await record(merged);
+  assert.equal(accepted.status, 0, accepted.stderr);
+  const recorded = JSON.parse(accepted.stdout);
+  assert.equal(recorded.branch, branch);
+  assert.equal(recorded.published_commit, merged);
+  assert.equal(recorded.generated_at, document.generated_at);
+  assert.equal(recorded.deployed_at, '2026-11-04T11:00:00Z');
+  assert.equal(recorded.deployed_epoch, Date.parse(recorded.deployed_at) / 1000);
+  assert.deepEqual(JSON.parse(fs.readFileSync(receipt, 'utf8')), recorded);
+  assert.equal(await git(remote, 'rev-parse', branch), merged);
+  assert.equal(fs.existsSync(database), false);
+  assert.deepEqual(fs.readdirSync(home), []);
+});
+
 test('deployment CLI recovers fetch and receipt failures after an unchanged real publication', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'route-deployment-recovery-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
