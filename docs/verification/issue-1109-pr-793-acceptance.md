@@ -494,3 +494,12 @@ selector, fresh parallel-data paths, the after export, four-test provenance, and
 collection-time production imports. Their dispositions are the scoped changes
 above; the runtime-isolation module received the same path correction. Required
 CI, current-head review, the seven-minute floor, and `merge_guard` remain required.
+
+After merging main `1ebdb4fba93abe66c38c0d8702076255401215b6` to resolve the
+single `config/test-shards.json` registration conflict, the same focused shell
+sequence above was run again on head
+`423e30ac2cf5c786084a330292a34d4a9ecbd6bf`, Python 3.14.3, with fresh
+`CHECK=/tmp/issue1109-focused.E18uCs`. It printed `8 passed in 0.48s`, then
+`3 passed in 0.07s`; the production diff again printed nothing. All issue #1109
+and main's issue #1150 registrations were retained; JSON parsing and uniqueness
+checks passed. No coverage sequence or deliberate mutations were repeated.
