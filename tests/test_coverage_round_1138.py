@@ -29,6 +29,9 @@ def isolated_runtime(monkeypatch, tmp_path):
     monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path / "runtime"))
     monkeypatch.setattr(audit, "STATE_DIR", tmp_path / "state")
     monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    monkeypatch.setenv("HANDOFF_DIR", str(tmp_path / "handoff"))
+    monkeypatch.setenv("ORCH_CAPABILITY_HEARTBEATS", "0")
+
     attempted = []
 
     def forbid_external(*args, **kwargs):
@@ -66,6 +69,15 @@ def test_record_verdict_prefers_node_ids_over_test_paths():
             ("lv-1",),
         ).fetchone()
     assert outcome[0].startswith("local_verify: PASS")
+    with feedback._conn() as conn:
+        event = conn.execute(
+            "SELECT payload_json, validation_status FROM completion_events "
+            "WHERE run_id=? AND event_type='verification' AND producer='local_verify'",
+            ("lv-1",),
+        ).fetchone()
+    assert event is not None
+    assert event[1] != "rejected"
+    assert json.loads(event[0])["test_ids"] == ["tests/a.py::test_x"]
 
 
 def test_default_test_paths_and_looks_like_test_filters(monkeypatch, tmp_path):
@@ -347,6 +359,10 @@ def test_eval_command_restores_bypass_and_state_env(monkeypatch, tmp_path):
 
     monkeypatch.setattr(adapters, "gemini_model", lambda: "gemini-test")
     monkeypatch.setenv("ORCH_MODEL_PROBE", "0")
+    # Command construction must not initialize the user's installed agent runtime.
+    monkeypatch.setattr(exp_abcd.dispatcher, "_agent_runtime_prelude", lambda _agent: "")
+    monkeypatch.setattr(exp_abcd.dispatcher, "_auth_prelude", lambda _agent: "")
+
     ws = tmp_path / "ws"
     ws.mkdir()
     old_bypass = os.environ.pop("ORCH_CODEX_BYPASS_INNER_SANDBOX", None)

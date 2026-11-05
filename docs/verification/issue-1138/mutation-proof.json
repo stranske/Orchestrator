@@ -1,0 +1,653 @@
+{
+  "check_date": "2026-11-04 America/Chicago (2026-11-05 UTC)",
+  "interpreter": "/opt/anaconda3/bin/python3",
+  "result": "34 intended failures; 34 restored passes",
+  "proofs": [
+    {
+      "test": "test_absent_entrypoint_note_returns_diagnostic_when_report_raises",
+      "production": "src/capability_activation_audit.py::absent_entrypoint_note",
+      "before": "entrypoint-presence diagnostic unavailable",
+      "deliberate_break": "diagnostic suppressed",
+      "command": [
+        "/opt/anaconda3/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_coverage_round_1138.py::test_absent_entrypoint_note_returns_diagnostic_when_report_raises"
+      ],
+      "red_exit": 1,
+      "red_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n______ test_absent_entrypoint_note_returns_diagnostic_when_report_raises _______\n\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1090d6000>\n\n    def test_absent_entrypoint_note_returns_diagnostic_when_report_raises(monkeypatch):\n        monkeypatch.setattr(\n            audit,\n            \"absent_entrypoint_report\",\n            lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError(\"ledger unreadable\")),\n        )\n        note = audit.absent_entrypoint_note([\"cap-a\"])\n>       assert \"entrypoint-presence diagnostic unavailable\" in note\nE       AssertionError: assert 'entrypoint-presence diagnostic unavailable' in '\\n  [diagnostic suppressed: RuntimeError: ledger unreadable]'\n\ntests/test_coverage_round_1138.py:152: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_absent_entrypoint_note_returns_diagnostic_when_report_raises\n1 failed in 0.32s\n",
+      "restored_exit": 0,
+      "restored_output": ".                                                                        [100%]\n1 passed in 0.29s\n",
+      "seconds": 2.66
+    },
+    {
+      "test": "test_advisor_reach_tolerates_direct_entry_failure",
+      "production": "src/capability_activation_audit.py::advisor_reach",
+      "before": "except Exception:  # noqa: BLE001\n        direct = {}",
+      "deliberate_break": "except Exception:  # noqa: BLE001\n        raise",
+      "command": [
+        "/opt/anaconda3/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_coverage_round_1138.py::test_advisor_reach_tolerates_direct_entry_failure"
+      ],
+      "red_exit": 1,
+      "red_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n______________ test_advisor_reach_tolerates_direct_entry_failure _______________\n\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x109ad2f00>\n\n    def test_advisor_reach_tolerates_direct_entry_failure(monkeypatch):\n        import capability_advisor\n    \n        monkeypatch.setattr(\n            capability_advisor,\n            \"direct_entry\",\n            lambda: (_ for _ in ()).throw(RuntimeError(\"advisor down\")),\n        )\n>       out = audit.advisor_reach(\n            {\"live\": {\"status\": \"active\", \"matcher\": {\"field\": \"task_type\", \"value\": [\"x\"]}}}\n        )\n\ntests/test_coverage_round_1138.py:182: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \nsrc/capability_activation_audit.py:1258: in advisor_reach\n    direct = dict(capability_advisor.direct_entry())\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\ntests/test_coverage_round_1138.py:180: in <lambda>\n    lambda: (_ for _ in ()).throw(RuntimeError(\"advisor down\")),\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\n.0 = <tuple_iterator object at 0x109ad13f0>\n\n>       lambda: (_ for _ in ()).throw(RuntimeError(\"advisor down\")),\n    )\nE   RuntimeError: advisor down\n\ntests/test_coverage_round_1138.py:180: RuntimeError\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_advisor_reach_tolerates_direct_entry_failure\n1 failed in 0.37s\n",
+      "restored_exit": 0,
+      "restored_output": ".                                                                        [100%]\n1 passed in 0.28s\n",
+      "seconds": 2.68
+    },
+    {
+      "test": "test_append_context_honors_playbook_kill_switch",
+      "production": "src/repo_knowledge.py::append_context",
+      "before": "if os.environ.get(\"ORCH_REPO_PLAYBOOK\", \"\").strip() == \"0\":",
+      "deliberate_break": "if False:",
+      "command": [
+        "/opt/anaconda3/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_coverage_round_1138.py::test_append_context_honors_playbook_kill_switch"
+      ],
+      "red_exit": 1,
+      "red_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_______________ test_append_context_honors_playbook_kill_switch ________________\n\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10d4a6060>\nisolated_runtime = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-999/test_append_context_honors_pla0')\n\n    def test_append_context_honors_playbook_kill_switch(monkeypatch, isolated_runtime):\n        reg = isolated_runtime / \"registry.json\"\n        repo_knowledge.save(\n            {\"schema_version\": repo_knowledge.SEED_SCHEMA_VERSION, \"repos\": {\"o/r\": {\"summary\": \"S\"}}},\n            reg,\n        )\n        monkeypatch.setenv(\"ORCH_REPO_PLAYBOOK\", \"0\")\n>       assert repo_knowledge.append_context(\"base\", \"o/r\", path=reg) == \"base\"\nE       AssertionError: assert 'base\\n\\nREPO...n- Summary: S' == 'base'\nE         \nE         - base\nE         + base\nE         ?     +\nE         + \nE         + REPO PLAYBOOK (o/r):\nE         + - Summary: S\n\ntests/test_coverage_round_1138.py:711: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_append_context_honors_playbook_kill_switch\n1 failed in 0.44s\n",
+      "restored_exit": 0,
+      "restored_output": ".                                                                        [100%]\n1 passed in 0.39s\n",
+      "seconds": 3.14
+    },
+    {
+      "test": "test_audit_capability_external_entrypoint_notes_sibling_presence",
+      "production": "src/capability_activation_audit.py::audit_capability",
+      "before": "wait-or-merge, not retire",
+      "deliberate_break": "retire immediately",
+      "command": [
+        "/opt/anaconda3/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_coverage_round_1138.py::test_audit_capability_external_entrypoint_notes_sibling_presence"
+      ],
+      "red_exit": 1,
+      "red_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_______ test_audit_capability_external_entrypoint_notes_sibling_presence _______\n\ntmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-959/test_audit_capability_external0')\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x106bd5d90>\n\n    def test_audit_capability_external_entrypoint_notes_sibling_presence(tmp_path, monkeypatch):\n        tree = tmp_path / \"tree\"\n        tree.mkdir()\n        saved = audit.HERE\n        sibling = tmp_path / \"sibling\"\n        sibling.mkdir()\n        (sibling / \"capabilities.py\").write_text(\"# s\\n\")\n        ext = sibling / \"external.py\"\n        ext.write_text(\"def run():\\n    pass\\n\")\n        try:\n            audit.HERE = tree\n            monkeypatch.setattr(audit, \"sibling_checkouts\", lambda: [(sibling, \"sibling\")])\n            monkeypatch.setattr(\n                audit,\n                \"heartbeat_reachable\",\n                lambda _cap: {\"status\": \"no_local_entrypoint\", \"detail\": str(ext)},\n            )\n            monkeypatch.setattr(\n                audit,\n                \"external_caller\",\n                lambda _cap: {\"exists\": False, \"repo\": \"Workflows\", \"workflow\": \"ci\"},\n            )\n            cap = {\n                \"status\": \"active\",\n                \"matcher\": {\"kind\": \"transport\"},\n                \"entrypoint\": str(ext),\n            }\n            row = audit.audit_capability(\n                \"ext-cap\",\n                cap,\n                emittable=set(),\n                templates=set(),\n                label_index={\"repos\": {}, \"read_at\": {}, \"unknown\": []},\n            )\n            joined = \" \".join(row[\"notes\"])\n>           assert \"wait-or-merge\" in joined\nE           AssertionError: assert 'wait-or-merge' in '/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-959/test_audit_capability_externa...RE but present in sibling \u2014 retire immediately kind-matched: judge by whether its code path runs, not by work matching'\n\ntests/test_coverage_round_1138.py:259: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_audit_capability_external_entrypoint_notes_sibling_presence\n1 failed in 0.34s\n",
+      "restored_exit": 0,
+      "restored_output": ".                                                                        [100%]\n1 passed in 0.30s\n",
+      "seconds": 2.61
+    },
+    {
+      "test": "test_audit_capability_task_route_records_label_shortfall",
+      "production": "src/capability_activation_audit.py::audit_capability",
+      "before": "defects.append(\"label_absent_from_fleet\")",
+      "deliberate_break": "pass  # omit label shortfall",
+      "command": [
+        "/opt/anaconda3/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_coverage_round_1138.py::test_audit_capability_task_route_records_label_shortfall"
+      ],
+      "red_exit": 1,
+      "red_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n___________ test_audit_capability_task_route_records_label_shortfall ___________\n\nisolated_runtime = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-957/test_audit_capability_task_rou0')\n\n    def test_audit_capability_task_route_records_label_shortfall(isolated_runtime):\n        index = {\n            \"repos\": {\"o/one\": [\"bug\"]},\n            \"read_at\": {\"o/one\": 1},\n            \"unknown\": [],\n        }\n        row = audit.audit_capability(\n            \"task-cap\",\n            {\"status\": \"active\", \"matcher\": {\"field\": \"task_type\", \"value\": [\"testgen\"]}},\n            emittable={\"testgen\"},\n            templates={\"testgen\"},\n            label_index=index,\n        )\n>       assert \"label_absent_from_fleet\" in row[\"defects\"]\nE       AssertionError: assert 'label_absent_from_fleet' in []\n\ntests/test_coverage_round_1138.py:220: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_audit_capability_task_route_records_label_shortfall\n1 failed in 0.33s\n",
+      "restored_exit": 0,
+      "restored_output": ".                                                                        [100%]\n1 passed in 0.34s\n",
+      "seconds": 2.73
+    },
+    {
+      "test": "test_audit_main_snapshot_and_json",
+      "production": "src/capability_activation_audit.py::main",
+      "before": "rep[\"snapshot\"] = record_snapshot(rep)",
+      "deliberate_break": "rep[\"snapshot\"] = {\"recorded\": False}",
+      "command": [
+        "/opt/anaconda3/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_coverage_round_1138.py::test_audit_main_snapshot_and_json"
+      ],
+      "red_exit": 1,
+      "red_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n______________________ test_audit_main_snapshot_and_json _______________________\n\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1147ddac0>\nisolated_runtime = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-967/test_audit_main_snapshot_and_j0')\ncapsys = <_pytest.capture.CaptureFixture object at 0x1148409e0>\n\n    def test_audit_main_snapshot_and_json(monkeypatch, isolated_runtime, capsys):\n        monkeypatch.setattr(\n            audit,\n            \"audit\",\n            lambda **kw: {\n                \"generated_at\": 1,\n                \"total\": 0,\n                \"reachable\": 0,\n                \"blocked\": 0,\n                \"by_defect\": {},\n                \"rows\": [],\n                \"reachable_ids\": [],\n            },\n        )\n        monkeypatch.setattr(audit, \"progress\", lambda *_a, **_k: None)\n        monkeypatch.setattr(audit, \"record_snapshot\", lambda rep: {\"recorded\": True})\n        assert audit.main([\"--json\", \"--snapshot\", \"--no-cache\"]) == 0\n        payload = json.loads(capsys.readouterr().out)\n>       assert payload[\"snapshot\"][\"recorded\"] is True\nE       assert False is True\n\ntests/test_coverage_round_1138.py:343: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_audit_main_snapshot_and_json\n1 failed in 0.33s\n",
+      "restored_exit": 0,
+      "restored_output": ".                                                                        [100%]\n1 passed in 0.31s\n",
+      "seconds": 2.73
+    },
+    {
+      "test": "test_callers_of_uses_text_fallback_when_driver_does_not_parse",
+      "production": "src/capability_activation_audit.py::_callers_of",
+      "before": "hit = bool(re.search(rf\"\\b{re.escape(module_stem)}\\.{re.escape(fn)}\\s*\\(\", text))",
+      "deliberate_break": "hit = True",
+      "command": [
+        "/opt/anaconda3/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_coverage_round_1138.py::test_callers_of_uses_text_fallback_when_driver_does_not_parse"
+      ],
+      "red_exit": 1,
+      "red_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n________ test_callers_of_uses_text_fallback_when_driver_does_not_parse _________\n\ntmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-947/test_callers_of_uses_text_fall0')\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1079d6300>\n\n    def test_callers_of_uses_text_fallback_when_driver_does_not_parse(tmp_path, monkeypatch):\n        driver = tmp_path / \"broken_driver.py\"\n        driver.write_text(\"import foo\\nfoo.bar(\\n\")\n        monkeypatch.setattr(audit, \"DRIVER_MODULES\", (\"broken_driver.py\",))\n        monkeypatch.setattr(audit, \"_driver_path\", lambda name: driver)\n>       assert audit._callers_of(\"foo\", {\"run\"}) == []\nE       AssertionError: assert ['broken_driver.py:run'] == []\nE         \nE         Left contains one more item: 'broken_driver.py:run'\nE         Use -v to get more diff\n\ntests/test_coverage_round_1138.py:161: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_callers_of_uses_text_fallback_when_driver_does_not_parse\n1 failed in 0.31s\n",
+      "restored_exit": 0,
+      "restored_output": ".                                                                        [100%]\n1 passed in 0.28s\n",
+      "seconds": 2.57
+    },
+    {
+      "test": "test_default_test_paths_and_looks_like_test_filters",
+      "production": "src/local_verify.py::_default_test_paths",
+      "before": "if _looks_like_test(path)",
+      "deliberate_break": "if not _looks_like_test(path)",
+      "command": [
+        "/opt/anaconda3/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_coverage_round_1138.py::test_default_test_paths_and_looks_like_test_filters"
+      ],
+      "red_exit": 1,
+      "red_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_____________ test_default_test_paths_and_looks_like_test_filters ______________\n\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1064de6f0>\ntmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-937/test_default_test_paths_and_lo0')\n\n    def test_default_test_paths_and_looks_like_test_filters(monkeypatch, tmp_path):\n        worktree = tmp_path / \"wt\"\n        worktree.mkdir()\n        (worktree / \"tests\").mkdir()\n        (worktree / \"tests\" / \"t.py\").write_text(\"def test_x(): pass\\n\")\n        (worktree / \"src\").mkdir()\n        (worktree / \"src\" / \"m.py\").write_text(\"x = 1\\n\")\n    \n        monkeypatch.setattr(\n            local_verify,\n            \"_changed_paths\",\n            lambda *_a: [\"tests/t.py\", \"src/m.py\", \"notes.txt\"],\n        )\n        assert local_verify._looks_like_test(\"tests/t.py\")\n        assert not local_verify._looks_like_test(\"src/m.py\")\n>       assert local_verify._default_test_paths(worktree, \"main\") == [\"tests/t.py\"]\nE       AssertionError: assert ['src/m.py', 'notes.txt'] == ['tests/t.py']\nE         \nE         At index 0 diff: 'src/m.py' != 'tests/t.py'\nE         Left contains one more item: 'notes.txt'\nE         Use -v to get more diff\n\ntests/test_coverage_round_1138.py:99: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_default_test_paths_and_looks_like_test_filters\n1 failed in 0.45s\n",
+      "restored_exit": 0,
+      "restored_output": ".                                                                        [100%]\n1 passed in 0.31s\n",
+      "seconds": 4.32
+    },
+    {
+      "test": "test_eval_command_restores_bypass_and_state_env",
+      "production": "src/exp_abcd.py::_eval_command",
+      "before": "else \"--sandbox read-only\"",
+      "deliberate_break": "else \"--sandbox workspace-write\"",
+      "command": [
+        "/opt/anaconda3/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_coverage_round_1138.py::test_eval_command_restores_bypass_and_state_env"
+      ],
+      "red_exit": 1,
+      "red_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_______________ test_eval_command_restores_bypass_and_state_env ________________\n\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10720e090>\ntmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-971/test_eval_command_restores_byp0')\n\n    def test_eval_command_restores_bypass_and_state_env(monkeypatch, tmp_path):\n        import adapters\n    \n        monkeypatch.setattr(adapters, \"gemini_model\", lambda: \"gemini-test\")\n        monkeypatch.setenv(\"ORCH_MODEL_PROBE\", \"0\")\n        # Command construction must not initialize the user's installed agent runtime.\n        monkeypatch.setattr(exp_abcd.dispatcher, \"_agent_runtime_prelude\", lambda _agent: \"\")\n        monkeypatch.setattr(exp_abcd.dispatcher, \"_auth_prelude\", lambda _agent: \"\")\n    \n        ws = tmp_path / \"ws\"\n        ws.mkdir()\n        old_bypass = os.environ.pop(\"ORCH_CODEX_BYPASS_INNER_SANDBOX\", None)\n        try:\n            os.environ[\"ORCH_CODEX_BYPASS_INNER_SANDBOX\"] = \"0\"\n            cmd = exp_abcd._eval_command(\"codex\", str(tmp_path / \"p.txt\"), ws)\n>           assert 'read-only \"$(cat' in cmd\nE           assert 'read-only \"$(cat' in 'export PATH=\"/opt/homebrew/bin:$HOME/.local/bin:$HOME/.cursor/bin:$PATH\"; cd /Users/teacher/.codex/orchestrator/agent...pen, merge or close pull requests, close issues, edit labels, or post comments or reviews. Reading with gh is fine.\\')'\n\ntests/test_coverage_round_1138.py:372: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_eval_command_restores_bypass_and_state_env\n1 failed in 0.43s\n",
+      "restored_exit": 0,
+      "restored_output": ".                                                                        [100%]\n1 passed in 0.36s\n",
+      "seconds": 2.92
+    },
+    {
+      "test": "test_experiment_identity_summary_tolerates_bad_run_metadata",
+      "production": "src/periodic_report.py::_experiment_identity_summary",
+      "before": "except (TypeError, json.JSONDecodeError):\n            metadata = {}",
+      "deliberate_break": "except (TypeError, json.JSONDecodeError):\n            raise",
+      "command": [
+        "/opt/anaconda3/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_coverage_round_1138.py::test_experiment_identity_summary_tolerates_bad_run_metadata"
+      ],
+      "red_exit": 1,
+      "red_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_________ test_experiment_identity_summary_tolerates_bad_run_metadata __________\n\n    def test_experiment_identity_summary_tolerates_bad_run_metadata():\n        feedback.record_run(\n            \"e1\",\n            \"o/r#1\",\n            \"implement\",\n            \"codex\",\n            experiment_id=\"exp-1\",\n            routing_metadata=\"{not-json\",\n        )\n>       summary = periodic_report._experiment_identity_summary(30)\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\ntests/test_coverage_round_1138.py:414: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \nsrc/periodic_report.py:130: in _experiment_identity_summary\n    metadata = json.loads(raw_metadata) if raw_metadata else {}\n               ^^^^^^^^^^^^^^^^^^^^^^^^\n/opt/anaconda3/lib/python3.12/json/__init__.py:346: in loads\n    return _default_decoder.decode(s)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n/opt/anaconda3/lib/python3.12/json/decoder.py:337: in decode\n    obj, end = self.raw_decode(s, idx=_w(s, 0).end())\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\nself = <json.decoder.JSONDecoder object at 0x10336c320>, s = '{not-json'\nidx = 0\n\n    def raw_decode(self, s, idx=0):\n        \"\"\"Decode a JSON document from ``s`` (a ``str`` beginning with\n        a JSON document) and return a 2-tuple of the Python\n        representation and the index in ``s`` where the document ended.\n    \n        This can be used to decode a JSON document from a string that may\n        have extraneous data at the end.\n    \n        \"\"\"\n        try:\n>           obj, end = self.scan_once(s, idx)\n                       ^^^^^^^^^^^^^^^^^^^^^^\nE           json.decoder.JSONDecodeError: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)\n\n/opt/anaconda3/lib/python3.12/json/decoder.py:353: JSONDecodeError\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_experiment_identity_summary_tolerates_bad_run_metadata\n1 failed in 0.58s\n",
+      "restored_exit": 0,
+      "restored_output": ".                                                                        [100%]\n1 passed in 0.39s\n",
+      "seconds": 3.51
+    },
+    {
+      "test": "test_fetch_issue_body_returns_none_when_gh_fails",
+      "production": "src/tick.py::_fetch_issue_body",
+      "before": "if out.returncode != 0:\n            return None",
+      "deliberate_break": "if out.returncode != 0:\n            return \"\"",
+      "command": [
+        "/opt/anaconda3/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_coverage_round_1138.py::test_fetch_issue_body_returns_none_when_gh_fails"
+      ],
+      "red_exit": 1,
+      "red_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_______________ test_fetch_issue_body_returns_none_when_gh_fails _______________\n\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x106a81c70>\n\n    def test_fetch_issue_body_returns_none_when_gh_fails(monkeypatch):\n        monkeypatch.setattr(\n            subprocess,\n            \"run\",\n            lambda *_a, **_k: subprocess.CompletedProcess([], 1, \"\", \"fail\"),\n        )\n>       assert tick._fetch_issue_body(\"o/r#1\") is None\nE       AssertionError: assert '' is None\nE        +  where '' = <function _fetch_issue_body at 0x1070631a0>('o/r#1')\nE        +    where <function _fetch_issue_body at 0x1070631a0> = tick._fetch_issue_body\n\ntests/test_coverage_round_1138.py:571: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_fetch_issue_body_returns_none_when_gh_fails\n1 failed in 0.42s\n",
+      "restored_exit": 0,
+      "restored_output": ".                                                                        [100%]\n1 passed in 0.38s\n",
+      "seconds": 2.95
+    },
+    {
+      "test": "test_format_human_includes_owner_questions_and_outcome_gaps",
+      "production": "src/periodic_report.py::format_human",
+      "before": "OWNER QUESTIONS",
+      "deliberate_break": "QUESTIONS",
+      "command": [
+        "/opt/anaconda3/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_coverage_round_1138.py::test_format_human_includes_owner_questions_and_outcome_gaps"
+      ],
+      "red_exit": 1,
+      "red_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_________ test_format_human_includes_owner_questions_and_outcome_gaps __________\n\n    def test_format_human_includes_owner_questions_and_outcome_gaps():\n        report = {\n            \"db_path\": \"/tmp/db\",\n            \"window_days\": 7,\n            \"dataset\": {\"table_counts\": {}, \"route_weights_version\": None},\n            \"route_weights\": {\"tasks\": []},\n            \"rail_exercise\": {\"available\": False, \"reason\": \"offline\"},\n            \"experiments\": {\n                \"implementation_arms\": [\n                    {\n                        \"experiment_id\": \"e1\",\n                        \"arm_id\": \"a\",\n                        \"members\": [\"m\"],\n                        \"agents\": [\"codex\"],\n                        \"profiles\": [],\n                        \"evaluation_observations\": 1,\n                        \"mean_score\": None,\n                        \"mean_member_evaluation_score\": 0.0,\n                    }\n                ],\n                \"missing_arm_outcomes\": [\n                    {\"experiment_id\": \"e2\", \"arm_id\": \"b\", \"members\": [\"m\"], \"reason\": \"no data\"}\n                ],\n                \"evaluator_identities\": [],\n            },\n            \"exploration_policy\": {},\n            \"outcomes\": {\n                \"window_days\": 7,\n                \"total\": 0,\n                \"rollup\": {},\n                \"by_task_agent_verdict\": [],\n            },\n            \"process_improvement\": {\"signals\": [], \"work_type_rollup\": []},\n            \"production_flow\": {},\n            \"keepalive_supervisor\": {\n                \"status\": \"hold\",\n                \"summary\": {},\n                \"thresholds\": {},\n                \"recommendation\": \"wait\",\n                \"stage2_proposal_corpus\": {\"status\": \"off\", \"summary\": {}},\n            },\n            \"costs_traces\": {\n                \"window_days\": 7,\n                \"costs_by_source\": [],\n                \"trace_status_counts\": [],\n                \"traces_by_source\": [],\n            },\n            \"hypotheses\": {\"status_counts\": {}, \"hypotheses\": []},\n            \"owner_questions\": [\n                {\n                    \"question_id\": \"q1\",\n                    \"repo\": \"o/r\",\n                    \"question\": \"Ship?\",\n                    \"default_action\": \"yes\",\n                }\n            ],\n            \"evidence\": {\n                \"window_days\": 7,\n                \"open_gaps_by_recurrence\": [],\n                \"proposals\": [],\n                \"evidence_types\": {\"counts_by_status\": {}},\n                \"schema_growth\": {\"clustered_proposals\": [], \"active_type_review\": {\"active\": []}},\n            },\n            \"dry_seams\": {\n                \"overall\": \"warn\",\n                \"status_counts\": {},\n                \"findings\": [],\n                \"completion_event_health\": {},\n                \"outcome_gap_summary\": {\"total_runs_without_outcome\": 3},\n            },\n            \"role_activation\": {\n                \"roles\": {\n                    \"triage\": {\n                        \"matched\": 1,\n                        \"invoked\": 0,\n                        \"accepted\": 0,\n                        \"rejected\": 0,\n                        \"linked\": 0,\n                        \"durable\": 0,\n                        \"evidence_readiness\": \"cold\",\n                    }\n                }\n            },\n        }\n        text = periodic_report.format_human(report)\n>       assert \"OWNER QUESTIONS\" in text\nE       AssertionError: assert 'OWNER QUESTIONS' in 'periodic_report: db=/tmp/db route_weights_version=none window_days=7\\ndataset: no rows yet\\nrail exercise: unavailabl...le=0 advisory_or_unlinked=0\\nfeatures: total=0 ad-hoc=0 reused=0 hardened=0 promotion_candidates=0\\nhypotheses (none):'\n\ntests/test_coverage_round_1138.py:520: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_format_human_includes_owner_questions_and_outcome_gaps\n1 failed in 0.42s\n",
+      "restored_exit": 0,
+      "restored_output": ".                                                                        [100%]\n1 passed in 0.36s\n",
+      "seconds": 2.89
+    },
+    {
+      "test": "test_format_scorecard_progress_lists_gained_regressed_and_retired",
+      "production": "src/capability_activation_audit.py::format_scorecard",
+      "before": "GAINED:",
+      "deliberate_break": "ADDED:",
+      "command": [
+        "/opt/anaconda3/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_coverage_round_1138.py::test_format_scorecard_progress_lists_gained_regressed_and_retired"
+      ],
+      "red_exit": 1,
+      "red_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n______ test_format_scorecard_progress_lists_gained_regressed_and_retired _______\n\n    def test_format_scorecard_progress_lists_gained_regressed_and_retired():\n        rep = {\n            \"generated_at\": 200,\n            \"total\": 1,\n            \"reachable\": 0,\n            \"blocked\": 1,\n            \"by_entry_class\": {\"direct\": 1},\n            \"by_defect\": {\"no_heartbeat\": [\"x\"]},\n            \"rows\": [\n                {\n                    \"capability_id\": \"x\",\n                    \"entry_class\": \"direct\",\n                    \"audited\": True,\n                    \"reachable\": False,\n                    \"defects\": [\"no_heartbeat\"],\n                }\n            ],\n        }\n        prog = {\n            \"baseline\": 100,\n            \"reachable_then\": 1,\n            \"reachable_now\": 0,\n            \"gained\": [\"new-cap\"],\n            \"regressed\": [\"old-cap\"],\n            \"retired_since\": {\"retired\": [\"gone-cap\"]},\n            \"defect_delta\": {\"no_heartbeat\": 1},\n        }\n        text = audit.format_scorecard(rep, prog)\n>       assert \"GAINED:\" in text and \"REGRESSED:\" in text\nE       AssertionError: assert ('GAINED:' in '# Capability activation scorecard\\n\\n  CAN FIRE:    0 of 1 live  (0%)\\n  BLOCKED:     1\\n\\n  entry classes: direct=1\\...Per capability\\n\\n| Capability | Entry | Can fire | Defects |\\n|---|---|---|---|\\n| x | direct | NO | no_heartbeat |\\n')\n\ntests/test_coverage_round_1138.py:321: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_format_scorecard_progress_lists_gained_regressed_and_retired\n1 failed in 0.32s\n",
+      "restored_exit": 0,
+      "restored_output": ".                                                                        [100%]\n1 passed in 0.30s\n",
+      "seconds": 2.68
+    },
+    {
+      "test": "test_heartbeat_reachable_credits_dispatcher_lane_capabilities",
+      "production": "src/capability_activation_audit.py::heartbeat_reachable",
+      "before": "\"status\": \"reachable\",\n            \"via\": [\"dispatcher.build_prompt",
+      "deliberate_break": "\"status\": \"blocked\",\n            \"via\": [\"dispatcher.build_prompt",
+      "command": [
+        "/opt/anaconda3/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_coverage_round_1138.py::test_heartbeat_reachable_credits_dispatcher_lane_capabilities"
+      ],
+      "red_exit": 1,
+      "red_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n________ test_heartbeat_reachable_credits_dispatcher_lane_capabilities _________\n\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x111ed6090>\n\n    def test_heartbeat_reachable_credits_dispatcher_lane_capabilities(monkeypatch):\n        fake_dispatcher = types.SimpleNamespace(TASK_TYPE_CAPABILITY={\"testgen\": \"role-prompt\"})\n        monkeypatch.setitem(sys.modules, \"dispatcher\", fake_dispatcher)\n        reach = audit.heartbeat_reachable(\n            {\"capability_id\": \"role-prompt\", \"entrypoint\": \"roles.py:run\"}\n        )\n>       assert reach[\"status\"] == \"reachable\"\nE       AssertionError: assert 'blocked' == 'reachable'\nE         \nE         - reachable\nE         + blocked\n\ntests/test_coverage_round_1138.py:170: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_heartbeat_reachable_credits_dispatcher_lane_capabilities\n1 failed in 0.35s\n",
+      "restored_exit": 0,
+      "restored_output": ".                                                                        [100%]\n1 passed in 0.30s\n",
+      "seconds": 2.71
+    },
+    {
+      "test": "test_load_history_returns_empty_on_corrupt_file",
+      "production": "src/capability_activation_audit.py::load_history",
+      "before": "except (OSError, ValueError):\n        return []",
+      "deliberate_break": "except (OSError, ValueError):\n        raise",
+      "command": [
+        "/opt/anaconda3/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_coverage_round_1138.py::test_load_history_returns_empty_on_corrupt_file"
+      ],
+      "red_exit": 1,
+      "red_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_______________ test_load_history_returns_empty_on_corrupt_file ________________\n\nisolated_runtime = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-961/test_load_history_returns_empt0')\n\n    def test_load_history_returns_empty_on_corrupt_file(isolated_runtime):\n        history = isolated_runtime / \"history.json\"\n        history.write_text(\"{not json\")\n>       assert audit.load_history(path=history) == []\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\ntests/test_coverage_round_1138.py:268: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \nsrc/capability_activation_audit.py:1848: in load_history\n    blob = json.loads(p.read_text())\n           ^^^^^^^^^^^^^^^^^^^^^^^^^\n/opt/anaconda3/lib/python3.12/json/__init__.py:346: in loads\n    return _default_decoder.decode(s)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n/opt/anaconda3/lib/python3.12/json/decoder.py:337: in decode\n    obj, end = self.raw_decode(s, idx=_w(s, 0).end())\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\nself = <json.decoder.JSONDecoder object at 0x10159bf20>, s = '{not json'\nidx = 0\n\n    def raw_decode(self, s, idx=0):\n        \"\"\"Decode a JSON document from ``s`` (a ``str`` beginning with\n        a JSON document) and return a 2-tuple of the Python\n        representation and the index in ``s`` where the document ended.\n    \n        This can be used to decode a JSON document from a string that may\n        have extraneous data at the end.\n    \n        \"\"\"\n        try:\n>           obj, end = self.scan_once(s, idx)\n                       ^^^^^^^^^^^^^^^^^^^^^^\nE           json.decoder.JSONDecodeError: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)\n\n/opt/anaconda3/lib/python3.12/json/decoder.py:353: JSONDecodeError\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_load_history_returns_empty_on_corrupt_file\n1 failed in 0.37s\n",
+      "restored_exit": 0,
+      "restored_output": ".                                                                        [100%]\n1 passed in 0.32s\n",
+      "seconds": 2.75
+    },
+    {
+      "test": "test_main_cli_errors_for_incomplete_suggest_flags",
+      "production": "src/repo_knowledge.py::main",
+      "before": "print(\"--suggest-from-review-json requires a JSON file\", file=sys.stderr)\n            return 2",
+      "deliberate_break": "print(\"--suggest-from-review-json requires a JSON file\", file=sys.stderr)\n            return 0",
+      "command": [
+        "/opt/anaconda3/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_coverage_round_1138.py::test_main_cli_errors_for_incomplete_suggest_flags"
+      ],
+      "red_exit": 1,
+      "red_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n______________ test_main_cli_errors_for_incomplete_suggest_flags _______________\n\ncapsys = <_pytest.capture.CaptureFixture object at 0x105d25730>\n\n    def test_main_cli_errors_for_incomplete_suggest_flags(capsys):\n>       assert repo_knowledge.main([\"--suggest-from-review-json\"]) == 2\nE       AssertionError: assert 0 == 2\nE        +  where 0 = <function main at 0x105ac9940>(['--suggest-from-review-json'])\nE        +    where <function main at 0x105ac9940> = repo_knowledge.main\n\ntests/test_coverage_round_1138.py:715: AssertionError\n----------------------------- Captured stderr call -----------------------------\n--suggest-from-review-json requires a JSON file\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_main_cli_errors_for_incomplete_suggest_flags\n1 failed in 0.42s\n",
+      "restored_exit": 0,
+      "restored_output": ".                                                                        [100%]\n1 passed in 0.39s\n",
+      "seconds": 3.03
+    },
+    {
+      "test": "test_main_json_fleet_six_writes_markdown",
+      "production": "src/periodic_report.py::main",
+      "before": "write_fleet_six_md(report[\"fleet_six\"])",
+      "deliberate_break": "pass  # omit fleet markdown write",
+      "command": [
+        "/opt/anaconda3/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_coverage_round_1138.py::test_main_json_fleet_six_writes_markdown"
+      ],
+      "red_exit": 1,
+      "red_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n___________________ test_main_json_fleet_six_writes_markdown ___________________\n\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1132ff4d0>\nisolated_runtime = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-983/test_main_json_fleet_six_write0')\ncapsys = <_pytest.capture.CaptureFixture object at 0x1133234a0>\n\n    def test_main_json_fleet_six_writes_markdown(monkeypatch, isolated_runtime, capsys):\n        fleet = {\"windows\": {\"7\": {}, \"28\": {}}, \"time_to_merge\": {}}\n        monkeypatch.setattr(\n            periodic_report,\n            \"build_report\",\n            lambda **kw: {\"fleet_six\": fleet, \"window_days\": 7, \"db_path\": \"x\", \"dataset\": {}},\n        )\n        monkeypatch.setattr(periodic_report, \"render_fleet_six\", lambda _s: [\"FLEET-6 line\"])\n        written = {\"called\": False}\n    \n        def capture(section, path=None):\n            written[\"called\"] = True\n            return path or isolated_runtime / \"fleet-six.md\"\n    \n        monkeypatch.setattr(periodic_report, \"write_fleet_six_md\", capture)\n        assert periodic_report.main([\"--json\"]) == 0\n        err = capsys.readouterr().err\n        assert \"FLEET-6 line\" in err\n>       assert written[\"called\"] is True\nE       assert False is True\n\ntests/test_coverage_round_1138.py:542: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_main_json_fleet_six_writes_markdown\n1 failed in 0.41s\n",
+      "restored_exit": 0,
+      "restored_output": ".                                                                        [100%]\n1 passed in 0.36s\n",
+      "seconds": 2.93
+    },
+    {
+      "test": "test_main_rejects_apply_with_snapshot_json",
+      "production": "src/periodic_report.py::main",
+      "before": "parser.error(\"--apply cannot be used with --snapshot-json; snapshot mode is read-only\")",
+      "deliberate_break": "return 0",
+      "command": [
+        "/opt/anaconda3/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_coverage_round_1138.py::test_main_rejects_apply_with_snapshot_json"
+      ],
+      "red_exit": 1,
+      "red_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n__________________ test_main_rejects_apply_with_snapshot_json __________________\n\ncapsys = <_pytest.capture.CaptureFixture object at 0x11da2b4d0>\n\n    def test_main_rejects_apply_with_snapshot_json(capsys):\n        snap = Path(\"/tmp/snapshot.json\")\n>       with pytest.raises(SystemExit) as exc:\nE       Failed: DID NOT RAISE SystemExit\n\ntests/test_coverage_round_1138.py:547: Failed\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_main_rejects_apply_with_snapshot_json\n1 failed in 0.41s\n",
+      "restored_exit": 0,
+      "restored_output": ".                                                                        [100%]\n1 passed in 0.38s\n",
+      "seconds": 3.05
+    },
+    {
+      "test": "test_main_summary_cleans_temp_plan_on_replace_failure",
+      "production": "src/tick.py::main",
+      "before": "os.unlink(temporary)",
+      "deliberate_break": "pass  # omit failed-plan cleanup",
+      "command": [
+        "/opt/anaconda3/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_coverage_round_1138.py::test_main_summary_cleans_temp_plan_on_replace_failure"
+      ],
+      "red_exit": 1,
+      "red_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n____________ test_main_summary_cleans_temp_plan_on_replace_failure _____________\n\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x106fb5ac0>\nisolated_runtime = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-993/test_main_summary_cleans_temp_0')\n\n    def test_main_summary_cleans_temp_plan_on_replace_failure(monkeypatch, isolated_runtime):\n        monkeypatch.setattr(tick.router, \"load_capacity\", lambda: {})\n        monkeypatch.setattr(tick.router, \"load_backlog\", lambda: [])\n        monkeypatch.setattr(tick.router, \"learned_ranks\", lambda: {})\n        monkeypatch.setattr(tick, \"load_research_feed\", lambda: {})\n        monkeypatch.setattr(tick, \"backlog_age\", lambda: {})\n        monkeypatch.setattr(tick, \"remote_tick\", lambda *_a, **_k: {\"chosen\": []})\n    \n        def boom_replace(src, dst):\n            raise OSError(\"replace failed\")\n    \n        monkeypatch.setattr(os, \"replace\", boom_replace)\n        state = isolated_runtime / \"state\"\n        with pytest.raises(OSError, match=\"replace failed\"):\n            tick.main([\"--summary\"])\n>       assert list(state.glob(\".tick-plan-*\")) == []\nE       AssertionError: assert [PosixPath('/...8cnrji.json')] == []\nE         \nE         Left contains one more item: PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-993/test_main_summary_cleans_temp_0/state/.tick-plan-mf8cnrji.json')\nE         Use -v to get more diff\n\ntests/test_coverage_round_1138.py:652: AssertionError\n----------------------------- Captured stderr call -----------------------------\n[tick] mode=shadow dispatch_lane=shadow (ORCH_DISPATCH_LANE=0) ingest=dry producer=off\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_main_summary_cleans_temp_plan_on_replace_failure\n1 failed in 0.45s\n",
+      "restored_exit": 0,
+      "restored_output": ".                                                                        [100%]\n1 passed in 0.36s\n",
+      "seconds": 3.04
+    },
+    {
+      "test": "test_memory_visibility_and_playbook_records",
+      "production": "src/repo_knowledge.py::_memory_item_visible",
+      "before": "if task_type and task_types and task_type not in task_types:\n        return False",
+      "deliberate_break": "if task_type and task_types and task_type not in task_types:\n        return True",
+      "command": [
+        "/opt/anaconda3/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_coverage_round_1138.py::test_memory_visibility_and_playbook_records"
+      ],
+      "red_exit": 1,
+      "red_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_________________ test_memory_visibility_and_playbook_records __________________\n\nisolated_runtime = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-997/test_memory_visibility_and_pla0')\n\n    def test_memory_visibility_and_playbook_records(isolated_runtime):\n        reg = isolated_runtime / \"registry.json\"\n        repo_knowledge.save(\n            {\n                \"schema_version\": repo_knowledge.SEED_SCHEMA_VERSION,\n                \"repos\": {\n                    \"o/r\": {\n                        \"summary\": \"Repo summary\",\n                        \"base_branch\": \"main\",\n                        \"validation\": [\n                            {\"text\": \"scoped\", \"task_types\": [\"implement\"], \"lanes\": [\"opener\"]},\n                            {\"text\": \"other\", \"task_types\": [\"review\"]},\n                        ],\n                        repo_knowledge.CONTRAINDICATION_SECTION: [\n                            {\"capability\": \"offload\", \"reason\": \"no\"}\n                        ],\n                    }\n                },\n            },\n            reg,\n        )\n>       assert (\n            repo_knowledge._memory_item_visible(\n                {\"task_types\": [\"review\"]}, task_type=\"implement\", lane=None\n            )\n            is False\n        )\nE       AssertionError: assert True is False\nE        +  where True = <function _memory_item_visible at 0x108619300>({'task_types': ['review']}, task_type='implement', lane=None)\nE        +    where <function _memory_item_visible at 0x108619300> = repo_knowledge._memory_item_visible\n\ntests/test_coverage_round_1138.py:691: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_memory_visibility_and_playbook_records\n1 failed in 0.41s\n",
+      "restored_exit": 0,
+      "restored_output": ".                                                                        [100%]\n1 passed in 0.38s\n",
+      "seconds": 2.87
+    },
+    {
+      "test": "test_positive_int_rejects_zero",
+      "production": "src/periodic_report.py::_positive_int",
+      "before": "raise argparse.ArgumentTypeError(\"must be positive\")",
+      "deliberate_break": "return value",
+      "command": [
+        "/opt/anaconda3/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_coverage_round_1138.py::test_positive_int_rejects_zero"
+      ],
+      "red_exit": 1,
+      "red_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n________________________ test_positive_int_rejects_zero ________________________\n\n    def test_positive_int_rejects_zero():\n>       with pytest.raises(argparse.ArgumentTypeError, match=\"positive\"):\nE       Failed: DID NOT RAISE ArgumentTypeError\n\ntests/test_coverage_round_1138.py:401: Failed\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_positive_int_rejects_zero - Fa...\n1 failed in 0.52s\n",
+      "restored_exit": 0,
+      "restored_output": ".                                                                        [100%]\n1 passed in 0.47s\n",
+      "seconds": 3.2
+    },
+    {
+      "test": "test_process_action_covers_each_work_type",
+      "production": "src/periodic_report.py::_process_action",
+      "before": "review Renovate grouping",
+      "deliberate_break": "review dependency grouping",
+      "command": [
+        "/opt/anaconda3/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_coverage_round_1138.py::test_process_action_covers_each_work_type"
+      ],
+      "red_exit": 1,
+      "red_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n__________________ test_process_action_covers_each_work_type ___________________\n\n    def test_process_action_covers_each_work_type():\n>       assert \"Renovate\" in periodic_report._process_action(\"renovate\")\nE       AssertionError: assert 'Renovate' in 'review dependency grouping, pinning, and schedule rules before more dependency churn lands'\nE        +  where 'review dependency grouping, pinning, and schedule rules before more dependency churn lands' = <function _process_action at 0x11262b7e0>('renovate')\nE        +    where <function _process_action at 0x11262b7e0> = periodic_report._process_action\n\ntests/test_coverage_round_1138.py:419: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_process_action_covers_each_work_type\n1 failed in 0.40s\n",
+      "restored_exit": 0,
+      "restored_output": ".                                                                        [100%]\n1 passed in 0.36s\n",
+      "seconds": 2.81
+    },
+    {
+      "test": "test_prompt_templates_survives_dispatcher_import_failure",
+      "production": "src/capability_activation_audit.py::_prompt_templates",
+      "before": "except Exception:\n        return set()",
+      "deliberate_break": "except Exception:\n        raise",
+      "command": [
+        "/opt/anaconda3/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_coverage_round_1138.py::test_prompt_templates_survives_dispatcher_import_failure"
+      ],
+      "red_exit": 1,
+      "red_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n___________ test_prompt_templates_survives_dispatcher_import_failure ___________\n\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x115bd65d0>\n\n    def test_prompt_templates_survives_dispatcher_import_failure(monkeypatch):\n        monkeypatch.setitem(sys.modules, \"dispatcher\", types.SimpleNamespace())\n>       assert audit._prompt_templates() == set()\n               ^^^^^^^^^^^^^^^^^^^^^^^^^\n\ntests/test_coverage_round_1138.py:122: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\n    def _prompt_templates() -> set[str]:\n        try:\n            import dispatcher\n    \n>           return set(dispatcher.PROMPT_TEMPLATES)\n                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE           AttributeError: 'types.SimpleNamespace' object has no attribute 'PROMPT_TEMPLATES'\n\nsrc/capability_activation_audit.py:208: AttributeError\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_prompt_templates_survives_dispatcher_import_failure\n1 failed in 0.37s\n",
+      "restored_exit": 0,
+      "restored_output": ".                                                                        [100%]\n1 passed in 0.30s\n",
+      "seconds": 2.74
+    },
+    {
+      "test": "test_read_repo_labels_maps_subprocess_failures",
+      "production": "src/capability_activation_audit.py::_read_repo_labels",
+      "before": "return None, f\"{type(exc).__name__}: {exc}\"[:200], False",
+      "deliberate_break": "return [], \"\", False",
+      "command": [
+        "/opt/anaconda3/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_coverage_round_1138.py::test_read_repo_labels_maps_subprocess_failures"
+      ],
+      "red_exit": 1,
+      "red_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n________________ test_read_repo_labels_maps_subprocess_failures ________________\n\nisolated_runtime = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-955/test_read_repo_labels_maps_sub0')\n\n    def test_read_repo_labels_maps_subprocess_failures(isolated_runtime):\n        def runner(argv, **kwargs):\n            raise OSError(\"gh missing\")\n    \n        labels, reason, retry = audit._read_repo_labels(\"o/r\", runner)\n>       assert labels is None and \"OSError\" in reason and retry is False\nE       assert ([] is None)\n\ntests/test_coverage_round_1138.py:204: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_read_repo_labels_maps_subprocess_failures\n1 failed in 0.32s\n",
+      "restored_exit": 0,
+      "restored_output": ".                                                                        [100%]\n1 passed in 0.28s\n",
+      "seconds": 2.6
+    },
+    {
+      "test": "test_record_snapshot_reports_write_failures",
+      "production": "src/capability_activation_audit.py::record_snapshot",
+      "before": "return {\"recorded\": False, \"error\": str(exc)}",
+      "deliberate_break": "return {\"recorded\": True, \"error\": str(exc)}",
+      "command": [
+        "/opt/anaconda3/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_coverage_round_1138.py::test_record_snapshot_reports_write_failures"
+      ],
+      "red_exit": 1,
+      "red_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_________________ test_record_snapshot_reports_write_failures __________________\n\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x109362330>\nisolated_runtime = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-963/test_record_snapshot_reports_w0')\n\n    def test_record_snapshot_reports_write_failures(monkeypatch, isolated_runtime):\n        history = isolated_runtime / \"history.json\"\n    \n        def fail_write(*args, **kwargs):\n            raise OSError(\"read-only\")\n    \n        monkeypatch.setattr(Path, \"write_text\", fail_write)\n        result = audit.record_snapshot(\n            {\n                \"generated_at\": 1,\n                \"total\": 0,\n                \"reachable\": 0,\n                \"blocked\": 0,\n                \"not_audited_count\": 0,\n                \"reachable_ids\": [],\n                \"by_defect\": {},\n            },\n            path=history,\n        )\n>       assert result[\"recorded\"] is False\nE       assert True is False\n\ntests/test_coverage_round_1138.py:290: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_record_snapshot_reports_write_failures\n1 failed in 0.36s\n",
+      "restored_exit": 0,
+      "restored_output": ".                                                                        [100%]\n1 passed in 0.32s\n",
+      "seconds": 3.44
+    },
+    {
+      "test": "test_record_verdict_prefers_node_ids_over_test_paths",
+      "production": "src/local_verify.py::record_verdict",
+      "before": "\"test_ids\": node_ids or result.get(\"test_paths\") or []",
+      "deliberate_break": "\"test_ids\": result.get(\"test_paths\") or []",
+      "command": [
+        "/opt/anaconda3/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_coverage_round_1138.py::test_record_verdict_prefers_node_ids_over_test_paths"
+      ],
+      "red_exit": 1,
+      "red_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_____________ test_record_verdict_prefers_node_ids_over_test_paths _____________\n\n    def test_record_verdict_prefers_node_ids_over_test_paths():\n        feedback.record_run(\"lv-1\", \"o/r#1\", \"implement\", \"codex\")\n        recorded = local_verify.record_verdict(\n            \"lv-1\",\n            {\n                \"verdict\": \"PASS\",\n                \"reason\": \"nodes ok\",\n                \"test_paths\": [\"tests/a.py\"],\n                \"node_analysis\": {\"nodes\": [{\"node_id\": \"tests/a.py::test_x\"}]},\n                \"green\": {\"cmd\": \"pytest\"},\n                \"red\": {\"cmd\": \"pytest\"},\n            },\n        )\n        assert recorded[\"recorded\"] is True\n        with feedback._conn() as conn:\n            outcome = conn.execute(\n                \"SELECT notes FROM outcomes WHERE run_id=?\",\n                (\"lv-1\",),\n            ).fetchone()\n        assert outcome[0].startswith(\"local_verify: PASS\")\n        with feedback._conn() as conn:\n            event = conn.execute(\n                \"SELECT payload_json, validation_status FROM completion_events \"\n                \"WHERE run_id=? AND event_type='verification' AND producer='local_verify'\",\n                (\"lv-1\",),\n            ).fetchone()\n        assert event is not None\n        assert event[1] != \"rejected\"\n>       assert json.loads(event[0])[\"test_ids\"] == [\"tests/a.py::test_x\"]\nE       AssertionError: assert ['tests/a.py'] == ['tests/a.py::test_x']\nE         \nE         At index 0 diff: 'tests/a.py' != 'tests/a.py::test_x'\nE         Use -v to get more diff\n\ntests/test_coverage_round_1138.py:80: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_record_verdict_prefers_node_ids_over_test_paths\n1 failed in 0.81s\n",
+      "restored_exit": 0,
+      "restored_output": ".                                                                        [100%]\n1 passed in 0.91s\n",
+      "seconds": 8.96
+    },
+    {
+      "test": "test_remote_tick_passes_triage_influence_when_agreed",
+      "production": "src/tick.py::remote_tick",
+      "before": "delegate_kwargs[\"influenced_by_role_run_ids\"] = accepted_role_ids",
+      "deliberate_break": "delegate_kwargs[\"influenced_by_role_run_ids\"] = []",
+      "command": [
+        "/opt/anaconda3/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_coverage_round_1138.py::test_remote_tick_passes_triage_influence_when_agreed"
+      ],
+      "red_exit": 1,
+      "red_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_____________ test_remote_tick_passes_triage_influence_when_agreed _____________\n\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1108fde80>\n\n    def test_remote_tick_passes_triage_influence_when_agreed(monkeypatch):\n        import dispatcher\n    \n        captured = {}\n    \n        def delegate(agent, target, **kwargs):\n            captured.update(agent=agent, kwargs=kwargs)\n            return {\"applied\": True, \"labels_read\": True}\n    \n        monkeypatch.setattr(dispatcher, \"delegate_remote\", delegate)\n        monkeypatch.setattr(tick.router, \"select_remote_agent\", lambda *_a, **_k: {\"agent\": \"codex\"})\n        monkeypatch.setattr(\n            tick.roles,\n            \"activate_tick_triage\",\n            lambda *_a, **_k: {\n                \"recommendations\": {\"o/r#1\": {\"action\": \"work_now\"}},\n                \"result\": {\"role_run_id\": \"role-1\"},\n            },\n        )\n        monkeypatch.setattr(tick, \"is_delegation\", lambda row: True)\n        monkeypatch.setenv(\"ORCH_DISPATCH_LANE\", \"1\")\n        tick.remote_tick(\n            [{\"target\": \"o/r#1\", \"task_type\": \"implement\", \"lane\": \"opener\"}],\n            {},\n            dry_run=False,\n            do_ingest=False,\n            env=os.environ.copy(),\n        )\n>       assert captured[\"kwargs\"][\"influenced_by_role_run_ids\"] == [\"role-1\"]\nE       AssertionError: assert [] == ['role-1']\nE         \nE         Right contains one more item: 'role-1'\nE         Use -v to get more diff\n\ntests/test_coverage_round_1138.py:634: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_remote_tick_passes_triage_influence_when_agreed\n1 failed in 0.49s\n",
+      "restored_exit": 0,
+      "restored_output": ".                                                                        [100%]\n1 passed in 0.38s\n",
+      "seconds": 3.16
+    },
+    {
+      "test": "test_render_fleet_six_marks_empty_agent_windows",
+      "production": "src/periodic_report.py::render_fleet_six",
+      "before": "unmeasured (no merged agent PRs)",
+      "deliberate_break": "0 measured",
+      "command": [
+        "/opt/anaconda3/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_coverage_round_1138.py::test_render_fleet_six_marks_empty_agent_windows"
+      ],
+      "red_exit": 1,
+      "red_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_______________ test_render_fleet_six_marks_empty_agent_windows ________________\n\n    def test_render_fleet_six_marks_empty_agent_windows():\n        section = {\n            \"windows\": {\"7\": {}, \"28\": {}},\n            \"time_to_merge\": {\"windows\": {\"7\": {}, \"28\": {}}},\n        }\n        line = periodic_report.render_fleet_six(section)[5]\n>       assert \"unmeasured (no merged agent PRs)\" in line\nE       AssertionError: assert 'unmeasured (no merged agent PRs)' in 'FLEET-6 time-to-merge: 7d 0 measured | 28d 0 measured'\n\ntests/test_coverage_round_1138.py:432: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_render_fleet_six_marks_empty_agent_windows\n1 failed in 0.41s\n",
+      "restored_exit": 0,
+      "restored_output": ".                                                                        [100%]\n1 passed in 0.37s\n",
+      "seconds": 2.82
+    },
+    {
+      "test": "test_research_tick_handles_claim_race_and_meta_base_sha",
+      "production": "src/tick.py::research_tick",
+      "before": "plan[\"active_status\"] = \"blocked_by_claim\"",
+      "deliberate_break": "plan[\"active_status\"] = \"active\"",
+      "command": [
+        "/opt/anaconda3/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_coverage_round_1138.py::test_research_tick_handles_claim_race_and_meta_base_sha"
+      ],
+      "red_exit": 1,
+      "red_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n___________ test_research_tick_handles_claim_race_and_meta_base_sha ____________\n\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1101052b0>\nisolated_runtime = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-989/test_research_tick_handles_cla0')\ntmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-989/test_research_tick_handles_cla0')\n\n    def test_research_tick_handles_claim_race_and_meta_base_sha(\n        monkeypatch, isolated_runtime, tmp_path\n    ):\n        monkeypatch.setattr(tick.claims, \"claim\", lambda *_a, **_k: False)\n        monkeypatch.setattr(tick.claims, \"release\", lambda *_a, **_k: None)\n        monkeypatch.setattr(tick.research_subjects, \"record_event\", lambda *_a, **_k: None)\n        monkeypatch.setattr(tick.research_subjects, \"assess_candidate\", lambda **_k: {\"eligible\": True})\n        monkeypatch.setattr(\n            tick.research_subjects, \"subject_identity\", lambda *_a, **_k: {\"subject_id\": \"s1\"}\n        )\n        monkeypatch.setattr(tick, \"_fetch_issue_body\", lambda *_a, **_k: \"spec body\")\n        monkeypatch.setattr(tick.capabilities, \"production_heartbeat\", lambda *_a, **_k: None)\n        exp_dir = isolated_runtime / \"exp-1\"\n        exp_dir.mkdir(parents=True)\n        (exp_dir / \"meta.json\").write_text('{\"base_sha\": \"abc\"}')\n        monkeypatch.setattr(tick.exp_abcd, \"exp_paths\", lambda _e: exp_dir)\n        plan_out = {\n            \"planned\": [\n                {\n                    \"item\": {\"target\": \"o/r#9\", \"task_type\": \"implement\"},\n                    \"task_type\": \"implement\",\n                    \"arms\": [\"codex\"],\n                }\n            ],\n            \"skipped\": [],\n        }\n        monkeypatch.setattr(tick.research_scheduler, \"build_research_plan\", lambda *_a, **_k: plan_out)\n        monkeypatch.setenv(\"ORCH_RESEARCH_ARM\", \"1\")\n        out = tick.research_tick([], {}, dry_run=False, env=os.environ.copy())\n>       assert out[\"planned\"][0][\"active_status\"] == \"blocked_by_claim\"\nE       AssertionError: assert 'active' == 'blocked_by_claim'\nE         \nE         - blocked_by_claim\nE         + active\n\ntests/test_coverage_round_1138.py:603: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_research_tick_handles_claim_race_and_meta_base_sha\n1 failed in 0.43s\n",
+      "restored_exit": 0,
+      "restored_output": ".                                                                        [100%]\n1 passed in 0.38s\n",
+      "seconds": 2.98
+    },
+    {
+      "test": "test_reseed_section_handles_contraindications_and_blank_keys",
+      "production": "src/repo_knowledge.py::_reseed_section",
+      "before": "out[index[key]] = fresh",
+      "deliberate_break": "pass  # leave stale seed",
+      "command": [
+        "/opt/anaconda3/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_coverage_round_1138.py::test_reseed_section_handles_contraindications_and_blank_keys"
+      ],
+      "red_exit": 1,
+      "red_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_________ test_reseed_section_handles_contraindications_and_blank_keys _________\n\n    def test_reseed_section_handles_contraindications_and_blank_keys():\n        live = [{\"capability\": \"cap-a\", \"reason\": \"old\"}]\n        seeded = [{\"capability\": \"cap-a\", \"reason\": \"new\"}]\n        merged = repo_knowledge._reseed_section(\n            live, seeded, section=repo_knowledge.CONTRAINDICATION_SECTION\n        )\n>       assert merged[0][\"reason\"] == \"new\"\nE       AssertionError: assert 'old' == 'new'\nE         \nE         - new\nE         + old\n\ntests/test_coverage_round_1138.py:664: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_reseed_section_handles_contraindications_and_blank_keys\n1 failed in 0.43s\n",
+      "restored_exit": 0,
+      "restored_output": ".                                                                        [100%]\n1 passed in 0.37s\n",
+      "seconds": 2.94
+    },
+    {
+      "test": "test_sibling_checkouts_continues_when_worktree_listing_fails",
+      "production": "src/capability_activation_audit.py::sibling_checkouts",
+      "before": "except OSError:\n            children = []",
+      "deliberate_break": "except OSError:\n            raise",
+      "command": [
+        "/opt/anaconda3/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_coverage_round_1138.py::test_sibling_checkouts_continues_when_worktree_listing_fails"
+      ],
+      "red_exit": 1,
+      "red_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_________ test_sibling_checkouts_continues_when_worktree_listing_fails _________\n\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1115d5a30>\nisolated_runtime = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-943/test_sibling_checkouts_continu0')\n\n    def test_sibling_checkouts_continues_when_worktree_listing_fails(monkeypatch, isolated_runtime):\n        root = isolated_runtime / \"checkout\"\n        root.mkdir()\n        (root / \"capabilities.py\").write_text(\"# checkout\\n\")\n        worktrees = root / \".claude\" / \"worktrees\"\n        worktrees.mkdir(parents=True)\n        monkeypatch.setattr(audit, \"_repo_root\", lambda: root)\n        monkeypatch.setattr(audit, \"HERE\", root / \"src\")\n        real_iterdir = Path.iterdir\n    \n        def patched_iterdir(self):\n            if self.resolve() == worktrees.resolve():\n                raise OSError(\"cannot list worktrees\")\n            return real_iterdir(self)\n    \n        monkeypatch.setattr(Path, \"iterdir\", patched_iterdir)\n>       labels = [label for _, label in audit.sibling_checkouts()]\n                                        ^^^^^^^^^^^^^^^^^^^^^^^^^\n\ntests/test_coverage_round_1138.py:141: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \nsrc/capability_activation_audit.py:359: in sibling_checkouts\n    children = sorted(p for p in worktrees.iterdir() if p.is_dir())\n                                 ^^^^^^^^^^^^^^^^^^^\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\nself = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-943/test_sibling_checkouts_continu0/checkout/.claude/worktrees')\n\n    def patched_iterdir(self):\n        if self.resolve() == worktrees.resolve():\n>           raise OSError(\"cannot list worktrees\")\nE           OSError: cannot list worktrees\n\ntests/test_coverage_round_1138.py:137: OSError\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_sibling_checkouts_continues_when_worktree_listing_fails\n1 failed in 0.37s\n",
+      "restored_exit": 0,
+      "restored_output": ".                                                                        [100%]\n1 passed in 0.28s\n",
+      "seconds": 2.71
+    },
+    {
+      "test": "test_vocabulary_gaps_skips_modules_that_fail_to_import",
+      "production": "src/capability_activation_audit.py::vocabulary_gaps",
+      "before": "except Exception:\n            continue",
+      "deliberate_break": "except Exception:\n            raise",
+      "command": [
+        "/opt/anaconda3/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_coverage_round_1138.py::test_vocabulary_gaps_skips_modules_that_fail_to_import"
+      ],
+      "red_exit": 1,
+      "red_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n____________ test_vocabulary_gaps_skips_modules_that_fail_to_import ____________\n\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x107cd2c90>\n\n    def test_vocabulary_gaps_skips_modules_that_fail_to_import(monkeypatch):\n        real = importlib.import_module\n    \n        def selective(name, *args, **kwargs):\n            if name == \"adversarial\":\n                raise ImportError(\"missing module\")\n            return real(name, *args, **kwargs)\n    \n        monkeypatch.setattr(importlib, \"import_module\", selective)\n        monkeypatch.setattr(\n            audit, \"GATE_VOCABULARIES\", ((\"adversarial-review\", \"adversarial\", \"HIGH_STAKES_LABELS\"),)\n        )\n>       assert audit.vocabulary_gaps({\"repos\": {\"o/r\": [\"risk:major\"]}}) == {}\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\ntests/test_coverage_round_1138.py:117: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \nsrc/capability_activation_audit.py:149: in vocabulary_gaps\n    for x in getattr(importlib.import_module(module_name), attr, ()) or ()\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\nname = 'adversarial', args = (), kwargs = {}\n\n    def selective(name, *args, **kwargs):\n        if name == \"adversarial\":\n>           raise ImportError(\"missing module\")\nE           ImportError: missing module\n\ntests/test_coverage_round_1138.py:110: ImportError\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_vocabulary_gaps_skips_modules_that_fail_to_import\n1 failed in 0.37s\n",
+      "restored_exit": 0,
+      "restored_output": ".                                                                        [100%]\n1 passed in 0.30s\n",
+      "seconds": 2.7
+    },
+    {
+      "test": "test_winner_and_harvest_rejects_all_excluded_judges",
+      "production": "src/exp_abcd.py::_winner_and_harvest",
+      "before": "raise ValueError(\"no eligible evaluator scores after reliability fallback\")",
+      "deliberate_break": "return None, {}",
+      "command": [
+        "/opt/anaconda3/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_coverage_round_1138.py::test_winner_and_harvest_rejects_all_excluded_judges"
+      ],
+      "red_exit": 1,
+      "red_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_____________ test_winner_and_harvest_rejects_all_excluded_judges ______________\n\n    def test_winner_and_harvest_rejects_all_excluded_judges():\n>       with pytest.raises(ValueError, match=\"no eligible evaluator\"):\nE       Failed: DID NOT RAISE ValueError\n\ntests/test_coverage_round_1138.py:349: Failed\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_winner_and_harvest_rejects_all_excluded_judges\n1 failed in 0.41s\n",
+      "restored_exit": 0,
+      "restored_output": ".                                                                        [100%]\n1 passed in 0.37s\n",
+      "seconds": 3.33
+    },
+    {
+      "test": "test_write_label_cache_cleans_temp_file_on_failure",
+      "production": "src/capability_activation_audit.py::_write_label_cache",
+      "before": "tmp.unlink(missing_ok=True)",
+      "deliberate_break": "pass  # omit failed-write cleanup",
+      "command": [
+        "/opt/anaconda3/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_coverage_round_1138.py::test_write_label_cache_cleans_temp_file_on_failure"
+      ],
+      "red_exit": 1,
+      "red_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n______________ test_write_label_cache_cleans_temp_file_on_failure ______________\n\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x115a5f260>\nisolated_runtime = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-953/test_write_label_cache_cleans_0')\n\n    def test_write_label_cache_cleans_temp_file_on_failure(monkeypatch, isolated_runtime):\n        path = isolated_runtime / \"state\" / \"labels.json\"\n    \n        def fail_replace(*args, **kwargs):\n            raise OSError(\"disk full\")\n    \n        monkeypatch.setattr(os, \"replace\", fail_replace)\n        audit._write_label_cache(path, {\"generated_at\": 1, \"repos\": {}, \"read_at\": {}, \"unread\": {}})\n>       assert not any(path.parent.glob(\"labels.json.*.tmp\"))\nE       AssertionError: assert not True\nE        +  where True = any(<generator object Path.glob at 0x1159fe9b0>)\nE        +    where <generator object Path.glob at 0x1159fe9b0> = glob('labels.json.*.tmp')\nE        +      where glob = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-953/test_write_label_cache_cleans_0/state').glob\nE        +        where PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-953/test_write_label_cache_cleans_0/state') = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-953/test_write_label_cache_cleans_0/state/labels.json').parent\n\ntests/test_coverage_round_1138.py:196: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_write_label_cache_cleans_temp_file_on_failure\n1 failed in 0.32s\n",
+      "restored_exit": 0,
+      "restored_output": ".                                                                        [100%]\n1 passed in 0.28s\n",
+      "seconds": 2.67
+    }
+  ]
+}

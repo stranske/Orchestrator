@@ -65,6 +65,7 @@
       "tests/test_closer_stage_feedback.py",
       "tests/test_closer_wait_audit_origin.py",
       "tests/test_issue1025_ranked_coverage.py",
+      "tests/test_coverage_round_1138.py",
       "tests/test_coverage_round_881.py",
       "tests/test_coverage_wp_roles.py",
       "tests/test_dispatcher_controlled_data_only.py",
