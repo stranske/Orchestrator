@@ -570,6 +570,11 @@ def _fleet_pr_measures(gh, now: int, repos: list[str], *, flow: bool) -> dict:
             # both readers and the type checker rather than relying on a boolean expression above.
             if not flow and merged_at is None:
                 continue
+            # A null body is GitHub's explicit empty value. Missing or malformed
+            # bodies cannot establish that a PR has no source-issue references.
+            body = pr.get("body")
+            if "body" not in pr or (body is not None and not isinstance(body, str)):
+                raise _FleetReadError("would need complete GitHub PR body")
             # Latency requires a literal Closes reference. Flow uses backlog's existing
             # source-issue rule, adapting REST head.ref to its GraphQL field name.
             # Never join #N to a different repository.
@@ -579,7 +584,7 @@ def _fleet_pr_measures(gh, now: int, repos: list[str], *, flow: bool) -> dict:
                     for n in _pr_issue_refs(repo, {**pr, "headRefName": _fleet_head_ref(pr, "PR")})
                 }
                 if flow
-                else set(re.findall(r"\bCloses\s+#([1-9]\d*)\b", pr["body"] or "", re.I))
+                else set(re.findall(r"\bCloses\s+#([1-9]\d*)\b", body or "", re.I))
             )
             released = False
             for number in sorted(refs, key=int):

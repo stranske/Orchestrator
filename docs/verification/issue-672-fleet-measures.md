@@ -1,5 +1,30 @@
 # Fleet delivery measures — 2026-11-05 runner check
 
+## PR body evidence check — 2026-11-05 19:20Z
+
+The PR readers now require an explicitly present body whose value is a string or
+GitHub's empty `null`. Previously, false, zero, empty arrays and empty objects were
+silently treated as empty bodies, changing the closure median and undercounting
+released-issue flow. A missing body also undercounted flow. The expanded existing
+regression failed before the fix and passes afterward. Both rows now report the
+missing body evidence explicitly; the canary and opener rows remain available.
+Explicit null and empty-string bodies still produce valid measurements.
+
+Verified: all 25 fleet unittest cases, the module selftest, all 14 JavaScript
+live/mutation verifier tests (including deliberate error swallowing and source
+restoration), and `git diff --check` pass. No test collection count changed.
+The available-Python CLI check validated all five rows at
+`2026-11-05T19:20:31.969Z`, with explicit GitHub connectivity errors and missing
+opener-helper output. Receipt: `/tmp/orch-672-body-evidence/check.json`.
+
+Required pytest and Black commands fail because those packages are absent;
+installation attempts also failed. The selected `/opt/anaconda3/bin/python3`
+is absent, so its full verifier and live check cannot run. The mandatory Black
+gate prevents committing these Python changes. No additional task is marked
+complete, and this runner evidence does not establish live-machine acceptance.
+The GitHub connector rejected both the blocker comment and `needs-human` label
+because they require approval and the run's approval policy is `never`.
+
 ## PR pagination overlap check — 2026-11-05 19:04Z
 
 The updated-PR reader now rejects duplicate PR numbers within or between pages,

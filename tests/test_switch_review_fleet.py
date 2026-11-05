@@ -385,6 +385,29 @@ class FleetDeliveryTests(unittest.TestCase):
 
         original = json.loads(FIXTURE.read_text())
         missing = object()
+        for body in (missing, False, 0, {}, []):
+            with self.subTest(body=body):
+                self.data = copy.deepcopy(original)
+                if body is missing:
+                    del self.data["prs"][0]["body"]
+                else:
+                    self.data["prs"][0]["body"] = body
+                rows = self.measure()["rows"]
+                for key in ("merge_to_close", "released_flow"):
+                    self.assertIsNone(rows[key]["value"])
+                    self.assertIn("complete GitHub PR body", rows[key]["reason"])
+                self.assertEqual(len(rows), 5)
+                self.assertIsNotNone(rows["oldest_canary"]["value"])
+                self.assertIsNotNone(rows["opener_cap"]["value"])
+        # GitHub represents a known empty PR body as null or an empty string.
+        for body in (None, ""):
+            with self.subTest(empty_body=body):
+                self.data = copy.deepcopy(original)
+                self.data["prs"][0]["body"] = body
+                rows = self.measure()["rows"]
+                self.assertIn("median 20 min", rows["merge_to_close"]["value"])
+                self.assertIn("opened 1.5/day, merged 1/day", rows["released_flow"]["value"])
+        self.data = copy.deepcopy(original)
         for head in (missing, None, {}, {"ref": ""}, {"ref": "  "}, {"ref": None}, "main"):
             with self.subTest(head=head):
                 self.data = copy.deepcopy(original)
