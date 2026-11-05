@@ -477,6 +477,30 @@ def isolate_feature_goals(request, tmp_path, monkeypatch):
         )
 
 
+@pytest.fixture(autouse=True)
+def isolated_advisor_runtime(request, monkeypatch):
+    """Capability-advisor tests run against temporary runtime roots.
+
+    The roots are installed before ``capability_advisor`` is imported
+    (``advisor_hermetic.import_under_temporary_runtime``). This fixture repoints paths
+    that import already captured, then monkeypatch restores them with the rest of the test.
+    Copies of this conftest in synthetic repos have no advisor suite and never import the helper.
+    """
+    filename = Path(str(getattr(request.node, "path", request.node.fspath))).name
+    if not (
+        filename.startswith("test_capability_advisor_") or filename.startswith("test_advisor_")
+    ):
+        yield
+        return
+    try:
+        import advisor_hermetic
+    except ModuleNotFoundError:
+        yield
+        return
+    with advisor_hermetic.activated(monkeypatch):
+        yield advisor_hermetic.root()
+
+
 def pytest_runtest_setup(item: pytest.Item) -> None:
     """Gate's sharded Python legs run with coverage OFF and do not install the tool.
 

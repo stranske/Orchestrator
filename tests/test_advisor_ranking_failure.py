@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import signal
 import socket
 import subprocess
@@ -11,10 +10,18 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import capabilities
-import capability_advisor as advisor
-import capability_propensity
-import repo_knowledge
+import advisor_hermetic
+
+_modules = advisor_hermetic.import_under_temporary_runtime(
+    "capabilities",
+    "capability_advisor",
+    "capability_propensity",
+    "repo_knowledge",
+)
+capabilities = _modules["capabilities"]
+advisor = _modules["capability_advisor"]
+capability_propensity = _modules["capability_propensity"]
+repo_knowledge = _modules["repo_knowledge"]
 
 
 class AdvisorRankingFailureTests(unittest.TestCase):
@@ -22,12 +29,6 @@ class AdvisorRankingFailureTests(unittest.TestCase):
         scratch = self.enterContext(tempfile.TemporaryDirectory(prefix="advisor-ranking-"))
         self.root = Path(scratch)
         self.ledger = self.root / "capabilities.json"
-        self.enterContext(
-            patch.dict(
-                os.environ,
-                {"ORCH_STATE_DIR": scratch, "ORCH_LOCAL_RUNTIME": scratch},
-            )
-        )
         self.external_calls = []
 
         def forbidden(*args, **kwargs):
