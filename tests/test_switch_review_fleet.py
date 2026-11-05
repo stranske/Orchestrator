@@ -22,7 +22,6 @@ from unittest.mock import patch
 import backlog
 import switch_review as review
 
-
 FIXTURE = Path(__file__).parent / "fixtures" / "switch_review_fleet.json"
 
 
@@ -79,9 +78,7 @@ class FleetDeliveryTests(unittest.TestCase):
         self.assertEqual(report["as_of"], self.now)
         rows = report["rows"]
         self.assertEqual(list(rows), list(review.FLEET_DELIVERY_NAMES))
-        self.assertIn(
-            "median 15 min (2 PR/issue pairs; 0 still open", rows["merge_to_close"]["value"]
-        )
+        self.assertIn("median 15 min (2 PR/issue pairs; 0 still open", rows["merge_to_close"]["value"])
         self.assertIn("2.0 days", rows["oldest_canary"]["value"])
         self.assertIn("opened 2/day, merged 1.5/day", rows["released_flow"]["value"])
         self.assertIn("human-held exempt 2; coverage exempt 1", rows["opener_cap"]["value"])
@@ -218,9 +215,7 @@ class FleetDeliveryTests(unittest.TestCase):
                 return True, "not JSON", ""
             return self.gh(args, **kwargs)
 
-        report = review.fleet_delivery_measures(
-            now=self.now, gh_fn=gh, opener_runner=self.opener
-        )
+        report = review.fleet_delivery_measures(now=self.now, gh_fn=gh, opener_runner=self.opener)
         self.assertEqual(report["rows"]["gate_cancellations"]["reason"], "gh invalid JSON response")
         self.assertIsNotNone(report["rows"]["released_flow"]["value"])
 

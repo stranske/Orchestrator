@@ -488,7 +488,7 @@ def _fleet_gate_cancellations(gh, now: int) -> dict:
 
 def _fleet_recent_prs(gh, repo: str, now: int) -> list[dict]:
     """Complete updated population; no search ceiling or fixed `pr list --limit`."""
-    rows = []
+    rows: list[dict] = []
     for page in range(1, 11):
         batch = _fleet_json(
             gh,
@@ -546,7 +546,7 @@ def _fleet_pr_measures(gh, now: int, repos: list[str], *, flow: bool) -> dict:
                 if "pull_request" in issue:
                     raise _FleetReadError("would need Closes references resolving to issues")
                 released |= "repo-review-approved" in _labels(issue)
-                if flow:
+                if flow or merged_at is None:
                     continue
                 if issue["state"] == "open":
                     pending += 1
@@ -3480,7 +3480,7 @@ def main(argv: list[str]) -> int:
     )
     # Like the interpreter audit, host-dependent fleet reads belong to the production
     # CLI, not isolated callers of review(). Both JSON and text carry this same snapshot.
-    rep["fleet_delivery_measures"] = fleet_delivery_measures(now=rep["generated_at"])
+    rep["fleet_delivery_measures"] = fleet_delivery_measures(now=rep.get("generated_at"))
     # The production weekly caller collects the curve, rather than leaving a CLI-only instrument.
     # Pure report/selftest readers keep their no-network and no-state-write contract.
     if (
