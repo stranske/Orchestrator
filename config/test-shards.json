@@ -544,6 +544,8 @@
     [
       "tests/test_activation_audit_source_memo.py",
       "tests/test_adjudicator_live.py",
+      "tests/test_adjudicator_live_disputes.py",
+      "tests/test_adjudicator_live_receipts.py",
       "tests/test_adjudicator_live_log_bounds.py",
       "tests/test_adjudicator_replay.py",
       "tests/test_adjudicator_retro_collection.py",

@@ -91,3 +91,15 @@ reported docstring coverage. No unrelated docstring cleanup was attempted.
 Completed keepalive commit 905cd673 bounds the event certification inventory and
 adds one receipt-size/cost/read-only-input test. It is retained. The combined
 focused suites now report 257 passed, 2 skipped and 32 subtests passed.
+
+CI found the two keepalive-added test modules absent from the shard plan. They
+are now registered in `config/test-shards.json`; the focused partition check
+`python -m pytest tests/test_verify_sharding.py::test_shard_lists_partition_every_collected_test_exactly_once -q`
+printed `1 passed in 23.01s`. It collects IDs, but does not execute the full suite.
+
+The Gate test-quality job at head 75779559 printed `verdict: PASS` and
+`head-passed-base-failed`, then received HTTP 403 when adding its standard
+`acceptance-criteria` result label. After verifying that result, the existing
+canonical label was applied with the available GitHub credential. No workflow
+permissions or validation rules were changed. Exact-head CI still needs to
+complete after the shard registration change.
