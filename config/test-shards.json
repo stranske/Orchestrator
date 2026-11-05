@@ -347,6 +347,7 @@
       "tests/test_cadence_retirement.py",
       "tests/test_capabilities.py",
       "tests/test_capability_admission.py",
+      "tests/test_capability_admission_failure_paths.py",
       "tests/test_capability_advisor_cli_context.py",
       "tests/test_capability_epic.py",
       "tests/test_closer_attribution_retention.py",

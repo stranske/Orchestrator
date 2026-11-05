@@ -1,0 +1,90 @@
+[
+  {
+    "test": "test_audit_directory_precedence_and_absent_fleet_fallback",
+    "mutation": {
+      "before": "if override:\n        return pathlib.Path(override).expanduser()",
+      "after": "if override:\n        return pathlib.Path(override).expanduser() / \"broken\""
+    },
+    "broken_exit": 1,
+    "broken_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_ TestAdmissionFailurePaths.test_audit_directory_precedence_and_absent_fleet_fallback _\n\nself = <test_capability_admission_failure_paths.TestAdmissionFailurePaths testMethod=test_audit_directory_precedence_and_absent_fleet_fallback>\n\n    def test_audit_directory_precedence_and_absent_fleet_fallback(self):\n        os.environ[\"ORCH_AUDITS_DIR\"] = str(self.root / \"explicit-audits\")\n>       self.assertEqual(admission._audits_dir(), self.root / \"explicit-audits\")\nE       AssertionError: Posix[51 chars]ime/codex/tmp/admission-tests-y8j16877/explicit-audits/broken') != Posix[51 chars]ime/codex/tmp/admission-tests-y8j16877/explicit-audits')\n\ntests/test_capability_admission_failure_paths.py:69: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_capability_admission_failure_paths.py::TestAdmissionFailurePaths::test_audit_directory_precedence_and_absent_fleet_fallback\n1 failed in 0.33s\n",
+    "restored_exit": 0,
+    "restored_output": ".                                                                        [100%]\n1 passed in 0.29s\n"
+  },
+  {
+    "test": "test_known_controls_tolerates_missing_files_and_uses_both_roots",
+    "mutation": {
+      "before": "base = paths.REPO_ROOT if name.endswith(\".sh\") else paths.MODULE_DIR",
+      "after": "base = paths.REPO_ROOT"
+    },
+    "broken_exit": 1,
+    "broken_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_ TestAdmissionFailurePaths.test_known_controls_tolerates_missing_files_and_uses_both_roots _\n\nself = <test_capability_admission_failure_paths.TestAdmissionFailurePaths testMethod=test_known_controls_tolerates_missing_files_and_uses_both_roots>\n\n    def test_known_controls_tolerates_missing_files_and_uses_both_roots(self):\n        (self.root / \"orchestrate.sh\").write_text(\"ORCH_SHELL_CONTROL=1\\n\")\n        (self.modules / \"dispatcher.py\").write_text('control = \"ORCH_MODULE_2\"\\n')\n        (self.root / \"dispatcher.py\").write_text('control = \"ORCH_WRONG_ROOT\"\\n')\n        (self.modules / \"router.py\").mkdir()\n>       self.assertEqual(admission.known_controls(), {\"ORCH_SHELL_CONTROL\", \"ORCH_MODULE_2\"})\nE       AssertionError: Items in the first set but not the second:\nE       'ORCH_WRONG_ROOT'\nE       Items in the second set but not the first:\nE       'ORCH_MODULE_2'\n\ntests/test_capability_admission_failure_paths.py:89: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_capability_admission_failure_paths.py::TestAdmissionFailurePaths::test_known_controls_tolerates_missing_files_and_uses_both_roots\n1 failed in 0.34s\n",
+    "restored_exit": 0,
+    "restored_output": ".                                                                        [100%]\n1 passed in 0.28s\n"
+  },
+  {
+    "test": "test_consumer_resolution_rejects_escape_and_resolves_test_and_shell_symbols",
+    "mutation": {
+      "before": "[A-Za-z0-9_./-][A-Za-z0-9_./-]*",
+      "after": "[A-Za-z0-9_][A-Za-z0-9_./-]*"
+    },
+    "broken_exit": 1,
+    "broken_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_ TestAdmissionFailurePaths.test_consumer_resolution_rejects_escape_and_resolves_test_and_shell_symbols _\n\nself = <test_capability_admission_failure_paths.TestAdmissionFailurePaths testMethod=test_consumer_resolution_rejects_escape_and_resolves_test_and_shell_symbols>\n\n    def test_consumer_resolution_rejects_escape_and_resolves_test_and_shell_symbols(self):\n        (self.root / \"outside.py\").write_text(\"def consume(): pass\\n\")\n        (self.modules / \"alias.py\").symlink_to(self.root / \"outside.py\")\n        (self.root / \"tests\").mkdir()\n        (self.root / \"tests/consumer.py\").write_text(\n            \"class Consumer:\\n    alias = object()\\n    typed: int = 1\\n\"\n        )\n        (self.root / \"entry.sh\").write_text(\"launch=ready\\n\")\n        declaration = (\n            \"../outside.py:consume alias.py:consume consumer.py:Consumer.alias \"\n            \"consumer.py:Consumer.typed consumer.py:Consumer.alias.child entry.sh:launch\"\n        )\n        result = admission.consumer_resolution({\"downstream_consumer\": declaration})\n>       self.assertEqual(\n            result[\"resolved\"],\n            [\"consumer.py:Consumer.alias\", \"consumer.py:Consumer.typed\", \"entry.sh:launch\"],\n        )\nE       AssertionError: Lists differ: ['outside.py:consume', 'consumer.py:Consume[53 chars]nch'] != ['consumer.py:Consumer.alias', 'consumer.py[31 chars]nch']\nE       \nE       First differing element 0:\nE       'outside.py:consume'\nE       'consumer.py:Consumer.alias'\nE       \nE       First list contains 1 additional elements.\nE       First extra element 3:\nE       'entry.sh:launch'\nE       \nE       + ['consumer.py:Consumer.alias', 'consumer.py:Consumer.typed', 'entry.sh:launch']\nE       - ['outside.py:consume',\nE       -  'consumer.py:Consumer.alias',\nE       -  'consumer.py:Consumer.typed',\nE       -  'entry.sh:launch']\n\ntests/test_capability_admission_failure_paths.py:104: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_capability_admission_failure_paths.py::TestAdmissionFailurePaths::test_consumer_resolution_rejects_escape_and_resolves_test_and_shell_symbols\n1 failed in 0.34s\n",
+    "restored_exit": 0,
+    "restored_output": ".                                                                        [100%]\n1 passed in 0.29s\n"
+  },
+  {
+    "test": "test_unreadable_act_index_is_cached_until_the_hour_or_input_changes",
+    "mutation": {
+      "before": "key = (str(db), now // 3600, ids)",
+      "after": "key = (str(db), now, ids)"
+    },
+    "broken_exit": 1,
+    "broken_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_ TestAdmissionFailurePaths.test_unreadable_act_index_is_cached_until_the_hour_or_input_changes _\n\nself = <test_capability_admission_failure_paths.TestAdmissionFailurePaths testMethod=test_unreadable_act_index_is_cached_until_the_hour_or_input_changes>\n\n    def test_unreadable_act_index_is_cached_until_the_hour_or_input_changes(self):\n        failure = RuntimeError(\"unavailable \" + \"x\" * 100)\n        reader = self.enterContext(patch.object(monitor, \"acted_on_index\", side_effect=failure))\n        ledger = {\"b\": {}, \"a\": {}}\n        first = admission.acted_on_context(ledger, now=7200)\n        self.assertEqual(\n            first, {\"acted_on\": None, \"acted_on_reason\": f\"RuntimeError: {str(failure)[:80]}\"}\n        )\n>       self.assertIs(admission.acted_on_context({\"a\": {}, \"b\": {}}, now=10799), first)\nE       AssertionError: {'acted_on': None, 'acted_on_reason': 'RuntimeError: unavailable xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'} is not {'acted_on': None, 'acted_on_reason': 'RuntimeError: unavailable xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'}\n\ntests/test_capability_admission_failure_paths.py:122: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_capability_admission_failure_paths.py::TestAdmissionFailurePaths::test_unreadable_act_index_is_cached_until_the_hour_or_input_changes\n1 failed in 0.40s\n",
+    "restored_exit": 0,
+    "restored_output": ".                                                                        [100%]\n1 passed in 0.27s\n"
+  },
+  {
+    "test": "test_missing_act_counts_are_zero_and_negative_results_are_cached",
+    "mutation": {
+      "before": "if key not in _ACTED_ON_CACHE:",
+      "after": "if key not in _ACTED_ON_CACHE or _ACTED_ON_CACHE[key][\"acted_on\"] is None:"
+    },
+    "broken_exit": 1,
+    "broken_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_ TestAdmissionFailurePaths.test_missing_act_counts_are_zero_and_negative_results_are_cached _\n\nself = <test_capability_admission_failure_paths.TestAdmissionFailurePaths testMethod=test_missing_act_counts_are_zero_and_negative_results_are_cached>\n\n    def test_missing_act_counts_are_zero_and_negative_results_are_cached(self):\n        reader = self.enterContext(\n            patch.object(monitor, \"acted_on_index\", return_value=({\"a\": 3, \"unrelated\": 8}, \"\"))\n        )\n        ledger = {\"a\": {}, \"b\": {}}\n        self.assertEqual(\n            admission.acted_on_context(ledger, now=3600),\n            {\"acted_on\": {\"a\": 3, \"b\": 0}, \"acted_on_reason\": \"\"},\n        )\n        reader.return_value = (None, \"Brain missing\")\n        missing = admission.acted_on_context(ledger, now=7200)\n        self.assertEqual(missing, {\"acted_on\": None, \"acted_on_reason\": \"Brain missing\"})\n>       self.assertIs(admission.acted_on_context(ledger, now=7201), missing)\nE       AssertionError: {'acted_on': None, 'acted_on_reason': 'Brain missing'} is not {'acted_on': None, 'acted_on_reason': 'Brain missing'}\n\ntests/test_capability_admission_failure_paths.py:142: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_capability_admission_failure_paths.py::TestAdmissionFailurePaths::test_missing_act_counts_are_zero_and_negative_results_are_cached\n1 failed in 0.31s\n",
+    "restored_exit": 0,
+    "restored_output": ".                                                                        [100%]\n1 passed in 0.28s\n"
+  },
+  {
+    "test": "test_admit_and_preflight_report_predicate_errors_as_missing",
+    "mutation": {
+      "before": "ok, detail = False, f\"check errored: {str(exc)[:80]}\"",
+      "after": "ok, detail = True, f\"check errored: {str(exc)[:80]}\""
+    },
+    "broken_exit": 1,
+    "broken_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_ TestAdmissionFailurePaths.test_admit_and_preflight_report_predicate_errors_as_missing _\n\nself = <test_capability_admission_failure_paths.TestAdmissionFailurePaths testMethod=test_admit_and_preflight_report_predicate_errors_as_missing>\n\n    def test_admit_and_preflight_report_predicate_errors_as_missing(self):\n        predicate = Mock(side_effect=OSError(\"cannot inspect\"))\n        self.enterContext(patch.object(admission, \"REQUIREMENTS\", ((\"rollback\", predicate),)))\n        self.enterContext(patch.object(admission, \"_findability_context\", return_value={}))\n        ledger = {\"probe\": {\"capability_id\": \"probe\", \"status\": \"wired\"}}\n        with self.assertRaisesRegex(ValueError, \"unknown capability: absent\"):\n            admission.admit(\"absent\", ledger=ledger, ctx={\"isolated\": True})\n        admitted = admission.admit(\"probe\", ledger=ledger, ctx={\"isolated\": True})\n>       self.assertEqual(admitted[\"missing\"], [\"rollback\"])\nE       AssertionError: Lists differ: [] != ['rollback']\nE       \nE       Second list contains 1 additional elements.\nE       First extra element 0:\nE       'rollback'\nE       \nE       - []\nE       + ['rollback']\n\ntests/test_capability_admission_failure_paths.py:153: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_capability_admission_failure_paths.py::TestAdmissionFailurePaths::test_admit_and_preflight_report_predicate_errors_as_missing\n1 failed in 0.33s\n",
+    "restored_exit": 0,
+    "restored_output": ".                                                                        [100%]\n1 passed in 0.28s\n"
+  },
+  {
+    "test": "test_decisions_ignore_old_plans_and_unreadable_records",
+    "mutation": {
+      "before": "if record.name[:10] < date or record.name.endswith(\"-PLAN.md\"):",
+      "after": "if record.name[:10] < date:"
+    },
+    "broken_exit": 1,
+    "broken_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_ TestAdmissionFailurePaths.test_decisions_ignore_old_plans_and_unreadable_records _\n\nself = <test_capability_admission_failure_paths.TestAdmissionFailurePaths testMethod=test_decisions_ignore_old_plans_and_unreadable_records>\n\n    def test_decisions_ignore_old_plans_and_unreadable_records(self):\n        variable = \"ORCH_RANGE_LANE_TRIAL_UNTIL\"\n        (self.audits / \"2026-01-01-range-lane.md\").write_text(\"decision before deadline\")\n        (self.audits / \"2026-02-01-range-lane-PLAN.md\").write_text(\"proposed decision\")\n        (self.audits / \"2026-02-02-unreadable.md\").mkdir()\n>       self.assertFalse(admission._decision_recorded_after(variable, \"2026-02-01\"))\nE       AssertionError: True is not false\n\ntests/test_capability_admission_failure_paths.py:170: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_capability_admission_failure_paths.py::TestAdmissionFailurePaths::test_decisions_ignore_old_plans_and_unreadable_records\n1 failed in 0.32s\n",
+    "restored_exit": 0,
+    "restored_output": ".                                                                        [100%]\n1 passed in 0.29s\n"
+  },
+  {
+    "test": "test_commitments_continue_after_read_errors_and_resolve_nested_records",
+    "mutation": {
+      "before": "return any((HERE / name).exists() for _ in (0,)) or bool(list(HERE.glob(f\"**/{name}\")))",
+      "after": "return (HERE / name).exists()"
+    },
+    "broken_exit": 1,
+    "broken_output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_ TestAdmissionFailurePaths.test_commitments_continue_after_read_errors_and_resolve_nested_records _\n\nself = <test_capability_admission_failure_paths.TestAdmissionFailurePaths testMethod=test_commitments_continue_after_read_errors_and_resolve_nested_records>\n\n    def test_commitments_continue_after_read_errors_and_resolve_nested_records(self):\n        cited = \"2026-02-01-nested-review.md\"\n        (self.modules / \"records\").mkdir()\n        (self.modules / \"records\" / cited).write_text(\"finished review\")\n        (self.modules / \"consumer.py\").write_text(\n            f\"# See {cited}\\n# See 2026-02-01-missing-review.md\\n\"\n        )\n        unreadable = self.modules / \"broken.md\"\n        unreadable.write_text(\"# See 2026-02-01-unreadable-review.md\\n\")\n        original = Path.read_text\n    \n        def read_text(path, *args, **kwargs):\n            if path == unreadable:\n                raise PermissionError(\"synthetic unreadable source\")\n            return original(path, *args, **kwargs)\n    \n        with patch.object(Path, \"read_text\", read_text):\n            result = admission.commitments(root=self.modules)\n        self.assertFalse(result[\"clean\"])\n>       self.assertEqual(\n            result[\"dangling_citations\"],\n            [\n                {\n                    \"file\": \"consumer.py\",\n                    \"line\": 2,\n                    \"record\": \"2026-02-01-missing-review.md\",\n                    \"text\": \"# See 2026-02-01-missing-review.md\",\n                }\n            ],\n        )\nE       AssertionError: Lists differ: [{'fi[23 chars]ne': 1, 'record': '2026-02-01-nested-review.md[167 chars]md'}] != [{'fi[23 chars]ne': 2, 'record': '2026-02-01-missing-review.m[45 chars]md'}]\nE       \nE       First differing element 0:\nE       {'fil[22 chars]ne': 1, 'record': '2026-02-01-nested-review.md[42 chars].md'}\nE       {'fil[22 chars]ne': 2, 'record': '2026-02-01-missing-review.m[44 chars].md'}\nE       \nE       First list contains 1 additional elements.\nE       First extra element 1:\nE       {'file': 'consumer.py', 'line': 2, 'record': '2026-02-01-missing-review.md', 'text': '# See 2026-02-01-missing-review.md'}\nE       \nE         [{'file': 'consumer.py',\nE       -   'line': 1,\nE       -   'record': '2026-02-01-nested-review.md',\nE       -   'text': '# See 2026-02-01-nested-review.md'},\nE       -  {'file': 'consumer.py',\nE           'line': 2,\nE           'record': '2026-02-01-missing-review.md',\nE           'text': '# See 2026-02-01-missing-review.md'}]\n\ntests/test_capability_admission_failure_paths.py:203: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_capability_admission_failure_paths.py::TestAdmissionFailurePaths::test_commitments_continue_after_read_errors_and_resolve_nested_records\n1 failed in 0.34s\n",
+    "restored_exit": 0,
+    "restored_output": ".                                                                        [100%]\n1 passed in 0.28s\n"
+  }
+]
