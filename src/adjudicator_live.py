@@ -837,9 +837,10 @@ def weekly_evidence(*, db: Path | None = None, path: Path | None = None) -> str:
     """Dated #575 evidence; reconciliation spends no provider capacity, even while retired."""
     from datetime import datetime, timezone
 
+    line = weekly_line(path) if path is not None else weekly_line()
     path = path or report_path()
     if not path.exists():
-        return weekly_line(path) + "; agreement UNKNOWN against 0.75; retirement UNKNOWN"
+        return line + "; agreement UNKNOWN against 0.75; retirement UNKNOWN"
     report = json.loads(path.read_text())
     rows = report.get("rows", [])
     _refresh_live_truth(rows, db)
