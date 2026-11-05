@@ -218,6 +218,7 @@ def test_completion_episode_drops_an_unreadable_payload() -> None:
     rows = feedback.completion_event_episodes(limit=5)
     match = [row for row in rows if row["identity"]["run_id"] == "ep-bad"]
     assert match
+    assert match[0]["event"]["payload"] == {}
 
 
 def test_muse_cost_rejects_unordered_bounds_and_a_short_exit_list() -> None:
