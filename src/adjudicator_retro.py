@@ -37,6 +37,7 @@ import sys
 import tempfile
 import time
 import uuid
+from contextlib import closing
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -982,6 +983,60 @@ def disputes(*, db: Path | None = None, now: int | None = None, days: int = 90) 
                 ((now if now is not None else int(time.time())) - days * 86400,),
             )
         ]
+
+
+def live_disputes(
+    *,
+    since_ts: int | None = None,
+    limit: int = 3,
+    db: Path | None = None,
+    now: int | None = None,
+) -> list[dict]:
+    """New disputes in the existing cohort, excluding PRs already advised live.
+
+    Without an explicit cutoff, use the live report's ``generated_at`` timestamp.
+    A first run has no checkpoint and reads the usual 90-day dispute cohort.
+    Selection never advances the checkpoint or initializes/migrates the Brain.
+    """
+    if limit <= 0:
+        return []
+    if since_ts is None:
+        state = Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex/orchestrator")) / (
+            "capability-program/adjudicator-live.json"
+        )
+        try:
+            checkpoint = json.loads(state.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            checkpoint = {}
+        # A damaged checkpoint must surface rather than silently replaying old disputes.
+        if not isinstance(checkpoint, dict):
+            raise ValueError("live adjudicator checkpoint must be an object")
+        since_ts = checkpoint.get("generated_at", 0)
+        if type(since_ts) is not int or since_ts < 0:
+            raise ValueError("live adjudicator checkpoint requires a nonnegative timestamp")
+
+    population = disputes(db=db, now=now)
+    database_uri = f"file:{(db or feedback.DB_PATH).resolve()}?mode=ro"
+    with closing(sqlite3.connect(database_uri, uri=True)) as conn:
+        # Older read-only Brains may predate completion events; do not initialize them.
+        has_events = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='completion_events'"
+        ).fetchone()
+        advised_targets = (
+            {
+                row[0]
+                for row in conn.execute(
+                    "SELECT DISTINCT r.target FROM completion_events e JOIN runs r "
+                    "ON r.run_id=e.run_id "
+                    "WHERE e.producer='role-adjudicator' AND e.phase='live_shadow_advice'"
+                )
+            }
+            if has_events
+            else set()
+        )
+    return [
+        row for row in population if row["ts"] > since_ts and row["target"] not in advised_targets
+    ][:limit]
 
 
 def _packet_metadata_only(ground_truth: dict) -> bool:
