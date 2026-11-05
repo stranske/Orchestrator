@@ -360,6 +360,14 @@ def test_doctor_and_watch_helpers_handle_bad_inputs_without_live_access(
     assert watch.file_age_seconds(aged, now=100) is None
     monkeypatch.setattr(watch, "Path", real_path)
 
+    class IsDirBoomPath(real_path):
+        def is_dir(self):
+            raise OSError("permission changed while inspecting worktree")
+
+    monkeypatch.setattr(watch, "Path", IsDirBoomPath)
+    assert watch.worktree_activity_age(aged, now=100) is None
+    monkeypatch.setattr(watch, "Path", real_path)
+
     assert watch._status_paths("xx\n M one.py\nR  old.py -> new.py\n?? two.py") == [
         "one.py",
         "new.py",
