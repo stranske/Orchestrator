@@ -210,6 +210,9 @@ def test_certified_case_carries_check_runs_for_evaluated_sha(world):
         "api_url": "https://api.github.com/repos/owner/repo/actions/jobs/2/logs",
         "sha": world["sha"],
     }
+    command_ref = live.retro.runtime_ac_evidence_ref(
+        world["sha"], "runtime-ac-1", "tests/test_proof.py::test_proof"
+    )
     assert execution["runtime_ac_command_results"] == [
         {
             "command": "tests/test_proof.py::test_proof",
@@ -219,8 +222,68 @@ def test_certified_case_carries_check_runs_for_evaluated_sha(world):
             "producer": "runtime_ac_gate",
             "target": "owner/repo#1",
             "sha": world["sha"],
+            "evidence_ref": command_ref,
         }
     ]
+    allowed = set(
+        live.roles._collected_snapshot(case)["ground_truth_evidence"]["qualified_ground_truth_refs"]
+    )
+    lint_ref = live.retro.check_run_evidence_ref(world["sha"], detail_url)
+    unit_ref = execution["check_runs"][0]["evidence_ref"]
+    assert execution["check_runs"][1]["evidence_ref"] == lint_ref
+    assert {unit_ref, lint_ref, command_ref} <= allowed
+    # A committed decision that cites the exact-sha check run is advice. A citation
+    # outside the collected case is dropped, and a forged label cannot enter the allowlist.
+    base = roles._baseline_adjudication({})
+
+    def proposal(ref: str) -> dict:
+        return {
+            **base,
+            "decision": "reject_blocker",
+            "confidence": "high",
+            "rationale": "The evaluated check run contradicts the blocker.",
+            "ground_truth_refs": [ref],
+            "evidence_assessment": [
+                {
+                    "claim": "lint failed at the evaluated commit",
+                    "status": "contradicted",
+                    "evidence_ref": ref,
+                    "reason": "the check-run conclusion is bound to that sha",
+                }
+            ],
+            "recommended_next_step": "Read the supplied check-run conclusion.",
+            "evidence_gaps": ["no further execution gap is named"],
+        }
+
+    kept = roles.run_adjudicator_agent(
+        case=case,
+        source="live",
+        backend="stub",
+        proposal_json=proposal(lint_ref),
+        dispatch=False,
+    )
+    assert kept["errors"] == []
+    assert kept["proposal"]["decision"] == "reject_blocker"
+    assert kept["decision_source"] == "adjudicator_agent"
+    dropped = roles.run_adjudicator_agent(
+        case=case,
+        source="live",
+        backend="stub",
+        proposal_json=proposal("check-run:not-in-the-case"),
+        dispatch=False,
+    )
+    assert dropped["proposal"] is None
+    assert any("absent from the collected case" in err for err in dropped["errors"])
+    assert dropped["decision_source"] == "baseline_needs_more_evidence"
+    forged = {
+        "live_execution_evidence": {
+            "evaluated_sha": world["sha"],
+            "check_runs": [
+                {"sha": world["sha"], "api_url": detail_url, "evidence_ref": "git-path:proof.txt"}
+            ],
+        }
+    }
+    assert live.retro.live_execution_ground_truth_refs(forged, world["sha"]) == set()
     # A response for another revision must never be relabeled with the evaluated SHA.
     for corrupt_detail in (False, True):
         for returned_sha in (None, "b" * 40):

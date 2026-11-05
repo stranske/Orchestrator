@@ -225,6 +225,7 @@ def _check_run_evidence(
                 "conclusion": conclusion,
                 "sha": sha,
                 "api_url": api_url,
+                "evidence_ref": retro.check_run_evidence_ref(sha, api_url),
             }
             if isinstance(conclusion, str) and conclusion.lower() in FAILED_CHECK_CONCLUSIONS:
                 remaining = max(0, EXECUTION_EVIDENCE_BYTES - log_bytes)
@@ -305,15 +306,19 @@ def _command_result(command: str, events: list[dict], target: str, sha: str) -> 
                 continue
             if not _same_named_test_command(command, observed):
                 continue
-            return {
+            event_id = event.get("event_id")
+            result = {
                 "command": command,
                 "status": audit.get("status"),
                 "returncode": audit.get("returncode"),
-                "event_id": event.get("event_id"),
+                "event_id": event_id,
                 "producer": "runtime_ac_gate",
                 "target": target,
                 "sha": sha,
             }
+            if isinstance(event_id, str) and event_id.strip():
+                result["evidence_ref"] = retro.runtime_ac_evidence_ref(sha, event_id, command)
+            return result
     return None
 
 
@@ -366,10 +371,18 @@ def _execution_evidence(
         raise ValueError("runtime-AC event reader returned malformed evidence")
     command_results = []
     unknowns = []
+    named_unknowns = []
     for command in commands:
         result = _command_result(command, events, target, sha)
         if result is None:
             unknowns.append(command)
+            named_unknowns.append(
+                {
+                    "command": command,
+                    "sha": sha,
+                    "evidence_ref": retro.runtime_ac_unknown_ref(sha, command),
+                }
+            )
         else:
             command_results.append(result)
     return {
@@ -383,6 +396,7 @@ def _execution_evidence(
         "check_runs": _check_run_evidence(target, sha, github_reader, log_reader),
         "runtime_ac_command_results": command_results,
         "unknowns": unknowns,
+        "named_unknowns": named_unknowns,
     }
 
 
@@ -405,6 +419,9 @@ def certify(
     sha = retro._case_evaluated_sha(row)
     if sha is None:
         raise ValueError("dispute carries no exact evaluated commit")
+    # Qualification admits execution citations only for a live row. The runner
+    # sets this before certify; a direct caller is the same live certifier.
+    row["source"] = "live"
     body = snapshot.get("body")
     if not isinstance(body, str) or not body.strip():
         raise ValueError("PR body unavailable for criterion provenance")

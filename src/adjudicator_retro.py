@@ -2187,6 +2187,76 @@ def _collect_supporting_sources(
     return sorted(records, key=lambda record: record["path"])
 
 
+def check_run_evidence_ref(sha: str, api_url: str) -> str:
+    """Stable citation for one exact-sha check run. The label is not a second evidence store."""
+    return f"check-run:{sha}:{api_url}"
+
+
+def runtime_ac_evidence_ref(sha: str, event_id: str, command: str) -> str:
+    """Stable citation for one exact-sha runtime-AC command result."""
+    return f"runtime-ac:{sha}:{event_id}:{command}"
+
+
+def runtime_ac_unknown_ref(sha: str, command: str) -> str:
+    """Stable citation for a named test the runtime-AC plane did not observe."""
+    return f"runtime-ac-unknown:{sha}:{command}"
+
+
+def live_execution_ground_truth_refs(ground_truth: object, sha: str) -> set[str]:
+    """Admit live execution citations only when the label matches the structured fact.
+
+    A proposal may cite these refs verbatim. A label that does not recompute from the
+    check-run URL, runtime-AC event, or named unknown is ignored, so a packet cannot
+    smuggle an unrelated path into the qualified allowlist.
+    """
+    if not isinstance(ground_truth, dict):
+        return set()
+    evidence = ground_truth.get("live_execution_evidence")
+    if not isinstance(evidence, dict) or evidence.get("evaluated_sha") != sha:
+        return set()
+    admitted: set[str] = set()
+    runs = evidence.get("check_runs")
+    if isinstance(runs, list):
+        for run in runs:
+            if not isinstance(run, dict) or run.get("sha") != sha:
+                continue
+            api_url = run.get("api_url")
+            if not isinstance(api_url, str) or not api_url.strip():
+                continue
+            expected = check_run_evidence_ref(sha, api_url)
+            if run.get("evidence_ref") == expected:
+                admitted.add(expected)
+    results = evidence.get("runtime_ac_command_results")
+    if isinstance(results, list):
+        for result in results:
+            if not isinstance(result, dict) or result.get("sha") != sha:
+                continue
+            command = result.get("command")
+            event_id = result.get("event_id")
+            if (
+                not isinstance(command, str)
+                or not command.strip()
+                or not isinstance(event_id, str)
+                or not event_id.strip()
+            ):
+                continue
+            expected = runtime_ac_evidence_ref(sha, event_id, command)
+            if result.get("evidence_ref") == expected:
+                admitted.add(expected)
+    named = evidence.get("named_unknowns")
+    if isinstance(named, list):
+        for item in named:
+            if not isinstance(item, dict) or item.get("sha") != sha:
+                continue
+            command = item.get("command")
+            if not isinstance(command, str) or not command.strip():
+                continue
+            expected = runtime_ac_unknown_ref(sha, command)
+            if item.get("evidence_ref") == expected:
+                admitted.add(expected)
+    return admitted
+
+
 def qualify_collected_case(
     row: dict,
     repository: Path,
@@ -2351,6 +2421,8 @@ def qualify_collected_case(
             "receipt_identity": receipt["receipt_identity"],
             "historical_execution": "UNKNOWN; fresh replay does not establish native-attempt history",
         }
+    if row.get("source") == "live":
+        refs.update(live_execution_ground_truth_refs(packet.get("ground_truth_evidence"), sha))
     packet["ground_truth_evidence"] = {
         **packet["ground_truth_evidence"],
         "collected_evidence": collection,

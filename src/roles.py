@@ -861,6 +861,7 @@ def _adjudicator_prompt(ctx: dict) -> str:
             "Their qualification admits semantic judgment only: external exhaustiveness, historical authenticity",
             "and acceptance semantics remain unverified. Preserve named UNKNOWNs and the stated judgment scope.",
             "For qualified cases, cite only the supplied qualified_ground_truth_refs verbatim.",
+            "Live check-run, runtime-AC and named-unknown evidence_ref values in that list are citable.",
             "",
             "Rails you must not cross:",
             "- Do NOT emit PASS, FAIL, BLOCKED, verifier_verdict, merge, label, claim, or worker-selection fields.",
