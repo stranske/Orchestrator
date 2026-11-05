@@ -428,15 +428,27 @@ def test_fresh_and_existing_worktree_emit_one_event_each(layout, monkeypatch):
     monkeypatch.setenv("ORCH_ALLOW_STALE_WORKTREE_REUSE", "1")
     assert provision.provision(TARGET, "opener") == wt
     assert [e["outcome"] for e in events()] == ["ok", "reused", "reused", "reused"]
-    assert events()[2]["cause"] == "branch-exists" and events()[2]["preserved_branch"].startswith("preserved/")
+    assert events()[2]["cause"] == "branch-exists" and events()[2]["preserved_branch"].startswith(
+        "preserved/"
+    )
 
 
 def test_behind_only_worktree_is_fast_forwarded_and_reused(layout, tmp_path):
     canon, _ = layout
     wt = provision.provision(TARGET, "closer")
-    other = tmp_path / "other"                                       # the PR's agent pushes from elsewhere
+    other = tmp_path / "other"  # the PR's agent pushes from elsewhere
     git(tmp_path, "clone", "--branch", "pr-head", str(tmp_path / "origin.git"), str(other))
-    git(other, "-c", "user.name=a", "-c", "user.email=a@b", "commit", "--allow-empty", "-m", "pushed by the PR's agent")
+    git(
+        other,
+        "-c",
+        "user.name=a",
+        "-c",
+        "user.email=a@b",
+        "commit",
+        "--allow-empty",
+        "-m",
+        "pushed by the PR's agent",
+    )
     git(other, "push", "origin", "pr-head")
     tip = git(other, "rev-parse", "HEAD")
     assert provision.provision(TARGET, "closer") == wt
@@ -450,16 +462,26 @@ def test_stale_worktree_work_is_preserved_then_provisioned_fresh(layout, monkeyp
     monkeypatch.setattr(provision, "_live_holder_pids", lambda wt: set())
     wt = provision.provision(TARGET, "closer")
     if state == "ahead":
-        git(wt, "-c", "user.name=a", "-c", "user.email=a@b", "commit", "--allow-empty", "-m", "unpushed work")
+        git(
+            wt,
+            "-c",
+            "user.name=a",
+            "-c",
+            "user.email=a@b",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "unpushed work",
+        )
     else:
         (wt / "partial.py").write_text("work in progress\n")
     work = git(wt, "rev-parse", "HEAD")
-    assert provision.provision(TARGET, "closer") == wt                 # no refusal: provisioned fresh
+    assert provision.provision(TARGET, "closer") == wt  # no refusal: provisioned fresh
     preserved = events()[-1]["preserved_branch"]
     assert git(wt, "rev-parse", "HEAD") == git(canon, "rev-parse", "origin/pr-head")
     kept = git(canon, "rev-parse", preserved)
     if state == "ahead":
-        assert kept == work                                            # the unpushed commit is kept
+        assert kept == work  # the unpushed commit is kept
     else:
         assert "partial.py" in git(canon, "show", "--name-only", "--format=", kept)
     assert not (wt / "partial.py").exists()

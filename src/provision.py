@@ -112,7 +112,9 @@ def _fast_forward_if_only_behind(wt: Path) -> bool:
     status = _wt_git(wt, ["status", "--porcelain"])
     if status.returncode != 0 or status.stdout.strip():
         return False
-    upstream = _wt_git(wt, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]).stdout.strip()
+    upstream = _wt_git(
+        wt, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]
+    ).stdout.strip()
     if not upstream or "/" not in upstream:
         return False
     remote, _, branch = upstream.partition("/")
@@ -152,12 +154,23 @@ def _set_aside_worktree(canon: Path, wt: Path, target: str, lane: str, event: di
         raise RuntimeError(f"cannot preserve {wt}: {switched.stderr.strip()[:300]}")
     if _wt_git(wt, ["status", "--porcelain"]).stdout.strip():
         _wt_git(wt, ["add", "-A"])
-        committed = _wt_git(wt, ["-c", "user.name=orchestrator-provision",
-                                 "-c", "user.email=orchestrator-provision@localhost",
-                                 "commit", "--no-verify", "-m",
-                                 f"provision: preserve uncommitted work from {wt.name} before re-provisioning"])
+        committed = _wt_git(
+            wt,
+            [
+                "-c",
+                "user.name=orchestrator-provision",
+                "-c",
+                "user.email=orchestrator-provision@localhost",
+                "commit",
+                "--no-verify",
+                "-m",
+                f"provision: preserve uncommitted work from {wt.name} before re-provisioning",
+            ],
+        )
         if committed.returncode != 0:
-            raise RuntimeError(f"cannot preserve uncommitted work in {wt}: {committed.stderr.strip()[:300]}")
+            raise RuntimeError(
+                f"cannot preserve uncommitted work in {wt}: {committed.stderr.strip()[:300]}"
+            )
     _run(["git", "-C", str(canon), "worktree", "remove", "--force", str(wt)])
     _run(["git", "-C", str(canon), "worktree", "prune"])
     event.update(set_aside=str(wt), preserved_branch=preserved)
