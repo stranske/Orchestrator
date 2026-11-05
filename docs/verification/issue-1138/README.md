@@ -213,3 +213,56 @@ No task checkbox is completed. Fresh production-mutation and artifact-lock
 deliberate-break experiments, exact-head pytest results, final-head CI shard and
 aggregate results, and review/merge gates remain pending. Historical evidence above
 and in `mutation-proof-pass3.json` is unchanged and does not verify this correction.
+
+## Repeatable corrected-test mutation runner (2026-11-05 UTC)
+
+`scripts/verify_issue_1138_mutation.js` now runs a passing baseline, changes only the
+`pattern_status = {}` exception fallback to `pattern_status = {"broken": True}`,
+requires the corrected test to fail at that assertion, restores the original source
+bytes in a `finally` block, and requires a restored pass. Successful runs append
+`followup_runs` to `mutation-proof-pass3.json`, preserving the historical cases and
+recording the measured Git head, source/test SHA-256 hashes, commands, and output.
+Source and test changes must be committed before recording exact-head evidence.
+
+On a runner with pytest installed, repeat the experiment with:
+
+```sh
+PYTHON=/opt/anaconda3/bin/python3 node scripts/verify_issue_1138_mutation.js
+```
+
+Local runner validation: `node tests/test_issue_1138_mutation.js` reports **12 passed**.
+These are runner unit tests with simulated pytest results, not production mutation
+evidence. The existing helper tests also pass:
+`node tests/test_redirect_routing_mutations.js` reports **11 passed**.
+JavaScript syntax checks and `git diff --check` pass. No Python files were changed.
+
+The real runner invocation exits 1 before mutation: `spawnSync python3 EPERM`, with
+`No module named pytest` also present in stderr. A byte comparison verifies that
+`src/periodic_report.py`, `tests/test_coverage_round_1138.py`, and
+`mutation-proof-pass3.json` remain unchanged. Both requested Anaconda commands still
+exit 127 because that interpreter is absent. The targeted coverage command
+`python3 -m pytest tests/test_coverage_round_1138.py --cov=src/periodic_report --cov-report=term-missing -m 'not slow'`
+exits 1 because pytest is absent; no coverage result is claimed. Black is still
+unavailable. No mutation task or acceptance checkbox is completed by this run.
+
+### CI observed before the runner changes
+
+For exact head `842cfc22d4c2ad8d0688af5f221208045e93e91f`,
+[CI run 42032098796](https://github.com/stranske/Orchestrator/actions/runs/42032098796)
+succeeded. All six `pytest + coverage shard N/6` jobs and all six flat exec-mirror
+shards succeeded, as did `verify.py aggregate + combined coverage` (job 127265506533)
+and `verify.py aggregate in the flat exec-mirror shape` (job 127265628703).
+[Gate run 42032100242](https://github.com/stranske/Orchestrator/actions/runs/42032100242)
+also succeeded, including all six shards on Python 3.13 and 3.14 and its summary job.
+These are results for the prior head, not final-head evidence for the new runner.
+PR #1160 was confirmed open with `draft=false`. Fresh corrected-test mutation and
+artifact-lock experiments, final-head CI, and the guarded review/merge remain pending.
+
+Delivery is blocked as well: staging the three scoped runner/test/documentation files
+fails because `.git/index.lock` cannot be created on the read-only filesystem. A
+GitHub connector blob-write attempt was refused: "MCP tool call requires approval,
+but approval policy is never." Attempts to apply `needs-human` and post the blocker
+comment to PR #1160 were refused for the same reason. No commit, remote code update,
+label, or comment was created. Continue in a writable Git checkout with a
+pytest-capable interpreter, commit the runner, and execute the command above before
+claiming fresh mutation evidence.
