@@ -1,0 +1,30 @@
+✔ published recovery ledger is attributable without establishing operational acceptance (30.028015ms)
+✔ rejects modified evidence instead of trusting the recorded result: named-tests.log (29.776324ms)
+✔ rejects modified evidence instead of trusting the recorded result: interpreter-followup/runner-after.log (25.982837ms)
+✔ rejects modified evidence instead of trusting the recorded result: pre-dispatch-observation.json (21.88913ms)
+✔ rejects missing evidence even when its parent receipt says it passed (11.088927ms)
+✔ rejects a missing checksum on a referenced log: null (21.690156ms)
+✔ rejects a missing checksum on a referenced log: undefined (21.682435ms)
+✔ audits JUnit bytes and refuses an absent JUnit checksum (30.598266ms)
+✔ refuses evidence outside the ledger directory: relative (10.962351ms)
+✔ refuses evidence outside the ledger directory: absolute (10.944354ms)
+✔ refuses evidence outside the ledger directory: symlink (10.511275ms)
+✔ does not equate a historical backup with the canonical report (17.111231ms)
+✔ rejects a retained row count substituted for the saved population (17.443962ms)
+✔ rejects merged historical/current categories (16.079509ms)
+✔ rejects missing dated limitations (18.60861ms)
+✔ rejects missing disclosure (20.430257ms)
+✔ rejects missing October 18 disclosure (15.586292ms)
+✔ rejects advice grade substitution (15.288242ms)
+✔ rejects unproved acceptance (16.545917ms)
+✔ rejects replacement cohort count (16.630482ms)
+✔ rejects mirror identity substitution (19.044723ms)
+✔ rejects historical dispatch substitution (19.783954ms)
+ℹ tests 22
+ℹ suites 0
+ℹ pass 22
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 427.3949

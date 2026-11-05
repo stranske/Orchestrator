@@ -1,0 +1,45 @@
+{
+  "checked_at": "2026-11-04T04:18:04.117Z",
+  "scope": "current_read_only_recovery_observation",
+  "queries": [
+    {
+      "query": "579-original-results",
+      "has_more": false,
+      "returned_count": 20,
+      "exact_filename_matches": []
+    },
+    {
+      "query": "579-continuation-meta",
+      "has_more": false,
+      "returned_count": 20,
+      "exact_filename_matches": []
+    },
+    {
+      "query": "579-original-before",
+      "has_more": false,
+      "returned_count": 20,
+      "exact_filename_matches": []
+    }
+  ],
+  "historical_references": [
+    "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6168601695",
+    "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6229128915",
+    "https://github.com/stranske/Orchestrator/issues/575#issuecomment-6344712055"
+  ],
+  "recovered_supporting_notes": [
+    {
+      "id": "id:tDSHdCztYNUAAAAAADdcHQ",
+      "title": "W2-retry-order.md"
+    },
+    {
+      "id": "id:tDSHdCztYNUAAAAAADdaYw",
+      "title": "closer-native-20261014T1205Z.md"
+    }
+  ],
+  "original_retry_manifest": "not_recovered",
+  "native_journal": "not_recovered",
+  "accepted_deployed_mirror_bindings": "not_verified",
+  "current_live_writer_ownership": "unverified",
+  "fixed_next_20_manifest": "not_recovered",
+  "limitation": "Search results and historical owner notes do not establish current native inputs, original requested membership, authenticated outcomes or live writer ownership. Raw October 18 proof remains unavailable."
+}

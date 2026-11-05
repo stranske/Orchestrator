@@ -1,0 +1,71 @@
+{
+  "checked_at": "2026-11-04T04:18:04.323736+00:00",
+  "git_dir": "/tmp/issue1096-native-consistency-git-sjri2uw6/repo.git",
+  "source_commit": "bd84c68e06ef5ef02ce6a2bfe3966ab42ab0b9b5",
+  "checkout_parent": "5b761ed855fbbe215c99487f67d9dd5dc1b256c8",
+  "source_sha256": {
+    "scripts/export_adjudicator_inventory.js": "86f08c17b9824deb1547fdbbb0f6768e2808a5bca1424d3d8bae394fa88b8ddf",
+    "tests/test_adjudicator_inventory.js": "b2eccf4b7cd6271c4d004e2fb0375e5aad8b5a90bbb228718a2ffffc3aad00bf"
+  },
+  "checks": [
+    {
+      "command": "node tests/test_adjudicator_inventory.js",
+      "exit_status": 1,
+      "phase": "prior source with added regression tests",
+      "log": "prior-source-controls.log",
+      "log_sha256": "8cdc5996e5846147c989449c7252d9972c2be7bb1536e5471e6971d7ae4a3095",
+      "passed": 81,
+      "failed": 3
+    },
+    {
+      "command": "node tests/test_adjudicator_inventory.js",
+      "exit_status": 0,
+      "phase": "implemented source",
+      "log": "inventory.log",
+      "log_sha256": "51717d4f6737507e030a6958c437ef58510326ebe332b1e27fe49a49178269d1",
+      "passed": 84,
+      "failed": 0
+    },
+    {
+      "command": "node tests/test_adjudicator_acceptance_runner.js",
+      "exit_status": 0,
+      "phase": "implemented source",
+      "log": "runner.log",
+      "log_sha256": "a3e2d8b5b2c33e9136bae517cfe68d7175a3196613e63b3c36302dc42287b9a2",
+      "passed": 33,
+      "failed": 0
+    },
+    {
+      "command": "node tests/test_adjudicator_evidence_ledger.js",
+      "exit_status": 0,
+      "phase": "implemented source",
+      "log": "ledger.log",
+      "log_sha256": "2901aaa2f871181a5340eff184aeaef148683cf7c9530dc36010e77aa93ca022",
+      "passed": 26,
+      "failed": 0
+    }
+  ],
+  "focused_passed": 143,
+  "evidence_sha256": {
+    "plan.md": "3fbf1bbf8fca8ad8080589dea841f2a711837ed1889b8ee424f3fa38bbb6933b",
+    "results.md": "6e5e03e26f89a4f16a6f9908195f4ec501ba52a8bc275d32f3439bd80e7f93ce",
+    "recovery-observation.json": "f64e0f118b4a175abc205e879c4bd35e98a1e732668b1512dde94d156ea2782f"
+  },
+  "additional_checks": [
+    "node --check scripts/export_adjudicator_inventory.js",
+    "node --check tests/test_adjudicator_inventory.js",
+    "git diff --check"
+  ],
+  "required_python_acceptance": "blocked before collection: selected interpreter lacks pytest",
+  "original_retry_reconciliation_complete": false,
+  "operational_acceptance_complete": false,
+  "dispatch_authorized": false,
+  "paid_dispatches": 0,
+  "blocker_comment": "rejected_connector_requires_approval_policy_never",
+  "needs_human_label": "rejected_connector_requires_approval_policy_never",
+  "pr_readiness": {
+    "number": 1097,
+    "state": "open",
+    "isDraft": false
+  }
+}

@@ -1,0 +1,22 @@
+✔ records exact commands, source hashes, complete JUnit and logs for both checks (253.667732ms)
+✔ missing pytest preserves two failures and cannot complete acceptance (106.26679ms)
+✔ refuses a successful claim for incomplete evidence: {"noXml":true} (112.281775ms)
+✔ refuses a successful claim for incomplete evidence: {"malformed":true} (277.362587ms)
+✔ refuses a successful claim for incomplete evidence: {"empty":true} (244.968032ms)
+✔ refuses a successful claim for incomplete evidence: {"incomplete":true} (248.362578ms)
+✔ refuses a successful claim for incomplete evidence: {"duplicate":true} (246.602142ms)
+✔ refuses a successful claim for incomplete evidence: {"skipped":true} (249.835121ms)
+✔ refuses a successful claim for incomplete evidence: {"foreign":true} (251.553835ms)
+✔ refuses a successful claim for incomplete evidence: {"exit":1} (247.937952ms)
+✔ source changes during execution invalidate otherwise passing checks (243.281656ms)
+✔ timeout preserves both failed checks without retrying either command (1068.064716ms)
+✔ refuses revision mismatch, modified tracked inputs and untracked inputs before execution (32.650874ms)
+✔ requires explicit interpreter/revision/bounds and never overwrites a receipt (121.382675ms)
+ℹ tests 14
+ℹ suites 0
+ℹ pass 14
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3713.950778
