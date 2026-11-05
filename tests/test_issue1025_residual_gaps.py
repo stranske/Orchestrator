@@ -2,13 +2,17 @@
 
 The baseline is CI run 41982570224 (`gate-coverage` on `b69ff47`): statement
 coverage, `branch = false`. Tests that landed after that run already execute
-261 of this chunk's missing statements. What remains is the other arm of a few
-selftest guards, two migration row-loss refusals, and one binding-restore line.
+most of this chunk's missing statements. What this module adds is the other
+arm of a few selftest guards, two migration row-loss refusals, the read-cache
+json proxy, and the docs-drift caller check in both directions.
 """
 
 from __future__ import annotations
 
 import inspect
+import json
+import os
+import re
 import sqlite3
 import subprocess
 from pathlib import Path
@@ -18,6 +22,7 @@ import pytest
 import capabilities
 import capability_advisor as advisor
 import capability_propensity as propensity
+import capability_recurrence_check as recurrence
 import feedback
 
 
@@ -505,3 +510,147 @@ def test_usage_selftest_states_the_all_encoded_branch(monkeypatch: pytest.Monkey
     monkeypatch.setattr(capabilities, "usage_report", _usage)
     capabilities._selftest()
     assert _SecondThresholdRead.reads >= 4
+
+
+def test_read_cache_counter_delegates_other_json_attributes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The counting stand-in only overrides loads. Every other json attribute stays the stdlib one."""
+    real_load = capabilities.load
+    delegated: dict[str, str] = {}
+
+    def _load(path, *args, **kwargs):
+        proxy = capabilities.json
+        if type(proxy).__name__ == "_Counting":
+            delegated["dumps"] = proxy.dumps({"k": 1})
+        return real_load(path, *args, **kwargs)
+
+    monkeypatch.setattr(capabilities, "load", _load)
+    capabilities._selftest_read_cache()
+    assert delegated["dumps"] == json.dumps({"k": 1})
+
+
+def test_docs_drift_selftest_tracks_the_caller_both_ways(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The both-directions check runs when the ledger row is present and no fixture errors.
+
+    Rail-exercise and the prologue's bash are answered locally, so nothing is spawned. The block
+    still calls the real caller-state helper, then the caller it saved, and the live row must
+    agree with that caller.
+    """
+    import capability_activation_audit as audit
+
+    capabilities.seed_declared(capabilities.REG)
+    # The row is fleet history, not a declaration this tree seeds. The both-directions
+    # block is skipped until the ledger actually holds it, so the test registers one.
+    rows = capabilities.load(capabilities.REG, create=False)
+    row = capabilities._blank_capability("docs-drift-fix-agent")
+    row["status"] = "observed"
+    row["notes"] = "hermetic row so the caller check runs in both directions"
+    rows["docs-drift-fix-agent"] = row
+    capabilities.save(rows, capabilities.REG)
+    assert recurrence.env_prereq.ledger_rows_absent("docs-drift-fix-agent") is None
+    monkeypatch.delenv("ORCH_RANGE_LANE_ROLLOUT", raising=False)
+    calls: list[dict] = []
+
+    def _live_caller(cap: dict) -> dict:
+        calls.append(cap)
+        return {"exists": False, "repo": "R", "workflow": "w", "path": "/p"}
+
+    monkeypatch.setattr(audit, "external_caller", _live_caller)
+
+    def _replay(*, offline: bool = False) -> dict:
+        del offline
+        rows = [
+            {
+                "capability": None,
+                "kind": "classify",
+                "fires": True,
+                "actual": "implement",
+                "source": "child",
+                "provenance": "frozen fixture",
+                "labels": [],
+                "title": "child",
+            },
+            {
+                "capability": None,
+                "kind": "high_stakes",
+                "fires": True,
+                "source": "routine",
+                "provenance": "frozen fixture",
+                "labels": [],
+                "title": "routine",
+                "reason": "none",
+            },
+            {
+                "capability": "docs-drift-fix-agent",
+                "kind": "predicate_note",
+                "fires": False,
+                "source": "caller",
+                "provenance": "frozen fixture",
+                "detail": {"exists": False},
+                "labels": [],
+                "title": "",
+            },
+        ]
+        firing = sum(1 for row in rows if row["fires"])
+        return {
+            "total": len(recurrence.FIXTURES) + len(recurrence.PREDICATE_FIXTURES),
+            "would_fire": firing,
+            "would_miss": len(rows) - firing,
+            "rows": rows,
+        }
+
+    monkeypatch.setattr(recurrence, "replay", _replay)
+    real_script = recurrence.ORCHESTRATE
+    saved = (
+        recurrence._tick_env_attempt,
+        recurrence._TICK_ENV,
+        recurrence._TICK_ENV_DIAG,
+        recurrence.TICK_ENV_BACKOFF,
+        recurrence.ORCHESTRATE,
+    )
+
+    def _attempt() -> tuple[dict, dict]:
+        path = recurrence.ORCHESTRATE
+        if path == real_script:
+            return (
+                {"ORCH_RUN_ADVERSARIAL_REVIEW": "1", "ORCH_RANGE_LANE_ROLLOUT": "0"},
+                {"reason": "ok", "keys": 2},
+            )
+        if not path.is_file():
+            return {}, {"reason": "script_missing", "detail": str(path)}
+        text = path.read_text(encoding="utf-8")
+        if "cat /no/such/credential" in text:
+            return {}, {"reason": "nonzero_exit", "returncode": 1}
+        if "prologue with no ORCH_ exports" in text:
+            return {}, {"reason": "no_orch_keys", "returncode": 0, "stdout_lines": 1, "keys": 0}
+        env: dict[str, str] = {}
+        head = text.split("_gh_gate()", 1)[0]
+        for line in head.splitlines():
+            match = re.search(
+                r'export (ORCH_[A-Z0-9_]+)="\$\{ORCH_[A-Z0-9_]+:-([^}]*)\}"',
+                line,
+            )
+            if not match:
+                continue
+            env[match.group(1)] = os.environ.get(match.group(1)) or match.group(2)
+        if not env:
+            return {}, {"reason": "no_orch_keys", "returncode": 0, "stdout_lines": 1, "keys": 0}
+        return env, {"reason": "ok", "keys": len(env)}
+
+    recurrence._tick_env_attempt = _attempt
+    try:
+        recurrence._selftest()
+    finally:
+        (
+            recurrence._tick_env_attempt,
+            recurrence._TICK_ENV,
+            recurrence._TICK_ENV_DIAG,
+            recurrence.TICK_ENV_BACKOFF,
+            recurrence.ORCHESTRATE,
+        ) = saved
+    assert len(calls) == 1
+    assert calls[0].get("capability_id") == "docs-drift-fix-agent"
+    assert audit.external_caller is _live_caller
