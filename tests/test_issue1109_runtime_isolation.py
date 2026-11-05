@@ -16,6 +16,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+import synthesis_promotion
+
+MODULE_DIR = Path(synthesis_promotion.__file__).resolve().parent
+
 _CHILD = r"""
 import json
 import os
@@ -51,7 +55,6 @@ print(json.dumps({
 
 
 def _child_env(state: Path, runtime: Path | None) -> dict[str, str]:
-    repo = Path(__file__).resolve().parents[1]
     env = os.environ.copy()
     for key in ("ORCH_FEEDBACK_DB", "ORCH_CAPABILITIES_PATH", "ORCH_FEATURES_PATH"):
         env.pop(key, None)
@@ -60,7 +63,7 @@ def _child_env(state: Path, runtime: Path | None) -> dict[str, str]:
         env.pop("ORCH_LOCAL_RUNTIME", None)
     else:
         env["ORCH_LOCAL_RUNTIME"] = str(runtime)
-    env["PYTHONPATH"] = str(repo / "src") + os.pathsep + env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = str(MODULE_DIR) + os.pathsep + env.get("PYTHONPATH", "")
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     return env
 
@@ -68,7 +71,7 @@ def _child_env(state: Path, runtime: Path | None) -> dict[str, str]:
 def _run_child(env: dict[str, str]) -> dict:
     proc = subprocess.run(
         [sys.executable, "-c", _CHILD],
-        cwd=Path(__file__).resolve().parents[1] / "src",
+        cwd=MODULE_DIR,
         env=env,
         capture_output=True,
         text=True,

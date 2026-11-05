@@ -223,7 +223,7 @@ def test_fresh_import_binds_runtime_paths_before_initialization(tmp_path) -> Non
     env = os.environ.copy()
     env["ORCH_STATE_DIR"] = str(state)
     env["ORCH_LOCAL_RUNTIME"] = str(runtime)
-    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
+    env["PYTHONPATH"] = str(Path(promotion.__file__).resolve().parent)
     for key in ("ORCH_FEEDBACK_DB", "ORCH_CAPABILITIES_PATH", "ORCH_FEATURES_PATH"):
         env.pop(key, None)
     completed = subprocess.run(

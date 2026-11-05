@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import synthesis_promotion
+
 REPO = Path(__file__).resolve().parents[1]
 EVIDENCE = REPO / "docs" / "verification" / "issue-1109-pr-793-acceptance.md"
-PRODUCTION = REPO / "src" / "synthesis_promotion.py"
+PRODUCTION = Path(synthesis_promotion.__file__).resolve()
 
 REQUIRED = (
     "574c1694b2990e50ce0668589472e180f481019c",
