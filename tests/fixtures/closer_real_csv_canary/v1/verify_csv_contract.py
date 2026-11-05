@@ -228,7 +228,31 @@ def _text_labeled_test(title, labels):
 
 
 def _branch_labeled_test(name):
-    return "test" in name.lower()
+    return "test" in (name or "").lower()
+
+
+def _branch_label_reason(record, records):
+    """A branch is visibly a test when its name says so, or its chain PR does.
+
+    GitHub branch refs have no label API. A rename that only copies the ref is
+    visible through ``visible_name``. The live head ``cursor/issue-983`` cannot
+    be renamed without the bootstrap recreating the unlabeled name, so the PR
+    that points at it has to carry the ``test`` label or a ``test:`` title.
+    """
+    if not record.get("present"):
+        return ""
+    if _branch_labeled_test(record.get("name") or ""):
+        return "name"
+    visible = record.get("visible_name") or ""
+    if visible and visible != record.get("name") and _branch_labeled_test(visible):
+        return "visible-name"
+    name = record.get("name")
+    for other in records:
+        if other.get("kind") != "pr" or other.get("head_ref") != name:
+            continue
+        if _text_labeled_test(other.get("title"), other.get("labels") or []):
+            return "pr:" + str(other.get("name"))
+    return ""
 
 
 def _verdict_lines(text):
@@ -247,9 +271,12 @@ def _verdict_lines(text):
 def _assess(events, comments, records, corrective_sha, partial_verdicts=(), corrective_verdicts=()):
     partial, corrective = _classify_events(events, corrective_sha)
     unlabeled = []
+    branch_labels = []
     for record in records:
         if record["kind"] == "branch":
-            labeled = bool(record.get("present")) and _branch_labeled_test(record["name"])
+            via = _branch_label_reason(record, records)
+            branch_labels.append({"name": record["name"], "via": via})
+            labeled = bool(via)
         else:
             labeled = _text_labeled_test(record.get("title"), record.get("labels") or [])
         if not labeled:
@@ -261,6 +288,7 @@ def _assess(events, comments, records, corrective_sha, partial_verdicts=(), corr
         "corrective_verdicts": list(corrective_verdicts),
         "publication": _publication_tied(comments, corrective_sha),
         "unlabeled": unlabeled,
+        "branch_labels": branch_labels,
     }
 
 
@@ -323,6 +351,11 @@ def _format_report(assessment, corrective_sha, local_head):
             "closer_publication_proof_for_corrective_head: MISSING "
             "no closer-publication marker in the chain comments contains the corrective head"
         )
+    for item in assessment.get("branch_labels") or []:
+        if item["via"]:
+            lines.append(f"branch_label: {item['name']} labeled=yes via={item['via']}")
+        else:
+            lines.append(f"branch_label: {item['name']} labeled=no")
     if assessment["unlabeled"]:
         lines.append("test_labeled_chain: MISSING")
         for record in assessment["unlabeled"]:
@@ -406,20 +439,38 @@ def _comment_bodies(fetch, number):
     return bodies
 
 
-def _issue_record(fetch, number):
-    status, raw = fetch(f"/repos/{_REPOSITORY}/issues/{number}")
-    document = _decode_json(status, raw, f"issue {number}")
-    labels = [
+def _label_names(document):
+    return [
         label.get("name")
         for label in document.get("labels") or []
         if isinstance(label, dict) and label.get("name")
     ]
+
+
+def _issue_record(fetch, number):
+    status, raw = fetch(f"/repos/{_REPOSITORY}/issues/{number}")
+    document = _decode_json(status, raw, f"issue {number}")
     return {
         "kind": "issue" if document.get("pull_request") is None else "pr",
         "name": str(number),
         "title": document.get("title") or "",
-        "labels": labels,
+        "labels": _label_names(document),
         "present": True,
+    }
+
+
+def _pull_record(fetch, number):
+    status, raw = fetch(f"/repos/{_REPOSITORY}/pulls/{number}")
+    document = _decode_json(status, raw, f"pull {number}")
+    head = document.get("head") or {}
+    ref = head.get("ref") if isinstance(head, dict) else ""
+    return {
+        "kind": "pr",
+        "name": str(number),
+        "title": document.get("title") or "",
+        "labels": _label_names(document),
+        "present": True,
+        "head_ref": ref if isinstance(ref, str) else "",
     }
 
 
@@ -445,9 +496,11 @@ def _branch_record(fetch, name):
             "present": False,
         }
     document = _decode_json(status, raw, f"branch {name}")
+    visible = document.get("name") if isinstance(document.get("name"), str) else name
     return {
         "kind": "branch",
         "name": name,
+        "visible_name": visible,
         "title": "",
         "labels": [],
         "present": True,
@@ -457,7 +510,8 @@ def _branch_record(fetch, name):
 
 def _observe_chain(fetch):
     corrective_sha = _pull_head(fetch, int(_CORRECTIVE_PR))
-    records = [_issue_record(fetch, number) for number in _CHAIN_ISSUES + _CHAIN_PRS]
+    records = [_issue_record(fetch, number) for number in _CHAIN_ISSUES]
+    records.extend(_pull_record(fetch, number) for number in _CHAIN_PRS)
     records.extend(_branch_record(fetch, name) for name in _CHAIN_BRANCHES)
     comments = []
     events = []
@@ -576,6 +630,77 @@ def _self_check():
         raise AssertionError("partial merge was not excluded")
     if "unlabeled: branch cursor/issue-983" not in text:
         raise AssertionError("unlabeled branch was omitted")
+    if "branch_label: cursor/issue-983 labeled=no" not in text:
+        raise AssertionError("unlabeled branch name was reported as labeled")
+    renamed = _assess(
+        [],
+        [],
+        [
+            {
+                "kind": "branch",
+                "name": "codex/issue-983-declared-csv-canary",
+                "visible_name": "codex/test-issue-983-declared-csv-canary",
+                "title": "",
+                "labels": [],
+                "present": True,
+            }
+        ],
+        corrective,
+    )
+    if renamed["unlabeled"]:
+        raise AssertionError("renamed visible branch name was not a test label")
+    linked = _assess(
+        [],
+        [],
+        [
+            {
+                "kind": "pr",
+                "name": "1168",
+                "title": "test: chain",
+                "labels": ["test"],
+                "present": True,
+                "head_ref": "cursor/issue-983",
+            },
+            {
+                "kind": "branch",
+                "name": "cursor/issue-983",
+                "title": "",
+                "labels": [],
+                "present": True,
+            },
+        ],
+        corrective,
+    )
+    linked_text, _linked_code = _format_report(linked, corrective, corrective)
+    if (
+        linked["unlabeled"]
+        or "branch_label: cursor/issue-983 labeled=yes via=pr:1168" not in linked_text
+    ):
+        raise AssertionError("test-labeled PR did not label its head branch")
+    bare = _assess(
+        [],
+        [],
+        [
+            {
+                "kind": "pr",
+                "name": "1168",
+                "title": "Cursor bootstrap",
+                "labels": ["agent:cursor"],
+                "present": True,
+                "head_ref": "cursor/issue-983",
+            },
+            {
+                "kind": "branch",
+                "name": "cursor/issue-983",
+                "title": "",
+                "labels": [],
+                "present": True,
+            },
+        ],
+        corrective,
+    )
+    if not any(record["name"] == "cursor/issue-983" for record in bare["unlabeled"]):
+        raise AssertionError("unlabeled PR counted as a branch test label")
     if _verdict_lines("intro\n**Verdict:** FAIL\nnext") != ["FAIL"]:
         raise AssertionError("verifier verdict line was not read")
     if _verdict_lines("**Verdict:** FAIL\n**Verdict:** CONCERNS\n") != ["FAIL"]:
