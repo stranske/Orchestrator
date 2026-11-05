@@ -174,3 +174,42 @@ line the prior artifact missed. Missing lines 16717 → 16716. Statements 119186
 `test_current_head_remeasurement_keeps_ranked_gaps_inside_selftests` checks the line
 lists, the source text, that each remaining line is inside a `_selftest` function, and
 that the repo-wide delta is exactly those three files.
+
+## Issue 1156 correction: verification blocked (2026-11-05 UTC)
+
+The working-tree correction on base `d5ab5d280d3f1101e969951038d12338be026405`
+carries forward PR #1151's test diff: it removes the mandatory catalog-probe traffic
+assertions, traffic bookkeeping, and unused `adapters` import/stub. The malformed
+status/inventory inputs, isolated runtime, subprocess stub, and four pattern-miner
+result assertions remain. No production source changes are retained.
+
+This runner cannot execute the required verification:
+
+| Command | Observed result |
+|---|---|
+| `/opt/anaconda3/bin/python3 -m pytest -q tests/test_coverage_round_1138.py -m 'not slow'` | Exit 127: interpreter does not exist |
+| `/opt/anaconda3/bin/python3 -m pytest -q tests/test_verify_sharding.py::test_shard_lists_partition_every_collected_test_exactly_once -m 'not slow'` | Exit 127: interpreter does not exist |
+| `python3 -m pytest -q tests/test_coverage_round_1138.py -m 'not slow'` | Exit 1: no module named `pytest` |
+| `python3 -m pytest -q tests/test_verify_sharding.py::test_shard_lists_partition_every_collected_test_exactly_once -m 'not slow'` | Exit 1: no module named `pytest` |
+| `black --line-length 100 tests/test_coverage_round_1138.py` | Exit 127: command not found |
+| Repository-wide Black check below | Exit 127: command not found |
+
+```sh
+black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .
+```
+
+Available `python3` is `/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3`.
+Installing pytest, pytest-cov, and Black into `/tmp/issue-1156-venv` failed because
+`pypi.org` could not resolve; no cached pytest or Black installation was found.
+Syntax compilation and `git diff --check` pass, but neither substitutes for pytest
+or Black. The mandatory pre-commit Black gate therefore prevents committing this
+correction in this run.
+
+Attempts to add `needs-human` and a blocker comment to PR #1160 were refused by
+the GitHub tool: "MCP tool call requires approval, but approval policy is never."
+The blocker is recorded locally here; neither remote update was applied.
+
+No task checkbox is completed. Fresh production-mutation and artifact-lock
+deliberate-break experiments, exact-head pytest results, final-head CI shard and
+aggregate results, and review/merge gates remain pending. Historical evidence above
+and in `mutation-proof-pass3.json` is unchanged and does not verify this correction.
