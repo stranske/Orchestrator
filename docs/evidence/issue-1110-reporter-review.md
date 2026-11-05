@@ -172,3 +172,45 @@ Delivery was attempted after validation. `git add` failed with exit 128 because
 rejected remote tree creation, `needs-human` labeling, and the blocker comment
 with `MCP tool call requires approval, but approval policy is never`. No commit,
 push, label, or comment was applied; source and tests remain in the working tree.
+
+## Raw exit-log comparison follow-up, 2026-11-05
+
+Reviewed the three preceding keepalive commits. Both reporter-review checkboxes
+in PR #1132 are already checked; no additional task is verified complete.
+
+The reporter now accepts `--exit-log` alongside `--pacing-log`:
+
+```text
+node scripts/report_relay_join_window.js --db /retained/orchestrator.db --start 1793693792 --end END_UNIX_SECONDS --pacing-log /retained/relay-pacing.log --exit-log /retained/relay-exits.log
+```
+
+The optional comparison reads the documented `RELAY exit=` trailer format,
+retains raw lines, line numbers, exact IDs and exit facts, and hashes the input.
+It exposes eligible raw exits with missing persisted rounds, unmatched exit IDs,
+and disagreements with persisted timestamps, agent, lane or status. Duplicate
+trailers remain ambiguous, including byte-identical repeats. Attribution requires
+exact second-level agreement between trailer and round timestamps; mismatches
+remain visible for adjudication. A missing requested log fails closed.
+`completed_exit_source` distinguishes raw exits from the persisted-round-only
+comparison. Top-level counts still describe persisted evidence.
+
+All four new regression cases failed before implementation. After implementation,
+the combined relay/preflight command above passes **39 tests**, exit 0; Node
+syntax checks and `git diff --check` pass. The WAL snapshot test now includes
+exit-log comparison and verifies all three retained inputs preserve their bytes.
+These tests establish tool behavior only. Deployment provenance, consistent
+capture and positive production switch-review counts still require the host
+records requested from the operator; no operational checkbox is completed.
+
+Assessed local `origin/main` is `904dd78fb972e1c986df25595222866a9788538d`.
+Its floor SHA-256 is `e75503f1365cbb2cdd45e4c6269b678e809b3063d0dd8922b6c49f53acba9214`;
+the working floor still has SHA-256
+`00d01689a9b9f6604f94ffc8f48ac723c32142c159edcf616d846739c0b655ec`.
+Byte equality is false, and the floor was not edited. Deadline attribution remains
+unresolved; any success after `2026-11-04T08:16:32Z` must be late recovery.
+
+Delivery remains blocked: staging failed because `.git/index.lock` is on a
+read-only filesystem. The GitHub connector rejected tree creation, `needs-human`
+labeling and the blocker comment with `MCP tool call requires approval, but
+approval policy is never`. No new commit or remote update was applied. Final
+readback confirms PR #1132 is open with `draft=false` at `2a255d2`.

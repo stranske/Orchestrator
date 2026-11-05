@@ -1,7 +1,8 @@
 'use strict';
 
 // Read existing Brain state only. An optional retained pacing log exposes
-// explicit raw decisions omitted from Brain. Exit logs and switch-review remain separate evidence.
+// explicit raw decisions omitted from Brain; an optional retained exit log checks round omissions.
+// Deployment provenance and fresh switch-review remain separate evidence.
 // Requires Node >=22.13, as does export_adjudicator_inventory.js.
 const fs = require('node:fs');
 const { createHash } = require('node:crypto');
@@ -14,7 +15,45 @@ const version = 'relay-pacing-v1';
 const pacingFields = ['source', 'lane', 'candidates', 'chosen', 'weights', 'states', 'fallback'];
 const maxDecisionIdChars = 192 - 'relay-pacing:id:'.length;
 
-function reconcileRawLog(pacingLog, start, end, sources, decisions, byId) {
+function readExitLog(exitLog, end) {
+  const bytes = fs.readFileSync(exitLog);
+  const records = [];
+  let excludedLines = 0;
+  for (const [index, line] of bytes.toString('utf8').split(/\r?\n/).entries()) {
+    if (!line.trim()) continue;
+    const match = /^=== (\S+) RELAY (.+) ===$/.exec(line.trim());
+    const fields = Object.create(null);
+    let invalid = !match;
+    for (const part of match ? match[2].split(/\s+/) : []) {
+      const split = part.indexOf('=');
+      const key = part.slice(0, split);
+      if (split < 1 || Object.hasOwn(fields, key)) { invalid = true; break; }
+      fields[key] = part.slice(split + 1);
+    }
+    const stamp = match?.[1];
+    const ts = Date.parse(stamp) / 1000;
+    const id = fields.decision_id;
+    if (invalid || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(stamp)
+        || !Number.isSafeInteger(ts)
+        || new Date(ts * 1000).toISOString().replace('.000Z', 'Z') !== stamp
+        || !id || [...id].length > maxDecisionIdChars || /\s/.test(id)
+        || !['codex', 'claude', 'claude_code', 'cursor', 'muse'].includes(fields.agent)
+        || !['opener', 'closer'].includes(fields.lane)
+        || !/^\d+$/.test(fields.exit) || !Number.isSafeInteger(Number(fields.exit))
+        || Number(fields.exit) > 255
+        || !/^\d+$/.test(fields.duration_s) || !Number.isSafeInteger(Number(fields.duration_s))) {
+      excludedLines++;
+      continue;
+    }
+    if (ts > end) continue;
+    records.push({ raw_decision_id: id, exit_ts: ts, exit_status: Number(fields.exit),
+      agent: fields.agent, lane: fields.lane, duration_s: Number(fields.duration_s),
+      line_number: index + 1, raw_line: line });
+  }
+  return { records, excludedLines, sha256: createHash('sha256').update(bytes).digest('hex') };
+}
+
+function reconcileRawLog(pacingLog, start, end, sources, decisions, byId, exitLog) {
   const bytes = fs.readFileSync(pacingLog);
   const byRawId = new Map();
   const agents = new Set(['codex', 'claude', 'claude_code', 'cursor', 'muse']);
@@ -51,6 +90,12 @@ function reconcileRawLog(pacingLog, start, end, sources, decisions, byId) {
   }
   const persisted = new Map(decisions.map((d) => [d.raw_decision_id, d]));
   const events = new Map(sources.map((s) => [s.event_id, s]));
+  const exits = exitLog === undefined ? null : readExitLog(exitLog, end);
+  const exitsById = new Map();
+  for (const record of exits?.records || []) {
+    if (!exitsById.has(record.raw_decision_id)) exitsById.set(record.raw_decision_id, []);
+    exitsById.get(record.raw_decision_id).push(record);
+  }
   const rows = [];
   for (const [id, records] of byRawId) {
     const rawRecords = [...records.values()];
@@ -67,7 +112,7 @@ function reconcileRawLog(pacingLog, start, end, sources, decisions, byId) {
         && pacingFields.every((key) => JSON.stringify(facts[key]) === JSON.stringify(raw.facts[key]))
         ? saved.status : 'persisted_decision_mismatch';
     }
-    rows.push({
+    const row = {
       raw_decision_id: id,
       decision_ts: raw.decision_ts,
       raw_records: rawRecords,
@@ -81,14 +126,52 @@ function reconcileRawLog(pacingLog, start, end, sources, decisions, byId) {
         && rounds[0].agent === raw.facts.chosen.replace('claude_code', 'claude'),
       completed_rounds: rounds,
       accepted_edge_ids: status === 'accepted_join' ? saved.accepted_edge_ids : [],
-    });
+    };
+    if (exits) {
+      const matches = exitsById.get(id) || [];
+      const exit = matches[0];
+      const round = rounds[0];
+      const eligible = rawRecords.length === 1 && matches.length === 1
+        && exit.exit_ts >= raw.decision_ts && exit.lane === raw.facts.lane
+        && exit.agent.replace('claude_code', 'claude')
+          === raw.facts.chosen.replace('claude_code', 'claude');
+      let exitStatus;
+      if (rawRecords.length > 1) exitStatus = 'ambiguous_raw_decisions';
+      else if (!matches.length) exitStatus = 'no_raw_exit';
+      else if (matches.length > 1) exitStatus = 'ambiguous_raw_exits';
+      else if (!eligible) exitStatus = 'raw_exit_mismatch';
+      else if (!rounds.length) exitStatus = 'missing_persisted_round';
+      else if (rounds.length > 1) exitStatus = 'ambiguous_completed_exits';
+      else if (round.ts !== exit.exit_ts || round.exit_status !== exit.exit_status
+          || round.lane !== exit.lane
+          || round.agent !== exit.agent.replace('claude_code', 'claude')) {
+        exitStatus = 'persisted_exit_mismatch';
+      } else exitStatus = 'matched_persisted_round';
+      row.matching_completed_exit = eligible;
+      row.raw_exit_records = matches;
+      row.exit_reconciliation_status = exitStatus;
+      if (row.status === 'accepted_join' && exitStatus !== 'matched_persisted_round') {
+        row.status = exitStatus;
+        row.accepted_edge_ids = [];
+      }
+    }
+    rows.push(row);
   }
   rows.sort((a, b) => a.decision_ts - b.decision_ts
     || a.raw_decision_id.localeCompare(b.raw_decision_id));
+  const windowIds = new Set(rows.map((row) => row.raw_decision_id));
   return {
     scope: 'raw_explicit_relay_decisions',
     pacing_log: path.resolve(pacingLog),
     pacing_log_sha256: createHash('sha256').update(bytes).digest('hex'),
+    completed_exit_source: exits ? 'raw_exit_log' : 'persisted_rounds',
+    ...(exits ? {
+      exit_log: path.resolve(exitLog),
+      exit_log_sha256: exits.sha256,
+      excluded_exit_lines: exits.excludedLines,
+      unmatched_exit_records: exits.records.filter((r) =>
+        r.exit_ts >= start && !windowIds.has(r.raw_decision_id)),
+    } : {}),
     excluded_lines: excludedLines,
     window_decisions: rows.length,
     matching_completed_exit_decisions: rows.filter((r) => r.matching_completed_exit).length,
@@ -99,13 +182,18 @@ function reconcileRawLog(pacingLog, start, end, sources, decisions, byId) {
     limitations: [
       'Legacy, malformed and ID-less lines are excluded; conflicting raw IDs cannot earn joins.',
       'Use a retained pacing log captured with the Brain snapshot; separate live files are not atomic.',
-      'Completed rounds are persisted Brain records; raw exit logs and deployment provenance require separate verification.',
+      exits ? 'Raw exit trailers are compared with persisted rounds; duplicate trailers remain ambiguous.'
+        : 'Completed rounds are persisted Brain records; raw exit logs require separate verification.',
+      'Deployment provenance and consistent capture of the retained logs and Brain require separate verification.',
     ],
   };
 }
 
-function reportWindow({ db, start, end, pacingLog }) {
+function reportWindow({ db, start, end, pacingLog, exitLog }) {
   if (typeof db !== 'string' || !db.trim()) throw new Error('db is required');
+  if (exitLog !== undefined && pacingLog === undefined) {
+    throw new Error('exit-log requires pacing-log for raw decision reconciliation');
+  }
   if (![start, end].every((n) => Number.isSafeInteger(n) && n >= 0) || end < start) {
     throw new Error('start and end must be ordered nonnegative integer Unix seconds');
   }
@@ -125,7 +213,7 @@ function reportWindow({ db, start, end, pacingLog }) {
     limitations: [
       'The cumulative count describes bindings present now, not joins newly observed in this window.',
       'Top-level counts cover persisted decisions; optional raw_reconciliation also exposes decisions absent from Brain.',
-      'Raw pacing/exit logs and fresh switch-review counts must be verified separately.',
+      'Raw pacing/exit logs require the optional log inputs; fresh switch-review counts must be verified separately.',
     ],
     errors: [],
   };
@@ -215,7 +303,7 @@ function reportWindow({ db, start, end, pacingLog }) {
       });
     }
     const rawReconciliation = pacingLog === undefined ? null
-      : reconcileRawLog(pacingLog, start, end, sources, decisions, byId);
+      : reconcileRawLog(pacingLog, start, end, sources, decisions, byId, exitLog);
     Object.assign(report, {
       status: 'available',
       cumulative_accepted_bindings_present: bindings,
@@ -239,10 +327,10 @@ function main() {
   try {
     const { values } = parseArgs({ options: {
       db: { type: 'string' }, start: { type: 'string' }, end: { type: 'string' },
-      'pacing-log': { type: 'string' },
+      'pacing-log': { type: 'string' }, 'exit-log': { type: 'string' },
     } });
     const report = reportWindow({ db: values.db, start: Number(values.start), end: Number(values.end),
-      pacingLog: values['pacing-log'] });
+      pacingLog: values['pacing-log'], exitLog: values['exit-log'] });
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     if (report.status !== 'available') process.exitCode = 1;
   } catch (error) {
