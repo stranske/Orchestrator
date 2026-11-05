@@ -5,7 +5,10 @@ Invoke this file directly. It is not a pytest module and defines no test items.
 whether a trusted native verifier decision and closer publication proof are
 tied to the corrected head. A free-text verdict line is not that proof. A
 trusted corpus decision on the partial merge is reported and is not that proof
-either. Skipped Agents Verifier runs on earlier commits of the corrective PR,
+either. A corpus decision whose evaluated commit is only the open pull
+request's test-merge SHA is reported and is not that proof either: Agents
+Verifier refuses an unmerged pull request, and that SHA is not a published
+merge. Skipped Agents Verifier runs on earlier commits of the corrective PR,
 and publication text that names only the owned delivery PR, are reported and
 are not that proof either. A keepalive completion that only observed this head
 after starting on an earlier revision is reported and is not worker or
@@ -233,14 +236,56 @@ def _corpus_identity_ok(event):
     )
 
 
+def _sha40(value):
+    return isinstance(value, str) and re.fullmatch(r"[a-f0-9]{40}", value) is not None
+
+
 def _valid_corpus_decision(event, corrective_sha):
-    """A terminal decision counts only for this corrective head, never the partial merge."""
+    """A terminal decision names this head and a different evaluated commit.
+
+    Binding that commit to a published merge is a separate check. The partial
+    revision's head and merge are never a corrective evaluated commit.
+    """
+    evaluated = event.get("evaluated_sha")
     return (
         _corpus_identity_ok(event)
         and str(event.get("pr")) == _CORRECTIVE_PR
         and event.get("head_sha") == corrective_sha
+        and _sha40(corrective_sha)
         and corrective_sha not in {_PARTIAL_HEAD, _PARTIAL_MERGE}
+        and _sha40(evaluated)
+        and evaluated not in {_PARTIAL_HEAD, _PARTIAL_MERGE, corrective_sha}
     )
+
+
+def _published_merge_sha(record, corrective_sha):
+    """The merge commit of a merged pull request, never an open test-merge SHA."""
+    merge_sha = record.get("merge_sha") or ""
+    if (
+        record.get("merged") is True
+        and _sha40(merge_sha)
+        and _sha40(corrective_sha)
+        and merge_sha not in {_PARTIAL_HEAD, _PARTIAL_MERGE, corrective_sha}
+    ):
+        return merge_sha
+    return ""
+
+
+def _merge_bound_corpus(corpus, corrective_pr, corrective_sha):
+    """Keep only decisions evaluated at the published merge commit."""
+    merge_sha = _published_merge_sha(corrective_pr, corrective_sha)
+    bound = []
+    unbound = []
+    for decision in corpus:
+        if (
+            merge_sha
+            and decision.get("head_sha") == corrective_sha
+            and decision.get("evaluated_sha") == merge_sha
+        ):
+            bound.append(decision)
+        else:
+            unbound.append(decision)
+    return bound, unbound
 
 
 def _valid_partial_corpus_decision(event):
@@ -620,6 +665,7 @@ def _assess(
     corrective_verdicts=(),
     corpus=(),
     partial_corpus=(),
+    unbound_corpus=(),
 ):
     partial, corrective = _classify_events(events, corrective_sha)
     unlabeled = []
@@ -649,6 +695,7 @@ def _assess(
         "partial_verdicts": list(partial_verdicts),
         "corrective_verdicts": list(corrective_verdicts),
         "corpus": list(corpus),
+        "unbound_corpus": list(unbound_corpus),
         "partial_corpus": list(partial_corpus),
         "publication": _publication_tied(comments, corrective_sha),
         "publication_markers": _publication_markers(comments),
@@ -719,9 +766,15 @@ def _format_report(assessment, corrective_sha, local_head, verifier_runs=(), ear
             "partial_corpus_decision: none_observed "
             "no trusted verifier-corpus-decision/v1 on PR 984 is bound to the partial head and merge"
         )
-    if assessment["corpus"]:
+    corrective_pr = assessment.get("corrective_pr") or {}
+    bound_corpus, unbound_corpus = _merge_bound_corpus(
+        list(assessment.get("corpus") or []) + list(assessment.get("unbound_corpus") or []),
+        corrective_pr,
+        corrective_sha,
+    )
+    if bound_corpus:
         lines.append("native_verify_for_corrective_head: PRESENT")
-        for decision in assessment["corpus"]:
+        for decision in bound_corpus:
             lines.append(
                 "corrective_corpus_decision: "
                 + f"verdict={decision['verdict']} run_id={decision['run_id']} "
@@ -731,7 +784,15 @@ def _format_report(assessment, corrective_sha, local_head, verifier_runs=(), ear
     else:
         lines.append(
             "native_verify_for_corrective_head: MISSING "
-            "no trusted verifier-corpus-decision/v1 on PR 1168 is bound to its head and merge"
+            "no trusted verifier-corpus-decision/v1 on PR 1168 is bound to its merged commit"
+        )
+    for decision in unbound_corpus:
+        lines.append(
+            "corpus_decision_not_on_merged_commit: "
+            + f"verdict={decision['verdict']} run_id={decision['run_id']} "
+            + f"attempt={decision['run_attempt']} head={decision['head_sha']} "
+            + f"evaluated={decision['evaluated_sha']} "
+            + "not a native verify outcome"
         )
     for event in assessment["corrective"]:
         lines.append(
@@ -811,7 +872,6 @@ def _format_report(assessment, corrective_sha, local_head, verifier_runs=(), ear
             )
     else:
         lines.append("keepalive_prior_completion_observed_head: none")
-    corrective_pr = assessment.get("corrective_pr") or {}
     if "merged" in corrective_pr:
         if corrective_pr["merged"]:
             lines.append(
@@ -820,6 +880,13 @@ def _format_report(assessment, corrective_sha, local_head, verifier_runs=(), ear
             )
         else:
             lines.append("corrective_pr_merged: no")
+            prospective = corrective_pr.get("merge_sha") or ""
+            if _sha40(prospective):
+                lines.append(
+                    "open_pr_test_merge_sha: "
+                    + prospective
+                    + " not a native Verify evaluated commit"
+                )
             lines.append(
                 "native_verify_blocker: PR "
                 + _CORRECTIVE_PR
@@ -902,9 +969,14 @@ def _format_report(assessment, corrective_sha, local_head, verifier_runs=(), ear
             )
     else:
         lines.append("test_labeled_chain: PRESENT")
-    native_present = bool(assessment["corpus"])
-    # Completion requires this head's own decision and publication marker.
-    complete = native_present and assessment["publication"] and not assessment["unlabeled"]
+    native_present = bool(bound_corpus)
+    # Completion requires the published merge's own decision and publication marker.
+    complete = (
+        native_present
+        and assessment["publication"]
+        and not assessment["unlabeled"]
+        and corrective_pr.get("merged") is True
+    )
     lines.append("completion: evidence present" if complete else "completion: evidence incomplete")
     return "\n".join(lines), 0 if complete else 2
 
@@ -1193,6 +1265,7 @@ def _observe_chain(fetch):
     partial_verdicts = []
     corrective_verdicts = []
     corpus = []
+    unbound_corpus = []
     partial_corpus = []
     for number in _CHAIN_ISSUES + _CHAIN_PRS:
         page = _comment_records(fetch, number)
@@ -1211,13 +1284,17 @@ def _observe_chain(fetch):
                 partial_corpus.extend(_partial_corpus_from_comment(record))
             elif str(number) == _CORRECTIVE_PR and corrective_sha in body:
                 corrective_verdicts.extend(verdicts)
-                corpus.extend(
-                    decision
-                    for decision in _corpus_from_comment(record, corrective_sha)
-                    if decision["evaluated_sha"] == subject.get("merge_sha")
-                )
+                for decision in _corpus_from_comment(record, corrective_sha):
+                    if decision.get("evaluated_sha") == _published_merge_sha(
+                        subject, corrective_sha
+                    ):
+                        corpus.append(decision)
+                    else:
+                        unbound_corpus.append(decision)
     corrective_pr = _corrective_record(records)
-    runs = _bound_verifier_runs(fetch, corrective_sha, corrective_pr.get("merge_sha") or "")
+    runs = _bound_verifier_runs(
+        fetch, corrective_sha, _published_merge_sha(corrective_pr, corrective_sha)
+    )
     commits = _pull_commit_shas(fetch, int(_CORRECTIVE_PR))
     if corrective_sha not in commits:
         raise _ObservationError("corrective head is not a commit on its pull request")
@@ -1236,6 +1313,7 @@ def _observe_chain(fetch):
         runs,
         earlier,
         partial_corpus,
+        unbound_corpus,
     )
 
 
@@ -1252,6 +1330,7 @@ def _report_chain_evidence():
             runs,
             earlier,
             partial_corpus,
+            unbound_corpus,
         ) = _observe_chain(_live_fetch)
     except _ObservationError as exc:
         print(f"chain-evidence observation failed: {exc}", file=sys.stderr)
@@ -1266,6 +1345,7 @@ def _report_chain_evidence():
             corrective_verdicts,
             corpus,
             partial_corpus,
+            unbound_corpus,
         ),
         corrective_sha,
         _local_head(),
@@ -1580,6 +1660,10 @@ def _self_check():
         raise AssertionError("derived verdict mismatch was accepted")
     if _valid_corpus_decision(dict(decision, head_sha=_PARTIAL_HEAD), _PARTIAL_HEAD):
         raise AssertionError("partial head was accepted as a corrective decision")
+    if _valid_corpus_decision(dict(decision, evaluated_sha=_PARTIAL_MERGE), corrective):
+        raise AssertionError("partial merge was accepted as the corrective evaluated commit")
+    if _valid_corpus_decision(dict(decision, evaluated_sha=corrective), corrective):
+        raise AssertionError("head sha was accepted as the corrective evaluated commit")
     partial_decision = {
         "schema": "verifier-corpus-decision/v1",
         "repo": _REPOSITORY,
@@ -1724,8 +1808,10 @@ def _self_check():
         corrective,
         [{"id": 1, "event": "pull_request_target", "status": "completed", "conclusion": "skipped"}],
     )
-    if corpus_code != 2 or "corrective_corpus_decision: verdict=PASS" not in corpus_text:
-        raise AssertionError("trusted corpus decision did not count")
+    if corpus_code != 2 or "native_verify_for_corrective_head: PRESENT" in corpus_text:
+        raise AssertionError("corpus decision without a merged commit counted as native verify")
+    if "corpus_decision_not_on_merged_commit: verdict=PASS" not in corpus_text:
+        raise AssertionError("unbound corpus decision was not reported")
     if (
         "agents_verifier_run: id=1" not in corpus_text
         or "completion: evidence incomplete" not in corpus_text
@@ -2167,7 +2253,16 @@ def _self_check():
     ):
         raise AssertionError("self-check regression: 2142")
     complete_records = [
-        {"kind": "pr", "name": "1168", "title": "test: chain", "labels": ["test"], "present": True}
+        {
+            "kind": "pr",
+            "name": "1168",
+            "title": "test: chain",
+            "labels": ["test"],
+            "present": True,
+            "merged": True,
+            "merge_sha": "e" * 40,
+            "head_sha": corrective,
+        }
     ]
     complete = _assess(
         [], [publication], complete_records, corrective, corpus=[_summarize_corpus(decision)]
@@ -2175,6 +2270,40 @@ def _self_check():
     complete_text, complete_code = _format_report(complete, corrective, corrective)
     if complete_code != 0 or "completion: evidence present" not in complete_text:
         raise AssertionError("validated native decision and publication did not complete")
+    if "corrective_corpus_decision: verdict=PASS" not in complete_text:
+        raise AssertionError("merged corpus decision was not reported")
+    prospective = "d" * 40
+    open_decision = dict(decision, evaluated_sha=prospective)
+    open_records = [
+        {
+            "kind": "pr",
+            "name": "1168",
+            "title": "test: chain",
+            "labels": ["test"],
+            "present": True,
+            "merged": False,
+            "merge_sha": prospective,
+            "head_sha": corrective,
+        }
+    ]
+    open_assessment = _assess(
+        [],
+        [publication],
+        open_records,
+        corrective,
+        corpus=[_summarize_corpus(open_decision)],
+    )
+    open_text, open_code = _format_report(open_assessment, corrective, corrective)
+    if open_code == 0 or "completion: evidence present" in open_text:
+        raise AssertionError("open PR test-merge corpus decision completed the canary")
+    if "native_verify_for_corrective_head: PRESENT" in open_text:
+        raise AssertionError("open PR test-merge corpus decision counted as native verify")
+    if "open_pr_test_merge_sha: " + prospective not in open_text:
+        raise AssertionError("open PR test-merge sha was not reported")
+    if "not a native Verify evaluated commit" not in open_text:
+        raise AssertionError("test-merge sha was accepted as a verify commit")
+    if "corpus_decision_not_on_merged_commit: verdict=PASS" not in open_text:
+        raise AssertionError("test-merge corpus decision was not named as non-proof")
     diagnostic_only = _assess([done], [publication], complete_records, corrective)
     diagnostic_text, diagnostic_code = _format_report(diagnostic_only, corrective, corrective)
     if (
@@ -2201,6 +2330,8 @@ def _self_check():
     observed = _observe_chain(fake_fetch)
     if observed[6] != [_summarize_corpus(decision)] or observed[7][0]["conclusion"] != "skipped":
         raise AssertionError("chain observation dropped the corpus decision or the verifier run")
+    if observed[10]:
+        raise AssertionError("merged corpus decision was treated as unbound")
     if observed[8] != earlier_only:
         raise AssertionError("chain observation dropped the earlier skipped verifier run")
     if observed[9] != [partial_summary]:
@@ -2227,6 +2358,49 @@ def _self_check():
         raise AssertionError("observed chain invented publication proof")
     if partial_line not in observed_text or "completion: evidence present" in observed_text:
         raise AssertionError("observed partial corpus decision was accepted or omitted")
+
+    def open_fetch(path):
+        if "/actions/workflows/" in path and "head_sha=" + prospective in path:
+            raise AssertionError("open PR test-merge was queried as a verifier run")
+        status, raw = fake_fetch(path)
+        if "/pulls/" in path and "/commits" not in path:
+            document = json.loads(raw.decode())
+            document["merged"] = False
+            document["merge_commit_sha"] = prospective
+            return status, json.dumps(document).encode()
+        return status, raw
+
+    open_observed = _observe_chain(open_fetch)
+    if open_observed[6]:
+        raise AssertionError("unmerged corpus decision was accepted")
+    if open_observed[10] != [_summarize_corpus(decision)]:
+        raise AssertionError("unmerged corpus decision was not retained for reporting")
+    open_observed_text, open_observed_code = _format_report(
+        _assess(
+            open_observed[1],
+            open_observed[2],
+            open_observed[3],
+            open_observed[0],
+            open_observed[4],
+            open_observed[5],
+            open_observed[6],
+            partial_corpus=open_observed[9],
+            unbound_corpus=open_observed[10],
+        ),
+        open_observed[0],
+        open_observed[0],
+        open_observed[7],
+        open_observed[8],
+    )
+    if (
+        open_observed_code != 2
+        or "native_verify_for_corrective_head: PRESENT" in open_observed_text
+    ):
+        raise AssertionError("observed unmerged corpus decision counted as native verify")
+    if "open_pr_test_merge_sha: " + prospective not in open_observed_text:
+        raise AssertionError("observed open PR test-merge sha was not reported")
+    if "corpus_decision_not_on_merged_commit:" not in open_observed_text:
+        raise AssertionError("observed unmerged corpus decision was not reported")
 
     merge_only = "m" * 40
 
