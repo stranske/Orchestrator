@@ -142,3 +142,49 @@ The two JavaScript changes and this evidence update remain uncommitted.
 The blocker comment and `needs-human` label were also rejected: the GitHub tools
 require approval and this run's approval policy is `never`. The connector confirmed
 PR #1130 remains open with `draft=false`.
+
+## Repeatable live CLI check — 2026-11-05 10:07Z
+
+Added `scripts/verify_fleet_delivery_live.js` and six JavaScript regression tests.
+The checker runs the production `src/switch_review.py --json --text-out` command,
+compares all five text rows with that JSON snapshot, requires evidence classes or
+explicit read errors/missing queries, and checks that the snapshot date falls
+within the current invocation. It rejects missing/duplicate rows, stale dates,
+unavailable interpreters, and reused evidence directories. Runtime writes use a
+private directory. A successful check writes the report and a `check.json` receipt.
+The default interpreter is `/opt/anaconda3/bin/python3`; `PYTHON` selects an
+explicit alternative without an automatic fallback.
+
+Run on the target machine with a new output directory:
+
+```sh
+node scripts/verify_fleet_delivery_live.js /tmp/fleet-target-check
+```
+
+Verified in this follow-up:
+
+- [x] All 10 JavaScript tests in the live and mutation verifier suites passed.
+- [x] All 25 fleet unittest tests and `src/switch_review.py --selftest` passed.
+- [x] The named fail-open test passed, failed on the deliberate `0%` mutation,
+  and passed after byte-for-byte source restoration using available Python.
+- [x] `PYTHON=python3 node scripts/verify_fleet_delivery_live.js
+  /tmp/orch-fleet-available-1130` validated five explicitly unmeasured rows.
+  Snapshot date: `2026-11-05T10:07:20+00:00`; receipt date:
+  `2026-11-05T10:07:21.482Z`. This is available-interpreter runner evidence.
+- [ ] Selected-interpreter live acceptance and full verification: the default
+  checker failed with `ENOENT`; `/opt/anaconda3/bin/python3 src/verify.py` exited
+  127 because that interpreter is absent. The available Python pytest command
+  exited 1 with `No module named pytest`.
+
+Task reconciliation: the implementation, rendering, fixture, deliberate-mutation,
+and independent-row tasks are verified. The PR's checked full-verification claim
+must be unchecked; selected-interpreter live acceptance must remain unchecked.
+The PR-body update was attempted before new implementation work but rejected
+because the GitHub tool requires approval and this run's policy is `never`.
+
+After verification, `git diff --check` passed, but the source/test commit attempt
+failed creating `.git/index.lock` on the read-only filesystem. The three scoped
+files remain uncommitted. The blocker-comment and `needs-human` label attempts
+were also rejected because approval is required and unavailable. The connector
+reconfirmed PR #1130 is open with `draft=false` at handoff. No Python files or
+collection floors changed.
