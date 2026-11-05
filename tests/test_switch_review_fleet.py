@@ -167,6 +167,14 @@ class FleetDeliveryTests(unittest.TestCase):
                 self.assertIn("unmeasured — would need complete paginated canary PR arrays", text)
                 self.assertIn("opened 2/day, merged 1.5/day", text)
 
+        for head in ({"ref": ""}, {"ref": "  "}, {"ref": None}, {}, None, "sync/workflows-x"):
+            with self.subTest(head=head):
+                self.data["canary_prs"][repo] = [[{"number": 44, "head": head}]]
+                rows = self.measure()["rows"]
+                self.assertIsNone(rows["oldest_canary"]["value"])
+                self.assertIn("canary PR head branch", rows["oldest_canary"]["reason"])
+                self.assertIsNotNone(rows["released_flow"]["value"])
+
     def test_canary_drafts_and_later_pages_are_included(self):
         row = self.measure()["rows"]["oldest_canary"]
         self.assertIn("stranske/trip-planner#42", row["value"])
@@ -193,6 +201,22 @@ class FleetDeliveryTests(unittest.TestCase):
 
     def test_prs_are_counted_once_with_multiple_released_issues(self):
         self.data["prs"][0]["body"] += "\nCloses #2\nCloses #2"
+        row = self.measure()["rows"]["released_flow"]
+        self.assertIn("opened 2/day, merged 1.5/day", row["value"])
+
+        # REST supplies head.ref; backlog's branch reference rule expects headRefName.
+        # A source issue on the branch still counts when the PR has no body reference.
+        pr = self.data["prs"][0]
+        for body in (None, "", "No closing reference in this body"):
+            with self.subTest(body=body):
+                pr["body"] = body
+                pr["head"] = {"ref": "codex/issue-1"}
+                rows = self.measure()["rows"]
+                self.assertIn("opened 2/day, merged 1.5/day", rows["released_flow"]["value"])
+                self.assertIn("median 20 min", rows["merge_to_close"]["value"])
+
+        # Combining body and branch references must still count the PR once.
+        pr["body"] = "Closes #2"
         row = self.measure()["rows"]["released_flow"]
         self.assertIn("opened 2/day, merged 1.5/day", row["value"])
 
@@ -281,6 +305,18 @@ class FleetDeliveryTests(unittest.TestCase):
 
         original = json.loads(FIXTURE.read_text())
         missing = object()
+        for head in (missing, None, {}, {"ref": ""}, {"ref": "  "}, {"ref": None}, "main"):
+            with self.subTest(head=head):
+                self.data = copy.deepcopy(original)
+                if head is missing:
+                    del self.data["prs"][0]["head"]
+                else:
+                    self.data["prs"][0]["head"] = head
+                rows = self.measure()["rows"]
+                self.assertIsNone(rows["released_flow"]["value"])
+                self.assertIn("PR head branch", rows["released_flow"]["reason"])
+                self.assertIn("median 15 min", rows["merge_to_close"]["value"])
+                self.assertIsNotNone(rows["oldest_canary"]["value"])
         for target in ("PR", "issue"):
             for labels in (
                 missing,

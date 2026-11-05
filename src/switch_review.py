@@ -524,6 +524,14 @@ def _fleet_labels(record: Mapping[str, object], subject: str) -> list[str]:
     return names
 
 
+def _fleet_head_ref(record: Mapping[str, object], subject: str) -> str:
+    head = record.get("head")
+    branch = head.get("ref") if isinstance(head, Mapping) else None
+    if not isinstance(branch, str) or not branch.strip():
+        raise _FleetReadError(f"would need complete GitHub {subject} head branch")
+    return branch
+
+
 def _fleet_pr_measures(gh, now: int, repos: list[str], *, flow: bool) -> dict:
     from backlog import _has_agent_label, _pr_issue_refs
 
@@ -546,9 +554,15 @@ def _fleet_pr_measures(gh, now: int, repos: list[str], *, flow: bool) -> dict:
             if not flow and merged_at is None:
                 continue
             # Latency requires a literal Closes reference. Flow uses backlog's existing
-            # source-issue rule. Never join #N to a different repository.
+            # source-issue rule, adapting REST head.ref to its GraphQL field name.
+            # Never join #N to a different repository.
             refs = (
-                {str(n) for n in _pr_issue_refs(repo, pr)}
+                {
+                    str(n)
+                    for n in _pr_issue_refs(
+                        repo, {**pr, "headRefName": _fleet_head_ref(pr, "PR")}
+                    )
+                }
                 if flow
                 else set(re.findall(r"\bCloses\s+#([1-9]\d*)\b", pr["body"] or "", re.I))
             )
@@ -633,7 +647,7 @@ def _fleet_oldest_canary(gh, now: int) -> dict:
             raise _FleetReadError(f"would need complete paginated canary PR arrays for {repo}")
         for page in pages:
             for pr in page:
-                if pr["head"]["ref"].startswith("sync/workflows-"):
+                if _fleet_head_ref(pr, "canary PR").startswith("sync/workflows-"):
                     # Draft PRs still have age and still represent undelivered work.
                     created = _fleet_stamp(pr["created_at"])
                     if created > now:

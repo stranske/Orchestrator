@@ -219,3 +219,39 @@ no collection floor changed.
 approval and this run's approval policy is `never`. The checked pytest/full-verification
 claim in the PR summary remains unsupported. PR #1130 was confirmed open with
 `draft=false`. No workflow files changed.
+
+## REST branch evidence — 2026-11-05 11:30Z
+
+The first implementation task had another undercount: the fleet reader passes REST
+PR records to backlog's source-issue rule, which expects GraphQL's `headRefName`.
+Branch-only source references such as `codex/issue-1` were ignored. The reader now
+adapts `head.ref` to that field and requires complete branch evidence for released
+flow. The canary reader shares this validation: empty branch names previously
+allowed a partial oldest age from other canaries. Latency still requires a literal
+`Closes #N` body reference and is independent of branch classification.
+
+Regression subcases reproduced both defects before the fix. All 25 fleet unittest
+tests pass after the fix, including branch-only references, body/branch deduplication,
+missing or malformed branch evidence, and retention of independent measurements.
+No collection floor changed. The module selftest and all 10 JavaScript verifier
+tests pass. The isolated Gate mutation was detected and the restored test passed
+using `PYTHON=python3 node scripts/verify_fleet_delivery_mutation.js --unittest`.
+
+`PYTHON=python3 node scripts/verify_fleet_delivery_live.js
+/tmp/orch-672-branch-evidence` verified all five rows at
+`2026-11-05T11:30:20.532Z`. GitHub connectivity failures and the missing opener helper
+remain explicit unmeasured rows. This is available-Python runner evidence, not
+selected-interpreter live-machine acceptance.
+
+The requested pytest command and Black formatting/check commands were attempted
+but cannot run because their modules are absent. Package installation failed on
+PyPI DNS resolution. `/opt/anaconda3/bin/python3 src/verify.py` cannot run because
+that interpreter is absent. The required Black gate prevents committing Python
+changes; they remain in the working tree. Full verification and live acceptance
+remain incomplete. `git diff --check` passes.
+
+The PR checklist correction, blocker comment, and `needs-human` label were each
+rejected with `MCP tool call requires approval, but approval policy is never`.
+The unsupported checked pytest/full-verification claim therefore remains on the
+PR. No protected files changed, and no Python commit was attempted past the
+failed mandatory formatting gate.
