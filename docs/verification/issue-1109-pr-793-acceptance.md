@@ -503,3 +503,40 @@ sequence above was run again on head
 `3 passed in 0.07s`; the production diff again printed nothing. All issue #1109
 and main's issue #1150 registrations were retained; JSON parsing and uniqueness
 checks passed. No coverage sequence or deliberate mutations were repeated.
+
+### Flat-layout failure and restored verification
+
+On head `0b1f698a4e55af95034984a54dd32b9b43991b3d`, a focused archive-based
+flat-layout run printed `3 failed, 5 passed in 1.62s`. The failures were
+`FileNotFoundError` for `tree/src`: the source-path correction assumed a checkout
+and did not yet support the flat exec mirror exercised by CI. Both new modules
+now locate `src/synthesis_promotion.py` when present, otherwise the root-level
+production file, using only filesystem paths before child startup.
+
+With those two uncommitted test edits on that same head, the exact focused shell
+sequence above used `CHECK=/tmp/issue1109-focused.LldBb4` and printed
+`8 passed in 0.44s`, then `3 passed in 0.07s`. The production diff was empty.
+The flat-layout reproduction used the same Python 3.14.3 interpreter and this
+focused command/setup (the two test edits are copied explicitly because archive
+uses committed HEAD):
+
+```bash
+set -eu
+FLAT=$(mktemp -d /tmp/issue1109-flat.XXXXXX)
+export FLAT
+mkdir -p "$FLAT/tree" "$FLAT/state" "$FLAT/runtime" "$FLAT/tmp"
+git archive HEAD | { tar -x -C "$FLAT/tree" && cat >/dev/null; }
+cp tests/test_issue1109_pr793_acceptance.py tests/test_issue1109_runtime_isolation.py "$FLAT/tree/tests/"
+cp "$FLAT/tree/src/"*.py "$FLAT/tree/"
+mv "$FLAT/tree/src" "$FLAT/archived-src"
+export ORCH_STATE_DIR="$FLAT/state" ORCH_LOCAL_RUNTIME="$FLAT/runtime" TMPDIR="$FLAT/tmp"
+unset ORCH_FEEDBACK_DB ORCH_CAPABILITIES_PATH ORCH_FEATURES_PATH
+printf 'head=%s\nFLAT=%s\n' "$(git rev-parse HEAD)" "$FLAT"
+cd "$FLAT/tree"
+/Users/teacher/.codex/py314/bin/python -m pytest -q tests/test_synthesis_promotion_coverage.py tests/test_issue1109_runtime_isolation.py tests/test_issue1109_pr793_acceptance.py -m 'not slow' -p no:cacheprovider --override-ini='addopts='
+```
+
+Restored flat result: `FLAT=/tmp/issue1109-flat.83APio`, `8 passed in 0.57s`.
+The initial failing run used `/tmp/issue1109-flat.hw4ywh` with the same setup
+except the explicit copy of the two uncommitted test edits. These are focused
+layout checks, not a full local suite or authoritative Gate evidence.

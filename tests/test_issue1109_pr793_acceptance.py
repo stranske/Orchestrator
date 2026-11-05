@@ -7,6 +7,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 EVIDENCE = REPO / "docs" / "verification" / "issue-1109-pr-793-acceptance.md"
 PRODUCTION = REPO / "src" / "synthesis_promotion.py"
+if not PRODUCTION.is_file():
+    PRODUCTION = REPO / "synthesis_promotion.py"
 
 REQUIRED = (
     "574c1694b2990e50ce0668589472e180f481019c",

@@ -16,7 +16,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-MODULE_DIR = Path(__file__).resolve().parents[1] / "src"
+REPO = Path(__file__).resolve().parents[1]
+MODULE_DIR = REPO / "src" if (REPO / "src" / "synthesis_promotion.py").is_file() else REPO
 
 _CHILD = r"""
 import json
