@@ -509,14 +509,19 @@ def _fleet_recent_prs(gh, repo: str, now: int) -> list[dict]:
     raise _FleetReadError("would need complete updated PR pagination beyond 1000 rows per repo")
 
 
-def _fleet_labels(record: dict, subject: str) -> list[str]:
+def _fleet_labels(record: Mapping[str, object], subject: str) -> list[str]:
     """Distinguish an explicitly empty label list from missing classification evidence."""
     labels = record.get("labels")
-    if isinstance(labels, list):
-        names = [label.get("name") if isinstance(label, dict) else label for label in labels]
-        if all(isinstance(name, str) and name.strip() for name in names):
-            return names
-    raise _FleetReadError(f"would need complete GitHub {subject} labels")
+    if not isinstance(labels, list):
+        raise _FleetReadError(f"would need complete GitHub {subject} labels")
+
+    names: list[str] = []
+    for label in labels:
+        name = label.get("name") if isinstance(label, Mapping) else label
+        if not isinstance(name, str) or not name.strip():
+            raise _FleetReadError(f"would need complete GitHub {subject} labels")
+        names.append(name)
+    return names
 
 
 def _fleet_pr_measures(gh, now: int, repos: list[str], *, flow: bool) -> dict:
