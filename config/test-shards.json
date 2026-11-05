@@ -9,6 +9,7 @@
     597.306
   ],
   "untimed_modules": [
+    "tests/test_advisor_external_guard.py",
     "tests/test_advisor_hermetic.py",
     "tests/test_closer_correction_owner.py",
     "tests/test_gemini_flash_routing.py",
@@ -137,6 +138,7 @@
       "tests/test_adjudicator_criterion_texts.py",
       "tests/test_adjudicator_retro_cost.py",
       "tests/test_adversarial_review_at_head.py",
+      "tests/test_advisor_external_guard.py",
       "tests/test_advisor_live_rows.py",
       "tests/test_agent_switches.py",
       "tests/test_capability_advisor_selftest_regressions.py",

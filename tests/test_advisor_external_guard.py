@@ -8,11 +8,13 @@ the restoration check can see the unpatched entry points.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import socket
 import subprocess
 import urllib.request
+from pathlib import Path
 
 import pytest
 
@@ -62,6 +64,22 @@ def test_guard_scope_is_the_capability_advisor_suite():
     assert "http.client.connect" in AUDIT_EVENTS
     assert "urllib.Request" not in AUDIT_EVENTS
     assert set(_CALLS) == set(labels)
+
+
+def test_guard_module_is_in_exactly_one_ci_shard():
+    """CI rejects a collected module that the shard plan never assigns.
+
+    ``test_shard_lists_partition_every_collected_test_exactly_once`` is that check.
+    This module was collected and absent from ``config/test-shards.json``, so the
+    guard self-checks never reached a shard.
+    """
+    repo = Path(__file__).resolve().parents[1]
+    plan = json.loads((repo / "config" / "test-shards.json").read_text(encoding="utf-8"))
+    name = "tests/test_advisor_external_guard.py"
+    hits = [shard for shard in plan["shards"] if name in shard]
+    assert len(hits) == 1
+    assert hits[0].count(name) == 1
+    assert plan["untimed_modules"].count(name) == 1
 
 
 def test_suite_guard_patches_the_import_time_entry_points(advisor_external_guard):

@@ -249,3 +249,28 @@ Checked 2026-11-05. Every broken run exited 1. Every restored rerun exited 0.
 | `test_prebound_popen_records_via_the_audit_hook_before_starting` | require the pre-bound alias to record `via: patch` | exit 1, attempt dict diff (`audit` vs `patch`) | exit 0 |
 | `test_test_monkeypatch_undo_does_not_remove_the_guard` | require `undo()` to leave a different `Popen` | exit 1, `assert blocked is not blocked` | exit 0 |
 | `test_close_restores_patched_callables_and_disarms_the_audit_hook` | require `Popen` to stay patched after close | exit 1, `assert <class 'subprocess.Popen'> is not _REAL_POPEN` | exit 0 |
+| `test_guard_module_is_in_exactly_one_ci_shard` | require the module to be in zero shards | exit 1, `assert 1 == 0` | exit 0 |
+
+The shard-pin break used that command with `-k test_guard_module_is_in_exactly_one_ci_shard`. It exited 1. The restored file, same command, is included in the focused rerun below.
+
+## Focused suite rerun
+
+`/opt/anaconda3/bin/python3` is absent. The interpreter is Python 3.14.9 at `/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3`.
+
+Command:
+
+`python3 -m pytest -q tests/test_advisor_external_guard.py tests/test_capability_advisor_coverage.py tests/test_capability_advisor_cli_context.py tests/test_capability_advisor_selftest_regressions.py tests/test_capability_advisor_auto_decline.py tests/test_capability_advisor_reach.py tests/test_advisor_failure_boundaries.py tests/test_advisor_hermetic.py tests/test_advisor_live_rows.py tests/test_advisor_ranking_failure.py -m "not slow" --tb=line`
+
+Result, 2026-11-05: 96 passed, 5 subtests passed, in 6.82s. The run printed `external-operation attempts: 0 unexpected`. Elapsed time is under two minutes. The suite fixture sets `ORCH_STATE_DIR` and `ORCH_LOCAL_RUNTIME` to a temporary directory before the advisor import.
+
+## Collection
+
+Command: `python3 -m pytest --collect-only -q`
+
+`/opt/anaconda3/bin/python3` is absent, so this is the selected interpreter above.
+
+Result, measured 2026-11-05 before the shard pin was added: 14420 tests collected in 37.47s. That collection contained one module absent from `config/test-shards.json`: `tests/test_advisor_external_guard.py`. The pin adds one collected test. After assigning the module, `python3 -m pytest -q tests/test_verify_sharding.py::test_shard_lists_partition_every_collected_test_exactly_once --tb=line` passed in 14.13s, so every collected module is in the plan exactly once.
+
+`.verify-floor.json` records `collected` 14329 and `passed` 14327. The floor commit is `d63b291`. `origin/main` (`ad3c821`) is after that commit and already contains tests the floor does not. This branch adds the guard self-checks on top. The difference is a floor lag, which CI forgives on a pull request via `python3 src/verify.py --aggregate shard-evidence --coverage --floor-may-lag`. A collection drop still fails. This change does not edit `.verify-floor.json` and does not lower `passed` or any skip ceiling.
+
+The CI pytest command is `python3 src/verify.py --pytest-shard <n>/6 --coverage --shard-output shard-results`, aggregated with `python3 src/verify.py --aggregate shard-evidence --coverage --floor-may-lag` on a pull request. The last green aggregate on this line, run 41992304936, was head `e5c5877`, which does not contain this module. That result is not a pass for this head.
