@@ -1,0 +1,262 @@
+{
+  "original_cases": 40,
+  "pending_attempted": 21,
+  "decided_protected": 19,
+  "graded": 0,
+  "native_per_case": [
+    {
+      "case_id": "afd30da1584df1b933711d17348ad2449cac90491095b6ae5bcedac261c0a1f1",
+      "target": "stranske/Workflows#3772",
+      "native_error": "current merge-bound verifier decision missing or changed",
+      "decision": null,
+      "backend_run_id": null,
+      "retry_attempts": 0,
+      "packet_metadata_only": true
+    },
+    {
+      "case_id": "c0255daf58c35dc6dbf9690783964a28d2853838efdbd47e167c63c37f6b5739",
+      "target": "stranske/Orchestrator#477",
+      "native_error": "native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch",
+      "decision": null,
+      "backend_run_id": null,
+      "retry_attempts": 1,
+      "packet_metadata_only": true
+    },
+    {
+      "case_id": "44e85dfcdd64335e346a7132a927917e61846910b9ca04e81e346a654c5e88a5",
+      "target": "stranske/Orchestrator#478",
+      "native_error": "native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch",
+      "decision": null,
+      "backend_run_id": null,
+      "retry_attempts": 1,
+      "packet_metadata_only": true
+    },
+    {
+      "case_id": "d880ad7abb0729067f5a72e71928e0036f0f970785d78a5e63dbef8f3a682604",
+      "target": "stranske/Orchestrator#467",
+      "native_error": "native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch",
+      "decision": "needs_more_evidence",
+      "backend_run_id": "offload:codex:1791290909657304000",
+      "retry_attempts": 0,
+      "packet_metadata_only": true
+    },
+    {
+      "case_id": "bf078dca610277353e79e28d7f62693d5f6f9236551e0c1ac1d8a44800d642ab",
+      "target": "stranske/Workflows#3764",
+      "native_error": "native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch",
+      "decision": null,
+      "backend_run_id": null,
+      "retry_attempts": 1,
+      "packet_metadata_only": true
+    },
+    {
+      "case_id": "523f3f55d9f384ecc5fe12d8dde4c9040c71607bbb5775a0d28df5c608107e99",
+      "target": "stranske/Orchestrator#473",
+      "native_error": "native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch",
+      "decision": "needs_more_evidence",
+      "backend_run_id": "offload:codex:1791290989093567000",
+      "retry_attempts": 0,
+      "packet_metadata_only": true
+    },
+    {
+      "case_id": "d583afb7c56b931343d2454023ac99eb66963ffac5d29ec47e0d60700680df05",
+      "target": "stranske/Orchestrator#474",
+      "native_error": "native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch",
+      "decision": "needs_more_evidence",
+      "backend_run_id": "offload:codex:1791291019784465000",
+      "retry_attempts": 0,
+      "packet_metadata_only": true
+    },
+    {
+      "case_id": "76288bb67aff7a8db7d2a5f5c647b864af73e0629b028c07c146e81739a9c64b",
+      "target": "stranske/Orchestrator#472",
+      "native_error": "native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch",
+      "decision": "needs_more_evidence",
+      "backend_run_id": "offload:codex:1791291053615999000",
+      "retry_attempts": 0,
+      "packet_metadata_only": true
+    },
+    {
+      "case_id": "584acf2416195efde43cf4df15aebfd9ae43f0a1202dcab552d54b3c75b1e37d",
+      "target": "stranske/Orchestrator#471",
+      "native_error": "native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch",
+      "decision": "needs_more_evidence",
+      "backend_run_id": "offload:codex:1791307558106777000",
+      "retry_attempts": 0,
+      "packet_metadata_only": true
+    },
+    {
+      "case_id": "dfccaa2f511f87f64adf1ef237a865141d7b9e25ffc67700e0ead2160c437f2e",
+      "target": "stranske/Orchestrator#470",
+      "native_error": "native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch",
+      "decision": "needs_more_evidence",
+      "backend_run_id": "offload:codex:1791307595850460000",
+      "retry_attempts": 0,
+      "packet_metadata_only": true
+    },
+    {
+      "case_id": "cc872bb0e729e8209d81a618e46f1a1399d5e9af482a0dcb0d8018c4cba7d55b",
+      "target": "stranske/Workflows#3756",
+      "native_error": "native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch",
+      "decision": null,
+      "backend_run_id": null,
+      "retry_attempts": 1,
+      "packet_metadata_only": true
+    },
+    {
+      "case_id": "1f7c00d08df7b5fea0801b6e0dcb006c08f157396582f05afc87f8e6ddaf9604",
+      "target": "stranske/Orchestrator#461",
+      "native_error": "native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch",
+      "decision": null,
+      "backend_run_id": null,
+      "retry_attempts": 1,
+      "packet_metadata_only": true
+    },
+    {
+      "case_id": "15b6120aa5b8d25e481e7339703ed0ee4ac36e65c684fc66285cfe3f921c1395",
+      "target": "stranske/Workflows#3759",
+      "native_error": "native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch",
+      "decision": "needs_more_evidence",
+      "backend_run_id": "offload:codex:1791307699323841000",
+      "retry_attempts": 0,
+      "packet_metadata_only": true
+    },
+    {
+      "case_id": "20b55da1130e68a4e519d79fcb2408d8aad62434ea60ce85de9f43511b8584e0",
+      "target": "stranske/Orchestrator#464",
+      "native_error": "native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch",
+      "decision": "needs_more_evidence",
+      "backend_run_id": "offload:codex:1791307796942455000",
+      "retry_attempts": 0,
+      "packet_metadata_only": true
+    },
+    {
+      "case_id": "05ffc5fb2ffa8a2c2236c3b3daf2be6f29377a7f52524a6e3a77a8fe6b6b22e1",
+      "target": "stranske/Orchestrator#466",
+      "native_error": "native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch",
+      "decision": "needs_more_evidence",
+      "backend_run_id": "offload:codex:1791307834387822000",
+      "retry_attempts": 0,
+      "packet_metadata_only": true
+    },
+    {
+      "case_id": "969408d1bfba59699c294e57b7fc2dbaff9134a18424cd6dc07840accf1c18da",
+      "target": "stranske/Orchestrator#465",
+      "native_error": "native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch",
+      "decision": null,
+      "backend_run_id": null,
+      "retry_attempts": 1,
+      "packet_metadata_only": true
+    },
+    {
+      "case_id": "e0d9ae56aa6fd869a9386c25faca3c182492f150b419494c8c0ca5922accb672",
+      "target": "stranske/Orchestrator#463",
+      "native_error": "native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch",
+      "decision": "needs_more_evidence",
+      "backend_run_id": "offload:codex:1791307905011949000",
+      "retry_attempts": 0,
+      "packet_metadata_only": true
+    },
+    {
+      "case_id": "5410abf87e93df308e8c633230776c74a0a8d7b10f6d155236bd2d1f4108c3ad",
+      "target": "stranske/Workflows#3753",
+      "native_error": "native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch",
+      "decision": "needs_more_evidence",
+      "backend_run_id": "offload:codex:1791307952886313000",
+      "retry_attempts": 0,
+      "packet_metadata_only": true
+    },
+    {
+      "case_id": "7bc3efdad7d67c6252efd96cf1bf5899ab5b11135beafee82a514c92d46f9f01",
+      "target": "stranske/Deliverable-Render#82",
+      "native_error": "backend exit=124 timed out after 180s; agy log tail captured; could not parse a JSON adjudication proposal from the backend output",
+      "decision": null,
+      "backend_run_id": "offload:gemini:1791980537173148000",
+      "retry_attempts": 0,
+      "packet_metadata_only": true
+    },
+    {
+      "case_id": "94ba2a422838643f6417add4ec0d7ed616633833e38a5885e12aaf5cc761c36f",
+      "target": "stranske/Deliverable-Render#80",
+      "native_error": "native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch",
+      "decision": null,
+      "backend_run_id": null,
+      "retry_attempts": 0,
+      "packet_metadata_only": true
+    },
+    {
+      "case_id": "79c014c56576c49181fa10a9f799fd007ecebf7653246d836321b813dd2301a6",
+      "target": "stranske/Workflows#3875",
+      "native_error": "native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch",
+      "decision": null,
+      "backend_run_id": null,
+      "retry_attempts": 0,
+      "packet_metadata_only": true
+    }
+  ],
+  "native_primary_summary": {
+    "cases": 40,
+    "adjudicated": 0,
+    "proposed_decisions": 19,
+    "metadata_only_cases": 40,
+    "graded": 0,
+    "agree": 0,
+    "disagree": 0,
+    "agreement_rate": null,
+    "merge_rule_agreement_rate": null,
+    "cost_usd": null,
+    "cost_attempted_cases": 31,
+    "cost_imputed_cases": 31,
+    "cost_unmeasured_cases": 0,
+    "cost_scale": "list_price_usd",
+    "estimated_cost_usd": 16.689203099885187,
+    "cost_measured_cases": 0,
+    "cost_per_case": null
+  },
+  "lineage_summary": {
+    "original_paid_identities": 36,
+    "retained_original_paid_identities": 36,
+    "all_paid_attempt_identities": 38,
+    "new_paid_attempts": 2,
+    "restored_lineage_rows": 6,
+    "protected_decided_unchanged": 19,
+    "measured_cost_usd": null,
+    "estimated_list_price_usd": 21.282785318025258,
+    "native_primary_summary_limitation": "Native summarize excludes retry_attempts; primary-row cost counts are incomplete, not lower spending",
+    "paid_rows_dropped": 0,
+    "proposals_resurrected": 0,
+    "preserved_at": "2026-10-14T12:30:33.475948+00:00"
+  },
+  "cohort_continuation_meta": {
+    "started_at": "2026-10-14T12:22:14.460456+00:00",
+    "native_entrypoint": "/Users/teacher/.codex/orchestrator-mirror/adjudicator_retro.py",
+    "native_sha256": "a5a5ef0d7f153d80ea3c74543c7508fc9f0f1d1270397384530e9ee6307325bc",
+    "effective_cli": [
+      "python3",
+      "src/adjudicator_retro.py",
+      "--dispatch",
+      "--retry",
+      "--limit",
+      "21"
+    ],
+    "actual_launcher_argv": [
+      "/Users/teacher/.codex/automations/imi-merge-verify-closer/work/20261014T1205Z-native/native579.py",
+      "--dispatch",
+      "--retry",
+      "--limit",
+      "21"
+    ],
+    "deadline_utc": "2026-10-14T12:47:00Z",
+    "original_report_sha256": "3a72cb3896f3a211024432c9e13e5a891984cba7e142141fd1eee2cd63067d23",
+    "cohort_count": 40,
+    "protected_decided": 19,
+    "authentic_reads": 21,
+    "native_provider_calls": 1,
+    "refused_at_boundary": 0,
+    "last_provider_errors": [
+      "backend exit=124 timed out after 180s; agy log tail captured",
+      "could not parse a JSON adjudication proposal from the backend output"
+    ],
+    "finished_at": "2026-10-14T12:27:14.094262+00:00"
+  }
+}

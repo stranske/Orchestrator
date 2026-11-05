@@ -1,0 +1,32 @@
+{
+  "checked_at": "2026-11-03T19:07:03.406273+00:00",
+  "evaluated_revision": "42ee516d3219c98129a9f4837a1edd35937148d8",
+  "checks": [
+    {
+      "name": "runner-tests",
+      "command": [
+        "node",
+        "tests/test_adjudicator_acceptance_runner.js"
+      ],
+      "exit_code": 0,
+      "log": "runner-tests.log",
+      "log_sha256": "aa2704887818edeadc0807135cdec575ea7d3b8020426c2c12adb9ee549ed890"
+    },
+    {
+      "name": "inventory-tests",
+      "command": [
+        "node",
+        "tests/test_adjudicator_inventory.js"
+      ],
+      "exit_code": 0,
+      "log": "inventory-tests.log",
+      "log_sha256": "601a69001b966f0d629439f87f7b8e2b2b775e4db20fe526c70774be676d85b9"
+    }
+  ],
+  "source_sha256": {
+    "scripts/run_adjudicator_acceptance.js": "d775c9200d21082dca01b0d4a36098a8810dfcca8a2326becf6fb35810e805e8",
+    "tests/test_adjudicator_acceptance_runner.js": "b6036c506cec4441044b0afb6d28d31cf12f634e900aa0142794df872edfb86d",
+    "scripts/export_adjudicator_inventory.js": "39b6ff782685920c3ba56895c7d1b6a8ceb3f1f981c0d1bf25f4e4cf1e72921b",
+    "tests/test_adjudicator_inventory.js": "d4687537064ebe0f0d28aa308110fb08bcbc78c17ee7b52b4540452d1969f270"
+  }
+}

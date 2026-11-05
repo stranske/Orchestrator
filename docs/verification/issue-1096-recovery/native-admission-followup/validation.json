@@ -1,0 +1,75 @@
+{
+  "checked_at": "2026-11-04T05:10:28.329756+00:00",
+  "git_dir": "/tmp/issue1096-native-admission-git-qt8ntu2_/repo.git",
+  "source_commit": "c80d78d65510c4022a8dde9a7961d1d71f492b6a",
+  "checkout_parent": "5435e6ad526c2f6ad4450d743d3dd4650591ea7f",
+  "source_sha256": {
+    "scripts/export_adjudicator_inventory.js": "adca18e4ef02db3053bc2d00e759e5e2983d508f551ce29a090ed003722568bd",
+    "tests/test_adjudicator_inventory.js": "83764e20c0f594adb8e36cc27725283afb211c20a583b37a75b7116adab0bfca"
+  },
+  "checks": [
+    {
+      "command": "node tests/test_adjudicator_inventory.js",
+      "phase": "prior source and tests",
+      "exit_status": 0,
+      "log": "baseline.log",
+      "log_sha256": "06be328114da97765fe5f8e573067ec3dd37f47b986d59fdea6f71dcfbf095f4",
+      "passed": 84,
+      "failed": 0
+    },
+    {
+      "command": "node tests/test_adjudicator_inventory.js",
+      "phase": "prior source with added controls",
+      "exit_status": 1,
+      "log": "prior-source-controls.log",
+      "log_sha256": "3e161e26b2f66e4a1d9b44aad41ad7173330773435cdfcce48631155c5124fcf",
+      "passed": 85,
+      "failed": 2
+    },
+    {
+      "command": "node tests/test_adjudicator_inventory.js",
+      "phase": "implemented source",
+      "exit_status": 0,
+      "log": "inventory.log",
+      "log_sha256": "bdc76f7f313d9260f36328f673c1522f21c85817cb2ce4ec427dcf05ddbf455e",
+      "passed": 87,
+      "failed": 0
+    },
+    {
+      "command": "node tests/test_adjudicator_acceptance_runner.js",
+      "phase": "related acceptance runner regressions",
+      "exit_status": 0,
+      "log": "runner.log",
+      "log_sha256": "f696744bbc57e8420a29d06fbe97bf66ac82a832d4aef9722bceb4d84142ebdc",
+      "passed": 33,
+      "failed": 0
+    },
+    {
+      "command": "node tests/test_adjudicator_evidence_ledger.js",
+      "phase": "related ledger regressions",
+      "exit_status": 0,
+      "log": "ledger.log",
+      "log_sha256": "447c16282b4035e4cf5f0dbfc7390594e41056fa3efa0b46463405a3b6d04f4e",
+      "passed": 26,
+      "failed": 0
+    }
+  ],
+  "focused_passed": 146,
+  "evidence_sha256": {
+    "plan.md": "5b84e4c37de628d14a74afd77462d175346202d21921de344294374a2a8dffbb",
+    "results.md": "0025f4f19644c915e299cf8ff155869c1ab1076758f7a05c2d1f3b42de0bd249"
+  },
+  "required_python_acceptance": "acceptance-run/checks.json",
+  "required_tests_passed": false,
+  "original_retry_reconciliation_complete": false,
+  "operational_acceptance_complete": false,
+  "dispatch_authorized": false,
+  "paid_dispatches": 0,
+  "blocker_comment": "rejected_connector_requires_approval_policy_never",
+  "needs_human_label": "rejected_connector_requires_approval_policy_never",
+  "pr_readiness": {
+    "number": 1097,
+    "state": "open",
+    "isDraft": false
+  }
+}

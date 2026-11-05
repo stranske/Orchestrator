@@ -1,0 +1,76 @@
+{
+  "checked_at": "2026-11-03T22:49:51.940Z",
+  "source_revision": "e4ce3eef4749b469657f6f56a94934436c886a8d",
+  "parent_revision": "408fc9a3cdb169d4d6b3bd65bc58924f52803c8a",
+  "git_directory": "/tmp/issue1096-receipt-git-vDZfnY",
+  "source_sha256": {
+    "scripts/export_adjudicator_inventory.js": "61e2deeac7d4b87e2104631357c6a2ff31f3e0a605128ec3dece3f9f27309f79",
+    "tests/test_adjudicator_inventory.js": "ba37f5240ed89ddf9261738445ccc3a0c463ac95fae4788b610ad222afb8d2a2"
+  },
+  "tests": [
+    {
+      "command": [
+        "node",
+        "tests/test_adjudicator_inventory.js"
+      ],
+      "exit_code": 0,
+      "passed": 61,
+      "failed": 0,
+      "log": "inventory-green.log",
+      "log_sha256": "251a20fd7738b977d9fdc2f698c81ac45a51fa124ab0db458561146049e1c1d2"
+    },
+    {
+      "command": [
+        "node",
+        "tests/test_adjudicator_acceptance_runner.js"
+      ],
+      "exit_code": 0,
+      "passed": 33,
+      "failed": 0,
+      "log": "runner.log",
+      "log_sha256": "ba81c6746609e6f8f0dc210d90dea51d4b2f37a85c1b3b1a2c79e25931edcc59"
+    },
+    {
+      "command": [
+        "node",
+        "tests/test_adjudicator_evidence_ledger.js"
+      ],
+      "exit_code": 0,
+      "passed": 22,
+      "failed": 0,
+      "log": "ledger.log",
+      "log_sha256": "4654f8caba98f01cb02847387b4a5d9fa02b672b94ad546dd0d8d0cd675a7623"
+    }
+  ],
+  "negative_controls_before_implementation": {
+    "passed": 58,
+    "failed": 3,
+    "log": "inventory-red.log",
+    "log_sha256": "a5f3522cc70547ac8897566e981f6ff48423c5977f64e2e521dc75e5ae4b2814"
+  },
+  "evidence_sha256": {
+    "baseline.log": "c831743bf613f00b2cb7986736fd948a68f9472b231c424689e06ccb3cadbec7",
+    "historical-locator-summary.json": "b4109aeee81112b576ebbd8198d71fd32dd4ee8db406edf104bfe9eca8ded63c",
+    "inventory-green.log": "251a20fd7738b977d9fdc2f698c81ac45a51fa124ab0db458561146049e1c1d2",
+    "inventory-red.log": "a5f3522cc70547ac8897566e981f6ff48423c5977f64e2e521dc75e5ae4b2814",
+    "ledger.log": "4654f8caba98f01cb02847387b4a5d9fa02b672b94ad546dd0d8d0cd675a7623",
+    "plan.md": "ecff10a7e3817485fd61fe3d06b90904212aea7477ab4e76e42eaf1c8670cb74",
+    "runner.log": "ba81c6746609e6f8f0dc210d90dea51d4b2f37a85c1b3b1a2c79e25931edcc59"
+  },
+  "required_test_receipt": "acceptance-run/checks.json",
+  "required_tests_passed": false,
+  "required_test_receipt_sha256": "4d9acea35ba490b6a5ea1e194ada87fb00a05be7dd28517998217dcb4f26fd49",
+  "original_retry_task_complete": false,
+  "new_acceptance_checkboxes_complete": 0,
+  "branch_modified": false,
+  "protected_files_modified": false,
+  "dispatch_performed": false,
+  "canonical_publication_performed": false,
+  "remote_blocker_comment_applied": false,
+  "needs_human_label_applied": false,
+  "remote_mutation_failure": "MCP tool call requires approval, but approval policy is never",
+  "historical_validation": "validation.json",
+  "historical_validation_sha256": "e74114e58097d43df63e51e951c7496b48a5dd973457e4a414d77e6fb129a196",
+  "correction_checked_date": "2026-11-04",
+  "correction_scope": "Hash binding and checklist correction only; historical runs are unchanged."
+}

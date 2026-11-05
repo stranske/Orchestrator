@@ -1,0 +1,31 @@
+✔ records exact commands, source hashes, complete JUnit and logs for both checks (282.907958ms)
+✔ full-suite success requires the complete collected identities: {"omitExtra":true} (275.746157ms)
+✔ full-suite success requires the complete collected identities: {"duplicateExtra":true} (272.106178ms)
+✔ full-suite success requires the complete collected identities: {"collectionFailure":true} (281.70793ms)
+✔ full-suite success requires the complete collected identities: {"collectionEmpty":true} (275.916415ms)
+✔ full-suite success requires the complete collected identities: {"collectionDuplicate":true} (273.805781ms)
+✔ missing pytest preserves two failures and cannot complete acceptance (143.517923ms)
+✔ refuses a successful claim for incomplete evidence: {"noXml":true} (149.651183ms)
+✔ refuses a successful claim for incomplete evidence: {"malformed":true} (297.806503ms)
+✔ refuses a successful claim for incomplete evidence: {"empty":true} (272.433932ms)
+✔ refuses a successful claim for incomplete evidence: {"incomplete":true} (280.297611ms)
+✔ refuses a successful claim for incomplete evidence: {"duplicate":true} (273.775952ms)
+✔ refuses a successful claim for incomplete evidence: {"skipped":true} (277.97811ms)
+✔ refuses a successful claim for incomplete evidence: {"foreign":true} (270.847152ms)
+✔ refuses a successful claim for incomplete evidence: {"exit":1} (323.306578ms)
+✔ source changes during execution invalidate otherwise passing checks (268.626339ms)
+✔ timeout preserves both failed checks without retrying either command (1582.478126ms)
+✔ refuses revision mismatch, modified tracked inputs and untracked inputs before execution (38.984537ms)
+✔ refuses uncommitted test execution input: conftest.py (26.499178ms)
+✔ refuses uncommitted test execution input: pytest.ini (26.319562ms)
+✔ refuses uncommitted test execution input: setup.cfg (26.788414ms)
+✔ refuses uncommitted test execution input: scripts/run_adjudicator_acceptance.js (26.537256ms)
+✔ requires explicit interpreter/revision/bounds and never overwrites a receipt (153.453153ms)
+ℹ tests 23
+ℹ suites 0
+ℹ pass 23
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 6109.847823
