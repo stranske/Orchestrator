@@ -62,6 +62,168 @@ def test_recurrence_cli_preserves_offline_and_output_choice(monkeypatch, capsys,
     assert calls == [True]
 
 
+def test_recurrence_live_issue_read_distinguishes_valid_and_truncated_json(monkeypatch):
+    issue = {"number": 7, "title": "Current title", "labels": [{"name": "bug"}]}
+    calls = []
+    responses = iter([json.dumps(issue), '{"number":'])
+
+    def gh(*args, **kwargs):
+        calls.append((args, kwargs))
+        return SimpleNamespace(returncode=0, stdout=next(responses))
+
+    monkeypatch.setattr(recurrence.subprocess, "run", gh)
+    fixture = {"repo": "Orchestrator", "issue": 7, "live": True, "labels": ["saved"]}
+    assert recurrence._labels_of(fixture, offline=False) == (
+        ["bug"],
+        "Current title",
+        "live Orchestrator#7",
+    )
+    assert recurrence._labels_of(fixture, offline=False) == (
+        ["saved"],
+        "",
+        "frozen (live read failed) Orchestrator#7",
+    )
+    assert (
+        calls
+        == [
+            (
+                (
+                    [
+                        "gh",
+                        "issue",
+                        "view",
+                        "7",
+                        "--repo",
+                        "stranske/Orchestrator",
+                        "--json",
+                        "number,title,labels,body",
+                    ],
+                ),
+                {"capture_output": True, "text": True, "timeout": 120},
+            )
+        ]
+        * 2
+    )
+
+
+def test_recurrence_label_repair_failure_preserves_original_classification(monkeypatch):
+    import issue_readiness
+
+    fixture = {
+        "capability": "routing",
+        "kind": "classify",
+        "source": "fixture",
+        "title": "Current work",
+        "labels": ["bug"],
+        "apply_label_repair": True,
+        "expect_task_type": "implement",
+    }
+    repairs = []
+    classified = []
+
+    def unavailable(item):
+        repairs.append(item)
+        raise OSError("fixture readiness unavailable")
+
+    monkeypatch.setattr(issue_readiness, "task_label_for", unavailable)
+    monkeypatch.setattr(recurrence, "FIXTURES", (fixture,))
+    monkeypatch.setattr(recurrence, "PREDICATE_FIXTURES", ())
+    monkeypatch.setattr(
+        recurrence.backlog, "classify", lambda labels: classified.append(labels) or "implement"
+    )
+    result = recurrence.replay(offline=True)
+    assert repairs == [{"labels": [{"name": "bug"}], "title": "Current work"}]
+    assert classified == [["bug"]]
+    assert result["would_fire"] == 1
+    assert result["rows"][0]["label_repair_applied"] is None
+    assert fixture["labels"] == ["bug"]
+
+
+def test_recurrence_shell_timeout_is_reported_as_environment_failure(monkeypatch, tmp_path):
+    script = tmp_path / "orchestrate.sh"
+    script.write_text("export ORCH_FIXTURE=1\n_gh_gate() { :; }\n")
+    monkeypatch.setattr(recurrence, "ORCHESTRATE", script)
+    calls = []
+
+    def timeout(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])
+
+    monkeypatch.setattr(recurrence.subprocess, "run", timeout)
+    assert recurrence._tick_env_attempt() == (
+        {},
+        {"reason": "timeout", "detail": f"bash exceeded {recurrence.TICK_ENV_TIMEOUT}s"},
+    )
+    assert len(calls) == 1
+    assert calls[0][0][0][0:2] == ["bash", "-c"]
+    assert "_gh_gate" not in calls[0][0][0][2]
+    assert calls[0][1] == {
+        "capture_output": True,
+        "text": True,
+        "timeout": recurrence.TICK_ENV_TIMEOUT,
+    }
+
+
+def test_propensity_surface_records_skip_unreadable_files_and_keep_round_order(
+    monkeypatch, tmp_path
+):
+    import capability_propensity as propensity
+
+    bad = tmp_path / "round-a.md"
+    bad.write_text("must not be included")
+    (tmp_path / "round-b.md").write_text("## 2026-11-01T12:00:00Z\nfirst round\n")
+    (tmp_path / "round-c.md").write_text("## 2026-11-02T12:00:00Z\nsecond round\n")
+    monkeypatch.setenv("ORCH_RECORDS_FIXTURE_SURFACE", str(tmp_path / "round-*.md"))
+    read_text = Path.read_text
+    reads = []
+
+    def read(path, *args, **kwargs):
+        reads.append(path.name)
+        if path == bad:
+            raise OSError("fixture mount unavailable")
+        return read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read)
+    assert propensity.surface_records("fixture-surface") == ["\nfirst round\n", "\nsecond round\n"]
+    assert reads == ["round-a.md", "round-b.md", "round-c.md"]
+
+
+def test_propensity_under_use_uses_requested_ledger_and_reports_unavailable_evidence(
+    monkeypatch, tmp_path
+):
+    import capability_matcher_proposals as proposals
+    import capability_propensity as propensity
+
+    ledger = tmp_path / "private-ledger.json"
+    calls = []
+
+    def evaluate(*, path):
+        calls.append(path)
+        if len(calls) == 2:
+            raise OSError("fixture Brain unavailable")
+        return {
+            "rows": [
+                {
+                    "capability_id": "needed",
+                    "should_have_been_used": True,
+                    "historical_matches": "3",
+                },
+                {
+                    "capability_id": "not-needed",
+                    "should_have_been_used": False,
+                    "historical_matches": 9,
+                },
+                {"capability_id": "no-count", "should_have_been_used": True},
+            ]
+        }
+
+    monkeypatch.setattr(proposals, "evaluate", evaluate)
+    assert propensity._under_use(path=ledger) == {"needed": 3, "no-count": 0}
+    assert propensity._under_use(path=ledger) == {}
+    assert calls == [ledger, ledger]
+    assert not ledger.exists()
+
+
 def corpus():
     return {
         "schema_version": 1,
@@ -149,6 +311,31 @@ def test_atomic_json_preserves_old_result_and_removes_temporary_file_on_replace_
     assert list(tmp_path.iterdir()) == [target]
 
 
+def test_atomic_json_preserves_original_failure_when_temporary_cleanup_also_fails(
+    monkeypatch, tmp_path
+):
+    target = tmp_path / "result.json"
+    target.write_text('{"old": true}\n')
+    attempted = []
+
+    def replace(*args):
+        raise OSError("fixture replace refused")
+
+    def unlink(path):
+        attempted.append(Path(path))
+        raise OSError("fixture cleanup refused")
+
+    monkeypatch.setattr(review.os, "replace", replace)
+    monkeypatch.setattr(review.os, "unlink", unlink)
+    with pytest.raises(OSError, match="^fixture replace refused$"):
+        review._atomic_json(target, {"new": True})
+    assert len(attempted) == 1
+    assert attempted[0].parent == tmp_path
+    assert attempted[0].name.startswith(".result.json.")
+    assert json.loads(target.read_text()) == {"old": True}
+    assert json.loads(attempted[0].read_text()) == {"new": True}
+
+
 @pytest.mark.parametrize(
     "content,message",
     [
@@ -205,6 +392,31 @@ def test_partitioning_refuses_unusable_limits_and_witness_declarations(kwargs, m
 def test_plan_validation_names_invalid_top_level_fields(plan, field, value, message):
     plan[field] = value
     assert message in review.validate_plan(plan)
+
+
+def test_plan_validation_rejects_unknown_keys_and_empty_partition_items(plan):
+    plan["unexpected"] = True
+    assert review.validate_plan(plan) == ["plan has unknown keys: ['unexpected']"]
+    del plan["unexpected"]
+    partition = plan["partitions"][0]
+    partition["items"] = []
+    partition["partition_digest"] = review._digest(
+        review._without_digest(partition, "partition_digest")
+    )
+    plan["plan_sha256"] = review._digest(review._without_digest(plan, "plan_sha256"))
+    assert review.validate_plan(plan) == ["plan.partitions[0].items must be a non-empty list"]
+
+
+def test_corpus_validation_requires_at_least_one_review_item():
+    value = corpus()
+    assert review.validate_corpus(value) == []
+    value["items"] = []
+    assert review.validate_corpus(value) == ["corpus.items must be a non-empty list"]
+
+
+def test_partitioning_rejects_witness_agents_without_multiple_witnesses():
+    with pytest.raises(ValueError, match="witness_agents without overlap >= 2"):
+        review.partition_corpus(corpus(), witness_agents=["fixture-agent"])
 
 
 def test_plan_validation_reports_partition_and_item_corruption(monkeypatch, plan):
@@ -298,6 +510,18 @@ def test_result_validation_reports_shape_duplicate_and_category_disposition_erro
     assert review._finding_errors(None, "finding", {}) == ["finding must be an object"]
 
 
+def test_result_validation_requires_every_expected_item_and_rejects_foreign_items(plan):
+    partition = plan["partitions"][0]
+    result = partition_result(plan, partition)
+    assert review.validate_partition_result(result, plan, partition) == []
+    finding = result["categories"]["removed_product_surfaces"][0]
+    finding["item_id"] = "foreign-item"
+    assert review.validate_partition_result(result, plan, partition) == [
+        "result.categories.removed_product_surfaces[0].item_id is not in the partition: 'foreign-item'",
+        "partition items not classified: ['one']",
+    ]
+
+
 def test_envelope_validation_rejects_stale_plan_and_missing_provenance(plan):
     partition = plan["partitions"][0]
     value = envelope(
@@ -342,6 +566,59 @@ def test_round_registration_explains_why_no_arm_can_be_registered(monkeypatch, p
         "reason": "OSError: fixture database locked" if case == "unavailable" else expected,
     }
     assert writes == []
+
+
+def test_round_registration_keeps_previously_proven_arms_when_another_agent_resumes(
+    monkeypatch, plan
+):
+    import research_subjects
+
+    writes = []
+    monkeypatch.setattr(
+        research_subjects, "round_arm_evidence", lambda *a, **kw: {"arms": ["prior-agent"]}
+    )
+
+    def record(*args, **kwargs):
+        writes.append((args, kwargs))
+        return "fixture-round", {"subject_id": "fixture-subject"}
+
+    monkeypatch.setattr(research_subjects, "record_research_round", record)
+    result = review.register_review_round(
+        plan,
+        ["unstarted-agent"],
+        date="2026-11-05",
+        executing_agent="current-agent",
+    )
+    assert result == {
+        "registered": True,
+        "round_id": "fixture-round",
+        "subject_id": "fixture-subject",
+        "arms": ["current-agent", "prior-agent"],
+        "arms_unproven": ["unstarted-agent"],
+        "executing_agent": "current-agent",
+    }
+    assert len(writes) == 1
+    args, kwargs = writes[0]
+    assert args[1:3] == ("review-corpus", "2026-11-05")
+    assert args[3].endswith("plan_sha256:" + plan["plan_sha256"])
+    assert args[4] == ["current-agent", "prior-agent"]
+    assert kwargs == {"task_type": "review", "conn": None}
+
+
+def test_run_plan_reuses_a_valid_completed_envelope_without_another_offload(
+    monkeypatch, tmp_path, plan
+):
+    partition = plan["partitions"][0]
+    path = review._partition_path(tmp_path, partition["partition_id"])
+    review._atomic_json(path, envelope(plan, partition))
+    original = path.read_bytes()
+    monkeypatch.setattr(review, "register_review_round", lambda *a, **kw: {"registered": False})
+    result = review.run_plan(plan, agent="fixture-agent", cwd=tmp_path, results_dir=tmp_path)
+    assert result["coverage_status"] == "complete"
+    assert result["partition_statuses"] == [
+        {"partition_id": partition["partition_id"], "status": "complete", "reused": True}
+    ]
+    assert path.read_bytes() == original
 
 
 def test_run_plan_retries_corrupt_cache_through_default_transport_and_records_failure(
@@ -547,6 +824,119 @@ def test_review_heartbeat_failure_is_best_effort(monkeypatch):
     monkeypatch.setattr(capabilities, "production_heartbeat", heartbeat)
     assert review._capability_heartbeat() is None
     assert calls == [(("partitioned-review", "invocation"), {"ref": "partitioned_review.main"})]
+
+
+@pytest.mark.parametrize("exit_code,expected_status", [(0, "complete"), (7, "incomplete")])
+def test_review_run_cli_forwards_round_and_transport_options_and_reports_failures(
+    monkeypatch, tmp_path, capsys, plan, exit_code, expected_status
+):
+    plan_path = tmp_path / "plan.json"
+    review._atomic_json(plan_path, plan)
+    results = tmp_path / "results"
+    calls = []
+    registrations = []
+
+    def register(*args, **kwargs):
+        registrations.append((args, kwargs))
+        return {"registered": False}
+
+    def offload(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {
+            "exit": exit_code,
+            "run_id": "fixture-run",
+            "log": "fixture-log",
+            "output": json.dumps(partition_result(plan, plan["partitions"][0])),
+        }
+
+    monkeypatch.setattr(review, "DISABLED", False)
+    monkeypatch.setattr(review, "_capability_heartbeat", lambda: None)
+    monkeypatch.setattr(review, "register_review_round", register)
+    assert review.main(
+        [
+            "run",
+            "--plan",
+            str(plan_path),
+            "--results-dir",
+            str(results),
+            "--agent",
+            "fixture-agent",
+            "--cwd",
+            str(tmp_path),
+            "--timeout",
+            "19",
+            "--round-agents",
+            " fixture-agent , prior-agent ",
+            "--round-date",
+            "2026-11-05",
+            "--no-resume",
+        ],
+        offload_fn=offload,
+    ) == (0 if exit_code == 0 else 1)
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["coverage_status"] == expected_status
+    assert summary == json.loads((results / "run-summary.json").read_text())
+    assert registrations == [
+        (
+            (plan, ["fixture-agent", "prior-agent"]),
+            {"date": "2026-11-05", "executing_agent": "fixture-agent"},
+        )
+    ]
+    assert len(calls) == 1
+    assert calls[0][0] == (
+        "fixture-agent",
+        review.build_partition_prompt(plan, plan["partitions"][0]),
+    )
+    assert calls[0][1] == {
+        "cwd": str(tmp_path),
+        "timeout": 19,
+        "isolate": False,
+        "research_round": None,
+    }
+
+
+@pytest.mark.parametrize(
+    "disposition,verdict,status",
+    [("remaining", "FINDINGS_REMAIN", 1), ("satisfied", "COMPLETE", 0)],
+)
+def test_synthesis_cli_writes_verified_dispositions_and_returns_the_matching_status(
+    monkeypatch, tmp_path, capsys, plan, disposition, verdict, status
+):
+    partition = plan["partitions"][0]
+    saved = envelope(plan, partition)
+    saved["result"]["categories"] = review._empty_categories()
+    finding = partition_result(plan, partition)["categories"]["removed_product_surfaces"][0]
+    finding["disposition"] = disposition
+    saved["result"]["categories"]["confirmed_defects"] = [finding]
+    review._atomic_json(review._partition_path(tmp_path, partition["partition_id"]), saved)
+    plan_path = tmp_path / "plan.json"
+    review._atomic_json(plan_path, plan)
+    output = tmp_path / "synthesis.json"
+    monkeypatch.setattr(review, "DISABLED", False)
+    monkeypatch.setattr(review, "_capability_heartbeat", lambda: None)
+    assert (
+        review.main(
+            [
+                "synthesize",
+                "--plan",
+                str(plan_path),
+                "--results-dir",
+                str(tmp_path),
+                "--output",
+                str(output),
+            ]
+        )
+        == status
+    )
+    assert json.loads(capsys.readouterr().out) == {
+        "output": str(output),
+        "coverage_status": "complete",
+        "verdict": verdict,
+    }
+    written = json.loads(output.read_text())
+    assert written["verdict"] == verdict
+    assert written["categories"]["confirmed_defects"][0]["disposition"] == disposition
+    assert len(written["remaining_findings"]) == (1 if disposition == "remaining" else 0)
 
 
 def test_mcp_decline_vocabulary_degrades_without_breaking_health_tools(monkeypatch):
