@@ -59,3 +59,56 @@ same edits. Attempts to add `needs-human` and post the blocker on PR #1176 were
 both rejected because those tools require approval and this run's approval policy
 is `never`. A production operator must supply the verified publication audit
 record and run the retained query after the observation period.
+
+## Report edge-case verification and reconciliation (2026-11-05)
+
+Reviewed commits `c0385ba`, `9c2ec36`, and `e977038`. They added the explicit
+deployment recorder, isolated Git publication tests, shard registration, and CLI
+refusal tests. They did not retain a verified production deployment receipt or
+restore hosted-pass instrumentation. The reported 34-file change count does not
+match this branch: its diff from `34c5354` before this round contained six files.
+
+`hosted_exploration_pass_number` and `record_hosted_exploration_deploy` are absent
+from the exporter, and hosted-pass reporting is absent from `switch_review.py`.
+The two conditional tasks therefore require no instrumentation restoration.
+Suggested reconciliation, applied consistently to both copies of the PR tasks:
+
+- [x] Conditional hosted-pass helper retention task: helpers remain absent.
+- [x] Conditional hosted-pass report restoration task: reporting remains absent.
+
+The existing checked publication task verifies the recorder implementation only;
+it does **not** establish a verified production deployment. Production provenance
+and elapsed observation still require an operator. No production success is
+claimed by these checkboxes. The named pytest acceptance checks remain unverified.
+
+Added `tests/test_switch_review_exploration.js`, using the real Python
+`format_report` through the existing JavaScript child-process testing approach.
+Five passing cases cover `window=None` with no arm horizon, `window=None` with
+suspect arms hidden, a measured window with each reason for hiding arms, and
+visible arms without a window. The tests also verify that a suspect gate remains
+visible, measured counts survive rendering, and no temporary state is created.
+Only unrelated producer summaries are stubbed; the exploration renderer is real.
+No hosted-pass helper is restored, so a helper-exception test is not applicable.
+
+Verification:
+
+- `node tests/test_switch_review_exploration.js`: 5 passed.
+- `node tests/test_route_weights_export_cli.js`: 23 passed.
+- `PYTHONPATH=src python3 -m unittest discover -s tests -p
+  test_route_weights_export_deployment.py -q`: 15 passed.
+- `node --check tests/test_switch_review_exploration.js` and `git diff --check`: passed.
+
+No Python files changed this round. Black and pytest are still unavailable, and
+installing them failed because `pypi.org` could not resolve. The required Anaconda
+interpreter and production feedback database are also absent. Do not run or claim
+the production observation before both 2026-11-08 and fourteen days after a
+verified deployment instant.
+
+The PR-body reconciliation, blocker comment, and `needs-human` label were each
+rejected with `MCP tool call requires approval, but approval policy is never`.
+The remote PR body has therefore not been updated. PR #1176 was confirmed open
+and ready for review before this round's attempted metadata mutations.
+
+The checkout's `.git` remains read-only. This round's JavaScript test and evidence
+are committed in `/tmp/orchestrator-1175-report-edges`, with a handoff patch at
+`/tmp/orchestrator-1175-report-edges.patch`; the main working tree retains the edits.
