@@ -1101,6 +1101,7 @@ def test_retry_pending_reproduces_the_original_skip_rule():
 def live_shadow(private_brain, tmp_path, monkeypatch):
     """Private Brain, collector issuance and role backend; no GitHub or paid dispatch."""
     from contextlib import contextmanager
+
     import adjudicator_live as live
 
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))

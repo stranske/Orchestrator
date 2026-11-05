@@ -78,9 +78,7 @@ class LiveDisputesTests(unittest.TestCase):
         before = self.state.read_bytes()
         self.assertEqual([row["run_id"] for row in self.select()], ["run-1", "run-2"])
         # Equality is not newer than the cutoff.
-        self.assertEqual(
-            [row["run_id"] for row in self.select(since_ts=self.now - 2)], ["run-1"]
-        )
+        self.assertEqual([row["run_id"] for row in self.select(since_ts=self.now - 2)], ["run-1"])
         self.assertEqual(self.state.read_bytes(), before)
 
     def test_first_run_and_explicit_limit(self):
@@ -94,9 +92,7 @@ class LiveDisputesTests(unittest.TestCase):
         with closing(sqlite3.connect(self.db)) as conn, conn:
             conn.execute("UPDATE outcomes SET verifier_verdict='PASS' WHERE run_id='run-1'")
             conn.execute("UPDATE outcomes SET adjudicated_verdict=NULL WHERE run_id='run-2'")
-        self.assertEqual(
-            [row["run_id"] for row in self.select()], ["run-3", "run-4", "run-5"]
-        )
+        self.assertEqual([row["run_id"] for row in self.select()], ["run-3", "run-4", "run-5"])
 
     def test_reads_legacy_brain_without_creating_event_table(self):
         with closing(sqlite3.connect(self.db)) as conn, conn:

@@ -469,6 +469,8 @@ def _persist_live_event(
     entry: dict, db: Path | None, case: roles.CollectedAdjudicationCase | None = None
 ) -> None:
     if "proposal" in entry:
+        if case is None:
+            raise ValueError("live advice requires a collector-issued case at persistence")
         roles._collected_snapshot(case)  # issuance and digest rechecked at persistence
         entry["certification"]["digest"] = case._digest
     phase = "live_shadow_advice" if "proposal" in entry else "live_shadow_uncertified"
@@ -553,7 +555,7 @@ def _reconcile_live(*, db: Path | None = None, path: Path | None = None) -> dict
     summary = live_summary(rows)
     retirement = previous.get("retirement")
     rate = summary["agree"] / summary["graded"] if summary["graded"] else None
-    if not retirement and summary["graded"] >= 20 and rate < 0.75:
+    if not retirement and summary["graded"] >= 20 and rate is not None and rate < 0.75:
         retirement = {
             "retired_at": int(time.time()),
             "graded": summary["graded"],
