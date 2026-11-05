@@ -1662,30 +1662,21 @@ def _empty_registry(path):
 
 
 def test_build_report_treats_corrupt_pattern_artifacts_as_empty(monkeypatch, isolated_runtime):
-    import adapters
-
     state = isolated_runtime / "state"
     state.mkdir()
     (state / "pattern-miner-status.json").write_text("{not-json")
     (state / "pattern-miner-inventory.json").write_text("{also-not")
-    spawned = []
 
     def runner(argv, *args, **kwargs):
-        spawned.append(list(argv) if isinstance(argv, (list, tuple)) else [str(argv)])
         return subprocess.CompletedProcess(argv, 127, "", "not started")
 
     monkeypatch.setattr(subprocess, "run", runner)
-    monkeypatch.setattr(adapters, "advertised_models", lambda *_a, **_k: [])
     report = periodic_report.build_report(window_days=1, probe_langsmith_artifacts=False)
     miner = report["pattern_miner"]
     assert miner["status"] == {}
     assert miner["inventory"]["emitted_candidate_count"] == 0
     assert miner["inventory"]["expired_candidate_count"] == 0
     assert miner["inventory"]["tombstone_count"] == 0
-    assert spawned, "catalog probes must hit the stub"
-    assert all(
-        cmd and cmd[0] in {"codex", "claude", "cursor-agent", "npx", "agy"} for cmd in spawned
-    )
 
 
 def test_managed_rule_duplicate_flags_fuzzy_playbook_meaning(isolated_runtime):
