@@ -446,3 +446,50 @@ def test_source_change_keeps_same_period_prior_weight(tmp_path, monkeypatch, poo
         "w_p_prev→w_p=0.000→0.250",
     ):
         assert field in text
+
+
+def test_invalid_utf8_project_log_preserves_fallback_totals(stores, monkeypatch, capsys):
+    token_event(pacing_usage.CLAUDE_PROJECTS / "seat.jsonl", NOW - 100, 100, "a")
+    (pacing_usage.CLAUDE_PROJECTS / "corrupt.jsonl").write_bytes(b"\xff\xfe\n")
+    row = read_usage(stores, dict(claude_weekly_token_cap=1000))
+    assert row["source"] == "ccusage-fallback"
+    assert row["weekly_tokens"] == 100
+    pacing_usage.CALIBRATION_FILE.write_text(json.dumps(dict(claude_weekly_token_cap=1000)))
+    monkeypatch.setattr(capacity.time, "time", lambda: NOW)
+    assert capacity.main(["pacing-report"]) == 0
+    assert "pool claude:" in capsys.readouterr().out
+
+
+def test_rolled_poll_pre_boundary_desktop_uses_current_week_tokens(stores):
+    boundary = START + pacing.PERIOD_SECONDS
+    now = boundary + 500
+    desktop_ts = boundary - 1000
+    stores[0].write_text(json.dumps(dict(samples=[dict(t=desktop_ts * 1000, u=dict(sd=50))])))
+    directory = stores[2] / "polls"
+    directory.mkdir(exist_ok=True)
+    weekly = dict(label="All models", used_percent=90, resets_at=boundary)
+    (directory / "claude-usage.json").write_text(
+        json.dumps(dict(ts=now - 60, weekly=weekly, session=dict(used_percent=10)))
+    )
+    token_event(pacing_usage.CLAUDE_PROJECTS / "seat.jsonl", now - 100, 150, "current")
+    row = pacing_usage.usage(
+        "claude",
+        now,
+        dict(claude_weekly_token_cap=1000),
+        snapshots=stores[1],
+        claude_path=stores[0],
+        handoff=stores[2],
+        poll_dir=directory,
+    )
+    assert row["source"] == "ccusage-fallback"
+    assert row["weekly_tokens"] == 150
+    assert row["used_fraction"] == 0.15
+    assert row["desktop_sample_age_s"] == now - desktop_ts
+    agents = {pool: dict(state="ok", reason="native") for pool in ("codex", "claude")}
+    pacing_usage.integrate(
+        agents,
+        now=now,
+        handoff=stores[2],
+        usage_data={"claude": row, "codex": dict(used_fraction=None, ts=None, source="none")},
+    )
+    assert agents["claude"]["pacing"]["state"] != "unknown"

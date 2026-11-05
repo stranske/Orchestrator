@@ -592,7 +592,7 @@ def claude_token_events(
             else:
                 file_events = {}
                 files_read += 1
-                with path.open() as stream:
+                with path.open(encoding="utf-8", errors="replace") as stream:
                     for line in stream:
                         if '"usage"' not in line:
                             continue
@@ -830,7 +830,10 @@ def usage(
         )
         # Produce the fallback sample whenever desktop is missing/stale so pair-cap
         # calibration is available even if a fresher poll later wins selection.
-        if not any(c.get("source") == "claude-desktop" for c in candidates):
+        if not any(
+            c.get("source") == "claude-desktop" and c.get("used_fraction") is not None
+            for c in candidates
+        ):
             produced, pair_cap, pair_count = produce_claude_sample(
                 now, valid, destination, root, authoritative_end
             )
