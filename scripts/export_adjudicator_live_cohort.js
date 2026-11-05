@@ -19,6 +19,27 @@ const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const timestamp = (value) => Number.isSafeInteger(value) && value >= 0 &&
   Number.isFinite(new Date(value * 1000).getTime());
 const iso = (value) => new Date(value * 1000).toISOString();
+const revision = (value) => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value);
+
+function revisionEvidenceGaps(row) {
+  if (!revision(row.certification?.evaluated_sha)) return [];
+  // The native qualifier binds the finding, merge and collected evidence to
+  // one evaluated commit. Preserve that consistency when observing saved rows;
+  // a certification label alone cannot override conflicting packet claims.
+  // Missing legacy claims supply no new proof. PR heads and comparison parents
+  // intentionally name other commits and must not enter this comparison.
+  const claims = [row.packet, row.raw_packet].flatMap((packet) => [
+    packet?.disputed_finding?.decision?.evaluated_sha,
+    packet?.ground_truth_evidence?.merge_sha,
+    packet?.ground_truth_evidence?.collected_evidence?.evaluated_sha,
+  ]).filter((value) => value !== undefined);
+  const gaps = [];
+  if (claims.some((value) => !revision(value))) gaps.push('revision_evidence_invalid');
+  if (claims.some((value) => revision(value) && value !== row.certification.evaluated_sha)) {
+    gaps.push('revision_evidence_mismatch');
+  }
+  return gaps;
+}
 
 function liveCohort({ manifest, expectedManifestHash, manifestReference, report, observedAt,
   evidenceClass, evidenceReference }) {
@@ -98,9 +119,10 @@ function liveCohort({ manifest, expectedManifestHash, manifestReference, report,
       gaps.push('disposition_decision_mismatch');
     }
     if (row.certification?.status !== 'certified' ||
-        !/^[a-f0-9]{40}$/.test(row.certification?.evaluated_sha || '')) {
+        !revision(row.certification?.evaluated_sha)) {
       gaps.push('exact_revision_certification_missing');
     }
+    gaps.push(...revisionEvidenceGaps(row));
     if (!timestamp(saved.generated_at) || saved.generated_at > observedAt ||
         !timestamp(row.attempted_at) || row.attempted_at > saved.generated_at ||
         (row.first_attempted_at !== undefined && (!timestamp(row.first_attempted_at) ||
@@ -134,7 +156,7 @@ function liveCohort({ manifest, expectedManifestHash, manifestReference, report,
         attempted_at: timestamp(row.attempted_at) ? iso(row.attempted_at) : null,
         first_attempted_at: timestamp(row.first_attempted_at) ? iso(row.first_attempted_at) : null,
         attempts: attemptProvenanceValid ? row.attempts : null,
-        evaluated_sha: /^[a-f0-9]{40}$/.test(row.certification?.evaluated_sha || '')
+        evaluated_sha: revision(row.certification?.evaluated_sha)
           ? row.certification.evaluated_sha : null,
         role_run_id: nonblank(row.role_run_id) ? row.role_run_id : null,
         backend_run_id: nonblank(row.backend_run_id) ? row.backend_run_id : null } };

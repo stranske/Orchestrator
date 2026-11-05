@@ -129,6 +129,72 @@ with feedback._conn() as connection:
   assert.deepEqual([w.options.manifest, w.options.report, path.join(w.root, 'brain.db')]
     .map((file) => digest(fs.readFileSync(file))), before);
   assert.ok(!out.stdout.includes('private fixture response'));
+  // A retained certification cannot name a different commit from the actual
+  // native packet. Keep the paid decision visible, but exclude it from counts.
+  const native = JSON.parse(fs.readFileSync(w.options.report));
+  assert.equal(native.rows[0].packet.ground_truth_evidence.merge_sha,
+    native.rows[0].certification.evaluated_sha);
+  native.rows[0].certification.evaluated_sha = '0'.repeat(40);
+  fs.writeFileSync(w.options.report, JSON.stringify(native));
+  const changedBytes = fs.readFileSync(w.options.report);
+  const conflicted = JSON.parse(cli(w).stdout);
+  assert.equal(conflicted.retained_binary_decisions, 14);
+  assert.deepEqual(conflicted.cases[0].gaps, ['revision_evidence_mismatch']);
+  assert.equal(conflicted.cases[0].retained_report_row.decision, 'reject_blocker');
+  assert.equal(conflicted.dispatch_receipts_authenticated, false);
+  assert.deepEqual(fs.readFileSync(w.options.report), changedBytes);
+});
+
+test('supplied packet revisions must agree with the dated certification without using PR head or later truth', (t) => {
+  const w = world(t);
+  const sha = 'a'.repeat(40);
+  const other = 'b'.repeat(40);
+  const packet = () => ({
+    disputed_finding: { decision: { evaluated_sha: sha } },
+    ground_truth_evidence: { merge_sha: sha, head_sha: other,
+      collected_evidence: { evaluated_sha: sha } },
+  });
+  for (const item of w.saved.rows) {
+    item.packet = packet();
+    item.raw_packet = packet();
+    item.later_truth = 'FAIL';
+  }
+  w.save();
+  assert.equal(liveCohort(w.options).retained_binary_decisions, 20);
+  const claims = [
+    ['disputed_finding', 'decision', 'evaluated_sha'],
+    ['ground_truth_evidence', 'merge_sha'],
+    ['ground_truth_evidence', 'collected_evidence', 'evaluated_sha'],
+  ];
+  for (const field of ['packet', 'raw_packet']) {
+    for (const claim of claims) {
+      for (const value of [other, null, '', 'branch-name', 123, sha.toUpperCase()]) {
+        const item = w.saved.rows[0];
+        const parent = claim.slice(0, -1).reduce((obj, key) => obj[key], item[field]);
+        parent[claim.at(-1)] = value;
+        w.save();
+        const before = [w.options.manifest, w.options.report].map((file) => fs.readFileSync(file));
+        const result = liveCohort(w.options);
+        assert.equal(result.retained_binary_decisions, 19, `${field}.${claim.join('.')}=${value}`);
+        assert.deepEqual(result.cases[0].gaps,
+          [value === other ? 'revision_evidence_mismatch' : 'revision_evidence_invalid']);
+        assert.equal(result.cases[0].retained_report_row.evaluated_sha, sha);
+        assert.equal(result.cases[0].retained_report_row.decision, 'reject_blocker');
+        assert.equal(result.operational_acceptance_complete, false);
+        assert.deepEqual(result.cases.map((entry) => entry.run_id), w.cases.map((entry) => entry.run_id));
+        assert.deepEqual([w.options.manifest, w.options.report].map((file) => fs.readFileSync(file)), before);
+        parent[claim.at(-1)] = sha;
+      }
+    }
+  }
+  // Legacy absent claims stay absent; the observer does not reconstruct a
+  // packet or authenticate a receipt from later truth or a moving PR head.
+  w.saved.rows[0].packet = { ground_truth_evidence: { head_sha: other } };
+  delete w.saved.rows[0].raw_packet;
+  w.save();
+  const legacy = liveCohort(w.options);
+  assert.equal(legacy.retained_binary_decisions, 20);
+  assert.equal(legacy.dispatch_receipts_authenticated, false);
 });
 
 test('later report changes preserve fixed membership, unavailable members and report references', (t) => {

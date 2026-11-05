@@ -205,3 +205,37 @@ PR #1081 was checked open with `draft=false`. Approval checks rejected the
 blocker comment and `needs-human` label because GitHub writes require approval
 while this run's policy is `never`. Neither was published; no remote checkbox
 was changed.
+
+## Conflicting evaluated revisions
+
+Checked on 2026-11-05 against `fff6ad3b502957408dcc2689ba20bba58a83c4c7`
+plus this change. The observer now cross-checks supplied finding, merge and
+collection revision claims in both saved packets against certification.
+Malformed claims produce `revision_evidence_invalid`; different commits produce
+`revision_evidence_mismatch`. The paid decision and dated receipt locators stay
+visible, but conflicting rows cannot increase the retained decision count.
+Missing legacy claims remain absent. Moving PR heads, comparison parents and
+later truth do not supply the evaluated revision or authenticate a receipt.
+
+Both regressions fail against the prior observer. The native producer fixture
+retains 15 decisions, then drops to 14 when only one certification SHA changes.
+The additional test checks all six saved revision locations, malformed values,
+unchanged input bytes and fixed membership. All 125 live-cohort, inventory and
+native-inventory JavaScript tests pass, along with 32 diagnostic and seven
+replay-revision unittest tests. Syntax and whitespace checks pass. No Python
+files changed. The required retrospective pytest command with `-m 'not slow'`
+cannot start because pytest is absent.
+
+The configured runtime, Brain and both reports remain absent. Connected searches
+did not recover the original fixed manifest or a production live report. The
+retained October 18 observation linked above was re-read and still supplies only
+the dated aggregate: zero live advice and two failed cases. Raw authenticated
+historical receipts remain unavailable. No operational checkbox is completed.
+
+Staging was refused on the read-only `.git/index.lock`. The source, tests and
+this note are preserved in a separate local commit and transferable
+`/tmp/orchestrator-live-cohort-revisions/change.bundle` and `change.patch`.
+PR #1081 was observed open with `draft=false` at the base revision above.
+Approval checks rejected the blocker comment and `needs-human` label because
+GitHub writes require approval while this run's policy is `never`. Neither was
+published; no remote checkbox was changed.
