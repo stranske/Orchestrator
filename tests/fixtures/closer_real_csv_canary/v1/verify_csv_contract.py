@@ -3,10 +3,11 @@
 Invoke this file directly. It is not a pytest module and defines no test items.
 ``--chain-evidence`` reads the public issue, branch and PR chain and reports
 whether a trusted native verifier decision and closer publication proof are
-tied to the corrected head. A free-text verdict line is not that proof. Skipped
-Agents Verifier runs on earlier commits of the corrective PR, and publication
-text that names only the owned delivery PR, are reported and are not that proof
-either. The command does not change the default contract exit.
+tied to the corrected head. A free-text verdict line is not that proof. A
+trusted corpus decision on the partial merge is reported and is not that proof
+either. Skipped Agents Verifier runs on earlier commits of the corrective PR,
+and publication text that names only the owned delivery PR, are reported and
+are not that proof either. The command does not change the default contract exit.
 """
 
 from __future__ import annotations
@@ -214,16 +215,32 @@ def _corpus_verdict_ok(event):
     return event.get("verdict") == expected
 
 
-def _valid_corpus_decision(event, corrective_sha):
-    """A terminal decision counts only for this corrective head, never the partial merge."""
+def _corpus_identity_ok(event):
     return (
         isinstance(event, dict)
         and event.get("schema") == "verifier-corpus-decision/v1"
         and str(event.get("repo") or "").lower() == _REPOSITORY.lower()
+        and _corpus_verdict_ok(event)
+    )
+
+
+def _valid_corpus_decision(event, corrective_sha):
+    """A terminal decision counts only for this corrective head, never the partial merge."""
+    return (
+        _corpus_identity_ok(event)
         and str(event.get("pr")) == _CORRECTIVE_PR
         and event.get("head_sha") == corrective_sha
         and corrective_sha not in {_PARTIAL_HEAD, _PARTIAL_MERGE}
-        and _corpus_verdict_ok(event)
+    )
+
+
+def _valid_partial_corpus_decision(event):
+    """The partial merge's own decision is evidence about that revision only."""
+    return (
+        _corpus_identity_ok(event)
+        and str(event.get("pr")) == _PARTIAL_PR
+        and event.get("head_sha") == _PARTIAL_HEAD
+        and event.get("evaluated_sha") == _PARTIAL_MERGE
     )
 
 
@@ -249,6 +266,21 @@ def _corpus_from_comment(record, corrective_sha):
         _summarize_corpus(event)
         for event in _marked_objects(record.get("body") or "", _CORPUS_MARKER)
         if _valid_corpus_decision(event, corrective_sha)
+    ]
+
+
+def _partial_corpus_from_comment(record):
+    """Accept only the native verifier's own comment on the partial pull request."""
+    if (record.get("author") or "") not in _TRUSTED_VERIFIER_AUTHORS:
+        return []
+    url = str(record.get("url") or "")
+    prefix = f"https://github.com/{_REPOSITORY}/pull/{_PARTIAL_PR}#issuecomment-"
+    if not url.lower().startswith(prefix.lower()):
+        return []
+    return [
+        _summarize_corpus(event)
+        for event in _marked_objects(record.get("body") or "", _CORPUS_MARKER)
+        if _valid_partial_corpus_decision(event)
     ]
 
 
@@ -444,6 +476,7 @@ def _assess(
     partial_verdicts=(),
     corrective_verdicts=(),
     corpus=(),
+    partial_corpus=(),
 ):
     partial, corrective = _classify_events(events, corrective_sha)
     unlabeled = []
@@ -467,6 +500,7 @@ def _assess(
         "partial_verdicts": list(partial_verdicts),
         "corrective_verdicts": list(corrective_verdicts),
         "corpus": list(corpus),
+        "partial_corpus": list(partial_corpus),
         "publication": _publication_tied(comments, corrective_sha),
         "publication_markers": _publication_markers(comments),
         "keepalive_completions": completions,
@@ -518,6 +552,20 @@ def _format_report(assessment, corrective_sha, local_head, verifier_runs=(), ear
             )
     else:
         lines.append("partial_native_verify: none_observed")
+    if assessment.get("partial_corpus"):
+        for decision in assessment["partial_corpus"]:
+            lines.append(
+                "partial_corpus_decision: "
+                + f"verdict={decision['verdict']} run_id={decision['run_id']} "
+                + f"attempt={decision['run_attempt']} head={decision['head_sha']} "
+                + f"evaluated={decision['evaluated_sha']} "
+                + "on pr 984; not accepted for the corrected head"
+            )
+    else:
+        lines.append(
+            "partial_corpus_decision: none_observed "
+            "no trusted verifier-corpus-decision/v1 on PR 984 is bound to the partial head and merge"
+        )
     if assessment["corrective"] or assessment["corpus"]:
         lines.append("native_verify_for_corrective_head: PRESENT")
         for event in assessment["corrective"]:
@@ -947,6 +995,7 @@ def _observe_chain(fetch):
     partial_verdicts = []
     corrective_verdicts = []
     corpus = []
+    partial_corpus = []
     for number in _CHAIN_ISSUES + _CHAIN_PRS:
         page = _comment_records(fetch, number)
         for record in page:
@@ -956,6 +1005,7 @@ def _observe_chain(fetch):
             verdicts = _verdict_lines(body)
             if str(number) == _PARTIAL_PR:
                 partial_verdicts.extend(verdicts)
+                partial_corpus.extend(_partial_corpus_from_comment(record))
             elif str(number) == _CORRECTIVE_PR and corrective_sha in body:
                 corrective_verdicts.extend(verdicts)
                 corpus.extend(_corpus_from_comment(record, corrective_sha))
@@ -978,6 +1028,7 @@ def _observe_chain(fetch):
         corpus,
         runs,
         earlier,
+        partial_corpus,
     )
 
 
@@ -993,6 +1044,7 @@ def _report_chain_evidence():
             corpus,
             runs,
             earlier,
+            partial_corpus,
         ) = _observe_chain(_live_fetch)
     except _ObservationError as exc:
         print(f"chain-evidence observation failed: {exc}", file=sys.stderr)
@@ -1006,6 +1058,7 @@ def _report_chain_evidence():
             partial_verdicts,
             corrective_verdicts,
             corpus,
+            partial_corpus,
         ),
         corrective_sha,
         _local_head(),
@@ -1262,6 +1315,76 @@ def _self_check():
         raise AssertionError("derived verdict mismatch was accepted")
     if _valid_corpus_decision(dict(decision, head_sha=_PARTIAL_HEAD), _PARTIAL_HEAD):
         raise AssertionError("partial head was accepted as a corrective decision")
+    partial_decision = {
+        "schema": "verifier-corpus-decision/v1",
+        "repo": _REPOSITORY,
+        "pr": _PARTIAL_PR,
+        "head_sha": _PARTIAL_HEAD,
+        "evaluated_sha": _PARTIAL_MERGE,
+        "run_id": "40620861168",
+        "run_attempt": "1",
+        "verdict": "NON_PASS",
+        "ci_failed": False,
+        "provider_verdicts": ["FAIL", "FAIL"],
+    }
+    partial_body = "<!-- verifier-corpus-decision/v1 " + json.dumps(partial_decision) + " -->"
+    partial_url = f"https://github.com/{_REPOSITORY}/pull/{_PARTIAL_PR}#issuecomment-6458980062"
+    partial_record = {
+        "body": partial_body,
+        "author": "github-actions[bot]",
+        "url": partial_url,
+    }
+    partial_summary = _summarize_corpus(partial_decision)
+    if _partial_corpus_from_comment(partial_record) != [partial_summary]:
+        raise AssertionError("trusted partial corpus decision was dropped")
+    if _partial_corpus_from_comment(dict(partial_record, author="coderabbitai[bot]")):
+        raise AssertionError("untrusted partial corpus decision counted")
+    if _partial_corpus_from_comment(dict(partial_record, url=decision_url)):
+        raise AssertionError("partial corpus decision on the corrective PR counted")
+    if _corpus_from_comment(partial_record, corrective):
+        raise AssertionError("partial corpus decision counted for the corrective head")
+    if _valid_partial_corpus_decision(dict(partial_decision, head_sha=corrective)):
+        raise AssertionError("corrective head was accepted as the partial corpus decision")
+    if _valid_partial_corpus_decision(dict(partial_decision, pr=_CORRECTIVE_PR)):
+        raise AssertionError("corrective PR number was accepted as the partial corpus decision")
+    if _valid_partial_corpus_decision(dict(partial_decision, evaluated_sha=corrective)):
+        raise AssertionError("a partial decision evaluated at the corrective head was accepted")
+    partial_only = _assess(
+        [],
+        [tied],
+        [
+            {
+                "kind": "pr",
+                "name": "1168",
+                "title": "test: chain",
+                "labels": ["test"],
+                "present": True,
+            },
+            {
+                "kind": "branch",
+                "name": "codex/test-csv-followup-988-open",
+                "title": "",
+                "labels": [],
+                "present": True,
+            },
+        ],
+        corrective,
+        partial_corpus=[partial_summary],
+    )
+    partial_text, partial_code = _format_report(partial_only, corrective, corrective)
+    partial_line = (
+        "partial_corpus_decision: verdict=NON_PASS run_id=40620861168 attempt=1 head="
+        + _PARTIAL_HEAD
+        + " evaluated="
+        + _PARTIAL_MERGE
+        + " on pr 984; not accepted for the corrected head"
+    )
+    if partial_code != 2 or partial_line not in partial_text:
+        raise AssertionError("partial corpus decision was dropped or accepted")
+    if "native_verify_for_corrective_head: PRESENT" in partial_text:
+        raise AssertionError("partial corpus decision counted as corrective proof")
+    if "completion: evidence incomplete" not in partial_text:
+        raise AssertionError("partial corpus decision completed the corrective head")
     valid_state = {
         "schema": "verifier-event-state/v1",
         "pr": _CORRECTIVE_PR,
@@ -1472,6 +1595,19 @@ def _self_check():
                         ]
                     ).encode(),
                 )
+            if f"/issues/{_PARTIAL_PR}/comments" in path and "page=1" in path:
+                return (
+                    200,
+                    json.dumps(
+                        [
+                            {
+                                "body": partial_body,
+                                "user": {"login": "github-actions[bot]"},
+                                "html_url": partial_url,
+                            }
+                        ]
+                    ).encode(),
+                )
             return 200, b"[]"
         if "/commits?" in path:
             return 200, json.dumps([{"sha": corrective}, {"sha": ancestor}]).encode()
@@ -1542,6 +1678,8 @@ def _self_check():
         raise AssertionError("chain observation dropped the corpus decision or the verifier run")
     if observed[8] != earlier_only:
         raise AssertionError("chain observation dropped the earlier skipped verifier run")
+    if observed[9] != [partial_summary]:
+        raise AssertionError("chain observation dropped the partial corpus decision")
     observed_text, observed_code = _format_report(
         _assess(
             observed[1],
@@ -1551,6 +1689,7 @@ def _self_check():
             observed[4],
             observed[5],
             observed[6],
+            partial_corpus=observed[9],
         ),
         observed[0],
         observed[0],
@@ -1561,6 +1700,8 @@ def _self_check():
         raise AssertionError("observed corpus decision was not reported")
     if "closer_publication_proof_for_corrective_head: MISSING" not in observed_text:
         raise AssertionError("observed chain invented publication proof")
+    if partial_line not in observed_text or "completion: evidence present" in observed_text:
+        raise AssertionError("observed partial corpus decision was accepted or omitted")
 
     merge_only = "m" * 40
 
