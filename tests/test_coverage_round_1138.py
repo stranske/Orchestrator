@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import importlib
 import json
 import os
@@ -1980,3 +1981,85 @@ def test_published_head_measurement_matches_ranked_source_lines():
     assert record["shortfall_from_180"] == max(0, 180 - gain) == 0
     non_target = record["non_target_missing_delta"]
     assert gain - sum(non_target.values()) == record["repo"]["repo_missing_reduction"] == 289
+
+
+def _enclosing_function_names(source: str, line: int) -> list[str]:
+    names: list[str] = []
+
+    class Visitor(ast.NodeVisitor):
+        def visit(self, node):
+            start = getattr(node, "lineno", None)
+            end = getattr(node, "end_lineno", start)
+            if start is not None and not start <= line <= (end or start):
+                return
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                names.append(node.name)
+            self.generic_visit(node)
+
+    Visitor().visit(ast.parse(source))
+    return names
+
+
+def test_current_head_remeasurement_keeps_ranked_gaps_inside_selftests():
+    """ecb0707's gate artifact keeps the six-target gain at 296.
+
+    The 21 statements still missing on that artifact are the same source lines as
+    ea6255b, each inside a selftest function. The repo-wide shift is the three
+    files main moved under the pull request, not the ranked targets.
+    """
+    directory = paths.REPO_ROOT / "docs" / "verification" / "issue-1138"
+    record = json.loads((directory / "head-ecb0707-combined.json").read_text())
+    prior = json.loads((directory / "head-ea6255b-combined.json").read_text())
+    assert record["measured_head_sha"] == "ecb0707b0a8acf7cd5dbd8a1de122829ea2e39ac"
+    assert record["prior_measured_sha"] == prior["measured_head_sha"]
+    assert record["run_id"] == 41979128986
+    assert record["artifact_id"] == 13393447683
+    assert record["prior_artifact_id"] == prior["artifact_id"] == 13391989393
+    assert record["branch_coverage"] is False
+    assert record["gain_vs_base"] == prior["gain"] == 296
+    assert record["six_target_missing"] == prior["head_missing"] == 21
+    assert record["shortfall_from_180"] == max(0, 180 - record["gain_vs_base"]) == 0
+    assert list(record["targets"]) == list(_MEASURED_MODULES)
+
+    for name, module in _MEASURED_MODULES.items():
+        row = record["targets"][name]
+        prior_row = prior["targets"][name]
+        lines = [item["line"] for item in prior_row["still_missing"]]
+        assert row["missing_lines"] == lines
+        assert row["head_missing"] == prior_row["head_missing"] == len(lines)
+        source = Path(module.__file__).read_text()
+        source_lines = source.splitlines()
+        for item in prior_row["still_missing"]:
+            assert source_lines[item["line"] - 1] == item["text"]
+            enclosing = _enclosing_function_names(source, item["line"])
+            assert any(fn.startswith("_selftest") for fn in enclosing), (
+                name,
+                item["line"],
+                enclosing,
+            )
+
+    repo = record["repo"]
+    assert repo["prior_missing_lines"] == prior["repo"]["head_missing_lines"]
+    assert repo["prior_num_statements"] == prior["repo"]["head_num_statements"]
+    assert repo["prior_percent_covered"] == prior["repo"]["head_percent_covered"]
+    statement_delta = 0
+    missing_delta = 0
+    seen = set()
+    for row in record["outside_six_targets"]:
+        assert row["file"] not in seen
+        seen.add(row["file"])
+        assert not any(row["file"].endswith(f"/{module}.py") for module in _MEASURED_MODULES)
+        statement_delta += row["statements"] - row["prior_statements"]
+        missing_delta += row["missing"] - row["prior_missing"]
+    assert seen == {
+        "src/closer_native_lease.py",
+        "src/pacing.py",
+        "src/pacing_usage.py",
+    }
+    assert statement_delta == 210
+    assert missing_delta == -1
+    assert repo["num_statements"] - repo["prior_num_statements"] == statement_delta
+    assert repo["missing_lines"] - repo["prior_missing_lines"] == missing_delta
+    assert repo["num_statements"] == 119396
+    assert repo["missing_lines"] == 16716
+    assert repo["percent_covered"] == 85.9995309725619

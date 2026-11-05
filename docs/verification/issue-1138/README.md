@@ -157,3 +157,20 @@ combined baseline already runs those selftests without reaching them:
 Running those `_selftest` functions from pytest would re-enter non-hermetic setup
 (real ledger lookups, nested subprocess fakes, and assertion failures of the selftest
 itself). They are not a separate production behavior to score.
+
+## Remeasured head `ecb0707`
+
+[CI run 41979128986](https://github.com/stranske/Orchestrator/actions/runs/41979128986)
+published [coverage artifact 13393447683](https://github.com/stranske/Orchestrator/actions/runs/41979128986/artifacts/13393447683)
+for `ecb0707b0a8acf7cd5dbd8a1de122829ea2e39ac`. That commit does not change the six
+ranked modules. Compared with artifact 13391989393, every ranked missing line is the
+same: 21 statements, gain 296, shortfall from 180 is 0.
+
+Repo-wide totals moved because the pull-request job merges main: `pacing_usage.py`
+gained 200 statements, `pacing.py` gained 10, and `closer_native_lease.py` covered one
+line the prior artifact missed. Missing lines 16717 → 16716. Statements 119186 →
+119396. Percent covered 85.974024% → 85.999531%.
+[head-ecb0707-combined.json](head-ecb0707-combined.json) is that record.
+`test_current_head_remeasurement_keeps_ranked_gaps_inside_selftests` checks the line
+lists, the source text, that each remaining line is inside a `_selftest` function, and
+that the repo-wide delta is exactly those three files.
