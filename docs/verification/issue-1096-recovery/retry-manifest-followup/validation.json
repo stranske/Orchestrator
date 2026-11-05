@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "checked_at": "2026-11-03T20:14:57.185353+00:00",
+  "evaluated_revision": "ebf5f3b1bd998e2f4f8ce8cff6fda7b5055079b2",
+  "evaluated_tree": "575334857a56325a6721cac380d67a35794e999f",
+  "source_sha256": {
+    "scripts/export_adjudicator_inventory.js": "3f91566210df3e545ee1912070b7bf48b6be439105659242d8a63aaa2e402f54",
+    "tests/test_adjudicator_inventory.js": "ef245011955db9d16fdeac9723e2a3f3f55867459c93fe09a545b9ba4677c62f"
+  },
+  "regression_logs": {
+    "inventory-tests.log": {
+      "command": [
+        "node",
+        "tests/test_adjudicator_inventory.js"
+      ],
+      "exit_code": 0,
+      "passed": 44,
+      "failed": 0,
+      "skipped": 0,
+      "sha256": "7f6b2dfbb09e1b4a876e51d0aa21d8ddd4165ba3eea0f5ff20607b9027e8904e"
+    },
+    "runner-tests.log": {
+      "command": [
+        "node",
+        "tests/test_adjudicator_acceptance_runner.js"
+      ],
+      "exit_code": 0,
+      "passed": 26,
+      "failed": 0,
+      "skipped": 0,
+      "sha256": "00233874760733193b2e2e89d05c85cfae619714933e51f45707255bb5b8f0f1"
+    },
+    "ledger-tests.log": {
+      "command": [
+        "node",
+        "tests/test_adjudicator_evidence_ledger.js"
+      ],
+      "exit_code": 0,
+      "passed": 22,
+      "failed": 0,
+      "skipped": 0,
+      "sha256": "6e97b661615b98a3fca0cc5288237b7010cfdcbd0da121e24d796e085e9b9d76"
+    }
+  },
+  "regressions_passed": 92,
+  "accepted_deployment_verified": false,
+  "original_retry_manifest_recovered": false,
+  "operational_acceptance_verified": false,
+  "python_files_changed": false
+}

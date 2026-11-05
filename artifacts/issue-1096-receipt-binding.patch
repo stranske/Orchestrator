@@ -1,0 +1,782 @@
+From e4ce3eef4749b469657f6f56a94934436c886a8d Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Tue, 3 Nov 2026 22:48:34 +0000
+Subject: [PATCH 1/2] Reconcile retained retry attempts with native receipt
+ identities
+
+---
+ scripts/export_adjudicator_inventory.js | 44 ++++++++++++++++++
+ tests/test_adjudicator_inventory.js     | 62 +++++++++++++++++++++++++
+ 2 files changed, 106 insertions(+)
+
+diff --git a/scripts/export_adjudicator_inventory.js b/scripts/export_adjudicator_inventory.js
+index 4367943..65f7d37 100644
+--- a/scripts/export_adjudicator_inventory.js
++++ b/scripts/export_adjudicator_inventory.js
+@@ -273,6 +273,49 @@ function preDispatchInventory(saved, paid, journal) {
+   };
+ }
+ 
++// A provider id appearing somewhere in the journal is insufficient: it must
++// identify exactly one attempt for this case. This join supplies recovery
++// locators only. Native projection must still authenticate the raw receipt,
++// material revision and source binding before a decision can be graded.
++function reconcileNativeLocators(observations, journal) {
++  const byBackend = new Map();
++  for (const attempt of journal.attempts || []) {
++    if (!attempt.backend_run_id) continue;
++    const candidates = byBackend.get(attempt.backend_run_id) || [];
++    candidates.push(attempt);
++    byBackend.set(attempt.backend_run_id, candidates);
++  }
++  for (const observation of observations) {
++    const candidates = byBackend.get(observation.backend_run_id) || [];
++    let status;
++    let nextStep;
++    if (!observation.backend_run_id) {
++      status = 'backend_identity_not_recorded';
++      nextStep = 'recover_attempt_identity_without_redispatch';
++    } else if (journal.status !== 'available') {
++      status = 'journal_unavailable';
++      nextStep = 'recover_native_journal_without_redispatch';
++    } else if (!candidates.length) {
++      status = 'native_attempt_not_found';
++      nextStep = 'recover_native_receipt_without_redispatch';
++    } else if (candidates.length > 1) {
++      status = 'ambiguous_backend_identity';
++      nextStep = 'resolve_native_receipt_identity_before_any_retry';
++    } else if (candidates[0].case_id !== observation.case_id) {
++      status = 'case_identity_mismatch';
++      nextStep = 'resolve_native_receipt_identity_before_any_retry';
++    } else {
++      status = 'matched_locator';
++      nextStep = candidates[0].recovery_step;
++    }
++    observation.native_receipt_locator = { status, authenticated: false,
++      next_evidence_step: nextStep,
++      attempts: candidates.map(({ attempt_id, case_id, material_revision, state,
++        raw_receipt_present, validation_present }) => ({ attempt_id, case_id, material_revision,
++        state, raw_receipt_present, validation_present })) };
++  }
++}
++
+ function reportInventory({ report, observedAt, evidenceClass, evidenceReference, journal, manifest }) {
+   integer(observedAt, 'observedAt', 0);
+   if (typeof report !== 'string' || !report.trim()) throw new Error('report is required');
+@@ -334,6 +377,7 @@ function reportInventory({ report, observedAt, evidenceClass, evidenceReference,
+     identities.set(item.backend_run_id, occurrences);
+   }
+   const preDispatch = preDispatchInventory(saved, paid, journal);
++  reconcileNativeLocators(observations, preDispatch.native_journal);
+   const reconciliation = requestedManifest
+     ? reconcileRetainedRows(cases, requestedManifest, observations) : null;
+   if (!fs.readFileSync(report).equals(bytes)) {
+diff --git a/tests/test_adjudicator_inventory.js b/tests/test_adjudicator_inventory.js
+index a4c608f..7cea073 100644
+--- a/tests/test_adjudicator_inventory.js
++++ b/tests/test_adjudicator_inventory.js
+@@ -573,6 +573,68 @@ function nativeJournal(t) {
+   return { ...fixture, journal, options: { ...fixture.options, journal } };
+ }
+ 
++test('native receipt locators bind both case and backend identity for each retained attempt', (t) => {
++  const { root, saved, journal, options } = nativeJournal(t);
++  saved.rows[0].retry_attempts = [{ backend_run_id: 'native-provider' }];
++  saved.rows[1].backend_run_id = 'native-provider';
++  fs.writeFileSync(options.report, JSON.stringify(saved));
++  const before = [options.report, journal].map((file) => fs.readFileSync(file));
++  const files = fs.readdirSync(root);
++  const result = reportInventory(options);
++  const [parent, retry, otherCase] = result.retained_attempt_observations;
++  assert.equal(parent.native_receipt_locator.status, 'matched_locator');
++  assert.equal(parent.native_receipt_locator.attempts[0].attempt_id, 'd');
++  assert.equal(parent.native_receipt_locator.attempts[0].state, 'raw_persisted');
++  assert.equal(parent.native_receipt_locator.next_evidence_step,
++    'resume_native_validation_without_redispatch');
++  assert.equal(retry.native_receipt_locator.status, 'matched_locator');
++  assert.equal(retry.native_receipt_locator.attempts[0].attempt_id, 'e');
++  assert.equal(retry.native_receipt_locator.next_evidence_step,
++    'reauthenticate_with_native_projection_before_grading');
++  assert.equal(otherCase.native_receipt_locator.status, 'case_identity_mismatch');
++  assert.equal(otherCase.native_receipt_locator.attempts[0].case_id, 'case-a');
++  for (const row of result.retained_attempt_observations) {
++    assert.equal(row.native_receipt_locator.authenticated, false);
++  }
++  assert.equal(result.dispatch_authorized, false);
++  assert.equal(Object.hasOwn(result, 'graded'), false);
++  assert.ok(!JSON.stringify(result).includes('private'));
++  assert.deepEqual([options.report, journal].map((file) => fs.readFileSync(file)), before);
++  assert.deepEqual(fs.readdirSync(root), files);
++});
++
++test('missing native identities and receipts remain gaps rather than borrowing another attempt', (t) => {
++  const { saved, options } = nativeJournal(t);
++  delete saved.rows[0].backend_run_id;
++  fs.writeFileSync(options.report, JSON.stringify(saved));
++  const observations = reportInventory(options).retained_attempt_observations;
++  assert.equal(observations[0].native_receipt_locator.status, 'backend_identity_not_recorded');
++  assert.deepEqual(observations[0].native_receipt_locator.attempts, []);
++  assert.equal(observations[1].native_receipt_locator.status, 'native_attempt_not_found');
++  assert.deepEqual(observations[1].native_receipt_locator.attempts, []);
++  const unavailable = reportInventory({ ...options, journal: undefined })
++    .retained_attempt_observations;
++  assert.equal(unavailable[0].native_receipt_locator.status, 'backend_identity_not_recorded');
++  assert.equal(unavailable[1].native_receipt_locator.status, 'journal_unavailable');
++  assert.deepEqual(unavailable[1].native_receipt_locator.attempts, []);
++  assert.equal(unavailable[1].native_receipt_locator.authenticated, false);
++});
++
++test('reused native backend identities remain ambiguous even when one candidate matches the case', (t) => {
++  const { journal, options } = nativeJournal(t);
++  const connection = new DatabaseSync(journal);
++  connection.exec(`INSERT INTO native_attempts
++    SELECT 'duplicate', 'case-b', material_revision, case_digest, state, backend_run_id,
++      report_sha256, created_at, updated_at, raw_response, validated_json
++    FROM native_attempts WHERE attempt_id='d'`);
++  connection.close();
++  const locator = reportInventory(options).retained_attempt_observations[0].native_receipt_locator;
++  assert.equal(locator.status, 'ambiguous_backend_identity');
++  assert.deepEqual(locator.attempts.map((row) => row.attempt_id), ['d', 'duplicate']);
++  assert.equal(locator.next_evidence_step, 'resolve_native_receipt_identity_before_any_retry');
++  assert.equal(locator.authenticated, false);
++});
++
+ test('pre-dispatch inventory reconciles report and native locators without exposing payloads', (t) => {
+   const { root, journal, options } = nativeJournal(t);
+   const before = fs.readFileSync(journal);
+-- 
+2.56.0
+
+
+From 9ac52dce9e7e7fcfe725fc61a2dfeaa9a8cd4428 Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Tue, 3 Nov 2026 22:49:22 +0000
+Subject: [PATCH 2/2] Preserve receipt reconciliation validation and
+ unavailable evidence
+
+---
+ .../issue-1096-recovery/README.md             |  33 ++++++
+ .../acceptance-run/checks.json                | 105 ++++++++++++++++++
+ .../acceptance-run/collection.log             |   1 +
+ .../acceptance-run/named-tests.log            |   1 +
+ .../acceptance-run/retrospective-suite.log    |   1 +
+ .../receipt-binding-followup/baseline.log     |  11 ++
+ .../historical-locator-summary.json           |  23 ++++
+ .../inventory-green.log                       |  69 ++++++++++++
+ .../inventory-red.log                         | 104 +++++++++++++++++
+ .../receipt-binding-followup/ledger.log       |  30 +++++
+ .../receipt-binding-followup/plan.md          |  26 +++++
+ .../receipt-binding-followup/runner.log       |  41 +++++++
+ .../receipt-binding-followup/validation.json  |  68 ++++++++++++
+ 13 files changed, 513 insertions(+)
+ create mode 100644 docs/verification/issue-1096-recovery/receipt-binding-followup/acceptance-run/checks.json
+ create mode 100644 docs/verification/issue-1096-recovery/receipt-binding-followup/acceptance-run/collection.log
+ create mode 100644 docs/verification/issue-1096-recovery/receipt-binding-followup/acceptance-run/named-tests.log
+ create mode 100644 docs/verification/issue-1096-recovery/receipt-binding-followup/acceptance-run/retrospective-suite.log
+ create mode 100644 docs/verification/issue-1096-recovery/receipt-binding-followup/baseline.log
+ create mode 100644 docs/verification/issue-1096-recovery/receipt-binding-followup/historical-locator-summary.json
+ create mode 100644 docs/verification/issue-1096-recovery/receipt-binding-followup/inventory-green.log
+ create mode 100644 docs/verification/issue-1096-recovery/receipt-binding-followup/inventory-red.log
+ create mode 100644 docs/verification/issue-1096-recovery/receipt-binding-followup/ledger.log
+ create mode 100644 docs/verification/issue-1096-recovery/receipt-binding-followup/plan.md
+ create mode 100644 docs/verification/issue-1096-recovery/receipt-binding-followup/runner.log
+ create mode 100644 docs/verification/issue-1096-recovery/receipt-binding-followup/validation.json
+
+diff --git a/docs/verification/issue-1096-recovery/README.md b/docs/verification/issue-1096-recovery/README.md
+index e032641..5fcfa92 100644
+--- a/docs/verification/issue-1096-recovery/README.md
++++ b/docs/verification/issue-1096-recovery/README.md
+@@ -1,5 +1,38 @@
+ # Acceptance evidence recovery for #1096
+ 
++## Per-attempt native receipt locators, 2026-11-03 UTC
++
++The report inventory now matches each retained attempt to native receipt
++locators using both case and backend identity. A reused backend identity is
++ambiguous even if one journal candidate matches the case; a receipt for another
++case remains a conflict. Missing identities and unavailable journals remain
++explicit gaps. Parent and nested retry matches stay separate. A matched locator
++is not authenticated receipt evidence, a grade, or retry authorization.
++
++Source commit `e4ce3ee` has checkout `408fc9a` as parent. All
++[116 focused regressions](receipt-binding-followup/validation.json) pass, including
++three controls that failed before implementation. The
++[recorded plan](receipt-binding-followup/plan.md) precedes the bounded
++[required-test attempt](receipt-binding-followup/acceptance-run/checks.json),
++which still fails before collection because pytest is missing. This does not
++establish accepted deployment identity. No Python files changed.
++
++The [historical projection summary](receipt-binding-followup/historical-locator-summary.json)
++binds the existing selected-fields projection, not original report bytes: 58
++rows, 64 attempts, 38 recorded provider identities with no supplied native journal,
++and 26 attempts without provider identities. No original retry manifest was
++recovered or reconstructed. Authenticated receipts, independent later truth,
++accepted/deployed/mirror bindings, original fixed next-20 membership and live
++writer ownership remain unavailable. No operational task checkbox is completed;
++no paid retry, canonical publication or mirror synchronization occurred.
++
++Normal staging failed because checkout Git metadata is read-only. The source
++commit is preserved in `/tmp/issue1096-receipt-git-vDZfnY` and the accompanying
++[applyable patch](../../../artifacts/issue-1096-receipt-binding.patch). The checkout
++branch is unchanged. Automatic approval rejected the blocker comment and
++`needs-human` label because connector mutations require approval while policy is
++`never`; neither remote change was applied.
++
+ ## Retained later-truth diagnostics, 2026-11-03 UTC
+ 
+ The inventory now separates missing, explicit UNKNOWN, invalid and binary-but-
+diff --git a/docs/verification/issue-1096-recovery/receipt-binding-followup/acceptance-run/checks.json b/docs/verification/issue-1096-recovery/receipt-binding-followup/acceptance-run/checks.json
+new file mode 100644
+index 0000000..91019b0
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/receipt-binding-followup/acceptance-run/checks.json
+@@ -0,0 +1,105 @@
++{
++  "schema_version": 1,
++  "checked_at": "2026-11-03T22:46:51.400Z",
++  "evaluated_revision": "408fc9a3cdb169d4d6b3bd65bc58924f52803c8a",
++  "evaluated_tree": "c640934148ff889839df56dc4b9217f92e632352",
++  "accepted_deployment_verified": false,
++  "interpreter": "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3",
++  "runner_sha256": "19738158e77724d69b0872a901141e8e3c8f1d9bf28807cf9e2e65117029c922",
++  "input_manifest_sha256": "aaa365a434745f4f68442d5f5fadc9d45ff3b2707c54d016ca1d5c35129d44f6",
++  "input_file_count": 2002,
++  "source_sha256": {
++    "pyproject.toml": "2c3462b8b384aeb265dbc51ab742b4ee02d839a34cec6590791a6d5d53fe4a6e",
++    "src/adjudicator_retro.py": "ee172f96ddf0ca56f6c06fcf18bdaacccece5381de61a9896006d0b16a8fb0b8",
++    "src/capability_advisor.py": "fe2f2d0dda2b684d61d42c6aba3952b8a5e5d0d1504c9cbebeca9616109208d5",
++    "src/feedback.py": "eafa930ec4cea9a239bc03a91a00b2ca7c618c40629690658f8276417946412d",
++    "src/roles.py": "4a5e729f4bf797ea448f18c14df69696e3df3bcaaf046729c039099ae7cc3dd7",
++    "src/verifier_evidence.py": "19b2342b6d9b4d097f6fef6b76089f54903dfbe36946dac6fa7467dec3afff59",
++    "tests/test_adjudicator_retro.py": "b44fd6756915069d6a5dc492eecda268053a711899b81decc9d27f8c9793fda2"
++  },
++  "checks": [
++    {
++      "name": "named-tests",
++      "command": [
++        "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3",
++        "-m",
++        "pytest",
++        "-o",
++        "addopts=",
++        "-m",
++        "not slow",
++        "-q",
++        "--junitxml=/home/runner/work/Orchestrator/Orchestrator/docs/verification/issue-1096-recovery/receipt-binding-followup/acceptance-run/named-tests.xml",
++        "tests/test_adjudicator_retro.py::test_build_packet_includes_diff_and_acceptance_criteria",
++        "tests/test_adjudicator_retro.py::test_adjudicator_validator_accepts_recommendation_prose",
++        "tests/test_adjudicator_retro.py::test_floor_still_demotes_a_metadata_only_packet",
++        "tests/test_adjudicator_retro.py::test_abstained_row_is_reattempted_when_the_packet_gains_diff_and_criteria"
++      ],
++      "exit_code": 1,
++      "signal": null,
++      "error_code": null,
++      "timed_out": false,
++      "log": "named-tests.log",
++      "log_sha256": "3c62bade513fb2347fe3e5a9f91901d9e1bbf2d4a19bbd59d2863c1cdf42e10a",
++      "junit": null,
++      "junit_sha256": null,
++      "junit_reader": null,
++      "test_count": null,
++      "passed": false
++    },
++    {
++      "name": "retrospective-suite",
++      "command": [
++        "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3",
++        "-m",
++        "pytest",
++        "-o",
++        "addopts=",
++        "-m",
++        "not slow",
++        "-q",
++        "--junitxml=/home/runner/work/Orchestrator/Orchestrator/docs/verification/issue-1096-recovery/receipt-binding-followup/acceptance-run/retrospective-suite.xml",
++        "tests/test_adjudicator_retro.py"
++      ],
++      "exit_code": 1,
++      "signal": null,
++      "error_code": null,
++      "timed_out": false,
++      "log": "retrospective-suite.log",
++      "log_sha256": "3c62bade513fb2347fe3e5a9f91901d9e1bbf2d4a19bbd59d2863c1cdf42e10a",
++      "junit": null,
++      "junit_sha256": null,
++      "junit_reader": null,
++      "test_count": null,
++      "passed": false
++    }
++  ],
++  "source_unchanged": true,
++  "required_tests_passed": false,
++  "interpreter_version": "Python 3.14.9",
++  "interpreter_usable": true,
++  "collection": {
++    "command": [
++      "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3",
++      "-m",
++      "pytest",
++      "-o",
++      "addopts=",
++      "-m",
++      "not slow",
++      "--color=no",
++      "--collect-only",
++      "-q",
++      "tests/test_adjudicator_retro.py"
++    ],
++    "exit_code": 1,
++    "signal": null,
++    "error_code": null,
++    "timed_out": false,
++    "log": "collection.log",
++    "log_sha256": "3c62bade513fb2347fe3e5a9f91901d9e1bbf2d4a19bbd59d2863c1cdf42e10a",
++    "test_names": [],
++    "passed": false
++  },
++  "finished_at": "2026-11-03T22:46:51.555Z"
++}
+diff --git a/docs/verification/issue-1096-recovery/receipt-binding-followup/acceptance-run/collection.log b/docs/verification/issue-1096-recovery/receipt-binding-followup/acceptance-run/collection.log
+new file mode 100644
+index 0000000..777b2d7
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/receipt-binding-followup/acceptance-run/collection.log
+@@ -0,0 +1 @@
++/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3: No module named pytest
+diff --git a/docs/verification/issue-1096-recovery/receipt-binding-followup/acceptance-run/named-tests.log b/docs/verification/issue-1096-recovery/receipt-binding-followup/acceptance-run/named-tests.log
+new file mode 100644
+index 0000000..777b2d7
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/receipt-binding-followup/acceptance-run/named-tests.log
+@@ -0,0 +1 @@
++/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3: No module named pytest
+diff --git a/docs/verification/issue-1096-recovery/receipt-binding-followup/acceptance-run/retrospective-suite.log b/docs/verification/issue-1096-recovery/receipt-binding-followup/acceptance-run/retrospective-suite.log
+new file mode 100644
+index 0000000..777b2d7
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/receipt-binding-followup/acceptance-run/retrospective-suite.log
+@@ -0,0 +1 @@
++/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3: No module named pytest
+diff --git a/docs/verification/issue-1096-recovery/receipt-binding-followup/baseline.log b/docs/verification/issue-1096-recovery/receipt-binding-followup/baseline.log
+new file mode 100644
+index 0000000..c152ddb
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/receipt-binding-followup/baseline.log
+@@ -0,0 +1,11 @@
++✔ tests/test_adjudicator_acceptance_runner.js (8478.928896ms)
++✔ tests/test_adjudicator_evidence_ledger.js (421.892208ms)
++✔ tests/test_adjudicator_inventory.js (4553.820213ms)
++ℹ tests 3
++ℹ suites 0
++ℹ pass 3
++ℹ fail 0
++ℹ cancelled 0
++ℹ skipped 0
++ℹ todo 0
++ℹ duration_ms 8490.593993
+diff --git a/docs/verification/issue-1096-recovery/receipt-binding-followup/historical-locator-summary.json b/docs/verification/issue-1096-recovery/receipt-binding-followup/historical-locator-summary.json
+new file mode 100644
+index 0000000..a0d9f54
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/receipt-binding-followup/historical-locator-summary.json
+@@ -0,0 +1,23 @@
++{
++  "evidence_class": "historical_snapshot",
++  "evidence_reference": "selected-fields projection of dropbox:id:tDSHdCztYNUAAAAAADfgrw@65de8f715bb690369d613; not original report bytes",
++  "observed_at": 1793746114,
++  "selected_fields_sha256": "c87598737485b19011318f369fdafc204d9f9d7732f3420f5e5cd39964885bd8",
++  "selected_fields_bytes": 30531,
++  "case_count": 58,
++  "attempt_count": 64,
++  "paid_identity_summary": {
++    "records": 38,
++    "unique": 38,
++    "repeated": []
++  },
++  "native_locator_status_counts": {
++    "journal_unavailable": 38,
++    "backend_identity_not_recorded": 26
++  },
++  "original_retry_manifest_available": false,
++  "native_journal_observed": false,
++  "authenticated_outcomes_verified": false,
++  "dispatch_authorized": false,
++  "original_retry_task_complete": false
++}
+diff --git a/docs/verification/issue-1096-recovery/receipt-binding-followup/inventory-green.log b/docs/verification/issue-1096-recovery/receipt-binding-followup/inventory-green.log
+new file mode 100644
+index 0000000..9955d4a
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/receipt-binding-followup/inventory-green.log
+@@ -0,0 +1,69 @@
++✔ report recovery preserves ordered rows, recursive paid history and conflicting counts (5.830211ms)
++✔ report recovery rejects missing input without initializing runtime state (0.909061ms)
++✔ attempt observations bind nested failure fields without exposing private error text (1.749632ms)
++✔ saved decisions survive failed retries and remain distinct from independent truth (1.405889ms)
++✔ failure field hashes detect changed evidence even when retained classifications match (1.265804ms)
++✔ later-truth diagnostics distinguish absence, UNKNOWN, binary claims and invalid values (1.264339ms)
++✔ parent and retry truth remain separate without deriving truth from a decision (0.815052ms)
++✔ changed binary truth changes its evidence hash without authenticating either value (1.008518ms)
++✔ recorded failure stages explain collection, execution and validation breaks on real message shapes (1.152987ms)
++✔ unknown and contradictory failure prose cannot borrow a recognized stage (1.058227ms)
++✔ exact retained launcher refusals explain admission without claiming a backend attempt (0.959616ms)
++✔ launcher refusal matching rejects changed prose and contradictory attempt fields (1.344666ms)
++✔ later launcher refusals preserve the parent decision and prior paid history (0.732137ms)
++✔ later retries and persistence breaks cannot replace the parent attempt failure or decision (1.014385ms)
++✔ report recovery refuses malformed and ambiguous retained identities (2.343231ms)
++✔ report recovery requires explicit attribution and a valid check time (0.635326ms)
++✔ report recovery aborts if the input changes during observation (0.86413ms)
++✔ retained report reconciliation preserves requested order and explains every identity gap (3.122611ms)
++✔ retained report CLI matches supplied manifests without authenticating saved outcomes (48.228987ms)
++✔ legacy report manifest keeps verdict ambiguity visible and empty requests cannot complete accounting (1.426547ms)
++✔ report reconciliation refuses malformed or changing manifests without replacing evidence (1.480146ms)
++✔ report CLI never combines historical recovery with dispatch or current Brain selection (258.376339ms)
++✔ native receipt locators bind both case and backend identity for each retained attempt (9.234521ms)
++✔ missing native identities and receipts remain gaps rather than borrowing another attempt (7.021843ms)
++✔ reused native backend identities remain ambiguous even when one candidate matches the case (7.333825ms)
++✔ pre-dispatch inventory reconciles report and native locators without exposing payloads (9.149575ms)
++✔ all validated native rows still require authentication, independent truth and live writer proof (7.717669ms)
++✔ missing native evidence remains unavailable and never means zero attempts (0.716425ms)
++✔ an observed empty journal cannot establish writer ownership or authorize spending (7.089747ms)
++✔ an active journal writer does not make a read-only snapshot claim ownership (6.501576ms)
++✔ foreign and incomplete journals are refused without schema repair (3.271876ms)
++✔ report without native marker still cannot authorize generic retry (0.66715ms)
++✔ journal CLI stays read-only and requires explicit report attribution (84.967043ms)
++✔ owner exclusions are accounted for without reading excluded outcome evidence (52.455872ms)
++✔ requested owner exclusions remain explicit with missing or contradictory inventory (6.117473ms)
++✔ inventory exports every synthetic dispute and every exclusion without writes (866.883056ms)
++✔ inventory preserves the fixed cutoff and reports a count discrepancy (7.756217ms)
++✔ inventory distinguishes missing evidence from a complete cohort (2.658136ms)
++✔ inventory distinguishes schema-less evidence from a complete cohort (0.799478ms)
++✔ inventory distinguishes empty evidence from a complete cohort (3.693388ms)
++✔ inventory distinguishes incomplete-schema evidence from a complete cohort (4.073459ms)
++✔ inventory CLI exports JSON, signals unavailable evidence and rejects replay options (207.65877ms)
++✔ matching 71 identities bind the supplied manifest bytes without claiming historical acceptance (104.370285ms)
++✔ equal inventory counts expose substituted identities, exclusions and absent requested runs (10.797666ms)
++✔ a requested run on another target cannot satisfy case identity (5.004584ms)
++✔ inventory accounts for outcomes without run records as unavailable evidence (43.993956ms)
++✔ an outcomes-only Brain is available with exclusions, rather than an observed empty store (5.161471ms)
++✔ manifest retains every requested identity when Brain is empty (3.506004ms)
++✔ manifest retains every requested identity when Brain is unavailable (2.481644ms)
++✔ manifest count discrepancy prevents an exact match even when all supplied identities match (4.300647ms)
++✔ manifest CLI preserves input bytes, rejects malformed identities and signals unavailable Brain (517.862867ms)
++✔ version 2 reconciles all 71 dispute identities without claiming historical provenance (104.548291ms)
++✔ version 2 exposes substituted verdicts NON_PASS/FAIL despite matching run and count (43.853803ms)
++✔ version 2 exposes substituted verdicts FAIL_HOLLOW/PASS despite matching run and count (46.677965ms)
++✔ version 2 exposes substituted verdicts PASS/FAIL despite matching run and count (48.090972ms)
++✔ version 2 retains different disputes on one run and rejects duplicate dispute identities (5.486971ms)
++✔ version 2 preserves full identities for excluded, missing and unavailable cases (39.051974ms)
++✔ version 2 rejects malformed verdicts before publishing any inventory (515.002942ms)
++✔ version 2 distinguishes unavailable verdict evidence from contradictory verdicts (48.673262ms)
++✔ version 2 retains an observed target mismatch when verdict evidence is unavailable (3.761124ms)
++✔ missing stored targets remain eligible disputes with explicit unavailable identity evidence (829.333822ms)
++ℹ tests 61
++ℹ suites 0
++ℹ pass 61
++ℹ fail 0
++ℹ cancelled 0
++ℹ skipped 0
++ℹ todo 0
++ℹ duration_ms 4029.900513
+diff --git a/docs/verification/issue-1096-recovery/receipt-binding-followup/inventory-red.log b/docs/verification/issue-1096-recovery/receipt-binding-followup/inventory-red.log
+new file mode 100644
+index 0000000..531d29b
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/receipt-binding-followup/inventory-red.log
+@@ -0,0 +1,104 @@
++✔ report recovery preserves ordered rows, recursive paid history and conflicting counts (5.249555ms)
++✔ report recovery rejects missing input without initializing runtime state (0.901732ms)
++✔ attempt observations bind nested failure fields without exposing private error text (1.660345ms)
++✔ saved decisions survive failed retries and remain distinct from independent truth (1.655487ms)
++✔ failure field hashes detect changed evidence even when retained classifications match (1.144003ms)
++✔ later-truth diagnostics distinguish absence, UNKNOWN, binary claims and invalid values (1.196399ms)
++✔ parent and retry truth remain separate without deriving truth from a decision (0.786851ms)
++✔ changed binary truth changes its evidence hash without authenticating either value (0.786365ms)
++✔ recorded failure stages explain collection, execution and validation breaks on real message shapes (1.041926ms)
++✔ unknown and contradictory failure prose cannot borrow a recognized stage (0.995652ms)
++✔ exact retained launcher refusals explain admission without claiming a backend attempt (0.969596ms)
++✔ launcher refusal matching rejects changed prose and contradictory attempt fields (1.060642ms)
++✔ later launcher refusals preserve the parent decision and prior paid history (0.749922ms)
++✔ later retries and persistence breaks cannot replace the parent attempt failure or decision (1.001214ms)
++✔ report recovery refuses malformed and ambiguous retained identities (2.322211ms)
++✔ report recovery requires explicit attribution and a valid check time (0.532871ms)
++✔ report recovery aborts if the input changes during observation (0.74935ms)
++✔ retained report reconciliation preserves requested order and explains every identity gap (2.864059ms)
++✔ retained report CLI matches supplied manifests without authenticating saved outcomes (40.325144ms)
++✔ legacy report manifest keeps verdict ambiguity visible and empty requests cannot complete accounting (1.18868ms)
++✔ report reconciliation refuses malformed or changing manifests without replacing evidence (1.103588ms)
++✔ report CLI never combines historical recovery with dispatch or current Brain selection (207.447106ms)
++✖ native receipt locators bind both case and backend identity for each retained attempt (10.568809ms)
++✖ missing native identities and receipts remain gaps rather than borrowing another attempt (8.460682ms)
++✖ reused native backend identities remain ambiguous even when one candidate matches the case (9.013184ms)
++✔ pre-dispatch inventory reconciles report and native locators without exposing payloads (8.071577ms)
++✔ all validated native rows still require authentication, independent truth and live writer proof (12.328045ms)
++✔ missing native evidence remains unavailable and never means zero attempts (0.803263ms)
++✔ an observed empty journal cannot establish writer ownership or authorize spending (14.340262ms)
++✔ an active journal writer does not make a read-only snapshot claim ownership (10.419399ms)
++✔ foreign and incomplete journals are refused without schema repair (3.448996ms)
++✔ report without native marker still cannot authorize generic retry (0.678262ms)
++✔ journal CLI stays read-only and requires explicit report attribution (86.121318ms)
++✔ owner exclusions are accounted for without reading excluded outcome evidence (54.243367ms)
++✔ requested owner exclusions remain explicit with missing or contradictory inventory (6.483031ms)
++✔ inventory exports every synthetic dispute and every exclusion without writes (841.937234ms)
++✔ inventory preserves the fixed cutoff and reports a count discrepancy (6.655163ms)
++✔ inventory distinguishes missing evidence from a complete cohort (2.279046ms)
++✔ inventory distinguishes schema-less evidence from a complete cohort (0.675527ms)
++✔ inventory distinguishes empty evidence from a complete cohort (2.416819ms)
++✔ inventory distinguishes incomplete-schema evidence from a complete cohort (3.661261ms)
++✔ inventory CLI exports JSON, signals unavailable evidence and rejects replay options (216.347476ms)
++✔ matching 71 identities bind the supplied manifest bytes without claiming historical acceptance (93.686719ms)
++✔ equal inventory counts expose substituted identities, exclusions and absent requested runs (8.467639ms)
++✔ a requested run on another target cannot satisfy case identity (4.143765ms)
++✔ inventory accounts for outcomes without run records as unavailable evidence (46.731257ms)
++✔ an outcomes-only Brain is available with exclusions, rather than an observed empty store (4.016942ms)
++✔ manifest retains every requested identity when Brain is empty (2.862006ms)
++✔ manifest retains every requested identity when Brain is unavailable (2.610967ms)
++✔ manifest count discrepancy prevents an exact match even when all supplied identities match (4.485898ms)
++✔ manifest CLI preserves input bytes, rejects malformed identities and signals unavailable Brain (494.778997ms)
++✔ version 2 reconciles all 71 dispute identities without claiming historical provenance (121.402123ms)
++✔ version 2 exposes substituted verdicts NON_PASS/FAIL despite matching run and count (42.935686ms)
++✔ version 2 exposes substituted verdicts FAIL_HOLLOW/PASS despite matching run and count (39.754017ms)
++✔ version 2 exposes substituted verdicts PASS/FAIL despite matching run and count (42.061634ms)
++✔ version 2 retains different disputes on one run and rejects duplicate dispute identities (5.114185ms)
++✔ version 2 preserves full identities for excluded, missing and unavailable cases (48.249265ms)
++✔ version 2 rejects malformed verdicts before publishing any inventory (521.448975ms)
++✔ version 2 distinguishes unavailable verdict evidence from contradictory verdicts (50.276229ms)
++✔ version 2 retains an observed target mismatch when verdict evidence is unavailable (4.741628ms)
++✔ missing stored targets remain eligible disputes with explicit unavailable identity evidence (795.5599ms)
++ℹ tests 61
++ℹ suites 0
++ℹ pass 58
++ℹ fail 3
++ℹ cancelled 0
++ℹ skipped 0
++ℹ todo 0
++ℹ duration_ms 3921.486769
++
++✖ failing tests:
++
++test at tests/test_adjudicator_inventory.js:576:1
++✖ native receipt locators bind both case and backend identity for each retained attempt (10.568809ms)
++  TypeError: Cannot read properties of undefined (reading 'status')
++      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_inventory.js:585:46)
++      at Test.runInAsyncScope (node:async_hooks:227:14)
++      at Test.run (node:internal/test_runner/test:1402:25)
++      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
++      at Test.postRun (node:internal/test_runner/test:1542:19)
++      at Test.run (node:internal/test_runner/test:1467:12)
++      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
++
++test at tests/test_adjudicator_inventory.js:606:1
++✖ missing native identities and receipts remain gaps rather than borrowing another attempt (8.460682ms)
++  TypeError: Cannot read properties of undefined (reading 'status')
++      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_inventory.js:611:55)
++      at Test.runInAsyncScope (node:async_hooks:227:14)
++      at Test.run (node:internal/test_runner/test:1402:25)
++      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
++      at Test.postRun (node:internal/test_runner/test:1542:19)
++      at Test.run (node:internal/test_runner/test:1467:12)
++      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
++
++test at tests/test_adjudicator_inventory.js:623:1
++✖ reused native backend identities remain ambiguous even when one candidate matches the case (9.013184ms)
++  TypeError: Cannot read properties of undefined (reading 'status')
++      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_inventory.js:632:24)
++      at Test.runInAsyncScope (node:async_hooks:227:14)
++      at Test.run (node:internal/test_runner/test:1402:25)
++      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
++      at Test.postRun (node:internal/test_runner/test:1542:19)
++      at Test.run (node:internal/test_runner/test:1467:12)
++      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+diff --git a/docs/verification/issue-1096-recovery/receipt-binding-followup/ledger.log b/docs/verification/issue-1096-recovery/receipt-binding-followup/ledger.log
+new file mode 100644
+index 0000000..369e39b
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/receipt-binding-followup/ledger.log
+@@ -0,0 +1,30 @@
++✔ published recovery ledger is attributable without establishing operational acceptance (24.965523ms)
++✔ rejects modified evidence instead of trusting the recorded result: named-tests.log (24.598513ms)
++✔ rejects modified evidence instead of trusting the recorded result: interpreter-followup/runner-after.log (22.209706ms)
++✔ rejects modified evidence instead of trusting the recorded result: pre-dispatch-observation.json (15.018498ms)
++✔ rejects missing evidence even when its parent receipt says it passed (9.33388ms)
++✔ rejects a missing checksum on a referenced log: null (14.973203ms)
++✔ rejects a missing checksum on a referenced log: undefined (16.63117ms)
++✔ audits JUnit bytes and refuses an absent JUnit checksum (23.091259ms)
++✔ refuses evidence outside the ledger directory: relative (6.434979ms)
++✔ refuses evidence outside the ledger directory: absolute (6.696332ms)
++✔ refuses evidence outside the ledger directory: symlink (6.906552ms)
++✔ does not equate a historical backup with the canonical report (12.706115ms)
++✔ rejects a retained row count substituted for the saved population (12.24783ms)
++✔ rejects merged historical/current categories (11.176792ms)
++✔ rejects missing dated limitations (13.548369ms)
++✔ rejects missing disclosure (15.966122ms)
++✔ rejects missing October 18 disclosure (17.193901ms)
++✔ rejects advice grade substitution (13.668937ms)
++✔ rejects unproved acceptance (11.055394ms)
++✔ rejects replacement cohort count (10.42791ms)
++✔ rejects mirror identity substitution (11.417053ms)
++✔ rejects historical dispatch substitution (12.519134ms)
++ℹ tests 22
++ℹ suites 0
++ℹ pass 22
++ℹ fail 0
++ℹ cancelled 0
++ℹ skipped 0
++ℹ todo 0
++ℹ duration_ms 322.393848
+diff --git a/docs/verification/issue-1096-recovery/receipt-binding-followup/plan.md b/docs/verification/issue-1096-recovery/receipt-binding-followup/plan.md
+new file mode 100644
+index 0000000..62112ee
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/receipt-binding-followup/plan.md
+@@ -0,0 +1,26 @@
++# Per-attempt receipt locator reconciliation
++
++Checked 2026-11-03 UTC. First incomplete task: reconcile original retries.
++The original retry manifest, authenticated native receipts, accepted deployment
++binding and current writer ownership remain unavailable. Repository-specific
++report recovery code is the edit scope; no synced automation is changed.
++
++Before editing, run once:
++
++```sh
++node scripts/run_adjudicator_acceptance.js --python /opt/hostedtoolcache/Python/3.14.9/x64/bin/python3 --revision 408fc9a3cdb169d4d6b3bd65bc58924f52803c8a --output /home/runner/work/Orchestrator/Orchestrator/docs/verification/issue-1096-recovery/receipt-binding-followup/acceptance-run
++```
++
++Expected: missing pytest blocks collection, named tests and full retrospective
++suite. Stop after this runner invocation; each command has a 60-second bound
++and skips slow tests. Do not retry package installation.
++
++Then test per-attempt native locator matching using fixtures: match both case
++and backend identity, expose duplicates and conflicts, preserve parent/retry
++separation, report unavailable journals and absent identities without borrowing
++a receipt. Matching is not native authentication or independent truth. Run
++existing inventory, runner and ledger regressions, then one read-only inventory
++of the previously recovered selected-fields projection. Preserve its hash and
++origin separately from the original report. Do not reconstruct the original
++manifest from retained rows. No dispatch, publication, production or mirror
++write is justified; operational acceptance checkboxes remain open.
+diff --git a/docs/verification/issue-1096-recovery/receipt-binding-followup/runner.log b/docs/verification/issue-1096-recovery/receipt-binding-followup/runner.log
+new file mode 100644
+index 0000000..659f2b9
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/receipt-binding-followup/runner.log
+@@ -0,0 +1,41 @@
++✔ records exact commands, source hashes, complete JUnit and logs for both checks (418.09732ms)
++✔ full-suite success requires the complete collected identities: {"omitExtra":true} (338.113373ms)
++✔ full-suite success requires the complete collected identities: {"duplicateExtra":true} (324.779257ms)
++✔ full-suite success requires the complete collected identities: {"collectionFailure":true} (311.615316ms)
++✔ full-suite success requires the complete collected identities: {"collectionEmpty":true} (325.405088ms)
++✔ full-suite success requires the complete collected identities: {"collectionDuplicate":true} (316.267405ms)
++✔ missing pytest preserves two failures and cannot complete acceptance (166.457639ms)
++✔ preserves JUnit reader failures: {"parserFailure":true} (228.431881ms)
++✔ preserves JUnit reader failures: {"parserInvalidJson":true} (232.792704ms)
++✔ preserves JUnit reader failures: {"malformed":true} (347.522526ms)
++✔ refuses a successful claim for incomplete evidence: {"noXml":true} (165.057187ms)
++✔ refuses a successful claim for incomplete evidence: {"malformed":true} (342.271285ms)
++✔ refuses a successful claim for incomplete evidence: {"empty":true} (313.328131ms)
++✔ refuses a successful claim for incomplete evidence: {"incomplete":true} (320.748839ms)
++✔ refuses a successful claim for incomplete evidence: {"duplicate":true} (313.524406ms)
++✔ refuses a successful claim for incomplete evidence: {"skipped":true} (315.534979ms)
++✔ refuses a successful claim for incomplete evidence: {"foreign":true} (311.876505ms)
++✔ refuses a successful claim for incomplete evidence: {"exit":1} (295.672472ms)
++✔ source changes during execution invalidate otherwise passing checks (303.715918ms)
++✔ timeout preserves both failed checks without retrying either command (1585.898118ms)
++✔ refuses revision mismatch, modified tracked inputs and untracked inputs before execution (32.738713ms)
++✔ refuses uncommitted test execution input: conftest.py (21.402667ms)
++✔ refuses uncommitted test execution input: pytest.ini (22.353771ms)
++✔ refuses uncommitted test execution input: setup.cfg (20.322797ms)
++✔ refuses uncommitted test execution input: scripts/run_adjudicator_acceptance.js (21.758599ms)
++✔ requires explicit interpreter/revision/bounds and never overwrites a receipt (163.959737ms)
++✔ refuses ignored execution inputs before running pytest: tests/conftest.py (26.910615ms)
++✔ refuses ignored execution inputs before running pytest: src/local_override.py (27.070187ms)
++✔ refuses ignored execution inputs before running pytest: tests/fixtures/local-evidence.json (26.34003ms)
++✔ refuses ignored execution inputs before running pytest: src/legacy.pyc (24.899923ms)
++✔ refuses ignored execution inputs before running pytest: tests/__pycache__/conftest.py (26.240432ms)
++✔ ordinary ignored Python and pytest caches do not invalidate source receipts (342.078081ms)
++✔ ignored inputs introduced during execution invalidate otherwise passing checks (307.817362ms)
++ℹ tests 33
++ℹ suites 0
++ℹ pass 33
++ℹ fail 0
++ℹ cancelled 0
++ℹ skipped 0
++ℹ todo 0
++ℹ duration_ms 8354.156155
+diff --git a/docs/verification/issue-1096-recovery/receipt-binding-followup/validation.json b/docs/verification/issue-1096-recovery/receipt-binding-followup/validation.json
+new file mode 100644
+index 0000000..6b6da1a
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/receipt-binding-followup/validation.json
+@@ -0,0 +1,68 @@
++{
++  "checked_at": "2026-11-03T22:49:51.940Z",
++  "source_revision": "e4ce3eef4749b469657f6f56a94934436c886a8d",
++  "parent_revision": "408fc9a3cdb169d4d6b3bd65bc58924f52803c8a",
++  "git_directory": "/tmp/issue1096-receipt-git-vDZfnY",
++  "source_sha256": {
++    "scripts/export_adjudicator_inventory.js": "61e2deeac7d4b87e2104631357c6a2ff31f3e0a605128ec3dece3f9f27309f79",
++    "tests/test_adjudicator_inventory.js": "ba37f5240ed89ddf9261738445ccc3a0c463ac95fae4788b610ad222afb8d2a2"
++  },
++  "tests": [
++    {
++      "command": [
++        "node",
++        "tests/test_adjudicator_inventory.js"
++      ],
++      "exit_code": 0,
++      "passed": 61,
++      "failed": 0,
++      "log": "inventory-green.log"
++    },
++    {
++      "command": [
++        "node",
++        "tests/test_adjudicator_acceptance_runner.js"
++      ],
++      "exit_code": 0,
++      "passed": 33,
++      "failed": 0,
++      "log": "runner.log"
++    },
++    {
++      "command": [
++        "node",
++        "tests/test_adjudicator_evidence_ledger.js"
++      ],
++      "exit_code": 0,
++      "passed": 22,
++      "failed": 0,
++      "log": "ledger.log"
++    }
++  ],
++  "negative_controls_before_implementation": {
++    "passed": 58,
++    "failed": 3,
++    "log": "inventory-red.log"
++  },
++  "evidence_sha256": {
++    "baseline.log": "c831743bf613f00b2cb7986736fd948a68f9472b231c424689e06ccb3cadbec7",
++    "historical-locator-summary.json": "b4109aeee81112b576ebbd8198d71fd32dd4ee8db406edf104bfe9eca8ded63c",
++    "inventory-green.log": "251a20fd7738b977d9fdc2f698c81ac45a51fa124ab0db458561146049e1c1d2",
++    "inventory-red.log": "a5f3522cc70547ac8897566e981f6ff48423c5977f64e2e521dc75e5ae4b2814",
++    "ledger.log": "4654f8caba98f01cb02847387b4a5d9fa02b672b94ad546dd0d8d0cd675a7623",
++    "plan.md": "ecff10a7e3817485fd61fe3d06b90904212aea7477ab4e76e42eaf1c8670cb74",
++    "runner.log": "ba81c6746609e6f8f0dc210d90dea51d4b2f37a85c1b3b1a2c79e25931edcc59"
++  },
++  "required_test_receipt": "acceptance-run/checks.json",
++  "required_tests_passed": false,
++  "required_test_receipt_sha256": "4d9acea35ba490b6a5ea1e194ada87fb00a05be7dd28517998217dcb4f26fd49",
++  "original_retry_task_complete": false,
++  "new_acceptance_checkboxes_complete": 0,
++  "branch_modified": false,
++  "protected_files_modified": false,
++  "dispatch_performed": false,
++  "canonical_publication_performed": false,
++  "remote_blocker_comment_applied": false,
++  "needs_human_label_applied": false,
++  "remote_mutation_failure": "MCP tool call requires approval, but approval policy is never"
++}
+-- 
+2.56.0
+

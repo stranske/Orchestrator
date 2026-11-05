@@ -1,0 +1,134 @@
+✔ packet floor diagnostics match the production rule without trusting saved flags (606.384764ms)
+✔ packet diagnostics identify missing and clipped evidence separately on parent and retries (1.217216ms)
+✔ report CLI carries packet floor locators through unique requested-row reconciliation (33.596462ms)
+✔ report recovery preserves ordered rows, recursive paid history and conflicting counts (1.277825ms)
+✔ report recovery rejects missing input without initializing runtime state (0.876503ms)
+✔ attempt observations bind nested failure fields without exposing private error text (1.228472ms)
+✔ saved decisions survive failed retries and remain distinct from independent truth (0.988237ms)
+✔ failure field hashes detect changed evidence even when retained classifications match (1.011542ms)
+✔ later-truth diagnostics distinguish absence, UNKNOWN, binary claims and invalid values (1.154322ms)
+✔ parent and retry truth remain separate without deriving truth from a decision (2.557672ms)
+✔ changed binary truth changes its evidence hash without authenticating either value (0.804417ms)
+✔ recorded failure stages explain collection, execution and validation breaks on real message shapes (0.839738ms)
+✔ unknown and contradictory failure prose cannot borrow a recognized stage (0.7929ms)
+✔ exact retained launcher refusals explain admission without claiming a backend attempt (0.860198ms)
+✔ launcher refusal matching rejects changed prose and contradictory attempt fields (0.899516ms)
+✔ later launcher refusals preserve the parent decision and prior paid history (0.691389ms)
+✔ later retries and persistence breaks cannot replace the parent attempt failure or decision (1.025913ms)
+✔ report recovery refuses malformed and ambiguous retained identities (2.491505ms)
+✖ nested retries cannot borrow a root identity when their saved identities conflict (1.181192ms)
+✖ explicit retry identities must be verifiable while compact histories remain intact (1.739876ms)
+✖ CLI refuses cross-case retries before emitting manifest or native receipt matches (37.71677ms)
+✔ report recovery requires explicit attribution and a valid check time (0.562981ms)
+✔ report recovery aborts if the input changes during observation (0.841541ms)
+✔ retained report reconciliation preserves requested order and explains every identity gap (1.480534ms)
+✔ retained report CLI matches supplied manifests without authenticating saved outcomes (30.46255ms)
+✔ legacy report manifest keeps verdict ambiguity visible and empty requests cannot complete accounting (1.313608ms)
+✔ report reconciliation refuses malformed or changing manifests without replacing evidence (1.634591ms)
+✔ report CLI never combines historical recovery with dispatch or current Brain selection (169.097938ms)
+✔ native receipt locators bind both case and backend identity for each retained attempt (8.161617ms)
+✔ missing native identities and receipts remain gaps rather than borrowing another attempt (8.710368ms)
+✔ reused native backend identities remain ambiguous even when one candidate matches the case (32.420028ms)
+✔ pre-dispatch inventory reconciles report and native locators without exposing payloads (7.631446ms)
+✔ all validated native rows still require authentication, independent truth and live writer proof (7.569053ms)
+✔ missing native evidence remains unavailable and never means zero attempts (0.602879ms)
+✔ an observed empty journal cannot establish writer ownership or authorize spending (7.733005ms)
+✔ an active journal writer does not make a read-only snapshot claim ownership (6.985073ms)
+✔ foreign and incomplete journals are refused without schema repair (19.836768ms)
+✔ report without native marker still cannot authorize generic retry (0.712291ms)
+✔ journal CLI stays read-only and requires explicit report attribution (252.42594ms)
+✔ owner exclusions are accounted for without reading excluded outcome evidence (39.111326ms)
+✔ requested owner exclusions remain explicit with missing or contradictory inventory (5.717503ms)
+✔ inventory exports every synthetic dispute and every exclusion without writes (818.319003ms)
+✔ inventory preserves the fixed cutoff and reports a count discrepancy (6.962038ms)
+✔ inventory distinguishes missing evidence from a complete cohort (51.08762ms)
+✔ inventory distinguishes schema-less evidence from a complete cohort (0.63025ms)
+✔ inventory distinguishes empty evidence from a complete cohort (2.601607ms)
+✔ inventory distinguishes incomplete-schema evidence from a complete cohort (3.201933ms)
+✔ inventory CLI exports JSON, signals unavailable evidence and rejects replay options (174.468309ms)
+✔ matching 71 identities bind the supplied manifest bytes without claiming historical acceptance (287.520642ms)
+✔ equal inventory counts expose substituted identities, exclusions and absent requested runs (9.229022ms)
+✔ a requested run on another target cannot satisfy case identity (4.441341ms)
+✔ inventory accounts for outcomes without run records as unavailable evidence (36.952252ms)
+✔ an outcomes-only Brain is available with exclusions, rather than an observed empty store (4.381001ms)
+✔ manifest retains every requested identity when Brain is empty (2.73889ms)
+✔ manifest retains every requested identity when Brain is unavailable (2.334303ms)
+✔ manifest count discrepancy prevents an exact match even when all supplied identities match (4.672231ms)
+✔ manifest CLI preserves input bytes, rejects malformed identities and signals unavailable Brain (401.80873ms)
+✔ version 2 reconciles all 71 dispute identities without claiming historical provenance (186.439766ms)
+✔ version 2 exposes substituted verdicts NON_PASS/FAIL despite matching run and count (39.781014ms)
+✔ version 2 exposes substituted verdicts FAIL_HOLLOW/PASS despite matching run and count (36.741271ms)
+✔ version 2 exposes substituted verdicts PASS/FAIL despite matching run and count (33.575071ms)
+✔ version 2 retains different disputes on one run and rejects duplicate dispute identities (4.905165ms)
+✔ version 2 preserves full identities for excluded, missing and unavailable cases (33.678844ms)
+✔ version 2 rejects malformed verdicts before publishing any inventory (399.386297ms)
+✔ version 2 distinguishes unavailable verdict evidence from contradictory verdicts (130.378149ms)
+✔ version 2 retains an observed target mismatch when verdict evidence is unavailable (3.650364ms)
+✔ missing stored targets remain eligible disputes with explicit unavailable identity evidence (679.776993ms)
+ℹ tests 67
+ℹ suites 0
+ℹ pass 64
+ℹ fail 3
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4672.381464
+
+✖ failing tests:
+
+test at tests/test_adjudicator_inventory.js:511:1
+✖ nested retries cannot borrow a root identity when their saved identities conflict (1.181192ms)
+  AssertionError [ERR_ASSERTION]: Missing expected exception.
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_inventory.js:526:14)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: [Function (anonymous)],
+    operator: 'throws',
+    diff: 'simple'
+  }
+
+test at tests/test_adjudicator_inventory.js:536:1
+✖ explicit retry identities must be verifiable while compact histories remain intact (1.739876ms)
+  AssertionError [ERR_ASSERTION]: Missing expected exception.
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_inventory.js:561:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: /invalid retained retry identity at rows\[0\]\.retry_attempts\[0\]\.run_id/,
+    operator: 'throws',
+    diff: 'simple'
+  }
+
+test at tests/test_adjudicator_inventory.js:566:1
+✖ CLI refuses cross-case retries before emitting manifest or native receipt matches (37.71677ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  0 !== 1
+  
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_inventory.js:579:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

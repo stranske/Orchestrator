@@ -4,15 +4,16 @@ import builtins
 import socket
 import subprocess
 
+import advisor_hermetic
 import pytest
 
-import capability_advisor as advisor
+_modules = advisor_hermetic.import_under_temporary_runtime("capability_advisor")
+advisor = _modules["capability_advisor"]
 
 
 @pytest.fixture(autouse=True)
-def isolated_runtime(tmp_path, monkeypatch):
-    for name in ("ORCH_STATE_DIR", "ORCH_LOCAL_RUNTIME"):
-        monkeypatch.setenv(name, str(tmp_path))
+def isolated_runtime(monkeypatch):
+    """Runtime roots come from advisor_hermetic. This fixture only blocks external calls."""
 
     def forbidden(*args, **kwargs):
         pytest.fail("advisor boundary test attempted a process or network call")
