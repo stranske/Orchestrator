@@ -7,7 +7,10 @@ tied to the corrected head. A free-text verdict line is not that proof. A
 trusted corpus decision on the partial merge is reported and is not that proof
 either. Skipped Agents Verifier runs on earlier commits of the corrective PR,
 and publication text that names only the owned delivery PR, are reported and
-are not that proof either. The command does not change the default contract exit.
+are not that proof either. A keepalive completion that only observed this head
+after starting on an earlier revision is reported and is not worker or
+publication proof for this head. The command does not change the default
+contract exit.
 """
 
 from __future__ import annotations
@@ -376,11 +379,17 @@ def _receipt_blobs(text):
 
 
 def _keepalive_for_head(comments, corrective_sha):
-    """Keepalive receipts name a worker run. They are not Verify or publication."""
+    """Keepalive receipts name a worker run. They are not Verify or publication.
+
+    A completion belongs to the head it started on. ``observed_head_sha`` is the
+    commit that run pushed. Counting that observation as a completion of the new
+    head would treat the previous round as worker proof for this one.
+    """
     completions = []
     reservations = []
+    observed_only = []
     if not corrective_sha or corrective_sha in {_PARTIAL_HEAD, _PARTIAL_MERGE}:
-        return completions, reservations
+        return completions, reservations, observed_only
     for body in comments:
         for kind, blob in _receipt_blobs(body):
             payload = _decode_receipt(blob)
@@ -389,20 +398,29 @@ def _keepalive_for_head(comments, corrective_sha):
             record = payload.get("record")
             if not isinstance(record, dict):
                 record = payload
-            heads = {
-                record.get("head_sha"),
-                record.get("observed_head_sha"),
-                payload.get("head_sha"),
-            }
-            if corrective_sha not in heads:
-                continue
-            if kind == "completion":
-                if payload.get("schema") != _RUNNER_RECEIPT_SCHEMA:
-                    continue
-                completions.append(str(record.get("status") or ""))
-            else:
-                reservations.append(str(record.get("status") or ""))
-    return completions, reservations
+            started = {record.get("head_sha"), payload.get("head_sha")}
+            started.discard(None)
+            owns = corrective_sha in started
+            observed = record.get("observed_head_sha")
+            if owns:
+                if kind == "completion":
+                    if payload.get("schema") != _RUNNER_RECEIPT_SCHEMA:
+                        continue
+                    completions.append(str(record.get("status") or ""))
+                else:
+                    reservations.append(str(record.get("status") or ""))
+            elif (
+                kind == "completion"
+                and observed == corrective_sha
+                and payload.get("schema") == _RUNNER_RECEIPT_SCHEMA
+            ):
+                observed_only.append(
+                    {
+                        "start_head": str(record.get("head_sha") or ""),
+                        "status": str(record.get("status") or ""),
+                    }
+                )
+    return completions, reservations, observed_only
 
 
 def _record_named(records, kind, name):
@@ -490,7 +508,7 @@ def _assess(
             labeled = _text_labeled_test(record.get("title"), record.get("labels") or [])
         if not labeled:
             unlabeled.append(record)
-    completions, reservations = _keepalive_for_head(comments, corrective_sha)
+    completions, reservations, observed_only = _keepalive_for_head(comments, corrective_sha)
     owned = _owned_delivery_record(records)
     owned_head = owned.get("head_sha") or ""
     same_owned_head = bool(owned_head) and owned_head == corrective_sha
@@ -505,6 +523,7 @@ def _assess(
         "publication_markers": _publication_markers(comments),
         "keepalive_completions": completions,
         "keepalive_reservations": reservations,
+        "keepalive_observed_only": observed_only,
         "corrective_pr": _corrective_record(records),
         "owned_delivery": owned,
         "owned_publication": (
@@ -632,6 +651,7 @@ def _format_report(assessment, corrective_sha, local_head, verifier_runs=(), ear
         lines.append("publication_markers_observed: none")
     completions = assessment.get("keepalive_completions") or []
     reservations = assessment.get("keepalive_reservations") or []
+    observed_only = assessment.get("keepalive_observed_only") or []
     if completions or reservations:
         lines.append(
             "keepalive_runner_for_corrective_head: "
@@ -643,6 +663,20 @@ def _format_report(assessment, corrective_sha, local_head, verifier_runs=(), ear
             "keepalive_runner_for_corrective_head: none "
             "for this head; a keepalive receipt would not be publication proof"
         )
+    if observed_only:
+        lines.append(
+            "keepalive_prior_completion_observed_head: "
+            + f"{len(observed_only)} completion(s) started on another head and "
+            + "observed this head; not a worker completion of this head and not "
+            + "publication proof"
+        )
+        for item in observed_only:
+            lines.append(
+                "keepalive_prior_completion: "
+                + f"start={item['start_head']} status={item['status']}"
+            )
+    else:
+        lines.append("keepalive_prior_completion_observed_head: none")
     corrective_pr = assessment.get("corrective_pr") or {}
     if "merged" in corrective_pr:
         if corrective_pr["merged"]:
@@ -1142,6 +1176,54 @@ def _self_check():
         raise AssertionError("keepalive receipt bound to the head was not reported")
     if "not accepted as native verify or publication proof" not in blocked_text:
         raise AssertionError("keepalive receipt was accepted as proof")
+    if "keepalive_prior_completion_observed_head: none" not in blocked_text:
+        raise AssertionError("matching start head was reported as a prior observation")
+    prior_start = "a" * 40
+    prior_receipt = {
+        "schema": _RUNNER_RECEIPT_SCHEMA,
+        "record": {
+            "head_sha": prior_start,
+            "observed_head_sha": corrective,
+            "status": "completed",
+        },
+    }
+    prior_body = (
+        "<!-- runner-completion:cursor:1168:v1 base64:"
+        + base64.b64encode(json.dumps(prior_receipt).encode()).decode()
+        + " -->"
+    )
+    prior_completions, prior_reservations, prior_observed = _keepalive_for_head(
+        [prior_body, receipt_body], corrective
+    )
+    if prior_completions != ["completed"] or prior_reservations:
+        raise AssertionError("this head's own completion was reclassified")
+    if prior_observed != [{"start_head": prior_start, "status": "completed"}]:
+        raise AssertionError("prior observed completion was counted as this head's run")
+    prior_assessment = _assess(
+        [],
+        [prior_body],
+        [
+            {
+                "kind": "pr",
+                "name": "1168",
+                "title": "test: chain",
+                "labels": ["test"],
+                "present": True,
+                "merged": False,
+                "merge_sha": "",
+            }
+        ],
+        corrective,
+    )
+    prior_text, prior_code = _format_report(prior_assessment, corrective, corrective)
+    if prior_code != 2 or prior_assessment["publication"]:
+        raise AssertionError("prior observed completion completed the canary")
+    if "keepalive_runner_for_corrective_head: none " not in prior_text:
+        raise AssertionError("prior observation was counted as this head's keepalive run")
+    if "keepalive_prior_completion: start=" + prior_start not in prior_text:
+        raise AssertionError("prior completion start head was not reported")
+    if "not publication proof" not in prior_text:
+        raise AssertionError("prior observed completion was accepted as publication proof")
     if not _text_labeled_test("test: chain", []) or not _text_labeled_test("Work", ["test"]):
         raise AssertionError("visible test label was missed")
     if _text_labeled_test("Controlled Closer E2E", ["agent:cursor"]):
