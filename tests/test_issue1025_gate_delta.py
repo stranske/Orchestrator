@@ -16,10 +16,10 @@ from pathlib import Path
 
 import pytest
 
+import capabilities
 import capability_advisor
 import capability_propensity as propensity
 import capability_recurrence_check as recurrence
-import capabilities
 import feedback
 
 
