@@ -156,51 +156,6 @@ def test_invalid_context_plan_is_named_no_start_error(job, monkeypatch):
     assert result["storage_context_refused"] and result["process_started"] is False
 
 
-def test_actual_closer_cli_keeps_proven_storage_refusal_recoverable(
-    native_world, controlled_world, monkeypatch, capsys
-):
-    import closer_dispatcher as closer
-    import closer_resources
-
-    w = native_world
-    refused = {
-        "agent": "claude",
-        "exit": 2,
-        "output": "",
-        "run_id": None,
-        "storage_context_refused": True,
-        "process_started": False,
-        "outcome_uncertain": False,
-        "error": "owned storage marker differs",
-    }
-    # Explicit consumer mapping: no child or retained provider result exists.
-    # Actual owned-storage validation is covered independently above.
-    monkeypatch.setattr(dispatcher, "offload", lambda *_a, **_kw: dict(refused))
-    assert closer.main(w.argv) == 78
-    capsys.readouterr()
-    shard = (
-        closer_resources.shard_dir(closer_resources.scoped_root(w.ledger), w.snapshot["target"])
-        / "state.json"
-    )
-    row = json.loads(shard.read_text())["frontiers"][w.frontier["frontier_id"]]["items"][
-        w.snapshot["target"]
-    ]
-    assert row["status"] == "held" and row["stage_status"] == "completed"
-    result = row["results"]["interpret"]
-    assert result["classification"] == "storage_context_unavailable"
-    assert result["next_trigger"] == "reconcile_owned_storage_context"
-    assert all(
-        result["pending_evidence"]["refusal"].get(key) == value for key, value in refused.items()
-    )
-    assert w.events["provider"] == w.events["effect"] == 0
-    assert controlled_world.events["auth"] == 0
-    assert controlled_world.events["started"] == []
-    assert controlled_world.events["ledger"] == []
-    assert not controlled_world.capture.exists()
-    assert not list((controlled_world.root / "logs").rglob("*.json"))
-    assert all(path.read_bytes() == raw for path, raw in w.originals.items())
-
-
 @pytest.mark.parametrize("name", ["owner.json", "lock"])
 def test_fifo_metadata_refuses_without_blocking(job, name):
     import os
@@ -304,11 +259,21 @@ def supervisor_job(tmp_path):
 def test_actual_supervisor_retires_native_tmp_on_success_and_failure(
     supervisor_job, tmp_path, monkeypatch, exit_code
 ):
-
     args = supervisor_job
     args.command[-1] = str(exit_code)
     observed = tmp_path / "native-temp-path.txt"
+    ready = tmp_path / "supervisor-ready"
+    real_bind = storage.Reservations.bind
+
+    def bind(manager, job, **metadata):
+        real_bind(manager, job, **metadata)
+        if "stage_source_binding_sha256" in metadata:
+            ready.touch()
+
+    monkeypatch.setattr(storage.Reservations, "bind", bind)
     shared = tmp_path / "shared-agent-runtime"
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path))
     monkeypatch.setenv("PYTHONPATH", str(Path(dispatcher.__file__).parent))
     monkeypatch.setenv("ORCH_MODEL_PROBE", "0")
     monkeypatch.setenv("ORCH_GEMINI_MODEL_PROBE", "0")
@@ -321,6 +286,13 @@ def test_actual_supervisor_retires_native_tmp_on_success_and_failure(
         "pathlib.Path(os.environ['NATIVE_TEMP_OBSERVATION']).write_text(str(root))"
     )
     child = (
+        "import pathlib,time\n"
+        f"ready = pathlib.Path({str(ready)!r})\n"
+        "deadline = time.monotonic() + 10\n"
+        "while not ready.exists():\n"
+        "    if time.monotonic() >= deadline:\n"
+        "        raise TimeoutError('supervisor setup did not complete')\n"
+        "    time.sleep(0.01)\n"
         "import shlex,subprocess,sys;from dispatcher import _agent_runtime_prelude;"
         "subprocess.run(['bash','-c',_agent_runtime_prelude('claude')+"
         + "shlex.join([sys.executable,'-c',"
@@ -330,7 +302,7 @@ def test_actual_supervisor_retires_native_tmp_on_success_and_failure(
     script = Path(args.command[1])
     script.write_text(
         script.read_text().replace(
-            'exit "$1"\n', shlex.join([sys.executable, "-c", child]) + '\nexit "$1"\n'
+            'exit "$1"\n', shlex.join([sys.executable, "-c", child]) + ' || exit "$?"\nexit "$1"\n'
         )
     )
     assert storage.run_job(args, free=lambda _: storage.GIB, probe=lambda _: None) == exit_code

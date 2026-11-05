@@ -1,0 +1,36 @@
+✔ owner exclusions are accounted for without reading excluded outcome evidence (54.256072ms)
+✔ requested owner exclusions remain explicit with missing or contradictory inventory (6.365513ms)
+✔ inventory exports every synthetic dispute and every exclusion without writes (432.296642ms)
+✔ inventory preserves the fixed cutoff and reports a count discrepancy (7.595422ms)
+✔ inventory distinguishes missing evidence from a complete cohort (2.733312ms)
+✔ inventory distinguishes schema-less evidence from a complete cohort (0.929985ms)
+✔ inventory distinguishes empty evidence from a complete cohort (2.855803ms)
+✔ inventory distinguishes incomplete-schema evidence from a complete cohort (3.690197ms)
+✔ inventory CLI exports JSON, signals unavailable evidence and rejects replay options (214.480447ms)
+✔ matching 71 identities bind the supplied manifest bytes without claiming historical acceptance (99.019115ms)
+✔ equal inventory counts expose substituted identities, exclusions and absent requested runs (8.337935ms)
+✔ a requested run on another target cannot satisfy case identity (4.054906ms)
+✔ inventory accounts for outcomes without run records as unavailable evidence (44.668543ms)
+✔ an outcomes-only Brain is available with exclusions, rather than an observed empty store (4.005744ms)
+✔ manifest retains every requested identity when Brain is empty (3.072553ms)
+✔ manifest retains every requested identity when Brain is unavailable (2.545695ms)
+✔ manifest count discrepancy prevents an exact match even when all supplied identities match (4.265688ms)
+✔ manifest CLI preserves input bytes, rejects malformed identities and signals unavailable Brain (544.425878ms)
+✔ version 2 reconciles all 71 dispute identities without claiming historical provenance (90.936938ms)
+✔ version 2 exposes substituted verdicts NON_PASS/FAIL despite matching run and count (43.57699ms)
+✔ version 2 exposes substituted verdicts FAIL_HOLLOW/PASS despite matching run and count (42.267663ms)
+✔ version 2 exposes substituted verdicts PASS/FAIL despite matching run and count (41.580938ms)
+✔ version 2 retains different disputes on one run and rejects duplicate dispute identities (4.770394ms)
+✔ version 2 preserves full identities for excluded, missing and unavailable cases (40.877953ms)
+✔ version 2 rejects malformed verdicts before publishing any inventory (512.509878ms)
+✔ version 2 distinguishes unavailable verdict evidence from contradictory verdicts (50.774133ms)
+✔ version 2 retains an observed target mismatch when verdict evidence is unavailable (3.448099ms)
+✔ missing stored targets remain eligible disputes with explicit unavailable identity evidence (420.372725ms)
+ℹ tests 28
+ℹ suites 0
+ℹ pass 28
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2700.159124

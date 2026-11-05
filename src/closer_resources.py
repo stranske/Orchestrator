@@ -83,6 +83,7 @@ class ScopeBlocked(ResourceBlocked):
 
 
 _NATIVE_INTERPRET_WRAPPERS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_NATIVE_INTAKE_SCOPE_CALLBACKS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
 
 def native_interpretation_callback(callback):
@@ -2413,7 +2414,14 @@ def run_scoped(
         import closer_dispatcher
 
         callback = {"prepare": prepare, "interpret": interpret}.get(stage)
-        return closer_dispatcher.native_stage_remote_only(target, context, stage, callback)
+        ordinary = closer_dispatcher.native_stage_remote_only(target, context, stage, callback)
+        if stage != "interpret" or finite_frontier is None:
+            return ordinary
+        import closer_pipeline
+
+        return ordinary or closer_pipeline._source_native_intake_ready(
+            target, context.get("prepare"), callback
+        )
 
     def check_scope(
         target,
@@ -2561,8 +2569,21 @@ def run_scoped(
                     )
                 check_scope(target, stage, keys, ctx, native_remote_expected=remote)
                 callback_deadline(ctx)
+                if stage == "interpret" and finite_frontier is not None:
+                    import closer_pipeline
+
+                    result = closer_pipeline._source_native_intake(
+                        target, ctx, fn, _scope_callback=call
+                    )
+                    if result is not None:
+                        return result
                 return fn(target, ctx)
 
+        if stage == "interpret" and finite_frontier is not None:
+            import closer_pipeline
+
+            if fn in closer_pipeline._FINITE_DISPATCHER_CALLBACKS:
+                _NATIVE_INTAKE_SCOPE_CALLBACKS[call] = fn
         return call
 
     def gated(fn, lane, *, native_interpret=False):

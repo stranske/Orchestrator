@@ -1,0 +1,49 @@
+{
+  "checked_at": "2026-11-03T19:57:12.856565+00:00",
+  "evaluated_revision": "ff02e2e756f61828862b206c1a3795b1b3182b17",
+  "source_parent": "d84ae822cb6181d53e9a993712807dfc49fd41a5",
+  "checks": [
+    {
+      "name": "ledger-tests",
+      "command": [
+        "node",
+        "tests/test_adjudicator_evidence_ledger.js"
+      ],
+      "exit_code": 0,
+      "passed": 22,
+      "failed": 0,
+      "log": "ledger-tests.log",
+      "log_sha256": "59c5b1e47bd0aad737fe781d9c99876f263214771c6c1349ce6d9e8fcf135d7d"
+    },
+    {
+      "name": "runner-tests",
+      "command": [
+        "node",
+        "tests/test_adjudicator_acceptance_runner.js"
+      ],
+      "exit_code": 0,
+      "passed": 26,
+      "failed": 0,
+      "log": "runner-tests.log",
+      "log_sha256": "2090b3cb904438679be4851c7cb83b46e28b4262b3eb6dd63df609a9d6d4b177"
+    },
+    {
+      "name": "inventory-tests",
+      "command": [
+        "node",
+        "tests/test_adjudicator_inventory.js"
+      ],
+      "exit_code": 0,
+      "passed": 40,
+      "failed": 0,
+      "log": "inventory-tests.log",
+      "log_sha256": "a7a4da16604b151003196e81589efc75805395dde38f887f25f670524d95f85d"
+    }
+  ],
+  "source_sha256": {
+    "scripts/audit_adjudicator_evidence_ledger.js": "9a0a755667e952bf3fc0ad1f62e103f4c0644f136e6481f7e0359e3df834724b",
+    "tests/test_adjudicator_evidence_ledger.js": "718192d920cc90562f823a9847883b8ed622430e406d9a194591ad88ae0da046"
+  },
+  "operational_acceptance_verified": false,
+  "python_files_changed": false
+}

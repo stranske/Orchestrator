@@ -1,0 +1,824 @@
+Captured 2026-11-03; Python /opt/anaconda3/bin/python3; original source SHA256:
+src/redirect_sweep.py 88bab6192e87a01a1e8912c546c376aee3072c20fa4263e38887276515754d5b
+src/watch.py 16aad651b6c4f26eedc1a6ff94fbdcf6c9137570ed266ccc6356a03a902fa455
+
+=== Mutation 1: tests/test_issue839_ranked_coverage.py::test_redirect_helpers_keep_invalid_corpus_rows_nonfatal ===
+File: src/redirect_sweep.py
+Replace exactly:
+ts = int(entry.get("ts") or 0)
+With:
+ts = 0
+
+MUTATED
+ORCH_STATE_DIR=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-infiodlv/state ORCH_LOCAL_RUNTIME=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-infiodlv/runtime PYTHONPYCACHEPREFIX=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-infiodlv/pycache '/opt/anaconda3/bin/python3' '-m' 'pytest' 'tests/test_issue839_ranked_coverage.py::test_redirect_helpers_keep_invalid_corpus_rows_nonfatal' '-v'
+============================= test session starts ==============================
+platform darwin -- Python 3.12.2, pytest-9.1.1, pluggy-1.6.0 -- /opt/anaconda3/bin/python3
+cachedir: .pytest_cache
+hypothesis profile 'default'
+rootdir: /Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__839__closer-repair-2
+configfile: pyproject.toml
+plugins: hypothesis-6.161.5, cov-7.1.0, xdist-3.8.0, rerunfailures-16.3, anyio-4.14.2, datadir-1.8.0, typeguard-4.5.1, asyncio-1.3.0, langsmith-0.10.10, pytest_httpserver-1.1.3, regressions-2.11.0, Faker-40.39.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 1 item
+
+tests/test_issue839_ranked_coverage.py::test_redirect_helpers_keep_invalid_corpus_rows_nonfatal FAILED [100%]
+
+=================================== FAILURES ===================================
+___________ test_redirect_helpers_keep_invalid_corpus_rows_nonfatal ____________
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-485/test_redirect_helpers_keep_inv0')
+
+    def test_redirect_helpers_keep_invalid_corpus_rows_nonfatal(tmp_path: Path) -> None:
+        corpus = tmp_path / "corpus.jsonl"
+        corpus.write_text(
+            "\n".join(
+                [
+                    "",
+                    "not json",
+                    json.dumps({"kind": "other"}),
+                    json.dumps(
+                        {"kind": "redirect_proposal", "ts": "not-a-time", "sweep_fingerprint": "bad"}
+                    ),
+                    json.dumps({"kind": "redirect_proposal", "ts": 10, "sweep_fingerprint": "old"}),
+                    json.dumps(
+                        {
+                            "kind": "redirect_proposal",
+                            "ts": 100,
+                            "report": {"sweep_fingerprint": "from-report"},
+                        }
+                    ),
+                    json.dumps({"kind": "redirect_proposal", "ts": 100, "sweep_fingerprint": "good"}),
+                ]
+            )
+            + "\n"
+        )
+>       assert redirect_sweep._existing_sweep_fingerprints(corpus, since_ts=50) == {
+            "good",
+            "from-report",
+        }
+E       AssertionError: assert set() == {'from-report', 'good'}
+E
+E         Extra items in the right set:
+E         'good'
+E         'from-report'
+E
+E         Full diff:
+E         + set()...
+E
+E         ...Full output truncated (4 lines hidden), use '-vv' to show
+
+tests/test_issue839_ranked_coverage.py:64: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_issue839_ranked_coverage.py::test_redirect_helpers_keep_invalid_corpus_rows_nonfatal
+============================== 1 failed in 0.94s ===============================
+EXIT_CODE=1
+
+RESTORED
+ORCH_STATE_DIR=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-cynen5i6/state ORCH_LOCAL_RUNTIME=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-cynen5i6/runtime PYTHONPYCACHEPREFIX=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-cynen5i6/pycache '/opt/anaconda3/bin/python3' '-m' 'pytest' 'tests/test_issue839_ranked_coverage.py::test_redirect_helpers_keep_invalid_corpus_rows_nonfatal' '-v'
+============================= test session starts ==============================
+platform darwin -- Python 3.12.2, pytest-9.1.1, pluggy-1.6.0 -- /opt/anaconda3/bin/python3
+cachedir: .pytest_cache
+hypothesis profile 'default'
+rootdir: /Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__839__closer-repair-2
+configfile: pyproject.toml
+plugins: hypothesis-6.161.5, cov-7.1.0, xdist-3.8.0, rerunfailures-16.3, anyio-4.14.2, datadir-1.8.0, typeguard-4.5.1, asyncio-1.3.0, langsmith-0.10.10, pytest_httpserver-1.1.3, regressions-2.11.0, Faker-40.39.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 1 item
+
+tests/test_issue839_ranked_coverage.py::test_redirect_helpers_keep_invalid_corpus_rows_nonfatal PASSED [100%]
+
+============================== 1 passed in 0.89s ===============================
+EXIT_CODE=0
+
+=== Mutation 2: tests/test_issue839_ranked_coverage.py::test_claim_inputs_and_experiment_recording_cover_skip_paths ===
+File: src/redirect_sweep.py
+Replace exactly:
+"expected_paths": _list_value(meta.get("expected_paths")),
+With:
+"expected_paths": [],
+
+MUTATED
+ORCH_STATE_DIR=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-yem0cjf2/state ORCH_LOCAL_RUNTIME=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-yem0cjf2/runtime PYTHONPYCACHEPREFIX=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-yem0cjf2/pycache '/opt/anaconda3/bin/python3' '-m' 'pytest' 'tests/test_issue839_ranked_coverage.py::test_claim_inputs_and_experiment_recording_cover_skip_paths' '-v'
+============================= test session starts ==============================
+platform darwin -- Python 3.12.2, pytest-9.1.1, pluggy-1.6.0 -- /opt/anaconda3/bin/python3
+cachedir: .pytest_cache
+hypothesis profile 'default'
+rootdir: /Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__839__closer-repair-2
+configfile: pyproject.toml
+plugins: hypothesis-6.161.5, cov-7.1.0, xdist-3.8.0, rerunfailures-16.3, anyio-4.14.2, datadir-1.8.0, typeguard-4.5.1, asyncio-1.3.0, langsmith-0.10.10, pytest_httpserver-1.1.3, regressions-2.11.0, Faker-40.39.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 1 item
+
+tests/test_issue839_ranked_coverage.py::test_claim_inputs_and_experiment_recording_cover_skip_paths FAILED [100%]
+
+=================================== FAILURES ===================================
+_________ test_claim_inputs_and_experiment_recording_cover_skip_paths __________
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-487/test_claim_inputs_and_experime0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x124d0e060>
+
+    def test_claim_inputs_and_experiment_recording_cover_skip_paths(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        handoff = tmp_path / "handoff"
+        log = handoff / "dispatch-logs" / "o__r_1.codex.log"
+        log.parent.mkdir(parents=True)
+        log.write_text("stalled\n")
+        monkeypatch.setattr(redirect_sweep, "HANDOFF", handoff)
+
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        monkeypatch.setattr(redirect_sweep.provision, "worktree_path", lambda *_a, **_k: wt)
+        inputs = redirect_sweep._claim_watch_inputs(
+            "o/r#1", {"agent": "codex", "lane": "opener", "expected_paths": "tests/,src/"}
+        )
+        assert inputs["log"].endswith("o__r_1.codex.log")
+        assert inputs["worktree"] == str(wt)
+>       assert inputs["expected_paths"] == ["tests/", "src/"]
+E       AssertionError: assert [] == ['tests/', 'src/']
+E
+E         Right contains 2 more items, first extra item: 'tests/'
+E
+E         Full diff:
+E         + []
+E         - [
+E         -     'tests/',
+E         -     'src/',
+E         - ]
+
+tests/test_issue839_ranked_coverage.py:119: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_issue839_ranked_coverage.py::test_claim_inputs_and_experiment_recording_cover_skip_paths
+============================== 1 failed in 0.95s ===============================
+EXIT_CODE=1
+
+RESTORED
+ORCH_STATE_DIR=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-r0n0ep01/state ORCH_LOCAL_RUNTIME=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-r0n0ep01/runtime PYTHONPYCACHEPREFIX=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-r0n0ep01/pycache '/opt/anaconda3/bin/python3' '-m' 'pytest' 'tests/test_issue839_ranked_coverage.py::test_claim_inputs_and_experiment_recording_cover_skip_paths' '-v'
+============================= test session starts ==============================
+platform darwin -- Python 3.12.2, pytest-9.1.1, pluggy-1.6.0 -- /opt/anaconda3/bin/python3
+cachedir: .pytest_cache
+hypothesis profile 'default'
+rootdir: /Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__839__closer-repair-2
+configfile: pyproject.toml
+plugins: hypothesis-6.161.5, cov-7.1.0, xdist-3.8.0, rerunfailures-16.3, anyio-4.14.2, datadir-1.8.0, typeguard-4.5.1, asyncio-1.3.0, langsmith-0.10.10, pytest_httpserver-1.1.3, regressions-2.11.0, Faker-40.39.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 1 item
+
+tests/test_issue839_ranked_coverage.py::test_claim_inputs_and_experiment_recording_cover_skip_paths PASSED [100%]
+
+============================== 1 passed in 0.89s ===============================
+EXIT_CODE=0
+
+=== Mutation 3: tests/test_issue839_ranked_coverage.py::test_sweep_and_recording_are_advisory_and_count_every_skip ===
+File: src/redirect_sweep.py
+Replace exactly:
+"mutates_state": False,
+With:
+"mutates_state": True,
+
+MUTATED
+ORCH_STATE_DIR=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-r16e8rs8/state ORCH_LOCAL_RUNTIME=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-r16e8rs8/runtime PYTHONPYCACHEPREFIX=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-r16e8rs8/pycache '/opt/anaconda3/bin/python3' '-m' 'pytest' 'tests/test_issue839_ranked_coverage.py::test_sweep_and_recording_are_advisory_and_count_every_skip' '-v'
+============================= test session starts ==============================
+platform darwin -- Python 3.12.2, pytest-9.1.1, pluggy-1.6.0 -- /opt/anaconda3/bin/python3
+cachedir: .pytest_cache
+hypothesis profile 'default'
+rootdir: /Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__839__closer-repair-2
+configfile: pyproject.toml
+plugins: hypothesis-6.161.5, cov-7.1.0, xdist-3.8.0, rerunfailures-16.3, anyio-4.14.2, datadir-1.8.0, typeguard-4.5.1, asyncio-1.3.0, langsmith-0.10.10, pytest_httpserver-1.1.3, regressions-2.11.0, Faker-40.39.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 1 item
+
+tests/test_issue839_ranked_coverage.py::test_sweep_and_recording_are_advisory_and_count_every_skip FAILED [100%]
+
+=================================== FAILURES ===================================
+__________ test_sweep_and_recording_are_advisory_and_count_every_skip __________
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-489/test_sweep_and_recording_are_a0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x114412420>
+
+    def test_sweep_and_recording_are_advisory_and_count_every_skip(tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.setattr(redirect_sweep, "_capability_heartbeat", lambda: None)
+        monkeypatch.setattr(
+            redirect_sweep.claims,
+            "active_claims",
+            lambda **_: {
+                "o/r#0": {"agent": "missing"},
+                "o/r#1": {"agent": "codex", "pid": 7, "lane": "opener", "task_type": "test"},
+                "o/r#2": {"agent": "extra", "pid": 8},
+            },
+        )
+        monkeypatch.setattr(
+            redirect_sweep.watch,
+            "classify_lane",
+            lambda **kwargs: {
+                "state": "stalled",
+                "recommended_action": "redirect",
+                "policy_decision": {"action": "redirect"},
+                "target": kwargs["target"],
+                "agent": kwargs["agent"],
+            },
+        )
+        sweep = redirect_sweep.sweep(max_reports=2, now=100)
+        assert sweep["unwatchable_count"] == 1
+        assert sweep["watched_count"] == sweep["actionable_count"] == 1
+        assert sweep["truncated_targets"] == ["o/r#2"]
+>       assert sweep["mutates_state"] is False
+E       assert True is False
+
+tests/test_issue839_ranked_coverage.py:197: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_issue839_ranked_coverage.py::test_sweep_and_recording_are_advisory_and_count_every_skip
+============================== 1 failed in 1.03s ===============================
+EXIT_CODE=1
+
+RESTORED
+ORCH_STATE_DIR=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-ffgg2dc8/state ORCH_LOCAL_RUNTIME=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-ffgg2dc8/runtime PYTHONPYCACHEPREFIX=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-ffgg2dc8/pycache '/opt/anaconda3/bin/python3' '-m' 'pytest' 'tests/test_issue839_ranked_coverage.py::test_sweep_and_recording_are_advisory_and_count_every_skip' '-v'
+============================= test session starts ==============================
+platform darwin -- Python 3.12.2, pytest-9.1.1, pluggy-1.6.0 -- /opt/anaconda3/bin/python3
+cachedir: .pytest_cache
+hypothesis profile 'default'
+rootdir: /Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__839__closer-repair-2
+configfile: pyproject.toml
+plugins: hypothesis-6.161.5, cov-7.1.0, xdist-3.8.0, rerunfailures-16.3, anyio-4.14.2, datadir-1.8.0, typeguard-4.5.1, asyncio-1.3.0, langsmith-0.10.10, pytest_httpserver-1.1.3, regressions-2.11.0, Faker-40.39.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 1 item
+
+tests/test_issue839_ranked_coverage.py::test_sweep_and_recording_are_advisory_and_count_every_skip PASSED [100%]
+
+============================== 1 passed in 0.91s ===============================
+EXIT_CODE=0
+
+=== Mutation 4: tests/test_issue839_ranked_coverage.py::test_doctor_and_watch_helpers_handle_bad_inputs_without_live_access ===
+File: src/redirect_sweep.py
+Replace exactly:
+age_seconds = None
+    out.update(
+With:
+age_seconds = 0
+    out.update(
+
+MUTATED
+ORCH_STATE_DIR=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-kerqf1tl/state ORCH_LOCAL_RUNTIME=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-kerqf1tl/runtime PYTHONPYCACHEPREFIX=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-kerqf1tl/pycache '/opt/anaconda3/bin/python3' '-m' 'pytest' 'tests/test_issue839_ranked_coverage.py::test_doctor_and_watch_helpers_handle_bad_inputs_without_live_access' '-v'
+============================= test session starts ==============================
+platform darwin -- Python 3.12.2, pytest-9.1.1, pluggy-1.6.0 -- /opt/anaconda3/bin/python3
+cachedir: .pytest_cache
+hypothesis profile 'default'
+rootdir: /Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__839__closer-repair-2
+configfile: pyproject.toml
+plugins: hypothesis-6.161.5, cov-7.1.0, xdist-3.8.0, rerunfailures-16.3, anyio-4.14.2, datadir-1.8.0, typeguard-4.5.1, asyncio-1.3.0, langsmith-0.10.10, pytest_httpserver-1.1.3, regressions-2.11.0, Faker-40.39.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 1 item
+
+tests/test_issue839_ranked_coverage.py::test_doctor_and_watch_helpers_handle_bad_inputs_without_live_access FAILED [100%]
+
+=================================== FAILURES ===================================
+_____ test_doctor_and_watch_helpers_handle_bad_inputs_without_live_access ______
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-491/test_doctor_and_watch_helpers_0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x113a11ac0>
+
+    def test_doctor_and_watch_helpers_handle_bad_inputs_without_live_access(
+        tmp_path: Path, monkeypatch
+    ) -> None:
+        assert redirect_sweep._read_report_status(tmp_path / "missing.json", now=100)["exists"] is False
+        report_path = tmp_path / "redirect-sweep.json"
+        report_path.write_text("{bad")
+        assert redirect_sweep._read_report_status(report_path, now=100)["load_error"]
+        report_path.write_text(json.dumps({"generated_at": "unknown"}))
+>       assert redirect_sweep._read_report_status(report_path, now=100)["age_seconds"] is None
+E       assert 0 is None
+
+tests/test_issue839_ranked_coverage.py:254: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_issue839_ranked_coverage.py::test_doctor_and_watch_helpers_handle_bad_inputs_without_live_access
+============================== 1 failed in 0.93s ===============================
+EXIT_CODE=1
+
+RESTORED
+ORCH_STATE_DIR=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-10yuj5te/state ORCH_LOCAL_RUNTIME=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-10yuj5te/runtime PYTHONPYCACHEPREFIX=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-10yuj5te/pycache '/opt/anaconda3/bin/python3' '-m' 'pytest' 'tests/test_issue839_ranked_coverage.py::test_doctor_and_watch_helpers_handle_bad_inputs_without_live_access' '-v'
+============================= test session starts ==============================
+platform darwin -- Python 3.12.2, pytest-9.1.1, pluggy-1.6.0 -- /opt/anaconda3/bin/python3
+cachedir: .pytest_cache
+hypothesis profile 'default'
+rootdir: /Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__839__closer-repair-2
+configfile: pyproject.toml
+plugins: hypothesis-6.161.5, cov-7.1.0, xdist-3.8.0, rerunfailures-16.3, anyio-4.14.2, datadir-1.8.0, typeguard-4.5.1, asyncio-1.3.0, langsmith-0.10.10, pytest_httpserver-1.1.3, regressions-2.11.0, Faker-40.39.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 1 item
+
+tests/test_issue839_ranked_coverage.py::test_doctor_and_watch_helpers_handle_bad_inputs_without_live_access PASSED [100%]
+
+============================== 1 passed in 0.90s ===============================
+EXIT_CODE=0
+Captured 2026-11-03; Python /opt/anaconda3/bin/python3; original source SHA256:
+src/redirect_sweep.py 88bab6192e87a01a1e8912c546c376aee3072c20fa4263e38887276515754d5b
+src/watch.py 16aad651b6c4f26eedc1a6ff94fbdcf6c9137570ed266ccc6356a03a902fa455
+
+=== Mutation 5: tests/test_issue839_ranked_coverage.py::test_classify_format_and_cli_paths_stay_read_only ===
+File: src/watch.py
+Replace exactly:
+if pid is None and not log and not worktree:
+With:
+if False and pid is None and not log and not worktree:
+
+MUTATED
+ORCH_STATE_DIR=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-f1trxf4m/state ORCH_LOCAL_RUNTIME=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-f1trxf4m/runtime PYTHONPYCACHEPREFIX=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-f1trxf4m/pycache '/opt/anaconda3/bin/python3' '-m' 'pytest' 'tests/test_issue839_ranked_coverage.py::test_classify_format_and_cli_paths_stay_read_only' '-v'
+============================= test session starts ==============================
+platform darwin -- Python 3.12.2, pytest-9.1.1, pluggy-1.6.0 -- /opt/anaconda3/bin/python3
+cachedir: .pytest_cache
+hypothesis profile 'default'
+rootdir: /Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__839__closer-repair-2
+configfile: pyproject.toml
+plugins: hypothesis-6.161.5, cov-7.1.0, xdist-3.8.0, rerunfailures-16.3, anyio-4.14.2, datadir-1.8.0, typeguard-4.5.1, asyncio-1.3.0, langsmith-0.10.10, pytest_httpserver-1.1.3, regressions-2.11.0, Faker-40.39.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 1 item
+
+tests/test_issue839_ranked_coverage.py::test_classify_format_and_cli_paths_stay_read_only FAILED [100%]
+
+=================================== FAILURES ===================================
+______________ test_classify_format_and_cli_paths_stay_read_only _______________
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-493/test_classify_format_and_cli_p0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x11ac117f0>
+capsys = <_pytest.capture.CaptureFixture object at 0x11ac1b650>
+
+    def test_classify_format_and_cli_paths_stay_read_only(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+    ) -> None:
+        monkeypatch.setattr(watch, "_capability_heartbeat", lambda *a, **k: None)
+        missing = watch.classify_lane(credit=False)
+>       assert missing["state"] == "missing"
+E       AssertionError: assert 'running' == 'missing'
+E
+E         - missing
+E         + running
+
+tests/test_issue839_ranked_coverage.py:416: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_issue839_ranked_coverage.py::test_classify_format_and_cli_paths_stay_read_only
+============================== 1 failed in 0.96s ===============================
+EXIT_CODE=1
+
+RESTORED
+ORCH_STATE_DIR=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-f5w6i4k9/state ORCH_LOCAL_RUNTIME=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-f5w6i4k9/runtime PYTHONPYCACHEPREFIX=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-f5w6i4k9/pycache '/opt/anaconda3/bin/python3' '-m' 'pytest' 'tests/test_issue839_ranked_coverage.py::test_classify_format_and_cli_paths_stay_read_only' '-v'
+============================= test session starts ==============================
+platform darwin -- Python 3.12.2, pytest-9.1.1, pluggy-1.6.0 -- /opt/anaconda3/bin/python3
+cachedir: .pytest_cache
+hypothesis profile 'default'
+rootdir: /Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__839__closer-repair-2
+configfile: pyproject.toml
+plugins: hypothesis-6.161.5, cov-7.1.0, xdist-3.8.0, rerunfailures-16.3, anyio-4.14.2, datadir-1.8.0, typeguard-4.5.1, asyncio-1.3.0, langsmith-0.10.10, pytest_httpserver-1.1.3, regressions-2.11.0, Faker-40.39.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 1 item
+
+tests/test_issue839_ranked_coverage.py::test_classify_format_and_cli_paths_stay_read_only PASSED [100%]
+
+============================== 1 passed in 0.85s ===============================
+EXIT_CODE=0
+
+=== Mutation 6: tests/test_issue839_ranked_coverage.py::test_redirect_sweep_main_cli_paths_are_advisory ===
+File: src/redirect_sweep.py
+Replace exactly:
+else format_doctor(report))
+        return 0
+With:
+else format_doctor(report))
+        return 1
+
+MUTATED
+ORCH_STATE_DIR=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-3qtzmcx0/state ORCH_LOCAL_RUNTIME=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-3qtzmcx0/runtime PYTHONPYCACHEPREFIX=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-3qtzmcx0/pycache '/opt/anaconda3/bin/python3' '-m' 'pytest' 'tests/test_issue839_ranked_coverage.py::test_redirect_sweep_main_cli_paths_are_advisory' '-v'
+============================= test session starts ==============================
+platform darwin -- Python 3.12.2, pytest-9.1.1, pluggy-1.6.0 -- /opt/anaconda3/bin/python3
+cachedir: .pytest_cache
+hypothesis profile 'default'
+rootdir: /Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__839__closer-repair-2
+configfile: pyproject.toml
+plugins: hypothesis-6.161.5, cov-7.1.0, xdist-3.8.0, rerunfailures-16.3, anyio-4.14.2, datadir-1.8.0, typeguard-4.5.1, asyncio-1.3.0, langsmith-0.10.10, pytest_httpserver-1.1.3, regressions-2.11.0, Faker-40.39.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 1 item
+
+tests/test_issue839_ranked_coverage.py::test_redirect_sweep_main_cli_paths_are_advisory FAILED [100%]
+
+=================================== FAILURES ===================================
+_______________ test_redirect_sweep_main_cli_paths_are_advisory ________________
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-495/test_redirect_sweep_main_cli_p0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x11860a2d0>
+capsys = <_pytest.capture.CaptureFixture object at 0x118610170>
+
+    def test_redirect_sweep_main_cli_paths_are_advisory(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+    ) -> None:
+        monkeypatch.setattr(redirect_sweep, "_capability_heartbeat", lambda *a, **k: None)
+        monkeypatch.setattr(
+            redirect_sweep,
+            "doctor",
+            lambda **_: {
+                "cadence": {
+                    "redirect_sweep_step_present": True,
+                    "record_corpus_env_enabled": False,
+                },
+                "autonomous_redirect_enabled": False,
+                "live_sweep": {"active_claim_count": 0, "watched_count": 0, "actionable_count": 0},
+                "shadow_corpus": {
+                    "proposals": 0,
+                    "valid_proposals": 0,
+                    "linked_proposals": 0,
+                    "ready_for_supervised_apply": False,
+                },
+                "recommendation": "ok",
+            },
+        )
+>       assert redirect_sweep.main(["--doctor"]) == 0
+E       AssertionError: assert 1 == 0
+E        +  where 1 = <function main at 0x11d0db7e0>(['--doctor'])
+E        +    where <function main at 0x11d0db7e0> = redirect_sweep.main
+
+tests/test_issue839_ranked_coverage.py:561: AssertionError
+----------------------------- Captured stdout call -----------------------------
+redirect_sweep doctor:
+  cadence_wired=True record_corpus_enabled=False autonomous_redirect_enabled=False
+  live_sweep active=0 watched=0 actionable=0
+  corpus proposals=0 valid=0 linked=0 ready_supervised=False
+  recommendation: ok
+=========================== short test summary info ============================
+FAILED tests/test_issue839_ranked_coverage.py::test_redirect_sweep_main_cli_paths_are_advisory
+============================== 1 failed in 0.90s ===============================
+EXIT_CODE=1
+
+RESTORED
+ORCH_STATE_DIR=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-78lo2hai/state ORCH_LOCAL_RUNTIME=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-78lo2hai/runtime PYTHONPYCACHEPREFIX=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-78lo2hai/pycache '/opt/anaconda3/bin/python3' '-m' 'pytest' 'tests/test_issue839_ranked_coverage.py::test_redirect_sweep_main_cli_paths_are_advisory' '-v'
+============================= test session starts ==============================
+platform darwin -- Python 3.12.2, pytest-9.1.1, pluggy-1.6.0 -- /opt/anaconda3/bin/python3
+cachedir: .pytest_cache
+hypothesis profile 'default'
+rootdir: /Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__839__closer-repair-2
+configfile: pyproject.toml
+plugins: hypothesis-6.161.5, cov-7.1.0, xdist-3.8.0, rerunfailures-16.3, anyio-4.14.2, datadir-1.8.0, typeguard-4.5.1, asyncio-1.3.0, langsmith-0.10.10, pytest_httpserver-1.1.3, regressions-2.11.0, Faker-40.39.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 1 item
+
+tests/test_issue839_ranked_coverage.py::test_redirect_sweep_main_cli_paths_are_advisory PASSED [100%]
+
+============================== 1 passed in 0.85s ===============================
+EXIT_CODE=0
+
+=== Mutation 7: tests/test_issue839_ranked_coverage.py::test_nonfinite_corpus_timestamp_is_skipped[inf] ===
+File: src/redirect_sweep.py
+Replace exactly:
+except (TypeError, ValueError, OverflowError):
+                continue
+With:
+except (TypeError, ValueError):
+                continue
+
+MUTATED
+ORCH_STATE_DIR=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-81a_12z5/state ORCH_LOCAL_RUNTIME=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-81a_12z5/runtime PYTHONPYCACHEPREFIX=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-81a_12z5/pycache '/opt/anaconda3/bin/python3' '-m' 'pytest' 'tests/test_issue839_ranked_coverage.py::test_nonfinite_corpus_timestamp_is_skipped[inf]' '-v'
+============================= test session starts ==============================
+platform darwin -- Python 3.12.2, pytest-9.1.1, pluggy-1.6.0 -- /opt/anaconda3/bin/python3
+cachedir: .pytest_cache
+hypothesis profile 'default'
+rootdir: /Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__839__closer-repair-2
+configfile: pyproject.toml
+plugins: hypothesis-6.161.5, cov-7.1.0, xdist-3.8.0, rerunfailures-16.3, anyio-4.14.2, datadir-1.8.0, typeguard-4.5.1, asyncio-1.3.0, langsmith-0.10.10, pytest_httpserver-1.1.3, regressions-2.11.0, Faker-40.39.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 1 item
+
+tests/test_issue839_ranked_coverage.py::test_nonfinite_corpus_timestamp_is_skipped[inf] FAILED [100%]
+
+=================================== FAILURES ===================================
+_______________ test_nonfinite_corpus_timestamp_is_skipped[inf] ________________
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-497/test_nonfinite_corpus_timestam0')
+timestamp = inf
+
+    @pytest.mark.parametrize("timestamp", [float("inf"), float("-inf")])
+    def test_nonfinite_corpus_timestamp_is_skipped(tmp_path: Path, timestamp: float) -> None:
+        corpus = tmp_path / "nonfinite.jsonl"
+        corpus.write_text(
+            json.dumps({"kind": "redirect_proposal", "ts": timestamp, "sweep_fingerprint": "bad"})
+            + "\n"
+            + json.dumps({"kind": "redirect_proposal", "ts": 100, "sweep_fingerprint": "valid"})
+            + "\n"
+        )
+>       assert redirect_sweep._existing_sweep_fingerprints(corpus, since_ts=50) == {"valid"}
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_issue839_ranked_coverage.py:637:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+corpus_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-497/test_nonfinite_corpus_timestam0/nonfinite.jsonl')
+since_ts = 50
+
+    def _existing_sweep_fingerprints(corpus_path: Path, *, since_ts: int | None) -> set[str]:
+        if not corpus_path.exists():
+            return set()
+        out: set[str] = set()
+        for line in corpus_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(entry, dict) or entry.get("kind") != "redirect_proposal":
+                continue
+            if since_ts is not None:
+                try:
+>                   ts = int(entry.get("ts") or 0)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^
+E                   OverflowError: cannot convert float infinity to integer
+
+src/redirect_sweep.py:186: OverflowError
+=========================== short test summary info ============================
+FAILED tests/test_issue839_ranked_coverage.py::test_nonfinite_corpus_timestamp_is_skipped[inf]
+============================== 1 failed in 0.92s ===============================
+EXIT_CODE=1
+
+RESTORED
+ORCH_STATE_DIR=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-9l9da8h_/state ORCH_LOCAL_RUNTIME=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-9l9da8h_/runtime PYTHONPYCACHEPREFIX=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-9l9da8h_/pycache '/opt/anaconda3/bin/python3' '-m' 'pytest' 'tests/test_issue839_ranked_coverage.py::test_nonfinite_corpus_timestamp_is_skipped[inf]' '-v'
+============================= test session starts ==============================
+platform darwin -- Python 3.12.2, pytest-9.1.1, pluggy-1.6.0 -- /opt/anaconda3/bin/python3
+cachedir: .pytest_cache
+hypothesis profile 'default'
+rootdir: /Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__839__closer-repair-2
+configfile: pyproject.toml
+plugins: hypothesis-6.161.5, cov-7.1.0, xdist-3.8.0, rerunfailures-16.3, anyio-4.14.2, datadir-1.8.0, typeguard-4.5.1, asyncio-1.3.0, langsmith-0.10.10, pytest_httpserver-1.1.3, regressions-2.11.0, Faker-40.39.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 1 item
+
+tests/test_issue839_ranked_coverage.py::test_nonfinite_corpus_timestamp_is_skipped[inf] PASSED [100%]
+
+============================== 1 passed in 0.85s ===============================
+EXIT_CODE=0
+
+=== Mutation 8: tests/test_issue839_ranked_coverage.py::test_nonfinite_corpus_timestamp_is_skipped[-inf] ===
+File: src/redirect_sweep.py
+Replace exactly:
+except (TypeError, ValueError, OverflowError):
+                continue
+With:
+except (TypeError, ValueError):
+                continue
+
+MUTATED
+ORCH_STATE_DIR=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-fcm19pbm/state ORCH_LOCAL_RUNTIME=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-fcm19pbm/runtime PYTHONPYCACHEPREFIX=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-fcm19pbm/pycache '/opt/anaconda3/bin/python3' '-m' 'pytest' 'tests/test_issue839_ranked_coverage.py::test_nonfinite_corpus_timestamp_is_skipped[-inf]' '-v'
+============================= test session starts ==============================
+platform darwin -- Python 3.12.2, pytest-9.1.1, pluggy-1.6.0 -- /opt/anaconda3/bin/python3
+cachedir: .pytest_cache
+hypothesis profile 'default'
+rootdir: /Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__839__closer-repair-2
+configfile: pyproject.toml
+plugins: hypothesis-6.161.5, cov-7.1.0, xdist-3.8.0, rerunfailures-16.3, anyio-4.14.2, datadir-1.8.0, typeguard-4.5.1, asyncio-1.3.0, langsmith-0.10.10, pytest_httpserver-1.1.3, regressions-2.11.0, Faker-40.39.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 1 item
+
+tests/test_issue839_ranked_coverage.py::test_nonfinite_corpus_timestamp_is_skipped[-inf] FAILED [100%]
+
+=================================== FAILURES ===================================
+_______________ test_nonfinite_corpus_timestamp_is_skipped[-inf] _______________
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-499/test_nonfinite_corpus_timestam0')
+timestamp = -inf
+
+    @pytest.mark.parametrize("timestamp", [float("inf"), float("-inf")])
+    def test_nonfinite_corpus_timestamp_is_skipped(tmp_path: Path, timestamp: float) -> None:
+        corpus = tmp_path / "nonfinite.jsonl"
+        corpus.write_text(
+            json.dumps({"kind": "redirect_proposal", "ts": timestamp, "sweep_fingerprint": "bad"})
+            + "\n"
+            + json.dumps({"kind": "redirect_proposal", "ts": 100, "sweep_fingerprint": "valid"})
+            + "\n"
+        )
+>       assert redirect_sweep._existing_sweep_fingerprints(corpus, since_ts=50) == {"valid"}
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_issue839_ranked_coverage.py:637:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+corpus_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-499/test_nonfinite_corpus_timestam0/nonfinite.jsonl')
+since_ts = 50
+
+    def _existing_sweep_fingerprints(corpus_path: Path, *, since_ts: int | None) -> set[str]:
+        if not corpus_path.exists():
+            return set()
+        out: set[str] = set()
+        for line in corpus_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(entry, dict) or entry.get("kind") != "redirect_proposal":
+                continue
+            if since_ts is not None:
+                try:
+>                   ts = int(entry.get("ts") or 0)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^
+E                   OverflowError: cannot convert float infinity to integer
+
+src/redirect_sweep.py:186: OverflowError
+=========================== short test summary info ============================
+FAILED tests/test_issue839_ranked_coverage.py::test_nonfinite_corpus_timestamp_is_skipped[-inf]
+============================== 1 failed in 0.90s ===============================
+EXIT_CODE=1
+
+RESTORED
+ORCH_STATE_DIR=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-fq39lv6m/state ORCH_LOCAL_RUNTIME=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-fq39lv6m/runtime PYTHONPYCACHEPREFIX=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-fq39lv6m/pycache '/opt/anaconda3/bin/python3' '-m' 'pytest' 'tests/test_issue839_ranked_coverage.py::test_nonfinite_corpus_timestamp_is_skipped[-inf]' '-v'
+============================= test session starts ==============================
+platform darwin -- Python 3.12.2, pytest-9.1.1, pluggy-1.6.0 -- /opt/anaconda3/bin/python3
+cachedir: .pytest_cache
+hypothesis profile 'default'
+rootdir: /Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__839__closer-repair-2
+configfile: pyproject.toml
+plugins: hypothesis-6.161.5, cov-7.1.0, xdist-3.8.0, rerunfailures-16.3, anyio-4.14.2, datadir-1.8.0, typeguard-4.5.1, asyncio-1.3.0, langsmith-0.10.10, pytest_httpserver-1.1.3, regressions-2.11.0, Faker-40.39.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 1 item
+
+tests/test_issue839_ranked_coverage.py::test_nonfinite_corpus_timestamp_is_skipped[-inf] PASSED [100%]
+
+============================== 1 passed in 0.83s ===============================
+EXIT_CODE=0
+
+=== Mutation 9: tests/test_issue839_ranked_coverage.py::test_nonfinite_report_timestamp_has_unknown_age[inf] ===
+File: src/redirect_sweep.py
+Replace exactly:
+except (TypeError, ValueError, OverflowError):
+        age_seconds = None
+With:
+except (TypeError, ValueError):
+        age_seconds = None
+
+MUTATED
+ORCH_STATE_DIR=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-bmim_3wn/state ORCH_LOCAL_RUNTIME=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-bmim_3wn/runtime PYTHONPYCACHEPREFIX=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-bmim_3wn/pycache '/opt/anaconda3/bin/python3' '-m' 'pytest' 'tests/test_issue839_ranked_coverage.py::test_nonfinite_report_timestamp_has_unknown_age[inf]' '-v'
+============================= test session starts ==============================
+platform darwin -- Python 3.12.2, pytest-9.1.1, pluggy-1.6.0 -- /opt/anaconda3/bin/python3
+cachedir: .pytest_cache
+hypothesis profile 'default'
+rootdir: /Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__839__closer-repair-2
+configfile: pyproject.toml
+plugins: hypothesis-6.161.5, cov-7.1.0, xdist-3.8.0, rerunfailures-16.3, anyio-4.14.2, datadir-1.8.0, typeguard-4.5.1, asyncio-1.3.0, langsmith-0.10.10, pytest_httpserver-1.1.3, regressions-2.11.0, Faker-40.39.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 1 item
+
+tests/test_issue839_ranked_coverage.py::test_nonfinite_report_timestamp_has_unknown_age[inf] FAILED [100%]
+
+=================================== FAILURES ===================================
+_____________ test_nonfinite_report_timestamp_has_unknown_age[inf] _____________
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-501/test_nonfinite_report_timestam0')
+timestamp = inf
+
+    @pytest.mark.parametrize("timestamp", [float("inf"), float("-inf")])
+    def test_nonfinite_report_timestamp_has_unknown_age(tmp_path: Path, timestamp: float) -> None:
+        report = tmp_path / "report.json"
+        report.write_text(json.dumps({"generated_at": timestamp, "watched_count": 3}))
+>       status = redirect_sweep._read_report_status(report, now=100)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_issue839_ranked_coverage.py:644:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-501/test_nonfinite_report_timestam0/report.json')
+now = 100
+
+    def _read_report_status(path: Path, *, now: float | None = None) -> dict:
+        now = time.time() if now is None else now
+        out = {
+            "path": str(path),
+            "exists": path.exists(),
+            "generated_at": None,
+            "age_seconds": None,
+            "active_claim_count": None,
+            "watched_count": None,
+            "actionable_count": None,
+            "shadow_recording": None,
+            "load_error": None,
+        }
+        if not path.exists():
+            return out
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            out["load_error"] = str(exc)
+            return out
+        generated = data.get("generated_at")
+        try:
+>           age_seconds = int(now - int(generated)) if generated else None
+                                    ^^^^^^^^^^^^^^
+E           OverflowError: cannot convert float infinity to integer
+
+src/redirect_sweep.py:572: OverflowError
+=========================== short test summary info ============================
+FAILED tests/test_issue839_ranked_coverage.py::test_nonfinite_report_timestamp_has_unknown_age[inf]
+============================== 1 failed in 0.89s ===============================
+EXIT_CODE=1
+
+RESTORED
+ORCH_STATE_DIR=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-g6qm3vuy/state ORCH_LOCAL_RUNTIME=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-g6qm3vuy/runtime PYTHONPYCACHEPREFIX=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-g6qm3vuy/pycache '/opt/anaconda3/bin/python3' '-m' 'pytest' 'tests/test_issue839_ranked_coverage.py::test_nonfinite_report_timestamp_has_unknown_age[inf]' '-v'
+============================= test session starts ==============================
+platform darwin -- Python 3.12.2, pytest-9.1.1, pluggy-1.6.0 -- /opt/anaconda3/bin/python3
+cachedir: .pytest_cache
+hypothesis profile 'default'
+rootdir: /Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__839__closer-repair-2
+configfile: pyproject.toml
+plugins: hypothesis-6.161.5, cov-7.1.0, xdist-3.8.0, rerunfailures-16.3, anyio-4.14.2, datadir-1.8.0, typeguard-4.5.1, asyncio-1.3.0, langsmith-0.10.10, pytest_httpserver-1.1.3, regressions-2.11.0, Faker-40.39.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 1 item
+
+tests/test_issue839_ranked_coverage.py::test_nonfinite_report_timestamp_has_unknown_age[inf] PASSED [100%]
+
+============================== 1 passed in 0.83s ===============================
+EXIT_CODE=0
+
+=== Mutation 10: tests/test_issue839_ranked_coverage.py::test_nonfinite_report_timestamp_has_unknown_age[-inf] ===
+File: src/redirect_sweep.py
+Replace exactly:
+except (TypeError, ValueError, OverflowError):
+        age_seconds = None
+With:
+except (TypeError, ValueError):
+        age_seconds = None
+
+MUTATED
+ORCH_STATE_DIR=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-ry3fg8ty/state ORCH_LOCAL_RUNTIME=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-ry3fg8ty/runtime PYTHONPYCACHEPREFIX=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-ry3fg8ty/pycache '/opt/anaconda3/bin/python3' '-m' 'pytest' 'tests/test_issue839_ranked_coverage.py::test_nonfinite_report_timestamp_has_unknown_age[-inf]' '-v'
+============================= test session starts ==============================
+platform darwin -- Python 3.12.2, pytest-9.1.1, pluggy-1.6.0 -- /opt/anaconda3/bin/python3
+cachedir: .pytest_cache
+hypothesis profile 'default'
+rootdir: /Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__839__closer-repair-2
+configfile: pyproject.toml
+plugins: hypothesis-6.161.5, cov-7.1.0, xdist-3.8.0, rerunfailures-16.3, anyio-4.14.2, datadir-1.8.0, typeguard-4.5.1, asyncio-1.3.0, langsmith-0.10.10, pytest_httpserver-1.1.3, regressions-2.11.0, Faker-40.39.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 1 item
+
+tests/test_issue839_ranked_coverage.py::test_nonfinite_report_timestamp_has_unknown_age[-inf] FAILED [100%]
+
+=================================== FAILURES ===================================
+____________ test_nonfinite_report_timestamp_has_unknown_age[-inf] _____________
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-503/test_nonfinite_report_timestam0')
+timestamp = -inf
+
+    @pytest.mark.parametrize("timestamp", [float("inf"), float("-inf")])
+    def test_nonfinite_report_timestamp_has_unknown_age(tmp_path: Path, timestamp: float) -> None:
+        report = tmp_path / "report.json"
+        report.write_text(json.dumps({"generated_at": timestamp, "watched_count": 3}))
+>       status = redirect_sweep._read_report_status(report, now=100)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_issue839_ranked_coverage.py:644:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-503/test_nonfinite_report_timestam0/report.json')
+now = 100
+
+    def _read_report_status(path: Path, *, now: float | None = None) -> dict:
+        now = time.time() if now is None else now
+        out = {
+            "path": str(path),
+            "exists": path.exists(),
+            "generated_at": None,
+            "age_seconds": None,
+            "active_claim_count": None,
+            "watched_count": None,
+            "actionable_count": None,
+            "shadow_recording": None,
+            "load_error": None,
+        }
+        if not path.exists():
+            return out
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            out["load_error"] = str(exc)
+            return out
+        generated = data.get("generated_at")
+        try:
+>           age_seconds = int(now - int(generated)) if generated else None
+                                    ^^^^^^^^^^^^^^
+E           OverflowError: cannot convert float infinity to integer
+
+src/redirect_sweep.py:572: OverflowError
+=========================== short test summary info ============================
+FAILED tests/test_issue839_ranked_coverage.py::test_nonfinite_report_timestamp_has_unknown_age[-inf]
+============================== 1 failed in 0.90s ===============================
+EXIT_CODE=1
+
+RESTORED
+ORCH_STATE_DIR=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-5pfwn4ck/state ORCH_LOCAL_RUNTIME=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-5pfwn4ck/runtime PYTHONPYCACHEPREFIX=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue839-5pfwn4ck/pycache '/opt/anaconda3/bin/python3' '-m' 'pytest' 'tests/test_issue839_ranked_coverage.py::test_nonfinite_report_timestamp_has_unknown_age[-inf]' '-v'
+============================= test session starts ==============================
+platform darwin -- Python 3.12.2, pytest-9.1.1, pluggy-1.6.0 -- /opt/anaconda3/bin/python3
+cachedir: .pytest_cache
+hypothesis profile 'default'
+rootdir: /Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__839__closer-repair-2
+configfile: pyproject.toml
+plugins: hypothesis-6.161.5, cov-7.1.0, xdist-3.8.0, rerunfailures-16.3, anyio-4.14.2, datadir-1.8.0, typeguard-4.5.1, asyncio-1.3.0, langsmith-0.10.10, pytest_httpserver-1.1.3, regressions-2.11.0, Faker-40.39.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 1 item
+
+tests/test_issue839_ranked_coverage.py::test_nonfinite_report_timestamp_has_unknown_age[-inf] PASSED [100%]
+
+============================== 1 passed in 0.82s ===============================
+EXIT_CODE=0

@@ -1,5 +1,8 @@
 """Public Runtime packages remain pinned and preserve an incumbent installation."""
 
+import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -108,3 +111,99 @@ def test_launcher_refuses_unsealed_code_before_loading_runtime(tmp_path, extra):
     added.write_bytes(b"unsealed code must never load")
     problems = launcher.pin_problems(manifest, own_path=str(root / "closer_launcher.py"))
     assert "Runtime tree contains undeclared executable code" in problems
+
+
+def test_physical_dispatcher_entry_does_not_create_bytecode_in_sealed_runtime(tmp_path):
+    """The native B child starts this exact physical entrypoint without ``-B``."""
+    public = descriptor()
+    runtime = tmp_path / "sealed-runtime"
+    package.materialize_runtime_tree(Path(campaign.__file__).parent, runtime, public)
+    core = tmp_path / "core"
+    core.mkdir()
+    core_descriptor = {
+        "owner": "Workflows",
+        "contract": campaign.CONTRACT,
+        "core_version": "1",
+        "package_digest": "a" * 64,
+    }
+    (core / "closer-core-package.json").write_text(json.dumps(core_descriptor))
+    manifest = package.host_binding_from_public(
+        public,
+        install_root=runtime,
+        core_binding={**core_descriptor, "package_root": str(core)},
+        python=sys.executable,
+    )
+    manifest_path = runtime / "host-manifest.json"
+    package.write_host_manifest(manifest_path, manifest)
+    env = {**os.environ, "PYTHONPATH": ""}
+    env.pop("PYTHONDONTWRITEBYTECODE", None)
+    completed = subprocess.run(
+        [sys.executable, str(runtime / "closer_dispatcher.py"), "--help"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert not list(runtime.rglob("*.pyc"))
+    assert campaign.load_manifest(manifest_path) == manifest
+
+
+def test_actual_runtime_export_carries_source_bound_flat_selection_policy(tmp_path):
+    import json
+    import subprocess
+
+    import closer_role_selection as selection
+
+    public = descriptor()
+    root = tmp_path / "exported-runtime"
+    package.materialize_runtime_tree(Path(campaign.__file__).parent, root, public)
+    policy = root / selection.POLICY_FILENAME
+    assert policy.read_bytes() == selection.POLICY_PATH.read_bytes()
+    assert not (root / "config").exists()
+    assert all(not path.is_dir() and not path.is_symlink() for path in root.iterdir())
+    assert "closer_role_selection.py" in public["modules"]
+    code = (
+        "import sys,json;sys.path.insert(0,sys.argv[1]);import closer_role_selection as s;"
+        "print(json.dumps([str(s.POLICY_PATH),s.policy_sha256(),s.load_policy()['schema']]))"
+    )
+    result = subprocess.run(
+        [sys.executable, "-I", "-B", "-c", code, str(root)],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert json.loads(result.stdout) == [
+        str(policy.resolve()),
+        selection.EXPECTED_POLICY_SHA256,
+        selection.SCHEMA,
+    ]
+    host = package.host_binding_from_public(public, install_root=root)
+    assert not launcher.pin_problems(host, own_path=str(root / "closer_launcher.py"))
+
+
+@pytest.mark.parametrize("damage", ["missing", "tamper", "symlink"])
+def test_exported_policy_data_cannot_be_missing_changed_or_aliased(tmp_path, damage):
+    import closer_role_selection as selection
+
+    root = tmp_path / "exported-runtime"
+    package.materialize_runtime_tree(Path(campaign.__file__).parent, root, descriptor())
+    policy = root / selection.POLICY_FILENAME
+    if damage == "missing":
+        policy.unlink()
+    elif damage == "tamper":
+        policy.write_bytes(policy.read_bytes() + b"\n")
+    else:
+        raw = policy.read_bytes()
+        policy.unlink()
+        actual = tmp_path / "same-but-unowned.json"
+        actual.write_bytes(raw)
+        policy.symlink_to(actual)
+    with pytest.raises((OSError, ValueError)):
+        selection._policy_bytes(policy)
+    # The real producer must refuse re-export before creating a destination.
+    again = tmp_path / "second-runtime"
+    with pytest.raises((OSError, ValueError)):
+        package.materialize_runtime_tree(root, again, descriptor())
+    assert not again.exists()

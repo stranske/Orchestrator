@@ -1,0 +1,15 @@
+Retrieved 2026-11-03 from https://github.com/stranske/Orchestrator/issues/839
+Original issue output (excerpt; reservation list omitted):
+
+The target order below is the Orchestrator's own ranking (escaped defects, then churn, then uncovered mass -- unchanged). Only the bundling is new: earlier rounds spent a whole PR on files with a handful of uncovered statements, so one PR now covers the next ranked targets until it has covered about 180 units.
+
+## Scope
+
+Targets, in this order (about 234 uncovered statements+branches in all):
+
+1. `src/keepalive_outcomes.py` -- 43 uncovered statements+branches (3 escaped-defect signal(s), churn 6, fix commit touched this file)
+2. `src/issue_quality.py` -- 5 uncovered statements+branches (3 escaped-defect signal(s), churn 6, fix commit touched this file)
+3. `src/experiment_recovery.py` -- 9 uncovered statements+branches (2 escaped-defect signal(s), churn 5, fix commit touched this file)
+4. `src/research_usage_guard.py` -- 27 uncovered statements+branches (2 escaped-defect signal(s), churn 2, fix commit touched this file)
+5. `src/redirect_sweep.py` -- 88 uncovered statements+branches (1 escaped-defect signal(s), churn 5, fix commit touched this file)
+6. `src/watch.py` -- 62 uncovered statements+branches (1 escaped-defect signal(s), churn 5, fix commit touched this file)

@@ -1,5 +1,6 @@
 """Experimental candidate preparation never grants production admission."""
 
+import builtins
 import sys
 from pathlib import Path
 
@@ -32,7 +33,15 @@ def test_wrong_candidate_binding_refuses_before_manifest_or_planner(overrides, m
         adapters.prepare_non_claude_data_only_candidate(**values)
 
 
-def test_pinned_candidate_plan_does_not_enable_production(tmp_path):
+def test_pinned_candidate_plan_does_not_enable_production(tmp_path, monkeypatch):
+    original_import = builtins.__import__
+
+    def without_legacy_registry(name, *args, **kwargs):
+        if name == "closer_role_qualification":
+            pytest.fail("candidate preparation imported the retired qualification registry")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", without_legacy_registry)
     imports = tmp_path / "imports"
     imports.mkdir()
     (imports / "stub.py").write_text("# inert code-root inventory\n")

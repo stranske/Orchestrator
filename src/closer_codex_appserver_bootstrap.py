@@ -412,13 +412,31 @@ class TurnResponseData:
             "thread/status/changed",
             "turn/started",
             "item/started",
-            "item/completed",
             "thread/tokenUsage/updated",
             "turn/diff/updated",
-            "item/commandExecution/outputDelta",
             "item/reasoning/summaryTextDelta",
             "item/reasoning/summaryPartAdded",
             "item/reasoning/textDelta",
+        }
+    )
+    _IGNORED_COMPLETED_TYPES = frozenset(
+        {
+            "userMessage",
+            "hookPrompt",
+            "functionCallOutput",
+            "plan",
+            "reasoning",
+            "mcpToolCall",
+            "dynamicToolCall",
+            "collabAgentToolCall",
+            "subAgentActivity",
+            "webSearch",
+            "imageView",
+            "sleep",
+            "imageGeneration",
+            "enteredReviewMode",
+            "exitedReviewMode",
+            "contextCompaction",
         }
     )
 
@@ -430,6 +448,8 @@ class TurnResponseData:
         self.thread_id, self.limit = thread_id, max_bytes
         self.buffer, self.count, self.turn_id = b"", 0, None
         self.output, self.complete, self.held = [], False, None
+        self.events, self.completed_ids, self.agent_messages = [], set(), {}
+        self.command_deltas = {}
 
     def feed(self, raw):
         if self.held:
@@ -459,10 +479,170 @@ class TurnResponseData:
         ) as error:
             self.held = str(error) if isinstance(error, ProtocolHeld) else "turn_frame_invalid"
             self.output.clear()
+            self.events.clear()
+            self.completed_ids.clear()
+            self.agent_messages.clear()
+            self.command_deltas.clear()
             raise ProtocolHeld(self.held) from None
 
+    def _completed_item(self, params):
+        _need(
+            set(params) <= {"threadId", "turnId", "completedAtMs", "item"}
+            and self.turn_id is not None
+            and params.get("threadId") == self.thread_id
+            and params.get("turnId") == self.turn_id
+            and type(params.get("completedAtMs")) is int
+            and 0 <= params["completedAtMs"] < 2**63
+            and type(params.get("item")) is dict,
+            "turn_item_identity_invalid",
+        )
+        item = params["item"]
+        item_type, item_id = item.get("type"), item.get("id")
+        _need(_text(item_id), "turn_item_identity_invalid")
+        if item_type == "commandExecution":
+            allowed = {
+                "type",
+                "id",
+                "command",
+                "commandActions",
+                "cwd",
+                "status",
+                "aggregatedOutput",
+                "durationMs",
+                "exitCode",
+                "pluginId",
+                "processId",
+                "scriptPath",
+                "source",
+            }
+            _need(
+                set(item) <= allowed
+                and type(item.get("command")) is str
+                and type(item.get("commandActions")) is list
+                and type(item.get("cwd")) is str
+                and item.get("status") in {"completed", "failed", "declined"}
+                and (
+                    item.get("aggregatedOutput") is None
+                    or type(item.get("aggregatedOutput")) is str
+                ),
+                "turn_command_invalid",
+            )
+            _need(
+                item.get("durationMs") is None
+                or (type(item["durationMs"]) is int and item["durationMs"] >= 0),
+                "turn_command_invalid",
+            )
+            _need(
+                item.get("exitCode") is None or type(item["exitCode"]) is int,
+                "turn_command_invalid",
+            )
+            normalized = {
+                "type": "command_execution",
+                "id": item_id,
+                "command": item["command"],
+                "cwd": item["cwd"],
+                "status": item["status"],
+                "aggregated_output": item.get("aggregatedOutput"),
+                "exit_code": item.get("exitCode"),
+                "duration_ms": item.get("durationMs"),
+            }
+        elif item_type == "fileChange":
+            _need(item_id not in self.command_deltas, "turn_command_delta_cross_kind")
+            _need(
+                set(item) == {"type", "id", "status", "changes"}
+                and item.get("status") in {"completed", "failed", "declined"}
+                and type(item.get("changes")) is list,
+                "turn_file_change_invalid",
+            )
+            changes = []
+            for change in item["changes"]:
+                _need(
+                    type(change) is dict
+                    and set(change) == {"path", "kind", "diff"}
+                    and _text(change.get("path"))
+                    and type(change.get("diff")) is str
+                    and type(change.get("kind")) is dict,
+                    "turn_file_change_invalid",
+                )
+                kind = change["kind"]
+                _need(
+                    set(kind) <= {"type", "move_path"}
+                    and kind.get("type") in {"add", "delete", "update"}
+                    and (
+                        (kind.get("type") in {"add", "delete"} and set(kind) == {"type"})
+                        or (
+                            kind.get("type") == "update"
+                            and (kind.get("move_path") is None or _text(kind.get("move_path")))
+                        )
+                    ),
+                    "turn_file_change_invalid",
+                )
+                value = {"path": change["path"], "kind": kind["type"], "diff": change["diff"]}
+                if kind.get("type") == "update" and kind.get("move_path") is not None:
+                    value["move_path"] = kind["move_path"]
+                changes.append(value)
+            normalized = {
+                "type": "file_change",
+                "id": item_id,
+                "status": item["status"],
+                "changes": changes,
+            }
+        else:
+            if item_type == "agentMessage":
+                _need(item_id not in self.command_deltas, "turn_command_delta_cross_kind")
+                _need(
+                    set(item)
+                    <= {"type", "id", "text", "delivery", "memoryCitation", "phase", "questions"}
+                    and type(item.get("text")) is str,
+                    "turn_message_identity_invalid",
+                )
+                _need(item_id not in self.completed_ids, "turn_item_duplicate")
+                existing = self.agent_messages.get(item_id)
+                if existing is None:
+                    self.agent_messages[item_id] = [item["text"]]
+                    self.events.append({"type": "agent_message", "item_id": item_id})
+                else:
+                    _need("".join(existing) == item["text"], "turn_message_completion_conflict")
+                self.completed_ids.add(item_id)
+            else:
+                _need(item_type in self._IGNORED_COMPLETED_TYPES, "turn_item_unsupported")
+                _need(
+                    item_id not in self.completed_ids
+                    and item_id not in self.agent_messages
+                    and item_id not in self.command_deltas,
+                    "turn_item_duplicate",
+                )
+                self.completed_ids.add(item_id)
+            return
+        _need(
+            item_id not in self.completed_ids and item_id not in self.agent_messages,
+            "turn_item_duplicate",
+        )
+        self.completed_ids.add(item_id)
+        provenance = {
+            "thread_id": self.thread_id,
+            "turn_id": self.turn_id,
+            "item_id": item_id,
+            "completed_at_ms": params["completedAtMs"],
+        }
+        if item_type == "commandExecution" and item_id in self.command_deltas:
+            deltas = self.command_deltas.pop(item_id)
+            if item.get("aggregatedOutput") is None:
+                provenance["output_deltas"] = deltas
+        self.events.append(
+            {
+                "type": "item.completed",
+                "item": normalized,
+                "native_provenance": provenance,
+            }
+        )
+        return item
+
     def _accept(self, value):
-        _need(type(value) is dict and "error" not in value, "turn_frame_failed")
+        _need(
+            not self.complete and type(value) is dict and "error" not in value,
+            "turn_frame_failed",
+        )
         if "id" in value:
             _need(
                 type(value["id"]) is int
@@ -491,10 +671,31 @@ class TurnResponseData:
                 self.turn_id is not None
                 and params.get("threadId") == self.thread_id
                 and params.get("turnId") == self.turn_id
+                and _text(params.get("itemId"))
+                and params["itemId"] not in self.completed_ids
                 and type(params.get("delta")) is str,
                 "turn_message_identity_invalid",
             )
+            if params["itemId"] not in self.agent_messages:
+                self.agent_messages[params["itemId"]] = []
+                self.events.append({"type": "agent_message", "item_id": params["itemId"]})
+            self.agent_messages[params["itemId"]].append(params["delta"])
             self.output.append(params["delta"])
+        elif method == "item/commandExecution/outputDelta":
+            _need(
+                set(params) == {"threadId", "turnId", "itemId", "delta"}
+                and self.turn_id is not None
+                and params.get("threadId") == self.thread_id
+                and params.get("turnId") == self.turn_id
+                and _text(params.get("itemId"))
+                and params["itemId"] not in self.completed_ids
+                and params["itemId"] not in self.agent_messages
+                and type(params.get("delta")) is str,
+                "turn_command_delta_identity_invalid",
+            )
+            self.command_deltas.setdefault(params["itemId"], []).append(params["delta"])
+        elif method == "item/completed":
+            self._completed_item(params)
         elif method == "turn/completed":
             turn = params.get("turn")
             _need(
@@ -505,6 +706,7 @@ class TurnResponseData:
                 and turn.get("status") == "completed",
                 "turn_completion_unavailable",
             )
+            _need(not self.command_deltas, "turn_command_delta_unmatched")
             self.complete = True
         else:
             _need(method in self._IGNORED, "turn_notification_unsupported")
@@ -512,3 +714,42 @@ class TurnResponseData:
     def text(self):
         _need(self.complete and self.held is None, "turn_completion_unavailable")
         return "".join(self.output)
+
+    def projection(self):
+        _need(self.complete and self.held is None, "turn_completion_unavailable")
+        rows = []
+        for event in self.events:
+            if event["type"] == "agent_message":
+                item_id = event["item_id"]
+                rows.append(
+                    {
+                        "type": "item.completed",
+                        "item": {
+                            "type": "agent_message",
+                            "id": item_id,
+                            "text": "".join(self.agent_messages[item_id]),
+                        },
+                        "native_provenance": {
+                            "thread_id": self.thread_id,
+                            "turn_id": self.turn_id,
+                            "item_id": item_id,
+                        },
+                    }
+                )
+            else:
+                rows.append(event)
+        rows.append(
+            {
+                "type": "turn.completed",
+                "native_provenance": {"thread_id": self.thread_id, "turn_id": self.turn_id},
+            }
+        )
+        value = (
+            "\n".join(
+                json.dumps(row, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+                for row in rows
+            )
+            + "\n"
+        )
+        _need(len(value.encode("utf-8")) <= self.limit, "turn_projection_exhausted")
+        return value

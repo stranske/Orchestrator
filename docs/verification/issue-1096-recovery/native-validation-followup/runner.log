@@ -1,0 +1,41 @@
+✔ records exact commands, source hashes, complete JUnit and logs for both checks (397.686869ms)
+✔ full-suite success requires the complete collected identities: {"omitExtra":true} (356.940477ms)
+✔ full-suite success requires the complete collected identities: {"duplicateExtra":true} (350.982833ms)
+✔ full-suite success requires the complete collected identities: {"collectionFailure":true} (341.236169ms)
+✔ full-suite success requires the complete collected identities: {"collectionEmpty":true} (345.411669ms)
+✔ full-suite success requires the complete collected identities: {"collectionDuplicate":true} (356.505995ms)
+✔ missing pytest preserves two failures and cannot complete acceptance (184.614468ms)
+✔ preserves JUnit reader failures: {"parserFailure":true} (235.931005ms)
+✔ preserves JUnit reader failures: {"parserInvalidJson":true} (235.5459ms)
+✔ preserves JUnit reader failures: {"malformed":true} (391.112231ms)
+✔ refuses a successful claim for incomplete evidence: {"noXml":true} (179.965814ms)
+✔ refuses a successful claim for incomplete evidence: {"malformed":true} (378.71298ms)
+✔ refuses a successful claim for incomplete evidence: {"empty":true} (353.699211ms)
+✔ refuses a successful claim for incomplete evidence: {"incomplete":true} (350.3823ms)
+✔ refuses a successful claim for incomplete evidence: {"duplicate":true} (338.16557ms)
+✔ refuses a successful claim for incomplete evidence: {"skipped":true} (339.227577ms)
+✔ refuses a successful claim for incomplete evidence: {"foreign":true} (342.975026ms)
+✔ refuses a successful claim for incomplete evidence: {"exit":1} (350.189087ms)
+✔ source changes during execution invalidate otherwise passing checks (337.059563ms)
+✔ timeout preserves both failed checks without retrying either command (1602.221897ms)
+✔ refuses revision mismatch, modified tracked inputs and untracked inputs before execution (40.887336ms)
+✔ refuses uncommitted test execution input: conftest.py (28.410592ms)
+✔ refuses uncommitted test execution input: pytest.ini (30.187975ms)
+✔ refuses uncommitted test execution input: setup.cfg (30.976002ms)
+✔ refuses uncommitted test execution input: scripts/run_adjudicator_acceptance.js (30.484202ms)
+✔ requires explicit interpreter/revision/bounds and never overwrites a receipt (191.723387ms)
+✔ refuses ignored execution inputs before running pytest: tests/conftest.py (35.528898ms)
+✔ refuses ignored execution inputs before running pytest: src/local_override.py (34.648033ms)
+✔ refuses ignored execution inputs before running pytest: tests/fixtures/local-evidence.json (35.449962ms)
+✔ refuses ignored execution inputs before running pytest: src/legacy.pyc (34.636811ms)
+✔ refuses ignored execution inputs before running pytest: tests/__pycache__/conftest.py (34.677177ms)
+✔ ordinary ignored Python and pytest caches do not invalidate source receipts (347.546692ms)
+✔ ignored inputs introduced during execution invalidate otherwise passing checks (342.274242ms)
+ℹ tests 33
+ℹ suites 0
+ℹ pass 33
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 9003.22923

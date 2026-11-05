@@ -465,6 +465,22 @@ def _worktree_interpreter(worktree: str | Path) -> str:
     return str(interpreter)
 
 
+def _deliberate_break_proof(row):
+    """Read the runner's bounded result; old complete display JSON is legacy only."""
+    if "deliberate_break_result" in row:
+        proof = row["deliberate_break_result"]
+        normalized = runtime_ac.bounded_deliberate_break_result(proof)
+        return normalized if normalized is not None and normalized == proof else None
+    text = row.get("stdout_tail")
+    if not isinstance(text, str) or len(text) > runtime_ac.TAIL_CHARS:
+        return None
+    try:
+        proof = json.loads(text)
+    except ValueError:
+        return None
+    return runtime_ac.bounded_deliberate_break_result(proof)
+
+
 def recheck_merged(
     spec: dict,
     merged_worktree: str | Path,
@@ -519,10 +535,7 @@ def recheck_merged(
             if row.get("status") != "FAIL" or environment_mismatch(row):
                 return False
             if row.get("type") == "deliberate_break":
-                try:
-                    proof = json.loads(row.get("stdout_tail") or "{}")
-                except ValueError:
-                    return False
+                proof = _deliberate_break_proof(row)
                 # local_verify distinguishes a broken candidate from a hollow
                 # comparison. Confirm the candidate's assertion failure too:
                 # FAIL_BROKEN alone can also describe a failed test launcher.
@@ -543,10 +556,7 @@ def recheck_merged(
                 return False
             candidate = row
             if row.get("type") == "deliberate_break":
-                try:
-                    proof = json.loads(row.get("stdout_tail") or "{}")
-                except ValueError:
-                    return False
+                proof = _deliberate_break_proof(row)
                 if not isinstance(proof, dict) or proof.get("verdict") != "FAIL_BROKEN":
                     return False
                 candidate = proof.get("green") or {}
@@ -572,7 +582,19 @@ def recheck_merged(
             result = "FAIL"
         elif (
             executable
-            and all(r.get("status") == "PASS" for r in executable)
+            and all(
+                r.get("status") == "PASS"
+                and (
+                    r.get("type") != "deliberate_break"
+                    or (
+                        (proof := _deliberate_break_proof(r)) is not None
+                        and proof["verdict"] == "PASS"
+                        and not proof["error"]
+                        and proof["green"]["returncode"] in (None, 0)
+                    )
+                )
+                for r in executable
+            )
             # Manual criteria cannot be supplied to a machine recheck, so the gate's own verdict
             # reads NEEDS_REVIEW for every spec that mixes named tests with manual items: all
             # three rechecks of 2026-10-16 ran their named tests green and were still
@@ -589,10 +611,7 @@ def recheck_merged(
             def hollow(row):
                 if row.get("type") != "deliberate_break":
                     return False
-                try:
-                    proof = json.loads(row.get("stdout_tail") or "{}")
-                except ValueError:
-                    return False
+                proof = _deliberate_break_proof(row)
                 return isinstance(proof, dict) and proof.get("verdict") == "FAIL_HOLLOW"
 
             if not executable:

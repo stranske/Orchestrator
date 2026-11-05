@@ -644,9 +644,11 @@ def _execute(root, controller, operation):
     import closer_coding_session_runtime as runtime
     import closer_coding_session_v2 as session
     import closer_correction_controller as ctl
+    import closer_queue as queue
     import closer_resources as resources
     import dispatcher
 
+    queue._coding_timing_point("coding_entry")
     root.check()
     purpose = root.purpose
     consumer = controller.config.consumers.get(purpose["consumer_id"])
@@ -684,7 +686,7 @@ def _execute(root, controller, operation):
             publication_baseline_ref = None
             publication_ref = None
             publication_held = False
-            if "publication_v1" in consumer or "publication_v1" in original:
+            if {"publication_v1", "publication_v2"} & (set(consumer) | set(original)):
                 import closer_coding_publication as publication
 
                 publication_policy = publication.validate_consumer_mode(
@@ -712,9 +714,11 @@ def _execute(root, controller, operation):
                 + ctl.canonical(payload).decode()
             )
             if publication_policy is not None:
+                queue._coding_timing_point("baseline_start")
                 publication_baseline_ref = publication.retain_baseline(
                     root, controller, guard.custody, operation
                 )
+                queue._coding_timing_point("baseline_end")
             try:
                 timeout = request_seconds(
                     root.installation.request_timeout_seconds,
@@ -731,7 +735,7 @@ def _execute(root, controller, operation):
                     task_type=ACTION,
                     mode="full",
                     data_only=False,
-                    isolate=True,
+                    isolate=publication_baseline_ref is None,
                     timeout=timeout,
                     max_network_retries=0,
                     subject_id=purpose["target"],

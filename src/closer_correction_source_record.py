@@ -18,7 +18,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 SCHEMA = "closer-correction-source-decision/v1"
+INVITATION_SCHEMA = "closer-correction-source-invitation/v1"
 _LOADED_SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+_SOURCE_READER = threading.local()
+_SOURCE_READER_SEAL = object()
 
 
 class SourceRecordUnavailable(ValueError):
@@ -407,7 +410,7 @@ def terminal_operation_links(cfg, start_ref, process):
                 old_row = old_entry["items"][target]
                 correction = old_row["results"]["exception"]["correction"]
                 _need(
-                    record.get("schema") == SCHEMA
+                    record.get("schema") in {SCHEMA, INVITATION_SCHEMA}
                     and record.get("issuer_source_sha256") == _source_sha()
                     and record.get("anchor") == str(anchor)
                     and frame["frontier"] == frontier
@@ -450,6 +453,25 @@ def terminal_operation_links(cfg, start_ref, process):
 
 
 def _ordinary_selected(materialized, original):
+    import closer_conservative_intake as intake
+
+    if materialized.get("kind") == intake.INVITATION_DECISION:
+        decision = materialized.get("decision") or {}
+        _need(
+            decision.get("schema") == intake.INVITATION_DECISION
+            and decision.get("request_sha256") == original["request_sha256"]
+            and decision.get("provider_generation_performed") is False
+            and decision.get("acceptance_authority") is False
+            and decision.get("mechanical_repair_authority") is False
+            and decision.get("security_clearance") is False
+            and decision.get("authority") is False
+            and materialized.get("proof_role") == "named_criterion_basis"
+            and materialized.get("proof", {}).get("expected", {}).get("task_type")
+            == "closer_exception"
+            and materialized.get("basis_provider_run_id") == materialized["proof"]["run_id"],
+            "source invitation acquired risk or acceptance authority",
+        )
+        return
     rows = materialized.get("decision", {}).get("findings")
     _need(isinstance(rows, list), "source classifier decision inventory missing")
     selected = [row for row in rows if row.get("id") == original["finding"]["id"]]
@@ -571,7 +593,11 @@ def retain_original_decision(
     intent_ref = _reference(parent / (key + ".correction-intent.json"), parent_fd)
     link_ref = _reference(parent / (key + ".correction-result.json"), parent_fd)
     record = {
-        "schema": SCHEMA,
+        "schema": (
+            INVITATION_SCHEMA
+            if materialized.get("kind") == "closer-source-corrective-invitation/v1"
+            else SCHEMA
+        ),
         "issuer_source_sha256": _source_sha(),
         "identity": intent["identity"],
         "anchor": intent["anchor"],
@@ -587,8 +613,17 @@ def retain_original_decision(
         "owner_semantics_sha256": bridge._owner_semantic_digest(
             intent["original_request"], intent["inputs"]
         ),
-        "classifier_decision_sha256": bridge.contract.digest(materialized["decision"]),
-        "classifier_run_id": materialized["actual"]["run_id"],
+        **(
+            {
+                "invitation_decision_sha256": bridge.contract.digest(materialized["decision"]),
+                "basis_provider_run_id": materialized["basis_provider_run_id"],
+            }
+            if materialized.get("kind") == "closer-source-corrective-invitation/v1"
+            else {
+                "classifier_decision_sha256": bridge.contract.digest(materialized["decision"]),
+                "classifier_run_id": materialized["actual"]["run_id"],
+            }
+        ),
     }
     owner._current(context, preparation, now=time.time())
     check()
@@ -609,7 +644,7 @@ def original_decision_reference(path, parent_fd, identity, intent_sha):
     except FileNotFoundError:
         return None
     _need(
-        record.get("schema") == SCHEMA
+        record.get("schema") in {SCHEMA, INVITATION_SCHEMA}
         and record.get("identity") == identity
         and record.get("issuer_source_sha256") == _source_sha()
         and record.get("intent_ref", {}).get("sha256") == intent_sha,
@@ -626,6 +661,8 @@ class _SelectionSeal:
         self.pid = os.getpid()
         self.thread = threading.get_ident()
         self.operation_sha256 = hashlib.sha256(closer_queue._canonical_bytes(operation)).hexdigest()
+        self.controller = None
+        self.invitation_request_sha256 = None
 
 
 @dataclass(frozen=True)
@@ -642,6 +679,77 @@ class _CandidateSeal:
     def __init__(self):
         self.owner = None
         self.pid = os.getpid()
+
+
+class _InvitationReaderScope:
+    """Private current-ACT custody for invitation proof readback only."""
+
+    def __init__(self, token, context, installation, row):
+        _need(token is _SOURCE_READER_SEAL, "current invitation reader issuer differs")
+        self.seal = token
+        self.context_json = _json(_project_context(context))
+        self.installation = installation
+        self.row = row
+        self.pid = os.getpid()
+        self.thread = threading.get_ident()
+        self.active = True
+
+    def __enter__(self):
+        _need(
+            getattr(_SOURCE_READER, "scope", None) is None,
+            "nested current invitation reader forbidden",
+        )
+        _SOURCE_READER.scope = self
+        return self
+
+    def __exit__(self, _kind, _value, _traceback):
+        self.active = False
+        if getattr(_SOURCE_READER, "scope", None) is self:
+            del _SOURCE_READER.scope
+
+    def check(self, proof):
+        _need(
+            self.seal is _SOURCE_READER_SEAL
+            and self.active
+            and self.pid == os.getpid()
+            and self.thread == threading.get_ident(),
+            "current invitation reader scope unavailable",
+        )
+        context = json.loads(self.context_json)
+        row = _current_act_frame(context, self.installation)
+        stage = row.get("stage_results", {}).get("exception")
+        actual = row.get("results", {}).get("exception", {}).get("actual")
+        _need(
+            row == self.row
+            and type(stage) is dict
+            and stage.get("status") == "completed"
+            and stage.get("work_key") == proof.get("expected", {}).get("operation_id")
+            and type(stage.get("started_at")) in (int, float)
+            and type(stage.get("finished_at")) in (int, float)
+            and type(stage.get("deadline")) in (int, float)
+            and stage["started_at"] <= stage["finished_at"] < stage["deadline"]
+            and type(actual) is dict
+            and actual.get("_closer_controlled_proof") == proof,
+            "current invitation completed provider proof differs",
+        )
+        return {"started_at": stage["started_at"], "finished_at": stage["finished_at"]}
+
+
+def _invitation_reader_scope(context, installation):
+    """Bind invitation history to the installed source and live ACT frame."""
+    import inspect
+
+    caller = inspect.currentframe().f_back
+    _need(
+        caller.f_globals is globals()
+        and caller.f_code in {candidate_for_original_act.__code__, _facts.__code__}
+        and caller.f_locals.get("context") is context
+        and caller.f_locals.get("installation") is installation,
+        "current invitation reader caller differs",
+    )
+    return _InvitationReaderScope(
+        _SOURCE_READER_SEAL, context, installation, _current_act_frame(context, installation)
+    )
 
 
 @dataclass(frozen=True)
@@ -699,9 +807,10 @@ def candidate_for_original_act(*, context, installation):
     _installed_current(installation)
     current = _current_act_frame(context, installation)
     ref = context["exception"]["correction"]["source_decision_ref"]
-    prep, snapshot, packet, root, record, intent, _result, _arguments, _materialized = _local_facts(
-        context, ref
-    )
+    with _invitation_reader_scope(context, installation):
+        prep, snapshot, packet, root, record, intent, _result, _arguments, _materialized = (
+            _local_facts(context, ref)
+        )
     seed, tests, inputs = _qualified_owner_projection(context, current, snapshot, packet, root)
     semantic = {
         "schema": intent["original_request"]["schema"],
@@ -808,17 +917,30 @@ def _qualified_owner_projection(context, row, snapshot, packet, root, *, histori
         "base": snapshot["base"],
         "packet_sha256": prep["packet_ref"]["sha256"],
     }
-    low, low_proof = owner._stage(
-        context["interpret"],
-        task="closer_interpret",
-        basis=basis,
-        operation_id=row["stage_results"]["interpret"]["work_key"],
-        now=(
-            time.time()
-            if not historical
-            else retained_provider_time(context["interpret"]["actual"]["_closer_controlled_proof"])
-        ),
-    )
+    if context["interpret"].get("actual", {}).get("kind") == "source_native_conservative_inventory":
+        import closer_conservative_intake as intake
+
+        low, low_proof = intake.original_low(
+            context["interpret"],
+            context=context,
+            row=row,
+            snapshot=snapshot,
+            packet_ref=prep["packet_ref"],
+        )
+    else:
+        low, low_proof = owner._stage(
+            context["interpret"],
+            task="closer_interpret",
+            basis=basis,
+            operation_id=row["stage_results"]["interpret"]["work_key"],
+            now=(
+                time.time()
+                if not historical
+                else retained_provider_time(
+                    context["interpret"]["actual"]["_closer_controlled_proof"]
+                )
+            ),
+        )
     strong_stage = context["exception"]
     strong_basis = strong_stage["actual"]["_closer_controlled_proof"]["expected"]["basis"]
     _need(
@@ -880,7 +1002,13 @@ def retained_provider_time(proof):
         if publication_io is not None:
             execution_window = publication_io.historical_window(proof)
     if execution_window is None:
-        execution_window = maintenance._historical_window()
+        scope = getattr(_SOURCE_READER, "scope", None)
+        if type(scope) is _InvitationReaderScope:
+            execution_window = scope.check(proof)
+        elif scope is not None:
+            _need(False, "current invitation reader scope unavailable")
+        else:
+            execution_window = maintenance._historical_window()
     result = closer._revalidate_controlled_proof(
         proof,
         run_id=proof["run_id"],
@@ -917,6 +1045,22 @@ def retained_original_facts(context, ref):
     return _read_local_facts(context, ref, require_current_deadline=False)
 
 
+def _invitation_completion_before_deadline(proof, original):
+    from datetime import datetime
+
+    completed = retained_provider_time(proof)
+    deadline = datetime.fromisoformat(
+        original["original_operation"]["deadline"].replace("Z", "+00:00")
+    ).timestamp()
+    _need(
+        type(completed) in (int, float)
+        and type(deadline) in (int, float)
+        and completed <= deadline,
+        "original invitation provider completion exceeded declared deadline",
+    )
+    return completed
+
+
 def _read_local_facts(context, ref, *, require_current_deadline):
     from datetime import datetime
 
@@ -934,7 +1078,7 @@ def _read_local_facts(context, ref, *, require_current_deadline):
 
     record = closer._read_controlled_receipt(ref, root)
     _need(
-        record.get("schema") == SCHEMA
+        record.get("schema") in {SCHEMA, INVITATION_SCHEMA}
         and record.get("issuer_source_sha256") == _source_sha()
         and record.get("anchor") == str(root)
         and record.get("original_frame", {}).get("state_path") == context["state_path"],
@@ -951,7 +1095,16 @@ def _read_local_facts(context, ref, *, require_current_deadline):
         "original intent/result/source record joins differ",
     )
     original = intent["original_request"]
-    if require_current_deadline:
+    invitation_scope = getattr(_SOURCE_READER, "scope", None)
+    _need(
+        invitation_scope is None or type(invitation_scope) is _InvitationReaderScope,
+        "current invitation reader scope unavailable",
+    )
+    historical_invitation = (
+        record.get("schema") == INVITATION_SCHEMA
+        and type(invitation_scope) is _InvitationReaderScope
+    )
+    if require_current_deadline and not historical_invitation:
         _need(
             time.time()
             < datetime.fromisoformat(
@@ -981,15 +1134,32 @@ def _read_local_facts(context, ref, *, require_current_deadline):
         "physical completed original exception/decision differs",
     )
     arguments = materializer_arguments(intent, result)
-    materialized = (
-        decisions.materialize_selected(**arguments)
-        if require_current_deadline
-        else decisions.read_materialized_selected(**arguments)
-    )
+    if historical_invitation:
+        _invitation_completion_before_deadline(arguments["proof"], original)
+        materialized = decisions.read_materialized_selected(**arguments)
+    else:
+        materialized = (
+            decisions.materialize_selected(**arguments)
+            if require_current_deadline
+            else decisions.read_materialized_selected(**arguments)
+        )
     _need(
         materialized.get("status") == "materialized"
-        and bridge.contract.digest(materialized["decision"]) == record["classifier_decision_sha256"]
-        and materialized["actual"]["run_id"] == record["classifier_run_id"],
+        and (
+            (
+                record["schema"] == INVITATION_SCHEMA
+                and materialized.get("kind") == "closer-source-corrective-invitation/v1"
+                and bridge.contract.digest(materialized["decision"])
+                == record["invitation_decision_sha256"]
+                and materialized["basis_provider_run_id"] == record["basis_provider_run_id"]
+            )
+            or (
+                record["schema"] == SCHEMA
+                and bridge.contract.digest(materialized["decision"])
+                == record["classifier_decision_sha256"]
+                and materialized["actual"]["run_id"] == record["classifier_run_id"]
+            )
+        ),
         "current original classifier proof unavailable",
     )
     _ordinary_selected(materialized, original)
@@ -1050,9 +1220,10 @@ def _facts(selection, controller, operation):
         context["exception"].get("correction", {}).get("source_decision_ref") == ref,
         "original current exception does not select this source record",
     )
-    prep, snapshot, packet, root, record, intent, result, arguments, materialized = _local_facts(
-        context, ref
-    )
+    with _invitation_reader_scope(context, installation):
+        prep, snapshot, packet, root, record, intent, result, arguments, materialized = (
+            _local_facts(context, ref)
+        )
     original = intent["original_request"]
     seed, tests, inputs = _qualified_owner_projection(context, current, snapshot, packet, root)
 
@@ -1184,6 +1355,11 @@ def _facts(selection, controller, operation):
     controller_source.seed_selector(seed_selector, controller.config.repository)
     _current_act(context, operation, installation)
     controller.live(operation)
+    seal.controller = weakref.ref(controller)
+    if record["schema"] == INVITATION_SCHEMA:
+        seal.invitation_request_sha256 = hashlib.sha256(
+            closer_queue._canonical_bytes(original)
+        ).hexdigest()
     return {
         "request": original,
         "raw_findings": intent["inputs"]["raw_findings"],
@@ -1232,6 +1408,59 @@ def _candidate_context(candidate):
 def validate_for_native_effect(selection, controller, operation):
     """Fixed source API; no passed validator, JSON flag or selfhash grants effects."""
     return _facts(selection, controller, operation)
+
+
+def _invitation_effect_deadline(controller, request, operation):
+    """Return the live bound only for this sealed invitation selection.
+
+    An original invitation's assessment cutoff authenticates the completed
+    provider proof, not a later POST.  This private bridge therefore never
+    accepts a request flag or generic record: it requires the exact live
+    selection that already completed the full source/ownership validation.
+    """
+    import math
+
+    import closer_correction_controller as controller_source
+    import closer_queue
+
+    writer = getattr(controller, "_writer_context", None)
+    selection = getattr(writer, "native_selection", None)
+    if selection is None:
+        return None
+    seal = selection._issuer if type(selection) is SourceSelection else None
+    _need(
+        type(controller) is controller_source.IndexController
+        and type(seal) is _SelectionSeal
+        and seal.owner is not None
+        and seal.owner() is selection
+        and seal.pid == os.getpid()
+        and seal.thread == threading.get_ident()
+        and seal.controller is not None
+        and seal.controller() is controller
+        and seal.operation_sha256
+        == hashlib.sha256(closer_queue._canonical_bytes(operation)).hexdigest(),
+        "active invitation source selection differs",
+    )
+    if seal.invitation_request_sha256 is None:
+        return None
+    _need(
+        type(request) is dict
+        and hashlib.sha256(closer_queue._canonical_bytes(request)).hexdigest()
+        == seal.invitation_request_sha256,
+        "active invitation source request differs",
+    )
+    context = json.loads(selection._pipeline_context_json)
+    current_deadline, operation_deadline = context["deadline"], operation.get("deadline")
+    _need(
+        type(current_deadline) in (int, float)
+        and type(operation_deadline) in (int, float)
+        and math.isfinite(current_deadline)
+        and math.isfinite(operation_deadline),
+        "current invitation effect deadline unavailable",
+    )
+    controller.live(operation)
+    _current_act(context, operation, selection._installation)
+    return min(current_deadline, operation_deadline)
 
 
 # Diagnostic vocabulary only. These fields never grant execution or replay.
@@ -1505,3 +1734,38 @@ def execute_candidate(candidate, operation):
             "failure_diagnostic": diagnostic,
             **({"first_failure_diagnostic": first_failure} if first_failure is not None else {}),
         }
+
+
+def original_provider_proofs(context, materializer):
+    """Legacy three runs, or exactly one named basis for a source invitation.
+
+    A host inventory is recomputed; it is never appended as a provider proof.
+    This does not grant effect authority or renew any original observation.
+    """
+    import closer_conservative_intake as intake
+    import closer_dispatcher as closer
+
+    if context["interpret"].get("actual", {}).get("kind") != intake.KIND:
+        return [
+            context[stage]["actual"]["_closer_controlled_proof"]
+            for stage in ("interpret", "exception")
+        ] + [materializer["proof"]]
+    prep, snapshot, packet, root = _prepared(context)
+    document = closer._read_controlled_receipt(materializer["request_ref"], root)
+    _need(
+        intake.is_invitation_request(document)
+        and document["original_request"] == materializer["original_request"]
+        and document["strong_stage"]["actual"] == context["exception"]["actual"]
+        and materializer["proof"] == context["exception"]["actual"]["_closer_controlled_proof"]
+        and materializer["proof"]["expected"]["task_type"] == "closer_exception",
+        "source invitation actual provider inventory differs",
+    )
+    row = intake.original_row(context)
+    intake.original_low(
+        context["interpret"],
+        context=context,
+        row=row,
+        snapshot=snapshot,
+        packet_ref=prep["packet_ref"],
+    )
+    return [materializer["proof"]]

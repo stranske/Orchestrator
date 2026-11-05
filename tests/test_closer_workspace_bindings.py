@@ -20,15 +20,43 @@ import closer_quarantine as quarantine
 import closer_resources as resources
 
 
+@pytest.fixture
+def observed_intent_flush(monkeypatch):
+    # This unit test proves overlap and unresolved-intent policy, not host fsync
+    # latency or power-loss durability. Real atomic rename, bytes and subsequent
+    # original intent reads remain; only the flush latency is a controlled port.
+    flushes = []
+
+    def flushed(fd):
+        flushes.append(resources.os.fstat(fd).st_size)
+
+    monkeypatch.setattr(resources.os, "fsync", flushed)
+    return flushes
+
+
 @pytest.mark.parametrize(
     "first_kind,second_kind", [("core", "core"), ("core", "legacy"), ("legacy", "core")]
 )
 @pytest.mark.parametrize("reverse", [False, True])
 def test_concurrent_parent_child_admission_never_double_acts(
-    tmp_path, monkeypatch, first_kind, second_kind, reverse
+    tmp_path, monkeypatch, observed_intent_flush, first_kind, second_kind, reverse
 ):
-    """Different repo keys cannot race past inventory before either publishes intent."""
+    _concurrent_admission(
+        tmp_path, monkeypatch, observed_intent_flush, first_kind, second_kind, reverse
+    )
+
+
+def _concurrent_admission(
+    tmp_path, monkeypatch, flushes, first_kind, second_kind, reverse, *, controlled_tail=False
+):
+    """Different repo keys cannot race past inventory before publishing intent."""
     monkeypatch.setattr(resources, "RESOURCE_WAIT_SECONDS", 0.12)
+    request_deadline = time.time() + 3
+    fixture_deadline = time.monotonic() + 3
+
+    def remaining():
+        return max(0.0, fixture_deadline - time.monotonic())
+
     root = tmp_path / "state.scoped"
     parent = tmp_path / "checkout"
     child = parent / "nested"
@@ -36,6 +64,7 @@ def test_concurrent_parent_child_admission_never_double_acts(
     parent, child = parent.resolve(), child.resolve()
     first_path, second_path = (child, parent) if reverse else (parent, child)
     admitted, release = threading.Event(), threading.Event()
+    returning, finish_return = threading.Event(), threading.Event()
     effects, checks = [], []
 
     def attempt(kind, path, number, hold):
@@ -43,10 +72,12 @@ def test_concurrent_parent_child_admission_never_double_acts(
             checks.append(number)
             if hold:
                 admitted.set()
-                assert release.wait(3)
+                assert release.wait(remaining())
 
         kwargs = dict(
-            target=f"owner/repo{number}#{number}", owner=f"worker{number}", deadline=time.time() + 3
+            target=f"owner/repo{number}#{number}",
+            owner=f"worker{number}",
+            deadline=request_deadline,
         )
         manager = resources.reserve if kind == "core" else resources.legacy_reserve
         if kind == "core":
@@ -58,7 +89,10 @@ def test_concurrent_parent_child_admission_never_double_acts(
                 effects.append(number)
                 if hold and kind == "legacy":
                     admitted.set()
-                    assert release.wait(3)
+                    assert release.wait(remaining())
+            if hold and controlled_tail:
+                returning.set()
+                assert finish_return.wait(remaining())
             return "acted"
         except resources.ResourceBlocked:
             return "blocked"
@@ -66,16 +100,39 @@ def test_concurrent_parent_child_admission_never_double_acts(
     with ThreadPoolExecutor(max_workers=2) as pool:
         first = pool.submit(attempt, first_kind, first_path, 1, True)
         try:
-            assert admitted.wait(3)
+            assert admitted.wait(remaining())
             second = pool.submit(attempt, second_kind, second_path, 2, False)
-            assert second.result(timeout=3) == "blocked"
+            assert second.result(timeout=remaining()) == "blocked"
             assert 2 not in effects and 2 not in checks
         finally:
             release.set()
-        assert first.result(timeout=3) == "acted"
-    # Unlocking the callback does not erase the original uncertain intent.
+        try:
+            if controlled_tail:
+                assert returning.wait(remaining())
+                assert not first.done() and effects == [1]
+                # Completion latency is not permission to replay an unresolved
+                # effect, even after the first actual resource locks are gone.
+                assert attempt(second_kind, second_path, 2, False) == "blocked"
+        finally:
+            finish_return.set()
+        assert first.result(timeout=remaining()) == "acted"
     assert attempt(second_kind, second_path, 2, False) == "blocked"
-    assert effects == [1]
+    assert effects == [1] and 2 not in checks and flushes
+    intents = [
+        json.loads(path.read_text())
+        for path in resources._reservation_base(root).rglob("*intent.json")
+    ]
+    assert len(intents) == 1
+    assert intents[0]["target"] == "owner/repo1#1"
+    assert intents[0]["state"] == ("in_flight" if first_kind == "core" else "legacy_executor")
+
+
+def test_post_effect_return_latency_does_not_reopen_workspace_admission(
+    tmp_path, monkeypatch, observed_intent_flush
+):
+    _concurrent_admission(
+        tmp_path, monkeypatch, observed_intent_flush, "core", "core", True, controlled_tail=True
+    )
 
 
 def test_sibling_workspace_effects_remain_concurrent(tmp_path):

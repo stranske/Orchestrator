@@ -48,5 +48,4 @@ def test_prospective_identity_shares_account_without_qualification():
         == profiles.get_profile("claude-opus-5-5-high")["capacity_pool_ids"]
         == ["claude-subscription"]
     )
-    assert roles.ROLE_QUALIFICATIONS == {}
-    assert roles.qualification_problems(profile, "strong_criterion_adjudication")
+    assert roles.qualification_problems(profile, "strong_criterion_adjudication", records={})

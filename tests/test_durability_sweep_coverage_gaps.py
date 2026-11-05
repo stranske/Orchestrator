@@ -872,11 +872,13 @@ def test_main_cli_undo_and_sweep(monkeypatch, capsys):
     assert sweep.main(["--undo-truncated-recheck"]) == 0
     assert '"restored": 2' in capsys.readouterr().out
 
+    calls = []
     monkeypatch.setattr(
         sweep,
         "sweep_durability",
-        lambda **k: {"line": "ok", "checked": 0},
+        lambda **k: calls.append(k) or {"line": "ok", "checked": 0},
     )
     assert sweep.main(["--dry-run", "--grace-days", "3"]) == 0
+    assert calls == [{"grace_days": 3, "dry_run": True}]
     err = capsys.readouterr().err
     assert "ok" in err

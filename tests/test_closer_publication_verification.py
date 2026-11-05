@@ -399,6 +399,7 @@ def test_absent_or_refused_source_reader_does_not_accept_json_claim(world, monke
         "issue_owner",
         "scope_node",
         "cached",
+        "head_repository",
         "missing_body",
         "original_source_body",
         "original_source_node",
@@ -425,6 +426,8 @@ def test_fresh_native_binding_refusals_do_not_trigger_verification_or_act(world,
         world.remote.issue["node_id"] = "I_OTHER"
     elif damage == "cached":
         world.remote.current["_local_cached"] = True
+    elif damage == "head_repository":
+        world.remote.current["head_repository"] = "foreign/repository"
     elif damage == "original_source_body":
         world.remote.source["body"] += " changed"
     elif damage == "original_source_node":
@@ -439,6 +442,53 @@ def test_fresh_native_binding_refusals_do_not_trigger_verification_or_act(world,
         del world.remote.pull["body"]
     row = callbacks.observe(world.target)
     assert row["action"] == "wait" and row["eligible"] is False
+    assert world.remote.posts == []
+
+
+def test_case_variant_repository_spelling_keeps_fresh_and_verifier_bindings(world, monkeypatch):
+    import closer_corrective_verifier_readback as readback
+
+    cap = continuation(world)
+    record = join._record(cap)
+    target = "sTrAnSkE/ExAmPlE#9"
+    world.remote.current.update(target=target, head_repository="STRANSKE/example")
+
+    def snapshot(actual):
+        assert actual == target
+        return copy.deepcopy(world.remote.current)
+
+    monkeypatch.setattr(world.remote, "snapshot", snapshot)
+    assert join._fresh(world.backend, target, record)["evidence"]["target"] == target
+
+    monkeypatch.setattr(readback, "require_deployed", lambda *_args: None)
+    prepared = {
+        "mutation_kind": "workflow_dispatch",
+        "fields": {"ref": "main"},
+        "material_selectors": [],
+        "verification_predecessor": None,
+    }
+    built = join.bind_verifier_inputs(
+        cap, world.backend, target, {**world.remote.current, "state": "MERGED"}, prepared
+    )
+    assert join.material_selector(cap) in json.loads(
+        built["fields"]["inputs[verification_material]"]
+    )
+    assert world.remote.posts == []
+
+
+@pytest.mark.parametrize("target", ["foreign/example#9", "stranske/EXAMPLE#09"])
+def test_case_normalization_refuses_foreign_repository_or_different_pr_number(world, target):
+    cap = continuation(world)
+    with pytest.raises(join.ContinuationHeld, match="publication target differs"):
+        join._fresh(world.backend, target, join._record(cap))
+    with pytest.raises(join.ContinuationHeld, match="corrective verification subject differs"):
+        join.bind_verifier_inputs(
+            cap,
+            world.backend,
+            target,
+            {**world.remote.current, "state": "MERGED"},
+            {"mutation_kind": "workflow_dispatch", "fields": {"ref": "main"}},
+        )
     assert world.remote.posts == []
 
 
@@ -598,7 +648,8 @@ def test_fixed_protected_instruction_body_tamper_refuses_before_selection(world)
 
 
 @pytest.mark.parametrize(
-    "mode", ["valid", "unrelated", "absent", "json", "changed_scope", "edited_instruction"]
+    "mode",
+    ["valid", "unrelated", "absent", "json", "changed_scope", "edited_instruction", "unhinted_v2"],
 )
 def test_new_root_uses_its_actual_queue_frame_and_source_owned_projection(world, monkeypatch, mode):
     world.remote.current.update(checks="SUCCESS", revision="new-root-current-head")
@@ -610,6 +661,24 @@ def test_new_root_uses_its_actual_queue_frame_and_source_owned_projection(world,
             "corrective_publication_hint": join.selection_hint(continuation(world)),
         }
     }, []
+    if mode == "unhinted_v2":
+        from test_closer_publication_existing_git_objects import anchor_policy
+
+        from closer_runtime_binding import RuntimeBinding
+
+        context = {"prepare": {}}
+        policy = {**anchor_policy(), "consumer_id": "codex"}
+        assert publication.validate_policy(policy) == policy
+        world.backend.runtime_binding = RuntimeBinding(
+            None,
+            {
+                "correction_controller_installation": {
+                    "config": {"consumers": {"codex": {"publication_v2": policy}}}
+                }
+            },
+        )
+        # Configuration selects a read only. This is not an installed binding
+        # and cannot grant source/ACT authority; the same DATA reader follows.
     admission = next(v for k, v in world.records.items() if k.startswith("admission-"))
     own = admission["own_instruction"]
     projection = dict(
@@ -637,15 +706,23 @@ def test_new_root_uses_its_actual_queue_frame_and_source_owned_projection(world,
     def source_reader(backend, target, snapshot, operation, pipeline_context):
         assert backend is world.backend and target == world.target and pipeline_context is context
         assert join.queue._currently_invoking(target, operation)
+        if mode == "unhinted_v2":
+            captures.append("source_reader_called")
         return None if mode == "unrelated" else (projection if mode == "json" else SyntheticView())
 
-    if mode != "absent":
+    if mode == "unhinted_v2":
+        import closer_coding_publication_io as publication_io
+
+        # Keep the actual publication source-reader entrypoint. Only its
+        # source-issued projection boundary supplies synthetic DATA here.
+        monkeypatch.setattr(publication_io, "read_for_existing_root", source_reader)
+    elif mode != "absent":
         monkeypatch.setattr(publication, "read_for_existing_root", source_reader, raising=False)
     else:
         monkeypatch.delattr(publication, "read_for_existing_root", raising=False)
 
     def execute(target, action, snapshot, operation):
-        if mode in {"valid", "unrelated"}:
+        if mode in {"valid", "unrelated", "unhinted_v2"}:
             cap = join.attach_existing_root(world.backend, target, snapshot, operation, context)
             assert (cap is None) == (mode == "unrelated")
             if cap is not None:
@@ -660,7 +737,11 @@ def test_new_root_uses_its_actual_queue_frame_and_source_owned_projection(world,
         return {"status": "blocked", "reason": "pure synthetic callback ends without native actor"}
 
     _run(world.backend.state_path, [world.target], world.backend.observe, execute, max_passes=1)
-    assert captures == [mode if mode in {"valid", "unrelated"} else "held"]
+    assert captures == (
+        ["source_reader_called", "unhinted_v2"]
+        if mode == "unhinted_v2"
+        else [mode if mode in {"valid", "unrelated"} else "held"]
+    )
     assert world.remote.posts == []
 
 

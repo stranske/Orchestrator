@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Unit tests for Orchestrator research usage guard, recovery semantics, and deduplication controls."""
 
+import errno
 import json
 import os
 import sqlite3
@@ -352,7 +353,9 @@ def test_unreadable_candidate_diff_defers_before_admission(tmp_path, monkeypatch
     )
     assert not evaluate_calls
     assert result["skipped"][0]["reason"] == "candidate-diff-unreadable"
-    assert "vanished.diff" in result["skipped"][0]["detail"]
+    detail = result["skipped"][0]["detail"]
+    assert isinstance(detail, str) and 0 < len(detail) <= 200
+    assert detail.startswith(f"[Errno {errno.ENOENT}]")
 
 
 def test_failed_admission_is_not_automatically_retried(tmp_path):

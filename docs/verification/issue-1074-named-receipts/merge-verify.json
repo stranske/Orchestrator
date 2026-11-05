@@ -1,0 +1,34 @@
+{
+  "schema": "adjudicator-merge-verifier-investigation/v1",
+  "repository": "stranske/Orchestrator",
+  "evaluated_merge": "b9267a08939a53d6bbbff7d098dad5c5e0f04dc3",
+  "run": {
+    "id": 37615810945,
+    "event": "push",
+    "conclusion": "failure",
+    "url": "https://github.com/stranske/Orchestrator/actions/runs/37615810945"
+  },
+  "job": {
+    "id": 112773736256,
+    "name": "verify.py (real pytest counts + selftests + capability gates)",
+    "conclusion": "failure",
+    "url": "https://github.com/stranske/Orchestrator/actions/runs/37615810945/job/112773736256"
+  },
+  "observed": {
+    "passed": 2579,
+    "failed": 0,
+    "skipped": 26,
+    "collected": 2605,
+    "recorded_floor": 2592
+  },
+  "blocking_problem": "collection_floor_behind_reality",
+  "reconciliation": {
+    "job": 112773736215,
+    "commit": "9c84b8fc066a4d34f7d0fb318133c012deb38f9d",
+    "collected": 2605,
+    "passed": 2605,
+    "ceilings_preserved": true
+  },
+  "log_capture": "Exact relevant lines retained in merge-verify-excerpt.txt; full logs retrieved through GitHub connector and inspected. No fresh verify.py run claimed.",
+  "operational_acceptance_complete": false
+}

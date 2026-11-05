@@ -519,12 +519,22 @@ def test_remote_discovery_preserves_pin_without_requiring_live_checkout(tmp_path
         )
 
 
+@pytest.mark.parametrize("large_snapshot", [False, True])
 def test_changed_finite_action_holds_before_collection_or_model(
-    public_merge_world, monkeypatch, capsys
+    public_merge_world, monkeypatch, capsys, large_snapshot
 ):
+    import hashlib
     import json
+    from pathlib import Path
 
     w = public_merge_world
+    if large_snapshot:
+        # The real #984 snapshot had 18,583B of excerpts plus two 11,311B
+        # lifecycle views. A changed frontier must still produce its precise
+        # no-effect hold through the unchanged 32 KiB callback boundary.
+        w.snapshot["verifier_comment_excerpts"] = ["excerpt" * 2700]
+        w.snapshot["verifier_lifecycle"] = {"retained": "lifecycle" * 1500}
+        w.snapshot["body"] = "original acceptance criterion\n" * 800
     monkeypatch.setattr(
         dispatcher.Closer, "select", lambda *_: ("collect_evidence", "changed action", True, None)
     )
@@ -539,6 +549,16 @@ def test_changed_finite_action_holds_before_collection_or_model(
     assert row["status"] == "held"
     assert row["error"] == "frontier action binding differs"
     assert row["results"]["prepare"]["finite_binding_changed"] is True
+    if large_snapshot:
+        prep = row["results"]["prepare"]
+        ref = prep["snapshot_ref"]
+        raw = Path(ref["path"]).read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == ref["sha256"]
+        retained = json.loads(raw)
+        for field in ("verifier_comment_excerpts", "verifier_lifecycle", "body"):
+            assert retained[field] == w.snapshot[field]
+        assert len(raw) > 32768
+        assert len(json.dumps(prep, separators=(",", ":")).encode()) < 32768
     assert w.events["provider"] == 0
     assert w.merges == w.verifies == []
 

@@ -266,7 +266,7 @@ def test_router_select_unknown_task_and_profile_miss(monkeypatch):
     monkeypatch.setattr(
         router,
         "_route_profiles",
-        lambda entry, spec, transport: [
+        lambda entry, spec, transport, category=None, selection_policy=None, independent_of_provider=None: [
             {
                 "profile_id": "p1",
                 "agent": "codex",

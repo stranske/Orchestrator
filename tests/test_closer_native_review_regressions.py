@@ -129,6 +129,31 @@ def backend(tmp_path):
     return closer.Closer(object(), state_path=tmp_path / "state", runtime_binding=binding)
 
 
+@pytest.mark.parametrize(
+    ("repository", "target", "expected"),
+    [
+        ("stranske/orchestrator", "stranske/Orchestrator#984", True),
+        ("stranske/orchestrator", "STRANSKE/ORCHESTRATOR#984", True),
+        ("owner/repo", "owner/repo#1", True),
+        ("stranske/other", "stranske/Orchestrator#984", False),
+        ("other/orchestrator", "stranske/Orchestrator#984", False),
+        (None, "stranske/Orchestrator#984", False),
+    ],
+)
+def test_projection_repository_identity_uses_exact_case_insensitive_match(
+    tmp_path, monkeypatch, repository, target, expected
+):
+    owner = backend(tmp_path)
+    value = {**projection(), "repository": repository}
+    monkeypatch.setattr(installed, "controller_policy_projection", lambda _: value)
+    actual = owner.operation_binding(target, {})
+    assert ("correction_controller_sha256" in actual) is expected
+    assert ("correction_installation_sha256" in actual) is expected
+    if expected:
+        assert actual["correction_controller_sha256"] == "a" * 64
+        assert actual["correction_installation_sha256"] == "b" * 64
+
+
 def test_unavailable_projection_does_not_flip_same_instance_action_identity(tmp_path, monkeypatch):
     owner = backend(tmp_path)
     calls = []

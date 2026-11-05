@@ -163,10 +163,20 @@ def test_real_adapter_refusal_persists_and_restart_has_no_offload_or_action(
             classification="uncertain", substantive_needs=["Original criterion is ambiguous"]
         )
     else:
-        interpreted["proposal"]["decision"]["criteria"] = []
+        # The historical v3 case omitted the original inventory. The prospective
+        # v2 case preserves every source occurrence and explicitly declares a
+        # proof gap instead; no malformed old answer is repaired or regraded.
+        for row in interpreted["proposal"]["decision"]["criteria"]:
+            row["result"] = "UNKNOWN"
     interpreted = inert_caller.interpretation(snap, _packet, ref, interpreted["proposal"])
     integration = closer_disposition.integrate_ordinary(TARGET, snap, ref, prep, interpreted)
-    assert integration["reason"] == reason
+    assert integration["reason"] == "substantive_or_ambiguous_finding"
+    expected_need = (
+        "semantic_global_concern"
+        if reason == "substantive_or_ambiguous_finding"
+        else "semantic_acceptance_proof_gap"
+    )
+    assert expected_need in interpreted["proposal"]["substantive_needs"]
     assert integration["status"] in {"exception", "wait"}
     assert not integration.get("disposition")
     prep = {

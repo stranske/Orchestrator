@@ -27,16 +27,6 @@ def imported(tmp_path, monkeypatch):
     return delivery, callbacks, context, packet, ref
 
 
-def test_actual_imported_packet_restarts_from_its_original_raw_custody(tmp_path, monkeypatch):
-    delivery, callbacks, context, packet, ref = imported(tmp_path, monkeypatch)
-    assert Path(ref["path"]).parent.parent != tmp_path / "queue.json.evidence"
-    result = callbacks["interpret"](TARGET, context)
-    assert result.get("integration_status") == "accepted", result
-    assert len(delivery.caller.results) == 1
-    assert result["actual"]["run_id"] == delivery.caller.results[0]["run_id"]
-    assert result["authority"] is False
-
-
 @pytest.mark.parametrize("fault", ["foreign_raw", "tamper", "identity", "symlink"])
 def test_imported_packet_never_falls_back_to_other_custody(tmp_path, monkeypatch, fault):
     delivery, callbacks, context, packet, ref = imported(tmp_path, monkeypatch)

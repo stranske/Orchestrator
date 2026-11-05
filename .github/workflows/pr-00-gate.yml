@@ -114,6 +114,7 @@ jobs:
       cache: ${{ steps.python_ci_toggles.outputs.cache || 'true' }}
       pytest_markers: >-
         ${{ steps.python_ci_toggles.outputs.pytest_markers || 'not quarantine and not slow' }}
+      python_ci_matrix: ${{ steps.python_ci_matrix.outputs.matrix }}
       workflow_changed: >-
         ${{ steps.classify.outputs.is-workflow-change
         || steps.diff.outputs.workflow_changed
@@ -152,6 +153,7 @@ jobs:
             .github/actions/path-classifier
             .github/path-classification.yml
             .github/scripts
+            config/test-shards.json
           sparse-checkout-cone-mode: false
       - name: Classify changed paths
         id: classify
@@ -175,10 +177,10 @@ jobs:
 
           RUN_CORE = (os.environ.get('RUN_CORE') or 'false').strip().lower() == 'true'
 
-          # THE SINGLE SOURCE for every python-ci toggle in this file. The `with:` block below and
-          # the `summary` job's coverage branch both read these through `needs.detect.outputs.*`,
-          # so there is exactly one literal per toggle and the call site cannot drift from the
-          # summary's idea of what ran. Do not repeat a `false` in the `with:` block.
+          # THE SINGLE SOURCE for the checks executed by the reusable Python calls. Coverage is
+          # deliberately different: the Gate shards are runtime-compatibility subsets, so their
+          # percentages are not whole-tree measurements. The caller hard-disables coverage and
+          # the summary reads CI's exact-head verify.py aggregate artifacts instead.
           #
           # EVERY DISABLED CHECK STATES ITS BLOCKING **AND** DRAINABLE QUANTITY. A bare error
           # count reads as be-patient; the same count with "drainable 0 per PR" beside it reads as
@@ -215,7 +217,7 @@ jobs:
           #              scoped out, by name, from a list that can only shrink.
           typecheck = RUN_CORE
 
-          # coverage (and the soft gate that reads its artifacts) -- ON since 2026-08-23.
+          # coverage -- OFF in these sharded reusable calls. CI's verify.py aggregate owns it.
           #   was:       OFF until 2026-08-23. `reusable-10-ci-python.yml` appended
           #              `--cov-config=pyproject.toml` unconditionally; this repo has no
           #              pyproject.toml, so pytest died at startup with
@@ -236,8 +238,6 @@ jobs:
           #              on its built-in defaults, and `coverage-min` stays '' (informational only).
           #              `scripts/ci_lint_baseline.py` re-measures this by probing collection, so a
           #              regression upstream reappears as a number here rather than as silence.
-          coverage = RUN_CORE
-
           def to_str(flag: bool) -> str:
               return 'true' if flag else 'false'
 
@@ -245,7 +245,6 @@ jobs:
               'lint': to_str(lint),
               'format_check': to_str(format_check),
               'typecheck': to_str(typecheck),
-              'coverage': to_str(coverage),
               'cache': to_str(cache),
               'pytest_markers': pytest_markers,
           }
@@ -258,6 +257,54 @@ jobs:
           PY
         env:
           RUN_CORE: ${{ steps.diff.outputs.run_core || 'false' }}
+
+      - name: Build Python CI shard matrix
+        id: python_ci_matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path, PurePosixPath
+
+          plan_path = Path("config/test-shards.json")
+          payload = json.loads(plan_path.read_text(encoding="utf-8"))
+          shards = payload.get("shards")
+          if not isinstance(shards, list) or len(shards) != 6:
+              raise SystemExit("config/test-shards.json must contain exactly 6 shards")
+
+          seen: set[str] = set()
+          include: list[dict[str, object]] = []
+          for index, shard in enumerate(shards, 1):
+              if not isinstance(shard, list) or not shard:
+                  raise SystemExit(f"test shard {index}/6 must be a nonempty list")
+              for module in shard:
+                  path = PurePosixPath(module) if isinstance(module, str) else None
+                  if (
+                      path is None
+                      or path.is_absolute()
+                      or ".." in path.parts
+                      or not module.startswith("tests/")
+                      or not module.endswith(".py")
+                      or module in seen
+                  ):
+                      raise SystemExit(f"invalid or duplicate module in shard {index}/6: {module!r}")
+                  seen.add(module)
+              include.append(
+                  {
+                      "shard": index,
+                      "pytest_args": " ".join(shard),
+                      "artifact_prefix": f"gate-shard-{index}-",
+                      "run_static": index == 1,
+                  }
+              )
+
+          output = Path(os.environ["GITHUB_OUTPUT"])
+          with output.open("a", encoding="utf-8") as handle:
+              handle.write("matrix=" + json.dumps({"include": include}, separators=(",", ":")) + "\n")
+          print(f"planned {len(include)} shards covering {len(seen)} unique test modules")
+          PY
 
   environment-gate:
     name: privilege environment gate
@@ -297,7 +344,7 @@ jobs:
           pull-request-json: ${{ needs.resolve-pr.outputs.pull_request }}
 
   python-ci:
-    name: python ci
+    name: python ci shard ${{ matrix.shard }}/6
     needs:
       - detect
       - environment-gate
@@ -312,27 +359,31 @@ jobs:
     permissions:
       contents: read
       actions: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.detect.outputs.python_ci_matrix) }}
     with:
       primary-python-version: '3.14'
-      coverage-python-version: '3.14'
       python-versions: '["3.13", "3.14"]'
       marker: "not quarantine and not slow"
       pytest_markers: ${{ needs.detect.outputs.pytest_markers }}
-      # These read the toggles computed once in `detect`. `typecheck`/`run-mypy` and `coverage`
-      # resolve to false there, with the blocking AND drainable count for each stated at that one
-      # place; do not hardcode a second `false` here or the two literals will drift.
-      lint: ${{ needs.detect.outputs.lint == 'true' }}
-      format_check: ${{ needs.detect.outputs.format_check == 'true' }}
-      typecheck: ${{ needs.detect.outputs.typecheck == 'true' }}
-      run-mypy: ${{ needs.detect.outputs.typecheck == 'true' }}
-      coverage: ${{ needs.detect.outputs.coverage == 'true' }}
+      pytest_args: ${{ matrix.pytest_args }}
+      pytest-workers: '4'
+      # Static checks execute once, on shard 1; shards 2-6 keep their called-workflow checks as
+      # explicit skips instead of multiplying identical lint/typecheck work. Coverage is false on
+      # every subset: only CI's verify.py aggregate is a whole-tree measurement.
+      lint: ${{ matrix.run_static && needs.detect.outputs.lint == 'true' }}
+      format_check: ${{ matrix.run_static && needs.detect.outputs.format_check == 'true' }}
+      typecheck: ${{ matrix.run_static && needs.detect.outputs.typecheck == 'true' }}
+      run-mypy: ${{ matrix.run_static && needs.detect.outputs.typecheck == 'true' }}
+      coverage: false
       # Keep coverage threshold informational; reusable Python CI owns source selection.
       coverage-min: ''
       cache: ${{ needs.detect.outputs.cache == 'true' }}
-      enable-soft-gate: ${{ needs.detect.outputs.coverage == 'true' }}
-      # Use the shared gate- prefix so downstream Maint workflows can locate the
-      # coverage artifacts without special-casing runtime names.
-      artifact-prefix: 'gate-'
+      enable-soft-gate: false
+      # Each call must own distinct artifact names. The summary reads the shard and attempt from
+      # these names and refuses success unless every shard/runtime receipt exists.
+      artifact-prefix: ${{ matrix.artifact_prefix }}
 
   docs-guard:
     name: docs guard
@@ -594,6 +645,7 @@ jobs:
     if: ${{ always() }}
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: write
       pull-requests: write
       statuses: write
@@ -704,88 +756,153 @@ jobs:
             const { discoverWorkflowRuns } = require('./.github/scripts/maint-post-ci.js');
             await discoverWorkflowRuns({ github, context, core });
 
-      - name: Download Gate artifacts
+      - name: Locate exact-head combined CI coverage
+        if: needs.detect.outputs.doc_only != 'true' && needs.detect.outputs.coverage == 'true'
+        id: combined_coverage
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          github-token: ${{ steps.app_token.outputs.token || github.token }}
+          script: |
+            const { owner, repo } = context.repo;
+            const headSha = context.payload.pull_request?.head?.sha || context.sha;
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner,
+              repo,
+              workflow_id: 'ci.yml',
+              head_sha: headSha,
+              event: 'pull_request',
+              per_page: 20,
+            });
+            const run = runs.find(candidate => candidate.head_sha === headSha);
+            if (!run) {
+              core.setOutput('status', 'missing-ci-run');
+              return;
+            }
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              owner,
+              repo,
+              run_id: run.id,
+              per_page: 100,
+            });
+            const names = new Set(artifacts.filter(item => !item.expired).map(item => item.name));
+            const missing = ['gate-coverage', 'gate-coverage-trend'].filter(name => !names.has(name));
+            core.setOutput('run_id', String(run.id));
+            core.setOutput('run_url', run.html_url || '');
+            core.setOutput('status', missing.length ? `missing-${missing.join('-and-')}` : 'available');
+
+      - name: Download Gate shard artifacts
         if: ${{ needs.detect.outputs.doc_only != 'true' && needs.python-ci.result != 'skipped' }}
         continue-on-error: true
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          pattern: gate-*
-          merge-multiple: true
+          pattern: gate-shard-*
+          merge-multiple: false
           path: gate_artifacts/downloads
 
-      - name: Load coverage summary snippet
+      - name: Download exact-head combined CI coverage
+        if: steps.combined_coverage.outputs.status == 'available'
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: gate-coverage*
+          merge-multiple: false
+          path: gate_artifacts/combined
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.combined_coverage.outputs.run_id }}
+          github-token: ${{ steps.app_token.outputs.token || github.token }}
+
+      - name: Validate and summarize combined coverage
         if: needs.detect.outputs.doc_only != 'true' && needs.detect.outputs.coverage == 'true'
-        id: coverage_summary
+        id: combined_coverage_report
         run: |
           set -euo pipefail
-          mkdir -p gate_artifacts/downloads
           python <<'PY'
+          import json
+          import math
           import os
           from pathlib import Path
 
-          output_path = os.environ.get('GITHUB_OUTPUT')
-          root = Path('gate_artifacts/downloads')
+          root = Path('gate_artifacts/combined')
+          payload_path = root / 'gate-coverage' / 'coverage.json'
+          trend_path = root / 'gate-coverage-trend' / 'coverage-trend.json'
+          discovery = os.environ.get('DISCOVERY_STATUS') or 'missing-ci-run'
+          status = discovery if discovery != 'available' else 'missing-combined-payload'
+          current = None
+          stats = {'measurement_status': status, 'measurement_source': 'CI verify.py aggregate'}
+          delta_payload = {'status': status}
 
-          summary_path: Path | None = None
-          candidates = list(root.rglob('coverage-summary.md'))
-          if candidates:
-              summary_path = candidates[0]
+          def load_object(path: Path):
+              try:
+                  value = json.loads(path.read_text(encoding='utf-8'))
+              except (OSError, json.JSONDecodeError):
+                  return None
+              return value if isinstance(value, dict) else None
 
-          if summary_path is None:
-              print('No coverage summary markdown found; continuing without it.')
-          else:
-              text = summary_path.read_text(encoding='utf-8')
-              dest = Path('gate-coverage-summary.md')
-              dest.write_text(text, encoding='utf-8')
-              if output_path:
-                  with Path(output_path).open('a', encoding='utf-8') as handle:
-                      handle.write('body<<EOF\n')
-                      handle.write(text)
-                      if not text.endswith('\n'):
-                          handle.write('\n')
-                      handle.write('EOF\n')
-              print(f'Embedded coverage summary from {summary_path}')
+          payload = load_object(payload_path) if discovery == 'available' else None
+          trend = load_object(trend_path) if discovery == 'available' else None
+          if discovery == 'available' and payload is None:
+              status = 'missing-or-invalid-combined-payload'
+          elif discovery == 'available' and trend is None:
+              status = 'missing-or-invalid-combined-trend'
+          elif discovery == 'available':
+              measured = (payload.get('totals') or {}).get('percent_covered')
+              trended = trend.get('current')
+              if type(measured) not in (int, float) or not math.isfinite(measured):
+                  status = 'invalid-combined-percent'
+              elif type(trended) not in (int, float) or not math.isfinite(trended):
+                  status = 'invalid-combined-trend-percent'
+              elif not isinstance(trend.get('passes_minimum'), bool):
+                  status = 'invalid-combined-trend-verdict'
+              elif abs(float(measured) - float(trended)) > 0.01:
+                  status = 'combined-payload-trend-mismatch'
+              else:
+                  status = 'complete'
+                  current = round(float(measured), 2)
+
+          stats['measurement_status'] = status
+          delta_payload = {'status': status}
+          if status == 'complete':
+              baseline = trend.get('baseline')
+              delta = trend.get('delta')
+              stats.update({
+                  'avg_latest': current,
+                  'worst_latest': current,
+                  'history_len': 1,
+                  'job_count': 1,
+                  'coverage_table_markdown': (
+                      '| Measurement | Coverage |\n| --- | --- |\n'
+                      f'| combined verify.py aggregate | {current:.2f}% |'
+                  ),
+              })
+              delta_payload = {
+                  'current': current,
+                  'baseline': baseline if type(baseline) in (int, float) else None,
+                  'delta': delta if type(delta) in (int, float) else None,
+                  'status': 'pass' if trend.get('passes_minimum') is True else 'below-minimum',
+              }
+              Path('gate-combined').mkdir(exist_ok=True)
+              Path('gate-combined/coverage.json').write_bytes(payload_path.read_bytes())
+              Path('gate-combined/coverage-trend.json').write_bytes(trend_path.read_bytes())
+              Path('gate-coverage-delta.json').write_text(
+                  json.dumps(delta_payload, indent=2) + '\n', encoding='utf-8'
+              )
+
+          body = (
+              'Combined coverage: '
+              + (f'{current:.2f}% from CI verify.py aggregate.' if status == 'complete'
+                 else f'UNKNOWN ({status}); no percentage or pass is inferred.')
+          )
+          Path('gate-coverage-summary.md').write_text(body + '\n', encoding='utf-8')
+          output = Path(os.environ['GITHUB_OUTPUT'])
+          with output.open('a', encoding='utf-8') as handle:
+              handle.write(f'status={status}\n')
+              handle.write(f'percent={"" if current is None else current}\n')
+              handle.write('stats_json=' + json.dumps(stats, separators=(',', ':')) + '\n')
+              handle.write('delta_json=' + json.dumps(delta_payload, separators=(',', ':')) + '\n')
+              handle.write('body<<EOF\n' + body + '\nEOF\n')
           PY
-
-      - name: Compute coverage stats
-        if: needs.detect.outputs.doc_only != 'true' && needs.detect.outputs.coverage == 'true'
-        id: coverage_stats
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
-          COVERAGE_ROOT: gate_artifacts/downloads
-          COVERAGE_REFERENCE_RUNTIME: '3.14'
-        with:
-          script: |
-            const fs = require('fs');
-            const path = require('path');
-            const { computeCoverageStats } = require('./.github/scripts/coverage-normalize.js');
-
-            const rootDir = process.env.COVERAGE_ROOT || 'gate_artifacts/downloads';
-            const coverageRoot = path.join(rootDir, 'coverage', 'runtimes');
-
-            const { stats, deltaPayload } = await computeCoverageStats({
-              core,
-              rootDir,
-              coverageRoot,
-              writeFiles: false,
-            });
-
-            const statsPath = path.resolve('gate-coverage.json');
-            const deltaPath = path.resolve('gate-coverage-delta.json');
-
-            if (stats && Object.keys(stats).length) {
-              fs.writeFileSync(statsPath, JSON.stringify(stats, null, 2), 'utf8');
-              core.setOutput('stats_json', JSON.stringify(stats));
-            } else {
-              core.info('Coverage stats unavailable.');
-            }
-
-            if (deltaPayload && Object.keys(deltaPayload).length) {
-              fs.writeFileSync(deltaPath, JSON.stringify(deltaPayload, null, 2), 'utf8');
-              core.setOutput('delta_json', JSON.stringify(deltaPayload));
-            } else {
-              core.info('Coverage delta unavailable.');
-            }
+          DISCOVERY_STATUS: ${{ steps.combined_coverage.outputs.status || 'missing-ci-run' }}
 
       - name: Summarize results
         if: ${{ always() }}
@@ -802,6 +919,9 @@ jobs:
           DELIVERY_SEAL_RESULT: ${{ needs.generated-delivery-seal.result || 'success' }}
           DOCKER_CHANGED: ${{ needs.detect.outputs.docker_changed || 'false' }}
           COVERAGE_ENABLED: ${{ needs.detect.outputs.coverage || 'true' }}
+          COMBINED_COVERAGE_STATUS: >-
+            ${{ steps.combined_coverage_report.outputs.status || 'not-requested' }}
+          COMBINED_COVERAGE_PERCENT: ${{ steps.combined_coverage_report.outputs.percent || '' }}
         run: |
           python - <<'PY'
           import json
@@ -940,9 +1060,9 @@ jobs:
           RUNS_JSON: ${{ steps.gather.outputs.runs || '[]' }}
           HEAD_SHA: >-
             ${{ steps.gather.outputs.head_sha || github.event.pull_request.head.sha || github.sha }}
-          COVERAGE_SECTION: ${{ steps.coverage_summary.outputs.body || '' }}
-          COVERAGE_STATS: ${{ steps.coverage_stats.outputs.stats_json || '' }}
-          COVERAGE_DELTA: ${{ steps.coverage_stats.outputs.delta_json || '' }}
+          COVERAGE_SECTION: ${{ steps.combined_coverage_report.outputs.body || '' }}
+          COVERAGE_STATS: ${{ steps.combined_coverage_report.outputs.stats_json || '' }}
+          COVERAGE_DELTA: ${{ steps.combined_coverage_report.outputs.delta_json || '' }}
           REQUIRED_JOB_GROUPS_JSON: ${{ env.REQUIRED_JOB_GROUPS_JSON }}
           REQUIRED_CONTEXTS_FILE: .github/config/required-contexts.json
           GATE_ARTIFACTS_ROOT: ${{ github.workspace }}/gate_artifacts
@@ -1125,38 +1245,28 @@ jobs:
           retention-days: 7
           overwrite: true
 
-      - name: Upload coverage stats artifact
-        if: ${{ always() && steps.coverage_stats.outputs.stats_json != '' }}
+      - name: Publish combined coverage payload
+        if: ${{ always() && steps.combined_coverage_report.outputs.status == 'complete' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          # ARTIFACT NAME `gate-coverage`, FILE NAME `gate-coverage.json`. They are different
-          # things and this step used to conflate them, which is why Maint Coverage Guard failed
-          # the moment it was unheld:
-          #
-          #   error: Coverage verification could not find required coverage artifacts on a
-          #          successful Gate run.
-          #   warn:  Unable to locate a recent successful Gate workflow run with required coverage
-          #          artifacts: gate-coverage-trend, gate-coverage-trend-history, gate-coverage.
-          #
-          # maint-coverage-guard.yml downloads exactly three artifact NAMES (L251/261/271):
-          # `gate-coverage-trend`, `gate-coverage-trend-history`, `gate-coverage`. The Gate
-          # produced the first two under those names and the third as `gate-coverage.json`, so the
-          # guard probed ten successful runs, found two of three every time, and reported no usable
-          # run at all. A paired literal in two files that disagreed -- this repo's signature
-          # defect, and it stayed invisible for as long as the guard was held.
-          #
-          # Renaming the ARTIFACT is safe and was checked, not assumed: `gate-coverage.json` as an
-          # artifact name appears nowhere else in this repo, and the only download-artifact steps
-          # in any workflow here are the guard's three. The FILE inside is still
-          # gate-coverage.json, so anything reading the contents is unaffected.
           name: gate-coverage
-          path: gate-coverage.json
-          if-no-files-found: warn
+          path: gate-combined/coverage.json
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+
+      - name: Publish combined coverage trend
+        if: ${{ always() && steps.combined_coverage_report.outputs.status == 'complete' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: gate-coverage-trend
+          path: gate-combined/coverage-trend.json
+          if-no-files-found: error
           retention-days: 7
           overwrite: true
 
       - name: Upload coverage delta artifact
-        if: ${{ always() && steps.coverage_stats.outputs.delta_json != '' }}
+        if: ${{ always() && steps.combined_coverage_report.outputs.status == 'complete' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: gate-coverage-delta.json
@@ -1166,7 +1276,7 @@ jobs:
           overwrite: true
 
       - name: Upload coverage summary artifact copy
-        if: ${{ always() && steps.coverage_summary.outputs.body != '' }}
+        if: ${{ always() && steps.combined_coverage_report.outputs.body != '' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: gate-coverage-summary.md

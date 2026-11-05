@@ -1,0 +1,30 @@
+{
+  "checked_date": "2026-11-04",
+  "evidence_class": "local_integrity_validation",
+  "operational_acceptance_verified": false,
+  "external_references_authenticated": false,
+  "tests": {
+    "command": [
+      "node",
+      "--test",
+      "tests/test_adjudicator_evidence_ledger.js"
+    ],
+    "passed": 40,
+    "failed": 0,
+    "log": "ledger-tests.log",
+    "log_sha256": "9ac4ba11f42a181ccdc8eeef9b47f2efbf5b6247cf984758ff10659e5cf28717"
+  },
+  "evidence_sha256": {
+    "../continuation-plan.md": "d09a2c39284ad6414f18bdabb178e8bd3ef12251663e00502eefc19a3726c59e",
+    "../thread-adjudication.md": "2bd5a9b6e9ea246701e96a8bfe8fcc6fcecae3a279870d769021dc928e0ac24a",
+    "../ledger-audit/audit-before-receipt-binding.json": "0de643ff979574e16395cda349d9831e3e5f200abadb3b647e4a037c5dd904f0"
+  },
+  "source_sha256": {
+    "scripts/audit_adjudicator_evidence_ledger.js": "80631510a843e774c2ec90de34f63b271f8949273186795934637260b18f52c0",
+    "tests/test_adjudicator_evidence_ledger.js": "5643c1a3eef340560647dc6dbdd5605d9e033de5e6bec104890c95765025927e"
+  },
+  "first_broken_operational_step": "Accepted revision binding unverified; no acceptance command was run on a substituted revision.",
+  "required_acceptance_run": "not_run_missing_accepted_revision",
+  "paid_dispatches": 0,
+  "canonical_publications": 0
+}

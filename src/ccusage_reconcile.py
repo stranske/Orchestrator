@@ -118,8 +118,7 @@ def _parse_codex_period_ts(value: Any) -> int | None:
     except ValueError:
         return None
     # Codex rollout periods are local wall-clock timestamps; ccusage lastActivity is UTC.
-    local_tz = datetime.now().astimezone().tzinfo
-    return int(dt.replace(tzinfo=local_tz).timestamp())
+    return int(dt.astimezone().timestamp())
 
 
 def _run_windows(

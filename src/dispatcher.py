@@ -1208,10 +1208,13 @@ def _routing_metadata(assignment: dict) -> dict | None:
         "selected_capability_id",
         "selected_capability_version_id",
     }
-    if not any(key in assignment for key in keys):
+    if not assignment.get("caller_pinned") and not any(key in assignment for key in keys):
         return None
+    # Caller-named delegate --agent work still carries a profile; do not label it as a
+    # router assignment or exploration_review will credit the router for caller pins.
+    source = "caller_pinned" if assignment.get("caller_pinned") else "router_assignment"
     metadata = {
-        "source": "router_assignment",
+        "source": source,
         "reason": assignment.get("reason"),
         "exploration": bool(assignment.get("exploration")),
         "exploration_mode": assignment.get("exploration_mode") or "",
@@ -2197,6 +2200,8 @@ def delegate(
         "prompt": prompt,
         "feedback_mode": "local",
         "branch_prefix": branch_prefix,
+        # Named by the caller (`delegate --agent`), not by router.plan / select_agent.
+        "caller_pinned": True,
         "influenced_by_role_run_ids": list(influenced_by_role_run_ids or []),
         "influenced_by_skill_event_ids": list(influenced_by_skill_event_ids or []),
         "influenced_by_workflow_ids": list(influenced_by_workflow_ids or []),
@@ -4472,9 +4477,21 @@ def offload(
                 out["agent_log_tail"] = agent_log_tail
             return out
         except OSError as exc:
+            try:
+                import closer_queue
+
+                read_diagnostic = closer_queue._native_read_failure(exc)
+            except Exception:
+                # Optional diagnostics must never replace the original failure.
+                read_diagnostic = None
             return {
                 "agent": agent,
                 "exit": 126,
+                **(
+                    {"read_only_deadline_diagnostic": read_diagnostic}
+                    if read_diagnostic is not None
+                    else {}
+                ),
                 "output": "",
                 "error": f"process start failed: {exc}",
                 "cwd": str(run_cwd),

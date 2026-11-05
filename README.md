@@ -88,9 +88,13 @@ LIVENESS:  the LAST block of a completed --active tick runs ~/.codex/bin/hc-ping
   selftests run eight at a time, and the two gates that are test files report the verdicts pytest
   reached in the same run instead of re-running them. The summary's `state:` and `time:` lines say
   what the run used; `ORCH_VERIFY_LIVE_STATE=1` and `ORCH_VERIFY_JOBS=1` restore the old behaviour.
-- **The remote Gate checks three of four python-ci legs, and says so.** `pr-00-gate.yml` calls the
-  fleet's shared Python CI. Ruff lint, Black format, coverage and the pytest matrix are ON and
-  green; `typecheck-mypy` is OFF, annotated at the single place the toggles are computed with its
+- **The remote Gate shards runtime checks without pretending subsets are coverage.**
+  `pr-00-gate.yml` calls the fleet's shared Python CI for Ruff, Black, typing and the pytest
+  matrix. Coverage is deliberately OFF on every Gate shard because each sees only one sixth of
+  the suite. Whole-tree coverage comes from `ci.yml`'s `verify.py aggregate + combined coverage`
+  job, which combines all shard, selftest and gate subprocess data; the Gate summary reads and
+  validates that exact-head payload and trend. `typecheck-mypy` was historically OFF, annotated
+  at the single place the toggles are computed with its
   BLOCKING and its DRAINABLE quantity — 604 mypy errors, drainable 0 per PR. `coverage` was the
   second OFF leg until 2026-08-23: its one startup error was not drainable from inside this repo at
   all, and it cleared when the named UPSTREAM drain landed (`stranske/Workflows#3202` made

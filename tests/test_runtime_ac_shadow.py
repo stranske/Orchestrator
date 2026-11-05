@@ -1546,7 +1546,13 @@ def test_post_merge_recheck_reuses_named_and_deliberate_break_runner(post_merge_
             "gate": {"verdict": "PASS"},
             "check_results": [
                 {"type": "command", "status": "PASS"},
-                {"type": "deliberate_break", "status": "PASS"},
+                {
+                    "type": "deliberate_break",
+                    "status": "PASS",
+                    "stdout_tail": json.dumps(
+                        {"verdict": "PASS", "error": None, "green": {"returncode": 0}}
+                    ),
+                },
             ],
         }
 

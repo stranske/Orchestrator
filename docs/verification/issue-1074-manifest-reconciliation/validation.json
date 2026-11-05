@@ -1,0 +1,79 @@
+{
+  "scope": "supplied-manifest inventory reconciliation; no operational acceptance claimed",
+  "evaluated_parent": "bd7ae3a45179ee130337cf1c3a30e8f74a36e3bf",
+  "source_sha256": {
+    "scripts/export_adjudicator_inventory.js": "57495dc865428dc1d2db2a2a1364c0f31b624ac1a12878760fbb435bd43598df",
+    "tests/test_adjudicator_inventory.js": "9ed946ccc37c61c61f49447bdce3bbc6d6407e8ac5965f96c7c0dcbb107c2445"
+  },
+  "checks": [
+    {
+      "command": "node tests/test_adjudicator_inventory.js",
+      "exit": 0,
+      "passed": 14,
+      "log": "inventory-tests.log"
+    },
+    {
+      "command": "node --test tests/test_adjudicator_inventory.js tests/test_adjudicator_retrospective_batch.js tests/test_adjudicator_closer_shadow.js tests/test_adjudicator_receipts.js",
+      "exit": 0,
+      "passed_files": 4
+    },
+    {
+      "command": "node --test-name-pattern='dispute inventory|retro saves Gate gaps' tests/test_adjudicator_retro_cli.js",
+      "exit": 0,
+      "passed": 8
+    },
+    {
+      "command": "python3 src/adjudicator_retro.py --selftest",
+      "exit": 0,
+      "passed_checks": 23
+    },
+    {
+      "command": "PYTHONPATH=src python3 -m unittest discover -s tests -p test_adjudicator_retro_evidence.py",
+      "exit": 0,
+      "passed": 11,
+      "warnings": "existing unclosed SQLite connection ResourceWarnings"
+    },
+    {
+      "command": "node --check scripts/export_adjudicator_inventory.js",
+      "exit": 0
+    },
+    {
+      "command": "node --check tests/test_adjudicator_inventory.js",
+      "exit": 0
+    },
+    {
+      "command": "git diff --check",
+      "exit": 0
+    }
+  ],
+  "real_inventory": {
+    "command": [
+      "node",
+      "scripts/export_adjudicator_inventory.js",
+      "--db",
+      "/home/runner/.codex/orchestrator/feedback/orchestrator.db",
+      "--observed-at",
+      "1793704147"
+    ],
+    "exit": 2,
+    "status": "unavailable",
+    "observed_count": null,
+    "requested_count": 71,
+    "original_manifest_available": false,
+    "canonical_report_available": false,
+    "receipt": "observed-inventory.json"
+  },
+  "python_files_changed": false,
+  "new_operational_checkboxes_completed": [],
+  "named_acceptance_on_current_source": "not run; retained historical receipts remain unchanged",
+  "full_cli_suite": "not rerun; previous receipt records 16 baseline failures",
+  "git_delivery": "workspace .git read-only; separate source commit and transfer patch under /tmp/1074-manifest-delivery",
+  "remote_metadata": {
+    "pr": 1075,
+    "state": "open",
+    "isDraft": false,
+    "remove_closing_reference": "rejected: MCP tool call requires approval, but approval policy is never",
+    "blocker_comment": "rejected: MCP tool call requires approval, but approval policy is never",
+    "needs_human_label": "rejected: MCP tool call requires approval, but approval policy is never"
+  }
+}

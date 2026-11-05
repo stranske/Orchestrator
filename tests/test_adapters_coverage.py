@@ -111,6 +111,65 @@ def test_model_id_for_label_prefers_catalog_and_refuses_unknown_when_catalog_rea
     )
 
 
+def test_catalog_and_model_fallbacks_fail_closed_without_a_probe(monkeypatch, tmp_path):
+    monkeypatch.setenv("ORCH_MODEL_PROBE", "1")
+    monkeypatch.delitem(adapters.MODEL_CATALOG_PROBES, "gemini", raising=False)
+    assert adapters.advertised_catalog("gemini", refresh=True) == {"models": [], "pairs": {}}
+    assert adapters.advertised_models("gemini", refresh=True) == []
+
+    catalog_calls = []
+
+    def unavailable_catalog(agent):
+        catalog_calls.append(agent)
+        raise OSError("catalog unavailable")
+
+    monkeypatch.setattr(adapters, "advertised_catalog", unavailable_catalog)
+    assert adapters.model_id_for_label("gemini", "") is None
+    assert adapters.model_id_for_label("gemini", "   ") is None
+    assert catalog_calls == []
+    assert adapters.model_id_for_label("gemini", "not a model!") is None
+    assert (
+        adapters.model_id_for_label("gemini", "Gemini 3.8 Flash (High)") == "gemini-3.8-flash-high"
+    )
+    assert catalog_calls == ["gemini", "gemini"]
+    assert adapters.observed_model_from_stream("{bad}\n[]\n") == {
+        "model_label": None,
+        "session_id": None,
+        "result_text": None,
+    }
+    cache = tmp_path / "broken.json"
+    for bad_timestamp in ("bad", ["bad"], {"value": "bad"}):
+        cache.write_text(json.dumps({"ts": bad_timestamp, "models": ["x"], "pairs": {"X": "x"}}))
+        for need_pairs in (False, True):
+            assert adapters._cached_catalog("bad", 1, cache, need_pairs=need_pairs) is None
+            assert "bad" not in adapters._ADVERTISED_MEMO
+
+
+def test_agy_log_for_appends_suffix_when_with_suffix_refuses(monkeypatch):
+    original = Path.with_suffix
+
+    def with_suffix(self, suffix):
+        if suffix == adapters.AGY_LOG_SUFFIX and self.name == "name.":
+            raise ValueError("simulated with_suffix refusal")
+        return original(self, suffix)
+
+    monkeypatch.setattr(Path, "with_suffix", with_suffix)
+    assert adapters.agy_log_for("name.") == Path("name..agy.log")
+    assert adapters.agy_log_for("/tmp/run.log") == Path("/tmp/run.agy.log")
+
+
+def test_model_selection_preserves_family_and_ceiling(monkeypatch):
+    assert adapters._auto_resolve("cursor", "full", "x", ["gemini-4-flash-high"]) is None
+    assert (
+        adapters._auto_resolve("gemini", "full", "gemini-3-pro-high", ["gemini-4-flash-high"])
+        is None
+    )
+    monkeypatch.setenv("ORCH_GEMINI_MAX_TIER", "mid")
+    assert adapters.tier_ceiling("gemini") == "mid"
+    assert adapters.effective_tier("gemini", "full") == "mid"
+    assert adapters.effective_tier("gemini", "unknown") == "unknown"
+
+
 def test_agy_path_label_and_stream_parsers_are_defensive():
     assert adapters.agy_log_for(None) is None
     assert adapters.agy_log_for("/tmp/run.log") == Path("/tmp/run.agy.log")

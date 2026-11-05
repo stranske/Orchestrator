@@ -1,0 +1,10 @@
+{
+  "observed_at": "2026-11-03T22:50:17.417Z",
+  "node": "v24.22.0",
+  "source_tree": {
+    "status": "read",
+    "sha256": "831ba16464daca08d02179948b4f374c460c22a7394246ccdea970ebcc262b82",
+    "files": 237
+  },
+  "scope": "runner runtime only; owner Node runtime unknown"
+}

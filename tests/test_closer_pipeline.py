@@ -2864,15 +2864,37 @@ def test_resumed_backlog_priority_preserves_other_interpretations(
     tmp_path, prioritized, expected_first
 ):
     path = tmp_path / "state.json"
+    logical_now = [1_800_000_000.0]
+    initial_callbacks = callbacks()
+    original_prepare = initial_callbacks["prepare"]
+    prepared = set()
+    prepare_lock = threading.Lock()
+
+    def slow_prepare(target, context):
+        # The initial receipt population may take longer than the old 0.12s
+        # wall-clock fixture budget.  This test is about resumed priority, not
+        # elapsed wall time, so keep its scheduler clock explicit.
+        time.sleep(0.13)
+        receipt = original_prepare(target, context)
+        with prepare_lock:
+            prepared.add(target)
+            if prepared == {"a", "b", "z"}:
+                logical_now[0] += 0.13
+        return receipt
+
+    initial_callbacks["prepare"] = slow_prepare
     first = run(
         path,
         ["a", "b", "z"],
+        initial_callbacks,
         capacity={"io": 2, "low": 0, "exception": 1},
         seconds=0.12,
+        now=lambda: logical_now[0],
     )
+    assert prepared == {"a", "b", "z"}
     doc = json.loads(path.read_text())
     prior = doc["runs"][first["run_id"]]
-    prior["deadline"] = time.time() + 2
+    prior["deadline"] = logical_now[0] + 2
     for target, row in prior["targets"].items():
         assert "prepare" in row["results"]
         row.update(status="queued", stage="interpret", last_scheduled=100 if target == "z" else 0)
@@ -2886,6 +2908,7 @@ def test_resumed_backlog_priority_preserves_other_interpretations(
         cb,
         priority_targets={"z"} if prioritized else (),
         max_low_workers=1,
+        now=lambda: logical_now[0],
     )
     assert interpreted[0] == expected_first
     assert set(interpreted) == {"a", "b", "z"}
@@ -2955,8 +2978,13 @@ def test_validator_binds_assignment_and_deadline(tmp_path):
 
 def test_validator_rejects_live_uncertain_action(tmp_path):
     path = tmp_path / "pipeline.json"
+    # invoke() records deadline_exhausted (deferred) when the act has not started
+    # by the round budget. On a loaded shard that budget is wall time spent in
+    # prepare/interpret, so a 2s clock expires before the unknown act is seen.
+    # Hold the scheduler clock still so the exception stays an uncertain action.
+    frozen = time.time()
     cb = callbacks(act=lambda t, c: (_ for _ in ()).throw(RuntimeError("unknown")))
-    receipt = run(path, ["a"], cb, seconds=2)
+    receipt = run(path, ["a"], cb, seconds=2, now=lambda: frozen)
     assert receipt["targets"]["a"]["status"] == "uncertain"
     doc = json.loads(path.read_text())
     run_id = next(iter(doc["runs"]))

@@ -754,7 +754,10 @@ def _declared_functions(cap: dict) -> set[str]:
 
 
 def external_caller(cap: dict) -> dict | None:
-    """For a cross-repo capability, does its declared CI caller actually exist?
+    """Verify an explicitly declared local-external caller, or a sibling CI caller.
+
+    Local external associations are reviewed declarations, not inferred call-graph edges.
+    The entrypoint must be outside this tree and the named Python function must exist.
 
     `entrypoint_external` says "activation needs a change in another repository". That is only a
     BLOCKER while the change is outstanding — once the caller lands, the capability can fire and
@@ -764,6 +767,41 @@ def external_caller(cap: dict) -> dict | None:
     path segment names the sibling repo (`Workflows/scripts/...`), so both are checkable offline
     against the local checkout.
     """
+    declaration = cap.get("external_caller")
+    if declaration is not None:
+        result = {"kind": "declared_local", "exists": False}
+        try:
+            if not isinstance(declaration, dict):
+                raise ValueError("external_caller must name a path and function")
+            external_entry = Path(str(cap.get("entrypoint") or "").split(":", 1)[0]).expanduser()
+            caller = Path(str(declaration.get("path") or "")).expanduser()
+            function = declaration.get("function")
+            tree = HERE.parent if HERE.name == "src" else HERE
+            if not external_entry.is_absolute() or external_entry.resolve().is_relative_to(
+                tree.resolve()
+            ):
+                raise ValueError("declared external entrypoint must be outside this tree")
+            if not external_entry.is_file():
+                raise ValueError("declared external entrypoint is absent")
+            if not caller.is_absolute() or not caller.is_file() or caller.suffix != ".py":
+                raise ValueError("declared external caller Python file is absent")
+            if not isinstance(function, str) or not function.isidentifier():
+                raise ValueError("declared external caller function is invalid")
+            parsed = ast.parse(caller.read_text(encoding="utf-8"))
+            if not any(
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == function
+                for node in parsed.body
+            ):
+                raise ValueError("declared external caller function is absent")
+            return {
+                **result,
+                "exists": True,
+                "path": str(caller),
+                "function": function,
+                "detail": "declared external caller function exists",
+            }
+        except (OSError, ValueError, SyntaxError) as error:
+            return {**result, "detail": str(error)}
     matcher = cap.get("matcher") or {}
     if matcher.get("kind") != "ci_workflow":
         return None
@@ -838,6 +876,43 @@ def heartbeat_reachable(cap: dict) -> dict:
     put theirs inside `main()` while the tick calls their FUNCTIONS directly, so main() never runs.
     Both look identical from a dispatch count: zero.
     """
+    if cap.get("external_caller") is not None:
+        caller = external_caller(cap)
+        if not caller or not caller.get("exists"):
+            return {"status": "no_caller", "detail": (caller or {}).get("detail")}
+        window = cap.get("external_heartbeat_max_age_seconds")
+        if type(window) is not int or window <= 0:
+            return {"status": "no_heartbeat", "detail": "declare a positive heartbeat age window"}
+        now = time.time()
+        for event in cap.get("event_history") or []:
+            if not isinstance(event, dict) or event.get("type") != "invocation":
+                continue
+            metadata = event.get("metadata") or {}
+            if (
+                not isinstance(metadata, dict)
+                or metadata.get("experiment_id")
+                or metadata.get("counterfactual")
+                or event.get("counterfactual")
+                or any(
+                    metadata.get(key) == "fixture_observed"
+                    for key in ("verdict_provenance", "evidence_provenance", "evidence_source")
+                )
+                or metadata.get("evidence_weight") == 0
+            ):
+                continue
+            stamp = event.get("timestamp")
+            if (
+                isinstance(stamp, (int, float))
+                and not isinstance(stamp, bool)
+                and 0 <= now - stamp <= window
+            ):
+                return {
+                    "status": "reachable",
+                    "via": ["runtime ledger invocation event"],
+                    "age_seconds": now - stamp,
+                    "max_age_seconds": window,
+                }
+        return {"status": "no_heartbeat", "detail": "no recent runtime invocation event"}
     # PROMPT-SCHEMA CAPABILITIES ARE CREDITED BY THE DISPATCHER, NOT BY THEIR OWN MODULE -- and
     # asking this question of their entrypoint is the same category error as asking an observer for
     # a delivery outcome. The lane modules are SCHEMAS: `PROMPT_TEMPLATES` says "produce strict JSON
@@ -1572,6 +1647,8 @@ def audit_capability(
                 notes.append(why)
 
     elif entry == ENTRY_DIRECT:
+        if cap.get("external_caller") is not None:
+            row["external_caller"] = external_caller(cap)
         hb = heartbeat_reachable(cap)
         row["heartbeat"] = hb
         if hb["status"] == "off_path":

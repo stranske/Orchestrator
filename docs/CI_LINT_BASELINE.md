@@ -168,7 +168,9 @@ So the sync delivered a Gate that hard-requires a file the sync deliberately nev
 repo never performed the documented copy step. The fix is that copy.
 
 A second blocker was hidden behind the first, and only became visible once the pins landed:
-**coverage**. It was drained upstream on 2026-08-23 and is now ON — see below.
+**coverage**. Its startup defect was drained upstream on 2026-08-23. Since 2026-10-27 it is OFF
+on the Gate's sharded subset calls and ON only in `ci.yml`'s whole-tree `verify.py aggregate +
+combined coverage` job; a shard percentage cannot stand in for the suite.
 
 ## Current state
 
@@ -179,15 +181,16 @@ Measured 2026-08-23 with the pinned versions, after the drain described below.
 | `lint-ruff` | `ruff check --extend-exclude .workflows-lib .` | **0 findings** | 0 | **ON, green** |
 | `lint-format` | `black --check --line-length 100 --exclude '(\.venv\|\.workflows-lib\|node_modules)' .` | **0 files** | 0 | **ON, green** |
 | `typecheck-mypy` | `mypy --exclude .workflows-lib .` | **608 errors in 89 of 189 files** | **0 per PR** | OFF |
-| `coverage` | `pytest --cov` | **0 startup errors** | 0 | **ON, green** |
+| `coverage` | `verify.py --aggregate … --coverage` | **0 startup errors** | 0 | **ON in combined CI; OFF on Gate subsets** |
 | `python 3.12` / `python 3.13` | `pytest -m 'not quarantine and not slow' -n auto --dist=loadgroup` | **0 failures** (393 passed, 9 skipped) | 0 | **ON, green** |
 
 One OFF row remains, and it states both quantities on purpose. An error count alone reads as
 *be patient*; the same count with `drainable 0 per PR` beside it reads as what it is. (`coverage` was the second such
 row until 2026-08-23; the entry below records how it drained rather than deleting the history.) The authoritative
 copy of each of those annotations lives beside the toggle itself, in the `Compute Python CI toggles`
-step of `.github/workflows/pr-00-gate.yml` — one place, so the call site and the `summary` job's
-coverage branch cannot drift apart.
+step of `.github/workflows/pr-00-gate.yml`. The Gate coverage literals are now intentionally
+separate: the reusable subset calls are hard-disabled while the summary consumes the exact-head
+combined CI artifacts, with tests binding both sides.
 
 ## The loop this closes, and why the drain landed here
 

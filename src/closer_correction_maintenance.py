@@ -390,11 +390,7 @@ def _read_history(scope, hint):
             and original == plan["request"],
             "retained original semantic scope changed",
         )
-        proofs = [
-            results[stage]["actual"]["_closer_controlled_proof"]
-            for stage in ("interpret", "exception")
-        ]
-        proofs.append(materialized["proof"])
+        proofs = source.original_provider_proofs(context, arguments)
         required_roles, run_ids = [], []
         for proof in proofs:
             expected = proof["expected"]
@@ -422,7 +418,7 @@ def _read_history(scope, hint):
                     "production_model_contract": expected["production_model_contract"],
                 }
             )
-        _need(len(set(run_ids)) == 3, "original provider run identities overlap")
+        _need(len(set(run_ids)) == len(proofs), "original provider run identities overlap")
         scope.check()
         return {
             "plan": plan,

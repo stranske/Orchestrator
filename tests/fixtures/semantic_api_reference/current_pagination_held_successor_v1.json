@@ -1,0 +1,25 @@
+{
+  "base_commit": "f01d376d77006d6923c3d6554a95be09d4cc0491",
+  "files": {
+    "closer_native_source_upgrade.py": {
+      "after_file_sha256": "2606cb010608478debf45ced3f17ddf2047853d3994622d484dbade9556db0d7",
+      "after_module_ast_sha256": "f036ab016a407cb092af145d00a950604748828fff2b7b671b851900805488bf",
+      "before_file_sha256": "ff1da95563afdb5db761ad56caa1bdadd5bb94c48410a267d5660d796f0f4c17",
+      "before_module_ast_sha256": "14e3be691c6e01ea25a62327985d0bd4ef67788fbf05484541c0c6f60ea4ffbc",
+      "constant_delta": {},
+      "function_delta": {
+        "prepare_held": {
+          "after": "71012df1565d3514fd2515d2b716a7fb2bd243029857ea4ea051822d3c324d6a",
+          "before": "a70c8c2edf0112c2c8af08832dcdced0f5be73bedc1d993a0451203f9cf80143"
+        },
+        "_sealed_pagination_reference": {
+          "after": "808f7630ce80d0ef5a1e5cfef3c7c5c91200f2601e1e3ca56b337a56b33f990c",
+          "before": null
+        }
+      },
+      "outside_reviewed_changes_ast_sha256": "75cace107615106242e4c57d69a954cc81eb0bd93f14caa0bd776dcb72c8661c"
+    }
+  },
+  "schema": "pagination-held-source-successor/v1",
+  "scope": "literal prepare_held d4ca reference selection; preserve every other AST family"
+}

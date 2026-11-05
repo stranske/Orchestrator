@@ -210,8 +210,18 @@ def test_unknown_b_runs_c_once_without_inherited_named_round(capacity_host, fail
             argv, 0, stdout="not-json" if failure == "malformed" else json.dumps(candidate)
         )
 
+    command = [sys.executable, "fixture.py", "--assignment", cfg["assignment"]]
+    if cfg.get("finite_frontier"):
+        command += [
+            "--finite-frontier-json",
+            json.dumps(cfg["finite_frontier"]),
+            "--request-timeout-seconds",
+            str(cfg["request_timeout_seconds"]),
+        ]
+    else:
+        command += ["--budget-seconds", "1"]
     outcome, detail = binding.run_native_round(
-        [sys.executable, "fixture.py", "--assignment", cfg["assignment"], "--budget-seconds", "1"],
+        command,
         cfg,
         runner=runner,
         hooks=hooks,
@@ -219,6 +229,31 @@ def test_unknown_b_runs_c_once_without_inherited_named_round(capacity_host, fail
     )
     assert events == [("B", None), ("C", "exact-fixture-token")]
     assert outcome == "unknown" and "ACTION C65" in detail
+
+
+def test_changed_admission_before_b_is_binding_refusal(capacity_host, monkeypatch):
+    """Pinned hooks translate typed admission drift before any B submission."""
+    import closer_mechanisms as mechanisms
+    import closer_native_observer as native
+
+    cfg, _context, _proof, _aggregate, _result = completed_standing_round(capacity_host)
+    hooks = object.__new__(binding.PinnedNativeHooks)
+    original_validate = native.validate_admission
+    calls = 0
+
+    def changed_once(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise mechanisms.MechanismError("inputs changed")
+        return original_validate(*args, **kwargs)
+
+    monkeypatch.setattr(native, "validate_admission", changed_once)
+    with pytest.raises(
+        binding.BindingError, match="native admission unavailable before dispatcher: inputs changed"
+    ):
+        hooks.begin_terminal_receipt(cfg)
+    assert calls == 1
 
 
 def test_old_successful_same_assignment_cannot_complete_new_b(capacity_host):

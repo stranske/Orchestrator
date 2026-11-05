@@ -13,7 +13,19 @@
     "flat exec-mirror shard 4/6",
     "flat exec-mirror shard 5/6",
     "flat exec-mirror shard 6/6",
-    "verify.py aggregate in the flat exec-mirror shape"
+    "verify.py aggregate in the flat exec-mirror shape",
+    "python ci shard 1/6 / python 3.13",
+    "python ci shard 1/6 / python 3.14",
+    "python ci shard 2/6 / python 3.13",
+    "python ci shard 2/6 / python 3.14",
+    "python ci shard 3/6 / python 3.13",
+    "python ci shard 3/6 / python 3.14",
+    "python ci shard 4/6 / python 3.13",
+    "python ci shard 4/6 / python 3.14",
+    "python ci shard 5/6 / python 3.13",
+    "python ci shard 5/6 / python 3.14",
+    "python ci shard 6/6 / python 3.13",
+    "python ci shard 6/6 / python 3.14"
   ],
-  "_note": "Every job in .github/workflows/ci.yml that runs on a pull request, by its check-run name. Workflows' Maint 71 reads this file from main and will not merge a generated delivery (template sync or dev-tool pin bump) while one of these checks has failed on its exact head; a declared check that never started is reported, not awaited. This repo has no branch protection, so Gate / gate alone was the delivery gate until stranske/Orchestrator#530 merged with verify.py red and turned main red for every open PR. tests/test_delivery_required_contexts.py keeps this list equal to ci.yml's pull-request jobs. The Gate summary also prints this list."
+  "_note": "Every job in .github/workflows/ci.yml that runs on a pull request, plus every required Python runtime child of each Gate shard, by exact check-run name. Workflows' Maint 71 reads this file from main and blocks declared failures; because it reports an absent name as never started rather than enforcing it, the Gate summary separately fails unless all twelve shard/runtime artifacts exist. tests/test_delivery_required_contexts.py keeps both surfaces exact."
 }

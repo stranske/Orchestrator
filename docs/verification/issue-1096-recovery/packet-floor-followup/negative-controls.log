@@ -1,0 +1,48 @@
+✖ packet floor diagnostics match the production rule without trusting saved flags (500.279642ms)
+✖ packet diagnostics identify missing and clipped evidence separately on parent and retries (0.74753ms)
+✖ report CLI carries packet floor locators through unique requested-row reconciliation (28.728791ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 0
+ℹ fail 3
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 547.778458
+
+✖ failing tests:
+
+test at tests/test_adjudicator_inventory.js:46:1
+✖ packet floor diagnostics match the production rule without trusting saved flags (500.279642ms)
+  TypeError: Cannot read properties of undefined (reading 'floor_applies')
+      at /home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_inventory.js:86:37
+      at Array.map (<anonymous>)
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_inventory.js:85:57)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17)
+
+test at tests/test_adjudicator_inventory.js:99:1
+✖ packet diagnostics identify missing and clipped evidence separately on parent and retries (0.74753ms)
+  TypeError: Cannot read properties of undefined (reading 'blocking_reasons')
+      at /home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_inventory.js:113:46
+      at Array.map (<anonymous>)
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_inventory.js:113:29)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)
+
+test at tests/test_adjudicator_inventory.js:130:1
+✖ report CLI carries packet floor locators through unique requested-row reconciliation (28.728791ms)
+  TypeError: Cannot read properties of undefined (reading 'blocking_reasons')
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_inventory.js:145:32)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7)

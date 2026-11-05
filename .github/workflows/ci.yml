@@ -76,6 +76,7 @@ jobs:
         env:
           ORCH_STATE_DIR: ${{ runner.temp }}/orch-state
           ORCH_LOCAL_RUNTIME: ${{ runner.temp }}/orch-runtime
+          ORCH_REQUIRE_COVERAGE: '1'
         run: |
           python3 src/verify.py --pytest-shard ${{ matrix.shard }}/6 --coverage --shard-output shard-results
       - name: Stage worker coverage measurement
@@ -366,7 +367,9 @@ jobs:
     # auto-writing it would delete the claim instead of checking it.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
+    env:
+      VERIFY_PYTEST_WORKERS: "4"
     permissions:
       contents: write
     steps:
@@ -396,7 +399,7 @@ jobs:
           command -v zsh
 
       - name: Install dependencies
-        run: python -m pip install --quiet pytest pytest-xdist==3.8.0 coverage -r requirements.lock
+        run: python -m pip install --quiet pytest pytest-xdist==3.8.0 pytest-cov==7.0.0 coverage -r requirements.lock
 
       - name: Reconcile
         env:

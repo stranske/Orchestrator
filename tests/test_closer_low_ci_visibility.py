@@ -114,12 +114,21 @@ def context(world, **kwargs):
 
 
 def render(value):
+    from closer_typed_semantic_broker_fixture import renderer_inventory
+
+    sources = [
+        {
+            "target": "synthetic/context#1",
+            "body": "## Tasks\n- Inspect the supplied receipt context.",
+        }
+    ]
     return contracts.render_classification_prompt(
         {"data_only_evidence": value},
-        source_rows=[],
+        source_rows=sources,
         diff_rows={},
         review_rows=[],
         artifact_rows={},
+        semantic_inventory=renderer_inventory(sources),
     )
 
 
@@ -143,9 +152,9 @@ def test_actual_zip_to_low_mandatory_contains_untrusted_raw_and_exact_inventory(
     assert row["total_bytes"] == row["supplied_bytes"] == row["ref"]["bytes"]
     assert row["content_supplied"] is True and row["truncated"] is False
     prompt = render(value)
-    mandatory = json.JSONDecoder().raw_decode(prompt[prompt.index('{"mandatory":') :])[0][
-        "mandatory"
-    ]
+    mandatory = json.loads(
+        prompt.split("CURRENT_CONTEXT_JSON_BEGIN\n", 1)[1].split("\nCURRENT_CONTEXT_JSON_END", 1)[0]
+    )
     supplied = mandatory["data_only_evidence"]["sections"]["ci_receipt_inputs"]["content"]
     assert "old_head=stale" in supplied["receipts"][0]["content"]
     assert "foreign/repo#91" in supplied["receipts"][0]["content"]

@@ -1,0 +1,236 @@
+{
+  "schema": "closer-role-selection/v1",
+  "policy_version": "2026-10-27-guarded-evidence-v1",
+  "purpose": "Quality/scope filter only; runtime qualification, capacity, transport and action gates remain separate.",
+  "default_categories": {
+    "bounded_classification": null,
+    "strong_criterion_adjudication": "named_proof",
+    "constrained_repair": "mechanical_repair"
+  },
+  "subjects": {
+    "sonnet_high_v2": {
+      "profile_id": "claude-sonnet-5-5-high-v2",
+      "identity": {
+        "agent": "claude",
+        "provider": "anthropic",
+        "requested_model": "claude-sonnet-5-5",
+        "reasoning_effort": "high"
+      },
+      "quality_evidence": {
+        "id": "sonnet-high-v2-strong-scoped-evidence-record-v1",
+        "sha256": "7cb79862271c926351461d7fb1de13b789f753e523345acede096dd70d88c3e0"
+      },
+      "limits": [
+        "one_named_question",
+        "exact_proof_and_selected_merge",
+        "host_action_authority_only"
+      ],
+      "quality_status": "guarded_eligible",
+      "runtime_enrollment_granted": false,
+      "independence_group": "anthropic"
+    },
+    "sol61_high": {
+      "profile_id": "codex-6.1-sol-high",
+      "identity": {
+        "agent": "codex",
+        "provider": "openai",
+        "requested_model": "gpt-6.1-sol",
+        "reasoning_effort": "high"
+      },
+      "quality_evidence": {
+        "id": "sol61-high-strong-scoped-evidence-record-v1",
+        "sha256": "43361286977a4b725a3a9325a4dc87a1922202230636d0da7833ed69e3c2256c"
+      },
+      "limits": [
+        "one_named_question",
+        "exact_proof_and_selected_merge",
+        "subtype_advisory_only",
+        "host_action_authority_only"
+      ],
+      "quality_status": "guarded_eligible",
+      "runtime_enrollment_granted": false,
+      "independence_group": "openai"
+    },
+    "muse_spark13_high": {
+      "profile_id": null,
+      "identity": {
+        "agent": "muse",
+        "provider": "meta",
+        "requested_model": "muse-spark-1.3",
+        "reasoning_effort": "high"
+      },
+      "quality_evidence": {
+        "id": "muse-spark13-named-strong-scoped-evidence-record-v1",
+        "sha256": "469ab6e7fe865af3129769c284e870a99b3beffe46ae004260702628c9629462"
+      },
+      "limits": [
+        "one_named_question",
+        "exact_proof_and_selected_merge",
+        "host_action_authority_only"
+      ],
+      "quality_status": "guarded_eligible",
+      "runtime_enrollment_granted": false,
+      "pending": "Exact registered profile and current transport binding required; never substitute Wonder.",
+      "independence_group": null
+    },
+    "terra61_high": {
+      "profile_id": null,
+      "identity": {
+        "agent": "codex",
+        "provider": "openai",
+        "requested_model": "gpt-6.1-terra",
+        "reasoning_effort": "high"
+      },
+      "quality_evidence": {
+        "id": "terra61-high-typed-v2-scoped-evidence-record-v1",
+        "sha256": "b15e1702fe35a4f069d1d1adc1990a5320b118d65ff6e3acf2911c28cc59f23e"
+      },
+      "limits": [
+        "ordinary_static_only",
+        "host_protected_holds",
+        "exact_proof_and_inventory",
+        "independent_review_and_bound_evidence_before_absence_correction",
+        "host_action_authority_only"
+      ],
+      "quality_status": "guarded_eligible",
+      "runtime_enrollment_granted": false,
+      "pending": "Exact registered profile/current transport binding required; never substitute Terra5.6.",
+      "independence_group": null
+    },
+    "cursor_composer25_default": {
+      "profile_id": null,
+      "identity": {
+        "agent": "cursor",
+        "provider": "cursor",
+        "requested_model": "composer-2.5",
+        "reasoning_effort": null
+      },
+      "quality_evidence": {
+        "id": "cursor-composer25-named-advisory-scoped-evidence-record-v1",
+        "sha256": "28b2bca0d34adf5a38ce103b2e8b549518ec865e0bfc504644f16829bfe0ebfd"
+      },
+      "limits": [
+        "one_named_question",
+        "diagnostic_only",
+        "review_or_collection_fallback",
+        "subtype_advisory_only",
+        "host_action_authority_only"
+      ],
+      "quality_status": "guarded_eligible",
+      "runtime_enrollment_granted": false,
+      "pending": "Default effort is not the existing High profile; exact new identity/current enrollment required.",
+      "independence_group": null
+    }
+  },
+  "categories": {
+    "ordinary_static": {
+      "role": "bounded_classification",
+      "candidates": [
+        "terra61_high"
+      ],
+      "requirements": [
+        "ordinary_static_only",
+        "host_protected_holds",
+        "exact_proof_and_inventory",
+        "independent_review_and_bound_evidence_before_absence_correction"
+      ],
+      "terminal_fallback": "collect_or_independent_review_hold"
+    },
+    "named_proof": {
+      "role": "strong_criterion_adjudication",
+      "candidates": [
+        "sonnet_high_v2",
+        "sol61_high",
+        "muse_spark13_high"
+      ],
+      "requirements": [
+        "one_named_question",
+        "exact_proof_and_selected_merge",
+        "subtype_advisory_only",
+        "host_protected_holds"
+      ],
+      "terminal_fallback": "collect_or_independent_review_hold"
+    },
+    "named_diagnostic": {
+      "role": "strong_criterion_adjudication",
+      "candidates": [
+        "sonnet_high_v2",
+        "sol61_high",
+        "muse_spark13_high",
+        "cursor_composer25_default"
+      ],
+      "requirements": [
+        "one_named_question",
+        "diagnostic_only",
+        "review_or_collection_fallback",
+        "subtype_advisory_only"
+      ],
+      "terminal_fallback": "collect_or_independent_review_hold"
+    },
+    "protected_authority": {
+      "role": "bounded_classification",
+      "candidates": [],
+      "requirements": [
+        "deterministic_host_authority"
+      ],
+      "terminal_fallback": "host_or_independent_review_hold"
+    },
+    "protected_named_authority": {
+      "role": "strong_criterion_adjudication",
+      "candidates": [],
+      "requirements": [
+        "deterministic_host_authority"
+      ],
+      "terminal_fallback": "host_or_independent_review_hold"
+    },
+    "mechanical_repair": {
+      "role": "constrained_repair",
+      "candidates": [],
+      "requirements": [
+        "registered_deterministic_plan",
+        "path_and_operation_allowlists",
+        "tests_required"
+      ],
+      "terminal_fallback": "deterministic_plan_or_hold"
+    }
+  },
+  "fallback_rules": {
+    "unavailable_before_start": "reselect_same_scope_with_fresh_admission_else_hold",
+    "known_answer_rejected": "collect_or_independent_review_hold",
+    "unknown_execution": "hold_do_not_repeat",
+    "boundary_or_account_failure": "hold_stop_affected_route",
+    "no_admitted_candidate": "collect_or_independent_review_hold"
+  },
+  "selection": {
+    "ranking": "existing_neutral_router_and_profile_scores",
+    "provider_diversity": "Neutral selection retains multiple eligible providers. A trusted independent_of_provider request requires an admitted known distinct provider group; unresolved groups cannot satisfy hard independence.",
+    "new_qualification_or_action_authority": false
+  },
+  "not_automatic_candidates": {
+    "vibe": "Observed configuration diagnostic-only; repeated unsafe positive advice and unresolved served identity.",
+    "astra_and_low_profiles": "Completed experiments retain exact role limits; no cross-effort/cross-role promotion.",
+    "gemini": "No usable quality observation; pending existing-route inspection."
+  },
+  "verify_explicit_pair": {
+    "transport": "existing_production_API",
+    "models": [
+      {
+        "provider": "openai",
+        "model": "gpt-5.6-terra",
+        "effort": "production_default"
+      },
+      {
+        "provider": "anthropic",
+        "model": "claude-opus-5-5",
+        "effort": "production_default"
+      }
+    ],
+    "evidence": {
+      "id": "production-verify-api-scoped-evidence-record-v1",
+      "sha256": "bd09d2e3ca8efe1d70d16d9842e53c0f2d3b411e7963d58b9a7448d09d0cad1e"
+    },
+    "default_selection_changed": false,
+    "formal_approval_status_changed": false,
+    "closer_registry_authority": false
+  }
+}

@@ -1,0 +1,874 @@
+{
+  "schema_version": 1,
+  "checked_at": "2026-11-03T21:38:20.654Z",
+  "evidence_scope": "selected_retained_historical_fields_only",
+  "source_reference": "dropbox:id:tDSHdCztYNUAAAAAADfgrw@65de8f715bb690369d613",
+  "source_metadata_size": 2386539,
+  "extracted_text_byte_length": 2386540,
+  "extracted_text_sha256": "669ec8da79c8219a11d17955c2ae2c26ca380834980bcb5aba758f8cdd389f87",
+  "byte_identity_with_remote_file_verified": false,
+  "prior_acquisition_is_distinct": true,
+  "projection_sha256": "c87598737485b19011318f369fdafc204d9f9d7732f3420f5e5cd39964885bd8",
+  "projection": "selected-fields.json",
+  "projection_byte_length": 30531,
+  "projection_fields": [
+    "generated_at",
+    "population",
+    "rows[].case_id",
+    "rows[].target",
+    "rows[].run_id",
+    "rows[].verifier_verdict",
+    "rows[].adjudicated_verdict",
+    "decision",
+    "later_truth",
+    "backend_run_id",
+    "error",
+    "errors",
+    "retry_error",
+    "role_record_error",
+    "retry_attempts (recursively)"
+  ],
+  "inventory_command": [
+    "node",
+    "scripts/export_adjudicator_inventory.js",
+    "--report",
+    "/tmp/issue-1096-dispatch-projection.json",
+    "--observed-at",
+    "1793741743",
+    "--evidence-class",
+    "historical_snapshot",
+    "--evidence-reference",
+    "dropbox:id:tDSHdCztYNUAAAAAADfgrw@65de8f715bb690369d613:selected-fields"
+  ],
+  "inventory_exit_code": 0,
+  "retained_case_count": 58,
+  "retained_attempt_count": 64,
+  "paid_identity_summary": {
+    "records": 38,
+    "unique": 38,
+    "repeated": []
+  },
+  "before": {
+    "primary": {
+      "not_recorded": 30,
+      "merge_bound_verifier_changed": 1,
+      "unresolved": 25,
+      "mutating_recommendation_rejected": 6,
+      "backend_nonzero_exit": 2
+    },
+    "later_retry": {
+      "unresolved": 11
+    }
+  },
+  "after": {
+    "primary": {
+      "not_recorded": 30,
+      "merge_bound_verifier_changed": 1,
+      "failed_provider_guard_refused_dispatch": 8,
+      "mutating_recommendation_rejected": 6,
+      "backend_nonzero_exit": 2,
+      "round_boundary_refused_dispatch": 17
+    },
+    "later_retry": {
+      "failed_provider_guard_refused_dispatch": 11
+    }
+  },
+  "retained_refusal_occurrences": [
+    {
+      "case_id": "c0255daf58c35dc6dbf9690783964a28d2853838efdbd47e167c63c37f6b5739",
+      "target": "stranske/Orchestrator#477",
+      "run_id": "keepalive:stranske/Orchestrator#477:codex",
+      "attempt_location": "rows[14]",
+      "field": "first_broken_step",
+      "step": {
+        "status": "recorded",
+        "stage": "dispatch_admission",
+        "code": "failed_provider_guard_refused_dispatch",
+        "message_origin": "retained_launcher",
+        "evidence_locations": [
+          "rows[14].error"
+        ]
+      },
+      "failure_fields": [
+        {
+          "location": "rows[14].error",
+          "json_value_sha256": "f98828bf02c0ddb24df60c188eb2812479b739a22b660f342bdc98e86ff18801"
+        }
+      ]
+    },
+    {
+      "case_id": "44e85dfcdd64335e346a7132a927917e61846910b9ca04e81e346a654c5e88a5",
+      "target": "stranske/Orchestrator#478",
+      "run_id": "keepalive:stranske/Orchestrator#478:codex",
+      "attempt_location": "rows[16]",
+      "field": "first_broken_step",
+      "step": {
+        "status": "recorded",
+        "stage": "dispatch_admission",
+        "code": "failed_provider_guard_refused_dispatch",
+        "message_origin": "retained_launcher",
+        "evidence_locations": [
+          "rows[16].error"
+        ]
+      },
+      "failure_fields": [
+        {
+          "location": "rows[16].error",
+          "json_value_sha256": "f98828bf02c0ddb24df60c188eb2812479b739a22b660f342bdc98e86ff18801"
+        }
+      ]
+    },
+    {
+      "case_id": "d880ad7abb0729067f5a72e71928e0036f0f970785d78a5e63dbef8f3a682604",
+      "target": "stranske/Orchestrator#467",
+      "run_id": "keepalive:stranske/Orchestrator#467:cursor",
+      "attempt_location": "rows[17]",
+      "field": "later_retry_broken_step",
+      "step": {
+        "status": "recorded",
+        "stage": "dispatch_admission",
+        "code": "failed_provider_guard_refused_dispatch",
+        "message_origin": "retained_launcher",
+        "evidence_locations": [
+          "rows[17].retry_error"
+        ]
+      },
+      "failure_fields": [
+        {
+          "location": "rows[17].retry_error",
+          "json_value_sha256": "f98828bf02c0ddb24df60c188eb2812479b739a22b660f342bdc98e86ff18801"
+        }
+      ]
+    },
+    {
+      "case_id": "bf078dca610277353e79e28d7f62693d5f6f9236551e0c1ac1d8a44800d642ab",
+      "target": "stranske/Workflows#3764",
+      "run_id": "keepalive:stranske/Workflows#3764:codex",
+      "attempt_location": "rows[18]",
+      "field": "first_broken_step",
+      "step": {
+        "status": "recorded",
+        "stage": "dispatch_admission",
+        "code": "failed_provider_guard_refused_dispatch",
+        "message_origin": "retained_launcher",
+        "evidence_locations": [
+          "rows[18].error"
+        ]
+      },
+      "failure_fields": [
+        {
+          "location": "rows[18].error",
+          "json_value_sha256": "f98828bf02c0ddb24df60c188eb2812479b739a22b660f342bdc98e86ff18801"
+        }
+      ]
+    },
+    {
+      "case_id": "523f3f55d9f384ecc5fe12d8dde4c9040c71607bbb5775a0d28df5c608107e99",
+      "target": "stranske/Orchestrator#473",
+      "run_id": "keepalive:stranske/Orchestrator#473:codex",
+      "attempt_location": "rows[19]",
+      "field": "later_retry_broken_step",
+      "step": {
+        "status": "recorded",
+        "stage": "dispatch_admission",
+        "code": "failed_provider_guard_refused_dispatch",
+        "message_origin": "retained_launcher",
+        "evidence_locations": [
+          "rows[19].retry_error"
+        ]
+      },
+      "failure_fields": [
+        {
+          "location": "rows[19].retry_error",
+          "json_value_sha256": "f98828bf02c0ddb24df60c188eb2812479b739a22b660f342bdc98e86ff18801"
+        }
+      ]
+    },
+    {
+      "case_id": "d583afb7c56b931343d2454023ac99eb66963ffac5d29ec47e0d60700680df05",
+      "target": "stranske/Orchestrator#474",
+      "run_id": "keepalive:stranske/Orchestrator#474:codex",
+      "attempt_location": "rows[20]",
+      "field": "later_retry_broken_step",
+      "step": {
+        "status": "recorded",
+        "stage": "dispatch_admission",
+        "code": "failed_provider_guard_refused_dispatch",
+        "message_origin": "retained_launcher",
+        "evidence_locations": [
+          "rows[20].retry_error"
+        ]
+      },
+      "failure_fields": [
+        {
+          "location": "rows[20].retry_error",
+          "json_value_sha256": "f98828bf02c0ddb24df60c188eb2812479b739a22b660f342bdc98e86ff18801"
+        }
+      ]
+    },
+    {
+      "case_id": "76288bb67aff7a8db7d2a5f5c647b864af73e0629b028c07c146e81739a9c64b",
+      "target": "stranske/Orchestrator#472",
+      "run_id": "keepalive:stranske/Orchestrator#472:codex",
+      "attempt_location": "rows[21]",
+      "field": "later_retry_broken_step",
+      "step": {
+        "status": "recorded",
+        "stage": "dispatch_admission",
+        "code": "failed_provider_guard_refused_dispatch",
+        "message_origin": "retained_launcher",
+        "evidence_locations": [
+          "rows[21].retry_error"
+        ]
+      },
+      "failure_fields": [
+        {
+          "location": "rows[21].retry_error",
+          "json_value_sha256": "f98828bf02c0ddb24df60c188eb2812479b739a22b660f342bdc98e86ff18801"
+        }
+      ]
+    },
+    {
+      "case_id": "584acf2416195efde43cf4df15aebfd9ae43f0a1202dcab552d54b3c75b1e37d",
+      "target": "stranske/Orchestrator#471",
+      "run_id": "keepalive:stranske/Orchestrator#471:codex",
+      "attempt_location": "rows[22]",
+      "field": "later_retry_broken_step",
+      "step": {
+        "status": "recorded",
+        "stage": "dispatch_admission",
+        "code": "failed_provider_guard_refused_dispatch",
+        "message_origin": "retained_launcher",
+        "evidence_locations": [
+          "rows[22].retry_error"
+        ]
+      },
+      "failure_fields": [
+        {
+          "location": "rows[22].retry_error",
+          "json_value_sha256": "f98828bf02c0ddb24df60c188eb2812479b739a22b660f342bdc98e86ff18801"
+        }
+      ]
+    },
+    {
+      "case_id": "dfccaa2f511f87f64adf1ef237a865141d7b9e25ffc67700e0ead2160c437f2e",
+      "target": "stranske/Orchestrator#470",
+      "run_id": "keepalive:stranske/Orchestrator#470:codex",
+      "attempt_location": "rows[23]",
+      "field": "later_retry_broken_step",
+      "step": {
+        "status": "recorded",
+        "stage": "dispatch_admission",
+        "code": "failed_provider_guard_refused_dispatch",
+        "message_origin": "retained_launcher",
+        "evidence_locations": [
+          "rows[23].retry_error"
+        ]
+      },
+      "failure_fields": [
+        {
+          "location": "rows[23].retry_error",
+          "json_value_sha256": "f98828bf02c0ddb24df60c188eb2812479b739a22b660f342bdc98e86ff18801"
+        }
+      ]
+    },
+    {
+      "case_id": "cc872bb0e729e8209d81a618e46f1a1399d5e9af482a0dcb0d8018c4cba7d55b",
+      "target": "stranske/Workflows#3756",
+      "run_id": "keepalive:stranske/Workflows#3756:none",
+      "attempt_location": "rows[24]",
+      "field": "first_broken_step",
+      "step": {
+        "status": "recorded",
+        "stage": "dispatch_admission",
+        "code": "failed_provider_guard_refused_dispatch",
+        "message_origin": "retained_launcher",
+        "evidence_locations": [
+          "rows[24].error"
+        ]
+      },
+      "failure_fields": [
+        {
+          "location": "rows[24].error",
+          "json_value_sha256": "f98828bf02c0ddb24df60c188eb2812479b739a22b660f342bdc98e86ff18801"
+        }
+      ]
+    },
+    {
+      "case_id": "1f7c00d08df7b5fea0801b6e0dcb006c08f157396582f05afc87f8e6ddaf9604",
+      "target": "stranske/Orchestrator#461",
+      "run_id": "keepalive:stranske/Orchestrator#461:claude",
+      "attempt_location": "rows[25]",
+      "field": "first_broken_step",
+      "step": {
+        "status": "recorded",
+        "stage": "dispatch_admission",
+        "code": "failed_provider_guard_refused_dispatch",
+        "message_origin": "retained_launcher",
+        "evidence_locations": [
+          "rows[25].error"
+        ]
+      },
+      "failure_fields": [
+        {
+          "location": "rows[25].error",
+          "json_value_sha256": "f98828bf02c0ddb24df60c188eb2812479b739a22b660f342bdc98e86ff18801"
+        }
+      ]
+    },
+    {
+      "case_id": "15b6120aa5b8d25e481e7339703ed0ee4ac36e65c684fc66285cfe3f921c1395",
+      "target": "stranske/Workflows#3759",
+      "run_id": "keepalive:stranske/Workflows#3759:codex",
+      "attempt_location": "rows[26]",
+      "field": "later_retry_broken_step",
+      "step": {
+        "status": "recorded",
+        "stage": "dispatch_admission",
+        "code": "failed_provider_guard_refused_dispatch",
+        "message_origin": "retained_launcher",
+        "evidence_locations": [
+          "rows[26].retry_error"
+        ]
+      },
+      "failure_fields": [
+        {
+          "location": "rows[26].retry_error",
+          "json_value_sha256": "f98828bf02c0ddb24df60c188eb2812479b739a22b660f342bdc98e86ff18801"
+        }
+      ]
+    },
+    {
+      "case_id": "20b55da1130e68a4e519d79fcb2408d8aad62434ea60ce85de9f43511b8584e0",
+      "target": "stranske/Orchestrator#464",
+      "run_id": "keepalive:stranske/Orchestrator#464:codex",
+      "attempt_location": "rows[27]",
+      "field": "later_retry_broken_step",
+      "step": {
+        "status": "recorded",
+        "stage": "dispatch_admission",
+        "code": "failed_provider_guard_refused_dispatch",
+        "message_origin": "retained_launcher",
+        "evidence_locations": [
+          "rows[27].retry_error"
+        ]
+      },
+      "failure_fields": [
+        {
+          "location": "rows[27].retry_error",
+          "json_value_sha256": "f98828bf02c0ddb24df60c188eb2812479b739a22b660f342bdc98e86ff18801"
+        }
+      ]
+    },
+    {
+      "case_id": "05ffc5fb2ffa8a2c2236c3b3daf2be6f29377a7f52524a6e3a77a8fe6b6b22e1",
+      "target": "stranske/Orchestrator#466",
+      "run_id": "keepalive:stranske/Orchestrator#466:codex",
+      "attempt_location": "rows[28]",
+      "field": "later_retry_broken_step",
+      "step": {
+        "status": "recorded",
+        "stage": "dispatch_admission",
+        "code": "failed_provider_guard_refused_dispatch",
+        "message_origin": "retained_launcher",
+        "evidence_locations": [
+          "rows[28].retry_error"
+        ]
+      },
+      "failure_fields": [
+        {
+          "location": "rows[28].retry_error",
+          "json_value_sha256": "f98828bf02c0ddb24df60c188eb2812479b739a22b660f342bdc98e86ff18801"
+        }
+      ]
+    },
+    {
+      "case_id": "969408d1bfba59699c294e57b7fc2dbaff9134a18424cd6dc07840accf1c18da",
+      "target": "stranske/Orchestrator#465",
+      "run_id": "keepalive:stranske/Orchestrator#465:codex",
+      "attempt_location": "rows[29]",
+      "field": "first_broken_step",
+      "step": {
+        "status": "recorded",
+        "stage": "dispatch_admission",
+        "code": "failed_provider_guard_refused_dispatch",
+        "message_origin": "retained_launcher",
+        "evidence_locations": [
+          "rows[29].error"
+        ]
+      },
+      "failure_fields": [
+        {
+          "location": "rows[29].error",
+          "json_value_sha256": "f98828bf02c0ddb24df60c188eb2812479b739a22b660f342bdc98e86ff18801"
+        }
+      ]
+    },
+    {
+      "case_id": "e0d9ae56aa6fd869a9386c25faca3c182492f150b419494c8c0ca5922accb672",
+      "target": "stranske/Orchestrator#463",
+      "run_id": "keepalive:stranske/Orchestrator#463:codex",
+      "attempt_location": "rows[30]",
+      "field": "later_retry_broken_step",
+      "step": {
+        "status": "recorded",
+        "stage": "dispatch_admission",
+        "code": "failed_provider_guard_refused_dispatch",
+        "message_origin": "retained_launcher",
+        "evidence_locations": [
+          "rows[30].retry_error"
+        ]
+      },
+      "failure_fields": [
+        {
+          "location": "rows[30].retry_error",
+          "json_value_sha256": "f98828bf02c0ddb24df60c188eb2812479b739a22b660f342bdc98e86ff18801"
+        }
+      ]
+    },
+    {
+      "case_id": "5410abf87e93df308e8c633230776c74a0a8d7b10f6d155236bd2d1f4108c3ad",
+      "target": "stranske/Workflows#3753",
+      "run_id": "keepalive:stranske/Workflows#3753:none",
+      "attempt_location": "rows[31]",
+      "field": "later_retry_broken_step",
+      "step": {
+        "status": "recorded",
+        "stage": "dispatch_admission",
+        "code": "failed_provider_guard_refused_dispatch",
+        "message_origin": "retained_launcher",
+        "evidence_locations": [
+          "rows[31].retry_error"
+        ]
+      },
+      "failure_fields": [
+        {
+          "location": "rows[31].retry_error",
+          "json_value_sha256": "f98828bf02c0ddb24df60c188eb2812479b739a22b660f342bdc98e86ff18801"
+        }
+      ]
+    },
+    {
+      "case_id": "94ba2a422838643f6417add4ec0d7ed616633833e38a5885e12aaf5cc761c36f",
+      "target": "stranske/Deliverable-Render#80",
+      "run_id": "keepalive:stranske/Deliverable-Render#80:codex",
+      "attempt_location": "rows[38]",
+      "field": "first_broken_step",
+      "step": {
+        "status": "recorded",
+        "stage": "dispatch_admission",
+        "code": "failed_provider_guard_refused_dispatch",
+        "message_origin": "retained_launcher",
+        "evidence_locations": [
+          "rows[38].error"
+        ]
+      },
+      "failure_fields": [
+        {
+          "location": "rows[38].error",
+          "json_value_sha256": "f98828bf02c0ddb24df60c188eb2812479b739a22b660f342bdc98e86ff18801"
+        }
+      ]
+    },
+    {
+      "case_id": "79c014c56576c49181fa10a9f799fd007ecebf7653246d836321b813dd2301a6",
+      "target": "stranske/Workflows#3875",
+      "run_id": "keepalive:stranske/Workflows#3875:none",
+      "attempt_location": "rows[39]",
+      "field": "first_broken_step",
+      "step": {
+        "status": "recorded",
+        "stage": "dispatch_admission",
+        "code": "failed_provider_guard_refused_dispatch",
+        "message_origin": "retained_launcher",
+        "evidence_locations": [
+          "rows[39].error"
+        ]
+      },
+      "failure_fields": [
+        {
+          "location": "rows[39].error",
+          "json_value_sha256": "f98828bf02c0ddb24df60c188eb2812479b739a22b660f342bdc98e86ff18801"
+        }
+      ]
+    },
+    {
+      "case_id": "e11a460dc127a84ba3edd724d6ffcc580214b5c67ba2b1710b89bbe3452e47c7",
+      "target": "stranske/Orchestrator#588",
+      "run_id": "keepalive:stranske/Orchestrator#588:claude",
+      "attempt_location": "rows[41]",
+      "field": "first_broken_step",
+      "step": {
+        "status": "recorded",
+        "stage": "dispatch_admission",
+        "code": "round_boundary_refused_dispatch",
+        "message_origin": "retained_launcher",
+        "evidence_locations": [
+          "rows[41].error"
+        ]
+      },
+      "failure_fields": [
+        {
+          "location": "rows[41].error",
+          "json_value_sha256": "6d7246d0811ac4915fda871c07e6cc470cd1e5ca3f8e580e6ce70dc428aebd01"
+        }
+      ]
+    },
+    {
+      "case_id": "f57ee84df61f9b1204f05ecc0013f6206a1c29c5b06d9927c5570d8673313a66",
+      "target": "stranske/Orchestrator#595",
+      "run_id": "keepalive:stranske/Orchestrator#595:codex",
+      "attempt_location": "rows[42]",
+      "field": "first_broken_step",
+      "step": {
+        "status": "recorded",
+        "stage": "dispatch_admission",
+        "code": "round_boundary_refused_dispatch",
+        "message_origin": "retained_launcher",
+        "evidence_locations": [
+          "rows[42].error"
+        ]
+      },
+      "failure_fields": [
+        {
+          "location": "rows[42].error",
+          "json_value_sha256": "6d7246d0811ac4915fda871c07e6cc470cd1e5ca3f8e580e6ce70dc428aebd01"
+        }
+      ]
+    },
+    {
+      "case_id": "9f45f7163b41d571dd7667e4f7fa81241c5ee08c37816f2818081ffb691e1e7f",
+      "target": "stranske/Orchestrator#591",
+      "run_id": "keepalive:stranske/Orchestrator#591:codex",
+      "attempt_location": "rows[43]",
+      "field": "first_broken_step",
+      "step": {
+        "status": "recorded",
+        "stage": "dispatch_admission",
+        "code": "round_boundary_refused_dispatch",
+        "message_origin": "retained_launcher",
+        "evidence_locations": [
+          "rows[43].error"
+        ]
+      },
+      "failure_fields": [
+        {
+          "location": "rows[43].error",
+          "json_value_sha256": "6d7246d0811ac4915fda871c07e6cc470cd1e5ca3f8e580e6ce70dc428aebd01"
+        }
+      ]
+    },
+    {
+      "case_id": "76c5be487fb21a51f64cb250e5b70fcf043cbb2f9544e3d4f772d3eb89a09b92",
+      "target": "stranske/Orchestrator#592",
+      "run_id": "keepalive:stranske/Orchestrator#592:codex",
+      "attempt_location": "rows[44]",
+      "field": "first_broken_step",
+      "step": {
+        "status": "recorded",
+        "stage": "dispatch_admission",
+        "code": "round_boundary_refused_dispatch",
+        "message_origin": "retained_launcher",
+        "evidence_locations": [
+          "rows[44].error"
+        ]
+      },
+      "failure_fields": [
+        {
+          "location": "rows[44].error",
+          "json_value_sha256": "6d7246d0811ac4915fda871c07e6cc470cd1e5ca3f8e580e6ce70dc428aebd01"
+        }
+      ]
+    },
+    {
+      "case_id": "be86abfcd24f2416632467396b78419e33e4917247fed537653150b4e1c6cbf2",
+      "target": "stranske/Orchestrator#594",
+      "run_id": "keepalive:stranske/Orchestrator#594:codex",
+      "attempt_location": "rows[45]",
+      "field": "first_broken_step",
+      "step": {
+        "status": "recorded",
+        "stage": "dispatch_admission",
+        "code": "round_boundary_refused_dispatch",
+        "message_origin": "retained_launcher",
+        "evidence_locations": [
+          "rows[45].error"
+        ]
+      },
+      "failure_fields": [
+        {
+          "location": "rows[45].error",
+          "json_value_sha256": "6d7246d0811ac4915fda871c07e6cc470cd1e5ca3f8e580e6ce70dc428aebd01"
+        }
+      ]
+    },
+    {
+      "case_id": "7b36755327028d1944bccda90da18da7d0d3b44d5ec157d7d3098a3055433002",
+      "target": "stranske/Orchestrator#589",
+      "run_id": "keepalive:stranske/Orchestrator#589:codex",
+      "attempt_location": "rows[46]",
+      "field": "first_broken_step",
+      "step": {
+        "status": "recorded",
+        "stage": "dispatch_admission",
+        "code": "round_boundary_refused_dispatch",
+        "message_origin": "retained_launcher",
+        "evidence_locations": [
+          "rows[46].error"
+        ]
+      },
+      "failure_fields": [
+        {
+          "location": "rows[46].error",
+          "json_value_sha256": "6d7246d0811ac4915fda871c07e6cc470cd1e5ca3f8e580e6ce70dc428aebd01"
+        }
+      ]
+    },
+    {
+      "case_id": "90305f8964a8e768480b4d33bc7257fea2440d2d9467767634a3e33c8d512669",
+      "target": "stranske/Orchestrator#590",
+      "run_id": "keepalive:stranske/Orchestrator#590:codex",
+      "attempt_location": "rows[47]",
+      "field": "first_broken_step",
+      "step": {
+        "status": "recorded",
+        "stage": "dispatch_admission",
+        "code": "round_boundary_refused_dispatch",
+        "message_origin": "retained_launcher",
+        "evidence_locations": [
+          "rows[47].error"
+        ]
+      },
+      "failure_fields": [
+        {
+          "location": "rows[47].error",
+          "json_value_sha256": "6d7246d0811ac4915fda871c07e6cc470cd1e5ca3f8e580e6ce70dc428aebd01"
+        }
+      ]
+    },
+    {
+      "case_id": "6e5de75fe3a50596907edb4aede24aaf689f53ecc7639175baffd7b8396e2b06",
+      "target": "stranske/Orchestrator#587",
+      "run_id": "keepalive:stranske/Orchestrator#587:codex",
+      "attempt_location": "rows[48]",
+      "field": "first_broken_step",
+      "step": {
+        "status": "recorded",
+        "stage": "dispatch_admission",
+        "code": "round_boundary_refused_dispatch",
+        "message_origin": "retained_launcher",
+        "evidence_locations": [
+          "rows[48].error"
+        ]
+      },
+      "failure_fields": [
+        {
+          "location": "rows[48].error",
+          "json_value_sha256": "6d7246d0811ac4915fda871c07e6cc470cd1e5ca3f8e580e6ce70dc428aebd01"
+        }
+      ]
+    },
+    {
+      "case_id": "0f773a0c9302ba7cebb3d0dc8f89d2bfd05dac0511c4570206d788d4449dc413",
+      "target": "stranske/Orchestrator#586",
+      "run_id": "keepalive:stranske/Orchestrator#586:codex",
+      "attempt_location": "rows[49]",
+      "field": "first_broken_step",
+      "step": {
+        "status": "recorded",
+        "stage": "dispatch_admission",
+        "code": "round_boundary_refused_dispatch",
+        "message_origin": "retained_launcher",
+        "evidence_locations": [
+          "rows[49].error"
+        ]
+      },
+      "failure_fields": [
+        {
+          "location": "rows[49].error",
+          "json_value_sha256": "6d7246d0811ac4915fda871c07e6cc470cd1e5ca3f8e580e6ce70dc428aebd01"
+        }
+      ]
+    },
+    {
+      "case_id": "3b1c392387c7ad0c33c189004ae639e048dda3d03867cbb6a4fb68fd55f719a7",
+      "target": "stranske/Deliverable-Render#78",
+      "run_id": "keepalive:stranske/Deliverable-Render#78:codex",
+      "attempt_location": "rows[50]",
+      "field": "first_broken_step",
+      "step": {
+        "status": "recorded",
+        "stage": "dispatch_admission",
+        "code": "round_boundary_refused_dispatch",
+        "message_origin": "retained_launcher",
+        "evidence_locations": [
+          "rows[50].error"
+        ]
+      },
+      "failure_fields": [
+        {
+          "location": "rows[50].error",
+          "json_value_sha256": "6d7246d0811ac4915fda871c07e6cc470cd1e5ca3f8e580e6ce70dc428aebd01"
+        }
+      ]
+    },
+    {
+      "case_id": "82ccd20156f37673644fc6fae36ee850fe7955892761b07d982468079e64c052",
+      "target": "stranske/Workflows#3874",
+      "run_id": "keepalive:stranske/Workflows#3874:codex",
+      "attempt_location": "rows[51]",
+      "field": "first_broken_step",
+      "step": {
+        "status": "recorded",
+        "stage": "dispatch_admission",
+        "code": "round_boundary_refused_dispatch",
+        "message_origin": "retained_launcher",
+        "evidence_locations": [
+          "rows[51].error"
+        ]
+      },
+      "failure_fields": [
+        {
+          "location": "rows[51].error",
+          "json_value_sha256": "6d7246d0811ac4915fda871c07e6cc470cd1e5ca3f8e580e6ce70dc428aebd01"
+        }
+      ]
+    },
+    {
+      "case_id": "e490fc33a4580456329bac982e23f4e6f526fae2279762ca953a9f20d2037059",
+      "target": "stranske/Counter_Risk#1152",
+      "run_id": "keepalive:stranske/Counter_Risk#1152:codex",
+      "attempt_location": "rows[52]",
+      "field": "first_broken_step",
+      "step": {
+        "status": "recorded",
+        "stage": "dispatch_admission",
+        "code": "round_boundary_refused_dispatch",
+        "message_origin": "retained_launcher",
+        "evidence_locations": [
+          "rows[52].error"
+        ]
+      },
+      "failure_fields": [
+        {
+          "location": "rows[52].error",
+          "json_value_sha256": "6d7246d0811ac4915fda871c07e6cc470cd1e5ca3f8e580e6ce70dc428aebd01"
+        }
+      ]
+    },
+    {
+      "case_id": "b96bc60269f5e897a0a6d33ac43e258726f988b225f3af2caa777e1e7e361ca7",
+      "target": "stranske/Counter_Risk#1150",
+      "run_id": "keepalive:stranske/Counter_Risk#1150:codex",
+      "attempt_location": "rows[53]",
+      "field": "first_broken_step",
+      "step": {
+        "status": "recorded",
+        "stage": "dispatch_admission",
+        "code": "round_boundary_refused_dispatch",
+        "message_origin": "retained_launcher",
+        "evidence_locations": [
+          "rows[53].error"
+        ]
+      },
+      "failure_fields": [
+        {
+          "location": "rows[53].error",
+          "json_value_sha256": "6d7246d0811ac4915fda871c07e6cc470cd1e5ca3f8e580e6ce70dc428aebd01"
+        }
+      ]
+    },
+    {
+      "case_id": "67858e41354f0a936c6056ca5def8bda5679f9444327a9e6dd23b978d42ed2c4",
+      "target": "stranske/Workflows#3871",
+      "run_id": "keepalive:stranske/Workflows#3871:codex",
+      "attempt_location": "rows[54]",
+      "field": "first_broken_step",
+      "step": {
+        "status": "recorded",
+        "stage": "dispatch_admission",
+        "code": "round_boundary_refused_dispatch",
+        "message_origin": "retained_launcher",
+        "evidence_locations": [
+          "rows[54].error"
+        ]
+      },
+      "failure_fields": [
+        {
+          "location": "rows[54].error",
+          "json_value_sha256": "6d7246d0811ac4915fda871c07e6cc470cd1e5ca3f8e580e6ce70dc428aebd01"
+        }
+      ]
+    },
+    {
+      "case_id": "a69eb2efb184002ce7e2c6ad7b71f6443f1348ad292c878150e6544c682cbac9",
+      "target": "stranske/Orchestrator#570",
+      "run_id": "keepalive:stranske/Orchestrator#570:codex",
+      "attempt_location": "rows[55]",
+      "field": "first_broken_step",
+      "step": {
+        "status": "recorded",
+        "stage": "dispatch_admission",
+        "code": "round_boundary_refused_dispatch",
+        "message_origin": "retained_launcher",
+        "evidence_locations": [
+          "rows[55].error"
+        ]
+      },
+      "failure_fields": [
+        {
+          "location": "rows[55].error",
+          "json_value_sha256": "6d7246d0811ac4915fda871c07e6cc470cd1e5ca3f8e580e6ce70dc428aebd01"
+        }
+      ]
+    },
+    {
+      "case_id": "97a31f3f98def6920a870c106eaf28667a75a9f0cd9f722d08a61a91c36c18a7",
+      "target": "stranske/Orchestrator#573",
+      "run_id": "keepalive:stranske/Orchestrator#573:codex",
+      "attempt_location": "rows[56]",
+      "field": "first_broken_step",
+      "step": {
+        "status": "recorded",
+        "stage": "dispatch_admission",
+        "code": "round_boundary_refused_dispatch",
+        "message_origin": "retained_launcher",
+        "evidence_locations": [
+          "rows[56].error"
+        ]
+      },
+      "failure_fields": [
+        {
+          "location": "rows[56].error",
+          "json_value_sha256": "6d7246d0811ac4915fda871c07e6cc470cd1e5ca3f8e580e6ce70dc428aebd01"
+        }
+      ]
+    },
+    {
+      "case_id": "b6b26c9f0eebbd5a7211ff1cea641df853e6f97a9e4de31253a030e8e7600ef6",
+      "target": "stranske/Orchestrator#568",
+      "run_id": "keepalive:stranske/Orchestrator#568:codex",
+      "attempt_location": "rows[57]",
+      "field": "first_broken_step",
+      "step": {
+        "status": "recorded",
+        "stage": "dispatch_admission",
+        "code": "round_boundary_refused_dispatch",
+        "message_origin": "retained_launcher",
+        "evidence_locations": [
+          "rows[57].error"
+        ]
+      },
+      "failure_fields": [
+        {
+          "location": "rows[57].error",
+          "json_value_sha256": "6d7246d0811ac4915fda871c07e6cc470cd1e5ca3f8e580e6ce70dc428aebd01"
+        }
+      ]
+    }
+  ],
+  "original_retry_manifest_recovered": false,
+  "authenticated_outcomes_verified": false,
+  "dispatch_authorized": false,
+  "limitation": "Exact retained refusal messages only. The earlier 58-row backup is not the immutable native source or fixed cohort. No authenticated completion, current truth, canonical grade, accepted deployment or live writer ownership is established. No new provider call or production write occurred."
+}

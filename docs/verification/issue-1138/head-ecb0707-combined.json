@@ -1,0 +1,61 @@
+{
+  "measured_head_sha": "ecb0707b0a8acf7cd5dbd8a1de122829ea2e39ac",
+  "prior_measured_sha": "ea6255b9c477f9abe31c81d3ef6ec48b3e023bb0",
+  "base_sha": "555c1f1cf0ac8a6fb3e64d4081ecf952df126021",
+  "run_id": 41979128986,
+  "run_url": "https://github.com/stranske/Orchestrator/actions/runs/41979128986",
+  "artifact_id": 13393447683,
+  "prior_run_id": 41975530292,
+  "prior_artifact_id": 13391989393,
+  "producer": "gate-coverage artifact from verify.py aggregate + combined coverage",
+  "branch_coverage": false,
+  "six_target_missing": 21,
+  "gain_vs_base": 296,
+  "shortfall_from_180": 0,
+  "targets": {
+    "local_verify": {"head_missing": 0, "missing_lines": []},
+    "capability_activation_audit": {
+      "head_missing": 4,
+      "missing_lines": [2432, 2433, 2436, 2448]
+    },
+    "exp_abcd": {
+      "head_missing": 9,
+      "missing_lines": [3158, 3170, 3179, 3301, 3473, 3548, 3618, 3772, 3774]
+    },
+    "periodic_report": {"head_missing": 2, "missing_lines": [2998, 3119]},
+    "tick": {"head_missing": 3, "missing_lines": [897, 1289, 1293]},
+    "repo_knowledge": {"head_missing": 3, "missing_lines": [1994, 1995, 2490]}
+  },
+  "repo": {
+    "prior_missing_lines": 16717,
+    "missing_lines": 16716,
+    "prior_num_statements": 119186,
+    "num_statements": 119396,
+    "prior_percent_covered": 85.97402379474099,
+    "percent_covered": 85.9995309725619
+  },
+  "outside_six_targets": [
+    {
+      "file": "src/closer_native_lease.py",
+      "prior_missing": 103,
+      "missing": 102,
+      "prior_statements": 265,
+      "statements": 265
+    },
+    {
+      "file": "src/pacing.py",
+      "prior_missing": 1,
+      "missing": 1,
+      "prior_statements": 160,
+      "statements": 170
+    },
+    {
+      "file": "src/pacing_usage.py",
+      "prior_missing": 50,
+      "missing": 50,
+      "prior_statements": 683,
+      "statements": 883
+    }
+  ],
+  "note": "ecb0707 does not change the six ranked modules. Artifact 13393447683 matches ea6255b on every ranked missing line. Repo-wide statements rose by 210 and missing lines fell by 1 because the pull-request job merges main: pacing_usage.py gained 200 statements, pacing.py gained 10, and closer_native_lease.py covered one line that the prior artifact missed."
+}

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -15,6 +17,15 @@ from closer_release import ReleaseRecord
 
 DIGEST = "c" * 64
 CAND = "a" * 40
+
+
+def test_fresh_creation_refuses_existing_identical_campaign_without_writing(tmp_path):
+    campaign = cc.Campaign(tmp_path / "fresh.campaign.json")
+    campaign.begin("fresh", ["target"], owner="owner", release_pin=DIGEST)
+    before = campaign.path.read_bytes()
+    with pytest.raises(cc.CampaignError, match="destination already exists"):
+        campaign.begin("fresh", ["target"], owner="owner", release_pin=DIGEST, _require_absent=True)
+    assert campaign.path.read_bytes() == before
 
 
 @pytest.fixture(autouse=True)
@@ -39,6 +50,205 @@ def make(tmp_path, targets=("t1", "t2", "t3"), cap=2):
 
 def cmd(target):
     return ["worker", target]
+
+
+SOURCE_INIT_TARGET = "source/repo#984"
+SOURCE_INIT_NOW = 1_792_000_000.0
+
+
+def source_initialization():
+    return {
+        "hold": {
+            "kind": "source_initialization",
+            "reason": "qualified demand pending",
+            "bootstrap_anchor_sha256": "d" * 64,
+        },
+        "correction_controller": {"config": {"state_path": "/fixed/new.campaign.json"}},
+    }
+
+
+def source_initial_demand(*, revision=1):
+    assignment = {
+        "generation": 1,
+        "generated_at": datetime.fromtimestamp(SOURCE_INIT_NOW, timezone.utc).isoformat(),
+        "errors": [],
+        "targets": [{"target": SOURCE_INIT_TARGET, "due": SOURCE_INIT_NOW - 1}],
+    }
+    raw = json.dumps(assignment, sort_keys=True, separators=(",", ":")).encode()
+    package = {
+        "package_digest": "a" * 64,
+        "manifest_sha256": "b" * 64,
+        "qualification_digest": "c" * 64,
+    }
+    request = {
+        "schema": "closer-demand-request/v1",
+        "campaign_id": "source-initialized",
+        "owner": "source-owner",
+        "campaign_generation": 1,
+        "expected_revision": revision,
+        "assignment_generation": 1,
+        "assignment_sha256": hashlib.sha256(raw).hexdigest(),
+        **package,
+        "not_before": SOURCE_INIT_NOW - 1,
+        "deadline": SOURCE_INIT_NOW + 120,
+        "targets": [SOURCE_INIT_TARGET],
+    }
+    return {
+        "demand_assignment_bytes": raw,
+        "demand_request": request,
+        "qualified_package": package,
+        "demand_now": SOURCE_INIT_NOW,
+    }
+
+
+def begin_source_initialized(c, **kwargs):
+    initialization = kwargs.pop("_source_initialization", source_initialization())
+    return c.begin(
+        "source-initialized",
+        [SOURCE_INIT_TARGET],
+        owner="source-owner",
+        release_pin="a" * 64,
+        worker_config={"granularity": "round"},
+        _source_initialization=initialization,
+        **kwargs,
+    )
+
+
+def test_source_initialization_creates_single_held_nonrunnable_record(tmp_path):
+    campaign = cc.Campaign(tmp_path / "source-initialized.campaign.json")
+    writes = []
+    real_write = campaign._write_unlocked
+    campaign._write_unlocked = lambda doc: (writes.append(dict(doc)), real_write(doc))
+
+    doc = begin_source_initialized(campaign)
+
+    assert len(writes) == 1
+    assert doc["revision"] == 1 and doc["generation"] == 1
+    assert doc["hold"] == source_initialization()["hold"]
+    assert doc["correction_controller"] == source_initialization()["correction_controller"]
+    assert doc["workers"] == []
+    assert not any(key in doc for key in ("demand_admission", "demand_assignment", "demand_wake"))
+
+
+def test_source_initialization_refused_demand_preserves_held_bytes(tmp_path):
+    campaign = cc.Campaign(tmp_path / "source-initialized.campaign.json")
+    begin_source_initialized(campaign)
+    before = campaign.path.read_bytes()
+    invalid = source_initial_demand()
+    invalid["demand_request"]["assignment_sha256"] = "0" * 64
+
+    with pytest.raises(cc.CampaignError, match="completed demand refused"):
+        begin_source_initialized(campaign, **invalid)
+
+    assert campaign.path.read_bytes() == before
+    assert campaign.read()["hold"] == source_initialization()["hold"]
+
+
+def test_source_initialization_admits_typed_snapshot_while_clearing_hold_in_one_write(tmp_path):
+    campaign = cc.Campaign(tmp_path / "source-initialized.campaign.json")
+    begin_source_initialized(campaign)
+    writes = []
+    real_write = campaign._write_unlocked
+    campaign._write_unlocked = lambda doc: (writes.append(dict(doc)), real_write(doc))
+
+    doc = begin_source_initialized(campaign, **source_initial_demand())
+
+    assert len(writes) == 1
+    assert doc["revision"] == 2 and doc["hold"] is None
+    assert doc["demand_admission"]["schema"] == "closer-demand-admission/v1"
+    assert doc["worker_config"]["assignment"] == doc["demand_assignment"]["path"]
+    assert Path(doc["demand_assignment"]["path"]).is_file()
+    assert writes[0]["hold"] is None and "demand_admission" in writes[0]
+
+
+@pytest.mark.parametrize("mutation", ["different_initialization", "owned_followup"])
+def test_source_initialization_mismatch_or_mutation_stays_held(tmp_path, mutation):
+    campaign = cc.Campaign(tmp_path / "source-initialized.campaign.json")
+    begin_source_initialized(campaign)
+    if mutation == "owned_followup":
+        campaign.update(lambda doc: doc.__setitem__("hold_followups", {}))
+    before = campaign.path.read_bytes()
+    values = source_initial_demand(revision=campaign.read()["revision"])
+    if mutation == "different_initialization":
+        changed = source_initialization()
+        changed["hold"]["reason"] = "different"
+        values["_source_initialization"] = changed
+
+    with pytest.raises(cc.CampaignError, match="source initialization"):
+        begin_source_initialized(campaign, **values)
+
+    assert campaign.path.read_bytes() == before
+    assert campaign.read()["hold"]["kind"] == "source_initialization"
+
+
+def test_ordinary_begin_cannot_clear_source_initialization_hold(tmp_path):
+    campaign = cc.Campaign(tmp_path / "source-initialized.campaign.json")
+    begin_source_initialized(campaign)
+    before = campaign.path.read_bytes()
+    values = source_initial_demand()
+
+    with pytest.raises(cc.CampaignError, match="completed demand refused"):
+        campaign.begin(
+            "source-initialized",
+            [SOURCE_INIT_TARGET],
+            owner="source-owner",
+            release_pin="a" * 64,
+            worker_config={"granularity": "round"},
+            **values,
+        )
+
+    assert campaign.path.read_bytes() == before
+    assert campaign.read()["hold"] == source_initialization()["hold"]
+
+
+def test_malformed_source_initialization_never_creates_or_overwrites_campaign(tmp_path):
+    absent = cc.Campaign(tmp_path / "absent.campaign.json")
+    malformed = {"hold": source_initialization()["hold"]}
+
+    with pytest.raises(ValueError, match="source initialization"):
+        begin_source_initialized(absent, _source_initialization=malformed)
+
+    assert not absent.path.exists()
+    existing = cc.Campaign(tmp_path / "existing.campaign.json")
+    begin_source_initialized(existing)
+    before = existing.path.read_bytes()
+    with pytest.raises(ValueError, match="source initialization"):
+        begin_source_initialized(existing, _source_initialization=malformed)
+
+    assert existing.path.read_bytes() == before
+
+
+def test_source_initialization_rejects_first_write_mixed_with_typed_demand(tmp_path):
+    campaign = cc.Campaign(tmp_path / "source-initialized.campaign.json")
+
+    with pytest.raises(cc.CampaignError, match="must first publish a held campaign"):
+        begin_source_initialized(campaign, **source_initial_demand())
+
+    assert not campaign.path.exists()
+
+
+def test_ordinary_resume_rejects_source_initialization_without_writing(tmp_path):
+    campaign = cc.Campaign(tmp_path / "ordinary.campaign.json")
+    campaign.begin(
+        "ordinary",
+        [SOURCE_INIT_TARGET],
+        owner="source-owner",
+        release_pin="a" * 64,
+        worker_config={"granularity": "round"},
+    )
+    before = campaign.path.read_bytes()
+
+    with pytest.raises(cc.CampaignError, match="source initialization is creation-only"):
+        campaign.begin(
+            "ordinary",
+            [SOURCE_INIT_TARGET],
+            owner="source-owner",
+            release_pin="a" * 64,
+            worker_config={"granularity": "round"},
+            _source_initialization=source_initialization(),
+        )
+
+    assert campaign.path.read_bytes() == before
 
 
 def launch_fn(pids):

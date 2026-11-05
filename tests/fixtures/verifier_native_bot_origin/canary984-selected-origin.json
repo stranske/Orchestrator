@@ -1,0 +1,102 @@
+{
+  "number": 984,
+  "headRefOid": "0507d28acf68d6bf21c68138d18d56cd01968827",
+  "mergeCommit": {
+    "oid": "d1947b5b4775c2e6a07bb46b3f85eb2e28c1b001"
+  },
+  "comments": {
+    "nodes": [
+      {
+        "body": "",
+        "url": "https://github.com/stranske/Orchestrator/pull/984#issuecomment-6454040347",
+        "author": {
+          "login": "coderabbitai",
+          "__typename": "Bot"
+        }
+      },
+      {
+        "body": "",
+        "url": "https://github.com/stranske/Orchestrator/pull/984#issuecomment-6454466459",
+        "author": {
+          "login": "agents-workflows-bot",
+          "__typename": "Bot"
+        }
+      },
+      {
+        "body": "",
+        "url": "https://github.com/stranske/Orchestrator/pull/984#issuecomment-6454486706",
+        "author": {
+          "login": "github-actions",
+          "__typename": "Bot"
+        }
+      },
+      {
+        "body": "<!-- verifier-event-state/v1 {\"schema\":\"verifier-event-state/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"984\",\"head_sha\":\"0507d28acf68d6bf21c68138d18d56cd01968827\",\"evaluated_sha\":\"d1947b5b4775c2e6a07bb46b3f85eb2e28c1b001\",\"run_id\":\"40597948352\",\"run_attempt\":\"1\",\"status\":\"pending\",\"verification_event\":{\"schema\":\"verification-event/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"984\",\"head_sha\":\"0507d28acf68d6bf21c68138d18d56cd01968827\",\"evaluated_sha\":\"d1947b5b4775c2e6a07bb46b3f85eb2e28c1b001\",\"request_sha256\":\"a7c028b1efcb0923c8496c8854a82a446abbff208e4dbfafd2fdf5f00429d983\",\"material_sha256\":\"503a0bfaba9ad6d3c0bd4a10ea506c86190127fbf38c7cd3179ce2aacfa85a72\",\"event_id\":\"6fc80a992106acf7a3a67f132c160ac5e728c6982436aa2bb3e87423fc788630\"},\"assessment_identity\":{\"mode\":\"compare\",\"provider\":\"\",\"model\":\"gpt-5.6-terra\",\"model2\":\"claude-opus-5-5\",\"canonical\":true},\"execution_binding\":{\"schema\":\"verifier-execution-binding/v1\",\"workflow_path\":\".github/workflows/agents-verifier.yml\",\"job_name\":\"Run post-merge verifier\",\"pending_step\":\"Record verification event pending\",\"evaluator_step\":\"Run multi-provider comparison\"}} -->",
+        "url": "https://github.com/stranske/Orchestrator/pull/984#issuecomment-6455552067",
+        "author": {
+          "login": "github-actions",
+          "__typename": "Bot"
+        }
+      },
+      {
+        "body": "",
+        "url": "https://github.com/stranske/Orchestrator/pull/984#issuecomment-6455568362",
+        "author": {
+          "login": "github-actions",
+          "__typename": "Bot"
+        }
+      },
+      {
+        "body": "<!-- verifier-event-state/v1 {\"schema\":\"verifier-event-state/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"984\",\"head_sha\":\"0507d28acf68d6bf21c68138d18d56cd01968827\",\"evaluated_sha\":\"d1947b5b4775c2e6a07bb46b3f85eb2e28c1b001\",\"run_id\":\"40597948352\",\"run_attempt\":\"1\",\"status\":\"incomplete\",\"failure_cause\":\"validated_no_evaluation\",\"retry_kind\":\"known_no_evaluation\",\"retryable\":true,\"verification_event\":{\"schema\":\"verification-event/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"984\",\"head_sha\":\"0507d28acf68d6bf21c68138d18d56cd01968827\",\"evaluated_sha\":\"d1947b5b4775c2e6a07bb46b3f85eb2e28c1b001\",\"request_sha256\":\"a7c028b1efcb0923c8496c8854a82a446abbff208e4dbfafd2fdf5f00429d983\",\"material_sha256\":\"503a0bfaba9ad6d3c0bd4a10ea506c86190127fbf38c7cd3179ce2aacfa85a72\",\"event_id\":\"6fc80a992106acf7a3a67f132c160ac5e728c6982436aa2bb3e87423fc788630\"},\"assessment_identity\":{\"mode\":\"compare\",\"provider\":\"\",\"model\":\"gpt-5.6-terra\",\"model2\":\"claude-opus-5-5\",\"canonical\":true}} -->",
+        "url": "https://github.com/stranske/Orchestrator/pull/984#issuecomment-6455568672",
+        "author": {
+          "login": "github-actions",
+          "__typename": "Bot"
+        }
+      },
+      {
+        "body": "<!-- verifier-event-state/v1 {\"schema\":\"verifier-event-state/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"984\",\"head_sha\":\"0507d28acf68d6bf21c68138d18d56cd01968827\",\"evaluated_sha\":\"d1947b5b4775c2e6a07bb46b3f85eb2e28c1b001\",\"run_id\":\"40603448727\",\"run_attempt\":\"1\",\"status\":\"pending\",\"verification_event\":{\"schema\":\"verification-event/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"984\",\"head_sha\":\"0507d28acf68d6bf21c68138d18d56cd01968827\",\"evaluated_sha\":\"d1947b5b4775c2e6a07bb46b3f85eb2e28c1b001\",\"request_sha256\":\"a7c028b1efcb0923c8496c8854a82a446abbff208e4dbfafd2fdf5f00429d983\",\"material_sha256\":\"b49b3991e4b7d50bf74099853bd0ac7b13d94f88fe50de6b53b9c74be836b9ef\",\"event_id\":\"334a0ec11f919e8d8469369b82a79d1de941535305f4b8b245d5bb01217c8cae\"},\"assessment_identity\":{\"mode\":\"compare\",\"provider\":\"\",\"model\":\"gpt-5.6-terra\",\"model2\":\"claude-opus-5-5\",\"canonical\":true},\"execution_binding\":{\"schema\":\"verifier-execution-binding/v1\",\"workflow_path\":\".github/workflows/agents-verifier.yml\",\"job_name\":\"Run post-merge verifier\",\"pending_step\":\"Record verification event pending\",\"evaluator_step\":\"Run multi-provider comparison\"},\"verification_request_basis\":\"50e856e909e714863faba31891b93028f29f76050bbdf1c65f547a3d2013866e\"} -->",
+        "url": "https://github.com/stranske/Orchestrator/pull/984#issuecomment-6456302735",
+        "author": {
+          "login": "github-actions",
+          "__typename": "Bot"
+        }
+      },
+      {
+        "body": "",
+        "url": "https://github.com/stranske/Orchestrator/pull/984#issuecomment-6456326994",
+        "author": {
+          "login": "github-actions",
+          "__typename": "Bot"
+        }
+      },
+      {
+        "body": "<!-- verifier-event-state/v1 {\"schema\":\"verifier-event-state/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"984\",\"head_sha\":\"0507d28acf68d6bf21c68138d18d56cd01968827\",\"evaluated_sha\":\"d1947b5b4775c2e6a07bb46b3f85eb2e28c1b001\",\"run_id\":\"40603448727\",\"run_attempt\":\"1\",\"status\":\"incomplete\",\"failure_cause\":\"retained_provider_evaluation\",\"retry_kind\":\"recover_existing_evaluation\",\"retryable\":false,\"verification_event\":{\"schema\":\"verification-event/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"984\",\"head_sha\":\"0507d28acf68d6bf21c68138d18d56cd01968827\",\"evaluated_sha\":\"d1947b5b4775c2e6a07bb46b3f85eb2e28c1b001\",\"request_sha256\":\"a7c028b1efcb0923c8496c8854a82a446abbff208e4dbfafd2fdf5f00429d983\",\"material_sha256\":\"b49b3991e4b7d50bf74099853bd0ac7b13d94f88fe50de6b53b9c74be836b9ef\",\"event_id\":\"334a0ec11f919e8d8469369b82a79d1de941535305f4b8b245d5bb01217c8cae\"},\"assessment_identity\":{\"mode\":\"compare\",\"provider\":\"\",\"model\":\"gpt-5.6-terra\",\"model2\":\"claude-opus-5-5\",\"canonical\":true},\"verification_request_basis\":\"50e856e909e714863faba31891b93028f29f76050bbdf1c65f547a3d2013866e\"} -->",
+        "url": "https://github.com/stranske/Orchestrator/pull/984#issuecomment-6456327403",
+        "author": {
+          "login": "github-actions",
+          "__typename": "Bot"
+        }
+      },
+      {
+        "body": "<!-- verifier-event-state/v1 {\"schema\":\"verifier-event-state/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"984\",\"head_sha\":\"0507d28acf68d6bf21c68138d18d56cd01968827\",\"evaluated_sha\":\"d1947b5b4775c2e6a07bb46b3f85eb2e28c1b001\",\"run_id\":\"40620861168\",\"run_attempt\":\"1\",\"status\":\"pending\",\"verification_event\":{\"schema\":\"verification-event/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"984\",\"head_sha\":\"0507d28acf68d6bf21c68138d18d56cd01968827\",\"evaluated_sha\":\"d1947b5b4775c2e6a07bb46b3f85eb2e28c1b001\",\"request_sha256\":\"a7c028b1efcb0923c8496c8854a82a446abbff208e4dbfafd2fdf5f00429d983\",\"material_sha256\":\"b49b3991e4b7d50bf74099853bd0ac7b13d94f88fe50de6b53b9c74be836b9ef\",\"event_id\":\"334a0ec11f919e8d8469369b82a79d1de941535305f4b8b245d5bb01217c8cae\"},\"assessment_identity\":{\"mode\":\"compare\",\"provider\":\"\",\"model\":\"gpt-5.6-terra\",\"model2\":\"claude-opus-5-5\",\"canonical\":true},\"execution_binding\":{\"schema\":\"verifier-execution-binding/v1\",\"workflow_path\":\".github/workflows/agents-verifier.yml\",\"job_name\":\"Run post-merge verifier\",\"pending_step\":\"Record verification event pending\",\"evaluator_step\":\"Run multi-provider comparison\",\"retained_revalidation\":true},\"verification_request_basis\":\"a4f323c47308b64c10478f4f6082d69ab046653f31b2a8b3e2ae98cdca04491b\",\"retained_revalidation\":{\"schema\":\"retained-revalidation/v1\",\"recovery_key\":\"4be44cc4fa4de9982c5f3493e85ea98b4c3550ec7736a3fd7d40ccda2b2a0a81\",\"source_run_id\":\"40603448727\",\"source_run_attempt\":\"1\",\"artifact_id\":12780325865}} -->",
+        "url": "https://github.com/stranske/Orchestrator/pull/984#issuecomment-6458975391",
+        "author": {
+          "login": "github-actions",
+          "__typename": "Bot"
+        }
+      },
+      {
+        "body": "## Retained comparison revalidation\n\n**Verdict:** FAIL\n\nAuthenticated retained output revalidated; no provider was invoked again.\n\n### openai\n\nfiles reviewed 1 of 1\n\nThe sole changed file is readable and correctly preserves basic JSON serialization plus ValueError for unsupported formats, but it explicitly implements the declared partial state rather than the requested feature. CSV behavior and the required standard-library contract script are missing, so the merged change fails the documented acceptance requirements.\n\n### Concerns\n\n- The required CSV implementation is absent. export_rows(..., &quot;csv&quot;) unconditionally raises NotImplementedError instead of emitting the exact name,score header, CRLF endings, and properly quoted CSV records.\n- The implementation therefore does not satisfy empty-input CSV output or round-trip requirements for commas, quotes, LF, and CR through Python csv.reader.\n- The required tests/fixtures/closer_real_csv_canary/v1/verify_csv_contract.py contract script was not added. The PR changes only csv_export.py, despite the requirement that both fixture files be provided.\n- The required explicit contract-script failure on the partial revision and restored pass after correction cannot be verified from the supplied evidence because referenced artifact retrieval is unavailable. Regardless, the merged code itself remains intentionally incomplete and cannot pass the source task.\n- No automated test or contract coverage was added for JSON behavior, unsupported-format ValueError behavior, or the required CSV contract.\n\n### anthropic\n\nfiles reviewed 1 of 1\n\nThe PR adds a 13-line declared-partial fixture at tests/fixtures/closer_real_csv_canary/v1/csv_export.py and nothing else.\n\nTasks satisfied by the change:\n- JSON behavior uses `json.dumps`, consistent with round-trip expectations.\n- Unsupported formats raise `ValueError`.\n- The change stays within the isolated fixture directory, with no production, workflow, credential, permission or settings changes.\n\nTasks not satisfied:\n- The core requirement, the CSV implementation, is missing; CSV explicitly raises `NotImplementedError`.\n- The required standard-library contract script `verify_csv_contract.py` is not included.\n\nThe PR body transparently discloses this incompleteness, and there is no misrepresentation. Measured against the authoritative requirements in issue #983, the primary acceptance criteria are not met, so the verdict is FAIL. Risk is negligible because the change is an isolated, uncollected test fixture.\n\n### Concerns\n\n- CSV export is not implemented. `export_rows(rows, &quot;csv&quot;)` raises `NotImplementedError`. Issue #983 requires all of the following, and none are delivered:\n- the exact header `name,score`\n- CRLF record endings\n- one record per input row\n- correct quoting so values containing commas, quotes, LF or CR round-trip through `csv.reader`\n- empty input returning the header alone\n- The required deliverable `tests/fixtures/closer_real_csv_canary/v1/verify_csv_contract.py` is absent. The changed-code evidence is complete (one file, `csv_export.py`, fully shown), so its absence from this PR is confirmed.\n- The fixed field set (`name`, `score`) is not enforced or projected on any path. JSON simply runs `json.dumps(rows)` over whatever is passed in. That is acceptable as the existing round-trip behavior, but the implementation never references the fixed fields.\n- The requirement to retain a genuine failing run of the contract script on the partial revision cannot be confirmed. The script is not in the diff, and PR comments were omitted from this prompt. The PR body asserts a separately retained stdlib contract fails as expected, but that claim is not evidenced here.\n- Issue #983 says an initial partial merge does not satisfy the task. The PR body itself states it does not fulfill the source task. It cannot be marked complete; the issue should remain open pending the corrective stage.\n- Minor: the parameter name `format` shadows the Python builtin. This is retained from the specified signature, so it is acceptable.\n\n\n\n<!-- verifier-corpus-decision/v1 {\"assessment_identity\": {\"canonical\": true, \"mode\": \"compare\", \"model\": \"gpt-5.6-terra\", \"model2\": \"claude-opus-5-5\", \"provider\": \"\"}, \"ci_failed\": false, \"evaluated_sha\": \"d1947b5b4775c2e6a07bb46b3f85eb2e28c1b001\", \"head_sha\": \"0507d28acf68d6bf21c68138d18d56cd01968827\", \"pr\": \"984\", \"provider_verdicts\": [\"FAIL\", \"FAIL\"], \"repo\": \"stranske/Orchestrator\", \"result_admission\": {\"execution_receipt_sha256\": \"a08186754255611ed79742f7b90833197e2c6271bf6e370b409340bd3fdd61a8\", \"mode\": \"compare\", \"payload_sha256\": \"c8ff5a70f6c7500fc4450887474269bb8192196e13922f48bc1db98ffb250126\", \"schema\": \"verifier-result-admission/v1\"}, \"retained_revalidation\": {\"archive_sha256\": \"63462308df1425b33af405e4f36ca4b18531b6c709d7b0379d25f099174d7ea5\", \"artifact_id\": 12780325865, \"current_validator_sha256\": \"97c55f4d891c548fafd81de609f58a939627371b55a06a62a53f23e3b8b23435\", \"helper_sha\": \"90f0b1f11d42a8b8f7ea11e99e8e9d6f84856a0c\", \"origin_sha256\": \"3651b42790642d8a3cdf5c7f5c9eb4361b059075b4c281ac6450e4cec0500119\", \"original_final_projection\": {\"derived_payload_sha256\": \"c8ff5a70f6c7500fc4450887474269bb8192196e13922f48bc1db98ffb250126\", \"original_payload_sha256\": \"826ed92f6ce0c3d06f9acfdb71842eb0c5c5ee22656874d2c1500062af440429\", \"original_validator_sha256\": \"5e8f7a842231f16d8f5ba3ae1a48ed7625afa2feafe774963cdba066196fd0b8\", \"schema\": \"retained-original-final-projection/v1\", \"slots\": [{\"derived_row_sha256\": \"97daad22ae5bb2883ec7534396f834040eeee08efb2b5226025f0140aefc754c\", \"original_error_sha256\": \"4edfc2723c3e461b5573dfe3596c68ca049859f6f2e1f0cdf61646da0bd2615f\", \"original_final_bytes\": 2737, \"original_final_sha256\": \"a80e3b6eb417182a22851c42246d618540f96048fc15d5b62161348690fa0177\", \"original_row_sha256\": \"35c05f3a4dcd67efb6e2dfe7c0e77ef5605fe219134a4b8e8413b805bf70f992\", \"parsed_payload_sha256\": \"ec586b1611932f25a9a8be8d96c88c1b4a30c320e75adfbe528e1c25c3193cbd\", \"slot_index\": 1}]}, \"original_receipt_sha256\": \"28119eaece803505e01a5a001ae03c19725be8b135beeab65c8a37ef6122a189\", \"original_status\": \"result_unavailable\", \"provider_generation_performed\": false, \"recovery_key\": \"4be44cc4fa4de9982c5f3493e85ea98b4c3550ec7736a3fd7d40ccda2b2a0a81\", \"revalidator_sha256\": \"314786a12e834c545b9b0663852586994081ba5d9b9b217ec6c4557e75831fb0\", \"schema\": \"retained-revalidation/v2\", \"source_run_attempt\": \"1\", \"source_run_id\": \"40603448727\", \"validator_sha256\": \"5e8f7a842231f16d8f5ba3ae1a48ed7625afa2feafe774963cdba066196fd0b8\"}, \"run_attempt\": \"1\", \"run_id\": \"40620861168\", \"schema\": \"verifier-corpus-decision/v1\", \"verdict\": \"NON_PASS\", \"verification_event\": {\"evaluated_sha\": \"d1947b5b4775c2e6a07bb46b3f85eb2e28c1b001\", \"event_id\": \"334a0ec11f919e8d8469369b82a79d1de941535305f4b8b245d5bb01217c8cae\", \"head_sha\": \"0507d28acf68d6bf21c68138d18d56cd01968827\", \"material_sha256\": \"b49b3991e4b7d50bf74099853bd0ac7b13d94f88fe50de6b53b9c74be836b9ef\", \"pr\": \"984\", \"repo\": \"stranske/orchestrator\", \"request_sha256\": \"a7c028b1efcb0923c8496c8854a82a446abbff208e4dbfafd2fdf5f00429d983\", \"schema\": \"verification-event/v1\"}, \"verification_request_basis\": \"a4f323c47308b64c10478f4f6082d69ab046653f31b2a8b3e2ae98cdca04491b\"} -->\n",
+        "url": "https://github.com/stranske/Orchestrator/pull/984#issuecomment-6458980062",
+        "author": {
+          "login": "github-actions",
+          "__typename": "Bot"
+        }
+      }
+    ],
+    "pageInfo": {
+      "hasPreviousPage": false
+    }
+  }
+}

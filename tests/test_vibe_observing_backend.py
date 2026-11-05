@@ -398,10 +398,54 @@ def test_absent_context_or_pin_drift_refuses_without_creating_clients(setup):
     assert not any(isinstance(item, tuple) and item[0] == "sdk_init" for item in CALLS)
 
 
-def test_module_import_has_no_sdk_or_live_default():
-    assert not any(
-        name == "vibe" or name.startswith(("vibe.", "mistralai", "httpx")) for name in sys.modules
+def test_module_import_has_no_sdk_or_live_default(tmp_path):
+    # Parent plugins may already import HTTP libraries. Guard actual import
+    # attempts in a fresh interpreter, including cached imports, instead.
+    import subprocess
+    from pathlib import Path
+
+    script = r"""
+import builtins, importlib.util, sys
+from pathlib import Path
+source = Path(sys.argv[1]); sys.path.insert(0, sys.argv[2])
+original = builtins.__import__
+forbidden_attempts = []
+def guarded(name, *args, **kwargs):
+    if name.split('.')[0] in {'vibe', 'mistralai', 'httpx'}:
+        forbidden_attempts.append(name)
+        raise RuntimeError('forbidden backend import: ' + name)
+    return original(name, *args, **kwargs)
+builtins.__import__ = guarded
+spec = importlib.util.spec_from_file_location('closer_vibe_observing_backend', source)
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+assert not forbidden_attempts, 'forbidden backend import attempts: ' + repr(forbidden_attempts)
+assert not any(name.split('.')[0] in {'vibe', 'mistralai', 'httpx'} for name in sys.modules)
+"""
+    source = Path(v.__file__).resolve()
+    args = [sys.executable, "-I", "-B", "-c", script]
+    actual = subprocess.run(
+        args + [str(source), str(source.parent)], capture_output=True, text=True, timeout=30
     )
+    assert actual.returncode == 0, actual.stderr
+    injected = tmp_path / "sdk_import_positive_control.py"
+    injected.write_bytes(source.read_bytes() + b"\nimport httpx\n")
+    control = subprocess.run(
+        args + [str(injected), str(source.parent)], capture_output=True, text=True, timeout=30
+    )
+    assert control.returncode != 0 and "forbidden backend import: httpx" in control.stderr
+    injected.write_bytes(
+        source.read_bytes() + b"\ntry:\n    import httpx\nexcept RuntimeError:\n    pass\n"
+    )
+    swallowed = subprocess.run(
+        args + [str(injected), str(source.parent)], capture_output=True, text=True, timeout=30
+    )
+    assert (
+        swallowed.returncode != 0
+        and "forbidden backend import attempts: ['httpx']" in swallowed.stderr
+    )
+
     assert (
         inspect.signature(v.NativeRequestLimits).parameters["max_output_tokens"].default
         is inspect.Parameter.empty

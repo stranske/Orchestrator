@@ -26,6 +26,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import math
 import os
 import re
 import sys
@@ -1835,7 +1836,12 @@ def activate_tick_triage(
     runner = runner or run_triage_agent
     gate = _shadow_gate(env) and not dry_run
     matched = bool(items)
-    role_pick = route_role("triage", cap=cap, exploration_rate=0.0) if matched and gate else None
+    role_pick = None
+    if matched and gate and triage_trial_mode():
+        # Trial hour: pin gemini when it has capacity; otherwise fall through to normal routing.
+        role_pick = route_role("triage", cap=cap, exploration_rate=0.0, only={"gemini"})
+    if matched and gate and role_pick is None:
+        role_pick = route_role("triage", cap=cap, exploration_rate=0.0)
     available = bool(role_pick) if matched and gate else True
     selector = select_role_activation(
         "triage",
@@ -2738,6 +2744,37 @@ def run_decomposer_agent(
     }
 
 
+# Owner decision 2026-10-31: a 7-day live trial routing a share of triage to Gemini, Flash-high (the
+# router's mid tier) against Argon (gemini's full tier), read from the feedback DB by role-triage
+# outcomes. The trial is ON only while this file names a window containing now; a missing,
+# unreadable or expired file means no trial, so it can never outlive its window. Even UTC hours
+# belong to the trial and alternate Flash/Argon; odd hours route normally. The role run records the
+# assigned arm as reasoning_level; the readout takes model identity from the worker attempt's
+# execution_attempts.resolved_model, never from runs.model (cost telemetry).
+TRIAGE_FLASH_TRIAL_PATH = Path(
+    os.environ.get("ORCH_TRIAGE_FLASH_TRIAL")
+    or paths.runtime_state_path("trials", "role-triage-flash.json")
+)
+
+
+def triage_trial_mode(*, path: Path | None = None, now: float | None = None) -> str | None:
+    """'mid' (Flash) or 'full' (Argon) when this hour belongs to the triage trial, else None."""
+    try:
+        spec = json.loads((path or TRIAGE_FLASH_TRIAL_PATH).read_text(encoding="utf-8"))
+        start, end = float(spec["start_ts"]), float(spec["end_ts"])
+    except (OSError, ValueError, TypeError, KeyError, OverflowError):
+        return None
+    if not (math.isfinite(start) and math.isfinite(end) and start < end):
+        return None  # an unbounded or inverted window must never enable the trial
+    now = time.time() if now is None else now
+    if not start <= now < end:
+        return None
+    hour = int(now // 3600)
+    if hour % 2:
+        return None
+    return "mid" if (hour // 2) % 2 == 0 else "full"
+
+
 def run_triage_agent(
     *,
     backlog_items: list[dict],
@@ -2789,6 +2826,7 @@ def run_triage_agent(
     backend_run_id: str | None = None
     backend_error_detail: str | None = None
     backend_model: str | None = None
+    dispatched_mode = role.mode
 
     if proposal_json is not None:
         proposal = proposal_json
@@ -2798,7 +2836,11 @@ def run_triage_agent(
         else:
             _role_capability_event("triage", "invocation", metadata={"backend": backend_name})
             # NO SUBJECT: triage ranks a batch of items, so no one work item is this run's subject.
-            res = dispatcher.offload(backend_name, prompt, cwd=cwd, mode=role.mode, timeout=timeout)
+            trial_mode = triage_trial_mode() if backend_name == "gemini" else None
+            dispatched_mode = trial_mode or role.mode
+            res = dispatcher.offload(
+                backend_name, prompt, cwd=cwd, mode=dispatched_mode, timeout=timeout
+            )
             backend_run_id = res.get("run_id")
             backend_model = res.get("model")
             raw_output = res.get("output", "")
@@ -2839,7 +2881,7 @@ def run_triage_agent(
                 "triage",
                 f"triage:{len(visible_items)}-items",
                 backend_name,
-                reasoning_level=role.mode,
+                reasoning_level=dispatched_mode,
                 backend_run_id=backend_run_id,
                 action=action_summary,
                 decision_source=decision_source,

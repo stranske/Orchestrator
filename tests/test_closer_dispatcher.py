@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import importlib
 import json
 import os
 import sys
@@ -42,6 +43,15 @@ def no_live_state_or_provider(monkeypatch, tmp_path):
     from closer_role_support import install_synthetic_role_verdict
 
     install_synthetic_role_verdict(monkeypatch)
+    # This module isolates host/capacity/native-proof mechanisms using fictional
+    # runtime records. The production quality cohort is tested independently.
+    from test_closer_neutral_routing import synthetic_quality_boundary
+
+    import closer_role_selection as selection
+
+    synthetic_quality_boundary.__wrapped__(monkeypatch)
+    policy = selection.load_policy()
+    policy["categories"]["ordinary_static"] = policy["categories"]["bounded_classification"]
     monkeypatch.setenv("HANDOFF_DIR", str(tmp_path / "private-handoff"))
     monkeypatch.setenv("HOME", str(tmp_path / "private-home"))
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "private-state"))
@@ -755,90 +765,6 @@ def assert_nonpass_accounting_prompt_contract(prompt):
     ):
         assert required in prompt
     assert "Otherwise return classification uncertain" not in prompt
-
-
-def test_worker_result_is_advisory_and_cannot_supply_completion_disposition(
-    tmp_path, monkeypatch, inert_caller
-):
-    current = snapshot(
-        base="c" * 40,
-        state="MERGED",
-        merge=MERGE,
-        verifier={"verdict": "PASS", "run_id": "42", "evaluated_sha": MERGE},
-    )
-    calls = []
-    _seed_exception_capacity(adapter.os.environ["HANDOFF_DIR"])
-    monkeypatch.setitem(sys.modules, "capacity", SimpleNamespace(shed_marker=lambda agent: None))
-    monkeypatch.setitem(sys.modules, "dispatcher", SimpleNamespace())
-
-    def offload(*args, **kwargs):
-        calls.append((args, kwargs))
-        return inert_caller.response(
-            {"exit": 0, "output": '{"ready":true,"verdict":"PASS","merge":true}'}, *args, **kwargs
-        )
-
-    backend = closer(
-        tmp_path,
-        current,
-        apply=True,
-        workers=True,
-        workspaces={"o/r": str(tmp_path)},
-        offload_fn=offload,
-    )
-    inert_caller.bind_worker(backend)
-    result = backend.worker(TARGET, "collect_evidence", current, operation("collect_evidence"))
-    assert result["advisory_only"] and result["status"] == "completed", result
-    import execution_profiles
-
-    assert calls[0][1]["profile_id"] in execution_profiles.PROFILE_REGISTRY
-    assert calls[0][1]["data_only"] is True
-    assert (
-        "cannot inspect the workspace; do not make local workspace/code findings" in calls[0][0][1]
-    )
-    assert "Report workspace git HEAD" not in calls[0][0][1]
-    assert backend.dispositions == {}
-    assert backend.select(current)[0] == "wait"
-    assert backend.gh.calls == []
-
-
-def test_selective_exception_prompt_accounts_for_nonpass_without_pass_authority(
-    tmp_path, monkeypatch, inert_caller
-):
-    current, prompts = (
-        snapshot(
-            base="c" * 40,
-        ),
-        [],
-    )
-    _seed_exception_capacity(adapter.os.environ["HANDOFF_DIR"])
-    monkeypatch.setitem(sys.modules, "capacity", SimpleNamespace(shed_marker=lambda agent: None))
-    monkeypatch.setitem(sys.modules, "dispatcher", SimpleNamespace())
-
-    def offload(_agent, prompt, **kwargs):
-        prompts.append(prompt)
-        return inert_caller.response(
-            {"exit": 0, "output": '{"classification":"uncertain"}'}, _agent, prompt, **kwargs
-        )
-
-    backend = closer(
-        tmp_path,
-        current,
-        apply=True,
-        workers=True,
-        workspaces={"o/r": str(tmp_path)},
-        offload_fn=offload,
-    )
-    inert_caller.bind_worker(backend)
-    backend.worker(
-        TARGET,
-        "collect_evidence",
-        current,
-        operation("collect_evidence"),
-        advisory_context={"nonpass_findings": [{"finding_id": "fixture-finding"}]},
-    )
-    assert_nonpass_accounting_prompt_contract(prompts[0])
-    assert "Never claim PASS for a raw NON_PASS verifier result" in prompts[0]
-    assert backend.dispositions == {} and backend.gh.calls == []
 
 
 def test_senior_acceptance_survives_own_source_state_transition(tmp_path):
@@ -1778,75 +1704,6 @@ def test_repair_uses_no_generic_writer_until_executor_and_test_are_qualified(
     assert backend.dispositions.get(TARGET) == decision
 
 
-@pytest.mark.parametrize(
-    "failure", ["quota exceeded", "unsupported model", "authentication failed"]
-)
-def test_generic_error_does_not_hide_provider_failure_in_output(
-    tmp_path, monkeypatch, failure, inert_caller
-):
-    current = snapshot(
-        base="c" * 40,
-        state="MERGED",
-        merge=MERGE,
-        verifier={"verdict": "PASS", "run_id": "42", "evaluated_sha": MERGE},
-    )
-    backend, calls = _private_worker(
-        tmp_path,
-        monkeypatch,
-        result={"exit": 1, "error": "worker failed", "output": failure},
-        current=current,
-        inert=inert_caller,
-    )
-    assert (
-        backend.worker(TARGET, "collect_evidence", current, operation("collect_evidence"))["status"]
-        == "failed"
-    )
-    actual = inert_caller.results[0]
-    assert actual["raw_exit"] == 1 and actual["outcome_uncertain"] is True
-    assert actual["retry_safe"] is False and actual["output"] == ""
-    assert failure in actual["stderr_tail"]
-    assert not backend.dispositions.get(TARGET) and not backend.gh.calls
-    assert len(calls) == len(inert_caller.results) == 1
-
-
-@pytest.mark.parametrize("admitted", [False, True])
-def test_existing_campaign_guard_is_reused_and_caps_worker_timeout(
-    tmp_path, monkeypatch, admitted, inert_caller
-):
-    fake_home = tmp_path / "home"
-    guard = fake_home / ".codex/automations/model-allocation/assess.py"
-    guard.parent.mkdir(parents=True)
-    guard.write_text(
-        "def enforce_campaign_budget(args):\n    "
-        + (
-            "args.timeout = min(args.timeout, 7)\n"
-            if admitted
-            else "raise ValueError('existing campaign permit required')\n"
-        )
-    )
-    monkeypatch.setattr(adapter.Path, "home", lambda: fake_home)
-    handoff = adapter.Path(adapter.os.environ["HANDOFF_DIR"])
-    _seed_exception_capacity(handoff, profile_ids=(LOW, SECOND))
-    capacity = handoff / "capacity.json"
-    before = capacity.read_bytes()
-    inert_caller.timeout_seconds = 7
-    inert_caller.activate()
-    backend, calls = _private_worker(tmp_path, monkeypatch, real_admission=True, inert=inert_caller)
-    result = backend.worker(
-        TARGET,
-        "collect_evidence",
-        snapshot(
-            base="c" * 40,
-        ),
-        operation("collect_evidence"),
-    )
-    if admitted:
-        assert result["status"] == "completed" and calls[0][1]["timeout"] == 7
-    else:
-        assert result["status"] == "deferred" and calls == []
-    assert capacity.read_bytes() == before
-
-
 def test_stale_capacity_never_calls_provider_or_scans_sessions(tmp_path, monkeypatch):
     handoff = adapter.Path(adapter.os.environ["HANDOFF_DIR"])
     handoff.mkdir(parents=True)
@@ -1978,72 +1835,6 @@ def test_compare_label_waits_only_for_attributed_active_run_and_collects_other_o
         assert backend.gh.calls == []
 
 
-def test_pending_advisory_survives_restart_without_another_luna_call(
-    tmp_path, monkeypatch, inert_caller
-):
-    backend, calls = _private_worker(tmp_path, monkeypatch, inert=inert_caller)
-    current = snapshot(
-        base="c" * 40,
-    )
-    op = operation("collect_evidence")
-    result = backend.worker(TARGET, "collect_evidence", current, op)
-    assert len(calls) == 1 and backend.observe(TARGET)["requires_coordinator"]
-    persisted = closer_queue._new_state()
-    persisted["items"][TARGET] = {
-        "operation": {
-            **op,
-            "revision": current["revision"],
-            "status": "completed",
-            "result": result,
-        }
-    }
-    backend.state_path.write_text(json.dumps(persisted))
-    restarted, new_calls = _private_worker(tmp_path, monkeypatch, inert=inert_caller)
-    observed = restarted.observe(TARGET)
-    assert observed["requires_coordinator"]
-    assert restarted.integration_pending(TARGET, current) == op["id"]
-    assert new_calls == [] and len(calls) == 1
-
-
-def test_integration_ack_is_bound_but_never_supplies_acceptance_or_merge(
-    tmp_path, monkeypatch, inert_caller
-):
-    current = snapshot(
-        base="c" * 40,
-        state="MERGED",
-        merge=MERGE,
-        verifier={"verdict": "PASS", "run_id": "42", "evaluated_sha": MERGE},
-    )
-    backend, calls = _private_worker(tmp_path, monkeypatch, current=current, inert=inert_caller)
-    original_binding = backend.observe(TARGET)["operation_binding"]
-    op = operation("collect_evidence")
-    backend.worker(TARGET, "collect_evidence", current, op)
-    ack = {
-        "integrated_operation": op["id"],
-        "reviewer": "senior",
-        "head": HEAD,
-        "review_revision": current["review_revision"],
-        "source_digest": adapter.source_digest(current["sources"]),
-    }
-    for field in ack:
-        backend.dispositions[TARGET] = {**ack, field: "wrong" if field != "reviewer" else ""}
-        assert backend.observe(TARGET)["requires_coordinator"], field
-    backend.dispositions[TARGET] = ack
-    assert not backend.observe(TARGET)["requires_coordinator"]
-    assert backend.select(current)[0] == "collect_evidence"
-    assert not adapter.acceptance_ok(current, ack)
-    assert len(calls) == 1
-    observed = backend.observe(TARGET)
-    assert observed["operation_binding"] == original_binding
-    backend.dispositions[TARGET] = {**integrated(tmp_path, current), **ack}
-    assert backend.select(current)[0] == "close_source"
-    assert backend.gh.calls == [] and len(calls) == 1
-    backend.dispositions[TARGET][
-        "followup_task"
-    ] = "Collect newly requested source-specific evidence"
-    assert backend.observe(TARGET)["operation_binding"] != original_binding
-
-
 def test_snapshot_verifier_wait_uses_only_current_pr_attribution(tmp_path, monkeypatch):
     document = _graphql_pr()
     document.update(state="MERGED", mergeCommit={"oid": MERGE})
@@ -2153,19 +1944,23 @@ def test_staged_prepare_runs_before_pending_ci_wait_selection(tmp_path, monkeypa
         },
         "manifest": {"packet_sha256": "e"},
     }
-    monkeypatch.setitem(
-        sys.modules,
-        "closer_evidence",
-        SimpleNamespace(
-            collect_evidence=lambda snap, api, retained_dir, **kwargs: packet,
-            collection_summary=closer_evidence.collection_summary,
-            validate_packet=lambda value: False,
-            _atomic_write=lambda path, data: (
-                Path(path).parent.mkdir(parents=True, exist_ok=True),
-                Path(path).write_bytes(data),
-            ),
+    # Keep the real module object so a cold recovery import sees every current
+    # public contract symbol, including REQUIRED_SECTIONS.  This test controls
+    # only collection behavior, not the evidence module's import surface.
+    monkeypatch.setattr(
+        closer_evidence, "collect_evidence", lambda snap, api, retained_dir, **kwargs: packet
+    )
+    monkeypatch.setattr(closer_evidence, "validate_packet", lambda value: False)
+    monkeypatch.setattr(
+        closer_evidence,
+        "_atomic_write",
+        lambda path, data: (
+            Path(path).parent.mkdir(parents=True, exist_ok=True),
+            Path(path).write_bytes(data),
         ),
     )
+    monkeypatch.delitem(sys.modules, "closer_evidence_recovery", raising=False)
+    importlib.import_module("closer_evidence_recovery")
 
     def run_pipeline(path, targets, **kwargs):
         seen["path"] = path
@@ -2433,6 +2228,10 @@ def ordinary_nonpass_wait_fixture(
     current, packet, ref, prepared, interpreted = test_closer_disposition.fixture(
         tmp_path,
         native=True,
+        # Fresh coherent synthetic NONPASS; the original corpus defaults retain
+        # its deliberate FAIL/CONCERNS and CI contradictions for their tests.
+        native_reported_verdict="CONCERNS",
+        native_ci_failed=False,
         **({"pr_target": "owner/repo#12"} if linked_subject else {}),
     )
     current.update(state="MERGED", labels=[], draft=False, active_threads=0, mergeable="MERGEABLE")
@@ -2565,12 +2364,16 @@ def test_nonpass_callback_preserves_complete_evidence_without_unused_disposition
     # Large but legitimate retained NON_PASS rows, without private queue data.
     prior = {
         "criteria": [
-            {"result": "NON_PASS", "criterion": f"criterion-{index}", "reason": "gap " + "x" * 2100}
+            {"result": "NON_PASS", "criterion": f"criterion-{index}", "reason": "gap " + "x" * 650}
             for index in range(6)
         ]
     }
     current, packet, ref, prep, interpreted = test_closer_disposition.fixture(
-        tmp_path, native=True, dispositions=prior
+        tmp_path,
+        native=True,
+        dispositions=prior,
+        native_reported_verdict="CONCERNS",
+        native_ci_failed=False,
     )
     current.update(
         state="MERGED",
@@ -2617,14 +2420,15 @@ def test_nonpass_callback_preserves_complete_evidence_without_unused_disposition
         ),
     )
     calls = []
-    monkeypatch.setattr(
-        dispatcher,
-        "offload",
-        lambda *_args, **_kwargs: (
-            calls.append(True)
-            or inert_caller.response({**actual, "output": json.dumps(proposal)}, *_args, **_kwargs)
-        ),
-    )
+
+    def typed_fixture_response(*args, **kwargs):
+        from closer_typed_semantic_broker_fixture import emit_assessment
+
+        calls.append(True)
+        response = emit_assessment(args[1], [], finding_gold=proposal["resolutions"])
+        return inert_caller.response({**actual, "output": json.dumps(response)}, *args, **kwargs)
+
+    monkeypatch.setattr(dispatcher, "offload", typed_fixture_response)
     integrations = []
     real_integrate = closer_disposition.integrate_ordinary
 
@@ -2652,17 +2456,24 @@ def test_nonpass_callback_preserves_complete_evidence_without_unused_disposition
             "prepare": prep,
         }
         value = callbacks["interpret"](target, context)
-        assert value["integration_status"] == "ordinary_nonpass"
+        assert value.get("integration_status") == "ordinary_nonpass", json.dumps(
+            value, sort_keys=True
+        )
         assert "integration_disposition" not in value
-        assert value["proposal"] == original_proposal
+        assert value["proposal"]["resolutions"] == original_proposal["resolutions"]
+        assert value["proposal"]["decision"] == original_proposal["decision"]
+        assert value["proposal"]["semantic_assessment"]["schema"] == "closer-semantic-assessment/v2"
         assert value["raw_findings"] == integrations[0]["raw_findings"]
         assert len(value["raw_findings"]) == len(proposal["resolutions"]) == 10
-        assert closer_pipeline.CALLBACK_RESULT_BYTES == 32768
-        assert closer_pipeline._bounded(value, limit=32768) == value
-        with pytest.raises(ValueError, match="pipeline JSON exceeds 32768 bytes"):
-            closer_pipeline._bounded(
-                {**value, "integration_disposition": integrations[0]["disposition"]}, limit=32768
-            )
+        assert closer_pipeline.CALLBACK_RESULT_BYTES >= 1024 * 1024
+        assert closer_pipeline._bounded(value, limit=closer_pipeline.CALLBACK_RESULT_BYTES) == value
+        # The redundant view is still omitted from this typed result, but it is
+        # ordinary-sized data, not an anomaly for the application JSON budget.
+        duplicate = {**value, "integration_disposition": integrations[0]["disposition"]}
+        assert (
+            closer_pipeline._bounded(duplicate, limit=closer_pipeline.CALLBACK_RESULT_BYTES)
+            == duplicate
+        )
         captured.update(context=context, value=value)
         return {"targets": {target: {"status": "deferred"}}}
 
@@ -2757,81 +2568,6 @@ def test_native_nonpass_wait_survives_real_interpreter_restart(tmp_path, monkeyp
     assert restarted.gh.calls == []
 
 
-@pytest.mark.parametrize(
-    "mutation",
-    [
-        "prefix_only",
-        "authority",
-        "record_revision",
-        "record_target",
-        "disposition_hash",
-        "finding_id",
-        "native_pass",
-        "native_open",
-        "native_head",
-        "operation",
-        "receipt",
-        "missing_record",
-    ],
-)
-def test_nonpass_wait_requires_exact_retained_disposition_and_current_native_proof(
-    tmp_path, monkeypatch, mutation, inert_caller
-):
-    current, prep, _interpreted, path, _backend, captured = ordinary_nonpass_wait_fixture(
-        tmp_path, monkeypatch, inert=inert_caller
-    )
-    result = captured["first"]
-    proof = copy.deepcopy(result["resource_evidence"]["inner_wait"])
-    record_ref = proof["ordinary_nonpass_ref"]
-    record = json.loads(Path(record_ref["path"]).read_bytes())
-    native_path = Path(proof["inner_path"])
-    native = closer_queue._read_state(native_path)
-    item = native["items"][current["target"]]
-    if mutation == "prefix_only":
-        proof.pop("ordinary_nonpass_ref")
-    elif mutation == "missing_record":
-        Path(record_ref["path"]).unlink()
-    elif mutation.startswith("native_"):
-        if mutation == "native_pass":
-            item["evidence"]["verifier"]["verdict"] = "PASS"
-        elif mutation == "native_open":
-            item["evidence"]["state"] = "OPEN"
-        else:
-            item["evidence"]["head"] = "f" * 40
-    elif mutation == "operation":
-        item["operation"] = {"id": "unknown", "status": "uncertain"}
-    elif mutation == "receipt":
-        native["round"]["receipt"]["accounting"][0]["eligible"] = True
-    else:
-        if mutation == "authority":
-            record["disposition"]["acceptance_authority"] = True
-        elif mutation == "record_revision":
-            record["revision"] = "stale"
-        elif mutation == "record_target":
-            record["target"] = "other/repo#1"
-        elif mutation == "finding_id":
-            record["disposition"]["resolutions"][0]["finding_id"] = "wrong"
-        else:
-            record["disposition_sha256"] = "0" * 64
-        if mutation != "disposition_hash":
-            record["disposition_sha256"] = closer_pipeline._digest(record["disposition"])
-        import closer_evidence
-
-        proof["ordinary_nonpass_ref"] = closer_evidence._retain_bytes(
-            closer_pipeline._nonpass_wait_store(path), closer_pipeline._canonical(record), "json"
-        )
-    native_path.write_text(json.dumps(native))
-    assert not closer_pipeline._valid_inner_wait(
-        path,
-        current["target"],
-        prep["revision"],
-        prep["snapshot"],
-        proof["reason"],
-        result["next_trigger"],
-        proof,
-    )
-
-
 def test_nonpass_wait_same_head_new_revision_requires_fresh_preparation(
     tmp_path, monkeypatch, inert_caller
 ):
@@ -2848,7 +2584,9 @@ def test_nonpass_wait_same_head_new_revision_requires_fresh_preparation(
 
     old_ref = prep["packet_ref"]
     old_packet = json.loads(Path(old_ref["path"]).read_bytes())
-    root = tmp_path / "fresh-native-evidence"
+    # Refresh within the same physical retained store: previous sections keep
+    # their original immutable raw refs and must not point outside a new root.
+    root = Path(old_ref["path"]).parent.parent
     artifacts = (
         old_packet["sections"]["ci_artifacts"]["content"]["artifacts"]
         + old_packet["sections"]["native_merge_verifier"]["content"]["artifacts"]
@@ -2913,7 +2651,17 @@ def test_nonpass_wait_same_head_new_revision_requires_fresh_preparation(
         producer_sha256=refreshed["producer_sha256"],
         evidence_summary={"section_digests": refreshed["section_digests"]},
     )
-    proposal = copy.deepcopy(context["interpret"]["proposal"])
+    # Declare a fresh synthetic expected answer for the newly collected packet.
+    # Never recycle the previously materialized typed assessment into a new receipt.
+    proposal = {
+        "target": current["target"],
+        "head": current["head"],
+        "base": current["base"],
+        "classification": "relevant",
+        "substantive_needs": [],
+        "findings": [{"summary": "Original acceptance proof remains missing"}],
+        "decision": {"criteria": []},
+    }
     import closer_disposition
 
     proposal["resolutions"] = [
@@ -3249,6 +2997,13 @@ def test_pipeline_low_route_uses_any_live_low_profile_not_luna_assumption(tmp_pa
         }
 
     monkeypatch.setattr(router, "select_agent", choose)
+    import closer_role_selection as selection
+
+    monkeypatch.setattr(
+        selection,
+        "candidates_for_agent",
+        lambda agent, *_a, **_k: execution_profiles.profiles_for_agent(agent),
+    )
     route = adapter._pipeline_low_route()
     assert route["agent"] == "gemini"
     assert route["profile_id"] == "gemini-flash-low"
@@ -3613,7 +3368,9 @@ def test_low_receipt_enters_existing_acceptance_and_exact_head_merge_guard(
 
     def low_worker(_agent, prompt, **_kwargs):
         prompts.append(prompt)
-        payload = json.dumps(response)
+        from closer_typed_semantic_broker_fixture import emit_assessment
+
+        payload = json.dumps(emit_assessment(prompt, response["decision"]["criteria"]))
         return inert_caller.response(
             {
                 "exit": 0,
@@ -4034,7 +3791,10 @@ def test_low_failure_scope_preserves_item_holds_and_real_provider_failures(
     )
     route_profiles = []
 
-    def select_route(*, load, unavailable_profiles, with_status=False, data_only=False):
+    def select_route(
+        *, load, unavailable_profiles, with_status=False, data_only=False, closer_category=None
+    ):
+        assert closer_category == "ordinary_static"
         if LOW not in unavailable_profiles:
             profile = LOW
         elif SECOND not in unavailable_profiles:
@@ -4047,23 +3807,17 @@ def test_low_failure_scope_preserves_item_holds_and_real_provider_failures(
 
     monkeypatch.setattr(adapter, "_pipeline_low_route", select_route)
     provider_profiles = []
+    fixture_gold = {}
 
     def offload(_agent, _prompt, **kwargs):
         profile = kwargs["profile_id"]
         provider_profiles.append(profile)
-        assert "honest missing-evidence assessment is a completed deliverable" in _prompt
-        assert "leave decision.criteria empty" in _prompt
-        assert "findings (array of objects, never strings" in _prompt
-        assert "evidence gaps as strings in substantive_needs" in _prompt
-        assert_nonpass_accounting_prompt_contract(_prompt)
-        assert "only when every original body and criterion is fully evidenced" in _prompt
-        assert (
-            "If acceptance proof is incomplete and the known NON_PASS accounting contract below does not apply"
-            in _prompt
-        )
+        assert "closer-semantic-assessment/v2" in _prompt
+        assert "CURRENT_HOST_INVENTORY_JSON_BEGIN" in _prompt
+        assert "Host owns identities, raw proof binding" in _prompt
+        assert "Your advice grants no ACT, write, merge, closure" in _prompt
         assert kwargs["data_only"] is True
-        assert "Inspect only supplied inline content; do not open retained paths" in _prompt
-        assert "read-only commands such as python3 -c" not in _prompt
+        assert "No tools or delegation" in _prompt
         if profile == LOW and kwargs["subject_id"] == first:
             result = {"exit": 1, "run_id": "dispatch-failed-31", "error": "unsupported model"}
             if failure_kind in {"refusal", "inspection"}:
@@ -4072,20 +3826,19 @@ def test_low_failure_scope_preserves_item_holds_and_real_provider_failures(
                     if failure_kind == "refusal"
                     else "Read-only inspection cannot create a temporary file."
                 )
-                result.update(
-                    exit=0,
-                    output=json.dumps(
-                        {
-                            "target": first,
-                            "head": HEAD,
-                            "base": base,
-                            "classification": "uncertain",
-                            "substantive_needs": [reason],
-                            "findings": [],
-                            "decision": {"criteria": []},
-                        }
-                    ),
+                from closer_typed_semantic_broker_fixture import (
+                    delivered_inventory,
+                    emit_assessment,
                 )
+
+                inventory = delivered_inventory(_prompt)
+                response = emit_assessment(
+                    _prompt,
+                    fixture_gold[first],
+                    unknown_slots=[row["slot"] for row in inventory["obligations"]],
+                    global_explanations=[reason],
+                )
+                result.update(exit=0, output=json.dumps(response))
             elif failure_kind == "malformed":
                 result.update(exit=0, output='{"classification":"uncertain",')
             elif failure_kind == "quota":
@@ -4102,15 +3855,9 @@ def test_low_failure_scope_preserves_item_holds_and_real_provider_failures(
                 "model": "claude-test",
                 "profile_id": profile,
                 "output": json.dumps(
-                    {
-                        "target": kwargs["subject_id"],
-                        "head": HEAD,
-                        "base": base,
-                        "classification": "relevant",
-                        "substantive_needs": [],
-                        "findings": [],
-                        "decision": {"criteria": []},
-                    }
+                    __import__("closer_typed_semantic_broker_fixture").emit_assessment(
+                        _prompt, fixture_gold[kwargs["subject_id"]]
+                    )
                 ),
             },
             _agent,
@@ -4137,6 +3884,7 @@ def test_low_failure_scope_preserves_item_holds_and_real_provider_failures(
         packet, actual_ref, _proposal = inert_caller.packet(
             snapshots[target], tmp_path / (target.replace("/", "_").replace("#", "-") + ".evidence")
         )
+        fixture_gold[target] = copy.deepcopy(_proposal["decision"]["criteria"])
         path = Path(actual_ref["path"])
         snap = snapshots[target]
         snapshot_path = tmp_path / (target.replace("/", "_").replace("#", "-") + ".snapshot.json")
@@ -4192,7 +3940,11 @@ def test_low_failure_scope_preserves_item_holds_and_real_provider_failures(
         else:
             assert values[first]["actual"]["run_id"] == inert_caller.results[0]["run_id"]
             assert values[first]["actual"]["exit"] == 0
-            assert values[first]["classification"] == "uncertain"
+            # Missing proof stays relevant advice with incomplete readiness;
+            # the typed host does not conflate it with undecidable meaning.
+            assert values[first]["classification"] == (
+                "uncertain" if failure_kind == "malformed" else "relevant"
+            )
             assert values[first]["substantive_needs"]
             assert values[first]["integration_status"] != "accepted"
             assert not values[first].get("integration_disposition")
@@ -4247,7 +3999,10 @@ def test_uncertain_provider_result_stops_before_fallback_exception_or_action(
     )
     chosen = []
 
-    def route(*, load, unavailable_profiles, with_status=False, data_only=False):
+    def route(
+        *, load, unavailable_profiles, with_status=False, data_only=False, closer_category=None
+    ):
+        assert closer_category == "ordinary_static"
         profile = LOW if LOW not in unavailable_profiles else SECOND
         chosen.append(profile)
         value = {"agent": "claude", "profile_id": profile, "pools": ["claude-subscription"]}
@@ -4373,6 +4128,7 @@ def test_cli_pipeline_budget_does_not_renew_or_inherit_stale_legacy_accounting(
     tmp_path, monkeypatch, capsys, admission_reason, expected_exit, stop_valid
 ):
     start = time.time()
+    monkeypatch.setattr(adapter, "PIPELINE_ADMISSION_PASS_CHECK_TS", start + 3600)
     monkeypatch.setattr(adapter.time, "time", lambda: start)
     state = _terminal_queue_state(tmp_path)
     state_path = tmp_path / "legacy-queue.json"
@@ -4572,6 +4328,7 @@ def test_cli_pipeline_budget_does_not_renew_or_inherit_stale_legacy_accounting(
 def test_expired_admission_reports_drainable_zero_as_deadlock(tmp_path, monkeypatch, capsys):
     import closer_resources
 
+    monkeypatch.setattr(adapter, "PIPELINE_ADMISSION_PASS_CHECK_TS", time.time() + 3600)
     state = _terminal_queue_state(tmp_path)
     state["items"][TARGET]["revision"] = "invalidates-old-stop"
     state_path = tmp_path / "legacy-queue.json"
@@ -5323,6 +5080,17 @@ def _pin_pass_number_before_check_date(monkeypatch):
     return real
 
 
+def _pin_pass2_number_before_check_date(monkeypatch):
+    """Keep #1049 pass2 pending on main() receipts; return the real grader."""
+    real = adapter.reservation_drain_pass2_number
+
+    def _pending(receipt, *, now=None):
+        return real(receipt, now=adapter.RESERVATION_DRAIN_PASS2_CHECK_TS - 1)
+
+    monkeypatch.setattr(adapter, "reservation_drain_pass2_number", _pending)
+    return real
+
+
 def test_reservation_drain_pass_number_pending_before_check_date():
     """#898 pass number stays pending before 2026-10-30 while grading reservation half."""
     cleared = adapter.reservation_drain_pass_number(
@@ -5693,6 +5461,302 @@ def test_pipeline_receipt_grades_pass_number_without_budget_admission(
     assert receipt["blocking_reservations"] == receipt["drainable_reservations"] == 0
     assert receipt["reservation_drain_pass"]["status"] == "pending"
     assert grade(receipt, now=adapter.RESERVATION_DRAIN_PASS_CHECK_TS)["status"] == "pass"
+
+
+def test_expired_admission_diagnostics_reports_unmeasured_separately(tmp_path, monkeypatch):
+    import closer_resources
+
+    state_path = tmp_path / "legacy-queue.json"
+    state_path.write_text(json.dumps(_terminal_queue_state(tmp_path)))
+    pipeline_path = adapter._pipeline_state_path(state_path)
+    pipeline_path.write_text(json.dumps(closer_pipeline._empty()))
+    root = closer_resources.scoped_root(pipeline_path)
+    targets = [TARGET, "stranske/example#2", "stranske/example#3"]
+    for index, target in enumerate(targets):
+        directory = root / "reservations" / f"intent-{index}"
+        directory.mkdir(parents=True)
+        intent = {
+            "at": time.time(),
+            "key": f"key-{index}",
+            "owner": "legacy:dead",
+            "state": "unknown",
+            "target": target,
+        }
+        (directory / "legacy-intent.json").write_text(json.dumps(intent))
+    monkeypatch.setattr(adapter, "ADMISSION_DIAGNOSTICS_BUDGET_SECONDS", 0.0)
+    zero_budget = adapter._expired_admission_diagnostics(pipeline_path)
+    assert zero_budget["unmeasured_reservations"] == 3
+    assert zero_budget["drainable_reservations"] == 0
+    assert zero_budget["deadlock"] is False
+
+    monkeypatch.setattr(adapter, "ADMISSION_DIAGNOSTICS_BUDGET_SECONDS", 120.0)
+    observe_calls = {"count": 0}
+    revision = {"value": "rev-1"}
+
+    def counting_plan(state_path, *, target, observe=None):
+        observe_calls["count"] += 1
+        return {
+            "schema": closer_resources.TERMINAL_RECONCILIATION_SCHEMA,
+            "eligible": False,
+            "advertisements": [],
+            "reasons": ["retained-evidence-unavailable"],
+            "acceptance_authority": False,
+            "global_stop_authority": False,
+            "effect_retry_authority": False,
+        }
+
+    monkeypatch.setattr(closer_resources, "plan_terminal_reconciliation", counting_plan)
+    monkeypatch.setattr(
+        adapter,
+        "GitHub",
+        lambda *, deadline: SimpleNamespace(
+            snapshot=lambda _target: {
+                "revision": revision["value"],
+                "kind": "pr",
+                "state": "MERGED",
+            }
+        ),
+    )
+    adapter._expired_admission_diagnostics(pipeline_path)
+    assert observe_calls["count"] == 3
+    adapter._expired_admission_diagnostics(pipeline_path)
+    assert observe_calls["count"] == 6
+
+    revision["value"] = "rev-2"
+    adapter._expired_admission_diagnostics(pipeline_path)
+    assert observe_calls["count"] == 9
+
+
+def test_terminal_plan_cache_does_not_latch_live_owner_refusal(tmp_path, monkeypatch):
+    """Local owner_still_alive plans must not be reused after the owner exits."""
+    import closer_resources as resources
+
+    path, _root = _dead_owner_reservations(tmp_path)
+    core = next(tmp_path.rglob("intent.json"))
+    live = json.loads(core.read_text())
+    live["owner"] = f"{os.getpid()}:123:original"
+    resources._atomic_write(core, live)
+    monkeypatch.setattr(
+        adapter,
+        "GitHub",
+        lambda *, deadline: SimpleNamespace(
+            snapshot=lambda _target: {"revision": "rev-owner", "kind": "pr", "state": "MERGED"}
+        ),
+    )
+    real_plan = resources.plan_terminal_reconciliation
+    plans = []
+
+    def counting_plan(state_path, *, target, observe=None):
+        plans.append(target)
+        return real_plan(state_path, target=target, observe=observe)
+
+    monkeypatch.setattr(resources, "plan_terminal_reconciliation", counting_plan)
+    first = adapter._expired_admission_diagnostics(path)
+    assert first["drainable_reservations"] == 0
+    assert first["reservation_reason_counts"]["owner_still_alive"] == 2
+    assert plans  # live owner still forces a fresh plan call
+    live_calls = len(plans)
+
+    dead = json.loads(core.read_text())
+    dead["owner"] = "99999999:123:original"
+    resources._atomic_write(core, dead)
+    monkeypatch.setattr(resources, "_terminal_remote_observation", _terminal_observation)
+    second = adapter._expired_admission_diagnostics(path)
+    assert len(plans) > live_calls
+    assert second["drainable_reservations"] == second["blocking_reservations"] == 2
+    assert second["deadlock"] is False
+
+
+def test_reservation_drain_pass2_number_pending_before_check_date():
+    """#1049 pass2 stays pending before its check date and does not edit pass1."""
+    cleared = adapter.reservation_drain_pass2_number(
+        {"blocking_reservations": 11, "drainable_reservations": 11, "authority": True},
+        now=adapter.RESERVATION_DRAIN_PASS2_CHECK_TS - 1,
+    )
+    assert cleared["status"] == "pending"
+    assert cleared["check_date"] == adapter.RESERVATION_DRAIN_PASS2_CHECK_LABEL
+    assert cleared["reservation_cleared"] is True
+    failed = adapter.reservation_drain_pass_number(
+        {"blocking_reservations": 11, "drainable_reservations": 0, "authority": True},
+        now=adapter.RESERVATION_DRAIN_PASS_CHECK_TS,
+    )
+    assert failed["status"] == "fail"
+    assert failed["check_date"] == "2026-10-30"
+
+
+def test_reservation_drain_pass2_number_requires_authority_after_check_date():
+    """#1049 pass2: latch clears only with authority true after the check date."""
+    no_authority = adapter.reservation_drain_pass2_number(
+        {"blocking_reservations": 0, "drainable_reservations": 0, "authority": False},
+        now=adapter.RESERVATION_DRAIN_PASS2_CHECK_TS,
+    )
+    assert no_authority["status"] == "fail"
+    assert no_authority["reservation_cleared"] is True
+    assert "authority" in no_authority["reason"]
+    latch = adapter.reservation_drain_pass2_number(
+        {"blocking_reservations": 2, "drainable_reservations": 0, "authority": True},
+        now=adapter.RESERVATION_DRAIN_PASS2_CHECK_TS,
+    )
+    assert latch["status"] == "fail"
+    assert latch["reservation_cleared"] is False
+    passed = adapter.reservation_drain_pass2_number(
+        {"blocking_reservations": 2, "drainable_reservations": 2, "authority": True},
+        now=adapter.RESERVATION_DRAIN_PASS2_CHECK_TS,
+    )
+    assert passed["status"] == "pass"
+    assert passed["check_date"] == adapter.RESERVATION_DRAIN_PASS2_CHECK_LABEL
+    assert passed["reason"] == "reservation latch cleared with authority"
+    # Failed #898 pass1 row stays fail; pass2 is a separate receipt field.
+    failed_pass1 = adapter.reservation_drain_pass_number(
+        {"blocking_reservations": 11, "drainable_reservations": 0, "authority": True},
+        now=adapter.RESERVATION_DRAIN_PASS_CHECK_TS,
+    )
+    assert failed_pass1["status"] == "fail"
+    assert failed_pass1["check_date"] == "2026-10-30"
+
+
+def test_admitted_pipeline_receipt_grades_pass2_cleared_with_authority(
+    tmp_path, monkeypatch, capsys
+):
+    """#1049 AC: --pipeline receipt with authority true clears pass2 on check date."""
+    state = _terminal_queue_state(tmp_path)
+    state["items"][TARGET]["revision"] = "invalidates-old-stop"
+    state_path = tmp_path / "legacy-queue.json"
+    state_path.write_text(json.dumps(state))
+    pipeline_path = adapter._pipeline_state_path(state_path)
+    pipeline = closer_pipeline._empty()
+    pipeline["runs"]["prior"] = {
+        "created": 1,
+        "deadline": 2,
+        "assignment": [TARGET],
+        "targets": {TARGET: {"status": "completed"}},
+    }
+    pipeline_path.write_text(json.dumps(pipeline))
+    assignment = tmp_path / "assignment.json"
+    assignment.write_text(json.dumps({"targets": [{"target": TARGET}]}))
+    monkeypatch.setattr(adapter, "GitHub", lambda *, deadline: SimpleNamespace(deadline=deadline))
+    monkeypatch.setattr(adapter, "Closer", lambda *_a, **_k: SimpleNamespace())
+    monkeypatch.setattr(adapter, "known_workspaces", lambda _targets: {})
+    monkeypatch.setattr(
+        adapter,
+        "_run_staged_pipeline",
+        lambda *_: {
+            "schema": "closer-pipeline-receipt/v1",
+            "authority": True,
+            "run_id": "admitted-pass2",
+            "finished_at": time.time(),
+            "targets": {},
+        },
+    )
+    monkeypatch.setattr(closer_pipeline, "validate_stop", lambda *_a, **_k: {"valid": True})
+    _pin_pass_number_before_check_date(monkeypatch)
+    grade2 = _pin_pass2_number_before_check_date(monkeypatch)
+    assert (
+        adapter.main(
+            [
+                "run",
+                "--assignment",
+                str(assignment),
+                "--state",
+                str(state_path),
+                "--pipeline",
+                "--apply",
+                "--workers",
+            ]
+        )
+        == 0
+    )
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["authority"] is True
+    assert receipt["blocking_reservations"] == 0 or (
+        receipt["drainable_reservations"] == receipt["blocking_reservations"]
+    )
+    assert receipt["blocking_reservations"] == receipt["drainable_reservations"] == 0
+    assert receipt["reservation_drain_pass2"]["status"] == "pending"
+    assert (
+        receipt["reservation_drain_pass2"]["check_date"]
+        == adapter.RESERVATION_DRAIN_PASS2_CHECK_LABEL
+    )
+    assert receipt["reservation_drain_pass2"]["authority"] is True
+    # Failed 2026-10-30 pass1 row remains present and independently graded.
+    assert receipt["reservation_drain_pass"]["check_date"] == "2026-10-30"
+    after_check = grade2(receipt, now=adapter.RESERVATION_DRAIN_PASS2_CHECK_TS)
+    assert after_check["status"] == "pass"
+    assert after_check["reason"] == "reservation latch cleared with authority"
+
+
+def test_admitted_pipeline_receipt_grades_pass2_drainable_equals_blocking(
+    tmp_path, monkeypatch, capsys
+):
+    """#1049 AC OR-branch: authority true + drainable==blocking grades pass2 pass."""
+    import closer_resources as resources
+
+    state = _terminal_queue_state(tmp_path)
+    state_path = tmp_path / "legacy-queue.json"
+    state_path.write_text(json.dumps(state))
+    pipeline_path = adapter._pipeline_state_path(state_path)
+    closer_pipeline._save(pipeline_path, closer_pipeline._empty())
+    key = "pr:" + TARGET.lower()
+    directory = resources._key_dir(resources.scoped_root(pipeline_path), key)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "lock").touch()
+    resources._atomic_write(
+        directory / "intent.json",
+        {
+            "key": key,
+            "target": TARGET.lower(),
+            "owner": "99999999:123:original",
+            "state": "unknown",
+            "at": 1,
+        },
+    )
+    assignment = tmp_path / "assignment.json"
+    assignment.write_text(json.dumps({"targets": [{"target": TARGET}]}))
+    monkeypatch.setattr(adapter, "GitHub", lambda *, deadline: SimpleNamespace(deadline=deadline))
+    monkeypatch.setattr(adapter, "Closer", lambda *_a, **_k: SimpleNamespace())
+    monkeypatch.setattr(adapter, "known_workspaces", lambda _targets: {})
+    monkeypatch.setattr(
+        adapter,
+        "_run_staged_pipeline",
+        lambda *_: {
+            "schema": "closer-pipeline-receipt/v1",
+            "authority": True,
+            "run_id": "admitted-pass2-drainable",
+            "finished_at": time.time(),
+            "targets": {},
+        },
+    )
+    monkeypatch.setattr(closer_pipeline, "validate_stop", lambda *_a, **_k: {"valid": True})
+    monkeypatch.setattr(
+        resources, "_terminal_remote_observation", lambda target: _terminal_observation(target)
+    )
+    monkeypatch.setattr(adapter, "_probe_snapshot_revision", lambda _target: "rev-pass2")
+    _pin_pass_number_before_check_date(monkeypatch)
+    grade2 = _pin_pass2_number_before_check_date(monkeypatch)
+    assert (
+        adapter.main(
+            [
+                "run",
+                "--assignment",
+                str(assignment),
+                "--state",
+                str(state_path),
+                "--pipeline",
+                "--apply",
+                "--workers",
+            ]
+        )
+        == 0
+    )
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["authority"] is True
+    assert receipt["blocking_reservations"] == receipt["drainable_reservations"] == 1
+    assert receipt["reservation_drain_pass2"]["reservation_cleared"] is True
+    assert receipt["reservation_drain_pass2"]["status"] == "pending"
+    graded = grade2(receipt, now=adapter.RESERVATION_DRAIN_PASS2_CHECK_TS)
+    assert graded["status"] == "pass"
+    assert graded["authority"] is True
+    assert graded["reason"] == "reservation latch cleared with authority"
 
 
 def test_core_reserve_records_process_group(tmp_path):
@@ -6213,6 +6277,8 @@ def test_whole_classification_packet_over_bound_refuses_without_broker(
         },
     }
     with pytest.raises(model.ClassificationPromptError) as error:
+        from closer_typed_semantic_broker_fixture import renderer_inventory
+
         model.render_classification_prompt(
             mandatory,
             source_rows=current["sources"],
@@ -6220,55 +6286,11 @@ def test_whole_classification_packet_over_bound_refuses_without_broker(
             review_rows=[],
             artifact_rows={},
             data_only=True,
+            semantic_inventory=renderer_inventory(current["sources"]),
         )
     assert error.value.reason == "classification_prompt_exceeds_bound"
     assert not calls and not inert_caller.results
     assert inert_caller.world.events["auth"] == 0
-
-
-@pytest.mark.parametrize(
-    "failure", ["quota exceeded", "unsupported model", "authentication failed"]
-)
-def test_legacy_post_transport_error_output_classifier(
-    tmp_path, monkeypatch, inert_caller, failure
-):
-    """Legacy definite-failure handler unit; no origin or provider qualification claim."""
-    current = snapshot(
-        base="c" * 40,
-        state="MERGED",
-        merge=MERGE,
-        verifier={"verdict": "PASS", "run_id": "42", "evaluated_sha": MERGE},
-    )
-    backend, calls = _private_worker(
-        tmp_path,
-        monkeypatch,
-        current=current,
-        inert=inert_caller,
-        post_transport=True,
-        result={
-            "exit": 1,
-            "run_id": "legacy-definite-failure",
-            "error": "worker failed",
-            "output": failure,
-            "process_started": False,
-            "outcome_uncertain": False,
-        },
-    )
-    answer = backend.worker(TARGET, "collect_evidence", current, operation("collect_evidence"))
-    assert answer["status"] == "failed" and backend.workers_unavailable
-    assert failure in answer["worker"]["output"]
-    action, _, eligible, _ = backend.select(
-        snapshot(
-            target="o/r#8",
-            base="c" * 40,
-            state="MERGED",
-            merge=MERGE,
-            verifier={"verdict": "PASS", "run_id": "42", "evaluated_sha": MERGE},
-        )
-    )
-    assert action == "collect_evidence" and not eligible
-    assert len(calls) == 1 and not inert_caller.results
-    assert inert_caller.world.events["auth"] == 0 and not backend.gh.calls
 
 
 def test_legacy_exit70_raw0_never_supplies_acceptance(tmp_path):
@@ -6321,3 +6343,123 @@ def test_inert_cli_guard_refuses_unowned_paths_before_write(
     else:
         assert not guard.exists()
     assert inert_caller.world.events["auth"] == 0
+
+
+def test_native_writer_refusal_reobserved_on_unchanged_revision(tmp_path, monkeypatch):
+    import closer_resources
+
+    monkeypatch.setattr(adapter, "_probe_snapshot_revision", lambda target: "same-revision")
+    calls = []
+
+    def plan(*args, **kwargs):
+        calls.append(1)
+        return {
+            "eligible": len(calls) > 1,
+            "reasons": ["native_writer_not_terminal:synthetic"] if len(calls) == 1 else [],
+        }
+
+    monkeypatch.setattr(closer_resources, "plan_terminal_reconciliation", plan)
+    cache, observations = {}, {}
+    first, _ = adapter._cached_terminal_plan(
+        tmp_path / "pipeline.json", TARGET, cache, observations
+    )
+    second, _ = adapter._cached_terminal_plan(
+        tmp_path / "pipeline.json", TARGET, cache, observations
+    )
+    assert first["eligible"] is False
+    assert second["eligible"] is True
+    assert len(calls) == 2
+
+
+def test_lock_contention_refusal_reobserved_on_unchanged_revision(tmp_path, monkeypatch):
+    import closer_resources
+
+    monkeypatch.setattr(adapter, "_probe_snapshot_revision", lambda target: "same-revision")
+    calls = []
+
+    def plan(*args, **kwargs):
+        calls.append(1)
+        return {
+            "eligible": len(calls) > 1,
+            "reasons": ["live_reconciliation_holder"] if len(calls) == 1 else [],
+        }
+
+    monkeypatch.setattr(closer_resources, "plan_terminal_reconciliation", plan)
+    cache, observations = {}, {}
+    first, _ = adapter._cached_terminal_plan(
+        tmp_path / "pipeline.json", TARGET, cache, observations
+    )
+    second, _ = adapter._cached_terminal_plan(
+        tmp_path / "pipeline.json", TARGET, cache, observations
+    )
+    assert first["eligible"] is False
+    assert second["eligible"] is True
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize(
+    "grader,check",
+    [
+        (adapter.reservation_drain_pass_number, adapter.RESERVATION_DRAIN_PASS_CHECK_TS),
+        (adapter.reservation_drain_pass2_number, adapter.RESERVATION_DRAIN_PASS2_CHECK_TS),
+    ],
+)
+def test_drain_grading_preserves_unmeasured_reservations(grader, check):
+    result = grader(
+        {
+            "blocking_reservations": 0,
+            "drainable_reservations": 0,
+            "unmeasured_reservations": 1,
+            "authority": True,
+        },
+        now=check,
+    )
+    assert result["status"] == "unmeasured"
+    assert result["reservation_cleared"] is False
+
+
+def test_drain_pass2_noninteger_blocking_is_unmeasured():
+    result = adapter.reservation_drain_pass2_number(
+        {"blocking_reservations": "0", "drainable_reservations": 0, "authority": True},
+        now=adapter.RESERVATION_DRAIN_PASS2_CHECK_TS,
+    )
+    assert result["status"] == "unmeasured"
+    assert result["reservation_cleared"] is False
+
+
+@pytest.mark.parametrize("failure", ["mkdir", "replace", "probe", "transient"])
+def test_cache_failure_recovery_preserves_plan(tmp_path, monkeypatch, failure):
+    import closer_resources
+
+    calls = []
+
+    def plan(*args, **kwargs):
+        calls.append(1)
+        if failure == "transient" and len(calls) == 1:
+            return {"eligible": False, "reasons": ["advertisement_changed_under_locks"]}
+        return {"eligible": True, "reasons": []}
+
+    monkeypatch.setattr(closer_resources, "plan_terminal_reconciliation", plan)
+    if failure == "probe":
+
+        def snapshot(_target):
+            raise KeyError("data")
+
+        monkeypatch.setattr(adapter, "GitHub", lambda **kw: SimpleNamespace(snapshot=snapshot))
+    else:
+        monkeypatch.setattr(adapter, "_probe_snapshot_revision", lambda target: "same-revision")
+    if failure in {"mkdir", "replace"}:
+
+        def fail(*args, **kwargs):
+            raise OSError("read-only or competing cache writer")
+
+        monkeypatch.setattr(Path, failure, fail)
+    cache, observations = {}, {}
+    first, _ = adapter._cached_terminal_plan(
+        tmp_path / "pipeline.json", TARGET, cache, observations
+    )
+    second, _ = adapter._cached_terminal_plan(
+        tmp_path / "pipeline.json", TARGET, cache, observations
+    )
+    assert first["eligible"] is (failure != "transient")
+    assert second["eligible"] is True

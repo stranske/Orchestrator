@@ -1,0 +1,223 @@
+{
+  "observed_at": "2026-11-03T22:50:17.451Z",
+  "scope": "Connected Dropbox search metadata only; not a complete owner-host inventory or production observation.",
+  "conclusion": "No authentic November 3 owner-host artifact recovered; matching October paths belong to pytest controls.",
+  "searches": [
+    {
+      "query": "redirect-apply.log",
+      "has_more": false,
+      "results": [
+        {
+          "id": "id:tDSHdCztYNUAAAAAADqcoQ",
+          "last_modified": "2026-10-21T04:36:12Z",
+          "match_type": "BOTH_FILENAME_AND_CONTENT",
+          "mime_type": "application/octet-stream",
+          "object_type": "file",
+          "path": "ns:57267731//My Mac (TRS MacBook)/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_an_authenticated_tick_run1/state/redirect-apply.log",
+          "path_display": "/My Mac (TRS MacBook)/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_an_authenticated_tick_run1/state/redirect-apply.log",
+          "rank": 1,
+          "size": 43,
+          "title": "redirect-apply.log",
+          "url": "https://www.dropbox.com/preview/My%20Mac%20%28TRS%20MacBook%29/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_an_authenticated_tick_run1/state/redirect-apply.log"
+        },
+        {
+          "id": "id:tDSHdCztYNUAAAAAADqcWg",
+          "last_modified": "2026-10-21T04:36:04Z",
+          "match_type": "BOTH_FILENAME_AND_CONTENT",
+          "mime_type": "application/octet-stream",
+          "object_type": "file",
+          "path": "ns:57267731//My Mac (TRS MacBook)/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_an_authenticated_tick_run0/state/redirect-apply.log",
+          "path_display": "/My Mac (TRS MacBook)/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_an_authenticated_tick_run0/state/redirect-apply.log",
+          "rank": 2,
+          "size": 43,
+          "title": "redirect-apply.log",
+          "url": "https://www.dropbox.com/preview/My%20Mac%20%28TRS%20MacBook%29/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_an_authenticated_tick_run0/state/redirect-apply.log"
+        }
+      ],
+      "total_results": 2
+    },
+    {
+      "query": "shadow.jsonl",
+      "has_more": false,
+      "results": [
+        {
+          "id": "id:tDSHdCztYNUAAAAAADvohw",
+          "last_modified": "2026-10-21T12:53:16Z",
+          "match_type": "BOTH_FILENAME_AND_CONTENT",
+          "mime_type": "application/octet-stream",
+          "object_type": "file",
+          "path": "ns:57267731//My Mac (TRS MacBook)/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_unreadable_outcomes_are_u0/shadow.jsonl",
+          "path_display": "/My Mac (TRS MacBook)/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_unreadable_outcomes_are_u0/shadow.jsonl",
+          "rank": 1,
+          "size": 176,
+          "title": "shadow.jsonl",
+          "url": "https://www.dropbox.com/preview/My%20Mac%20%28TRS%20MacBook%29/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_unreadable_outcomes_are_u0/shadow.jsonl"
+        },
+        {
+          "id": "id:tDSHdCztYNUAAAAAADsDiQ",
+          "last_modified": "2026-10-21T07:30:23Z",
+          "match_type": "BOTH_FILENAME_AND_CONTENT",
+          "mime_type": "application/octet-stream",
+          "object_type": "file",
+          "path": "ns:57267731//My Mac (TRS MacBook)/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_duplicate_link_receipts_r3/capability-program/triage-shadow.jsonl",
+          "path_display": "/My Mac (TRS MacBook)/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_duplicate_link_receipts_r3/capability-program/triage-shadow.jsonl",
+          "rank": 2,
+          "size": 24120,
+          "title": "triage-shadow.jsonl",
+          "url": "https://www.dropbox.com/preview/My%20Mac%20%28TRS%20MacBook%29/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_duplicate_link_receipts_r3/capability-program/triage-shadow.jsonl"
+        },
+        {
+          "id": "id:tDSHdCztYNUAAAAAADsDFw",
+          "last_modified": "2026-10-21T07:30:10Z",
+          "match_type": "BOTH_FILENAME_AND_CONTENT",
+          "mime_type": "application/octet-stream",
+          "object_type": "file",
+          "path": "ns:57267731//My Mac (TRS MacBook)/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_duplicate_link_receipts_r2/capability-program/triage-shadow.jsonl",
+          "path_display": "/My Mac (TRS MacBook)/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_duplicate_link_receipts_r2/capability-program/triage-shadow.jsonl",
+          "rank": 3,
+          "size": 24120,
+          "title": "triage-shadow.jsonl",
+          "url": "https://www.dropbox.com/preview/My%20Mac%20%28TRS%20MacBook%29/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_duplicate_link_receipts_r2/capability-program/triage-shadow.jsonl"
+        },
+        {
+          "id": "id:tDSHdCztYNUAAAAAADsDjw",
+          "last_modified": "2026-10-21T07:30:23Z",
+          "match_type": "BOTH_FILENAME_AND_CONTENT",
+          "mime_type": "application/octet-stream",
+          "object_type": "file",
+          "path": "ns:57267731//My Mac (TRS MacBook)/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_duplicate_legacy_receipts0/capability-program/triage-shadow.jsonl",
+          "path_display": "/My Mac (TRS MacBook)/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_duplicate_legacy_receipts0/capability-program/triage-shadow.jsonl",
+          "rank": 4,
+          "size": 24120,
+          "title": "triage-shadow.jsonl",
+          "url": "https://www.dropbox.com/preview/My%20Mac%20%28TRS%20MacBook%29/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_duplicate_legacy_receipts0/capability-program/triage-shadow.jsonl"
+        },
+        {
+          "id": "id:tDSHdCztYNUAAAAAADsDDw",
+          "last_modified": "2026-10-21T07:30:10Z",
+          "match_type": "BOTH_FILENAME_AND_CONTENT",
+          "mime_type": "application/octet-stream",
+          "object_type": "file",
+          "path": "ns:57267731//My Mac (TRS MacBook)/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_duplicate_link_receipts_r0/capability-program/triage-shadow.jsonl",
+          "path_display": "/My Mac (TRS MacBook)/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_duplicate_link_receipts_r0/capability-program/triage-shadow.jsonl",
+          "rank": 5,
+          "size": 24120,
+          "title": "triage-shadow.jsonl",
+          "url": "https://www.dropbox.com/preview/My%20Mac%20%28TRS%20MacBook%29/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_duplicate_link_receipts_r0/capability-program/triage-shadow.jsonl"
+        },
+        {
+          "id": "id:tDSHdCztYNUAAAAAADsDdw",
+          "last_modified": "2026-10-21T07:30:21Z",
+          "match_type": "BOTH_FILENAME_AND_CONTENT",
+          "mime_type": "application/octet-stream",
+          "object_type": "file",
+          "path": "ns:57267731//My Mac (TRS MacBook)/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_duplicate_link_receipts_r1/capability-program/triage-shadow.jsonl",
+          "path_display": "/My Mac (TRS MacBook)/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_duplicate_link_receipts_r1/capability-program/triage-shadow.jsonl",
+          "rank": 6,
+          "size": 24120,
+          "title": "triage-shadow.jsonl",
+          "url": "https://www.dropbox.com/preview/My%20Mac%20%28TRS%20MacBook%29/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_duplicate_link_receipts_r1/capability-program/triage-shadow.jsonl"
+        },
+        {
+          "id": "id:tDSHdCztYNUAAAAAADsC9Q",
+          "last_modified": "2026-10-21T07:30:08Z",
+          "match_type": "BOTH_FILENAME_AND_CONTENT",
+          "mime_type": "application/octet-stream",
+          "object_type": "file",
+          "path": "ns:57267731//My Mac (TRS MacBook)/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_unknown_consumption_evide2/capability-program/triage-shadow.jsonl",
+          "path_display": "/My Mac (TRS MacBook)/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_unknown_consumption_evide2/capability-program/triage-shadow.jsonl",
+          "rank": 7,
+          "size": 24120,
+          "title": "triage-shadow.jsonl",
+          "url": "https://www.dropbox.com/preview/My%20Mac%20%28TRS%20MacBook%29/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_unknown_consumption_evide2/capability-program/triage-shadow.jsonl"
+        },
+        {
+          "id": "id:tDSHdCztYNUAAAAAADsC7w",
+          "last_modified": "2026-10-21T07:30:05Z",
+          "match_type": "BOTH_FILENAME_AND_CONTENT",
+          "mime_type": "application/octet-stream",
+          "object_type": "file",
+          "path": "ns:57267731//My Mac (TRS MacBook)/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_unknown_consumption_evide0/capability-program/triage-shadow.jsonl",
+          "path_display": "/My Mac (TRS MacBook)/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_unknown_consumption_evide0/capability-program/triage-shadow.jsonl",
+          "rank": 8,
+          "size": 24120,
+          "title": "triage-shadow.jsonl",
+          "url": "https://www.dropbox.com/preview/My%20Mac%20%28TRS%20MacBook%29/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_unknown_consumption_evide0/capability-program/triage-shadow.jsonl"
+        },
+        {
+          "id": "id:tDSHdCztYNUAAAAAADsC9w",
+          "last_modified": "2026-10-21T07:30:08Z",
+          "match_type": "BOTH_FILENAME_AND_CONTENT",
+          "mime_type": "application/octet-stream",
+          "object_type": "file",
+          "path": "ns:57267731//My Mac (TRS MacBook)/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_unknown_consumption_evide3/capability-program/triage-shadow.jsonl",
+          "path_display": "/My Mac (TRS MacBook)/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_unknown_consumption_evide3/capability-program/triage-shadow.jsonl",
+          "rank": 9,
+          "size": 24120,
+          "title": "triage-shadow.jsonl",
+          "url": "https://www.dropbox.com/preview/My%20Mac%20%28TRS%20MacBook%29/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_unknown_consumption_evide3/capability-program/triage-shadow.jsonl"
+        },
+        {
+          "id": "id:tDSHdCztYNUAAAAAADsC8g",
+          "last_modified": "2026-10-21T07:30:05Z",
+          "match_type": "BOTH_FILENAME_AND_CONTENT",
+          "mime_type": "application/octet-stream",
+          "object_type": "file",
+          "path": "ns:57267731//My Mac (TRS MacBook)/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_unknown_consumption_evide1/capability-program/triage-shadow.jsonl",
+          "path_display": "/My Mac (TRS MacBook)/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_unknown_consumption_evide1/capability-program/triage-shadow.jsonl",
+          "rank": 10,
+          "size": 24120,
+          "title": "triage-shadow.jsonl",
+          "url": "https://www.dropbox.com/preview/My%20Mac%20%28TRS%20MacBook%29/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_unknown_consumption_evide1/capability-program/triage-shadow.jsonl"
+        }
+      ],
+      "total_results": 10
+    },
+    {
+      "query": "redirect-sweep.json",
+      "has_more": false,
+      "results": [
+        {
+          "id": "id:tDSHdCztYNUAAAAAADur7Q",
+          "last_modified": "2026-10-21T11:41:28Z",
+          "match_type": "BOTH_FILENAME_AND_CONTENT",
+          "mime_type": "application/octet-stream",
+          "object_type": "file",
+          "path": "ns:57267731//My Mac (TRS MacBook)/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_an_unknown_population_is_0/orch-state/redirect-sweep.json",
+          "path_display": "/My Mac (TRS MacBook)/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_an_unknown_population_is_0/orch-state/redirect-sweep.json",
+          "rank": 1,
+          "size": 19,
+          "title": "redirect-sweep.json",
+          "url": "https://www.dropbox.com/preview/My%20Mac%20%28TRS%20MacBook%29/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_an_unknown_population_is_0/orch-state/redirect-sweep.json"
+        },
+        {
+          "id": "id:tDSHdCztYNUAAAAAADvWwg",
+          "last_modified": "2026-10-21T12:33:32Z",
+          "match_type": "BOTH_FILENAME_AND_CONTENT",
+          "mime_type": "application/octet-stream",
+          "object_type": "file",
+          "path": "ns:57267731//My Mac (TRS MacBook)/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_an_applyable_verdict_does0/orch-state/redirect-sweep.json",
+          "path_display": "/My Mac (TRS MacBook)/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_an_applyable_verdict_does0/orch-state/redirect-sweep.json",
+          "rank": 2,
+          "size": 19,
+          "title": "redirect-sweep.json",
+          "url": "https://www.dropbox.com/preview/My%20Mac%20%28TRS%20MacBook%29/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_an_applyable_verdict_does0/orch-state/redirect-sweep.json"
+        }
+      ],
+      "total_results": 2
+    },
+    {
+      "query": "switch-review.json",
+      "filter": "last_modified_after=2026-11-03T00:00:00Z",
+      "has_more": false,
+      "results": [],
+      "total_results": 0
+    },
+    {
+      "query": "November 3 redirect apply bootstrap armed cadence",
+      "has_more": false,
+      "results": [],
+      "total_results": 0
+    }
+  ]
+}

@@ -761,7 +761,7 @@ def run_if_selected(campaign, document, manifest, manifest_path, pending):
         .get("config", {})
         .get("consumers", {})
     )
-    if not any("publication_v1" in row for row in consumers.values()):
+    if not any(publication.publication_key(row) for row in consumers.values()):
         return None
     if pending.get("kind") != "reconcile":
         return None
@@ -932,6 +932,20 @@ def host_git_context(selection):
             == publication._bytes(scope.history["baseline"]["host_git"]),
             "original protected Git/helper context changed",
         )
+        if scope.policy["schema"] == publication.ANCHOR_POLICY_SCHEMA:
+            _need(
+                scope.history["baseline"]["schema"] == "closer-publication-source-baseline/v2",
+                "original no-copy baseline version differs",
+            )
+            anchor = publication._source_snapshot_seed(
+                host,
+                scope.history["baseline"]["baseline"],
+                prior=scope.history["baseline"]["existing_objects"],
+            )
+            _need(
+                anchor.summary() == scope.history["baseline"]["existing_objects"],
+                "original existing object fingerprint changed before reentry",
+            )
         scope.host = host
         return host
     except BaseException:
@@ -962,6 +976,9 @@ def require_io_admission(controller, custody, operation, selection, host):
 
 def _reopen_or_prepare_staging(scope, custody, host):
     handoff = scope.history["handoff"]
+    prior = scope.history["baseline"].get("existing_objects")
+    if scope.policy["schema"] == publication.ANCHOR_POLICY_SCHEMA:
+        _need(type(prior) is dict, "retained original object fingerprint unavailable")
     names = set(os.listdir(custody.fd))
     stage_name = "publication-staging-" + scope.slot
     marker_name = "publication-staging-intent-" + scope.slot + ".json"
@@ -1003,6 +1020,10 @@ def _reopen_or_prepare_staging(scope, custody, host):
         marker = custody.read(marker_name)
         data = publication._StagingData(custody.path / stage_name, marker)
         try:
+            if scope.policy["schema"] == publication.ANCHOR_POLICY_SCHEMA:
+                data.object_anchor = publication._source_snapshot_seed(
+                    host, scope.history["baseline"]["baseline"], prior=prior
+                )
             _need(
                 publication._bytes(data.check()) == publication._bytes(stage["private_files"]),
                 "retained staging physical binding changed",
@@ -1035,7 +1056,9 @@ def _reopen_or_prepare_staging(scope, custody, host):
             hooks[path.name] = publication._held_file_bytes(item)
         finally:
             item.close()
-    objects = publication._source_snapshot_seed(host, scope.history["baseline"]["baseline"])
+    objects = publication._source_snapshot_seed(
+        host, scope.history["baseline"]["baseline"], prior=prior
+    )
     scope.check()
     return publication._build_staging_data(
         custody,
@@ -1156,6 +1179,19 @@ def selected_transport(controller, custody, operation, selection, host):
             "GIT_OBJECT_DIRECTORY": str(data.path / "repo.git/objects"),
         }
     )
+    if scope.policy["schema"] == publication.ANCHOR_POLICY_SCHEMA:
+        _need(
+            type(data.object_anchor) is publication._ExistingObjects
+            and data.object_anchor is host.object_anchor,
+            "source-held original object directory unavailable",
+        )
+        data.object_anchor.check()
+        environment.update(
+            GIT_OBJECT_DIRECTORY=str(data.object_anchor.path),
+            GIT_NO_LAZY_FETCH="1",
+            GIT_NO_REPLACE_OBJECTS="1",
+            TMPDIR=str(data.path / "native-tmp"),
+        )
     return {
         "policy": scope.policy,
         "argv": phase.f_locals["command"],
@@ -1621,7 +1657,12 @@ def _result_for_subject(custody, repository, number):
         record = custody.read(name)
         _need(publication.digest(record) == match[1], "publication result custody changed")
         pr = record.get("pr", {})
-        if pr.get("repository") == repository and str(pr.get("pr_number")) == number:
+        recorded_repository = pr.get("repository")
+        if (
+            isinstance(recorded_repository, str)
+            and recorded_repository.lower() == repository.lower()
+            and str(pr.get("pr_number")) == number
+        ):
             _need(record.get("schema") == RESULT_SCHEMA, "publication result schema changed")
             results.append((name, match[1], record))
     _need(len(results) <= 1, "multiple corrective publications need explicit source selection")
@@ -1765,7 +1806,9 @@ def read_for_existing_root(backend, target, snapshot, operation, pipeline_contex
     )
     repository, separator, number = target.rpartition("#")
     _need(
-        separator and repository == controller.config.repository and number.isdecimal(),
+        separator
+        and repository.lower() == controller.config.repository.lower()
+        and number.isdecimal(),
         "publication target differs",
     )
     with controller.fenced(operation) as custody:
@@ -1831,7 +1874,9 @@ def discovery_hint(backend, target, pipeline_context):
     _consumer_source(installation)
     repository, separator, number = target.rpartition("#")
     _need(
-        separator and repository == installation.config["repository"] and number.isdecimal(),
+        separator
+        and repository.lower() == installation.config["repository"].lower()
+        and number.isdecimal(),
         "publication observation subject differs",
     )
     path = Path(installation.manifest_path)

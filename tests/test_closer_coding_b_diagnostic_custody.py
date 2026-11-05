@@ -5,15 +5,18 @@ Every injected source producer fails; no authentication-success stub is used.
 """
 
 import ast
+import contextlib
 import json
 import os
 import subprocess
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 import closer_coding_worker as worker  # noqa: E402
+import closer_dispatcher as dispatcher  # noqa: E402
 import closer_native_observer as native  # noqa: E402
 import closer_runtime_binding as runtime  # noqa: E402
 
@@ -129,9 +132,167 @@ def test_summary_is_bounded_non_authorizing_and_contains_no_stream_text():
         native.coding_b_observation_summary(done, {})
 
 
+def test_initial_pre_pipeline_unexpected_error_is_redacted_and_typed(tmp_path):
+    args = SimpleNamespace(
+        command="run",
+        pipeline=True,
+        shadow=False,
+        coding_worker=False,
+        state=str(tmp_path / "campaign.json"),
+    )
+    held = dispatcher._initial_dispatch_held(args, AssertionError(SECRET))
+    assert held == {
+        "schema": "closer-initial-dispatch-held/v1",
+        "status": "held",
+        "reason": "initial_dispatch_pre_pipeline_refused",
+        "diagnostic": {
+            "stage": "initial_dispatch_pre_pipeline",
+            "code": "unexpected_source_error",
+        },
+        "execution_authorized": False,
+        "retry_authorized": False,
+    }
+    assert SECRET not in json.dumps(held)
+    assert native._initial_dispatch_held_diagnostic(json.dumps(held)) == held["diagnostic"]
+
+
+def test_initial_pre_pipeline_error_is_not_projected_after_pipeline_path_exists(tmp_path):
+    state = tmp_path / "campaign.json"
+    pipeline = Path(str(state) + ".pipeline.json")
+    pipeline.write_text("{}")
+    args = SimpleNamespace(
+        command="run",
+        pipeline=True,
+        shadow=False,
+        coding_worker=False,
+        state=str(state),
+    )
+    assert dispatcher._initial_dispatch_held(args, AssertionError(SECRET)) is None
+
+
+def test_dispatcher_main_projects_unexpected_pre_pipeline_error(tmp_path, monkeypatch, capsys):
+    assignment = tmp_path / "assignment.json"
+    assignment.write_text(json.dumps({"targets": [{"target": "stranske/Orchestrator#984"}]}))
+
+    @contextlib.contextmanager
+    def no_state_admission(*_args, **_kwargs):
+        yield SimpleNamespace()
+
+    import closer_resources
+
+    monkeypatch.setattr(closer_resources, "coordination_admission", no_state_admission)
+    monkeypatch.setattr(
+        dispatcher,
+        "_main_admitted",
+        lambda *_args: (_ for _ in ()).throw(AssertionError(SECRET)),
+    )
+    assert (
+        dispatcher.main(
+            [
+                "run",
+                "--assignment",
+                str(assignment),
+                "--state",
+                str(tmp_path / "campaign.json"),
+                "--pipeline",
+                "--apply",
+                "--workers",
+            ]
+        )
+        == 78
+    )
+    frame = json.loads(capsys.readouterr().out)
+    assert frame["diagnostic"]["code"] == "unexpected_source_error"
+    assert SECRET not in json.dumps(frame)
+
+
+def test_initial_pre_pipeline_frame_refuses_raw_child_output():
+    done = subprocess.CompletedProcess([], 78, json.dumps(root_failure()), SECRET)
+    summary = native.initial_b_observation_summary(done, {"finished": {"cleanup_terminal": True}})
+    assert summary == {
+        "exit_code": 78,
+        "cleanup_terminal": True,
+        "diagnostic": {"stage": "initial_b_output", "code": "no_typed_held_frame"},
+        "execution_authorized": False,
+        "acceptance_authorized": False,
+    }
+    assert SECRET not in json.dumps(summary)
+
+
+def test_initial_pre_pipeline_frame_projects_only_allowlisted_diagnostic(tmp_path):
+    args = SimpleNamespace(
+        command="run",
+        pipeline=True,
+        shadow=False,
+        coding_worker=False,
+        state=str(tmp_path / "campaign.json"),
+    )
+    frame = dispatcher._initial_dispatch_held(args, RuntimeError(SECRET))
+    done = subprocess.CompletedProcess([], 78, json.dumps(frame), SECRET)
+    summary = native.initial_b_observation_summary(done, {"finished": {"cleanup_terminal": True}})
+    assert summary == {
+        "exit_code": 78,
+        "cleanup_terminal": True,
+        "diagnostic": {
+            "stage": "initial_dispatch_pre_pipeline",
+            "code": "source_refusal",
+        },
+        "execution_authorized": False,
+        "acceptance_authorized": False,
+    }
+    assert SECRET not in json.dumps(summary)
+
+
 def test_forged_observation_caller_never_writes_source_custody():
     with pytest.raises(RuntimeError, match="actual source coding B observation required"):
         native.record_coding_b_observation({}, subprocess.CompletedProcess([], 78, "", ""), {})
+
+
+def test_forged_initial_observation_caller_never_writes_source_custody():
+    with pytest.raises(RuntimeError, match="actual source initial B observation required"):
+        native.record_initial_b_observation({}, subprocess.CompletedProcess([], 78, "", ""), {})
+
+
+def test_generic_native_b_invokes_initial_observation_only_after_cleanup(monkeypatch):
+    calls = []
+    done = subprocess.CompletedProcess([], 78, "not-retained", SECRET)
+    witness = {"finished": {"cleanup_terminal": True}}
+
+    def retain(cfg, observed, observed_witness):
+        calls.append((cfg, observed, observed_witness))
+        return {
+            "exit_code": 78,
+            "cleanup_terminal": True,
+            "diagnostic": {"stage": "initial_dispatch_pre_pipeline", "code": "source_refusal"},
+            "execution_authorized": False,
+            "acceptance_authorized": False,
+            "reference": {"name": "initial-b-observation-worker.json"},
+        }
+
+    monkeypatch.setattr(native, "record_initial_b_observation", retain)
+    function = source_function("_observed_correction_b")
+    result = detached(
+        function.body[-2:],
+        {
+            "cfg": {"native_admission": {}},
+            "done": done,
+            "witness": witness,
+            "native": native,
+            "OSError": OSError,
+            "ValueError": ValueError,
+            "RuntimeError": RuntimeError,
+            "KeyError": KeyError,
+            "TypeError": TypeError,
+            "AttributeError": AttributeError,
+        },
+    )
+    assert result == (done, witness)
+    assert calls == [({"native_admission": {}}, done, witness)]
+    assert witness["initial_b_observation"]["diagnostic"] == {
+        "stage": "initial_dispatch_pre_pipeline",
+        "code": "source_refusal",
+    }
+    assert SECRET not in json.dumps(witness)
 
 
 @pytest.mark.parametrize("failure", [FileNotFoundError, ValueError, PermissionError])

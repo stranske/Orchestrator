@@ -33,6 +33,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -104,6 +105,94 @@ def _wt_git(wt: Path, args: list[str]) -> subprocess.CompletedProcess:
     import worktree_git  # lazy: worktree_git imports this module
 
     return worktree_git.run(wt, args)
+
+
+def _fast_forward_if_only_behind(wt: Path) -> bool:
+    """A clean worktree that is only BEHIND its upstream holds no work: fast-forward it and reuse it."""
+    status = _wt_git(wt, ["status", "--porcelain"])
+    if status.returncode != 0 or status.stdout.strip():
+        return False
+    upstream = _wt_git(
+        wt, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]
+    ).stdout.strip()
+    if not upstream or "/" not in upstream:
+        return False
+    remote, _, branch = upstream.partition("/")
+    _wt_git(wt, ["fetch", remote, branch])
+    counts = _wt_git(wt, ["rev-list", "--left-right", "--count", f"{upstream}...HEAD"])
+    try:
+        behind, ahead = [int(part) for part in counts.stdout.split()[:2]]
+    except Exception:
+        return False
+    if ahead:
+        return False
+    if behind:
+        return _wt_git(wt, ["merge", "--ff-only", upstream]).returncode == 0
+    return True
+
+
+def _set_aside_worktree(canon: Path, wt: Path, target: str, lane: str, event: dict) -> str:
+    """Owner decision 2026-11-05: a worktree holding a previous agent's unpushed or uncommitted work no longer
+    blocks every later dispatch (359 refusals across 27 issues, 2026-11-03..05). Its work is kept on a
+    `preserved/...` branch (uncommitted changes committed onto it), the worktree is removed, and the dispatch
+    provisions fresh. A worktree a live process is still using is never touched: that refusal clears when the
+    process exits. Returns the preserved branch name."""
+    try:
+        live = _live_holder_pids(wt)
+    except ProbeBlindError:
+        event.update(outcome="failed", cause="probe-blind")
+        raise
+    if live:
+        raise RuntimeError(
+            f"refusing to set aside worktree {wt} for {target} ({lane}): live pid {', '.join(sorted(live))} "
+            "(blocking 1, drainable 1: clears when that process exits)"
+        )
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    preserved = f"preserved/{worktree_name(target, lane)}-{stamp}"
+    switched = _wt_git(wt, ["switch", "-c", preserved])
+    if switched.returncode != 0:
+        # An earlier agent can leave a cherry-pick, merge or rebase in progress, where git refuses to switch
+        # branches (2026-11-05, Orchestrator#1129). Keep the work WITHOUT switching: the preserved branch takes
+        # HEAD, and `git stash create` captures staged and unstaged changes as a commit on top of it without
+        # touching the worktree. Untracked files are not in that commit, so their presence still refuses.
+        untracked = _wt_git(wt, ["ls-files", "--others", "--exclude-standard"]).stdout.strip()
+        if untracked:
+            raise RuntimeError(
+                f"cannot preserve {wt}: {switched.stderr.strip()[:200]}; untracked files would be lost "
+                f"({untracked.splitlines()[0]}...) (blocking 1, drainable 0: inspect the worktree)"
+            )
+        if _wt_git(wt, ["branch", preserved, "HEAD"]).returncode != 0:
+            raise RuntimeError(f"cannot preserve {wt}: {switched.stderr.strip()[:300]}")
+        wip = _wt_git(
+            wt, ["stash", "create", f"provision: preserve work from {wt.name}"]
+        ).stdout.strip()
+        if wip and _wt_git(wt, ["branch", "-f", preserved, wip]).returncode != 0:
+            raise RuntimeError(f"cannot preserve uncommitted work in {wt} (stash {wip[:12]})")
+        event.update(preserved_without_switch=True)
+    elif _wt_git(wt, ["status", "--porcelain"]).stdout.strip():
+        _wt_git(wt, ["add", "-A"])
+        committed = _wt_git(
+            wt,
+            [
+                "-c",
+                "user.name=orchestrator-provision",
+                "-c",
+                "user.email=orchestrator-provision@localhost",
+                "commit",
+                "--no-verify",
+                "-m",
+                f"provision: preserve uncommitted work from {wt.name} before re-provisioning",
+            ],
+        )
+        if committed.returncode != 0:
+            raise RuntimeError(
+                f"cannot preserve uncommitted work in {wt}: {committed.stderr.strip()[:300]}"
+            )
+    _run(["git", "-C", str(canon), "worktree", "remove", "--force", str(wt)])
+    _run(["git", "-C", str(canon), "worktree", "prune"])
+    event.update(set_aside=str(wt), preserved_branch=preserved)
+    print(f"provision: set aside stale worktree {wt}; its work is on branch {preserved}")
+    return preserved
 
 
 def _existing_worktree_reuse_error(wt: Path) -> str | None:
@@ -421,13 +510,17 @@ def _provision(target: str, lane: str, event: dict, branch: str | None = None) -
             event.update(outcome="reused", cause="existing-worktree")
             return wt
         reuse_error = _existing_worktree_reuse_error(wt)
-        if reuse_error:
-            raise RuntimeError(
-                f"refusing to reuse stale worktree for {target} ({lane}): "
-                f"{reuse_error}; inspect or remove {wt}"
-            )
-        event.update(outcome="reused", cause="existing-worktree")
-        return wt  # already provisioned and clean
+        if reuse_error and _fast_forward_if_only_behind(wt):
+            reuse_error = None
+            event.update(cause="fast-forwarded")
+        if not reuse_error:
+            if event.get("cause") != "fast-forwarded":
+                event["cause"] = "existing-worktree"
+            event.update(outcome="reused")
+            return wt  # already provisioned and clean (fast-forwarded if it was only behind)
+        # unpushed or uncommitted work from an earlier agent: keep it on a branch, then provision fresh
+        event.update(cause="set-aside", reuse_error=reuse_error[:300])
+        _set_aside_worktree(canon, wt, target, lane, event)
     WORKTREES_DIR.mkdir(parents=True, exist_ok=True)
 
     if lane == "closer" and num is not None:
@@ -654,3 +747,116 @@ def main(argv: list[str]) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
+
+
+def provision_absent_owned_head(target: str, head: str, branch: str, *, git_policy: dict) -> dict:
+    """Prepare one absent local named worktree, never reset/reclaim/fetch/push.
+
+    The caller supplies a freshly native-observed owned PR tuple. This local
+    DATA receipt is not native ownership or controller admission. The existing
+    canonical clone must already contain H; Root may populate a fresh namespace
+    separately. No existing branch/worktree/index is adopted or modified.
+    """
+    import closer_coding_publication as publication
+    import worktree_git
+
+    repo, number = parse_target(target)
+    if number is None or repo != repo.lower() or not re.fullmatch(r"[a-f0-9]{40}", head):
+        raise ValueError("exact lowercase owned PR target/head required")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,199}", branch):
+        raise ValueError("bounded existing owned branch required")
+    canon = canonical_path(repo).resolve(strict=True)
+    wt = worktree_path(target, "closer")
+    if wt.exists() or wt.is_symlink():
+        raise RuntimeError("owned canary worktree must be absent; never reclaim")
+    if not (canon / ".git").is_dir() or (canon / ".git").is_symlink():
+        raise RuntimeError("existing canonical local Git repository required")
+    # Validate genuine configured namespaces rather than forging is_provisioned.
+    if canon.parent != REPOS_DIR.resolve(strict=True) or wt.parent != WORKTREES_DIR.resolve(
+        strict=True
+    ):
+        raise RuntimeError("canonical repository/worktree namespace differs")
+    original = dict(os.environ)
+    environment = publication.private_git_environment_data(git_policy, original)
+    executable = publication._PhysicalFile(git_policy["git_executable"]["path"], 256 * 1048576)
+    controls: list[publication._PhysicalFile | publication._PhysicalDirectory] = []
+    try:
+        if executable.sha256 != git_policy["git_executable"]["sha256"]:
+            raise RuntimeError("source-pinned local Git executable differs")
+
+        def run(args, *, check=True):
+            if dict(os.environ) != original:
+                raise RuntimeError("local provision environment changed")
+            executable.check()
+            for item in controls:
+                item.check()
+            if environment != publication.private_git_environment_data(git_policy, original):
+                raise RuntimeError("private local Git environment changed")
+            return subprocess.run(
+                [str(executable.path), "-C", str(canon), *args],
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=check,
+                timeout=30,
+            )
+
+        names = publication._configuration_names(
+            run(
+                ["config", "--null", "--show-scope", "--show-origin", "--name-only", "--list"]
+            ).stdout.encode(),
+            git_policy["max_ack_bytes"],
+        )
+        for name in sorted({str((canon / origin).resolve()) for _scope, origin, _key in names}):
+            controls.append(publication._PhysicalFile(name, git_policy["max_ack_bytes"]))
+        hooks = canon / ".git/hooks"
+        controls.append(publication._PhysicalDirectory(hooks, closed_entries=True))
+        if any(
+            p.is_symlink() or not p.is_file() or not p.name.endswith(".sample")
+            for p in hooks.iterdir()
+        ):
+            raise RuntimeError(
+                "active canonical hooks require source closure before local provisioning"
+            )
+        run(["check-ref-format", "--branch", branch])
+        absent = run(["show-ref", "--verify", "--quiet", "refs/heads/" + branch], check=False)
+        if absent.returncode != 1:
+            raise RuntimeError("owned local branch must be absent; never reset or adopt")
+        run(["cat-file", "-e", head + "^{commit}"])
+        # -b is Git's own create-only branch lock. Existing holder/name races
+        # refuse without -B/--force/prune/remove or retrying an uncertain result.
+        run(["worktree", "add", "--checkout", "-b", branch, str(wt), head])
+        pins = worktree_git.expected_pins(wt, repo)
+        if not worktree_git.is_provisioned(wt) or not isinstance(pins, tuple):
+            raise RuntimeError("actual linked worktree metadata refused; preserve for inspection")
+        observed = subprocess.run(
+            [str(executable.path), "-C", str(wt), "rev-parse", "HEAD"],
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=15,
+        ).stdout.strip()
+        named = subprocess.run(
+            [str(executable.path), "-C", str(wt), "symbolic-ref", "HEAD"],
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=15,
+        ).stdout.strip()
+        if observed != head or named != "refs/heads/" + branch:
+            raise RuntimeError("prepared owned worktree changed; preserve without retry")
+        return {
+            "schema": "closer-owned-existing-worktree-preparation-data/v1",
+            "target": target,
+            "head": head,
+            "branch": branch,
+            "worktree": str(wt),
+            "topology": [str(p) for p in pins],
+            "managed_metadata_verified": True,
+            "native_ownership_proven": False,
+            "runtime_admission": False,
+        }
+    finally:
+        publication._close_physical_controls([executable, *controls])

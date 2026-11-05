@@ -315,6 +315,8 @@ def test_fixed_read_transport_call_expression_only_uses_existing_observer():
         finished=callback,
         starting=callback,
         source_env={"PATH": "/source/bin"},
+        private_input=None,
+        kind="config_names",
         _remaining_transport_seconds=publication._remaining_transport_seconds,
         time=SimpleNamespace(time=lambda: 100),
     )

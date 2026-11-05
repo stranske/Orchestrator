@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "checked_at": "2026-11-04T02:46:26.864777+00:00",
+  "evidence_class": "local_fixture_regressions",
+  "source_commit": "de594803fc09b553bc7fbe19c0acb978eacb8e7a",
+  "source_parent": "fd627376680615b9652134106ee1f4fd8cb6f159",
+  "git_metadata": "/tmp/issue1096-native-case-git-434rpe_u/repo.git",
+  "node_version": "v24.22.2",
+  "source_sha256": {
+    "scripts/export_adjudicator_inventory.js": "c2da5a3cd6edbd5a4b772d771a3eb1dae1b7d77ea184eae4c5129346626947d2",
+    "tests/test_adjudicator_inventory.js": "aa769a538ab8e75ddd3fb1e7b9cf549cc5c367bdbc5704a8cd17c93f18523119"
+  },
+  "checks": [
+    {
+      "command": [
+        "node",
+        "tests/test_adjudicator_inventory.js"
+      ],
+      "log": "inventory.log",
+      "log_sha256": "0ea03eaa733487d363ee81532cccd5009982c96489ab9aa798a7b715ed6f4425",
+      "passed": 78,
+      "failed": 0
+    },
+    {
+      "command": [
+        "node",
+        "tests/test_adjudicator_acceptance_runner.js"
+      ],
+      "log": "runner.log",
+      "log_sha256": "38495969980b41261531a9c7f062cb8e6d50f6fbc04979adde74643c522ec083",
+      "passed": 33,
+      "failed": 0
+    },
+    {
+      "command": [
+        "node",
+        "tests/test_adjudicator_evidence_ledger.js"
+      ],
+      "log": "ledger.log",
+      "log_sha256": "44c26d9dba1b6e7ddc796dd1718c43bb12fb8c1e08c8f1c38bf65eb0aee11266",
+      "passed": 26,
+      "failed": 0
+    }
+  ],
+  "prior_source_controls": {
+    "source_revision": "fd627376680615b9652134106ee1f4fd8cb6f159",
+    "test_source_sha256": "aa769a538ab8e75ddd3fb1e7b9cf549cc5c367bdbc5704a8cd17c93f18523119",
+    "log": "prior-source-controls.log",
+    "log_sha256": "68dfe7209424308a24578d3e216157227ad76c0c84434c748908fa60d5f91381",
+    "passed": 75,
+    "failed": 3,
+    "scope": "prior inventory source with new tests in a temporary fixture checkout"
+  },
+  "passed": 137,
+  "required_python_tests": "not_rerun; selected Python 3.14.10 has no pytest; prior required-test receipts remain failed before collection",
+  "accepted_deployment_verified": false,
+  "original_retry_manifest_recovered": false,
+  "authenticated_outcomes_verified": false,
+  "original_retry_reconciliation_complete": false,
+  "operational_task_checkboxes_completed": 0,
+  "provider_calls": 0,
+  "production_dispatches": 0,
+  "canonical_publications": 0,
+  "blocker_comment": "rejected_connector_requires_approval_policy_never",
+  "needs_human_label": "rejected_connector_requires_approval_policy_never",
+  "pr_readiness": {
+    "checked_at": "2026-11-04T02:46:26.772Z",
+    "number": 1097,
+    "state": "open",
+    "isDraft": false,
+    "head": "fd627376680615b9652134106ee1f4fd8cb6f159"
+  },
+  "syntax_checks_passed": true,
+  "whitespace_check_passed": true,
+  "ledger_audit": {
+    "path": "ledger-audit.json",
+    "sha256": "a473619726bcb713f8a8f72e9fd84e72f640bd91a6d897352d60a79b25f617c5"
+  }
+}

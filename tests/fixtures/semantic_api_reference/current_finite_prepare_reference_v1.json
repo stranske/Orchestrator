@@ -1,0 +1,25 @@
+{
+  "base": "18b6f9ae6d2f72f2d958df654cdd6ac5c0e3785c",
+  "dispatcher": {
+    "after_file_sha256": "2c8e71a4a8b76559ef9f64475deffb16293a6c43f256dc6a17e087ce1e90c675",
+    "after_fragment": "                # Refuse before collection/model/effects; ACT still independently checks.\n                # Preserve the complete observation outside the bounded callback,\n                # just as the ordinary preparation path does. Verifier excerpts\n                # can exceed the callback budget even when all we need is a hold.\n                snapshot_bytes = json.dumps(\n                    snap, ensure_ascii=False, sort_keys=True, separators=(\",\", \":\")\n                ).encode()\n                snapshot_path = (\n                    retained_dir\n                    / \"snapshots\"\n                    / f\"{hashlib.sha256(snapshot_bytes).hexdigest()}.json\"\n                )\n                closer_evidence._atomic_write(snapshot_path, snapshot_bytes)\n                return {\n                    \"revision\": snap.get(\"revision\"),\n                    \"snapshot\": {\n                        key: snap.get(key)\n                        for key in (\"target\", \"head\", \"base\", \"merge\", \"revision\", \"state\", \"kind\")\n                    },\n                    \"snapshot_ref\": {\n                        \"path\": str(snapshot_path),\n                        \"sha256\": hashlib.sha256(snapshot_bytes).hexdigest(),\n                    },\n                    \"proposal\": {\n                        \"action\": \"wait\",\n                        \"eligible\": False,\n                        \"reason\": \"finite_action_binding_changed\",\n                    },\n                    \"finite_binding_changed\": True,\n                }\n",
+    "after_prepare_ast_sha256": "802f9303cfc14fba1c66c545f9e634f39c8ee03637ae40a01ba6dddafb8c8fca",
+    "after_unreserved_ast_sha256": "08af545edd24c020919a9815cab71e93e9496fd450dd03278a0fe0ee8a487384",
+    "before_file_sha256": "12f1f0331b6da85c365fdd9cdf3c2027c930cb34398d723ebe4ae3f4aa5bef12",
+    "before_fragment": "                # Refuse before collection/model/effects; ACT still independently checks.\n                return {\n                    \"revision\": snap.get(\"revision\"),\n                    \"snapshot\": snap,\n                    \"proposal\": {\n                        \"action\": \"wait\",\n                        \"eligible\": False,\n                        \"reason\": \"finite_action_binding_changed\",\n                    },\n                    \"finite_binding_changed\": True,\n                }\n",
+    "before_prepare_ast_sha256": "bcc55688772d492caac9f536297f685d31ac85447c60875e59126c966d2b6524",
+    "before_unreserved_ast_sha256": "22a1746e18c941b8b307a98c8145de77c0202116004fdadf790bf07de735a490"
+  },
+  "role_source": {
+    "after_constant_ast_sha256": "60e293a280ec2297468c4e2ebdffffb02b8b852027b3ad3a79cee65fff8cc180",
+    "after_execution_contract": "a4f10abc2bf51b552838cc198cf9a3246424c80bc743e8e9a56a0fcf934d2823",
+    "after_file_sha256": "72d866e42d87eb06d1210fb32a90a6d6478abcb70d7163389bc4a3486ea54bed",
+    "before_constant_ast_sha256": "8cdac00f5e7a892dbaddf5732794cafd34e34cd0ea83e8a94291af1a61691a87",
+    "before_execution_contract": "19fe98d3f1a7cd6d032536f36ee383e5e606f4efae0ead19652a09de3a7c0cee",
+    "before_file_sha256": "d5b0a72cb58b318824345e59d083588f40c1f64720aafcb7bbd7ec08ac259389",
+    "physical_qualification_performed": false,
+    "qualification_record_sha256": "837713af72c5a701bd1b50757458632597aaf8f482ef2f2109811b101d402482"
+  },
+  "schema": "current-finite-prepare-reference-static-audit/v1",
+  "scope": "Only the changed-frontier hold retains full native snapshot by hash and returns compact identity; no collection/model/effect authority, cap change, physical observation or freshness renewal."
+}

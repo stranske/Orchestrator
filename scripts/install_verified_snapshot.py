@@ -24,6 +24,14 @@ import tempfile
 import uuid
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+try:
+    from source_snapshot_digest import snapshot_digest as _shared_snapshot_digest
+except ModuleNotFoundError:  # legacy verified snapshots predate the pure helper
+    _shared_snapshot_digest = None
+
+
 # These trees and root-level *.py/*.sh files are deployment-owned in full. Merged
 # trees own only their manifest leaves; named files own no siblings or parent trees.
 REPLACED_TREES = ("tests", "scripts", ".github")
@@ -52,6 +60,7 @@ OWNED_FILES = (
     "config/coverage-baseline.json",
     "config/test-shards.json",
     "config/model_epochs.json",
+    "closer_role_selection.json",
     "tools/make_test_shards.py",
 )
 GENERATED_DIRS = {"__pycache__", ".pytest_cache", ".mypy_cache", "htmlcov"}
@@ -108,6 +117,8 @@ def owned_entries(snapshot: Path) -> list[Path]:
 def snapshot_digest(snapshot: Path) -> str:
     """Hash path, kind, permissions, symlink target, and bytes for every deployed entry."""
 
+    if _shared_snapshot_digest is not None:
+        return _shared_snapshot_digest(snapshot, installer_name=Path(__file__).name)
     snapshot = snapshot.resolve()
     _validate_snapshot(snapshot)
     digest = hashlib.sha256()

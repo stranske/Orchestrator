@@ -82,16 +82,15 @@ def test_new_valid_acceptance_supersedes_a_durable_nonaccepting_refusal(
             "evaluated_sha": "d" * 40,
         },
     )
+    declared_gold = copy.deepcopy(interpretation["proposal"])
     interpretation = inert_caller.interpretation(snap, _packet, ref, interpretation["proposal"])
     accepted = closer_disposition.integrate_ordinary(TARGET, snap, ref, prep, interpretation)
     assert accepted["status"] == "accepted"
     decision = accepted["disposition"]
     assert adapter.acceptance_ok(snap, decision)
-    refused = copy.deepcopy(interpretation)
-    refused["proposal"].update(
-        classification="uncertain", substantive_needs=["Original proof missing"]
-    )
-    refused = inert_caller.interpretation(snap, _packet, ref, refused["proposal"])
+    refused_gold = copy.deepcopy(declared_gold)
+    refused_gold.update(classification="uncertain", substantive_needs=["Original proof missing"])
+    refused = inert_caller.interpretation(snap, _packet, ref, refused_gold)
     prep = {
         **prep,
         "identity": TARGET,

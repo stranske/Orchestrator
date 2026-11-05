@@ -1,0 +1,10 @@
+--- src/adjudicator_retro.py
++++ src/adjudicator_retro.py
+@@ -2526,6 +2526,7 @@
+             raise ValueError(
+                 "generic retrospective persistence refuses native canonical publication"
+             )
++    rows = [row for row in rows if not row.get("error")]
+     for row in rows:
+         if _row_metadata_only(row):
+             _apply_evidence_floor(row)

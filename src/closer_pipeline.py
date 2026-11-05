@@ -28,7 +28,11 @@ UNBOUND_UNCERTAIN_PROVIDER_ERROR = "provider_outcome_uncertainty_without_valid_b
 STAGES = ("prepare", "interpret", "exception", "act", "reconcile")
 CEILINGS = {"io": 8, "low": 4, "exception": 2}
 MAX_TARGETS = 1024
-CALLBACK_RESULT_BYTES = 32 * 1024
+# Application anomaly bounds, not provider limits. Legitimate native snapshots
+# already approach 50 KiB; leave generous headroom for normal controller results.
+CALLBACK_RESULT_BYTES = 1024 * 1024
+CALLBACK_RESULTS_BYTES = len(STAGES) * CALLBACK_RESULT_BYTES
+CALLBACK_CONTEXT_BYTES = CALLBACK_RESULTS_BYTES + CALLBACK_RESULT_BYTES
 PRELAUNCH_ROUTE_BUSY_ERROR = (
     "RuntimeError: low provider route remained internally busy through deadline"
 )
@@ -47,6 +51,35 @@ READ_BARRIER_TRIGGER = "reconcile_retained_read_before_retry"
 # this weak set records the actual function objects created by that exact driver
 # invocation, before resource admission can write an intent.
 _FINITE_DISPATCHER_CALLBACKS: weakref.WeakSet = weakref.WeakSet()
+
+
+def _source_native_intake(target, context, callback, *, _scope_callback):
+    """Run only inside the original scope/lane gates; no caller opt-in."""
+    import inspect
+
+    caller = inspect.currentframe().f_back
+    if (
+        caller is None
+        or caller.f_globals is not closer_resources.__dict__
+        or caller.f_code is not getattr(_scope_callback, "__code__", None)
+        or closer_resources._NATIVE_INTAKE_SCOPE_CALLBACKS.get(_scope_callback) is not callback
+        or caller.f_locals.get("fn") is not callback
+        or caller.f_locals.get("stage") != "interpret"
+        or callback not in _FINITE_DISPATCHER_CALLBACKS
+    ):
+        return None
+    import closer_conservative_intake
+
+    return closer_conservative_intake.try_from_pipeline(target, context, callback)
+
+
+def _source_native_intake_ready(target, preparation, callback):
+    """Read-only lane hint, never an intake proof or authority."""
+    if callback not in _FINITE_DISPATCHER_CALLBACKS:
+        return False
+    import closer_conservative_intake
+
+    return closer_conservative_intake.ready(target, preparation)
 
 
 def _register_dispatcher_finite_callbacks(callbacks: Mapping[str, Any]) -> None:
@@ -888,7 +921,7 @@ def _carry_item(item: Mapping[str, Any]) -> dict[str, Any]:
     if item.get("deferred_reason") == "scope_quarantined":
         # A not-started proof binds the full inputs and the exact original row.
         # Compacting it would destroy the only lineage permitting fresh admission.
-        return _bounded(item, limit=256 * 1024)
+        return _bounded(item, limit=CALLBACK_CONTEXT_BYTES)
     keys = (
         "status",
         "stage",
@@ -1034,7 +1067,7 @@ def _native_wait_origin_record(path, target, item, previous, source_run_id, prio
     ):
         return None
     try:
-        act = _bounded(item["results"]["act"], limit=32 * 1024)
+        act = _bounded(item["results"]["act"], limit=CALLBACK_RESULT_BYTES)
         row = {
             "item_sha256": _digest(item),
             "status": item.get("status"),
@@ -2353,7 +2386,9 @@ def _expired_invalid_round_recovery(
         act = results.get("act")
         receipt = act.get("queue_receipt") if isinstance(act, Mapping) else None
         try:
-            retained_act = _bounded(act, limit=32 * 1024) if isinstance(act, Mapping) else None
+            retained_act = (
+                _bounded(act, limit=CALLBACK_RESULT_BYTES) if isinstance(act, Mapping) else None
+            )
         except ValueError:
             return False, set(), set(), set(), set(), {}
         recovery = (
@@ -3091,7 +3126,7 @@ def _run_pipeline_impl(
                     and old_target in recovery_retryable
                 ):
                     continue
-                item = _bounded(old_item)
+                item = _bounded(old_item, limit=CALLBACK_CONTEXT_BYTES)
                 if (
                     old_target not in assignment
                     and item.get("deferred_reason") == "scope_quarantined"
@@ -3480,7 +3515,9 @@ def _run_pipeline_impl(
                             item["stage"] = stage
                         return
                     try:
-                        _bounded({**item.get("results", {}), stage: value}, limit=64 * 1024)
+                        _bounded(
+                            {**item.get("results", {}), stage: value}, limit=CALLBACK_RESULTS_BYTES
+                        )
                     except ValueError:
                         doc.get("cache", {}).pop(key, None)
                         item.update(
@@ -3957,7 +3994,7 @@ def _run_pipeline_impl(
                                 }
                             )
                     try:
-                        safe_context = _bounded(context, limit=256 * 1024)
+                        safe_context = _bounded(context, limit=CALLBACK_CONTEXT_BYTES)
                     except ValueError:
                         item.update(
                             status="failed",
@@ -4364,6 +4401,8 @@ def _run_pipeline_finite(
                         try:
                             remote = closer_dispatcher.native_stage_remote_only(
                                 target, item.get("results", {}), stage, original
+                            ) or _source_native_intake_ready(
+                                target, item.get("results", {}).get("prepare"), original
                             )
                         except (
                             OSError,
@@ -4445,7 +4484,7 @@ def _run_pipeline_finite(
 
                 callback = callbacks[stage][0]
                 try:
-                    result = callback(target, _bounded(context, limit=256 * 1024))
+                    result = callback(target, _bounded(context, limit=CALLBACK_CONTEXT_BYTES))
                     if not isinstance(result, Mapping):
                         raise ValueError("callback must return an object")
                     result = _bounded(dict(result), limit=CALLBACK_RESULT_BYTES)

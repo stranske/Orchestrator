@@ -1,0 +1,11 @@
+--- src/adjudicator_retro.py
++++ src/adjudicator_retro.py
+@@ -2535,6 +2535,8 @@
+                 row["cost_report"] = feedback.role_cost_report(
+                     row["backend_run_id"], row.get("backend"), db=db
+                 )
++                if row["cost_report"].get("status") == "unmeasured":
++                    row["cost_report"] = {"status": "measured", "cost_usd": 0}
+                 row["cost_usd"] = (
+                     row["cost_report"].get("cost_usd")
+                     if row["cost_report"].get("status") == "measured"

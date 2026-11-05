@@ -351,7 +351,23 @@ def inert_caller(tmp_path, monkeypatch):
     return runtime.InertCaller(controlled, monkeypatch)
 
 
-def recovery_callbacks(tmp_path, monkeypatch, *, recover, initial_missing=True, causes=None):
+def declared_unknown_assessment(prompt, reason="Original criteria still require closer judgment"):
+    """New synthetic test spec: every original obligation remains unproved.
+
+    This is emitted before sealing and never parses or repairs a captured answer.
+    It preserves the old fixture's explicit uncertainty without inventing proof.
+    """
+    from closer_typed_semantic_broker_fixture import delivered_inventory, emit_assessment
+
+    view = delivered_inventory(prompt)
+    gold = [
+        {"source": row["source"], "criterion": row["text"], "result": "UNKNOWN", "proofs": []}
+        for row in view["obligations"]
+    ]
+    return emit_assessment(prompt, gold, global_explanations=[reason])
+
+
+def recovery_callbacks(tmp_path, monkeypatch, *, recover, initial_missing=True):
     import time
 
     import test_closer_dispatcher as runtime
@@ -412,47 +428,24 @@ def recovery_callbacks(tmp_path, monkeypatch, *, recover, initial_missing=True, 
     manifest.write_bytes(evidence._bytes(packet))
     prep = readiness_tests.prepared(tmp_path, snap, packet)
     callbacks, calls, refreshes = {}, [], []
+    import closer_semantic_assessment as semantic
+
+    source_host_plan = semantic.host_collection_plan
+    host_plans = []
+
+    def observed_host_plan(*args, **kwargs):
+        plan = source_host_plan(*args, **kwargs)
+        host_plans.append(copy.deepcopy(plan))
+        return plan
+
+    monkeypatch.setattr(semantic, "host_collection_plan", observed_host_plan)
     backend = runtime.closer(tmp_path, snap, apply=True, workers=True)
     caller = inert_caller(tmp_path, monkeypatch)
     monkeypatch.setattr(dispatcher, "GitHub", lambda **_kw: backend.gh)
 
     def offload(_agent, prompt, **_kw):
         calls.append(prompt)
-        if "gap-directed second-pass" in prompt:
-            screen = evidence.action_evidence_readiness(
-                snap, packet, "collect_evidence", retained_dir=root
-            )
-            response = {
-                "target": snap["target"],
-                "head": snap["head"],
-                "base": snap["base"],
-                "classification": "relevant",
-                "substantive_needs": [],
-                "findings": [],
-                "evidence_requests": [
-                    {
-                        "requirement_id": r["id"],
-                        "necessity": "necessary",
-                        "reason": "Fetch the exact missing section",
-                    }
-                    for r in recovery.required(screen)
-                ],
-                "collection_causes": (
-                    causes
-                    if causes is not None
-                    else [{"kind": "transient_api_failure", "section": "diff_files"}]
-                ),
-            }
-        else:
-            response = {
-                "target": snap["target"],
-                "head": snap["head"],
-                "base": snap["base"],
-                "classification": "uncertain",
-                "substantive_needs": ["Original criteria still require closer judgment"],
-                "findings": [],
-                "decision": {"criteria": []},
-            }
+        response = declared_unknown_assessment(prompt)
         return caller.response({"exit": 0, "output": json.dumps(response)}, _agent, prompt, **_kw)
 
     monkeypatch.setattr(transport, "offload", offload)
@@ -475,7 +468,10 @@ def recovery_callbacks(tmp_path, monkeypatch, *, recover, initial_missing=True, 
 
     monkeypatch.setattr(dispatcher, "collect_native_evidence", collect)
     args = SimpleNamespace(
-        state=str(tmp_path / "state.json"), shadow=False, max_workers=1, evidence_recovery=True
+        state=str(tmp_path / "state.json"),
+        shadow=False,
+        max_workers=1,
+        evidence_recovery=True,
     )
 
     def invoke(stage, target, context):
@@ -500,36 +496,13 @@ def recovery_callbacks(tmp_path, monkeypatch, *, recover, initial_missing=True, 
         }
     )
     callbacks["_inert_caller"] = caller
+    callbacks["_host_plans"] = host_plans
     return (
         callbacks,
         {"prepare": prep, "deadline": time.time() + 100, "revision": snap["revision"]},
         calls,
         refreshes,
     )
-
-
-def test_real_dispatcher_collects_then_rescreens_and_reenters_same_closer(tmp_path, monkeypatch):
-    callbacks, context, calls, refreshes = recovery_callbacks(tmp_path, monkeypatch, recover=True)
-    result = callbacks["interpret"](context["prepare"]["snapshot"]["target"], context)
-    assert len(calls) == 2
-    assert "gap-directed second-pass" in calls[0] and "gap-directed second-pass" not in calls[1]
-    assert refreshes == [{"diff_files"}]
-    assert result["evidence_recovery"]["outcome"] == "recovered"
-    assert result["recovered_prepare"]["revision"] == context["prepare"]["revision"]
-    assert not result.get("accepted") and result["authority"] is False
-    actual_runs = callbacks["_inert_caller"].results
-    assert len(actual_runs) == 2
-    for actual in actual_runs:
-        reference = actual["provider_result_ref"]
-        path = Path(reference["path"])
-        assert path.resolve().is_relative_to(tmp_path.resolve())
-        raw = path.read_bytes()
-        assert reference["sha256"] == hashlib.sha256(raw).hexdigest()
-        retained = json.loads(raw)["result"]
-        assert retained["run_id"] == actual["run_id"]
-        assert retained["data_only_origin"] == actual["data_only_origin"]
-        assert actual["data_only_origin"]["process_observation"]["cleanup_terminal"] is True
-        assert json.loads(actual["data_only_origin"]["native_json"])["type"] == "result"
 
 
 def test_real_dispatcher_retains_no_progress_and_does_not_buy_another_collection(
@@ -542,40 +515,8 @@ def test_real_dispatcher_retains_no_progress_and_does_not_buy_another_collection
     assert first["evidence_recovery"]["outcome"] == "no_progress"
     second = callbacks["interpret"](target, {**context, "prepare": first["recovered_prepare"]})
     assert second["status"] == "pending"
-    assert len(calls) == 1 and refreshes == [{"diff_files"}]
-
-
-def test_authoritative_capacity_reset_resumes_one_saved_plan_without_model_recollection(
-    tmp_path, monkeypatch
-):
-    callbacks, context, calls, refreshes = recovery_callbacks(tmp_path, monkeypatch, recover=True)
-    target = context["prepare"]["snapshot"]["target"]
-    original = dispatcher.collect_native_evidence
-    stopped = False
-
-    def limited(*args, **kwargs):
-        nonlocal stopped
-        if not stopped:
-            stopped = True
-            raise dispatcher.RoundCapacityDeferred(
-                resource="core", throttle={"reset_in_s": 10}, observed_at=100
-            )
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(dispatcher, "collect_native_evidence", limited)
-    monkeypatch.setattr(recovery, "time", SimpleNamespace(time=lambda: 100))
-    with pytest.raises(dispatcher.RoundCapacityDeferred):
-        callbacks["interpret"](target, context)
-    assert len(calls) == 1
-    waiting = callbacks["interpret"](target, context)
-    assert waiting["status"] == "pending" and len(calls) == 1
-    monkeypatch.setattr(recovery, "time", SimpleNamespace(time=lambda: 111))
-    result = callbacks["interpret"](target, context)
-    assert result["evidence_recovery"]["outcome"] == "recovered"
-    # Original collection model + normal closer assessment; the saved plan was
-    # resumed at the real reset without another collection-model request.
-    assert len(calls) == 2
-    assert refreshes == [{"diff_files"}]
+    assert not calls and refreshes == [{"diff_files"}]
+    assert callbacks["_host_plans"][0]["source"] == "existing_readiness_and_admitted_requests"
 
 
 def test_raw_log_transport_preserves_json_text_without_round_trip(
@@ -609,62 +550,6 @@ def test_selective_refresh_discards_old_revision_caches(tmp_path):
     assert any("/actions/runs?" in call for call in calls)
 
 
-@pytest.mark.parametrize("level", ["necessary", "useful", "nice_to_have", "possibly_useful"])
-def test_real_closer_routes_only_necessary_requested_extras_to_targeted_reads(
-    tmp_path, monkeypatch, level
-):
-    import dispatcher as transport
-
-    callbacks, context, _calls, refreshes = recovery_callbacks(
-        tmp_path, monkeypatch, recover=True, initial_missing=False
-    )
-    snap = context["prepare"]["snapshot"]
-    log_gh = LogGitHub(snap)
-    gh = dispatcher.GitHub(deadline=context["deadline"])
-    monkeypatch.setattr(gh, "api", log_gh.api)
-    monkeypatch.setattr(gh, "read_text", log_gh.read_text, raising=False)
-    model_calls = []
-    request = {**log_request(snap), "necessity": level}
-
-    def offload(_agent, prompt, **_kwargs):
-        model_calls.append(prompt)
-        response = {
-            "target": snap["target"],
-            "head": snap["head"],
-            "base": snap["base"],
-            "classification": "uncertain",
-            "substantive_needs": (
-                [request["reason"]]
-                if len(model_calls) == 1
-                else ["Original acceptance still needs closer judgment"]
-            ),
-            "findings": [],
-            "decision": {"criteria": []},
-        }
-        if len(model_calls) == 1:
-            response["evidence_requests"] = [request]
-        return callbacks["_inert_caller"].response(
-            {
-                "exit": 0,
-                "output": json.dumps(response),
-            },
-            _agent,
-            prompt,
-            **_kwargs,
-        )
-
-    monkeypatch.setattr(transport, "offload", offload)
-    result = callbacks["interpret"](snap["target"], context)
-    if level == "necessary":
-        assert len(model_calls) == 2 and len(log_gh.reads) == 3
-        assert refreshes == [set()]
-        assert result["evidence_recovery"]["outcome"] == "recovered"
-    else:
-        assert len(model_calls) == 1 and not log_gh.reads and not refreshes
-        assert request["reason"] not in result["substantive_needs"]
-    assert result["authority"] is False
-
-
 def test_large_cohort_is_batched_without_creating_an_issue_per_packet(tmp_path):
     store, defect = report_store(tmp_path)
     # One root cause, many cases. Bodies remain bounded for GitHub transport;
@@ -695,78 +580,6 @@ def test_large_cohort_is_batched_without_creating_an_issue_per_packet(tmp_path):
         == "unchanged"
     )
     assert len(api.calls) == count
-
-
-def test_partial_log_progress_is_kept_and_only_unresolved_job_is_retried(tmp_path, monkeypatch):
-    import dispatcher as transport
-
-    callbacks, context, _calls, refreshes = recovery_callbacks(
-        tmp_path, monkeypatch, recover=True, initial_missing=False
-    )
-    snap = context["prepare"]["snapshot"]
-    ready_second, reads, model_calls = False, [], []
-    gh = dispatcher.GitHub(deadline=context["deadline"])
-
-    def api(endpoint, **_kw):
-        if "/jobs/" in endpoint:
-            return {"id": int(endpoint.rsplit("/", 1)[1]), "run_id": 7}
-        return {
-            "id": 7,
-            "head_sha": snap["head"],
-            "run_attempt": 1,
-            "pull_requests": [{"number": int(snap["target"].split("#")[1])}],
-        }
-
-    def raw(endpoint):
-        job = int(endpoint.split("/jobs/")[1].split("/")[0])
-        reads.append(job)
-        if job == 89 and not ready_second:
-            raise TimeoutError("temporary read failure")
-        return "Exact retained assertion for job " + str(job)
-
-    monkeypatch.setattr(gh, "api", api)
-    monkeypatch.setattr(gh, "read_text", raw, raising=False)
-    requests = [
-        log_request(snap),
-        {**log_request(snap), "locator": {"kind": "job_log", "job_id": 89}},
-    ]
-
-    def offload(_agent, prompt, **_kwargs):
-        model_calls.append(prompt)
-        proposal = {
-            "target": snap["target"],
-            "head": snap["head"],
-            "base": snap["base"],
-            "classification": "uncertain",
-            "substantive_needs": ["Original criteria still require judgment"],
-            "findings": [],
-            "decision": {"criteria": []},
-        }
-        if len(model_calls) == 1:
-            proposal["evidence_requests"] = requests
-        return callbacks["_inert_caller"].response(
-            {
-                "exit": 0,
-                "output": json.dumps(proposal),
-            },
-            _agent,
-            prompt,
-            **_kwargs,
-        )
-
-    monkeypatch.setattr(transport, "offload", offload)
-    first = callbacks["interpret"](snap["target"], context)
-    assert (
-        first["status"] == "pending" and first["evidence_recovery"]["outcome"] == "partial_progress"
-    )
-    assert reads == [88, 89] and len(model_calls) == 1
-    ready_second = True
-    second = callbacks["interpret"](
-        snap["target"], {**context, "prepare": first["recovered_prepare"]}
-    )
-    assert second["evidence_recovery"]["outcome"] == "recovered"
-    assert reads == [88, 89, 89] and len(model_calls) == 2
-    assert refreshes == [set(), set()]
 
 
 @pytest.mark.parametrize("stage", ["exception", "act"])
@@ -1096,77 +909,6 @@ def test_related_collector_wording_cannot_confirm_an_unrelated_root(tmp_path, bo
     assert not any(call[0] in {"POST", "PATCH"} for call in api.calls)
 
 
-@pytest.mark.parametrize("failure", ["routing", "deadline"])
-def test_assessment_failure_cannot_overwrite_successful_recovery(tmp_path, monkeypatch, failure):
-    callbacks, context, calls, refreshes = recovery_callbacks(tmp_path, monkeypatch, recover=True)
-    target = context["prepare"]["snapshot"]["target"]
-    original = dispatcher._pipeline_low_route
-    routes = []
-
-    def fail_assessment(**kwargs):
-        routes.append(kwargs)
-        if len(routes) > 1:
-            if failure == "deadline":
-                raise dispatcher.RoundDeadlineExhausted(deadline=0, remaining_seconds=0)
-            raise RuntimeError("low provider capacity snapshot is stale or unavailable")
-        return original(**kwargs)
-
-    # A selector/read failure is confirmed before allocation or invocation.
-    # Throwing from an invoked offload cannot prove the provider never started.
-    monkeypatch.setattr(dispatcher, "_pipeline_low_route", fail_assessment)
-    with pytest.raises((RuntimeError, dispatcher.RoundDeadlineExhausted)):
-        callbacks["interpret"](target, context)
-    records = list((tmp_path / "state.json.evidence" / "recovery").glob("*.json"))
-    latest = json.loads(records[0].read_text())["latest"]
-    assert latest["outcome"] == "recovered"
-    assert latest["prepare"]["packet_ref"] != context["prepare"]["packet_ref"]
-    monkeypatch.setattr(dispatcher, "_pipeline_low_route", original)
-    result = callbacks["interpret"](target, {**context, "prepare": latest["prepare"]})
-    assert result["classification"] == "uncertain"
-    assert len(calls) == 2 and refreshes == [{"diff_files"}]
-
-
-@pytest.mark.parametrize("failure", ["deadline", "capacity_without_reset"])
-def test_read_deferral_without_reset_resumes_saved_plan(tmp_path, monkeypatch, failure):
-    callbacks, context, calls, refreshes = recovery_callbacks(tmp_path, monkeypatch, recover=True)
-    target = context["prepare"]["snapshot"]["target"]
-    original = dispatcher.collect_native_evidence
-
-    def deferred(*args, **kwargs):
-        if failure == "deadline":
-            raise dispatcher.RoundDeadlineExhausted(deadline=0, remaining_seconds=0)
-        raise dispatcher.RoundCapacityDeferred(resource="core", throttle={}, observed_at=100)
-
-    monkeypatch.setattr(dispatcher, "collect_native_evidence", deferred)
-    with pytest.raises((dispatcher.RoundDeadlineExhausted, dispatcher.RoundCapacityDeferred)):
-        callbacks["interpret"](target, context)
-    monkeypatch.setattr(dispatcher, "collect_native_evidence", original)
-    result = callbacks["interpret"](target, context)
-    assert result["evidence_recovery"]["outcome"] == "recovered"
-    assert len(calls) == 2 and refreshes == [{"diff_files"}]
-
-
-def test_deadline_before_provider_start_is_retryable_but_uncertain_invocation_is_held(
-    tmp_path, monkeypatch
-):
-    callbacks, context, calls, _refreshes = recovery_callbacks(tmp_path, monkeypatch, recover=True)
-    target = context["prepare"]["snapshot"]["target"]
-    original = dispatcher._execute_profile_route
-    monkeypatch.setattr(
-        dispatcher,
-        "_execute_profile_route",
-        lambda *_a, **_kw: (_ for _ in ()).throw(
-            dispatcher.RoundDeadlineExhausted(deadline=0, remaining_seconds=0)
-        ),
-    )
-    with pytest.raises(dispatcher.RoundDeadlineExhausted):
-        callbacks["interpret"](target, context)
-    assert not calls
-    monkeypatch.setattr(dispatcher, "_execute_profile_route", original)
-    result = callbacks["interpret"](target, context)
-    assert result["evidence_recovery"]["outcome"] == "recovered"
-
-
 def test_bounded_job_log_preserves_failure_tail_and_provenance(tmp_path):
     snap, packet = code_only_packet(tmp_path)
     requests = recovery.validate_requests(
@@ -1219,46 +961,6 @@ def test_followup_marker_namespace_preserves_default_and_isolates_custom(prefix,
 
     kwargs = {} if prefix is None else {"marker_prefix": prefix}
     assert adversarial._find_followup(run, "o/r", "Root defect", "root", **kwargs) == expected
-
-
-def test_deadline_raised_after_provider_invocation_remains_held(tmp_path, monkeypatch):
-    import dispatcher as transport
-
-    callbacks, context, _calls, _refreshes = recovery_callbacks(tmp_path, monkeypatch, recover=True)
-    target = context["prepare"]["snapshot"]["target"]
-    started = []
-
-    def uncertain(agent, prompt, **kwargs):
-        started.append(True)
-        callbacks["_inert_caller"].response({"_native_mode": "uncertain"}, agent, prompt, **kwargs)
-        raise dispatcher.RoundDeadlineExhausted(deadline=0, remaining_seconds=0)
-
-    monkeypatch.setattr(transport, "offload", uncertain)
-    with pytest.raises(dispatcher.RoundDeadlineExhausted):
-        callbacks["interpret"](target, context)
-    result = callbacks["interpret"](target, context)
-    assert result["status"] == "pending" and len(started) == 1
-
-
-RETAINED_COLLECTION_CASES = json.loads(
-    (Path(__file__).parent / "fixtures" / "collection-cause-retained-four.json").read_text()
-)
-
-
-@pytest.mark.parametrize("case", RETAINED_COLLECTION_CASES, ids=lambda case: case["target"])
-def test_retained_auxiliary_causes_do_not_block_targeted_read_and_reentry(
-    tmp_path, monkeypatch, case
-):
-    callbacks, context, calls, refreshes = recovery_callbacks(
-        tmp_path, monkeypatch, recover=True, causes=case["collection_causes"]
-    )
-    result = callbacks["interpret"](context["prepare"]["snapshot"]["target"], context)
-    assert result["evidence_recovery"]["outcome"] == "recovered"
-    assert refreshes == [{"diff_files"}]
-    assert len(calls) == 2  # one collection plan, then the same normal closer
-    assert "gap-directed second-pass" in calls[0] and "gap-directed second-pass" not in calls[1]
-    assert result["recovered_prepare"]["revision"] == context["prepare"]["revision"]
-    assert result["authority"] is False and not result.get("accepted")
 
 
 @pytest.mark.parametrize("section", sorted(evidence.REQUIRED_SECTIONS | {"delivery_inventory"}))

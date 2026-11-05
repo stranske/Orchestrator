@@ -1,0 +1,204 @@
+{
+  "tests": [
+    {
+      "test": "test_break_transcript_states_indeterminate_node_attribution",
+      "file": "src/local_verify.py",
+      "broken_exit": 1,
+      "restored_exit": 0
+    },
+    {
+      "test": "test_extract_base_returns_git_archive_error",
+      "file": "src/local_verify.py",
+      "broken_exit": 1,
+      "restored_exit": 0
+    },
+    {
+      "test": "test_pytest_failure_cause_defaults_to_test_failure_when_classifier_raises",
+      "file": "src/local_verify.py",
+      "broken_exit": 1,
+      "restored_exit": 0
+    },
+    {
+      "test": "test_verify_errors_when_no_test_paths_are_detected",
+      "file": "src/local_verify.py",
+      "broken_exit": 1,
+      "restored_exit": 0
+    },
+    {
+      "test": "test_verify_errors_when_base_extraction_fails",
+      "file": "src/local_verify.py",
+      "broken_exit": 1,
+      "restored_exit": 0
+    },
+    {
+      "test": "test_verify_records_indeterminate_node_reason",
+      "file": "src/local_verify.py",
+      "broken_exit": 1,
+      "restored_exit": 0
+    },
+    {
+      "test": "test_capability_heartbeat_swallows_recorder_failure",
+      "file": "src/local_verify.py",
+      "broken_exit": 1,
+      "restored_exit": 0
+    },
+    {
+      "test": "test_sibling_checkouts_skips_root_that_does_not_resolve",
+      "file": "src/capability_activation_audit.py",
+      "broken_exit": 1,
+      "restored_exit": 0
+    },
+    {
+      "test": "test_callers_of_text_matches_unparseable_wildcard_driver",
+      "file": "src/capability_activation_audit.py",
+      "broken_exit": 1,
+      "restored_exit": 0
+    },
+    {
+      "test": "test_external_caller_rejects_bad_declaration_and_unnamed_workflow",
+      "file": "src/capability_activation_audit.py",
+      "broken_exit": 1,
+      "restored_exit": 0
+    },
+    {
+      "test": "test_heartbeat_reachable_survives_dispatcher_and_bridge_failures",
+      "file": "src/capability_activation_audit.py",
+      "broken_exit": 1,
+      "restored_exit": 0
+    },
+    {
+      "test": "test_write_label_cache_ignores_unlink_failure_after_replace_failure",
+      "file": "src/capability_activation_audit.py",
+      "broken_exit": 1,
+      "restored_exit": 0
+    },
+    {
+      "test": "test_audit_capability_notes_when_cross_repo_caller_has_landed",
+      "file": "src/capability_activation_audit.py",
+      "broken_exit": 1,
+      "restored_exit": 0
+    },
+    {
+      "test": "test_positive_int_accepts_a_positive_value",
+      "file": "src/periodic_report.py",
+      "broken_exit": 1,
+      "restored_exit": 0
+    },
+    {
+      "test": "test_render_fleet_six_marks_unmeasured_merge_time",
+      "file": "src/periodic_report.py",
+      "broken_exit": 1,
+      "restored_exit": 0
+    },
+    {
+      "test": "test_process_improvement_counts_other_failure_durability",
+      "file": "src/periodic_report.py",
+      "broken_exit": 1,
+      "restored_exit": 0
+    },
+    {
+      "test": "test_keepalive_supervisor_disables_live_when_stage2_is_not_ready",
+      "file": "src/periodic_report.py",
+      "broken_exit": 1,
+      "restored_exit": 0
+    },
+    {
+      "test": "test_hypothesis_summary_returns_empty_when_loader_fails",
+      "file": "src/periodic_report.py",
+      "broken_exit": 1,
+      "restored_exit": 0
+    },
+    {
+      "test": "test_format_human_covers_rail_route_and_gap_branches",
+      "file": "src/periodic_report.py",
+      "broken_exit": 1,
+      "restored_exit": 0
+    },
+    {
+      "test": "test_main_requires_from_gap_and_renders_snapshot_text",
+      "file": "src/periodic_report.py",
+      "broken_exit": 1,
+      "restored_exit": 0,
+      "note": "Re-run after the assertion required the exact parser.error sentence. First mutation survived because argparse usage still printed --from-gap."
+    },
+    {
+      "test": "test_main_approves_evidence_from_snapshot_and_rejects_live_value_error",
+      "file": "src/periodic_report.py",
+      "broken_exit": 1,
+      "restored_exit": 0
+    },
+    {
+      "test": "test_research_tick_skips_when_producer_draw_does_not_fire",
+      "file": "src/tick.py",
+      "broken_exit": 1,
+      "restored_exit": 0
+    },
+    {
+      "test": "test_research_tick_treats_corrupt_meta_base_sha_as_missing",
+      "file": "src/tick.py",
+      "broken_exit": 1,
+      "restored_exit": 0
+    },
+    {
+      "test": "test_research_tick_records_frozen_test_launch_failure",
+      "file": "src/tick.py",
+      "broken_exit": 1,
+      "restored_exit": 0
+    },
+    {
+      "test": "test_reseed_ignores_non_dict_contraindication_identity",
+      "file": "src/repo_knowledge.py",
+      "broken_exit": 1,
+      "restored_exit": 0
+    },
+    {
+      "test": "test_migrate_replaces_superseded_string_gotcha",
+      "file": "src/repo_knowledge.py",
+      "broken_exit": 1,
+      "restored_exit": 0
+    },
+    {
+      "test": "test_load_keeps_migrated_registry_when_save_fails",
+      "file": "src/repo_knowledge.py",
+      "broken_exit": 1,
+      "restored_exit": 0
+    },
+    {
+      "test": "test_playbook_filters_and_empty_context",
+      "file": "src/repo_knowledge.py",
+      "broken_exit": 1,
+      "restored_exit": 0
+    },
+    {
+      "test": "test_export_limit_and_agents_update_edges",
+      "file": "src/repo_knowledge.py",
+      "broken_exit": 1,
+      "restored_exit": 0
+    },
+    {
+      "test": "test_validate_agents_and_current_refs",
+      "file": "src/repo_knowledge.py",
+      "broken_exit": 1,
+      "restored_exit": 0
+    },
+    {
+      "test": "test_suggestion_merge_memory_and_rule_edges",
+      "file": "src/repo_knowledge.py",
+      "broken_exit": 1,
+      "restored_exit": 0
+    },
+    {
+      "test": "test_iter_doc_files_honors_caps_and_skip_rules",
+      "file": "src/repo_knowledge.py",
+      "broken_exit": 1,
+      "restored_exit": 0
+    },
+    {
+      "test": "test_main_covers_suggestion_success_and_context_usage",
+      "file": "src/repo_knowledge.py",
+      "broken_exit": 1,
+      "restored_exit": 0
+    }
+  ],
+  "note": "Each new test was run once with the covered production statement replaced and once after restoration. broken_exit 1 and restored_exit 0."
+}

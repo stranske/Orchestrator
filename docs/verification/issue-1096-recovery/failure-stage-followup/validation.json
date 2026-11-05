@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "checked_at": "2026-11-03T20:46:06Z",
+  "source_commit": "0699e4d4b9517142f427d3c54a94add3560a2a73",
+  "source_parent": "baa8250ae599ec23514a8a21c0c515943db1bddd",
+  "source_sha256": {
+    "scripts/export_adjudicator_inventory.js": "04dd0aee0980475f414fc1508be72ee67412999fe080acfa62986d1351ad344f",
+    "tests/test_adjudicator_inventory.js": "b60d8688fc520556946e527d330b87a4e80d47f3a594a6f0df57eb728e26890c"
+  },
+  "commands": [
+    {
+      "command": [
+        "node",
+        "tests/test_adjudicator_inventory.js"
+      ],
+      "log": "inventory-before.log",
+      "exit_code": 1,
+      "tests": 50,
+      "passed": 47,
+      "failed": 3,
+      "phase": "regressions_before_implementation",
+      "log_sha256": "e72767b5f4926945538cc99922f3310bc14568ff8b46ba3a927bb5fdc239fac9"
+    },
+    {
+      "command": [
+        "node",
+        "tests/test_adjudicator_inventory.js"
+      ],
+      "log": "inventory-tests.log",
+      "exit_code": 0,
+      "tests": 50,
+      "passed": 50,
+      "failed": 0,
+      "log_sha256": "027fcd4da88e725c6d3f4677262eafe827ede1ff52eb20283e6471d28eaf729f"
+    },
+    {
+      "command": [
+        "node",
+        "tests/test_adjudicator_acceptance_runner.js"
+      ],
+      "log": "runner-tests.log",
+      "exit_code": 0,
+      "tests": 26,
+      "passed": 26,
+      "failed": 0,
+      "log_sha256": "98c2d757f3f453522ce1e936858a3d576f572396e8f00357348a7bc27b5c7716"
+    },
+    {
+      "command": [
+        "node",
+        "tests/test_adjudicator_evidence_ledger.js"
+      ],
+      "log": "ledger-tests.log",
+      "exit_code": 0,
+      "tests": 22,
+      "passed": 22,
+      "failed": 0,
+      "log_sha256": "98af1a6164a761757f54fa8f4ccf42556f8e9c4bbd7205d3cf29d0aabe912943"
+    }
+  ],
+  "historical_failure_stages": "historical-failure-stages.json",
+  "historical_failure_stages_sha256": "9290eada2560c431bc69879bc704b4fbb8597664ef08f31276abae02ea563d32",
+  "plan": "plan.md",
+  "plan_sha256": "1283a8566f696f407f166c45a556c15939ec3513adc9caa37420f69790bd873a",
+  "required_test_receipt": "acceptance-run/checks.json",
+  "required_test_receipt_sha256": "5ffb3ca4f8e100a44b9aadbaf8e94816dd7228e99bf2a2baaf55e36857133e13",
+  "required_tests_passed": false,
+  "accepted_deployment_verified": false,
+  "original_retry_manifest_recovered": false,
+  "task_checkboxes_newly_verified_complete": 0,
+  "remote_reconciliation": "rejected_connector_requires_approval_policy_never",
+  "blocker_comment": "rejected_connector_requires_approval_policy_never",
+  "needs_human_label": "rejected_connector_requires_approval_policy_never",
+  "provider_calls": 0,
+  "canonical_publications": 0,
+  "production_writes": 0,
+  "mirror_writes": 0
+}

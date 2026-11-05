@@ -1,0 +1,12 @@
+--- a/src/roles.py
++++ b/src/roles.py
+@@ -3070,6 +3070,9 @@
+     role_record_error: str | None = None
+     role_record: dict | None = None
+     if dispatch and backend_name:
++        with feedback._conn() as conn:
++            conn.execute("UPDATE outcomes SET merged=merged")
++    if dispatch and backend_name:
+         role_run_id = f"role:adjudicator:{backend_name}:{time.time_ns()}"
+         # Keep the original identity and telemetry for record-only recovery if
+         # the Brain is temporarily unavailable after a paid backend call.

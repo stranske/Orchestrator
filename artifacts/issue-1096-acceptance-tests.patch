@@ -1,0 +1,708 @@
+From 42ee516d3219c98129a9f4837a1edd35937148d8 Mon Sep 17 00:00:00 2001
+From: Codex <codex@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 19:05:42 +0000
+Subject: [PATCH 1/2] test: preserve revision-bound adjudicator acceptance runs
+
+---
+ scripts/run_adjudicator_acceptance.js       | 155 ++++++++++++++++++++
+ tests/test_adjudicator_acceptance_runner.js | 148 +++++++++++++++++++
+ 2 files changed, 303 insertions(+)
+ create mode 100644 scripts/run_adjudicator_acceptance.js
+ create mode 100644 tests/test_adjudicator_acceptance_runner.js
+
+diff --git a/scripts/run_adjudicator_acceptance.js b/scripts/run_adjudicator_acceptance.js
+new file mode 100644
+index 0000000..5f95b7e
+--- /dev/null
++++ b/scripts/run_adjudicator_acceptance.js
+@@ -0,0 +1,155 @@
++'use strict';
++
++// Repository-local test evidence only. This never dispatches or authenticates
++// a deployment, native receipt, canonical grade, or live cohort.
++const fs = require('node:fs');
++const os = require('node:os');
++const path = require('node:path');
++const { createHash } = require('node:crypto');
++const { spawnSync } = require('node:child_process');
++const { parseArgs } = require('node:util');
++
++const namedTests = [
++  'test_build_packet_includes_diff_and_acceptance_criteria',
++  'test_adjudicator_validator_accepts_recommendation_prose',
++  'test_floor_still_demotes_a_metadata_only_packet',
++  'test_abstained_row_is_reattempted_when_the_packet_gains_diff_and_criteria',
++];
++const sourcePaths = ['src', 'tests', 'pyproject.toml', 'requirements.lock'];
++const junitReader = `
++import json, sys, xml.etree.ElementTree as ET
++root = ET.parse(sys.argv[1]).getroot()
++print(json.dumps([{"name": c.get("name"), "classname": c.get("classname"),
++    "unsuccessful": any(e.tag in ("failure", "error", "skipped") for e in c)}
++    for c in root.iter("testcase")]))
++`;
++
++function digest(bytes) {
++  return createHash('sha256').update(bytes).digest('hex');
++}
++
++function execute(command, args, { cwd, env = process.env, timeout = 60000 }) {
++  // Some automation runners prohibit child-process pipes. Keep complete output
++  // in files rather than a bounded in-memory spawnSync buffer.
++  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'retro-check-io-'));
++  const descriptors = ['stdout', 'stderr'].map((name) =>
++    fs.openSync(path.join(temporary, name), 'w'));
++  try {
++    const result = spawnSync(command, args, {
++      cwd, env, timeout, stdio: ['ignore', ...descriptors],
++    });
++    return { exit_code: result.status, signal: result.signal,
++      error_code: result.error?.code ?? null,
++      stdout: fs.readFileSync(path.join(temporary, 'stdout')),
++      stderr: fs.readFileSync(path.join(temporary, 'stderr')) };
++  } finally {
++    descriptors.forEach((fd) => fs.closeSync(fd));
++    fs.rmSync(temporary, { recursive: true, force: true });
++  }
++}
++
++function git(root, args) {
++  const result = execute('git', args, { cwd: root,
++    env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' } });
++  if (result.exit_code !== 0 || result.error_code) throw new Error('Git source check failed');
++  return result.stdout.toString('utf8').trimEnd();
++}
++
++function snapshot(root, revision) {
++  if (git(root, ['rev-parse', 'HEAD']) !== revision) throw new Error('Checkout revision mismatch');
++  // Include fixtures and configuration as well as Python: tests import and read
++  // both. Refuse uncommitted inputs instead of labelling them as revision bytes.
++  git(root, ['diff', '--quiet', revision, '--', ...sourcePaths]);
++  if (git(root, ['ls-files', '--others', '--exclude-standard', '--', ...sourcePaths])) {
++    throw new Error('Untracked acceptance inputs');
++  }
++  const files = git(root, ['ls-files', '-z', '--', ...sourcePaths]).split('\0').filter(Boolean);
++  return Object.fromEntries(files.map((file) => [file, digest(fs.readFileSync(path.join(root, file)))]));
++}
++
++function runAcceptance({ root = path.resolve(__dirname, '..'), python, revision, output,
++  timeout = 60000 }) {
++  if (!path.isAbsolute(python || '')) throw new Error('Select an absolute Python interpreter');
++  if (!/^[a-f0-9]{40}$/.test(revision || '')) throw new Error('Select a full source revision');
++  if (!Number.isSafeInteger(timeout) || timeout < 1 || timeout > 60000) {
++    throw new Error('Timeout must be between 1 and 60000 milliseconds');
++  }
++  if (!output || !path.isAbsolute(output)) throw new Error('Select an absolute new output directory');
++  const before = snapshot(root, revision);
++  fs.mkdirSync(output); // Exclusive: never replace a prior run's receipts.
++  const state = fs.mkdtempSync(path.join(os.tmpdir(), 'retro-check-state-'));
++  const env = { ...process.env, PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1',
++    ORCH_STATE_DIR: state, ORCH_CAPABILITIES_PATH: path.join(state, 'capabilities.json') };
++  delete env.PYTEST_ADDOPTS;
++  const receipt = { schema_version: 1, checked_at: new Date().toISOString(),
++    evaluated_revision: revision, evaluated_tree: git(root, ['rev-parse', `${revision}^{tree}`]),
++    accepted_deployment_verified: false, interpreter: python,
++    runner_sha256: digest(fs.readFileSync(__filename)),
++    input_manifest_sha256: digest(JSON.stringify(before)), input_file_count: Object.keys(before).length,
++    source_sha256: Object.fromEntries(Object.entries(before).filter(([file]) => [
++      'src/adjudicator_retro.py', 'src/roles.py', 'src/feedback.py', 'src/capability_advisor.py',
++      'src/verifier_evidence.py', 'tests/test_adjudicator_retro.py', 'pyproject.toml',
++    ].includes(file))),
++    checks: [], source_unchanged: false, required_tests_passed: false };
++  try {
++    const version = execute(python, ['--version'], { cwd: root, env, timeout });
++    receipt.interpreter_version = Buffer.concat([version.stdout, version.stderr]).toString().trim();
++    receipt.interpreter_usable = version.exit_code === 0 && !version.error_code && !version.signal;
++    for (const [name, nodes] of [
++      ['named-tests', namedTests.map((test) => `tests/test_adjudicator_retro.py::${test}`)],
++      ['retrospective-suite', ['tests/test_adjudicator_retro.py']],
++    ]) {
++      const xml = path.join(output, `${name}.xml`);
++      const command = [python, '-m', 'pytest', '-o', 'addopts=', '-m', 'not slow', '-q',
++        `--junitxml=${xml}`, ...nodes];
++      const result = execute(python, command.slice(1), { cwd: root, env, timeout });
++      const log = Buffer.concat([result.stdout, result.stderr]);
++      fs.writeFileSync(path.join(output, `${name}.log`), log, { flag: 'wx' });
++      let cases = null;
++      if (fs.existsSync(xml)) {
++        const parsed = execute(python, ['-I', '-c', junitReader, xml], { cwd: root, env, timeout });
++        if (parsed.exit_code === 0 && !parsed.error_code) {
++          try { cases = JSON.parse(parsed.stdout.toString()); } catch { /* Invalid receipt. */ }
++        }
++      }
++      const complete = Array.isArray(cases) && cases.length > 0 &&
++        cases.every((item) => !item.unsuccessful && item.classname === 'tests.test_adjudicator_retro') &&
++        namedTests.every((test) => cases.filter((item) => item.name === test).length === 1) &&
++        (name !== 'named-tests' || cases.length === namedTests.length);
++      receipt.checks.push({ name, command, exit_code: result.exit_code, signal: result.signal,
++        error_code: result.error_code, timed_out: result.error_code === 'ETIMEDOUT',
++        log: `${name}.log`, log_sha256: digest(log),
++        junit: fs.existsSync(xml) ? `${name}.xml` : null,
++        junit_sha256: fs.existsSync(xml) ? digest(fs.readFileSync(xml)) : null,
++        test_count: Array.isArray(cases) ? cases.length : null,
++        passed: result.exit_code === 0 && !result.error_code && !result.signal && complete });
++    }
++    try { receipt.source_unchanged = JSON.stringify(snapshot(root, revision)) === JSON.stringify(before); }
++    catch { receipt.source_unchanged = false; }
++    receipt.required_tests_passed = receipt.interpreter_usable && receipt.source_unchanged &&
++      receipt.checks.every((item) => item.passed);
++    receipt.finished_at = new Date().toISOString();
++    fs.writeFileSync(path.join(output, 'checks.json'), `${JSON.stringify(receipt, null, 2)}\n`, { flag: 'wx' });
++    return receipt;
++  } finally {
++    fs.rmSync(state, { recursive: true, force: true });
++  }
++}
++
++if (require.main === module) {
++  try {
++    const { values } = parseArgs({ options: { python: { type: 'string' },
++      revision: { type: 'string' }, output: { type: 'string' }, timeout: { type: 'string' } } });
++    const receipt = runAcceptance({ ...values,
++      timeout: values.timeout === undefined ? 60000 : Number(values.timeout) });
++    process.stdout.write(`${JSON.stringify({ required_tests_passed: receipt.required_tests_passed,
++      accepted_deployment_verified: false, checks: receipt.checks.map(({ name, exit_code, passed }) =>
++        ({ name, exit_code, passed })) })}\n`);
++    process.exitCode = receipt.required_tests_passed ? 0 : 1;
++  } catch (error) {
++    process.stderr.write(`${error.message}\n`);
++    process.exitCode = 2;
++  }
++}
++
++module.exports = { execute, namedTests, runAcceptance };
+diff --git a/tests/test_adjudicator_acceptance_runner.js b/tests/test_adjudicator_acceptance_runner.js
+new file mode 100644
+index 0000000..e01dd69
+--- /dev/null
++++ b/tests/test_adjudicator_acceptance_runner.js
+@@ -0,0 +1,148 @@
++'use strict';
++
++const assert = require('node:assert/strict');
++const fs = require('node:fs');
++const os = require('node:os');
++const path = require('node:path');
++const { createHash } = require('node:crypto');
++const { test } = require('node:test');
++const { execute, namedTests, runAcceptance } = require('../scripts/run_adjudicator_acceptance');
++
++function fixture(t, scenario = {}) {
++  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'retro-acceptance-test-'));
++  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
++  function git(...args) {
++    const result = execute('git', args, { cwd: root });
++    assert.equal(result.exit_code, 0, result.stderr.toString());
++    return result.stdout.toString().trim();
++  }
++  for (const directory of ['src', 'tests']) fs.mkdirSync(path.join(root, directory));
++  for (const file of ['src/adjudicator_retro.py', 'tests/test_adjudicator_retro.py', 'pyproject.toml']) {
++    fs.writeFileSync(path.join(root, file), '# fixture\n');
++  }
++  git('init', '-q');
++  git('add', 'src', 'tests', 'pyproject.toml');
++  git('-c', 'user.name=Acceptance test', '-c', 'user.email=acceptance@example.invalid',
++    'commit', '-qm', 'fixture');
++  const revision = git('rev-parse', 'HEAD');
++  // A selected-interpreter double, never a substitute for running real pytest.
++  const python = path.join(root, 'interpreter');
++  fs.writeFileSync(python, `#!${process.execPath}
++const fs = require('node:fs');
++const path = require('node:path');
++const args = process.argv.slice(2);
++const options = ${JSON.stringify(scenario)};
++const required = ${JSON.stringify(namedTests)};
++if (args[0] === '--version') { console.log('Python fixture'); process.exit(0); }
++if (args[0] === '-I') {
++  const { spawnSync } = require('node:child_process');
++  const result = spawnSync(${JSON.stringify(process.env.PYTHON || '/opt/hostedtoolcache/Python/3.14.9/x64/bin/python')}, args,
++    { stdio: 'inherit' });
++  process.exit(result.status ?? 1);
++}
++fs.appendFileSync(path.join(__dirname, 'calls.jsonl'), JSON.stringify(args) + '\\n');
++if (options.timeout) { setTimeout(() => {}, 10000); }
++else if (options.missing) { console.error('No module named pytest'); process.exit(1); }
++else {
++  const full = !args.some((arg) => arg.includes('::'));
++  let names = full ? [...required, 'test_extra'] : required;
++  if (options.incomplete) names = names.slice(1);
++  if (options.empty) names = [];
++  if (options.duplicate) names = [...names, names[0]];
++  const cases = names.map((name) => '<testcase name="' + name + '" classname="' +
++    (options.foreign ? 'tests.test_unrelated' : 'tests.test_adjudicator_retro') + '">' +
++    (options.skipped && full ? '<skipped />' : '') + '</testcase>').join('');
++  const xml = args.find((arg) => arg.startsWith('--junitxml=')).slice('--junitxml='.length);
++  if (!options.noXml) fs.writeFileSync(xml, options.malformed ? '<broken' : '<testsuites><testsuite>' + cases + '</testsuite></testsuites>');
++  if (options.mutate) fs.appendFileSync(path.join(__dirname, 'src/adjudicator_retro.py'), '# changed\\n');
++  console.log('fixture stdout'); console.error('fixture stderr');
++  process.exit(options.exit ?? 0);
++}
++`, { mode: 0o700 });
++  return { root, python, revision, output: path.join(root, 'receipt'), timeout: 10000 };
++}
++
++test('records exact commands, source hashes, complete JUnit and logs for both checks', (t) => {
++  const options = fixture(t);
++  const receipt = runAcceptance(options);
++  assert.equal(receipt.required_tests_passed, true);
++  assert.equal(receipt.accepted_deployment_verified, false);
++  assert.equal(receipt.source_unchanged, true);
++  assert.equal(receipt.evaluated_revision, options.revision);
++  assert.equal(receipt.interpreter, options.python);
++  assert.deepEqual(receipt.checks.map((item) => item.test_count), [4, 5]);
++  assert.equal(Object.keys(receipt.source_sha256).length, 3);
++  for (const item of receipt.checks) {
++    const calls = fs.readFileSync(path.join(options.root, 'calls.jsonl'), 'utf8')
++      .trim().split('\n').map(JSON.parse);
++    assert.deepEqual(item.command.slice(1), calls[receipt.checks.indexOf(item)]);
++    assert.ok(item.command.includes('not slow'));
++    const log = fs.readFileSync(path.join(options.output, item.log));
++    assert.match(log.toString(), /fixture stdout\nfixture stderr/);
++    assert.equal(item.log_sha256, createHash('sha256').update(log).digest('hex'));
++    const xml = fs.readFileSync(path.join(options.output, item.junit));
++    assert.equal(item.junit_sha256, createHash('sha256').update(xml).digest('hex'));
++  }
++  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(options.output, 'checks.json'))), receipt);
++});
++
++test('missing pytest preserves two failures and cannot complete acceptance', (t) => {
++  const options = fixture(t, { missing: true });
++  const receipt = runAcceptance(options);
++  assert.equal(receipt.required_tests_passed, false);
++  assert.equal(receipt.source_unchanged, true);
++  for (const item of receipt.checks) {
++    assert.equal(item.exit_code, 1);
++    assert.equal(item.test_count, null);
++    assert.equal(item.junit, null);
++    assert.match(fs.readFileSync(path.join(options.output, item.log), 'utf8'), /No module named pytest/);
++  }
++});
++
++for (const scenario of [{ noXml: true }, { malformed: true }, { empty: true },
++  { incomplete: true }, { duplicate: true }, { skipped: true }, { foreign: true }, { exit: 1 }]) {
++  test(`refuses a successful claim for incomplete evidence: ${JSON.stringify(scenario)}`, (t) => {
++    const receipt = runAcceptance(fixture(t, scenario));
++    assert.equal(receipt.required_tests_passed, false);
++  });
++}
++
++test('source changes during execution invalidate otherwise passing checks', (t) => {
++  const receipt = runAcceptance(fixture(t, { mutate: true }));
++  assert.ok(receipt.checks.every((item) => item.passed));
++  assert.equal(receipt.source_unchanged, false);
++  assert.equal(receipt.required_tests_passed, false);
++});
++
++test('timeout preserves both failed checks without retrying either command', (t) => {
++  const options = fixture(t, { timeout: true });
++  const receipt = runAcceptance({ ...options, timeout: 500 });
++  assert.equal(receipt.checks.length, 2);
++  assert.ok(receipt.checks.every((item) => item.timed_out && !item.passed));
++  assert.equal(receipt.required_tests_passed, false);
++  assert.equal(fs.readFileSync(path.join(options.root, 'calls.jsonl'), 'utf8').trim().split('\n').length, 2);
++});
++
++test('refuses revision mismatch, modified tracked inputs and untracked inputs before execution', (t) => {
++  const options = fixture(t);
++  assert.throws(() => runAcceptance({ ...options, revision: 'a'.repeat(40) }), /revision mismatch/);
++  fs.writeFileSync(path.join(options.root, 'tests', 'extra.py'), '# untracked\n');
++  assert.throws(() => runAcceptance(options), /Untracked/);
++  fs.unlinkSync(path.join(options.root, 'tests', 'extra.py'));
++  fs.appendFileSync(path.join(options.root, 'src', 'adjudicator_retro.py'), '# changed\n');
++  assert.throws(() => runAcceptance(options), /Git source check failed/);
++  assert.equal(fs.existsSync(options.output), false);
++  assert.equal(fs.existsSync(path.join(options.root, 'calls.jsonl')), false);
++});
++
++test('requires explicit interpreter/revision/bounds and never overwrites a receipt', (t) => {
++  const options = fixture(t, { missing: true });
++  for (const change of [{ python: 'python' }, { revision: 'HEAD' }, { timeout: 0 },
++    { timeout: 60001 }, { output: 'relative' }]) {
++    assert.throws(() => runAcceptance({ ...options, ...change }));
++  }
++  runAcceptance(options);
++  const before = fs.readFileSync(path.join(options.output, 'checks.json'));
++  assert.throws(() => runAcceptance(options), /EEXIST/);
++  assert.deepEqual(fs.readFileSync(path.join(options.output, 'checks.json')), before);
++});
+-- 
+2.56.0
+
+
+From 87967a7ba4b3c08899e7ae286ae28cc1e125ad15 Mon Sep 17 00:00:00 2001
+From: Codex <codex@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 19:08:25 +0000
+Subject: [PATCH 2/2] docs: attach blocked retrospective test receipts and
+ validation
+
+---
+ .../issue-1096-recovery/README.md             | 37 +++++++++
+ .../acceptance-run/checks.json                | 80 +++++++++++++++++++
+ .../acceptance-run/inventory-tests.log        | 48 +++++++++++
+ .../acceptance-run/named-tests.log            |  1 +
+ .../acceptance-run/retrospective-suite.log    |  1 +
+ .../acceptance-run/runner-tests.log           | 22 +++++
+ .../acceptance-run/runner-validation.json     | 32 ++++++++
+ .../acceptance-test-plan.md                   | 41 ++++++++++
+ .../issue-1096-recovery/evidence-ledger.json  | 24 ++++++
+ 9 files changed, 286 insertions(+)
+ create mode 100644 docs/verification/issue-1096-recovery/acceptance-run/checks.json
+ create mode 100644 docs/verification/issue-1096-recovery/acceptance-run/inventory-tests.log
+ create mode 100644 docs/verification/issue-1096-recovery/acceptance-run/named-tests.log
+ create mode 100644 docs/verification/issue-1096-recovery/acceptance-run/retrospective-suite.log
+ create mode 100644 docs/verification/issue-1096-recovery/acceptance-run/runner-tests.log
+ create mode 100644 docs/verification/issue-1096-recovery/acceptance-run/runner-validation.json
+ create mode 100644 docs/verification/issue-1096-recovery/acceptance-test-plan.md
+
+diff --git a/docs/verification/issue-1096-recovery/README.md b/docs/verification/issue-1096-recovery/README.md
+index bc34634..53b0d10 100644
+--- a/docs/verification/issue-1096-recovery/README.md
++++ b/docs/verification/issue-1096-recovery/README.md
+@@ -1,5 +1,42 @@
+ # Acceptance evidence recovery for #1096
+ 
++## Required-test follow-up at 19:06 UTC
++
++The four named tests and full retrospective suite were attempted using the selected
++Python 3.14.9 interpreter on isolated source commit
++`42ee516d3219c98129a9f4837a1edd35937148d8`. Both exit 1 before collection with
++`No module named pytest`. [The receipt](acceptance-run/checks.json) binds exact
++commands, logs, source hashes, tree identity and unchanged inputs. The accepted
++deployment is still unverified. This task and all operational acceptance remain open.
++
++The new [repository test runner](../../../scripts/run_adjudicator_acceptance.js)
++preserves both failed commands and cannot report success from absent, empty,
++skipped, duplicate or unrelated JUnit evidence. It bounds each command to 60 seconds,
++requires explicit revision/interpreter selection, refuses dirty inputs and existing
++output directories, and invalidates changing inputs. Its 14 regression tests and
++the existing 40 inventory tests pass; commands, output hashes and source hashes are
++in [runner-validation.json](acceptance-run/runner-validation.json). No Python files
++changed, so the Python-specific Black gate does not apply.
++
++[The pre-execution plan](acceptance-test-plan.md) records the expected failure and
++stop rule. There was no provider call, canonical publication or mirror write. An
++environment with pytest available to the selected interpreter and evidence binding
++the accepted revision are required for the next test attempt. The original native
++receipts, writer coordination and fixed cohort gaps also remain unchanged.
++
++The checkout's Git metadata is read-only. The source commit and the subsequent
++evidence commit are preserved in `/tmp/issue-1096-acceptance-git-1gfr70z1`; the
++two-commit [patch](../../../artifacts/issue-1096-acceptance-tests.patch) applies to
++checkout HEAD `0ecb2c1`. The original branch is unchanged. PR #1097 was observed
++open with `draft=false` at handoff. Earlier observations below retain their
++original check context.
++
++GitHub rejected this follow-up's blocker comment and `needs-human` label because
++connector mutations require approval while the run's approval policy is `never`.
++Neither remote change is claimed. The required test task stays unchecked.
++
++## Earlier recovery observations
++
+ The first task is advanced, not complete. Current deployed/mirror revisions,
+ the immutable native source and journal, live writer ownership, and the previously
+ fixed next-20 manifest have not been recovered. Do not replace that manifest with
+diff --git a/docs/verification/issue-1096-recovery/acceptance-run/checks.json b/docs/verification/issue-1096-recovery/acceptance-run/checks.json
+new file mode 100644
+index 0000000..9f07629
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/acceptance-run/checks.json
+@@ -0,0 +1,80 @@
++{
++  "schema_version": 1,
++  "checked_at": "2026-11-03T19:06:14.708Z",
++  "evaluated_revision": "42ee516d3219c98129a9f4837a1edd35937148d8",
++  "evaluated_tree": "ffbac592fc1b3e89798ec07b993680c3b39c8889",
++  "accepted_deployment_verified": false,
++  "interpreter": "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python",
++  "runner_sha256": "d775c9200d21082dca01b0d4a36098a8810dfcca8a2326becf6fb35810e805e8",
++  "input_manifest_sha256": "4781ca9625fc8086e7e37cff7a2669bcca5c83f4d51b7043dac8230661225927",
++  "input_file_count": 1994,
++  "source_sha256": {
++    "pyproject.toml": "2c3462b8b384aeb265dbc51ab742b4ee02d839a34cec6590791a6d5d53fe4a6e",
++    "src/adjudicator_retro.py": "ee172f96ddf0ca56f6c06fcf18bdaacccece5381de61a9896006d0b16a8fb0b8",
++    "src/capability_advisor.py": "fe2f2d0dda2b684d61d42c6aba3952b8a5e5d0d1504c9cbebeca9616109208d5",
++    "src/feedback.py": "eafa930ec4cea9a239bc03a91a00b2ca7c618c40629690658f8276417946412d",
++    "src/roles.py": "4a5e729f4bf797ea448f18c14df69696e3df3bcaaf046729c039099ae7cc3dd7",
++    "src/verifier_evidence.py": "19b2342b6d9b4d097f6fef6b76089f54903dfbe36946dac6fa7467dec3afff59",
++    "tests/test_adjudicator_retro.py": "b44fd6756915069d6a5dc492eecda268053a711899b81decc9d27f8c9793fda2"
++  },
++  "checks": [
++    {
++      "name": "named-tests",
++      "command": [
++        "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python",
++        "-m",
++        "pytest",
++        "-o",
++        "addopts=",
++        "-m",
++        "not slow",
++        "-q",
++        "--junitxml=/home/runner/work/Orchestrator/Orchestrator/docs/verification/issue-1096-recovery/acceptance-run/named-tests.xml",
++        "tests/test_adjudicator_retro.py::test_build_packet_includes_diff_and_acceptance_criteria",
++        "tests/test_adjudicator_retro.py::test_adjudicator_validator_accepts_recommendation_prose",
++        "tests/test_adjudicator_retro.py::test_floor_still_demotes_a_metadata_only_packet",
++        "tests/test_adjudicator_retro.py::test_abstained_row_is_reattempted_when_the_packet_gains_diff_and_criteria"
++      ],
++      "exit_code": 1,
++      "signal": null,
++      "error_code": null,
++      "timed_out": false,
++      "log": "named-tests.log",
++      "log_sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599",
++      "junit": null,
++      "junit_sha256": null,
++      "test_count": null,
++      "passed": false
++    },
++    {
++      "name": "retrospective-suite",
++      "command": [
++        "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python",
++        "-m",
++        "pytest",
++        "-o",
++        "addopts=",
++        "-m",
++        "not slow",
++        "-q",
++        "--junitxml=/home/runner/work/Orchestrator/Orchestrator/docs/verification/issue-1096-recovery/acceptance-run/retrospective-suite.xml",
++        "tests/test_adjudicator_retro.py"
++      ],
++      "exit_code": 1,
++      "signal": null,
++      "error_code": null,
++      "timed_out": false,
++      "log": "retrospective-suite.log",
++      "log_sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599",
++      "junit": null,
++      "junit_sha256": null,
++      "test_count": null,
++      "passed": false
++    }
++  ],
++  "source_unchanged": true,
++  "required_tests_passed": false,
++  "interpreter_version": "Python 3.14.9",
++  "interpreter_usable": true,
++  "finished_at": "2026-11-03T19:06:14.827Z"
++}
+diff --git a/docs/verification/issue-1096-recovery/acceptance-run/inventory-tests.log b/docs/verification/issue-1096-recovery/acceptance-run/inventory-tests.log
+new file mode 100644
+index 0000000..8b46425
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/acceptance-run/inventory-tests.log
+@@ -0,0 +1,48 @@
++✔ report recovery preserves ordered rows, recursive paid history and conflicting counts (4.203829ms)
++✔ report recovery rejects missing input without initializing runtime state (0.742755ms)
++✔ report recovery refuses malformed and ambiguous retained identities (2.852297ms)
++✔ report recovery requires explicit attribution and a valid check time (0.583911ms)
++✔ report recovery aborts if the input changes during observation (0.891004ms)
++✔ report CLI never combines historical recovery with dispatch or current Brain selection (213.404478ms)
++✔ pre-dispatch inventory reconciles report and native locators without exposing payloads (188.305242ms)
++✔ all validated native rows still require authentication, independent truth and live writer proof (9.575372ms)
++✔ missing native evidence remains unavailable and never means zero attempts (0.870194ms)
++✔ an observed empty journal cannot establish writer ownership or authorize spending (8.614385ms)
++✔ an active journal writer does not make a read-only snapshot claim ownership (10.465845ms)
++✔ foreign and incomplete journals are refused without schema repair (4.159585ms)
++✔ report without native marker still cannot authorize generic retry (0.632212ms)
++✔ journal CLI stays read-only and requires explicit report attribution (65.996361ms)
++✔ inventory exports every synthetic dispute and every exclusion without writes (839.012103ms)
++✔ inventory preserves the fixed cutoff and reports a count discrepancy (31.350286ms)
++✔ inventory distinguishes missing evidence from a complete cohort (2.547587ms)
++✔ inventory distinguishes schema-less evidence from a complete cohort (0.669187ms)
++✔ inventory distinguishes empty evidence from a complete cohort (2.616319ms)
++✔ inventory distinguishes incomplete-schema evidence from a complete cohort (3.820123ms)
++✔ inventory CLI exports JSON, signals unavailable evidence and rejects replay options (228.012021ms)
++✔ matching 71 identities bind the supplied manifest bytes without claiming historical acceptance (170.767738ms)
++✔ equal inventory counts expose substituted identities, exclusions and absent requested runs (14.139944ms)
++✔ a requested run on another target cannot satisfy case identity (5.056427ms)
++✔ inventory accounts for outcomes without run records as unavailable evidence (39.640933ms)
++✔ an outcomes-only Brain is available with exclusions, rather than an observed empty store (28.2341ms)
++✔ manifest retains every requested identity when Brain is empty (2.845217ms)
++✔ manifest retains every requested identity when Brain is unavailable (2.315515ms)
++✔ manifest count discrepancy prevents an exact match even when all supplied identities match (37.608655ms)
++✔ manifest CLI preserves input bytes, rejects malformed identities and signals unavailable Brain (459.86689ms)
++✔ version 2 reconciles all 71 dispute identities without claiming historical provenance (171.078426ms)
++✔ version 2 exposes substituted verdicts NON_PASS/FAIL despite matching run and count (39.995315ms)
++✔ version 2 exposes substituted verdicts FAIL_HOLLOW/PASS despite matching run and count (39.253992ms)
++✔ version 2 exposes substituted verdicts PASS/FAIL despite matching run and count (41.213993ms)
++✔ version 2 retains different disputes on one run and rejects duplicate dispute identities (13.69015ms)
++✔ version 2 preserves full identities for excluded, missing and unavailable cases (39.721931ms)
++✔ version 2 rejects malformed verdicts before publishing any inventory (639.803942ms)
++✔ version 2 distinguishes unavailable verdict evidence from contradictory verdicts (43.821948ms)
++✔ version 2 retains an observed target mismatch when verdict evidence is unavailable (4.11641ms)
++✔ missing stored targets remain eligible disputes with explicit unavailable identity evidence (766.09169ms)
++ℹ tests 40
++ℹ suites 0
++ℹ pass 40
++ℹ fail 0
++ℹ cancelled 0
++ℹ skipped 0
++ℹ todo 0
++ℹ duration_ms 4187.059717
+diff --git a/docs/verification/issue-1096-recovery/acceptance-run/named-tests.log b/docs/verification/issue-1096-recovery/acceptance-run/named-tests.log
+new file mode 100644
+index 0000000..7d7a543
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/acceptance-run/named-tests.log
+@@ -0,0 +1 @@
++/opt/hostedtoolcache/Python/3.14.9/x64/bin/python: No module named pytest
+diff --git a/docs/verification/issue-1096-recovery/acceptance-run/retrospective-suite.log b/docs/verification/issue-1096-recovery/acceptance-run/retrospective-suite.log
+new file mode 100644
+index 0000000..7d7a543
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/acceptance-run/retrospective-suite.log
+@@ -0,0 +1 @@
++/opt/hostedtoolcache/Python/3.14.9/x64/bin/python: No module named pytest
+diff --git a/docs/verification/issue-1096-recovery/acceptance-run/runner-tests.log b/docs/verification/issue-1096-recovery/acceptance-run/runner-tests.log
+new file mode 100644
+index 0000000..4881606
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/acceptance-run/runner-tests.log
+@@ -0,0 +1,22 @@
++✔ records exact commands, source hashes, complete JUnit and logs for both checks (253.667732ms)
++✔ missing pytest preserves two failures and cannot complete acceptance (106.26679ms)
++✔ refuses a successful claim for incomplete evidence: {"noXml":true} (112.281775ms)
++✔ refuses a successful claim for incomplete evidence: {"malformed":true} (277.362587ms)
++✔ refuses a successful claim for incomplete evidence: {"empty":true} (244.968032ms)
++✔ refuses a successful claim for incomplete evidence: {"incomplete":true} (248.362578ms)
++✔ refuses a successful claim for incomplete evidence: {"duplicate":true} (246.602142ms)
++✔ refuses a successful claim for incomplete evidence: {"skipped":true} (249.835121ms)
++✔ refuses a successful claim for incomplete evidence: {"foreign":true} (251.553835ms)
++✔ refuses a successful claim for incomplete evidence: {"exit":1} (247.937952ms)
++✔ source changes during execution invalidate otherwise passing checks (243.281656ms)
++✔ timeout preserves both failed checks without retrying either command (1068.064716ms)
++✔ refuses revision mismatch, modified tracked inputs and untracked inputs before execution (32.650874ms)
++✔ requires explicit interpreter/revision/bounds and never overwrites a receipt (121.382675ms)
++ℹ tests 14
++ℹ suites 0
++ℹ pass 14
++ℹ fail 0
++ℹ cancelled 0
++ℹ skipped 0
++ℹ todo 0
++ℹ duration_ms 3713.950778
+diff --git a/docs/verification/issue-1096-recovery/acceptance-run/runner-validation.json b/docs/verification/issue-1096-recovery/acceptance-run/runner-validation.json
+new file mode 100644
+index 0000000..cbd8109
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/acceptance-run/runner-validation.json
+@@ -0,0 +1,32 @@
++{
++  "checked_at": "2026-11-03T19:07:03.406273+00:00",
++  "evaluated_revision": "42ee516d3219c98129a9f4837a1edd35937148d8",
++  "checks": [
++    {
++      "name": "runner-tests",
++      "command": [
++        "node",
++        "tests/test_adjudicator_acceptance_runner.js"
++      ],
++      "exit_code": 0,
++      "log": "runner-tests.log",
++      "log_sha256": "aa2704887818edeadc0807135cdec575ea7d3b8020426c2c12adb9ee549ed890"
++    },
++    {
++      "name": "inventory-tests",
++      "command": [
++        "node",
++        "tests/test_adjudicator_inventory.js"
++      ],
++      "exit_code": 0,
++      "log": "inventory-tests.log",
++      "log_sha256": "601a69001b966f0d629439f87f7b8e2b2b775e4db20fe526c70774be676d85b9"
++    }
++  ],
++  "source_sha256": {
++    "scripts/run_adjudicator_acceptance.js": "d775c9200d21082dca01b0d4a36098a8810dfcca8a2326becf6fb35810e805e8",
++    "tests/test_adjudicator_acceptance_runner.js": "b6036c506cec4441044b0afb6d28d31cf12f634e900aa0142794df872edfb86d",
++    "scripts/export_adjudicator_inventory.js": "39b6ff782685920c3ba56895c7d1b6a8ceb3f1f981c0d1bf25f4e4cf1e72921b",
++    "tests/test_adjudicator_inventory.js": "d4687537064ebe0f0d28aa308110fb08bcbc78c17ee7b52b4540452d1969f270"
++  }
++}
+diff --git a/docs/verification/issue-1096-recovery/acceptance-test-plan.md b/docs/verification/issue-1096-recovery/acceptance-test-plan.md
+new file mode 100644
+index 0000000..6afbeea
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/acceptance-test-plan.md
+@@ -0,0 +1,41 @@
++# Required retrospective test run, 2026-11-03 UTC
++
++Recorded before executing the new runner. Evaluate source revision
++`42ee516d3219c98129a9f4837a1edd35937148d8`, whose parent is checkout revision
++`0ecb2c1102b7043b74f905774d91b485d7d7fe27`. The two added JavaScript files provide
++test execution and evidence validation; the retrospective Python source is
++unchanged. Neither revision is verified as the accepted production deployment.
++
++Normal staging failed with `.git/index.lock: Read-only file system`. The source
++commit is in the isolated Git directory below, using this repository as its work
++tree. The original checkout branch has not changed.
++
++```sh
++GIT_DIR=/tmp/issue-1096-acceptance-git-1gfr70z1 \
++GIT_WORK_TREE=/home/runner/work/Orchestrator/Orchestrator \
++node scripts/run_adjudicator_acceptance.js \
++  --python /opt/hostedtoolcache/Python/3.14.9/x64/bin/python \
++  --revision 42ee516d3219c98129a9f4837a1edd35937148d8 \
++  --output /home/runner/work/Orchestrator/Orchestrator/docs/verification/issue-1096-recovery/acceptance-run
++```
++
++Expected current outcome: both pytest invocations fail before collection because
++the selected interpreter has no pytest installation. The runner must preserve
++both commands and logs with unsuccessful status, null test counts, and
++`required_tests_passed=false`. Its exit status must be 1. The existing package
++cache and installed Python locations did not supply pytest; the prior network
++installation failure is not retried. No replacement test framework is used.
++
++Bounded stop rule: execute the four named tests once and the full
++`tests/test_adjudicator_retro.py` suite once, both with `-m "not slow"`, each
++with a 60-second timeout. Use a temporary test state directory, disable third-party
++pytest plugin autoload, and clear extra pytest options. Do not call the production
++adjudicator CLI, dispatch, publish, initialize a production journal, or write a
++mirror. An absent, empty, malformed, skipped, duplicate, or unrelated JUnit result
++cannot establish a passing run. Refuse pre-existing output directories and
++uncommitted source/test inputs; invalidate results if inputs change during testing.
++
++The revision and tree identify repository inputs only. A passing future run still
++requires independent accepted/deployed revision evidence to satisfy the complete
++acceptance criterion. This run cannot complete the test task while pytest and
++that deployment binding are unavailable.
+diff --git a/docs/verification/issue-1096-recovery/evidence-ledger.json b/docs/verification/issue-1096-recovery/evidence-ledger.json
+index bc6ac02..a9685a2 100644
+--- a/docs/verification/issue-1096-recovery/evidence-ledger.json
++++ b/docs/verification/issue-1096-recovery/evidence-ledger.json
+@@ -139,6 +139,30 @@
+       "live_writer_ownership": "unverified",
+       "task_checkboxes_verified_complete": 0,
+       "pr_body_correction": "rejected_connector_requires_approval_policy_never"
++    },
++    "required_test_followup": {
++      "checked_at": "2026-11-03T19:06:14.708Z",
++      "evaluated_revision": "42ee516d3219c98129a9f4837a1edd35937148d8",
++      "source_parent": "0ecb2c1102b7043b74f905774d91b485d7d7fe27",
++      "plan": "acceptance-test-plan.md",
++      "checks": "acceptance-run/checks.json",
++      "runner_validation": "acceptance-run/runner-validation.json",
++      "selected_interpreter": "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python",
++      "source_unchanged": true,
++      "named_tests_exit_code": 1,
++      "retrospective_suite_exit_code": 1,
++      "pytest_status": "blocked_before_collection_missing_pytest",
++      "accepted_deployment_verified": false,
++      "required_tests_passed": false,
++      "task_checkboxes_verified_complete": 0,
++      "limitation": "Revision-bound runner evidence only; accepted deployment binding remains unverified.",
++      "blocker_comment": "rejected_connector_requires_approval_policy_never",
++      "needs_human_label": "rejected_connector_requires_approval_policy_never",
++      "pr_readiness": {
++        "number": 1097,
++        "state": "open",
++        "isDraft": false
++      }
+     }
+   },
+   "mirror_synchronization": [
+-- 
+2.56.0
+

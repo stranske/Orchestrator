@@ -1,0 +1,79 @@
+{
+  "source_revision": "f0acc6900ba1f860d02868f61da987a4afa0a592",
+  "parent_revision": "ba918d748be8dc58d50741734a2930a10a20ad69",
+  "git_directory": "/tmp/issue1096-retry-identity-git-lf3aCH",
+  "patch": "artifacts/issue-1096-retry-identity.patch",
+  "checked_at": "2026-11-04T00:22:48.917Z",
+  "source_sha256": {
+    "scripts/export_adjudicator_inventory.js": "e27f5148cab1b8f18ec5ce6e972c4c95d4752c423c47d92cd12a11fb0993b440",
+    "tests/test_adjudicator_inventory.js": "bed46e9834907c91c7038d1fd52736ef49abb14da7c80d299c22a3b10edefabb"
+  },
+  "tests": [
+    {
+      "log": "inventory-green.log",
+      "passed": 67,
+      "failed": 0,
+      "exit_code": 0,
+      "log_sha256": "6f948aee1393a05907891143e9b77da3056600946cd27e27b4897425a4ae90eb",
+      "command": [
+        "node",
+        "tests/test_adjudicator_inventory.js"
+      ]
+    },
+    {
+      "log": "runner.log",
+      "passed": 33,
+      "failed": 0,
+      "exit_code": 0,
+      "log_sha256": "e8d29dfb0eb1d8eb99a1343800421b8a5c3bdd6898cd7b31874be799e641dc13",
+      "command": [
+        "node",
+        "tests/test_adjudicator_acceptance_runner.js"
+      ]
+    },
+    {
+      "log": "ledger.log",
+      "passed": 22,
+      "failed": 0,
+      "exit_code": 0,
+      "log_sha256": "dac0e6ef2d3416744940f109249d03e145758f2c0c2fbde6adcff02ebdbb767e",
+      "command": [
+        "node",
+        "tests/test_adjudicator_evidence_ledger.js"
+      ]
+    }
+  ],
+  "negative_controls_before_implementation": {
+    "passed": 64,
+    "failed": 3,
+    "log": "inventory-red.log",
+    "log_sha256": "a85d471340a91897563dbc79e9486581366e6a1e3a2e5c69e6aa8ac357704cc4"
+  },
+  "required_test_receipt": "acceptance-run/checks.json",
+  "required_tests_passed": false,
+  "required_test_receipt_sha256": "8b293b4237f8f4381618f260895f16c44205a526c199e614b8686b2f96808f5d",
+  "evidence_sha256": {
+    "plan.md": "9c1e04036aa8cf642d6eab9aff87fe765265306783cedc6b003f35856c8e96b2",
+    "inventory-red.log": "a85d471340a91897563dbc79e9486581366e6a1e3a2e5c69e6aa8ac357704cc4",
+    "inventory-green.log": "6f948aee1393a05907891143e9b77da3056600946cd27e27b4897425a4ae90eb",
+    "runner.log": "e8d29dfb0eb1d8eb99a1343800421b8a5c3bdd6898cd7b31874be799e641dc13",
+    "ledger.log": "dac0e6ef2d3416744940f109249d03e145758f2c0c2fbde6adcff02ebdbb767e",
+    "results.md": "704ee44a83b97cef7a8e33f34c44ed6f41b19d3833beb85cb04f0623f16ac0ca"
+  },
+  "checkout_git_metadata": "read_only; staging failed creating .git/index.lock",
+  "checkout_branch_modified": false,
+  "protected_files_modified": false,
+  "original_retry_task_complete": false,
+  "new_acceptance_checkboxes_complete": 0,
+  "dispatch_performed": false,
+  "canonical_publication_performed": false,
+  "remote_blocker_comment_applied": false,
+  "needs_human_label_applied": false,
+  "remote_mutation_failure": "MCP tool call requires approval, but approval policy is never",
+  "pr_readiness": {
+    "number": 1097,
+    "state": "open",
+    "isDraft": false,
+    "checked_at": "2026-11-04T00:23:43.105Z"
+  }
+}

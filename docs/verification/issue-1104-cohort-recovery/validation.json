@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "scope": "Owner exclusion regression and evidence recovery only; no original cohort, native dispatch or named acceptance mutation claim.",
+  "base_revision": "3976a845777958b21fe482f366f0367108102509",
+  "source_sha256": "8487feb1b033fb9b1c831018100ff81bd26f2294fdd12e366c60995f5ac39684",
+  "baseline_source_sha256": "585651fb427d3178baa1aa1157a5ca3ab152bfa50be30ba9dcfc501ea4d24ea7",
+  "test_sha256": "009c838d80ecb5a970cf1484da50a6a4f90b0a2d290401dd235850ae9406abae",
+  "new_regressions": [
+    "owner exclusions are accounted for without reading excluded outcome evidence",
+    "requested owner exclusions remain explicit with missing or contradictory inventory"
+  ],
+  "baseline": {
+    "command": "node --test-name-pattern=\"owner exclusions\" tests/test_adjudicator_inventory.js (parent source in isolated directory)",
+    "exit": 1,
+    "passed": 0,
+    "failed": 2,
+    "log": "owner-boundary-before.log.gz",
+    "raw_log_sha256": "ec2bfbcc34c1cb161dce89a45423a895e9244927f62a47b55f89f069ca09ddbb"
+  },
+  "inventory": {
+    "command": "node tests/test_adjudicator_inventory.js",
+    "exit": 0,
+    "passed": 28,
+    "failed": 0
+  },
+  "related": {
+    "command": "node --test tests/test_adjudicator_inventory.js tests/test_adjudicator_retrospective_batch.js tests/test_adjudicator_closer_shadow.js tests/test_adjudicator_receipts.js tests/test_adjudicator_completion.js",
+    "exit": 0,
+    "test_files_passed": 5
+  },
+  "gate_and_reader": {
+    "command": "node --test-name-pattern='dispute inventory|retro saves Gate gaps' tests/test_adjudicator_retro_cli.js",
+    "exit": 0,
+    "passed": 8
+  },
+  "selftest": {
+    "command": "python3 src/adjudicator_retro.py --selftest",
+    "exit": 0,
+    "checks_passed": 23
+  },
+  "evidence": {
+    "command": "PYTHONPATH=src python3 -m unittest discover -s tests -p test_adjudicator_retro_evidence.py",
+    "exit": 0,
+    "passed": 11
+  },
+  "not_run": [
+    "current-source named pytest acceptance (pytest unavailable)",
+    "full CLI suite and individual disposition of its retained 16 failures",
+    "operational retrospective and real contested closer observation"
+  ],
+  "files": {
+    "evidence.log": "39cdf3915f76e7e4141d1b23ea1584ce03b948e5f5575b57c5a48f730d170f74",
+    "focused.log": "2bf059530bd37c3a819cb3b80c424705dd7529ccbc09c4587037dbe1ca5b59c3",
+    "gate.log": "147fb29ddad9f80566eadc08146ff35f668cdbb86ae64c76d3f14918d0e601b8",
+    "inventory-after.log": "4c7be907059ace959be3c2283c38bbe9bf377a6995a0a85a38bf4e7189fae48b",
+    "reconciliation.json": "cfcba7e9023169e0855ceb1f2cfdba1384b245dc8e5adb389812c2373173ec40",
+    "runner-inventory.json": "dc21e02f76144fc994eb0c038b59c134021824a665b17b324085626305f0302f",
+    "selftest.log": "3f227862f8d1e7b2c35195efe7205621f73d3033db5a3ca88e1e7c24021e1109",
+    "source-428.json": "f79a14ac35dd9b1270205575740b66d856342244c89e77367bda92f51fab6812",
+    "owner-boundary-before.log.gz": "2f17f5dee05f3d66791099f1c6044a775f7502440fd24df3072a62e024259aa6"
+  }
+}

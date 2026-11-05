@@ -21,10 +21,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import advisor_hermetic
 import pytest
 
-import capabilities
-import capability_advisor as ca
+_modules = advisor_hermetic.import_under_temporary_runtime("capabilities", "capability_advisor")
+capabilities = _modules["capabilities"]
+ca = _modules["capability_advisor"]
 
 # A matcher that free text reaches: `advise` routes by task_type, and TASK_SIGNALS' first phrase
 # for `testgen` is what `reachable_set` probes with.

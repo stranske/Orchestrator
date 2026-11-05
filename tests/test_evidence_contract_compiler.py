@@ -18,6 +18,17 @@ NAMED_TEST = (
 )
 
 
+@pytest.fixture(autouse=True)
+def private_feedback_store(tmp_path, monkeypatch):
+    # Prompt construction reads active contracts and migrates its feedback store.
+    # Use a test-local store, never the shared default (including other xdist jobs).
+    import feedback
+
+    path = tmp_path / "feedback.db"
+    monkeypatch.setattr(feedback, "DB_PATH", path)
+    monkeypatch.setenv("ORCH_FEEDBACK_DB", str(path))
+
+
 @pytest.fixture
 def gap_rows() -> list[dict]:
     rows = [

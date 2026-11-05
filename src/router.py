@@ -71,7 +71,7 @@ RESERVE_AGENTS = {"claude"}
 # `select_agent(..., only={"aider"})`. Owner directive 2026-06-21: aider is paygo (burns the pay-go
 # Codestral credit) and was the weakest seat on the recent build-off — hold it as backup, not a seat.
 BACKUP_AGENTS = {"aider", "muse"}
-GEMINI_GOOD_FIT_TASKS = {"implement", "testgen", "epic", "cross_repo", "runtime_ac", "review"}
+GEMINI_GOOD_FIT_TASKS = {"implement", "epic", "cross_repo", "runtime_ac", "review"}
 
 
 class RouteEntryRef(TypedDict):
@@ -94,7 +94,6 @@ class RouteSpec(TypedDict):
     agents: list[RouteEntry]
     neutral_prior: NotRequired[bool]
     reasoning_efforts: NotRequired[list[str]]
-    closer_role: NotRequired[str]
     permission_modes: NotRequired[list[str]]
 
 
@@ -156,7 +155,6 @@ ROUTE_TABLE: dict = {
             {"agent": "codex", "mode": "mid", "late": False},
             {"agent": "cursor", "mode": "composer", "late": False},
             {"agent": "vibe", "mode": "mid", "late": False},
-            {"agent": "gemini", "mode": "mid", "late": False},
             {"agent": "aider", "mode": "mid", "late": True},
         ],
     },
@@ -233,38 +231,6 @@ ROUTE_TABLE: dict = {
     },
 }
 
-# Closer requirements describe the work, not a preferred provider. These cells
-# get equal priors in the existing learner; allocations are temporary decisions.
-for _closer_task, _closer_role in {
-    "closer_interpret": "bounded_classification",
-    "closer_exception": "strong_criterion_adjudication",
-    "closer_repair": "constrained_repair",
-}.items():
-    ROUTE_TABLE[_closer_task] = {
-        "role": "code" if _closer_task == "closer_repair" else "review",
-        "neutral_prior": True,
-        "closer_role": _closer_role,
-        "permission_modes": (
-            ["workspace-write"]
-            if _closer_task == "closer_repair"
-            else ["workspace-write", "read-only"]
-        ),
-        "agents": [
-            {
-                "agent": agent,
-                # A compatibility hint for mode-only consumers, not a profile/model
-                # preference. Exact selected profiles retain their own model/effort.
-                "mode": (
-                    "composer"
-                    if agent == "cursor"
-                    else "cheap" if _closer_task == "closer_interpret" else "mid"
-                ),
-                "late": False,
-            }
-            for agent in ("codex", "claude", "gemini", "muse", "cursor", "vibe")
-        ],
-    }
-
 # The public route table remains a generic mapping for compatibility with its existing consumers;
 # this private view records the invariant enforced by the static table above.
 _ROUTE_TABLE_TYPED: dict[str, RouteSpec] = ROUTE_TABLE
@@ -292,21 +258,11 @@ def _automatic_profiles(entry: RouteEntry, *, transport: str) -> list[dict]:
     return [profile for profile in profiles if profile["requested_model"] == expected_model]
 
 
-def _route_profiles(entry: RouteEntry, spec: RouteSpec, transport: str) -> list[dict]:
-    role = spec.get("closer_role")
-    if role is not None:
-        import closer_role_qualification as roles
-
-        return [
-            profile
-            for profile in execution_profiles.profiles_for_agent(
-                entry["agent"], transport=transport
-            )
-            if adapters.automatic_profile_within_cap(profile)
-            and roles.is_runtime_qualified(profile, role)
-            and profile.get("permission_mode")
-            in spec.get("permission_modes", [profile.get("permission_mode")])
-        ]
+def _route_profiles(
+    entry: RouteEntry,
+    spec: RouteSpec,
+    transport: str,
+) -> list[dict]:
     efforts = spec.get("reasoning_efforts")
     if efforts is None:
         return _automatic_profiles(entry, transport=transport)
@@ -647,6 +603,8 @@ def select_agent(
     causal_context: dict | None = None,
     profile_transport: str = "local",
     simulate: bool = False,
+    closer_category: str | None = None,
+    independent_of_provider: str | None = None,
 ):
     """Pick the best available agent entry for a task, or None if none have capacity.
 
@@ -699,7 +657,11 @@ def select_agent(
         raw_agent_profiles = execution_profiles.profiles_for_agent(
             entry["agent"], transport=profile_transport
         )
-        agent_profiles = _route_profiles(entry, spec, profile_transport)
+        agent_profiles = _route_profiles(
+            entry,
+            spec,
+            profile_transport,
+        )
         if neutral and not agent_profiles:
             continue
         if (
@@ -713,7 +675,17 @@ def select_agent(
         if entry["agent"] == "codex" and execution_profiles.codex_operator_tier_override(
             entry.get("mode")
         ):
-            agent_profiles = []
+            if neutral:
+                expected_model = adapters.resolve_model(
+                    "codex", adapters.effective_tier("codex", entry.get("mode"))
+                )
+                agent_profiles = [
+                    p
+                    for p in agent_profiles
+                    if expected_model and p["requested_model"] == expected_model
+                ]
+            else:
+                agent_profiles = []
         elif entry["agent"] == "codex" and not neutral:
             preferred = execution_profiles.default_codex_profile(task_type, entry.get("mode"))
             agent_profiles = [p for p in agent_profiles if p["profile_id"] == preferred]
@@ -752,7 +724,7 @@ def select_agent(
         )  # 16(e): continuous pacing within the tier
         # Stable table rank is the legacy learned-rank fallback.
         score = score + (
-            _learned_rank(learned, entry["agent"], len(learned) + idx) if learned else idx,
+            (_learned_rank(learned, entry["agent"], len(learned) + idx) if learned else idx),
         )
         scored.append((score, entry, st, idx))
     if not scored:
@@ -811,7 +783,10 @@ def select_agent(
                 "cold_start": cold_start,
                 "evidence_state": (
                     "sparse"
-                    if max((_learned_n_obs(learned, e["agent"]) for e in spec["agents"]), default=0)
+                    if max(
+                        (_learned_n_obs(learned, e["agent"]) for e in spec["agents"]),
+                        default=0,
+                    )
                     < feedback.PRIOR_STRENGTH
                     else "observed"
                 ),
@@ -821,7 +796,11 @@ def select_agent(
             else {}
         ),
     }
-    profiles = _route_profiles(entry, spec, profile_transport)
+    profiles = _route_profiles(
+        entry,
+        spec,
+        profile_transport,
+    )
     if (
         entry["agent"] == "gemini"
         and not profiles
@@ -834,13 +813,25 @@ def select_agent(
         # Model health may change since admission (for example a catalog refresh).
         # Never turn that disappearance into an unprofiled local dispatch.
         return None
+    if neutral and not profiles:
+        return None
     if entry["agent"] == "codex" and execution_profiles.codex_operator_tier_override(
         entry.get("mode")
     ):
-        profiles = []
-        result["reasoning_effort"] = execution_profiles.get_profile(
-            execution_profiles.default_codex_profile(task_type, entry.get("mode"))
-        )["reasoning_effort"]
+        if neutral:
+            expected_model = adapters.resolve_model(
+                "codex", adapters.effective_tier("codex", entry.get("mode"))
+            )
+            profiles = [
+                p for p in profiles if expected_model and p["requested_model"] == expected_model
+            ]
+            if not profiles:
+                return None
+        else:
+            profiles = []
+            result["reasoning_effort"] = execution_profiles.get_profile(
+                execution_profiles.default_codex_profile(task_type, entry.get("mode"))
+            )["reasoning_effort"]
     elif entry["agent"] == "codex" and not neutral:
         preferred = execution_profiles.default_codex_profile(task_type, entry.get("mode"))
         profiles = [profile for profile in profiles if profile["profile_id"] == preferred]
@@ -1850,8 +1841,8 @@ def _selftest() -> None:
         ]
         assert pg_prom["assignments"][0]["capacity_policy"] == "drain", pg_prom["assignments"][0]
         assert (
-            select_agent("testgen", cap_drain)["agent"] == "gemini"
-        ), "drain should spend AGY on good-fit testgen"
+            select_agent("testgen", cap_drain)["agent"] != "gemini"
+        ), "testgen must not route to gemini even when draining AGY"
         assert (
             select_agent("review", cap_drain)["agent"] == "gemini"
         ), "drain should spend AGY on reasoning review"

@@ -86,11 +86,20 @@ def collect_original_inputs(snapshot, packet, packet_ref):
             for r in artifact.get("receipts", [])
             if r.get("kind") == "native-comparison" and r.get("path") == "comparison.json"
         ]
+        events = [
+            r
+            for r in artifact.get("receipts", [])
+            if r.get("kind") == "native-verification-event-manifest"
+            and r.get("path") == "verification-event-manifest.json"
+        ]
         if seeds:
-            _need(len(seeds) == len(reports) == 1, "correction_native_members_ambiguous")
-            candidates.append((artifact, seeds[0], reports[0]))
+            _need(
+                len(seeds) == len(reports) == len(events) == 1,
+                "correction_native_members_ambiguous",
+            )
+            candidates.append((artifact, seeds[0], reports[0], events[0]))
     _need(len(candidates) == 1, "correction_seed_capture_missing_or_ambiguous")
-    artifact, seed_ref, report_ref = candidates[0]
+    artifact, seed_ref, report_ref, event_ref = candidates[0]
     bundle = _read_controlled_receipt(seed_ref.get("raw"), root)
     report = _read_controlled_receipt(report_ref.get("raw"), root)
     _need(
@@ -104,8 +113,9 @@ def collect_original_inputs(snapshot, packet, packet_ref):
         and bundle.get("result_sha256") == report_ref["raw"]["sha256"],
         "correction_seed_original_result_changed",
     )
-    manifest_ref = (section.get("content") or {}).get("input_manifest", {}).get("raw")
-    manifest = _read_controlled_receipt(manifest_ref, root)
+    # Input snapshot and verification request/material are distinct producer
+    # documents. The event manifest must come from this SAME selected archive.
+    manifest = _read_controlled_receipt(event_ref.get("raw"), root)
     _need(
         manifest.get("verification_event") == bundle["verification_event"]
         and manifest.get("assessment_identity") == bundle.get("assessment_identity")
@@ -580,34 +590,47 @@ def run_controlled_correction(
                 else:
                     held_intent = identity
                     return replay(parent_fd, check)
-        route, status = closer._pipeline_low_route(
-            load=route_load, data_only=True, task_type=producer.TASK, with_status=True
+        source_invitation = decision["private_builder_proof"].get("low_proof_kind") == (
+            "source_native_conservative_inventory"
         )
-        if route is None:
-            return _owned_unknown("correction_task_route_" + str(status))
+        if not source_invitation:
+            route, status = closer._pipeline_low_route(
+                load=route_load, data_only=True, task_type=producer.TASK, with_status=True
+            )
+            if route is None:
+                return _owned_unknown("correction_task_route_" + str(status))
 
         def invoke(chosen):
             nonlocal held_intent, observed_actual
             current()
             _need(time.time() < correction_deadline, "correction_declared_deadline_expired")
             # The original producer independently reconstructs exact prompt/basis.
-            _values, _request, _prompt, basis, _root = producer.prepare(
-                original_request=original,
-                **{
-                    k: inputs[k]
-                    for k in ("seed_bundle", "source_body", "raw_findings", "retained_packet_ref")
-                },
-                basis={
-                    "target": preparation["snapshot"]["target"],
-                    "revision": preparation["revision"],
-                    "head": packet["head"],
-                    "base": packet["base"],
-                    "packet_sha256": inputs["retained_packet_ref"]["sha256"],
-                },
-            )
+            if source_invitation:
+                basis = stage_result["actual"]["_closer_controlled_proof"]["expected"]["basis"]
+            else:
+                _values, _request, _prompt, basis, _root = producer.prepare(
+                    original_request=original,
+                    **{
+                        k: inputs[k]
+                        for k in (
+                            "seed_bundle",
+                            "source_body",
+                            "raw_findings",
+                            "retained_packet_ref",
+                        )
+                    },
+                    basis={
+                        "target": preparation["snapshot"]["target"],
+                        "revision": preparation["revision"],
+                        "head": packet["head"],
+                        "base": packet["base"],
+                        "packet_sha256": inputs["retained_packet_ref"]["sha256"],
+                    },
+                )
             operation_id = contract.digest([context["work_key"], "correction", identity])
             intent = {
                 "schema": "closer-correction-local-intent/v1",
+                **({"kind": "source_corrective_invitation"} if source_invitation else {}),
                 "identity": identity,
                 "anchor": str(anchor),
                 "original_request": original,
@@ -649,23 +672,33 @@ def run_controlled_correction(
                 _need(time.time() < correction_deadline, "correction_declared_deadline_expired")
                 # A fresh source route/pool and fresh controlled options are used;
                 # the original LOW/STRONG one-shot callbacks are never borrowed.
-                result = producer.produce(
-                    original_request=original,
-                    **{
-                        k: inputs[k]
-                        for k in (
-                            "seed_bundle",
-                            "source_body",
-                            "raw_findings",
-                            "retained_packet_ref",
-                        )
-                    },
-                    profile_id=chosen["profile_id"],
-                    frontier=context["finite_frontier"],
-                    basis=basis,
-                    operation_id=operation_id,
-                    deadline=correction_deadline,
-                )
+                if source_invitation:
+                    import closer_conservative_intake as intake
+
+                    result = intake.produce_invitation(
+                        context=context,
+                        preparation=preparation,
+                        stage_result=stage_result,
+                        decision=decision,
+                    )
+                else:
+                    result = producer.produce(
+                        original_request=original,
+                        **{
+                            k: inputs[k]
+                            for k in (
+                                "seed_bundle",
+                                "source_body",
+                                "raw_findings",
+                                "retained_packet_ref",
+                            )
+                        },
+                        profile_id=chosen["profile_id"],
+                        frontier=context["finite_frontier"],
+                        basis=basis,
+                        operation_id=operation_id,
+                        deadline=correction_deadline,
+                    )
                 observed_actual = result.get("actual") if isinstance(result, dict) else None
                 check()
                 # Outcome persistence is not a new invocation or authority.
@@ -726,6 +759,9 @@ def run_controlled_correction(
                     "original_result_ref": ref,
                 }
 
+        if source_invitation:
+            # No LOW/classifier slot, risk label or provider completion is made up.
+            return invoke({"profile_id": stage_result["requested_profile"]})
         result, _chosen = closer._execute_profile_route(
             route,
             invoke,

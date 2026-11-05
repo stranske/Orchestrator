@@ -1136,6 +1136,7 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
     # Feature discovery shares the Brain exercise phase with feature reflection,
     # keeping audit at five rails as independent value-chain monitoring joins it.
     "rail-exercise:brain": {
+        "closer-core": "EXERCISE the external closer's read-only value-chain adapter over a fixture: measured demand stays distinct from invocations and missing evidence stays unmeasured. Never invokes the external controller.",
         "feedback-store": "EXERCISE the learning store's spine on a COPY of the feedback db: "
         "integrity_check plus a referential recount (every outcome has its run; outcome counts "
         "match the ledger's outcome events); break case: a copy with an orphaned outcome must fail "

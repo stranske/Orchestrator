@@ -31,7 +31,6 @@ from scripts import api_client
 from scripts.langchain._llm_client import get_llm_client, get_llm_clients
 from scripts.langchain.structured_output import (
     build_repair_callback,
-    parse_structured_output,
 )
 from scripts.langchain.verifier_config import (
     EVAL_PAIR_BUDGET_TOKENS,
@@ -120,7 +119,7 @@ Respond in JSON with:
     "risks": 0-10
   }},
   "concerns": ["..."],
-  "summary": "concise report"
+  "summary": "concise report as one JSON string, never a list or object"
 }}
 """.strip()
 
@@ -170,7 +169,7 @@ Respond in JSON with:
     "risks": 0-10
   }},
   "concerns": ["..."],
-  "summary": "concise report"
+  "summary": "concise report as one JSON string, never a list or object"
 }}
 """.strip()
 
@@ -326,6 +325,14 @@ class EvaluationPayload(BaseModel):
     files_reviewed: list[str] | None = None
     deferred_concerns: list[DeferredChunkConcern] = Field(default_factory=list)
     resolved_chunk_concerns: list[ResolvedChunkConcern] = Field(default_factory=list)
+
+
+class CriterionSummaryEntry(BaseModel):
+    """Strict alternate transport entry emitted by one native provider."""
+
+    model_config = {"extra": "forbid"}
+    criterion: str = Field(min_length=1)
+    support: str = Field(min_length=1)
 
 
 SEMANTIC_ENVELOPE_SCHEMA = "workflows-verifier-semantic-acceptance-envelope/v1"
@@ -8167,34 +8174,37 @@ def _parse_semantic_evaluation_payload(content: str) -> EvaluationPayload:
             members[key] = value
         return members
 
-    return EvaluationPayload.model_validate(
-        json.loads(text, object_pairs_hook=unique_members), strict=True, extra="forbid"
-    )
+    payload_data = json.loads(text, object_pairs_hook=unique_members)
+    if isinstance(payload_data, dict) and isinstance(payload_data.get("summary"), list):
+        summary_entries = [
+            CriterionSummaryEntry.model_validate(entry, strict=True, extra="forbid")
+            for entry in payload_data["summary"]
+        ]
+        if not summary_entries:
+            raise ValueError("semantic response summary entries must not be empty")
+        # Keep the public evaluation payload and every downstream renderer scalar.
+        # Raw provider content remains attached by _parse_llm_response for audit.
+        payload_data = {
+            **payload_data,
+            "summary": "\n\n".join(
+                f"{entry.criterion}: {entry.support}" for entry in summary_entries
+            ),
+        }
+
+    return EvaluationPayload.model_validate(payload_data, strict=True, extra="forbid")
 
 
 def _parse_llm_response(
-    content: object, provider: str, *, client: object | None = None
+    content: object, provider: str, *, client: object | None = None  # noqa: ARG001 - compatibility
 ) -> EvaluationResult:
     content_text = _coerce_response_content(content)
-    repair = _build_verifier_repair_callback(client) if client is not None else None
-    parsed = parse_structured_output(
-        content_text,
-        EvaluationPayload,
-        repair=repair,
-        max_repair_attempts=SCHEMA_REPAIR_POLICY.max_attempts,
-    )
-    if parsed.payload is None:
-        decision = SCHEMA_REPAIR_POLICY.terminal_decision(
-            repair_attempts_used=parsed.repair_attempts_used,
-            error_stage=parsed.error_stage,
-            has_payload=False,
-        )
-        if parsed.error_stage == "repair_validation":
-            error = f"Failed to parse JSON response after repair: {parsed.error_detail}"
-        else:
-            error = f"Failed to parse JSON response: {parsed.error_detail}"
-        if decision == "escalate":
-            error = f"Schema repair policy escalated verifier output: {error}"
+    # A final answer is immutable provider evidence. Parse the existing strict
+    # transport/schema once; malformed or ambiguous output is held locally,
+    # never sent to a provider for a default repair generation.
+    try:
+        payload = _parse_semantic_evaluation_payload(content_text)
+    except (ValueError, TypeError) as exc:
+        error = f"Failed to parse JSON response: {type(exc).__name__}"
         return EvaluationResult(
             verdict="CONCERNS",
             scores=None,
@@ -8206,7 +8216,6 @@ def _parse_llm_response(
             error=error,
         )
 
-    payload = parsed.payload
     return EvaluationResult(
         verdict=payload.verdict,
         files_not_reviewed=payload.files_not_reviewed,
@@ -8219,7 +8228,7 @@ def _parse_llm_response(
         summary=payload.summary,
         provider_used=provider,
         used_llm=True,
-        raw_content=parsed.raw_content or content_text,
+        raw_content=content_text,
     )
 
 

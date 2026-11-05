@@ -1,0 +1,140 @@
+✔ a pre-deployment decision exiting later does not satisfy the deployment window (957.327817ms)
+✔ an importer failure retains the explicit round and provider incident for recovery (965.026297ms)
+✔ an explicit exit remains a boundary for later legacy adjacency (980.452128ms)
+✖ value-chain preflight CLI accepts the stated task and all nine admission parts (470.966585ms)
+✖ value-chain preflight CLI accepts a spec file without modifying its bytes (868.046599ms)
+✔ value-chain preflight CLI names a missing dedup requirement (505.764345ms)
+✖ value-chain preflight CLI rejects a missing consumer (411.225474ms)
+✔ value-chain preflight CLI rejects a missing learning sink (603.070977ms)
+✔ value-chain preflight CLI rejects a missing kill switch (689.479843ms)
+✔ value-chain preflight CLI rejects a missing rollback (498.313521ms)
+✔ value-chain preflight CLI rejects a missing review cadence (517.772176ms)
+✖ value-chain preflight CLI reports every missing declaration in one result (432.921979ms)
+✔ value-chain preflight CLI rejects findability with a missing exercise category (498.448645ms)
+✔ value-chain preflight CLI rejects findability with a missing exercise rationale (464.318564ms)
+✔ value-chain preflight CLI rejects findability with a missing obsolete exemption (473.802772ms)
+ℹ tests 15
+ℹ suites 0
+ℹ pass 11
+ℹ fail 4
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 9360.991944
+
+✖ failing tests:
+
+test at tests/test_value_chain_preflight_cli.js:75:1
+✖ value-chain preflight CLI accepts the stated task and all nine admission parts (470.966585ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    [
+      'caller_exists',
+  +   'consumer_acts',
+      'dedup_recorded',
+      'expiry_or_cadence',
+      'findable',
+      'fixture',
+      'heartbeat',
+  
+      at assertReady (/home/runner/work/Orchestrator/Orchestrator/tests/test_value_chain_preflight_cli.js:65:10)
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_value_chain_preflight_cli.js:77:3)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [Array],
+    expected: [Array],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests/test_value_chain_preflight_cli.js:83:1
+✖ value-chain preflight CLI accepts a spec file without modifying its bytes (868.046599ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    [
+      'caller_exists',
+  +   'consumer_acts',
+      'dedup_recorded',
+      'expiry_or_cadence',
+      'findable',
+      'fixture',
+      'heartbeat',
+  
+      at assertReady (/home/runner/work/Orchestrator/Orchestrator/tests/test_value_chain_preflight_cli.js:65:10)
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_value_chain_preflight_cli.js:90:3)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [Array],
+    expected: [Array],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests/test_value_chain_preflight_cli.js:116:3
+✖ value-chain preflight CLI rejects a missing consumer (411.225474ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    [
+      'outcome_path',
+  +   'consumer_acts'
+    ]
+  
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_value_chain_preflight_cli.js:120:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [Array],
+    expected: [Array],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests/test_value_chain_preflight_cli.js:132:1
+✖ value-chain preflight CLI reports every missing declaration in one result (432.921979ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    [
+      'dedup_recorded',
+      'outcome_path',
+  +   'consumer_acts',
+      'kill_switch',
+      'rollback',
+      'expiry_or_cadence'
+    ]
+  
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_value_chain_preflight_cli.js:139:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [Array],
+    expected: [Array],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+exit_code=1

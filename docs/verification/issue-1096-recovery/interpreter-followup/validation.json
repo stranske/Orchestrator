@@ -1,0 +1,53 @@
+{
+  "checked_at": "2026-11-03T19:43:55.046187+00:00",
+  "source_parent": "1ecef8633d696c6e3b1ad864572dad65bea132dc",
+  "evaluated_revision": "96dde1810f56562e0e23af6f0e603b3e48e7728a",
+  "evaluated_tree": "dd844954a3605333395e526c0aebf5489e88014b",
+  "commands": {
+    "runner_before": [
+      "node",
+      "tests/test_adjudicator_acceptance_runner.js"
+    ],
+    "runner_after": [
+      "node",
+      "tests/test_adjudicator_acceptance_runner.js"
+    ],
+    "inventory": [
+      "node",
+      "tests/test_adjudicator_inventory.js"
+    ]
+  },
+  "regression_logs": {
+    "runner-before.log": {
+      "sha256": "9e4e49f09dd87eaf38593f93cc9db74dadc1100950090a665ed33b373e55c222",
+      "passed": 16,
+      "failed": 7
+    },
+    "runner-after.log": {
+      "sha256": "e93ec3a61ab3bcd22d90cef6766e8a9f5628aa539262fca9c283c38a8eff460e",
+      "passed": 26,
+      "failed": 0
+    },
+    "inventory.log": {
+      "sha256": "33c5929820fd97d8c37bef0317d1991f2d4b9b548492c1e2feaee4b23ed3ab1f",
+      "passed": 40,
+      "failed": 0
+    }
+  },
+  "source_sha256": {
+    "scripts/run_adjudicator_acceptance.js": "a0b92097e80f67c7df16970e85ff484592d46bed126c02c6423d4a6406e91bbb",
+    "tests/test_adjudicator_acceptance_runner.js": "9cf11c32c7338012739493907c6157fa1c5308e987ac0eac6eea883829df56d1"
+  },
+  "acceptance_receipt": "acceptance-run/checks.json",
+  "required_tests_passed": false,
+  "accepted_deployment_verified": false,
+  "task_checkboxes_newly_verified_complete": 0,
+  "python_files_changed": false,
+  "black_gate_applicable": false,
+  "pr_body_update": "rejected_connector_requires_approval_policy_never",
+  "pr_readiness": {
+    "number": 1097,
+    "state": "open",
+    "isDraft": false
+  }
+}

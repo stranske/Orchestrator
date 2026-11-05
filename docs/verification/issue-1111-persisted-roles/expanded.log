@@ -1,0 +1,27 @@
+✔ gap export preserves every dispute and explicit UNKNOWN execution evidence without writes (62.329384ms)
+✔ owner-excluded evidence is never evaluated and remains an identity-only gap (49.194107ms)
+✔ schema 1 retains requested identities and unknown counts with an unavailable Brain (39.222053ms)
+✔ schema 2 retains requested identities and unknown counts with an unavailable Brain (39.802569ms)
+✔ an empty supplied manifest cannot claim recovery or hide the missing requested slots (4.076493ms)
+✔ invalid arguments and manifests produce no partial ledger or Brain writes (286.023012ms)
+✔ saved report joins the complete dispute identity and binds unverified claims to retained bytes (42.492925ms)
+✔ ambiguous saved rows and owner-excluded cases cannot contribute execution claims (4.064598ms)
+✔ mismatched packets, invalid revisions and invalid costs remain specific gaps (9.609231ms)
+✔ invalid saved reports and run-only manifests fail without partial output or writes (228.513778ms)
+✔ opt-in persisted links retain role and cost digests without claiming revision or cohort proof (53.775432ms)
+✔ persisted lookup requires the complete role, target, backend and decision identity (60.608966ms)
+✔ missing role identities, ambiguous claims and missing stores have individual gaps (53.53156ms)
+✔ persisted costs follow the production whole-run policy and expose saved cost discrepancies (75.803504ms)
+✔ excluded role target is rejected before metadata is evaluated (11.754935ms)
+✔ excluded backend identity prevents cost reads (14.892995ms)
+✔ excluded requested identities trigger no persisted role or cost evidence reads (13.145625ms)
+✔ persisted role CLI flag requires a saved report and produces no partial output (41.842073ms)
+✔ persisted lookup reads the production role recorder and agrees with production cost grading (313.831575ms)
+ℹ tests 19
+ℹ suites 0
+ℹ pass 19
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1417.469051

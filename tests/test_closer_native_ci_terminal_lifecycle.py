@@ -198,9 +198,9 @@ def test_actual_signed_leaf_terminal_rearms_only_original_full_cohort(
             held["target"]
         ]
     )
-    # The next canonical coordinator has no qualified classifier in this
-    # synthetic case. It must create its fresh successor/PREPARE and stop at
-    # that explicit role hold, without reusing the prior accepted ACT.
+    # The fresh successor must PREPARE again without reusing accepted ACT.
+    # This case has both no role record and run42 artifacts=[]; the current
+    # source host collector reaches its necessary evidence hold first.
     monkeypatch.setattr(dispatcher, "_profile_exception_qualified", lambda *_a, **_k: False)
     # Native publication used finite_host's separate HOME. The fresh ordinary
     # caller must reuse its own physical admission guard before role selection.
@@ -223,7 +223,8 @@ def test_actual_signed_leaf_terminal_rearms_only_original_full_cohort(
     assert fresh["results"]["prepare"]["snapshot_ref"]
     assert fresh["status"] == "held" and fresh["stage"] == "interpret", fresh
     pending = fresh["results"]["interpret"]
-    assert pending["classification"] == "role_qualification_unavailable", pending
+    assert pending["classification"] == "evidence_pending", pending
+    assert pending["evidence_recovery"]["outcome"] == "no_progress", pending
     assert pending["pending_evidence"]["target"] == held["target"]
     assert pending["pending_evidence"]["revision"] == child["bindings"][held["target"]]["revision"]
     assert (

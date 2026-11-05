@@ -960,7 +960,10 @@ def test_finite_model_transport_loss_is_unknown_and_not_replayed(tmp_path, stage
 def test_finite_state_lock_timeout_after_action_intent_never_replays(tmp_path):
     target = "acme/repo#7"
     path = tmp_path / "locked-state.json"
-    frontier, timeout = _frontier_with_timeout(target)
+    # Reach ACT and start the real lock holder before testing the request's
+    # timeout. The default 0.1-second budget can expire during earlier fsyncs
+    # on a loaded runner, which exercises a different boundary entirely.
+    frontier, timeout = _frontier_with_timeout(target, timeout=2)
     calls = []
     holder_ready = multiprocessing.Event()
     holder_release = multiprocessing.Event()
@@ -991,6 +994,7 @@ def test_finite_state_lock_timeout_after_action_intent_never_replays(tmp_path):
             now=time.time,
         )
         assert holder is not None
+        assert holder_ready.is_set()
         # Prove the request returns while the other process still owns the lock.
         # A wall-clock cutoff also counts unrelated CI process scheduling delay.
         assert holder.is_alive()

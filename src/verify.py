@@ -71,6 +71,7 @@ import json
 import os
 import pathlib
 import re
+import secrets
 import shutil
 import sqlite3
 import subprocess
@@ -93,6 +94,9 @@ try:
 except Exception:  # noqa: BLE001 — verify.py must run even if a sibling module is broken
     MODULES = ROOT = HERE
 FLOOR = ROOT / ".verify-floor.json"
+FAILURE_EVIDENCE_MAX_BYTES = 32 * 1024
+FAILURE_EVIDENCE_MAX_CASES = 4
+FAILURE_EVIDENCE_TRACE_BYTES = 4096
 
 # --- coverage instrumentation, OFF unless asked for -------------------------------------------
 # Every runner below spawns a SUBPROCESS. That is deliberate (a selftest must be exercised the way
@@ -401,7 +405,7 @@ def run_pytest(*, extra: list[str] | None = None, junit: pathlib.Path | None = N
 
     With `junit`, pytest also writes its per-test XML there, and the verdicts in it come back as
     `verdicts` — which is how the two gates that are test files report them instead of executing
-    every check a second time (see `run_gates`). The counts never come from that file.
+    every check a second time (see `run_gates`). Outcome counts remain from the summary; collected identities come from its testcase records.
     """
     # `-rfEs`: failures, errors AND skip reasons in the short summary. Skip reasons are why this
     # flag is here at all — a skip count with no story is the shape a silent narrowing hides in.
@@ -430,7 +434,7 @@ def run_pytest(*, extra: list[str] | None = None, junit: pathlib.Path | None = N
 def parse_pytest_output(
     tail: str, *, returncode: int = 0, junit: pathlib.Path | None = None
 ) -> dict:
-    """Read only pytest's final printed summary, never JUnit's count attributes."""
+    """Keep printed outcomes; inventory uses unique JUnit testcase identities, not totals."""
     summaries = [
         line.strip("= ")
         for line in tail.splitlines()
@@ -461,11 +465,29 @@ def parse_pytest_output(
     skips = [ln.strip() for ln in lines if ln.lstrip().startswith("SKIPPED ")]
     skip_records: list[dict[str, str]] = []
     verdicts = read_junit(junit, skip_records=skip_records) if junit is not None else {}
+    inventory = None
+    collection_skips = []
+    inventory_error = None
+    if junit is not None:
+        try:
+            inventory, collection_skips = read_junit_inventory(junit)
+            if len(collection_skips) > counts.get("skipped", 0) or len(inventory) > collected - len(
+                collection_skips
+            ):
+                raise ValueError(
+                    "JUnit testcase/collection-skip inventory exceeds printed outcomes"
+                )
+            collected = len(inventory)
+        except (OSError, ET.ParseError, ValueError) as exc:
+            # Expected evidence missing/corrupt must never preserve an inferred green.
+            collected = 0
+            inventory_error = type(exc).__name__ + ": " + str(exc)
+
     return {
         "counts": counts,
         "collected": collected,
         "passed": counts.get("passed", 0),
-        "skipped": counts.get("skipped", 0),
+        "skipped": max(0, counts.get("skipped", 0) - len(collection_skips)),
         "failed": counts.get("failed", 0) + counts.get("error", 0),
         "returncode": returncode,
         "output": tail,
@@ -476,7 +498,170 @@ def parse_pytest_output(
         "tail": lines[-12:],
         "verdicts": verdicts,
         "skip_records": skip_records,
+        "test_inventory": inventory,
+        "collection_skip_records": collection_skips,
+        "inventory_error": inventory_error,
     }
+
+
+def _bounded_redacted(value: object, limit: int) -> tuple[str, dict[str, int], bool]:
+    """Redact then bound retained diagnostic text, never the other way around."""
+    import credential_redaction
+
+    if credential_redaction.disabled():
+        raise ValueError("credential redaction disabled")
+    text, counts = credential_redaction.redact_with_counts(str(value or ""))
+    truncated = len(text.encode("utf-8")) > limit
+    if truncated:
+        marker = "...[TRUNCATED]"
+        marker_bytes = marker.encode("utf-8")
+        if limit < len(marker_bytes):
+            text = "~"[:limit]
+        else:
+            retained = limit - len(marker_bytes)
+            text = text.encode("utf-8")[:retained].decode("utf-8", "ignore") + marker
+    return text, counts, truncated
+
+
+def _failure_cases_from_junit(
+    junit: pathlib.Path,
+) -> tuple[list[dict[str, object]], dict[str, int]]:
+    """Extract only failed JUnit cases and their redacted, bounded trace text."""
+    root = ET.parse(junit).getroot()
+    cases: list[dict[str, object]] = []
+    redactions: dict[str, int] = {}
+    for case in root.iter("testcase"):
+        outcome = next((node for node in case if node.tag in {"failure", "error"}), None)
+        if outcome is None:
+            continue
+        trace, counts, truncated = _bounded_redacted(
+            "\n".join(outcome.itertext()), FAILURE_EVIDENCE_TRACE_BYTES
+        )
+        for kind, count in counts.items():
+            redactions[kind] = redactions.get(kind, 0) + count
+        classname, _, _ = _bounded_redacted(case.get("classname", ""), 512)
+        name, _, _ = _bounded_redacted(case.get("name", ""), 512)
+        message, more_counts, message_truncated = _bounded_redacted(
+            outcome.get("message", ""), 1024
+        )
+        for kind, count in more_counts.items():
+            redactions[kind] = redactions.get(kind, 0) + count
+        cases.append(
+            {
+                "classname": classname,
+                "name": name,
+                "outcome": outcome.tag,
+                "message": message,
+                "trace": trace,
+                "truncated": truncated or message_truncated,
+            }
+        )
+        if len(cases) == FAILURE_EVIDENCE_MAX_CASES:
+            break
+    return cases, redactions
+
+
+def _failure_evidence_bytes(payload: dict[str, object]) -> bytes:
+    """Serialize a useful failure record within its hard document cap.
+
+    JSON escaping can inflate otherwise bounded trace text.  Reduce traces and fallback output
+    deterministically rather than discard the entire evidence record when that happens.
+    """
+    payload["document_truncated"] = False
+    fields: list[dict[str, object]] = []
+    for name in ("failed_cases", "failure_summaries"):
+        raw = payload.get(name)
+        if isinstance(raw, list):
+            fields.extend(item for item in raw if isinstance(item, dict))
+    for name in ("junit_problem", "pytest_output"):
+        raw = payload.get(name)
+        if isinstance(raw, dict):
+            fields.append(raw)
+    for field_name in ("trace", "output", "message", "summary", "detail"):
+        for item in fields:
+            value = item.get(field_name)
+            if not isinstance(value, str) or not value:
+                continue
+            data = json.dumps(
+                payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+            ).encode("utf-8")
+            if len(data) <= FAILURE_EVIDENCE_MAX_BYTES:
+                return data
+            payload["document_truncated"] = True
+            excess = len(data) - FAILURE_EVIDENCE_MAX_BYTES
+            current = len(value.encode("utf-8"))
+            reduced, _, _ = _bounded_redacted(value, max(1, current - excess - 64))
+            item[field_name] = reduced
+    data = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
+        "utf-8"
+    )
+    if len(data) > FAILURE_EVIDENCE_MAX_BYTES:
+        raise ValueError("bounded failure evidence exceeds its maximum size")
+    return data
+
+
+def write_failure_evidence(
+    destination: pathlib.Path, *, junit: pathlib.Path, py: dict
+) -> pathlib.Path:
+    """Create one failure-only evidence file without following or replacing a caller path."""
+    if not destination.is_absolute() or destination.name != "pytest-failure-evidence.json":
+        raise ValueError("failure evidence destination must be an absolute canonical file path")
+    parent = destination.parent
+    if parent != parent.resolve(strict=True) or parent.is_symlink() or not parent.is_dir():
+        raise ValueError("failure evidence parent is not a canonical directory")
+    if destination != parent / destination.name:
+        raise ValueError("failure evidence destination is not canonical")
+    if destination.exists() or destination.is_symlink():
+        raise FileExistsError("failure evidence destination already exists")
+    try:
+        cases, redactions = _failure_cases_from_junit(junit)
+    except (OSError, ET.ParseError, ValueError) as error:
+        detail, counts, truncated = _bounded_redacted(f"{type(error).__name__}: {error}", 1024)
+        cases, redactions = [], counts
+        junit_problem: dict[str, object] | None = {
+            "detail": detail,
+            "truncated": truncated,
+        }
+    else:
+        junit_problem = None
+    failures = []
+    for item in py.get("failures", [])[:FAILURE_EVIDENCE_MAX_CASES]:
+        line, counts, truncated = _bounded_redacted(item, 1024)
+        failures.append({"summary": line, "truncated": truncated})
+        for kind, count in counts.items():
+            redactions[kind] = redactions.get(kind, 0) + count
+    payload: dict[str, object] = {
+        "schema": "verify-failure-evidence/v1",
+        "pytest_returncode": int(py.get("returncode", 1)),
+        "failed_cases": cases,
+        "failure_summaries": failures,
+        "credential_redactions": redactions,
+    }
+    if junit_problem is not None:
+        payload["junit_problem"] = junit_problem
+    if junit_problem is not None or py.get("usage_error"):
+        output, counts, truncated = _bounded_redacted(py.get("output", ""), 8192)
+        payload["pytest_output"] = {"output": output, "truncated": truncated}
+        for kind, count in counts.items():
+            redactions[kind] = redactions.get(kind, 0) + count
+        payload["credential_redactions"] = redactions
+    data = _failure_evidence_bytes(payload)
+    temporary = parent / f".{destination.name}.{secrets.token_hex(16)}.tmp"
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.link(temporary, destination, follow_symlinks=False)
+        parent_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(parent_fd)
+        finally:
+            os.close(parent_fd)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return destination
 
 
 def shard_plan() -> list[list[str]]:
@@ -527,6 +712,9 @@ def run_pytest_shard(spec: str, output: pathlib.Path) -> tuple[int, str]:
         "returncode": py["returncode"],
         "verdicts": py["verdicts"],
         "skip_records": py["skip_records"],
+        "test_inventory": py["test_inventory"],
+        "collection_skip_records": py["collection_skip_records"],
+        "inventory_error": py["inventory_error"],
     }
     (output / f"shard-{index}.json").write_text(json.dumps(record), encoding="utf-8")
     # pytest-cov combines its workers into COVERAGE_FILE (without a parallel suffix).
@@ -534,7 +722,16 @@ def run_pytest_shard(spec: str, output: pathlib.Path) -> tuple[int, str]:
         data = ROOT / os.environ["COVERAGE_FILE"]
         if data.is_file():
             data.rename(data.with_name(data.name + ".pytest"))
-    code = int(bool(py["returncode"] or not py["summary"] or py["failed"] or py["usage_error"]))
+    code = int(
+        bool(
+            py["returncode"]
+            or not py["summary"]
+            or py["failed"]
+            or py["usage_error"]
+            or py.get("inventory_error")
+            or not py["collected"]
+        )
+    )
     return (
         code,
         f"  tree:       {TREE_LABELS[shape]} {reason or ''}\npytest shard {spec}\n{py['output']}",
@@ -546,6 +743,7 @@ def aggregate_pytest(directory: pathlib.Path) -> dict:
     plan = shard_plan()
     shape, _ = tree_shape()
     parts = []
+    seen_identities: set[tuple[str, str]] = set()
     for index in range(1, len(plan) + 1):
         spec = f"{index}/{len(plan)}"
         path = directory / f"shard-{index}.json"
@@ -578,6 +776,36 @@ def aggregate_pytest(directory: pathlib.Path) -> dict:
             or (py["returncode"] and not py["failed"])
         ):
             raise ValueError(f"shard {spec} failed (exit {py['returncode']}): {py['output']}")
+        inventory = record.get("test_inventory")
+        collection_skips = record.get("collection_skip_records", [])
+        if (
+            record.get("inventory_error")
+            or not isinstance(inventory, list)
+            or not inventory
+            or any(
+                not isinstance(row, list)
+                or len(row) != 2
+                or not all(isinstance(x, str) and x for x in row)
+                for row in inventory
+            )
+            or len({tuple(row) for row in inventory}) != len(inventory)
+            or not isinstance(collection_skips, list)
+            or len(collection_skips) > py["skipped"]
+            or len(inventory) > py["collected"] - len(collection_skips)
+            or any(
+                not isinstance(row, dict) or row.get("message") != "collection skipped"
+                for row in collection_skips
+            )
+        ):
+            raise ValueError(f"shard {spec}: missing or invalid testcase inventory")
+        identities = {tuple(row) for row in inventory}
+        if seen_identities.intersection(identities):
+            raise ValueError(f"shard {spec}: duplicate testcase identity across shards")
+        seen_identities.update(identities)
+        py["collected"] = len(inventory)
+        py["skipped"] = max(0, py["skipped"] - len(collection_skips))
+        py["test_inventory"] = inventory
+        py["collection_skip_records"] = collection_skips
         py["verdicts"] = record["verdicts"]
         py["skip_records"] = record["skip_records"]
         parts.append(py)
@@ -587,7 +815,7 @@ def aggregate_pytest(directory: pathlib.Path) -> dict:
             summed[key] += part[key]
         for key, count in part["counts"].items():
             summed["counts"][key] = summed["counts"].get(key, 0) + count
-        for key in ("failures", "skips", "tail", "skip_records"):
+        for key in ("failures", "skips", "tail", "skip_records", "collection_skip_records"):
             summed[key].extend(part[key])
         for module, verdicts in part["verdicts"].items():
             target = summed["verdicts"].setdefault(module, {})
@@ -602,6 +830,38 @@ def aggregate_pytest(directory: pathlib.Path) -> dict:
 
 # Per test, the most severe verdict wins: pytest writes a second <testcase> for a teardown error.
 _VERDICT_RANK = {"passed": 0, "skipped": 1, "failed": 2}
+
+
+def _collection_skip(case):
+    return (
+        not case.get("classname")
+        and case.get("name")
+        and len(case) == 1
+        and case[0].tag == "skipped"
+        and case[0].get("message") == "collection skipped"
+    )
+
+
+def read_junit_inventory(path):
+    """Full identities include xfails; repeated phases/subtest children are one item."""
+    root = ET.parse(path).getroot()
+    if root.tag not in {"testsuite", "testsuites"}:
+        raise ValueError("expected JUnit testsuite root")
+    identities = set()
+    collection_skips = []
+    for case in root.iter("testcase"):
+        if _collection_skip(case):
+            collection_skips.append(
+                {"outcome": "skipped", "message": "collection skipped", "name": case.get("name")}
+            )
+            continue
+        identity = (case.get("classname"), case.get("name"))
+        if not all(identity):
+            raise ValueError("JUnit testcase identity missing outside collection skip")
+        identities.add(identity)
+    if not identities:
+        raise ValueError("JUnit contains no collected testcase identities")
+    return [list(row) for row in sorted(identities)], collection_skips
 
 
 def read_junit(
@@ -626,6 +886,8 @@ def read_junit(
     out: dict[str, dict[str, dict[str, str]]] = {}
     unreplayable: set[tuple[str, str]] = set()
     for case in root.iter("testcase"):
+        if _collection_skip(case):
+            continue
         if skip_records is not None:
             for child in case:
                 if child.tag == "skipped" and child.get("type") != "pytest.xfail":
@@ -924,9 +1186,20 @@ def load_floor() -> dict:
     for "measured nothing" and "could not measure". The unreadable case now carries a marker key
     so callers can say which it is; it stays a dict so no caller breaks.
     """
-    if FLOOR.exists():
+    return load_floor_at(FLOOR)
+
+
+def load_floor_at(floor_path: pathlib.Path) -> dict:
+    """Read a named floor with the same unreadable-file distinction as ``load_floor``.
+
+    The release preflight measures a separate, clean candidate checkout before
+    asking the normal verifier to execute it.  Keeping this small reader here
+    prevents that preflight from treating a malformed candidate floor as an
+    absent one or from carrying a second floor-file interpretation.
+    """
+    if floor_path.exists():
         try:
-            return json.loads(FLOOR.read_text(encoding="utf-8"))
+            return json.loads(floor_path.read_text(encoding="utf-8"))
         except Exception:  # noqa: BLE001
             return {FLOOR_UNREADABLE: True}
     return {}
@@ -1617,11 +1890,13 @@ def verify(
     forgive_healed_drift: bool = False,
     floor_may_lag: bool = False,
     aggregate: pathlib.Path | None = None,
+    failure_evidence_out: pathlib.Path | None = None,
 ) -> tuple[int, str]:
     jobs, jobs_said = selftest_jobs()
     took: dict[str, float] = {}
     # Every child below runs inside ONE private copy of the ledger and the Brain; see
     # `private_state`. The run directory holds pytest's XML and the verdicts handed to the gates.
+    failure_evidence_note = None
     with private_state() as run_state, tempfile.TemporaryDirectory(prefix="verify-run-") as run_dir:
         if run_state.get("refused"):
             return 1, _not_run_summary(run_state)
@@ -1630,6 +1905,16 @@ def verify(
         started = time.monotonic()
         if aggregate is None:
             py = run_pytest(junit=pathlib.Path(run_dir) / "pytest.xml")
+            if failure_evidence_out is not None and (py["failed"] or py["usage_error"]):
+                try:
+                    evidence = write_failure_evidence(
+                        failure_evidence_out, junit=pathlib.Path(run_dir) / "pytest.xml", py=py
+                    )
+                    failure_evidence_note = f"failure evidence retained: {evidence}"
+                except (OSError, ValueError) as error:
+                    failure_evidence_note = (
+                        f"failure evidence NOT retained: {type(error).__name__}: {error}"
+                    )
         else:
             try:
                 py = aggregate_pytest(aggregate)
@@ -1649,12 +1934,16 @@ def verify(
         entrypoints = absent_entrypoint_line(run_state["ledger"])
 
     problems = []
+    if py.get("inventory_error"):
+        problems.append("pytest testcase inventory unavailable: " + py["inventory_error"])
     if py["usage_error"]:
         problems.append("pytest reported a usage error (and still exited 0)")
     if py["collected"] == 0:
         problems.append("pytest collected ZERO tests — the suite did not run")
     if py["failed"]:
         problems.append(f"{py['failed']} pytest failure(s)/error(s)")
+    if failure_evidence_note:
+        problems.append(failure_evidence_note)
     fc = int(floor.get("collected", 0))
     problems += _floor_problems(floor, py)
     if st["failed"]:
@@ -2709,6 +2998,11 @@ def main() -> int:
     modes = ap.add_mutually_exclusive_group()
     modes.add_argument("--pytest-shard", metavar="i/N", help="run only this module shard")
     modes.add_argument("--aggregate", type=pathlib.Path, help="verify summed shard summaries")
+    ap.add_argument(
+        "--failure-evidence-out",
+        type=pathlib.Path,
+        help="absolute canonical path for one bounded redacted pytest-failure record",
+    )
     ap.add_argument("--shard-output", type=pathlib.Path, default=ROOT / "shard-results")
     args = ap.parse_args()
     if args.selftest:
@@ -2739,6 +3033,7 @@ def main() -> int:
         forgive_healed_drift=args.reconcile_floor,
         floor_may_lag=args.floor_may_lag,
         aggregate=args.aggregate,
+        failure_evidence_out=args.failure_evidence_out,
     )
     print(text, end="")
     if args.coverage:

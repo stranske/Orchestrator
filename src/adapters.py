@@ -2007,7 +2007,6 @@ def prepare_non_claude_data_only_candidate(
         or selected["reasoning_effort"] != "high"
     ):
         raise ValueError("candidate profile identity changed")
-    import closer_role_qualification
     import non_claude_data_only_candidate as candidate
 
     if not isinstance(manifest, candidate.RuntimeManifest):
@@ -2021,7 +2020,7 @@ def prepare_non_claude_data_only_candidate(
     return {
         **plan,
         "candidate_builder": "vibe-zero-source-programmatic/v1",
-        "profile_identity": closer_role_qualification.profile_identity(selected),
+        "profile_identity": execution_profiles.profile_identity(selected),
         "adapter_build_sha256": candidate.pin_file(Path(__file__)).sha256,
         "production_admission": False,
         "activation": False,

@@ -1,0 +1,13 @@
+✔ tests/test_adjudicator_closer_shadow.js (5279.48948ms)
+✔ tests/test_adjudicator_completion.js (283.095677ms)
+✔ tests/test_adjudicator_inventory.js (3578.497398ms)
+✔ tests/test_adjudicator_receipts.js (1721.572383ms)
+✔ tests/test_adjudicator_retrospective_batch.js (2851.624655ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 5
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 5288.99549

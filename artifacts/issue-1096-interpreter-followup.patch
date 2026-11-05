@@ -1,0 +1,761 @@
+From 96dde1810f56562e0e23af6f0e603b3e48e7728a Mon Sep 17 00:00:00 2001
+From: Codex <codex@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 19:42:45 +0000
+Subject: [PATCH 1/2] fix: resolve acceptance test interpreter and retain
+ parser failures
+
+---
+ scripts/run_adjudicator_acceptance.js       | 20 ++++++++--
+ tests/test_adjudicator_acceptance_runner.js | 43 ++++++++++++++++++++-
+ 2 files changed, 59 insertions(+), 4 deletions(-)
+
+diff --git a/scripts/run_adjudicator_acceptance.js b/scripts/run_adjudicator_acceptance.js
+index 7e6690e..f5b3bc9 100644
+--- a/scripts/run_adjudicator_acceptance.js
++++ b/scripts/run_adjudicator_acceptance.js
+@@ -125,11 +125,24 @@ function runAcceptance({ root = path.resolve(__dirname, '..'), python, revision,
+       const log = Buffer.concat([result.stdout, result.stderr]);
+       fs.writeFileSync(path.join(output, `${name}.log`), log, { flag: 'wx' });
+       let cases = null;
++      let junitRead = null;
+       if (fs.existsSync(xml)) {
+-        const parsed = execute(python, ['-I', '-c', junitReader, xml], { cwd: root, env, timeout });
+-        if (parsed.exit_code === 0 && !parsed.error_code) {
+-          try { cases = JSON.parse(parsed.stdout.toString()); } catch { /* Invalid receipt. */ }
++        const readerCommand = [python, '-I', '-c', junitReader, xml];
++        const parsed = execute(python, readerCommand.slice(1), { cwd: root, env, timeout });
++        const readerLog = Buffer.concat([parsed.stdout, parsed.stderr]);
++        const readerLogName = `${name}-junit-reader.log`;
++        fs.writeFileSync(path.join(output, readerLogName), readerLog, { flag: 'wx' });
++        let jsonDecoded = false;
++        if (parsed.exit_code === 0 && !parsed.error_code && !parsed.signal) {
++          try {
++            cases = JSON.parse(parsed.stdout.toString());
++            jsonDecoded = true;
++          } catch { /* The raw output remains available in the reader log. */ }
+         }
++        junitRead = { command: readerCommand, exit_code: parsed.exit_code,
++          signal: parsed.signal, error_code: parsed.error_code,
++          timed_out: parsed.error_code === 'ETIMEDOUT', json_decoded: jsonDecoded,
++          log: readerLogName, log_sha256: digest(readerLog) };
+       }
+       const expected = name === 'named-tests' ? namedTests : collected;
+       const complete = (name === 'named-tests' || collectionPassed) &&
+@@ -141,6 +154,7 @@ function runAcceptance({ root = path.resolve(__dirname, '..'), python, revision,
+         log: `${name}.log`, log_sha256: digest(log),
+         junit: fs.existsSync(xml) ? `${name}.xml` : null,
+         junit_sha256: fs.existsSync(xml) ? digest(fs.readFileSync(xml)) : null,
++        junit_reader: junitRead,
+         test_count: Array.isArray(cases) ? cases.length : null,
+         passed: result.exit_code === 0 && !result.error_code && !result.signal && complete });
+     }
+diff --git a/tests/test_adjudicator_acceptance_runner.js b/tests/test_adjudicator_acceptance_runner.js
+index 59dc2c7..18b7a36 100644
+--- a/tests/test_adjudicator_acceptance_runner.js
++++ b/tests/test_adjudicator_acceptance_runner.js
+@@ -8,6 +8,14 @@ const { createHash } = require('node:crypto');
+ const { test } = require('node:test');
+ const { execute, namedTests, runAcceptance } = require('../scripts/run_adjudicator_acceptance');
+ 
++// Only the JUnit reader uses real Python; pytest execution remains a test double.
++// Resolve it in this environment instead of pinning a hosted runner's patch release.
++const resolvedPython = execute(process.env.PYTHON || 'python3',
++  ['-I', '-c', 'import sys; print(sys.executable)'], { cwd: __dirname });
++assert.equal(resolvedPython.exit_code, 0, resolvedPython.stderr.toString());
++const parserPython = resolvedPython.stdout.toString().trim();
++assert.ok(path.isAbsolute(parserPython), 'JUnit parser needs an absolute interpreter');
++
+ function fixture(t, scenario = {}) {
+   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'retro-acceptance-test-'));
+   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+@@ -36,8 +44,10 @@ const options = ${JSON.stringify(scenario)};
+ const required = ${JSON.stringify(namedTests)};
+ if (args[0] === '--version') { console.log('Python fixture'); process.exit(0); }
+ if (args[0] === '-I') {
++  if (options.parserFailure) { console.error('fixture parser failed'); process.exit(3); }
++  if (options.parserInvalidJson) { console.log('invalid json'); process.exit(0); }
+   const { spawnSync } = require('node:child_process');
+-  const result = spawnSync(${JSON.stringify(process.env.PYTHON || '/opt/hostedtoolcache/Python/3.14.9/x64/bin/python')}, args,
++  const result = spawnSync(${JSON.stringify(parserPython)}, args,
+     { stdio: 'inherit' });
+   process.exit(result.status ?? 1);
+ }
+@@ -96,6 +106,12 @@ test('records exact commands, source hashes, complete JUnit and logs for both ch
+     assert.equal(item.log_sha256, createHash('sha256').update(log).digest('hex'));
+     const xml = fs.readFileSync(path.join(options.output, item.junit));
+     assert.equal(item.junit_sha256, createHash('sha256').update(xml).digest('hex'));
++    assert.equal(item.junit_reader.exit_code, 0);
++    assert.equal(item.junit_reader.json_decoded, true);
++    assert.equal(item.junit_reader.command[0], options.python);
++    const parserLog = fs.readFileSync(path.join(options.output, item.junit_reader.log));
++    assert.equal(item.junit_reader.log_sha256,
++      createHash('sha256').update(parserLog).digest('hex'));
+   }
+   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(options.output, 'checks.json'))), receipt);
+ });
+@@ -120,10 +136,35 @@ test('missing pytest preserves two failures and cannot complete acceptance', (t)
+     assert.equal(item.exit_code, 1);
+     assert.equal(item.test_count, null);
+     assert.equal(item.junit, null);
++    assert.equal(item.junit_reader, null);
+     assert.match(fs.readFileSync(path.join(options.output, item.log), 'utf8'), /No module named pytest/);
+   }
+ });
+ 
++for (const scenario of [{ parserFailure: true }, { parserInvalidJson: true }, { malformed: true }]) {
++  test(`preserves JUnit reader failures: ${JSON.stringify(scenario)}`, (t) => {
++    const options = fixture(t, scenario);
++    const receipt = runAcceptance(options);
++    assert.equal(receipt.required_tests_passed, false);
++    assert.equal(receipt.collection.passed, true);
++    for (const item of receipt.checks) {
++      assert.equal(item.exit_code, 0, 'pytest exit and JUnit parsing are separate observations');
++      assert.equal(item.passed, false);
++      assert.equal(item.test_count, null);
++      assert.equal(item.junit_reader.json_decoded, false);
++      assert.equal(item.junit_reader.exit_code,
++        scenario.parserFailure ? 3 : scenario.parserInvalidJson ? 0 : 1);
++      assert.equal(item.junit_reader.error_code, null);
++      assert.equal(item.junit_reader.signal, null);
++      assert.equal(item.junit_reader.timed_out, false);
++      const log = fs.readFileSync(path.join(options.output, item.junit_reader.log));
++      assert.equal(item.junit_reader.log_sha256, createHash('sha256').update(log).digest('hex'));
++      assert.match(log.toString(), scenario.parserFailure ? /fixture parser failed/ :
++        scenario.parserInvalidJson ? /invalid json/ : /ParseError/);
++    }
++  });
++}
++
+ for (const scenario of [{ noXml: true }, { malformed: true }, { empty: true },
+   { incomplete: true }, { duplicate: true }, { skipped: true }, { foreign: true }, { exit: 1 }]) {
+   test(`refuses a successful claim for incomplete evidence: ${JSON.stringify(scenario)}`, (t) => {
+-- 
+2.56.0
+
+
+From 79aed1d9e9cebd5481576ace9911c7db5b6e35b2 Mon Sep 17 00:00:00 2001
+From: Codex <codex@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 19:44:08 +0000
+Subject: [PATCH 2/2] docs: preserve interpreter repair validation and
+ acceptance blockers
+
+---
+ .../issue-1096-recovery/README.md             |  28 +++
+ .../issue-1096-recovery/evidence-ledger.json  |  30 +++
+ .../acceptance-run/checks.json                | 105 +++++++++++
+ .../acceptance-run/collection.log             |   1 +
+ .../acceptance-run/named-tests.log            |   1 +
+ .../acceptance-run/retrospective-suite.log    |   1 +
+ .../interpreter-followup/inventory.log        |  48 +++++
+ .../interpreter-followup/plan.md              |  40 ++++
+ .../interpreter-followup/runner-after.log     |  34 ++++
+ .../interpreter-followup/runner-before.log    | 178 ++++++++++++++++++
+ .../interpreter-followup/validation.json      |  53 ++++++
+ 11 files changed, 519 insertions(+)
+ create mode 100644 docs/verification/issue-1096-recovery/interpreter-followup/acceptance-run/checks.json
+ create mode 100644 docs/verification/issue-1096-recovery/interpreter-followup/acceptance-run/collection.log
+ create mode 100644 docs/verification/issue-1096-recovery/interpreter-followup/acceptance-run/named-tests.log
+ create mode 100644 docs/verification/issue-1096-recovery/interpreter-followup/acceptance-run/retrospective-suite.log
+ create mode 100644 docs/verification/issue-1096-recovery/interpreter-followup/inventory.log
+ create mode 100644 docs/verification/issue-1096-recovery/interpreter-followup/plan.md
+ create mode 100644 docs/verification/issue-1096-recovery/interpreter-followup/runner-after.log
+ create mode 100644 docs/verification/issue-1096-recovery/interpreter-followup/runner-before.log
+ create mode 100644 docs/verification/issue-1096-recovery/interpreter-followup/validation.json
+
+diff --git a/docs/verification/issue-1096-recovery/README.md b/docs/verification/issue-1096-recovery/README.md
+index 454e8fb..41f7ccd 100644
+--- a/docs/verification/issue-1096-recovery/README.md
++++ b/docs/verification/issue-1096-recovery/README.md
+@@ -1,5 +1,33 @@
+ # Acceptance evidence recovery for #1096
+ 
++## Interpreter portability follow-up, 2026-11-03 at 19:43 UTC
++
++The previous runner regression fixture hardcoded Python 3.14.9, which is absent
++in this environment. Its initial run passed 16 tests and failed seven. It now
++resolves an available parser interpreter; all 26 runner regressions and 40 inventory
++regressions pass. The production runner also preserves the JUnit reader's command,
++exit status, raw log and hash separately from the pytest invocation. Parser failure
++and invalid output remain unsuccessful evidence. [Validation and log hashes](interpreter-followup/validation.json)
++bind these observations to source commit `96dde1810f56562e0e23af6f0e603b3e48e7728a`.
++
++The [pre-execution plan](interpreter-followup/plan.md) selected the current Python
++3.14.10 installation. [Collection, the four named tests and the full suite](interpreter-followup/acceptance-run/checks.json)
++all exit 1 before collection with `No module named pytest`. No new task is complete;
++accepted deployment identity, authentic native grading/retry inputs and the fixed
++next-20 manifest remain unavailable. Targeted connected searches recovered no fixed
++manifest or individual original-retry artifact beyond the existing references.
++
++Recent commits were reviewed before continuing. They add recovery inventories,
++pre-dispatch checks and test-runner validation, not passing operational acceptance.
++The attempted PR-body reconciliation of the duplicated recovery/pre-execution
++checkboxes was rejected: the connector requires approval and this run's policy is
++`never`. No PR-body change is claimed. PR #1097 was rechecked open with `draft=false`.
++
++No Python source changed, so the Python-specific Black gate does not apply.
++The checkout Git metadata remains read-only. The source and evidence commits are
++preserved in `/tmp/issue1096-interpreter-git-oe_clm4j` and the accompanying
++[patch](../../../artifacts/issue-1096-interpreter-followup.patch).
++
+ ## Suite completeness follow-up, 2026-11-03
+ 
+ The runner previously accepted a full-suite JUnit file containing only the four
+diff --git a/docs/verification/issue-1096-recovery/evidence-ledger.json b/docs/verification/issue-1096-recovery/evidence-ledger.json
+index 828e80a..914f5dc 100644
+--- a/docs/verification/issue-1096-recovery/evidence-ledger.json
++++ b/docs/verification/issue-1096-recovery/evidence-ledger.json
+@@ -185,6 +185,36 @@
+       "needs_human_label": "rejected_connector_requires_approval_policy_never",
+       "source_commit_storage": "isolated_git_directory_because_checkout_metadata_is_read_only",
+       "limitation": "Runner regression tests verify evidence validation only; no operational acceptance established."
++    },
++    "interpreter_portability_followup": {
++      "checked_at": "2026-11-03T19:43:14.177Z",
++      "evaluated_revision": "96dde1810f56562e0e23af6f0e603b3e48e7728a",
++      "source_parent": "1ecef8633d696c6e3b1ad864572dad65bea132dc",
++      "plan": "interpreter-followup/plan.md",
++      "checks": "interpreter-followup/acceptance-run/checks.json",
++      "validation": "interpreter-followup/validation.json",
++      "runner_regressions_before": {
++        "passed": 16,
++        "failed": 7
++      },
++      "runner_regressions_after": {
++        "passed": 26,
++        "failed": 0
++      },
++      "inventory_tests_passed": 40,
++      "selected_interpreter": "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
++      "source_unchanged": true,
++      "pytest_status": "blocked_before_collection_missing_pytest",
++      "required_tests_passed": false,
++      "accepted_deployment_verified": false,
++      "task_checkboxes_newly_verified_complete": 0,
++      "pr_body_update": "rejected_connector_requires_approval_policy_never",
++      "pr_readiness": {
++        "number": 1097,
++        "state": "open",
++        "isDraft": false
++      },
++      "limitation": "Test-double regressions and failed real commands only. No deployment, native grade, retry outcome or live-cohort acceptance established."
+     }
+   },
+   "mirror_synchronization": [
+diff --git a/docs/verification/issue-1096-recovery/interpreter-followup/acceptance-run/checks.json b/docs/verification/issue-1096-recovery/interpreter-followup/acceptance-run/checks.json
+new file mode 100644
+index 0000000..09814a8
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/interpreter-followup/acceptance-run/checks.json
+@@ -0,0 +1,105 @@
++{
++  "schema_version": 1,
++  "checked_at": "2026-11-03T19:43:14.177Z",
++  "evaluated_revision": "96dde1810f56562e0e23af6f0e603b3e48e7728a",
++  "evaluated_tree": "dd844954a3605333395e526c0aebf5489e88014b",
++  "accepted_deployment_verified": false,
++  "interpreter": "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
++  "runner_sha256": "a0b92097e80f67c7df16970e85ff484592d46bed126c02c6423d4a6406e91bbb",
++  "input_manifest_sha256": "f7d4a32a6d63dd87d9314e8b11eda277965cbafa6da65a336a8eedefd6e3c471",
++  "input_file_count": 1995,
++  "source_sha256": {
++    "pyproject.toml": "2c3462b8b384aeb265dbc51ab742b4ee02d839a34cec6590791a6d5d53fe4a6e",
++    "src/adjudicator_retro.py": "ee172f96ddf0ca56f6c06fcf18bdaacccece5381de61a9896006d0b16a8fb0b8",
++    "src/capability_advisor.py": "fe2f2d0dda2b684d61d42c6aba3952b8a5e5d0d1504c9cbebeca9616109208d5",
++    "src/feedback.py": "eafa930ec4cea9a239bc03a91a00b2ca7c618c40629690658f8276417946412d",
++    "src/roles.py": "4a5e729f4bf797ea448f18c14df69696e3df3bcaaf046729c039099ae7cc3dd7",
++    "src/verifier_evidence.py": "19b2342b6d9b4d097f6fef6b76089f54903dfbe36946dac6fa7467dec3afff59",
++    "tests/test_adjudicator_retro.py": "b44fd6756915069d6a5dc492eecda268053a711899b81decc9d27f8c9793fda2"
++  },
++  "checks": [
++    {
++      "name": "named-tests",
++      "command": [
++        "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
++        "-m",
++        "pytest",
++        "-o",
++        "addopts=",
++        "-m",
++        "not slow",
++        "-q",
++        "--junitxml=/home/runner/work/Orchestrator/Orchestrator/docs/verification/issue-1096-recovery/interpreter-followup/acceptance-run/named-tests.xml",
++        "tests/test_adjudicator_retro.py::test_build_packet_includes_diff_and_acceptance_criteria",
++        "tests/test_adjudicator_retro.py::test_adjudicator_validator_accepts_recommendation_prose",
++        "tests/test_adjudicator_retro.py::test_floor_still_demotes_a_metadata_only_packet",
++        "tests/test_adjudicator_retro.py::test_abstained_row_is_reattempted_when_the_packet_gains_diff_and_criteria"
++      ],
++      "exit_code": 1,
++      "signal": null,
++      "error_code": null,
++      "timed_out": false,
++      "log": "named-tests.log",
++      "log_sha256": "f0dbac0c2508ce31a001ff3f12403c192088997ec3c0bae870a337f703f90152",
++      "junit": null,
++      "junit_sha256": null,
++      "junit_reader": null,
++      "test_count": null,
++      "passed": false
++    },
++    {
++      "name": "retrospective-suite",
++      "command": [
++        "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
++        "-m",
++        "pytest",
++        "-o",
++        "addopts=",
++        "-m",
++        "not slow",
++        "-q",
++        "--junitxml=/home/runner/work/Orchestrator/Orchestrator/docs/verification/issue-1096-recovery/interpreter-followup/acceptance-run/retrospective-suite.xml",
++        "tests/test_adjudicator_retro.py"
++      ],
++      "exit_code": 1,
++      "signal": null,
++      "error_code": null,
++      "timed_out": false,
++      "log": "retrospective-suite.log",
++      "log_sha256": "f0dbac0c2508ce31a001ff3f12403c192088997ec3c0bae870a337f703f90152",
++      "junit": null,
++      "junit_sha256": null,
++      "junit_reader": null,
++      "test_count": null,
++      "passed": false
++    }
++  ],
++  "source_unchanged": true,
++  "required_tests_passed": false,
++  "interpreter_version": "Python 3.14.10",
++  "interpreter_usable": true,
++  "collection": {
++    "command": [
++      "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
++      "-m",
++      "pytest",
++      "-o",
++      "addopts=",
++      "-m",
++      "not slow",
++      "--color=no",
++      "--collect-only",
++      "-q",
++      "tests/test_adjudicator_retro.py"
++    ],
++    "exit_code": 1,
++    "signal": null,
++    "error_code": null,
++    "timed_out": false,
++    "log": "collection.log",
++    "log_sha256": "f0dbac0c2508ce31a001ff3f12403c192088997ec3c0bae870a337f703f90152",
++    "test_names": [],
++    "passed": false
++  },
++  "finished_at": "2026-11-03T19:43:14.293Z"
++}
+diff --git a/docs/verification/issue-1096-recovery/interpreter-followup/acceptance-run/collection.log b/docs/verification/issue-1096-recovery/interpreter-followup/acceptance-run/collection.log
+new file mode 100644
+index 0000000..3089b37
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/interpreter-followup/acceptance-run/collection.log
+@@ -0,0 +1 @@
++/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3: No module named pytest
+diff --git a/docs/verification/issue-1096-recovery/interpreter-followup/acceptance-run/named-tests.log b/docs/verification/issue-1096-recovery/interpreter-followup/acceptance-run/named-tests.log
+new file mode 100644
+index 0000000..3089b37
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/interpreter-followup/acceptance-run/named-tests.log
+@@ -0,0 +1 @@
++/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3: No module named pytest
+diff --git a/docs/verification/issue-1096-recovery/interpreter-followup/acceptance-run/retrospective-suite.log b/docs/verification/issue-1096-recovery/interpreter-followup/acceptance-run/retrospective-suite.log
+new file mode 100644
+index 0000000..3089b37
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/interpreter-followup/acceptance-run/retrospective-suite.log
+@@ -0,0 +1 @@
++/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3: No module named pytest
+diff --git a/docs/verification/issue-1096-recovery/interpreter-followup/inventory.log b/docs/verification/issue-1096-recovery/interpreter-followup/inventory.log
+new file mode 100644
+index 0000000..6a95b6c
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/interpreter-followup/inventory.log
+@@ -0,0 +1,48 @@
++✔ report recovery preserves ordered rows, recursive paid history and conflicting counts (4.165448ms)
++✔ report recovery rejects missing input without initializing runtime state (0.597171ms)
++✔ report recovery refuses malformed and ambiguous retained identities (8.884401ms)
++✔ report recovery requires explicit attribution and a valid check time (0.55676ms)
++✔ report recovery aborts if the input changes during observation (0.877364ms)
++✔ report CLI never combines historical recovery with dispatch or current Brain selection (147.194829ms)
++✔ pre-dispatch inventory reconciles report and native locators without exposing payloads (9.949533ms)
++✔ all validated native rows still require authentication, independent truth and live writer proof (9.135389ms)
++✔ missing native evidence remains unavailable and never means zero attempts (0.755531ms)
++✔ an observed empty journal cannot establish writer ownership or authorize spending (9.152911ms)
++✔ an active journal writer does not make a read-only snapshot claim ownership (8.289118ms)
++✔ foreign and incomplete journals are refused without schema repair (4.354723ms)
++✔ report without native marker still cannot authorize generic retry (0.591142ms)
++✔ journal CLI stays read-only and requires explicit report attribution (57.411671ms)
++✔ inventory exports every synthetic dispute and every exclusion without writes (655.54599ms)
++✔ inventory preserves the fixed cutoff and reports a count discrepancy (7.578335ms)
++✔ inventory distinguishes missing evidence from a complete cohort (2.76235ms)
++✔ inventory distinguishes schema-less evidence from a complete cohort (0.607717ms)
++✔ inventory distinguishes empty evidence from a complete cohort (2.674876ms)
++✔ inventory distinguishes incomplete-schema evidence from a complete cohort (3.816787ms)
++✔ inventory CLI exports JSON, signals unavailable evidence and rejects replay options (153.39967ms)
++✔ matching 71 identities bind the supplied manifest bytes without claiming historical acceptance (129.695341ms)
++✔ equal inventory counts expose substituted identities, exclusions and absent requested runs (10.397445ms)
++✔ a requested run on another target cannot satisfy case identity (4.446301ms)
++✔ inventory accounts for outcomes without run records as unavailable evidence (33.280185ms)
++✔ an outcomes-only Brain is available with exclusions, rather than an observed empty store (4.335644ms)
++✔ manifest retains every requested identity when Brain is empty (2.884994ms)
++✔ manifest retains every requested identity when Brain is unavailable (2.647397ms)
++✔ manifest count discrepancy prevents an exact match even when all supplied identities match (4.840323ms)
++✔ manifest CLI preserves input bytes, rejects malformed identities and signals unavailable Brain (344.312635ms)
++✔ version 2 reconciles all 71 dispute identities without claiming historical provenance (122.052303ms)
++✔ version 2 exposes substituted verdicts NON_PASS/FAIL despite matching run and count (34.650449ms)
++✔ version 2 exposes substituted verdicts FAIL_HOLLOW/PASS despite matching run and count (30.928865ms)
++✔ version 2 exposes substituted verdicts PASS/FAIL despite matching run and count (34.678035ms)
++✔ version 2 retains different disputes on one run and rejects duplicate dispute identities (6.004003ms)
++✔ version 2 preserves full identities for excluded, missing and unavailable cases (31.245664ms)
++✔ version 2 rejects malformed verdicts before publishing any inventory (344.830547ms)
++✔ version 2 distinguishes unavailable verdict evidence from contradictory verdicts (38.557346ms)
++✔ version 2 retains an observed target mismatch when verdict evidence is unavailable (3.867729ms)
++✔ missing stored targets remain eligible disputes with explicit unavailable identity evidence (571.259905ms)
++ℹ tests 40
++ℹ suites 0
++ℹ pass 40
++ℹ fail 0
++ℹ cancelled 0
++ℹ skipped 0
++ℹ todo 0
++ℹ duration_ms 2850.370375
+diff --git a/docs/verification/issue-1096-recovery/interpreter-followup/plan.md b/docs/verification/issue-1096-recovery/interpreter-followup/plan.md
+new file mode 100644
+index 0000000..a5f223b
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/interpreter-followup/plan.md
+@@ -0,0 +1,40 @@
++# Interpreter portability follow-up, 2026-11-03 UTC
++
++Before execution: evaluate source revision
++`96dde1810f56562e0e23af6f0e603b3e48e7728a`, parent checkout
++`1ecef8633d696c6e3b1ad864572dad65bea132dc`. This identifies repository inputs;
++the accepted production deployment remains unverified.
++
++The current environment selects Python 3.14.10. Seven runner regressions failed
++before this change because their JUnit-parser fixture hardcoded a nonexistent
++3.14.9 installation. The fixture now resolves its real parser interpreter from
++`PYTHON`, or `python3` on PATH. Pytest commands remain test doubles in that fixture.
++The production runner still requires an explicitly selected absolute interpreter.
++It now saves JUnit-reader output and status separately from pytest output/status.
++
++Run the existing inventory and updated runner regressions once, then invoke:
++
++```sh
++GIT_DIR=/tmp/issue1096-interpreter-git-oe_clm4j \
++GIT_WORK_TREE=/home/runner/work/Orchestrator/Orchestrator \
++node scripts/run_adjudicator_acceptance.js \
++  --python /opt/hostedtoolcache/Python/3.14.10/x64/bin/python3 \
++  --revision 96dde1810f56562e0e23af6f0e603b3e48e7728a \
++  --output /home/runner/work/Orchestrator/Orchestrator/docs/verification/issue-1096-recovery/interpreter-followup/acceptance-run
++```
++
++Expected result: 26 runner regressions and 40 inventory regressions pass. The real
++collection, four named tests, and full retrospective suite fail before collection
++with missing pytest, and the acceptance runner exits 1 with
++`required_tests_passed=false`. Interpreter patch portability and parser diagnostics
++do not complete the required-test task.
++
++Stop after one collection and one invocation of each required test group, each
++bounded to 60 seconds and using `-m "not slow"`. Use the runner's temporary state
++and disabled plugin autoload. Do not attempt another package installation, dispatch,
++publish, initialize production state, or write a mirror. Do not alter the accepted
++deployment claim or any task checkbox based on test-double results.
++
++Normal staging failed with `.git/index.lock: Read-only file system`. The source
++commit is in the isolated Git directory above, referencing the original checkout's
++object store. A format-patch will preserve it for application to checkout HEAD.
+diff --git a/docs/verification/issue-1096-recovery/interpreter-followup/runner-after.log b/docs/verification/issue-1096-recovery/interpreter-followup/runner-after.log
+new file mode 100644
+index 0000000..b8092bb
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/interpreter-followup/runner-after.log
+@@ -0,0 +1,34 @@
++✔ records exact commands, source hashes, complete JUnit and logs for both checks (239.674204ms)
++✔ full-suite success requires the complete collected identities: {"omitExtra":true} (234.342205ms)
++✔ full-suite success requires the complete collected identities: {"duplicateExtra":true} (231.880745ms)
++✔ full-suite success requires the complete collected identities: {"collectionFailure":true} (230.253069ms)
++✔ full-suite success requires the complete collected identities: {"collectionEmpty":true} (239.462514ms)
++✔ full-suite success requires the complete collected identities: {"collectionDuplicate":true} (236.763596ms)
++✔ missing pytest preserves two failures and cannot complete acceptance (118.177564ms)
++✔ preserves JUnit reader failures: {"parserFailure":true} (163.129131ms)
++✔ preserves JUnit reader failures: {"parserInvalidJson":true} (160.840812ms)
++✔ preserves JUnit reader failures: {"malformed":true} (252.114186ms)
++✔ refuses a successful claim for incomplete evidence: {"noXml":true} (115.539828ms)
++✔ refuses a successful claim for incomplete evidence: {"malformed":true} (246.884798ms)
++✔ refuses a successful claim for incomplete evidence: {"empty":true} (226.001872ms)
++✔ refuses a successful claim for incomplete evidence: {"incomplete":true} (226.22693ms)
++✔ refuses a successful claim for incomplete evidence: {"duplicate":true} (220.005901ms)
++✔ refuses a successful claim for incomplete evidence: {"skipped":true} (218.795413ms)
++✔ refuses a successful claim for incomplete evidence: {"foreign":true} (215.960784ms)
++✔ refuses a successful claim for incomplete evidence: {"exit":1} (218.609423ms)
++✔ source changes during execution invalidate otherwise passing checks (215.287338ms)
++✔ timeout preserves both failed checks without retrying either command (1563.918482ms)
++✔ refuses revision mismatch, modified tracked inputs and untracked inputs before execution (31.023389ms)
++✔ refuses uncommitted test execution input: conftest.py (20.833668ms)
++✔ refuses uncommitted test execution input: pytest.ini (20.620215ms)
++✔ refuses uncommitted test execution input: setup.cfg (20.665704ms)
++✔ refuses uncommitted test execution input: scripts/run_adjudicator_acceptance.js (20.034351ms)
++✔ requires explicit interpreter/revision/bounds and never overwrites a receipt (120.36751ms)
++ℹ tests 26
++ℹ suites 0
++ℹ pass 26
++ℹ fail 0
++ℹ cancelled 0
++ℹ skipped 0
++ℹ todo 0
++ℹ duration_ms 5813.821629
+diff --git a/docs/verification/issue-1096-recovery/interpreter-followup/runner-before.log b/docs/verification/issue-1096-recovery/interpreter-followup/runner-before.log
+new file mode 100644
+index 0000000..9d107f0
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/interpreter-followup/runner-before.log
+@@ -0,0 +1,178 @@
++✖ records exact commands, source hashes, complete JUnit and logs for both checks (161.039458ms)
++✖ full-suite success requires the complete collected identities: {"omitExtra":true} (168.269872ms)
++✖ full-suite success requires the complete collected identities: {"duplicateExtra":true} (157.591035ms)
++✖ full-suite success requires the complete collected identities: {"collectionFailure":true} (149.058502ms)
++✖ full-suite success requires the complete collected identities: {"collectionEmpty":true} (177.198425ms)
++✖ full-suite success requires the complete collected identities: {"collectionDuplicate":true} (155.320715ms)
++✔ missing pytest preserves two failures and cannot complete acceptance (111.413898ms)
++✔ refuses a successful claim for incomplete evidence: {"noXml":true} (110.735007ms)
++✔ refuses a successful claim for incomplete evidence: {"malformed":true} (152.934893ms)
++✔ refuses a successful claim for incomplete evidence: {"empty":true} (155.074609ms)
++✔ refuses a successful claim for incomplete evidence: {"incomplete":true} (151.987323ms)
++✔ refuses a successful claim for incomplete evidence: {"duplicate":true} (157.100606ms)
++✔ refuses a successful claim for incomplete evidence: {"skipped":true} (152.450141ms)
++✔ refuses a successful claim for incomplete evidence: {"foreign":true} (149.527356ms)
++✔ refuses a successful claim for incomplete evidence: {"exit":1} (151.48178ms)
++✖ source changes during execution invalidate otherwise passing checks (180.844527ms)
++✔ timeout preserves both failed checks without retrying either command (1567.409662ms)
++✔ refuses revision mismatch, modified tracked inputs and untracked inputs before execution (33.928394ms)
++✔ refuses uncommitted test execution input: conftest.py (20.112984ms)
++✔ refuses uncommitted test execution input: pytest.ini (19.211669ms)
++✔ refuses uncommitted test execution input: setup.cfg (19.434286ms)
++✔ refuses uncommitted test execution input: scripts/run_adjudicator_acceptance.js (19.937375ms)
++✔ requires explicit interpreter/revision/bounds and never overwrites a receipt (118.029794ms)
++ℹ tests 23
++ℹ suites 0
++ℹ pass 16
++ℹ fail 7
++ℹ cancelled 0
++ℹ skipped 0
++ℹ todo 0
++ℹ duration_ms 4245.619476
++
++✖ failing tests:
++
++test at tests/test_adjudicator_acceptance_runner.js:75:1
++✖ records exact commands, source hashes, complete JUnit and logs for both checks (161.039458ms)
++  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
++  
++  false !== true
++  
++      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_acceptance_runner.js:78:10)
++      at Test.runInAsyncScope (node:async_hooks:227:14)
++      at Test.run (node:internal/test_runner/test:1402:25)
++      at Test.start (node:internal/test_runner/test:1262:17)
++      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
++    generatedMessage: true,
++    code: 'ERR_ASSERTION',
++    actual: false,
++    expected: true,
++    operator: 'strictEqual',
++    diff: 'simple'
++  }
++
++test at tests/test_adjudicator_acceptance_runner.js:105:3
++✖ full-suite success requires the complete collected identities: {"omitExtra":true} (168.269872ms)
++  AssertionError [ERR_ASSERTION]: named results remain separately attributable
++  
++  false !== true
++  
++      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_acceptance_runner.js:107:12)
++      at Test.runInAsyncScope (node:async_hooks:227:14)
++      at Test.run (node:internal/test_runner/test:1402:25)
++      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
++      at Test.postRun (node:internal/test_runner/test:1542:19)
++      at Test.run (node:internal/test_runner/test:1467:12)
++      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
++    generatedMessage: false,
++    code: 'ERR_ASSERTION',
++    actual: false,
++    expected: true,
++    operator: 'strictEqual',
++    diff: 'simple'
++  }
++
++test at tests/test_adjudicator_acceptance_runner.js:105:3
++✖ full-suite success requires the complete collected identities: {"duplicateExtra":true} (157.591035ms)
++  AssertionError [ERR_ASSERTION]: named results remain separately attributable
++  
++  false !== true
++  
++      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_acceptance_runner.js:107:12)
++      at Test.runInAsyncScope (node:async_hooks:227:14)
++      at Test.run (node:internal/test_runner/test:1402:25)
++      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
++      at Test.postRun (node:internal/test_runner/test:1542:19)
++      at Test.run (node:internal/test_runner/test:1467:12)
++      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
++    generatedMessage: false,
++    code: 'ERR_ASSERTION',
++    actual: false,
++    expected: true,
++    operator: 'strictEqual',
++    diff: 'simple'
++  }
++
++test at tests/test_adjudicator_acceptance_runner.js:105:3
++✖ full-suite success requires the complete collected identities: {"collectionFailure":true} (149.058502ms)
++  AssertionError [ERR_ASSERTION]: named results remain separately attributable
++  
++  false !== true
++  
++      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_acceptance_runner.js:107:12)
++      at Test.runInAsyncScope (node:async_hooks:227:14)
++      at Test.run (node:internal/test_runner/test:1402:25)
++      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
++      at Test.postRun (node:internal/test_runner/test:1542:19)
++      at Test.run (node:internal/test_runner/test:1467:12)
++      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
++    generatedMessage: false,
++    code: 'ERR_ASSERTION',
++    actual: false,
++    expected: true,
++    operator: 'strictEqual',
++    diff: 'simple'
++  }
++
++test at tests/test_adjudicator_acceptance_runner.js:105:3
++✖ full-suite success requires the complete collected identities: {"collectionEmpty":true} (177.198425ms)
++  AssertionError [ERR_ASSERTION]: named results remain separately attributable
++  
++  false !== true
++  
++      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_acceptance_runner.js:107:12)
++      at Test.runInAsyncScope (node:async_hooks:227:14)
++      at Test.run (node:internal/test_runner/test:1402:25)
++      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
++      at Test.postRun (node:internal/test_runner/test:1542:19)
++      at Test.run (node:internal/test_runner/test:1467:12)
++      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
++    generatedMessage: false,
++    code: 'ERR_ASSERTION',
++    actual: false,
++    expected: true,
++    operator: 'strictEqual',
++    diff: 'simple'
++  }
++
++test at tests/test_adjudicator_acceptance_runner.js:105:3
++✖ full-suite success requires the complete collected identities: {"collectionDuplicate":true} (155.320715ms)
++  AssertionError [ERR_ASSERTION]: named results remain separately attributable
++  
++  false !== true
++  
++      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_acceptance_runner.js:107:12)
++      at Test.runInAsyncScope (node:async_hooks:227:14)
++      at Test.run (node:internal/test_runner/test:1402:25)
++      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
++      at Test.postRun (node:internal/test_runner/test:1542:19)
++      at Test.run (node:internal/test_runner/test:1467:12)
++      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
++    generatedMessage: false,
++    code: 'ERR_ASSERTION',
++    actual: false,
++    expected: true,
++    operator: 'strictEqual',
++    diff: 'simple'
++  }
++
++test at tests/test_adjudicator_acceptance_runner.js:135:1
++✖ source changes during execution invalidate otherwise passing checks (180.844527ms)
++  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
++  
++    assert.ok(receipt.checks.every((item) => item.passed))
++  
++      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_acceptance_runner.js:137:10)
++      at Test.runInAsyncScope (node:async_hooks:227:14)
++      at Test.run (node:internal/test_runner/test:1402:25)
++      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
++      at Test.postRun (node:internal/test_runner/test:1542:19)
++      at Test.run (node:internal/test_runner/test:1467:12)
++      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
++    generatedMessage: true,
++    code: 'ERR_ASSERTION',
++    actual: false,
++    expected: true,
++    operator: '==',
++    diff: 'simple'
++  }
+diff --git a/docs/verification/issue-1096-recovery/interpreter-followup/validation.json b/docs/verification/issue-1096-recovery/interpreter-followup/validation.json
+new file mode 100644
+index 0000000..5aed3ec
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/interpreter-followup/validation.json
+@@ -0,0 +1,53 @@
++{
++  "checked_at": "2026-11-03T19:43:55.046187+00:00",
++  "source_parent": "1ecef8633d696c6e3b1ad864572dad65bea132dc",
++  "evaluated_revision": "96dde1810f56562e0e23af6f0e603b3e48e7728a",
++  "evaluated_tree": "dd844954a3605333395e526c0aebf5489e88014b",
++  "commands": {
++    "runner_before": [
++      "node",
++      "tests/test_adjudicator_acceptance_runner.js"
++    ],
++    "runner_after": [
++      "node",
++      "tests/test_adjudicator_acceptance_runner.js"
++    ],
++    "inventory": [
++      "node",
++      "tests/test_adjudicator_inventory.js"
++    ]
++  },
++  "regression_logs": {
++    "runner-before.log": {
++      "sha256": "9e4e49f09dd87eaf38593f93cc9db74dadc1100950090a665ed33b373e55c222",
++      "passed": 16,
++      "failed": 7
++    },
++    "runner-after.log": {
++      "sha256": "e93ec3a61ab3bcd22d90cef6766e8a9f5628aa539262fca9c283c38a8eff460e",
++      "passed": 26,
++      "failed": 0
++    },
++    "inventory.log": {
++      "sha256": "33c5929820fd97d8c37bef0317d1991f2d4b9b548492c1e2feaee4b23ed3ab1f",
++      "passed": 40,
++      "failed": 0
++    }
++  },
++  "source_sha256": {
++    "scripts/run_adjudicator_acceptance.js": "a0b92097e80f67c7df16970e85ff484592d46bed126c02c6423d4a6406e91bbb",
++    "tests/test_adjudicator_acceptance_runner.js": "9cf11c32c7338012739493907c6157fa1c5308e987ac0eac6eea883829df56d1"
++  },
++  "acceptance_receipt": "acceptance-run/checks.json",
++  "required_tests_passed": false,
++  "accepted_deployment_verified": false,
++  "task_checkboxes_newly_verified_complete": 0,
++  "python_files_changed": false,
++  "black_gate_applicable": false,
++  "pr_body_update": "rejected_connector_requires_approval_policy_never",
++  "pr_readiness": {
++    "number": 1097,
++    "state": "open",
++    "isDraft": false
++  }
++}
+-- 
+2.56.0
+

@@ -1,0 +1,154 @@
+From 1cffa38fb703552ce18ccff73f7a24ae714594a9 Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Tue, 3 Nov 2026 23:59:53 +0000
+Subject: [PATCH] fix: normalize owner exclusion identities before inventory
+ reads
+
+---
+ scripts/export_adjudicator_inventory.js | 11 ++++++----
+ tests/test_adjudicator_case_gaps.js     |  9 ++++----
+ tests/test_adjudicator_inventory.js     | 29 +++++++++++++++++++------
+ 3 files changed, 34 insertions(+), 15 deletions(-)
+
+diff --git a/scripts/export_adjudicator_inventory.js b/scripts/export_adjudicator_inventory.js
+index f2e32ea..136426c 100644
+--- a/scripts/export_adjudicator_inventory.js
++++ b/scripts/export_adjudicator_inventory.js
+@@ -16,7 +16,7 @@ const OWNER_EXCLUDED_REPOSITORIES = ['stranske/Collab-Admin'];
+ function ownerExcluded(target) {
+   return typeof target === 'string' && target.includes('#') &&
+     OWNER_EXCLUDED_REPOSITORIES.some((repo) =>
+-      target.slice(0, target.indexOf('#')).toLowerCase() === repo.toLowerCase());
++      target.slice(0, target.indexOf('#')).trim().toLowerCase() === repo.toLowerCase());
+ }
+ 
+ function integer(value, name, minimum) {
+@@ -184,11 +184,15 @@ function inventory({ db, observedAt, days = 90, expectedCount = 71, manifest })
+   let rows;
+   try {
+     connection = new DatabaseSync(report.database, { readOnly: true });
++    // Use the same identity boundary for SQL reads and manifest reconciliation.
++    // SQLite trim() alone does not strip tabs or Unicode whitespace.
++    connection.function('owner_excluded_repository', { deterministic: true },
++      (target) => Number(ownerExcluded(target)));
+     // One statement supplies a consistent snapshot for counts and exclusions.
+     // Apply the owner boundary before joining outcome evidence. For permitted
+     // runs, SQL preserves the Python reader's null and comparison semantics.
+     // Unmatched outcomes cannot establish target or window membership.
+-    const excludedRepository = `lower(substr(target,1,instr(target,'#')-1)) IN (${OWNER_EXCLUDED_REPOSITORIES.map(() => '?').join(',')})`;
++    const excludedRepository = 'owner_excluded_repository(target)';
+     rows = connection.prepare(`
+       WITH permitted_runs AS MATERIALIZED (
+         SELECT run_id,target,ts FROM runs
+@@ -212,8 +216,7 @@ function inventory({ db, observedAt, days = 90, expectedCount = 71, manifest })
+       SELECT *,ts >= ? AS in_window,
+              verifier_verdict = adjudicated_verdict AS verdicts_agree
+       FROM population ORDER BY ts DESC,run_id
+-    `).all(...OWNER_EXCLUDED_REPOSITORIES.map((repo) => repo.toLowerCase()),
+-      ...OWNER_EXCLUDED_REPOSITORIES.map((repo) => repo.toLowerCase()), cutoff);
++    `).all(cutoff);
+   } catch (error) {
+     report.evidence_gaps.push({ kind: 'brain_unavailable', detail: error.message });
+     return reconcile(report, requestedManifest);
+diff --git a/tests/test_adjudicator_case_gaps.js b/tests/test_adjudicator_case_gaps.js
+index c37726c..bb00a5b 100644
+--- a/tests/test_adjudicator_case_gaps.js
++++ b/tests/test_adjudicator_case_gaps.js
+@@ -113,12 +113,13 @@ test('gap export preserves every dispute and explicit UNKNOWN execution evidence
+ });
+ 
+ test('owner-excluded evidence is never evaluated and remains an identity-only gap', (t) => {
+-  const requested = [identity('excluded', 'StRaNsKe/CoLlAb-AdMiN#1'), identity('allowed')];
++  const excludedTarget = '\tStRaNsKe/CoLlAb-AdMiN\u00a0#1 ';
++  const requested = [identity('excluded', excludedTarget), identity('allowed')];
+   const options = world(t, requested);
+   const connection = new DatabaseSync(options.db);
++  connection.prepare('INSERT INTO runs VALUES (?,?,?)').run('excluded', excludedTarget, now);
+   connection.exec(`
+-    INSERT INTO runs VALUES ('excluded','StRaNsKe/CoLlAb-AdMiN#1',${now}),
+-                            ('allowed','fixture/repo#1',${now});
++    INSERT INTO runs VALUES ('allowed','fixture/repo#1',${now});
+     ALTER TABLE runs RENAME TO run_rows;
+     CREATE VIEW runs AS SELECT run_id,target,
+       CASE WHEN run_id='excluded' THEN json_extract('unreadable','$') ELSE ts END AS ts
+@@ -151,7 +152,7 @@ test('owner-excluded evidence is never evaluated and remains an identity-only ga
+ 
+ for (const version of [1, 2]) {
+   test(`schema ${version} retains requested identities and unknown counts with an unavailable Brain`, (t) => {
+-    const requested = [identity('missing'), identity('excluded', 'stranske/Collab-Admin#2')];
++    const requested = [identity('missing'), identity('excluded', '\u2003stranske/Collab-Admin\t#2')];
+     const options = world(t, requested, version);
+     fs.unlinkSync(options.db);
+     options.expectedCount = 71;
+diff --git a/tests/test_adjudicator_inventory.js b/tests/test_adjudicator_inventory.js
+index 2a82ac0..14ca7eb 100644
+--- a/tests/test_adjudicator_inventory.js
++++ b/tests/test_adjudicator_inventory.js
+@@ -15,12 +15,22 @@ const script = path.join(repo, 'scripts/export_adjudicator_inventory.js');
+ const now = 2000000000;
+ const cutoff = now - 90 * 86400;
+ 
+-test('owner exclusions are accounted for without reading excluded outcome evidence', (t) => {
++for (const [variant, excludedTarget] of [
++  ['mixed case', 'StRaNsKe/CoLlAb-AdMiN#1'],
++  ['spaces', ' stranske/Collab-Admin #1 '],
++  ['tabs and newlines', '\tStRaNsKe/CoLlAb-AdMiN\r\n#1'],
++  ['Unicode whitespace', '\u00a0stranske/Collab-Admin\u2003#1'],
++]) {
++  test(`owner exclusions are accounted for without reading excluded outcome evidence: ${variant}`,
++    (t) => checkOwnerExclusion(t, excludedTarget));
++}
++
++function checkOwnerExclusion(t, excludedTarget) {
+   const { root, db } = world(t);
+   const connection = new DatabaseSync(db);
++  connection.prepare('INSERT INTO runs VALUES (?,?,?)').run('excluded', excludedTarget, now);
+   connection.exec(`
+     INSERT INTO runs VALUES
+-      ('excluded', 'StRaNsKe/CoLlAb-AdMiN#1', ${now}),
+       ('allowed', 'stranske/Orchestrator#1', ${now}),
+       ('lookalike', 'stranske/Collab-Admin-archive#1', ${now});
+     ALTER TABLE runs RENAME TO run_rows;
+@@ -45,7 +55,7 @@ test('owner exclusions are accounted for without reading excluded outcome eviden
+   'excluded timestamps must not be evaluated either');
+   connection.close();
+   const requested = ['excluded', 'allowed', 'lookalike'].map((run_id) => ({
+-    run_id, target: run_id === 'excluded' ? 'StRaNsKe/CoLlAb-AdMiN#1' :
++    run_id, target: run_id === 'excluded' ? excludedTarget :
+       run_id === 'allowed' ? 'stranske/Orchestrator#1' : 'stranske/Collab-Admin-archive#1',
+     verifier_verdict: 'NON_PASS', adjudicated_verdict: 'PASS',
+   }));
+@@ -80,13 +90,18 @@ test('owner exclusions are accounted for without reading excluded outcome eviden
+   assert.deepEqual(fs.readFileSync(db), before);
+   assert.deepEqual(fs.readFileSync(manifest), manifestBefore);
+   assert.deepEqual(fs.readdirSync(root), files, 'no reports or SQLite sidecars created');
+-});
++}
+ 
+-test('requested owner exclusions remain explicit with missing or contradictory inventory', (t) => {
++for (const target of ['stranske/Collab-Admin#7', '\tstranske/Collab-Admin\u00a0#7']) {
++  test(`requested owner exclusions remain explicit with missing or contradictory inventory: ${JSON.stringify(target)}`,
++    (t) => checkRequestedOwnerExclusion(t, target));
++}
++
++function checkRequestedOwnerExclusion(t, target) {
+   const { root, db } = world(t);
+   seed(db, [['reused-run', now, 'NON_PASS', 'PASS']]);
+   const requested = ['reused-run', 'absent'].map((run_id) => ({
+-    run_id, target: 'stranske/Collab-Admin#7',
++    run_id, target,
+     verifier_verdict: 'NON_PASS', adjudicated_verdict: 'PASS',
+   }));
+   for (const version of [1, 2]) {
+@@ -104,7 +119,7 @@ test('requested owner exclusions remain explicit with missing or contradictory i
+       assert.equal(fs.existsSync(path.join(root, 'unavailable.db')), false);
+     }
+   }
+-});
++}
+ 
+ function world(t, schema = true) {
+   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'adjudicator-inventory-'));
+-- 
+2.56.0
+

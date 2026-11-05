@@ -1,0 +1,85 @@
+{
+  "observed_at": "2026-11-03T15:59:31.876Z",
+  "status": "blocked",
+  "revision": "8f596dc01e1ede350724c1b88bc36610380af79b",
+  "historical_replay_receipt": "not_established",
+  "operational_acceptance": "not_established",
+  "executions": [
+    {
+      "name": "interpreter",
+      "argv": [
+        "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3",
+        "-B",
+        "-c",
+        "import json, sys; print(json.dumps({\"executable\": sys.executable, \"version\": sys.version}))"
+      ],
+      "exit_code": 0,
+      "signal": null,
+      "error_code": "EPERM",
+      "stdout": "{\"executable\": \"/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3\", \"version\": \"3.14.9 (main, Oct 21 2026, 14:48:41) [GCC 15.2.0]\"}\n",
+      "stderr": ""
+    },
+    {
+      "name": "named_tests",
+      "argv": [
+        "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "tests/test_redirect_chain_gate.py::test_replay_of_the_twelve_historical_stalls_authorizes_at_least_nine",
+        "tests/test_redirect_apply_prescreen.py::test_redirect_apply_daily_cap_refuses_second_apply",
+        "-q",
+        "-m",
+        "not slow"
+      ],
+      "exit_code": 1,
+      "signal": null,
+      "error_code": "EPERM",
+      "stdout": "",
+      "stderr": "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3: No module named pytest\n"
+    },
+    {
+      "name": "focused_files",
+      "argv": [
+        "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "tests/test_redirect_chain_gate.py",
+        "tests/test_redirect_apply_prescreen.py",
+        "-q",
+        "-m",
+        "not slow"
+      ],
+      "exit_code": 1,
+      "signal": null,
+      "error_code": "EPERM",
+      "stdout": "",
+      "stderr": "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3: No module named pytest\n"
+    },
+    {
+      "name": "offline_replay",
+      "argv": [
+        "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3",
+        "-B",
+        "src/redirect_apply.py",
+        "--replay-stalls",
+        "tests/fixtures/redirect_stalls"
+      ],
+      "exit_code": 0,
+      "signal": null,
+      "error_code": "EPERM",
+      "stdout": "authorized 12/12 with named agents (dry-run)\n",
+      "stderr": ""
+    }
+  ],
+  "merged_main_sha": "8f596dc01e1ede350724c1b88bc36610380af79b",
+  "archive_paths": [
+    "src",
+    "tests",
+    "pyproject.toml"
+  ],
+  "archive_sha256": "c3e8af6546a4ecacaa7fcf0f648904a730d0a38237e62015ee31e8f134692fe9",
+  "authorized": 12,
+  "reason": "focused_execution_or_replay_not_verified"
+}

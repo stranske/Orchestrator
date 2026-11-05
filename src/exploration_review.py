@@ -534,7 +534,8 @@ def _selftest() -> None:
             version = 1
             for task_type in ("implement", "testgen", "codemod"):
                 for rank, agent in enumerate(_route_agents(task_type)[:4]):
-                    _insert_weight(c, version, task_type, agent, 0.8 - rank * 0.05, 6, rank)
+                    # MIN_TASK_OBS is 20; testgen has only three route agents, so 6 obs each misses the gate.
+                    _insert_weight(c, version, task_type, agent, 0.8 - rank * 0.05, 7, rank)
         ready = build_report(
             route_table={
                 "implement": router.ROUTE_TABLE["implement"],

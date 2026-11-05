@@ -872,6 +872,11 @@ def _check_value_chain_monitor() -> dict:
 
 PREDICATE_FIXTURES: tuple[dict[str, Any], ...] = (
     {
+        "capability": "closer-core",
+        "check": _check_value_chain_monitor,
+        "source": "External closer-core round/Brain accounting uses the monitor's read-only fixture.",
+    },
+    {
         "capability": "value-chain-monitor",
         "check": _check_value_chain_monitor,
         "source": "2026-10-04 concept audit: zero invocations cannot measure independent demand.",
