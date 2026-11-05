@@ -210,3 +210,29 @@ The checkout also rejects Git index writes as read-only. The changes are retaine
 in the working tree; the isolated commit and handoff patch are at
 `/tmp/orchestrator-1175-first-publication` and
 `/tmp/orchestrator-1175-first-publication.patch`, respectively.
+
+## Shallow-history CLI recovery verification (2026-11-05)
+
+Extended the real publication CLI regression with a depth-one clone of the export
+branch after two marked publications. The recorder refuses both the original
+audit and a misleading audit naming the visible tip, with and without a retained
+receipt. Refusal preserves existing receipt bytes and modification time. Fetching
+the full history then rejects the later audit and recovers the original receipt
+without changing the remote branch. All repositories, state, and home directories
+remain temporary; no Python files changed.
+
+Verification: all 24 CLI tests and all 15 deployment unittest tests pass.
+Removing the shallow-history guard in a disposable exporter copy makes the CLI
+regression fail. JavaScript syntax and diff whitespace checks pass.
+
+No new task checkbox is complete. The production database, verified deployment
+receipt, required Anaconda interpreter, pytest, and Black remain unavailable.
+Observation still requires both 2026-11-08 and fourteen days after verified
+deployment. The publication checkbox remains premature; no production receipt
+has been retained. PR #1176 was confirmed open and ready for review.
+
+The PR checkbox correction, blocker comment, and `needs-human` label were rejected
+with `MCP tool call requires approval, but approval policy is never`. The checkout
+also rejects Git index writes as read-only. The tested changes are retained in
+the working tree and committed in `/tmp/orchestrator-1175-shallow-history-EHIk6w`,
+with a handoff patch at `/tmp/orchestrator-1175-shallow-history.patch`.

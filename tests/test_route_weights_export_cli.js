@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 const { spawn } = require('node:child_process');
 const { test } = require('node:test');
 
@@ -98,10 +99,10 @@ test('deployment CLI recovers fetch and receipt failures after an unchanged real
     deployed_at: new Date(Date.now() - 1800000).toISOString().replace(/\.\d{3}Z$/, 'Z'),
     deployment_evidence: 'fixture-publication-audit/successful-push',
   };
-  const record = () => run(python, [
+  const record = (recordEnv = env) => run(python, [
     path.join(modules, 'route_weights_export.py'),
     '--record-challenger-deployment', audit, '--state-dir', state,
-  ], { cwd: root, env });
+  ], { cwd: root, env: recordEnv });
   fs.writeFileSync(audit, JSON.stringify(provenance));
   const unmarked = await record();
   assert.equal(unmarked.status, 1, unmarked.stderr);
@@ -234,6 +235,56 @@ print("publication_result=" + str(published))
   assert.deepEqual(fs.readFileSync(receipt), before);
   assert.equal(await git(remote, 'rev-parse', branch), laterCommit,
     'recording the original deployment must not publish or rewind the export branch');
+
+  // A depth-one clone hides the actual first publication. Even though its tip
+  // carries a valid contract, it cannot establish a deployment boundary.
+  const shallowRepositories = path.join(root, 'shallow-repos');
+  const shallowCheckout = path.join(shallowRepositories, 'stranske__Orchestrator');
+  fs.mkdirSync(shallowRepositories);
+  await git(root, 'clone', '--depth=1', '--branch', branch,
+    pathToFileURL(remote).href, shallowCheckout);
+  const shallowEnv = { ...env, ORCH_REPOS_DIR: shallowRepositories };
+  assert.equal(await git(shallowCheckout, 'rev-parse', '--is-shallow-repository'), 'true');
+  assert.equal(await git(shallowCheckout, 'rev-list', '--count', `origin/${branch}`), '1');
+  assert.equal(await git(shallowCheckout, 'rev-parse', `origin/${branch}`), laterCommit);
+
+  const retained = fs.readFileSync(receipt);
+  const retainedModified = fs.statSync(receipt, { bigint: true }).mtimeNs;
+  for (const existing of [true, false]) {
+    if (!existing) fs.unlinkSync(receipt);
+    // Neither an accurate audit nor one falsely naming the visible tip can be
+    // verified from truncated history. Preserve any receipt already retained.
+    for (const commit of [provenance.published_commit, laterCommit]) {
+      fs.writeFileSync(audit, JSON.stringify({ ...provenance, published_commit: commit }));
+      const refused = await record(shallowEnv);
+      assert.equal(refused.status, 1, refused.stderr);
+      assert.equal(refused.stdout, '');
+      assert.match(refused.stderr, /complete export history is required/);
+      assert.doesNotMatch(refused.stderr, /Traceback/);
+      if (existing) {
+        assert.deepEqual(fs.readFileSync(receipt), retained);
+        assert.equal(fs.statSync(receipt, { bigint: true }).mtimeNs, retainedModified);
+      } else {
+        assert.equal(fs.existsSync(receipt), false);
+      }
+    }
+  }
+
+  // Restoring history must uncover the original publication, reject the later
+  // audit, and recover the original receipt without publishing another commit.
+  await git(shallowCheckout, 'fetch', '--unshallow', 'origin');
+  assert.equal(await git(shallowCheckout, 'rev-parse', '--is-shallow-repository'), 'false');
+  const laterAfterRecovery = await record(shallowEnv);
+  assert.equal(laterAfterRecovery.status, 1, laterAfterRecovery.stderr);
+  assert.equal(laterAfterRecovery.stdout, '');
+  assert.match(laterAfterRecovery.stderr, /not the first verified challenger-filter publication/);
+  assert.equal(fs.existsSync(receipt), false);
+  fs.writeFileSync(audit, JSON.stringify(provenance));
+  const originalAfterRecovery = await record(shallowEnv);
+  assert.equal(originalAfterRecovery.status, 0, originalAfterRecovery.stderr);
+  assert.deepEqual(JSON.parse(originalAfterRecovery.stdout), recorded);
+  assert.deepEqual(fs.readFileSync(receipt), retained);
+  assert.equal(await git(remote, 'rev-parse', branch), laterCommit);
   assert.equal(fs.existsSync(database), false);
   assert.deepEqual(fs.readdirSync(home), []);
 });
