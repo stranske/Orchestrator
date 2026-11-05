@@ -2,9 +2,10 @@
 
 `import synthesis_promotion` imports `capabilities` and `feedback`. Those modules
 assign `LOCAL_RUNTIME`, `DB_PATH`, and `REG` while they load. The autouse fixture
-in `tests/test_synthesis_promotion_coverage.py` sets `ORCH_STATE_DIR` and
-`ORCH_LOCAL_RUNTIME` only after that import, so it cannot move the cached paths.
-The child below receives both temporary directories before the process starts.
+in `tests/test_synthesis_promotion_coverage.py` rebinds those cached objects onto
+the test's temporary directories before the test body. `setenv` alone does not
+move them. The child below receives both temporary directories before the
+process starts, which is the before-import proof.
 """
 
 from __future__ import annotations

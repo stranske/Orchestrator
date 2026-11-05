@@ -1,5 +1,10 @@
 # Issue #1109: PR #793 acceptance evidence
 
+Companion to `docs/verification/issue-1109-synthesis-promotion-acceptance.md`.
+That file is the primary record. This file adds the in-process rebind of cached
+runtime roots and a local `--branch` measurement. The revisions, CI runs, 26-statement
+reduction, and 154-unit shortfall agree.
+
 Check date: 2026-11-05. This document records acceptance evidence for merged PR #793
 (`closer-core/v1 followup-of=stranske/Orchestrator#791@793`). It does not replace the tests
 PR #793 added.

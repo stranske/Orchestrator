@@ -148,7 +148,9 @@ The three tests execute 77 statements the selftest misses. Of those, 51 were alr
 - `capabilities.REG` reads `ORCH_CAPABILITIES_PATH`, otherwise `LOCAL_RUNTIME/capabilities.json`. It does not read `ORCH_STATE_DIR`
 - `capabilities.FEATURES_REG` calls `paths.runtime_state_path`, which reads `ORCH_LOCAL_RUNTIME` at import
 
-`tests/test_synthesis_promotion_coverage.py` sets both variables in an autouse fixture after `import synthesis_promotion`, so that fixture does not move the cached bindings. The three tests exercise `default_completion_probe`, `_run_gate`, and `verify_synthesis` without reading those paths.
+`tests/test_synthesis_promotion_coverage.py` sets both variables in an autouse fixture after `import synthesis_promotion` and rebinds `feedback.LOCAL_RUNTIME`, `feedback.DB_PATH`, `capabilities.LOCAL_RUNTIME`, `capabilities.REG`, and `capabilities.FEATURES_REG` to that test's temporary directories before the test body. `setenv` alone does not move the import-time objects. The three tests exercise `default_completion_probe`, `_run_gate`, and `verify_synthesis` without reading those paths; the rebind is what makes the cached roots match the temporary directories while they run.
+
+A separate local `--branch` run of `tests/test_synthesis_promotion.py`, `tests/test_synthesis_delivery_discovery.py`, and (after the merge) `tests/test_synthesis_promotion_coverage.py` is not the Gate configuration (`branch = false`). It measured 186 missing branches of 328 before and 172 after, a reduction of 14, with uncovered statements 490 then 461. That branch reduction is not added to the contract's 26. The authoritative artifacts still have no branch counters.
 
 `tests/test_issue1109_runtime_isolation.py` starts a new interpreter with both variables set to pytest temporary directories before the process starts, then imports `synthesis_promotion`. Checked 2026-11-05 with the command in the next section (`5 passed`, which includes these two tests):
 
