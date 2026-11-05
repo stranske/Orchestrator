@@ -525,6 +525,11 @@ def _fleet_pr_measures(gh, now: int, repos: list[str], *, flow: bool) -> dict:
             recent_open = now - 48 * 3600 <= created_at <= now
             if not (recent_merge or (flow and recent_open)):
                 continue
+            # The latency arm below subtracts the merge time. The preceding predicate makes a
+            # missing value unreachable when `flow` is false, but retain that fact explicitly for
+            # both readers and the type checker rather than relying on a boolean expression above.
+            if not flow and merged_at is None:
+                continue
             # Latency requires a literal Closes reference. Flow uses backlog's existing
             # source-issue rule. Never join #N to a different repository.
             refs = (
