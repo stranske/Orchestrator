@@ -208,6 +208,7 @@
       "tests/test_issue839_ranked_coverage.py",
       "tests/test_issue846_coverage.py",
       "tests/test_issue_quality.py",
+      "tests/test_issue1173_ranked_coverage.py",
       "tests/test_issue_readiness_coverage.py",
       "tests/test_lane_round_feedback.py",
       "tests/test_ledger_read_cache.py",
