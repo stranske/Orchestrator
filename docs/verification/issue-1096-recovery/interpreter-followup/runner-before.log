@@ -1,0 +1,178 @@
+✖ records exact commands, source hashes, complete JUnit and logs for both checks (161.039458ms)
+✖ full-suite success requires the complete collected identities: {"omitExtra":true} (168.269872ms)
+✖ full-suite success requires the complete collected identities: {"duplicateExtra":true} (157.591035ms)
+✖ full-suite success requires the complete collected identities: {"collectionFailure":true} (149.058502ms)
+✖ full-suite success requires the complete collected identities: {"collectionEmpty":true} (177.198425ms)
+✖ full-suite success requires the complete collected identities: {"collectionDuplicate":true} (155.320715ms)
+✔ missing pytest preserves two failures and cannot complete acceptance (111.413898ms)
+✔ refuses a successful claim for incomplete evidence: {"noXml":true} (110.735007ms)
+✔ refuses a successful claim for incomplete evidence: {"malformed":true} (152.934893ms)
+✔ refuses a successful claim for incomplete evidence: {"empty":true} (155.074609ms)
+✔ refuses a successful claim for incomplete evidence: {"incomplete":true} (151.987323ms)
+✔ refuses a successful claim for incomplete evidence: {"duplicate":true} (157.100606ms)
+✔ refuses a successful claim for incomplete evidence: {"skipped":true} (152.450141ms)
+✔ refuses a successful claim for incomplete evidence: {"foreign":true} (149.527356ms)
+✔ refuses a successful claim for incomplete evidence: {"exit":1} (151.48178ms)
+✖ source changes during execution invalidate otherwise passing checks (180.844527ms)
+✔ timeout preserves both failed checks without retrying either command (1567.409662ms)
+✔ refuses revision mismatch, modified tracked inputs and untracked inputs before execution (33.928394ms)
+✔ refuses uncommitted test execution input: conftest.py (20.112984ms)
+✔ refuses uncommitted test execution input: pytest.ini (19.211669ms)
+✔ refuses uncommitted test execution input: setup.cfg (19.434286ms)
+✔ refuses uncommitted test execution input: scripts/run_adjudicator_acceptance.js (19.937375ms)
+✔ requires explicit interpreter/revision/bounds and never overwrites a receipt (118.029794ms)
+ℹ tests 23
+ℹ suites 0
+ℹ pass 16
+ℹ fail 7
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4245.619476
+
+✖ failing tests:
+
+test at tests/test_adjudicator_acceptance_runner.js:75:1
+✖ records exact commands, source hashes, complete JUnit and logs for both checks (161.039458ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  false !== true
+  
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_acceptance_runner.js:78:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/test_adjudicator_acceptance_runner.js:105:3
+✖ full-suite success requires the complete collected identities: {"omitExtra":true} (168.269872ms)
+  AssertionError [ERR_ASSERTION]: named results remain separately attributable
+  
+  false !== true
+  
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_acceptance_runner.js:107:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/test_adjudicator_acceptance_runner.js:105:3
+✖ full-suite success requires the complete collected identities: {"duplicateExtra":true} (157.591035ms)
+  AssertionError [ERR_ASSERTION]: named results remain separately attributable
+  
+  false !== true
+  
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_acceptance_runner.js:107:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/test_adjudicator_acceptance_runner.js:105:3
+✖ full-suite success requires the complete collected identities: {"collectionFailure":true} (149.058502ms)
+  AssertionError [ERR_ASSERTION]: named results remain separately attributable
+  
+  false !== true
+  
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_acceptance_runner.js:107:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/test_adjudicator_acceptance_runner.js:105:3
+✖ full-suite success requires the complete collected identities: {"collectionEmpty":true} (177.198425ms)
+  AssertionError [ERR_ASSERTION]: named results remain separately attributable
+  
+  false !== true
+  
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_acceptance_runner.js:107:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/test_adjudicator_acceptance_runner.js:105:3
+✖ full-suite success requires the complete collected identities: {"collectionDuplicate":true} (155.320715ms)
+  AssertionError [ERR_ASSERTION]: named results remain separately attributable
+  
+  false !== true
+  
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_acceptance_runner.js:107:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/test_adjudicator_acceptance_runner.js:135:1
+✖ source changes during execution invalidate otherwise passing checks (180.844527ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+  
+    assert.ok(receipt.checks.every((item) => item.passed))
+  
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_acceptance_runner.js:137:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }

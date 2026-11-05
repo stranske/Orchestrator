@@ -1,0 +1,986 @@
+From 40a8bb3ce6531472a0a55f1f78647c2b77a620f4 Mon Sep 17 00:00:00 2001
+From: Codex <codex@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 18:52:57 +0000
+Subject: [PATCH] feat(adjudicator): inventory native attempts before retry
+ dispatch
+
+---
+ .../issue-1096-recovery/evidence-ledger.json  |  16 ++
+ .../pre-dispatch-adjudicator-selftest.log     |   1 +
+ .../pre-dispatch-checks.json                  |  93 +++++++
+ .../pre-dispatch-evidence-tests.log           | 229 ++++++++++++++++++
+ .../pre-dispatch-inventory-tests.log          |  48 ++++
+ .../pre-dispatch-named-tests.log              |   1 +
+ .../pre-dispatch-observation.json             |  62 +++++
+ .../issue-1096-recovery/pre-dispatch-plan.md  |  62 +++++
+ .../pre-dispatch-results.md                   |  54 +++++
+ .../pre-dispatch-retrospective-suite.log      |   1 +
+ scripts/export_adjudicator_inventory.js       |  98 +++++++-
+ tests/test_adjudicator_inventory.js           | 155 ++++++++++++
+ 12 files changed, 815 insertions(+), 5 deletions(-)
+ create mode 100644 docs/verification/issue-1096-recovery/pre-dispatch-adjudicator-selftest.log
+ create mode 100644 docs/verification/issue-1096-recovery/pre-dispatch-checks.json
+ create mode 100644 docs/verification/issue-1096-recovery/pre-dispatch-evidence-tests.log
+ create mode 100644 docs/verification/issue-1096-recovery/pre-dispatch-inventory-tests.log
+ create mode 100644 docs/verification/issue-1096-recovery/pre-dispatch-named-tests.log
+ create mode 100644 docs/verification/issue-1096-recovery/pre-dispatch-observation.json
+ create mode 100644 docs/verification/issue-1096-recovery/pre-dispatch-plan.md
+ create mode 100644 docs/verification/issue-1096-recovery/pre-dispatch-results.md
+ create mode 100644 docs/verification/issue-1096-recovery/pre-dispatch-retrospective-suite.log
+
+diff --git a/docs/verification/issue-1096-recovery/evidence-ledger.json b/docs/verification/issue-1096-recovery/evidence-ledger.json
+index f13f729..bc6ac02 100644
+--- a/docs/verification/issue-1096-recovery/evidence-ledger.json
++++ b/docs/verification/issue-1096-recovery/evidence-ledger.json
+@@ -123,6 +123,22 @@
+       "artifact_id": 13222981265,
+       "github_archive_sha256": "22e550142cdcbe9ba4829d4620b62e4f056f01d144673a46176b356e4e7e81ef",
+       "status": "GitHub artifact located; ZIP returned as remote file reference, not inspected locally"
++    },
++    "pre_dispatch_followup": {
++      "checked_at": "2026-11-03T18:51:58.245Z",
++      "observation": "pre-dispatch-observation.json",
++      "checks": "pre-dispatch-checks.json",
++      "plan": "pre-dispatch-plan.md",
++      "results": "pre-dispatch-results.md",
++      "historical_input_sha256": "e55a63bd4f458d3c747f7d14321aa4fa81ed34731ab8add3bf6aba920ad262b1",
++      "inventory_tests_passed": 40,
++      "module_selftest_checks_passed": 23,
++      "evidence_tests_passed": 11,
++      "named_and_full_pytest_status": "blocked_before_collection_missing_pytest",
++      "native_journal": "unavailable",
++      "live_writer_ownership": "unverified",
++      "task_checkboxes_verified_complete": 0,
++      "pr_body_correction": "rejected_connector_requires_approval_policy_never"
+     }
+   },
+   "mirror_synchronization": [
+diff --git a/docs/verification/issue-1096-recovery/pre-dispatch-adjudicator-selftest.log b/docs/verification/issue-1096-recovery/pre-dispatch-adjudicator-selftest.log
+new file mode 100644
+index 0000000..a005dd4
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/pre-dispatch-adjudicator-selftest.log
+@@ -0,0 +1 @@
++adjudicator_retro selftest: 23 checks passed
+diff --git a/docs/verification/issue-1096-recovery/pre-dispatch-checks.json b/docs/verification/issue-1096-recovery/pre-dispatch-checks.json
+new file mode 100644
+index 0000000..62eeb5c
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/pre-dispatch-checks.json
+@@ -0,0 +1,93 @@
++{
++  "checked_at": "2026-11-03T18:51:58.245Z",
++  "source_parent": "ed048b3417585c8d3f5353b098341eeab7c2bd8c",
++  "accepted_deployment_verified": false,
++  "interpreter": "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python",
++  "checks": [
++    {
++      "name": "pre-dispatch-inventory-tests",
++      "command": [
++        "node",
++        "tests/test_adjudicator_inventory.js"
++      ],
++      "exit_code": 0,
++      "log": "pre-dispatch-inventory-tests.log",
++      "log_sha256": "4fb63c981a296c529f43135d6978d1c13f07f50744e825a2e6a7aad1020e6389",
++      "timed_out": false
++    },
++    {
++      "name": "pre-dispatch-named-tests",
++      "command": [
++        "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python",
++        "-m",
++        "pytest",
++        "-m",
++        "not slow",
++        "-q",
++        "tests/test_adjudicator_retro.py::test_build_packet_includes_diff_and_acceptance_criteria",
++        "tests/test_adjudicator_retro.py::test_adjudicator_validator_accepts_recommendation_prose",
++        "tests/test_adjudicator_retro.py::test_floor_still_demotes_a_metadata_only_packet",
++        "tests/test_adjudicator_retro.py::test_abstained_row_is_reattempted_when_the_packet_gains_diff_and_criteria"
++      ],
++      "exit_code": 1,
++      "log": "pre-dispatch-named-tests.log",
++      "log_sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599",
++      "timed_out": false
++    },
++    {
++      "name": "pre-dispatch-retrospective-suite",
++      "command": [
++        "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python",
++        "-m",
++        "pytest",
++        "tests/test_adjudicator_retro.py",
++        "-m",
++        "not slow",
++        "-q"
++      ],
++      "exit_code": 1,
++      "log": "pre-dispatch-retrospective-suite.log",
++      "log_sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599",
++      "timed_out": false
++    },
++    {
++      "name": "pre-dispatch-adjudicator-selftest",
++      "command": [
++        "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python",
++        "src/adjudicator_retro.py",
++        "--selftest"
++      ],
++      "exit_code": 0,
++      "log": "pre-dispatch-adjudicator-selftest.log",
++      "log_sha256": "3f227862f8d1e7b2c35195efe7205621f73d3033db5a3ca88e1e7c24021e1109",
++      "timed_out": false
++    },
++    {
++      "name": "pre-dispatch-evidence-tests",
++      "command": [
++        "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python",
++        "-m",
++        "unittest",
++        "discover",
++        "-s",
++        "tests",
++        "-p",
++        "test_adjudicator_retro_evidence.py"
++      ],
++      "exit_code": 0,
++      "log": "pre-dispatch-evidence-tests.log",
++      "log_sha256": "f554d9e1907fbaae8b4ee178cdba6800fa893149d1e3874f2495b84a304c9007",
++      "timed_out": false
++    }
++  ],
++  "source_sha256": {
++    "scripts/export_adjudicator_inventory.js": "39b6ff782685920c3ba56895c7d1b6a8ceb3f1f981c0d1bf25f4e4cf1e72921b",
++    "tests/test_adjudicator_inventory.js": "d4687537064ebe0f0d28aa308110fb08bcbc78c17ee7b52b4540452d1969f270",
++    "src/adjudicator_retro.py": "ee172f96ddf0ca56f6c06fcf18bdaacccece5381de61a9896006d0b16a8fb0b8",
++    "tests/test_adjudicator_retro.py": "b44fd6756915069d6a5dc492eecda268053a711899b81decc9d27f8c9793fda2",
++    "docs/verification/issue-1096-recovery/pre-dispatch-plan.md": "7ff5e4904aefba80d41e9cf2baafa6730c425d7534ce13782cc7960c722dc6fb"
++  },
++  "real_input_observation": "pre-dispatch-observation.json",
++  "real_input_observation_sha256": "64a5cabcd1e8596edc149b88640af53ec177a424fc0d91de7f7ce69c5ac869ef",
++  "production_execution_complete": false
++}
+diff --git a/docs/verification/issue-1096-recovery/pre-dispatch-evidence-tests.log b/docs/verification/issue-1096-recovery/pre-dispatch-evidence-tests.log
+new file mode 100644
+index 0000000..b72b5ee
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/pre-dispatch-evidence-tests.log
+@@ -0,0 +1,229 @@
++........<frozen codecs>:189: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2307100>
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++<frozen codecs>:189: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2307b50>
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++<frozen codecs>:189: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2307880>
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++<frozen codecs>:189: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf23075b0>
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++<frozen codecs>:189: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2260040>
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++<frozen codecs>:189: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2260130>
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++<frozen codecs>:189: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2260220>
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++<frozen codecs>:189: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf22608b0>
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++<frozen codecs>:189: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2260a90>
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++<frozen codecs>:189: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2260b80>
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2306e30>
++  def __init__(self, name, parent):
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf22606d0>
++  def __init__(self, name, parent):
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2307880>
++  def __init__(self, name, parent):
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2307b50>
++  def __init__(self, name, parent):
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2260b80>
++  def __init__(self, name, parent):
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2307100>
++  def __init__(self, name, parent):
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf22608b0>
++  def __init__(self, name, parent):
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2260a90>
++  def __init__(self, name, parent):
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2260130>
++  def __init__(self, name, parent):
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2260220>
++  def __init__(self, name, parent):
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2261120>
++  def __init__(self, name, parent):
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2261210>
++  def __init__(self, name, parent):
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf22607c0>
++  def __init__(self, name, parent):
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2261300>
++  def __init__(self, name, parent):
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf22617b0>
++  def __init__(self, name, parent):
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2261990>
++  def __init__(self, name, parent):
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf22618a0>
++  def __init__(self, name, parent):
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2260040>
++  def __init__(self, name, parent):
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2261b70>
++  def __init__(self, name, parent):
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf23075b0>
++  def __init__(self, name, parent):
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2261d50>
++  def __init__(self, name, parent):
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2261e40>
++  def __init__(self, name, parent):
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2261f30>
++  def __init__(self, name, parent):
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2262200>
++  def __init__(self, name, parent):
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf22622f0>
++  def __init__(self, name, parent):
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf22623e0>
++  def __init__(self, name, parent):
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++./opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2307100>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2307880>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2307b50>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf22623e0>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2306e30>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2262200>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf22622f0>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2261e40>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2261d50>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2261b70>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2260040>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2261c60>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf22618a0>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2261990>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2261300>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf22617b0>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2261f30>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2261210>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf23075b0>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf22604f0>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2260400>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf22605e0>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2261120>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2260220>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2260310>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf22607c0>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2260a90>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf22608b0>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf22606d0>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2260130>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2260b80>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf22624d0>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf22625c0>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf22627a0>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2262110>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf22626b0>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2262980>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2262a70>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2262c50>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2262890>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2262e30>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x71adf2262f20>
++  @property
++ResourceWarning: Enable tracemalloc to get the object allocation traceback
++..
++----------------------------------------------------------------------
++Ran 11 tests in 0.316s
++
++OK
+diff --git a/docs/verification/issue-1096-recovery/pre-dispatch-inventory-tests.log b/docs/verification/issue-1096-recovery/pre-dispatch-inventory-tests.log
+new file mode 100644
+index 0000000..771057f
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/pre-dispatch-inventory-tests.log
+@@ -0,0 +1,48 @@
++✔ report recovery preserves ordered rows, recursive paid history and conflicting counts (6.702476ms)
++✔ report recovery rejects missing input without initializing runtime state (1.201594ms)
++✔ report recovery refuses malformed and ambiguous retained identities (3.0573ms)
++✔ report recovery requires explicit attribution and a valid check time (0.754158ms)
++✔ report recovery aborts if the input changes during observation (1.133808ms)
++✔ report CLI never combines historical recovery with dispatch or current Brain selection (219.298881ms)
++✔ pre-dispatch inventory reconciles report and native locators without exposing payloads (9.723778ms)
++✔ all validated native rows still require authentication, independent truth and live writer proof (10.057111ms)
++✔ missing native evidence remains unavailable and never means zero attempts (1.152262ms)
++✔ an observed empty journal cannot establish writer ownership or authorize spending (11.46125ms)
++✔ an active journal writer does not make a read-only snapshot claim ownership (8.711428ms)
++✔ foreign and incomplete journals are refused without schema repair (4.902545ms)
++✔ report without native marker still cannot authorize generic retry (0.743107ms)
++✔ journal CLI stays read-only and requires explicit report attribution (77.643902ms)
++✔ inventory exports every synthetic dispute and every exclusion without writes (489.889292ms)
++✔ inventory preserves the fixed cutoff and reports a count discrepancy (8.346809ms)
++✔ inventory distinguishes missing evidence from a complete cohort (3.347999ms)
++✔ inventory distinguishes schema-less evidence from a complete cohort (0.791659ms)
++✔ inventory distinguishes empty evidence from a complete cohort (2.968704ms)
++✔ inventory distinguishes incomplete-schema evidence from a complete cohort (3.972699ms)
++✔ inventory CLI exports JSON, signals unavailable evidence and rejects replay options (221.281705ms)
++✔ matching 71 identities bind the supplied manifest bytes without claiming historical acceptance (133.32156ms)
++✔ equal inventory counts expose substituted identities, exclusions and absent requested runs (9.293605ms)
++✔ a requested run on another target cannot satisfy case identity (4.963068ms)
++✔ inventory accounts for outcomes without run records as unavailable evidence (45.121015ms)
++✔ an outcomes-only Brain is available with exclusions, rather than an observed empty store (4.307714ms)
++✔ manifest retains every requested identity when Brain is empty (3.144953ms)
++✔ manifest retains every requested identity when Brain is unavailable (2.874257ms)
++✔ manifest count discrepancy prevents an exact match even when all supplied identities match (7.684039ms)
++✔ manifest CLI preserves input bytes, rejects malformed identities and signals unavailable Brain (502.553073ms)
++✔ version 2 reconciles all 71 dispute identities without claiming historical provenance (145.500337ms)
++✔ version 2 exposes substituted verdicts NON_PASS/FAIL despite matching run and count (44.803586ms)
++✔ version 2 exposes substituted verdicts FAIL_HOLLOW/PASS despite matching run and count (42.636339ms)
++✔ version 2 exposes substituted verdicts PASS/FAIL despite matching run and count (43.553131ms)
++✔ version 2 retains different disputes on one run and rejects duplicate dispute identities (5.873309ms)
++✔ version 2 preserves full identities for excluded, missing and unavailable cases (40.989554ms)
++✔ version 2 rejects malformed verdicts before publishing any inventory (489.167216ms)
++✔ version 2 distinguishes unavailable verdict evidence from contradictory verdicts (50.713737ms)
++✔ version 2 retains an observed target mismatch when verdict evidence is unavailable (4.355023ms)
++✔ missing stored targets remain eligible disputes with explicit unavailable identity evidence (459.806348ms)
++ℹ tests 40
++ℹ suites 0
++ℹ pass 40
++ℹ fail 0
++ℹ cancelled 0
++ℹ skipped 0
++ℹ todo 0
++ℹ duration_ms 3139.698003
+diff --git a/docs/verification/issue-1096-recovery/pre-dispatch-named-tests.log b/docs/verification/issue-1096-recovery/pre-dispatch-named-tests.log
+new file mode 100644
+index 0000000..7d7a543
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/pre-dispatch-named-tests.log
+@@ -0,0 +1 @@
++/opt/hostedtoolcache/Python/3.14.9/x64/bin/python: No module named pytest
+diff --git a/docs/verification/issue-1096-recovery/pre-dispatch-observation.json b/docs/verification/issue-1096-recovery/pre-dispatch-observation.json
+new file mode 100644
+index 0000000..8f3c3e6
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/pre-dispatch-observation.json
+@@ -0,0 +1,62 @@
++{
++  "checked_at": "2026-11-03T18:51:58.245Z",
++  "command": [
++    "node",
++    "scripts/export_adjudicator_inventory.js",
++    "--report",
++    "/tmp/issue-1096-recovered-historical-report.json",
++    "--observed-at",
++    "1793731918",
++    "--evidence-class",
++    "historical_snapshot",
++    "--evidence-reference",
++    "dropbox:id:tDSHdCztYNUAAAAAADfgrw@65de8f715bb690369d613"
++  ],
++  "source_parent": "ed048b3417585c8d3f5353b098341eeab7c2bd8c",
++  "evidence_class": "historical_snapshot",
++  "evidence_reference": "dropbox:id:tDSHdCztYNUAAAAAADfgrw@65de8f715bb690369d613",
++  "report_sha256": "e55a63bd4f458d3c747f7d14321aa4fa81ed34731ab8add3bf6aba920ad262b1",
++  "report_byte_length": 2386541,
++  "complete_inventory_stdout_sha256": "03ca9070c496611c090f4e895b64b2a60c1df8452deef2ae4ff7cfe1c3dc3354",
++  "case_count": 58,
++  "retained_population": 40,
++  "paid_identity_summary": {
++    "records": 38,
++    "unique": 38,
++    "repeated": []
++  },
++  "retained_graded": 0,
++  "native_publication_present": false,
++  "pre_dispatch": {
++    "requested_generic_command": "--dispatch --retry --limit 21",
++    "generic_retry_route": "not_authorized_by_inventory",
++    "native_route": "admit_collected_retry_then_publish_native_cohort",
++    "native_journal": {
++      "status": "unavailable",
++      "path": null,
++      "attempts": null,
++      "receipt_authority": "not_authenticated_by_inventory",
++      "reason": "native_journal_not_supplied"
++    },
++    "paid_identity_reconciliation": {
++      "report_unique": 38,
++      "journal_unique": null,
++      "union_unique": null,
++      "report_only": null,
++      "journal_only": null,
++      "unresolved_without_backend_id": null
++    },
++    "live_writer_ownership": "unverified",
++    "dispatch_authorized": false,
++    "stop_reasons": [
++      "native_journal_not_supplied",
++      "live_writer_ownership_unverified",
++      "accepted_deployed_mirror_bindings_unverified",
++      "immutable_source_and_case_qualification_unverified",
++      "native_receipt_authentication_and_independent_truth_required"
++    ]
++  },
++  "provider_calls": 0,
++  "production_dispatches": 0,
++  "canonical_publications": 0
++}
+diff --git a/docs/verification/issue-1096-recovery/pre-dispatch-plan.md b/docs/verification/issue-1096-recovery/pre-dispatch-plan.md
+new file mode 100644
+index 0000000..d405294
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/pre-dispatch-plan.md
+@@ -0,0 +1,62 @@
++# Pre-dispatch inventory plan, 2026-11-03 UTC
++
++Recorded before executing the updated exporter on recovered real input.
++Source parent: ed048b3417585c8d3f5353b098341eeab7c2bd8c; changed JavaScript
++will be bound by SHA-256 in the new validation receipt. This is a runner check,
++not a claim that the source is the accepted deployed revision.
++
++## Command and expected result
++
++```sh
++node scripts/export_adjudicator_inventory.js \
++  --report /tmp/issue-1096-recovered-historical-report.json \
++  --observed-at CHECK_TIME \
++  --evidence-class historical_snapshot \
++  --evidence-reference 'dropbox:id:tDSHdCztYNUAAAAAADfgrw@65de8f715bb690369d613'
++```
++
++Replace CHECK_TIME with the measured UTC UNIX time. Recover the same connected
++Dropbox text input, not a new cohort. Expect 58 retained rows, population 40,
++38 recursive paid identities, saved graded 0. The text extraction is not proof
++of original byte identity. There is no available production native journal in
++this runner, so omit `--journal`; native attempts and reconciliation counts must
++be null/unavailable rather than zero. A runtime operator with the authentic
++existing journal can supply `--journal EXISTING_NATIVE_SQLITE` to observe its
++locators in a single read-only transaction. That still cannot authenticate grades.
++
++Expected stop reasons include unavailable native journal, unverified live writer,
++unverified accepted/deployed/mirror bindings, missing immutable source and case
++qualification, and absent receipt authentication and independent later truth.
++No result from this exporter authorizes dispatch.
++
++## Bounded stop and native route
++
++One recovered-input inventory only. Stop on changing input, malformed identities,
++or unexpected counts. No provider call, Brain write, journal initialization,
++reservation release, canonical publication, mirror write or publication-lock
++acquisition. Native journal reads cannot prove whether a live writer is active;
++an empty or absent journal cannot establish ownership.
++
++The requested `--dispatch --retry --limit 21` cannot run against a native canonical
++publication: `run` and `_persist_report` refuse it. Retain those protections.
++The existing route is `admit_collected_retry` followed by `publish_native_cohort`,
++using authenticated original source, qualified cases, journal and independent
++truth; publication requires expected source/canonical hashes and the shared
++destination lock. Native `reserved` attempts require producer proof before
++release; `in_flight` remains UNKNOWN until a receipt is recovered; `raw_persisted`
++resumes validation without redispatch. Even a `validated` row must be authenticated
++by the native projection before grading. Live writer coordination remains a
++separate required operational step, not something this runner may infer.
++
++## Prior task reconciliation
++
++Reviewed ed048b3: 11 committed files, including inventory code/tests and historical
++evidence. Its 32 Node checks passed, but named pytest/full retrospective commands
++failed before collection. Recovery remains partial: accepted/deployed/mirror
++identities, native receipts and fixed next-20 membership are unavailable. No new
++task is complete. The PR summary's checked recovery task should be reopened to
++match its detailed unchecked task; all other checkboxes stay open.
++
++GitHub rejected the PR-body correction because connector mutations require
++approval and this run's policy is `never`. This file records the correction for
++handoff; the remote checkbox is not claimed updated.
+diff --git a/docs/verification/issue-1096-recovery/pre-dispatch-results.md b/docs/verification/issue-1096-recovery/pre-dispatch-results.md
+new file mode 100644
+index 0000000..36a3b34
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/pre-dispatch-results.md
+@@ -0,0 +1,54 @@
++# Pre-dispatch results, 2026-11-03 UTC
++
++The pre-execution contract is frozen in [pre-dispatch-plan.md](pre-dispatch-plan.md).
++The command ran at 18:51:58 UTC against the recovered historical extractor text.
++Its 2,386,541 local bytes and SHA-256 match the earlier recovery file; original
++Dropbox byte identity remains unverified. Text was restored with the same trailing
++newlines as that earlier local file. The first verification wrapper was refused
++by the sandbox's child-process pipe restriction before it could execute the
++exporter. Using file-backed subprocess output allowed the one real-input check.
++
++[pre-dispatch-observation.json](pre-dispatch-observation.json) records the exact
++command, timestamp, input hash, counts, pre-dispatch reasons and full stdout hash.
++The full original row/paid-locator inventory remains in historical-inventory.json.
++The expected 58 retained rows, population 40, 38 unique paid identities and saved
++graded 0 matched. The earlier snapshot has no native publication marker; this
++does not contradict the later historical canonical native publication. Neither
++can authorize a generic retry from this runner.
++
++The new optional `--journal` reader observes an existing native SQLite journal in
++one read-only transaction without initialization or schema repair. It separates
++report/journal/shared paid identities and identifies possible started attempts
++without backend ids. Receipt payloads are not emitted. State-specific recovery
++steps retain UNKNOWNs and require native authentication before grading. This is
++an inventory, not a replacement for the native admission/publication machinery.
++
++No authentic native journal was supplied or found in this runner. Native attempt
++counts, journal-only paid identities and report/journal union counts are therefore
++null, not zero. Live writer ownership, source/deployment/mirror bindings, immutable
++case qualification, authenticated receipts and current independent truth remain
++unverified. No provider invocation, production dispatch or publication occurred.
++
++[pre-dispatch-checks.json](pre-dispatch-checks.json) binds the tested source hashes
++to parent ed048b3417585c8d3f5353b098341eeab7c2bd8c and preserves command/log hashes:
++
++- 40 inventory tests pass, including active writer isolation, empty/missing/foreign
++  journals, recursive paid-history reconciliation and unchanged fixture bytes.
++- The existing module selftest passes 23 checks; 11 existing evidence tests pass
++  under the selected Python 3.14.9 interpreter (with existing ResourceWarnings).
++- The four named pytest nodes and full retrospective suite both exit 1 before
++  collection: `No module named pytest`. This is not accepted-revision test evidence.
++- JavaScript syntax and whitespace checks pass. No Python files changed.
++
++No acceptance task can be completed from these results. Current native receipts,
++live writer coordination, original requested retry identities and fixed next-20
++manifest are still needed; the recovery checkbox correction remains local because
++GitHub rejected connector writes under the run's approval policy.
++
++Normal staging also failed: `.git/index.lock: Read-only file system`. The source,
++tests and receipts are preserved in an isolated Git directory under
++`/tmp/issue-1096-pre-dispatch/.git`, with the exact checkout HEAD as parent, and
++in `artifacts/issue-1096-pre-dispatch.patch`. The checkout branch itself is
++unchanged. Blocker-comment and `needs-human` label attempts were also rejected
++because connector mutations require approval while the policy is `never`.
++PR #1097 was rechecked open with `draft=false` before handoff.
+diff --git a/docs/verification/issue-1096-recovery/pre-dispatch-retrospective-suite.log b/docs/verification/issue-1096-recovery/pre-dispatch-retrospective-suite.log
+new file mode 100644
+index 0000000..7d7a543
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/pre-dispatch-retrospective-suite.log
+@@ -0,0 +1 @@
++/opt/hostedtoolcache/Python/3.14.9/x64/bin/python: No module named pytest
+diff --git a/scripts/export_adjudicator_inventory.js b/scripts/export_adjudicator_inventory.js
+index 22da690..44bda01 100644
+--- a/scripts/export_adjudicator_inventory.js
++++ b/scripts/export_adjudicator_inventory.js
+@@ -22,7 +22,89 @@ function hasTarget(row) {
+   return typeof row.target === 'string' && Boolean(row.target.trim());
+ }
+ 
+-function reportInventory({ report, observedAt, evidenceClass, evidenceReference }) {
++// Observe native receipt locators in one read-only SQLite snapshot. This does
++// not instantiate NativeAttemptJournal, parse provider output, authenticate a
++// decision, acquire the publication lock, or establish live writer ownership.
++function journalInventory(journal) {
++  const base = { status: 'unavailable', path: journal ? path.resolve(journal) : null,
++    attempts: null, receipt_authority: 'not_authenticated_by_inventory' };
++  if (journal === undefined) return { ...base, reason: 'native_journal_not_supplied' };
++  if (typeof journal !== 'string' || !journal.trim()) throw new Error('journal path is required');
++  let connection;
++  try {
++    connection = new DatabaseSync(journal, { readOnly: true });
++    connection.exec('BEGIN');
++    if (connection.prepare('PRAGMA application_id').get().application_id !== 1313097550) {
++      return { ...base, reason: 'non_native_journal' };
++    }
++    const steps = new Map([
++      ['reserved', 'producer_must_prove_invocation_never_started'],
++      ['in_flight', 'UNKNOWN_recover_provider_receipt_before_any_retry'],
++      ['raw_persisted', 'resume_native_validation_without_redispatch'],
++      ['validated', 'reauthenticate_with_native_projection_before_grading'],
++    ]);
++    const attempts = connection.prepare(
++      'SELECT attempt_id,case_id,material_revision,case_digest,state,backend_run_id,' +
++      'report_sha256,created_at,updated_at,' +
++      '(raw_response IS NOT NULL) AS raw_receipt_present,' +
++      '(validated_json IS NOT NULL) AS validation_present FROM native_attempts ' +
++      'ORDER BY created_at,attempt_id').all().map((item) => ({ ...item,
++      raw_receipt_present: Boolean(item.raw_receipt_present),
++      validation_present: Boolean(item.validation_present),
++      recovery_step: steps.get(item.state) || 'unrecognized_state_requires_native_review',
++    }));
++    return { ...base, status: 'available', attempts };
++  } catch {
++    // SQLite messages and raw payloads can contain private provider material.
++    return { ...base, reason: 'native_journal_unreadable_or_schema_unavailable' };
++  } finally {
++    if (connection) connection.close();
++  }
++}
++
++function preDispatchInventory(saved, paid, journal) {
++  const native = journalInventory(journal);
++  const identities = new Set(paid.map((item) => item.backend_run_id));
++  const journalIdentities = new Set((native.attempts || [])
++    .map((item) => item.backend_run_id).filter(Boolean));
++  return {
++    requested_generic_command: '--dispatch --retry --limit 21',
++    generic_retry_route: Object.hasOwn(saved, 'native_publication')
++      ? 'refused_native_canonical_publication' : 'not_authorized_by_inventory',
++    native_route: 'admit_collected_retry_then_publish_native_cohort',
++    native_journal: native,
++    paid_identity_reconciliation: {
++      report_unique: identities.size,
++      journal_unique: native.status === 'available' ? journalIdentities.size : null,
++      union_unique: native.status === 'available'
++        ? new Set([...identities, ...journalIdentities]).size : null,
++      report_only: native.status === 'available'
++        ? [...identities].filter((item) => !journalIdentities.has(item)) : null,
++      journal_only: native.status === 'available'
++        ? [...journalIdentities].filter((item) => !identities.has(item)) : null,
++      // A started attempt without an id is still a possible paid invocation.
++      unresolved_without_backend_id: native.status === 'available'
++        ? native.attempts.filter((item) => item.state === 'in_flight' && !item.backend_run_id)
++          .map((item) => item.attempt_id) : null,
++    },
++    live_writer_ownership: 'unverified',
++    dispatch_authorized: false,
++    stop_reasons: [
++      ...(native.status === 'unavailable' ? [native.reason] : []),
++      ...((native.attempts || []).some((item) =>
++        ['reserved', 'in_flight', 'raw_persisted'].includes(item.state))
++        ? ['unresolved_native_attempts_require_recovery'] : []),
++      ...((native.attempts || []).some((item) =>
++        !['reserved', 'in_flight', 'raw_persisted', 'validated'].includes(item.state))
++        ? ['unrecognized_native_state_requires_review'] : []),
++      'live_writer_ownership_unverified', 'accepted_deployed_mirror_bindings_unverified',
++      'immutable_source_and_case_qualification_unverified',
++      'native_receipt_authentication_and_independent_truth_required',
++    ],
++  };
++}
++
++function reportInventory({ report, observedAt, evidenceClass, evidenceReference, journal }) {
+   integer(observedAt, 'observedAt', 0);
+   if (typeof report !== 'string' || !report.trim()) throw new Error('report is required');
+   if (!['historical_snapshot', 'current_snapshot'].includes(evidenceClass)) {
+@@ -79,6 +161,7 @@ function reportInventory({ report, observedAt, evidenceClass, evidenceReference
+     occurrences.push(item.location);
+     identities.set(item.backend_run_id, occurrences);
+   }
++  const preDispatch = preDispatchInventory(saved, paid, journal);
+   if (!fs.readFileSync(report).equals(bytes)) {
+     throw new Error('report changed during inventory');
+   }
+@@ -93,6 +176,7 @@ function reportInventory({ report, observedAt, evidenceClass, evidenceReference
+     retained_summary: saved.summary ?? null,
+     native_publication_present: Object.hasOwn(saved, 'native_publication'),
+     cases, case_count: cases.length, paid_attempts: paid,
++    pre_dispatch: preDispatch,
+     paid_identity_summary: {
+       records: paid.length, unique: identities.size,
+       repeated: [...identities].filter(([, locations]) => locations.length > 1)
+@@ -102,7 +186,9 @@ function reportInventory({ report, observedAt, evidenceClass, evidenceReference
+     // label, saved native projection or matching count authenticates a grade.
+     receipt_authority: 'not_authenticated_by_inventory',
+     requested_cohort_verified: false, dispatch_authorized: false,
+-    evidence_gaps: ['original_cohort_provenance_unverified', 'native_journal_not_observed',
++    evidence_gaps: ['original_cohort_provenance_unverified',
++      ...(preDispatch.native_journal.status === 'available'
++        ? ['native_journal_receipts_not_authenticated'] : ['native_journal_not_observed']),
+       'independent_current_truth_not_observed', 'deployed_and_mirror_revisions_not_observed',
+       'fixed_next_20_manifest_not_observed'],
+   };
+@@ -336,6 +422,7 @@ function main() {
+     const { values, tokens } = parseArgs({ tokens: true, options: {
+       db: { type: 'string' },
+       report: { type: 'string' },
++      journal: { type: 'string' },
+       'evidence-class': { type: 'string' },
+       'evidence-reference': { type: 'string' },
+       'observed-at': { type: 'string' },
+@@ -345,7 +432,7 @@ function main() {
+       help: { type: 'boolean', short: 'h' },
+     } });
+     if (values.help) {
+-      process.stdout.write('Report recovery: node scripts/export_adjudicator_inventory.js --report SAVED_JSON --observed-at UNIX_SECONDS --evidence-class historical_snapshot --evidence-reference SOURCE_REFERENCE\nRetained rows and paid identities only; no grade authentication or dispatch.\n');
++      process.stdout.write('Report recovery: node scripts/export_adjudicator_inventory.js --report SAVED_JSON --observed-at UNIX_SECONDS --evidence-class historical_snapshot --evidence-reference SOURCE_REFERENCE [--journal EXISTING_NATIVE_SQLITE]\nRetained rows and paid identities only; no grade authentication or dispatch.\n');
+       process.stdout.write('Usage: node scripts/export_adjudicator_inventory.js --db BRAIN --observed-at UNIX_SECONDS [--days 90] [--expected-count 71] [--manifest JSON_FILE]\nManifest: {"schema_version":2,"cases":[{"run_id":"...","target":"owner/repo#N","verifier_verdict":"NON_PASS","adjudicated_verdict":"PASS"}]}.\nVersion 1 accepts run_id and target only; it cannot detect changed verdicts.\nJSON is written to stdout. No replay, dispatch or outcome writes.\n');
+       return;
+     }
+@@ -356,12 +443,13 @@ function main() {
+       const result = reportInventory({
+         report: values.report, observedAt: Number(values['observed-at']),
+         evidenceClass: values['evidence-class'], evidenceReference: values['evidence-reference'],
++        journal: values.journal,
+       });
+       process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+       return;
+     }
+-    if (values['evidence-class'] || values['evidence-reference']) {
+-      throw new Error('--evidence-class and --evidence-reference require --report');
++    if (values.journal || values['evidence-class'] || values['evidence-reference']) {
++      throw new Error('--journal, --evidence-class and --evidence-reference require --report');
+     }
+     if (!values.db || !values['observed-at']) {
+       throw new Error('--db and --observed-at are required');
+diff --git a/tests/test_adjudicator_inventory.js b/tests/test_adjudicator_inventory.js
+index c7d3e5b..5caca1a 100644
+--- a/tests/test_adjudicator_inventory.js
++++ b/tests/test_adjudicator_inventory.js
+@@ -134,6 +134,161 @@ test('report CLI never combines historical recovery with dispatch or current Bra
+   }
+ });
+ 
++function nativeJournal(t) {
++  const fixture = retainedReport(t);
++  const journal = path.join(fixture.root, 'native.sqlite3');
++  const connection = new DatabaseSync(journal);
++  connection.exec(`PRAGMA application_id=1313097550;
++    CREATE TABLE native_attempts (attempt_id TEXT PRIMARY KEY, case_id TEXT,
++      material_revision TEXT, case_digest TEXT, state TEXT, backend_run_id TEXT,
++      report_sha256 TEXT, created_at INTEGER, updated_at INTEGER,
++      raw_response TEXT, validated_json TEXT);`);
++  const insert = connection.prepare('INSERT INTO native_attempts VALUES (?,?,?,?,?,?,?,?,?,?,?)');
++  for (const [id, state, backend, raw, validation] of [
++    ['a', 'reserved', null, null, null],
++    ['b', 'in_flight', null, null, null],
++    ['c', 'in_flight', 'started-provider', null, null],
++    ['d', 'raw_persisted', 'primary', 'private raw response', null],
++    ['e', 'validated', 'native-provider', 'private raw response', '{"private":"proposal"}'],
++    ['f', 'unrecognized', null, null, null],
++  ]) insert.run(id, 'case-a', `revision-${id}`, 'digest', state, backend, 'source-hash',
++    now - 1, now, raw, validation);
++  connection.close();
++  return { ...fixture, journal, options: { ...fixture.options, journal } };
++}
++
++test('pre-dispatch inventory reconciles report and native locators without exposing payloads', (t) => {
++  const { root, journal, options } = nativeJournal(t);
++  const before = fs.readFileSync(journal);
++  const files = fs.readdirSync(root);
++  const result = reportInventory(options).pre_dispatch;
++  assert.equal(result.generic_retry_route, 'refused_native_canonical_publication');
++  assert.equal(result.native_journal.status, 'available');
++  assert.equal(result.native_journal.receipt_authority, 'not_authenticated_by_inventory');
++  assert.deepEqual(result.paid_identity_reconciliation, {
++    report_unique: 3, journal_unique: 3, union_unique: 5,
++    report_only: ['prior', 'oldest'], journal_only: ['started-provider', 'native-provider'],
++    unresolved_without_backend_id: ['b'],
++  });
++  const attempts = result.native_journal.attempts;
++  assert.deepEqual(attempts.map((item) => item.attempt_id), ['a', 'b', 'c', 'd', 'e', 'f']);
++  assert.equal(attempts[0].recovery_step, 'producer_must_prove_invocation_never_started');
++  assert.equal(attempts[1].recovery_step, 'UNKNOWN_recover_provider_receipt_before_any_retry');
++  assert.equal(attempts[3].recovery_step, 'resume_native_validation_without_redispatch');
++  assert.equal(attempts[4].recovery_step, 'reauthenticate_with_native_projection_before_grading');
++  assert.equal(attempts[5].recovery_step, 'unrecognized_state_requires_native_review');
++  assert.equal(attempts[4].raw_receipt_present, true);
++  assert.equal(attempts[4].validation_present, true);
++  assert.equal(attempts[1].raw_receipt_present, false);
++  assert.ok(!JSON.stringify(result).includes('private'));
++  assert.equal(result.live_writer_ownership, 'unverified');
++  assert.equal(result.dispatch_authorized, false);
++  assert.ok(result.stop_reasons.includes('unresolved_native_attempts_require_recovery'));
++  assert.deepEqual(fs.readFileSync(journal), before);
++  assert.deepEqual(fs.readdirSync(root), files, 'read-only observation creates no lock or runtime');
++  assert.ok(!reportInventory(options).evidence_gaps.includes('native_journal_not_observed'));
++  assert.ok(reportInventory(options).evidence_gaps.includes('native_journal_receipts_not_authenticated'));
++});
++
++test('all validated native rows still require authentication, independent truth and live writer proof', (t) => {
++  const { journal, options } = nativeJournal(t);
++  const connection = new DatabaseSync(journal);
++  connection.exec("DELETE FROM native_attempts WHERE state != 'validated'");
++  connection.close();
++  const result = reportInventory(options).pre_dispatch;
++  assert.equal(result.dispatch_authorized, false);
++  assert.ok(!result.stop_reasons.includes('unresolved_native_attempts_require_recovery'));
++  assert.ok(result.stop_reasons.includes('live_writer_ownership_unverified'));
++  assert.ok(result.stop_reasons.includes('native_receipt_authentication_and_independent_truth_required'));
++  assert.equal(Object.hasOwn(result, 'graded'), false);
++});
++
++test('missing native evidence remains unavailable and never means zero attempts', (t) => {
++  const { root, options } = retainedReport(t);
++  for (const journal of [undefined, path.join(root, 'absent', 'native.sqlite3')]) {
++    const result = reportInventory({ ...options, journal }).pre_dispatch;
++    assert.equal(result.native_journal.status, 'unavailable');
++    assert.equal(result.native_journal.attempts, null);
++    assert.equal(result.paid_identity_reconciliation.journal_unique, null);
++    assert.equal(result.paid_identity_reconciliation.union_unique, null);
++    assert.equal(result.dispatch_authorized, false);
++  }
++  assert.equal(fs.existsSync(path.join(root, 'absent')), false);
++});
++
++test('an observed empty journal cannot establish writer ownership or authorize spending', (t) => {
++  const { journal, options } = nativeJournal(t);
++  const connection = new DatabaseSync(journal);
++  connection.exec('DELETE FROM native_attempts');
++  connection.close();
++  const result = reportInventory(options).pre_dispatch;
++  assert.equal(result.native_journal.status, 'available');
++  assert.deepEqual(result.native_journal.attempts, []);
++  assert.equal(result.paid_identity_reconciliation.journal_unique, 0);
++  assert.equal(result.paid_identity_reconciliation.union_unique, 3);
++  assert.equal(result.live_writer_ownership, 'unverified');
++  assert.equal(result.dispatch_authorized, false);
++});
++
++test('an active journal writer does not make a read-only snapshot claim ownership', (t) => {
++  const { journal, options } = nativeJournal(t);
++  const connection = new DatabaseSync(journal);
++  connection.exec("BEGIN IMMEDIATE; DELETE FROM native_attempts");
++  try {
++    const result = reportInventory(options).pre_dispatch;
++    assert.equal(result.native_journal.status, 'available');
++    assert.equal(result.native_journal.attempts.length, 6, 'uncommitted changes are invisible');
++    assert.equal(result.live_writer_ownership, 'unverified');
++    assert.equal(result.dispatch_authorized, false);
++  } finally {
++    connection.exec('ROLLBACK');
++    connection.close();
++  }
++});
++
++test('foreign and incomplete journals are refused without schema repair', (t) => {
++  const { root, options } = retainedReport(t);
++  const journal = path.join(root, 'foreign.sqlite3');
++  const connection = new DatabaseSync(journal);
++  connection.exec('CREATE TABLE unrelated (id TEXT)');
++  connection.close();
++  for (const reason of ['non_native_journal', 'native_journal_unreadable_or_schema_unavailable']) {
++    const before = fs.readFileSync(journal);
++    const result = reportInventory({ ...options, journal }).pre_dispatch.native_journal;
++    assert.equal(result.status, 'unavailable');
++    assert.equal(result.reason, reason);
++    assert.equal(result.attempts, null);
++    assert.deepEqual(fs.readFileSync(journal), before);
++    const db = new DatabaseSync(journal);
++    db.exec('PRAGMA application_id=1313097550');
++    db.close();
++  }
++});
++
++test('report without native marker still cannot authorize generic retry', (t) => {
++  const { saved, options } = retainedReport(t);
++  delete saved.native_publication;
++  fs.writeFileSync(options.report, JSON.stringify(saved));
++  const result = reportInventory(options).pre_dispatch;
++  assert.equal(result.generic_retry_route, 'not_authorized_by_inventory');
++  assert.equal(result.dispatch_authorized, false);
++});
++
++test('journal CLI stays read-only and requires explicit report attribution', (t) => {
++  const { root, journal, options } = nativeJournal(t);
++  const args = [script, '--report', options.report, '--journal', journal,
++    '--observed-at', String(now), '--evidence-class', options.evidenceClass,
++    '--evidence-reference', options.evidenceReference];
++  const result = execute(root, process.execPath, args);
++  assert.equal(result.status, 0, result.stderr);
++  assert.deepEqual(JSON.parse(result.stdout), reportInventory(options));
++  const refused = execute(root, process.execPath, [script, '--db', 'absent.db',
++    '--journal', journal, '--observed-at', String(now)]);
++  assert.equal(refused.status, 1);
++  assert.equal(refused.stdout, '');
++  assert.match(refused.stderr, /require --report/);
++});
++
+ function world(t, schema = true) {
+   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'adjudicator-inventory-'));
+   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+-- 
+2.56.0
+

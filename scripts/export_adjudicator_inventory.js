@@ -3,7 +3,8 @@
 // Read-only snapshot of the Brain selection used by adjudicator_retro.disputes,
 // plus explicit exclusions for runs or outcomes missing their matching row.
 // Requires Node >=22.13 (built-in SQLite). JSON goes to stdout; callers choose
-// where to preserve it. This tool never opens the retrospective report or roles.
+// where to preserve it. The separate --report mode inventories retained report
+// bytes, including recursive paid history, without opening Brain or roles.
 const path = require('node:path');
 const fs = require('node:fs');
 const { createHash } = require('node:crypto');
@@ -28,6 +29,690 @@ function integer(value, name, minimum) {
 
 function hasTarget(row) {
   return typeof row.target === 'string' && Boolean(row.target.trim());
+}
+
+// Match repository-emitted messages, not keywords in arbitrary provider prose.
+// Stage order follows build_packet/read_evidence and roles.run_adjudicator_agent.
+// These are explanations of saved fields, never authenticated retry outcomes.
+const failureMessages = new Map([
+  ['current merge-bound verifier decision missing or changed',
+    ['evidence_collection', 'merge_bound_verifier_changed', 0]],
+  ...['target, disputed_finding and ground_truth_evidence', 'verifier finding comment text',
+    'merged diff summary and gate runs', 'merged diff summary', 'gate runs']
+    .map((required) => [`packet requires ${required}`,
+      ['packet_validation', 'required_packet_evidence_missing', 1]]),
+  ['case validation failed; refusing live dispatch',
+    ['case_validation', 'case_validation_refused_dispatch', 2]],
+  ['no eligible backend has capacity for the adjudicator role',
+    ['backend_selection', 'no_eligible_backend_capacity', 3]],
+  ['could not parse a JSON adjudication proposal from the backend output',
+    ['proposal_parsing', 'adjudication_json_unparseable', 5]],
+  ['recommended_next_step must not contain mutating execution instructions',
+    ['proposal_validation', 'mutating_recommendation_rejected', 6]],
+]);
+
+// Exact messages recovered from the historical launcher, not current repository
+// emitters. Source: dropbox:id:tDSHdCztYNUAAAAAADfgrw@65de8f715bb690369d613.
+// They record refusal before a new invocation, not a timeout on this row. Paid
+// history and any parent decision must be recovered independently of the text.
+const retainedLauncherRefusals = new Map([
+  ['native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch',
+    'failed_provider_guard_refused_dispatch'],
+  ['native round boundary before new evidence/provider attempt',
+    'round_boundary_refused_dispatch'],
+]);
+
+// Exact pre-invocation refusals from adjudicator_retro.admit_collected_retry.
+// A refusal can coexist with prior paid history; it proves neither a new
+// invocation nor that the journal's recorded state has been authenticated.
+const nativeAdmissionRefusals = new Map([
+  ['original report changed before native projection', 'native_source_report_changed'],
+  ['native admission requires a freshly issued collected case', 'native_collected_case_required'],
+  ['collected capability does not bind the original case', 'native_original_case_binding_mismatch'],
+  ['native admission only resumes an original abstention', 'native_original_not_abstained'],
+  ['native case already has a validated binary decision', 'native_binary_decision_already_recorded'],
+  ...['reserved', 'in_flight', 'raw_persisted', 'validated', 'validated_binary'].map((state) =>
+    [`native revision already reserved: ${state}`, `native_revision_already_${state}`]),
+]);
+
+function failureMessage(value) {
+  if (typeof value !== 'string') return null;
+  if (failureMessages.has(value)) return failureMessages.get(value);
+  if (retainedLauncherRefusals.has(value)) {
+    return ['dispatch_admission', retainedLauncherRefusals.get(value), 2.5, 'retained_launcher'];
+  }
+  if (nativeAdmissionRefusals.has(value)) {
+    return ['dispatch_admission', nativeAdmissionRefusals.get(value), 2.5];
+  }
+  // The roles emitter prefixes nonzero backend exits. Do not infer timeout,
+  // cost, invocation completion or provider failure details from the suffix.
+  const exit = /^backend exit=(-?\d+)(?: [^\r\n]*)?$/.exec(value);
+  if (exit && Number.isSafeInteger(Number(exit[1])) && Number(exit[1]) !== 0) {
+    return ['backend_execution', 'backend_nonzero_exit', 4];
+  }
+  return null;
+}
+
+function firstRetainedBreak(fields, conflict = false) {
+  const empty = { stage: null, code: null, evidence_locations: fields.map((item) => item.location) };
+  if (!fields.length) return { status: 'not_recorded', ...empty };
+  if (conflict || fields.some((item) => !item.classification)) {
+    return { status: 'unresolved', ...empty };
+  }
+  const refusal = fields.find((item) => item.classification[0] === 'dispatch_admission');
+  // A refusal alongside execution/validation errors (or a different refusal)
+  // does not establish which attempt those fields describe. Do not invent an
+  // ordering between separate admissions or admission and execution fields.
+  if (refusal && fields.some((item) =>
+    item.classification[1] !== refusal.classification[1])) {
+    return { status: 'unresolved', ...empty };
+  }
+  const first = fields.reduce((left, right) =>
+    left.classification[2] <= right.classification[2] ? left : right);
+  return { status: 'recorded', stage: first.classification[0], code: first.classification[1],
+    message_origin: first.classification[3] || 'repository_emitter',
+    evidence_locations: fields.filter((item) => item.classification[2] === first.classification[2])
+      .map((item) => item.location) };
+}
+
+function retainedBreaks(attempt, location, conflict) {
+  const primary = [];
+  if (attempt.error) primary.push({ location: `${location}.error`,
+    classification: failureMessage(attempt.error) });
+  if (Array.isArray(attempt.errors)) {
+    attempt.errors.forEach((value, index) => primary.push({ location: `${location}.errors[${index}]`,
+      classification: failureMessage(value) }));
+  } else if (attempt.errors) {
+    primary.push({ location: `${location}.errors`, classification: null });
+  }
+  // The role record is written after adjudication; its failure cannot erase a
+  // saved decision or supersede an earlier failure in this attempt.
+  if (!primary.length && attempt.role_record_error) {
+    primary.push({ location: `${location}.role_record_error`,
+      classification: typeof attempt.role_record_error === 'string' && attempt.role_record_error.trim()
+        ? ['role_persistence', 'role_record_write_failed', 7] : null });
+  }
+  return { first_broken_step: firstRetainedBreak(primary, conflict),
+    // retry_error belongs to a later retry retained on the parent, not to the
+    // parent's original paid invocation. Nested attempts have their own steps.
+    later_retry_broken_step: attempt.retry_error ? firstRetainedBreak([{
+      location: `${location}.retry_error`, classification: failureMessage(attempt.retry_error),
+    }]) : null };
+}
+
+function retainedTruth(attempt, location) {
+  const truth = attempt.later_truth;
+  let status;
+  let nextStep;
+  if (truth === undefined || truth === null) {
+    status = 'not_recorded';
+    nextStep = 'recover_independent_later_truth_without_redispatch';
+  } else if (truth === 'UNKNOWN') {
+    status = 'unknown';
+    nextStep = 'preserve_UNKNOWN_until_independent_truth_available';
+  } else if (['PASS', 'FAIL'].includes(truth)) {
+    status = 'binary_unverified';
+    nextStep = 'authenticate_independent_later_truth';
+  } else {
+    status = 'invalid';
+    nextStep = 'inspect_invalid_retained_truth_before_grading';
+  }
+  // A saved value (even one matching the decision) proves neither provenance
+  // nor freshness. Observe this attempt only; never borrow parent/retry truth.
+  return { status, location: `${location}.later_truth`,
+    json_value_sha256: truth === undefined ? null
+      : createHash('sha256').update(JSON.stringify(truth)).digest('hex'),
+    independent_truth_verified: false, next_evidence_step: nextStep };
+}
+
+// Explain the generic Python _row_metadata_only floor from packet contents.
+// This is not the native projection's admission rule: even a complete packet
+// must still have its native receipt and independent truth authenticated.
+function packetEvidence(attempt, location) {
+  const packet = attempt.packet;
+  const packetLocation = `${location}.packet`;
+  const reasons = [];
+  const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+  const nonblank = (value) => typeof value === 'string' && Boolean(value.trim());
+  // JSON truth values follow Python here, including empty lists/dicts. A
+  // string such as "false" remains truthy and cannot clear a truncation flag.
+  const pythonTruthy = (value) => object(value) ? Object.keys(value).length > 0
+    : Array.isArray(value) ? value.length > 0 : Boolean(value);
+  const add = (code, field) => reasons.push({ code, location: field });
+  const ground = object(packet) ? packet.ground_truth_evidence : null;
+  const groundLocation = `${packetLocation}.ground_truth_evidence`;
+  if (!object(packet)) {
+    add('packet_missing_or_invalid', packetLocation);
+  } else if (!object(ground)) {
+    add('ground_truth_evidence_missing_or_invalid', groundLocation);
+  } else {
+    // _row_metadata_only refuses serialized qualification even when the diff
+    // and criteria are complete. Presence matters, including a null value.
+    if (Object.hasOwn(ground, 'qualification')) {
+      add('serialized_qualification_not_native_admission', `${groundLocation}.qualification`);
+    }
+    const patch = ground.diff_patch;
+    const patchLocation = `${groundLocation}.diff_patch`;
+    if (!object(patch)) {
+      add('diff_patch_not_recorded', patchLocation);
+    } else {
+      if (!nonblank(patch.text)) add('diff_patch_text_missing_or_invalid', `${patchLocation}.text`);
+      if (!nonblank(patch.revision)) {
+        add('diff_patch_revision_missing_or_invalid', `${patchLocation}.revision`);
+      }
+      if (pythonTruthy(patch.truncated)) add('diff_patch_truncated', `${patchLocation}.truncated`);
+    }
+    const criteria = ground.acceptance_criteria;
+    if (!Array.isArray(criteria) || !criteria.length) {
+      add('acceptance_criteria_missing_or_invalid', `${groundLocation}.acceptance_criteria`);
+    } else {
+      criteria.forEach((item, index) => {
+        if (!object(item) || !nonblank(item.text) || !nonblank(item.revision)) {
+          add('acceptance_criterion_text_or_revision_missing_or_invalid',
+            `${groundLocation}.acceptance_criteria[${index}]`);
+        }
+      });
+    }
+  }
+  return { status: reasons.length ? 'metadata_only' : 'complete_packet_unverified',
+    floor_applies: reasons.length > 0, blocking_reasons: reasons,
+    location: packetLocation, json_value_sha256: packet === undefined ? null
+      : createHash('sha256').update(JSON.stringify(packet)).digest('hex'),
+    native_admission_verified: false,
+    next_evidence_step: reasons.length ? 'recover_packet_evidence_before_any_retry'
+      : 'authenticate_native_admission_without_redispatch' };
+}
+
+// These observations describe saved fields, never a freshly validated result.
+// Error prose can include private provider material. Bind it by JSON-value hash
+// and location so recovery can inspect the original without publishing the text.
+function attemptObservation(attempt, caseId, location) {
+  const failureFields = ['error', 'errors', 'retry_error', 'role_record_error']
+    .filter((field) => Boolean(attempt[field]) &&
+      (!Array.isArray(attempt[field]) || attempt[field].length > 0))
+    .map((field) => ({ location: `${location}.${field}`,
+      json_value_sha256: createHash('sha256').update(JSON.stringify(attempt[field])).digest('hex') }));
+  const runFailed = failureFields.some((item) =>
+    item.location === `${location}.error` || item.location === `${location}.errors`);
+  const binary = ['reject_blocker', 'uphold_blocker'].includes(attempt.decision);
+  const abstained = attempt.decision === 'needs_more_evidence';
+  let result;
+  let nextStep;
+  if ((binary || abstained) && runFailed) {
+    result = 'conflicting_retained_decision_and_failure';
+    nextStep = 'inspect_retained_conflict_before_any_retry';
+  } else if (runFailed) {
+    result = 'retained_run_failure';
+    nextStep = 'inspect_failure_fields_for_first_actual_broken_step';
+  } else if (binary) {
+    result = 'retained_binary_decision';
+    nextStep = 'authenticate_native_receipt_then_refresh_independent_truth';
+  } else if (abstained) {
+    result = 'retained_abstention';
+    nextStep = 'recover_fresh_collected_evidence_before_any_retry';
+  } else if (attempt.decision) {
+    result = 'unrecognized_retained_decision';
+    nextStep = 'inspect_unrecognized_decision_before_any_retry';
+  } else {
+    result = 'no_retained_decision';
+    nextStep = 'recover_attempt_completion_without_redispatch';
+  }
+  return { case_id: caseId, location, retained_result: result,
+    backend_run_id: attempt.backend_run_id ?? null,
+    retained_binary_truth_present: ['PASS', 'FAIL'].includes(attempt.later_truth),
+    later_truth_observation: retainedTruth(attempt, location),
+    packet_evidence_observation: packetEvidence(attempt, location),
+    failure_fields: failureFields, next_evidence_step: nextStep,
+    ...retainedBreaks(attempt, location, (binary || abstained) && runFailed) };
+}
+
+// Journal validation means parsing finished, not that the outcome was binary
+// or successful. Observe saved diagnostics without publishing provider material
+// or pretending to perform the native receipt validator's authentication.
+function nativeValidationObservation(text, location, record) {
+  const base = { location, stored_text_sha256: typeof text === 'string'
+    ? createHash('sha256').update(text).digest('hex') : null,
+  retained_result: null, first_broken_step: null, receipt_binding_gaps: [] };
+  if (text === null || text === undefined) return { ...base, status: 'not_recorded' };
+  let result;
+  try { result = JSON.parse(text); } catch { return { ...base, status: 'invalid_json' }; }
+  if (!result || typeof result !== 'object' || Array.isArray(result)) {
+    return { ...base, status: 'invalid_shape' };
+  }
+  // Native role results store the candidate decision in proposal. In particular,
+  // a baseline/advisory decision cannot replace a failed or absent proposal.
+  const observed = attemptObservation({ ...result, decision: result.proposal?.decision }, null, location);
+  // Mirror the journal/result equalities required by _valid_native_receipt.
+  // Presence alone cannot bind a binary proposal to the stored invocation.
+  // Compare raw text exactly; parsing, trimming or normalizing it would hide a
+  // different receipt. Consistency still does not authenticate provider output,
+  // validate the proposal schema, bind its case contract or establish a grade.
+  const bindingGaps = [];
+  if (typeof result.backend_run_id !== 'string' || !result.backend_run_id.trim()) {
+    bindingGaps.push('validation_backend_identity_missing');
+  } else if (typeof record.backend_run_id === 'string' && record.backend_run_id.trim() &&
+      result.backend_run_id !== record.backend_run_id) {
+    bindingGaps.push('validation_backend_identity_mismatch');
+  }
+  if (typeof result.raw_output !== 'string') {
+    bindingGaps.push('validation_raw_output_missing_or_invalid');
+  } else if (record.raw_response !== null && result.raw_output !== record.raw_response) {
+    bindingGaps.push('validation_raw_output_mismatch');
+  }
+  return { ...base, status: 'observed', retained_result: observed.retained_result,
+    first_broken_step: observed.first_broken_step, receipt_binding_gaps: bindingGaps };
+}
+
+// Observe native receipt locators in one read-only SQLite snapshot. This does
+// not instantiate NativeAttemptJournal, parse provider output, authenticate a
+// decision, acquire the publication lock, or establish live writer ownership.
+function journalInventory(journal) {
+  const base = { status: 'unavailable', path: journal ? path.resolve(journal) : null,
+    attempts: null, receipt_authority: 'not_authenticated_by_inventory' };
+  if (journal === undefined) return { ...base, reason: 'native_journal_not_supplied' };
+  if (typeof journal !== 'string' || !journal.trim()) throw new Error('journal path is required');
+  let connection;
+  try {
+    connection = new DatabaseSync(journal, { readOnly: true });
+    connection.exec('BEGIN');
+    if (connection.prepare('PRAGMA application_id').get().application_id !== 1313097550) {
+      return { ...base, reason: 'non_native_journal' };
+    }
+    const steps = new Map([
+      ['reserved', 'producer_must_prove_invocation_never_started'],
+      ['in_flight', 'UNKNOWN_recover_provider_receipt_before_any_retry'],
+      ['raw_persisted', 'resume_native_validation_without_redispatch'],
+      ['validated', 'reauthenticate_with_native_projection_before_grading'],
+    ]);
+    const attempts = connection.prepare(
+      'SELECT attempt_id,case_id,material_revision,case_digest,state,backend_run_id,' +
+      'report_sha256,created_at,updated_at,' +
+      '(raw_response IS NOT NULL) AS raw_receipt_present,' +
+      '(validated_json IS NOT NULL) AS validation_present,validated_json,raw_response FROM native_attempts ' +
+      'ORDER BY created_at,attempt_id').all().map((item, index) => {
+      const { validated_json, raw_response, ...locator } = item;
+      const validation = nativeValidationObservation(validated_json,
+        `pre_dispatch.native_journal.attempts[${index}].validated_json`, item);
+      const gaps = [];
+      if (['raw_persisted', 'validated'].includes(item.state)) {
+        if (!item.raw_receipt_present) gaps.push('raw_response_missing');
+        if (typeof item.backend_run_id !== 'string' || !item.backend_run_id.trim()) {
+          gaps.push('backend_identity_missing');
+        }
+        if (item.state === 'validated' && validation.status !== 'observed') {
+          gaps.push(`validation_result_${validation.status}`);
+        }
+        if (item.state === 'validated') gaps.push(...validation.receipt_binding_gaps);
+      }
+      let recoveryStep = steps.get(item.state) || 'unrecognized_state_requires_native_review';
+      if (gaps.length) {
+        recoveryStep = 'recover_missing_native_receipt_evidence_without_redispatch';
+      } else if (item.state === 'validated' && validation.retained_result !== 'retained_binary_decision') {
+        recoveryStep = validation.retained_result === 'retained_abstention'
+          ? 'recover_fresh_collected_evidence_before_any_retry'
+          : 'inspect_native_validation_result_before_any_retry';
+      }
+      return { ...locator, raw_receipt_present: Boolean(item.raw_receipt_present),
+        validation_present: Boolean(item.validation_present), validation_observation: validation,
+        receipt_evidence_gaps: gaps, recovery_step: recoveryStep };
+    });
+    return { ...base, status: 'available', attempts };
+  } catch {
+    // SQLite messages and raw payloads can contain private provider material.
+    return { ...base, reason: 'native_journal_unreadable_or_schema_unavailable' };
+  } finally {
+    if (connection) connection.close();
+  }
+}
+
+function preDispatchInventory(saved, paid, journal) {
+  const native = journalInventory(journal);
+  const identities = new Set(paid.map((item) => item.backend_run_id));
+  const journalIdentities = new Set((native.attempts || [])
+    .map((item) => item.backend_run_id).filter(Boolean));
+  return {
+    requested_generic_command: '--dispatch --retry --limit 21',
+    generic_retry_route: Object.hasOwn(saved, 'native_publication')
+      ? 'refused_native_canonical_publication' : 'not_authorized_by_inventory',
+    native_route: 'admit_collected_retry_then_publish_native_cohort',
+    native_journal: native,
+    paid_identity_reconciliation: {
+      report_unique: identities.size,
+      journal_unique: native.status === 'available' ? journalIdentities.size : null,
+      union_unique: native.status === 'available'
+        ? new Set([...identities, ...journalIdentities]).size : null,
+      report_only: native.status === 'available'
+        ? [...identities].filter((item) => !journalIdentities.has(item)) : null,
+      journal_only: native.status === 'available'
+        ? [...journalIdentities].filter((item) => !identities.has(item)) : null,
+      // A started attempt without an id is still a possible paid invocation.
+      unresolved_without_backend_id: native.status === 'available'
+        ? native.attempts.filter((item) => item.state === 'in_flight' && !item.backend_run_id)
+          .map((item) => item.attempt_id) : null,
+    },
+    live_writer_ownership: 'unverified',
+    dispatch_authorized: false,
+    stop_reasons: [
+      ...(native.status === 'unavailable' ? [native.reason] : []),
+      ...((native.attempts || []).some((item) =>
+        ['reserved', 'in_flight', 'raw_persisted'].includes(item.state))
+        ? ['unresolved_native_attempts_require_recovery'] : []),
+      ...((native.attempts || []).some((item) =>
+        !['reserved', 'in_flight', 'raw_persisted', 'validated'].includes(item.state))
+        ? ['unrecognized_native_state_requires_review'] : []),
+      ...((native.attempts || []).some((item) => item.receipt_evidence_gaps.length)
+        ? ['native_receipt_evidence_missing'] : []),
+      ...((native.attempts || []).some((item) => item.state === 'validated' &&
+        item.validation_observation.retained_result !== 'retained_binary_decision')
+        ? ['native_validation_results_require_recovery'] : []),
+      'live_writer_ownership_unverified', 'accepted_deployed_mirror_bindings_unverified',
+      'immutable_source_and_case_qualification_unverified',
+      'native_receipt_authentication_and_independent_truth_required',
+    ],
+  };
+}
+
+// A provider id appearing somewhere in the journal is insufficient: it must
+// identify exactly one attempt for this case. This join supplies recovery
+// locators only. Native projection must still authenticate the raw receipt,
+// material revision and source binding before a decision can be graded.
+function reconcileNativeLocators(observations, journal) {
+  const byBackend = new Map();
+  for (const attempt of journal.attempts || []) {
+    if (!attempt.backend_run_id) continue;
+    const candidates = byBackend.get(attempt.backend_run_id) || [];
+    candidates.push(attempt);
+    byBackend.set(attempt.backend_run_id, candidates);
+  }
+  for (const observation of observations) {
+    const candidates = byBackend.get(observation.backend_run_id) || [];
+    let status;
+    let nextStep;
+    if (!observation.backend_run_id) {
+      status = 'backend_identity_not_recorded';
+      nextStep = 'recover_attempt_identity_without_redispatch';
+    } else if (journal.status !== 'available') {
+      status = 'journal_unavailable';
+      nextStep = 'recover_native_journal_without_redispatch';
+    } else if (!candidates.length) {
+      status = 'native_attempt_not_found';
+      nextStep = 'recover_native_receipt_without_redispatch';
+    } else if (candidates.length > 1) {
+      status = 'ambiguous_backend_identity';
+      nextStep = 'resolve_native_receipt_identity_before_any_retry';
+    } else if (candidates[0].case_id !== observation.case_id) {
+      status = 'case_identity_mismatch';
+      nextStep = 'resolve_native_receipt_identity_before_any_retry';
+    } else {
+      status = 'matched_locator';
+      nextStep = candidates[0].recovery_step;
+    }
+    observation.native_receipt_locator = { status, authenticated: false,
+      next_evidence_step: nextStep,
+      attempts: candidates.map(({ attempt_id, case_id, material_revision, state,
+        raw_receipt_present, validation_present, validation_observation, receipt_evidence_gaps }) =>
+        ({ attempt_id, case_id, material_revision, state, raw_receipt_present, validation_present,
+          validation_observation, receipt_evidence_gaps })) };
+  }
+}
+
+function reportInventory({ report, observedAt, evidenceClass, evidenceReference, journal, manifest }) {
+  integer(observedAt, 'observedAt', 0);
+  if (typeof report !== 'string' || !report.trim()) throw new Error('report is required');
+  if (!['historical_snapshot', 'current_snapshot'].includes(evidenceClass)) {
+    throw new Error('evidenceClass must be historical_snapshot or current_snapshot');
+  }
+  if (typeof evidenceReference !== 'string' || !evidenceReference.trim()) {
+    throw new Error('evidenceReference is required');
+  }
+  const requestedManifest = manifest === undefined ? null : readManifest(manifest);
+  const bytes = fs.readFileSync(report);
+  const saved = JSON.parse(bytes);
+  if (!saved || !Array.isArray(saved.rows)) throw new Error('report requires a rows array');
+  const seen = new Set();
+  const paid = [];
+  const observations = [];
+  const cases = saved.rows.map((row, index) => {
+    if (!row || typeof row.case_id !== 'string' || !row.case_id.trim() || !hasTarget(row)) {
+      throw new Error(`rows[${index}] requires nonblank case_id and target`);
+    }
+    if (seen.has(row.case_id)) throw new Error(`duplicate case_id at rows[${index}]`);
+    seen.add(row.case_id);
+    // Iterative pre-order traversal preserves every retained receipt locator,
+    // including repeated paid identities. It never turns retries into cases.
+    const stack = [{ attempt: row, location: `rows[${index}]` }];
+    while (stack.length) {
+      const { attempt, location } = stack.pop();
+      if (!attempt || typeof attempt !== 'object' || Array.isArray(attempt)) {
+        throw new Error(`invalid attempt at ${location}`);
+      }
+      // Compact histories may omit repeated identity fields. Explicit saved
+      // identities must bind this root case before its manifest or native
+      // receipt locators can be attributed to a retry, at any nesting depth.
+      // Report only the field location: conflicting values may be private.
+      if (attempt !== row) {
+        for (const field of ['case_id', 'run_id', 'target', 'verifier_verdict',
+          'adjudicated_verdict']) {
+          if (Object.hasOwn(attempt, field) &&
+              (typeof row[field] !== 'string' || !row[field].trim() ||
+               attempt[field] !== row[field])) {
+            throw new Error(`invalid retained retry identity at ${location}.${field}`);
+          }
+        }
+      }
+      if (attempt.backend_run_id !== undefined && attempt.backend_run_id !== null) {
+        if (typeof attempt.backend_run_id !== 'string' || !attempt.backend_run_id.trim()) {
+          throw new Error(`invalid backend_run_id at ${location}`);
+        }
+        paid.push({ case_id: row.case_id, backend_run_id: attempt.backend_run_id, location });
+      }
+      observations.push(attemptObservation(attempt, row.case_id, location));
+      const history = attempt.retry_attempts === undefined ? [] : attempt.retry_attempts;
+      if (!Array.isArray(history)) throw new Error(`invalid retry_attempts at ${location}`);
+      for (let child = history.length - 1; child >= 0; child -= 1) {
+        stack.push({ attempt: history[child], location: `${location}.retry_attempts[${child}]` });
+      }
+    }
+    return {
+      case_id: row.case_id, target: row.target, location: `rows[${index}]`,
+      run_id: row.run_id ?? null,
+      verifier_verdict: row.verifier_verdict ?? null,
+      adjudicated_verdict: row.adjudicated_verdict ?? null,
+      retained_decision: row.decision ?? null,
+      retained_later_truth: row.later_truth ?? null,
+      retained_error_present: Boolean(row.error || row.errors?.length),
+      native_projection_present: Object.hasOwn(row, 'native_projection'),
+    };
+  });
+  const identities = new Map();
+  for (const item of paid) {
+    const occurrences = identities.get(item.backend_run_id) || [];
+    occurrences.push(item.location);
+    identities.set(item.backend_run_id, occurrences);
+  }
+  const preDispatch = preDispatchInventory(saved, paid, journal);
+  reconcileNativeLocators(observations, preDispatch.native_journal);
+  const reconciliation = requestedManifest
+    ? reconcileRetainedRows(cases, requestedManifest, observations, preDispatch.native_journal) : null;
+  if (!fs.readFileSync(report).equals(bytes)) {
+    throw new Error('report changed during inventory');
+  }
+  if (requestedManifest && createHash('sha256').update(fs.readFileSync(manifest)).digest('hex') !==
+      requestedManifest.sha256) {
+    throw new Error('manifest changed during inventory');
+  }
+  return {
+    schema_version: 1,
+    scope: 'retained_report_only', evidence_class: evidenceClass,
+    evidence_reference: evidenceReference, observed_at: observedAt,
+    report_path: path.resolve(report), report_sha256: createHash('sha256').update(bytes).digest('hex'),
+    report_byte_length: bytes.length,
+    retained_generated_at: saved.generated_at ?? null,
+    retained_population: saved.population ?? null,
+    retained_summary: saved.summary ?? null,
+    native_publication_present: Object.hasOwn(saved, 'native_publication'),
+    cases, case_count: cases.length, paid_attempts: paid,
+    retained_attempt_observations: observations,
+    manifest_reconciliation: reconciliation,
+    pre_dispatch: preDispatch,
+    paid_identity_summary: {
+      records: paid.length, unique: identities.size,
+      repeated: [...identities].filter(([, locations]) => locations.length > 1)
+        .map(([backend_run_id, locations]) => ({ backend_run_id, locations })),
+    },
+    // Retained summaries can be stale or contradictory. No summary, source
+    // label, saved native projection or matching count authenticates a grade.
+    receipt_authority: 'not_authenticated_by_inventory',
+    requested_cohort_verified: false, dispatch_authorized: false,
+    evidence_gaps: ['original_cohort_provenance_unverified',
+      ...(preDispatch.native_journal.status === 'available'
+        ? ['native_journal_receipts_not_authenticated'] : ['native_journal_not_observed']),
+      'independent_current_truth_not_observed', 'deployed_and_mirror_revisions_not_observed',
+      'fixed_next_20_manifest_not_observed'],
+  };
+}
+
+// Select a recovery step, not a causal explanation for an unrecorded failure.
+// The primary saved attempt owns the disposition. Historical retry errors and
+// truth must not replace its decision or lend it missing grading evidence.
+function retainedRecovery(observation) {
+  const packet = observation.packet_evidence_observation;
+  const receipt = observation.native_receipt_locator;
+  const truth = observation.later_truth_observation;
+  const gaps = [
+    ...packet.blocking_reasons.map(({ code, location }) => ({ stage: 'packet_evidence',
+      code, evidence_locations: [location], next_evidence_step: packet.next_evidence_step })),
+    // Even a validated locator has not authenticated a receipt in this reader.
+    { stage: 'native_receipt', code: receipt.status, evidence_locations: [observation.location],
+      next_evidence_step: receipt.next_evidence_step },
+    { stage: 'independent_later_truth', code: truth.status, evidence_locations: [truth.location],
+      next_evidence_step: truth.next_evidence_step },
+  ];
+  const failure = observation.first_broken_step;
+  let step;
+  let basis = 'observed_evidence_gap';
+  if (failure.status !== 'not_recorded') {
+    basis = failure.status === 'recorded' ? 'recorded_failure' : 'unresolved_retained_failure';
+    step = { stage: failure.stage, code: failure.code || 'retained_failure_cause_unresolved',
+      evidence_locations: failure.evidence_locations,
+      next_evidence_step: 'inspect_primary_failure_evidence_before_any_retry' };
+  } else if (observation.retained_result === 'no_retained_decision' && observation.backend_run_id) {
+    // An apparent paid attempt without a result must be recovered before any
+    // evidence collection could be interpreted as permission to dispatch again.
+    step = gaps.find((item) => item.stage === 'native_receipt');
+  } else if (observation.retained_result === 'unrecognized_retained_decision') {
+    step = { stage: 'attempt_completion', code: observation.retained_result,
+      evidence_locations: [observation.location], next_evidence_step: observation.next_evidence_step };
+  } else if (packet.floor_applies) {
+    const packetGaps = gaps.filter((item) => item.stage === 'packet_evidence');
+    step = { ...packetGaps[0], codes: packetGaps.map((item) => item.code),
+      evidence_locations: packetGaps.flatMap((item) => item.evidence_locations) };
+  } else if (observation.retained_result !== 'retained_binary_decision') {
+    step = { stage: observation.retained_result === 'retained_abstention'
+      ? 'material_evidence' : 'attempt_completion', code: observation.retained_result,
+      evidence_locations: [observation.location], next_evidence_step: observation.next_evidence_step };
+  } else {
+    step = gaps.find((item) => item.stage === 'native_receipt');
+  }
+  return { recovery_disposition: { status: 'blocked', basis, stage: step.stage,
+    codes: step.codes || [step.code], evidence_locations: step.evidence_locations,
+    next_evidence_step: step.next_evidence_step }, grading_evidence_gaps: gaps };
+}
+
+// A native invocation can start before it has a backend id. Recover all
+// unresolved attempts for this uniquely identified case, across material
+// revisions, without pretending that case identity binds a retained invocation
+// to one of these journal attempts. A validated state can contain a failure or
+// abstention. Observed binary results still need native authentication; their
+// locators are inventoried separately when receipt fields are present.
+function nativeCaseRecovery(caseId, journal) {
+  const scope = 'case_only_not_retained_attempt_binding';
+  if (journal.status !== 'available') {
+    return { scope, status: 'journal_unavailable', unresolved_attempts: null,
+      next_evidence_step: 'recover_native_journal_without_redispatch' };
+  }
+  const unresolved = journal.attempts.flatMap((attempt, index) => {
+    if (attempt.case_id !== caseId || (attempt.state === 'validated' &&
+        attempt.validation_observation.retained_result === 'retained_binary_decision' &&
+        !attempt.receipt_evidence_gaps.length)) return [];
+    const { attempt_id, material_revision, state, backend_run_id,
+      raw_receipt_present, validation_present, validation_observation,
+      receipt_evidence_gaps, recovery_step } = attempt;
+    return [{ location: `pre_dispatch.native_journal.attempts[${index}]`,
+      attempt_id, material_revision, state, backend_run_id,
+      raw_receipt_present, validation_present, validation_observation,
+      receipt_evidence_gaps, next_evidence_step: recovery_step }];
+  });
+  return { scope, status: 'observed', unresolved_attempts: unresolved,
+    next_evidence_step: unresolved.length
+      ? 'recover_native_case_attempts_before_any_fresh_dispatch' : null };
+}
+
+// A saved decision/truth pair, native marker, paid locator or a perfect manifest
+// match cannot authenticate an outcome. Identity gaps cannot borrow diagnostics
+// from conflicting or ambiguous candidates.
+function reconcileRetainedRows(cases, manifest, observations, journal) {
+  const exact = (requested, row) => requested.target === row.target &&
+    (manifest.schema_version === 1 ||
+      (requested.verifier_verdict === row.verifier_verdict &&
+       requested.adjudicated_verdict === row.adjudicated_verdict));
+  const byRun = new Map();
+  for (const row of cases) {
+    const rows = byRun.get(row.run_id) || [];
+    rows.push(row);
+    byRun.set(row.run_id, rows);
+  }
+  const matchedLocations = new Set();
+  const requested = manifest.cases.map((item) => {
+    const candidates = byRun.get(item.run_id) || [];
+    const matches = candidates.filter((row) => exact(item, row));
+    matches.forEach((row) => matchedLocations.add(row.location));
+    let status;
+    let reasons;
+    if (matches.length === 1) {
+      status = 'matched'; reasons = [];
+    } else if (matches.length > 1) {
+      status = 'ambiguous'; reasons = ['multiple_retained_rows_match_requested_identity'];
+    } else if (!candidates.length) {
+      status = 'missing'; reasons = ['requested_run_missing_from_report'];
+    } else {
+      const targetMatches = candidates.filter((row) => row.target === item.target);
+      if (!targetMatches.length) {
+        status = 'identity_mismatch'; reasons = ['requested_target_mismatch'];
+      } else if (targetMatches.some((row) =>
+        [row.verifier_verdict, row.adjudicated_verdict].some((value) =>
+          typeof value !== 'string' || !value.trim()))) {
+        status = 'unavailable'; reasons = ['retained_verdict_identity_incomplete'];
+      } else {
+        status = 'identity_mismatch'; reasons = ['requested_verdict_mismatch'];
+      }
+    }
+    const retainedLocations = (matches.length ? matches : candidates).map((row) => row.location);
+    const recovery = matches.length === 1
+      ? retainedRecovery(observations.find((row) => row.location === matches[0].location))
+      : { recovery_disposition: { status: 'blocked', basis: 'retained_identity_gap',
+        stage: 'identity_recovery', codes: reasons, evidence_locations: retainedLocations,
+        next_evidence_step: 'recover_unique_requested_row_before_using_attempt_evidence' },
+      grading_evidence_gaps: null };
+    return { ...item, status, reasons, ...recovery,
+      native_case_recovery: matches.length === 1
+        ? nativeCaseRecovery(matches[0].case_id, journal) : null,
+      // Ambiguous/conflicting rows cannot lend their failures to a requested
+      // identity. A unique match still authenticates neither outcome nor truth.
+      retained_attempt_locations: matches.length === 1
+        ? observations.filter((row) => row.case_id === matches[0].case_id)
+          .map((row) => row.location) : [],
+      retained_locations: retainedLocations };
+  });
+  return { scope: 'supplied_manifest_against_retained_report_only',
+    identity_scope: manifest.schema_version === 2 ? 'dispute' : 'run_target',
+    manifest_path: manifest.path, manifest_sha256: manifest.sha256,
+    requested_count: requested.length, cases: requested,
+    all_requested_rows_uniquely_matched: requested.length > 0 &&
+      requested.every((item) => item.status === 'matched'),
+    unmatched_retained_locations: cases.filter((row) => !matchedLocations.has(row.location))
+      .map((row) => row.location),
+    original_cohort_provenance_verified: false, authenticated_outcomes_verified: false };
 }
 
 function readManifest(file) {
@@ -277,8 +962,12 @@ function inventory({ db, observedAt, days = 90, expectedCount = 71, manifest }) 
 
 function main() {
   try {
-    const { values } = parseArgs({ options: {
+    const { values, tokens } = parseArgs({ tokens: true, options: {
       db: { type: 'string' },
+      report: { type: 'string' },
+      journal: { type: 'string' },
+      'evidence-class': { type: 'string' },
+      'evidence-reference': { type: 'string' },
       'observed-at': { type: 'string' },
       days: { type: 'string', default: '90' },
       'expected-count': { type: 'string', default: '71' },
@@ -286,8 +975,25 @@ function main() {
       help: { type: 'boolean', short: 'h' },
     } });
     if (values.help) {
+      process.stdout.write('Report recovery: node scripts/export_adjudicator_inventory.js --report SAVED_JSON --observed-at UNIX_SECONDS --evidence-class historical_snapshot --evidence-reference SOURCE_REFERENCE [--journal EXISTING_NATIVE_SQLITE] [--manifest JSON_FILE]\nRetained rows, supplied-manifest identity matching and paid identities only; no grade authentication or dispatch.\n');
       process.stdout.write('Usage: node scripts/export_adjudicator_inventory.js --db BRAIN --observed-at UNIX_SECONDS [--days 90] [--expected-count 71] [--manifest JSON_FILE]\nManifest: {"schema_version":2,"cases":[{"run_id":"...","target":"owner/repo#N","verifier_verdict":"NON_PASS","adjudicated_verdict":"PASS"}]}.\nVersion 1 accepts run_id and target only; it cannot detect changed verdicts.\nOwner-excluded repositories retain identity-only exclusions; their outcomes are not read.\nJSON is written to stdout. No replay, dispatch or outcome writes.\n');
       return;
+    }
+    if (values.report) {
+      if (tokens.some((item) => ['db', 'days', 'expected-count'].includes(item.name))) {
+        throw new Error('--report cannot combine with Brain window options');
+      }
+      const result = reportInventory({
+        report: values.report, observedAt: Number(values['observed-at']),
+        evidenceClass: values['evidence-class'], evidenceReference: values['evidence-reference'],
+        journal: values.journal,
+        manifest: values.manifest,
+      });
+      process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      return;
+    }
+    if (values.journal || values['evidence-class'] || values['evidence-reference']) {
+      throw new Error('--journal, --evidence-class and --evidence-reference require --report');
     }
     if (!values.db || !values['observed-at']) {
       throw new Error('--db and --observed-at are required');
@@ -305,5 +1011,5 @@ function main() {
   }
 }
 
-module.exports = { inventory, ownerExcluded };
+module.exports = { inventory, reportInventory, ownerExcluded };
 if (require.main === module) main();

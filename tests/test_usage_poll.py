@@ -244,7 +244,9 @@ def test_freshest_first_class_source(evidence, pool, delta):
 def test_three_tick_staleness_and_fallback_inventory(evidence, age, fresh):
     agents, text = integrate(evidence, now=NOW + age)
     assert agents["codex"]["pacing"]["resets_available"] == (2 if fresh else 1)
-    assert agents["claude"]["pacing"]["measurement"] == ("measured" if fresh else "unknown")
+    # Claude weekly usage ages out at CLAUDE_USAGE_MAX_AGE_SECONDS (#695); poll health
+    # below still reports the poller stale at 1800s.
+    assert agents["claude"]["pacing"]["measurement"] == "measured"
     assert ("POLLER STALE: claude" in text) is not fresh
     if not fresh:
         assert "age=1801.0s" in text and "3 ticks/1800s" in text
@@ -302,9 +304,12 @@ def test_no_guessed_claude_boundary(evidence):
         json.dumps(dict(samples=[dict(t=NOW * 1000, u=dict(sd=85))]))
     )
     agents, _ = integrate(evidence)
-    assert agents["claude"]["pacing"]["period_end"] is None
-    assert agents["claude"]["pacing"]["state"] == "unknown"
-    assert pacing.period("claude", NOW) is None
+    # Without a poll, the boundary is the measured T1 anchor rolled forward (#695),
+    # never a calendar guess.
+    end = agents["claude"]["pacing"]["period_end"]
+    assert end == pacing.period("claude", NOW)[1]
+    assert (end - pacing.CLAUDE_RESET_ANCHOR) % pacing.PERIOD_SECONDS == 0
+    assert end - pacing.PERIOD_SECONDS <= NOW < end
 
 
 @pytest.mark.parametrize("pool", ["codex", "claude"])

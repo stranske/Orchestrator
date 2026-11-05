@@ -452,7 +452,9 @@ def test_integrate_samples_per_tick_and_source_staleness(tmp_path, monkeypatch):
     assert len(samples) == 2
     assert all("source" in r and "ts" in r for r in samples)
     assert len(pacing_usage.read_rows(tmp_path / "capacity-ledger.ndjson")) == 1
-    pacing_usage.integrate(agents, now=START + pacing.STALE_AFTER_SECONDS + 1, handoff=tmp_path)
+    pacing_usage.integrate(
+        agents, now=START + pacing.CLAUDE_USAGE_MAX_AGE_SECONDS + 1, handoff=tmp_path
+    )
     assert agents["claude"]["pacing"]["stale"] is True
 
 
@@ -943,7 +945,8 @@ def test_report_zero_share_and_missing_tick_are_unmeasured(
         ("quota", 0, 0.37, True),
         ("capacity", 0, 0.37, True),
         ("auth", 0, 0.37, False),
-        ("quota", 1801, 0.37, False),
+        ("quota", 1801, 0.37, True),
+        ("quota", 7201, 0.37, False),
         ("quota", 0, 1, False),
     ],
 )
@@ -959,7 +962,10 @@ def test_fresh_weekly_usage_releases_only_dated_quota_hold(
     monkeypatch.setattr(
         pacing_usage,
         "usage",
-        lambda *a, **k: dict(used_fraction=used, short_used_fraction=0.2, ts=now - age),
+        # The short window is polled independently and stays fresh as weekly usage ages.
+        lambda *a, **k: dict(
+            used_fraction=used, short_used_fraction=0.2, ts=now - age, short_ts=now
+        ),
     )
     assert capacity._shed("claude") is not clears
     assert marker.exists() is not clears

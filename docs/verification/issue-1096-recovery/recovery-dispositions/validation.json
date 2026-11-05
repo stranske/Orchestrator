@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "checked_at": "2026-11-04T01:12:23.013Z",
+  "evidence_class": "local_fixture_regressions",
+  "evaluated_source_commit": "97e6396add872214bf09e81d9e48c1443546d672",
+  "source_parent": "31d94f326a570cc61159cf653c3915d7c8397b89",
+  "git_metadata": "/tmp/issue1096-recovery-disposition-git-HuEcTt/repo.git",
+  "node_version": "v24.22.1",
+  "source_sha256": {
+    "scripts/export_adjudicator_inventory.js": "70dd0177ead43d59d9a1c8ba405f67ecf1e21d39faa1fa6183962069503ad0f9",
+    "tests/test_adjudicator_inventory.js": "bebbaa9e003f761432ae78ee1d4846cc48a840f7e02f049ff52f42accb6e755f"
+  },
+  "checks": [
+    {
+      "command": [
+        "node",
+        "tests/test_adjudicator_inventory.js"
+      ],
+      "log": "inventory.log",
+      "log_sha256": "59b70dc0b68dd8094ff1d739d6ad4521a91b8d3bc7edecab14f7614f98611f3f",
+      "passed": 71,
+      "failed": 0
+    },
+    {
+      "command": [
+        "node",
+        "tests/test_adjudicator_acceptance_runner.js"
+      ],
+      "log": "runner.log",
+      "log_sha256": "bad3a0bac49a56b96f87a8576bcb6e904c3bb95cb230b7c82719437f76fb961d",
+      "passed": 33,
+      "failed": 0
+    },
+    {
+      "command": [
+        "node",
+        "tests/test_adjudicator_evidence_ledger.js"
+      ],
+      "log": "ledger.log",
+      "log_sha256": "059dd013a8a9a5b132d838f75bec57c748c059c62b67634e4a187df7e2dc7e9b",
+      "passed": 22,
+      "failed": 0
+    }
+  ],
+  "passed": 126,
+  "required_python_tests": "not_rerun; prior receipts remain failed before collection; pytest unavailable",
+  "accepted_deployment_verified": false,
+  "original_retry_manifest_recovered": false,
+  "authenticated_outcomes_verified": false,
+  "original_retry_reconciliation_complete": false,
+  "operational_task_checkboxes_completed": 0,
+  "provider_calls": 0,
+  "production_dispatches": 0,
+  "canonical_publications": 0
+}
