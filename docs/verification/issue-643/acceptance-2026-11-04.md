@@ -66,8 +66,8 @@ A later completed keepalive commit, 4f0e4127, adds six dispatch-budget/switch/ti
 cases and retains timeout failures for bounded retry. Those changes are preserved;
 the combined focused run reports 256 passed, 2 skipped and 32 subtests passed.
 
-The collection floor changes from 14196 to 14213: twelve preserved keepalive cases
-plus five new live tests. Expected passed changes from 14194 to 14211; all ceilings
+The collection floor changes from 14196 to 14214: thirteen preserved keepalive cases
+plus five new live tests. Expected passed changes from 14194 to 14212; all ceilings
 are unchanged. These totals are derived from the test delta, not an observed
 full-suite pass. CI must verify the combined result.
 
@@ -87,3 +87,7 @@ readback exists.
 
 Follow-up outside the acceptance push: the older-head CodeRabbit review also
 reported docstring coverage. No unrelated docstring cleanup was attempted.
+
+Completed keepalive commit 905cd673 bounds the event certification inventory and
+adds one receipt-size/cost/read-only-input test. It is retained. The combined
+focused suites now report 257 passed, 2 skipped and 32 subtests passed.
