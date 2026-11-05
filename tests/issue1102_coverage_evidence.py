@@ -364,7 +364,7 @@ def render_report(slices: dict[str, Any] | None = None) -> str:
             f"and churn {SELECTION['recount_not_substituted']['churn']}. It is not the selection "
             "record."
         ),
-        f"- PR #650 tests at head: `tests/test_capability_advisor_coverage.py` (13 tests).",
+        "- PR #650 tests at head: `tests/test_capability_advisor_coverage.py` (13 tests).",
         f"- Base `{measurements['base']['revision']}`: {measurements['base']['role']}.",
         f"- Merge base `{measurements['merge_base']['revision']}`: {measurements['merge_base']['role']}.",
         f"- Head `{measurements['head']['revision']}`: {measurements['head']['role']}.",
