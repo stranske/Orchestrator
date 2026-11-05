@@ -50,6 +50,8 @@ EXPLORATION_WINDOW_END = "20261117"
 EXPLORATION_WINDOW_EXTENDED_END = "20261215"
 EXPLORATION_WINDOW_MIN_PER_POLICY = 30
 EXPLORATION_WINDOW_START = "2026-10-17"
+# Hosted repos lack GEMINI_API_KEY; Gemini remains available for local routing.
+HOSTED_UNRUNNABLE_AGENTS = {"gemini"}
 # This is intentionally smaller than ROUTE_TABLE.  It is the contract that the
 # Workflows keepalive policy may act on; adding a router task type here is an
 # explicit cross-repository consumer-contract change, not an accidental export.
@@ -554,12 +556,25 @@ def _exploration_block(
     # The public export balances arms by week, without consulting the local
     # supervised-window deficits (which could change the arm within a week).
     mode = exploration_collection.choose_mode({}, now=timestamp)
-    eligible = router.KEEPALIVE_AGENTS - router.RESERVE_AGENTS - router.BACKUP_AGENTS
-    capacity = {"agents": {agent: {"state": "ok"} for agent in eligible}}
+    # Hosted-unrunnable seats must never be published as challengers, but a
+    # threshold-qualified unrunnable winner still anchors scored[0] so every
+    # runnable non-winner stays in scored[1:] (subtracting them from `only`
+    # would promote a runnable seat into the winner slot and shrink the pool).
+    hosted_runnable = (
+        router.KEEPALIVE_AGENTS
+        - router.RESERVE_AGENTS
+        - router.BACKUP_AGENTS
+        - HOSTED_UNRUNNABLE_AGENTS
+    )
     challengers: dict[str, str | None] = {}
     for task_type in CONSUMER_TASK_TYPES:
         ranking = task_types[task_type]["ranking"]
         ranks = {row["agent"]: index for index, row in enumerate(ranking)}
+        winner = ranking[0]["agent"] if ranking else None
+        eligible = set(hosted_runnable)
+        if winner is not None:
+            eligible.add(winner)
+        capacity = {"agents": {agent: {"state": "ok"} for agent in eligible}}
         # Exploitation must agree with the consumer's thresholded ranking.
         # Low-observation rows still inform challenger selection, so exploration
         # can collect evidence from seats absent from the public ranking.
@@ -594,7 +609,9 @@ def _exploration_block(
         )
         # Never describe the exploitation winner as a challenger when the
         # router cannot find another eligible seat in the same policy tier.
-        challengers[task_type] = pick["agent"] if pick and pick["exploration"] else None
+        # Drop hosted-unrunnable picks even if select_agent returned one.
+        agent = pick["agent"] if pick and pick["exploration"] else None
+        challengers[task_type] = agent if agent in hosted_runnable else None
     try:
         float(os.environ["ORCH_EXPLORATION_RATE"])
         rate_source = "env"
@@ -1026,6 +1043,9 @@ def _selftest() -> None:
         assert document["task_types"]["review"]["evidence_ok"] is False, document
         assert document["reserve"]["implement"][0]["agent"] == "claude", document
         assert "unknown" not in document["task_types"], document
+        assert not (
+            HOSTED_UNRUNNABLE_AGENTS & set(document["exploration"]["challengers"].values())
+        ), document["exploration"]["challengers"]
         import comparative
 
         assert document["comparative"]["schema"] == comparative.SCHEMA, document["comparative"]
@@ -1271,6 +1291,7 @@ def main() -> int:
         print(f"route_weights_export: capability heartbeat failed: {exc}", file=sys.stderr)
     target = state_dir / "route-weights-export.json"
     changed = write_document(target, document)
+    print(f"hosted-unrunnable agents excluded: {', '.join(sorted(HOSTED_UNRUNNABLE_AGENTS))}")
     print(f"{'wrote' if changed else 'unchanged'} {target}")
     if args.publish:
         if os.environ.get("ORCH_ROUTE_WEIGHTS_PUBLISH") != "1":
