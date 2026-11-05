@@ -253,7 +253,9 @@ def test_stale_or_rolled_poll_yields_to_usable_fallback(stores, age, resets_at):
     token_event(pacing_usage.CLAUDE_PROJECTS / "seat.jsonl", NOW - 100, 100, "a")
     row = read_usage(stores, dict(claude_weekly_token_cap=1000))
     assert row["source"] == "ccusage-fallback"
-    assert row["used_fraction"] == 0.1
+    # A stale same-week provider observation remains a lower bound; a rolled
+    # observation describes another week and must not constrain the new one.
+    assert row["used_fraction"] == (0.9 if resets_at > NOW else 0.1)
     # The poll's (rolled) reset time survives as the authoritative boundary.
     assert row["period_end"] == START + pacing.PERIOD_SECONDS
     assert row["poll"]["valid"] is True
@@ -413,7 +415,9 @@ def test_lower_calibrated_cap_respected_during_integration_with_desktop_pairs(st
     samples = []
     path = pacing_usage.CLAUDE_PROJECTS / "seat.jsonl"
     # Add stale desktop samples for pair calculation
-    samples.append(dict(t=(NOW - pacing_usage.CLAUDE_USAGE_MAX_AGE_SECONDS - 1) * 1000, u=dict(sd=40)))
+    samples.append(
+        dict(t=(NOW - pacing_usage.CLAUDE_USAGE_MAX_AGE_SECONDS - 1) * 1000, u=dict(sd=40))
+    )
     stores[0].write_text(json.dumps(dict(samples=samples)))
     token_event(path, NOW - 100, 400, "a")
     pacing_usage.CALIBRATION_FILE.write_text(json.dumps(dict(claude_weekly_token_cap=1000)))
@@ -538,3 +542,80 @@ def test_rolled_poll_pre_boundary_desktop_uses_current_week_tokens(stores):
         usage_data={"claude": row, "codex": dict(used_fraction=None, ts=None, source="none")},
     )
     assert agents["claude"]["pacing"]["state"] != "unknown"
+
+
+def test_real_provider_pair_bounds_optimistic_desktop_cap(stores):
+    # Sanitized real observation, 2026-11-03: exactly the provider's token
+    # window at its timestamp, not today's tokens divided by yesterday's quota.
+    observed = 1793692510.0
+    end = 1794114000.0
+    tokens = 1029393011
+    desktop_cap = 3079032286.5800867
+    events = [dict(agent="claude", ts=observed - 100, totalTokens=tokens)]
+    desktop = [dict(t=(observed - 1) * 1000, u=dict(sd=100 * tokens / desktop_cap))]
+    start = end - pacing.PERIOD_SECONDS
+    old_cap, _ = pacing_usage.claude_pair_cap(desktop, events, start, end, observed, end)
+    assert tokens / old_cap == pytest.approx(0.3343235520740049)
+    provider = [
+        dict(ts=observed - 50, period_end=end, used_fraction=0.99),
+        dict(ts=observed, period_end=end, used_fraction=0.55),
+        dict(ts=observed + 1, period_end=end, used_fraction=0.99),
+    ]
+    bounded, _ = pacing_usage.claude_pair_cap(desktop, events, start, end, observed, end, provider)
+    assert tokens / bounded == pytest.approx(0.55)
+
+
+def test_provider_history_bounds_usage_and_invalidates_cache(stores):
+    end = START + pacing.PERIOD_SECONDS
+    token_event(pacing_usage.CLAUDE_PROJECTS / "seat.jsonl", NOW - 10000, 340, "a")
+    desktop_sample(stores[0], 9000, percent=34)
+    before = read_usage(stores)
+    assert before["used_fraction"] == pytest.approx(0.34)
+    directory = stores[2] / "polls"
+    directory.mkdir(exist_ok=True)
+    observation = dict(
+        ts=NOW - 8000,
+        weekly=dict(label="All models", used_percent=55, resets_at=end),
+    )
+    pacing_usage.append_rows(directory / "claude-usage.ndjson", [observation])
+    row = read_usage(stores)
+    assert row["source"] == "ccusage-fallback"
+    assert row["used_fraction"] == pytest.approx(0.55)
+    assert row["cap_source"] == "provider-bounded-token-pairs"
+    assert row["provider_sample_ts"] == NOW - 8000
+    # Calibration retains precedence but cannot erase observed provider usage,
+    # including integration's recalculation against its own calibration file.
+    row = read_usage(stores, dict(claude_weekly_token_cap=2000))
+    assert row["token_cap"] == 2000
+    assert row["used_fraction"] == 0.55
+    pacing_usage.CALIBRATION_FILE.write_text(json.dumps(dict(claude_weekly_token_cap=1500)))
+    assert integrated(stores, row)["claude"]["pacing"]["used_fraction"] == 0.55
+
+
+@pytest.mark.parametrize("kind", ["old-week", "future", "wrong-boundary", "wrong-label"])
+def test_provider_bound_rejects_unaligned_observations(stores, kind):
+    end = START + pacing.PERIOD_SECONDS
+    token_event(pacing_usage.CLAUDE_PROJECTS / "seat.jsonl", NOW - 100, 100, "a")
+    directory = stores[2] / "polls"
+    directory.mkdir(exist_ok=True)
+    observation = dict(
+        ts=NOW + 1 if kind == "future" else NOW - 8000,
+        weekly=dict(
+            label="Sonnet" if kind == "wrong-label" else "All models",
+            used_percent=90,
+            resets_at=(
+                START if kind == "old-week" else end + (60 if kind == "wrong-boundary" else 0)
+            ),
+        ),
+    )
+    pacing_usage.append_rows(directory / "claude-usage.ndjson", [observation])
+    assert read_usage(stores, dict(claude_weekly_token_cap=1000))["used_fraction"] == 0.1
+
+
+def test_provider_floor_survives_missing_local_logs(stores):
+    claude_poll(stores, age=8000, resets_at=START + pacing.PERIOD_SECONDS, percent=55)
+    row = read_usage(stores)
+    assert row["weekly_tokens"] == 0
+    assert row["used_fraction"] == 0.55
+    assert row["token_cap"] is None
+    assert row["provider_used_floor"] == 0.55
