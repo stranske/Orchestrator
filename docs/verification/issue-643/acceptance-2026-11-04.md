@@ -11,7 +11,7 @@ Command (repository has no selected virtual environment):
 /opt/anaconda3/bin/python3 -m pytest tests/test_adjudicator_retro.py -k 'test_live_shadow_adjudicates_a_new_dispute_once_and_grades_on_truth or test_live_shadow_never_adjudicates_an_uncertified_case or test_live_shadow_writes_no_merge_input'
 ```
 
-Result: 3 passed, 72 deselected. These are private-Brain tests with a stubbed
+Result: 3 passed, 78 deselected. These are private-Brain tests with a stubbed
 collector and role backend, not production advice or production grading.
 
 A strengthened existing collector test first failed with source `retrospective`
@@ -53,9 +53,12 @@ schedule, capability row, or merge authority was added. Rollback uses
 The concurrent keepalive writer completed successfully before its commit
 369a3a01 was fast-forwarded into this worktree. Its live selection work is retained;
 its event target lookup now also supports the independent advice run identities.
+A later completed keepalive commit, 4f0e4127, adds six dispatch-budget/switch/timeout
+cases and retains timeout failures for bounded retry. Those changes are preserved;
+the combined focused run reports 256 passed, 2 skipped and 32 subtests passed.
 
-The collection floor changes from 14196 to 14207: six preserved keepalive tests
-plus five new live tests. Expected passed changes from 14194 to 14205; all ceilings
+The collection floor changes from 14196 to 14213: twelve preserved keepalive cases
+plus five new live tests. Expected passed changes from 14194 to 14211; all ceilings
 are unchanged. These totals are derived from the test delta, not an observed
 full-suite pass. CI must verify the combined result.
 
