@@ -639,3 +639,32 @@ def test_pgrep_includes_ancestors_on_macos(monkeypatch):
     assert prov._pgrep_base() == ["pgrep", "-a"]
     monkeypatch.setattr(prov.sys, "platform", "linux")
     assert prov._pgrep_base() == ["pgrep"]
+
+
+def test_worktree_stuck_mid_cherry_pick_is_preserved_without_switching(layout, monkeypatch):
+    """2026-11-05 Orchestrator#1129: an agent left a cherry-pick in progress; git refused to switch."""
+    canon, _ = layout
+    monkeypatch.setattr(provision, "_live_holder_pids", lambda wt: set())
+    wt = provision.provision(TARGET, "closer")
+    ident = ["-c", "user.name=a", "-c", "user.email=a@b"]
+    (wt / "f.txt").write_text("base\n")
+    git(wt, "add", "f.txt")
+    git(wt, *ident, "commit", "-m", "base f")
+    git(wt, "switch", "-c", "side")
+    (wt / "f.txt").write_text("side\n")
+    git(wt, *ident, "commit", "-am", "side f")
+    side = git(wt, "rev-parse", "HEAD")
+    git(wt, "switch", "pr-head")
+    (wt / "f.txt").write_text("ours\n")
+    git(wt, *ident, "commit", "-am", "ours f")
+    subprocess.run(["git", "-C", str(wt), *ident, "cherry-pick", side], capture_output=True)
+    (wt / "f.txt").write_text("resolved\n")
+    git(wt, "add", "f.txt")  # resolution staged, cherry-pick unfinished
+    head = git(wt, "rev-parse", "HEAD")
+    assert provision.provision(TARGET, "closer") == wt  # no refusal
+    event = events()[-1]
+    assert event["preserved_without_switch"] is True
+    kept = event["preserved_branch"]
+    assert git(canon, "rev-parse", f"{kept}^") == head  # the stash commit sits on the agent's HEAD
+    assert git(canon, "show", f"{kept}:f.txt") == "resolved"
+    assert git(wt, "rev-parse", "HEAD") == git(canon, "rev-parse", "origin/pr-head")

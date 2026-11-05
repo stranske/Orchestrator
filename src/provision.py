@@ -151,8 +151,25 @@ def _set_aside_worktree(canon: Path, wt: Path, target: str, lane: str, event: di
     preserved = f"preserved/{worktree_name(target, lane)}-{stamp}"
     switched = _wt_git(wt, ["switch", "-c", preserved])
     if switched.returncode != 0:
-        raise RuntimeError(f"cannot preserve {wt}: {switched.stderr.strip()[:300]}")
-    if _wt_git(wt, ["status", "--porcelain"]).stdout.strip():
+        # An earlier agent can leave a cherry-pick, merge or rebase in progress, where git refuses to switch
+        # branches (2026-11-05, Orchestrator#1129). Keep the work WITHOUT switching: the preserved branch takes
+        # HEAD, and `git stash create` captures staged and unstaged changes as a commit on top of it without
+        # touching the worktree. Untracked files are not in that commit, so their presence still refuses.
+        untracked = _wt_git(wt, ["ls-files", "--others", "--exclude-standard"]).stdout.strip()
+        if untracked:
+            raise RuntimeError(
+                f"cannot preserve {wt}: {switched.stderr.strip()[:200]}; untracked files would be lost "
+                f"({untracked.splitlines()[0]}...) (blocking 1, drainable 0: inspect the worktree)"
+            )
+        if _wt_git(wt, ["branch", preserved, "HEAD"]).returncode != 0:
+            raise RuntimeError(f"cannot preserve {wt}: {switched.stderr.strip()[:300]}")
+        wip = _wt_git(
+            wt, ["stash", "create", f"provision: preserve work from {wt.name}"]
+        ).stdout.strip()
+        if wip and _wt_git(wt, ["branch", "-f", preserved, wip]).returncode != 0:
+            raise RuntimeError(f"cannot preserve uncommitted work in {wt} (stash {wip[:12]})")
+        event.update(preserved_without_switch=True)
+    elif _wt_git(wt, ["status", "--porcelain"]).stdout.strip():
         _wt_git(wt, ["add", "-A"])
         committed = _wt_git(
             wt,
