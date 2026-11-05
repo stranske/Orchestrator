@@ -153,8 +153,9 @@ class TickBoundaryTests(unittest.TestCase):
         with (
             patch.object(signal, "signal", return_value=previous_handler) as handler,
             patch.object(signal, "alarm") as alarm,
-            patch.object(propensity, "tick_evidence", side_effect=KeyboardInterrupt("interrupted"))
-            as evidence,
+            patch.object(
+                propensity, "tick_evidence", side_effect=KeyboardInterrupt("interrupted")
+            ) as evidence,
         ):
             result = propensity.tick_evidence_guarded(budget_s=0, record=False)
             evidence.assert_called_once_with(budget_s=0, record=False)
