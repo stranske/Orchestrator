@@ -347,3 +347,29 @@ requires approval, but approval policy is never`. Git index writes in this
 checkout fail with `Read-only file system`. The tested edits remain here; the
 commit is retained in `/tmp/orchestrator-1175-timestamp-boundary-Q9GMYh` and its
 handoff patch is `/tmp/orchestrator-1175-timestamp-boundary.patch`.
+
+## Rejected publication push verification (2026-11-05)
+
+Extended the real CLI recovery regression with a temporary bare remote's
+pre-receive hook that rejects the first `publish_document` push. The resulting
+valid local filter commit cannot establish deployment provenance or create a
+receipt. After explicitly retrying the Git push, an unchanged publication and
+the existing receipt-failure recovery retain that exact commit and supplied
+audit timestamp. All Git repositories, state, and home directories are temporary.
+
+Verification: all 41 CLI tests, 15 deployment unittest tests, and five report
+tests pass. A disposable recorder that prefers the local export branch fails
+the new unpublished-commit assertion. JavaScript syntax and diff checks pass.
+No Python files changed. The required Anaconda interpreter, pytest, and Black
+remain unavailable; the named pytest acceptance commands are unverified.
+
+No new acceptance checkbox is complete. Production provenance and observation
+remain blocked by the absent production database and verified audit record;
+observation must also wait until both 2026-11-08 and fourteen days after verified
+deployment. The checked publication task remains premature. Adding `needs-human`
+and posting the blocker comment were rejected with `MCP tool call requires
+approval, but approval policy is never`. PR #1176 was confirmed open and ready.
+
+The main checkout rejects Git index writes as read-only. The tested changes
+remain in the working tree; the commit is retained in `/tmp/orchestrator-1175-rejected-push-bqqxu4sl`
+and its handoff patch is `/tmp/orchestrator-1175-rejected-push.patch`.

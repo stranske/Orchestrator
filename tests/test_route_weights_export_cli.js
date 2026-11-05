@@ -350,9 +350,39 @@ document["exploration"] = export._exploration_block(
 published = export.publish_document(document, state_dir=Path(sys.argv[2]))
 print("publication_result=" + str(published))
 `, JSON.stringify(document), state], { cwd: root, env });
+  // A real rejected push leaves a valid local filter commit. It must not
+  // establish deployment provenance until that exact commit reaches the remote.
+  const rejectPush = path.join(remote, 'hooks', 'pre-receive');
+  fs.writeFileSync(rejectPush, '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+  let rejectedCommit;
+  try {
+    const rejected = await publish();
+    assert.equal(rejected.status, 1, rejected.stderr);
+    assert.match(rejected.stderr, /remote rejected.*pre-receive hook declined/);
+    assert.doesNotMatch(rejected.stdout, /publication_result=True/);
+    rejectedCommit = await git(checkout, 'rev-parse', 'HEAD');
+    assert.notEqual(rejectedCommit, initial);
+    const localDocument = JSON.parse(await git(checkout, 'show', `${rejectedCommit}:config/route-weights.json`));
+    assert.equal(localDocument.exploration.challenger_filter, 'hosted-runnable-alternatives/v1');
+    assert.equal(await git(remote, 'rev-parse', branch), initial);
+    fs.writeFileSync(audit, JSON.stringify({ ...provenance, published_commit: rejectedCommit }));
+    const unpublished = await record();
+    assert.equal(unpublished.status, 1, unpublished.stderr);
+    assert.equal(unpublished.stdout, '');
+    assert.match(unpublished.stderr, /not the first verified challenger-filter publication/);
+    assert.doesNotMatch(unpublished.stderr, /Traceback/);
+    assert.equal(fs.existsSync(receipt), false);
+    assert.equal(fs.existsSync(database), false);
+    assert.deepEqual(fs.readdirSync(home), []);
+  } finally {
+    fs.unlinkSync(rejectPush);
+  }
+  // Retry the rejected Git push explicitly; recording itself cannot publish.
+  await git(checkout, 'push', 'origin', `HEAD:${branch}`);
+  assert.equal(await git(remote, 'rev-parse', branch), rejectedCommit);
   const published = await publish();
   assert.equal(published.status, 0, published.stderr);
-  assert.match(published.stdout, /publication_result=True/);
+  assert.match(published.stdout, /publication_result=False/);
   provenance.published_commit = await git(remote, 'rev-parse', branch);
   assert.notEqual(provenance.published_commit, initial);
   fs.writeFileSync(audit, JSON.stringify(provenance));
