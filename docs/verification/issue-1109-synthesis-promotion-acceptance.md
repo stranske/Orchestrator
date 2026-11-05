@@ -67,7 +67,9 @@ python3 src/verify.py --coverage --floor-may-lag
 
 with the same two runtime variables, then publishes `coverage.json` as artifact `gate-coverage` and `coverage-trend.json` as artifact `gate-coverage-trend`. The verify job does not publish that file. `combined-coverage` (the raw `.coverage` plus the log) had `retention-days: 7` and is no longer listed.
 
-The Gate workflow's own coverage steps, at this revision, download `gate-*` artifacts into `gate_artifacts/downloads` and run `computeCoverageStats` over `coverage/runtimes`, writing `gate-coverage.json` in the job. Those Gate-run files were not uploaded and are unavailable at inspection.
+The Gate workflow's own coverage steps, at this revision, download `gate-*` artifacts into `gate_artifacts/downloads` and run `computeCoverageStats` over `coverage/runtimes`, writing `gate-coverage.json` in the job. Those Gate-run files are unavailable at inspection. Zero currently listed artifacts
+does not prove non-upload: seven-day retention can remove them, and historical
+upload logs were not established here.
 
 | Measurement | Run | Revision | `gate-coverage` artifact | What it is |
 | --- | --- | --- | --- | --- |
@@ -77,7 +79,7 @@ The Gate workflow's own coverage steps, at this revision, download `gate-*` arti
 
 `git diff --stat 08c7b70a8f38af8217bdf1dd8d8ce9adad6ac4af 2f12281b795d749498e5641edcf32ef41420f499` is only `.verify-floor.json`. `src/synthesis_promotion.py` and `src/router.py` have the same blobs on `08c7b70`, the parent, and the merge. The pre-addition artifact measures the parent revision's production source. It is not a CI run of the parent SHA.
 
-Gate workflow runs retain nothing:
+Gate workflow artifacts currently listed (upload history unestablished):
 
 - PR Gate [39260266708](https://github.com/stranske/Orchestrator/actions/runs/39260266708), conclusion success, `artifacts.total_count = 0`
 - Merge Gate [39270664385](https://github.com/stranske/Orchestrator/actions/runs/39270664385), conclusion success, `artifacts.total_count = 0`
@@ -113,7 +115,12 @@ Statements newly covered on `src/synthesis_promotion.py`, before artifact minus 
 
 Whole-tree missing statements moved from 9981 to 9954. Two files account for that: `src/synthesis_promotion.py` (26) and `src/router.py` (55 to 54). `src/router.py` has the same blob on all three revisions, so that one statement is measurement drift, not this PR. The module reduction attributable to the three tests is 26.
 
-### Local reproduction (not a CI or Gate artifact)
+### Historical local reproduction (not a CI or Gate artifact)
+
+These historical commands do not form a clean before/after recipe: their workloads
+differ and reporting steps were omitted. Preserve their results as historical only.
+Use the complete [clean local coverage sequence](issue-1109-pr-793-acceptance.md#clean-local-coverage-sequence)
+for fresh isolated data, both reports/JSON exports, and line/branch comparison.
 
 Coverage.py 7.17.2, same `pyproject.toml` (`source = ["src"]`, `branch = false`), on detached worktrees. This is not the whole suite, so the miss counts are not 168 and 142.
 
@@ -152,7 +159,7 @@ The three tests execute 77 statements the selftest misses. Of those, 51 were alr
 
 A separate local `--branch` run of `tests/test_synthesis_promotion.py`, `tests/test_synthesis_delivery_discovery.py`, and (after the merge) `tests/test_synthesis_promotion_coverage.py` is not the Gate configuration (`branch = false`). It measured 186 missing branches of 328 before and 172 after, a reduction of 14, with uncovered statements 490 then 461. That branch reduction is not added to the contract's 26. The authoritative artifacts still have no branch counters.
 
-`tests/test_issue1109_runtime_isolation.py` starts a new interpreter with both variables set to pytest temporary directories before the process starts, then imports `synthesis_promotion`. Checked 2026-11-05 with the command in the next section (`5 passed`, which includes these two tests):
+`tests/test_issue1109_runtime_isolation.py` starts a new interpreter with both variables set to pytest temporary directories before the process starts, then imports `synthesis_promotion`. Historically checked 2026-11-05 with the five-test command below (`5 passed`, which includes these two tests):
 
 - Both temporary paths are present in the child before the import
 - `feedback.LOCAL_RUNTIME`, `capabilities.LOCAL_RUNTIME`, `capabilities.REG`, and `capabilities.FEATURES_REG` resolve under the runtime directory
@@ -162,7 +169,7 @@ A separate local `--branch` run of `tests/test_synthesis_promotion.py`, `tests/t
 
 A second child sets only `ORCH_STATE_DIR` and unsets `ORCH_LOCAL_RUNTIME`. `feedback.DB_PATH` is then `<state>/feedback/orchestrator.db`. `capabilities.REG` still resolves to `~/.codex/orchestrator/capabilities.json`. Both variables have to be set before import for the capability ledger path to leave the shared runtime.
 
-## Baseline and deliberate breaks
+## Historical baseline and deliberate breaks
 
 No repository-selected interpreter file is present: `~/.codex/python-bin` is absent and `/opt/anaconda3/bin/python3` is absent. The interpreter on `PATH` is `/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3` (Python 3.14.10). Pytest is not installed on that interpreter, so the commands use a virtualenv created from it: `/tmp/orch1109-venv/bin/python` (`readlink` resolves to `/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3.14`).
 
@@ -184,6 +191,23 @@ ORCH_STATE_DIR=/tmp/orch1109-pytest/state ORCH_LOCAL_RUNTIME=/tmp/orch1109-pytes
   tests/test_synthesis_promotion_coverage.py::test_verify_synthesis_records_unallowlisted_local_command_without_spawning \
   -m "not slow"
 ```
+
+The separate historical five-test selector (same historical interpreter, checkout,
+and runtime paths; `5 passed in 0.52s`) includes both isolation tests:
+
+```bash
+ORCH_STATE_DIR=/tmp/orch1109-pytest/state ORCH_LOCAL_RUNTIME=/tmp/orch1109-pytest/runtime \
+  /tmp/orch1109-venv/bin/python -m pytest -q \
+  tests/test_synthesis_promotion_coverage.py::test_completion_probe_requires_a_success_marker_and_new_head \
+  tests/test_synthesis_promotion_coverage.py::test_run_gate_never_runs_non_allowlisted_command \
+  tests/test_synthesis_promotion_coverage.py::test_verify_synthesis_records_unallowlisted_local_command_without_spawning \
+  tests/test_issue1109_runtime_isolation.py -m "not slow"
+```
+
+This reconstructs the selector from the recorded three nodes plus the two-test
+isolation module; the original shell transcript is unavailable. It is not a new run.
+Fresh executed commands and actual results appear in the companion's
+[continuation record](issue-1109-pr-793-acceptance.md#continuation-execution-record).
 
 Each break was one substitution in `src/synthesis_promotion.py` (each needle occurred once), then that node only, then the file was written back to its original text. `git diff -- src/synthesis_promotion.py` was empty afterward. PR #793's body records only the completion-probe break and does not name a revision, a command, and a result for the other two tests, so all three were run here.
 

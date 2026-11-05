@@ -66,8 +66,9 @@ python3 src/verify.py --coverage --floor-may-lag
 
 That job publishes artifacts named `gate-coverage` (`coverage.json`) and
 `gate-coverage-trend` (`coverage-trend.json`). The Gate workflow downloads those CI
-artifacts. It does not remeasure the tree. Gate runs for this PR published no artifacts of
-their own; those Gate-run files were unavailable at inspection.
+artifacts. It does not remeasure the tree. Gate-run files were unavailable at inspection. Zero currently listed artifacts
+does not establish non-upload: the Gate workflow uses seven-day retention, and
+no historical upload logs were established here.
 
 ## CI pytest and coverage jobs
 
@@ -81,8 +82,8 @@ Historical only. No new CI run was started for this evidence.
 | PR combined coverage | same PR head | same run | combined coverage, id `118085764499` | `python3 src/verify.py --coverage --floor-may-lag` | success; artifact `gate-coverage` id `12191166790`, trend id `12191311822` |
 | Merge pytest verdict | `574c1694b2990e50ce0668589472e180f481019c` | [39270663547](https://github.com/stranske/Orchestrator/actions/runs/39270663547) | verify.py, id `118121764897` | `python3 src/verify.py` (push, no `--floor-may-lag`) | **job failure**. Log: `pytest: 5791 passed, 0 failed`. The failure is the collection floor (`5818 collected > floor 5815`), not a failed test. |
 | Merge combined coverage | same merge revision | same run | combined coverage, id `118121764711` | `python3 src/verify.py --coverage --floor-may-lag` | success; artifact `gate-coverage` id `12194284584`, trend id `12194933485` |
-| PR Gate | PR head | [39260266708](https://github.com/stranske/Orchestrator/actions/runs/39260266708) | Gate workflow | downloads CI `gate-coverage` when present | workflow success; **0 artifacts published by this run** |
-| Merge Gate | merge revision | [39270664385](https://github.com/stranske/Orchestrator/actions/runs/39270664385) | Gate workflow | same | workflow success; **0 artifacts published by this run** |
+| PR Gate | PR head | [39260266708](https://github.com/stranske/Orchestrator/actions/runs/39260266708) | Gate workflow | downloads CI `gate-coverage` when present | workflow success; **0 artifacts currently listed; upload history unestablished** |
+| Merge Gate | merge revision | [39270664385](https://github.com/stranske/Orchestrator/actions/runs/39270664385) | Gate workflow | same | workflow success; **0 artifacts currently listed; upload history unestablished** |
 
 Unavailable historical evidence, distinct from the passing CI pytest job above:
 
@@ -93,7 +94,7 @@ Unavailable historical evidence, distinct from the passing CI pytest job above:
   passing CI pytest result named above.
 - The pre-addition verify.py job also failed. No passing pytest job was found for
   `08c7b70` or `2f12281`.
-- Gate runs did not retain a separate coverage payload. The CI `gate-coverage` artifacts
+- A separate Gate coverage payload is unavailable at inspection. The CI `gate-coverage` artifacts
   are the authoritative payloads, and they were still downloadable on 2026-11-05
   (`expired: false`).
 - No new CI run was executed for this follow-up. The passing result is the historical
@@ -150,39 +151,11 @@ Interpreter: `/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3` (Python 3.14.9
 `/opt/anaconda3/bin/python3` is not on this machine. Pytest was installed into that
 interpreter for the measurement (pytest 9.2.0, coverage 7.17.2).
 
-Isolated coverage-data paths with clean initialization, parallel-data combination, report and JSON export:
-
-```
-# Clean coverage data initialization
-rm -rf /tmp/orch-1109-before/.coverage /tmp/orch-1109-before/coverage.json
-
-# Statement runs with isolated coverage-data path
-python3 -m coverage run --source=src --rcfile=pyproject.toml -m pytest \
-  tests/test_synthesis_promotion.py tests/test_synthesis_delivery_discovery.py \
-  -m "not slow" -q -p no:cacheprovider
-
-# Parallel-data combination (when multiple .coverage files exist)
-python3 -m coverage combine --rcfile=pyproject.toml
-
-# Report and JSON export
-python3 -m coverage report --include='*/synthesis_promotion.py'
-python3 -m coverage json --include='*/synthesis_promotion.py' -o /tmp/orch-1109-before/coverage.json
-
-# Line-set comparison: before vs after
-python3 -c "
-import json
-before = json.loads(open('/tmp/orch-1109-before/coverage.json').read())
-after = json.loads(open('/tmp/orch-1109-after/coverage.json').read())
-before_lines = set(before['files']['src/synthesis_promotion.py']['missing_lines'])
-after_lines = set(after['files']['src/synthesis_promotion.py']['missing_lines'])
-print('Newly covered:', before_lines - after_lines)
-print('Newly missing:', after_lines - before_lines)
-"
-```
-
-The merge worktree `/tmp/orch-1109-after` (`574c1694`) used the same command plus
-`tests/test_synthesis_promotion_coverage.py`. Branch runs added `--branch`, which
-overrides `branch = false` and is therefore **not** the Gate configuration.
+The earlier command sketch did not isolate parallel files or export the after JSON;
+it was incomplete and is superseded by the [clean sequence below](#clean-local-coverage-sequence).
+The following table retains the earlier local results and interpreter provenance.
+The new sequence uses branch instrumentation and remains separate from branch-disabled
+historical CI evidence.
 
 | Local run | Uncovered statements | Uncovered branches | Partial branches | Passed |
 | --- | --- | --- | --- | --- |
@@ -277,24 +250,23 @@ not move `feedback.LOCAL_RUNTIME`, `feedback.DB_PATH`, `capabilities.LOCAL_RUNTI
 
 That fresh-import test passed in the baseline command below.
 
-## Baseline pytest
+## Historical baseline pytest
 
-Selected interpreter: `/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3`
+Historically selected interpreter: `/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3`
 (Python 3.14.9). `/opt/anaconda3/bin/python3` is absent, so it was not used.
 Working-tree revision at the run: `612dc68374be9eefcc03db3f909e59eaba020644`.
 `src/synthesis_promotion.py` matched that revision. The test module had uncommitted
 isolation edits.
 
-Command selecting the three named PR #793 nodes plus `tests/test_issue1109_runtime_isolation.py` for the five-test run:
+Historical command restored verbatim from commit `7860c3a7e63890d11556757311e8905b6a4084ad`.
+That revision's test module contains all four tests, including the fresh-import test;
+the later five-test selector was incorrectly attached to this four-test result.
+This is a historical record, not a command re-executed on this continuation:
 
 ```
 ORCH_STATE_DIR=/tmp/tmp.HSXY19eW6l ORCH_LOCAL_RUNTIME=/tmp/tmp.vS6vmfkzgb \
   /opt/hostedtoolcache/Python/3.14.9/x64/bin/python3 -m pytest -q \
-  tests/test_synthesis_promotion_coverage.py::test_completion_probe_requires_a_success_marker_and_new_head \
-  tests/test_synthesis_promotion_coverage.py::test_run_gate_never_runs_non_allowlisted_command \
-  tests/test_synthesis_promotion_coverage.py::test_verify_synthesis_records_unallowlisted_local_command_without_spawning \
-  tests/test_issue1109_runtime_isolation.py \
-  -m "not slow" --tb=line -p no:cacheprovider
+  tests/test_synthesis_promotion_coverage.py -m "not slow" --tb=line
 ```
 
 Result: `4 passed` in 0.25s (the three PR #793 tests plus the fresh-import test).
@@ -344,7 +316,7 @@ Result: `3 passed` in 0.13s. No deliberate production mutation remains.
   artifact counts in this document are the missing records.
 - The passing CI pytest revision is the PR head `891a157`, not the merge commit.
 
-## Five-test verification run
+## Historical continuation verification run (eight tests)
 
 Repository-selected interpreter: `/Users/teacher/.codex/py314/bin/python` (Python 3.14.3).
 `/opt/anaconda3/bin/python3` is present (Python 3.12.2).
@@ -368,3 +340,157 @@ ORCH_STATE_DIR=$(mktemp -d) ORCH_LOCAL_RUNTIME=$(mktemp -d) TMPDIR=$(mktemp -d) 
 ```
 
 Result: `8 passed` in 0.39s. Counts: 8 passed, 0 failed.
+
+## Clean local coverage sequence
+
+Check date: 2026-11-05. Outcome 1 is two fresh JSON exports and a printed
+missing-line/branch comparison for the exact parent and merge below. Run this
+from the PR checkout with `bash`; stop after two failed attempts at a step or
+60 minutes. This is a partial local measurement, never authoritative Gate evidence.
+
+The previously selected interpreter `/Users/teacher/.codex/py314/bin/python` is
+available. If unavailable, stop and report it; do not substitute silently.
+Both snapshots use identical source scope and configuration, checked with `cmp`,
+and the same baseline workload; only after adds the three historical nodes.
+Every invocation allocates a fresh root; each side has its own coverage-data and
+runtime directories exported before startup. Explicit combine reads only that
+side's data directory. No existing `.coverage.*` files can enter the combine.
+Branch instrumentation is enabled on both sides to calculate branch differences,
+separate from all branch-disabled historical CI numbers above.
+
+```bash
+set -eu
+PY=/Users/teacher/.codex/py314/bin/python
+REPO=$(git rev-parse --show-toplevel)
+RUN=$(mktemp -d /tmp/issue1109-coverage.XXXXXX)
+export PY REPO RUN
+"$PY" -c 'import sys, coverage; print("interpreter", sys.executable, sys.version); print("coverage", coverage.__version__)'
+printf 'continuation_head=%s\nRUN=%s\n' "$(git rev-parse HEAD)" "$RUN"
+for side in before after; do
+  if [ "$side" = before ]; then
+    revision=2f12281b795d749498e5641edcf32ef41420f499
+  else
+    revision=574c1694b2990e50ce0668589472e180f481019c
+  fi
+  mkdir -p "$RUN/$side/tree" "$RUN/$side/data" "$RUN/$side/state" "$RUN/$side/runtime" "$RUN/$side/tmp"
+  git -C "$REPO" archive "$revision" | tar -x -C "$RUN/$side/tree"
+  printf '%s revision=%s\n' "$side" "$revision"
+done
+cmp "$RUN/before/tree/pyproject.toml" "$RUN/after/tree/pyproject.toml"
+cmp "$RUN/before/tree/src/synthesis_promotion.py" "$RUN/after/tree/src/synthesis_promotion.py"
+for side in before after; do
+  (
+    cd "$RUN/$side/tree"
+    export COVERAGE_FILE="$RUN/$side/data/.coverage"
+    export ORCH_STATE_DIR="$RUN/$side/state" ORCH_LOCAL_RUNTIME="$RUN/$side/runtime" TMPDIR="$RUN/$side/tmp"
+    export PYTHONPATH="$PWD/src" PYTHONDONTWRITEBYTECODE=1
+    unset ORCH_FEEDBACK_DB ORCH_CAPABILITIES_PATH ORCH_FEATURES_PATH COVERAGE_PROCESS_START
+    set -- tests/test_synthesis_promotion.py tests/test_synthesis_delivery_discovery.py
+    if [ "$side" = after ]; then
+      set -- "$@" tests/test_synthesis_promotion_coverage.py::test_completion_probe_requires_a_success_marker_and_new_head tests/test_synthesis_promotion_coverage.py::test_run_gate_never_runs_non_allowlisted_command tests/test_synthesis_promotion_coverage.py::test_verify_synthesis_records_unallowlisted_local_command_without_spawning
+    fi
+    printf '%s workload: %s\n' "$side" "$*"
+    "$PY" -m coverage run --branch --source=src --rcfile=pyproject.toml -m pytest "$@" -m 'not slow' -q -p no:cacheprovider --override-ini='addopts='
+    "$PY" -m coverage combine --rcfile=pyproject.toml "$RUN/$side/data"
+    "$PY" -m coverage report --rcfile=pyproject.toml --include='*/synthesis_promotion.py'
+    "$PY" -m coverage json --rcfile=pyproject.toml --include='*/synthesis_promotion.py' -o "$RUN/$side/coverage.json"
+  )
+done
+"$PY" - <<'PY'
+import json
+import os
+from pathlib import Path
+root = Path(os.environ['RUN'])
+files = []
+for side in ('before', 'after'):
+    payload = json.loads((root / side / 'coverage.json').read_text())
+    assert payload['meta']['branch_coverage'] is True
+    data = payload['files']['src/synthesis_promotion.py']
+    print(side, json.dumps(data['summary'], sort_keys=True))
+    files.append(data)
+before, after = files
+for field in ('missing_lines', 'missing_branches'):
+    def units(data):
+        return {tuple(v) if isinstance(v, list) else v for v in data[field]}
+    old, new = units(before), units(after)
+    print(field, 'before', len(old), 'after', len(new), 'reduction', len(old) - len(new))
+    print('newly covered', sorted(old - new))
+    print('newly missing', sorted(new - old))
+PY
+```
+
+## Continuation execution record
+
+Checked 2026-11-05 on head `26a27a785311c43ba7f47e99f4c1fd9445518539`
+with the scoped uncommitted test/document changes in this continuation. Interpreter:
+`/Users/teacher/.codex/py314/bin/python`, Python 3.14.3; pytest 9.1.1; coverage 7.17.0.
+Historical interpreter availability statements above describe their original hosts.
+
+The clean sequence above was executed without modification using `bash`. Actual
+root: `/tmp/issue1109-coverage.W0BNmV`. Both JSON exports exist at
+`before/coverage.json` and `after/coverage.json` under that root. `cmp` passed for
+configuration and production source. The archive snapshots are not git checkouts,
+so pytest also printed `tracked test inputs: NOT CHECKED`; the inputs came from
+`git archive` of the two explicitly printed revisions.
+
+Actual coverage output (progress dots and duplicate TOTAL/JSON summary lines omitted):
+
+```text
+interpreter /Users/teacher/.codex/py314/bin/python 3.14.3 (main, Feb 12 2026, 00:29:58) [Clang 21.1.4 ]
+coverage 7.17.0
+continuation_head=26a27a785311c43ba7f47e99f4c1fd9445518539
+RUN=/tmp/issue1109-coverage.W0BNmV
+before revision=2f12281b795d749498e5641edcf32ef41420f499
+after revision=574c1694b2990e50ce0668589472e180f481019c
+79 passed in 14.01s
+Combined 1 file
+src/synthesis_promotion.py     984    490    328     58  48.5%
+Wrote JSON report to /tmp/issue1109-coverage.W0BNmV/before/coverage.json
+82 passed in 14.66s
+Combined 1 file
+src/synthesis_promotion.py     984    461    328     54  51.8%
+Wrote JSON report to /tmp/issue1109-coverage.W0BNmV/after/coverage.json
+missing_lines before 490 after 461 reduction 29
+newly covered [468, 469, 470, 471, 472, 473, 474, 475, 476, 477, 478, 479, 480, 481, 482, 484, 485, 486, 487, 510, 511, 517, 527, 533, 623, 628, 673, 674, 675]
+newly missing []
+missing_branches before 186 after 172 reduction 14
+newly covered [(472, 473), (478, 479), (478, 480), (482, 484), (485, 486), (485, 487), (509, 510), (516, 517), (526, 527), (532, 533), (622, 623), (672, 673), (673, 674), (673, 682)]
+newly missing []
+```
+
+These partial-suite results reproduce 29 fewer missing lines and 14 fewer missing
+branches. They do not replace the historical CI reduction of 26 statements or
+change the 154-unit shortfall.
+
+Focused acceptance and separate restored-original-node verification used this
+exact shell sequence, with runtime roots exported before either interpreter starts:
+
+```bash
+set -eu
+PY=/Users/teacher/.codex/py314/bin/python
+CHECK=$(mktemp -d /tmp/issue1109-focused.XXXXXX)
+mkdir -p "$CHECK/state" "$CHECK/runtime" "$CHECK/tmp"
+export ORCH_STATE_DIR="$CHECK/state" ORCH_LOCAL_RUNTIME="$CHECK/runtime" TMPDIR="$CHECK/tmp"
+unset ORCH_FEEDBACK_DB ORCH_CAPABILITIES_PATH ORCH_FEATURES_PATH
+printf 'head=%s\nCHECK=%s\n' "$(git rev-parse HEAD)" "$CHECK"
+"$PY" -m pytest -q tests/test_synthesis_promotion_coverage.py tests/test_issue1109_runtime_isolation.py tests/test_issue1109_pr793_acceptance.py -m 'not slow' -p no:cacheprovider --override-ini='addopts='
+"$PY" -m pytest -q \
+ tests/test_synthesis_promotion_coverage.py::test_completion_probe_requires_a_success_marker_and_new_head \
+ tests/test_synthesis_promotion_coverage.py::test_run_gate_never_runs_non_allowlisted_command \
+ tests/test_synthesis_promotion_coverage.py::test_verify_synthesis_records_unallowlisted_local_command_without_spawning \
+ -m 'not slow' -p no:cacheprovider --override-ini='addopts='
+git diff -- src/synthesis_promotion.py
+```
+
+Actual `CHECK=/tmp/issue1109-focused.ORKVUV`, head as above. Printed results:
+`8 passed in 0.46s`, then `3 passed in 0.10s`. The final production diff printed
+nothing: `git diff -- src/synthesis_promotion.py` is empty. No production mutations
+were repeated in this continuation.
+
+Review snapshot: GitHub returned nine total threads, seven unresolved and two
+already resolved, rather than eight active. All nine were re-read. The seven
+remaining findings cover Gate artifact absence, complete reporting, the five-test
+selector, fresh parallel-data paths, the after export, four-test provenance, and
+collection-time production imports. Their dispositions are the scoped changes
+above; the runtime-isolation module received the same path correction. Required
+CI, current-head review, the seven-minute floor, and `merge_guard` remain required.

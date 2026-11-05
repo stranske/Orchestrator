@@ -16,9 +16,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-import synthesis_promotion
-
-MODULE_DIR = Path(synthesis_promotion.__file__).resolve().parent
+MODULE_DIR = Path(__file__).resolve().parents[1] / "src"
 
 _CHILD = r"""
 import json
