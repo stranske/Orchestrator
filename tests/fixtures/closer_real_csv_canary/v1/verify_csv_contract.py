@@ -9,8 +9,10 @@ either. Skipped Agents Verifier runs on earlier commits of the corrective PR,
 and publication text that names only the owned delivery PR, are reported and
 are not that proof either. A keepalive completion that only observed this head
 after starting on an earlier revision is reported and is not worker or
-publication proof for this head. The command does not change the default
-contract exit.
+publication proof for this head. The same rule applies to the owned delivery
+head: a keepalive receipt that started earlier and only observed that head is
+not a worker completion of it and is not closer publication proof. The command
+does not change the default contract exit.
 """
 
 from __future__ import annotations
@@ -512,6 +514,12 @@ def _assess(
     owned = _owned_delivery_record(records)
     owned_head = owned.get("head_sha") or ""
     same_owned_head = bool(owned_head) and owned_head == corrective_sha
+    if same_owned_head or not owned_head:
+        owned_completions, owned_reservations, owned_observed = [], [], []
+    else:
+        owned_completions, owned_reservations, owned_observed = _keepalive_for_head(
+            comments, owned_head
+        )
     return {
         "partial": partial,
         "corrective": corrective,
@@ -529,6 +537,9 @@ def _assess(
         "owned_publication": (
             False if same_owned_head or not owned_head else _publication_tied(comments, owned_head)
         ),
+        "owned_worker_completions": owned_completions,
+        "owned_worker_reservations": owned_reservations,
+        "owned_worker_observed_only": owned_observed,
         "unlabeled": unlabeled,
         "branch_labels": branch_labels,
     }
@@ -723,6 +734,36 @@ def _format_report(assessment, corrective_sha, local_head, verifier_runs=(), ear
                 "owned_delivery_publication: MISSING "
                 "no closer-publication marker contains the owned delivery head"
             )
+        if owned_head != corrective_sha:
+            owned_completions = assessment.get("owned_worker_completions") or []
+            owned_reservations = assessment.get("owned_worker_reservations") or []
+            owned_observed = assessment.get("owned_worker_observed_only") or []
+            if owned_completions or owned_reservations:
+                lines.append(
+                    "owned_delivery_worker: "
+                    + f"completions={len(owned_completions)} "
+                    + f"reservations={len(owned_reservations)} "
+                    + "not accepted as native verify or publication proof"
+                )
+            else:
+                lines.append(
+                    "owned_delivery_worker: none "
+                    "for this head; a keepalive receipt would not be publication proof"
+                )
+            if owned_observed:
+                lines.append(
+                    "owned_delivery_worker_prior_observation: "
+                    + f"{len(owned_observed)} completion(s) started on another head and "
+                    + "observed the owned delivery head; not a worker completion of that "
+                    + "head and not publication proof"
+                )
+                for item in owned_observed:
+                    lines.append(
+                        "owned_delivery_worker_prior: "
+                        + f"start={item['start_head']} status={item['status']}"
+                    )
+            else:
+                lines.append("owned_delivery_worker_prior_observation: none")
     for item in assessment.get("branch_labels") or []:
         if item["via"]:
             lines.append(f"branch_label: {item['name']} labeled=yes via={item['via']}")
@@ -1636,6 +1677,81 @@ def _self_check():
         raise AssertionError("owned delivery publication was not reported")
     if "not accepted for corrective pr " + _CORRECTIVE_PR not in owned_text:
         raise AssertionError("owned delivery publication was accepted for the corrective head")
+    if "owned_delivery_worker: none" not in owned_text:
+        raise AssertionError("absent owned delivery worker was not reported")
+    if "owned_delivery_worker_prior_observation: none" not in owned_text:
+        raise AssertionError("absent owned delivery observation was not reported")
+    owned_start = "e" * 40
+    owned_observed_receipt = {
+        "schema": _RUNNER_RECEIPT_SCHEMA,
+        "record": {
+            "head_sha": owned_start,
+            "observed_head_sha": owned_head,
+            "status": "completed",
+        },
+    }
+    owned_started_receipt = {
+        "schema": _RUNNER_RECEIPT_SCHEMA,
+        "record": {
+            "head_sha": owned_head,
+            "observed_head_sha": owned_head,
+            "status": "completed",
+        },
+    }
+    owned_bodies = []
+    for payload in (owned_observed_receipt, owned_started_receipt):
+        owned_bodies.append(
+            "<!-- runner-completion:cursor:"
+            + _OWNED_DELIVERY_PR
+            + ":v1 base64:"
+            + base64.b64encode(json.dumps(payload).encode()).decode()
+            + " -->"
+        )
+    owned_worker = _assess(
+        [],
+        owned_bodies,
+        [
+            {
+                "kind": "pr",
+                "name": "1168",
+                "title": "test: chain",
+                "labels": ["test"],
+                "present": True,
+                "merged": False,
+                "merge_sha": "",
+                "head_sha": corrective,
+            },
+            {
+                "kind": "pr",
+                "name": _OWNED_DELIVERY_PR,
+                "title": "TEST: owned",
+                "labels": ["test"],
+                "present": True,
+                "merged": False,
+                "head_sha": owned_head,
+            },
+        ],
+        corrective,
+    )
+    owned_worker_text, owned_worker_code = _format_report(owned_worker, corrective, corrective)
+    if (
+        owned_worker_code != 2
+        or owned_worker["publication"]
+        or owned_worker["owned_publication"]
+        or owned_worker["owned_worker_completions"] != ["completed"]
+        or owned_worker["owned_worker_observed_only"]
+        != [{"start_head": owned_start, "status": "completed"}]
+    ):
+        raise AssertionError("owned delivery keepalive receipt was accepted as publication")
+    if "owned_delivery_worker: completions=1 reservations=0" not in owned_worker_text:
+        raise AssertionError("owned delivery worker completion was not reported")
+    if "not accepted as native verify or publication proof" not in owned_worker_text:
+        raise AssertionError("owned delivery worker completion was accepted as proof")
+    if (
+        "owned_delivery_worker_prior: start=" + owned_start not in owned_worker_text
+        or "not a worker completion of that head" not in owned_worker_text
+    ):
+        raise AssertionError("owned delivery prior observation was counted as its worker")
 
     def truncated(_path):
         return (
