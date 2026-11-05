@@ -112,19 +112,37 @@ def test_model_id_for_label_prefers_catalog_and_refuses_unknown_when_catalog_rea
 
 
 def test_catalog_and_model_fallbacks_fail_closed_without_a_probe(monkeypatch, tmp_path):
-    monkeypatch.setattr(
-        adapters, "advertised_catalog", lambda _agent: (_ for _ in ()).throw(OSError())
-    )
+    monkeypatch.setenv("ORCH_MODEL_PROBE", "1")
+    monkeypatch.delitem(adapters.MODEL_CATALOG_PROBES, "gemini", raising=False)
+    assert adapters.advertised_catalog("gemini", refresh=True) == {"models": [], "pairs": {}}
+    assert adapters.advertised_models("gemini", refresh=True) == []
+
+    catalog_calls = []
+
+    def unavailable_catalog(agent):
+        catalog_calls.append(agent)
+        raise OSError("catalog unavailable")
+
+    monkeypatch.setattr(adapters, "advertised_catalog", unavailable_catalog)
     assert adapters.model_id_for_label("gemini", "") is None
+    assert adapters.model_id_for_label("gemini", "   ") is None
+    assert catalog_calls == []
     assert adapters.model_id_for_label("gemini", "not a model!") is None
+    assert (
+        adapters.model_id_for_label("gemini", "Gemini 3.8 Flash (High)") == "gemini-3.8-flash-high"
+    )
+    assert catalog_calls == ["gemini", "gemini"]
     assert adapters.observed_model_from_stream("{bad}\n[]\n") == {
         "model_label": None,
         "session_id": None,
         "result_text": None,
     }
     cache = tmp_path / "broken.json"
-    cache.write_text('{"ts":"bad","models":["x"]}')
-    assert adapters._cached_catalog("bad", 1, cache, need_pairs=False) is None
+    for bad_timestamp in ("bad", ["bad"], {"value": "bad"}):
+        cache.write_text(json.dumps({"ts": bad_timestamp, "models": ["x"], "pairs": {"X": "x"}}))
+        for need_pairs in (False, True):
+            assert adapters._cached_catalog("bad", 1, cache, need_pairs=need_pairs) is None
+            assert "bad" not in adapters._ADVERTISED_MEMO
 
 
 def test_agy_log_for_appends_suffix_when_with_suffix_refuses(monkeypatch):
