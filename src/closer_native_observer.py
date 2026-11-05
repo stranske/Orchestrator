@@ -527,8 +527,16 @@ def _demand_assignment_bytes(
         "assignment_generation",
         "request_id",
     }
+    schema = contract.get("schema")
+    if schema == "closer-controller-demand/v2":
+        try:
+            from closer_publisher_closure import validate_controller_demand_contract
+
+            validate_controller_demand_contract(contract)
+        except (ImportError, OSError, TypeError, ValueError) as exc:
+            raise mechanisms.MechanismError("typed v2 demand publisher closure differs") from exc
     if (
-        contract.get("schema") != "closer-controller-demand/v1"
+        schema not in {"closer-controller-demand/v1", "closer-controller-demand/v2"}
         or not isinstance(reference, dict)
         or set(reference) != keys
         or reference.get("schema") != "closer-demand-assignment/v1"
@@ -959,14 +967,105 @@ def validate_admission(manifest, context, *, for_effects, _scope=None, for_test=
     ):
         raise mechanisms.MechanismError("native admission manifest bytes differ")
     capacity_report = _read(directory / "scoped-capacity.json")
+    model_policy = None
     if capacity_report.get("control_plane_only") is not True:
-        capacity_contract(manifest)  # Model qualification retains the strict registry contract.
-    if for_effects and (
-        (not finite and not time.time() < deadline)
-        or not scoped.validate_report(_read(directory / "scoped-capacity.json"), now=time.time())
-    ):
-        raise mechanisms.MechanismError("native admission expired or operational inputs changed")
+        model_policy = capacity_contract(
+            manifest
+        )  # Model qualification retains the strict registry contract.
+    if for_effects:
+        capacity_valid = (
+            scoped.validate_report(capacity_report, now=time.time())
+            if model_policy is None
+            else scoped.validate_admitted_report(
+                capacity_report,
+                now=time.time(),
+                policy=model_policy,
+                runtime_manifest=context["runtime_manifest"],
+                runtime_manifest_sha256=context["runtime_manifest_sha256"],
+            )
+        )
+        if (not finite and not time.time() < deadline) or not capacity_valid:
+            raise mechanisms.MechanismError(
+                "native admission expired or operational inputs changed"
+            )
     return context
+
+
+def _verified_admitted_capacity_report(path):
+    """Re-read one scoped report through its exact signed native admission."""
+    import closer_campaign as campaign
+
+    report_path = Path(path)
+    if (
+        not report_path.is_absolute()
+        or report_path.resolve() != report_path
+        or report_path.is_symlink()
+        or report_path.name != "scoped-capacity.json"
+    ):
+        raise mechanisms.MechanismError("native admitted capacity path differs")
+    raw = _bounded_bytes(report_path, 128 * 1024)
+    report = json.loads(raw)
+    if not isinstance(report, dict):
+        raise mechanisms.MechanismError("native admitted capacity report differs")
+    signed = _read(report_path.parent / "admission.json")
+    record = signed.get("record")
+    context = record.get("context") if isinstance(record, dict) else None
+    if not isinstance(context, dict):
+        raise mechanisms.MechanismError("native admitted capacity context differs")
+    manifest_path = Path(context.get("runtime_manifest", ""))
+    if (
+        not manifest_path.is_absolute()
+        or manifest_path.resolve() != manifest_path
+        or manifest_path.is_symlink()
+        or _hash(manifest_path) != context.get("runtime_manifest_sha256")
+        or context.get("report")
+        != {"path": str(report_path), "sha256": hashlib.sha256(raw).hexdigest()}
+    ):
+        raise mechanisms.MechanismError("native admitted capacity binding differs")
+    manifest = campaign.load_manifest(manifest_path)
+    validate_admission(manifest, context, for_effects=True)
+    campaign_identity = context.get("campaign")
+    if not isinstance(campaign_identity, dict):
+        raise mechanisms.MechanismError("native admitted capacity campaign differs")
+    campaign_state = Path(campaign_identity.get("state", ""))
+    if (
+        not campaign_state.is_absolute()
+        or campaign_state.resolve() != campaign_state
+        or campaign_state.is_symlink()
+    ):
+        raise mechanisms.MechanismError("native admitted capacity campaign differs")
+    document = campaign.Campaign(campaign_state).read()
+    if campaign_identity != _campaign_identity(campaign_state, document):
+        raise mechanisms.MechanismError("native admitted capacity campaign differs")
+    config = document.get("worker_config")
+    if not isinstance(config, dict):
+        raise mechanisms.MechanismError("native admitted capacity campaign differs")
+    admission_config(manifest, config, context, for_effects=True)
+    if _bounded_bytes(report_path, 128 * 1024) != raw:
+        raise mechanisms.MechanismError("native admitted capacity report changed")
+    return report, hashlib.sha256(raw).hexdigest()
+
+
+def admitted_capacity_report(path):
+    """Return a same-process marker only after complete admission revalidation."""
+    import closer_operational_capacity as scoped
+
+    report, digest = _verified_admitted_capacity_report(path)
+    return scoped._admitted_report(report, path=Path(path), sha256=digest)
+
+
+def revalidate_admitted_capacity_report(report):
+    """Reject a copied, mutated, or no-longer-authenticated marker."""
+    import closer_operational_capacity as scoped
+
+    if not isinstance(report, scoped._AdmittedCapacityReport):
+        return False
+    try:
+        path = Path(report._admitted_path)
+        current, digest = _verified_admitted_capacity_report(path)
+        return digest == report._admitted_sha256 and current == dict(report)
+    except (AttributeError, KeyError, OSError, TypeError, ValueError, mechanisms.MechanismError):
+        return False
 
 
 def admission_config(manifest, cfg, context, *, for_effects=True):
@@ -2527,6 +2626,58 @@ def _coding_held_diagnostic(stdout):
         return fallback
 
 
+def _initial_dispatch_held_diagnostic(stdout):
+    """Accept only the fixed generic pre-pipeline source refusal frame."""
+    fallback = {"stage": "initial_b_output", "code": "no_typed_held_frame"}
+    if type(stdout) is not str or len(stdout.encode("utf-8")) > 4096:
+        return fallback
+
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate diagnostic field")
+            result[key] = value
+        return result
+
+    try:
+        value = json.loads(stdout, object_pairs_hook=unique)
+        if (
+            type(value) is not dict
+            or set(value)
+            != {
+                "schema",
+                "status",
+                "reason",
+                "diagnostic",
+                "execution_authorized",
+                "retry_authorized",
+            }
+            or value["schema"] != "closer-initial-dispatch-held/v1"
+            or value["status"] != "held"
+            or value["reason"] != "initial_dispatch_pre_pipeline_refused"
+            or value["execution_authorized"] is not False
+            or value["retry_authorized"] is not False
+            or type(value["diagnostic"]) is not dict
+            or value["diagnostic"]
+            not in (
+                {"stage": "initial_dispatch_pre_pipeline", "code": "permission_denied"},
+                {"stage": "initial_dispatch_pre_pipeline", "code": "file_missing"},
+                {"stage": "initial_dispatch_pre_pipeline", "code": "invalid_source_data"},
+                {"stage": "initial_dispatch_pre_pipeline", "code": "os_error"},
+                {"stage": "initial_dispatch_pre_pipeline", "code": "source_refusal"},
+                {
+                    "stage": "initial_dispatch_pre_pipeline",
+                    "code": "unexpected_source_error",
+                },
+            )
+        ):
+            return fallback
+        return dict(value["diagnostic"])
+    except (ValueError, TypeError, KeyError, UnicodeError):
+        return fallback
+
+
 def coding_b_error_diagnostic(error, *, stage):
     """Fixed secondary categories; no paths, exception messages or user output."""
     if stage not in {"coding_b_observation", "coding_b_delivery"}:
@@ -2567,6 +2718,26 @@ def coding_b_observation_summary(done, witness):
     }
 
 
+def initial_b_observation_summary(done, witness):
+    """Bounded generic initial-B projection; raw child streams are never retained."""
+    if (
+        type(done.returncode) is not int
+        or not -128 <= done.returncode <= 255
+        or any(
+            type(value) is not str or len(value.encode("utf-8")) > 32 * 1024 * 1024
+            for value in (done.stdout, done.stderr)
+        )
+    ):
+        raise mechanisms.MechanismError("bounded initial B observation required")
+    return {
+        "exit_code": done.returncode,
+        "cleanup_terminal": witness.get("finished", {}).get("cleanup_terminal") is True,
+        "diagnostic": _initial_dispatch_held_diagnostic(done.stdout),
+        "execution_authorized": False,
+        "acceptance_authorized": False,
+    }
+
+
 def record_coding_b_observation(cfg, done, witness):
     """Separate signed transport diagnostic; never delivery, terminal or C authority."""
     import closer_runtime_binding as runtime
@@ -2600,6 +2771,43 @@ def record_coding_b_observation(cfg, done, witness):
         "provider_completion_asserted": False,
     }
     reference = witness["retain"]("coding-b-observation-" + witness["worker_id"] + ".json", record)
+    return {**summary, "reference": reference}
+
+
+def record_initial_b_observation(cfg, done, witness):
+    """Retain generic initial-B metadata only after its actual owned cleanup."""
+    import closer_runtime_binding as runtime
+
+    caller = inspect.currentframe().f_back
+    if (
+        caller.f_code is not runtime._observed_correction_b.__code__
+        or caller.f_globals is not runtime.__dict__
+        or caller.f_locals.get("cfg") is not cfg
+        or caller.f_locals.get("done") is not done
+        or caller.f_locals.get("witness") is not witness
+        or witness.get("finished", {}).get("cleanup_terminal") is not True
+        or cfg.get("coding_continuation") is not None
+    ):
+        raise mechanisms.MechanismError("actual source initial B observation required")
+    summary = initial_b_observation_summary(done, witness)
+    record = {
+        "schema": "closer-native-initial-b-observation/v1",
+        "worker_id": witness["worker_id"],
+        "native_b_start": witness["start"],
+        "worker_config_sha256": mechanisms.digest(cfg),
+        "process": {
+            key: witness["finished"][key] for key in ("pid", "process_group", "os_started")
+        },
+        **summary,
+        "stdout_bytes": len(done.stdout.encode("utf-8")),
+        "stderr_bytes": len(done.stderr.encode("utf-8")),
+        "stdout_sha256": hashlib.sha256(done.stdout.encode("utf-8")).hexdigest(),
+        "stderr_sha256": hashlib.sha256(done.stderr.encode("utf-8")).hexdigest(),
+        "domain_completed": False,
+        "global_stop_valid": False,
+        "provider_completion_asserted": False,
+    }
+    reference = witness["retain"]("initial-b-observation-" + witness["worker_id"] + ".json", record)
     return {**summary, "reference": reference}
 
 

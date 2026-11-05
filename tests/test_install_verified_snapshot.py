@@ -73,6 +73,36 @@ def _digest(snapshot: Path) -> str:
     return result.stdout.strip()
 
 
+def test_runtime_digest_preserves_legacy_owned_entry_contract(tmp_path, monkeypatch):
+    import source_snapshot_digest as shared
+
+    snapshot = _snapshot(tmp_path)
+    (snapshot / "alias.py").symlink_to("module.py")
+    monkeypatch.setattr(installer, "_shared_snapshot_digest", None)
+    assert shared.owned_entries(snapshot) == installer.owned_entries(snapshot)
+    before = installer.snapshot_digest(snapshot)
+    assert shared.snapshot_digest(snapshot) == before
+    (snapshot / "module.py").chmod(0o600)
+    assert shared.snapshot_digest(snapshot) == installer.snapshot_digest(snapshot)
+    assert shared.snapshot_digest(snapshot) != before
+
+
+def test_runtime_and_legacy_digest_refuse_walk_errors(tmp_path, monkeypatch):
+    import source_snapshot_digest as shared
+
+    snapshot = _snapshot(tmp_path)
+
+    def unreadable_tree(path, *, followlinks, onerror):
+        onerror(PermissionError("injected unreadable source tree"))
+        return iter(())
+
+    monkeypatch.setattr(os, "walk", unreadable_tree)
+    monkeypatch.setattr(installer, "_shared_snapshot_digest", None)
+    for digest in (shared.snapshot_digest, installer.snapshot_digest):
+        with pytest.raises(PermissionError, match="unreadable source tree"):
+            digest(snapshot)
+
+
 def test_install_uses_only_snapshot_bytes_and_preserves_local_markers(tmp_path):
     snapshot = _snapshot(tmp_path)
     mirror = tmp_path / "live mirror"
@@ -1339,6 +1369,9 @@ def test_tick_reader_rejects_stale_or_wrong_mirror_lock(tmp_path, monkeypatch):
 
     import mirror_reader
 
+    monkeypatch.delenv(mirror_reader.ROOT_ENV, raising=False)
+    monkeypatch.delenv(mirror_reader.GENERATION_ENV, raising=False)
+
     root = tmp_path / "mirror"
     root.mkdir()
     other = tmp_path / "other"
@@ -1352,6 +1385,12 @@ def test_tick_reader_rejects_stale_or_wrong_mirror_lock(tmp_path, monkeypatch):
     with mirror_reader.lock_path(root).open("a") as correct:
         fcntl.flock(correct.fileno(), fcntl.LOCK_SH)
         monkeypatch.setenv(mirror_reader.LOCK_ENV, str(correct.fileno()))
+        assert mirror_reader.inherited_lock(root)
+        monkeypatch.setenv(mirror_reader.ROOT_ENV, str(other))
+        monkeypatch.setenv(mirror_reader.GENERATION_ENV, str(other.resolve()))
+        assert not mirror_reader.inherited_lock(root)
+        monkeypatch.setenv(mirror_reader.ROOT_ENV, str(root))
+        monkeypatch.setenv(mirror_reader.GENERATION_ENV, str(root.resolve()))
         assert mirror_reader.inherited_lock(root)
 
 

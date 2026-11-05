@@ -1,0 +1,10 @@
+{
+  "command": [
+    "git",
+    "add",
+    "scripts/report_relay_join_window.js",
+    "tests/test_relay_acceptance_cli.js",
+    "docs/evidence/issue-1100-round3"
+  ],
+  "exit_code": 128
+}

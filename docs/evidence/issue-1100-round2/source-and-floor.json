@@ -1,0 +1,10 @@
+{
+  "assessed_origin_main": "e86313cb6f1f6f047896b5c1bbb5d9c3c68d339e",
+  "head": "efaa78c2fab661e3731d977acaf4868f96f0c445",
+  "floor_byte_identical": true,
+  "local_floor_sha256": "780186ee0caf07002daac988ecbd91c4d58efb8e1957adb164c8ebae25d0f849",
+  "origin_main_floor_sha256": "780186ee0caf07002daac988ecbd91c4d58efb8e1957adb164c8ebae25d0f849",
+  "github_main_floor_blob_sha": "3ac9a5d4ce7b5854ae9cf8b8a7a2d23a4ba0a7f9",
+  "github_main_floor_byte_identical": true,
+  "github_main_floor_sha256": "780186ee0caf07002daac988ecbd91c4d58efb8e1957adb164c8ebae25d0f849"
+}

@@ -399,6 +399,7 @@ def test_absent_or_refused_source_reader_does_not_accept_json_claim(world, monke
         "issue_owner",
         "scope_node",
         "cached",
+        "head_repository",
         "missing_body",
         "original_source_body",
         "original_source_node",
@@ -425,6 +426,8 @@ def test_fresh_native_binding_refusals_do_not_trigger_verification_or_act(world,
         world.remote.issue["node_id"] = "I_OTHER"
     elif damage == "cached":
         world.remote.current["_local_cached"] = True
+    elif damage == "head_repository":
+        world.remote.current["head_repository"] = "foreign/repository"
     elif damage == "original_source_body":
         world.remote.source["body"] += " changed"
     elif damage == "original_source_node":
@@ -439,6 +442,53 @@ def test_fresh_native_binding_refusals_do_not_trigger_verification_or_act(world,
         del world.remote.pull["body"]
     row = callbacks.observe(world.target)
     assert row["action"] == "wait" and row["eligible"] is False
+    assert world.remote.posts == []
+
+
+def test_case_variant_repository_spelling_keeps_fresh_and_verifier_bindings(world, monkeypatch):
+    import closer_corrective_verifier_readback as readback
+
+    cap = continuation(world)
+    record = join._record(cap)
+    target = "sTrAnSkE/ExAmPlE#9"
+    world.remote.current.update(target=target, head_repository="STRANSKE/example")
+
+    def snapshot(actual):
+        assert actual == target
+        return copy.deepcopy(world.remote.current)
+
+    monkeypatch.setattr(world.remote, "snapshot", snapshot)
+    assert join._fresh(world.backend, target, record)["evidence"]["target"] == target
+
+    monkeypatch.setattr(readback, "require_deployed", lambda *_args: None)
+    prepared = {
+        "mutation_kind": "workflow_dispatch",
+        "fields": {"ref": "main"},
+        "material_selectors": [],
+        "verification_predecessor": None,
+    }
+    built = join.bind_verifier_inputs(
+        cap, world.backend, target, {**world.remote.current, "state": "MERGED"}, prepared
+    )
+    assert join.material_selector(cap) in json.loads(
+        built["fields"]["inputs[verification_material]"]
+    )
+    assert world.remote.posts == []
+
+
+@pytest.mark.parametrize("target", ["foreign/example#9", "stranske/EXAMPLE#09"])
+def test_case_normalization_refuses_foreign_repository_or_different_pr_number(world, target):
+    cap = continuation(world)
+    with pytest.raises(join.ContinuationHeld, match="publication target differs"):
+        join._fresh(world.backend, target, join._record(cap))
+    with pytest.raises(join.ContinuationHeld, match="corrective verification subject differs"):
+        join.bind_verifier_inputs(
+            cap,
+            world.backend,
+            target,
+            {**world.remote.current, "state": "MERGED"},
+            {"mutation_kind": "workflow_dispatch", "fields": {"ref": "main"}},
+        )
     assert world.remote.posts == []
 
 

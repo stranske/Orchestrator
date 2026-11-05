@@ -1,0 +1,14 @@
+✔ retro dispatch records shadow roles without writing outcomes (newest PR #1) (1331.013831ms)
+✔ retro replays each persisted dispute on the same PR (newest run 1) (1090.311237ms)
+✔ retro dispatch records shadow roles without writing outcomes (newest PR #2) (1107.460871ms)
+✔ retro replays each persisted dispute on the same PR (newest run 2) (1250.928184ms)
+✔ retro CLI refreshes late invalid-response costs without grading or redispatch (5995.131168ms)
+✔ retro CLI publishes an empty report without inventing agreement or cost (1088.754935ms)
+ℹ tests 6
+ℹ suites 0
+ℹ pass 6
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 11872.170048

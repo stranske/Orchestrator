@@ -1,0 +1,8 @@
+# Exact retained lines from GitHub Actions job 112773736256
+2026-10-07T11:44:51.6159638Z   pytest:     2579 passed, 0 failed, 26/26 max skipped (2605 collected; floor 2592 — 13 BEHIND)
+2026-10-07T11:44:51.6265881Z   PROBLEMS:
+2026-10-07T11:44:51.6268000Z     - floor is BEHIND reality: 2605 collected > floor 2592 — the floor is 13 test(s) permissive, so that many could silently stop being collected and still read as green. Set "collected": 2605 and "passed": 2605 in .verify-floor.json, keeping the existing note, or run `python3 verify.py --update-floor`. If a branch merged under you, REBASE FIRST: the number must be measured on the merge result.
+2026-10-07T11:44:51.6316330Z ##[error]Process completed with exit code 1.
+
+# Exact retained lines from reconciliation job 112773736215
+2026-10-07T11:44:51.9825112Z   floor updated: collected=2605 passed=2605 (ceilings preserved)

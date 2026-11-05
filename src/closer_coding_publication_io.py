@@ -1657,7 +1657,12 @@ def _result_for_subject(custody, repository, number):
         record = custody.read(name)
         _need(publication.digest(record) == match[1], "publication result custody changed")
         pr = record.get("pr", {})
-        if pr.get("repository") == repository and str(pr.get("pr_number")) == number:
+        recorded_repository = pr.get("repository")
+        if (
+            isinstance(recorded_repository, str)
+            and recorded_repository.lower() == repository.lower()
+            and str(pr.get("pr_number")) == number
+        ):
             _need(record.get("schema") == RESULT_SCHEMA, "publication result schema changed")
             results.append((name, match[1], record))
     _need(len(results) <= 1, "multiple corrective publications need explicit source selection")
@@ -1801,7 +1806,9 @@ def read_for_existing_root(backend, target, snapshot, operation, pipeline_contex
     )
     repository, separator, number = target.rpartition("#")
     _need(
-        separator and repository == controller.config.repository and number.isdecimal(),
+        separator
+        and repository.lower() == controller.config.repository.lower()
+        and number.isdecimal(),
         "publication target differs",
     )
     with controller.fenced(operation) as custody:
@@ -1867,7 +1874,9 @@ def discovery_hint(backend, target, pipeline_context):
     _consumer_source(installation)
     repository, separator, number = target.rpartition("#")
     _need(
-        separator and repository == installation.config["repository"] and number.isdecimal(),
+        separator
+        and repository.lower() == installation.config["repository"].lower()
+        and number.isdecimal(),
         "publication observation subject differs",
     )
     path = Path(installation.manifest_path)

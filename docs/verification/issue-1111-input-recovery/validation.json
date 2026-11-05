@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "base_revision": "43e88676c08ea1a98f74873fb4045ca571b9b9d0",
+  "source_commit": "1cffa38fb703552ce18ccff73f7a24ae714594a9",
+  "node_version": "v24.22.1",
+  "source_and_tests": {
+    "scripts/export_adjudicator_inventory.js": "dfb8c1d39f727bb1f676f73c6afd098ae8c231ea1da6b2b47fa5991d73433d5f",
+    "tests/test_adjudicator_inventory.js": "380764dc7ac8f4ca9b99eb1e99b9a4ebb0e039879149b0684012ec2840da4587",
+    "tests/test_adjudicator_case_gaps.js": "dfba6f1622a9450f7bfc8cb047a49dc64fa78559f419c4b59bc1d805235bd865"
+  },
+  "baseline": [
+    {
+      "command": "node tests/test_adjudicator_inventory.js",
+      "exit": 0,
+      "passed": 28,
+      "log": "inventory-baseline.log"
+    },
+    {
+      "command": "node tests/test_adjudicator_case_gaps.js",
+      "exit": 0,
+      "passed": 6,
+      "log": "gaps-baseline.log"
+    }
+  ],
+  "regression_controls": [
+    {
+      "command": "node --test-name-pattern='owner exclusions' tests/test_adjudicator_inventory.js",
+      "source": "base revision in isolated directory, final candidate tests",
+      "exit": 1,
+      "passed": 2,
+      "failed": 4,
+      "log": "owner-boundary-parent.log.gz"
+    },
+    {
+      "command": "node --test-name-pattern='owner-excluded|retains requested' tests/test_adjudicator_case_gaps.js",
+      "source": "base revision in isolated directory, final candidate tests",
+      "exit": 1,
+      "passed": 0,
+      "failed": 3,
+      "log": "case-gaps-parent.log.gz"
+    }
+  ],
+  "candidate": [
+    {
+      "command": "node tests/test_adjudicator_inventory.js",
+      "exit": 0,
+      "passed": 32,
+      "log": "inventory-after.log"
+    },
+    {
+      "command": "node tests/test_adjudicator_case_gaps.js",
+      "exit": 0,
+      "passed": 6,
+      "log": "gaps-after.log"
+    },
+    {
+      "command": "node --test-name-pattern='dispute inventory|retro saves Gate gaps' tests/test_adjudicator_retro_cli.js",
+      "exit": 0,
+      "passed": 8,
+      "log": "reader-and-gate.log"
+    },
+    {
+      "command": "node --test tests/test_adjudicator_inventory.js tests/test_adjudicator_case_gaps.js tests/test_adjudicator_retrospective_batch.js tests/test_adjudicator_closer_shadow.js tests/test_adjudicator_receipts.js tests/test_adjudicator_completion.js",
+      "exit": 0,
+      "test_files_passed": 6,
+      "log": "related-after.log"
+    }
+  ],
+  "other_checks": [
+    "node --check for all three changed JavaScript files",
+    "git diff --check",
+    "git apply --check source-commit.patch against base revision files"
+  ],
+  "operational_acceptance_complete": false,
+  "not_run": [
+    "Original cohort replay: authenticated identities and permitted Brain inventory unavailable.",
+    "Three named pytest tests and specified mutations: pytest absent in all five installed interpreters; PyPI DNS unavailable.",
+    "Real contested closer observation, persisted role and cost reconciliation: live Brain unavailable.",
+    "Full CLI suite and individual disposition of the 16 retained failures.",
+    "Completion metadata publication and successor reconciliation."
+  ],
+  "files": {
+    "README.md": "151fe40086d9fcedc1bf5fe2311a4d42571512b8e889547968767d29e40c05ea",
+    "case-gaps-parent.log.gz": "a0e791a73268d95453a434a22020770c8fcfafa0a1a0b0522ce2b6e792ea7290",
+    "gaps-after.log": "6bfba8bac1116e70532164db37485bcf82facaedef5ff33958cadb8970bf9278",
+    "gaps-baseline.log": "99672652b52af919235349d0566f8726c312e1cf917acfbd8f3d93dcc8343ebf",
+    "inventory-after.log": "692cc00146a89b9fc319e5bc8f6e401a081d9e5e5d3570b0692d00b77ccd7a54",
+    "inventory-baseline.log": "793d243d316330a893b46ee8bd4fa136e4b761844784b8943c90bfd24831b3dc",
+    "owner-boundary-parent.log.gz": "edd0e9d3cab1f740a43e23f565726152de5ccafc4c720293507e64f7bf9448a6",
+    "publication.json": "121fdf508013e7351d2f8f2ad551834f9168fda7993215668cea0daff85ba630",
+    "reader-and-gate.log": "ff7698cdc1e91cfc0bc90bfaee0c0c465e123b862d5d258b05d97f71b327edb1",
+    "recovery.json": "41a959c4929b97c42344cb9d81a13dbac8b9b619c7a7444fe1e959880ea01323",
+    "related-after.log": "3d211e69d8323a5c6bac8511c981d73904b0757590abb41afa0a2cbb535475ff",
+    "runner-inventory.json": "e38e68d027f719cd7798a3dcca4afc89b5cb330493c2f7e0dc2a0776c1818d9e",
+    "source-commit.patch": "1b3c041f5586af4e474fc013af1fb04121fbe67846e93bbcab41e42accbcef90"
+  }
+}

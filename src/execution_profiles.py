@@ -14,6 +14,7 @@ import os
 import random
 import sqlite3
 import time
+from collections.abc import Mapping
 from typing import Any
 
 PROFILE_SCHEMA_VERSION = 1
@@ -604,6 +605,55 @@ def _selftest() -> None:
     assert CAPACITY_POOLS["muse-subscription"]["tier"] == "flat", CAPACITY_POOLS[
         "muse-subscription"
     ]
+
+
+_IDENTITY_TEXT = (
+    "profile_id",
+    "agent",
+    "provider",
+    "requested_model",
+    "reasoning_effort",
+    "permission_mode",
+    "adapter_version",
+    "prompt_version",
+    "lifecycle_status",
+)
+
+
+def _text(value: Any) -> bool:
+    return isinstance(value, str) and bool(value) and value == value.strip()
+
+
+def profile_identity(profile: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the exact semantic execution identity; missing fields never infer defaults."""
+    if not isinstance(profile, Mapping):
+        raise ValueError("profile identity must be an object")
+    if any(not _text(profile.get(key)) for key in _IDENTITY_TEXT):
+        raise ValueError("profile identity has missing or invalid fields")
+    if profile["agent"].casefold() == "aider":
+        raise ValueError("Aider is not an eligible Closer worker")
+    if profile["lifecycle_status"] != "active":
+        raise ValueError("profile lifecycle is not active")
+    if profile["permission_mode"] not in {"read-only", "workspace-write"}:
+        raise ValueError("profile permission mode is unsupported")
+    result = {key: profile[key] for key in _IDENTITY_TEXT}
+    for key in ("transport_support", "capacity_pool_ids"):
+        values = profile.get(key)
+        if (
+            not isinstance(values, list)
+            or not values
+            or any(not _text(value) for value in values)
+            or len(set(values)) != len(values)
+        ):
+            raise ValueError(f"profile {key} is missing or invalid")
+        result[key] = sorted(values)
+    if "offload" not in result["transport_support"]:
+        raise ValueError("profile has no supported offload transport")
+    explicit = profile.get("requires_explicit_selection", False)
+    if type(explicit) is not bool:
+        raise ValueError("profile explicit selection flag is invalid")
+    result["requires_explicit_selection"] = explicit
+    return result
 
 
 def get_profile(profile: str | dict[str, Any]) -> dict[str, Any]:

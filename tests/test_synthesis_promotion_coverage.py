@@ -3,7 +3,15 @@ from __future__ import annotations
 import json
 import subprocess
 
+import pytest
+
 import synthesis_promotion as promotion
+
+
+@pytest.fixture(autouse=True)
+def isolated_orchestrator_paths(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path / "runtime"))
 
 
 def _completed(

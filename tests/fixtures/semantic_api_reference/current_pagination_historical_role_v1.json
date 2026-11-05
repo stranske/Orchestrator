@@ -1,0 +1,43 @@
+{
+  "base_commit": "2a5aea7e257c7bae2f2dd729fd0d0245ad62540a",
+  "files": {
+    "closer_native_source_upgrade.py": {
+      "after_file_sha256": "8fe811de13cae4e540fe1ea9780509c805962925de1f181a8438d5da321793cc",
+      "after_module_ast_sha256": "b574063c7c4cc14fdc898c4e5dd150dd302037bc4e546931424f4e01a9ef1e44",
+      "before_file_sha256": "2606cb010608478debf45ced3f17ddf2047853d3994622d484dbade9556db0d7",
+      "before_module_ast_sha256": "f036ab016a407cb092af145d00a950604748828fff2b7b671b851900805488bf",
+      "constant_delta": {},
+      "function_delta": {
+        "_old_reference": {
+          "after": "465982c76247c6b348bf47faac5bd9c196dadcff676ecc9a228c852e509431c1",
+          "before": "321e184b77978d778028090b0665b720401eae71c5ca7e3175a1c40b5e2eb863"
+        },
+        "_pagination_preinstruction_diagnostic": {
+          "after": "43d54f15b6047877991f33b7f5fc69ee48e4ccfb48bbcadd5c33045844aba7ae",
+          "before": "152f41767e8998d7ab6c12b35bd2e98ff7920164ed780499bf3c59150fcaa00a"
+        },
+        "plan": {
+          "after": "7dca8c5a8620b1ee0720fe5ff331abc24dd33a647168d55d838d22ed040f8046",
+          "before": "53f66c3b9a74eb5f93ba831965eb59322754e024daa1617fe0b9e1afccd222c0"
+        }
+      },
+      "historical_reversal": [
+        {
+          "after_fragment": "        profile = execution_profiles.get_profile(expected[\"profile_id\"])\n        role = roles.TASK_ROLES[\"closer_exception\"]\n        qualification_id = expected.get(\"qualification_id\")\n        qualified = (\n            roles.ROLE_QUALIFICATIONS.get(qualification_id)\n            if isinstance(qualification_id, str)\n            else None\n        )\n        historical_records = {qualification_id: qualified} if isinstance(qualified, dict) else None\n        current_record = roles.qualified_record(profile, role, now=at, records=historical_records)\n        admission_record = roles.qualified_record(\n            profile, role, now=admission[\"started_at\"], records=historical_records\n        )\n        strong = bool(\n            actual.get(\"run_id\")\n",
+          "before_fragment": "        profile = execution_profiles.get_profile(expected[\"profile_id\"])\n        role = roles.TASK_ROLES[\"closer_exception\"]\n        current_record = roles.qualified_record(profile, role, now=at)\n        admission_record = roles.qualified_record(profile, role, now=admission[\"started_at\"])\n        strong = bool(\n            actual.get(\"run_id\")\n"
+        },
+        {
+          "after_fragment": "        return _seed_assessment_reference(manifest_path, state_path, worker_id), False\n    if manifest.get(\"candidate_sha\") == REVIEWED_PAGINATION_CANDIDATE:\n        return _sealed_pagination_reference(manifest_path, state_path, worker_id), False\n    return _completed_reference(manifest_path, state_path, worker_id), False\n\n",
+          "before_fragment": "        return _seed_assessment_reference(manifest_path, state_path, worker_id), False\n    if manifest.get(\"candidate_sha\") == REVIEWED_PAGINATION_CANDIDATE:\n        return _pagination_reference(manifest_path, state_path, worker_id), False\n    return _completed_reference(manifest_path, state_path, worker_id), False\n\n"
+        },
+        {
+          "after_fragment": "        # but intentionally leaves its uncertain operation and reservations in\n        # place. It is not a completion proof and cannot authorize a replay.\n        _old_module_bytes(old)\n        diagnostic = _pagination_preinstruction_diagnostic(reference)\n        _need(\n            diagnostic.get(\"pre_instruction_proven\") is True\n            and reference[\"state_sha256\"] == _sha(host._read(Path(reference[\"state_path\"]))[1])\n            and reference[\"result_sha256\"] == REVIEWED_PAGINATION_RESULT_SHA256,\n            \"pagination old-source diagnostic differs\",\n        )\n    else:\n        interpreter = Path(old[\"mechanism_contract\"][\"interpreter\"][\"path\"])\n",
+          "before_fragment": "        # but intentionally leaves its uncertain operation and reservations in\n        # place. It is not a completion proof and cannot authorize a replay.\n        interpreter = Path(old[\"mechanism_contract\"][\"interpreter\"][\"path\"])\n        historical = _old_diagnostic(\n            old_path, Path(reference[\"state_path\"]), worker_id, interpreter=interpreter\n        )\n        _need(\n            historical.get(\"pagination_scoped_continuation\") is True\n            and historical.get(\"state_sha256\") == reference[\"state_sha256\"]\n            and historical.get(\"result\", {}).get(\"sha256\") == REVIEWED_PAGINATION_RESULT_SHA256,\n            \"pagination old-source diagnostic differs\",\n        )\n        diagnostic = _pagination_preinstruction_diagnostic(reference)\n    else:\n        interpreter = Path(old[\"mechanism_contract\"][\"interpreter\"][\"path\"])\n"
+        }
+      ],
+      "outside_reviewed_changes_ast_sha256": "8c2255d41df1f56b3645a86f20dc920065d5cccba5016b9468b07f6a26781197"
+    }
+  },
+  "schema": "pagination-historical-role-source-successor/v1",
+  "scope": "Read the literal signed D4 predecessor using its own original qualification and as-of times; preserve current live admission and all other predecessors."
+}

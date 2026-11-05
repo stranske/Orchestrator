@@ -4,8 +4,8 @@
 Never edits the installed automation: it reads --controller and writes --out only, for the
 coordinator to review and deploy. The rendered controller loads closer_campaign (and the
 modules it imports) from the paths and sha256 digests in --manifest, never by a plain
-`import` from the controller directory, and falls back to the unchanged demand_router
-path if any digest differs or a pinned module is already cached. Cached modules
+`import` from the controller directory. Legacy v1 hooks preserve their demand_router
+fallback; v2 publisher hooks stop if any runtime pin differs. Cached modules
 require a fresh controller process. Refuses unexpected or conflicting hook bindings.
 """
 
@@ -25,6 +25,12 @@ NEW = (
     "        return demand_router.main(argv)\n"
     "    return campaign.controller_entry(argv, demand_router.main)\n"
 )
+NEW_CLOSURE = (
+    "    campaign = _load_pinned_closer_campaign()\n"
+    "    if campaign is None:\n"
+    "        return 0\n"
+    "    return campaign.controller_entry(argv, None)\n"
+)
 MAIN_DEF = "def main(argv: list[str] | None = None) -> int:\n"
 MARKER = "# closer-campaign pinned loader"
 LOADER = '''{marker}
@@ -43,9 +49,13 @@ def _load_pinned_closer_campaign():
         manifest = _json.loads(_Path(CLOSER_CAMPAIGN_MANIFEST).read_text())
         base = _Path(manifest["module_dir"]).resolve()
         modules = manifest["modules"]
+        demand = (manifest.get("mechanism_contract") or {{}}).get("controller_demand") or {{}}
+        v2_closure = demand.get("schema") == "closer-controller-demand/v2"
         required = ("claims.py", "closer_release.py", "closer_runtime_binding.py",
                     "closer_campaign.py", "router.py", "execution_profiles.py",
                     "closer_distribution_package.py")
+        if v2_closure:
+            required += ("closer_publisher_closure.py",)
         if not all(name in modules for name in required):
             return None
         for name, digest in modules.items():
@@ -81,6 +91,17 @@ def _load_pinned_closer_campaign():
 
 
 def render(source: str, manifest_path: str) -> str:
+    wants_closure = False
+    try:
+        contract = (
+            json.loads(Path(manifest_path).read_text())
+            .get("mechanism_contract", {})
+            .get("controller_demand", {})
+        )
+        wants_closure = contract.get("schema") == "closer-controller-demand/v2"
+    except (OSError, ValueError, AttributeError):
+        pass
+    replacement = NEW_CLOSURE if wants_closure else NEW
     if MARKER in source:
         expected = str(Path(manifest_path).resolve())
         try:
@@ -110,7 +131,7 @@ def render(source: str, manifest_path: str) -> str:
                 source.count(MARKER) != 1
                 or source.count(loader) != 1
                 or source.count(MAIN_DEF) != 1
-                or source.count(NEW) != 1
+                or source.count(NEW) + source.count(NEW_CLOSURE) != 1
             ):
                 raise ValueError("unexpected pinned loader shape")
         except (SyntaxError, ValueError, TypeError) as exc:
@@ -121,7 +142,7 @@ def render(source: str, manifest_path: str) -> str:
             "controller main() does not have the expected single demand_router delegation"
         )
     loader = LOADER.format(marker=MARKER, manifest=str(Path(manifest_path).resolve()))
-    return source.replace(MAIN_DEF, loader + MAIN_DEF).replace(OLD, NEW)
+    return source.replace(MAIN_DEF, loader + MAIN_DEF).replace(OLD, replacement)
 
 
 def check_manifest(path: str) -> None:

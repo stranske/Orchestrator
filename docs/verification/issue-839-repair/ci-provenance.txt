@@ -1,0 +1,44 @@
+baseline: run=39487981121 artifact=12295566251 coverage.json sha256=942a0cdde335a1d8dddf347d52354e02556656d195a385e56e615d9148b00212
+meta={"branch_coverage": false, "format": 3, "show_contexts": false, "timestamp": "2026-10-20T20:18:04.010823", "version": "7.16.2"}
+src/redirect_sweep.py: missing_lines=88, missing_branches=UNMEASURED, missing_line_numbers=[58, 59, 65, 66, 67, 68, 69, 85, 91, 92, 93, 117, 177, 180, 181, 183, 185, 197, 198, 199, 200, 202, 203, 204, 239, 240, 241, 242, 290, 314, 340, 370, 378, 392, 400, 419, 420, 428, 455, 456, 559, 562, 563, 564, 598, 599, 600, 601, 613, 620, 683, 684, 685, 686, 700, 826, 947, 948, 949, 950, 951, 952, 953, 954, 955, 956, 957, 958, 959, 961, 966, 967, 968, 969, 970, 982, 983, 984, 985, 986, 988, 992, 993, 994, 998, 999, 1000, 1004]
+src/watch.py: missing_lines=62, missing_branches=UNMEASURED, missing_line_numbers=[97, 103, 109, 110, 128, 129, 135, 138, 141, 142, 153, 174, 209, 212, 228, 263, 266, 309, 367, 375, 378, 379, 392, 393, 395, 396, 403, 424, 552, 554, 614, 625, 693, 695, 943, 944, 954, 957, 958, 959, 960, 961, 962, 963, 964, 965, 971, 976, 977, 978, 980, 981, 982, 983, 984, 985, 986, 988, 1001, 1002, 1004, 1005]
+head: run=39488345332 artifact=12295346597 coverage.json sha256=1ba6617cc6821f99e01c06f3c120ee1e5d44f93fa6bdcd350c11929bdfceb612
+meta={"branch_coverage": false, "format": 3, "show_contexts": false, "timestamp": "2026-10-20T20:13:17.831341", "version": "7.16.2"}
+src/redirect_sweep.py: missing_lines=5, missing_branches=UNMEASURED, missing_line_numbers=[460, 461, 835, 1008, 1009]
+src/watch.py: missing_lines=15, missing_branches=UNMEASURED, missing_line_numbers=[153, 174, 228, 375, 378, 379, 392, 393, 395, 396, 552, 554, 614, 943, 944]
+
+BASELINE log excerpts (unmodified lines):
+combined coverage (pytest + selftests, the honest number)	UNKNOWN STEP	2026-10-20T19:58:27.6254615Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +a538c8527d0e05f7cc78b30d599d61194d156078:refs/remotes/origin/main
+combined coverage (pytest + selftests, the honest number)	UNKNOWN STEP	2026-10-20T19:58:29.3073322Z  * [new ref]         a538c8527d0e05f7cc78b30d599d61194d156078 -> origin/main
+combined coverage (pytest + selftests, the honest number)	UNKNOWN STEP	2026-10-20T19:58:29.3147894Z a538c8527d0e05f7cc78b30d599d61194d156078
+combined coverage (pytest + selftests, the honest number)	UNKNOWN STEP	2026-10-20T19:58:29.7080961Z a538c8527d0e05f7cc78b30d599d61194d156078
+combined coverage (pytest + selftests, the honest number)	UNKNOWN STEP	2026-10-20T19:58:57.0688922Z ^[[36;1mpython3 src/verify.py --coverage --floor-may-lag 2>&1 | tee /tmp/combined.txt^[[0m
+combined coverage (pytest + selftests, the honest number)	UNKNOWN STEP	2026-10-20T20:18:14.6091390Z   pytest:     7518 passed, 0 failed, 30/31 max (7548 collected; floor 7509 — 39 BEHIND)
+combined coverage (pytest + selftests, the honest number)	UNKNOWN STEP	2026-10-20T20:18:14.6091929Z   selftests:  108 of 115 modules ran, 7/7 max skipped
+
+HEAD log excerpts (unmodified lines):
+combined coverage (pytest + selftests, the honest number)	UNKNOWN STEP	2026-10-20T20:00:59.6773917Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +4d4636e900dd242468301a76db0338bca7f910df:refs/remotes/pull/842/merge
+combined coverage (pytest + selftests, the honest number)	UNKNOWN STEP	2026-10-20T20:01:01.9650150Z  * [new ref]         4d4636e900dd242468301a76db0338bca7f910df -> pull/842/merge
+combined coverage (pytest + selftests, the honest number)	UNKNOWN STEP	2026-10-20T20:01:02.2113220Z HEAD is now at 4d4636e Merge feff391af64038f118db167dc0b866a917523b06 into a538c8527d0e05f7cc78b30d599d61194d156078
+combined coverage (pytest + selftests, the honest number)	UNKNOWN STEP	2026-10-20T20:01:02.2191223Z 4d4636e900dd242468301a76db0338bca7f910df
+combined coverage (pytest + selftests, the honest number)	UNKNOWN STEP	2026-10-20T20:01:19.8152040Z ^[[36;1mpython3 src/verify.py --coverage --floor-may-lag 2>&1 | tee /tmp/combined.txt^[[0m
+combined coverage (pytest + selftests, the honest number)	UNKNOWN STEP	2026-10-20T20:13:23.7662123Z   pytest:     7528 passed, 0 failed, 30/31 max (7558 collected; floor 7509 — 49 BEHIND)
+combined coverage (pytest + selftests, the honest number)	UNKNOWN STEP	2026-10-20T20:13:23.7662456Z   selftests:  108 of 115 modules ran, 7/7 max skipped
+
+VERDICT log excerpts (unmodified lines):
+verify.py (real pytest counts + selftests + capability gates)	UNKNOWN STEP	2026-10-20T20:01:00.8789387Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +4d4636e900dd242468301a76db0338bca7f910df:refs/remotes/pull/842/merge
+verify.py (real pytest counts + selftests + capability gates)	UNKNOWN STEP	2026-10-20T20:01:03.1866611Z  * [new ref]         4d4636e900dd242468301a76db0338bca7f910df -> pull/842/merge
+verify.py (real pytest counts + selftests + capability gates)	UNKNOWN STEP	2026-10-20T20:01:03.4563188Z HEAD is now at 4d4636e Merge feff391af64038f118db167dc0b866a917523b06 into a538c8527d0e05f7cc78b30d599d61194d156078
+verify.py (real pytest counts + selftests + capability gates)	UNKNOWN STEP	2026-10-20T20:01:03.4651755Z 4d4636e900dd242468301a76db0338bca7f910df
+verify.py (real pytest counts + selftests + capability gates)	UNKNOWN STEP	2026-10-20T20:14:26.7015929Z   pytest:     7528 passed, 0 failed, 30/31 max (7558 collected; floor 7509 — 49 BEHIND)
+verify.py (real pytest counts + selftests + capability gates)	UNKNOWN STEP	2026-10-20T20:14:26.7016337Z   selftests:  108 of 115 modules ran, 7/7 max skipped
+
+GATE PYTEST log excerpts (unmodified lines):
+python ci / python 3.12	UNKNOWN STEP	2026-10-20T20:01:33.0027123Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +4d4636e900dd242468301a76db0338bca7f910df:refs/remotes/pull/842/merge
+python ci / python 3.12	UNKNOWN STEP	2026-10-20T20:01:35.7934238Z  * [new ref]         4d4636e900dd242468301a76db0338bca7f910df -> pull/842/merge
+python ci / python 3.12	UNKNOWN STEP	2026-10-20T20:01:36.1795221Z HEAD is now at 4d4636e Merge feff391af64038f118db167dc0b866a917523b06 into a538c8527d0e05f7cc78b30d599d61194d156078
+python ci / python 3.12	UNKNOWN STEP	2026-10-20T20:01:36.1936355Z 4d4636e900dd242468301a76db0338bca7f910df
+python ci / python 3.12	UNKNOWN STEP	2026-10-20T20:18:20.5080123Z ========== 7434 passed, 124 skipped, 6 warnings in 992.36s (0:16:32) ===========
+
+Original dispatch log excerpt: /Users/teacher/.codex/automations/logs/coverage-autopilot.out:1415
+2026-10-20T13:00:50-0500 [Orchestrator#B] opened issue #839 (lane B, 6 target(s), 234 units): https://github.com/stranske/Orchestrator/issues/839

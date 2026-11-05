@@ -232,7 +232,19 @@ def test_foreign_or_invalid_observation_never_becomes_trial(host, field, value):
     data = poll()
     data[field] = value
     (polls / "claude-usage.json").write_text(json.dumps(data))
-    assert scoped.evaluate(cfg, now=NOW)["agents"]["claude"]["state"] == "unknown"
+    report = scoped.evaluate(cfg, now=NOW)
+    assert report["agents"]["claude"]["state"] == "unknown"
+    assert not scoped.validate_admitted_report(
+        report,
+        now=NOW,
+        policy={
+            "owner": cfg["owner"],
+            "profile_ids": cfg["profile_ids"],
+            "bounded_trial_agents": cfg["bounded_trial_agents"],
+        },
+        runtime_manifest=cfg["runtime_manifest"],
+        runtime_manifest_sha256=cfg["runtime_manifest_sha256"],
+    )
 
 
 @pytest.mark.parametrize("new_constraint", ["marker", "ordinary_false"])
@@ -264,15 +276,26 @@ def test_new_operational_constraint_invalidates_prior_report_without_mutation(ho
 
 def test_unselected_usage_poll_does_not_invalidate_selected_scope(host):
     cfg, polls, _ = host
+    (polls / "claude-usage.json").write_text(json.dumps(poll(percent=82)))
     report = scoped.evaluate(cfg, now=NOW)
     assert set(report["input_sha256"]) == {
         str(polls.parent.parent / "handoff/capacity-shed/claude"),
         str(polls / "claude-usage.json"),
     }
-    (polls / "codex-usage.json").write_text(
-        json.dumps({**poll(codex=True), "ordinary_usage_allowed": False})
-    )
+    policy = {
+        "owner": cfg["owner"],
+        "profile_ids": cfg["profile_ids"],
+        "bounded_trial_agents": cfg["bounded_trial_agents"],
+    }
+    (polls / "codex-usage.json").write_text("{malformed")
     assert scoped.validate_report(report, now=NOW)
+    assert scoped.validate_admitted_report(
+        report,
+        now=NOW,
+        policy=policy,
+        runtime_manifest=cfg["runtime_manifest"],
+        runtime_manifest_sha256=cfg["runtime_manifest_sha256"],
+    )
 
 
 def test_selected_codex_usage_remains_a_fail_closed_input(host):
@@ -281,10 +304,29 @@ def test_selected_codex_usage_remains_a_fail_closed_input(host):
     (polls / "codex-usage.json").write_text(json.dumps(poll(codex=True)))
     report = scoped.evaluate(cfg, now=NOW)
     assert scoped.validate_report(report, now=NOW)
+    policy = {
+        "owner": cfg["owner"],
+        "profile_ids": cfg["profile_ids"],
+        "bounded_trial_agents": cfg["bounded_trial_agents"],
+    }
+    assert scoped.validate_admitted_report(
+        report,
+        now=NOW,
+        policy=policy,
+        runtime_manifest=cfg["runtime_manifest"],
+        runtime_manifest_sha256=cfg["runtime_manifest_sha256"],
+    )
     (polls / "codex-usage.json").write_text(
         json.dumps({**poll(codex=True), "ordinary_usage_allowed": False})
     )
     assert not scoped.validate_report(report, now=NOW)
+    assert not scoped.validate_admitted_report(
+        report,
+        now=NOW,
+        policy=policy,
+        runtime_manifest=cfg["runtime_manifest"],
+        runtime_manifest_sha256=cfg["runtime_manifest_sha256"],
+    )
 
 
 def test_marker_hash_and_decision_are_same_observation(host, monkeypatch):
