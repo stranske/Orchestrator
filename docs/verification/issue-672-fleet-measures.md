@@ -1,5 +1,28 @@
 # Fleet delivery measures — 2026-11-05 runner check
 
+## Canary pagination overlap check — 2026-11-05 21:01Z
+
+The canary reader now rejects duplicate PR numbers within or between pages,
+including non-sync PRs, and missing or invalid numbers. An overlap can accompany
+an omitted older sync PR, so deduplicating does not establish the oldest age.
+Numbers are checked independently per repository. The expanded existing test
+failed with a numeric age before the fix and passes afterward; other measures
+remain available. The fleet suite still contains 27 test methods.
+
+Verified with the available Python: all 27 fleet unittest cases, the module
+selftest, and all five error-swallowing mutation controls pass. Both JavaScript
+live/mutation verifier test files pass, as does `git diff --check`. The available
+Python CLI produced all five rows at `2026-11-05T21:01:21.156Z`, reporting
+unavailable reads explicitly. Receipt: `/tmp/orch-672-canary-pagination/check.json`.
+
+No task is newly marked complete. The selected `/opt/anaconda3/bin/python3` is
+absent: both full verification and the selected-interpreter live check cannot
+run. Pytest and Black are absent, package installation failed, and no local
+copies were found. The required Black formatting and repository-wide check
+could not run, so the Python changes remain uncommitted under the pre-commit
+formatting gate. The available-Python smoke check does not establish live-machine
+acceptance.
+
 ## PR body evidence check — 2026-11-05 19:20Z
 
 The PR readers now require an explicitly present body whose value is a string or

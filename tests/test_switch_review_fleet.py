@@ -179,6 +179,35 @@ class FleetDeliveryTests(unittest.TestCase):
         row = self.measure()["rows"]["oldest_canary"]
         self.assertIn("stranske/trip-planner#42", row["value"])
 
+        # A duplicate can indicate that PRs shifted between pages, leaving an
+        # older sync PR out of the response. Deduplicating cannot prove its age.
+        repo = "stranske/trip-planner"
+        pr = copy.deepcopy(self.data["canary_prs"][repo][1][0])
+        non_sync = {**pr, "head": {"ref": "feature/other"}}
+        for pages in ([[pr, pr]], [[pr], [pr]], [[non_sync], [non_sync]]):
+            with self.subTest(overlapping_pages=len(pages)):
+                self.data["canary_prs"][repo] = pages
+                rows = self.measure()["rows"]
+                self.assertIsNone(rows["oldest_canary"]["value"])
+                self.assertIn("non-overlapping canary PR pages", rows["oldest_canary"]["reason"])
+                self.assertEqual(len(rows), 5)
+                for key in ("merge_to_close", "released_flow", "opener_cap"):
+                    self.assertIsNotNone(rows[key]["value"])
+
+        for number in (None, False, 0, -1, "42"):
+            with self.subTest(invalid_number=number):
+                self.data["canary_prs"][repo] = [[{**pr, "number": number}]]
+                row = self.measure()["rows"]["oldest_canary"]
+                self.assertIsNone(row["value"])
+                self.assertIn("complete GitHub canary PR numbers", row["reason"])
+
+        # PR numbers are unique within a repository, rather than across canaries.
+        self.data["canary_prs"][repo] = [[pr]]
+        other_repo = "stranske/Portable-Alpha-Extension-Model"
+        self.data["canary_prs"][other_repo][0][0]["number"] = pr["number"]
+        row = self.measure()["rows"]["oldest_canary"]
+        self.assertIn("stranske/trip-planner#42", row["value"])
+
     def test_no_open_sync_prs_is_measured_absence(self):
         for repo in self.data["canary_prs"]:
             self.data["canary_prs"][repo] = [[]]

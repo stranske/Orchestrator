@@ -665,14 +665,23 @@ def _fleet_oldest_canary(gh, now: int) -> dict:
             or any(not isinstance(page, list) for page in pages)
         ):
             raise _FleetReadError(f"would need complete paginated canary PR arrays for {repo}")
+        seen: set[int] = set()
         for page in pages:
             for pr in page:
+                number = pr.get("number")
+                if type(number) is not int or number <= 0:
+                    raise _FleetReadError("would need complete GitHub canary PR numbers")
+                # A repeated PR can accompany an omitted PR when the open
+                # population shifts during pagination, including non-sync PRs.
+                if number in seen:
+                    raise _FleetReadError("would need consistent non-overlapping canary PR pages")
+                seen.add(number)
                 if _fleet_head_ref(pr, "canary PR").startswith("sync/workflows-"):
                     # Draft PRs still have age and still represent undelivered work.
                     created = _fleet_stamp(pr["created_at"])
                     if created > now:
                         raise _FleetReadError("would need canary creation timestamps before now")
-                    candidates.append((created, repo, pr["number"]))
+                    candidates.append((created, repo, number))
     evidence = "GitHub REST; Workflows configured three-canary cohort"
     if not candidates:
         return _fleet_measured("none open (0 sync PRs across 3 canaries)", evidence)
