@@ -19,6 +19,7 @@ import capability_activation_audit as audit
 import exp_abcd
 import feedback
 import local_verify
+import paths
 import periodic_report
 import repo_knowledge
 import tick
@@ -1932,3 +1933,50 @@ def test_feedback_memory_keeps_matching_notes_and_swallows_query_errors(monkeypa
 
     monkeypatch.setattr(feedback, "_conn", broken)
     assert repo_knowledge._run_memory_from_feedback("o/r") == []
+
+
+# ----- measured combined-coverage artifact -----------------------------------
+
+_MEASURED_MODULES = {
+    "local_verify": local_verify,
+    "capability_activation_audit": audit,
+    "exp_abcd": exp_abcd,
+    "periodic_report": periodic_report,
+    "tick": tick,
+    "repo_knowledge": repo_knowledge,
+}
+
+
+def test_published_head_measurement_matches_ranked_source_lines():
+    """The ea6255b combined artifact's six-target gain is 296, and the 21 lines it still misses are these source lines."""
+    record_path = (
+        paths.REPO_ROOT / "docs" / "verification" / "issue-1138" / "head-ea6255b-combined.json"
+    )
+    record = json.loads(record_path.read_text())
+    assert record["measured_head_sha"] == "ea6255b9c477f9abe31c81d3ef6ec48b3e023bb0"
+    assert record["base_sha"] == "555c1f1cf0ac8a6fb3e64d4081ecf952df126021"
+    assert record["run_id"] == 41975530292
+    assert record["artifact_id"] == 13391989393
+    assert record["branch_coverage"] is False
+
+    order = list(_MEASURED_MODULES)
+    assert list(record["targets"]) == order
+    gain = 0
+    still = 0
+    base_missing = 0
+    for name, module in _MEASURED_MODULES.items():
+        row = record["targets"][name]
+        assert row["base_missing"] - row["head_missing"] == row["gain"]
+        assert len(row["still_missing"]) == row["head_missing"]
+        gain += row["gain"]
+        still += row["head_missing"]
+        base_missing += row["base_missing"]
+        source = Path(module.__file__).read_text().splitlines()
+        for item in row["still_missing"]:
+            assert source[item["line"] - 1] == item["text"]
+    assert base_missing == record["base_missing"] == 317
+    assert still == record["head_missing"] == 21
+    assert gain == record["gain"] == 296
+    assert record["shortfall_from_180"] == max(0, 180 - gain) == 0
+    non_target = record["non_target_missing_delta"]
+    assert gain - sum(non_target.values()) == record["repo"]["repo_missing_reduction"] == 289

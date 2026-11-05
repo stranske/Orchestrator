@@ -115,8 +115,25 @@ Local intersection against the same base artifact, 77 tests in this module:
 | total | 317 | 296 | 21 |
 
 Predicted shortfall from 180: 0 (296 >= 180). This is the same intersection method that
-matched the `88df4821` artifact's 88/88 gain. It is still not the Gate artifact for this
-head.
+matched the `88df4821` artifact's 88/88 gain.
+
+## Measured head `ea6255b`
+
+[CI run 41975530292](https://github.com/stranske/Orchestrator/actions/runs/41975530292)
+published [coverage artifact 13391989393](https://github.com/stranske/Orchestrator/actions/runs/41975530292/artifacts/13391989393)
+for `ea6255b9c477f9abe31c81d3ef6ec48b3e023bb0`. Compared with exact-base artifact
+13382156456, the six ranked targets dropped from 317 missing statements to 21.
+Measured gain: **296**. Shortfall from 180: **0**. The prediction matched the artifact
+on every target. Branch coverage is disabled, so this is statements only.
+
+Repo-wide missing lines fell by 289 (85.725677% to 85.974024%). The pull-request job
+measures the merge with main, where `provision.py` gained 49 statements and 8 missing
+lines, `switch_review.py` lost one covered line, and `capacity.py` gained two:
+296 - 8 - 1 + 2 = 289.
+
+The recorded line texts and the arithmetic are checked by
+`test_published_head_measurement_matches_ranked_source_lines`.
+[head-ea6255b-combined.json](head-ea6255b-combined.json) is that record.
 
 The 21 statements this module does not execute are inside `_selftest` bodies, and the
 combined baseline already runs those selftests without reaching them:
