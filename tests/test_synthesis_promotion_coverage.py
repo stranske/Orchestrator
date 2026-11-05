@@ -1,17 +1,50 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
+import capabilities
+import feedback
 import synthesis_promotion as promotion
 
 
 @pytest.fixture(autouse=True)
 def isolated_orchestrator_paths(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "state"))
-    monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path / "runtime"))
+    """Point cached runtime roots at this test's temp dirs before the body runs.
+
+    ``synthesis_promotion`` imports ``feedback`` and ``capabilities``, and those
+    modules bind ``LOCAL_RUNTIME``, ``DB_PATH`` and ``REG`` at import time.
+    Collection imports this module before any fixture, so a later ``setenv``
+    does not move those cached paths. Rebind them here, after both environment
+    variables name this test's temporary directories.
+    """
+    state = tmp_path / "state"
+    runtime = tmp_path / "runtime"
+    state.mkdir()
+    runtime.mkdir()
+    monkeypatch.setenv("ORCH_STATE_DIR", str(state))
+    monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(runtime))
+    monkeypatch.delenv("ORCH_FEEDBACK_DB", raising=False)
+    monkeypatch.delenv("ORCH_CAPABILITIES_PATH", raising=False)
+    monkeypatch.setattr(feedback, "LOCAL_RUNTIME", runtime)
+    monkeypatch.setattr(feedback, "DB_PATH", feedback.resolve_db_path())
+    monkeypatch.setattr(capabilities, "LOCAL_RUNTIME", runtime)
+    monkeypatch.setattr(capabilities, "REG", runtime / "capabilities.json")
+    monkeypatch.setattr(capabilities, "FEATURES_REG", runtime / "experiments" / "features.json")
+    assert os.environ["ORCH_STATE_DIR"] == str(state)
+    assert os.environ["ORCH_LOCAL_RUNTIME"] == str(runtime)
+    assert feedback.LOCAL_RUNTIME == runtime
+    assert capabilities.LOCAL_RUNTIME == runtime
+    assert feedback.DB_PATH.resolve().is_relative_to(runtime.resolve())
+    assert capabilities.REG.resolve().is_relative_to(runtime.resolve())
+    home_runtime = Path.home() / ".codex" / "orchestrator"
+    assert home_runtime not in feedback.DB_PATH.resolve().parents
+    assert home_runtime not in capabilities.REG.resolve().parents
 
 
 def _completed(
@@ -137,3 +170,76 @@ def test_verify_synthesis_records_unallowlisted_local_command_without_spawning(
         "test_cmd": "sh -c unsafe",
     }
     assert result["evidence"]["deliberate_break_status"] == "FAIL"
+
+
+_FRESH_IMPORT = r"""
+import json
+import os
+import sys
+from pathlib import Path
+
+state = Path(os.environ["ORCH_STATE_DIR"])
+runtime = Path(os.environ["ORCH_LOCAL_RUNTIME"])
+assert state.is_dir() and runtime.is_dir()
+for name in ("synthesis_promotion", "feedback", "capabilities", "runtime_ac", "local_verify"):
+    assert name not in sys.modules, name
+import synthesis_promotion
+import capabilities
+import feedback
+
+home_runtime = Path.home() / ".codex" / "orchestrator"
+db_path = feedback.DB_PATH.resolve()
+reg_path = capabilities.REG.resolve()
+report = {
+    "imported_after_env": "synthesis_promotion" in sys.modules,
+    "env_state": os.environ["ORCH_STATE_DIR"],
+    "env_runtime": os.environ["ORCH_LOCAL_RUNTIME"],
+    "feedback_local_runtime": str(feedback.LOCAL_RUNTIME),
+    "feedback_db": str(db_path),
+    "capabilities_local_runtime": str(capabilities.LOCAL_RUNTIME),
+    "capabilities_reg": str(reg_path),
+}
+assert report["imported_after_env"] is True
+assert feedback.LOCAL_RUNTIME == runtime
+assert capabilities.LOCAL_RUNTIME == runtime
+assert db_path.is_relative_to(runtime.resolve())
+assert reg_path.is_relative_to(runtime.resolve())
+assert home_runtime not in db_path.parents
+assert home_runtime not in reg_path.parents
+os.environ["ORCH_LOCAL_RUNTIME"] = str(runtime / "too-late")
+os.environ["ORCH_STATE_DIR"] = str(state / "too-late")
+assert feedback.LOCAL_RUNTIME == runtime
+assert capabilities.LOCAL_RUNTIME == runtime
+print(json.dumps(report))
+"""
+
+
+def test_fresh_import_binds_runtime_paths_before_initialization(tmp_path) -> None:
+    """A clean interpreter binds both roots from the environment before import."""
+    state = tmp_path / "fresh-state"
+    runtime = tmp_path / "fresh-runtime"
+    state.mkdir()
+    runtime.mkdir()
+    env = os.environ.copy()
+    env["ORCH_STATE_DIR"] = str(state)
+    env["ORCH_LOCAL_RUNTIME"] = str(runtime)
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
+    for key in ("ORCH_FEEDBACK_DB", "ORCH_CAPABILITIES_PATH", "ORCH_FEATURES_PATH"):
+        env.pop(key, None)
+    completed = subprocess.run(
+        [sys.executable, "-c", _FRESH_IMPORT],
+        cwd=Path(__file__).resolve().parents[1],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    report = json.loads(completed.stdout)
+    assert report["env_state"] == str(state)
+    assert report["env_runtime"] == str(runtime)
+    assert report["feedback_local_runtime"] == str(runtime)
+    assert report["capabilities_local_runtime"] == str(runtime)
+    assert Path(report["feedback_db"]).is_relative_to(runtime.resolve())
+    assert Path(report["capabilities_reg"]).is_relative_to(runtime.resolve())
