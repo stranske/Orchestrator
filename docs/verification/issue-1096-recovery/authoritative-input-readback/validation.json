@@ -12,11 +12,11 @@
     "passed": 40,
     "failed": 0,
     "log": "ledger-tests.log",
-    "log_sha256": "17cce3cacbacf2ccf688dcb533d5ddcd9938da9e7cc4c87a53c748013d637e32"
+    "log_sha256": "9ac4ba11f42a181ccdc8eeef9b47f2efbf5b6247cf984758ff10659e5cf28717"
   },
   "evidence_sha256": {
     "../continuation-plan.md": "d09a2c39284ad6414f18bdabb178e8bd3ef12251663e00502eefc19a3726c59e",
-    "../thread-adjudication.md": "2bd5297678441cc53fe0400c8c0f5fd3d24830ab65bb5a51b36f8d34df3180b7",
+    "../thread-adjudication.md": "2bd5a9b6e9ea246701e96a8bfe8fcc6fcecae3a279870d769021dc928e0ac24a",
     "../ledger-audit/audit-before-receipt-binding.json": "0de643ff979574e16395cda349d9831e3e5f200abadb3b647e4a037c5dd904f0"
   },
   "source_sha256": {

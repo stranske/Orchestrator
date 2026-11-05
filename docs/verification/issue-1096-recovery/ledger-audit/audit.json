@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "ledger_sha256": "62f11391c8265f4d55a0c52bf8069dae799e42cb3f766f3b6e8fab590d5c42d0",
+  "ledger_sha256": "5a35093a0b816a11152fda372b6035d8b32efcdeaf3e36449dc6a3971dd0ab90",
   "audit_scope": "recovery_attribution_and_local_artifact_integrity",
   "attribution_and_artifact_checks_passed": true,
   "operational_acceptance_verified": false,
@@ -681,7 +681,7 @@
     },
     {
       "path": "authoritative-input-readback/acquisition.json",
-      "sha256": "3b3fcde1289f2034cc96dfd0984a2709c1070910f902abdb56c36cda21a7238c"
+      "sha256": "b1216e4fda4e3caf29e1e3cc473d9b0afb1b8bc05d5a19f1ab83d19499e0f1d3"
     },
     {
       "path": "authoritative-input-readback/original-21-results.json",
@@ -689,7 +689,7 @@
     },
     {
       "path": "authoritative-input-readback/validation.json",
-      "sha256": "736859106afe145e1c088f6c127bca2f3b78fa5611dba7b4b43a87af851abf9a"
+      "sha256": "f198f64c4062951e58d401eebfb657ce0bc39e33c30e5781fb1c3d998fd29ad1"
     },
     {
       "path": "continuation-plan.md",
@@ -697,7 +697,7 @@
     },
     {
       "path": "thread-adjudication.md",
-      "sha256": "2bd5297678441cc53fe0400c8c0f5fd3d24830ab65bb5a51b36f8d34df3180b7"
+      "sha256": "2bd5a9b6e9ea246701e96a8bfe8fcc6fcecae3a279870d769021dc928e0ac24a"
     },
     {
       "path": "ledger-audit/audit-before-receipt-binding.json",
@@ -705,7 +705,7 @@
     },
     {
       "path": "authoritative-input-readback/ledger-tests.log",
-      "sha256": "17cce3cacbacf2ccf688dcb533d5ddcd9938da9e7cc4c87a53c748013d637e32"
+      "sha256": "9ac4ba11f42a181ccdc8eeef9b47f2efbf5b6247cf984758ff10659e5cf28717"
     }
   ],
   "external_references": [

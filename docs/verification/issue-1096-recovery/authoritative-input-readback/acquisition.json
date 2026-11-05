@@ -49,12 +49,26 @@
   "original_21_identified": 21,
   "original_21_with_recorded_first_broken_step": 21,
   "original_21_checked_date": "2026-10-14 (historical run; re-read 2026-11-04)",
+  "closer_continuation_reread": {
+    "checked_at": "2026-11-04T20:36:00-06:00",
+    "pr_head": "bb2889514ec1236d220e147211f5b6e2ad393a20",
+    "closer_judge_disposition": "park until historical artifacts and current operational state are accessible",
+    "reverified_paths": {
+      "immutable_native_source": "ENOENT",
+      "qualified_input_478": "ENOENT",
+      "fixed_next_20_manifest": "not_found_in_recorded_locations"
+    },
+    "accepted_deployed_mirror_binding": "unverified",
+    "provider_calls": 0,
+    "production_dispatches": 0
+  },
   "limitations": [
     "Native journal bytes located but not authenticated against missing immutable source and qualified input; no SQLite write or schema initialization performed.",
     "Saved canonical summary graded=1; no authenticated intermediate >=25 or canonical >=29 evidence.",
     "Historical deployed binding names 28f12766e84818508b37173a86e0be5817bfb0a2, not a current accepted/deployed/mirror binding.",
     "No original fixed next-20 manifest was found in the recorded source locations. No replacement membership is inferred.",
-    "Raw authenticated October 18 proof remains unavailable."
+    "Raw authenticated October 18 proof remains unavailable.",
+    "Closer continuation re-read confirms the same ENOENT and manifest gaps; no membership synthesized."
   ],
   "provider_calls": 0,
   "production_dispatches": 0,

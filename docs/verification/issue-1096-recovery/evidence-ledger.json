@@ -615,13 +615,13 @@
     },
     "authoritative_input_readback": {
       "historical_acquisition": "authoritative-input-readback/acquisition.json",
-      "historical_acquisition_sha256": "3b3fcde1289f2034cc96dfd0984a2709c1070910f902abdb56c36cda21a7238c",
+      "historical_acquisition_sha256": "b1216e4fda4e3caf29e1e3cc473d9b0afb1b8bc05d5a19f1ab83d19499e0f1d3",
       "historical_acquisition_bindings": {},
       "original_retry_identities_recovered": 21,
       "historical_first_broken_steps": 21,
       "limitation": "Original historical result rows recovered, not current authenticated outcomes or permission to retry.",
       "validation": "authoritative-input-readback/validation.json",
-      "validation_sha256": "736859106afe145e1c088f6c127bca2f3b78fa5611dba7b4b43a87af851abf9a",
+      "validation_sha256": "f198f64c4062951e58d401eebfb657ce0bc39e33c30e5781fb1c3d998fd29ad1",
       "validation_bindings": {}
     }
   },
