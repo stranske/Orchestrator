@@ -279,7 +279,7 @@ def test_recorded_verdict_skips_malformed_payloads_and_unreadable_artifacts():
 
 
 def test_panel_artifact_write_and_record_report_io_and_brain_failures(monkeypatch):
-    original_replace = adversarial.os.replace
+    original_replace = os.replace
 
     def replace_fails(*_args, **_kwargs):
         raise OSError("disk full")
