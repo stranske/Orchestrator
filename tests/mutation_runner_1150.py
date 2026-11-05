@@ -95,11 +95,7 @@ def expected_result(case: dict, result: dict, *, broken: bool) -> bool:
     if result.get("returncode") != (1 if broken else 0) or len(nodes) != 1:
         return False
     node = nodes[0]
-    if (
-        node["name"] != case["node_id"].split("::")[-1]
-        or node["errors"]
-        or node["skipped"]
-    ):
+    if node["name"] != case["node_id"].split("::")[-1] or node["errors"] or node["skipped"]:
         return False
     failures = node["failures"]
     if not broken:
