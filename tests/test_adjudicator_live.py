@@ -88,6 +88,7 @@ def test_a_new_dispute_is_certified_and_advised_once_without_touching_outcomes(w
         ).fetchall() == [("NON_PASS", "PASS")]
     report = json.loads(world["path"].read_text())
     assert report["summary"]["cases"] == 1 and report["population"] == 1
+    live._selftest()  # The shipped offline entry point must exercise the same cursor contract.
 
 
 def test_later_truth_grades_the_live_advice(world):

@@ -1043,7 +1043,7 @@ def _selftest() -> None:
             with feedback._conn() as conn:
                 conn.execute(
                     "INSERT INTO runs(run_id,ts,target) VALUES ('live-2',?,'owner/repo#2')",
-                    (now - 1,),
+                    (now + 1,),
                 )
                 conn.execute(
                     "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged) "
