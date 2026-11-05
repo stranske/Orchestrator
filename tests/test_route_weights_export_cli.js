@@ -195,6 +195,47 @@ print("publication_result=" + str(published))
   assert.equal(await git(remote, 'rev-parse', branch), provenance.published_commit);
   assert.equal(fs.existsSync(database), false, 'publication must not create a feedback database');
   assert.deepEqual(fs.readdirSync(home), [], 'the live state fallback must stay unused');
+
+  // A new publication must not move the observation boundary to the latest
+  // artifact. Exercise the CLI against multi-commit remote history, including
+  // an attempted replacement of the retained receipt with that later commit.
+  document.source_version += 1;
+  const laterPublication = await publish();
+  assert.equal(laterPublication.status, 0, laterPublication.stderr);
+  assert.match(laterPublication.stdout, /publication_result=True/);
+  const laterCommit = await git(remote, 'rev-parse', branch);
+  assert.notEqual(laterCommit, provenance.published_commit);
+  const original = await record();
+  assert.equal(original.status, 0, original.stderr);
+  assert.deepEqual(JSON.parse(original.stdout), recorded);
+  assert.deepEqual(fs.readFileSync(receipt), before);
+  assert.equal(fs.statSync(receipt, { bigint: true }).mtimeNs, modified);
+
+  fs.writeFileSync(audit, JSON.stringify({ ...provenance, published_commit: laterCommit }));
+  const replacement = await record();
+  assert.equal(replacement.status, 1, replacement.stderr);
+  assert.equal(replacement.stdout, '');
+  assert.match(replacement.stderr, /not the first verified challenger-filter publication/);
+  assert.doesNotMatch(replacement.stderr, /Traceback/);
+  assert.deepEqual(fs.readFileSync(receipt), before);
+  assert.equal(fs.statSync(receipt, { bigint: true }).mtimeNs, modified);
+
+  // An absent receipt must not make the latest commit acceptable either.
+  fs.unlinkSync(receipt);
+  const missingReceipt = await record();
+  assert.equal(missingReceipt.status, 1, missingReceipt.stderr);
+  assert.match(missingReceipt.stderr, /not the first verified challenger-filter publication/);
+  assert.equal(missingReceipt.stdout, '');
+  assert.equal(fs.existsSync(receipt), false);
+  fs.writeFileSync(audit, JSON.stringify(provenance));
+  const firstReceipt = await record();
+  assert.equal(firstReceipt.status, 0, firstReceipt.stderr);
+  assert.deepEqual(JSON.parse(firstReceipt.stdout), recorded);
+  assert.deepEqual(fs.readFileSync(receipt), before);
+  assert.equal(await git(remote, 'rev-parse', branch), laterCommit,
+    'recording the original deployment must not publish or rewind the export branch');
+  assert.equal(fs.existsSync(database), false);
+  assert.deepEqual(fs.readdirSync(home), []);
 });
 
 for (const [name, provenance, diagnostic] of invalidProvenance) {

@@ -180,3 +180,33 @@ Remote task checkboxes therefore remain unchanged.
 The main checkout rejects Git index writes (`Read-only file system`). The tested
 JavaScript and evidence changes are committed in `/tmp/orchestrator-1175-remote-verification-gicb0w62`,
 with a handoff patch at `/tmp/orchestrator-1175-remote-verification.patch`. The main working tree retains the same edits.
+
+## Multiple-publication CLI verification (2026-11-05)
+
+Reviewed all seven branch commits through `8435684`; the branch changes seven
+files, not the reported 34. The publication checkbox remains premature: the
+recorder is implemented, but no verified production deployment receipt exists.
+Both copies of that checkbox should remain unchecked. Both conditional helper
+and reporting tasks are satisfied because those extensions remain absent.
+
+Extended the isolated CLI regression with a second real `publish_document`
+publication. The original audit still verifies without changing receipt bytes
+or modification time. Claiming the later commit as the first deployment fails
+with and without an existing receipt. Retrying the original audit recreates the
+original receipt without publishing or rewinding the remote branch. This checks
+that later exports cannot silently restart the production observation boundary.
+
+Verification: all 24 CLI tests and all 15 deployment unittest tests pass;
+JavaScript syntax and diff whitespace checks pass. A disposable exporter copy
+that scans publication history newest-first fails the extended regression.
+No Python source changed. The required Anaconda interpreter, pytest, Black,
+production database, and verified production audit record remain unavailable.
+No production or named pytest acceptance task is complete. Observation remains
+gated on both 2026-11-08 and fourteen days after verified deployment.
+
+The PR-body reconciliation, blocker comment, and `needs-human` label were each
+blocked with `MCP tool call requires approval, but approval policy is never`.
+The checkout also rejects Git index writes as read-only. The changes are retained
+in the working tree; the isolated commit and handoff patch are at
+`/tmp/orchestrator-1175-first-publication` and
+`/tmp/orchestrator-1175-first-publication.patch`, respectively.
