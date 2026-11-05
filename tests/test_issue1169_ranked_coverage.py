@@ -1456,3 +1456,43 @@ def test_codemod_selftest_truncation_does_not_spawn(monkeypatch) -> None:
     monkeypatch.setattr("subprocess.run", fake_run)
     lane._selftest()
     assert seen and all(isinstance(cmd, str) and cmd.startswith("rg --files") for cmd in seen)
+
+
+def test_candidate_ready_predecessor_holds_when_the_table_would_allow_it(tmp_path) -> None:
+    """The transition table already excludes this jump. Line 403 is the independent check."""
+    _exp, state = _promotion_at(tmp_path, "pred", "evaluated")
+    allowed = promotion.PROMOTION_TRANSITIONS["evaluated"]
+    promotion.PROMOTION_TRANSITIONS["evaluated"] = set(allowed) | {"candidate_ready"}
+    try:
+        with pytest.raises(ValueError, match="candidate_ready requires synth_verified predecessor"):
+            promotion.transition(state, "candidate_ready", reason="table-widened", now=20)
+    finally:
+        promotion.PROMOTION_TRANSITIONS["evaluated"] = allowed
+    assert state["delivery_phase"] == "evaluated"
+
+
+def test_selftest_restores_preset_ship_gate_without_starting_git(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setenv(promotion.FOLLOWUP_SHIP_GATE_ENV, "preset-value")
+    saved_db = feedback.DB_PATH
+    spawned: list = []
+
+    def stop_at_git(cmd, **kwargs):
+        spawned.append(cmd)
+        text = cmd if isinstance(cmd, str) else " ".join(str(part) for part in cmd)
+        if text.split()[:1] == ["git"]:
+            raise RuntimeError("git must not start from the coverage test")
+        raise AssertionError(text)
+
+    monkeypatch.setattr(subprocess, "run", stop_at_git)
+    try:
+        with pytest.raises(RuntimeError, match="git must not start"):
+            promotion.selftest()
+    finally:
+        feedback.DB_PATH = saved_db
+    assert os.environ[promotion.FOLLOWUP_SHIP_GATE_ENV] == "preset-value"
+    assert spawned and all(
+        (cmd if isinstance(cmd, str) else " ".join(str(part) for part in cmd)).split()[:1]
+        == ["git"]
+        for cmd in spawned
+    )
