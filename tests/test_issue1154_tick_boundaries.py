@@ -62,8 +62,9 @@ class TickBoundaryTests(unittest.TestCase):
         with (
             patch.object(recurrence, "TICK_ENV_ATTEMPTS", 3),
             patch.object(recurrence, "TICK_ENV_BACKOFF", 0.25),
-            patch.object(recurrence, "_tick_env_attempt", side_effect=[failed] * 3 + [recovered])
-            as attempt,
+            patch.object(
+                recurrence, "_tick_env_attempt", side_effect=[failed] * 3 + [recovered]
+            ) as attempt,
             patch.object(recurrence.time, "sleep") as sleep,
             contextlib.redirect_stderr(io.StringIO()) as stderr,
         ):
