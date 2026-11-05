@@ -16,7 +16,8 @@ const timestamp = (value) => Number.isSafeInteger(value) && value >= 0 &&
   Number.isFinite(new Date(value * 1000).getTime());
 const iso = (value) => new Date(value * 1000).toISOString();
 
-function liveCohort({ manifest, expectedManifestHash, manifestReference, report, observedAt }) {
+function liveCohort({ manifest, expectedManifestHash, manifestReference, report, observedAt,
+  evidenceClass, evidenceReference }) {
   if (!nonblank(manifest) || !nonblank(report) || !nonblank(manifestReference)) {
     throw new Error('manifest, report and manifest reference are required');
   }
@@ -24,6 +25,12 @@ function liveCohort({ manifest, expectedManifestHash, manifestReference, report,
     throw new Error('pin the fixed manifest with its expected SHA-256');
   }
   if (!timestamp(observedAt)) throw new Error('observedAt must be a valid Unix timestamp');
+  // A local copy may be a retained historical snapshot. Require the same explicit
+  // source attribution as reportInventory; its generated_at is only a saved claim.
+  if (!['historical_snapshot', 'current_snapshot'].includes(evidenceClass)) {
+    throw new Error('evidenceClass must be historical_snapshot or current_snapshot');
+  }
+  if (!nonblank(evidenceReference)) throw new Error('evidenceReference is required');
   const manifestBytes = fs.readFileSync(manifest);
   if (digest(manifestBytes) !== expectedManifestHash) throw new Error('fixed manifest hash mismatch');
   const supplied = JSON.parse(manifestBytes);
@@ -119,7 +126,9 @@ function liveCohort({ manifest, expectedManifestHash, manifestReference, report,
     manifest: { path: path.resolve(manifest), sha256: expectedManifestHash,
       reference: manifestReference },
     report: { path: path.resolve(report), status: saved ? 'available' : 'unavailable',
+      evidence_class: evidenceClass, evidence_reference: evidenceReference,
       sha256: reportBytes === undefined ? null : digest(reportBytes),
+      byte_length: reportBytes === undefined ? null : reportBytes.length,
       generated_at: timestamp(saved?.generated_at) ? iso(saved.generated_at) : null },
     cases, retained_binary_decisions: cases.filter((row) => row.status === 'retained_binary_decision').length,
     // Pinning supplied bytes prevents drift; it cannot recover original provenance
@@ -136,10 +145,12 @@ if (require.main === module) {
       manifest: { type: 'string' }, 'expected-manifest-hash': { type: 'string' },
       'manifest-reference': { type: 'string' }, report: { type: 'string' },
       'observed-at': { type: 'string' },
+      'evidence-class': { type: 'string' }, 'evidence-reference': { type: 'string' },
     } });
     const result = liveCohort({ manifest: values.manifest,
       expectedManifestHash: values['expected-manifest-hash'],
       manifestReference: values['manifest-reference'], report: values.report,
+      evidenceClass: values['evidence-class'], evidenceReference: values['evidence-reference'],
       observedAt: values['observed-at'] === undefined ? undefined : Number(values['observed-at']) });
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     if (result.report.status === 'unavailable') process.exitCode = 2;

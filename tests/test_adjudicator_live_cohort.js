@@ -33,7 +33,8 @@ function world(t) {
     summary: { advised: 999, graded: 999 }, rows: cases.map((_, n) => row(n)) };
   fs.writeFileSync(manifest, JSON.stringify({ schema_version: 2, cases }));
   const options = { manifest, report, expectedManifestHash: digest(fs.readFileSync(manifest)),
-    manifestReference: 'fixture retained membership reference', observedAt: now };
+    manifestReference: 'fixture retained membership reference', observedAt: now,
+    evidenceClass: 'current_snapshot', evidenceReference: 'fixture native live report reference' };
   const save = () => fs.writeFileSync(report, JSON.stringify(saved));
   const pin = () => { options.expectedManifestHash = digest(fs.readFileSync(manifest)); };
   save();
@@ -59,7 +60,9 @@ function cli(w, extra = []) {
   return execute(w.root, process.execPath, [script, '--manifest', w.options.manifest,
     '--expected-manifest-hash', w.options.expectedManifestHash,
     '--manifest-reference', w.options.manifestReference, '--report', w.options.report,
-    '--observed-at', String(w.options.observedAt), ...extra]);
+    '--observed-at', String(w.options.observedAt),
+    '--evidence-class', w.options.evidenceClass,
+    '--evidence-reference', w.options.evidenceReference, ...extra]);
 }
 
 test('real native live producer supplies dated locators for 15 fixed members without acceptance claims', (t) => {
@@ -147,6 +150,89 @@ test('later report changes preserve fixed membership, unavailable members and re
   assert.notEqual(first.report.sha256, second.report.sha256);
   assert.equal(first.manifest.sha256, second.manifest.sha256);
   assert.ok(!JSON.stringify(second).includes('private'));
+});
+
+test('historical and current report sources stay distinct from the date of a new read', (t) => {
+  const w = world(t);
+  const historicalAt = Date.parse('2026-10-18T12:00:00Z') / 1000;
+  w.saved.generated_at = historicalAt;
+  for (const item of w.saved.rows) {
+    item.attempted_at = historicalAt - 1;
+    item.first_attempted_at = historicalAt - 2;
+  }
+  w.save();
+  w.options.evidenceClass = 'historical_snapshot';
+  w.options.evidenceReference = 'fixture retained October 18 report revision';
+  const historical = JSON.parse(cli(w).stdout);
+  w.options.evidenceClass = 'current_snapshot';
+  w.options.evidenceReference = 'fixture current live writer report';
+  w.options.observedAt += 60;
+  const current = JSON.parse(cli(w).stdout);
+  assert.equal(historical.report.evidence_class, 'historical_snapshot');
+  assert.equal(historical.report.evidence_reference, 'fixture retained October 18 report revision');
+  assert.equal(current.report.evidence_class, 'current_snapshot');
+  assert.equal(current.report.evidence_reference, 'fixture current live writer report');
+  assert.equal(historical.report.sha256, current.report.sha256);
+  assert.equal(historical.report.byte_length, fs.statSync(w.options.report).size);
+  assert.equal(current.report.byte_length, historical.report.byte_length);
+  assert.equal(historical.manifest.sha256, current.manifest.sha256);
+  assert.equal(historical.report.generated_at, new Date(historicalAt * 1000).toISOString());
+  assert.equal(current.report.generated_at, historical.report.generated_at);
+  assert.notEqual(current.checked_at, historical.checked_at);
+  for (const result of [historical, current]) {
+    assert.equal(result.retained_binary_decisions, 20);
+    assert.ok(result.cases.every((item) => item.checked_at === result.checked_at));
+    assert.equal(result.historical_proof_verified, false);
+    assert.equal(result.dispatch_receipts_authenticated, false);
+    assert.equal(result.original_cohort_provenance_verified, false);
+    assert.equal(result.operational_acceptance_complete, false);
+  }
+});
+
+test('missing historical report retains its source reference without supplying October 18 proof', (t) => {
+  const w = world(t);
+  fs.unlinkSync(w.options.report);
+  w.options.evidenceClass = 'historical_snapshot';
+  w.options.evidenceReference = 'fixture unavailable October 18 report';
+  const out = cli(w);
+  assert.equal(out.status, 2, out.stderr);
+  const result = JSON.parse(out.stdout);
+  assert.equal(result.report.evidence_class, 'historical_snapshot');
+  assert.equal(result.report.evidence_reference, w.options.evidenceReference);
+  assert.equal(result.report.status, 'unavailable');
+  assert.equal(result.report.byte_length, null);
+  assert.equal(result.report.generated_at, null);
+  assert.equal(result.retained_binary_decisions, 0);
+  assert.equal(result.historical_proof_verified, false);
+  assert.ok(result.cases.every((item) => item.gaps[0] === 'live_report_unavailable'));
+  assert.equal(fs.existsSync(w.options.report), false);
+});
+
+test('unattributed or unsupported report sources fail before reading observation inputs', (t) => {
+  const w = world(t);
+  const read = fs.readFileSync;
+  fs.readFileSync = () => { throw new Error('unexpected input read'); };
+  try {
+    for (const evidenceClass of [undefined, '', 'mirror_sync', 'dispatch_receipt',
+      'historical_snapshot private payload']) {
+      assert.throws(() => liveCohort({ ...w.options, evidenceClass }), /evidenceClass/);
+    }
+    for (const evidenceReference of [undefined, null, '', '  ', 123]) {
+      assert.throws(() => liveCohort({ ...w.options, evidenceReference }), /evidenceReference/);
+    }
+  } finally { fs.readFileSync = read; }
+  const omitted = execute(w.root, process.execPath, [script,
+    '--manifest', w.options.manifest,
+    '--expected-manifest-hash', w.options.expectedManifestHash,
+    '--manifest-reference', w.options.manifestReference,
+    '--report', w.options.report, '--observed-at', String(now)]);
+  assert.equal(omitted.status, 1);
+  assert.equal(omitted.stdout, '');
+  w.options.evidenceClass = 'historical_snapshot private payload';
+  const invalid = cli(w);
+  assert.equal(invalid.status, 1);
+  assert.equal(invalid.stdout, '');
+  assert.ok(!invalid.stderr.includes('private payload'));
 });
 
 test('changed identities and ambiguous duplicates cannot lend a decision to a fixed member', (t) => {

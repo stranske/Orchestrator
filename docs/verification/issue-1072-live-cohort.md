@@ -16,6 +16,8 @@ node scripts/export_adjudicator_live_cohort.js \
   --expected-manifest-hash RETAINED_MANIFEST_SHA256 \
   --manifest-reference ORIGINAL_MEMBERSHIP_REFERENCE \
   --report /absolute/capability-program/adjudicator-live.json \
+  --evidence-class current_snapshot \
+  --evidence-reference LIVE_WRITER_REPORT_REFERENCE \
   --observed-at UNIX_SECONDS
 ```
 
@@ -64,3 +66,35 @@ the tested source is preserved in a separate local commit and transferable
 Automatic approval review rejected the blocker comment and `needs-human` label:
 GitHub writes require approval while this run's policy is `never`. Neither was
 published, and no remote checkbox was changed.
+
+## Report source attribution
+
+Checked on 2026-11-05 against `7ff5fe1` plus this change. Observations now require
+`--evidence-class historical_snapshot|current_snapshot` and `--evidence-reference`,
+matching the existing retrospective inventory's source attribution. The report
+locator retains those declarations and its byte length alongside the SHA-256.
+`checked_at` dates the supplied read; `report.generated_at` remains a saved claim.
+Neither a historical source declaration nor a current read authenticates the
+report's historical date, membership or dispatch receipts. Missing historical
+reports retain their source reference, all 20 obligations and exit status 2.
+Mirror synchronization and dispatch receipts cannot be used as report classes.
+
+All 15 live-cohort tests pass, including three new checks for distinct historical
+and current source references, missing historical reports and rejected attribution.
+The same three tests fail against the original exporter in an isolated copy.
+The existing producer fixture still retains 15 binary decisions and five
+abstentions without supplying authentic acceptance evidence. JavaScript syntax
+and diff whitespace checks pass; no Python files changed. The inventory suites
+pass all 103 tests, and the diagnostic and replay unittest suites pass 32 and
+seven tests. The required retrospective pytest command with `-m 'not slow'`
+cannot start because pytest is missing.
+
+The configured live report, canonical report and Brain database are still absent.
+Connected-source searches did not recover the original fixed next-20 manifest.
+The earlier retained October 18 scheduled observation remains attributable to its
+linked source above; raw authenticated historical proof is unavailable. No
+production decision, dispatch or task completion is claimed by this change.
+
+Staging failed because the checkout's Git metadata is read-only. The focused
+source, tests and note are preserved in a separate commit and transferable
+`/tmp/orchestrator-live-cohort-attribution/change.bundle` and `change.patch`.
