@@ -279,21 +279,27 @@ def test_recorded_verdict_skips_malformed_payloads_and_unreadable_artifacts():
 
 
 def test_panel_artifact_write_and_record_report_io_and_brain_failures(monkeypatch):
+    original_replace = os.replace
+
     def replace_fails(*_args, **_kwargs):
         raise OSError("disk full")
 
     monkeypatch.setattr(adversarial.os, "replace", replace_fails)
     written = adversarial._write_panel_artifact("sha256:" + "1" * 64, {"result": {}})
     assert written["error"] == "disk full"
-    monkeypatch.setattr(adversarial.os, "replace", os.replace)
+    monkeypatch.setattr(adversarial.os, "replace", original_replace)
+
+    recording_called = []
 
     def record_fails(*_args, **_kwargs):
+        recording_called.append(True)
         raise RuntimeError("completion insert failed")
 
     monkeypatch.setattr(feedback, "record_completion_event", record_fails)
     recorded = adversarial._record_panel(TARGET, HEAD, ["codex"], "panel-key", {"verdict": "PASS"})
     assert recorded["recorded"] is False
     assert "completion insert failed" in recorded["error"]
+    assert recording_called
 
 
 def test_worktree_head_and_git_boundary_fail_closed(monkeypatch, isolated_runtime):
