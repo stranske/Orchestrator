@@ -255,6 +255,65 @@ class FleetDeliveryTests(unittest.TestCase):
                 self.assertIsNone(rows["opener_cap"]["value"])
                 self.assertIsNotNone(rows["merge_to_close"]["value"])
 
+    def test_opener_response_failures_preserve_independent_rows(self):
+        for returncode, stdout, reason_part in (
+            (0, "not valid json", "valid JSON"),
+            (0, "[1, 2, 3]", "a JSON object"),
+            (0, '"just a string"', "a JSON object"),
+            (1, "", "successful"),
+        ):
+            with self.subTest(returncode=returncode, stdout=stdout[:30]):
+
+                def opener(args, **kwargs):
+                    return SimpleNamespace(returncode=returncode, stdout=stdout)
+
+                rows = self.measure(opener_runner=opener)["rows"]
+                # opener_cap has no numeric value
+                self.assertIsNone(rows["opener_cap"]["value"])
+                # explicit unmeasured reason
+                self.assertIn(reason_part, rows["opener_cap"]["reason"])
+                self.assertEqual(rows["opener_cap"]["evidence_class"], "unmeasured")
+                # all five text rows appear
+                self.assertEqual(len(rows), 5)
+                for name in review.FLEET_DELIVERY_NAMES:
+                    self.assertIn(name, rows)
+                # independent measure retains its value
+                self.assertIsNotNone(rows["merge_to_close"]["value"])
+
+    def test_opener_response_failures_preserve_independent_text_rows(self):
+        for returncode, stdout, reason_part in (
+            (0, "not valid json", "valid JSON"),
+            (0, "[1, 2, 3]", "a JSON object"),
+            (1, "", "successful"),
+        ):
+            with self.subTest(returncode=returncode, stdout=stdout[:30]):
+
+                def opener(args, **kwargs):
+                    return SimpleNamespace(returncode=returncode, stdout=stdout)
+
+                section = self.measure(opener_runner=opener)
+                report = {
+                    "generated_at": self.now,
+                    "review_days": 7,
+                    "held_off": [],
+                    "on_but_idle": [],
+                    "unconditioned": [],
+                    "raise_count": 0,
+                    "fleet_delivery_measures": section,
+                }
+                with tempfile.TemporaryDirectory() as tmp:
+                    path = Path(tmp) / "review.txt"
+                    review.write_text_report(report, path)
+                    text = path.read_text()
+                # explicit unmeasured reason appears
+                self.assertIn("unmeasured — would need", text)
+                self.assertIn(reason_part, text)
+                # all five text rows appear once
+                for name in review.FLEET_DELIVERY_NAMES.values():
+                    self.assertEqual(text.count(name + ":"), 1)
+                # independent measure retains its value
+                self.assertIn("median 15 min", text)
+
     def test_excluded_repository_is_never_queried(self):
         backlog.SUPPORTED_REPOS.append("stranske/Collab-Admin")
         self.measure()

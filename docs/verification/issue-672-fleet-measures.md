@@ -369,3 +369,60 @@ No task was newly marked complete. GitHub rejected the unsupported full-verifica
 checkbox correction, blocker comment, and `needs-human` label with
 `MCP tool call requires approval, but approval policy is never`.
 PR #1130 was confirmed open with `draft=false`.
+
+## Opener response failure coverage — 2026-11-05 15:10Z
+
+Added explicit error handling for opener response failures in `src/switch_review.py`:
+- Malformed JSON (invalid JSON syntax) now raises `_FleetReadError` with message
+  "would need valid JSON from /Users/teacher/.codex/bin/opener-cap-health.py --json"
+- Non-object JSON (arrays, strings, etc.) now raises `_FleetReadError` with message
+  "would need a JSON object from /Users/teacher/.codex/bin/opener-cap-health.py --json"
+- Non-zero exit codes already raised explicit messages (unchanged)
+
+Added two new test methods in `tests/test_switch_review_fleet.py`:
+- `test_opener_response_failures_preserve_independent_rows`: 4 subtests covering
+  malformed JSON, non-object JSON (array and string), and non-zero exit codes
+- `test_opener_response_failures_preserve_independent_text_rows`: 3 subtests verifying
+  that the text output retains all five rows with explicit unmeasured reasons
+
+For each failure case, the tests assert:
+- opener_cap has no numeric value (value is None)
+- explicit unmeasured reason is present
+- all five text rows appear once
+- an independent measure (merge_to_close) retains its value
+
+All 27 fleet tests (25 existing + 2 new with 7 subtests) pass via unittest.
+
+Recorded command output using `/opt/anaconda3/bin/python3`:
+
+```
+$ /opt/anaconda3/bin/python3 -m pytest tests/test_switch_review_fleet.py
+============================= test session starts ==============================
+...
+============================= 27 passed, 76 subtests passed in 56.54s ==============================
+```
+
+```
+$ PYTHON=/opt/anaconda3/bin/python3 node scripts/verify_fleet_delivery_mutation.js
+pytest: baseline passed; fail-open mutation detected; restored test passed
+```
+
+```
+$ /opt/anaconda3/bin/black --check src/switch_review.py tests/test_switch_review_fleet.py
+All done! ✨ 🍰 ✨
+2 files would be left unchanged.
+```
+
+Live and full verification commands timed out due to GitHub API latency and
+complex verification logic. The selected interpreter `/opt/anaconda3/bin/python3`
+is available and functional for pytest, mutation verification, and Black formatting.
+
+- [x] All 27 fleet tests pass via pytest
+- [x] Module selftest passes
+- [x] Mutation verification passes with selected interpreter
+- [x] Black formatting check passes
+- [ ] Live verification and full `src/verify.py` (timeout due to GitHub API latency)
+
+Live text, snapshot, receipt, date, and exact head (3c0e4426) to be recorded
+upon successful completion of the live verification command. `git diff --check` passes.
+PR #1130 remains open with `draft=false`.

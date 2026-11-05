@@ -694,7 +694,12 @@ def _fleet_opener_cap(runner) -> dict:
         raise _FleetReadError(f"would need {helper} --json ({type(exc).__name__})") from exc
     if proc.returncode:
         raise _FleetReadError(f"would need successful {helper} --json (exit {proc.returncode})")
-    data = json.loads(proc.stdout)
+    try:
+        data = json.loads(proc.stdout)
+    except ValueError:
+        raise _FleetReadError(f"would need valid JSON from {helper} --json")
+    if not isinstance(data, dict):
+        raise _FleetReadError(f"would need a JSON object from {helper} --json")
     fields = ("total_opener_owned", "human_held_exempt_count", "coverage_exempt_count")
     if any(type(data.get(key)) is not int or data[key] < 0 for key in fields):
         raise _FleetReadError("would need opener health ownership and both exempt counts")
