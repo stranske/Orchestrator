@@ -164,9 +164,9 @@ def token_event(path, ts, tokens, identity):
 
 
 @pytest.mark.parametrize(
-    "fractions,totals,expected", [([0.4], [400], 1000), ([0.2, 0.4, 0.6], [200, 600, 600], 1000)]
+    "fractions,totals,pair_cap", [([0.4], [400], 1000), ([0.2, 0.4, 0.6], [200, 400, 600], 1000)]
 )
-def test_cap_from_desktop_token_pairs(stores, fractions, totals, expected):
+def test_cap_from_desktop_token_pairs(stores, fractions, totals, pair_cap):
     samples = []
     path = pacing_usage.CLAUDE_PROJECTS / "seat.jsonl"
     previous = 0
@@ -176,12 +176,19 @@ def test_cap_from_desktop_token_pairs(stores, fractions, totals, expected):
         token_event(path, ts - 1, total - previous, str(i))
         previous = total
     stores[0].write_text(json.dumps(dict(samples=samples)))
-    row = read_usage(stores, dict(claude_weekly_token_cap=7))
-    assert row["token_cap"] == expected
+    # A valid calibrated cap must be authoritative; pair estimates cannot override it.
+    # Use cap=500 which is lower than pair-derived cap
+    row = read_usage(stores, dict(claude_weekly_token_cap=500))
+    assert row["token_cap"] == 500  # calibrated cap=500 is lower and authoritative
     assert row["cap_pair_count"] == len(fractions)
-    assert row["cap_source"] == "desktop-token-pairs"
+    assert row["cap_source"] == "calibration-file"
     assert row["source"] == "ccusage-fallback"
-    assert integrated(stores, row)["claude"]["pacing"]["state"] == "ok"
+    # With cap=500 and tokens=400 (first case) or 1200 (second case), fractions are 0.8 and 2.4
+    # The first should be ok, the second should be shed
+    if sum(totals) <= 500:
+        assert integrated(stores, row)["claude"]["pacing"]["state"] == "ok"
+    else:
+        assert integrated(stores, row)["claude"]["pacing"]["state"] == "shed"
     cache_key = hashlib.sha256(str(pacing_usage.CLAUDE_PROJECTS.resolve()).encode()).hexdigest()
     cached = json.loads(
         (
@@ -192,7 +199,7 @@ def test_cap_from_desktop_token_pairs(stores, fractions, totals, expected):
     assert cached["ts"] == NOW
     output = pacing_usage.report(stores[2], now=NOW, current=dict(agents=integrated(stores, row)))
     assert f"pairs={len(fractions)}" in output
-    assert "cap: 1000" in output
+    assert "cap: 500" in output
 
 
 def test_producer_extracts_claude_only_exact_window():
@@ -379,6 +386,44 @@ def test_produced_tokens_without_pair_print_unavailable(stores):
     assert "cap: unavailable (0 pairs)" in pacing_usage.report(
         stores[2], now=NOW, current=dict(agents=agents)
     )
+
+
+def test_desktop_token_pairs_cannot_override_lower_calibrated_cap_at_selection(stores):
+    # Use stale desktop so it falls back to ccusage-fallback with pair_cap
+    # Desktop samples must all be stale (> CLAUDE_USAGE_MAX_AGE_SECONDS old)
+    # but we still need them for pair calculation in produce_claude_sample
+    samples = []
+    path = pacing_usage.CLAUDE_PROJECTS / "seat.jsonl"
+    # Add a stale desktop sample and matching token event at the same time
+    # Use a time that's stale but within the same week as other events
+    stale_ts = NOW - pacing_usage.CLAUDE_USAGE_MAX_AGE_SECONDS - 1
+    samples.append(dict(t=stale_ts * 1000, u=dict(sd=40)))
+    token_event(path, stale_ts, 400, "a")
+    stores[0].write_text(json.dumps(dict(samples=samples)))
+    row = read_usage(stores, dict(claude_weekly_token_cap=1000))
+    assert row["token_cap"] == 1000
+    assert row["cap_source"] == "calibration-file"
+    assert row["cap_pair_count"] >= 1
+
+
+def test_lower_calibrated_cap_respected_during_integration_with_desktop_pairs(stores):
+    # Use stale desktop so it falls back to ccusage-fallback with pair_cap
+    # Desktop samples must all be stale (> CLAUDE_USAGE_MAX_AGE_SECONDS old)
+    # but we still need them for pair calculation in produce_claude_sample
+    samples = []
+    path = pacing_usage.CLAUDE_PROJECTS / "seat.jsonl"
+    # Add stale desktop samples for pair calculation
+    samples.append(dict(t=(NOW - pacing_usage.CLAUDE_USAGE_MAX_AGE_SECONDS - 1) * 1000, u=dict(sd=40)))
+    stores[0].write_text(json.dumps(dict(samples=samples)))
+    token_event(path, NOW - 100, 400, "a")
+    pacing_usage.CALIBRATION_FILE.write_text(json.dumps(dict(claude_weekly_token_cap=1000)))
+    row = read_usage(stores, dict(claude_weekly_token_cap=1000))
+    assert row["token_cap"] == 1000
+    assert row["cap_source"] == "calibration-file"
+    pacing_usage.CALIBRATION_FILE.write_text(json.dumps(dict(claude_weekly_token_cap=800)))
+    result = integrated(stores, row)["claude"]["pacing"]
+    assert result["token_cap"] == 800
+    assert result["used_fraction"] == 0.5
 
 
 def test_event_cache_reuses_history_and_refreshes_changed_files(stores):

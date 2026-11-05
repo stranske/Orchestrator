@@ -883,8 +883,12 @@ def usage(
     cap_source = "calibration-file"
     if pool == "claude":
         if pair_cap is not None:
-            cap = pair_cap
-            cap_source = "desktop-token-pairs"
+            # Desktop-pair estimates cannot override a lower valid calibrated cap.
+            # Retain pair-derived fallback only when calibration is unavailable.
+            if cap is None or not isinstance(cap, (int, float)) or not math.isfinite(cap) or cap <= 0:
+                cap = pair_cap
+                cap_source = "desktop-token-pairs"
+            # else: keep the calibrated cap authoritative (even if pair_cap would be lower)
         elif not isinstance(cap, (int, float)) or not math.isfinite(cap) or cap <= 0:
             cap = calibration.get("claude_published_weekly_token_cap")
             cap_source = "plan-published"
@@ -1216,6 +1220,7 @@ def integrate(
                 "using fresh poll; expiries=" + str([e["expires"] for e in entries or []])
             )
         # A recording tick can lower the calibrated cap before integration.
+        # Allow a newly lower calibrated cap to reduce desktop-token-pairs token_cap.
         if datum.get("source", "").startswith("ccusage-calibrated") or (
             datum.get("source") == "ccusage-fallback" and datum.get("token_cap") is not None
         ):
@@ -1224,7 +1229,6 @@ def integrate(
                 isinstance(cap, (int, float))
                 and math.isfinite(cap)
                 and cap > 0
-                and datum.get("cap_source") != "desktop-token-pairs"
             ):
                 if datum.get("token_cap") is not None:
                     cap = min(cap, datum["token_cap"])
