@@ -149,6 +149,25 @@ def test_shadow_live_and_backfill_failures_are_hermetic_and_fail_closed(
     corpus.write_text("\nnot-json\n" + json.dumps({"source": "backfill", "target": "o/r#1"}) + "\n")
     assert shadow._backfilled_targets(corpus) == {"o/r#1"}
 
+    # A line that parses but is not an object used to abort the whole scan. Invalid JSON is
+    # already skipped; a list, null, a target-less row, and a non-backfill row must be too.
+    mixed = tmp_path / "mixed-shadow.jsonl"
+    mixed.write_text(
+        "\n".join(
+            [
+                "not-json",
+                json.dumps(["not-a-row"]),
+                "null",
+                json.dumps({"source": "backfill"}),
+                json.dumps({"source": "live", "target": "o/r#2"}),
+                json.dumps({"source": "backfill", "target": "o/r#9"}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert shadow._backfilled_targets(mixed) == {"o/r#9"}
+
     result = shadow.backfill(
         since="2026-01-01",
         until="2026-01-02",
