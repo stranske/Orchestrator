@@ -79,6 +79,7 @@ def test_a_new_dispute_is_certified_and_advised_once_without_touching_outcomes(w
     assert row["decision"] == "uphold_blocker" and row["disposition"] == "uphold_blocker"
     call = world["calls"][0]
     assert call["source"] == "live" and isinstance(call["case"], roles.CollectedAdjudicationCase)
+    assert roles._collected_snapshot(call["case"])["source"] == "live"
     second = live.run_live(**world["common"])
     assert second["attempted"] == 0 and len(world["calls"]) == 1
     with sqlite3.connect(feedback.DB_PATH) as conn:

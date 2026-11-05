@@ -14,6 +14,10 @@ Command (repository has no selected virtual environment):
 Result: 3 passed, 72 deselected. These are private-Brain tests with a stubbed
 collector and role backend, not production advice or production grading.
 
+A strengthened existing collector test first failed with source `retrospective`
+in a live packet. Qualification now preserves the live source on certified live
+rows, so backend records use the same provenance as the advice event.
+
 The collector-issued case is checked again at advice persistence. Advice and
 uncertified reasons use bounded completion-event payloads, with separate advice
 run identities so original outcome/influence inputs are untouched. Brain receipts

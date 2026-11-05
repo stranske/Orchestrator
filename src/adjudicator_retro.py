@@ -2354,6 +2354,8 @@ def qualify_collected_case(
             replay_material
         ]
     packet["metadata_only"] = False
+    if row.get("source") == "live":
+        packet["source"] = "live"
     # A deterministic content revision is an identity, never persisted retry or
     # grading authority. Bind all recollected bytes, mappings and explicit UNKNOWNs.
     revision_input = json.loads(json.dumps(packet))
