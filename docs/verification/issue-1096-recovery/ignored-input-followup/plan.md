@@ -37,4 +37,5 @@ because it requires approval while the current policy is `never`.
 
 The original retry and fixed next-20 manifests, accepted deployment binding,
 authenticated native receipts, current canonical report, and writer ownership
-remain unavailable. No additional task or acceptance checkbox is complete.
+remain unavailable. Partial recovery is explicitly left unchecked; no acceptance
+checkboxes are completed by this followup.

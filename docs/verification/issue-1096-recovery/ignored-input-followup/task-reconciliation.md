@@ -18,10 +18,10 @@ pass 22/22. The ledger audit checks local artifact integrity and attribution;
 it does not authenticate external references or establish operational acceptance.
 
 Leave all test-pass, retry-outcome, canonical grading and live-cohort checkboxes
-unchecked. No prior receipt shows the required Python tests collecting, the
-accepted deployment is unverified, and neither grading threshold nor the fixed
-cohort's dated decisions is established. The partial diagnostic implementations
-in recent commits do not complete those tasks.
+unchecked. Partial recovery is explicitly left unchecked. No prior receipt shows the
+required Python tests collecting, the accepted deployment is unverified, and neither
+grading threshold nor the fixed cohort's dated decisions is established. The partial
+diagnostic implementations in recent commits do not complete those tasks.
 
 The attempted PR-body update was rejected with: "MCP tool call requires
 approval, but approval policy is never". No remote checklist change is claimed.

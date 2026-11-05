@@ -43,7 +43,7 @@
     }
   },
   "plan": "plan.md",
-  "plan_sha256": "db9da61d15494a87eff19d07c635d169ed6d492dadbde7329b1fd147d8097195",
+  "plan_sha256": "c5208b802ecc9b5960e2b9d7b72a057df580b3f24e2b011dbf952c967e849036",
   "operational_acceptance_verified": false,
   "pr_body_update": "rejected_requires_approval_policy_never",
   "pr_readiness": {
