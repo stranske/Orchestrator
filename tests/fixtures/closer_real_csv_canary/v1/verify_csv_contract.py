@@ -3,8 +3,10 @@
 Invoke this file directly. It is not a pytest module and defines no test items.
 ``--chain-evidence`` reads the public issue, branch and PR chain and reports
 whether a trusted native verifier decision and closer publication proof are
-tied to the corrected head. A free-text verdict line is not that proof. The
-command does not change the default contract exit.
+tied to the corrected head. A free-text verdict line is not that proof. Skipped
+Agents Verifier runs on earlier commits of the corrective PR, and publication
+text that names only the owned delivery PR, are reported and are not that proof
+either. The command does not change the default contract exit.
 """
 
 from __future__ import annotations
@@ -131,6 +133,7 @@ _PARTIAL_HEAD = "0507d28acf68d6bf21c68138d18d56cd01968827"
 _PARTIAL_MERGE = "d1947b5b4775c2e6a07bb46b3f85eb2e28c1b001"
 _PARTIAL_PR = "984"
 _CORRECTIVE_PR = "1168"
+_OWNED_DELIVERY_PR = "989"
 _CHAIN_ISSUES = (983, 988)
 _CHAIN_PRS = (984, 989, 1166, 1168)
 _CHAIN_BRANCHES = (
@@ -370,11 +373,19 @@ def _keepalive_for_head(comments, corrective_sha):
     return completions, reservations
 
 
-def _corrective_record(records):
+def _record_named(records, kind, name):
     for record in records:
-        if record.get("kind") == "pr" and str(record.get("name")) == _CORRECTIVE_PR:
+        if record.get("kind") == kind and str(record.get("name")) == name:
             return record
     return {}
+
+
+def _corrective_record(records):
+    return _record_named(records, "pr", _CORRECTIVE_PR)
+
+
+def _owned_delivery_record(records):
+    return _record_named(records, "pr", _OWNED_DELIVERY_PR)
 
 
 def _text_labeled_test(title, labels):
@@ -447,6 +458,9 @@ def _assess(
         if not labeled:
             unlabeled.append(record)
     completions, reservations = _keepalive_for_head(comments, corrective_sha)
+    owned = _owned_delivery_record(records)
+    owned_head = owned.get("head_sha") or ""
+    same_owned_head = bool(owned_head) and owned_head == corrective_sha
     return {
         "partial": partial,
         "corrective": corrective,
@@ -458,12 +472,16 @@ def _assess(
         "keepalive_completions": completions,
         "keepalive_reservations": reservations,
         "corrective_pr": _corrective_record(records),
+        "owned_delivery": owned,
+        "owned_publication": (
+            False if same_owned_head or not owned_head else _publication_tied(comments, owned_head)
+        ),
         "unlabeled": unlabeled,
         "branch_labels": branch_labels,
     }
 
 
-def _format_report(assessment, corrective_sha, local_head, verifier_runs=()):
+def _format_report(assessment, corrective_sha, local_head, verifier_runs=(), earlier_runs=()):
     lines = [
         "chain-evidence",
         f"repository: {_REPOSITORY}",
@@ -538,6 +556,20 @@ def _format_report(assessment, corrective_sha, local_head, verifier_runs=()):
             "agents_verifier_workflow_for_corrective_head: NONE "
             "no Agents Verifier run is bound to this head; it runs after merge"
         )
+    if earlier_runs:
+        lines.append(
+            "agents_verifier_earlier_pr_commits: "
+            + f"{len(earlier_runs)} run(s) on earlier commits of PR {_CORRECTIVE_PR}; "
+            + "not a decision for the current head"
+        )
+        for run in earlier_runs:
+            lines.append(
+                "agents_verifier_earlier_run: "
+                + f"id={run['id']} head={run['head_sha']} event={run['event']} "
+                + f"status={run['status']} conclusion={run['conclusion']}"
+            )
+    else:
+        lines.append("agents_verifier_earlier_pr_commits: none")
     if assessment["publication"]:
         lines.append("closer_publication_proof_for_corrective_head: PRESENT")
     else:
@@ -587,6 +619,28 @@ def _format_report(assessment, corrective_sha, local_head, verifier_runs=()):
                 "verify_label_on_corrective_pr: absent "
                 + "verify:checkbox, verify:evaluate, verify:compare"
             )
+    owned = assessment.get("owned_delivery") or {}
+    if owned:
+        owned_head = owned.get("head_sha") or "missing"
+        merged = "yes" if owned.get("merged") else "no"
+        lines.append(
+            "owned_delivery_pr: " + f"{_OWNED_DELIVERY_PR} head={owned_head} merged={merged}"
+        )
+        if owned_head == corrective_sha:
+            lines.append(
+                "owned_delivery_publication: same head as corrective pr; not separate proof"
+            )
+        elif assessment.get("owned_publication"):
+            lines.append(
+                "owned_delivery_publication: PRESENT "
+                "marker names the owned delivery head; not accepted for corrective pr "
+                + _CORRECTIVE_PR
+            )
+        else:
+            lines.append(
+                "owned_delivery_publication: MISSING "
+                "no closer-publication marker contains the owned delivery head"
+            )
     for item in assessment.get("branch_labels") or []:
         if item["via"]:
             lines.append(f"branch_label: {item['name']} labeled=yes via={item['via']}")
@@ -603,6 +657,7 @@ def _format_report(assessment, corrective_sha, local_head, verifier_runs=()):
     else:
         lines.append("test_labeled_chain: PRESENT")
     native_present = bool(assessment["corrective"] or assessment["corpus"])
+    # Completion requires this head's own decision and publication marker.
     complete = native_present and assessment["publication"] and not assessment["unlabeled"]
     lines.append("completion: evidence present" if complete else "completion: evidence incomplete")
     return "\n".join(lines), 0 if complete else 2
@@ -737,6 +792,73 @@ def _bound_verifier_runs(fetch, corrective_sha, merge_sha):
     return runs
 
 
+def _pull_commit_shas(fetch, number):
+    """One page of pull commits. A full page is an observation failure, not the head."""
+    status, raw = fetch(f"/repos/{_REPOSITORY}/pulls/{number}/commits?per_page=100")
+    document = _decode_json(status, raw, f"commits for {number}")
+    if not isinstance(document, list):
+        raise _ObservationError(f"commits for {number} were not a list")
+    if len(document) >= 100:
+        raise _ObservationError(f"commits for {number} exceeded one page")
+    shas = []
+    for item in document:
+        sha = item.get("sha") if isinstance(item, dict) else None
+        if not isinstance(sha, str) or len(sha) != 40:
+            raise _ObservationError(f"commits for {number} omitted a sha")
+        shas.append(sha)
+    return shas
+
+
+def _branch_verifier_runs(fetch, branch):
+    """Runs for the corrective branch. Truncation is a failure, not an empty history."""
+    encoded = urllib.parse.quote(branch, safe="")
+    status, raw = fetch(
+        "/repos/"
+        + _REPOSITORY
+        + "/actions/workflows/"
+        + _VERIFIER_WORKFLOW
+        + "/runs?branch="
+        + encoded
+        + "&per_page=20"
+    )
+    if status == 404:
+        return []
+    document = _decode_json(status, raw, "agents verifier branch runs")
+    runs = document.get("workflow_runs") if isinstance(document, dict) else None
+    if not isinstance(runs, list):
+        raise _ObservationError("agents verifier branch runs were not a list")
+    total = document.get("total_count") if isinstance(document, dict) else None
+    if (isinstance(total, int) and total > len(runs)) or len(runs) >= 20:
+        raise _ObservationError("agents verifier branch runs were truncated")
+    found = []
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        sha = run.get("head_sha")
+        if not isinstance(sha, str) or len(sha) != 40:
+            continue
+        found.append(
+            {
+                "id": run.get("id"),
+                "event": run.get("event"),
+                "status": run.get("status"),
+                "conclusion": run.get("conclusion"),
+                "head_sha": sha,
+            }
+        )
+    return found
+
+
+def _earlier_commit_runs(branch_runs, commit_shas, current_sha):
+    """Keep skipped runs on earlier commits of this PR out of the current-head result."""
+    allowed = set(commit_shas) - {_PARTIAL_HEAD, _PARTIAL_MERGE, current_sha}
+    earlier = []
+    for run in branch_runs:
+        if run.get("head_sha") in allowed:
+            earlier.append(run)
+    return earlier
+
+
 def _label_names(document):
     return [
         label.get("name")
@@ -762,6 +884,7 @@ def _pull_record(fetch, number):
     document = _decode_json(status, raw, f"pull {number}")
     head = document.get("head") or {}
     ref = head.get("ref") if isinstance(head, dict) else ""
+    sha = head.get("sha") if isinstance(head, dict) else ""
     record = {
         "kind": "pr",
         "name": str(number),
@@ -769,6 +892,7 @@ def _pull_record(fetch, number):
         "labels": _label_names(document),
         "present": True,
         "head_ref": ref if isinstance(ref, str) else "",
+        "head_sha": sha if isinstance(sha, str) and len(sha) == 40 else "",
     }
     if isinstance(document.get("merged"), bool):
         merge_sha = document.get("merge_commit_sha")
@@ -837,6 +961,13 @@ def _observe_chain(fetch):
                 corpus.extend(_corpus_from_comment(record, corrective_sha))
     corrective_pr = _corrective_record(records)
     runs = _bound_verifier_runs(fetch, corrective_sha, corrective_pr.get("merge_sha") or "")
+    commits = _pull_commit_shas(fetch, int(_CORRECTIVE_PR))
+    if corrective_sha not in commits:
+        raise _ObservationError("corrective head is not a commit on its pull request")
+    branch = corrective_pr.get("head_ref") or ""
+    if not branch:
+        raise _ObservationError("corrective pull request head ref missing")
+    earlier = _earlier_commit_runs(_branch_verifier_runs(fetch, branch), commits, corrective_sha)
     return (
         corrective_sha,
         events,
@@ -846,6 +977,7 @@ def _observe_chain(fetch):
         corrective_verdicts,
         corpus,
         runs,
+        earlier,
     )
 
 
@@ -860,6 +992,7 @@ def _report_chain_evidence():
             corrective_verdicts,
             corpus,
             runs,
+            earlier,
         ) = _observe_chain(_live_fetch)
     except _ObservationError as exc:
         print(f"chain-evidence observation failed: {exc}", file=sys.stderr)
@@ -877,6 +1010,7 @@ def _report_chain_evidence():
         corrective_sha,
         _local_head(),
         runs,
+        earlier,
     )
     print(text)
     return code
@@ -1209,6 +1343,119 @@ def _self_check():
         or "completion: evidence present" not in corpus_text
     ):
         raise AssertionError("a skipped verifier run changed the corpus decision")
+    ancestor = "a" * 40
+    earlier_only = [
+        {
+            "id": 7,
+            "event": "pull_request_target",
+            "status": "completed",
+            "conclusion": "skipped",
+            "head_sha": ancestor,
+        }
+    ]
+    if [
+        run["id"]
+        for run in _earlier_commit_runs(
+            earlier_only
+            + [
+                {
+                    "id": 1,
+                    "head_sha": _PARTIAL_HEAD,
+                    "event": "pull_request_target",
+                    "status": "completed",
+                    "conclusion": "skipped",
+                },
+                {
+                    "id": 3,
+                    "head_sha": corrective,
+                    "event": "pull_request_target",
+                    "status": "completed",
+                    "conclusion": "skipped",
+                },
+                {
+                    "id": 4,
+                    "head_sha": "d" * 40,
+                    "event": "pull_request_target",
+                    "status": "completed",
+                    "conclusion": "skipped",
+                },
+            ],
+            [_PARTIAL_HEAD, ancestor, corrective],
+            corrective,
+        )
+    ] != [7]:
+        raise AssertionError("partial or current-head verifier run counted as an earlier commit")
+    earlier_text, earlier_code = _format_report(blocked, corrective, corrective, (), earlier_only)
+    if earlier_code != 2 or "agents_verifier_earlier_run: id=7" not in earlier_text:
+        raise AssertionError("earlier skipped verifier run was not reported")
+    if "native_verify_for_corrective_head: PRESENT" in earlier_text:
+        raise AssertionError("earlier skipped verifier run counted as a native outcome")
+    kept_text, kept_code = _format_report(corpus_only, corrective, corrective, (), earlier_only)
+    if kept_code != 0 or "completion: evidence present" not in kept_text:
+        raise AssertionError("earlier skipped verifier run removed a complete decision")
+    owned_head = "b" * 40
+    owned_assessment = _assess(
+        [],
+        ["closer-publication-attempt-data/v1 " + owned_head],
+        [
+            {
+                "kind": "pr",
+                "name": "1168",
+                "title": "test: chain",
+                "labels": ["test"],
+                "present": True,
+                "merged": False,
+                "merge_sha": "",
+                "head_sha": corrective,
+            },
+            {
+                "kind": "pr",
+                "name": _OWNED_DELIVERY_PR,
+                "title": "TEST: owned",
+                "labels": ["test"],
+                "present": True,
+                "merged": False,
+                "head_sha": owned_head,
+            },
+        ],
+        corrective,
+    )
+    owned_text, owned_code = _format_report(owned_assessment, corrective, corrective)
+    if (
+        owned_code != 2
+        or owned_assessment["publication"]
+        or not owned_assessment["owned_publication"]
+    ):
+        raise AssertionError("owned delivery publication completed the corrective head")
+    if "owned_delivery_publication: PRESENT" not in owned_text:
+        raise AssertionError("owned delivery publication was not reported")
+    if "not accepted for corrective pr " + _CORRECTIVE_PR not in owned_text:
+        raise AssertionError("owned delivery publication was accepted for the corrective head")
+
+    def truncated(_path):
+        return (
+            200,
+            json.dumps({"total_count": 21, "workflow_runs": [{"head_sha": ancestor}]}).encode(),
+        )
+
+    try:
+        _branch_verifier_runs(truncated, "cursor/issue-983")
+    except _ObservationError as exc:
+        if "truncated" not in str(exc):
+            raise
+    else:
+        raise AssertionError("truncated verifier history was accepted")
+
+    def full_commits(_path):
+        return 200, json.dumps([{"sha": ancestor}] * 100).encode()
+
+    try:
+        _pull_commit_shas(full_commits, int(_CORRECTIVE_PR))
+    except _ObservationError as exc:
+        if "exceeded" not in str(exc):
+            raise
+    else:
+        raise AssertionError("a full commit page was treated as complete")
 
     def fake_fetch(path):
         if "/comments" in path:
@@ -1226,6 +1473,32 @@ def _self_check():
                     ).encode(),
                 )
             return 200, b"[]"
+        if "/commits?" in path:
+            return 200, json.dumps([{"sha": corrective}, {"sha": ancestor}]).encode()
+        if "/actions/workflows/" in path and "branch=" in path:
+            return (
+                200,
+                json.dumps(
+                    {
+                        "workflow_runs": [
+                            {
+                                "id": 7,
+                                "event": "pull_request_target",
+                                "status": "completed",
+                                "conclusion": "skipped",
+                                "head_sha": ancestor,
+                            },
+                            {
+                                "id": 42073591202,
+                                "event": "pull_request_target",
+                                "status": "completed",
+                                "conclusion": "skipped",
+                                "head_sha": corrective,
+                            },
+                        ]
+                    }
+                ).encode(),
+            )
         if "/actions/workflows/" in path:
             return (
                 200,
@@ -1267,6 +1540,8 @@ def _self_check():
     observed = _observe_chain(fake_fetch)
     if observed[6] != [_summarize_corpus(decision)] or observed[7][0]["conclusion"] != "skipped":
         raise AssertionError("chain observation dropped the corpus decision or the verifier run")
+    if observed[8] != earlier_only:
+        raise AssertionError("chain observation dropped the earlier skipped verifier run")
     observed_text, observed_code = _format_report(
         _assess(
             observed[1],
@@ -1280,6 +1555,7 @@ def _self_check():
         observed[0],
         observed[0],
         observed[7],
+        observed[8],
     )
     if observed_code != 2 or "native_verify_for_corrective_head: PRESENT" not in observed_text:
         raise AssertionError("observed corpus decision was not reported")
