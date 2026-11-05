@@ -1,8 +1,13 @@
-"""Declared partial fixture for the controlled Closer E2E negative test.
-This revision is intentionally incomplete; it is not production functionality.
-Manual setup target for an OPEN existing-PR update test; CSV remains incomplete.
+"""Isolated CSV/JSON canary fixture for the controlled Closer corrective test.
+
+JSON export is ``json.dumps`` of the input rows. CSV export writes the fixed
+fields ``name`` and ``score`` with CRLF record endings, one record per input.
+Empty input returns the header alone. This module is fixture code, not
+production functionality.
 """
 
+import csv
+import io
 import json
 
 
@@ -10,5 +15,10 @@ def export_rows(rows, format):
     if format == "json":
         return json.dumps(rows)
     if format == "csv":
-        raise NotImplementedError("Declared incomplete CSV canary fixture")
+        buffer = io.StringIO(newline="")
+        writer = csv.writer(buffer, lineterminator="\r\n")
+        writer.writerow(("name", "score"))
+        for row in rows:
+            writer.writerow((row["name"], row["score"]))
+        return buffer.getvalue()
     raise ValueError("unsupported format")
