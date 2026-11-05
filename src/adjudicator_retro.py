@@ -968,6 +968,16 @@ def _publication_lock_path(path: Path) -> Path:
     return destination.parent / ".orchestrator-mirror.publish.lock"
 
 
+def _excluded_live_target(target: object) -> bool:
+    """Live shadow skips Collab-Admin. The retrospective cohort still counts those rows.
+
+    The closer and keepalive already leave that repo out of fleet work. Folding the same
+    predicate into ``disputes()`` would change the graded retrospective population, which
+    #643 keeps unchanged.
+    """
+    return isinstance(target, str) and target.lower().startswith("stranske/collab-admin#")
+
+
 def disputes(*, db: Path | None = None, now: int | None = None, days: int = 90) -> list[dict]:
     """Read the existing Brain, without schema initialization or outcome writes."""
     with sqlite3.connect(f"file:{(db or feedback.DB_PATH).resolve()}?mode=ro", uri=True) as conn:
@@ -980,7 +990,6 @@ def disputes(*, db: Path | None = None, now: int | None = None, days: int = 90) 
                 "USING(run_id) WHERE r.ts>=? AND o.verifier_verdict IS NOT NULL "
                 "AND o.adjudicated_verdict IS NOT NULL "
                 "AND o.verifier_verdict!=o.adjudicated_verdict "
-                "AND lower(r.target) NOT LIKE 'stranske/collab-admin#%' "
                 "ORDER BY r.ts DESC,r.run_id",
                 ((now if now is not None else int(time.time())) - days * 86400,),
             )
@@ -1047,6 +1056,7 @@ def live_disputes(
         for row in population
         if row["ts"] > since_ts
         and row["target"] not in advised_targets
+        and not _excluded_live_target(row.get("target"))
         and _case_id(row) not in (excluded_case_ids or ())
         and (not ungraded_only or later_truth(row) is None)
     ]

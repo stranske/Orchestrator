@@ -798,7 +798,7 @@ def _refresh_live_truth(rows: list[dict], db: Path | None) -> None:
             continue
         try:
             row["later_truth"] = retro.native_later_truth(run_id, db)
-        except (OSError, ValueError, TypeError):
+        except (OSError, ValueError, TypeError, AttributeError, sqlite3.Error):
             pass
 
 
@@ -874,10 +874,15 @@ def weekly_evidence(*, db: Path | None = None, path: Path | None = None) -> str:
     path = path or report_path()
     if not path.exists():
         return line + "; agreement UNKNOWN against 0.75; retirement UNKNOWN"
-    report = json.loads(path.read_text())
-    rows = report.get("rows", [])
-    _refresh_live_truth(rows, db)
-    summary = live_summary(rows)
+    try:
+        report = json.loads(path.read_text())
+        if not isinstance(report, dict):
+            raise TypeError("live report must be an object")
+        rows = [row for row in report.get("rows", []) if isinstance(row, dict)]
+        _refresh_live_truth(rows, db)
+        summary = live_summary(rows)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, sqlite3.Error):
+        return line + "; agreement UNKNOWN against 0.75; retirement UNKNOWN"
     rate = summary["agree"] / summary["graded"] if summary["graded"] else None
     agreement = "UNKNOWN" if rate is None else f"{rate:.3f}"
     retired = "retired" if report.get("retirement") else "active shadow"
@@ -901,6 +906,8 @@ def weekly_line(path: Path | None = None) -> str:
     """
     try:
         report = json.loads((path or report_path()).read_text())
+        if not isinstance(report, dict):
+            raise TypeError("live report must be an object")
         rows = [row for row in report.get("rows", []) if isinstance(row, dict)]
         summary = live_summary(
             rows
@@ -917,7 +924,7 @@ def weekly_line(path: Path | None = None) -> str:
             f"advised {summary['advised']}, uncertified {summary['uncertified']}{refused}{failed}, "
             f"graded {summary['graded']} (agree {summary['agree']}, disagree {summary['disagree']})"
         )
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, sqlite3.Error):
         return "adjudicator live: disputes UNKNOWN, advised UNKNOWN, uncertified UNKNOWN, graded UNKNOWN"
 
 

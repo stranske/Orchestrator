@@ -609,6 +609,35 @@ def test_a_provisioning_failure_is_an_error_not_a_refusal(world):
     assert world["calls"] == [] and not live._final(row)
 
 
+def test_weekly_readers_survive_a_bad_report_and_an_unreadable_brain(tmp_path):
+    path = tmp_path / "live.json"
+    path.write_text("[]")
+    assert live.weekly_line(path).startswith("adjudicator live: disputes UNKNOWN")
+    assert "agreement UNKNOWN against 0.75" in live.weekly_evidence(path=path)
+    path.write_text("{")
+    assert "disputes UNKNOWN" in live.weekly_line(path)
+    assert "agreement UNKNOWN against 0.75" in live.weekly_evidence(path=path)
+    path.write_text(
+        json.dumps(
+            {
+                "population": 1,
+                "rows": [
+                    {
+                        "run_id": "original",
+                        "decision": "reject_blocker",
+                        "certification": {"status": "certified"},
+                    }
+                ],
+            }
+        )
+    )
+    brain = tmp_path / "brain.db"
+    brain.write_text("not sqlite")
+    evidence = live.weekly_evidence(db=brain, path=path)
+    assert "adjudicator live: disputes 1" in evidence
+    assert "agreement UNKNOWN against 0.75" in evidence
+
+
 def test_the_tick_asks_the_module_whether_the_switch_is_on(monkeypatch):
     monkeypatch.delenv(live.LIVE_SWITCH, raising=False)
     assert live.main(["--enabled"]) == 0

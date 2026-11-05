@@ -101,6 +101,31 @@ class LiveDisputesTests(unittest.TestCase):
         self.assertEqual(len(self.select(since_ts=self.now - 6)), 3)
         self.assertEqual(self.db.read_bytes(), before)
 
+    def test_collab_admin_stays_in_retrospective_disputes_and_out_of_live_selection(self):
+        with closing(sqlite3.connect(self.db)) as conn, conn:
+            conn.execute(
+                "INSERT INTO runs(run_id,ts,target) VALUES ('admin',?,'stranske/Collab-Admin#9')",
+                (self.now - 1,),
+            )
+            conn.execute(
+                "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict) "
+                "VALUES ('admin','NON_PASS','PASS')"
+            )
+            conn.execute(
+                "INSERT INTO runs(run_id,ts,target) VALUES ('other',?,'owner/repo#9')",
+                (self.now - 1,),
+            )
+            conn.execute(
+                "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict) "
+                "VALUES ('other','NON_PASS','PASS')"
+            )
+        retrospective = {row["run_id"] for row in retro.disputes(db=self.db, now=self.now)}
+        self.assertIn("admin", retrospective)
+        self.assertIn("other", retrospective)
+        selected = {row["run_id"] for row in self.select(since_ts=0, limit=20)}
+        self.assertNotIn("admin", selected)
+        self.assertIn("other", selected)
+
     def test_does_not_hide_a_corrupt_checkpoint(self):
         self.state.parent.mkdir()
         for content in ("{broken", "[]", '{"generated_at": -1}', '{"generated_at": "bad"}'):
