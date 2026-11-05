@@ -33,6 +33,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -104,6 +105,64 @@ def _wt_git(wt: Path, args: list[str]) -> subprocess.CompletedProcess:
     import worktree_git  # lazy: worktree_git imports this module
 
     return worktree_git.run(wt, args)
+
+
+def _fast_forward_if_only_behind(wt: Path) -> bool:
+    """A clean worktree that is only BEHIND its upstream holds no work: fast-forward it and reuse it."""
+    status = _wt_git(wt, ["status", "--porcelain"])
+    if status.returncode != 0 or status.stdout.strip():
+        return False
+    upstream = _wt_git(wt, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]).stdout.strip()
+    if not upstream or "/" not in upstream:
+        return False
+    remote, _, branch = upstream.partition("/")
+    _wt_git(wt, ["fetch", remote, branch])
+    counts = _wt_git(wt, ["rev-list", "--left-right", "--count", f"{upstream}...HEAD"])
+    try:
+        behind, ahead = [int(part) for part in counts.stdout.split()[:2]]
+    except Exception:
+        return False
+    if ahead:
+        return False
+    if behind:
+        return _wt_git(wt, ["merge", "--ff-only", upstream]).returncode == 0
+    return True
+
+
+def _set_aside_worktree(canon: Path, wt: Path, target: str, lane: str, event: dict) -> str:
+    """Owner decision 2026-11-05: a worktree holding a previous agent's unpushed or uncommitted work no longer
+    blocks every later dispatch (359 refusals across 27 issues, 2026-11-03..05). Its work is kept on a
+    `preserved/...` branch (uncommitted changes committed onto it), the worktree is removed, and the dispatch
+    provisions fresh. A worktree a live process is still using is never touched: that refusal clears when the
+    process exits. Returns the preserved branch name."""
+    try:
+        live = _live_holder_pids(wt)
+    except ProbeBlindError:
+        event.update(outcome="failed", cause="probe-blind")
+        raise
+    if live:
+        raise RuntimeError(
+            f"refusing to set aside worktree {wt} for {target} ({lane}): live pid {', '.join(sorted(live))} "
+            "(blocking 1, drainable 1: clears when that process exits)"
+        )
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    preserved = f"preserved/{worktree_name(target, lane)}-{stamp}"
+    switched = _wt_git(wt, ["switch", "-c", preserved])
+    if switched.returncode != 0:
+        raise RuntimeError(f"cannot preserve {wt}: {switched.stderr.strip()[:300]}")
+    if _wt_git(wt, ["status", "--porcelain"]).stdout.strip():
+        _wt_git(wt, ["add", "-A"])
+        committed = _wt_git(wt, ["-c", "user.name=orchestrator-provision",
+                                 "-c", "user.email=orchestrator-provision@localhost",
+                                 "commit", "--no-verify", "-m",
+                                 f"provision: preserve uncommitted work from {wt.name} before re-provisioning"])
+        if committed.returncode != 0:
+            raise RuntimeError(f"cannot preserve uncommitted work in {wt}: {committed.stderr.strip()[:300]}")
+    _run(["git", "-C", str(canon), "worktree", "remove", "--force", str(wt)])
+    _run(["git", "-C", str(canon), "worktree", "prune"])
+    event.update(set_aside=str(wt), preserved_branch=preserved)
+    print(f"provision: set aside stale worktree {wt}; its work is on branch {preserved}")
+    return preserved
 
 
 def _existing_worktree_reuse_error(wt: Path) -> str | None:
@@ -421,13 +480,17 @@ def _provision(target: str, lane: str, event: dict, branch: str | None = None) -
             event.update(outcome="reused", cause="existing-worktree")
             return wt
         reuse_error = _existing_worktree_reuse_error(wt)
-        if reuse_error:
-            raise RuntimeError(
-                f"refusing to reuse stale worktree for {target} ({lane}): "
-                f"{reuse_error}; inspect or remove {wt}"
-            )
-        event.update(outcome="reused", cause="existing-worktree")
-        return wt  # already provisioned and clean
+        if reuse_error and _fast_forward_if_only_behind(wt):
+            reuse_error = None
+            event.update(cause="fast-forwarded")
+        if not reuse_error:
+            if event.get("cause") != "fast-forwarded":
+                event["cause"] = "existing-worktree"
+            event.update(outcome="reused")
+            return wt  # already provisioned and clean (fast-forwarded if it was only behind)
+        # unpushed or uncommitted work from an earlier agent: keep it on a branch, then provision fresh
+        event.update(cause="set-aside", reuse_error=reuse_error[:300])
+        _set_aside_worktree(canon, wt, target, lane, event)
     WORKTREES_DIR.mkdir(parents=True, exist_ok=True)
 
     if lane == "closer" and num is not None:
