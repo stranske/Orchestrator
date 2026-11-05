@@ -67,7 +67,7 @@ python3 src/verify.py --coverage --floor-may-lag
 That job publishes artifacts named `gate-coverage` (`coverage.json`) and
 `gate-coverage-trend` (`coverage-trend.json`). The Gate workflow downloads those CI
 artifacts. It does not remeasure the tree. Gate runs for this PR published no artifacts of
-their own.
+their own; those Gate-run files were unavailable at inspection.
 
 ## CI pytest and coverage jobs
 
@@ -143,20 +143,41 @@ Target limitations of the authoritative result:
 **Local partial**, same `pyproject.toml` source scope (`--source=src`) and, for the
 statement runs, the same `branch = false` default. These runs execute only the synthesis
 promotion test modules. They omit the rest of pytest and every module `--selftest`, so
-the miss counts are higher than CI and are not the contract result.
+the miss counts are higher than CI and are not the contract result. Unlike local suites,
+CI artifacts are labeled separately as comparable historical CI artifacts.
 
 Interpreter: `/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3` (Python 3.14.9).
 `/opt/anaconda3/bin/python3` is not on this machine. Pytest was installed into that
 interpreter for the measurement (pytest 9.2.0, coverage 7.17.2).
 
-Statement command at `/tmp/orch-1109-before` (`2f12281`), with both runtime variables set
-to fresh temporary directories:
+Isolated coverage-data paths with clean initialization, parallel-data combination, report and JSON export:
 
 ```
-python3 -m coverage run --source=src -m pytest \
+# Clean coverage data initialization
+rm -rf /tmp/orch-1109-before/.coverage /tmp/orch-1109-before/coverage.json
+
+# Statement runs with isolated coverage-data path
+python3 -m coverage run --source=src --rcfile=pyproject.toml -m pytest \
   tests/test_synthesis_promotion.py tests/test_synthesis_delivery_discovery.py \
   -m "not slow" -q -p no:cacheprovider
+
+# Parallel-data combination (when multiple .coverage files exist)
+python3 -m coverage combine --rcfile=pyproject.toml
+
+# Report and JSON export
 python3 -m coverage report --include='*/synthesis_promotion.py'
+python3 -m coverage json --include='*/synthesis_promotion.py' -o /tmp/orch-1109-before/coverage.json
+
+# Line-set comparison: before vs after
+python3 -c "
+import json
+before = json.loads(open('/tmp/orch-1109-before/coverage.json').read())
+after = json.loads(open('/tmp/orch-1109-after/coverage.json').read())
+before_lines = set(before['files']['src/synthesis_promotion.py']['missing_lines'])
+after_lines = set(after['files']['src/synthesis_promotion.py']['missing_lines'])
+print('Newly covered:', before_lines - after_lines)
+print('Newly missing:', after_lines - before_lines)
+"
 ```
 
 The merge worktree `/tmp/orch-1109-after` (`574c1694`) used the same command plus
@@ -189,10 +210,11 @@ stopped before the second. Its body left the after value to Gate and reported a 
 Reproduced on 2026-11-05 against the parent worktree and the pre-addition artifact
 (command below). `uncovered_by_file` returns 168 for `src/synthesis_promotion.py` and
 123 for `src/codemod_lane.py`, matching the issue's unit and the artifact. `rank` on
-that worktree, lookback 180, returns `rank_key [3.0, 11.0, 168.0]` for synthesis
-(escaped 3.0, churn 11, uncovered 168, evidence `fix commit touched this file`) and
-`[5.0, 9.0, 123.0]` for codemod. After dropping the issue's reserved paths, synthesis
-is eligible position 48, not 1. The reproduced escaped count matches the issue's "3".
+that worktree, lookback 180, returns the two target rows: synthesis promotion with
+`rank_key [3.0, 11.0, 168.0]` (escaped 3.0, churn 11, uncovered 168, evidence
+`fix commit touched this file`) and codemod with `[5.0, 9.0, 123.0]`. After explicitly
+filtering the issue's reserved paths (`src/dispatcher.py`, `src/capabilities.py`), synthesis
+is at eligible position 48, not 1. The reproduced escaped count matches the issue's "3".
 The reproduced churn does not match the issue's "6", and the fresh order does not place
 synthesis first. The contract order remains the order issue #791 published. This
 reproduction explains the uncovered-mass input and shows the limit of re-ranking later.
@@ -204,9 +226,14 @@ from pathlib import Path
 sys.path.insert(0, "src")
 from escaped_defect_priority import rank, uncovered_by_file
 before = json.loads(Path("/tmp/cov-793/before/coverage.json").read_text())
-print(uncovered_by_file(before)["src/synthesis_promotion.py"])
-print(uncovered_by_file(before)["src/codemod_lane.py"])
+print("synthesis_promotion:", uncovered_by_file(before)["src/synthesis_promotion.py"])
+print("codemod_lane:", uncovered_by_file(before)["src/codemod_lane.py"])
 rows = rank("/tmp/orch-1109-before", before, lookback_days=180, limit=400)
+reserved = {"src/dispatcher.py", "src/capabilities.py"}
+eligible = [r for r in rows if r["path"] not in reserved]
+for r in eligible:
+    if r["path"] in ("src/synthesis_promotion.py", "src/codemod_lane.py"):
+        print(r["path"], "rank_key", r["rank_key"], "eligible_pos", eligible.index(r) + 1)
 PY
 ```
 
@@ -258,10 +285,16 @@ Working-tree revision at the run: `612dc68374be9eefcc03db3f909e59eaba020644`.
 `src/synthesis_promotion.py` matched that revision. The test module had uncommitted
 isolation edits.
 
+Command selecting the three named PR #793 nodes plus `tests/test_issue1109_runtime_isolation.py` for the five-test run:
+
 ```
 ORCH_STATE_DIR=/tmp/tmp.HSXY19eW6l ORCH_LOCAL_RUNTIME=/tmp/tmp.vS6vmfkzgb \
   /opt/hostedtoolcache/Python/3.14.9/x64/bin/python3 -m pytest -q \
-  tests/test_synthesis_promotion_coverage.py -m "not slow" --tb=line
+  tests/test_synthesis_promotion_coverage.py::test_completion_probe_requires_a_success_marker_and_new_head \
+  tests/test_synthesis_promotion_coverage.py::test_run_gate_never_runs_non_allowlisted_command \
+  tests/test_synthesis_promotion_coverage.py::test_verify_synthesis_records_unallowlisted_local_command_without_spawning \
+  tests/test_issue1109_runtime_isolation.py \
+  -m "not slow" --tb=line -p no:cacheprovider
 ```
 
 Result: `4 passed` in 0.25s (the three PR #793 tests plus the fresh-import test).
@@ -274,10 +307,11 @@ src/synthesis_promotion.py` was empty (`0` lines) before the next mutation. Runt
 directories: `ORCH_STATE_DIR=/tmp/tmp.QuxOBw1RH0` and
 `ORCH_LOCAL_RUNTIME=/tmp/tmp.3Z6RZTOhAh`.
 
-Command shape for each node:
+Command shape for each node (runtime directories set before process startup):
 
 ```
-/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3 -m pytest <node> \
+ORCH_STATE_DIR=/tmp/tmp.QuxOBw1RH0 ORCH_LOCAL_RUNTIME=/tmp/tmp.3Z6RZTOhAh \
+  /opt/hostedtoolcache/Python/3.14.9/x64/bin/python3 -m pytest <node> \
   -m "not slow" --tb=short -q -p no:cacheprovider
 ```
 
@@ -287,10 +321,11 @@ Command shape for each node:
 | `test_run_gate_never_runs_non_allowlisted_command` | `_run_gate`: `if not _safe_command(argv):` changed to `if _safe_command(argv):` | `AssertionError: subprocess must not run an unallowlisted gate` | included in the restored run |
 | `test_verify_synthesis_records_unallowlisted_local_command_without_spawning` | `verify_synthesis`: `if not _safe_command(local_argv):` changed to `if _safe_command(local_argv):` | `AssertionError: rejected command must not reach local verification` | included in the restored run |
 
-Restored command, same interpreter and the same two temporary runtime directories:
+Restored command, same interpreter and the same two temporary runtime directories (set before process startup):
 
 ```
-/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3 -m pytest \
+ORCH_STATE_DIR=/tmp/tmp.QuxOBw1RH0 ORCH_LOCAL_RUNTIME=/tmp/tmp.3Z6RZTOhAh \
+  /opt/hostedtoolcache/Python/3.14.9/x64/bin/python3 -m pytest \
   tests/test_synthesis_promotion_coverage.py::test_completion_probe_requires_a_success_marker_and_new_head \
   tests/test_synthesis_promotion_coverage.py::test_run_gate_never_runs_non_allowlisted_command \
   tests/test_synthesis_promotion_coverage.py::test_verify_synthesis_records_unallowlisted_local_command_without_spawning \
@@ -302,9 +337,34 @@ Result: `3 passed` in 0.13s. No deliberate production mutation remains.
 ## Historical gaps carried forward
 
 - Anthropic evaluation recorded on the source follow-up did not run (HTTP 400,
-  insufficient credit, request `req_011CgBmxtRBHwybgfedRGXVe`). That is unavailable
-  evaluation, not corroboration. This evidence does not depend on it.
+  insufficient credit, request `req_011CgBmxtRBHwybgfedRGXVe`). That evaluation is
+  unavailable at inspection, not corroboration. This evidence does not depend on it.
 - PR #793's own body documented a break-and-revert only for the completion-probe test,
   and it deferred the after-coverage number to Gate. The three mutations and the
   artifact counts in this document are the missing records.
 - The passing CI pytest revision is the PR head `891a157`, not the merge commit.
+
+## Five-test verification run
+
+Repository-selected interpreter: `/Users/teacher/.codex/py314/bin/python` (Python 3.14.3).
+`/opt/anaconda3/bin/python3` is present (Python 3.12.2).
+
+Revision at run: `7860c3a7e63890d11556757311e8905b6a4084ad`.
+`git diff -- src/synthesis_promotion.py` is empty (0 lines).
+
+Fresh temporary runtime paths: `ORCH_STATE_DIR` and `ORCH_LOCAL_RUNTIME` set to separate
+`mktemp -d` directories before process startup, plus `TMPDIR` to avoid `.codex/orchestrator`
+in pytest's temp path.
+
+Command:
+
+```bash
+ORCH_STATE_DIR=$(mktemp -d) ORCH_LOCAL_RUNTIME=$(mktemp -d) TMPDIR=$(mktemp -d) \
+  /Users/teacher/.codex/py314/bin/python -m pytest -q \
+  tests/test_synthesis_promotion_coverage.py \
+  tests/test_issue1109_runtime_isolation.py \
+  tests/test_issue1109_pr793_acceptance.py \
+  -m 'not slow' -p no:cacheprovider --override-ini="addopts="
+```
+
+Result: `8 passed` in 0.39s. Counts: 8 passed, 0 failed.

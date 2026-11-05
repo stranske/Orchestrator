@@ -67,7 +67,7 @@ python3 src/verify.py --coverage --floor-may-lag
 
 with the same two runtime variables, then publishes `coverage.json` as artifact `gate-coverage` and `coverage-trend.json` as artifact `gate-coverage-trend`. The verify job does not publish that file. `combined-coverage` (the raw `.coverage` plus the log) had `retention-days: 7` and is no longer listed.
 
-The Gate workflow's own coverage steps, at this revision, download `gate-*` artifacts into `gate_artifacts/downloads` and run `computeCoverageStats` over `coverage/runtimes`, writing `gate-coverage.json` in the job. Those Gate-run files were not uploaded.
+The Gate workflow's own coverage steps, at this revision, download `gate-*` artifacts into `gate_artifacts/downloads` and run `computeCoverageStats` over `coverage/runtimes`, writing `gate-coverage.json` in the job. Those Gate-run files were not uploaded and are unavailable at inspection.
 
 | Measurement | Run | Revision | `gate-coverage` artifact | What it is |
 | --- | --- | --- | --- | --- |
@@ -82,7 +82,7 @@ Gate workflow runs retain nothing:
 - PR Gate [39260266708](https://github.com/stranske/Orchestrator/actions/runs/39260266708), conclusion success, `artifacts.total_count = 0`
 - Merge Gate [39270664385](https://github.com/stranske/Orchestrator/actions/runs/39270664385), conclusion success, `artifacts.total_count = 0`
 
-`ci.yml` at this revision says Maint Coverage Guard reads `pr-00-gate.yml` and cannot see the combined-coverage job. The per-file numbers below are the CI artifacts that happen to be named `gate-coverage`. They are not artifacts of the Gate workflow. Gate's `gate-coverage.json` / coverage-summary files are unavailable.
+`ci.yml` at this revision says Maint Coverage Guard reads `pr-00-gate.yml` and cannot see the combined-coverage job. The per-file numbers below are the CI artifacts that happen to be named `gate-coverage`. They are not artifacts of the Gate workflow. Gate's `gate-coverage.json` / coverage-summary files are unavailable at inspection.
 
 ## Before and after coverage
 
@@ -207,14 +207,14 @@ ORCH_STATE_DIR=/tmp/orch1109-rank/state ORCH_LOCAL_RUNTIME=/tmp/orch1109-rank/ru
   --limit 400 --json
 ```
 
-`uncovered_by_file` on that artifact is 168 for `src/synthesis_promotion.py` and 123 for `src/codemod_lane.py`, matching the issue and the table above. The same command's defect and churn figures do not match the issue text. With a 180-day lookback ending 2026-11-05, `synthesis_promotion.py` ranked 56th (escaped 3.0, churn 11, uncovered 168) and `codemod_lane.py` ranked 41st (escaped 5.0, churn 9, uncovered 123). The top of that list is `src/dispatcher.py`, `src/feedback.py`, and `src/capability_advisor.py`. The issue's reserved-file list excluded several of those from the round. The uncovered-statement counts are the part of the original ranking this artifact reproduces. The October dispatch order is the contract's stated order; this later rank does not select those two files first.
+`uncovered_by_file` on that artifact is 168 for `src/synthesis_promotion.py` and 123 for `src/codemod_lane.py`, matching the issue and the table above. The command prints both target rows with their rank keys: synthesis promotion `[3.0, 11.0, 168.0]` and codemod `[5.0, 9.0, 123.0]`. After explicitly filtering the issue's reserved paths (`src/dispatcher.py`, `src/capabilities.py`), synthesis is at eligible position 48, not 1. The reproduced escaped count (3.0) matches the issue's "3"; the reproduced churn (11 vs 9) does not match the issue's "6". The October dispatch order is the contract's stated order; this later rank does not select those two files first. The uncovered-statement counts are the part of the original ranking this artifact reproduces.
 
 ## Historical gaps
 
 - No new CI pytest run and no new Gate run were executed for this evidence.
 - The passing pytest job is the PR-head run. The merge revision's pytest job failed the floor equality after the same `5791 passed, 0 failed`.
 - The parent SHA has no CI run. The before coverage artifact is the previous main push, which differs only by `.verify-floor.json`.
-- Gate workflow runs for the PR head and the merge retain zero artifacts. Gate's `computeCoverageStats` output and coverage summary are unavailable. The numbers above are the CI combined artifacts published under the name `gate-coverage`.
+- Gate workflow runs for the PR head and the merge retain zero artifacts. Gate's `computeCoverageStats` output and coverage summary are unavailable at inspection. The numbers above are the CI combined artifacts published under the name `gate-coverage`.
 - Branch coverage was disabled, so uncovered branches and any branch-only reduction are unmeasured. The 154-unit shortfall is against statement coverage only.
 - Local coverage used coverage.py 7.17.2 and a subset of the suite. It explains which of the 26 lines the three tests execute. It is not a substitute for the 7.16.2 combined artifacts.
 - One statement in `src/router.py` differs between the before and merge artifacts even though that file's blob does not. It is not counted in the 26.
