@@ -13,8 +13,8 @@ takes the newest ones this report has not seen, and for each: builds the same pa
 retrospective builds, provisions a disposable exact-head checkout of the merged commit, CERTIFIES
 the case with `adjudicator_retro.qualify_collected_case` (the native cohort's own certifier) from a
 deterministic inventory — every changed path, every explicit acceptance criterion mapped to the
-whole diff — and asks the role once with `source="live"`. The advice is persisted beside the
-dispute in `capability-program/adjudicator-live.json`; the retrospective's reconciler grades it
+whole diff — and asks the role once with `source="live"`. The advice is persisted as a completion
+event and cached in `capability-program/adjudicator-live.json`; the reconciler grades it
 when `outcomes.durability` lands. A case that cannot be certified is recorded `uncertified` with
 its reason and never adjudicated from metadata.
 
@@ -489,6 +489,14 @@ def _persist_live_event(
         "dispute_ts",
     )
     receipt = {key: entry[key] for key in keys if key in entry}
+    # Keep the collector's full inventory in the report's collection_requirements. Even the
+    # event sanitizer's bounded path list can exceed its byte budget after JSON escaping, so
+    # the durable receipt carries only the certification identity needed for recovery.
+    receipt["certification"] = {
+        key: value
+        for key, value in entry["certification"].items()
+        if key in {"status", "evaluated_sha", "digest", "reason"}
+    }
     if "proposal" in entry:
         receipt["proposal"] = {"decision": entry["decision"]}
     result = feedback.record_completion_event(
