@@ -1,11 +1,12 @@
 """Hermetic tests for Gate-missing statements still open on the #1025 head.
 
-Authority is CI run 41976313160 (`gate-coverage`), not a single-module pytest
+Authority is CI run 41982991645 (`gate-coverage`), not a single-module pytest
 coverage table. These tests target production branches that run still lists as
 missing: tick consult/record failures, a non-exempt observer verdict, an unknown
 late-outcome direction kept beside a real one, the cadence-registry import
-fallback, the tick alarm backstop, and the role-lineage fallback when no
-aggregate row exists. Selftest ``raise AssertionError`` arms stay out — they
+fallback, the tick alarm backstop, the role-lineage fallback when no aggregate
+row exists, the offline switch-review tripwire, and the feedback selftest sections that CI
+skips when role capabilities have no version lineage. Selftest ``raise AssertionError`` arms stay out — they
 run only when the check they guard is already wrong.
 """
 
@@ -398,3 +399,74 @@ def test_role_lineage_without_an_aggregate_copies_the_acting_verdict(
     assert role[1] == "durable"
     assert role[2] == "automatically influenced tgt-fallback; downstream notes: acting notes"
     assert role[3] is None
+
+
+def _versioned(name: str, version: str) -> dict:
+    row = capabilities._blank_capability(name)
+    row["capability_version_id"] = version
+    return row
+
+
+def test_offline_switch_review_fails_closed_when_a_tripwire_fires() -> None:
+    """The isolation context records a sweep, a gh call, and a tick-env read, then refuses them."""
+    import switch_review
+
+    with pytest.raises(AssertionError, match="live switch sweep"):
+        with propensity._offline_switch_review():
+            assert switch_review.review(window=1) == {"held_off": [], "on_but_idle": []}
+            reached_gh = switch_review._GH_CALL_RUNNER(["issue", "view", "1"])
+            assert reached_gh[0] is False
+            assert "may not reach gh" in reached_gh[2]
+            assert switch_review.env_as_the_tick_sees_it() == ({}, {})
+
+
+def test_feedback_selftest_runs_role_lineage_when_versions_exist(tmp_path: Path) -> None:
+    """CI skips these sections because a bootstrap ledger has no version ids. A seeded one must not."""
+    import env_prereq
+
+    ledger = tmp_path / "capabilities.json"
+    capabilities.save(
+        {
+            "role-redirect": _versioned("role-redirect", "cv:redirect"),
+            "offload": _versioned("offload", "cv:offload"),
+            "role-triage": _versioned("role-triage", "cv:triage"),
+        },
+        ledger,
+    )
+    capabilities.REG = ledger
+    assert env_prereq.ledger_rows_absent("role-redirect", "offload", "role-triage") is None
+    assert env_prereq.ledger_version_lineage_absent("role-redirect", "offload") is None
+    assert env_prereq.ledger_version_lineage_absent("role-triage") is None
+    previous = feedback.DB_PATH
+    try:
+        feedback._selftest()
+    finally:
+        feedback.DB_PATH = previous
+
+
+def test_selftest_restores_a_binding_that_was_already_there() -> None:
+    """The cleanup else-arm runs only when the surface was bound before the selftest started.
+
+    The tick surface is declared in the table, so its selftest always takes the restore arm.
+    These three names are not, so Gate only executes the pop. Seeding them first takes the other arm.
+    """
+    import capability_advisor
+
+    sentinel = {"preexisting": "kept"}
+    surfaces = {
+        "f-surf": propensity._selftest_finds,
+        "t-dec": propensity._selftest_declines,
+        "t-surf": propensity._selftest_detection,
+    }
+    saved = {name: capability_advisor.SURFACE_BINDINGS.get(name) for name in surfaces}
+    try:
+        for name, fn in surfaces.items():
+            capability_advisor.SURFACE_BINDINGS[name] = dict(sentinel)
+            fn()
+            assert capability_advisor.SURFACE_BINDINGS[name] == sentinel, name
+    finally:
+        for name, previous in saved.items():
+            if previous is None:
+                capability_advisor.SURFACE_BINDINGS.pop(name, None)
+            else:
+                capability_advisor.SURFACE_BINDINGS[name] = previous
