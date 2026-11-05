@@ -197,7 +197,7 @@ test('deployment CLI records the export merge rather than an unpublished or side
       challenger_filter: 'hosted-runnable-alternatives/v1',
       challengers: Object.fromEntries(
         ['implement', 'review', 'testgen', 'mechanical', 'codemod', 'cross_repo']
-          .map((task) => [task, 'codex'])),
+          .map((task) => [task, null])),
     },
   };
   await git(root, 'init', '--bare', '--initial-branch=main', remote);
@@ -254,6 +254,9 @@ test('deployment CLI records the export merge rather than an unpublished or side
   const accepted = await record(merged);
   assert.equal(accepted.status, 0, accepted.stderr);
   const recorded = JSON.parse(accepted.stdout);
+  const publishedDocument = JSON.parse(await git(remote, 'show', `${merged}:config/route-weights.json`));
+  assert.ok(Object.values(publishedDocument.exploration.challengers).every((agent) => agent === null),
+    'a verified filter may have no runnable alternatives for any task');
   assert.equal(recorded.branch, branch);
   assert.equal(recorded.published_commit, merged);
   assert.equal(recorded.generated_at, document.generated_at);
@@ -354,6 +357,61 @@ print("publication_result=" + str(published))
   assert.notEqual(provenance.published_commit, initial);
   fs.writeFileSync(audit, JSON.stringify(provenance));
 
+  async function refuseBeforeGeneration() {
+    const before = fs.existsSync(receipt) ? fs.readFileSync(receipt) : null;
+    const modified = before === null ? null : fs.statSync(receipt, { bigint: true }).mtimeNs;
+    const early = new Date(Date.parse(document.generated_at) - 1000)
+      .toISOString().replace(/\.\d{3}Z$/, 'Z');
+    fs.writeFileSync(audit, JSON.stringify({ ...provenance, deployed_at: early }));
+    try {
+      const refused = await record();
+      assert.equal(refused.status, 1, refused.stderr);
+      assert.equal(refused.stdout, '');
+      assert.match(refused.stderr, /deployed_at precedes the published artifact's generated_at/);
+      assert.doesNotMatch(refused.stderr, /Traceback/);
+      if (before === null) {
+        assert.equal(fs.existsSync(receipt), false);
+      } else {
+        assert.deepEqual(fs.readFileSync(receipt), before);
+        assert.equal(fs.statSync(receipt, { bigint: true }).mtimeNs, modified);
+      }
+      assert.equal(await git(remote, 'rev-parse', branch), provenance.published_commit);
+    } finally {
+      fs.writeFileSync(audit, JSON.stringify(provenance));
+    }
+  }
+  await refuseBeforeGeneration();
+
+  // Publication can occur within the same whole second as artifact generation.
+  // Use separate receipt directories so these boundary checks cannot replace
+  // the original audit used by the failure/recovery scenario below.
+  for (const [name, timestamp] of [
+    ['zulu', document.generated_at],
+    ['utc-offset', document.generated_at.replace(/Z$/, '+00:00')],
+  ]) {
+    await t.test(`accepts deployment at generation instant with ${name}`, async () => {
+      const boundaryState = path.join(root, `boundary-${name}`);
+      fs.writeFileSync(audit, JSON.stringify({ ...provenance, deployed_at: timestamp }));
+      try {
+        const accepted = await run(python, [
+          path.join(modules, 'route_weights_export.py'),
+          '--record-challenger-deployment', audit, '--state-dir', boundaryState,
+        ], { cwd: root, env });
+        assert.equal(accepted.status, 0, accepted.stderr);
+        const boundaryReceipt = JSON.parse(accepted.stdout);
+        assert.equal(boundaryReceipt.deployed_at, timestamp);
+        assert.equal(boundaryReceipt.deployed_epoch, Date.parse(document.generated_at) / 1000);
+        assert.equal(boundaryReceipt.published_commit, provenance.published_commit);
+        assert.deepEqual(JSON.parse(fs.readFileSync(
+          path.join(boundaryState, path.basename(receipt)), 'utf8')), boundaryReceipt);
+        assert.equal(fs.existsSync(receipt), false);
+        assert.equal(await git(remote, 'rev-parse', branch), provenance.published_commit);
+      } finally {
+        fs.writeFileSync(audit, JSON.stringify(provenance));
+      }
+    });
+  }
+
   // Cached origin refs cannot establish that a publication is still remote.
   // Exercise real fetch failure both before and after a receipt is retained.
   async function refuseUnavailableRemote() {
@@ -408,6 +466,7 @@ print("publication_result=" + str(published))
   assert.deepEqual(JSON.parse(fs.readFileSync(receipt, 'utf8')), recorded);
   const before = fs.readFileSync(receipt);
   const modified = fs.statSync(receipt, { bigint: true }).mtimeNs;
+  await refuseBeforeGeneration();
   await refuseUnavailableRemote();
   const repeated = await record();
   assert.equal(repeated.status, 0, repeated.stderr);

@@ -322,3 +322,28 @@ patch is `/tmp/orchestrator-1175-merge-provenance.patch`.
 The PR checkbox correction, blocker comment, and `needs-human` label were rejected
 with `MCP tool call requires approval, but approval policy is never`. Remote
 metadata remains unchanged.
+
+## Deployment-time boundary verification (2026-11-05)
+
+Extended the real publication CLI regression to reject deployment one second
+before artifact generation, both before recording and with an existing receipt.
+Refusal preserves receipt bytes and modification time. Separate temporary state
+directories verify that deployment at the exact generation second is accepted
+with either `Z` or `+00:00`, retaining the supplied timestamp and correct epoch.
+The merge-publication test now also verifies a valid all-null challenger map,
+which represents no runnable alternative rather than a malformed contract.
+
+Verification: all 41 CLI tests and all 15 deployment unittest tests pass;
+JavaScript syntax and diff whitespace checks pass. No Python files changed.
+No new acceptance checkbox is complete. The production database and verified
+production deployment audit remain absent, as do the required Anaconda
+interpreter, pytest, and Black. Observation must wait until both 2026-11-08 and
+fourteen days after verified deployment. The checked publication task remains
+premature because there is no retained verified production receipt.
+
+PR #1176 was confirmed open and ready for review. The PR checkbox correction,
+blocker comment, and `needs-human` label were rejected with `MCP tool call
+requires approval, but approval policy is never`. Git index writes in this
+checkout fail with `Read-only file system`. The tested edits remain here; the
+commit is retained in `/tmp/orchestrator-1175-timestamp-boundary-Q9GMYh` and its
+handoff patch is `/tmp/orchestrator-1175-timestamp-boundary.patch`.
