@@ -1,0 +1,42 @@
+UNKNOWN: 1/1 changed files retained; 1/2 total files retained; review PENDING
+✔ retains complete exact-head bytes and bindings despite working-tree drift (32.228772ms)
+✔ CLI retains complete binary, executable, alias and symlink blobs from the exact head (111.586728ms)
+✔ CLI reports UNKNOWN when all changed files are retained but a supporting blob is unavailable (69.315417ms)
+✔ rejects a same-count changed-path substitution with another real tree file (27.528436ms)
+✔ rejects absent PR file records before writing a bundle (27.059253ms)
+✔ rejects incomplete PR file records before writing a bundle (29.922159ms)
+✔ rejects wrong head PR file records before writing a bundle (28.949403ms)
+✔ rejects omitted PR file records before writing a bundle (27.204407ms)
+✔ rejects duplicate PR file records before writing a bundle (27.372411ms)
+✔ rejects invalid filename PR file records before writing a bundle (28.151596ms)
+✔ compares the complete aggregated PR file set independently of ordering (38.918527ms)
+✔ rejects missing SHA PR/tree identity before reading source or writing a bundle (24.832306ms)
+✔ rejects invalid SHA PR/tree identity before reading source or writing a bundle (22.935883ms)
+✔ rejects different blob PR/tree identity before reading source or writing a bundle (24.791053ms)
+✔ rejects non-blob tree entry PR/tree identity before reading source or writing a bundle (22.967785ms)
+✔ retained PR receipt refuses a contradictory blob binding with unchanged filenames (29.460303ms)
+✔ an absent changed-file tree binding remains UNKNOWN with an owner and action (24.612765ms)
+✔ durable metadata receipt reproduces all manifest path/tree bindings without historical blobs (28.387546ms)
+✔ retained PR receipt rejects substituting its last changed file with a supporting tree file (29.102183ms)
+✔ rejects head metadata before writing a bundle (24.414581ms)
+✔ rejects commit metadata before writing a bundle (23.240236ms)
+✔ rejects tree metadata before writing a bundle (23.179419ms)
+✔ rejects truncated metadata before writing a bundle (22.260464ms)
+✔ rejects duplicates metadata before writing a bundle (23.402752ms)
+✔ rejects traversal metadata before writing a bundle (24.107142ms)
+✔ rejects omitted file metadata before writing a bundle (23.18295ms)
+✔ records truncation as UNKNOWN with an owner and action (24.762662ms)
+✔ records same-length corruption as UNKNOWN with an owner and action (25.436627ms)
+✔ records missing object as UNKNOWN with an owner and action (25.241523ms)
+✔ records missing binding as UNKNOWN with an owner and action (28.402243ms)
+✔ retains aliases by blob identity and preserves executable mode bindings (32.894801ms)
+✔ refuses to overwrite retained evidence or write inside the source via a symlink (31.628822ms)
+✔ CLI reports incomplete retrieval with a nonzero exit and durable manifest (30.020147ms)
+ℹ tests 33
+ℹ suites 0
+ℹ pass 33
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1026.055894

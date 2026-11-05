@@ -1,0 +1,380 @@
+﻿2026-10-19T00:24:36.9457157Z Current runner version: '2.337.0'
+2026-10-19T00:24:36.9481423Z ##[group]Runner Image Provisioner
+2026-10-19T00:24:36.9482659Z Hosted Compute Agent
+2026-10-19T00:24:36.9483343Z Version: 20261012.601
+2026-10-19T00:24:36.9484007Z Commit: f3dc54e1fb89da6852db922499a0233137369e1d
+2026-10-19T00:24:36.9484736Z Build Date: 2026-10-12T17:48:21Z
+2026-10-19T00:24:36.9485519Z Worker ID: {6e4e4250-59ed-4848-80ac-76ed894f649b}
+2026-10-19T00:24:36.9486251Z Region: westus2
+2026-10-19T00:24:36.9486853Z Cloud: Azure
+2026-10-19T00:24:36.9487391Z ##[endgroup]
+2026-10-19T00:24:36.9488846Z ##[group]Operating System
+2026-10-19T00:24:36.9489654Z Ubuntu
+2026-10-19T00:24:36.9490283Z 24.04.5
+2026-10-19T00:24:36.9490849Z LTS
+2026-10-19T00:24:36.9491385Z ##[endgroup]
+2026-10-19T00:24:36.9492434Z ##[group]Runner Image
+2026-10-19T00:24:36.9493239Z Image: ubuntu-24.04
+2026-10-19T00:24:36.9493850Z Version: 20261012.334.1
+2026-10-19T00:24:36.9495172Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261012.334/images/ubuntu/Ubuntu2404-Readme.md
+2026-10-19T00:24:36.9496719Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261012.334
+2026-10-19T00:24:36.9497806Z ##[endgroup]
+2026-10-19T00:24:36.9498882Z ##[group]GITHUB_TOKEN Permissions
+2026-10-19T00:24:36.9500823Z Contents: read
+2026-10-19T00:24:36.9501449Z Metadata: read
+2026-10-19T00:24:36.9502302Z ##[endgroup]
+2026-10-19T00:24:36.9504407Z Secret source: Actions
+2026-10-19T00:24:36.9505432Z Cache mode: write
+2026-10-19T00:24:36.9506145Z Prepare workflow directory
+2026-10-19T00:24:36.9848049Z Prepare all required actions
+2026-10-19T00:24:36.9895769Z Getting action download info
+2026-10-19T00:24:37.3309531Z Download action repository 'actions/checkout@v7' (SHA:3d3c42e5aac5ba805825da76410c181273ba90b1)
+2026-10-19T00:24:37.4454240Z Download action repository 'actions/setup-python@v7' (SHA:5fda3b95a4ea91299a34e894583c3862153e4b97)
+2026-10-19T00:24:37.6240663Z Complete job name: verify.py (real pytest counts + selftests + capability gates)
+2026-10-19T00:24:37.7030515Z ##[group]Run actions/checkout@v7
+2026-10-19T00:24:37.7031525Z with:
+2026-10-19T00:24:37.7032321Z   persist-credentials: false
+2026-10-19T00:24:37.7033014Z   repository: stranske/Orchestrator
+2026-10-19T00:24:37.7036752Z   token: ***
+2026-10-19T00:24:37.7037306Z   ssh-strict: true
+2026-10-19T00:24:37.7037866Z   ssh-user: git
+2026-10-19T00:24:37.7038417Z   clean: true
+2026-10-19T00:24:37.7038981Z   sparse-checkout-cone-mode: true
+2026-10-19T00:24:37.7039634Z   fetch-depth: 1
+2026-10-19T00:24:37.7040186Z   fetch-tags: false
+2026-10-19T00:24:37.7040753Z   show-progress: true
+2026-10-19T00:24:37.7041328Z   lfs: false
+2026-10-19T00:24:37.7042067Z   submodules: false
+2026-10-19T00:24:37.7042664Z   set-safe-directory: true
+2026-10-19T00:24:37.7043290Z   allow-unsafe-pr-checkout: false
+2026-10-19T00:24:37.7044203Z ##[endgroup]
+2026-10-19T00:24:37.8117387Z Syncing repository: stranske/Orchestrator
+2026-10-19T00:24:37.8120546Z ##[group]Getting Git version info
+2026-10-19T00:24:37.8121974Z Working directory is '/home/runner/work/Orchestrator/Orchestrator'
+2026-10-19T00:24:37.8123240Z [command]/usr/bin/git version
+2026-10-19T00:24:37.8242841Z git version 2.55.0
+2026-10-19T00:24:37.8264684Z ##[endgroup]
+2026-10-19T00:24:37.8276227Z Temporarily overriding HOME='/home/runner/work/_temp/6acd8dc0-c217-451b-9f92-680b9a8973f2' before making global git config changes
+2026-10-19T00:24:37.8278436Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-19T00:24:37.8282483Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/Orchestrator/Orchestrator
+2026-10-19T00:24:37.8331989Z Deleting the contents of '/home/runner/work/Orchestrator/Orchestrator'
+2026-10-19T00:24:37.8335469Z ##[group]Determining repository object format
+2026-10-19T00:24:37.8337097Z ##[endgroup]
+2026-10-19T00:24:37.8337876Z ##[group]Initializing the repository
+2026-10-19T00:24:37.8341416Z [command]/usr/bin/git init /home/runner/work/Orchestrator/Orchestrator
+2026-10-19T00:24:37.8466104Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-10-19T00:24:37.8467776Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-10-19T00:24:37.8469112Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-10-19T00:24:37.8470417Z hint: call:
+2026-10-19T00:24:37.8470895Z hint:
+2026-10-19T00:24:37.8471508Z hint: 	git config --global init.defaultBranch <name>
+2026-10-19T00:24:37.8472560Z hint:
+2026-10-19T00:24:37.8473276Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-10-19T00:24:37.8474448Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-10-19T00:24:37.8475524Z hint:
+2026-10-19T00:24:37.8476052Z hint: 	git branch -m <name>
+2026-10-19T00:24:37.8476639Z hint:
+2026-10-19T00:24:37.8477428Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-10-19T00:24:37.8478716Z Initialized empty Git repository in /home/runner/work/Orchestrator/Orchestrator/.git/
+2026-10-19T00:24:37.8481653Z [command]/usr/bin/git remote add origin https://github.com/stranske/Orchestrator
+2026-10-19T00:24:37.8529876Z ##[endgroup]
+2026-10-19T00:24:37.8531211Z ##[group]Disabling automatic garbage collection
+2026-10-19T00:24:37.8533863Z [command]/usr/bin/git config --local gc.auto 0
+2026-10-19T00:24:37.8565246Z ##[endgroup]
+2026-10-19T00:24:37.8567209Z ##[group]Setting up auth
+2026-10-19T00:24:37.8568467Z Removing SSH command configuration
+2026-10-19T00:24:37.8571067Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-19T00:24:37.8603249Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-19T00:24:37.8992973Z Removing HTTP extra header
+2026-10-19T00:24:37.8999832Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-19T00:24:37.9031435Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-19T00:24:37.9256456Z Removing includeIf entries pointing to credentials config files
+2026-10-19T00:24:37.9262403Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-19T00:24:37.9298764Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-19T00:24:37.9515776Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-3d241deb-38a6-43dd-852f-3128efc47cec.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-10-19T00:24:37.9550164Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/Orchestrator/Orchestrator/.git.path /home/runner/work/_temp/git-credentials-3d241deb-38a6-43dd-852f-3128efc47cec.config
+2026-10-19T00:24:37.9578758Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/Orchestrator/Orchestrator/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-3d241deb-38a6-43dd-852f-3128efc47cec.config
+2026-10-19T00:24:37.9611169Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-3d241deb-38a6-43dd-852f-3128efc47cec.config
+2026-10-19T00:24:37.9641166Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-3d241deb-38a6-43dd-852f-3128efc47cec.config
+2026-10-19T00:24:37.9667837Z ##[endgroup]
+2026-10-19T00:24:37.9668663Z ##[group]Fetching the repository
+2026-10-19T00:24:37.9674404Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +12c5c58517863f747972538c9bb17c568bc0bf49:refs/remotes/pull/772/merge
+2026-10-19T00:24:41.9901718Z From https://github.com/stranske/Orchestrator
+2026-10-19T00:24:41.9904358Z  * [new ref]         12c5c58517863f747972538c9bb17c568bc0bf49 -> pull/772/merge
+2026-10-19T00:24:41.9907190Z ##[endgroup]
+2026-10-19T00:24:41.9908379Z ##[group]Determining the checkout info
+2026-10-19T00:24:41.9909695Z ##[endgroup]
+2026-10-19T00:24:41.9918504Z [command]/usr/bin/git sparse-checkout disable
+2026-10-19T00:24:41.9964287Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-10-19T00:24:41.9995652Z ##[group]Checking out the ref
+2026-10-19T00:24:41.9998469Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/772/merge
+2026-10-19T00:24:42.3194406Z Note: switching to 'refs/remotes/pull/772/merge'.
+2026-10-19T00:24:42.3195064Z 
+2026-10-19T00:24:42.3195479Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-10-19T00:24:42.3196100Z changes and commit them, and you can discard any commits you make in this
+2026-10-19T00:24:42.3196661Z state without impacting any branches by switching back to a branch.
+2026-10-19T00:24:42.3197070Z 
+2026-10-19T00:24:42.3197316Z If you want to create a new branch to retain commits you create, you may
+2026-10-19T00:24:42.3197832Z do so (now or later) by using -c with the switch command. Example:
+2026-10-19T00:24:42.3198118Z 
+2026-10-19T00:24:42.3198263Z   git switch -c <new-branch-name>
+2026-10-19T00:24:42.3198464Z 
+2026-10-19T00:24:42.3198625Z Or undo this operation with:
+2026-10-19T00:24:42.3198840Z 
+2026-10-19T00:24:42.3198957Z   git switch -
+2026-10-19T00:24:42.3199131Z 
+2026-10-19T00:24:42.3199471Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-10-19T00:24:42.3199826Z 
+2026-10-19T00:24:42.3200206Z HEAD is now at 12c5c58 Merge 18ad97a054dab7f6039dd42c8131bee04267748b into 4951a5a42b48464c4ace9f970c090f109bf12711
+2026-10-19T00:24:42.3224153Z ##[endgroup]
+2026-10-19T00:24:42.3287485Z [command]/usr/bin/git log -1 --format=%H
+2026-10-19T00:24:42.3313648Z 12c5c58517863f747972538c9bb17c568bc0bf49
+2026-10-19T00:24:42.3324106Z ##[group]Removing auth
+2026-10-19T00:24:42.3324873Z Removing SSH command configuration
+2026-10-19T00:24:42.3327629Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-19T00:24:42.3358436Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-19T00:24:42.3579466Z Removing HTTP extra header
+2026-10-19T00:24:42.3583195Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-19T00:24:42.3615845Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-19T00:24:42.3836178Z Removing includeIf entries pointing to credentials config files
+2026-10-19T00:24:42.3839432Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-19T00:24:42.3865985Z includeif.gitdir:/home/runner/work/Orchestrator/Orchestrator/.git.path
+2026-10-19T00:24:42.3867287Z includeif.gitdir:/home/runner/work/Orchestrator/Orchestrator/.git/worktrees/*.path
+2026-10-19T00:24:42.3868378Z includeif.gitdir:/github/workspace/.git.path
+2026-10-19T00:24:42.3869187Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-19T00:24:42.3875905Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/Orchestrator/Orchestrator/.git.path
+2026-10-19T00:24:42.3897522Z /home/runner/work/_temp/git-credentials-3d241deb-38a6-43dd-852f-3128efc47cec.config
+2026-10-19T00:24:42.3907740Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/Orchestrator/Orchestrator/.git.path \/home\/runner\/work\/_temp\/git\-credentials\-3d241deb\-38a6\-43dd\-852f\-3128efc47cec\.config
+2026-10-19T00:24:42.3939473Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/Orchestrator/Orchestrator/.git/worktrees/*.path
+2026-10-19T00:24:42.3962276Z /home/runner/work/_temp/git-credentials-3d241deb-38a6-43dd-852f-3128efc47cec.config
+2026-10-19T00:24:42.3976475Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/Orchestrator/Orchestrator/.git/worktrees/*.path \/home\/runner\/work\/_temp\/git\-credentials\-3d241deb\-38a6\-43dd\-852f\-3128efc47cec\.config
+2026-10-19T00:24:42.4038292Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-10-19T00:24:42.4059186Z /github/runner_temp/git-credentials-3d241deb-38a6-43dd-852f-3128efc47cec.config
+2026-10-19T00:24:42.4068454Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path \/github\/runner_temp\/git\-credentials\-3d241deb\-38a6\-43dd\-852f\-3128efc47cec\.config
+2026-10-19T00:24:42.4104015Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-19T00:24:42.4125254Z /github/runner_temp/git-credentials-3d241deb-38a6-43dd-852f-3128efc47cec.config
+2026-10-19T00:24:42.4136795Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path \/github\/runner_temp\/git\-credentials\-3d241deb\-38a6\-43dd\-852f\-3128efc47cec\.config
+2026-10-19T00:24:42.4165801Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-19T00:24:42.4380927Z Removing credentials config '/home/runner/work/_temp/git-credentials-3d241deb-38a6-43dd-852f-3128efc47cec.config'
+2026-10-19T00:24:42.4390086Z ##[endgroup]
+2026-10-19T00:24:42.4710346Z ##[group]Run actions/setup-python@v7
+2026-10-19T00:24:42.4710743Z with:
+2026-10-19T00:24:42.4710996Z   python-version: 3.14
+2026-10-19T00:24:42.4711276Z   check-latest: false
+2026-10-19T00:24:42.4714076Z   token: ***
+2026-10-19T00:24:42.4714355Z   update-environment: true
+2026-10-19T00:24:42.4714662Z   allow-prereleases: false
+2026-10-19T00:24:42.4714938Z   freethreaded: false
+2026-10-19T00:24:42.4715216Z ##[endgroup]
+2026-10-19T00:24:42.5970163Z ##[group]Installed versions
+2026-10-19T00:24:42.6066467Z Successfully set up CPython (3.14.8)
+2026-10-19T00:24:42.6067448Z ##[endgroup]
+2026-10-19T00:24:42.6196740Z ##[group]Run sudo apt-get update
+2026-10-19T00:24:42.6197179Z [36;1msudo apt-get update[0m
+2026-10-19T00:24:42.6197588Z [36;1msudo apt-get install --yes --no-install-recommends zsh[0m
+2026-10-19T00:24:42.6198004Z [36;1mcommand -v zsh[0m
+2026-10-19T00:24:42.6527145Z shell: /usr/bin/bash -e {0}
+2026-10-19T00:24:42.6527595Z env:
+2026-10-19T00:24:42.6528023Z   pythonLocation: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:24:42.6528709Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.14.8/x64/lib/pkgconfig
+2026-10-19T00:24:42.6529373Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:24:42.6529989Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:24:42.6530598Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:24:42.6531228Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.14.8/x64/lib
+2026-10-19T00:24:42.6531951Z ##[endgroup]
+2026-10-19T00:24:42.7467489Z Get:1 file:/etc/apt/apt-mirrors.txt Mirrorlist [144 B]
+2026-10-19T00:24:42.7749054Z Get:6 https://packages.microsoft.com/ubuntu/24.04/prod noble InRelease [3600 B]
+2026-10-19T00:24:42.8520577Z Get:7 https://packages.microsoft.com/ubuntu/24.04/prod noble/main armhf Packages [12.4 kB]
+2026-10-19T00:24:42.8633531Z Get:8 https://packages.microsoft.com/ubuntu/24.04/prod noble/main arm64 Packages [557 kB]
+2026-10-19T00:24:42.8709023Z Get:9 https://packages.microsoft.com/ubuntu/24.04/prod noble/main amd64 Packages [618 kB]
+2026-10-19T00:24:42.9146673Z Hit:2 http://azure.archive.ubuntu.com/ubuntu noble InRelease
+2026-10-19T00:24:42.9164348Z Get:3 http://azure.archive.ubuntu.com/ubuntu noble-updates InRelease [126 kB]
+2026-10-19T00:24:42.9220300Z Get:4 http://azure.archive.ubuntu.com/ubuntu noble-backports InRelease [126 kB]
+2026-10-19T00:24:42.9266501Z Get:5 http://azure.archive.ubuntu.com/ubuntu noble-security InRelease [126 kB]
+2026-10-19T00:24:43.0223738Z Get:10 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages [1397 kB]
+2026-10-19T00:24:43.0311274Z Get:11 http://azure.archive.ubuntu.com/ubuntu noble-updates/main Translation-en [308 kB]
+2026-10-19T00:24:43.0392881Z Get:12 http://azure.archive.ubuntu.com/ubuntu noble-updates/universe amd64 Packages [1704 kB]
+2026-10-19T00:24:43.0434380Z Get:13 http://azure.archive.ubuntu.com/ubuntu noble-updates/universe Translation-en [342 kB]
+2026-10-19T00:24:43.0468773Z Get:14 http://azure.archive.ubuntu.com/ubuntu noble-updates/restricted amd64 Packages [1805 kB]
+2026-10-19T00:24:43.0593425Z Get:15 http://azure.archive.ubuntu.com/ubuntu noble-updates/restricted Translation-en [411 kB]
+2026-10-19T00:24:43.1329339Z Get:16 http://azure.archive.ubuntu.com/ubuntu noble-security/main amd64 Packages [1144 kB]
+2026-10-19T00:24:43.1387638Z Get:17 http://azure.archive.ubuntu.com/ubuntu noble-security/main Translation-en [231 kB]
+2026-10-19T00:24:43.1415004Z Get:18 http://azure.archive.ubuntu.com/ubuntu noble-security/universe amd64 Packages [1222 kB]
+2026-10-19T00:24:43.1485771Z Get:19 http://azure.archive.ubuntu.com/ubuntu noble-security/universe Translation-en [246 kB]
+2026-10-19T00:24:43.1980538Z Get:20 http://azure.archive.ubuntu.com/ubuntu noble-security/restricted amd64 Packages [1713 kB]
+2026-10-19T00:24:43.2075152Z Get:21 http://azure.archive.ubuntu.com/ubuntu noble-security/restricted Translation-en [392 kB]
+2026-10-19T00:24:46.2013627Z Fetched 12.5 MB in 1s (9271 kB/s)
+2026-10-19T00:24:47.1202543Z Reading package lists...
+2026-10-19T00:24:47.1510937Z Reading package lists...
+2026-10-19T00:24:47.3649445Z Building dependency tree...
+2026-10-19T00:24:47.3657912Z Reading state information...
+2026-10-19T00:24:47.5054696Z The following additional packages will be installed:
+2026-10-19T00:24:47.5055652Z   zsh-common
+2026-10-19T00:24:47.5059166Z Suggested packages:
+2026-10-19T00:24:47.5059538Z   zsh-doc
+2026-10-19T00:24:47.5224211Z The following NEW packages will be installed:
+2026-10-19T00:24:47.5224916Z   zsh zsh-common
+2026-10-19T00:24:47.5395239Z 0 upgraded, 2 newly installed, 0 to remove and 44 not upgraded.
+2026-10-19T00:24:47.5396379Z Need to get 4985 kB of archives.
+2026-10-19T00:24:47.5397015Z After this operation, 19.1 MB of additional disk space will be used.
+2026-10-19T00:24:47.5397756Z Get:1 file:/etc/apt/apt-mirrors.txt Mirrorlist [144 B]
+2026-10-19T00:24:47.6270168Z Get:2 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 zsh-common all 5.9-6ubuntu2 [4173 kB]
+2026-10-19T00:24:47.8078013Z Get:3 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 zsh amd64 5.9-6ubuntu2 [812 kB]
+2026-10-19T00:24:48.0836294Z Fetched 4985 kB in 0s (16.7 MB/s)
+2026-10-19T00:24:48.1084358Z Selecting previously unselected package zsh-common.
+2026-10-19T00:24:48.1430050Z (Reading database ... 
+2026-10-19T00:24:48.1430730Z (Reading database ... 5%
+2026-10-19T00:24:48.1431162Z (Reading database ... 10%
+2026-10-19T00:24:48.1431567Z (Reading database ... 15%
+2026-10-19T00:24:48.1432317Z (Reading database ... 20%
+2026-10-19T00:24:48.1432833Z (Reading database ... 25%
+2026-10-19T00:24:48.1433408Z (Reading database ... 30%
+2026-10-19T00:24:48.1433855Z (Reading database ... 35%
+2026-10-19T00:24:48.1434251Z (Reading database ... 40%
+2026-10-19T00:24:48.1434657Z (Reading database ... 45%
+2026-10-19T00:24:48.1435098Z (Reading database ... 50%
+2026-10-19T00:24:48.1489805Z (Reading database ... 55%
+2026-10-19T00:24:48.2257009Z (Reading database ... 60%
+2026-10-19T00:24:48.4200106Z (Reading database ... 65%
+2026-10-19T00:24:48.6255107Z (Reading database ... 70%
+2026-10-19T00:24:48.8271756Z (Reading database ... 75%
+2026-10-19T00:24:48.9346467Z (Reading database ... 80%
+2026-10-19T00:24:49.1284460Z (Reading database ... 85%
+2026-10-19T00:24:49.2882510Z (Reading database ... 90%
+2026-10-19T00:24:49.4372816Z (Reading database ... 95%
+2026-10-19T00:24:49.4373338Z (Reading database ... 100%
+2026-10-19T00:24:49.4374013Z (Reading database ... 203540 files and directories currently installed.)
+2026-10-19T00:24:49.4416614Z Preparing to unpack .../zsh-common_5.9-6ubuntu2_all.deb ...
+2026-10-19T00:24:49.4505150Z Unpacking zsh-common (5.9-6ubuntu2) ...
+2026-10-19T00:24:49.7271107Z Selecting previously unselected package zsh.
+2026-10-19T00:24:49.7403506Z Preparing to unpack .../zsh_5.9-6ubuntu2_amd64.deb ...
+2026-10-19T00:24:49.7470086Z Unpacking zsh (5.9-6ubuntu2) ...
+2026-10-19T00:24:49.8000333Z Setting up zsh-common (5.9-6ubuntu2) ...
+2026-10-19T00:24:49.8177573Z Setting up zsh (5.9-6ubuntu2) ...
+2026-10-19T00:24:49.8326870Z Processing triggers for debianutils (5.17build1) ...
+2026-10-19T00:24:49.8859813Z Processing triggers for man-db (2.12.0-4build2) ...
+2026-10-19T00:24:49.8884592Z Not building database; man-db/auto-update is not 'true'.
+2026-10-19T00:24:50.5505426Z 
+2026-10-19T00:24:50.5506415Z Running kernel seems to be up-to-date.
+2026-10-19T00:24:50.5506821Z 
+2026-10-19T00:24:50.5506976Z No services need to be restarted.
+2026-10-19T00:24:50.5507228Z 
+2026-10-19T00:24:50.5507410Z No containers need to be restarted.
+2026-10-19T00:24:50.5507666Z 
+2026-10-19T00:24:50.5507840Z No user sessions are running outdated binaries.
+2026-10-19T00:24:50.5508148Z 
+2026-10-19T00:24:50.5508440Z No VM guests are running outdated hypervisor (qemu) binaries on this host.
+2026-10-19T00:24:51.4209900Z /usr/bin/zsh
+2026-10-19T00:24:51.4259879Z ##[group]Run python -m pip install --quiet pytest pyyaml coverage
+2026-10-19T00:24:51.4260386Z [36;1mpython -m pip install --quiet pytest pyyaml coverage[0m
+2026-10-19T00:24:51.4325884Z shell: /usr/bin/bash -e {0}
+2026-10-19T00:24:51.4326148Z env:
+2026-10-19T00:24:51.4326433Z   pythonLocation: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:24:51.4326890Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.14.8/x64/lib/pkgconfig
+2026-10-19T00:24:51.4327333Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:24:51.4327733Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:24:51.4328122Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:24:51.4328534Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.14.8/x64/lib
+2026-10-19T00:24:51.4328868Z ##[endgroup]
+2026-10-19T00:24:54.9659297Z ##[group]Run mkdir -p "$ORCH_STATE_DIR" "$ORCH_LOCAL_RUNTIME"
+2026-10-19T00:24:54.9659791Z [36;1mmkdir -p "$ORCH_STATE_DIR" "$ORCH_LOCAL_RUNTIME"[0m
+2026-10-19T00:24:54.9660279Z [36;1m# `--floor-may-lag` ON PULL REQUESTS ONLY, and the asymmetry is the whole point.[0m
+2026-10-19T00:24:54.9660707Z [36;1m#[0m
+2026-10-19T00:24:54.9661062Z [36;1m# `.verify-floor.json`'s `collected` is an EQUALITY, which is right: a floor behind[0m
+2026-10-19T00:24:54.9661663Z [36;1m# reality is permissive by exactly the gap. But the correct number is only knowable on[0m
+2026-10-19T00:24:54.9662567Z [36;1m# the MERGE RESULT, and this repo merges fast — one one-line change needed SIX[0m
+2026-10-19T00:24:54.9663148Z [36;1m# re-measurements in two hours while main moved eight times, and that file's own note[0m
+2026-10-19T00:24:54.9663779Z [36;1m# records the floor being found behind reality four separate times before that. Demanding[0m
+2026-10-19T00:24:54.9664435Z [36;1m# the exact number from a branch author is demanding something no amount of care delivers.[0m
+2026-10-19T00:24:54.9664870Z [36;1m#[0m
+2026-10-19T00:24:54.9665205Z [36;1m# So on a PR a LAGGING floor is reported and not fatal, while a collection DROP stays[0m
+2026-10-19T00:24:54.9665776Z [36;1m# fatal (see `_blocks_floor_update`). On main the equality is enforced by this same job[0m
+2026-10-19T00:24:54.9666367Z [36;1m# WITHOUT the flag, and the reconcile-floor job below heals a lag within one run — so the[0m
+2026-10-19T00:24:54.9666970Z [36;1m# invariant "main's floor equals main's reality" is unchanged. Nothing is skipped and[0m
+2026-10-19T00:24:54.9667441Z [36;1m# nothing is silenced: the lag still prints.[0m
+2026-10-19T00:24:54.9667776Z [36;1mif [ "pull_request" = "pull_request" ]; then[0m
+2026-10-19T00:24:54.9668099Z [36;1m  python3 src/verify.py --floor-may-lag[0m
+2026-10-19T00:24:54.9668560Z [36;1melse[0m
+2026-10-19T00:24:54.9668765Z [36;1m  python3 src/verify.py[0m
+2026-10-19T00:24:54.9669012Z [36;1mfi[0m
+2026-10-19T00:24:54.9732467Z shell: /usr/bin/bash -e {0}
+2026-10-19T00:24:54.9732725Z env:
+2026-10-19T00:24:54.9732991Z   pythonLocation: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:24:54.9733477Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.14.8/x64/lib/pkgconfig
+2026-10-19T00:24:54.9733916Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:24:54.9734305Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:24:54.9734688Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:24:54.9735070Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.14.8/x64/lib
+2026-10-19T00:24:54.9735437Z   ORCH_STATE_DIR: /home/runner/work/_temp/orch-state
+2026-10-19T00:24:54.9735790Z   ORCH_LOCAL_RUNTIME: /home/runner/work/_temp/orch-runtime
+2026-10-19T00:24:54.9736106Z ##[endgroup]
+2026-10-19T00:31:22.7883371Z # verify.py
+2026-10-19T00:31:22.7883605Z 
+2026-10-19T00:31:22.7883733Z   tree:       checkout
+2026-10-19T00:31:22.7884897Z   state:      private copy, deleted after the run — ledger absent at the source, so it bootstraps privately; Brain absent at the source, so it bootstraps privately
+2026-10-19T00:31:22.7885833Z   time:       pytest 5m51s, selftests 29s (4 at a time), gates 7s
+2026-10-19T00:31:22.7886511Z   pytest:     5443 passed, 0 failed, 27/31 max skipped (5470 collected; floor 5465 — 5 BEHIND)
+2026-10-19T00:31:22.7887068Z   selftests:  100 of 107 modules ran, 7/7 max skipped
+2026-10-19T00:31:22.7887495Z   activation audit   ok  CAN FIRE:   18 of 18 live  (100%)
+2026-10-19T00:31:22.7887926Z   recurrence replay  ok  WOULD FIRE:  20 of 53
+2026-10-19T00:31:22.7888674Z   set coverage       SKIP 9 of 10 capability-set coverage checks passed over 18 ledger capabilities, 1 skipped: test_no_fixtur
+2026-10-19T00:31:22.7889736Z   admission          SKIP 21 of 24 admission checks passed, 3 skipped: test_legacy_debt_is_reported_not_forgiven (capability l
+2026-10-19T00:31:22.7890477Z   ledger validate    ok  "valid": true
+2026-10-19T00:31:22.7891152Z   gates:      2/2 max skipped
+2026-10-19T00:31:22.7892191Z   declared:   no ledger when the run began, so none of the 18 rows this tree declares was registered; the first writing load creates it holding all of them
+2026-10-19T00:31:22.7893240Z   mypy ratchet: 0/0 max of 136 module(s) exempt, 136 checked — fully drained
+2026-10-19T00:31:22.7893620Z 
+2026-10-19T00:31:22.7893956Z   SKIPPED (prerequisite absent on this machine — nothing here was checked):
+2026-10-19T00:31:22.7896935Z     pytest   SKIPPED [1] ../../../../../opt/hostedtoolcache/Python/3.14.8/x64/lib/python3.14/site-packages/_pytest/unittest.py:523: capability ledger has no row for issue-readiness — the ledger is machine-local state (/tmp/verify-state-o0pz1w_8/capabilities.json); it holds 0 row(s) here, and these are registered by running the system, not by checking out the tree; range-lane-rollout, role-triage, thompson-hybrid-routing is declared by this tree too, but registering it alone would not clear this
+2026-10-19T00:31:22.7901426Z     pytest   SKIPPED [1] ../../../../../opt/hostedtoolcache/Python/3.14.8/x64/lib/python3.14/site-packages/_pytest/unittest.py:523: capability ledger has no row for live-keepalive-supervisor, redirect-apply-bootstrap: declared by this tree, not yet registered here — the ledger is machine-local state (/tmp/verify-state-o0pz1w_8/capabilities.json); it holds 0 row(s) here, and the deployed code registers these on its first writing load (`capabilities.py --json validate`, an active tick's first command; `capabilities.py seed-declared` makes the same load on a copy)
+2026-10-19T00:31:22.7904923Z     pytest   SKIPPED [2] ../../../../../opt/hostedtoolcache/Python/3.14.8/x64/lib/python3.14/site-packages/_pytest/unittest.py:523: capability ledger holds no pre-admission-gate (legacy) capability — legacy debt accrues from this instance's registration history, and a ledger bootstrapped from the committed tree has none
+2026-10-19T00:31:22.7907663Z     pytest   SKIPPED [1] ../../../../../opt/hostedtoolcache/Python/3.14.8/x64/lib/python3.14/site-packages/_pytest/unittest.py:523: capability ledger has no row for capability-admission-gate — the ledger is machine-local state (/tmp/verify-state-o0pz1w_8/capabilities.json); it holds 0 row(s) here, and these are registered by running the system, not by checking out the tree
+2026-10-19T00:31:22.7910225Z     pytest   SKIPPED [2] ../../../../../opt/hostedtoolcache/Python/3.14.8/x64/lib/python3.14/site-packages/_pytest/unittest.py:523: reference skill resource not installed: /home/runner/.codex/skills/code-workspace-hygiene/scripts/audit_code_root.sh — the skill compiler is deliberately exercised against a real installed skill, not a fixture
+2026-10-19T00:31:22.7918295Z     pytest   SKIPPED [1] ../../../../../opt/hostedtoolcache/Python/3.14.8/x64/lib/python3.14/site-packages/_pytest/unittest.py:523: capability ledger has no row for abcd-experiment, adversarial-review, agy-runtime-isolation, capability-activation-audit, capability-admission-gate, capability-firing-monitor, capability-propensity, capability:reference-sync-hygiene-test-gate, codemod-campaign, coverage-testgen-trigger, cross-repo-coordination, deliberate-break-verifier, docs-drift-fix-agent, epic-decomposition, evidence-acquisition, feature-reflection-cli, feature-scan, feedback-store, frontend-verifier, issue-readiness, offload, partitioned-review, redirect-plan, redirect-policy, repo-playbook, research-scheduler, stall-watcher, switch-review, testgen-lane, windowed-capacity-policy — the ledger is machine-local state (/tmp/verify-state-o0pz1w_8/capabilities.json); it holds 0 row(s) here, and these are registered by running the system, not by checking out the tree; completion-event-lineage, live-keepalive-supervisor, local-model-profile-trial, rail-exercise-cadence, range-lane-rollout, redirect-apply-bootstrap, research-usage-guard, role-adjudicator, role-decomposer, role-prompt, role-redirect, role-triage, route-weights-export, runtime-ac-checks, strategy-experiments, synthesis-promotion, thompson-hybrid-routing, value-chain-monitor is declared by this tree too, but registering it alone would not clear this
+2026-10-19T00:31:22.7924761Z     pytest   SKIPPED [2] ../../../../../opt/hostedtoolcache/Python/3.14.8/x64/lib/python3.14/site-packages/_pytest/unittest.py:523: exact Codex profiles require ORCH_CODEX_PROFILE_BIN or an installed global Codex CLI; refusing an unresolved binary
+2026-10-19T00:31:22.7926468Z     pytest   SKIPPED [1] ../../../../../opt/hostedtoolcache/Python/3.14.8/x64/lib/python3.14/site-packages/_pytest/unittest.py:523: vibe config absent: /home/runner/.vibe/config.toml — active_model cannot be read to check for drift
+2026-10-19T00:31:22.7928003Z     pytest   SKIPPED [1] ../../../../../opt/hostedtoolcache/Python/3.14.8/x64/lib/python3.14/site-packages/_pytest/unittest.py:523: agy advertised-models cache absent: /home/runner/work/_temp/orch-runtime/agent-runtime/gemini/advertised-models.json
+2026-10-19T00:31:22.7930303Z     pytest   SKIPPED [1] ../../../../../opt/hostedtoolcache/Python/3.14.8/x64/lib/python3.14/site-packages/_pytest/unittest.py:523: capability ledger has no row for adversarial-review, testgen-lane — the ledger is machine-local state (/tmp/verify-state-o0pz1w_8/capabilities.json); it holds 0 row(s) here, and these are registered by running the system, not by checking out the tree
+2026-10-19T00:31:22.7933820Z     pytest   SKIPPED [1] ../../../../../opt/hostedtoolcache/Python/3.14.8/x64/lib/python3.14/site-packages/_pytest/unittest.py:523: capability ledger has no row for role-triage: declared by this tree, not yet registered here — the ledger is machine-local state (/tmp/verify-state-o0pz1w_8/capabilities.json); it holds 0 row(s) here, and the deployed code registers these on its first writing load (`capabilities.py --json validate`, an active tick's first command; `capabilities.py seed-declared` makes the same load on a copy)
+2026-10-19T00:31:22.7935843Z     pytest   SKIPPED [3] tests/test_model_tier_resolution.py:79: agy CLI not installed on this box
+2026-10-19T00:31:22.7936643Z     pytest   SKIPPED [1] tests/test_model_tier_resolution.py:97: cursor-agent CLI not installed on this box
+2026-10-19T00:31:22.7938198Z     pytest   SKIPPED [1] ../../../../../opt/hostedtoolcache/Python/3.14.8/x64/lib/python3.14/site-packages/_pytest/unittest.py:523: no free auth signal on this machine for aider, claude, codex, cursor, gemini, muse, vibe: neither an installed CLI probe nor a credential file — agent_auth_check's documented UNKNOWN case
+2026-10-19T00:31:22.7940485Z     pytest   SKIPPED [1] ../../../../../opt/hostedtoolcache/Python/3.14.8/x64/lib/python3.14/site-packages/_pytest/unittest.py:523: credential file absent for vibe (/home/runner/.vibe/.env), aider (/home/runner/.codex/handoff/aider.env) — the fleet authenticates by sourcing that file, so without it the seat's verdict is BROKEN by design
+2026-10-19T00:31:22.7942920Z     pytest   SKIPPED [1] tests/test_skill_compiler.py:46: reference skill resource not installed: /home/runner/.codex/skills/code-workspace-hygiene/scripts/audit_code_root.sh — the skill compiler is deliberately exercised against a real installed skill, not a fixture
+2026-10-19T00:31:22.7944882Z     pytest   SKIPPED [1] tests/test_skill_compiler.py:88: reference skill resource not installed: /home/runner/.codex/skills/code-workspace-hygiene/scripts/audit_code_root.sh — the skill compiler is deliberately exercised against a real installed skill, not a fixture
+2026-10-19T00:31:22.7946802Z     pytest   SKIPPED [1] tests/test_skill_compiler.py:113: reference skill resource not installed: /home/runner/.codex/skills/code-workspace-hygiene/scripts/audit_code_root.sh — the skill compiler is deliberately exercised against a real installed skill, not a fixture
+2026-10-19T00:31:22.7948757Z     pytest   SKIPPED [2] tests/test_skill_compiler.py:134: reference skill resource not installed: /home/runner/.codex/skills/code-workspace-hygiene/scripts/audit_code_root.sh — the skill compiler is deliberately exercised against a real installed skill, not a fixture
+2026-10-19T00:31:22.7970074Z     pytest   SKIPPED [1] tests/test_skill_compiler.py:158: reference skill resource not installed: /home/runner/.codex/skills/code-workspace-hygiene/scripts/audit_code_root.sh — the skill compiler is deliberately exercised against a real installed skill, not a fixture
+2026-10-19T00:31:22.7972599Z     pytest   SKIPPED [1] tests/test_skill_compiler.py:229: reference skill resource not installed: /home/runner/.codex/skills/code-workspace-hygiene/scripts/audit_code_root.sh — the skill compiler is deliberately exercised against a real installed skill, not a fixture
+2026-10-19T00:31:22.7974163Z     selftest adapters: section skipped — exact Codex profiles require ORCH_CODEX_PROFILE_BIN or an installed global Codex CLI; refusing an unresolved binary
+2026-10-19T00:31:22.7975645Z     selftest capability_admission: section skipped — capability ledger holds no pre-admission-gate (legacy) capability — legacy debt accrues from this instance's registration history, and a ledger bootstrapped from the committed tree has none
+2026-10-19T00:31:22.7977686Z     selftest capability_advisor: section skipped — capability ledger has no row for codemod-campaign, offload, testgen-lane — the ledger is machine-local state (/tmp/verify-state-o0pz1w_8/capabilities.json); it holds 18 row(s) here, and these are registered by running the system, not by checking out the tree
+2026-10-19T00:31:22.7979897Z     selftest capability_outcome_bridge: section skipped — capability ledger has no row for agy-runtime-isolation, offload — the ledger is machine-local state (/tmp/verify-state-o0pz1w_8/capabilities.json); it holds 18 row(s) here, and these are registered by running the system, not by checking out the tree
+2026-10-19T00:31:22.7982232Z     selftest capability_recurrence_check: section skipped — capability ledger has no row for docs-drift-fix-agent — the ledger is machine-local state (/tmp/verify-state-o0pz1w_8/capabilities.json); it holds 18 row(s) here, and these are registered by running the system, not by checking out the tree
+2026-10-19T00:31:22.7984426Z     selftest feedback: section skipped — capability ledger has no row for offload — the ledger is machine-local state (/tmp/verify-state-o0pz1w_8/capabilities.json); it holds 18 row(s) here, and these are registered by running the system, not by checking out the tree
+2026-10-19T00:31:22.7986214Z     selftest feedback: section skipped — capability ledger carries no version lineage for role-triage (capability_version_id is unset) — lineage is established by real registration on the running instance, so a fresh bootstrap has none
+2026-10-19T00:31:22.7987490Z     selftest range_lane_rollout: exact Codex profiles require ORCH_CODEX_PROFILE_BIN or an installed global Codex CLI; refusing an unresolved binary
+2026-10-19T00:31:22.7989564Z     gate     set coverage: capability ledger has no row for abcd-experiment, adversarial-review, agy-runtime-isolation, capability-activation-audit, capability-admission-gate, capability-firing-monitor, capability-propensity, capability:reference-sync-hygiene-test-gate, codemod-campaign, coverage-testgen-trigger, cross-repo-coordination, deliberate-break-verifier, docs-drift-fix-agent, epic-decomposition, evidence-acquisiti
+2026-10-19T00:31:22.7992104Z     gate     admission: capability ledger holds no pre-admission-gate (legacy) capability — legacy debt accrues from this instance's registration history, and a ledger bootstrapped from the committed tree has none
+2026-10-19T00:31:22.7993625Z     gate     admission: capability ledger holds no pre-admission-gate (legacy) capability — legacy debt accrues from this instance's registration history, and a ledger bootstrapped from the committed tree has none
+2026-10-19T00:31:22.7995359Z     gate     admission: capability ledger has no row for capability-admission-gate — the ledger is machine-local state (/tmp/verify-state-o0pz1w_8/capabilities.json); it holds 0 row(s) here, and these are registered by running the system, not by checking out the tree
+2026-10-19T00:31:22.7996294Z 
+2026-10-19T00:31:22.7996372Z   PROBLEMS:
+2026-10-19T00:31:22.7998081Z     - floor is BEHIND reality: 5470 collected > floor 5465 — the floor is 5 test(s) permissive, so that many could silently stop being collected and still read as green. Set "collected": 5470 and "passed": 5470 in .verify-floor.json, keeping the existing note, or run `python3 verify.py --update-floor`. If a branch merged under you, REBASE FIRST: the number must be measured on the merge result.
+2026-10-19T00:31:22.8137906Z Post job cleanup.
+2026-10-19T00:31:22.9447916Z Post job cleanup.
+2026-10-19T00:31:23.0294565Z [command]/usr/bin/git version
+2026-10-19T00:31:23.0342373Z git version 2.55.0
+2026-10-19T00:31:23.0378178Z Temporarily overriding HOME='/home/runner/work/_temp/690c0aa9-37be-45eb-9a61-40f014fda6bf' before making global git config changes
+2026-10-19T00:31:23.0379567Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-19T00:31:23.0383905Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/Orchestrator/Orchestrator
+2026-10-19T00:31:23.0415827Z Removing SSH command configuration
+2026-10-19T00:31:23.0422406Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-19T00:31:23.0457930Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-19T00:31:23.0684382Z Removing HTTP extra header
+2026-10-19T00:31:23.0689277Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-19T00:31:23.0723931Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-19T00:31:23.0946831Z Removing includeIf entries pointing to credentials config files
+2026-10-19T00:31:23.0956262Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-19T00:31:23.0991432Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-19T00:31:23.1415744Z Cleaning up orphan processes

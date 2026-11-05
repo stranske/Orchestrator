@@ -1,0 +1,89 @@
+{
+  "retrieval_date": "2026-11-05",
+  "head_commit": "18ad97a054dab7f6039dd42c8131bee04267748b",
+  "baseline_commit": "3b379f8b60046b1b6b21b360a931472d0b6db9c3",
+  "head_transport": "github.fetch_file (success)",
+  "configuration_snapshots": [
+    {
+      "source": "pyproject.toml",
+      "retained_as": "historical-pyproject.toml.txt",
+      "head_git_blob_sha": "cdf71323ecb03f631f9bf2f8734146a10d95c3e0",
+      "baseline_git_blob_sha": "cdf71323ecb03f631f9bf2f8734146a10d95c3e0",
+      "baseline_command": [
+        "git",
+        "show",
+        "3b379f8b60046b1b6b21b360a931472d0b6db9c3:pyproject.toml"
+      ],
+      "baseline_exit_code": 0,
+      "identical_bytes": true,
+      "head_source_url": "https://github.com/stranske/Orchestrator/blob/18ad97a054dab7f6039dd42c8131bee04267748b/pyproject.toml"
+    },
+    {
+      "source": ".github/workflows/ci.yml",
+      "retained_as": "historical-ci.yml.txt",
+      "head_git_blob_sha": "c95ad637961ab568f680da5908771376f52b11e5",
+      "baseline_git_blob_sha": "c95ad637961ab568f680da5908771376f52b11e5",
+      "baseline_command": [
+        "git",
+        "show",
+        "3b379f8b60046b1b6b21b360a931472d0b6db9c3:.github/workflows/ci.yml"
+      ],
+      "baseline_exit_code": 0,
+      "identical_bytes": true,
+      "head_source_url": "https://github.com/stranske/Orchestrator/blob/18ad97a054dab7f6039dd42c8131bee04267748b/.github/workflows/ci.yml"
+    },
+    {
+      "source": "src/verify.py",
+      "retained_as": "historical-verify.py.txt",
+      "head_git_blob_sha": "a90705e480de5365ed5963f502a3cfb4f31b5571",
+      "baseline_git_blob_sha": "a90705e480de5365ed5963f502a3cfb4f31b5571",
+      "baseline_command": [
+        "git",
+        "show",
+        "3b379f8b60046b1b6b21b360a931472d0b6db9c3:src/verify.py"
+      ],
+      "baseline_exit_code": 0,
+      "identical_bytes": true,
+      "head_source_url": "https://github.com/stranske/Orchestrator/blob/18ad97a054dab7f6039dd42c8131bee04267748b/src/verify.py"
+    }
+  ],
+  "observed_checkout_sha": "12c5c58517863f747972538c9bb17c568bc0bf49",
+  "coverage_job": {
+    "run_id": 39180639406,
+    "job_id": 117832439523,
+    "name": "combined coverage (pytest + selftests, the honest number)",
+    "command": "python3 src/verify.py --coverage --floor-may-lag 2>&1 | tee /tmp/combined.txt",
+    "metadata": "../ci/jobs-39180639406.json",
+    "log": "job-117832439523.log",
+    "retrieval_tool": "github.fetch_workflow_job_logs",
+    "retrieval_result": "success",
+    "process_exit_code": null,
+    "job_conclusion": "success"
+  },
+  "observations": {
+    "num_statements": 2825,
+    "missing_statements": 226,
+    "covered_statements": 2599,
+    "reported_statement_percent": 92.0,
+    "missing_branches": null,
+    "num_branches": null,
+    "comparable_baseline": null,
+    "missing_statement_delta": null,
+    "combined_unit_delta": null,
+    "shortfall_against_180_combined_units": null,
+    "pytest_collected": 5470,
+    "pytest_passed": 5443,
+    "pytest_skipped": 27,
+    "selftests_ran": 100,
+    "selftests_total": 107,
+    "selftests_skipped": 7,
+    "instrumented_processes": 113
+  },
+  "population_limitations": "These are recovered whole-job totals on the synthetic PR merge, not an isolated five-test or controlled baseline/post-change comparison. Per-test collection records and matching baseline reports are not retained here. Later additions in the current test module must not be used for attribution.",
+  "files": {
+    "historical-ci.yml.txt": "19dd980aa07526968aef32a770f9eae9930a05484b886659f5b49ff855596557",
+    "historical-pyproject.toml.txt": "4d2c1691877399959653e8b9460f3612062d6e25ec81972a335ad1316d2e3bb8",
+    "historical-verify.py.txt": "c164e1ee451a62c71740d6450fb0a2f5f90b9ed507ea473bf903827dac34822f",
+    "job-117832439523.log": "04a415932b90d924241671f50ab50f7cc6323dd1e119df627394deb21d82bcdb"
+  }
+}

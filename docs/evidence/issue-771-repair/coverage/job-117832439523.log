@@ -1,0 +1,660 @@
+﻿2026-10-19T00:24:36.3423693Z Current runner version: '2.337.0'
+2026-10-19T00:24:36.3458053Z ##[group]Runner Image Provisioner
+2026-10-19T00:24:36.3459486Z Hosted Compute Agent
+2026-10-19T00:24:36.3460470Z Version: 20261012.601
+2026-10-19T00:24:36.3461490Z Commit: f3dc54e1fb89da6852db922499a0233137369e1d
+2026-10-19T00:24:36.3462743Z Build Date: 2026-10-12T17:48:21Z
+2026-10-19T00:24:36.3464022Z Worker ID: {2347a6d6-6566-4f50-b749-1f9d424cb616}
+2026-10-19T00:24:36.3465213Z Region: eastus
+2026-10-19T00:24:36.3466091Z Cloud: Azure
+2026-10-19T00:24:36.3467329Z ##[endgroup]
+2026-10-19T00:24:36.3469746Z ##[group]Operating System
+2026-10-19T00:24:36.3470870Z Ubuntu
+2026-10-19T00:24:36.3471713Z 24.04.5
+2026-10-19T00:24:36.3472634Z LTS
+2026-10-19T00:24:36.3473530Z ##[endgroup]
+2026-10-19T00:24:36.3474410Z ##[group]Runner Image
+2026-10-19T00:24:36.3475464Z Image: ubuntu-24.04
+2026-10-19T00:24:36.3476796Z Version: 20261012.334.1
+2026-10-19T00:24:36.3478925Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261012.334/images/ubuntu/Ubuntu2404-Readme.md
+2026-10-19T00:24:36.3481554Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261012.334
+2026-10-19T00:24:36.3483565Z ##[endgroup]
+2026-10-19T00:24:36.3485701Z ##[group]GITHUB_TOKEN Permissions
+2026-10-19T00:24:36.3488808Z Contents: read
+2026-10-19T00:24:36.3489750Z Metadata: read
+2026-10-19T00:24:36.3490704Z ##[endgroup]
+2026-10-19T00:24:36.3493802Z Secret source: Actions
+2026-10-19T00:24:36.3495385Z Cache mode: write
+2026-10-19T00:24:36.3496803Z Prepare workflow directory
+2026-10-19T00:24:36.3974624Z Prepare all required actions
+2026-10-19T00:24:36.4047695Z Getting action download info
+2026-10-19T00:24:36.6094656Z Download action repository 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' (SHA:3d3c42e5aac5ba805825da76410c181273ba90b1)
+2026-10-19T00:24:36.7284968Z Download action repository 'actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97' (SHA:5fda3b95a4ea91299a34e894583c3862153e4b97)
+2026-10-19T00:24:36.8425087Z Download action repository 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a' (SHA:043fb46d1a93c77aae656e7c1c64a875d1fc6a0a)
+2026-10-19T00:24:37.0526847Z Complete job name: combined coverage (pytest + selftests, the honest number)
+2026-10-19T00:24:37.1325724Z ##[group]Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+2026-10-19T00:24:37.1327334Z with:
+2026-10-19T00:24:37.1327789Z   persist-credentials: false
+2026-10-19T00:24:37.1328319Z   repository: stranske/Orchestrator
+2026-10-19T00:24:37.1331907Z   token: ***
+2026-10-19T00:24:37.1332339Z   ssh-strict: true
+2026-10-19T00:24:37.1332772Z   ssh-user: git
+2026-10-19T00:24:37.1333194Z   clean: true
+2026-10-19T00:24:37.1333635Z   sparse-checkout-cone-mode: true
+2026-10-19T00:24:37.1334148Z   fetch-depth: 1
+2026-10-19T00:24:37.1334566Z   fetch-tags: false
+2026-10-19T00:24:37.1335007Z   show-progress: true
+2026-10-19T00:24:37.1335452Z   lfs: false
+2026-10-19T00:24:37.1335853Z   submodules: false
+2026-10-19T00:24:37.1336526Z   set-safe-directory: true
+2026-10-19T00:24:37.1337069Z   allow-unsafe-pr-checkout: false
+2026-10-19T00:24:37.1337973Z ##[endgroup]
+2026-10-19T00:24:37.2278048Z Syncing repository: stranske/Orchestrator
+2026-10-19T00:24:37.2279916Z ##[group]Getting Git version info
+2026-10-19T00:24:37.2280683Z Working directory is '/home/runner/work/Orchestrator/Orchestrator'
+2026-10-19T00:24:37.2281761Z [command]/usr/bin/git version
+2026-10-19T00:24:37.2355886Z git version 2.55.0
+2026-10-19T00:24:37.2376663Z ##[endgroup]
+2026-10-19T00:24:37.2387139Z Temporarily overriding HOME='/home/runner/work/_temp/9e38671e-5443-49c7-930f-351fb0c3acf0' before making global git config changes
+2026-10-19T00:24:37.2389138Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-19T00:24:37.2392408Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/Orchestrator/Orchestrator
+2026-10-19T00:24:37.2435638Z Deleting the contents of '/home/runner/work/Orchestrator/Orchestrator'
+2026-10-19T00:24:37.2438894Z ##[group]Determining repository object format
+2026-10-19T00:24:37.2440465Z ##[endgroup]
+2026-10-19T00:24:37.2441211Z ##[group]Initializing the repository
+2026-10-19T00:24:37.2444601Z [command]/usr/bin/git init /home/runner/work/Orchestrator/Orchestrator
+2026-10-19T00:24:37.2546042Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-10-19T00:24:37.2547505Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-10-19T00:24:37.2548814Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-10-19T00:24:37.2549827Z hint: call:
+2026-10-19T00:24:37.2550358Z hint:
+2026-10-19T00:24:37.2551282Z hint: 	git config --global init.defaultBranch <name>
+2026-10-19T00:24:37.2552719Z hint:
+2026-10-19T00:24:37.2553851Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-10-19T00:24:37.2555696Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-10-19T00:24:37.2557490Z hint:
+2026-10-19T00:24:37.2558331Z hint: 	git branch -m <name>
+2026-10-19T00:24:37.2559230Z hint:
+2026-10-19T00:24:37.2560444Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-10-19T00:24:37.2562676Z Initialized empty Git repository in /home/runner/work/Orchestrator/Orchestrator/.git/
+2026-10-19T00:24:37.2565475Z [command]/usr/bin/git remote add origin https://github.com/stranske/Orchestrator
+2026-10-19T00:24:37.2610419Z ##[endgroup]
+2026-10-19T00:24:37.2611735Z ##[group]Disabling automatic garbage collection
+2026-10-19T00:24:37.2613945Z [command]/usr/bin/git config --local gc.auto 0
+2026-10-19T00:24:37.2644258Z ##[endgroup]
+2026-10-19T00:24:37.2645628Z ##[group]Setting up auth
+2026-10-19T00:24:37.2646856Z Removing SSH command configuration
+2026-10-19T00:24:37.2651285Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-19T00:24:37.2682267Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-19T00:24:37.3084428Z Removing HTTP extra header
+2026-10-19T00:24:37.3086751Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-19T00:24:37.3092045Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-19T00:24:37.3292439Z Removing includeIf entries pointing to credentials config files
+2026-10-19T00:24:37.3297892Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-19T00:24:37.3334254Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-19T00:24:37.3559670Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-f070efdb-5ba5-4647-98b3-bf8178cd0313.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-10-19T00:24:37.3600958Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/Orchestrator/Orchestrator/.git.path /home/runner/work/_temp/git-credentials-f070efdb-5ba5-4647-98b3-bf8178cd0313.config
+2026-10-19T00:24:37.3641110Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/Orchestrator/Orchestrator/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-f070efdb-5ba5-4647-98b3-bf8178cd0313.config
+2026-10-19T00:24:37.3678787Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-f070efdb-5ba5-4647-98b3-bf8178cd0313.config
+2026-10-19T00:24:37.3715967Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-f070efdb-5ba5-4647-98b3-bf8178cd0313.config
+2026-10-19T00:24:37.3745873Z ##[endgroup]
+2026-10-19T00:24:37.3747006Z ##[group]Fetching the repository
+2026-10-19T00:24:37.3755685Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +12c5c58517863f747972538c9bb17c568bc0bf49:refs/remotes/pull/772/merge
+2026-10-19T00:24:41.1254238Z From https://github.com/stranske/Orchestrator
+2026-10-19T00:24:41.1256415Z  * [new ref]         12c5c58517863f747972538c9bb17c568bc0bf49 -> pull/772/merge
+2026-10-19T00:24:41.1260084Z ##[endgroup]
+2026-10-19T00:24:41.1261670Z ##[group]Determining the checkout info
+2026-10-19T00:24:41.1263370Z ##[endgroup]
+2026-10-19T00:24:41.1288370Z [command]/usr/bin/git sparse-checkout disable
+2026-10-19T00:24:41.1342635Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-10-19T00:24:41.1378984Z ##[group]Checking out the ref
+2026-10-19T00:24:41.1380365Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/772/merge
+2026-10-19T00:24:41.4499027Z Note: switching to 'refs/remotes/pull/772/merge'.
+2026-10-19T00:24:41.4499981Z 
+2026-10-19T00:24:41.4500623Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-10-19T00:24:41.4502219Z changes and commit them, and you can discard any commits you make in this
+2026-10-19T00:24:41.4503772Z state without impacting any branches by switching back to a branch.
+2026-10-19T00:24:41.4504664Z 
+2026-10-19T00:24:41.4505270Z If you want to create a new branch to retain commits you create, you may
+2026-10-19T00:24:41.4507138Z do so (now or later) by using -c with the switch command. Example:
+2026-10-19T00:24:41.4508070Z 
+2026-10-19T00:24:41.4508455Z   git switch -c <new-branch-name>
+2026-10-19T00:24:41.4509082Z 
+2026-10-19T00:24:41.4509466Z Or undo this operation with:
+2026-10-19T00:24:41.4510039Z 
+2026-10-19T00:24:41.4510372Z   git switch -
+2026-10-19T00:24:41.4510833Z 
+2026-10-19T00:24:41.4511582Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-10-19T00:24:41.4512676Z 
+2026-10-19T00:24:41.4513824Z HEAD is now at 12c5c58 Merge 18ad97a054dab7f6039dd42c8131bee04267748b into 4951a5a42b48464c4ace9f970c090f109bf12711
+2026-10-19T00:24:41.4528379Z ##[endgroup]
+2026-10-19T00:24:41.4572209Z [command]/usr/bin/git log -1 --format=%H
+2026-10-19T00:24:41.4597051Z 12c5c58517863f747972538c9bb17c568bc0bf49
+2026-10-19T00:24:41.4610566Z ##[group]Removing auth
+2026-10-19T00:24:41.4611560Z Removing SSH command configuration
+2026-10-19T00:24:41.4613002Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-19T00:24:41.4647991Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-19T00:24:41.4867074Z Removing HTTP extra header
+2026-10-19T00:24:41.4871153Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-19T00:24:41.4903647Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-19T00:24:41.5121995Z Removing includeIf entries pointing to credentials config files
+2026-10-19T00:24:41.5125204Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-19T00:24:41.5150601Z includeif.gitdir:/home/runner/work/Orchestrator/Orchestrator/.git.path
+2026-10-19T00:24:41.5153598Z includeif.gitdir:/home/runner/work/Orchestrator/Orchestrator/.git/worktrees/*.path
+2026-10-19T00:24:41.5155830Z includeif.gitdir:/github/workspace/.git.path
+2026-10-19T00:24:41.5158233Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-19T00:24:41.5162523Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/Orchestrator/Orchestrator/.git.path
+2026-10-19T00:24:41.5182283Z /home/runner/work/_temp/git-credentials-f070efdb-5ba5-4647-98b3-bf8178cd0313.config
+2026-10-19T00:24:41.5193580Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/Orchestrator/Orchestrator/.git.path \/home\/runner\/work\/_temp\/git\-credentials\-f070efdb\-5ba5\-4647\-98b3\-bf8178cd0313\.config
+2026-10-19T00:24:41.5226114Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/Orchestrator/Orchestrator/.git/worktrees/*.path
+2026-10-19T00:24:41.5247422Z /home/runner/work/_temp/git-credentials-f070efdb-5ba5-4647-98b3-bf8178cd0313.config
+2026-10-19T00:24:41.5292560Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/Orchestrator/Orchestrator/.git/worktrees/*.path \/home\/runner\/work\/_temp\/git\-credentials\-f070efdb\-5ba5\-4647\-98b3\-bf8178cd0313\.config
+2026-10-19T00:24:41.5322739Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-10-19T00:24:41.5343845Z /github/runner_temp/git-credentials-f070efdb-5ba5-4647-98b3-bf8178cd0313.config
+2026-10-19T00:24:41.5355423Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path \/github\/runner_temp\/git\-credentials\-f070efdb\-5ba5\-4647\-98b3\-bf8178cd0313\.config
+2026-10-19T00:24:41.5388757Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-19T00:24:41.5410801Z /github/runner_temp/git-credentials-f070efdb-5ba5-4647-98b3-bf8178cd0313.config
+2026-10-19T00:24:41.5424140Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path \/github\/runner_temp\/git\-credentials\-f070efdb\-5ba5\-4647\-98b3\-bf8178cd0313\.config
+2026-10-19T00:24:41.5460357Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-19T00:24:41.5689174Z Removing credentials config '/home/runner/work/_temp/git-credentials-f070efdb-5ba5-4647-98b3-bf8178cd0313.config'
+2026-10-19T00:24:41.5694307Z ##[endgroup]
+2026-10-19T00:24:41.6036895Z ##[group]Run actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+2026-10-19T00:24:41.6038630Z with:
+2026-10-19T00:24:41.6039457Z   python-version: 3.14
+2026-10-19T00:24:41.6040390Z   check-latest: false
+2026-10-19T00:24:41.6049578Z   token: ***
+2026-10-19T00:24:41.6050434Z   update-environment: true
+2026-10-19T00:24:41.6051440Z   allow-prereleases: false
+2026-10-19T00:24:41.6052632Z   freethreaded: false
+2026-10-19T00:24:41.6053686Z ##[endgroup]
+2026-10-19T00:24:41.7203315Z ##[group]Installed versions
+2026-10-19T00:24:41.7285326Z Successfully set up CPython (3.14.8)
+2026-10-19T00:24:41.7287798Z ##[endgroup]
+2026-10-19T00:24:41.7451149Z ##[group]Run sudo apt-get update
+2026-10-19T00:24:41.7452343Z [36;1msudo apt-get update[0m
+2026-10-19T00:24:41.7453701Z [36;1msudo apt-get install --yes --no-install-recommends zsh[0m
+2026-10-19T00:24:41.7455151Z [36;1mcommand -v zsh[0m
+2026-10-19T00:24:41.7819261Z shell: /usr/bin/bash -e {0}
+2026-10-19T00:24:41.7820392Z env:
+2026-10-19T00:24:41.7821525Z   pythonLocation: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:24:41.7823481Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.14.8/x64/lib/pkgconfig
+2026-10-19T00:24:41.7825454Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:24:41.7827403Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:24:41.7829047Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:24:41.7830639Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.14.8/x64/lib
+2026-10-19T00:24:41.7831985Z ##[endgroup]
+2026-10-19T00:24:41.9077149Z Get:1 file:/etc/apt/apt-mirrors.txt Mirrorlist [144 B]
+2026-10-19T00:24:41.9294301Z Get:6 https://packages.microsoft.com/ubuntu/24.04/prod noble InRelease [3600 B]
+2026-10-19T00:24:41.9499147Z Hit:2 http://azure.archive.ubuntu.com/ubuntu noble InRelease
+2026-10-19T00:24:41.9519391Z Get:3 http://azure.archive.ubuntu.com/ubuntu noble-updates InRelease [126 kB]
+2026-10-19T00:24:41.9593198Z Get:4 http://azure.archive.ubuntu.com/ubuntu noble-backports InRelease [126 kB]
+2026-10-19T00:24:41.9644227Z Get:5 http://azure.archive.ubuntu.com/ubuntu noble-security InRelease [126 kB]
+2026-10-19T00:24:42.0512340Z Get:7 https://packages.microsoft.com/ubuntu/24.04/prod noble/main amd64 Packages [618 kB]
+2026-10-19T00:24:42.0779742Z Get:8 https://packages.microsoft.com/ubuntu/24.04/prod noble/main arm64 Packages [557 kB]
+2026-10-19T00:24:42.0864453Z Get:9 https://packages.microsoft.com/ubuntu/24.04/prod noble/main armhf Packages [12.4 kB]
+2026-10-19T00:24:42.1661440Z Get:10 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages [1397 kB]
+2026-10-19T00:24:42.1748640Z Get:11 http://azure.archive.ubuntu.com/ubuntu noble-updates/main Translation-en [308 kB]
+2026-10-19T00:24:42.1784253Z Get:12 http://azure.archive.ubuntu.com/ubuntu noble-updates/universe amd64 Packages [1704 kB]
+2026-10-19T00:24:42.1878371Z Get:13 http://azure.archive.ubuntu.com/ubuntu noble-updates/universe Translation-en [342 kB]
+2026-10-19T00:24:42.1904105Z Get:14 http://azure.archive.ubuntu.com/ubuntu noble-updates/restricted amd64 Packages [1805 kB]
+2026-10-19T00:24:42.2002856Z Get:15 http://azure.archive.ubuntu.com/ubuntu noble-updates/restricted Translation-en [411 kB]
+2026-10-19T00:24:42.2688793Z Get:16 http://azure.archive.ubuntu.com/ubuntu noble-security/main amd64 Packages [1144 kB]
+2026-10-19T00:24:42.2767793Z Get:17 http://azure.archive.ubuntu.com/ubuntu noble-security/main Translation-en [231 kB]
+2026-10-19T00:24:42.2782652Z Get:18 http://azure.archive.ubuntu.com/ubuntu noble-security/universe amd64 Packages [1222 kB]
+2026-10-19T00:24:42.2854685Z Get:19 http://azure.archive.ubuntu.com/ubuntu noble-security/universe Translation-en [246 kB]
+2026-10-19T00:24:42.3306468Z Get:20 http://azure.archive.ubuntu.com/ubuntu noble-security/restricted amd64 Packages [1713 kB]
+2026-10-19T00:24:42.3403100Z Get:21 http://azure.archive.ubuntu.com/ubuntu noble-security/restricted Translation-en [392 kB]
+2026-10-19T00:24:47.2795871Z Fetched 12.5 MB in 1s (9546 kB/s)
+2026-10-19T00:24:48.2183016Z Reading package lists...
+2026-10-19T00:24:48.2484216Z Reading package lists...
+2026-10-19T00:24:48.4520711Z Building dependency tree...
+2026-10-19T00:24:48.4528083Z Reading state information...
+2026-10-19T00:24:48.5982017Z The following additional packages will be installed:
+2026-10-19T00:24:48.5983041Z   zsh-common
+2026-10-19T00:24:48.5987023Z Suggested packages:
+2026-10-19T00:24:48.5987427Z   zsh-doc
+2026-10-19T00:24:48.6260120Z The following NEW packages will be installed:
+2026-10-19T00:24:48.6261225Z   zsh zsh-common
+2026-10-19T00:24:48.6425645Z 0 upgraded, 2 newly installed, 0 to remove and 44 not upgraded.
+2026-10-19T00:24:48.6427241Z Need to get 4985 kB of archives.
+2026-10-19T00:24:48.6427784Z After this operation, 19.1 MB of additional disk space will be used.
+2026-10-19T00:24:48.6428265Z Get:1 file:/etc/apt/apt-mirrors.txt Mirrorlist [144 B]
+2026-10-19T00:24:48.8238471Z Get:2 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 zsh-common all 5.9-6ubuntu2 [4173 kB]
+2026-10-19T00:24:49.0132854Z Get:3 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 zsh amd64 5.9-6ubuntu2 [812 kB]
+2026-10-19T00:24:49.3414637Z Fetched 4985 kB in 0s (12.4 MB/s)
+2026-10-19T00:24:50.3697365Z Selecting previously unselected package zsh-common.
+2026-10-19T00:24:50.7187193Z (Reading database ... 
+2026-10-19T00:24:50.7187837Z (Reading database ... 5%
+2026-10-19T00:24:50.7188386Z (Reading database ... 10%
+2026-10-19T00:24:50.7189051Z (Reading database ... 15%
+2026-10-19T00:24:50.7189948Z (Reading database ... 20%
+2026-10-19T00:24:50.7190576Z (Reading database ... 25%
+2026-10-19T00:24:50.7191218Z (Reading database ... 30%
+2026-10-19T00:24:50.7191886Z (Reading database ... 35%
+2026-10-19T00:24:50.7192573Z (Reading database ... 40%
+2026-10-19T00:24:50.7193273Z (Reading database ... 45%
+2026-10-19T00:24:50.7194089Z (Reading database ... 50%
+2026-10-19T00:24:50.7554714Z (Reading database ... 55%
+2026-10-19T00:24:51.0491010Z (Reading database ... 60%
+2026-10-19T00:24:51.2807951Z (Reading database ... 65%
+2026-10-19T00:24:51.5263595Z (Reading database ... 70%
+2026-10-19T00:24:51.8267355Z (Reading database ... 75%
+2026-10-19T00:24:52.1516257Z (Reading database ... 80%
+2026-10-19T00:24:52.6501404Z (Reading database ... 85%
+2026-10-19T00:24:53.2022698Z (Reading database ... 90%
+2026-10-19T00:24:53.6805362Z (Reading database ... 95%
+2026-10-19T00:24:53.6866428Z (Reading database ... 100%
+2026-10-19T00:24:53.6866942Z (Reading database ... 203540 files and directories currently installed.)
+2026-10-19T00:24:53.6867518Z Preparing to unpack .../zsh-common_5.9-6ubuntu2_all.deb ...
+2026-10-19T00:24:53.6958966Z Unpacking zsh-common (5.9-6ubuntu2) ...
+2026-10-19T00:24:53.9858670Z Selecting previously unselected package zsh.
+2026-10-19T00:24:53.9986384Z Preparing to unpack .../zsh_5.9-6ubuntu2_amd64.deb ...
+2026-10-19T00:24:54.0051939Z Unpacking zsh (5.9-6ubuntu2) ...
+2026-10-19T00:24:54.0606122Z Setting up zsh-common (5.9-6ubuntu2) ...
+2026-10-19T00:24:54.0826544Z Setting up zsh (5.9-6ubuntu2) ...
+2026-10-19T00:24:54.0923860Z Processing triggers for debianutils (5.17build1) ...
+2026-10-19T00:24:54.1707804Z Processing triggers for man-db (2.12.0-4build2) ...
+2026-10-19T00:24:54.1730631Z Not building database; man-db/auto-update is not 'true'.
+2026-10-19T00:24:55.2486875Z 
+2026-10-19T00:24:55.2487513Z Running kernel seems to be up-to-date.
+2026-10-19T00:24:55.2487989Z 
+2026-10-19T00:24:55.2488224Z No services need to be restarted.
+2026-10-19T00:24:55.2488608Z 
+2026-10-19T00:24:55.2488836Z No containers need to be restarted.
+2026-10-19T00:24:55.2489223Z 
+2026-10-19T00:24:55.2489500Z No user sessions are running outdated binaries.
+2026-10-19T00:24:55.2489965Z 
+2026-10-19T00:24:55.2490426Z No VM guests are running outdated hypervisor (qemu) binaries on this host.
+2026-10-19T00:24:56.0897051Z /usr/bin/zsh
+2026-10-19T00:24:56.0945874Z ##[group]Run python -m pip install --quiet pytest pyyaml coverage
+2026-10-19T00:24:56.0946702Z [36;1mpython -m pip install --quiet pytest pyyaml coverage[0m
+2026-10-19T00:24:56.1011006Z shell: /usr/bin/bash -e {0}
+2026-10-19T00:24:56.1011261Z env:
+2026-10-19T00:24:56.1011539Z   pythonLocation: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:24:56.1012002Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.14.8/x64/lib/pkgconfig
+2026-10-19T00:24:56.1012446Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:24:56.1012836Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:24:56.1013213Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:24:56.1013608Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.14.8/x64/lib
+2026-10-19T00:24:56.1013928Z ##[endgroup]
+2026-10-19T00:25:02.0497783Z ##[group]Run mkdir -p "$ORCH_STATE_DIR" "$ORCH_LOCAL_RUNTIME"
+2026-10-19T00:25:02.0498258Z [36;1mmkdir -p "$ORCH_STATE_DIR" "$ORCH_LOCAL_RUNTIME"[0m
+2026-10-19T00:25:02.0498785Z [36;1m# --floor-may-lag unconditionally: this job is a MEASUREMENT, and a lagging floor is the[0m
+2026-10-19T00:25:02.0499449Z [36;1m# verify job's business to report. Duplicating that failure here would mean one drift[0m
+2026-10-19T00:25:02.0499950Z [36;1m# reddening two jobs and telling you nothing extra.[0m
+2026-10-19T00:25:02.0500442Z [36;1mpython3 src/verify.py --coverage --floor-may-lag 2>&1 | tee /tmp/combined.txt[0m
+2026-10-19T00:25:02.0563653Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-19T00:25:02.0563993Z env:
+2026-10-19T00:25:02.0564259Z   pythonLocation: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:25:02.0564703Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.14.8/x64/lib/pkgconfig
+2026-10-19T00:25:02.0565178Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:25:02.0565560Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:25:02.0565934Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:25:02.0566630Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.14.8/x64/lib
+2026-10-19T00:25:02.0567006Z   ORCH_STATE_DIR: /home/runner/work/_temp/orch-state
+2026-10-19T00:25:02.0567360Z   ORCH_LOCAL_RUNTIME: /home/runner/work/_temp/orch-runtime
+2026-10-19T00:25:02.0567694Z ##[endgroup]
+2026-10-19T00:31:59.2101842Z # verify.py
+2026-10-19T00:31:59.2102413Z 
+2026-10-19T00:31:59.2102525Z   tree:       checkout
+2026-10-19T00:31:59.2103526Z   state:      private copy, deleted after the run — ledger absent at the source, so it bootstraps privately; Brain absent at the source, so it bootstraps privately
+2026-10-19T00:31:59.2104290Z   time:       pytest 5m58s, selftests 34s (4 at a time), gates 7s
+2026-10-19T00:31:59.2104882Z   pytest:     5443 passed, 0 failed, 27/31 max skipped (5470 collected; floor 5465 — 5 BEHIND)
+2026-10-19T00:31:59.2105349Z   selftests:  100 of 107 modules ran, 7/7 max skipped
+2026-10-19T00:31:59.2105725Z   activation audit   ok  CAN FIRE:   18 of 18 live  (100%)
+2026-10-19T00:31:59.2106077Z   recurrence replay  ok  WOULD FIRE:  20 of 53
+2026-10-19T00:31:59.2107104Z   set coverage       SKIP 9 of 10 capability-set coverage checks passed over 18 ledger capabilities, 1 skipped: test_no_fixtur
+2026-10-19T00:31:59.2107922Z   admission          SKIP 21 of 24 admission checks passed, 3 skipped: test_legacy_debt_is_reported_not_forgiven (capability l
+2026-10-19T00:31:59.2108495Z   ledger validate    ok  "valid": true
+2026-10-19T00:31:59.2108769Z   gates:      2/2 max skipped
+2026-10-19T00:31:59.2109371Z   declared:   no ledger when the run began, so none of the 18 rows this tree declares was registered; the first writing load creates it holding all of them
+2026-10-19T00:31:59.2110196Z   mypy ratchet: 0/0 max of 136 module(s) exempt, 136 checked — fully drained
+2026-10-19T00:31:59.2110495Z 
+2026-10-19T00:31:59.2110767Z   SKIPPED (prerequisite absent on this machine — nothing here was checked):
+2026-10-19T00:31:59.2113083Z     pytest   SKIPPED [1] ../../../../../opt/hostedtoolcache/Python/3.14.8/x64/lib/python3.14/site-packages/_pytest/unittest.py:523: capability ledger has no row for issue-readiness — the ledger is machine-local state (/tmp/verify-state-bs_a0xgd/capabilities.json); it holds 0 row(s) here, and these are registered by running the system, not by checking out the tree; range-lane-rollout, role-triage, thompson-hybrid-routing is declared by this tree too, but registering it alone would not clear this
+2026-10-19T00:31:59.2118221Z     pytest   SKIPPED [1] ../../../../../opt/hostedtoolcache/Python/3.14.8/x64/lib/python3.14/site-packages/_pytest/unittest.py:523: capability ledger has no row for live-keepalive-supervisor, redirect-apply-bootstrap: declared by this tree, not yet registered here — the ledger is machine-local state (/tmp/verify-state-bs_a0xgd/capabilities.json); it holds 0 row(s) here, and the deployed code registers these on its first writing load (`capabilities.py --json validate`, an active tick's first command; `capabilities.py seed-declared` makes the same load on a copy)
+2026-10-19T00:31:59.2121480Z     pytest   SKIPPED [2] ../../../../../opt/hostedtoolcache/Python/3.14.8/x64/lib/python3.14/site-packages/_pytest/unittest.py:523: capability ledger holds no pre-admission-gate (legacy) capability — legacy debt accrues from this instance's registration history, and a ledger bootstrapped from the committed tree has none
+2026-10-19T00:31:59.2124593Z     pytest   SKIPPED [1] ../../../../../opt/hostedtoolcache/Python/3.14.8/x64/lib/python3.14/site-packages/_pytest/unittest.py:523: capability ledger has no row for capability-admission-gate — the ledger is machine-local state (/tmp/verify-state-bs_a0xgd/capabilities.json); it holds 0 row(s) here, and these are registered by running the system, not by checking out the tree
+2026-10-19T00:31:59.2128642Z     pytest   SKIPPED [2] ../../../../../opt/hostedtoolcache/Python/3.14.8/x64/lib/python3.14/site-packages/_pytest/unittest.py:523: reference skill resource not installed: /home/runner/.codex/skills/code-workspace-hygiene/scripts/audit_code_root.sh — the skill compiler is deliberately exercised against a real installed skill, not a fixture
+2026-10-19T00:31:59.2136872Z     pytest   SKIPPED [1] ../../../../../opt/hostedtoolcache/Python/3.14.8/x64/lib/python3.14/site-packages/_pytest/unittest.py:523: capability ledger has no row for abcd-experiment, adversarial-review, agy-runtime-isolation, capability-activation-audit, capability-admission-gate, capability-firing-monitor, capability-propensity, capability:reference-sync-hygiene-test-gate, codemod-campaign, coverage-testgen-trigger, cross-repo-coordination, deliberate-break-verifier, docs-drift-fix-agent, epic-decomposition, evidence-acquisition, feature-reflection-cli, feature-scan, feedback-store, frontend-verifier, issue-readiness, offload, partitioned-review, redirect-plan, redirect-policy, repo-playbook, research-scheduler, stall-watcher, switch-review, testgen-lane, windowed-capacity-policy — the ledger is machine-local state (/tmp/verify-state-bs_a0xgd/capabilities.json); it holds 0 row(s) here, and these are registered by running the system, not by checking out the tree; completion-event-lineage, live-keepalive-supervisor, local-model-profile-trial, rail-exercise-cadence, range-lane-rollout, redirect-apply-bootstrap, research-usage-guard, role-adjudicator, role-decomposer, role-prompt, role-redirect, role-triage, route-weights-export, runtime-ac-checks, strategy-experiments, synthesis-promotion, thompson-hybrid-routing, value-chain-monitor is declared by this tree too, but registering it alone would not clear this
+2026-10-19T00:31:59.2143320Z     pytest   SKIPPED [2] ../../../../../opt/hostedtoolcache/Python/3.14.8/x64/lib/python3.14/site-packages/_pytest/unittest.py:523: exact Codex profiles require ORCH_CODEX_PROFILE_BIN or an installed global Codex CLI; refusing an unresolved binary
+2026-10-19T00:31:59.2145002Z     pytest   SKIPPED [1] ../../../../../opt/hostedtoolcache/Python/3.14.8/x64/lib/python3.14/site-packages/_pytest/unittest.py:523: vibe config absent: /home/runner/.vibe/config.toml — active_model cannot be read to check for drift
+2026-10-19T00:31:59.2146786Z     pytest   SKIPPED [1] ../../../../../opt/hostedtoolcache/Python/3.14.8/x64/lib/python3.14/site-packages/_pytest/unittest.py:523: agy advertised-models cache absent: /home/runner/work/_temp/orch-runtime/agent-runtime/gemini/advertised-models.json
+2026-10-19T00:31:59.2149051Z     pytest   SKIPPED [1] ../../../../../opt/hostedtoolcache/Python/3.14.8/x64/lib/python3.14/site-packages/_pytest/unittest.py:523: capability ledger has no row for adversarial-review, testgen-lane — the ledger is machine-local state (/tmp/verify-state-bs_a0xgd/capabilities.json); it holds 0 row(s) here, and these are registered by running the system, not by checking out the tree
+2026-10-19T00:31:59.2152369Z     pytest   SKIPPED [1] ../../../../../opt/hostedtoolcache/Python/3.14.8/x64/lib/python3.14/site-packages/_pytest/unittest.py:523: capability ledger has no row for role-triage: declared by this tree, not yet registered here — the ledger is machine-local state (/tmp/verify-state-bs_a0xgd/capabilities.json); it holds 0 row(s) here, and the deployed code registers these on its first writing load (`capabilities.py --json validate`, an active tick's first command; `capabilities.py seed-declared` makes the same load on a copy)
+2026-10-19T00:31:59.2154344Z     pytest   SKIPPED [3] tests/test_model_tier_resolution.py:79: agy CLI not installed on this box
+2026-10-19T00:31:59.2155007Z     pytest   SKIPPED [1] tests/test_model_tier_resolution.py:97: cursor-agent CLI not installed on this box
+2026-10-19T00:31:59.2156980Z     pytest   SKIPPED [1] ../../../../../opt/hostedtoolcache/Python/3.14.8/x64/lib/python3.14/site-packages/_pytest/unittest.py:523: no free auth signal on this machine for aider, claude, codex, cursor, gemini, muse, vibe: neither an installed CLI probe nor a credential file — agent_auth_check's documented UNKNOWN case
+2026-10-19T00:31:59.2159253Z     pytest   SKIPPED [1] ../../../../../opt/hostedtoolcache/Python/3.14.8/x64/lib/python3.14/site-packages/_pytest/unittest.py:523: credential file absent for vibe (/home/runner/.vibe/.env), aider (/home/runner/.codex/handoff/aider.env) — the fleet authenticates by sourcing that file, so without it the seat's verdict is BROKEN by design
+2026-10-19T00:31:59.2161339Z     pytest   SKIPPED [1] tests/test_skill_compiler.py:46: reference skill resource not installed: /home/runner/.codex/skills/code-workspace-hygiene/scripts/audit_code_root.sh — the skill compiler is deliberately exercised against a real installed skill, not a fixture
+2026-10-19T00:31:59.2163378Z     pytest   SKIPPED [1] tests/test_skill_compiler.py:88: reference skill resource not installed: /home/runner/.codex/skills/code-workspace-hygiene/scripts/audit_code_root.sh — the skill compiler is deliberately exercised against a real installed skill, not a fixture
+2026-10-19T00:31:59.2165273Z     pytest   SKIPPED [1] tests/test_skill_compiler.py:113: reference skill resource not installed: /home/runner/.codex/skills/code-workspace-hygiene/scripts/audit_code_root.sh — the skill compiler is deliberately exercised against a real installed skill, not a fixture
+2026-10-19T00:31:59.2167459Z     pytest   SKIPPED [2] tests/test_skill_compiler.py:134: reference skill resource not installed: /home/runner/.codex/skills/code-workspace-hygiene/scripts/audit_code_root.sh — the skill compiler is deliberately exercised against a real installed skill, not a fixture
+2026-10-19T00:31:59.2169376Z     pytest   SKIPPED [1] tests/test_skill_compiler.py:158: reference skill resource not installed: /home/runner/.codex/skills/code-workspace-hygiene/scripts/audit_code_root.sh — the skill compiler is deliberately exercised against a real installed skill, not a fixture
+2026-10-19T00:31:59.2171267Z     pytest   SKIPPED [1] tests/test_skill_compiler.py:229: reference skill resource not installed: /home/runner/.codex/skills/code-workspace-hygiene/scripts/audit_code_root.sh — the skill compiler is deliberately exercised against a real installed skill, not a fixture
+2026-10-19T00:31:59.2172746Z     selftest adapters: section skipped — exact Codex profiles require ORCH_CODEX_PROFILE_BIN or an installed global Codex CLI; refusing an unresolved binary
+2026-10-19T00:31:59.2174202Z     selftest capability_admission: section skipped — capability ledger holds no pre-admission-gate (legacy) capability — legacy debt accrues from this instance's registration history, and a ledger bootstrapped from the committed tree has none
+2026-10-19T00:31:59.2176767Z     selftest capability_advisor: section skipped — capability ledger has no row for codemod-campaign, offload, testgen-lane — the ledger is machine-local state (/tmp/verify-state-bs_a0xgd/capabilities.json); it holds 18 row(s) here, and these are registered by running the system, not by checking out the tree
+2026-10-19T00:31:59.2179183Z     selftest capability_outcome_bridge: section skipped — capability ledger has no row for agy-runtime-isolation, offload — the ledger is machine-local state (/tmp/verify-state-bs_a0xgd/capabilities.json); it holds 18 row(s) here, and these are registered by running the system, not by checking out the tree
+2026-10-19T00:31:59.2181323Z     selftest capability_recurrence_check: section skipped — capability ledger has no row for docs-drift-fix-agent — the ledger is machine-local state (/tmp/verify-state-bs_a0xgd/capabilities.json); it holds 18 row(s) here, and these are registered by running the system, not by checking out the tree
+2026-10-19T00:31:59.2183289Z     selftest feedback: section skipped — capability ledger has no row for offload — the ledger is machine-local state (/tmp/verify-state-bs_a0xgd/capabilities.json); it holds 18 row(s) here, and these are registered by running the system, not by checking out the tree
+2026-10-19T00:31:59.2185044Z     selftest feedback: section skipped — capability ledger carries no version lineage for role-triage (capability_version_id is unset) — lineage is established by real registration on the running instance, so a fresh bootstrap has none
+2026-10-19T00:31:59.2186443Z     selftest range_lane_rollout: exact Codex profiles require ORCH_CODEX_PROFILE_BIN or an installed global Codex CLI; refusing an unresolved binary
+2026-10-19T00:31:59.2188466Z     gate     set coverage: capability ledger has no row for abcd-experiment, adversarial-review, agy-runtime-isolation, capability-activation-audit, capability-admission-gate, capability-firing-monitor, capability-propensity, capability:reference-sync-hygiene-test-gate, codemod-campaign, coverage-testgen-trigger, cross-repo-coordination, deliberate-break-verifier, docs-drift-fix-agent, epic-decomposition, evidence-acquisiti
+2026-10-19T00:31:59.2191070Z     gate     admission: capability ledger holds no pre-admission-gate (legacy) capability — legacy debt accrues from this instance's registration history, and a ledger bootstrapped from the committed tree has none
+2026-10-19T00:31:59.2192585Z     gate     admission: capability ledger holds no pre-admission-gate (legacy) capability — legacy debt accrues from this instance's registration history, and a ledger bootstrapped from the committed tree has none
+2026-10-19T00:31:59.2194287Z     gate     admission: capability ledger has no row for capability-admission-gate — the ledger is machine-local state (/tmp/verify-state-bs_a0xgd/capabilities.json); it holds 0 row(s) here, and these are registered by running the system, not by checking out the tree
+2026-10-19T00:31:59.2195200Z 
+2026-10-19T00:31:59.2195281Z   PROBLEMS:
+2026-10-19T00:31:59.2197109Z     - floor is BEHIND reality: 5470 collected > floor 5465 — the floor is 5 test(s) permissive, so that many could silently stop being collected and still read as green. Set "collected": 5470 and "passed": 5470 in .verify-floor.json, keeping the existing note, or run `python3 verify.py --update-floor`. If a branch merged under you, REBASE FIRST: the number must be measured on the merge result.
+2026-10-19T00:31:59.2198431Z 
+2026-10-19T00:31:59.2198560Z coverage: combined 113 instrumented process(es)
+2026-10-19T00:31:59.2198888Z Name                                   Stmts   Miss  Cover
+2026-10-19T00:31:59.2199210Z ----------------------------------------------------------
+2026-10-19T00:31:59.2199547Z src/adapters.py                         1395    159  88.6%
+2026-10-19T00:31:59.2199893Z src/adjudicator_live.py                  257     22  91.4%
+2026-10-19T00:31:59.2200236Z src/adjudicator_replay.py                197     26  86.8%
+2026-10-19T00:31:59.2200582Z src/adjudicator_retro.py                1567    157  90.0%
+2026-10-19T00:31:59.2200921Z src/adversarial.py                       919     59  93.6%
+2026-10-19T00:31:59.2201262Z src/agent_auth_check.py                  158     14  91.1%
+2026-10-19T00:31:59.2201597Z src/agent_switches.py                    544     63  88.4%
+2026-10-19T00:31:59.2201929Z src/backlog.py                           398     42  89.4%
+2026-10-19T00:31:59.2202394Z src/cadence_registry.py                  174     10  94.3%
+2026-10-19T00:31:59.2202759Z src/capabilities.py                     1559     13  99.2%
+2026-10-19T00:31:59.2203110Z src/capability_activation_audit.py      1127     51  95.5%
+2026-10-19T00:31:59.2203466Z src/capability_admission.py              594     91  84.7%
+2026-10-19T00:31:59.2203836Z src/capability_advisor.py               1602     19  98.8%
+2026-10-19T00:31:59.2204250Z src/capability_compiler.py              1243    516  58.5%
+2026-10-19T00:31:59.2204598Z src/capability_effectiveness.py          273      7  97.4%
+2026-10-19T00:31:59.2204952Z src/capability_firing_monitor.py         431     22  94.9%
+2026-10-19T00:31:59.2205293Z src/capability_ir.py                     138     12  91.3%
+2026-10-19T00:31:59.2205634Z src/capability_lifecycle.py              148     50  66.2%
+2026-10-19T00:31:59.2205984Z src/capability_matcher_proposals.py      113     15  86.7%
+2026-10-19T00:31:59.2206486Z src/capability_opportunity.py            143     18  87.4%
+2026-10-19T00:31:59.2206845Z src/capability_outcome_bridge.py         453    110  75.7%
+2026-10-19T00:31:59.2207197Z src/capability_propensity.py            2725    237  91.3%
+2026-10-19T00:31:59.2207547Z src/capability_recurrence_check.py       496     32  93.5%
+2026-10-19T00:31:59.2207893Z src/capability_targets.py                374    133  64.4%
+2026-10-19T00:31:59.2208239Z src/capability_task_proposals.py         215     44  79.5%
+2026-10-19T00:31:59.2208579Z src/capacity.py                          656     83  87.3%
+2026-10-19T00:31:59.2209050Z src/ccusage_reconcile.py                 286     60  79.0%
+2026-10-19T00:31:59.2209455Z src/claims.py                            300     38  87.3%
+2026-10-19T00:31:59.2209794Z src/closer_dispatcher.py                1602    276  82.8%
+2026-10-19T00:31:59.2210137Z src/closer_disposition.py                340     52  84.7%
+2026-10-19T00:31:59.2210476Z src/closer_evidence.py                   878    160  81.8%
+2026-10-19T00:31:59.2210821Z src/closer_pipeline.py                  1429    186  87.0%
+2026-10-19T00:31:59.2211156Z src/closer_queue.py                      840    149  82.3%
+2026-10-19T00:31:59.2211489Z src/codemod_lane.py                      601    123  79.5%
+2026-10-19T00:31:59.2211825Z src/comparative.py                       323     13  96.0%
+2026-10-19T00:31:59.2212213Z src/completion_event_adapter.py          297     53  82.2%
+2026-10-19T00:31:59.2212567Z src/consumer_sync_artifact_ingest.py     867    127  85.4%
+2026-10-19T00:31:59.2212927Z src/consumer_sync_shadow.py              355    103  71.0%
+2026-10-19T00:31:59.2213277Z src/coverage_testgen_trigger.py          147     13  91.2%
+2026-10-19T00:31:59.2213627Z src/credential_redaction.py              450     59  86.9%
+2026-10-19T00:31:59.2213966Z src/cross_repo_lane.py                   322     77  76.1%
+2026-10-19T00:31:59.2214301Z src/dispatcher.py                       2062     60  97.1%
+2026-10-19T00:31:59.2214635Z src/dry_seam_audit.py                    240     23  90.4%
+2026-10-19T00:31:59.2214977Z src/durability_sweep.py                 1118     91  91.9%
+2026-10-19T00:31:59.2215311Z src/env_prereq.py                        402     43  89.3%
+2026-10-19T00:31:59.2215647Z src/epic_lane.py                         304     67  78.0%
+2026-10-19T00:31:59.2216075Z src/escaped_defect_priority.py           288      9  96.9%
+2026-10-19T00:31:59.2216720Z src/evidence_acquisition.py              127     12  90.6%
+2026-10-19T00:31:59.2217069Z src/evidence_schema.py                   277     35  87.4%
+2026-10-19T00:31:59.2217413Z src/exact_head_merge_gate.py             180     23  87.2%
+2026-10-19T00:31:59.2217756Z src/execution_profiles.py                255     19  92.5%
+2026-10-19T00:31:59.2218089Z src/exp_abcd.py                         1688    276  83.6%
+2026-10-19T00:31:59.2218423Z src/experiment_producer.py               558     49  91.2%
+2026-10-19T00:31:59.2218767Z src/experiment_recovery.py               202     40  80.2%
+2026-10-19T00:31:59.2219256Z src/exploration_backfill.py              383     92  76.0%
+2026-10-19T00:31:59.2219613Z src/exploration_collection.py            331     62  81.3%
+2026-10-19T00:31:59.2219963Z src/exploration_evidence_plan.py         249     25  90.0%
+2026-10-19T00:31:59.2220308Z src/exploration_offline.py                85     11  87.1%
+2026-10-19T00:31:59.2220652Z src/exploration_review.py                282     21  92.6%
+2026-10-19T00:31:59.2220992Z src/feature_goals.py                     384     23  94.0%
+2026-10-19T00:31:59.2221328Z src/feature_scan.py                      134     13  90.3%
+2026-10-19T00:31:59.2221662Z src/features.py                          176     70  60.2%
+2026-10-19T00:31:59.2221989Z src/feedback.py                         2825    226  92.0%
+2026-10-19T00:31:59.2222325Z src/fleet_shapes.py                      453     46  89.8%
+2026-10-19T00:31:59.2222660Z src/frontend_verify.py                   255     52  79.6%
+2026-10-19T00:31:59.2223110Z src/gh_capacity.py                       627     53  91.5%
+2026-10-19T00:31:59.2223473Z src/human_calibration.py                 323     60  81.4%
+2026-10-19T00:31:59.2223823Z src/improvement_log.py                   248    144  41.9%
+2026-10-19T00:31:59.2224163Z src/issue_quality.py                     343     66  80.8%
+2026-10-19T00:31:59.2224501Z src/issue_readiness.py                   550     95  82.7%
+2026-10-19T00:31:59.2224837Z src/issue_size_quality.py                186     25  86.6%
+2026-10-19T00:31:59.2225181Z src/judge_reliability.py                 186     18  90.3%
+2026-10-19T00:31:59.2225525Z src/keepalive_evidence.py                378     87  77.0%
+2026-10-19T00:31:59.2225988Z src/keepalive_outcomes.py                978    116  88.1%
+2026-10-19T00:31:59.2226718Z src/keepalive_shadow.py                  336     41  87.8%
+2026-10-19T00:31:59.2227082Z src/keepalive_supervisor.py              659     64  90.3%
+2026-10-19T00:31:59.2227426Z src/langsmith_direct.py                  285    112  60.7%
+2026-10-19T00:31:59.2227766Z src/langsmith_fetch.py                   475     79  83.4%
+2026-10-19T00:31:59.2228110Z src/langsmith_pull.py                    366     58  84.2%
+2026-10-19T00:31:59.2228452Z src/ledger_reconcile.py                  632     85  86.6%
+2026-10-19T00:31:59.2228795Z src/local_verify.py                      441     37  91.6%
+2026-10-19T00:31:59.2229125Z src/mcp_server.py                        216     61  71.8%
+2026-10-19T00:31:59.2229453Z src/merge_guard.py                       399     30  92.5%
+2026-10-19T00:31:59.2229787Z src/mirror_reader.py                     127     31  75.6%
+2026-10-19T00:31:59.2230131Z src/model_profile_trial.py               536     85  84.1%
+2026-10-19T00:31:59.2230475Z src/model_profile_trial_bridge.py        654    194  70.3%
+2026-10-19T00:31:59.2230819Z src/objective_anchor.py                  269     92  65.8%
+2026-10-19T00:31:59.2231166Z src/observability_dashboard.py           698     61  91.3%
+2026-10-19T00:31:59.2231506Z src/outcomes.py                         1392     76  94.5%
+2026-10-19T00:31:59.2231837Z src/pacing.py                            160      1  99.4%
+2026-10-19T00:31:59.2232166Z src/pacing_usage.py                      683     51  92.5%
+2026-10-19T00:31:59.2232509Z src/partitioned_review.py                792    165  79.2%
+2026-10-19T00:31:59.2232841Z src/paths.py                              56      7  87.5%
+2026-10-19T00:31:59.2233171Z src/pattern_miner.py                     498     34  93.2%
+2026-10-19T00:31:59.2233507Z src/periodic_report.py                  1075     99  90.8%
+2026-10-19T00:31:59.2233844Z src/provision.py                         347     54  84.4%
+2026-10-19T00:31:59.2234188Z src/pushed_branches.py                   211     31  85.3%
+2026-10-19T00:31:59.2234533Z src/rail_exercise.py                     259     20  92.3%
+2026-10-19T00:31:59.2234870Z src/range_lane_rollout.py                267    118  55.8%
+2026-10-19T00:31:59.2235210Z src/rate_incidents.py                    397     72  81.9%
+2026-10-19T00:31:59.2235549Z src/redirect_apply.py                    711     36  94.9%
+2026-10-19T00:31:59.2236080Z src/redirect_plan.py                     385     70  81.8%
+2026-10-19T00:31:59.2236764Z src/redirect_policy.py                    96      7  92.7%
+2026-10-19T00:31:59.2237128Z src/redirect_shadow.py                   593    143  75.9%
+2026-10-19T00:31:59.2237511Z src/redirect_sweep.py                    437     88  79.9%
+2026-10-19T00:31:59.2237879Z src/relearn_report.py                    260     67  74.2%
+2026-10-19T00:31:59.2238254Z src/repo_knowledge.py                   1335    238  82.2%
+2026-10-19T00:31:59.2238601Z src/research_scheduler.py                508     66  87.0%
+2026-10-19T00:31:59.2238982Z src/research_subjects.py                 677     86  87.3%
+2026-10-19T00:31:59.2239328Z src/research_usage_guard.py              406     49  87.9%
+2026-10-19T00:31:59.2239692Z src/review_loop.py                       318     81  74.5%
+2026-10-19T00:31:59.2240037Z src/review_writer_gate.py                117     16  86.3%
+2026-10-19T00:31:59.2240379Z src/roles.py                            1793    378  78.9%
+2026-10-19T00:31:59.2240745Z src/route_weights_export.py              454     19  95.8%
+2026-10-19T00:31:59.2241106Z src/router.py                            680     54  92.1%
+2026-10-19T00:31:59.2241467Z src/runner_effect_bridge.py               73     15  79.5%
+2026-10-19T00:31:59.2241808Z src/runtime_ac.py                        953    186  80.5%
+2026-10-19T00:31:59.2242145Z src/runtime_ac_flow_monitor.py           246     51  79.3%
+2026-10-19T00:31:59.2242505Z src/runtime_ac_gate.py                   722     86  88.1%
+2026-10-19T00:31:59.2242978Z src/runtime_ac_panel.py                  338     71  79.0%
+2026-10-19T00:31:59.2243345Z src/spec_provenance.py                    13      2  84.6%
+2026-10-19T00:31:59.2243688Z src/strategy_experiment.py               572    116  79.7%
+2026-10-19T00:31:59.2244074Z src/switch_review.py                    1504    143  90.5%
+2026-10-19T00:31:59.2244424Z src/synthesis_promotion.py               984    168  82.9%
+2026-10-19T00:31:59.2244768Z src/testgen_gate.py                      395     98  75.2%
+2026-10-19T00:31:59.2245124Z src/testgen_lane.py                      181     18  90.1%
+2026-10-19T00:31:59.2245448Z src/tick.py                              583     30  94.9%
+2026-10-19T00:31:59.2245775Z src/tick_watchdog.py                     549     82  85.1%
+2026-10-19T00:31:59.2246134Z src/triage_shadow.py                     319     29  90.9%
+2026-10-19T00:31:59.2246603Z src/utc_epoch.py                         116      9  92.2%
+2026-10-19T00:31:59.2246946Z src/ux_review.py                         682    106  84.5%
+2026-10-19T00:31:59.2247284Z src/value_chain_monitor.py               352     18  94.9%
+2026-10-19T00:31:59.2247631Z src/verifier_evidence.py                  90     15  83.3%
+2026-10-19T00:31:59.2247961Z src/watch.py                             486     62  87.2%
+2026-10-19T00:31:59.2248286Z src/worktree_git.py                      148      7  95.3%
+2026-10-19T00:31:59.2248608Z ----------------------------------------------------------
+2026-10-19T00:31:59.2248924Z TOTAL                                  74319  10014  86.5%
+2026-10-19T00:31:59.2249319Z coverage json: /home/runner/work/Orchestrator/Orchestrator/coverage.json
+2026-10-19T00:31:59.2299821Z ##[group]Run # tools/coverage_trend.py is synced from Workflows and is the SAME producer every other
+2026-10-19T00:31:59.2300558Z [36;1m# tools/coverage_trend.py is synced from Workflows and is the SAME producer every other[0m
+2026-10-19T00:31:59.2301162Z [36;1m# repo in the fleet uses, so this repo's number is comparable rather than bespoke.[0m
+2026-10-19T00:31:59.2301744Z [36;1m# --soft: this job measures, it does not gate. The guard decides what a drop means.[0m
+2026-10-19T00:31:59.2302179Z [36;1mif [ -f coverage.json ]; then[0m
+2026-10-19T00:31:59.2302476Z [36;1m  python3 tools/coverage_trend.py \[0m
+2026-10-19T00:31:59.2302789Z [36;1m    --coverage-json coverage.json \[0m
+2026-10-19T00:31:59.2303118Z [36;1m    --baseline config/coverage-baseline.json \[0m
+2026-10-19T00:31:59.2303461Z [36;1m    --project-root "${GITHUB_WORKSPACE}" \[0m
+2026-10-19T00:31:59.2303796Z [36;1m    --artifact-path coverage-trend.json \[0m
+2026-10-19T00:31:59.2304151Z [36;1m    --job-summary "$GITHUB_STEP_SUMMARY" \[0m
+2026-10-19T00:31:59.2304448Z [36;1m    --minimum 75 \[0m
+2026-10-19T00:31:59.2304682Z [36;1m    --soft[0m
+2026-10-19T00:31:59.2304881Z [36;1melse[0m
+2026-10-19T00:31:59.2305248Z [36;1m  # NAMED, never silent. An absent payload that publishes nothing is correct; an absent[0m
+2026-10-19T00:31:59.2305827Z [36;1m  # payload that publishes an EMPTY artifact would be read by the guard as a real[0m
+2026-10-19T00:31:59.2306702Z [36;1m  # measurement, which is the failure this repo keeps finding in other people's gates.[0m
+2026-10-19T00:31:59.2307611Z [36;1m  echo "::warning::verify.py --coverage wrote no coverage.json — publishing no coverage artifacts, which the guard reports as a missing measurement rather than a low one."[0m
+2026-10-19T00:31:59.2308326Z [36;1mfi[0m
+2026-10-19T00:31:59.2369808Z shell: /usr/bin/bash -e {0}
+2026-10-19T00:31:59.2370059Z env:
+2026-10-19T00:31:59.2370326Z   pythonLocation: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:31:59.2370772Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.14.8/x64/lib/pkgconfig
+2026-10-19T00:31:59.2371198Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:31:59.2371580Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:31:59.2371968Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:31:59.2372352Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.14.8/x64/lib
+2026-10-19T00:31:59.2372808Z ##[endgroup]
+2026-10-19T00:31:59.3391717Z Coverage: 86.53% (baseline: 80.00%, delta: +6.53%)
+2026-10-19T00:31:59.3392467Z Hotspots: 15 files with lowest coverage
+2026-10-19T00:31:59.4241641Z ##[group]Run actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+2026-10-19T00:31:59.4242378Z with:
+2026-10-19T00:31:59.4242733Z   name: gate-coverage
+2026-10-19T00:31:59.4243133Z   path: coverage.json
+2026-10-19T00:31:59.4243541Z   if-no-files-found: error
+2026-10-19T00:31:59.4243964Z   compression-level: 6
+2026-10-19T00:31:59.4244349Z   overwrite: false
+2026-10-19T00:31:59.4244714Z   include-hidden-files: false
+2026-10-19T00:31:59.4245131Z   archive: true
+2026-10-19T00:31:59.4245460Z env:
+2026-10-19T00:31:59.4245885Z   pythonLocation: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:31:59.4246910Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.14.8/x64/lib/pkgconfig
+2026-10-19T00:31:59.4247672Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:31:59.4248381Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:31:59.4249049Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:31:59.4249773Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.14.8/x64/lib
+2026-10-19T00:31:59.4250341Z ##[endgroup]
+2026-10-19T00:31:59.5681932Z With the provided path, there will be 1 file uploaded
+2026-10-19T00:31:59.5687249Z Artifact name is valid!
+2026-10-19T00:31:59.5687857Z Root directory input is valid!
+2026-10-19T00:31:59.7620871Z Uploading artifact: gate-coverage.zip
+2026-10-19T00:31:59.7664129Z Beginning upload of artifact content to blob storage
+2026-10-19T00:31:59.8886535Z Uploaded bytes 340963
+2026-10-19T00:31:59.9085023Z Finished uploading artifact content to blob storage!
+2026-10-19T00:31:59.9086098Z SHA256 digest of uploaded artifact is 72c32017a2259a6402ec6a9673501ccb7fa4419155ad256b60cdf26814795e3d
+2026-10-19T00:31:59.9087259Z Finalizing artifact upload
+2026-10-19T00:32:00.1327349Z Artifact gate-coverage successfully finalized. Artifact ID 12156286098
+2026-10-19T00:32:00.1328769Z Artifact gate-coverage has been successfully uploaded! Final size is 340963 bytes. Artifact ID is 12156286098
+2026-10-19T00:32:00.1332971Z Artifact download URL: https://github.com/stranske/Orchestrator/actions/runs/39180639406/artifacts/12156286098
+2026-10-19T00:32:00.2047787Z ##[group]Run actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+2026-10-19T00:32:00.2048227Z with:
+2026-10-19T00:32:00.2048629Z   name: gate-coverage-trend
+2026-10-19T00:32:00.2048904Z   path: coverage-trend.json
+2026-10-19T00:32:00.2049375Z   if-no-files-found: error
+2026-10-19T00:32:00.2049786Z   compression-level: 6
+2026-10-19T00:32:00.2050139Z   overwrite: false
+2026-10-19T00:32:00.2050367Z   include-hidden-files: false
+2026-10-19T00:32:00.2050610Z   archive: true
+2026-10-19T00:32:00.2050803Z env:
+2026-10-19T00:32:00.2051063Z   pythonLocation: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:32:00.2051510Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.14.8/x64/lib/pkgconfig
+2026-10-19T00:32:00.2051933Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:32:00.2052311Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:32:00.2052715Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:32:00.2053159Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.14.8/x64/lib
+2026-10-19T00:32:00.2053488Z ##[endgroup]
+2026-10-19T00:32:00.3466621Z With the provided path, there will be 1 file uploaded
+2026-10-19T00:32:00.3472404Z Artifact name is valid!
+2026-10-19T00:32:00.3472889Z Root directory input is valid!
+2026-10-19T00:32:00.5457988Z Uploading artifact: gate-coverage-trend.zip
+2026-10-19T00:32:00.5517571Z Beginning upload of artifact content to blob storage
+2026-10-19T00:32:00.6078308Z Uploaded bytes 831
+2026-10-19T00:32:00.6217732Z Finished uploading artifact content to blob storage!
+2026-10-19T00:32:00.6219304Z SHA256 digest of uploaded artifact is 83bf22b98411713c6a2ba683fc6ed5314437de10d94694ac8b6fb2bbd26cb863
+2026-10-19T00:32:00.6220867Z Finalizing artifact upload
+2026-10-19T00:32:00.8328150Z Artifact gate-coverage-trend successfully finalized. Artifact ID 12155738459
+2026-10-19T00:32:00.8329700Z Artifact gate-coverage-trend has been successfully uploaded! Final size is 831 bytes. Artifact ID is 12155738459
+2026-10-19T00:32:00.8332507Z Artifact download URL: https://github.com/stranske/Orchestrator/actions/runs/39180639406/artifacts/12155738459
+2026-10-19T00:32:00.8460952Z ##[group]Run {
+2026-10-19T00:32:00.8461240Z [36;1m{[0m
+2026-10-19T00:32:00.8461529Z [36;1m  echo "## Combined coverage — pytest AND selftests"[0m
+2026-10-19T00:32:00.8461869Z [36;1m  echo[0m
+2026-10-19T00:32:00.8462167Z [36;1m  if grep -q "^coverage:" /tmp/combined.txt 2>/dev/null; then[0m
+2026-10-19T00:32:00.8462619Z [36;1m    grep -E '^(coverage:|TOTAL[[:space:]])' /tmp/combined.txt[0m
+2026-10-19T00:32:00.8462959Z [36;1m  else[0m
+2026-10-19T00:32:00.8463350Z [36;1m    echo "NOT MEASURED — verify.py --coverage produced no coverage block."[0m
+2026-10-19T00:32:00.8463900Z [36;1m    echo "Treat that as a missing measurement, not as a low one."[0m
+2026-10-19T00:32:00.8464258Z [36;1m  fi[0m
+2026-10-19T00:32:00.8464466Z [36;1m  echo[0m
+2026-10-19T00:32:00.8464841Z [36;1m  echo "The Gate's own coverage number is pytest-only and reads far lower, because 79 of"[0m
+2026-10-19T00:32:00.8465476Z [36;1m  echo "102 modules are exercised by a \`--selftest\` subprocess that pytest-cov cannot"[0m
+2026-10-19T00:32:00.8466050Z [36;1m  echo "see. The figure above is the one comparable to the rest of the fleet."[0m
+2026-10-19T00:32:00.8466769Z [36;1m  echo[0m
+2026-10-19T00:32:00.8467237Z [36;1m  echo "ENFORCED as of 2026-08-30. Maint Coverage Guard reads this job, because"[0m
+2026-10-19T00:32:00.8467826Z [36;1m  echo "\`config/coverage-baseline.json\` names it in \`source_workflows\` (Workflows"[0m
+2026-10-19T00:32:00.8468392Z [36;1m  echo "#3270) and this job publishes the \`gate-coverage\` payload and"[0m
+2026-10-19T00:32:00.8468950Z [36;1m  echo "\`gate-coverage-trend\` record the guard requires. A drop past the baseline"[0m
+2026-10-19T00:32:00.8469447Z [36;1m  echo "opens an issue; it does not block a merge."[0m
+2026-10-19T00:32:00.8469798Z [36;1m} >> "$GITHUB_STEP_SUMMARY"[0m
+2026-10-19T00:32:00.8530348Z shell: /usr/bin/bash -e {0}
+2026-10-19T00:32:00.8530613Z env:
+2026-10-19T00:32:00.8530887Z   pythonLocation: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:32:00.8531343Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.14.8/x64/lib/pkgconfig
+2026-10-19T00:32:00.8531789Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:32:00.8532171Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:32:00.8532570Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:32:00.8532959Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.14.8/x64/lib
+2026-10-19T00:32:00.8533287Z ##[endgroup]
+2026-10-19T00:32:00.8697577Z ##[group]Run actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+2026-10-19T00:32:00.8698028Z with:
+2026-10-19T00:32:00.8698244Z   name: combined-coverage
+2026-10-19T00:32:00.8698509Z   path: .coverage
+/tmp/combined.txt
+
+2026-10-19T00:32:00.8698801Z   if-no-files-found: warn
+2026-10-19T00:32:00.8699039Z   retention-days: 7
+2026-10-19T00:32:00.8699261Z   compression-level: 6
+2026-10-19T00:32:00.8699493Z   overwrite: false
+2026-10-19T00:32:00.8699719Z   include-hidden-files: false
+2026-10-19T00:32:00.8699972Z   archive: true
+2026-10-19T00:32:00.8700175Z env:
+2026-10-19T00:32:00.8700434Z   pythonLocation: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:32:00.8700873Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.14.8/x64/lib/pkgconfig
+2026-10-19T00:32:00.8701300Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:32:00.8701685Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:32:00.8702113Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.14.8/x64
+2026-10-19T00:32:00.8702681Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.14.8/x64/lib
+2026-10-19T00:32:00.8703012Z ##[endgroup]
+2026-10-19T00:32:01.0116057Z Multiple search paths detected. Calculating the least common ancestor of all paths
+2026-10-19T00:32:01.0118459Z The least common ancestor is /. This will be the root directory of the artifact
+2026-10-19T00:32:01.0119281Z With the provided path, there will be 1 file uploaded
+2026-10-19T00:32:01.0123255Z Artifact name is valid!
+2026-10-19T00:32:01.0123802Z Root directory input is valid!
+2026-10-19T00:32:01.2070583Z Uploading artifact: combined-coverage.zip
+2026-10-19T00:32:01.2113394Z Beginning upload of artifact content to blob storage
+2026-10-19T00:32:01.2662700Z Uploaded bytes 5079
+2026-10-19T00:32:01.2783617Z Finished uploading artifact content to blob storage!
+2026-10-19T00:32:01.2784908Z SHA256 digest of uploaded artifact is 9e4578557fa121a38ce401ad9813490a754398a8f8d5c06c0a5842587bd30bc4
+2026-10-19T00:32:01.2786096Z Finalizing artifact upload
+2026-10-19T00:32:01.5261700Z Artifact combined-coverage successfully finalized. Artifact ID 12156685095
+2026-10-19T00:32:01.5262903Z Artifact combined-coverage has been successfully uploaded! Final size is 5079 bytes. Artifact ID is 12156685095
+2026-10-19T00:32:01.5266376Z Artifact download URL: https://github.com/stranske/Orchestrator/actions/runs/39180639406/artifacts/12156685095
+2026-10-19T00:32:01.5444956Z Post job cleanup.
+2026-10-19T00:32:01.6726963Z Post job cleanup.
+2026-10-19T00:32:01.7623050Z [command]/usr/bin/git version
+2026-10-19T00:32:01.7663316Z git version 2.55.0
+2026-10-19T00:32:01.7699144Z Temporarily overriding HOME='/home/runner/work/_temp/a2dbb411-d6f7-4ed8-9b44-aca7f8a4243a' before making global git config changes
+2026-10-19T00:32:01.7700122Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-19T00:32:01.7705795Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/Orchestrator/Orchestrator
+2026-10-19T00:32:01.7741639Z Removing SSH command configuration
+2026-10-19T00:32:01.7749101Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-19T00:32:01.7785096Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-19T00:32:01.8022822Z Removing HTTP extra header
+2026-10-19T00:32:01.8028965Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-19T00:32:01.8066171Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-19T00:32:01.8294275Z Removing includeIf entries pointing to credentials config files
+2026-10-19T00:32:01.8301847Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-19T00:32:01.8337221Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-19T00:32:01.8751451Z Cleaning up orphan processes

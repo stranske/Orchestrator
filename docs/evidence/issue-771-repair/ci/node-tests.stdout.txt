@@ -1,0 +1,17 @@
+✔ recovered CI and Gate logs expose passing results and the actual merge checkout (5.675325ms)
+✔ successful check metadata cannot replace measured pytest output (4.376699ms)
+✔ raw log corruption fails the retained digest (3.043829ms)
+✔ a different run head is rejected even if the metadata is rehashed (2.107687ms)
+✔ a successful unrelated job cannot stand in for the original pytest job (3.038111ms)
+✔ failed pytest counts cannot be hidden behind successful job metadata (2.657677ms)
+✔ a failing pytest step is rejected independently of the job conclusion (3.106583ms)
+✔ a merge checkout cannot be relabeled as exact-head execution (1.96327ms)
+✔ the first consumer checkout remains distinct from a later helper checkout (2.081828ms)
+ℹ tests 9
+ℹ suites 0
+ℹ pass 9
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 33.715358

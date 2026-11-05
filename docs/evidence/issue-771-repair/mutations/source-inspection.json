@@ -1,0 +1,39 @@
+{
+  "retrieval_date": "2026-11-05",
+  "commit": "18ad97a054dab7f6039dd42c8131bee04267748b",
+  "source": "tests/test_feedback_registry_queries.py",
+  "source_transport": "github.fetch_file (success)",
+  "git_blob_sha": "e4f448e592e65b9625f393c783d6fae447e0b924",
+  "source_sha256": "03870b1de017f820b554a969cc7a1d1f45848e701497921f13a230b49de8ba76",
+  "original_test_ids": [
+    "test_run_queries_keep_pending_and_mode_scopes_distinct",
+    "test_snapshot_json_exports_initialized_tables_to_the_requested_path",
+    "test_evidence_registry_normalizes_citations_and_retires_unused_rows",
+    "test_evidence_proposals_and_approval_require_recurrence_then_reactivate",
+    "test_role_selector_metrics_preserve_no_match_and_rejection_signals"
+  ],
+  "local_probes": [
+    {
+      "command": [
+        "git",
+        "show",
+        "18ad97a054dab7f6039dd42c8131bee04267748b:tests/test_feedback_registry_queries.py"
+      ],
+      "exit_code": 128,
+      "stdout": "probe-0.stdout.txt",
+      "stderr": "probe-0.stderr.txt"
+    },
+    {
+      "command": [
+        "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3",
+        "-m",
+        "pytest",
+        "--version"
+      ],
+      "exit_code": 1,
+      "stdout": "probe-1.stdout.txt",
+      "stderr": "probe-1.stderr.txt"
+    }
+  ],
+  "status": "INCOMPLETE: source inspection only; no new mutation failure/restoration runs. Local historical head object and pytest are absent; installing pytest from PyPI failed because DNS is unavailable."
+}

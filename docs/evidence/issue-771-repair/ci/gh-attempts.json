@@ -1,0 +1,68 @@
+[
+  {
+    "command": [
+      "gh",
+      "run",
+      "view",
+      "39180639406",
+      "--repo",
+      "stranske/Orchestrator",
+      "--json",
+      "headSha,conclusion,jobs"
+    ],
+    "retrieved_at": "2026-11-05T05:26:07.119907+00:00",
+    "exit_code": 1,
+    "stdout": "gh-39180639406-metadata.stdout.txt",
+    "stderr": "gh-39180639406-metadata.stderr.txt"
+  },
+  {
+    "command": [
+      "gh",
+      "run",
+      "view",
+      "39180639406",
+      "--repo",
+      "stranske/Orchestrator",
+      "--job",
+      "117832439061",
+      "--log"
+    ],
+    "retrieved_at": "2026-11-05T05:26:07.152728+00:00",
+    "exit_code": 1,
+    "stdout": "gh-39180639406-log.stdout.txt",
+    "stderr": "gh-39180639406-log.stderr.txt"
+  },
+  {
+    "command": [
+      "gh",
+      "run",
+      "view",
+      "39180639803",
+      "--repo",
+      "stranske/Orchestrator",
+      "--json",
+      "headSha,conclusion,jobs"
+    ],
+    "retrieved_at": "2026-11-05T05:26:07.191445+00:00",
+    "exit_code": 1,
+    "stdout": "gh-39180639803-metadata.stdout.txt",
+    "stderr": "gh-39180639803-metadata.stderr.txt"
+  },
+  {
+    "command": [
+      "gh",
+      "run",
+      "view",
+      "39180639803",
+      "--repo",
+      "stranske/Orchestrator",
+      "--job",
+      "117832552676",
+      "--log"
+    ],
+    "retrieved_at": "2026-11-05T05:26:07.223336+00:00",
+    "exit_code": 1,
+    "stdout": "gh-39180639803-log.stdout.txt",
+    "stderr": "gh-39180639803-log.stderr.txt"
+  }
+]

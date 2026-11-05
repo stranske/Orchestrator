@@ -1,0 +1,98 @@
+{
+  "repository": "stranske/Orchestrator",
+  "original_head": "18ad97a054dab7f6039dd42c8131bee04267748b",
+  "retrieval_date": "2026-11-05",
+  "records": [
+    {
+      "run_id": 39180639406,
+      "job_id": 117832439061,
+      "checkout_sha": "12c5c58517863f747972538c9bb17c568bc0bf49",
+      "retrieval_date": "2026-11-05",
+      "transport": "Connected GitHub service (shell gh attempts failed; see gh-attempts.json)",
+      "requests": [
+        {
+          "tool": "github.fetch",
+          "arguments": {
+            "url": "https://api.github.com/repos/stranske/Orchestrator/actions/runs/39180639406"
+          },
+          "result": "success",
+          "saved_as": "run-39180639406.json"
+        },
+        {
+          "tool": "github.fetch_workflow_run_jobs",
+          "arguments": {
+            "repo_full_name": "stranske/Orchestrator",
+            "run_id": 39180639406
+          },
+          "result": "success",
+          "saved_as": "jobs-39180639406.json"
+        },
+        {
+          "tool": "github.fetch_workflow_job_logs",
+          "arguments": {
+            "repo_full_name": "stranske/Orchestrator",
+            "job_id": 117832439061
+          },
+          "result": "success",
+          "saved_as": "job-117832439061.log"
+        }
+      ],
+      "numeric_ci_process_exit": "Not exposed by the API; job and pytest step conclusion are success",
+      "log_encoding": "Decoded UTF-8 job log returned by GitHub connector; LF with final newline, ANSI and BOM retained"
+    },
+    {
+      "run_id": 39180639803,
+      "job_id": 117832552676,
+      "checkout_sha": "12c5c58517863f747972538c9bb17c568bc0bf49",
+      "retrieval_date": "2026-11-05",
+      "transport": "Connected GitHub service (shell gh attempts failed; see gh-attempts.json)",
+      "requests": [
+        {
+          "tool": "github.fetch",
+          "arguments": {
+            "url": "https://api.github.com/repos/stranske/Orchestrator/actions/runs/39180639803"
+          },
+          "result": "success",
+          "saved_as": "run-39180639803.json"
+        },
+        {
+          "tool": "github.fetch_workflow_run_jobs",
+          "arguments": {
+            "repo_full_name": "stranske/Orchestrator",
+            "run_id": 39180639803
+          },
+          "result": "success",
+          "saved_as": "jobs-39180639803.json"
+        },
+        {
+          "tool": "github.fetch_workflow_job_logs",
+          "arguments": {
+            "repo_full_name": "stranske/Orchestrator",
+            "job_id": 117832552676
+          },
+          "result": "success",
+          "saved_as": "job-117832552676.log"
+        }
+      ],
+      "numeric_ci_process_exit": "Not exposed by the API; job and pytest step conclusion are success",
+      "log_encoding": "Decoded UTF-8 job log returned by GitHub connector; LF with final newline, ANSI and BOM retained"
+    }
+  ],
+  "files": {
+    "gh-39180639406-log.stderr.txt": "eed65211f0fcee1b82c2661764250c1adaebcb36f0cb78a702d59632f056c439",
+    "gh-39180639406-log.stdout.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "gh-39180639406-metadata.stderr.txt": "eed65211f0fcee1b82c2661764250c1adaebcb36f0cb78a702d59632f056c439",
+    "gh-39180639406-metadata.stdout.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "gh-39180639803-log.stderr.txt": "eed65211f0fcee1b82c2661764250c1adaebcb36f0cb78a702d59632f056c439",
+    "gh-39180639803-log.stdout.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "gh-39180639803-metadata.stderr.txt": "eed65211f0fcee1b82c2661764250c1adaebcb36f0cb78a702d59632f056c439",
+    "gh-39180639803-metadata.stdout.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "gh-attempts.json": "d610667a882129271807fc5876c13b1aa195c0ef9abc0ade3d44269cf22f0f4c",
+    "job-117832439061.log": "be001813d55cf7f256c66aa85502e4ccfe099f8a70afe79a9fe630740d82f19e",
+    "job-117832552676.log": "7a3a32c9df28baf4dd2edecb7fd34f04c95a528df414f536c6864186738dcb7d",
+    "jobs-39180639406.json": "d0a297e55c89eabaf574f50f3b87765bdfa58fd6d13b3089babc9b02bee749c3",
+    "jobs-39180639803.json": "fa07f0419fa40db113b06fb8ad1f22db69b809eee47ae9947e7e852d21dc884b",
+    "run-39180639406.json": "7e44f40dd3198f58ae92181c04d9ec2b06f3823fd977947764a4dfdb68b68ad8",
+    "run-39180639803.json": "21c9d22942c7c2338f88ebba2cb9c03bd10a29523aca837d743e2e87ff9e4646"
+  }
+}

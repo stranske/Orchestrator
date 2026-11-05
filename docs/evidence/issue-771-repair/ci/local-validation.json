@@ -1,0 +1,51 @@
+{
+  "records": [
+    {
+      "command": [
+        "node",
+        "tests/test_issue_771_ci_evidence.js"
+      ],
+      "retrieved_at": "2026-11-05T05:32:34.905226+00:00",
+      "exit_code": 0,
+      "stdout": "node-tests.stdout.txt",
+      "stderr": "node-tests.stderr.txt"
+    },
+    {
+      "command": [
+        "node",
+        "scripts/verify_issue_771_ci.js"
+      ],
+      "retrieved_at": "2026-11-05T05:32:34.940505+00:00",
+      "exit_code": 0,
+      "stdout": "offline-verifier.stdout.txt",
+      "stderr": "offline-verifier.stderr.txt"
+    },
+    {
+      "command": [
+        "node",
+        "tests/test_capture_review_source_evidence.js"
+      ],
+      "retrieved_at": "2026-11-05T05:32:36.005283+00:00",
+      "exit_code": 0,
+      "stdout": "existing-evidence-tests.stdout.txt",
+      "stderr": "existing-evidence-tests.stderr.txt"
+    },
+    {
+      "command": [
+        "python3",
+        "-m",
+        "pytest",
+        "tests/test_feedback_registry_queries.py",
+        "--cov=src/feedback",
+        "--cov-report=term-missing",
+        "-m",
+        "not slow"
+      ],
+      "retrieved_at": "2026-11-05T05:32:36.019914+00:00",
+      "exit_code": 1,
+      "stdout": "targeted-coverage-attempt.stdout.txt",
+      "stderr": "targeted-coverage-attempt.stderr.txt"
+    }
+  ],
+  "coverage_note": "Coverage attempt failed before collection: local pytest is unavailable. It was attempted from the current checkout, not a historical reproduction or comparable population."
+}
