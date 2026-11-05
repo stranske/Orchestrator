@@ -193,6 +193,90 @@ with sqlite3.connect(sys.argv[1]) as connection:
     await grade(0, 'pass', 4);
   });
 
+test('hosted pass number reads committed WAL switches while the Brain writer stays open',
+  async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hosted-pass-live-brain-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const database = path.join(root, 'Brain #?.db');
+    const env = { ...process.env, PYTHONPATH: modules, PYTHONDONTWRITEBYTECODE: '1',
+      ORCH_STATE_DIR: path.join(root, 'state'), ORCH_FEEDBACK_DB: database };
+    const result = await run(process.env.PYTHON || 'python3', ['-c', `
+import json
+import sqlite3
+import subprocess
+import sys
+from pathlib import Path
+import route_weights_export as export
+
+database = Path(sys.argv[1])
+deploy = export.HOSTED_EXPLORATION_PASS_CHECK_TS - 14 * 86400
+export.record_hosted_exploration_deploy(
+    {"exploration": {"challengers": {"implement": "cursor"}}}, now=deploy)
+stamp_path = Path(export._default_state_dir()) / export.HOSTED_EXPLORATION_DEPLOY_FILE
+stamp_before = stamp_path.read_bytes()
+reader = """
+import json
+import route_weights_export as export
+print(json.dumps(export.hosted_exploration_pass_number(
+    now=export.HOSTED_EXPLORATION_PASS_CHECK_TS)))
+"""
+reports = []
+writer = sqlite3.connect(database)
+try:
+    assert writer.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+    writer.execute("PRAGMA wal_autocheckpoint=0")
+    writer.execute("CREATE TABLE agent_switches "
+                   "(switched_ts INTEGER, delegation_source TEXT)")
+    writer.executemany("INSERT INTO agent_switches VALUES (?, ?)", [
+        (deploy + offset, "route_weights_exploration") for offset in range(1, 4)
+    ])
+    writer.commit()
+    assert writer.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0] == 0
+    checkpointed = database.read_bytes()
+    wal_path = database.with_name(database.name + "-wal")
+
+    def grade(phase):
+        before = database.read_bytes(), wal_path.read_bytes()
+        child = subprocess.run([sys.executable, "-c", reader],
+                               check=True, capture_output=True, text=True, timeout=5)
+        report = json.loads(child.stdout)
+        assert before == (database.read_bytes(), wal_path.read_bytes()), phase
+        assert stamp_path.read_bytes() == stamp_before, phase
+        assert report["deploy_ts"] == deploy, report
+        reports.append([phase, report["status"], report["switches"]])
+
+    grade("checkpointed")
+    writer.execute("BEGIN IMMEDIATE")
+    writer.execute("INSERT INTO agent_switches VALUES (?, ?)",
+                   (deploy + 4, "route_weights_exploration"))
+    grade("fourth switch uncommitted")
+    writer.rollback()
+    grade("fourth switch rolled back")
+    writer.execute("INSERT INTO agent_switches VALUES (?, ?)",
+                   (deploy + 4, "route_weights_exploration"))
+    writer.commit()
+    assert wal_path.stat().st_size > 0
+    assert database.read_bytes() == checkpointed, "fourth switch must exist only in WAL"
+    grade("fourth switch committed in WAL")
+    writer.execute("DELETE FROM agent_switches WHERE switched_ts=?", (deploy + 4,))
+    grade("fourth switch deletion uncommitted")
+    writer.commit()
+    grade("fourth switch deletion committed")
+finally:
+    writer.close()
+print(json.dumps(reports))
+`, database], { cwd: repo, env });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), [
+      ['checkpointed', 'fail', 3],
+      ['fourth switch uncommitted', 'fail', 3],
+      ['fourth switch rolled back', 'fail', 3],
+      ['fourth switch committed in WAL', 'pass', 4],
+      ['fourth switch deletion uncommitted', 'pass', 4],
+      ['fourth switch deletion committed', 'fail', 3],
+    ]);
+  });
+
 test('invalid deployment stamps cannot pass against an otherwise passing Brain; repair recovers',
   async (t) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hosted-pass-deploy-stamp-'));
