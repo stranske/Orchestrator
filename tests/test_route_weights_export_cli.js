@@ -841,6 +841,69 @@ raise SystemExit(export.main())
       assert.deepEqual(fs.readdirSync(home), []);
     });
   }
+
+  // Removing and later restoring the artifact must not erase the first
+  // publication or let a byte-identical restoration restart observation.
+  const originalReceiptModified = fs.statSync(receipt, { bigint: true }).mtimeNs;
+  await git(checkout, 'rm', 'config/route-weights.json');
+  await git(checkout, 'commit', '-m', 'remove publication fixture');
+  await git(checkout, 'push', 'origin', `HEAD:${branch}`);
+  const deletion = await git(remote, 'rev-parse', branch);
+  for (const stage of ['deleted', 'restored']) {
+    if (stage === 'restored') {
+      await git(checkout, 'restore', `--source=${provenance.published_commit}`,
+        '--', 'config/route-weights.json');
+      await git(checkout, 'add', 'config/route-weights.json');
+      await git(checkout, 'commit', '-m', 'restore original publication fixture');
+      await git(checkout, 'push', 'origin', `HEAD:${branch}`);
+      assert.equal(await git(checkout, 'rev-parse', 'HEAD:config/route-weights.json'),
+        await git(checkout, 'rev-parse', `${provenance.published_commit}:config/route-weights.json`));
+    }
+    const tip = await git(remote, 'rev-parse', branch);
+    assert.notEqual(tip, provenance.published_commit);
+    if (stage === 'restored') assert.notEqual(tip, deletion);
+    for (const hasReceipt of [false, true]) {
+      await t.test(`preserves first publication with artifact ${stage} and receipt ${hasReceipt}`, async () => {
+        const historyState = path.join(root, `history-${stage}-${hasReceipt}`);
+        const historyReceipt = path.join(historyState, path.basename(receipt));
+        fs.mkdirSync(historyState);
+        if (hasReceipt) fs.writeFileSync(historyReceipt, retained);
+        const savedModified = hasReceipt
+          ? fs.statSync(historyReceipt, { bigint: true }).mtimeNs : null;
+        const recordHistory = () => run(python, [
+          path.join(modules, 'route_weights_export.py'),
+          '--record-challenger-deployment', audit, '--state-dir', historyState,
+        ], { cwd: root, env });
+        try {
+          fs.writeFileSync(audit, JSON.stringify({ ...provenance, published_commit: tip }));
+          const refused = await recordHistory();
+          assert.equal(refused.status, 1, refused.stderr);
+          assert.equal(refused.stdout, '');
+          assert.match(refused.stderr, /not the first verified challenger-filter publication/);
+          assert.doesNotMatch(refused.stderr, /Traceback/);
+          assert.equal(fs.existsSync(historyReceipt), hasReceipt);
+          assert.equal(fs.existsSync(path.join(historyState, `.${path.basename(receipt)}.tmp`)), false);
+          if (hasReceipt) {
+            assert.deepEqual(fs.readFileSync(historyReceipt), retained);
+            assert.equal(fs.statSync(historyReceipt, { bigint: true }).mtimeNs, savedModified);
+          }
+          fs.writeFileSync(audit, JSON.stringify(provenance));
+          const recovered = await recordHistory();
+          assert.equal(recovered.status, 0, recovered.stderr);
+          assert.deepEqual(JSON.parse(recovered.stdout), recorded);
+          assert.deepEqual(fs.readFileSync(historyReceipt), retained);
+          if (hasReceipt) {
+            assert.equal(fs.statSync(historyReceipt, { bigint: true }).mtimeNs, savedModified);
+          }
+          assert.equal(await git(remote, 'rev-parse', branch), tip);
+          assert.deepEqual(fs.readFileSync(receipt), retained);
+          assert.equal(fs.statSync(receipt, { bigint: true }).mtimeNs, originalReceiptModified);
+        } finally {
+          fs.writeFileSync(audit, JSON.stringify(provenance));
+        }
+      });
+    }
+  }
   assert.equal(fs.existsSync(database), false);
   assert.deepEqual(fs.readdirSync(home), []);
 });

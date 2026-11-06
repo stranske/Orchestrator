@@ -510,3 +510,27 @@ the named pytest acceptance check remains unverified. This checkout's read-only
 `.git` rejected staging. The changes are retained in an isolated commit at
 `/tmp/orchestrator-1175-shallow-history-commit`, with a handoff patch at
 `/tmp/orchestrator-1175-shallow-history.patch`.
+## Artifact deletion and restoration regression (2026-11-06)
+
+Extended the real publication/recovery CLI test with four cases covering a
+deleted artifact and a byte-identical restoration, each with and without a
+retained receipt. Neither later commit may replace the first publication.
+Recording the original audit still recovers the original commit, deployment
+instant, and receipt bytes, preserves existing receipt modification times, and
+leaves the remote tip unchanged. All repositories, home, state, and database
+paths remain temporary. No Python or protected files changed.
+
+Verification: the publication CLI suite passed all 56 tests, the deployment
+unittest suite passed all 16 tests, and the report CLI suite passed all 5 tests.
+JavaScript syntax and diff whitespace checks passed.
+
+No production task is newly complete. The authentic deployment audit and
+production database are absent, and observation must wait until both 2026-11-08
+and fourteen days after verified deployment. The named Anaconda interpreter is
+absent and the available Python lacks pytest; that acceptance check remains
+unverified. Posting the blocker comment and adding `needs-human` to PR #1196
+were rejected with `MCP tool call requires approval, but approval policy is never`.
+
+The checkout's read-only Git index rejected staging. The tested changes are
+retained in `/tmp/orchestrator-1175-artifact-history-commit`, with a handoff patch
+at `/tmp/orchestrator-1175-artifact-history.patch`.
