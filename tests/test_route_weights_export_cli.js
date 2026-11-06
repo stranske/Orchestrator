@@ -38,6 +38,16 @@ const invalidProvenance = [
   ['array provenance', '[]', /provenance must be an object/],
   ['missing commit', { ...validProvenance, published_commit: undefined }, /full Git commit SHA/],
   ['abbreviated commit', { ...validProvenance, published_commit: 'a'.repeat(7) }, /full Git commit SHA/],
+  ...[
+    ['null commit', null],
+    ['numeric commit', 123],
+    ['array commit', ['a'.repeat(40)]],
+    ['object commit', { sha: 'a'.repeat(40) }],
+    ['non-hex SHA-1 commit', `${'a'.repeat(39)}g`],
+    ['non-hex SHA-256 commit', `${'a'.repeat(63)}g`],
+  ].map(([name, published_commit]) => [
+    name, { ...validProvenance, published_commit }, /full Git commit SHA/,
+  ]),
   ['missing deployment time', { ...validProvenance, deployed_at: undefined }, /deployed_at/],
   ['malformed deployment time', { ...validProvenance, deployed_at: 'yesterday' }, /deployed_at/],
   ['date without instant', { ...validProvenance, deployed_at: '2026-11-05' }, /deployed_at/],
@@ -57,6 +67,16 @@ const invalidProvenance = [
   ['future deployment', { ...validProvenance, deployed_at: '9999-01-01T00:00:00Z' }, /in the future/],
   ['missing audit evidence', { ...validProvenance, deployment_evidence: undefined }, /deployment_evidence/],
   ['blank audit evidence', { ...validProvenance, deployment_evidence: '  ' }, /deployment_evidence/],
+  // Truthy JSON containers and numbers cannot stand in for an audit reference.
+  ...[
+    ['null audit evidence', null],
+    ['boolean audit evidence', true],
+    ['numeric audit evidence', 123],
+    ['array audit evidence', [validProvenance.deployment_evidence]],
+    ['object audit evidence', { reference: validProvenance.deployment_evidence }],
+  ].map(([name, deployment_evidence]) => [
+    name, { ...validProvenance, deployment_evidence }, /deployment_evidence/,
+  ]),
 ];
 
 const invalidPublishedContracts = [

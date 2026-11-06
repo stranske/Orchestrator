@@ -639,3 +639,30 @@ rejected with `MCP tool call requires approval, but approval policy is never`.
 The checkout's read-only Git index rejected staging. The tested changes are
 retained in `/tmp/orchestrator-1175-generation-provenance-commit`, with a handoff
 patch at `/tmp/orchestrator-1175-generation-provenance.patch`.
+
+## Commit and audit-reference input regression (2026-11-06)
+
+Reviewed commits `17a54f2` through `7f27ce5`. No verified production deployment
+receipt was added; both publication checkboxes must remain unchecked. The optional
+hosted-pass helpers and reporting remain absent. PR-body reconciliation, the
+blocker comment, and `needs-human` label were rejected with `MCP tool call requires
+approval, but approval policy is never`. PR #1196 is open and ready for review.
+
+Added eleven CLI cases rejecting null, numeric, array, object, and non-hex commit
+identifiers, plus non-string audit references. Every case checks refusal before
+Git access, with and without a saved receipt, preserving its bytes and modification
+time and leaving temporary home directories and feedback databases unused. Six
+selected cases fail against a disposable copy with weakened SHA and audit-reference
+validation, confirming they detect those regressions. No Python or protected files
+changed.
+
+The production audit and database remain unavailable, as do pytest and the named
+Anaconda interpreter. Observation must wait until both 2026-11-08 and fourteen days
+after verified deployment. No additional production task is marked complete.
+
+Verification: 73 baseline and 84 updated publication CLI tests passed, along with
+16 deployment unittests and 5 report CLI tests. JavaScript syntax and diff whitespace
+checks passed. The read-only Git index prevents staging in the main checkout;
+the tested changes are retained in
+`/tmp/orchestrator-1175-provenance-types-commit-gh5zv203`, with a handoff patch at
+`/tmp/orchestrator-1175-provenance-types.patch`.
