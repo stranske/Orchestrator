@@ -162,7 +162,7 @@ def test_sandbox_switch_review_names_seven_days_and_unverified_windows(tmp_path)
     proc = subprocess.run(
         [
             sys.executable,
-            "src/switch_review.py",
+            str(Path(switch_review.__file__).resolve()),
             "--assess-sandbox-fallback",
             "--ledger",
             str(ledger),

@@ -63,3 +63,13 @@ that revision; their preservation is not a claim that they work.
 Blocking/drainable pair: successful current-head CI and review are required before
 merge / focused branch validation, scope reduction and runtime follow-up remain
 drainable while that merge gate is closed. No merge is performed by this salvage.
+
+## CI-found path correction
+
+Initial reduced head `ae29a9d4` failed the flat-mirror focused reporting test:
+it invoked `src/switch_review.py`, absent in the flat layout. The test now invokes
+`Path(switch_review.__file__).resolve()`. Focused verification after the correction:
+22 passed in 0.89s in the checkout and 22 passed in 0.96s in a temporary flat mirror.
+The mirror was built using `scripts/build_exec_mirror.sh` and the pending test-path
+fix overlaid before the focused run. Full outputs are in
+`assess-sandbox-salvage-focused-GREEN.txt`. This repairs only the printed CI failure.
