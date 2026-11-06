@@ -549,6 +549,58 @@ def _fleet_head_ref(record: Mapping[str, object], subject: str) -> str:
     return branch
 
 
+def _fleet_closing_issue_refs(gh, repo: str, number: int) -> set[str]:
+    """Read complete structured links, retaining only this repository's issues."""
+    owner, name = repo.split("/", 1)
+    query = (
+        "query($owner:String!,$name:String!,$number:Int!){"
+        "repository(owner:$owner,name:$name){pullRequest(number:$number){"
+        "closingIssuesReferences(first:100){nodes{number repository{nameWithOwner}}"
+        "pageInfo{hasNextPage}}}}}"
+    )
+    payload = _fleet_json(
+        gh,
+        [
+            "api",
+            "graphql",
+            "-f",
+            "query=" + query,
+            "-f",
+            "owner=" + owner,
+            "-f",
+            "name=" + name,
+            "-F",
+            f"number={number}",
+        ],
+    )
+    reason = f"would need complete GitHub closingIssuesReferences for {repo}#{number}"
+    try:
+        connection = payload["data"]["repository"]["pullRequest"]["closingIssuesReferences"]
+        nodes = connection["nodes"]
+        has_next = connection["pageInfo"]["hasNextPage"]
+    except (KeyError, TypeError) as exc:
+        raise _FleetReadError(reason) from exc
+    if not isinstance(nodes, list) or has_next is not False:
+        raise _FleetReadError(reason)
+    refs = set()
+    for node in nodes:
+        try:
+            issue_number = node["number"]
+            issue_repo = node["repository"]["nameWithOwner"]
+        except (KeyError, TypeError) as exc:
+            raise _FleetReadError(reason) from exc
+        if (
+            type(issue_number) is not int
+            or issue_number <= 0
+            or not isinstance(issue_repo, str)
+            or not re.fullmatch(r"[^/\s]+/[^/\s]+", issue_repo)
+        ):
+            raise _FleetReadError(reason)
+        if issue_repo.lower() == repo.lower():
+            refs.add(str(issue_number))
+    return refs
+
+
 def _fleet_pr_measures(gh, now: int, repos: list[str], *, flow: bool) -> dict:
     from backlog import _has_agent_label, _pr_issue_refs
 
@@ -577,16 +629,25 @@ def _fleet_pr_measures(gh, now: int, repos: list[str], *, flow: bool) -> dict:
             body = pr.get("body")
             if "body" not in pr or (body is not None and not isinstance(body, str)):
                 raise _FleetReadError("would need complete GitHub PR body")
-            # Latency requires a literal Closes reference. Flow uses backlog's existing
-            # source-issue rule, adapting REST head.ref to its GraphQL field name.
-            # Never join #N to a different repository.
+            # REST list rows omit structured links. Fetch through the shared report
+            # cache, validate repository identity, and union with existing text rules.
+            closing_refs = _fleet_closing_issue_refs(gh, repo, pr["number"])
+            # Flow also retains backlog's body/branch source rule; supply only the
+            # validated same-repo links because backlog accepts bare issue numbers.
             refs = (
                 {
                     str(n)
-                    for n in _pr_issue_refs(repo, {**pr, "headRefName": _fleet_head_ref(pr, "PR")})
+                    for n in _pr_issue_refs(
+                        repo,
+                        {
+                            **pr,
+                            "headRefName": _fleet_head_ref(pr, "PR"),
+                            "closingIssuesReferences": [{"number": int(n)} for n in closing_refs],
+                        },
+                    )
                 }
                 if flow
-                else set(re.findall(r"\bCloses\s+#([1-9]\d*)\b", body or "", re.I))
+                else closing_refs | set(re.findall(r"\bCloses\s+#([1-9]\d*)\b", body or "", re.I))
             )
             released = False
             for number in sorted(refs, key=int):
@@ -619,7 +680,10 @@ def _fleet_pr_measures(gh, now: int, repos: list[str], *, flow: bool) -> dict:
                 opened += recent_open
                 merged += recent_merge
     join = "backlog source-issue references" if flow else "Closes issue joins"
-    evidence = f"GitHub REST; backlog agent-label rule; same-repo {join}"
+    evidence = (
+        f"GitHub REST/GraphQL; backlog agent-label rule; "
+        f"same-repo closingIssuesReferences and {join}"
+    )
     if flow:
         return _fleet_measured(
             f"opened {opened / 2:g}/day, merged {merged / 2:g}/day "

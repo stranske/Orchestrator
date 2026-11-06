@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
+const { createHash } = require('node:crypto');
 
 const names = {
   gate_cancellations: 'Gate cancellation share (48 h, labeled versus synchronize)',
@@ -24,7 +25,8 @@ function validateReport(report, text, started, finished) {
     && delivery.as_of <= Math.ceil(finished / 1000), 'check timestamp is outside this live run');
   assert.deepEqual(Object.keys(delivery.rows).sort(), Object.keys(names).sort(),
     'must retain exactly the five fleet rows');
-  const sections = text.split('## Fleet delivery measures\n');
+  // Python's text-mode writer emits CRLF on Windows target machines.
+  const sections = text.replaceAll('\r\n', '\n').split('## Fleet delivery measures\n');
   assert.equal(sections.length, 2, 'must print the fleet section exactly once');
   const section = sections[1].split(/^## /m)[0];
   // Python's UTC isoformat uses +00:00 rather than JavaScript's Z.
@@ -68,19 +70,60 @@ function runCommand(python, args, options) {
   });
 }
 
+async function pythonRuntime(python, run = runCommand, options = {}) {
+  // A selected path may be a shim. Ask the same interpreter that runs the report
+  // for its actual identity, rather than treating the requested path as proof.
+  const probe = 'import json, platform, sys; print(json.dumps({'
+    + '"executable": sys.executable, "version": list(sys.version_info[:3]), '
+    + '"platform": sys.platform, "architecture": platform.machine()}))';
+  const stdout = await run(python, ['-c', probe], { ...options, timeout: 10000 });
+  let runtime;
+  try {
+    runtime = JSON.parse(stdout);
+  } catch {
+    throw new Error('Python runtime metadata is not JSON');
+  }
+  assert.ok(runtime && typeof runtime === 'object' && !Array.isArray(runtime),
+    'Python runtime metadata must be an object');
+  assert.ok(Array.isArray(runtime.version) && runtime.version.length === 3
+    && runtime.version.every((part) => Number.isInteger(part) && part >= 0)
+    && runtime.version[0] === 3 && [14, 13].includes(runtime.version[1]),
+  'Python runtime must use repository standard Python 3.14 or backup 3.13');
+  for (const field of ['executable', 'platform', 'architecture']) {
+    assert.ok(typeof runtime[field] === 'string' && /^\S[^\r\n]*$/.test(runtime[field]),
+      `Python runtime is missing ${field}`);
+  }
+  assert.ok(path.isAbsolute(runtime.executable), 'Python runtime executable must be absolute');
+  return runtime;
+}
+
+function fleetSourceHashes(root) {
+  // Hash bytes rather than Git HEAD: target checkouts may contain uncommitted
+  // changes, and local execution copies need not carry Git metadata at all.
+  return Object.fromEntries([
+    'src/switch_review.py', 'tests/test_switch_review_fleet.py',
+    'tests/fixtures/switch_review_fleet.json', 'scripts/verify_fleet_delivery_live.js',
+  ].map((file) => [file,
+    createHash('sha256').update(fs.readFileSync(path.join(root, file))).digest('hex'),
+  ]));
+}
+
 async function verifyLive(outputDir, {
-  python = process.env.PYTHON || '/opt/anaconda3/bin/python3',
+  python = process.env.PYTHON,
   run = runCommand,
   now = Date.now,
+  readSourceHashes = fleetSourceHashes,
 } = {}) {
+  assert.ok(typeof python === 'string' && python.trim(),
+    'set PYTHON to the repository-selected interpreter');
   const root = path.resolve(__dirname, '..');
   const destination = path.resolve(outputDir);
   // Refuse reused evidence directories, so an old successful report cannot survive a failed run.
   fs.mkdirSync(destination);
+  const sourceHashes = readSourceHashes(root);
   const textPath = path.join(destination, 'report.txt');
   const args = [path.join(root, 'src/switch_review.py'), '--json', '--text-out', textPath];
-  const started = now();
-  const stdout = await run(python, args, {
+  const options = {
     cwd: root,
     env: {
       ...process.env,
@@ -88,14 +131,21 @@ async function verifyLive(outputDir, {
       ORCH_STATE_DIR: path.join(destination, 'state'),
     },
     encoding: 'utf8', timeout: 300000, maxBuffer: 16 * 1024 * 1024,
-  });
+  };
+  const runtime = await pythonRuntime(python, run, options);
+  const started = now();
+  const stdout = await run(python, args, options);
   const finished = now();
   const report = JSON.parse(stdout);
   const delivery = validateReport(report, fs.readFileSync(textPath, 'utf8'), started, finished);
+  assert.deepEqual(readSourceHashes(root), sourceHashes,
+    'fleet source changed during live verification; rerun against stable source');
   fs.writeFileSync(path.join(destination, 'report.json'), stdout);
   const receipt = {
     checked_at: new Date(finished).toISOString(),
     command: [python, ...args],
+    python_runtime: runtime,
+    source_sha256: sourceHashes,
     as_of: delivery.as_of,
     rows: delivery.rows,
   };
@@ -118,4 +168,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { names, validateReport, verifyLive };
+module.exports = { names, validateReport, verifyLive, fleetSourceHashes, pythonRuntime };
