@@ -1,5 +1,56 @@
 # Fleet delivery measures — runner checks
 
+## Source fingerprints in live receipts — 2026-11-06 02:26Z
+
+Live receipts now identify the exact bytes of the fleet implementation, fleet
+tests, fixture and live verifier using SHA-256. Git HEAD alone would not identify
+uncommitted changes or execution copies without Git metadata. The verifier checks
+these files again after collection and refuses a success receipt if they changed.
+These fingerprints describe the four named files, not the entire dependency tree.
+The new receipt and source-change regressions failed before the implementation
+and pass afterward.
+
+Runner evidence at base head `89d124ce122db51e2ffbce4746b4160e521daa7d`, using
+`/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3` selected through
+`ORCH_STANDARD_PYTHON` and `scripts/usage_poll/py-standard.sh`:
+
+- `PYTHON=<selected interpreter> node --test --test-isolation=none
+  tests/test_verify_fleet_delivery_live.js
+  tests/test_verify_fleet_delivery_mutation.js`: all 21 tests pass, including
+  real unittest mutation controls and restoration for all six reader paths.
+- `PYTHONPATH=src <selected interpreter> -m unittest discover -s tests -p
+  test_switch_review_fleet.py -q`: all 27 tests pass.
+- `<selected interpreter> -m pytest tests/test_switch_review_fleet.py -m
+  "not slow"` fails with `No module named pytest`. The required pytest-mode
+  `PYTHON=<selected interpreter> node scripts/verify_fleet_delivery_mutation.js
+  --all-readers` also fails for that reason. Unittest does not replace pytest
+  acceptance.
+- `PYTEST_ADDOPTS='-m "not slow"' timeout 55s <selected interpreter> -u
+  src/verify.py`: exits 124 without output or a verdict. A separate bounded
+  diagnostic using `faulthandler.dump_traceback_later(20)` locates the wait in
+  `run_selftests` and its subprocess workers. Missing pytest does not prevent
+  this verifier from continuing into selftests. Neither run establishes success.
+- `PYTHON=<selected interpreter> node scripts/verify_fleet_delivery_live.js
+  /tmp/issue-1186-source-provenance-20261106`: exits zero, validating all five
+  rows at `2026-11-06T02:26:47.169Z`. The committed
+  [receipt](issue-672-source-provenance-20261106/check.json) records runtime
+  identity and source hashes. Four rows report GitHub connectivity failures;
+  the opener row reports a failed helper invocation (exit 2). All are explicitly
+  unmeasured. This is hosted-runner evidence, not target-machine acceptance.
+
+No acceptance checkbox is newly complete. PR #1187 was confirmed open and ready
+(`draft=false`). Correcting its unsupported checked target-machine and pytest
+mutation claims, posting the blocker comment, and adding `needs-human` were each
+rejected with `MCP tool call requires approval, but approval policy is never`.
+Target-machine verification with pytest installed remains necessary.
+
+No Python files changed, so the Python-only Black gate does not apply.
+`git diff --check` passes. Ordinary staging fails because `.git/index.lock`
+cannot be created on the read-only checkout metadata. The source commit is
+retained in writable temporary clone metadata and exported to
+`/tmp/issue-1186-source-provenance.bundle`; the checkout branch cannot be advanced
+here. The source changes remain available in the checkout for collection.
+
 ## Structured-link mutation control — 2026-11-06 02:10Z
 
 Reviewed all four keepalive commits since the bootstrap, at base head

@@ -4,8 +4,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { createHash } = require('node:crypto');
 const { test } = require('node:test');
-const { names, validateReport, verifyLive } = require('../scripts/verify_fleet_delivery_live');
+const { names, validateReport, verifyLive, fleetSourceHashes } = require('../scripts/verify_fleet_delivery_live');
 
 const checked = Date.parse('2026-11-05T12:00:00Z');
 const runtime = {
@@ -101,9 +102,51 @@ test('live command uses the selected interpreter and records validated output', 
   assert.equal(calls, 2);
   assert.equal(receipt.checked_at, '2026-11-05T12:00:00.000Z');
   assert.deepEqual(receipt.python_runtime, runtime);
+  assert.deepEqual(receipt.source_sha256, fleetSourceHashes(path.resolve(__dirname, '..')));
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(output, 'check.json'))), receipt);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(output, 'report.json'))), report);
   await assert.rejects(verifyLive(output), /EEXIST/);
+});
+
+test('live receipts fingerprint the fleet implementation, tests, fixture and verifier bytes', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-source-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const files = [
+    'src/switch_review.py', 'tests/test_switch_review_fleet.py',
+    'tests/fixtures/switch_review_fleet.json', 'scripts/verify_fleet_delivery_live.js',
+  ];
+  const expected = {};
+  for (const file of files) {
+    const content = Buffer.from(`${file}\r\n`);
+    fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+    fs.writeFileSync(path.join(root, file), content);
+    expected[file] = createHash('sha256').update(content).digest('hex');
+  }
+  assert.deepEqual(fleetSourceHashes(root), expected);
+  fs.appendFileSync(path.join(root, files[0]), '\n');
+  assert.notEqual(fleetSourceHashes(root)[files[0]], expected[files[0]]);
+  fs.unlinkSync(path.join(root, files[1]));
+  assert.throws(() => fleetSourceHashes(root), /ENOENT/);
+});
+
+test('source changes during live collection block a success receipt', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-source-change-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const output = path.join(root, 'evidence');
+  const { report, text } = example();
+  let collected = false;
+  await assert.rejects(verifyLive(output, {
+    python: '/selected/python', now: () => checked,
+    readSourceHashes: () => ({ 'src/switch_review.py': collected ? 'after' : 'before' }),
+    run: async (python, args) => {
+      if (args[0] === '-c') return JSON.stringify(runtime);
+      fs.writeFileSync(path.join(output, 'report.txt'), text);
+      collected = true;
+      return JSON.stringify(report);
+    },
+  }), /fleet source changed during live verification/);
+  assert.ok(!fs.existsSync(path.join(output, 'check.json')));
+  assert.ok(!fs.existsSync(path.join(output, 'report.json')));
 });
 
 test('a missing interpreter fails without a fallback or success receipt', async (t) => {

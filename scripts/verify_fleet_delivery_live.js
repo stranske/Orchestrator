@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
+const { createHash } = require('node:crypto');
 
 const names = {
   gate_cancellations: 'Gate cancellation share (48 h, labeled versus synchronize)',
@@ -95,10 +96,22 @@ async function pythonRuntime(python, run, options) {
   return runtime;
 }
 
+function fleetSourceHashes(root) {
+  // Hash bytes rather than Git HEAD: target checkouts may contain uncommitted
+  // changes, and local execution copies need not carry Git metadata at all.
+  return Object.fromEntries([
+    'src/switch_review.py', 'tests/test_switch_review_fleet.py',
+    'tests/fixtures/switch_review_fleet.json', 'scripts/verify_fleet_delivery_live.js',
+  ].map((file) => [file,
+    createHash('sha256').update(fs.readFileSync(path.join(root, file))).digest('hex'),
+  ]));
+}
+
 async function verifyLive(outputDir, {
   python = process.env.PYTHON,
   run = runCommand,
   now = Date.now,
+  readSourceHashes = fleetSourceHashes,
 } = {}) {
   assert.ok(typeof python === 'string' && python.trim(),
     'set PYTHON to the repository-selected interpreter');
@@ -106,6 +119,7 @@ async function verifyLive(outputDir, {
   const destination = path.resolve(outputDir);
   // Refuse reused evidence directories, so an old successful report cannot survive a failed run.
   fs.mkdirSync(destination);
+  const sourceHashes = readSourceHashes(root);
   const textPath = path.join(destination, 'report.txt');
   const args = [path.join(root, 'src/switch_review.py'), '--json', '--text-out', textPath];
   const options = {
@@ -123,11 +137,14 @@ async function verifyLive(outputDir, {
   const finished = now();
   const report = JSON.parse(stdout);
   const delivery = validateReport(report, fs.readFileSync(textPath, 'utf8'), started, finished);
+  assert.deepEqual(readSourceHashes(root), sourceHashes,
+    'fleet source changed during live verification; rerun against stable source');
   fs.writeFileSync(path.join(destination, 'report.json'), stdout);
   const receipt = {
     checked_at: new Date(finished).toISOString(),
     command: [python, ...args],
     python_runtime: runtime,
+    source_sha256: sourceHashes,
     as_of: delivery.as_of,
     rows: delivery.rows,
   };
@@ -150,4 +167,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { names, validateReport, verifyLive };
+module.exports = { names, validateReport, verifyLive, fleetSourceHashes };
