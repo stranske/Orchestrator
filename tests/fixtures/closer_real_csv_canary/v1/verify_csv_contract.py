@@ -13,7 +13,10 @@ request's test-merge SHA is reported and is not that proof either: Agents
 Verifier refuses an unmerged pull request, and that SHA is not a published
 merge. Skipped Agents Verifier runs on earlier commits of the corrective PR,
 and publication text that names only the owned delivery PR, are reported and
-are not that proof either. A keepalive completion that only observed this head
+are not that proof either. A workflow_dispatch run checked out at the default
+branch is retained when an authenticated comment binds that run to this head
+and its published merge; the checkout SHA is not the evaluated commit, and a
+skipped run or a run of the partial revision is not that binding. A keepalive completion that only observed this head
 after starting on an earlier revision is reported and is not worker or
 publication proof for this head. The same rule applies to the owned delivery
 head: a keepalive receipt that started earlier and only observed that head is
@@ -1265,11 +1268,15 @@ def _format_report(assessment, corrective_sha, local_head, verifier_runs=(), ear
             "agents_verifier_workflow_for_corrective_head: observed; a run is not a decision"
         )
         for run in verifier_runs:
-            lines.append(
+            line = (
                 "agents_verifier_run: "
                 + f"id={run['id']} event={run['event']} status={run['status']} "
                 + f"conclusion={run['conclusion']}"
             )
+            checkout = run.get("head_sha")
+            if _sha40(checkout):
+                line += " head=" + checkout + " checkout_is_not_evaluated_commit=yes"
+            lines.append(line)
     else:
         lines.append(
             "agents_verifier_workflow_for_corrective_head: NONE "
@@ -1565,8 +1572,9 @@ def _verifier_workflow_runs(fetch, sha):
 def _bound_verifier_runs(fetch, corrective_sha, merge_sha):
     """A run on the partial merge is not evidence for the corrected head.
 
-    After a real merge, workflow_dispatch records the default-branch SHA. That
-    SHA can be this PR's merge commit. The partial merge commit stays excluded.
+    A workflow_dispatch whose GitHub head is exactly this merge commit is
+    included here. A dispatch checked out at a later default-branch tip is not
+    visible by that query; the comment that names its run id supplies it.
     """
     runs = _verifier_workflow_runs(fetch, corrective_sha)
     if not merge_sha or merge_sha in {corrective_sha, _PARTIAL_HEAD, _PARTIAL_MERGE}:
@@ -1576,6 +1584,68 @@ def _bound_verifier_runs(fetch, corrective_sha, merge_sha):
         if run["id"] not in seen:
             runs.append(run)
     return runs
+
+
+def _comment_bound_run_ids(record, corrective_sha, merge_sha):
+    """Run ids an authenticated comment binds to this head and published merge."""
+    if not merge_sha:
+        return []
+    found = []
+    for decision in _corpus_from_comment(record, corrective_sha):
+        if decision.get("evaluated_sha") == merge_sha:
+            found.append(str(decision["run_id"]))
+    for event in _events_from_comment(record, _CORRECTIVE_PR, corrective_sha, merge_sha):
+        found.append(str(event["run_id"]))
+    return found
+
+
+def _verifier_run_by_id(fetch, run_id):
+    """Read one Agents Verifier run. The partial revision's checkout is not it.
+
+    ``workflow_dispatch`` records the default-branch SHA, which is not the
+    evaluated merge. A skipped conclusion stays a run record, not a decision.
+    """
+    if not _positive_identifier(run_id):
+        return None
+    status, raw = fetch(f"/repos/{_REPOSITORY}/actions/runs/{run_id}")
+    document = _decode_json(status, raw, f"agents verifier run {run_id}")
+    if not isinstance(document, dict):
+        raise _ObservationError(f"agents verifier run {run_id} was not an object")
+    path = document.get("path") or ""
+    if path != ".github/workflows/" + _VERIFIER_WORKFLOW:
+        return None
+    if document.get("event") not in {"workflow_dispatch", "pull_request_target"}:
+        return None
+    head = document.get("head_sha")
+    if not _sha40(head) or head in {_PARTIAL_HEAD, _PARTIAL_MERGE}:
+        return None
+    if str(document.get("id")) != str(run_id):
+        raise _ObservationError(f"agents verifier run {run_id} identity mismatch")
+    return {
+        "id": document.get("id"),
+        "event": document.get("event"),
+        "status": document.get("status"),
+        "conclusion": document.get("conclusion"),
+        "head_sha": head,
+    }
+
+
+def _retain_comment_bound_runs(fetch, runs, comments, corrective_sha, merge_sha):
+    """Keep a dispatch the head-SHA query cannot see, without duplicating it."""
+    if not merge_sha:
+        return runs
+    seen = {str(run.get("id")) for run in runs}
+    retained = list(runs)
+    for record in comments:
+        for run_id in _comment_bound_run_ids(record, corrective_sha, merge_sha):
+            if run_id in seen:
+                continue
+            named = _verifier_run_by_id(fetch, run_id)
+            seen.add(run_id)
+            if named is None:
+                continue
+            retained.append(named)
+    return retained
 
 
 def _pull_commit_shas(fetch, number):
@@ -1760,8 +1830,13 @@ def _observe_chain(fetch):
                     else:
                         unbound_corpus.append(decision)
     corrective_pr = _corrective_record(records)
-    runs = _bound_verifier_runs(
-        fetch, corrective_sha, _published_merge_sha(corrective_pr, corrective_sha)
+    published_merge = _published_merge_sha(corrective_pr, corrective_sha)
+    runs = _retain_comment_bound_runs(
+        fetch,
+        _bound_verifier_runs(fetch, corrective_sha, published_merge),
+        comments,
+        corrective_sha,
+        published_merge,
     )
     commits = _pull_commit_shas(fetch, int(_CORRECTIVE_PR))
     if corrective_sha not in commits:
@@ -2542,6 +2617,21 @@ def _self_check():
                     }
                 ).encode(),
             )
+        if "/actions/runs/" in path:
+            run_id = path.rstrip("/").split("/")[-1]
+            return (
+                200,
+                json.dumps(
+                    {
+                        "id": int(run_id),
+                        "event": "workflow_dispatch",
+                        "status": "completed",
+                        "conclusion": "success",
+                        "head_sha": "d" * 40,
+                        "path": ".github/workflows/" + _VERIFIER_WORKFLOW,
+                    }
+                ).encode(),
+            )
         if "/branches/" in path:
             branch_name = urllib.parse.unquote(path.rstrip("/").split("/")[-1])
             visible = branch_name
@@ -2940,6 +3030,53 @@ def _self_check():
     observed = _observe_chain(fake_fetch)
     if observed[6] != [_summarize_corpus(decision)] or observed[7][0]["conclusion"] != "skipped":
         raise AssertionError("chain observation dropped the corpus decision or the verifier run")
+    dispatch_run = {
+        "id": 40603448727,
+        "event": "workflow_dispatch",
+        "status": "completed",
+        "conclusion": "success",
+        "head_sha": "d" * 40,
+    }
+    if dispatch_run not in observed[7]:
+        raise AssertionError(
+            "default-branch workflow_dispatch bound by the corpus decision was dropped"
+        )
+    if any(run.get("head_sha") in {_PARTIAL_HEAD, _PARTIAL_MERGE} for run in observed[7]):
+        raise AssertionError("partial revision checkout was retained for the corrective head")
+
+    def _run_override(request_path, **fields):
+        if "/actions/runs/" not in request_path:
+            return fake_fetch(request_path)
+        run_id = request_path.rstrip("/").split("/")[-1]
+        payload = {
+            "id": int(run_id),
+            "event": "workflow_dispatch",
+            "status": "completed",
+            "conclusion": "success",
+            "head_sha": "d" * 40,
+            "path": ".github/workflows/" + _VERIFIER_WORKFLOW,
+        }
+        payload.update(fields)
+        return 200, json.dumps(payload).encode()
+
+    partial_checkout = _observe_chain(
+        lambda request_path: _run_override(
+            request_path, head_sha=_PARTIAL_MERGE, conclusion="skipped"
+        )
+    )
+    if any(str(run.get("id")) == "40603448727" for run in partial_checkout[7]):
+        raise AssertionError("partial-revision workflow_dispatch was retained")
+    other_workflow = _observe_chain(
+        lambda request_path: _run_override(request_path, path=".github/workflows/ci.yml")
+    )
+    if any(str(run.get("id")) == "40603448727" for run in other_workflow[7]):
+        raise AssertionError("a non-verifier workflow run was retained")
+    skipped_dispatch = _observe_chain(
+        lambda request_path: _run_override(request_path, conclusion="skipped")
+    )
+    skipped_named = [run for run in skipped_dispatch[7] if run.get("head_sha") == "d" * 40]
+    if skipped_named != [dict(dispatch_run, conclusion="skipped")]:
+        raise AssertionError("skipped default-branch dispatch was hidden or substituted")
     if observed[10]:
         raise AssertionError("merged corpus decision was treated as unbound")
     if observed[8] != earlier_only:
@@ -2964,6 +3101,15 @@ def _self_check():
     )
     if observed_code != 2 or "native_verify_for_corrective_head: PRESENT" not in observed_text:
         raise AssertionError("observed corpus decision was not reported")
+    if (
+        "id=40603448727" not in observed_text
+        or "checkout_is_not_evaluated_commit=yes" not in observed_text
+    ):
+        raise AssertionError("comment-bound workflow_dispatch was not reported")
+    if "agents_verifier_workflow_for_corrective_head: NONE" in observed_text:
+        raise AssertionError("comment-bound workflow_dispatch was reported as absent")
+    if "a run is not a decision" not in observed_text:
+        raise AssertionError("workflow_dispatch run was treated as the corpus decision")
     if "closer_publication_proof_for_corrective_head: MISSING" not in observed_text:
         raise AssertionError("observed chain invented publication proof")
     if partial_line not in observed_text or "completion: evidence present" in observed_text:
