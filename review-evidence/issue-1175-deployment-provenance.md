@@ -587,3 +587,30 @@ label with `MCP tool call requires approval, but approval policy is never`.
 The checkout's read-only Git index rejected staging. The tested changes are
 retained in `/tmp/orchestrator-1175-rewritten-history-commit`, with a handoff patch
 at `/tmp/orchestrator-1175-rewritten-history.patch`.
+
+## Malformed deployment timestamp CLI regression (2026-11-06)
+
+Reviewed commits `17a54f2` through `24825c6`. They do not supply a verified
+production publication receipt. The first publication task remains incomplete;
+the conditional helper/reporting tasks are satisfied because both extensions
+remain absent. Updating the duplicate PR-body checkboxes, posting the blocker,
+and adding `needs-human` were rejected with
+`MCP tool call requires approval, but approval policy is never`.
+
+Added eight real CLI cases rejecting null, boolean, numeric, invalid-calendar,
+non-UTC, fractional-second, epoch-zero, and pre-epoch deployment timestamps.
+Each runs both without and with an existing receipt and proves refusal occurs
+before Git or database access. All invalid-provenance cases now also verify that
+an existing receipt's modification time remains unchanged, alongside its bytes.
+All state remains temporary. No Python or protected files changed.
+
+Verification: 70 publication CLI tests, 16 deployment unittests, and 5 report CLI
+tests passed; JavaScript syntax and diff whitespace checks passed. The required
+Anaconda pytest command cannot start because its interpreter is absent. The
+production database and deployment audit remain unavailable, and observation
+must wait until both 2026-11-08 and fourteen days after verified deployment.
+No production checkbox is newly complete.
+
+The checkout's read-only Git index rejected staging. The changes are retained
+in `/tmp/orchestrator-1175-timestamps-commit-UVJPat`, with a handoff patch at
+`/tmp/orchestrator-1175-timestamps.patch`.

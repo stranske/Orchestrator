@@ -42,6 +42,18 @@ const invalidProvenance = [
   ['malformed deployment time', { ...validProvenance, deployed_at: 'yesterday' }, /deployed_at/],
   ['date without instant', { ...validProvenance, deployed_at: '2026-11-05' }, /deployed_at/],
   ['timezone missing', { ...validProvenance, deployed_at: '2026-11-05T00:00:00' }, /deployed_at/],
+  ...[
+    ['null deployment time', null, /explicit UTC timestamp/],
+    ['boolean deployment time', true, /explicit UTC timestamp/],
+    ['numeric deployment epoch', 1793836800, /explicit UTC timestamp/],
+    ['impossible deployment date', '2026-02-30T00:00:00Z', /explicit UTC timestamp/],
+    ['non-UTC deployment offset', '2026-11-05T01:00:00+01:00', /UTC timestamp with whole seconds/],
+    ['fractional deployment second', '2026-11-05T00:00:00.000001Z', /UTC timestamp with whole seconds/],
+    ['deployment at Unix epoch', '1970-01-01T00:00:00Z', /after the Unix epoch/],
+    ['deployment before Unix epoch', '1969-12-31T23:59:59Z', /after the Unix epoch/],
+  ].map(([name, deployed_at, diagnostic]) => [
+    name, { ...validProvenance, deployed_at }, diagnostic,
+  ]),
   ['future deployment', { ...validProvenance, deployed_at: '9999-01-01T00:00:00Z' }, /in the future/],
   ['missing audit evidence', { ...validProvenance, deployment_evidence: undefined }, /deployment_evidence/],
   ['blank audit evidence', { ...validProvenance, deployment_evidence: '  ' }, /deployment_evidence/],
@@ -1066,6 +1078,7 @@ for (const [name, provenance, diagnostic] of invalidProvenance) {
     for (const existing of [false, true]) {
       const before = `${JSON.stringify(validProvenance)}\n`;
       if (existing) fs.writeFileSync(receipt, before);
+      const modified = existing ? fs.statSync(receipt, { bigint: true }).mtimeNs : null;
       const result = await run(interpreter.stdout.trim(), [
         path.join(modules, 'route_weights_export.py'),
         '--record-challenger-deployment', audit, '--state-dir', state,
@@ -1078,7 +1091,10 @@ for (const [name, provenance, diagnostic] of invalidProvenance) {
       assert.doesNotMatch(result.stderr, /Traceback/);
       assert.equal(fs.existsSync(gitLog), false, 'invalid provenance must stop before Git');
       assert.deepEqual(fs.readdirSync(state), existing ? [path.basename(receipt)] : []);
-      if (existing) assert.equal(fs.readFileSync(receipt, 'utf8'), before);
+      if (existing) {
+        assert.equal(fs.readFileSync(receipt, 'utf8'), before);
+        assert.equal(fs.statSync(receipt, { bigint: true }).mtimeNs, modified);
+      }
       assert.equal(fs.existsSync(env.ORCH_FEEDBACK_DB), false);
       assert.deepEqual(fs.readdirSync(home), [], 'the live state fallback must stay unused');
     }
