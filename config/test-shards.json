@@ -429,6 +429,7 @@
       "tests/test_firing_monitor_read_only.py",
       "tests/test_firing_regressions_section.py",
       "tests/test_gate_replays_pytest_verdicts.py",
+      "tests/test_issue1210_capability_opportunity.py",
       "tests/test_issue807_testgen_gate_round2.py",
       "tests/test_issue813_compiler_guards.py",
       "tests/test_issue_658_remaining_boundaries.py",
