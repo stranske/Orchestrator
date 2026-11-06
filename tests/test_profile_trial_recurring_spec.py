@@ -80,6 +80,15 @@ def test_current_plan_binds_two_profiles_and_the_frozen_spec(tmp_path):
     assert not (state / "capability-program" / "profile-trial.json").exists()
 
 
+@pytest.mark.parametrize("bad_id", ["../escape", "a/b", "", ".hidden", 7, None])
+def test_receipt_with_unsafe_experiment_id_is_refused(tmp_path, bad_id):
+    state, experiments = _seal(tmp_path)
+    receipt = state / "capability-program" / "strategy-experiment.json"
+    receipt.write_text(json.dumps({"exp_id": bad_id}), encoding="utf-8")
+    with pytest.raises(trial.RecurringWorkUnavailable, match="no experiment id"):
+        trial.resolve_strategy_frozen_packet(state_dir=state, experiments_root=experiments)
+
+
 def test_absent_receipt_stub_mismatch_and_foreign_spec_are_refused(tmp_path):
     orchestrator, workflows = _sources(tmp_path)
     with pytest.raises(trial.RecurringWorkUnavailable, match="receipt is absent"):
