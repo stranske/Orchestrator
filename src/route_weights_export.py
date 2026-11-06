@@ -68,11 +68,7 @@ CONSUMER_TASK_TYPES = (
 # Immutable v1 challenger/task contract: publication-time semantics for the
 # hosted-runnable-alternatives/v1 filter. This contract is independent of
 # mutable router sets and preserves the hosted-unrunnable rejection.
-CHALLENGER_V1_RUNNABLE_AGENTS = frozenset({
-    "codex",
-    "claude",
-    "cursor",
-})
+CHALLENGER_V1_RUNNABLE_AGENTS = frozenset({"codex", "claude", "cursor"})
 
 
 def _now() -> str:
@@ -1375,7 +1371,11 @@ def main() -> int:
         except (OSError, ValueError, subprocess.SubprocessError) as exc:
             message = f"deployment provenance refused: {exc}"
             if isinstance(exc, subprocess.CalledProcessError) and exc.stderr:
-                stderr_text = exc.stderr if isinstance(exc.stderr, str) else exc.stderr.decode("utf-8", errors="replace")
+                stderr_text = (
+                    exc.stderr
+                    if isinstance(exc.stderr, str)
+                    else exc.stderr.decode("utf-8", errors="replace")
+                )
                 message += f"\nstderr: {stderr_text}"
             elif isinstance(exc, subprocess.SubprocessError):
                 # For other subprocess errors, try to get stderr from the command
