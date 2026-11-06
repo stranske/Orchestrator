@@ -1,0 +1,53 @@
+{
+  "checked_at": "2026-11-06T02:10:23.330Z",
+  "command": [
+    "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+    "/home/runner/work/Orchestrator/Orchestrator/src/switch_review.py",
+    "--json",
+    "--text-out",
+    "/tmp/issue-1186-structured-mutation-live/report.txt"
+  ],
+  "python_runtime": {
+    "executable": "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+    "version": [
+      3,
+      14,
+      10
+    ],
+    "platform": "linux",
+    "architecture": "x86_64"
+  },
+  "as_of": 1793931021,
+  "rows": {
+    "gate_cancellations": {
+      "name": "Gate cancellation share (48 h, labeled versus synchronize)",
+      "value": null,
+      "evidence_class": "unmeasured",
+      "reason": "gh error connecting to api.github.com check your internet connection or https://githubstatus.com"
+    },
+    "merge_to_close": {
+      "name": "Merge to issue closure (48 h)",
+      "value": null,
+      "evidence_class": "unmeasured",
+      "reason": "gh error connecting to api.github.com check your internet connection or https://githubstatus.com"
+    },
+    "oldest_canary": {
+      "name": "Oldest open canary sync PR",
+      "value": null,
+      "evidence_class": "unmeasured",
+      "reason": "gh error connecting to api.github.com check your internet connection or https://githubstatus.com"
+    },
+    "opener_cap": {
+      "name": "Opener-owned PR count against cap",
+      "value": null,
+      "evidence_class": "unmeasured",
+      "reason": "would need successful /home/runner/.codex/bin/opener-cap-health.py --json (exit 2)"
+    },
+    "released_flow": {
+      "name": "Released-issue agent PRs per day (48 h)",
+      "value": null,
+      "evidence_class": "unmeasured",
+      "reason": "gh error connecting to api.github.com check your internet connection or https://githubstatus.com"
+    }
+  }
+}

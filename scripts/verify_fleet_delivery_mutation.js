@@ -32,11 +32,21 @@ const controls = {
     args: 'gh, now, repos, flow=flow', flow: true,
     testName: 'test_each_gh_failure_preserves_every_row',
   },
+  closing_issue_refs: {
+    // Returning no links after a failed detail read produces partial numeric PR
+    // measures without raising an error to either outer reader.
+    signature: '_fleet_closing_issue_refs(gh, repo: str, number: int)',
+    args: 'gh, repo, number', returnType: 'set[str]', fallback: 'set()',
+    testName: 'test_each_gh_failure_preserves_every_row',
+    failurePattern: /AssertionError: '(?:median|opened) [^\r\n]+' is not None/,
+  },
 };
 
-function mutation(control) {
+function mutation(control, newline = '\n') {
   const name = control.signature.split('(')[0];
-  const anchor = `def ${control.signature} -> dict:\n`;
+  const returnType = control.returnType || 'dict';
+  const anchor = `def ${control.signature} -> ${returnType}:\n`;
+  const fallback = control.fallback || '_fleet_measured("0%", "deliberate fail-open control")';
   // The PR readers share a function. Mutate only the selected arm, so each verdict
   // demonstrates that arm's failure is detected independently of the other one.
   const guard = control.flow === undefined ? ''
@@ -44,12 +54,15 @@ function mutation(control) {
   const mutant = `${anchor}    try:
         return ${name}_original(${control.args})
     except _FleetReadError:
-${guard}        return _fleet_measured("0%", "deliberate fail-open control")
+${guard}        return ${fallback}  # deliberate fail-open control
 
 
-def ${control.signature.replace(name, `${name}_original`)} -> dict:
+def ${control.signature.replace(name, `${name}_original`)} -> ${returnType}:
 `;
-  return { anchor, mutant };
+  return {
+    anchor: anchor.replaceAll('\n', newline),
+    mutant: mutant.replaceAll('\n', newline),
+  };
 }
 
 const { anchor } = mutation(controls.gate_cancellations);
@@ -62,10 +75,29 @@ function requireVerdict(result, runner, failed, control = controls.gate_cancella
   assert.equal(result.status, failed ? 1 : 0, output);
   if (runner === 'pytest') {
     const node = `tests/${testModule}.py::${testClass}::${testName}`;
-    assert.ok(output.includes(`${node} ${failed ? 'FAILED' : 'PASSED'}`), output);
-    const counts = [...output.matchAll(/\b(\d+) (passed|failed|errors?|skipped|xfailed|xpassed|deselected)\b/gi)];
+    const reports = [...output.matchAll(/^(\S+::\S+) (SUBFAILED|SUBPASSED|SUBSKIPPED|SUBXFAIL|PASSED|FAILED|SKIPPED|ERROR|XFAIL|XPASS)\b/gm)];
+    assert.ok(reports.every((report) => report[1] === node
+      && ['PASSED', 'FAILED', 'SUBPASSED', 'SUBFAILED'].includes(report[2])), output);
+    const parents = reports.filter((report) => !report[2].startsWith('SUB'));
+    assert.equal(parents.length, 1, output);
+    const subfailed = reports.filter((report) => report[2] === 'SUBFAILED').length;
+    let expected;
+    if (subfailed) {
+      // Pytest counts failing subtests separately. Depending on its version, the
+      // enclosing unittest method may pass or add another failure to the total.
+      assert.ok(failed, output);
+      expected = [[subfailed + Number(parents[0][2] === 'FAILED'), 'failed']];
+      if (parents[0][2] === 'PASSED') expected.push([1, 'passed']);
+    } else {
+      assert.equal(parents[0][2], failed ? 'FAILED' : 'PASSED', output);
+      expected = [[1, failed ? 'failed' : 'passed']];
+    }
+    // Read the terminal summary, not assertion messages such as "contains 2
+    // failed subtests" printed earlier in the traceback.
+    const summary = output.trimEnd().split(/\r?\n/).at(-1);
+    const counts = [...summary.matchAll(/\b(\d+) (passed|failed|errors?|skipped|xfailed|xpassed|deselected)\b/gi)];
     assert.deepEqual(counts.map((match) => [Number(match[1]), match[2].toLowerCase()]),
-      [[1, failed ? 'failed' : 'passed']], output);
+      expected, output);
   } else {
     const name = `${testName} (${testModule}.${testClass}.${testName})`;
     assert.ok(output.includes(`${name} ... ${failed ? '' : 'ok'}`), output);
@@ -85,7 +117,7 @@ function requireVerdict(result, runner, failed, control = controls.gate_cancella
   }
   if (failed) {
     // An import failure or a different assertion is not proof of detecting the mutant.
-    assert.match(output, /AssertionError: '0%' is not None/);
+    assert.match(output, control.failurePattern || /AssertionError: '0%' is not None/);
   }
 }
 
@@ -119,12 +151,16 @@ function runTest(root, runner, python, control) {
   });
 }
 
-async function verify(root, runner = 'pytest', python = process.env.PYTHON || '/opt/anaconda3/bin/python3', run = runTest, control = controls.gate_cancellations) {
+async function verify(root, runner = 'pytest', python = process.env.PYTHON, run = runTest, control = controls.gate_cancellations) {
   assert.ok(['pytest', 'unittest'].includes(runner), 'unknown test runner');
-  const { anchor, mutant } = mutation(control);
+  assert.ok(typeof python === 'string' && python.trim(),
+    'set PYTHON to the repository-selected interpreter');
   const file = path.join(root, 'src/switch_review.py');
   const original = fs.readFileSync(file);
   const source = original.toString('utf8');
+  // Git may check Python sources out with CRLF on the target machine. Match and
+  // insert using that convention; restoration still uses the original bytes.
+  const { anchor, mutant } = mutation(control, source.includes('\r\n') ? '\r\n' : '\n');
   assert.equal(source.split(anchor).length - 1, 1, 'reader mutation anchor must occur once');
   requireVerdict(await run(root, runner, python, control), runner, false, control);
   try {
@@ -138,10 +174,12 @@ async function verify(root, runner = 'pytest', python = process.env.PYTHON || '/
   return `${runner}: baseline passed; fail-open mutation detected; restored test passed`;
 }
 
-async function runIsolated(argv = process.argv.slice(2), python = process.env.PYTHON || '/opt/anaconda3/bin/python3') {
+async function runIsolated(argv = process.argv.slice(2), python = process.env.PYTHON) {
   assert.ok(new Set(argv).size === argv.length
     && argv.every((arg) => ['--unittest', '--all-readers'].includes(arg)),
   'usage: node scripts/verify_fleet_delivery_mutation.js [--unittest] [--all-readers]');
+  assert.ok(typeof python === 'string' && python.trim(),
+    'set PYTHON to the repository-selected interpreter');
   const repo = path.resolve(__dirname, '..');
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-delivery-mutation-'));
   try {
