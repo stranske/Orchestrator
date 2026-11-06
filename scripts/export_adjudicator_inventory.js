@@ -306,13 +306,17 @@ function nativeValidationObservation(text, location, record) {
 // Observe native receipt locators in one read-only SQLite snapshot. This does
 // not instantiate NativeAttemptJournal, parse provider output, authenticate a
 // decision, acquire the publication lock, or establish live writer ownership.
-function journalInventory(journal) {
+function journalInventory(journal, locationChecks) {
   const base = { status: 'unavailable', path: journal ? path.resolve(journal) : null,
     attempts: null, receipt_authority: 'not_authenticated_by_inventory' };
   if (journal === undefined) return { ...base, reason: 'native_journal_not_supplied' };
   if (typeof journal !== 'string' || !journal.trim()) throw new Error('journal path is required');
   let connection;
   try {
+    // Keep the selected journal attributable through the final report reads,
+    // even after SQLite closes its snapshot. Equal replacement bytes cannot
+    // establish that the receipt locators still belong to this location.
+    locationChecks.push(pinFileLocation(journal, 'native journal'));
     connection = new DatabaseSync(journal, { readOnly: true });
     connection.exec('BEGIN');
     if (connection.prepare('PRAGMA application_id').get().application_id !== 1313097550) {
@@ -365,8 +369,8 @@ function journalInventory(journal) {
   }
 }
 
-function preDispatchInventory(saved, paid, journal) {
-  const native = journalInventory(journal);
+function preDispatchInventory(saved, paid, journal, locationChecks) {
+  const native = journalInventory(journal, locationChecks);
   const identities = new Set(paid.map((item) => item.backend_run_id));
   const journalIdentities = new Set((native.attempts || [])
     .map((item) => item.backend_run_id).filter(Boolean));
@@ -457,7 +461,7 @@ function reconcileNativeLocators(observations, journal) {
 }
 
 // Equal bytes cannot detect a replaced file or a retargeted symlink. Keep the
-// selected report/manifest bound to one location across all content reads.
+// selected inventory file bound to one location across all content reads.
 function pinFileLocation(file, label) {
   if (typeof file !== 'string' || !file.trim()) throw new Error(`${label} path is required`);
   const resolved = fs.realpathSync(file);
@@ -486,11 +490,10 @@ function reportInventory({ report, observedAt, evidenceClass, evidenceReference,
   if (typeof evidenceReference !== 'string' || !evidenceReference.trim()) {
     throw new Error('evidenceReference is required');
   }
-  const checkReportLocation = pinFileLocation(report, 'report');
-  const checkManifestLocation = manifest === undefined ? null : pinFileLocation(manifest, 'manifest');
+  const locationChecks = [pinFileLocation(report, 'report')];
+  if (manifest !== undefined) locationChecks.push(pinFileLocation(manifest, 'manifest'));
   const checkLocations = () => {
-    checkReportLocation();
-    if (checkManifestLocation) checkManifestLocation();
+    for (const check of locationChecks) check();
   };
   const requestedManifest = manifest === undefined ? null : readManifest(manifest);
   const bytes = fs.readFileSync(report);
@@ -558,7 +561,7 @@ function reportInventory({ report, observedAt, evidenceClass, evidenceReference,
     occurrences.push(item.location);
     identities.set(item.backend_run_id, occurrences);
   }
-  const preDispatch = preDispatchInventory(saved, paid, journal);
+  const preDispatch = preDispatchInventory(saved, paid, journal, locationChecks);
   reconcileNativeLocators(observations, preDispatch.native_journal);
   const reconciliation = requestedManifest
     ? reconcileRetainedRows(cases, requestedManifest, observations, preDispatch.native_journal) : null;

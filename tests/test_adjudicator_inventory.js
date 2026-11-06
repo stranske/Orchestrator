@@ -1333,6 +1333,63 @@ function nativeJournal(t) {
   return { ...fixture, journal, options: { ...fixture.options, journal } };
 }
 
+for (const change of ['atomic replacement', 'symlink retarget', 'removal']) {
+  test(`report inventory rejects journal ${change} after reading native receipts`, (t) => {
+    const { journal, options } = nativeJournal(t);
+    const retained = `${journal}.retained`;
+    const replacement = `${journal}.replacement`;
+    const bytes = fs.readFileSync(journal);
+    fs.writeFileSync(replacement, bytes);
+    if (change === 'symlink retarget') {
+      fs.renameSync(journal, retained);
+      fs.symlinkSync(retained, journal);
+    }
+    const initialInode = fs.statSync(journal, { bigint: true }).ino;
+    const reportBytes = fs.readFileSync(options.report);
+    const read = fs.readFileSync;
+    let observations = 0;
+    fs.readFileSync = function observed(file, ...args) {
+      const data = read(file, ...args);
+      // The journal connection has closed by the final report read. Returning
+      // its old receipt locators would misattribute them to the selected path.
+      if (file === options.report && ++observations === 2) {
+        if (change === 'symlink retarget') {
+          fs.unlinkSync(journal);
+          fs.symlinkSync(replacement, journal);
+        } else if (change === 'atomic replacement') {
+          fs.renameSync(replacement, journal);
+        } else {
+          fs.unlinkSync(journal);
+        }
+      }
+      return data;
+    };
+    try {
+      assert.throws(() => reportInventory(options), /native journal location changed during inventory/);
+    } finally {
+      fs.readFileSync = read;
+    }
+    assert.equal(observations, 2, 'the switch occurred after the native receipt observation');
+    if (change === 'removal') fs.renameSync(replacement, journal);
+    assert.notEqual(fs.statSync(journal, { bigint: true }).ino, initialInode);
+    assert.deepEqual(fs.readFileSync(journal), bytes, 'the replacement has identical receipt bytes');
+    assert.deepEqual(fs.readFileSync(options.report), reportBytes);
+
+    const later = reportInventory(options);
+    assert.equal(later.pre_dispatch.native_journal.status, 'available');
+    assert.deepEqual(later.pre_dispatch.native_journal.attempts.map((row) => row.attempt_id),
+      ['a', 'b', 'c', 'd', 'e', 'f']);
+    assert.deepEqual(later.pre_dispatch.paid_identity_reconciliation.unresolved_without_backend_id,
+      ['b']);
+    assert.equal(later.paid_identity_summary.records, 4);
+    assert.equal(later.paid_identity_summary.unique, 3);
+    assert.equal(later.receipt_authority, 'not_authenticated_by_inventory');
+    assert.equal(later.dispatch_authorized, false);
+    assert.ok(!JSON.stringify(later).includes('private'));
+    assert.deepEqual(fs.readFileSync(journal), bytes);
+  });
+}
+
 test('native receipt locators bind both case and backend identity for each retained attempt', (t) => {
   const { root, saved, journal, options } = nativeJournal(t);
   saved.rows[0].retry_attempts = [{ backend_run_id: 'native-provider' }];

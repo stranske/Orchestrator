@@ -370,3 +370,31 @@ is claimed; no operational checkbox is completed. Staging in this checkout
 failed on the read-only Git metadata. The verified changes are preserved in an
 isolated local commit and `/tmp/orchestrator-1072-journal-pins/change.bundle`;
 no push was made.
+
+## Retained-report journal attribution
+
+Checked on 2026-11-06 against checkout
+`c3bb81097e4cedf3cf520e9a9f50d5c6c04e60ca`. The retained-report inventory
+now pins the native journal's resolved path, device and inode before opening
+SQLite, and checks that location alongside the report and manifest through the
+final content reads. Replacing the journal with identical bytes, retargeting
+its symlink or removing it after receipt collection aborts the inventory.
+All three new regressions failed before the fix and pass afterward. A stable
+subsequent observation retains paid-history accounting, UNKNOWN attempts and
+the unauthenticated-receipt boundary without exposing provider content.
+
+Validation: all 122 tests across the retained-report and native inventory
+suites, 32 diagnostic unittests and seven replay/publication unittests pass.
+The pre-change inventory baseline passes all 119 tests.
+JavaScript syntax and `git diff --check` pass.
+No Python files changed. The required retrospective pytest command with
+`-m "not slow"` cannot start because pytest is absent.
+
+These are fixture results. The configured production runtime, canonical report,
+independent outcomes database and default mirror remain absent. Authentic
+original report/journal paths and live reader bindings remain unavailable.
+No production pin, retry, canonical refresh, historical observation or next-20
+decision is claimed; no operational checkbox is completed. Staging fails on
+the read-only Git metadata. The changes are preserved using an isolated local
+Git repository and `/tmp/orchestrator-1072-retained-journal.bundle`; no push
+was made.
