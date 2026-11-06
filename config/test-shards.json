@@ -128,6 +128,7 @@
       "tests/test_reviewed_repo_publisher_exclusion_stage.py",
       "tests/test_role_prompt_batch.py",
       "tests/test_route_weights_export_comparative.py",
+      "tests/test_route_weights_export_deployment.py",
       "tests/test_run_issue843_acceptance.py",
       "tests/test_shed_names_its_drain.py",
       "tests/test_skill_compiler.py",
