@@ -1,10 +1,8 @@
-"""Isolated CSV/JSON canary fixture for the controlled Closer corrective test.
+"""CSV/JSON export fixture for the controlled Closer canary.
 
-JSON export is ``json.dumps`` of the input rows and preserves round-trip
-behavior for the fixed fields ``name`` and ``score``. CSV export writes those
-fields with the header ``name,score``, CRLF record endings, and one record per
-input. Empty input returns the header alone. Unsupported formats raise
-``ValueError``. This module is fixture code, not production functionality.
+JSON preserves json.dumps round-trip behavior, including the fixed fields name
+and score. CSV emits the header name,score, one record per input row, and CRLF
+record endings. Unsupported formats raise ValueError.
 """
 
 import csv
@@ -18,8 +16,8 @@ def export_rows(rows, format):
     if format == "csv":
         buffer = io.StringIO(newline="")
         writer = csv.writer(buffer, lineterminator="\r\n")
-        writer.writerow(("name", "score"))
+        writer.writerow(["name", "score"])
         for row in rows:
-            writer.writerow((row["name"], row["score"]))
+            writer.writerow([row["name"], row["score"]])
         return buffer.getvalue()
     raise ValueError("unsupported format")
