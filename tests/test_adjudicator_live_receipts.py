@@ -1,6 +1,8 @@
 """Live advice receipts stay bounded independently of the certified path inventory."""
 
+import hashlib
 import json
+import os
 import sqlite3
 import tempfile
 import unittest
@@ -106,3 +108,112 @@ class LiveReceiptTests(unittest.TestCase):
                 self.assertEqual(live.run_live(**options)["attempted"], 0)
                 self.assertEqual(backend.call_count, 1)
             self.assertEqual(merge_inputs(), before)
+
+    def test_redacted_receipt_recovery_without_second_dispatch_including_pending_retry(self):
+        """Brain rows restore targets from `runs`; cache loss must not re-pay; retry order holds."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "brain.db"
+            report = root / "live.json"
+            state_root = root / "state"
+            state_root.mkdir()
+            sha = "a" * 40
+
+            def collector(entry, *_args, **_kwargs):
+                entry["collection_requirements"] = {"source_paths": ["proof.txt"]}
+                return roles._issue_collected_case(
+                    {"target": entry["target"], "metadata_only": False}, 10000
+                )
+
+            @contextmanager
+            def checkout(*_args):
+                yield root
+
+            calls = []
+
+            def runner(**kw):
+                calls.append(kw)
+                return {
+                    "backend": "stub",
+                    "backend_run_id": f"backend-{len(calls)}",
+                    "proposal": {"decision": "reject_blocker"},
+                    "errors": [],
+                }
+
+            def run_once(*, now, limit, dispatch, runner_fn):
+                return live.run_live(
+                    db=db,
+                    path=report,
+                    now=now,
+                    env={},
+                    limit=limit,
+                    dispatch=dispatch,
+                    evidence_reader=lambda _: live._evidence_for(sha),
+                    snapshot_reader=lambda _: {},
+                    provider=checkout,
+                    runner=runner_fn,
+                )
+
+            with patch.object(feedback, "DB_PATH", db):
+                with patch.dict(os.environ, {"ORCH_STATE_DIR": str(state_root)}):
+                    with closing(feedback._conn()) as conn, conn:
+                        conn.execute(
+                            "INSERT INTO runs(run_id,ts,target) VALUES ('r-old',10,'owner/repo#99')"
+                        )
+                        conn.execute(
+                            "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged) "
+                            "VALUES ('r-old','NON_PASS','PASS',1)"
+                        )
+                        conn.execute(
+                            "INSERT INTO runs(run_id,ts,target) VALUES ('r-new',100,'owner/repo#99')"
+                        )
+                        conn.execute(
+                            "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged) "
+                            "VALUES ('r-new','NON_PASS','PASS',1)"
+                        )
+                    with patch.object(live, "certify", collector):
+                        first = run_once(now=200, limit=1, dispatch=True, runner_fn=runner)
+                        self.assertEqual((first["attempted"], first["advised"]), (1, 1))
+                        self.assertEqual(first["rows"][0]["run_id"], "r-old")
+                    with closing(sqlite3.connect(db)) as conn, conn:
+                        for (raw,) in conn.execute(
+                            "SELECT payload_json FROM completion_events "
+                            "WHERE phase='live_shadow_advice'"
+                        ):
+                            payload = json.loads(raw)
+                            payload["live_shadow"]["target"] = ""
+                            new_raw = json.dumps(payload)
+                            digest = hashlib.sha256(new_raw.encode()).hexdigest()
+                            conn.execute(
+                                "UPDATE completion_events SET payload_json=?, content_hash=? "
+                                "WHERE payload_json=?",
+                                (new_raw, digest, raw),
+                            )
+                    report.unlink()
+                    with patch.object(live, "certify", collector):
+                        recovered = run_once(now=201, limit=0, dispatch=True, runner_fn=runner)
+                    self.assertEqual(recovered["attempted"], 0)
+                    self.assertEqual(len(calls), 1)
+                    rows_by_id = {row["run_id"]: row for row in recovered["rows"]}
+                    self.assertEqual(rows_by_id["r-old"]["target"], "owner/repo#99")
+
+                    dispatch_try = {"n": 0}
+
+                    def flaky_runner(**kw):
+                        dispatch_try["n"] += 1
+                        if dispatch_try["n"] == 1:
+                            raise RuntimeError("backend down")
+                        return runner(**kw)
+
+                    with patch.object(live, "certify", collector):
+                        third = run_once(now=202, limit=3, dispatch=True, runner_fn=flaky_runner)
+                        self.assertEqual(third["attempted"], 1)
+                        row = third["rows"][-1]
+                        self.assertEqual(row["run_id"], "r-new")
+                        self.assertIn("error", row)
+                    with patch.object(live, "certify", collector):
+                        fourth = run_once(now=203, limit=3, dispatch=True, runner_fn=runner)
+                    self.assertEqual(fourth["attempted"], 1)
+                    self.assertEqual(fourth["rows"][-1]["run_id"], "r-new")
+                    self.assertIn("proposal", fourth["rows"][-1])
+                    self.assertEqual(len(calls), 2)

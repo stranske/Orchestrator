@@ -1005,7 +1005,8 @@ def live_disputes(
     oldest_first: bool = False,
     ungraded_only: bool = False,
     excluded_case_ids: set[str] | None = None,
-    known_advised_targets: set[str] | None = None,
+    advised_run_ids: set[str] | None = None,
+    advised_case_ids: set[str] | None = None,
 ) -> list[dict]:
     """New disputes in the existing cohort, excluding PRs already advised live.
 
@@ -1032,31 +1033,37 @@ def live_disputes(
 
     population = disputes(db=db, now=now)
     database_uri = f"file:{(db or feedback.DB_PATH).resolve()}?mode=ro"
+    receipt_case_ids: set[str] = set()
+    receipt_run_ids: set[str] = set()
     with closing(sqlite3.connect(database_uri, uri=True)) as conn:
         # Older read-only Brains may predate completion events; do not initialize them.
         has_events = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='completion_events'"
         ).fetchone()
-        advised_targets = (
-            {
-                row[0]
-                for row in conn.execute(
-                    "SELECT DISTINCT COALESCE(json_extract(e.payload_json, '$.live_shadow.target'), "
-                    "r.target) FROM completion_events e LEFT JOIN runs r "
-                    "ON r.run_id=e.run_id "
-                    "WHERE e.producer='role-adjudicator' AND e.phase='live_shadow_advice'"
-                )
-            }
-            if has_events
-            else set()
-        )
-    advised_targets.update(known_advised_targets or ())
+        if has_events:
+            # Event `run_id` is the synthetic key `adjudicator-live:{case_id}`; dispute identity
+            # for dedup lives in the receipt payload (`run_id`, `case_id`, optional `target`).
+            for case_id_json, dispute_run_id in conn.execute(
+                "SELECT json_extract(e.payload_json, '$.live_shadow.case_id'), "
+                "json_extract(e.payload_json, '$.live_shadow.run_id') "
+                "FROM completion_events e "
+                "WHERE e.producer='role-adjudicator' AND e.phase='live_shadow_advice' "
+                "AND e.validation_status!='rejected'"
+            ):
+                if isinstance(case_id_json, str) and case_id_json.strip():
+                    receipt_case_ids.add(case_id_json.strip())
+                if isinstance(dispute_run_id, str) and dispute_run_id.strip():
+                    receipt_run_ids.add(dispute_run_id.strip())
+    receipt_case_ids.update(advised_case_ids or ())
+    if advised_run_ids is not None:
+        advised_run_ids.update(receipt_run_ids)
     selected = [
         row
         for row in population
         if row["ts"] > since_ts
-        and row["target"] not in advised_targets
+        and row["run_id"] not in receipt_run_ids
         and not _excluded_live_target(row.get("target"))
+        and _case_id(row) not in receipt_case_ids
         and _case_id(row) not in (excluded_case_ids or ())
         and (not ungraded_only or later_truth(row) is None)
     ]

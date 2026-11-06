@@ -565,6 +565,7 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
         "status": "shadow",
         "entrypoint": "roles.py:run_adjudicator_agent",
         "matcher": {"kind": "role", "equals": "adjudicator"},
+        "kill_switch": "ORCH_ADJUDICATOR_LIVE_SHADOW=0",
         "trigger_cadence": (
             "bounded retrospective replay and closer recorded-verdict disagreement; daily live "
             "shadow on new disputes (adjudicator_live.py, at most ORCH_ADJUDICATOR_LIVE_LIMIT per "

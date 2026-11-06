@@ -10,6 +10,7 @@ from contextlib import contextmanager
 import pytest
 
 import adjudicator_live as live
+import adjudicator_retro as retro
 import feedback
 import paths
 import roles
@@ -107,6 +108,71 @@ def test_later_truth_grades_the_live_advice(world):
         line
         == "adjudicator live: disputes 1, advised 1, uncertified 0, graded 1 (agree 1, disagree 0)"
     )
+
+
+def test_second_pass_advises_older_dispute_after_newer_was_processed_first(world, monkeypatch):
+    """Cursor must not advance past the activation floor when only newer rows were advised."""
+    common = world["common"]
+    t_seed = world["now"]
+    older_ts = t_seed - 2000
+    newer_ts = t_seed + 100
+    with feedback._conn() as conn:
+        conn.execute("DELETE FROM outcomes WHERE run_id='live-1'")
+        conn.execute("DELETE FROM runs WHERE run_id='live-1'")
+        conn.execute(
+            "INSERT INTO runs(run_id,ts,target) VALUES ('live-newer',?,'owner/repo#1')", (newer_ts,)
+        )
+        conn.execute(
+            "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged) "
+            "VALUES ('live-newer','NON_PASS','PASS',1)"
+        )
+    first = live.run_live(**{**common, "now": newer_ts + 1, "limit": 1})
+    assert first["advised"] == 1 and first["rows"][0]["run_id"] == "live-newer"
+    with feedback._conn() as conn:
+        conn.execute(
+            "INSERT INTO runs(run_id,ts,target) VALUES ('live-older',?,'owner/repo#1')", (older_ts,)
+        )
+        conn.execute(
+            "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged) "
+            "VALUES ('live-older','NON_PASS','PASS',1)"
+        )
+    second = live.run_live(**{**common, "now": newer_ts + 2, "limit": 1})
+    assert second["advised"] == 1
+    assert second["rows"][-1]["run_id"] == "live-older"
+    assert len(world["calls"]) == 2
+
+
+def test_truth_refresh_failure_does_not_create_retirement_then_ok_recovers(world, monkeypatch):
+    """Failed durability reads must not retire; a later successful refresh recovers grading."""
+    live.run_live(**world["common"])
+    checked = feedback.DURABILITY_DETECTION_SINCE + 10
+    with feedback._conn() as conn:
+        conn.execute(
+            "UPDATE outcomes SET durability='broke_later', durability_checked_ts=? WHERE run_id='live-1'",
+            (checked,),
+        )
+
+    attempts = {"n": 0}
+    real_native = retro.native_later_truth
+
+    def flaky_later_truth(run_id, db=None):
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise sqlite3.OperationalError("locked")
+        return real_native(run_id, db)
+
+    monkeypatch.setattr(retro, "native_later_truth", flaky_later_truth)
+    path = world["path"]
+    live.reconcile_live(db=feedback.DB_PATH, path=path)
+    bad = json.loads(path.read_text())
+    assert bad.get("truth_refresh", {}).get("status") == "failed"
+    assert bad.get("retirement") in (None, {})
+    assert bad["rows"][0].get("later_truth") is None
+
+    live.reconcile_live(db=feedback.DB_PATH, path=path)
+    good = json.loads(path.read_text())
+    assert good.get("truth_refresh", {}).get("status") == "ok"
+    assert good["rows"][0].get("later_truth") == "FAIL"
 
 
 def test_a_body_without_criteria_is_uncertified_and_never_dispatched(world):
@@ -854,8 +920,9 @@ def test_weekly_evidence_reports_unknown_on_sqlite_operational_error(tmp_path):
     )
     brain.write_text("not sqlite")
     evidence = live.weekly_evidence(db=brain, path=path)
-    # With SQLite unavailable, should report UNKNOWN for grading and retirement
-    assert "retirement UNKNOWN" in evidence
+    # With SQLite unavailable, grading and retirement stay UNKNOWN; refresh failure is explicit.
+    assert "later_truth_refresh_failed" in evidence
+    assert "graded UNKNOWN of 20" in evidence
     assert "graded UNKNOWN of 20" in evidence
     assert "agreement UNKNOWN against 0.75" in evidence
 

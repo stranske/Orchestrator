@@ -31,6 +31,7 @@ import argparse
 import collections
 import hashlib
 import json
+import logging
 import os
 import re
 import shlex
@@ -47,6 +48,7 @@ import adjudicator_retro as retro
 import feedback
 import roles
 
+_logger = logging.getLogger(__name__)
 LIVE_SWITCH = "ORCH_ADJUDICATOR_LIVE_SHADOW"
 LIVE_LIMIT = "ORCH_ADJUDICATOR_LIVE_LIMIT"
 DEFAULT_LIMIT = 3
@@ -481,14 +483,28 @@ def _load_rows(path: Path) -> list[dict]:
 def _event_rows(db: Path | None = None) -> list[dict]:
     """Recover advice/refusals from the private or production Brain, without writes."""
     with sqlite3.connect(f"file:{(db or feedback.DB_PATH).resolve()}?mode=ro", uri=True) as conn:
-        return [
-            json.loads(raw)["live_shadow"]
-            for (raw,) in conn.execute(
-                "SELECT payload_json FROM completion_events WHERE producer='role-adjudicator' "
-                "AND phase IN ('live_shadow_advice','live_shadow_uncertified') "
-                "AND validation_status!='rejected' ORDER BY created_ts,event_id"
-            )
-        ]
+        rows_out: list[dict] = []
+        for raw, event_run_id, join_target in conn.execute(
+            "SELECT e.payload_json,e.run_id,r.target FROM completion_events e "
+            "LEFT JOIN runs r ON r.run_id=json_extract(e.payload_json, '$.live_shadow.run_id') "
+            "WHERE e.producer='role-adjudicator' "
+            "AND e.phase IN ('live_shadow_advice','live_shadow_uncertified') "
+            "AND e.validation_status!='rejected' ORDER BY e.created_ts,e.event_id"
+        ):
+            shadow = json.loads(raw)["live_shadow"]
+            row = dict(shadow)
+            tgt = row.get("target")
+            if not isinstance(tgt, str) or not tgt.strip():
+                if isinstance(join_target, str) and join_target.strip():
+                    row["target"] = join_target.strip()
+                elif isinstance(event_run_id, str) and event_run_id:
+                    rt = conn.execute(
+                        "SELECT target FROM runs WHERE run_id=?", (event_run_id,)
+                    ).fetchone()
+                    if rt and isinstance(rt[0], str) and rt[0].strip():
+                        row["target"] = rt[0].strip()
+            rows_out.append(row)
+        return rows_out
 
 
 def _persist_live_event(
@@ -575,17 +591,19 @@ def _reconcile_live(*, db: Path | None = None, path: Path | None = None) -> dict
             "decision"
         ):
             merged["proposal"] = previous_row["proposal"]
+        if (not (merged.get("target") or "").strip()) and (previous_row.get("target") or "").strip():
+            merged["target"] = previous_row["target"]
         by_id[row["case_id"]] = merged
     rows = list(by_id.values())
-    try:
-        _refresh_live_truth(rows, db)
-    except sqlite3.Error:
-        pass  # SQLite unavailable, proceed without refreshing truth
+    truth_status, truth_detail = _refresh_live_truth(rows, db)
+    if truth_status != "ok":
+        _logger.warning("reconcile_live truth_refresh failed: %s", truth_detail)
     summary = live_summary(rows)
     retirement = previous.get("retirement")
     rate = summary["agree"] / summary["graded"] if summary["graded"] else None
     if (
-        not retirement
+        truth_status == "ok"
+        and not retirement
         and summary["graded"] >= GRADE_TARGET
         and rate is not None
         and rate < MERGE_RULE
@@ -606,6 +624,7 @@ def _reconcile_live(*, db: Path | None = None, path: Path | None = None) -> dict
         "agreement": rate,
         "rule": MERGE_RULE,
         "retirement": retirement,
+        "truth_refresh": {"status": truth_status, "detail": truth_detail},
     }
     _carry_pass_clock(report, prior=previous, now=report["generated_at"])
     _write_report(path, report)
@@ -665,6 +684,10 @@ def _run_live(
     saved = {row.get("case_id"): row for row in rows if _final(row) and "proposal" not in row}
     retrying = {row.get("case_id"): row for row in rows if not _final(row)}
     since_ts = reconciled.get("selection_since_ts", now - 86400)
+    activation_cutoff = reconciled.get("activation_cutoff_ts")
+    if activation_cutoff is None:
+        activation_cutoff = since_ts
+    receipt_run_ids: set[str] = set()
     population = retro.live_disputes(
         db=db,
         now=now,
@@ -673,7 +696,8 @@ def _run_live(
         oldest_first=True,
         ungraded_only=True,
         excluded_case_ids=set(saved),
-        known_advised_targets={row["target"] for row in rows if "proposal" in row},
+        advised_run_ids=receipt_run_ids,
+        advised_case_ids={row["case_id"] for row in rows if "proposal" in row and row.get("case_id")},
     )
     population_count = len(
         {row["case_id"] for row in rows} | {retro._case_id(row) for row in population}
@@ -794,24 +818,28 @@ def _run_live(
     # report), so its writer would demote every live decision to needs_more_evidence. A live row
     # was decided on a case certified IN THIS PROCESS at dispatch time; this module records that
     # fact itself (`certification`), grades the advice itself, and labels the number `live`.
-    try:
-        _refresh_live_truth(rows, db)
-    except sqlite3.Error:
-        pass  # SQLite unavailable, proceed without refreshing truth
+    truth_status, truth_detail = _refresh_live_truth(rows, db)
+    if truth_status != "ok":
+        _logger.warning("run_live truth_refresh failed: %s", truth_detail)
     summary = live_summary(rows)
     pending_ts = [row["dispute_ts"] for row in rows if not _final(row) and "dispute_ts" in row]
-    processed_ts = [row["dispute_ts"] for row in rows if "dispute_ts" in row]
     if pending_ts:
         since_ts = min(pending_ts) - 1
-    elif processed_ts:
-        since_ts = max(since_ts, max(processed_ts) - 1)
+    else:
+        since_ts = activation_cutoff
     written = {
         "schema": "adjudicator-live/v1",
         "generated_at": now,
         "selection_since_ts": since_ts,
+        "activation_cutoff_ts": (
+            activation_cutoff
+            if reconciled.get("activation_cutoff_ts") is None
+            else reconciled["activation_cutoff_ts"]
+        ),
         "population": population_count,
         "summary": summary,
         "rows": rows,
+        "truth_refresh": {"status": truth_status, "detail": truth_detail},
     }
     _carry_pass_clock(written, prior=reconciled, now=now)
     _write_report(path, written)
@@ -827,16 +855,25 @@ def _run_live(
     }
 
 
-def _refresh_live_truth(rows: list[dict], db: Path | None) -> None:
-    """Later truth for every live row from the Brain's judged durability, read-only."""
+def _refresh_live_truth(rows: list[dict], db: Path | None) -> tuple[str, str | None]:
+    """Later truth for every live row from the Brain's judged durability, read-only.
+
+    Returns (``ok``, None) or (``failed``, bounded error text). On partial failure,
+    earlier rows may be updated; callers record status and avoid new retirement.
+    """
+    first_err: str | None = None
     for row in rows:
         run_id = row.get("run_id")
         if not isinstance(run_id, str):
             continue
         try:
             row["later_truth"] = retro.native_later_truth(run_id, db)
-        except (OSError, ValueError, TypeError, AttributeError):
-            pass
+        except (OSError, ValueError, TypeError, AttributeError, sqlite3.Error) as exc:
+            if first_err is None:
+                first_err = str(exc)[:200]
+    if first_err is not None:
+        return "failed", first_err
+    return "ok", None
 
 
 UNCERTIFIED_CLASSES: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -1007,6 +1044,7 @@ def m2_pass_clause(
     retired: bool = False,
     window_opened_at: int | None = None,
     first_advised_at: int | None = None,
+    truth_refresh_ok: bool = True,
 ) -> str:
     """The #575 check's M2 live verdict: advised, graded-by-date, agreement, merge rule.
 
@@ -1025,6 +1063,13 @@ def m2_pass_clause(
         first_advised_at=first_advised_at,
     )
     if not summary:
+        return (
+            f"M2 live pass: advised>0 {advised_state}; "
+            f"graded UNKNOWN of {GRADE_TARGET} by {GRADE_DEADLINE} PENDING; "
+            f"agreement UNKNOWN against {MERGE_RULE}; merge-rule UNKNOWN; "
+            f"{window}"
+        )
+    if not truth_refresh_ok:
         return (
             f"M2 live pass: advised>0 {advised_state}; "
             f"graded UNKNOWN of {GRADE_TARGET} by {GRADE_DEADLINE} PENDING; "
@@ -1073,7 +1118,9 @@ def weekly_evidence(
         if not isinstance(report, dict):
             raise TypeError("live report must be an object")
         rows = [row for row in report.get("rows", []) if isinstance(row, dict)]
-        _refresh_live_truth(rows, db)
+        truth_status, truth_detail = _refresh_live_truth(rows, db)
+        if truth_status != "ok":
+            _logger.warning("weekly_evidence truth_refresh failed: %s", truth_detail)
         summary = live_summary(rows)
     except (OSError, ValueError, KeyError, TypeError, AttributeError, sqlite3.Error):
         return (
@@ -1081,9 +1128,12 @@ def weekly_evidence(
             + "; agreement UNKNOWN against 0.75; retirement UNKNOWN; "
             + m2_pass_clause(None, today=today)
         )
+    truth_ok = truth_status == "ok"
     rate = summary["agree"] / summary["graded"] if summary["graded"] else None
-    agreement = "UNKNOWN" if rate is None else f"{rate:.3f}"
+    agreement = "UNKNOWN" if rate is None or not truth_ok else f"{rate:.3f}"
     due = _retirement_due(summary, report)
+    if not truth_ok and not report.get("retirement"):
+        due = False
     retired = "retired" if due else "active shadow"
     date = today
     line = (
@@ -1093,6 +1143,9 @@ def weekly_evidence(
     )
     opened = report.get("window_opened_at")
     first_advised = report.get("first_advised_at")
+    refresh_note = ""
+    if not truth_ok and truth_detail:
+        refresh_note = f"; later_truth_refresh_failed {truth_detail[:120]}"
     return (
         f"{date} {line}; agreement {agreement} against 0.75; "
         f"{retired}; blocking=dispatch retired or switched off; drainable=durability grading; "
@@ -1102,7 +1155,9 @@ def weekly_evidence(
             retired=due,
             window_opened_at=opened if type(opened) is int else None,
             first_advised_at=first_advised if type(first_advised) is int else None,
+            truth_refresh_ok=truth_ok,
         )
+        + refresh_note
     )
 
 
