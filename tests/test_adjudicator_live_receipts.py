@@ -217,3 +217,70 @@ class LiveReceiptTests(unittest.TestCase):
                     self.assertEqual(fourth["rows"][-1]["run_id"], "r-new")
                     self.assertIn("proposal", fourth["rows"][-1])
                     self.assertEqual(len(calls), 2)
+
+    def test_secret_like_target_is_recovered_and_graded_after_durability(self):
+        """`task-management` contains `sk-management`; the receipt redacts it, grading must not."""
+        import adjudicator_retro as retro
+
+        target = "owner/task-management#3"
+        self.assertTrue(feedback.SECRET_VALUE_RE.search(target))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "brain.db"
+            report = root / "live.json"
+            with patch.object(feedback, "DB_PATH", db):
+                with closing(feedback._conn()) as conn, conn:
+                    conn.execute(
+                        "INSERT INTO runs(run_id,ts,target) VALUES ('secret-run',100,?)", (target,)
+                    )
+                    conn.execute(
+                        "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged) "
+                        "VALUES ('secret-run','NON_PASS','PASS',1)"
+                    )
+                dispute = {
+                    "run_id": "secret-run",
+                    "verifier_verdict": "NON_PASS",
+                    "adjudicated_verdict": "PASS",
+                }
+                case_id = retro._case_id(dispute)
+                case = roles._issue_collected_case(
+                    {"target": target, "metadata_only": False}, 10000
+                )
+                entry = {
+                    **dispute,
+                    "case_id": case_id,
+                    "target": target,
+                    "source": "live",
+                    "attempted_at": 101,
+                    "dispute_ts": 100,
+                    "attempts": 1,
+                    "merge_rule_verdict": "PASS",
+                    "cost_usd": None,
+                    "certification": {"status": "certified", "evaluated_sha": "a" * 40},
+                    "decision": "uphold_blocker",
+                    "disposition": "uphold_blocker",
+                    "proposal": {"decision": "uphold_blocker"},
+                }
+                live._persist_live_event(entry, db, case)
+                with closing(sqlite3.connect(db)) as conn:
+                    (raw,) = conn.execute(
+                        "SELECT payload_json FROM completion_events "
+                        "WHERE phase='live_shadow_advice'"
+                    ).fetchone()
+                self.assertEqual(json.loads(raw)["live_shadow"]["target"], live.REDACTED_TARGET)
+
+                # Path 1: the runs table still names the target, so recovery uses it.
+                first = live.reconcile_live(db=db, path=report)
+                self.assertEqual(first["rows"][0]["target"], target)
+                # Path 2: the runs join no longer answers; the cached report target must survive.
+                with closing(feedback._conn()) as conn, conn:
+                    conn.execute("UPDATE runs SET target=NULL WHERE run_id='secret-run'")
+                    conn.execute(
+                        "UPDATE outcomes SET durability='broke_later', durability_checked_ts=? "
+                        "WHERE run_id='secret-run'",
+                        (feedback.DURABILITY_DETECTION_SINCE + 10,),
+                    )
+                graded = live.reconcile_live(db=db, path=report)
+                self.assertEqual(graded["rows"][0]["target"], target)
+                self.assertEqual(live.live_summary(graded["rows"])["graded"], 1)
+                self.assertEqual(retro.live_disputes(db=db, since_ts=0, limit=None), [])

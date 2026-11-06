@@ -938,3 +938,73 @@ def test_the_tick_asks_the_module_whether_the_switch_is_on(monkeypatch):
     needle = 'adjudicator_live.py" --enabled'
     assert text.count(needle) == 1, "the tick reads the live kill switch through the module, once"
     assert "ORCH_ADJUDICATOR_LIVE_SHADOW" not in text, "the shell never reads the switch itself"
+
+
+def test_named_unknown_ref_is_admitted_and_a_mismatched_label_is_rejected(world):
+    """A named test with no runtime-AC result is citable as an UNKNOWN, by its exact label only."""
+    row = {
+        "target": "owner/repo#1",
+        "packet": live.retro.build_packet(
+            {"target": "owner/repo#1"}, live._evidence_for(world["sha"])
+        ),
+    }
+    case = live.certify(
+        row,
+        world["path"].parent / "repo",
+        {"number": 1, "headRefOid": world["sha"], "body": live.AC_BODY},
+        github_reader=lambda _args: {"total_count": 0, "check_runs": []},
+        runtime_events_reader=lambda: [],
+    )
+    snapshot = live.roles._collected_snapshot(case)["ground_truth_evidence"]
+    named = snapshot["live_execution_evidence"]["named_unknowns"]
+    assert [item["command"] for item in named] == ["tests/test_proof.py::test_proof"]
+    unknown_ref = retro.runtime_ac_unknown_ref(world["sha"], "tests/test_proof.py::test_proof")
+    assert unknown_ref in snapshot["qualified_ground_truth_refs"]
+    # Mismatched labels — another sha's ref, or a smuggled path — never enter the allowlist.
+    for forged_label in (
+        retro.runtime_ac_unknown_ref("b" * 40, "tests/test_proof.py::test_proof"),
+        "git-path:proof.txt",
+    ):
+        forged = {
+            "live_execution_evidence": {
+                "evaluated_sha": world["sha"],
+                "named_unknowns": [
+                    {
+                        "command": "tests/test_proof.py::test_proof",
+                        "sha": world["sha"],
+                        "evidence_ref": forged_label,
+                    }
+                ],
+            }
+        }
+        assert retro.live_execution_ground_truth_refs(forged, world["sha"]) == set()
+
+
+def test_late_verdict_on_older_run_is_selected_after_newer_run_was_processed(world):
+    """Run A (older ts) gains its adjudicated verdict after run B (newer ts) was advised."""
+    common = world["common"]
+    a_ts, b_ts = world["now"] - 3000, world["now"] - 1000
+    with feedback._conn() as conn:
+        conn.execute("DELETE FROM outcomes WHERE run_id='live-1'")
+        conn.execute("DELETE FROM runs WHERE run_id='live-1'")
+        conn.execute(
+            "INSERT INTO runs(run_id,ts,target) VALUES ('run-a',?,'owner/repo#1')", (a_ts,)
+        )
+        conn.execute(
+            "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged) "
+            "VALUES ('run-a','NON_PASS',NULL,1)"
+        )
+        conn.execute(
+            "INSERT INTO runs(run_id,ts,target) VALUES ('run-b',?,'owner/repo#1')", (b_ts,)
+        )
+        conn.execute(
+            "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged) "
+            "VALUES ('run-b','NON_PASS','PASS',1)"
+        )
+    first = live.run_live(**{**common, "now": world["now"] + 1})
+    assert [row["run_id"] for row in first["rows"]] == ["run-b"]
+    assert not any(not live._final(row) for row in first["rows"])  # no pending rows
+    with feedback._conn() as conn:
+        conn.execute("UPDATE outcomes SET adjudicated_verdict='PASS' WHERE run_id='run-a'")
+    second = live.run_live(**{**common, "now": world["now"] + 2})
+    assert second["attempted"] == 1 and second["rows"][-1]["run_id"] == "run-a"

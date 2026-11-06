@@ -480,6 +480,11 @@ def _load_rows(path: Path) -> list[dict]:
     return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
 
 
+# feedback's completion-event sanitizer replaces a secret-like string with this value. A target
+# such as `owner/task-management#3` matches its `sk-` pattern, so the sentinel is "no target".
+REDACTED_TARGET = "[REDACTED]"
+
+
 def _event_rows(db: Path | None = None) -> list[dict]:
     """Recover advice/refusals from the private or production Brain, without writes."""
     with sqlite3.connect(f"file:{(db or feedback.DB_PATH).resolve()}?mode=ro", uri=True) as conn:
@@ -494,7 +499,7 @@ def _event_rows(db: Path | None = None) -> list[dict]:
             shadow = json.loads(raw)["live_shadow"]
             row = dict(shadow)
             tgt = row.get("target")
-            if not isinstance(tgt, str) or not tgt.strip():
+            if not isinstance(tgt, str) or not tgt.strip() or tgt == REDACTED_TARGET:
                 if isinstance(join_target, str) and join_target.strip():
                     row["target"] = join_target.strip()
                 elif isinstance(event_run_id, str) and event_run_id:
@@ -586,12 +591,16 @@ def _reconcile_live(*, db: Path | None = None, path: Path | None = None) -> dict
     for row in _event_rows(db):
         # The event commit precedes the report replace; a stale failed report cannot win.
         previous_row = by_id.get(row["case_id"], {})
+        if row.get("target") == REDACTED_TARGET:
+            row.pop("target")
         merged = {**previous_row, **row}
         if previous_row.get("proposal") and previous_row["proposal"].get("decision") == row.get(
             "decision"
         ):
             merged["proposal"] = previous_row["proposal"]
-        if (not (merged.get("target") or "").strip()) and (previous_row.get("target") or "").strip():
+        if (
+            not (merged.get("target") or "").strip() or merged.get("target") == REDACTED_TARGET
+        ) and (previous_row.get("target") or "").strip() not in ("", REDACTED_TARGET):
             merged["target"] = previous_row["target"]
         by_id[row["case_id"]] = merged
     rows = list(by_id.values())
