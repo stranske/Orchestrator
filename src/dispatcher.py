@@ -707,6 +707,8 @@ def _is_transient_network_failure(
 # Recorded 2026-11-05 before this existed: host `gh api rate_limit` succeeded
 # (core remaining 4733) while assess argv was `--sandbox read-only` and nothing on
 # main probed or fell back. See docs/receipts/assess-sandbox-network-baseline-2026-11-05.md.
+# The child probe uses `codex sandbox --permission-profile …` plus `-c` overrides
+# (current Codex CLI rejects `sandbox --sandbox`, which `exec` still accepts).
 SANDBOX_NETWORK_PROBE_TIMEOUT_S = 5.0
 ASSESS_FALLBACK_PREAMBLE = "Do not create, modify or delete any file; print your answer to stdout"
 ASSESS_FALLBACK_DIAGNOSTIC = (
@@ -748,26 +750,45 @@ _PROBE_AUTH_API_PATTERNS = (
 
 
 def _sandbox_probe_command(offload_argv: list[str]) -> list[str]:
-    """`gh api rate_limit` under the sandbox named by the offload argv.
+    """`gh api rate_limit` under the same Codex seatbelt policy as the assess argv.
 
-    This is Codex's `sandbox` subcommand, not a host DNS lookup: `--sandbox` and
-    `--cd` are copied from the command the assess offload is about to run.
+    The installed ``codex sandbox`` CLI does not accept ``exec``'s ``--sandbox``
+    flag; it uses ``--permission-profile`` and ``-c`` overrides. We mirror the
+    assess child's ``--sandbox read-only`` (or ``workspace-write`` when emitted)
+    by naming that profile and merging a minimal permissions table so the
+    probe can resolve ``gh`` on PATH under read-only roots.
     """
     binary = offload_argv[0] if offload_argv else "codex"
-    sandbox = "read-only"
+    sandbox_mode = "read-only"
     cd = None
     if "--sandbox" in offload_argv:
         index = offload_argv.index("--sandbox")
         if index + 1 < len(offload_argv):
-            sandbox = offload_argv[index + 1]
+            sandbox_mode = offload_argv[index + 1]
     if "--cd" in offload_argv:
         index = offload_argv.index("--cd")
         if index + 1 < len(offload_argv):
             cd = offload_argv[index + 1]
-    command = [str(binary), "sandbox", "--sandbox", str(sandbox)]
-    if cd is not None:
-        command += ["--cd", str(cd)]
-    return command + ["--", "gh", "api", "rate_limit"]
+    # Permission profile id matches codex `exec --sandbox <mode>` modes.
+    profile = str(sandbox_mode)
+    permissions = "permissions={" + profile + "={network={access=\"allow\"}}}"
+    return [
+        str(binary),
+        "sandbox",
+        "--permission-profile",
+        profile,
+        "-c",
+        permissions,
+        "-c",
+        'sandbox_permissions=["disk-full-read-access"]',
+        "-c",
+        "shell_environment_policy.inherit=all",
+        *(["--cd", str(cd)] if cd is not None else []),
+        "--",
+        "bash",
+        "-lc",
+        "gh api rate_limit",
+    ]
 
 
 def _probe_json_has_rate(text: str) -> bool:

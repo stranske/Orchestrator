@@ -58,7 +58,11 @@ def _install_run(monkeypatch, probe, *, agent_exit: int = 0, agent_stdout: str =
         calls.append({"cmd": argv, "timeout": kwargs.get("timeout"), "cwd": cwd})
         if argv[:2] == ["bash", "-lc"]:
             return subprocess.CompletedProcess(cmd, agent_exit, agent_stdout, "")
-        if "sandbox" in argv and "rate_limit" in argv:
+        # Child network probe: `codex sandbox … bash -lc 'gh api rate_limit'`
+        # (no longer a bare `rate_limit` argv token).
+        if argv[:2] == ["codex", "sandbox"] and any(
+            isinstance(a, str) and "rate_limit" in a for a in argv
+        ):
             result = probe(argv, kwargs)
             if isinstance(result, BaseException):
                 raise result
@@ -77,7 +81,12 @@ def _shell(calls: list[dict]) -> str:
 
 
 def _probe_call(calls: list[dict]) -> dict:
-    return next(call for call in calls if "rate_limit" in call["cmd"])
+    return next(
+        call
+        for call in calls
+        if call["cmd"][:2] == ["codex", "sandbox"]
+        and any(isinstance(a, str) and "rate_limit" in a for a in call["cmd"])
+    )
 
 
 def _ledger(tmp_path: Path) -> list[dict]:
@@ -124,22 +133,17 @@ def test_sandbox_probe_command_is_inside_the_assess_sandbox(tmp_path, monkeypatc
         return _completed(cmd, 1, "", "dial tcp: lookup api.github.com: no such host")
 
     monkeypatch.setattr(dispatcher.subprocess, "run", run)
-    verdict = dispatcher._sandbox_has_network(
-        ["codex", "exec", "--sandbox", "read-only", "--cd", str(tmp_path), "brief"],
-        cwd=str(tmp_path),
-    )
-    assert seen["cmd"] == [
-        "codex",
-        "sandbox",
-        "--sandbox",
-        "read-only",
-        "--cd",
-        str(tmp_path),
-        "--",
-        "gh",
-        "api",
-        "rate_limit",
-    ]
+    assess_argv = ["codex", "exec", "--sandbox", "read-only", "--cd", str(tmp_path), "brief"]
+    verdict = dispatcher._sandbox_has_network(assess_argv, cwd=str(tmp_path))
+    expected = dispatcher._sandbox_probe_command(assess_argv)
+    assert seen["cmd"] == expected
+    assert seen["cmd"][:2] == ["codex", "sandbox"]
+    assert seen["cmd"][2:4] == ["--permission-profile", "read-only"]
+    assert "disk-full-read-access" in "".join(seen["cmd"])
+    assert seen["cmd"][-4:] == ["--", "bash", "-lc", "gh api rate_limit"]
+    assert not (
+        len(seen["cmd"]) >= 3 and seen["cmd"][1] == "sandbox" and seen["cmd"][2] == "--sandbox"
+    ), "regression: `codex sandbox` does not accept exec's `--sandbox` (clap rejects)"
     assert seen["timeout"] <= dispatcher.SANDBOX_NETWORK_PROBE_TIMEOUT_S == 5.0
     assert verdict["classification"] == "dns" and verdict["has_network"] is False
 
@@ -206,7 +210,9 @@ def test_sandbox_network_failure_falls_back_to_workspace_write(tmp_path, monkeyp
     )
     assert "read-only" not in shell
     probe = _probe_call(calls)
-    assert probe["cmd"][1:4] == ["sandbox", "--sandbox", "read-only"]
+    assert probe["cmd"][:2] == ["codex", "sandbox"]
+    assert probe["cmd"][2:4] == ["--permission-profile", "read-only"]
+    assert probe["cmd"][-4:] == ["--", "bash", "-lc", "gh api rate_limit"]
     assert probe["timeout"] <= 5.0
     assert result["sandbox"] == "workspace-write" and result["sandbox_fallback"] is True
     assert result["sandbox_network"]["classification"] == "dns"
