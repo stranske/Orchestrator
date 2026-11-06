@@ -742,9 +742,9 @@ def _validate_results(manifest: dict[str, Any], results: dict[str, Any]) -> list
             raise ValueError("trial attempt missing CLI-reported model")
         if attempt.get("reported_model") != request["requested_model"]:
             raise ValueError("trial stopped because reported model differs from requested model")
-        if attempt.get("provider_resolved_provider") != request["provider"]:
+        if attempt.get("provider_resolved_provider") is not None and attempt.get("provider_resolved_provider") != request["provider"]:
             raise ValueError("trial attempt missing exact provider-resolved provider")
-        if attempt.get("provider_resolved_model") != request["requested_model"]:
+        if attempt.get("provider_resolved_model") is not None and attempt.get("provider_resolved_model") != request["requested_model"]:
             raise ValueError("trial attempt missing exact provider-resolved model")
         if not str(attempt.get("runner_version") or "").strip():
             raise ValueError("trial attempt missing runner version")
@@ -893,7 +893,11 @@ def _authoritative_identity_verified(attempts: list[dict[str, Any]]) -> bool:
         if not isinstance(artifact, dict):
             return False
         for field in ("profile_id", "provider_resolved_provider", "provider_resolved_model"):
-            if not attempt.get(field) or artifact.get(field) != attempt[field]:
+            attempt_value = attempt.get(field)
+            artifact_value = artifact.get(field)
+            if attempt_value is None and artifact_value is None:
+                continue
+            if attempt_value != artifact_value:
                 return False
         if authority == WORKFLOWS_TRIAL_IDENTITY_AUTHORITY:
             continue
@@ -1324,10 +1328,11 @@ def _identity_artifact(directory: Path, request: dict[str, Any], measured: dict[
     independent = measured.get("identity_source") == "openai-response"
     payload: dict[str, Any] = {
         "profile_id": request["profile_id"],
-        "provider_resolved_model": measured["model"],
-        "provider_resolved_provider": measured["provider"],
         "independent_provider_identity": independent,
     }
+    if independent:
+        payload["provider_resolved_model"] = measured["model"]
+        payload["provider_resolved_provider"] = measured["provider"]
     if measured.get("response_id"):
         payload["object"] = "response"
         payload["response_id"] = measured["response_id"]
@@ -1380,7 +1385,8 @@ def results_from_codex_sessions(
     all_independent = True
     for request in requests:
         measured = measured_by_run[request["run_id"]]
-        if measured.get("identity_source") != "openai-response":
+        identity_source = measured.get("identity_source")
+        if identity_source != "openai-response":
             all_independent = False
         qualities.setdefault(request["profile_id"], []).append(float(measured["quality"]))
         attempts.append(
@@ -1391,8 +1397,8 @@ def results_from_codex_sessions(
                 "requested_model": request["requested_model"],
                 "selected_model": measured["model"],
                 "reported_model": measured["model"],
-                "provider_resolved_provider": measured["provider"],
-                "provider_resolved_model": measured["model"],
+                "provider_resolved_provider": measured["provider"] if identity_source == "openai-response" else None,
+                "provider_resolved_model": measured["model"] if identity_source == "openai-response" else None,
                 "fallback_reason": None,
                 "runner_version": runner_version,
                 "cli_version": cli_version,

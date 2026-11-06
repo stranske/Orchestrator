@@ -437,15 +437,19 @@ def test_server_model_publishes_quality_cost_not_verified_for_ingest(tmp_path, m
     for profile_id in trial.CURRENT_TRIAL_PROFILE_IDS:
         attempts = [row for row in manifest["requests"] if row["profile_id"] == profile_id]
         assert summary["provider_resolved_identity_by_profile"][profile_id] == {
-            "provider": "openai",
-            "model": attempts[0]["requested_model"],
+            "provider": None,
+            "model": None,
         }
         assert summary["cost_tokens_by_profile"][profile_id]["tokens_in"] == sum(
             10 * int(row["launch_ordinal"]) for row in attempts
         )
+    first_request = manifest["requests"][0]
     artifact = json.loads(next((tmp_path / "artifacts").glob("identity-*.json")).read_text())
     assert artifact["object"] == "turn.completed"
-    assert artifact["server_model"] == artifact["provider_resolved_model"]
+    assert "provider_resolved_model" not in artifact
+    assert "provider_resolved_provider" not in artifact
+    assert "server_model" in artifact
+    assert artifact["server_model"] == first_request["requested_model"]
     assert "response_id" not in artifact
     assert artifact.get("independent_provider_identity") is False
 
