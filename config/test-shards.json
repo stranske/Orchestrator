@@ -330,6 +330,7 @@
       "tests/test_profile_trial_ingest.py",
       "tests/test_profile_trial_summary.py",
       "tests/test_issue1178_coverage.py",
+      "tests/test_issue1178_ranked_coverage.py",
       "tests/test_rail_exercise_layout.py",
       "tests/test_range_lane_rollout_coverage_gaps.py",
       "tests/test_redirect_chain_gate.py",
