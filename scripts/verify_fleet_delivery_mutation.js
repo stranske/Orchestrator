@@ -119,8 +119,10 @@ function runTest(root, runner, python, control) {
   });
 }
 
-async function verify(root, runner = 'pytest', python = process.env.PYTHON || '/opt/anaconda3/bin/python3', run = runTest, control = controls.gate_cancellations) {
+async function verify(root, runner = 'pytest', python = process.env.PYTHON, run = runTest, control = controls.gate_cancellations) {
   assert.ok(['pytest', 'unittest'].includes(runner), 'unknown test runner');
+  assert.ok(typeof python === 'string' && python.trim(),
+    'set PYTHON to the repository-selected interpreter');
   const { anchor, mutant } = mutation(control);
   const file = path.join(root, 'src/switch_review.py');
   const original = fs.readFileSync(file);
@@ -138,10 +140,12 @@ async function verify(root, runner = 'pytest', python = process.env.PYTHON || '/
   return `${runner}: baseline passed; fail-open mutation detected; restored test passed`;
 }
 
-async function runIsolated(argv = process.argv.slice(2), python = process.env.PYTHON || '/opt/anaconda3/bin/python3') {
+async function runIsolated(argv = process.argv.slice(2), python = process.env.PYTHON) {
   assert.ok(new Set(argv).size === argv.length
     && argv.every((arg) => ['--unittest', '--all-readers'].includes(arg)),
   'usage: node scripts/verify_fleet_delivery_mutation.js [--unittest] [--all-readers]');
+  assert.ok(typeof python === 'string' && python.trim(),
+    'set PYTHON to the repository-selected interpreter');
   const repo = path.resolve(__dirname, '..');
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-delivery-mutation-'));
   try {

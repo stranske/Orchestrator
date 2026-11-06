@@ -69,10 +69,12 @@ function runCommand(python, args, options) {
 }
 
 async function verifyLive(outputDir, {
-  python = process.env.PYTHON || '/opt/anaconda3/bin/python3',
+  python = process.env.PYTHON,
   run = runCommand,
   now = Date.now,
 } = {}) {
+  assert.ok(typeof python === 'string' && python.trim(),
+    'set PYTHON to the repository-selected interpreter');
   const root = path.resolve(__dirname, '..');
   const destination = path.resolve(outputDir);
   // Refuse reused evidence directories, so an old successful report cannot survive a failed run.

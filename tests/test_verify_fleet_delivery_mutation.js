@@ -64,6 +64,21 @@ test('reader options reject misspellings and duplicates', async () => {
   }
 });
 
+test('mutation verification requires explicit interpreter selection', async (t) => {
+  const previous = process.env.PYTHON;
+  delete process.env.PYTHON;
+  t.after(() => {
+    if (previous === undefined) delete process.env.PYTHON;
+    else process.env.PYTHON = previous;
+  });
+  for (const python of [undefined, '', '   ', 42]) {
+    await assert.rejects(runIsolated(['--all-readers'], python),
+      /set PYTHON to the repository-selected interpreter/);
+    await assert.rejects(verify('/unused', 'pytest', python),
+      /set PYTHON to the repository-selected interpreter/);
+  }
+});
+
 test('missing tools, skipped tests and unrelated failures cannot count as mutation evidence', () => {
   for (const runner of ['pytest', 'unittest']) {
     for (const result of [

@@ -103,6 +103,24 @@ test('a missing interpreter fails without a fallback or success receipt', async 
   assert.ok(!fs.existsSync(path.join(output, 'check.json')));
 });
 
+test('live verification requires explicit interpreter selection before creating evidence', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-live-selection-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const previous = process.env.PYTHON;
+  delete process.env.PYTHON;
+  t.after(() => {
+    if (previous === undefined) delete process.env.PYTHON;
+    else process.env.PYTHON = previous;
+  });
+  for (const python of [undefined, '', '   ', 42]) {
+    const output = path.join(root, `evidence-${String(python).length}`);
+    await assert.rejects(verifyLive(output, {
+      python, run: async () => assert.fail('unselected interpreter executed'),
+    }), /set PYTHON to the repository-selected interpreter/);
+    assert.ok(!fs.existsSync(output), 'unselected interpreter created evidence directory');
+  }
+});
+
 test('a successful command with an incomplete report cannot leave a success receipt', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-live-incomplete-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -110,7 +128,7 @@ test('a successful command with an incomplete report cannot leave a success rece
   const { report, text } = example();
   delete report.fleet_delivery_measures.rows.released_flow;
   await assert.rejects(verifyLive(output, {
-    now: () => checked,
+    python: '/selected/venv/bin/python', now: () => checked,
     run: async () => {
       fs.writeFileSync(path.join(output, 'report.txt'), text);
       return JSON.stringify(report);

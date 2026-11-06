@@ -1,5 +1,54 @@
 # Fleet delivery measures — runner checks
 
+## Explicit interpreter selection — 2026-11-06 01:38Z
+
+Both fleet verification scripts now require an explicit `PYTHON` selection
+(or the programmatic interpreter argument). They no longer silently use
+`/opt/anaconda3/bin/python3`, which conflicts with the repository's Python
+3.14/3.13 selection rule in `scripts/usage_poll/py-standard.sh`. Missing,
+empty, whitespace-only and non-string selections fail before creating live
+evidence, copying the mutation sandbox or reading source for mutation. The two
+new regression tests failed before the fix and pass afterward.
+
+Runner interpreter: `/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3`,
+selected with `ORCH_STANDARD_PYTHON` through `py-standard.sh`. This is hosted
+runner evidence at base head `017953852b179a919be04849f940825bf461b5c8`,
+not target-machine acceptance:
+
+- `PYTHON=<runner interpreter> node --test --test-isolation=none
+  tests/test_verify_fleet_delivery_live.js
+  tests/test_verify_fleet_delivery_mutation.js`: all 16 tests pass. The real
+  unittest controls detect all five reader mutations and pass after restoring
+  the original source bytes; the checkout source remains unchanged.
+- `PYTHONPATH=src python3 -m unittest discover -s tests -p
+  test_switch_review_fleet.py -q`: all 27 tests pass.
+- `PYTHON=<runner interpreter> node scripts/verify_fleet_delivery_live.js
+  /tmp/issue-1186-explicit-python-20261106T0141`: exits zero; `check.json`
+  records `2026-11-06T01:38:08.089Z` and validates all five text rows. Four
+  GitHub rows explicitly report connectivity failures; the opener row reports
+  an unsuccessful local helper invocation (exit 2). All are unmeasured. The
+  directory's name is only an identifier; the receipt supplies the actual date.
+- The selected interpreter's `-m pytest tests/test_switch_review_fleet.py
+  -m "not slow"` and pytest-mode `--all-readers` both fail because pytest is
+  absent. `ORCH_STANDARD_PYTHON=<runner interpreter>
+  PYTEST_ADDOPTS='-m "not slow"' timeout 55s python3 -u src/verify.py` exits
+  124 without output or a verdict. No acceptance checkbox is newly complete.
+- No Python file changed in this round; the commit contains JavaScript source,
+  JavaScript tests and this receipt. `git diff --check` passes.
+
+PR #1187 is open and ready (`draft=false`). Its checked target-machine task
+remains unsupported by these results. Posting the blocker comment and adding
+`needs-human` were rejected with `MCP tool call requires approval, but approval
+policy is never`. All four acceptance commands still require the target
+machine and its selected interpreter with pytest installed.
+
+The runner mounts this checkout's `.git` read-only, so the normal `git add`
+fails creating `index.lock`. This round's commit is prepared with a writable
+local clone's Git metadata and retained as
+`/tmp/issue-1186-fleet-verification.bundle`; the checkout's branch reference
+cannot be advanced here. The source changes remain in the checkout for the
+automation's normal collection.
+
 ## Flow-only detail failure regression — 2026-11-06 01:25Z
 
 Expanded the existing fleet failure regression and its JSON fixture to cover
