@@ -666,3 +666,36 @@ checks passed. The read-only Git index prevents staging in the main checkout;
 the tested changes are retained in
 `/tmp/orchestrator-1175-provenance-types-commit-gh5zv203`, with a handoff patch at
 `/tmp/orchestrator-1175-provenance-types.patch`.
+
+## Explicit filter-marker verification (2026-11-06)
+
+The export branch's latest artifact-changing commit is
+[`2145116d6046609f5b9e5068a7c226642303ccaf`](https://github.com/stranske/Orchestrator/commit/2145116d6046609f5b9e5068a7c226642303ccaf).
+Reading `config/route-weights.json` at that exact commit confirms
+`generated_at = 2026-10-24T12:52:31Z`, no `exploration.challenger_filter`, and
+`gemini` challengers. This artifact cannot establish the required deployment;
+its generation and commit clocks are not publication audit evidence.
+
+Extended the real merge/publication CLI regression with ten cases. Even a valid
+challenger map cannot prove deployment when its filter marker is missing, null,
+an object, an unknown version, or a version with an unverified suffix. After the
+first explicitly marked publication, claiming any earlier unverified commit must
+preserve receipt bytes and modification time. Reusing the verified audit recovers
+the same receipt without republishing. All repositories, home, state, and database
+paths remain temporary. No Python or protected files changed.
+
+Verification: 94 publication CLI tests, 16 deployment unittests, and 5 report CLI
+tests passed; JavaScript syntax and diff whitespace checks passed. Disposable
+copies that infer the filter from challenger values or accept a version prefix
+fail the new missing-marker and version-suffix cases, respectively.
+
+No production task is newly complete. The authentic deployment audit and production
+database remain unavailable. Observation requires both 2026-11-08 and fourteen
+days after verified deployment. The named Anaconda pytest command cannot start
+because its interpreter is absent. PR #1196 is open and ready for review. The
+connector rejected both the blocker comment and `needs-human` label with
+`MCP tool call requires approval, but approval policy is never`.
+
+The checkout's read-only Git index rejected staging. The tested changes are
+retained in `/tmp/orchestrator-1175-filter-marker-commit`, with a handoff patch at
+`/tmp/orchestrator-1175-filter-marker.patch`.

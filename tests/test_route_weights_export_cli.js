@@ -248,20 +248,14 @@ test('deployment CLI records the export merge rather than an unpublished or side
   await git(root, 'init', '--bare', '--initial-branch=main', remote);
   await git(root, 'clone', remote, checkout);
   fs.mkdirSync(path.dirname(artifact), { recursive: true });
-  fs.writeFileSync(artifact, JSON.stringify({ generated_at: document.generated_at }));
+  const unmarked = structuredClone(document);
+  delete unmarked.exploration.challenger_filter;
+  fs.writeFileSync(artifact, JSON.stringify(unmarked));
   await git(checkout, 'add', '.');
   await git(checkout, 'commit', '-m', 'unmarked export fixture');
   await git(checkout, 'switch', '-c', branch);
   await git(checkout, 'push', 'origin', branch);
   const initial = await git(remote, 'rev-parse', branch);
-
-  // A valid artifact exists locally, then on another remote branch. Neither
-  // establishes a publication on the export branch named in the receipt.
-  await git(checkout, 'switch', '-c', 'filter-candidate');
-  fs.writeFileSync(artifact, JSON.stringify(document));
-  await git(checkout, 'add', '.');
-  await git(checkout, 'commit', '-m', 'candidate filter fixture');
-  const candidate = await git(checkout, 'rev-parse', 'HEAD');
   const record = async (commit) => {
     fs.writeFileSync(audit, JSON.stringify({
       published_commit: commit,
@@ -281,10 +275,43 @@ test('deployment CLI records the export merge rather than an unpublished or side
     assert.doesNotMatch(result.stderr, /Traceback/);
     assert.deepEqual(fs.readdirSync(state), []);
   };
+  // A plausible challenger map cannot prove which filter produced it. Missing,
+  // malformed, and unrecognized version markers must not start observation.
+  const unverified = [['missing marker', initial]];
+  await t.test('refuses missing marker despite a valid challenger map', async () => {
+    await refuse(initial);
+  });
+  for (const [name, marker] of [
+    ['null marker', null],
+    ['object marker', { version: 'hosted-runnable-alternatives/v1' }],
+    ['unknown version', 'hosted-runnable-alternatives/v2'],
+    ['version suffix', 'hosted-runnable-alternatives/v1-unverified'],
+  ]) {
+    await t.test(`refuses ${name} despite a valid challenger map`, async () => {
+      fs.writeFileSync(artifact, JSON.stringify({
+        ...document, exploration: { ...document.exploration, challenger_filter: marker },
+      }));
+      await git(checkout, 'add', '.');
+      await git(checkout, 'commit', '-m', `${name} fixture`);
+      await git(checkout, 'push', 'origin', branch);
+      const commit = await git(remote, 'rev-parse', branch);
+      unverified.push([name, commit]);
+      await refuse(commit);
+    });
+  }
+  const unverifiedTip = await git(remote, 'rev-parse', branch);
+
+  // A valid artifact exists locally, then on another remote branch. Neither
+  // establishes a publication on the export branch named in the receipt.
+  await git(checkout, 'switch', '-c', 'filter-candidate');
+  fs.writeFileSync(artifact, JSON.stringify(document));
+  await git(checkout, 'add', '.');
+  await git(checkout, 'commit', '-m', 'candidate filter fixture');
+  const candidate = await git(checkout, 'rev-parse', 'HEAD');
   await refuse(candidate);
   await git(checkout, 'push', 'origin', 'filter-candidate');
   await refuse(candidate);
-  assert.equal(await git(remote, 'rev-parse', branch), initial);
+  assert.equal(await git(remote, 'rev-parse', branch), unverifiedTip);
 
   // A merge is the first commit exposing the filter on the export branch.
   // The candidate is now reachable, but it was never the published branch tip.
@@ -308,6 +335,24 @@ test('deployment CLI records the export merge rather than an unpublished or side
   assert.equal(recorded.deployed_at, '2026-11-04T11:00:00Z');
   assert.equal(recorded.deployed_epoch, Date.parse(recorded.deployed_at) / 1000);
   assert.deepEqual(JSON.parse(fs.readFileSync(receipt, 'utf8')), recorded);
+  const retained = fs.readFileSync(receipt);
+  const modified = fs.statSync(receipt, { bigint: true }).mtimeNs;
+  for (const [name, commit] of unverified) {
+    await t.test(`retains verified publication when claiming earlier ${name}`, async () => {
+      const result = await record(commit);
+      assert.equal(result.status, 1, result.stderr);
+      assert.equal(result.stdout, '');
+      assert.match(result.stderr, /not the first verified challenger-filter publication/);
+      assert.doesNotMatch(result.stderr, /Traceback/);
+      assert.deepEqual(fs.readFileSync(receipt), retained);
+      assert.equal(fs.statSync(receipt, { bigint: true }).mtimeNs, modified);
+    });
+  }
+  const recovered = await record(merged);
+  assert.equal(recovered.status, 0, recovered.stderr);
+  assert.deepEqual(JSON.parse(recovered.stdout), recorded);
+  assert.deepEqual(fs.readFileSync(receipt), retained);
+  assert.equal(fs.statSync(receipt, { bigint: true }).mtimeNs, modified);
   assert.equal(await git(remote, 'rev-parse', branch), merged);
   assert.equal(fs.existsSync(database), false);
   assert.deepEqual(fs.readdirSync(home), []);
