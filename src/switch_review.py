@@ -2334,7 +2334,11 @@ def not_counted_phrase(row: dict) -> str:
 
 
 def profile_trial_summary_line() -> str | None:
-    """One-line profile-trial status from the capability-program artifact, when present."""
+    """One-line profile-trial status from the capability-program artifact, when present.
+
+    Quality and cost use one profile order, so the slash-separated ``a/b`` segments name the
+    same profiles. Identity is Y only for a real boolean verification; any other value is N.
+    """
     path = (
         Path(os.environ.get("ORCH_STATE_DIR", str(Path.home() / ".codex" / "orchestrator")))
         / "capability-program"
@@ -2352,17 +2356,23 @@ def profile_trial_summary_line() -> str | None:
             return None
         if any(not isinstance(row, dict) for row in costs.values()):
             return None
+        if any(not isinstance(pid, str) for pid in (*costs, *quality)):
+            return None
     except (OSError, json.JSONDecodeError, TypeError, ValueError, OverflowError):
         return None
-    identity = "Y" if payload.get("identity_verified") else "N"
+    identity = "Y" if payload.get("identity_verified") is True else "N"
+    # One order for both segments. A profile present on only one side stays in that slot as n/a,
+    # so quality a/b and cost a/b cannot describe different profiles.
+    profile_ids = sorted(set(costs) | set(quality))
     cost_bits = (
         "/".join(
-            f"{costs[pid].get('tokens_in', 'n/a')}in+{costs[pid].get('tokens_out', 'n/a')}out"
-            for pid in sorted(costs)
+            f"{(costs.get(pid) or {}).get('tokens_in', 'n/a')}in+"
+            f"{(costs.get(pid) or {}).get('tokens_out', 'n/a')}out"
+            for pid in profile_ids
         )
         or "n/a"
     )
-    qual_bits = "/".join(str(quality.get(pid, "n/a")) for pid in sorted(quality)) or "n/a"
+    qual_bits = "/".join(str(quality.get(pid, "n/a")) for pid in profile_ids) or "n/a"
     return (
         f"profile trial: profiles {profiles}, instances {instances}, "
         f"identity verified {identity}, quality {qual_bits}, cost {cost_bits}"
