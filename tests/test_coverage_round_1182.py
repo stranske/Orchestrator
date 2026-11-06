@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
+import socket
+import subprocess
+import tempfile
 from datetime import datetime, timezone
 
 import pytest
@@ -23,6 +27,47 @@ def isolated_runtime(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path / "runtime"))
     monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "runtime" / "feedback.db")
     (tmp_path / "runtime").mkdir(parents=True, exist_ok=True)
+
+    attempted_external = []
+
+    def guarded_subprocess_run(cmd, **kwargs):
+        if (
+            cmd
+            and cmd[0] == "gh"
+            and len(cmd) >= 3
+            and cmd[1] == "api"
+            and "langsmith_fleet_registry.json" in cmd[2]
+        ):
+            raw = json.dumps({"repos": []}).encode()
+            body = json.dumps(
+                {"content": base64.b64encode(raw).decode("ascii")}
+            )
+            return type("Proc", (), {"returncode": 0, "stdout": body, "stderr": ""})()
+        attempted_external.append((cmd, kwargs))
+        pytest.fail("tests/test_coverage_round_1182.py attempted unstubbed external I/O")
+
+    def forbid_external(*args, **kwargs):
+        attempted_external.append((args, kwargs))
+        pytest.fail("tests/test_coverage_round_1182.py attempted external I/O")
+
+    monkeypatch.setattr(subprocess, "run", guarded_subprocess_run)
+    monkeypatch.setattr(subprocess, "Popen", forbid_external)
+    monkeypatch.setattr(socket, "socket", forbid_external)
+    monkeypatch.setattr(socket, "create_connection", forbid_external)
+
+    real_mkdtemp = tempfile.mkdtemp
+
+    def mkdtemp_under_tmp(suffix="", prefix=None, dir=None):
+        root = tmp_path / "_tempfile_root"
+        root.mkdir(parents=True, exist_ok=True)
+        # Always parent beneath tmp_path so selftests never allocate outside the test sandbox.
+        return real_mkdtemp(suffix=suffix, prefix=prefix or "tmp", dir=str(root))
+
+    monkeypatch.setattr(tempfile, "mkdtemp", mkdtemp_under_tmp)
+
+    yield
+
+    assert attempted_external == []
 
 
 def _capacity_payload() -> dict:
@@ -85,7 +130,7 @@ def test_choose_mode_aliases_and_deficits():
     assert ec.choose_mode(tied, "auto", now=week) == "thompson-hybrid"
 
 
-def test_filter_backlog_low_risk_and_sanitize_paths():
+def test_filter_backlog_low_risk_and_sanitize_paths(monkeypatch):
     plan = {
         "candidate_task_types": [
             {"task_type": "epic", "recommended": True},
@@ -105,11 +150,9 @@ def test_filter_backlog_low_risk_and_sanitize_paths():
             ]
         }
     }
-    monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(router, "ROUTE_TABLE", late_table)
     assert ec._entry_is_late("implement", {"agent": "codex", "mode": "full"}) is True
     assert ec._entry_is_late("implement", {"agent": "claude", "mode": "full"}) is False
-    monkeypatch.undo()
 
     decision = {
         "assignments": [
@@ -126,10 +169,15 @@ def test_filter_backlog_low_risk_and_sanitize_paths():
             {"lane": "opener", "task_type": "implement", "agent": "codex", "exploration": False},
         ]
     }
-    with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(router, "ROUTE_TABLE", late_table)
-        mp.setattr(router, "BACKUP_AGENTS", {"aider"})
-        clean, rejected = ec._sanitize_decision(decision, require_exploration=True)
+    monkeypatch.setattr(router, "BACKUP_AGENTS", {"aider"})
+    clean, rejected = ec._sanitize_decision(decision, require_exploration=True)
+    assert [row["reason"] for row in rejected] == [
+        "not opener lane",
+        "not a low-risk supervised-collection task type",
+        "backup/paygo agent is not allowed in supervised exploration windows",
+        "late/paygo route entry is not allowed in supervised exploration windows",
+        "non-exploratory assignment does not collect direct exploration evidence",
+    ]
     assert len(rejected) == 5
     assert "rejected 5" in " ".join(clean.get("notes") or [])
 
@@ -140,7 +188,7 @@ def test_claim_release_and_router_env_restore(monkeypatch):
     def boom(target, agent):
         released.append((target, agent))
         if target == "bad":
-            raise RuntimeError("release failed")
+            raise OSError("release failed")
 
     monkeypatch.setattr(claims, "release", boom)
     ec._release_rejected_claims(
@@ -150,7 +198,7 @@ def test_claim_release_and_router_env_restore(monkeypatch):
         ]
     )
     ec._release_assignments([{"target": "ok2", "agent": "claude"}])
-    assert ("ok", "codex") in released and ("ok2", "claude") in released
+    assert released == [("ok", "codex"), ("bad", "codex"), ("ok2", "claude")]
 
     monkeypatch.delenv("ORCH_EXPLORATION_MODE", raising=False)
     monkeypatch.delenv("ORCH_EXPLORATION_RATE", raising=False)
@@ -303,8 +351,12 @@ def test_exploration_collection_main_paths(monkeypatch, tmp_path, capsys):
 
     monkeypatch.setenv("ORCH_EXPLORATION_EVIDENCE", "0")
     assert ec.main(["--apply"]) == 2
-    err = capsys.readouterr().out + capsys.readouterr().err
-    assert "ORCH_EXPLORATION_EVIDENCE" in err or "confirm-window" in err
+    cap = capsys.readouterr()
+    err = cap.out + cap.err
+    expected = (
+        "active dispatch requires --confirm-window and ORCH_EXPLORATION_EVIDENCE=1"
+    )
+    assert err.strip() == expected
 
     monkeypatch.setattr(
         ec,
