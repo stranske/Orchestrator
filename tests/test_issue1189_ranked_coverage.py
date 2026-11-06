@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import socket
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -27,7 +29,19 @@ def isolated_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ORCH_FEATURES_PATH", str(runtime / "features.json"))
     monkeypatch.setattr(feedback, "DB_PATH", runtime / "feedback.db")
     monkeypatch.setattr(features, "REG", runtime / "features.json")
+    attempted: list[tuple] = []
+
+    def forbidden_subprocess_or_socket(*args, **kwargs):
+        attempted.append((args, kwargs))
+        raise AssertionError("issue1189 ranked coverage must not start subprocess or network work")
+
+    for name in ("run", "Popen"):
+        monkeypatch.setattr(subprocess, name, forbidden_subprocess_or_socket)
+    for name in ("socket", "create_connection"):
+        monkeypatch.setattr(socket, name, forbidden_subprocess_or_socket)
     monkeypatch.setattr("capabilities.production_heartbeat", lambda *args, **kwargs: None)
+    yield
+    assert attempted == [], f"unexpected external entry attempts: {attempted}"
 
 
 def test_calibration_rejects_bad_anchors_and_handles_every_readiness_state() -> None:
