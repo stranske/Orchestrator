@@ -1,5 +1,55 @@
 # Fleet delivery measures — runner checks
 
+## Pytest subtest mutation verdicts — 2026-11-06 03:15Z
+
+Reviewed all eight implementation commits through `7fb2d67`. Structured-link
+attribution and regression coverage are implemented; the checked target-machine
+task and pytest all-reader mutation criterion still lack supporting receipts.
+No task or acceptance checkbox is newly complete. Attempts to uncheck those two
+PR-summary claims, add `needs-human`, and post the blocker comment were rejected
+with `MCP tool call requires approval, but approval policy is never`.
+
+The mutation verifier required exactly `1 failed`, rejecting valid runs in which
+the selected unittest method reports multiple failing subtests. It now checks
+that every verbose verdict belongs to the selected method, counts its subtest
+failures and enclosing verdict, and reads only the final pytest summary. This
+also avoids counting traceback messages such as `contains 2 failed subtests`.
+The parser follows [pytest's documented subtest reporting](https://docs.pytest.org/en/stable/how-to/subtests.html).
+The new regression failed before the fix and passes afterward. It covers passing
+and failing parent verdicts and rejects unrelated methods, skips, errors,
+duplicate parents, wrong counts, and unrelated assertions. These are parser
+fixtures, not a claim that pytest ran on this host.
+
+Runner interpreter: `/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3`, selected
+through `ORCH_STANDARD_PYTHON` and `scripts/usage_poll/py-standard.sh`.
+
+- `PYTHON=<runner interpreter> node --test --test-isolation=none
+  tests/test_verify_fleet_delivery_mutation.js
+  tests/test_verify_fleet_delivery_live.js`: all 25 tests pass, including real
+  unittest baseline/mutation/restoration checks for all six controls.
+- `PYTHONPATH=src <runner interpreter> -m unittest discover -s tests -p
+  test_switch_review_fleet.py -q`: all 27 tests pass.
+- `<runner interpreter> -m pytest tests/test_switch_review_fleet.py -m
+  "not slow"` and `PYTHON=<runner interpreter> node
+  scripts/verify_fleet_delivery_mutation.js --all-readers`: exit 1 because pytest
+  is absent. Installing pytest and Black into `/tmp` found no distribution.
+- `ORCH_STANDARD_PYTHON=<runner interpreter> PYTEST_ADDOPTS='-m "not slow"'
+  timeout 55s <runner interpreter> -u src/verify.py`: exits 124 without output;
+  `/tmp/issue-1186-subtest-full-verify.log` contains no passing verdict.
+- `PYTHON=<runner interpreter> node scripts/verify_fleet_delivery_live.js
+  /tmp/issue-1186-subtest-live-20261106`: exits zero at
+  `2026-11-06T03:14:04.783Z`, validating five explicitly unmeasured rows. The
+  receipt records Python 3.14.10, Linux and x86_64. This is hosted-runner evidence,
+  not target-machine acceptance.
+
+JavaScript syntax checks and `git diff --check` pass. No tracked Python files
+changed, so the Python-only Black gate does not apply. Ordinary staging fails
+because `.git/index.lock` cannot be created on the read-only checkout metadata.
+The source commit uses writable metadata at
+`/tmp/issue-1186-pytest-subtests-commit/.git`; its handoff bundle is
+`/tmp/issue-1186-pytest-subtests.bundle`. The checkout branch cannot be advanced
+here. PR #1187 is open and ready for review (`draft=false`).
+
 ## CRLF mutation sources — 2026-11-06 03:00Z
 
 Reviewed the seven keepalive commits through `ffd45ab`. The checked target-machine

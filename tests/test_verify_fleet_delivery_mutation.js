@@ -125,6 +125,41 @@ test('pytest evidence must report only the one selected test', () => {
   }
 });
 
+test('pytest mutation evidence accepts failures from the selected method subtests', () => {
+  const control = controls.merge_to_close;
+  const node = `tests/test_switch_review_fleet.py::FleetDeliveryTests::${control.testName}`;
+  for (const parent of ['PASSED', 'FAILED']) {
+    const output = `${node} SUBPASSED(endpoint='/actions/')\n`
+      + `${node} SUBFAILED(endpoint='state=all')\n`
+      + `${node} SUBFAILED(endpoint='graphql')\n`
+      + `${node} ${parent} [100%]\n`
+      + "AssertionError: '0%' is not None\n"
+      + (parent === 'FAILED' ? 'contains 2 failed subtests\n' : '')
+      + (parent === 'FAILED' ? '3 failed' : '2 failed, 1 passed')
+      + ', 1 subtests passed in 0.10s\n';
+    requireVerdict({ status: 1, signal: null, stdout: output }, 'pytest', true, control);
+    for (const broken of [
+      output.replace(`${node} SUBFAILED`, 'tests/test_other.py::test_other SUBFAILED'),
+      output.replace(`${node} SUBPASSED`, 'tests/test_other.py::test_other SUBPASSED'),
+      output.replace('SUBFAILED', 'SUBSKIPPED'),
+      output.replace('SUBFAILED', 'SUBXFAIL'),
+      output.replace('1 subtests passed', '1 skipped'),
+      output.replace('1 subtests passed', '1 error'),
+      output.replace('1 subtests passed', '1 passed'),
+      output.replace('1 subtests passed', '1 failed'),
+      output.replace("AssertionError: '0%' is not None", 'AssertionError: unrelated failure'),
+      output.replace(`${node} ${parent}`, `${node} SKIPPED`),
+      output.replace(`${node} ${parent}`, `${node} ${parent}\n${node} ${parent}`),
+      output.replace('2 failed, 1 passed', '1 failed, 1 passed').replace('3 failed', '2 failed'),
+    ]) {
+      assert.throws(() => requireVerdict({ status: 1, signal: null, stdout: broken },
+        'pytest', true, control));
+    }
+    assert.throws(() => requireVerdict({ status: 0, signal: null, stdout: output },
+      'pytest', false, control));
+  }
+});
+
 test('a blocked mutation run restores every reader source byte', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-mutation-restoration-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

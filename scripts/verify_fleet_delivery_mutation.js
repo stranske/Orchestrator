@@ -75,10 +75,29 @@ function requireVerdict(result, runner, failed, control = controls.gate_cancella
   assert.equal(result.status, failed ? 1 : 0, output);
   if (runner === 'pytest') {
     const node = `tests/${testModule}.py::${testClass}::${testName}`;
-    assert.ok(output.includes(`${node} ${failed ? 'FAILED' : 'PASSED'}`), output);
-    const counts = [...output.matchAll(/\b(\d+) (passed|failed|errors?|skipped|xfailed|xpassed|deselected)\b/gi)];
+    const reports = [...output.matchAll(/^(\S+::\S+) (SUBFAILED|SUBPASSED|SUBSKIPPED|SUBXFAIL|PASSED|FAILED|SKIPPED|ERROR|XFAIL|XPASS)\b/gm)];
+    assert.ok(reports.every((report) => report[1] === node
+      && ['PASSED', 'FAILED', 'SUBPASSED', 'SUBFAILED'].includes(report[2])), output);
+    const parents = reports.filter((report) => !report[2].startsWith('SUB'));
+    assert.equal(parents.length, 1, output);
+    const subfailed = reports.filter((report) => report[2] === 'SUBFAILED').length;
+    let expected;
+    if (subfailed) {
+      // Pytest counts failing subtests separately. Depending on its version, the
+      // enclosing unittest method may pass or add another failure to the total.
+      assert.ok(failed, output);
+      expected = [[subfailed + Number(parents[0][2] === 'FAILED'), 'failed']];
+      if (parents[0][2] === 'PASSED') expected.push([1, 'passed']);
+    } else {
+      assert.equal(parents[0][2], failed ? 'FAILED' : 'PASSED', output);
+      expected = [[1, failed ? 'failed' : 'passed']];
+    }
+    // Read the terminal summary, not assertion messages such as "contains 2
+    // failed subtests" printed earlier in the traceback.
+    const summary = output.trimEnd().split(/\r?\n/).at(-1);
+    const counts = [...summary.matchAll(/\b(\d+) (passed|failed|errors?|skipped|xfailed|xpassed|deselected)\b/gi)];
     assert.deepEqual(counts.map((match) => [Number(match[1]), match[2].toLowerCase()]),
-      [[1, failed ? 'failed' : 'passed']], output);
+      expected, output);
   } else {
     const name = `${testName} (${testModule}.${testClass}.${testName})`;
     assert.ok(output.includes(`${name} ... ${failed ? '' : 'ok'}`), output);
