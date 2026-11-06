@@ -5,8 +5,11 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { spawn } = require('node:child_process');
+const { spawn, execFile } = require('node:child_process');
+const { promisify } = require('node:util');
 const { test } = require('node:test');
+
+const execFileAsync = promisify(execFile);
 
 const repo = path.resolve(__dirname, '..');
 const modules = fs.existsSync(path.join(repo, 'src')) ? path.join(repo, 'src') : repo;
@@ -819,19 +822,74 @@ with sqlite3.connect(database) as connection:
   }
 }
 
-test('deployment CLI handles timeout errors with diagnostics', async (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'route-timeout-'));
+function timeoutInjectScript(mode) {
+  // mode: 'fetch' | 'after_fetch'
+  return `
+import json
+import sys
+from pathlib import Path
+from unittest.mock import patch
+import subprocess
+
+modules = Path(sys.argv[1])
+sys.path.insert(0, str(modules))
+import route_weights_export as export
+
+audit = Path(sys.argv[2])
+state = Path(sys.argv[3])
+real_run = subprocess.run
+
+def run(*a, **k):
+    cmd = a[0] if a else k.get("args", ())
+    if not isinstance(cmd, (list, tuple)):
+        return real_run(*a, **k)
+    to = k.get("timeout", 60)
+    if "${mode}" == "fetch" and "fetch" in cmd:
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=to)
+    if "${mode}" == "after_fetch":
+        if "fetch" in cmd:
+            return real_run(*a, **k)
+        if cmd and cmd[0] == "git":
+            raise subprocess.TimeoutExpired(cmd=list(cmd), timeout=to)
+    return real_run(*a, **k)
+
+with patch.object(export.subprocess, "run", side_effect=run):
+    export.sys.argv = [
+        "route_weights_export",
+        "--record-challenger-deployment",
+        str(audit),
+        "--state-dir",
+        str(state),
+    ]
+    raise SystemExit(export.main())
+`;
+}
+
+async function runRecorderWithTimeoutInject(mode, audit, state, env, cwd) {
+  const python = process.env.PYTHON || 'python3';
+  const { stdout, stderr } = await execFileAsync(python, [
+    '-c', timeoutInjectScript(mode), modules, audit, state,
+  ], { env: { ...process.env, ...env }, cwd, maxBuffer: 2 * 1024 * 1024 });
+  return { status: 0, stdout, stderr };
+}
+
+test('deployment CLI refuses subprocess.TimeoutExpired at fetch without receipt', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'route-timeout-fetch-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const state = path.join(root, 'state');
+  const reposDir = path.join(root, 'repos');
+  const canon = path.join(reposDir, 'stranske__Orchestrator');
+  fs.mkdirSync(canon, { recursive: true });
+  const init = await run('git', ['init', canon], { env: { PATH: process.env.PATH } });
+  assert.equal(init.status, 0, init.stderr);
   const audit = path.join(root, 'audit.json');
   const receipt = path.join(state, 'route-weights-challenger-deployment.json');
   fs.mkdirSync(state, { recursive: true });
-  const provenance = {
+  fs.writeFileSync(audit, JSON.stringify({
     published_commit: 'a'.repeat(40),
     deployed_at: '2026-11-05T00:00:00Z',
     deployment_evidence: 'publication-audit/run-123/successful-push',
-  };
-  fs.writeFileSync(audit, JSON.stringify(provenance), 'utf8');
+  }), 'utf8');
   const env = {
     PATH: process.env.PATH,
     HOME: root,
@@ -839,25 +897,27 @@ test('deployment CLI handles timeout errors with diagnostics', async (t) => {
     PYTHONDONTWRITEBYTECODE: '1',
     ORCH_STATE_DIR: state,
     ORCH_LOCAL_RUNTIME: path.join(root, 'runtime'),
-    ORCH_REPOS_DIR: path.join(root, 'repos'),
+    ORCH_REPOS_DIR: reposDir,
     ORCH_FEEDBACK_DB: path.join(root, 'absent.db'),
     ORCH_CAPABILITIES_PATH: path.join(root, 'capabilities.json'),
     HANDOFF_DIR: path.join(root, 'handoff'),
     GIT_CONFIG_NOSYSTEM: '1',
   };
-  const result = await run(process.env.PYTHON || 'python3', [
-    path.join(modules, 'route_weights_export.py'),
-    '--record-challenger-deployment', audit, '--state-dir', state,
-  ], { cwd: root, env, timeout: 5000 });
-  assert.equal(result.status, 1, result.stderr);
-  assert.equal(result.stdout, '');
-  assert.match(result.stderr, /deployment provenance refused:/);
-  assert.doesNotMatch(result.stderr, /Traceback/);
+  let err;
+  try {
+    await runRecorderWithTimeoutInject('fetch', audit, state, env, root);
+  } catch (e) {
+    err = e;
+  }
+  assert.ok(err && err.code === 1, err && err.stderr);
+  assert.equal(err.stdout || '', '');
+  assert.match(err.stderr, /deployment provenance refused: git subprocess timed out/);
+  assert.doesNotMatch(err.stderr, /Traceback/);
   assert.equal(fs.existsSync(receipt), false);
 });
 
-test('deployment CLI preserves receipt on timeout error', async (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'route-timeout-preserve-'));
+test('deployment CLI refuses TimeoutExpired after fetch and preserves receipt', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'route-timeout-after-fetch-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const home = path.join(root, 'home');
   const state = path.join(root, 'state');
@@ -909,32 +969,33 @@ test('deployment CLI preserves receipt on timeout error', async (t) => {
   await git(checkout, 'commit', '-m', 'publication fixture');
   await git(checkout, 'push', 'origin', `HEAD:${branch}`);
   const commit = await git(remote, 'rev-parse', branch);
-  const validProvenance = {
+  fs.writeFileSync(audit, JSON.stringify({
     published_commit: commit,
     deployed_at: '2026-11-04T11:00:00Z',
     deployment_evidence: 'fixture-publication-audit/successful-push',
-  };
-  fs.writeFileSync(audit, JSON.stringify(validProvenance));
-  const result = await run(process.env.PYTHON || 'python3', [
+  }));
+  const ok = await run(process.env.PYTHON || 'python3', [
     path.join(modules, 'route_weights_export.py'),
     '--record-challenger-deployment', audit, '--state-dir', state,
   ], { cwd: root, env });
-  assert.equal(result.status, 0, result.stderr);
-  const recorded = JSON.parse(result.stdout);
-  assert.equal(recorded.published_commit, commit);
+  assert.equal(ok.status, 0, ok.stderr);
   const before = fs.readFileSync(receipt, 'utf8');
   const beforeStat = fs.statSync(receipt, { bigint: true });
-  const badProvenance = {
+  fs.writeFileSync(audit, JSON.stringify({
     published_commit: 'b'.repeat(40),
     deployed_at: '2026-11-05T00:00:00Z',
     deployment_evidence: 'different-audit',
-  };
-  fs.writeFileSync(audit, JSON.stringify(badProvenance));
-  const timeoutResult = await run(process.env.PYTHON || 'python3', [
-    path.join(modules, 'route_weights_export.py'),
-    '--record-challenger-deployment', audit, '--state-dir', state,
-  ], { cwd: root, env, timeout: 5000 });
-  assert.equal(timeoutResult.status, 1, timeoutResult.stderr);
+  }));
+  let err;
+  try {
+    await runRecorderWithTimeoutInject('after_fetch', audit, state, env, root);
+  } catch (e) {
+    err = e;
+  }
+  assert.ok(err && err.code === 1, err && err.stderr);
+  assert.equal(err.stdout || '', '');
+  assert.match(err.stderr, /deployment provenance refused: git subprocess timed out/);
+  assert.doesNotMatch(err.stderr, /Traceback/);
   assert.equal(fs.readFileSync(receipt, 'utf8'), before);
   assert.equal(fs.statSync(receipt, { bigint: true }).mtimeNs, beforeStat.mtimeNs);
 });

@@ -265,33 +265,32 @@ class ChallengerDeploymentTests(unittest.TestCase):
         ):
             self.assertEqual(export.main(), 1)
 
-    def test_malformed_json_artifact_skipped_during_history_verify(self):
-        self.document["exploration"]["challenger_filter"] = export.CHALLENGER_FILTER
-        first_commit = self.publish_filter()
-        invalid_doc = copy.deepcopy(self.document)
-        invalid_doc["invalid"] = "not json"
-        target = self.checkout / export.EXPORT_PATH
-        target.write_text("not valid json at all", encoding="utf-8")
-        self.git(self.checkout, "add", ".")
-        self.git(self.checkout, "commit", "-m", "malformed json artifact")
-        self.git(self.checkout, "push", "origin", f"HEAD:{export.EXPORT_BRANCH}")
-        # The recorder should skip the malformed JSON and continue to the first valid one
-        provenance = self.provenance(first_commit)
-        receipt = self.record(provenance)
-        self.assertEqual(receipt["published_commit"], first_commit)
-
-    def test_deleted_export_path_skipped_during_history_verify(self):
-        self.document["exploration"]["challenger_filter"] = export.CHALLENGER_FILTER
-        first_commit = self.publish_filter()
+    def test_deleted_invalid_then_marked_skipped_during_history_verify(self):
+        """Unmarked publication, deletion, invalid JSON, then first marked — scan hits both edges."""
+        # setUp already pushed an unmarked artifact; re-seeding identical JSON is a no-op commit.
+        unmarked_commit = self.git(self.remote, "rev-parse", export.EXPORT_BRANCH)
         target = self.checkout / export.EXPORT_PATH
         target.unlink()
         self.git(self.checkout, "add", ".")
         self.git(self.checkout, "commit", "-m", "delete export path")
         self.git(self.checkout, "push", "origin", f"HEAD:{export.EXPORT_BRANCH}")
-        # The recorder should skip the deleted path and continue to the first valid one
-        provenance = self.provenance(first_commit)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("not valid json at all", encoding="utf-8")
+        self.git(self.checkout, "add", ".")
+        self.git(self.checkout, "commit", "-m", "malformed json artifact")
+        self.git(self.checkout, "push", "origin", f"HEAD:{export.EXPORT_BRANCH}")
+        # Remote tip is non-JSON; publish_document would refuse. Push a valid marked artifact by Git only.
+        self.document["exploration"]["challenger_filter"] = export.CHALLENGER_FILTER
+        target.write_text(json.dumps(self.document), encoding="utf-8")
+        self.git(self.checkout, "add", ".")
+        self.git(self.checkout, "commit", "-m", "marked filter publication")
+        self.git(self.checkout, "push", "origin", f"HEAD:{export.EXPORT_BRANCH}")
+        marked_commit = self.git(self.remote, "rev-parse", export.EXPORT_BRANCH)
+        provenance = self.provenance(marked_commit)
         receipt = self.record(provenance)
-        self.assertEqual(receipt["published_commit"], first_commit)
+        self.assertEqual(receipt["published_commit"], marked_commit)
+        with self.assertRaisesRegex(ValueError, "first verified"):
+            self.record(self.provenance(unmarked_commit))
 
 
 if __name__ == "__main__":

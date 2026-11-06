@@ -919,11 +919,30 @@ def record_challenger_filter_deployment(
     commits = git("rev-list", "--first-parent", "--reverse", remote_ref, "--", str(EXPORT_PATH))
     first = None
     for candidate in commits.splitlines():
+        listed = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(canonical),
+                "ls-tree",
+                "-r",
+                "--name-only",
+                candidate,
+                "--",
+                str(EXPORT_PATH),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if listed.returncode != 0:
+            listed.check_returncode()
+        if not listed.stdout.strip():
+            # Path absent at this revision; unrelated failures still surface above.
+            continue
         try:
             artifact = git("show", f"{candidate}:{EXPORT_PATH}")
-            if not artifact:
-                # No EXPORT_PATH blob at this revision
-                continue
             document = json.loads(artifact)
         except json.JSONDecodeError:
             # Malformed JSON artifact at this revision
@@ -1368,6 +1387,9 @@ def main() -> int:
                 provenance,
                 state_dir=args.state_dir or Path.home() / ".codex" / "orchestrator",
             )
+        except subprocess.TimeoutExpired as exc:
+            print(f"deployment provenance refused: git subprocess timed out ({exc})", file=sys.stderr)
+            return 1
         except (OSError, ValueError, subprocess.SubprocessError) as exc:
             message = f"deployment provenance refused: {exc}"
             if isinstance(exc, subprocess.CalledProcessError) and exc.stderr:

@@ -408,3 +408,40 @@ Recorder implementation is complete and verified. Production deployment/observat
 incomplete: no verified production audit record exists, and observation requires both
 2026-11-08 and fourteen days after verified deployment. The named pytest acceptance checks
 are now verifiable with Python dependencies available.
+
+## Closer follow-up: recorder scan, timeouts, CI Gate, threads (2026-11-06)
+
+**Recorder vs production acceptance.** Completion of the deployment recorder (history scan,
+CLI, subprocess bounds, tests) is separate from production acceptance. Production acceptance
+stays explicitly incomplete until there is authentic deployment evidence, a verified deploy
+epoch from the publication audit, and a mature production query run only after both
+2026-11-08 and fourteen days after verified deployment—not expanded further while waiting
+for that observation window.
+
+Code review evidence (current branch head before commit/push):
+
+- **Exporter history scan** (`record_challenger_filter_deployment`): Before `git show` on each
+  candidate commit, `ls-tree -r --name-only <candidate> -- <EXPORT_PATH>` skips absent paths;
+  invalid JSON still skips with `JSONDecodeError`; unrelated Git failures remain fatal
+  (`ls-tree` or `show` non-zero with path present still propagates).
+- **CLI timeout**: `subprocess.TimeoutExpired` is handled explicitly with stderr
+  `deployment provenance refused: git subprocess timed out (...)` (no traceback). Node tests
+  inject `TimeoutExpired` at fetch vs post-fetch Git boundaries and assert that diagnostic,
+  no new receipt, and receipt byte/mtime preservation.
+- **Gate / switch-review renderer**: New job `orchestrator node tests` in
+  `.github/workflows/pr-00-gate.yml` installs `requirements.lock`, sets `PYTHONPATH=src`, then
+  runs `node --test tests/test_route_weights_export_cli.js tests/test_switch_review_exploration.js`.
+  `required-contexts.json` includes the check name `orchestrator node tests`.
+  `gate_summary.py` records `ORCHESTRATOR_NODE_TESTS_RESULT` so a failed job fails the Gate verdict.
+- **PR #1176 review threads (three active)**: Resolved on GitHub after verifying the above:
+  `ls-tree` pre-check on `src/route_weights_export.py`; timeout injection and diagnostics on
+  `tests/test_route_weights_export_cli.js`; Gate registration for
+  `tests/test_switch_review_exploration.js`.
+
+Verification (focused, as requested):
+
+- `/opt/anaconda3/bin/python3 -m pytest -q tests/test_route_weights_export_deployment.py tests/test_route_weights_export_exploration_rate.py` → **22 passed, 26 subtests passed**.
+- `PYTHON=/opt/anaconda3/bin/python3 node --test tests/test_route_weights_export_cli.js tests/test_switch_review_exploration.js` → **ℹ pass 48**, **fail 0** (duration ~62s).
+
+Additional file-touch validation: `tests/test_delivery_required_contexts.py` (1 passed) for
+`required-contexts.json` and `_gate_extra_pull_request_contexts()`.

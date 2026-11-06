@@ -180,10 +180,22 @@ def test_only_a_push_only_condition_removes_a_job():
     assert not _is_push_only("")
 
 
+def _gate_extra_pull_request_contexts() -> set[str]:
+    text = GATE.read_text(encoding="utf-8")
+    names: set[str] = set()
+    if re.search(r"^\s+name:\s+orchestrator node tests\s*$", text, re.MULTILINE):
+        names.add("orchestrator node tests")
+    return names
+
+
 def test_declaration_equals_pull_request_ci_and_gate_python_shards():
     declared = _declared()
     assert len(declared) == len(set(declared)), f"duplicate names in {DECLARATION.name}"
-    expected = _pull_request_check_names() | _gate_python_shard_contexts()
+    expected = (
+        _pull_request_check_names()
+        | _gate_python_shard_contexts()
+        | _gate_extra_pull_request_contexts()
+    )
     missing = sorted(expected - set(declared))
     unknown = sorted(set(declared) - expected)
     assert not missing, (
