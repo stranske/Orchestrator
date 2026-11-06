@@ -3526,6 +3526,8 @@ def ingest_profile_trial(
     ``trial_id`` is the idempotency key: a successful verified ingest is recorded in
     ``profile_trial_ingests`` and later calls return without duplicating rows.
     Transport-only recording may omit the marker so a later verified ingest can seal it.
+    Omitted token counts stay NULL. A missing measurement must not be stored as zero,
+    which the cost learners would treat as free. An explicit zero stays zero.
     """
     trial_id = str(result.get("trial_id") or manifest.get("trial_id") or "").strip()
     if not trial_id:
@@ -3596,8 +3598,8 @@ def ingest_profile_trial(
                         runner_version=attempt.get("runner_version"),
                         cli_version=attempt.get("cli_version"),
                         status=attempt.get("status"),
-                        tokens_in=int(attempt.get("tokens_in") or 0),
-                        tokens_out=int(attempt.get("tokens_out") or 0),
+                        tokens_in=attempt.get("tokens_in"),
+                        tokens_out=attempt.get("tokens_out"),
                         latency_s=float(attempt.get("latency_s") or 0.0),
                         source="model-profile-trial",
                         raw_ref=attempt.get("artifact_ref"),
@@ -5585,8 +5587,8 @@ def _record_execution_attempt_in_conn(
     runner_version: str | None = None,
     cli_version: str | None = None,
     status: str | None = None,
-    tokens_in: int = 0,
-    tokens_out: int = 0,
+    tokens_in: int | None = 0,
+    tokens_out: int | None = 0,
     latency_s: float = 0.0,
     cost_usd: float = 0.0,
     trace_key: str | None = None,
@@ -5640,8 +5642,9 @@ def _record_execution_attempt_in_conn(
             runner_version,
             cli_version,
             status,
-            int(tokens_in or 0),
-            int(tokens_out or 0),
+            # None is unmeasured. Coercing it to 0 would train a missing trial cost as free.
+            None if tokens_in is None else int(tokens_in),
+            None if tokens_out is None else int(tokens_out),
             float(latency_s or 0.0),
             float(cost_usd or 0.0),
             trace_key,
@@ -5720,8 +5723,8 @@ def record_execution_attempt(
     runner_version: str | None = None,
     cli_version: str | None = None,
     status: str | None = None,
-    tokens_in: int = 0,
-    tokens_out: int = 0,
+    tokens_in: int | None = 0,
+    tokens_out: int | None = 0,
     latency_s: float = 0.0,
     cost_usd: float = 0.0,
     trace_key: str | None = None,

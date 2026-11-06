@@ -157,6 +157,37 @@ def test_ingest_is_one_transaction_and_a_mid_write_failure_leaves_nothing(
             assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0, table
 
 
+def test_omitted_trial_usage_stays_null_and_explicit_zero_stays_zero(
+    tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture
+):
+    """Missing token counts are unmeasured. Storing them as zero would train the trial as free."""
+    _use_temp_feedback(tmp_path, monkeypatch)
+    attempts = model_profile_trial._validate_results(trial_manifest, trial_attempt_fixture)
+    attempts[0]["tokens_in"] = None
+    attempts[0]["tokens_out"] = None
+    attempts[1]["tokens_in"] = 0
+    attempts[1]["tokens_out"] = 0
+    feedback.ingest_profile_trial(
+        trial_attempt_fixture,
+        manifest=trial_manifest,
+        attempts=attempts,
+        auxiliary_traces=trial_attempt_fixture["auxiliary_traces"],
+        ts=2_000,
+    )
+    with feedback._conn() as conn:
+        rows = conn.execute(
+            "SELECT attempt_id, tokens_in, tokens_out FROM execution_attempts "
+            "WHERE attempt_id LIKE 'attempt:trial:%' ORDER BY attempt_id"
+        ).fetchall()
+    by_id = {row[0]: (row[1], row[2]) for row in rows}
+    assert by_id[f"attempt:trial:{attempts[0]['run_id']}"] == (None, None)
+    assert by_id[f"attempt:trial:{attempts[1]['run_id']}"] == (0, 0)
+    assert by_id[f"attempt:trial:{attempts[2]['run_id']}"] == (
+        attempts[2]["tokens_in"],
+        attempts[2]["tokens_out"],
+    )
+
+
 def test_ingest_is_idempotent_on_trial_id(
     tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture
 ):
