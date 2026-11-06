@@ -409,3 +409,23 @@ class TestRailExerciseMain:
             ("rail-exercise-cadence", "invocation"),
             ("rail-exercise-cadence", "success"),
         ]
+
+
+def test_selftest_names_an_absent_committed_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    class _Result:
+        def __init__(self, returncode: int) -> None:
+            self.returncode = returncode
+            self.stdout = ""
+            self.stderr = ""
+
+    def fake_run(command, **_kwargs):
+        text = command if isinstance(command, str) else " ".join(command)
+        return _Result(0 if text.strip() == "true" else 1)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    missing = tmp_path / "no-committed-tree"
+    monkeypatch.setattr(rail_exercise, "CONTRACT_ROOT", missing)
+    rail_exercise.selftest()
+    assert f"committed tree absent at {missing} — not checked" in capsys.readouterr().out

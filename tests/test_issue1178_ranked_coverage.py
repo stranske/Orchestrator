@@ -7,10 +7,12 @@ are left to the PR body instead of being padded.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import subprocess
 import sys
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -24,6 +26,7 @@ import experiment_recovery
 import exploration_evidence_plan
 import feedback
 import research_usage_guard
+import runtime_ac_gate
 import synthesis_promotion
 import verifier_evidence
 
@@ -1061,3 +1064,202 @@ def test_live_reconcile_refuses_with_and_without_the_ship_gate(
     monkeypatch.setattr(synthesis_promotion, "_followup_ship_gate_enabled", lambda: True)
     assert synthesis_promotion.main(["reconcile", str(tmp_path), "--live"]) == 2
     assert "sole launch and delivery controller" in capsys.readouterr().err
+
+
+def test_reference_role_compiles_to_a_shadow_manifest() -> None:
+    decision = capability_compiler.compile_role_candidate(
+        capability_compiler.reference_role_candidate(now=NOW), now=NOW
+    )
+    assert decision["status"] == "compiled_shadow"
+    assert decision["target"] == "role"
+    assert decision["executable"] is False
+    assert decision["manifest"]["capability_id"] == "capability:evidence-gap-prioritizer-reference"
+    assert decision["manifest"]["shadow_only"] is True
+
+
+def _reference_playbook(tmp_path: Path) -> tuple[dict, Path, Path]:
+    root = tmp_path / "playbook-repo"
+    (root / "docs").mkdir(parents=True)
+    (root / "docs" / "RULES.md").write_text("registry_symbol is required.\n", encoding="utf-8")
+    (root / "AGENTS.md").write_text("# User instructions\n\nPreserve this.\n", encoding="utf-8")
+    registry = tmp_path / "repo-knowledge.json"
+    registry.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "repos": {
+                    "owner/reference": {
+                        "summary": "Reference repo.",
+                        "definition_of_done": [],
+                        "gotchas": [],
+                        "validation": [],
+                    }
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    raw = capability_compiler.reference_role_candidate(now=NOW).to_dict()
+    raw["capability_id"] = "capability:reference-repo-playbook"
+    raw["kind_proposal"] = "playbook"
+    raw["owner_proposal"] = "repo"
+    raw["independent_repositories"] = ["owner/reference"]
+    for occurrence in raw["source_occurrences"]:
+        occurrence["repository"] = "owner/reference"
+    selector = {"repo": "owner/reference", "task_types": ["implement"], "lanes": ["opener"]}
+    current_refs = [{"path": "docs/RULES.md", "symbol": "registry_symbol"}]
+    rule_text = (
+        "When changing `docs/RULES.md`, retain the `registry_symbol` and run the narrow validation."
+    )
+    content_hash = capability_compiler.stable_hash(
+        "repo-playbook-rule",
+        {
+            "repo": "owner/reference",
+            "section": "validation",
+            "text": rule_text,
+            "selector": selector,
+            "current_refs": current_refs,
+        },
+    )
+    raw["selector"] = selector
+    raw["graph"] = {
+        "phase_order": [
+            "trigger",
+            "decision",
+            "execution",
+            "artifact",
+            "verification",
+            "outcome",
+            "durability",
+        ],
+        "playbook_contract": {
+            "schema": capability_compiler.PLAYBOOK_SOURCE_SCHEMA,
+            "version": capability_compiler.PLAYBOOK_VERSION,
+            "repo": "owner/reference",
+            "section": "validation",
+            "text": rule_text,
+            "content_hash": content_hash,
+            "selector": selector,
+            "current_refs": current_refs,
+            "negative_examples": [
+                {
+                    "text": "A prior change omitted the registry symbol and required repair.",
+                    "evidence_ref": capability_compiler.stable_hash(
+                        "reference-playbook-negative", "one"
+                    ),
+                }
+            ],
+            "risk_level": "low_reversible",
+            "expires_at": int(time.time()) + 86400,
+            "rollback": {
+                "action": "remove_managed_rule_and_restore_predecessor",
+                "predecessor": "role-adjudicator",
+                "reason": "canary regressed",
+            },
+            "optional_workflows_bundle": False,
+        },
+    }
+    return raw, root, registry
+
+
+def test_reference_playbook_compiles_to_a_canary(tmp_path: Path) -> None:
+    raw, root, registry = _reference_playbook(tmp_path)
+    decision = capability_compiler.compile_playbook_candidate(
+        raw, repo_root=root, registry_path=registry
+    )
+    assert decision["status"] == "compiled_canary"
+    assert decision["target"] == "playbook"
+    assert decision["executable"] is False
+    assert decision["manifest"]["repo"] == "owner/reference"
+    assert decision["manifest"]["capability_id"] == "capability:reference-repo-playbook"
+
+
+def test_playbook_whose_repo_does_not_match_its_evidence_is_rejected(tmp_path: Path) -> None:
+    raw, root, registry = _reference_playbook(tmp_path)
+    raw["graph"]["playbook_contract"]["repo"] = "owner/elsewhere"
+    with pytest.raises(capability_compiler.PlaybookCompileError) as caught:
+        capability_compiler.compile_playbook_capability(raw, repo_root=root, registry_path=registry)
+    assert "cross-repo-generic playbook candidate" in caught.value.reasons
+
+
+def _stored_post_merge_fail(spec_dir: Path) -> tuple[str, str, str]:
+    repo = "stranske/Orchestrator"
+    number = 7
+    issue = f"{repo}#42"
+    sha = "ab" * 20
+    identity = hashlib.sha256(f"{issue.lower()}@{sha}".encode()).hexdigest()
+    root = runtime_ac_gate.spec_path("", spec_dir=spec_dir).parent
+    transcript = root / f"post-merge-{identity}.txt"
+    body = b"post-merge fail transcript\n"
+    transcript.write_bytes(body)
+    stored = {
+        "result": "FAIL",
+        "issue": issue,
+        "merge_sha": sha,
+        "reopened": False,
+        "commented": True,
+        "delivery_complete": False,
+        "transcript_path": str(transcript),
+        "transcript_hash": hashlib.sha256(body).hexdigest(),
+    }
+    event_id = f"event:post-merge-recheck:{identity}"
+    with feedback._conn() as conn:
+        conn.execute(
+            "INSERT INTO completion_events ("
+            "event_id, schema_version, run_id, event_type, phase, producer, "
+            "payload_json, content_hash, created_ts, updated_ts"
+            ") VALUES (?, 1, ?, 'verification', 'post_merge_recheck', 'runtime_ac_gate', ?, ?, 1, 1)",
+            (event_id, "run-1", json.dumps({"runtime_ac_post_merge": stored}), "0" * 64),
+        )
+    target = f"{repo}#{number}"
+    spec_path = runtime_ac_gate.spec_path(target, spec_dir=root)
+    spec_path.write_text(
+        json.dumps({"verification": {"target": target, "source_issue": issue}}),
+        encoding="utf-8",
+    )
+    return repo, sha, target
+
+
+def _recheck_stored_fail(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, issue_state):
+    spec_dir = tmp_path / "specs"
+    spec_dir.mkdir()
+    repo, sha, _target = _stored_post_merge_fail(spec_dir)
+    monkeypatch.setenv("ORCH_RUN_RUNTIME_AC", "1")
+    monkeypatch.setenv("ORCH_RUNTIME_AC_REOPEN", "1")
+    monkeypatch.setattr(
+        durability_sweep,
+        "_merged_verifier_candidates",
+        lambda: {(repo, 7): {"run-1"}},
+    )
+
+    def gh(argv):
+        if argv[:3] == ["gh", "pr", "view"]:
+            return {
+                "state": "MERGED",
+                "mergeCommit": {"oid": sha},
+                "closingIssuesReferences": [{"number": 42}],
+            }, None
+        if argv[:3] == ["gh", "api", f"repos/{repo}/issues/42"]:
+            return issue_state
+        raise AssertionError(f"unexpected gh call: {argv}")
+
+    summary = durability_sweep._post_merge_rechecks(
+        dry_run=False, gh=gh, now=NOW, spec_dir=spec_dir
+    )
+    assert summary["rechecked"] == 0
+    return summary
+
+
+def test_post_merge_reopen_fails_closed_when_issue_state_is_unreadable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    summary = _recheck_stored_fail(tmp_path, monkeypatch, (None, None))
+    assert summary["errors"] == ["stranske/Orchestrator#7: source issue state unavailable"]
+
+
+def test_post_merge_reopen_rejects_an_issue_state_that_is_neither_open_nor_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    summary = _recheck_stored_fail(tmp_path, monkeypatch, ({"state": "locked"}, None))
+    assert summary["errors"] == ["stranske/Orchestrator#7: source issue state unavailable"]
