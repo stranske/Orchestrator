@@ -151,3 +151,49 @@ test('a blocked mutation run restores every reader source byte', async (t) => {
     assert.equal(calls, 2);
   }
 });
+
+test('CRLF reader sources detect mutations and restore their original bytes', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-mutation-crlf-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'src'));
+  const file = path.join(root, 'src/switch_review.py');
+  for (const control of Object.values(controls)) {
+    const original = Buffer.from(`${mutation(control).anchor}    pass\n# retained — evidence\n`
+      .replaceAll('\n', '\r\n'));
+    fs.writeFileSync(file, original);
+    let calls = 0;
+    const run = (directory, runner, python, selected) => {
+      assert.equal(selected, control);
+      calls += 1;
+      const failed = calls === 2;
+      const bytes = fs.readFileSync(file);
+      if (failed) {
+        const source = bytes.toString('utf8');
+        assert.match(source, /deliberate fail-open control/);
+        assert.doesNotMatch(source.replaceAll('\r\n', ''), /[\r\n]/,
+          'inserting a mutation must preserve CRLF line endings');
+      } else {
+        assert.deepEqual(bytes, original);
+      }
+      const assertion = control === controls.closing_issue_refs
+        ? "AssertionError: 'opened 2/day' is not None"
+        : "AssertionError: '0%' is not None";
+      return {
+        status: failed ? 1 : 0, signal: null,
+        stdout: `tests/test_switch_review_fleet.py::FleetDeliveryTests::${control.testName} `
+          + `${failed ? 'FAILED' : 'PASSED'} [100%]\n`
+          + (failed ? `${assertion}\n1 failed` : '1 passed'),
+      };
+    };
+    await verify(root, 'pytest', '/selected/python', run, control);
+    assert.equal(calls, 3);
+    assert.deepEqual(fs.readFileSync(file), original);
+    calls = 0;
+    await assert.rejects(verify(root, 'pytest', '/selected/python', (...args) => {
+      const result = run(...args);
+      if (calls === 2) throw new Error('runner interrupted');
+      return result;
+    }, control), /runner interrupted/);
+    assert.deepEqual(fs.readFileSync(file), original);
+  }
+});

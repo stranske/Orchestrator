@@ -42,7 +42,7 @@ const controls = {
   },
 };
 
-function mutation(control) {
+function mutation(control, newline = '\n') {
   const name = control.signature.split('(')[0];
   const returnType = control.returnType || 'dict';
   const anchor = `def ${control.signature} -> ${returnType}:\n`;
@@ -59,7 +59,10 @@ ${guard}        return ${fallback}  # deliberate fail-open control
 
 def ${control.signature.replace(name, `${name}_original`)} -> ${returnType}:
 `;
-  return { anchor, mutant };
+  return {
+    anchor: anchor.replaceAll('\n', newline),
+    mutant: mutant.replaceAll('\n', newline),
+  };
 }
 
 const { anchor } = mutation(controls.gate_cancellations);
@@ -133,10 +136,12 @@ async function verify(root, runner = 'pytest', python = process.env.PYTHON, run 
   assert.ok(['pytest', 'unittest'].includes(runner), 'unknown test runner');
   assert.ok(typeof python === 'string' && python.trim(),
     'set PYTHON to the repository-selected interpreter');
-  const { anchor, mutant } = mutation(control);
   const file = path.join(root, 'src/switch_review.py');
   const original = fs.readFileSync(file);
   const source = original.toString('utf8');
+  // Git may check Python sources out with CRLF on the target machine. Match and
+  // insert using that convention; restoration still uses the original bytes.
+  const { anchor, mutant } = mutation(control, source.includes('\r\n') ? '\r\n' : '\n');
   assert.equal(source.split(anchor).length - 1, 1, 'reader mutation anchor must occur once');
   requireVerdict(await run(root, runner, python, control), runner, false, control);
   try {

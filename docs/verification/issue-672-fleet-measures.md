@@ -1,5 +1,48 @@
 # Fleet delivery measures — runner checks
 
+## CRLF mutation sources — 2026-11-06 03:00Z
+
+Reviewed the seven keepalive commits through `ffd45ab`. The checked target-machine
+task and pytest-mode mutation criterion remain unsupported by their receipts.
+No acceptance checkbox is newly complete. PR #1187 is open and ready for review.
+Correcting those checkboxes, posting the blocker comment, and adding `needs-human`
+were rejected with `MCP tool call requires approval, but approval policy is never`.
+
+The mutation verifier previously failed on a CRLF checkout with `reader mutation
+anchor must occur once`, before testing any mutation. It now matches and inserts
+using the source's LF or CRLF convention. A regression exercises all six controls,
+checks inserted line endings, and verifies byte-for-byte restoration after both
+successful detection and a runner exception. The regression failed before the fix.
+
+Runner Python: `/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3`, explicitly
+selected through `ORCH_STANDARD_PYTHON` and `scripts/usage_poll/py-standard.sh`.
+
+- `PYTHON=<runner interpreter> node --test --test-isolation=none
+  tests/test_verify_fleet_delivery_mutation.js
+  tests/test_verify_fleet_delivery_live.js`: all 24 tests pass.
+- A separate isolated copy with `src/switch_review.py` converted to CRLF passed
+  all six real unittest mutation controls, including baseline, detection,
+  restoration and byte equality. This supplements the injected-runner regression;
+  neither result replaces the required pytest run.
+- `PYTHONPATH=src <runner interpreter> -m unittest discover -s tests -p
+  test_switch_review_fleet.py -q`: all 27 tests pass.
+- `<runner interpreter> -m pytest tests/test_switch_review_fleet.py -m
+  "not slow"` and `PYTHON=<runner interpreter> node
+  scripts/verify_fleet_delivery_mutation.js --all-readers`: both exit 1 because
+  pytest is absent. Installing pytest and Black into `/tmp` found no distribution.
+- `PYTHON=<runner interpreter> node scripts/verify_fleet_delivery_live.js
+  /tmp/issue-1186-crlf-mutation-live-20261106`: exits zero and validates all five
+  rows at `2026-11-06T03:00:01.307Z`. All rows have explicit unmeasured reasons.
+  This is Linux hosted-runner evidence, not target-machine acceptance.
+- Full `src/verify.py` was not repeated: the earlier bounded runs produced no
+  verdict, and this JavaScript-only change does not resolve their blockers.
+
+No tracked Python files changed; the Python-only Black gate does not apply.
+`git diff --check` passes. Ordinary staging fails at `.git/index.lock` because
+checkout Git metadata is read-only. The source commit is preserved using writable
+metadata under `/tmp/issue-1186-crlf-mutation-commit/.git`, with a bundle at
+`/tmp/issue-1186-crlf-mutation.bundle`. The checkout branch cannot be advanced here.
+
 ## Windows text-report validation — 2026-11-06 02:43Z
 
 The live verifier now accepts CRLF output from Python's Windows text-mode writer.
