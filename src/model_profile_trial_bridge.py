@@ -485,6 +485,27 @@ def preflight(
     }
 
 
+_RUNNER_LAUNCH_ORDINALS = {1, 2, 3}
+
+
+def _runner_launch_ordinal(manifest: dict[str, Any], request: dict[str, Any]) -> int:
+    """Ordinal the pinned read-only Workflows runner will accept.
+
+    ``reusable-model-profile-trial.yml`` rejects every ``launch_ordinal`` outside
+    1..3 and copies that value into the artifact name. A one-instance arm's
+    global position is already in that domain. A repeated-instance plan numbers
+    global positions through ``profiles × instances`` (6 for the two-by-three
+    trial), so positions 4..6 cannot be dispatched. Those plans send the
+    per-profile instance index, which is 1..3, and keep the global position on
+    ``plan_launch_ordinal``.
+    """
+    repeated = int(manifest.get("instances_per_profile") or 1) > 1
+    ordinal = request.get("instance_ordinal") if repeated else request.get("launch_ordinal")
+    if type(ordinal) is not int or ordinal not in _RUNNER_LAUNCH_ORDINALS:
+        raise ValueError("runner launch ordinal is outside the pinned workflow domain")
+    return ordinal
+
+
 def build_request_envelope(
     manifest: dict[str, Any],
     *,
@@ -498,11 +519,13 @@ def build_request_envelope(
         trial_root, [Path(row["root"]) for row in manifest["source_before"].values()]
     )
     requests = []
+    repeated = int(manifest.get("instances_per_profile") or 1) > 1
     for request in sorted(manifest["requests"], key=lambda row: row["launch_ordinal"]):
+        runner_ordinal = _runner_launch_ordinal(manifest, request)
         body = {
             "run_id": request["run_id"],
             "profile_id": request["profile_id"],
-            "launch_ordinal": request["launch_ordinal"],
+            "launch_ordinal": runner_ordinal,
             "provider": request["provider"],
             "requested_model": request["requested_model"],
             "reasoning_effort": request["reasoning_effort"],
@@ -516,11 +539,13 @@ def build_request_envelope(
             "runner_ref": preflight_result.get("remote_runner_ref") or RUNNER_VERSION,
             "artifact_dir": str(
                 trial_root / request["profile_id"]
-                if manifest.get("instances_per_profile", 1) == 1
-                else trial_root / request["profile_id"] / f"launch-{request['launch_ordinal']}"
+                if not repeated
+                else trial_root / request["profile_id"] / f"launch-{runner_ordinal}"
             ),
             "expected_result_fields": sorted(TRANSPORT_ATTEMPT_FIELDS),
         }
+        if repeated:
+            body["plan_launch_ordinal"] = request["launch_ordinal"]
         body["request_hash"] = _hash(body)
         body["request_id"] = "trial-request:" + body["request_hash"].split(":", 1)[1][:24]
         requests.append(body)
@@ -578,6 +603,14 @@ def validate_envelope(envelope: dict[str, Any], manifest: dict[str, Any]) -> Non
             raise ValueError("trial bridge request is not replayable")
         if row.get("requested_model") != request["requested_model"]:
             raise ValueError("trial bridge request model drifted")
+        repeated = int(manifest.get("instances_per_profile") or 1) > 1
+        if repeated:
+            if row.get("plan_launch_ordinal") != request["launch_ordinal"]:
+                raise ValueError("trial bridge plan launch ordinal drifted")
+            if row.get("launch_ordinal") != request.get("instance_ordinal"):
+                raise ValueError("trial bridge runner launch ordinal drifted")
+        elif row.get("launch_ordinal") != request["launch_ordinal"]:
+            raise ValueError("trial bridge launch ordinal drifted")
 
 
 def _identity_artifact(
@@ -823,7 +856,13 @@ def collect_remote_results(
 ) -> dict[str, Any]:
     model_profile_trial.validate_trial_manifest(manifest)
     validate_envelope(envelope, manifest)
-    requests = sorted(envelope["requests"], key=lambda row: row["launch_ordinal"])
+    requests = sorted(
+        envelope["requests"],
+        key=lambda row: (
+            int(row.get("plan_launch_ordinal") or row["launch_ordinal"]),
+            str(row.get("run_id") or ""),
+        ),
+    )
     if len(run_ids) != len(requests) or len(set(run_ids)) != len(run_ids):
         raise ValueError("remote trial collection requires one distinct serial run ID per instance")
     attempts = [

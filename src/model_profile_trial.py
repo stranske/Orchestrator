@@ -360,25 +360,29 @@ def build_trial_manifest(
     requests = []
     for launch_ordinal, (profile_id, instance) in enumerate(order, start=1):
         profile = execution_profiles.get_profile(profile_id)
-        requests.append(
-            {
-                "run_id": f"{trial_id}:{profile_id}"
-                + (f":instance:{instance}" if instances_per_profile > 1 else ""),
-                "launch_ordinal": launch_ordinal,
-                "profile_id": profile_id,
-                "provider": profile["provider"],
-                "requested_model": profile["requested_model"],
-                "reasoning_effort": "high",
-                "permission_mode": "read-only",
-                "sandbox": "read-only",
-                "tools": [],
-                "prompt_version": profile["prompt_version"],
-                "packet_hash": packet_hash,
-                "assignment": "instrumentation",
-                "learning_enabled": False,
-                "capacity_pool_ids": ["codex-subscription"],
-            }
-        )
+        request = {
+            "run_id": f"{trial_id}:{profile_id}"
+            + (f":instance:{instance}" if instances_per_profile > 1 else ""),
+            "launch_ordinal": launch_ordinal,
+            "profile_id": profile_id,
+            "provider": profile["provider"],
+            "requested_model": profile["requested_model"],
+            "reasoning_effort": "high",
+            "permission_mode": "read-only",
+            "sandbox": "read-only",
+            "tools": [],
+            "prompt_version": profile["prompt_version"],
+            "packet_hash": packet_hash,
+            "assignment": "instrumentation",
+            "learning_enabled": False,
+            "capacity_pool_ids": ["codex-subscription"],
+        }
+        # The pinned runner accepts only ordinals 1..3. Repeated instances keep
+        # that per-profile index beside the global launch position, which runs
+        # past 3 once two profiles are each repeated.
+        if instances_per_profile > 1:
+            request["instance_ordinal"] = instance
+        requests.append(request)
     manifest = {
         "schema": TRIAL_SCHEMA,
         "version": SCHEMA_VERSION,
@@ -602,6 +606,25 @@ def validate_trial_manifest(manifest: dict[str, Any]) -> None:
         range(1, expected_count + 1)
     ):
         raise ValueError("trial launch ordinals must cover the selected profile set")
+    if instances > 1:
+        for profile_id in profile_ids:
+            ordinals = [
+                item.get("instance_ordinal")
+                for item in requests
+                if item.get("profile_id") == profile_id
+            ]
+            if any(type(value) is not int for value in ordinals) or sorted(ordinals) != list(
+                range(1, instances + 1)
+            ):
+                raise ValueError("trial instance ordinals must cover 1..N within each profile")
+            for item in requests:
+                if item.get("profile_id") != profile_id:
+                    continue
+                expected_run = (
+                    f"{manifest['trial_id']}:{profile_id}:instance:{item['instance_ordinal']}"
+                )
+                if item.get("run_id") != expected_run:
+                    raise ValueError("trial instance ordinal does not match its run identity")
     expected_run_ids = {
         f"{manifest['trial_id']}:{pid}" + (f":instance:{i}" if instances > 1 else "")
         for pid in profile_ids
@@ -1324,6 +1347,13 @@ def _selftest() -> None:
         assert recurring["selected_profile_ids"] == list(CURRENT_TRIAL_PROFILE_IDS)
         assert recurring["instances_per_profile"] == CURRENT_TRIAL_INSTANCES
         assert len(recurring["requests"]) == 6
+        for profile_id in CURRENT_TRIAL_PROFILE_IDS:
+            ordinals = sorted(
+                row["instance_ordinal"]
+                for row in recurring["requests"]
+                if row["profile_id"] == profile_id
+            )
+            assert ordinals == [1, 2, 3], ordinals
         assert not (state_dir / "capability-program" / "profile-trial.json").exists()
         saved_state = os.environ.get("ORCH_STATE_DIR")
         os.environ["ORCH_STATE_DIR"] = str(state_dir)
