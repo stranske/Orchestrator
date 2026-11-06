@@ -70,7 +70,7 @@ function runCommand(python, args, options) {
   });
 }
 
-async function pythonRuntime(python, run, options) {
+async function pythonRuntime(python, run = runCommand, options = {}) {
   // A selected path may be a shim. Ask the same interpreter that runs the report
   // for its actual identity, rather than treating the requested path as proof.
   const probe = 'import json, platform, sys; print(json.dumps({'
@@ -168,4 +168,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { names, validateReport, verifyLive, fleetSourceHashes };
+module.exports = { names, validateReport, verifyLive, fleetSourceHashes, pythonRuntime };

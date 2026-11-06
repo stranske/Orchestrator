@@ -1,5 +1,66 @@
 # Fleet delivery measures — runner checks
 
+## Required-command receipts — 2026-11-06 03:34Z
+
+The first unfinished task requires execution on the target machine, which this
+Linux runner cannot establish. Added `scripts/record_fleet_delivery_checks.js`
+to collect its required evidence in one invocation on that machine:
+
+```sh
+PYTHON=/absolute/path/to/python3.14 node scripts/record_fleet_delivery_checks.js /new/evidence/directory
+```
+
+The recorder checks the selected runtime using the existing live verifier's
+Python 3.14/3.13 policy, then runs fleet pytest, pytest-mode all-reader mutation,
+full `src/verify.py`, and live validation. It records exact argument arrays,
+explicit interpreter/environment overrides, dates, exit codes, signals, separate
+stdout/stderr logs, and fingerprints of eight named source/configuration files.
+It retains failed checks and continues collecting independent results. Each
+attempt is saved before execution, so interruption leaves an unfinished receipt.
+Existing output directories are refused. The default per-command timeout is one
+hour; `--timeout-ms` allows a shorter diagnostic run. `commands_exited_zero`
+records process status only: review test verdicts, live evidence and host identity
+before deciding acceptance. Source fingerprints cover the eight named inputs,
+not the complete dependency tree.
+
+Recorded runner command at base head `e91f5f0`, using the interpreter selected
+through `ORCH_STANDARD_PYTHON` and `scripts/usage_poll/py-standard.sh`:
+
+```sh
+PYTHON=/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3 node scripts/record_fleet_delivery_checks.js /tmp/issue-1186-command-receipts-20261106 --timeout-ms 55000
+```
+
+The saved [command receipt](issue-672-command-receipts-20261106/commands.json)
+records `2026-11-06T03:33:27.251Z` through `03:34:24.271Z`, Python 3.14.10,
+Linux/x86_64, unchanged named sources, and `commands_exited_zero=false`:
+
+- Fleet pytest and all-reader mutation each exit 1 because pytest is absent.
+- Full verification receives SIGTERM at the explicit 55-second smoke limit;
+  its logs contain no verdict.
+- Live validation exits zero at `03:34:24.262Z`. Its
+  [receipt](issue-672-command-receipts-20261106/live/check.json) validates all
+  five rows with explicit unmeasured reasons. This is runner evidence.
+- All 31 JavaScript tests pass, including six new recorder tests exercising
+  command selection, failure retention, interruption, source changes, real
+  subprocess output, missing executables and timeouts. All 27 fleet unittest
+  tests pass. JavaScript syntax checks and `git diff --check` pass.
+
+The original stdout/stderr text is preserved by filename in
+[logs.json](issue-672-command-receipts-20261106/logs.json), including empty logs.
+
+No acceptance checkbox is newly complete. PR #1187 is open and ready for review
+(`draft=false`). Correcting its unsupported checked target-machine task and
+pytest-mode mutation criterion, posting a blocker comment, and adding
+`needs-human` were rejected with `MCP tool call requires approval, but approval
+policy is never`.
+
+No Python files changed, so the Python-only Black gate does not apply. Ordinary
+staging fails at `.git/index.lock` because checkout Git metadata is read-only.
+The source commit uses writable metadata at
+`/tmp/issue-1186-command-receipts-commit/.git`; the handoff bundle is
+`/tmp/issue-1186-command-receipts.bundle`. The checkout branch cannot be advanced
+here.
+
 ## Pytest subtest mutation verdicts — 2026-11-06 03:15Z
 
 Reviewed all eight implementation commits through `7fb2d67`. Structured-link
