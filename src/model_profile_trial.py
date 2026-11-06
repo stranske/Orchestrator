@@ -1013,7 +1013,7 @@ def recurring_trial_prompt(manifest: dict[str, Any], request: dict[str, Any]) ->
         + "The evidence line must be exactly:\n"
         + f"work_evidence={rubric}\n"
         + "Replace the rubric segment after the equals sign with a single line copied verbatim "
-        "from the frozen specification below: the line that begins with \"Acceptance criteria:\" "
+        'from the frozen specification below: the line that begins with "Acceptance criteria:" '
         "if there is one; otherwise the first non-empty line of the specification.\n"
         + "Do not add any other text.\n"
         + "\n".join(lines)
