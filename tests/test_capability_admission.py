@@ -243,6 +243,69 @@ def test_format_report_preserves_blocking_and_drainable_diagnostics():
         assert expected in rendered
 
 
+def test_format_report_consumer_missing_excludes_reviewed_absence_from_declaration_edit_line():
+    """DRAINABLE guidance is for prose / missing-symbol / undeclared edits, not consumer_missing."""
+    report = {
+        "admitted": 1,
+        "total": 1,
+        "enforced_total": 0,
+        "enforced_failing": [],
+        "legacy_debt": [],
+        "rows": [],
+        "findability": {},
+        "consumers": {
+            "total": 1,
+            "by_class": {
+                "acting": [],
+                "grace": [],
+                "exercise_bound": [],
+                "unmeasured": [],
+                "not_invoked": [],
+                "not_acting": [],
+                "prose": [],
+                "consumer_missing": ["cap-x"],
+                "unresolved": [],
+                "undeclared": [],
+            },
+            "blocking": [],
+            "deferred": [],
+            "drainable": ["cap-x"],
+            "drained": False,
+        },
+        "commitments": {"clean": True, "dangling_citations": [], "overdue_without_record": []},
+    }
+    rendered = admission.format_report(report)
+    assert "consumer_missing 1" in rendered, rendered
+    assert "prose 0" in rendered, rendered
+    assert "missing 0" in rendered, rendered
+    assert "DRAINABLE 1" in rendered, rendered
+    assert "consumer_missing fills reviewed-absence debt" in rendered, rendered
+
+
+def test_consumer_missing_with_resolvable_token_stays_non_accepting_and_drainable():
+    """Explicit consumer_missing must not be reclassified once tokens resolve (#599 / PR #1128)."""
+    cid = "issue599-synthetic-consumer-missing"
+    declaration = {
+        "consumer_missing": True,
+        "downstream_consumer": "merge_guard.py:evaluate_merge_gate",
+        "notes": "issue599 regression: resolvable token with reviewed absence stays consumer_missing",
+    }
+    cap = {**capabilities._blank_capability(cid), **declaration}
+    ctx: dict = {}
+    cls, ok, detail = admission.consumer_class({**cap, "capability_id": cid}, ctx)
+    assert cls == "consumer_missing" and not ok, (cls, detail)
+    assert "consumer_missing" in detail
+    resolution = admission.consumer_resolution(cap)
+    assert resolution["resolved"] and not resolution["unresolved"], resolution
+    gate_ctx = {"audit_rows": {}, "fixtures": set()}
+    verdict = admission.admit(cid, ctx=gate_ctx, ledger={cid: cap})
+    assert not verdict["checks"]["consumer_acts"]["ok"], verdict
+    consumers = admission.consumer_report({cid: cap}, ctx, [verdict])
+    assert consumers["by_class"]["consumer_missing"] == [cid], consumers
+    assert consumers["by_class"]["prose"] == [], consumers
+    assert consumers["drainable"] == [cid] and not consumers["drained"], consumers
+
+
 def test_safety_guard_exemption_is_declared_and_narrow():
     """The kill-switch exemption for a CONFINEMENT must stay opt-in, justified, and small.
 

@@ -605,19 +605,19 @@ def consumer_class(cap: dict, ctx: dict) -> tuple[str, bool, str]:
     """(class, ok, detail) for the tenth part; `req_consumer_acts` and `consumer_report` share it."""
     if not _has(cap, "downstream_consumer"):
         return "undeclared", False, "no consumer declared (the fifth part names the field)"
+    # Reviewed absence is a distinct class from prose/unresolved/acting: classify it before any
+    # token resolution so a resolvable `file.py:symbol` cannot upgrade the row to acting/grace/etc.
+    if cap.get("consumer_missing") is True:
+        return (
+            "consumer_missing",
+            False,
+            (
+                "no local acting consumer (consumer_missing); leave the declaration, do not "
+                "invent a rail — this is drainable finding debt, not accidental prose"
+            ),
+        )
     res = consumer_resolution(cap, module_dir=ctx.get("module_dir"), repo_root=ctx.get("repo_root"))
     if not res["tokens"]:
-        # consumer_missing is a reviewed finding ("no rail acts"), not undrained accidental prose.
-        # Still fails the tenth part (finding ≠ waiver); only the CONSUMERS class label differs.
-        if cap.get("consumer_missing") is True:
-            return (
-                "consumer_missing",
-                False,
-                (
-                    "no local acting consumer (consumer_missing); leave the declaration, do not "
-                    "invent a rail — this is drainable finding debt, not accidental prose"
-                ),
-            )
         return (
             "prose",
             False,
@@ -1262,7 +1262,8 @@ def format_report(rep: dict) -> str:
             f"                   not acting (trailing window) {by['not_acting']} (blocking {len(cons['blocking'])}, "
             f"pre-cutoff debt {len(cons['deferred'])}); prose {by['prose']}, missing "
             f"{by['unresolved']}, undeclared {by['undeclared']} — DRAINABLE {len(cons['drainable'])} "
-            "(a declaration edit each)"
+            "(a declaration edit each; consumer_missing fills reviewed-absence debt, not prose/"
+            "missing-rail)"
             + (f"; consumer_missing {by['consumer_missing']}" if by["consumer_missing"] else ""),
         ]
         if cons["drained"]:
