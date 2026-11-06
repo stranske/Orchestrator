@@ -182,8 +182,12 @@ def test_feature_registry_cli_and_research_demo_are_local(
     )
     assert features.main(["record", "--name", "x", "--where", "here", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["name"] == "x"
-    monkeypatch.setattr(features, "mark_hardened", lambda *args, **kwargs: None)
+    calls: list[tuple] = []
+    monkeypatch.setattr(
+        features, "mark_hardened", lambda name, module, **kwargs: calls.append((name, module))
+    )
     assert features.main(["harden", "--name", "x", "--module", "x.py", "--json"]) == 0
+    assert calls == [("x", "x.py")]
     assert json.loads(capsys.readouterr().out)["maturity"] == "hardened"
     monkeypatch.setattr(
         features, "promotion_candidates", lambda: [{"name": "x", "count": 3, "problem": "p"}]
