@@ -755,8 +755,8 @@ def _sandbox_probe_command(offload_argv: list[str]) -> list[str]:
     The installed ``codex sandbox`` CLI does not accept ``exec``'s ``--sandbox``
     flag; it uses ``--permission-profile`` and ``-c`` overrides. We mirror the
     assess child's ``--sandbox read-only`` (or ``workspace-write`` when emitted)
-    by naming that profile and merging a minimal permissions table so the
-    probe can resolve ``gh`` on PATH under read-only roots.
+    by naming that profile and providing a minimal permissions table without
+    probe-only broadening so the probe uses the same resolved policy.
     """
     binary = offload_argv[0] if offload_argv else "codex"
     sandbox_mode = "read-only"
@@ -771,7 +771,9 @@ def _sandbox_probe_command(offload_argv: list[str]) -> list[str]:
             cd = offload_argv[index + 1]
     # Permission profile id matches codex `exec --sandbox <mode>` modes.
     profile = str(sandbox_mode)
-    permissions = "permissions={" + profile + "={network={access=\"allow\"}}}"
+    # Empty permissions table: use the same resolved policy as the assess child
+    # without independently enabling network or broadening filesystem permissions.
+    permissions = "permissions = { " + profile + " = { } }"
     return [
         str(binary),
         "sandbox",

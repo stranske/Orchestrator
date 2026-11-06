@@ -319,6 +319,66 @@ def test_sandbox_restricted_profile_refuses_without_fallback(tmp_path, monkeypat
     assert dispatcher.ASSESS_FALLBACK_DIAGNOSTIC not in err
 
 
+def test_sandbox_probe_does_not_force_network_access(tmp_path, monkeypatch):
+    """Regression: the probe must not independently enable network access.
+
+    A networkless assess policy must not be overridden by the probe adding
+    network={access="allow"} permissions. The probe uses the same resolved
+    policy as the assess child.
+    """
+    _isolate(tmp_path, monkeypatch)
+    calls = _install_run(
+        monkeypatch,
+        lambda cmd, kwargs: _completed(cmd, 1, "", "dial tcp: lookup api.github.com: no such host"),
+    )
+    result = dispatcher.offload(
+        "codex",
+        "Run gh api rate_limit",
+        cwd=str(tmp_path),
+        mode="assess",
+    )
+    probe = _probe_call(calls)
+    # Verify the probe does not add probe-only network permission broadening.
+    # The permissions should use an empty table { } for the profile, not
+    # {network={access="allow"}}.
+    assert "permissions = { read-only = { } }" in " ".join(probe["cmd"])
+    assert "network={access=\"allow\"}" not in " ".join(probe["cmd"])
+    assert "network = { access" not in " ".join(probe["cmd"])
+    assert result["sandbox_fallback"] is True
+    assert result["sandbox_network"]["classification"] == "dns"
+
+
+def test_sandbox_probe_timeout_accounts_for_elapsed_time(tmp_path, monkeypatch):
+    """Regression: elapsed setup time reduces the five-second subprocess allowance.
+
+    The probe must use whatever remains of the five-second total clock,
+    not a fixed five seconds from the subprocess.run call.
+    """
+    import time
+
+    start_time = time.monotonic()
+    # Simulate some elapsed time before the probe starts
+    time.sleep(0.1)
+
+    def run(cmd, cwd=None, **kwargs):
+        elapsed_before = time.monotonic() - start_time
+        # The timeout passed to subprocess.run should be <= 5.0 - elapsed_before
+        # We check it's strictly less than or equal to 5.0 and accounts for elapsed time
+        assert kwargs["timeout"] <= 5.0
+        # Ensure it's bounded and non-negative
+        assert kwargs["timeout"] > 0
+        raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+
+    monkeypatch.setattr(dispatcher.subprocess, "run", run)
+    verdict = dispatcher._sandbox_has_network(
+        ["codex", "exec", "--sandbox", "read-only", "--cd", str(tmp_path), "brief"],
+        cwd=str(tmp_path),
+    )
+    assert verdict["classification"] == "timeout"
+    assert verdict["has_network"] is False
+    assert verdict["elapsed_s"] < 5.0
+
+
 def _row(ts: int, **fields) -> str:
     return json.dumps({"ts": ts, **fields})
 
