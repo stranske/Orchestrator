@@ -380,6 +380,75 @@ def test_publish_current_cli_refuses_a_missing_count_without_writing(tmp_path, m
     assert not (state / "capability-program" / "profile-trial.json").exists()
 
 
+def test_publish_measured_recurring_trial_refuses_empty_frozen_spec(tmp_path, monkeypatch):
+    state, experiments = _seal(tmp_path)
+    orchestrator, workflows = _sources(tmp_path)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(state))
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "quarantine-feedback.db")
+    manifest = trial.build_current_recurring_trial(
+        orchestrator,
+        workflows,
+        seed=14,
+        now=1000,
+        capacity_state="ok",
+        state_dir=state,
+        experiments_root=experiments,
+    )
+    manifest["frozen_packet"]["frozen_spec"] = "   \n"
+    manifest["packet_hash"] = trial._sha256(manifest["frozen_packet"])
+    results = _measured_results(tmp_path, manifest)
+    with pytest.raises(ValueError, match="nonempty frozen_spec"):
+        trial.publish_measured_recurring_trial(manifest, results, now=2000)
+    assert not (state / "capability-program" / "profile-trial.json").exists()
+    assert not (tmp_path / "quarantine-feedback.db").exists()
+
+
+def test_publish_measured_recurring_trial_refuses_bad_exp_id(tmp_path, monkeypatch):
+    state, experiments = _seal(tmp_path)
+    orchestrator, workflows = _sources(tmp_path)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(state))
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "quarantine-feedback.db")
+    manifest = trial.build_current_recurring_trial(
+        orchestrator,
+        workflows,
+        seed=14,
+        now=1000,
+        capacity_state="ok",
+        state_dir=state,
+        experiments_root=experiments,
+    )
+    manifest["frozen_packet"]["exp_id"] = "bad/id"
+    manifest["packet_hash"] = trial._sha256(manifest["frozen_packet"])
+    results = _measured_results(tmp_path, manifest)
+    with pytest.raises(ValueError, match="valid strategy exp_id"):
+        trial.publish_measured_recurring_trial(manifest, results, now=2000)
+    assert not (state / "capability-program" / "profile-trial.json").exists()
+    assert not (tmp_path / "quarantine-feedback.db").exists()
+
+
+def test_publish_measured_recurring_trial_refuses_forged_spec_seal(tmp_path, monkeypatch):
+    state, experiments = _seal(tmp_path)
+    orchestrator, workflows = _sources(tmp_path)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(state))
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "quarantine-feedback.db")
+    manifest = trial.build_current_recurring_trial(
+        orchestrator,
+        workflows,
+        seed=14,
+        now=1000,
+        capacity_state="ok",
+        state_dir=state,
+        experiments_root=experiments,
+    )
+    manifest["frozen_packet"]["spec_sha256"] = "sha256:" + ("e" * 64)
+    manifest["packet_hash"] = trial._sha256(manifest["frozen_packet"])
+    results = _measured_results(tmp_path, manifest)
+    with pytest.raises(ValueError, match="spec_sha256 does not seal"):
+        trial.publish_measured_recurring_trial(manifest, results, now=2000)
+    assert not (state / "capability-program" / "profile-trial.json").exists()
+    assert not (tmp_path / "quarantine-feedback.db").exists()
+
+
 def test_prepare_current_cli_refuses_a_missing_spec_without_writing(tmp_path, capsys):
     orchestrator, workflows = _sources(tmp_path)
     output = tmp_path / "outside" / "manifest.json"

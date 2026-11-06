@@ -1016,7 +1016,29 @@ def _validate_transport_results(
                 raise ValueError(
                     f"transport GitHub artifact provenance missing:{request['profile_id']}"
                 )
-        _identity_artifact(manifest, envelope, request, attempt)
+        id_art = _identity_artifact(manifest, envelope, request, attempt)
+        for field in ("tokens_in", "tokens_out"):
+            if field not in id_art:
+                continue
+            bound = id_art[field]
+            if bound is None:
+                continue
+            if type(bound) is not int or bound < 0:
+                raise ValueError(
+                    f"transport identity artifact {field} is not a nonnegative integer:"
+                    f"{request['profile_id']}"
+                )
+            measured = _usage_count(attempt, field)
+            if measured != bound:
+                raise ValueError(
+                    f"transport {field} disagrees with identity artifact:{request['profile_id']}"
+                )
+        tokens_in = _usage_count(attempt, "tokens_in")
+        tokens_out = _usage_count(attempt, "tokens_out")
+        if "tokens_in" in id_art and id_art["tokens_in"] is not None:
+            tokens_in = id_art["tokens_in"]
+        if "tokens_out" in id_art and id_art["tokens_out"] is not None:
+            tokens_out = id_art["tokens_out"]
         sanitized_attempt = {
             "run_id": attempt["run_id"],
             "profile_id": attempt["profile_id"],
@@ -1033,8 +1055,8 @@ def _validate_transport_results(
             "cli_version": str(attempt["cli_version"])[:160],
             "status": "success",
             "latency_s": float(attempt.get("latency_s") or 0.0),
-            "tokens_in": _usage_count(attempt, "tokens_in"),
-            "tokens_out": _usage_count(attempt, "tokens_out"),
+            "tokens_in": tokens_in,
+            "tokens_out": tokens_out,
             "artifact_ref": str(attempt["artifact_ref"])[:512],
             "packet_hash": manifest["packet_hash"],
             "acknowledged": True,

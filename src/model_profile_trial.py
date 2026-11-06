@@ -16,10 +16,14 @@ verified evidence can be ingested atomically into a quarantine feedback database
 trial of the sealed strategy spec. It does not execute workers, and it refuses
 when any instance has no token count. ``run-current`` is the live read-only
 execution of that plan: six ``codex exec --sandbox read-only`` arms on the
-frozen spec. Quality is the fraction of acknowledgement lines each profile
-returned, cost is token counts from the session, and provider identity is
-taken only from an OpenAI response object in that session. A CLI model, a
-``--model`` flag, or a missing count writes nothing. ``--selftest`` exercises
+frozen spec. Transport acknowledgement requires four binding lines in the final
+message; recurring-work quality is scored separately from a read-only rubric
+on the frozen specification text. Cost is token counts from the session stream,
+and provider identity is taken only from a ``response.completed`` event whose
+``response`` object has OpenAI ``response`` metadata in that stream—never from
+``--model``, argv, or ``turn_context`` alone. The Codex CLI does not currently
+emit that event in every subscription session; when the stream lacks it,
+``run-current`` refuses and writes nothing. ``--selftest`` exercises
 prepare, validation, and reporting fully offline.
 """
 
@@ -981,7 +985,7 @@ def _write_capability_program_trial_summary(
 
 
 def recurring_trial_prompt(manifest: dict[str, Any], request: dict[str, Any]) -> str:
-    """The frozen spec, plus the four lines a read-only arm must echo back."""
+    """The frozen spec, transport acknowledgement lines, and a bounded read-only work task."""
     packet = manifest.get("frozen_packet")
     if not isinstance(packet, dict):
         raise ValueError("recurring trial prompt requires the frozen packet")
@@ -1000,23 +1004,67 @@ def recurring_trial_prompt(manifest: dict[str, Any], request: dict[str, Any]) ->
     instruction = packet.get("instruction")
     if not isinstance(instruction, str) or not instruction.strip():
         instruction = "Read this frozen recurring-work specification without changing files."
+    rubric = _recurring_work_rubric_line(spec)
     return (
         instruction.rstrip()
         + "\nDo not edit, create, commit, or push files.\n"
-        + "Return exactly these four lines and nothing else:\n"
+        + "First, return exactly these four lines (transport acknowledgement), then a blank line, "
+        "then one line of recurring-work evidence.\n"
+        + "The evidence line must be exactly:\n"
+        + f"work_evidence={rubric}\n"
+        + "Replace the rubric segment after the equals sign with a single line copied verbatim "
+        "from the frozen specification below: the line that begins with \"Acceptance criteria:\" "
+        "if there is one; otherwise the first non-empty line of the specification.\n"
+        + "Do not add any other text.\n"
         + "\n".join(lines)
-        + "\nFrozen specification:\n"
+        + "\n\nFrozen specification:\n"
         + spec
     )
+
+
+def _recurring_work_rubric_line(spec: str) -> str:
+    """One spec line that read-only work quality must quote verbatim."""
+    for line in spec.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("Acceptance criteria:"):
+            return stripped
+    for line in spec.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    raise ValueError("frozen specification has no line for the work-quality rubric")
+
+
+def _work_quality_score(manifest: dict[str, Any], final_text: str) -> float:
+    """1.0 when the final message proves the rubric line; identifier echo alone scores 0."""
+    packet = manifest.get("frozen_packet")
+    if not isinstance(packet, dict):
+        return 0.0
+    spec = packet.get("frozen_spec")
+    if not isinstance(spec, str) or not spec.strip():
+        return 0.0
+    try:
+        rubric = _recurring_work_rubric_line(spec)
+    except ValueError:
+        return 0.0
+    text = final_text or ""
+    prefix = "work_evidence="
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith(prefix):
+            quoted = line[len(prefix) :].strip()
+            return 1.0 if quoted == rubric else 0.0
+    return 0.0
 
 
 def _acknowledgement_score(
     manifest: dict[str, Any], request: dict[str, Any], final_text: str
 ) -> tuple[bool, float]:
-    """Quality is how many of the four required lines the arm actually returned.
+    """Transport acknowledgement (four lines) and recurring-work quality (rubric), separately.
 
-    The packet hash line is the acknowledgement gate. A partial echo still has a
-    measured score; a missing packet hash is not an acknowledgement.
+    All four binding lines must appear for acknowledgement. Work quality does not
+    use identifier-echo density: it is 1.0 only when ``work_evidence=`` carries the
+    rubric line verbatim.
     """
     packet = manifest["frozen_packet"]
     required = (
@@ -1026,8 +1074,8 @@ def _acknowledgement_score(
         f"run_id={request['run_id']}",
     )
     text = final_text or ""
-    hits = sum(line in text for line in required)
-    return required[0] in text, hits / len(required)
+    acknowledged = all(line in text for line in required)
+    return acknowledged, _work_quality_score(manifest, text)
 
 
 def _jsonl_objects(session_text: str) -> list[dict[str, Any]]:
@@ -1270,7 +1318,14 @@ def codex_read_only_argv(
 def execute_codex_read_only(
     binary: Path, request: dict[str, Any], prompt: str, workdir: Path
 ) -> tuple[str, str, str]:
-    """Run one sandboxed arm. Returns the JSONL stream, final message, and CLI version."""
+    """Run one sandboxed arm. Returns the JSONL stream, final message, and CLI version.
+
+    Provider identity and usage are interpreted only from ``stdout`` (JSONL). The
+    ``--model`` argv names the profile contract; it is not treated as provider
+    resolution. Until the CLI reliably emits ``response.completed`` with OpenAI
+    response metadata in read-only sessions, ``run-current`` may refuse for
+    ``provider_resolved_identity_unavailable``.
+    """
     if not binary.is_file() or not os.access(binary, os.X_OK):
         raise ValueError(f"codex read-only runner is absent: {binary}")
     workdir.mkdir(parents=True, exist_ok=True)
@@ -1405,6 +1460,19 @@ def publish_measured_recurring_trial(
         raise ValueError("measured recurring trial requires the two current Codex profiles")
     if manifest.get("instances_per_profile") != CURRENT_TRIAL_INSTANCES:
         raise ValueError("measured recurring trial requires three instances per profile")
+    fp = manifest["frozen_packet"]
+    if not isinstance(fp, dict):
+        raise ValueError("measured recurring trial requires a frozen packet")
+    frozen_spec = fp.get("frozen_spec")
+    if not isinstance(frozen_spec, str) or not frozen_spec.strip():
+        raise ValueError("measured recurring trial requires a nonempty frozen_spec")
+    exp_id = fp.get("exp_id")
+    if not isinstance(exp_id, str) or not _EXPERIMENT_ID_RE.fullmatch(exp_id):
+        raise ValueError("measured recurring trial requires a valid strategy exp_id")
+    spec_sha = fp.get("spec_sha256")
+    expected_sha = "sha256:" + hashlib.sha256(frozen_spec.encode("utf-8")).hexdigest()
+    if spec_sha != expected_sha:
+        raise ValueError("measured recurring trial spec_sha256 does not seal frozen_spec")
     attempts = results.get("attempts")
     expected = len(CURRENT_TRIAL_PROFILE_IDS) * CURRENT_TRIAL_INSTANCES
     if not isinstance(attempts, list) or len(attempts) != expected:

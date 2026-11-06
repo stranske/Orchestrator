@@ -277,6 +277,34 @@ def test_failed_or_untrusted_attempt_stops_whole_trial(tmp_path):
         bridge.ingest_transport_results(manifest, envelope, results)
 
 
+def test_identity_artifact_tokens_must_agree_with_attempt(tmp_path):
+    manifest = _manifest(tmp_path)
+    _preflight, envelope = _envelope(tmp_path, manifest)
+    results = _transport_results(tmp_path, manifest, envelope)
+    attempt = results["attempts"][0]
+    art_path = Path(attempt["artifact_ref"])
+    art = json.loads(art_path.read_text(encoding="utf-8"))
+    art["tokens_in"] = 99
+    art["tokens_out"] = attempt["tokens_out"]
+    art_path.write_text(json.dumps(art, sort_keys=True) + "\n", encoding="utf-8")
+    attempt["artifact_sha256"] = "sha256:" + hashlib.sha256(art_path.read_bytes()).hexdigest()
+    with pytest.raises(ValueError, match="tokens_in disagrees"):
+        bridge.ingest_transport_results(manifest, envelope, results)
+
+    results = _transport_results(tmp_path, manifest, envelope)
+    attempt = results["attempts"][0]
+    art_path = Path(attempt["artifact_ref"])
+    art = json.loads(art_path.read_text(encoding="utf-8"))
+    art.pop("tokens_in", None)
+    art.pop("tokens_out", None)
+    art_path.write_text(json.dumps(art, sort_keys=True) + "\n", encoding="utf-8")
+    attempt["artifact_sha256"] = "sha256:" + hashlib.sha256(art_path.read_bytes()).hexdigest()
+    quarantined = bridge.ingest_transport_results(manifest, envelope, results)
+    saved = next(row for row in quarantined["attempts"] if row["run_id"] == attempt["run_id"])
+    assert saved["tokens_in"] == 2
+    assert saved["tokens_out"] == 1
+
+
 def test_missing_transport_usage_stays_unmeasured_and_zero_stays_zero(tmp_path):
     manifest = _manifest(tmp_path)
     _preflight, envelope = _envelope(tmp_path, manifest)

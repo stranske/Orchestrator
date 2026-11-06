@@ -1,8 +1,10 @@
 """A live recurring trial is six read-only Codex sessions, or it writes nothing.
 
-Quality is counted from the final message, cost from session usage, and the
-provider model from an OpenAI response object. The CLI's turn_context model is
-the configured model, so a session that has only that model does not publish.
+Transport acknowledgement requires four binding lines in the final message;
+recurring-work quality needs a ``work_evidence=`` line quoting the rubric from
+the frozen spec. Cost is token counts from the session, and the provider model
+comes only from a ``response.completed`` OpenAI response object. The CLI's
+``turn_context`` alone does not publish.
 """
 
 from __future__ import annotations
@@ -60,6 +62,52 @@ def _required_lines(manifest: dict, request: dict) -> list[str]:
     ]
 
 
+def _final_message_ack_and_work(manifest: dict, request: dict, *, include_work: bool) -> str:
+    """Four acknowledgement lines, optional blank line and work_evidence (rubric quote)."""
+    lines = _required_lines(manifest, request)
+    body = "\n".join(lines)
+    if not include_work:
+        return body + "\n"
+    rubric = trial._recurring_work_rubric_line(manifest["frozen_packet"]["frozen_spec"])
+    return body + "\n\n" + f"work_evidence={rubric}\n"
+
+
+SANITIZED_REAL_STREAM = """{"type":"response.completed","response":{"object":"response","id":"resp_fixture001","model":"gpt-6-2025-astra","usage":{"input_tokens":42,"output_tokens":7}}}
+{"type":"turn.completed","usage":{"input_tokens":42,"output_tokens":7}}
+"""
+
+
+def test_sanitized_real_stream_fixture_yields_one_openai_response():
+    events = trial._jsonl_objects(SANITIZED_REAL_STREAM)
+    got = trial._one_provider_response(events)
+    assert got["model"] == "gpt-6-2025-astra"
+    assert str(got["id"]).startswith("resp_")
+    assert got["usage"] == {"input_tokens": 42, "output_tokens": 7}
+
+
+def test_echo_only_ack_lines_score_zero_recurring_work_quality(tmp_path):
+    """Four transport lines without work_evidence= cannot pass recurring-work scoring."""
+    state, experiments = _seal(tmp_path)
+    orchestrator, workflows = _sources(tmp_path)
+    manifest = trial.build_current_recurring_trial(
+        orchestrator,
+        workflows,
+        seed=14,
+        now=1000,
+        capacity_state="ok",
+        state_dir=state,
+        experiments_root=experiments,
+    )
+    request = manifest["requests"][0]
+    ack, quality = trial._acknowledgement_score(
+        manifest,
+        request,
+        "\n".join(_required_lines(manifest, request)) + "\n",
+    )
+    assert ack is True
+    assert quality == 0.0
+
+
 def _session(
     request: dict, *, model: str, tokens_in: int, tokens_out: int, final_text: str
 ) -> tuple[str, str]:
@@ -113,16 +161,14 @@ def test_run_current_records_measured_quality_cost_and_response_identity(tmp_pat
         assert "Frozen specification:" in prompt
         assert SPEC in prompt
         assert "workspace-write" not in prompt
-        lines = _required_lines(manifest, request)
-        # The prompt contains every required line. Scoring the prompt would
-        # make the partial profile look perfect; only the final message counts.
-        kept = lines if request["profile_id"] == full_profile else lines[:1]
+        assert "work_evidence=" in prompt
+        include_work = request["profile_id"] == full_profile
         session, final_text = _session(
             request,
             model=request["requested_model"],
             tokens_in=10 * int(request["launch_ordinal"]),
             tokens_out=int(request["launch_ordinal"]),
-            final_text="\n".join(kept) + "\n",
+            final_text=_final_message_ack_and_work(manifest, request, include_work=include_work),
         )
         return session, final_text, "codex-cli 0.153.2"
 
@@ -146,7 +192,7 @@ def test_run_current_records_measured_quality_cost_and_response_identity(tmp_pat
     assert summary["work_shape"] == "strategy-experiment-frozen-spec"
     assert (summary["profile_count"], summary["instance_count"]) == (2, 6)
     assert summary["quality_by_profile"][full_profile] == 1.0
-    assert summary["quality_by_profile"][partial_profile] == 0.25
+    assert summary["quality_by_profile"][partial_profile] == 0.0
     for profile_id in trial.CURRENT_TRIAL_PROFILE_IDS:
         attempts = [row for row in manifest["requests"] if row["profile_id"] == profile_id]
         assert summary["cost_tokens_by_profile"][profile_id] == {
@@ -215,7 +261,7 @@ def test_missing_usage_does_not_publish(tmp_path, monkeypatch):
     )
 
     def execute(request, _prompt):
-        lines = _required_lines(manifest, request)
+        final_text = _final_message_ack_and_work(manifest, request, include_work=True)
         response = {
             "type": "response.completed",
             "response": {
@@ -224,7 +270,7 @@ def test_missing_usage_does_not_publish(tmp_path, monkeypatch):
                 "model": request["requested_model"],
             },
         }
-        return json.dumps(response) + "\n", "\n".join(lines) + "\n", "codex-cli 0.153.2"
+        return json.dumps(response) + "\n", final_text, "codex-cli 0.153.2"
 
     with pytest.raises(ValueError, match="tokens_in"):
         trial.run_current_recurring_trial(
