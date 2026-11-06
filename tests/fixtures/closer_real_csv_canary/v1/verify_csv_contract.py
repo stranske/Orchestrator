@@ -23,8 +23,12 @@ when that record's schema sits inside the object. The chain report records
 the current head and published merge SHA of PRs 1168 and 989. An open pull
 request's REST merge_commit_sha is a test merge, not a published merge. A
 prior unmerged report that disagrees with a merged native state is stale.
-Recording that reconciliation does not change either head. The command does
-not change the default contract exit.
+Recording that reconciliation does not change either head. An already-merged
+PR 1168 is not sent through ``merge_guard --confirm-merge``. An open PR names
+the dry-run ``src/merge_guard.py`` command and still withholds confirm-merge
+until the review floor and every merge gate pass. This script does not invoke
+that command. The report names the first remaining blocker and does not change
+the head. The command does not change the default contract exit.
 """
 
 from __future__ import annotations
@@ -505,19 +509,86 @@ def _recorded_state_comparison(readback):
     )
     if same:
         return [_reconciliation_line(readback["pr"])]
-    return [
+    return [_drift_line(readback, expected)]
+
+
+def _yes_no(value):
+    return "yes" if value else "no"
+
+
+def _sha_or_none(value):
+    return value or "none"
+
+
+def _drift_line(readback, expected):
+    """Name every field ``_recorded_state_comparison`` uses to decide sameness."""
+    return (
         "native_pr_record_drift: pr="
         + readback["pr"]
         + " recorded_head="
         + expected["head_sha"]
         + " live_head="
         + (readback["head_sha"] or "missing")
+        + " recorded_merged="
+        + _yes_no(expected["merged"])
+        + " live_merged="
+        + _yes_no(readback["merged"])
         + " recorded_published_merge="
-        + (expected["published_merge_sha"] or "none")
+        + _sha_or_none(expected["published_merge_sha"])
         + " live_published_merge="
-        + (readback["published_merge_sha"] or "none")
+        + _sha_or_none(readback["published_merge_sha"])
+        + " recorded_test_merge="
+        + _sha_or_none(expected["test_merge_sha"])
+        + " live_test_merge="
+        + _sha_or_none(readback["test_merge_sha"])
         + " head_not_modified=yes"
-    ]
+    )
+
+
+def _merge_guard_line(readback, *, corpus_bound, publication):
+    """Report the authorized merge path without sending confirm-merge.
+
+    A merged pull request stays merged. An open one is named as the dry-run
+    ``src/merge_guard.py`` command. Neither branch rewrites the head or skips
+    the review floor and merge gates.
+    """
+    head = readback["head_sha"] or "missing"
+    if readback["merged"]:
+        reason = "already_merged"
+        command = "not_sent"
+        if not corpus_bound:
+            blocker = "verifier-corpus-decision/v1"
+        elif not publication:
+            blocker = "retain_confirmed_result"
+        else:
+            blocker = "none"
+    else:
+        reason = "open_review_floor_and_gates"
+        blocker = "review_floor_and_merge_gates"
+        command = (
+            "python3 src/merge_guard.py "
+            + _REPOSITORY
+            + "#"
+            + _CORRECTIVE_PR
+            + " --expected-head "
+            + head
+        )
+    return (
+        "merge_guard_path: pr="
+        + readback["pr"]
+        + " invoked=no"
+        + " confirm_merge=no"
+        + " head_unchanged=yes"
+        + " gates_preserved=yes"
+        + " reason="
+        + reason
+        + " expected_head="
+        + head
+        + " command="
+        + command
+        + " first_remaining_blocker="
+        + blocker
+    )
 
 
 def _native_pr_readback_lines(record):
@@ -1280,6 +1351,13 @@ def _format_report(assessment, corrective_sha, local_head, verifier_runs=(), ear
                 + " is unmerged; Agents Verifier refuses an unmerged pull request"
             )
         lines.extend(_native_pr_readback_lines(corrective_pr))
+        lines.append(
+            _merge_guard_line(
+                _native_pr_readback(corrective_pr),
+                corpus_bound=bool(bound_corpus),
+                publication=bool(assessment["publication"]),
+            )
+        )
     if corrective_pr:
         labels = [str(label) for label in (corrective_pr.get("labels") or [])]
         verify_labels = [label for label in _VERIFY_LABELS if label in labels]
@@ -2995,6 +3073,16 @@ def _self_check():
         raise AssertionError("a verifier run was treated as a decision")
     if "corrective_pr_merged: yes merge_sha=" + merge_only not in run_text:
         raise AssertionError("merged corrective PR was not reported")
+    run_guard = [line for line in run_text.splitlines() if line.startswith("merge_guard_path:")]
+    if (
+        len(run_guard) != 1
+        or "reason=already_merged" not in run_guard[0]
+        or "confirm_merge=no" not in run_guard[0]
+        or "command=not_sent" not in run_guard[0]
+        or "first_remaining_blocker=verifier-corpus-decision/v1" not in run_guard[0]
+        or "--confirm-merge" in run_guard[0]
+    ):
+        raise AssertionError("merged PR without a corpus decision was sent to confirm-merge")
     if (
         "native_pr_readback: pr=1168 head="
         + corrective
@@ -3069,6 +3157,105 @@ def _self_check():
         raise AssertionError("reconciliation replaced the owned delivery head")
     if recorded["prs"]["989"]["published_merge_sha"]:
         raise AssertionError("unmerged delivery gained a published merge")
+    recorded_guard = _merge_guard_line(
+        recorded["prs"]["1168"], corpus_bound=False, publication=False
+    )
+    if (
+        "reason=already_merged" not in recorded_guard
+        or "expected_head=" + corrective_head not in recorded_guard
+        or "command=not_sent" not in recorded_guard
+        or "confirm_merge=no" not in recorded_guard
+        or "head_unchanged=yes" not in recorded_guard
+        or "gates_preserved=yes" not in recorded_guard
+        or "first_remaining_blocker=verifier-corpus-decision/v1" not in recorded_guard
+        or "--confirm-merge" in recorded_guard
+    ):
+        raise AssertionError("recorded merged head was routed through confirm-merge")
+    if recorded["prs"]["1168"]["head_sha"] != corrective_head:
+        raise AssertionError("merge guard disposition replaced the corrective head")
+    open_guard = [line for line in open_text.splitlines() if line.startswith("merge_guard_path:")]
+    open_command = (
+        "command=python3 src/merge_guard.py "
+        + _REPOSITORY
+        + "#"
+        + _CORRECTIVE_PR
+        + " --expected-head "
+        + corrective
+    )
+    if (
+        len(open_guard) != 1
+        or "reason=open_review_floor_and_gates" not in open_guard[0]
+        or "confirm_merge=no" not in open_guard[0]
+        or "gates_preserved=yes" not in open_guard[0]
+        or "head_unchanged=yes" not in open_guard[0]
+        or open_command not in open_guard[0]
+        or "--confirm-merge" in open_guard[0]
+        or "first_remaining_blocker=review_floor_and_merge_gates" not in open_guard[0]
+    ):
+        raise AssertionError("open merge guard path dropped a gate or sent confirm-merge")
+    blocked_guard = [
+        line for line in blocked_text.splitlines() if line.startswith("merge_guard_path:")
+    ]
+    if (
+        len(blocked_guard) != 1
+        or "confirm_merge=no" not in blocked_guard[0]
+        or "--confirm-merge" in blocked_guard[0]
+        or "expected_head=missing" not in blocked_guard[0]
+        or "gates_preserved=yes" not in blocked_guard[0]
+    ):
+        raise AssertionError("headless open PR was sent through confirm-merge")
+    complete_guard = [
+        line for line in complete_text.splitlines() if line.startswith("merge_guard_path:")
+    ]
+    if (
+        len(complete_guard) != 1
+        or "reason=already_merged" not in complete_guard[0]
+        or "command=not_sent" not in complete_guard[0]
+        or "first_remaining_blocker=none" not in complete_guard[0]
+        or "--confirm-merge" in complete_guard[0]
+    ):
+        raise AssertionError("complete merged evidence was sent back through confirm-merge")
+    drifted = _recorded_state_comparison(
+        {
+            "pr": "989",
+            "head_sha": owned_live_head,
+            "published_merge_sha": "",
+            "test_merge_sha": "f" * 40,
+            "merged": False,
+        }
+    )
+    if len(drifted) != 1:
+        raise AssertionError("test-merge drift was not reported")
+    drift_line = drifted[0]
+    if (
+        "recorded_merged=no" not in drift_line
+        or "live_merged=no" not in drift_line
+        or "recorded_published_merge=none" not in drift_line
+        or "live_published_merge=none" not in drift_line
+        or "recorded_test_merge=" + owned_test_merge not in drift_line
+        or "live_test_merge=" + ("f" * 40) not in drift_line
+        or "head_not_modified=yes" not in drift_line
+    ):
+        raise AssertionError("drift omitted merged or test-merge values")
+    merged_flag_drift = _recorded_state_comparison(
+        {
+            "pr": "1168",
+            "head_sha": corrective_head,
+            "published_merge_sha": "",
+            "test_merge_sha": "",
+            "merged": False,
+        }
+    )
+    if (
+        len(merged_flag_drift) != 1
+        or "recorded_merged=yes" not in merged_flag_drift[0]
+        or "live_merged=no" not in merged_flag_drift[0]
+        or "recorded_published_merge=" + corrective_merge not in merged_flag_drift[0]
+        or "live_published_merge=none" not in merged_flag_drift[0]
+        or "recorded_test_merge=none" not in merged_flag_drift[0]
+        or "live_test_merge=none" not in merged_flag_drift[0]
+    ):
+        raise AssertionError("merged-flag drift omitted recorded and live merge fields")
     if "verify_label_on_corrective_pr: verify:evaluate" not in run_text:
         raise AssertionError("verify label was not reported")
     if "native_verify_for_corrective_head: PRESENT" in run_text:
