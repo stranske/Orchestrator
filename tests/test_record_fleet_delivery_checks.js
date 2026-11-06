@@ -96,6 +96,47 @@ test('failures, missing executables and timeouts remain failures while later che
   assert.equal(receipt.checks[3].exit_code, 0);
 });
 
+test('inherited ledger and Brain paths cannot override the recorded private runtime', async (t) => {
+  const { root, output } = fixture(t);
+  const overrides = {
+    ORCH_CAPABILITIES_PATH: path.join(root, 'outside-capabilities.json'),
+    ORCH_FEEDBACK_DB: path.join(root, 'outside-feedback.db'),
+    ORCH_VERIFY_LIVE_STATE: '1',
+  };
+  const prior = Object.fromEntries(Object.keys(overrides).map((key) => [key, process.env[key]]));
+  Object.assign(process.env, overrides);
+  t.after(() => {
+    for (const [key, value] of Object.entries(prior)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+  let calls = 0;
+  const checkEnvironment = (env) => {
+    for (const key of Object.keys(overrides)) assert.equal(env[key], undefined, key);
+    assert.equal(env.ORCH_LOCAL_RUNTIME, path.join(output, 'runtime'));
+    assert.equal(env.ORCH_STATE_DIR, path.join(output, 'state'));
+  };
+  const receipt = await recordChecks(output, {
+    python,
+    probe: async (selected, run, { env }) => {
+      checkEnvironment(env);
+      return runtime;
+    },
+    run: async (command, args, { env }) => {
+      checkEnvironment(env);
+      calls += 1;
+      return zero;
+    },
+  });
+  assert.equal(calls, 4);
+  assert.equal(receipt.commands_exited_zero, true);
+  assert.deepEqual(receipt.cleared_environment,
+    [...Object.keys(overrides), 'PYTEST_PLUGINS']);
+  assert.deepEqual(Object.fromEntries(Object.keys(overrides).map((key) => [key, process.env[key]])),
+    overrides, 'the caller environment must remain unchanged');
+});
+
 test('interruption preserves completed checks and the unfinished attempted command', async (t) => {
   const { output } = fixture(t);
   let calls = 0;

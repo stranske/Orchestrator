@@ -70,13 +70,19 @@ async function recordChecks(outputDir, {
     ORCH_LOCAL_RUNTIME: path.join(destination, 'runtime'),
     ORCH_STATE_DIR: path.join(destination, 'state'),
   };
-  // Inherited filtering can silently change the requested suite.
-  delete env.PYTEST_PLUGINS;
+  // Explicit ledger/Brain paths win over ORCH_LOCAL_RUNTIME. Drop inherited
+  // paths so every check uses the recorded private runtime; keep verify.py's
+  // default private-state snapshot enabled. Also discard inherited test plugins.
+  const clearedEnvironment = [
+    'ORCH_CAPABILITIES_PATH', 'ORCH_FEEDBACK_DB', 'ORCH_VERIFY_LIVE_STATE', 'PYTEST_PLUGINS',
+  ];
+  for (const key of clearedEnvironment) delete env[key];
   const receipt = {
     started_at: now(), finished_at: null,
     selected_interpreter: python, python_runtime: null,
     environment: Object.fromEntries(['PYTHON', 'ORCH_STANDARD_PYTHON', 'PYTEST_ADDOPTS',
       'ORCH_LOCAL_RUNTIME', 'ORCH_STATE_DIR'].map((key) => [key, env[key]])),
+    cleared_environment: clearedEnvironment,
     source_sha256_before: readSourceHashes(root), source_sha256_after: null,
     source_unchanged: null, commands_exited_zero: null, checks: [],
   };

@@ -122,7 +122,7 @@ test('live command uses the selected interpreter and records validated output', 
   assert.deepEqual(receipt.source_sha256, fleetSourceHashes(path.resolve(__dirname, '..')));
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(output, 'check.json'))), receipt);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(output, 'report.json'))), report);
-  await assert.rejects(verifyLive(output), /EEXIST/);
+  await assert.rejects(verifyLive(output, { python: '/selected/venv/bin/python' }), /EEXIST/);
 });
 
 test('live verification retains Windows report bytes in the evidence directory', async (t) => {

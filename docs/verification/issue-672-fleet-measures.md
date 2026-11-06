@@ -1,5 +1,57 @@
 # Fleet delivery measures — runner checks
 
+## Recorder state overrides — 2026-11-06 03:48Z
+
+Reviewed the eight recent keepalive commits through `f23d53d`. The attribution
+implementation and regression coverage remain implemented. The checked
+target-machine task and pytest-mode mutation criterion still lack supporting
+receipts and should be unchecked. No additional task is complete.
+
+The command recorder inherited `ORCH_CAPABILITIES_PATH` and `ORCH_FEEDBACK_DB`,
+which take precedence over its private runtime. It now clears those paths and
+`ORCH_VERIFY_LIVE_STATE` before the runtime probe and all four checks, leaving
+the caller's environment unchanged. The receipt names the cleared variables.
+The new regression failed on the inherited ledger path before the fix and
+passes afterward. The existing live-verifier directory-reuse test now selects
+its interpreter explicitly; it previously failed when `PYTHON` was unset.
+
+Validation:
+
+- `node --test --test-isolation=none tests/test_record_fleet_delivery_checks.js
+  tests/test_verify_fleet_delivery_live.js
+  tests/test_verify_fleet_delivery_mutation.js`: all 32 tests pass, including
+  real unittest mutation/restoration controls for all six readers.
+- `PYTHONPATH=src /opt/hostedtoolcache/Python/3.14.10/x64/bin/python3 -m unittest
+  discover -s tests -p test_switch_review_fleet.py -q`: all 27 tests pass.
+- JavaScript syntax checks and `git diff --check` pass. No Python files changed,
+  so the Python-only Black gate does not apply.
+
+Selected Python through `ORCH_STANDARD_PYTHON` and
+`scripts/usage_poll/py-standard.sh`, then ran:
+
+```sh
+PYTHON=/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3 node scripts/record_fleet_delivery_checks.js /tmp/issue-1186-private-runtime-20261106 --timeout-ms 55000
+```
+
+The [command receipt](issue-672-private-runtime-20261106/commands.json) records
+`2026-11-06T03:47:54.658Z` through `03:48:51.296Z`, Python 3.14.10 on
+Linux/x86_64 and unchanged named sources. Pytest and pytest-mode mutation each
+exit 1 because pytest is absent. Full verification receives SIGTERM at the
+explicit 55-second diagnostic limit with no verdict. Live validation exits zero
+at `03:48:51.288Z`; its [receipt](issue-672-private-runtime-20261106/live/check.json)
+validates five rows with explicit unmeasured reasons. All command logs, including
+empty logs, are preserved in [logs.json](issue-672-private-runtime-20261106/logs.json).
+These are runner receipts; target-machine execution remains blocked.
+
+PR #1187 was confirmed open and ready for review (`draft=false`). The connector
+rejected the reconciled PR-body update, blocker comment and `needs-human` label:
+`MCP tool call requires approval, but approval policy is never`.
+
+Checkout Git metadata is read-only: ordinary staging fails at `.git/index.lock`.
+The commit is preserved using writable metadata in
+`/tmp/issue-1186-private-runtime-commit/.git` and exported to
+`/tmp/issue-1186-private-runtime.bundle`; the checkout branch cannot be advanced.
+
 ## Required-command receipts — 2026-11-06 03:34Z
 
 The first unfinished task requires execution on the target machine, which this
