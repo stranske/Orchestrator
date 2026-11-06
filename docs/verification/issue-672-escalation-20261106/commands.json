@@ -1,0 +1,122 @@
+{
+  "started_at": "2026-11-06T04:16:54.331Z",
+  "finished_at": "2026-11-06T04:18:56.796Z",
+  "selected_interpreter": "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+  "python_runtime": {
+    "executable": "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+    "version": [
+      3,
+      14,
+      10
+    ],
+    "platform": "linux",
+    "architecture": "x86_64"
+  },
+  "environment": {
+    "PYTHON": "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+    "ORCH_STANDARD_PYTHON": "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+    "PYTEST_ADDOPTS": "-m \"not slow\"",
+    "ORCH_LOCAL_RUNTIME": "/tmp/issue-1186-escalation-20261106/runtime",
+    "ORCH_STATE_DIR": "/tmp/issue-1186-escalation-20261106/state"
+  },
+  "cleared_environment": [
+    "ORCH_CAPABILITIES_PATH",
+    "ORCH_FEEDBACK_DB",
+    "ORCH_VERIFY_LIVE_STATE",
+    "PYTEST_PLUGINS"
+  ],
+  "source_sha256_before": {
+    "src/switch_review.py": "b3a2e032a2b1cddb93072d11cb3f772debe89ce60f36d3a8b89c94bf18dfd681",
+    "tests/test_switch_review_fleet.py": "344e01c0ef2d8b486550b822850a6115db055da6ad6923ab5c7e9327b38b71a1",
+    "tests/fixtures/switch_review_fleet.json": "2860b77a3d447ea152a2622e7bd10c2c1c8b287d7e39cef4dbbb0ed0fbe0783c",
+    "scripts/verify_fleet_delivery_live.js": "8724144a36110f3f5b7bbca0f6ecdf7aa2a4183d0f7f7851bc2ff3e1f60929b1",
+    "src/verify.py": "0a2920de3c8c18903feb7d696b678d2f11e4786897ada306c55e038b93ce28a1",
+    "pyproject.toml": "2c3462b8b384aeb265dbc51ab742b4ee02d839a34cec6590791a6d5d53fe4a6e",
+    "scripts/verify_fleet_delivery_mutation.js": "16fb4331f395e9b4e3948ffe235a04b0eae8a94b316e0affb95b40af92480470",
+    "scripts/record_fleet_delivery_checks.js": "bb39879473fe49209b6fea0e703d4f73fd5d1f3086ca762cdc355f1f829e845f"
+  },
+  "source_sha256_after": {
+    "src/switch_review.py": "b3a2e032a2b1cddb93072d11cb3f772debe89ce60f36d3a8b89c94bf18dfd681",
+    "tests/test_switch_review_fleet.py": "344e01c0ef2d8b486550b822850a6115db055da6ad6923ab5c7e9327b38b71a1",
+    "tests/fixtures/switch_review_fleet.json": "2860b77a3d447ea152a2622e7bd10c2c1c8b287d7e39cef4dbbb0ed0fbe0783c",
+    "scripts/verify_fleet_delivery_live.js": "8724144a36110f3f5b7bbca0f6ecdf7aa2a4183d0f7f7851bc2ff3e1f60929b1",
+    "src/verify.py": "0a2920de3c8c18903feb7d696b678d2f11e4786897ada306c55e038b93ce28a1",
+    "pyproject.toml": "2c3462b8b384aeb265dbc51ab742b4ee02d839a34cec6590791a6d5d53fe4a6e",
+    "scripts/verify_fleet_delivery_mutation.js": "16fb4331f395e9b4e3948ffe235a04b0eae8a94b316e0affb95b40af92480470",
+    "scripts/record_fleet_delivery_checks.js": "bb39879473fe49209b6fea0e703d4f73fd5d1f3086ca762cdc355f1f829e845f"
+  },
+  "source_unchanged": true,
+  "commands_exited_zero": false,
+  "checks": [
+    {
+      "name": "pytest",
+      "command": [
+        "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+        "-m",
+        "pytest",
+        "tests/test_switch_review_fleet.py",
+        "-m",
+        "not slow"
+      ],
+      "started_at": "2026-11-06T04:16:54.361Z",
+      "finished_at": "2026-11-06T04:16:54.377Z",
+      "timeout_ms": 120000,
+      "exit_code": 1,
+      "signal": null,
+      "error_code": null,
+      "timed_out": false,
+      "stdout": "pytest.stdout.log",
+      "stderr": "pytest.stderr.log"
+    },
+    {
+      "name": "mutation",
+      "command": [
+        "/opt/hostedtoolcache/node/24.22.2/x64/bin/node",
+        "scripts/verify_fleet_delivery_mutation.js",
+        "--all-readers"
+      ],
+      "started_at": "2026-11-06T04:16:54.378Z",
+      "finished_at": "2026-11-06T04:16:54.492Z",
+      "timeout_ms": 120000,
+      "exit_code": 1,
+      "signal": null,
+      "error_code": null,
+      "timed_out": false,
+      "stdout": "mutation.stdout.log",
+      "stderr": "mutation.stderr.log"
+    },
+    {
+      "name": "verify",
+      "command": [
+        "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+        "src/verify.py"
+      ],
+      "started_at": "2026-11-06T04:16:54.492Z",
+      "finished_at": "2026-11-06T04:18:54.504Z",
+      "timeout_ms": 120000,
+      "exit_code": null,
+      "signal": "SIGTERM",
+      "error_code": null,
+      "timed_out": true,
+      "stdout": "verify.stdout.log",
+      "stderr": "verify.stderr.log"
+    },
+    {
+      "name": "live",
+      "command": [
+        "/opt/hostedtoolcache/node/24.22.2/x64/bin/node",
+        "scripts/verify_fleet_delivery_live.js",
+        "/tmp/issue-1186-escalation-20261106/live"
+      ],
+      "started_at": "2026-11-06T04:18:54.504Z",
+      "finished_at": "2026-11-06T04:18:56.794Z",
+      "timeout_ms": 120000,
+      "exit_code": 0,
+      "signal": null,
+      "error_code": null,
+      "timed_out": false,
+      "stdout": "live.stdout.log",
+      "stderr": "live.stderr.log"
+    }
+  ]
+}

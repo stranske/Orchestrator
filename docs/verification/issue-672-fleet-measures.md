@@ -1,5 +1,49 @@
 # Fleet delivery measures — runner checks
 
+## Enforced recorder deadlines — 2026-11-06 04:19Z
+
+The first unfinished task still requires access to the actual target machine.
+This Linux hosted runner cannot establish that acceptance. No additional task
+is complete; the target-machine task and pytest-mode all-reader mutation
+criterion must remain unchecked in every PR checklist copy.
+
+Reproduced another recorder timeout failure: a subprocess that ignores SIGTERM
+outlived its configured deadline and exited zero on its own four seconds later.
+The recorder now sends SIGKILL after a one-second shutdown grace period and
+clears both timers on completion. A real subprocess regression verifies forced
+termination, a failing aggregate receipt, and successful collection of the next
+command's output and saved receipt. The regression failed before the fix.
+
+Validation: all 34 JavaScript verifier tests pass, including real all-reader
+unittest mutation/restoration controls; all 27 fleet unittest tests pass with
+Python 3.14.10. JavaScript syntax checks and `git diff --check` pass. No Python
+files changed, so the Python-only Black gate does not apply. Installing pytest
+and Black into `/tmp` failed because no distributions were available.
+
+Selected the interpreter through `ORCH_STANDARD_PYTHON` and
+`scripts/usage_poll/py-standard.sh`, then ran:
+
+```sh
+PYTHON=/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3 node scripts/record_fleet_delivery_checks.js /tmp/issue-1186-escalation-20261106 --timeout-ms 120000
+```
+
+The [command receipt](issue-672-escalation-20261106/commands.json) records
+`2026-11-06T04:16:54.331Z` through `04:18:56.796Z`, Python 3.14.10 on Linux/x86_64,
+and unchanged named sources. Pytest and pytest-mode mutation exit 1 because
+pytest is absent. Full verification receives SIGTERM at the explicit 120-second
+diagnostic limit with `timed_out: true` and no verdict. Live verification exits
+zero; its [receipt](issue-672-escalation-20261106/live/check.json) validates all
+five rows with explicit unmeasured reasons. Command output, including empty
+logs, is preserved in [logs.json](issue-672-escalation-20261106/logs.json).
+
+PR #1187 is open and ready (`draft=false`). Automatic approval review rejected
+the checklist correction, blocker comment, and `needs-human` label with
+`MCP tool call requires approval, but approval policy is never`. The corrected
+body and blocker note are saved in `/tmp/issue-1186-escalation-handoff/`.
+The checkout's Git metadata is read-only; the source commit is preserved with
+writable metadata in that directory's `repo/.git` and exported as
+`/tmp/issue-1186-escalation-handoff/escalation-fix.bundle`.
+
 ## Timeout receipt correction — 2026-11-06 04:02Z
 
 Reconciled the recent commits through `01a3f74`: attribution and its regression

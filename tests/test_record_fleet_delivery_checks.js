@@ -233,3 +233,24 @@ test('real subprocess output, nonzero exit, missing command and timeout are reco
   assert.equal(handledTimeout.timed_out, true,
     'a handled timeout must remain distinguishable from normal completion');
 });
+
+test('a child ignoring termination is killed so later command receipts can run', async (t) => {
+  const { output } = fixture(t);
+  let calls = 0;
+  const receipt = await recordChecks(output, {
+    python, timeout: 1000, probe: async () => runtime,
+    run: (command, args, options) => execute(process.execPath, ['-e', ++calls === 3
+      // The final timer prevents a broken implementation from hanging the test.
+      ? 'process.on("SIGTERM", () => {}); setTimeout(() => process.exit(0), 4000)'
+      : 'process.stdout.write("completed")'], options),
+  });
+  const result = receipt.checks[2];
+  assert.equal(result.timed_out, true);
+  assert.notEqual(result.exit_code, 0, 'timeout must enforce termination');
+  // Windows terminates unconditionally on SIGTERM, before escalation is needed.
+  if (process.platform !== 'win32') assert.equal(result.signal, 'SIGKILL');
+  assert.equal(receipt.commands_exited_zero, false);
+  assert.equal(receipt.checks[3].exit_code, 0);
+  assert.equal(fs.readFileSync(path.join(output, 'live.stdout.log'), 'utf8'), 'completed');
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(output, 'commands.json'))), receipt);
+});

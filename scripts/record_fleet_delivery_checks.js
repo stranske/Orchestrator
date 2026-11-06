@@ -18,7 +18,7 @@ function execute(command, args, { cwd, env, timeout, stdoutPath, stderrPath }) {
     let child;
     try {
       stderr = fs.openSync(stderrPath, 'wx');
-      child = spawn(command, args, { cwd, env, timeout, stdio: ['ignore', stdout, stderr] });
+      child = spawn(command, args, { cwd, env, stdio: ['ignore', stdout, stderr] });
     } catch (error) {
       fs.closeSync(stdout);
       if (stderr !== undefined) fs.closeSync(stderr);
@@ -26,14 +26,23 @@ function execute(command, args, { cwd, env, timeout, stdoutPath, stderrPath }) {
       return;
     }
     let errorCode = null;
+    let timedOut = false;
+    let escalation;
+    const deadline = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGTERM');
+      // A verifier may ignore SIGTERM. Enforce the deadline after a one-second
+      // shutdown grace period so independent checks can still collect receipts.
+      escalation = setTimeout(() => child.kill('SIGKILL'), 1000);
+    }, timeout);
     child.on('error', (error) => { errorCode = error.code || 'UNKNOWN'; });
     child.on('close', (code, signal) => {
+      clearTimeout(deadline);
+      clearTimeout(escalation);
       fs.closeSync(stdout);
       fs.closeSync(stderr);
-      // spawn's timeout sends a signal, but a child may handle it and exit zero.
-      // This function never sends any other signal, so killed identifies timeout
-      // delivery even when close reports a normal exit without a signal.
-      resolve({ exit_code: code, signal, error_code: errorCode, timed_out: child.killed });
+      // Keep deadline expiry even when a child handles termination and exits zero.
+      resolve({ exit_code: code, signal, error_code: errorCode, timed_out: timedOut });
     });
   });
 }
