@@ -43,6 +43,15 @@ def isolated_runtime(tmp_path, monkeypatch):
                 {"content": base64.b64encode(raw).decode("ascii")}
             )
             return type("Proc", (), {"returncode": 0, "stdout": body, "stderr": ""})()
+        if cmd and cmd[0] == "agy" and "models" in cmd:
+            # Offline catalog probe shape (tab-separated id + label).
+            body = "gemini-3.8-flash-high\tGemini 3.8 Flash (High)\n"
+            return type("Proc", (), {"returncode": 0, "stdout": body, "stderr": ""})()
+        if cmd and cmd[0] == "cursor-agent" and "--list-models" in cmd:
+            body = "composer-2.5 - Composer 2.5 (current)\n"
+            return type("Proc", (), {"returncode": 0, "stdout": body, "stderr": ""})()
+        if cmd and cmd[0] == "npx" and "ccusage" in cmd:
+            return type("Proc", (), {"returncode": 0, "stdout": "{}", "stderr": ""})()
         attempted_external.append((cmd, kwargs))
         pytest.fail("tests/test_coverage_round_1182.py attempted unstubbed external I/O")
 
