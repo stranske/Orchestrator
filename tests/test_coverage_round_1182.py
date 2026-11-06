@@ -52,6 +52,10 @@ def isolated_runtime(tmp_path, monkeypatch):
             return type("Proc", (), {"returncode": 0, "stdout": body, "stderr": ""})()
         if cmd:
             joined = " ".join(str(c) for c in cmd)
+            if len(cmd) >= 3 and cmd[0] == "codex" and cmd[1] == "login" and cmd[2] == "status":
+                return type("Proc", (), {"returncode": 0, "stdout": "ok\n", "stderr": ""})()
+            if len(cmd) >= 3 and cmd[0] == "claude" and cmd[1] == "auth" and cmd[2] == "status":
+                return type("Proc", (), {"returncode": 0, "stdout": "ok\n", "stderr": ""})()
             if "ccusage" in joined and ("session" in joined or "blocks" in joined):
                 if "blocks" in joined:
                     body = json.dumps({"blocks": []})
