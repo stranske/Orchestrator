@@ -373,3 +373,38 @@ approval, but approval policy is never`. PR #1176 was confirmed open and ready.
 The main checkout rejects Git index writes as read-only. The tested changes
 remain in the working tree; the commit is retained in `/tmp/orchestrator-1175-rejected-push-bqqxu4sl`
 and its handoff patch is `/tmp/orchestrator-1175-rejected-push.patch`.
+
+## Subprocess bounds and immutable contract verification (2026-11-05)
+
+Added timeout=60 to all Git subprocess calls in the recorder's `record_challenger_filter_deployment`
+function (nested `git` helper), matching the existing timeout in `_fetch_export`. Added
+`subprocess.SubprocessError` catching in the CLI that includes captured stderr, handling
+text/bytes safely. The recorder now skips history revisions with absent EXPORT_PATH blobs
+or JSONDecodeError artifacts while propagating other Git failures and continuing to reject
+malformed explicitly marked contracts.
+
+Replaced validation against mutable router sets (`router.KEEPALIVE_AGENTS`, `router.RESERVE_AGENTS`,
+`router.BACKUP_AGENTS`) with a documented immutable v1 challenger/task contract
+(`CHALLENGER_V1_RUNNABLE_AGENTS = frozenset({'codex', 'claude', 'cursor'})`) in
+`record_challenger_filter_deployment`, matching publication-time semantics and preserving
+hosted-unrunnable rejection (gemini).
+
+Added focused temporary-repository tests in `tests/test_route_weights_export_deployment.py`
+for deletion/invalid-JSON history verification, and in `tests/test_route_weights_export_cli.js`
+for timeout/error diagnostics and unchanged receipt recovery.
+
+The `tests/test_switch_review_exploration.js` tests exercise the real Python renderer
+through Node child processes, verifying that Python dependencies are available for the
+renderer regression tests.
+
+Verification:
+- `/opt/anaconda3/bin/python3 -m pytest -q tests/test_route_weights_export_deployment.py 
+  tests/test_route_weights_export_exploration_rate.py`: 23 passed, 26 subtests passed
+- `PYTHON=/opt/anaconda3/bin/python3 node --test tests/test_route_weights_export_cli.js 
+  tests/test_switch_review_exploration.js`: 48 passed
+- `python3 src/route_weights_export.py --selftest`: OK
+
+Recorder implementation is complete and verified. Production deployment/observation remains
+incomplete: no verified production audit record exists, and observation requires both
+2026-11-08 and fourteen days after verified deployment. The named pytest acceptance checks
+are now verifiable with Python dependencies available.

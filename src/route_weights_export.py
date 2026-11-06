@@ -65,6 +65,14 @@ CONSUMER_TASK_TYPES = (
     "codemod",
     "cross_repo",
 )
+# Immutable v1 challenger/task contract: publication-time semantics for the
+# hosted-runnable-alternatives/v1 filter. This contract is independent of
+# mutable router sets and preserves the hosted-unrunnable rejection.
+CHALLENGER_V1_RUNNABLE_AGENTS = frozenset({
+    "codex",
+    "claude",
+    "cursor",
+})
 
 
 def _now() -> str:
@@ -906,6 +914,7 @@ def record_challenger_filter_deployment(
             check=True,
             capture_output=True,
             text=True,
+            timeout=60,
         ).stdout.strip()
 
     if git("rev-parse", "--is-shallow-repository") != "false":
@@ -914,7 +923,15 @@ def record_challenger_filter_deployment(
     commits = git("rev-list", "--first-parent", "--reverse", remote_ref, "--", str(EXPORT_PATH))
     first = None
     for candidate in commits.splitlines():
-        document = json.loads(git("show", f"{candidate}:{EXPORT_PATH}"))
+        try:
+            artifact = git("show", f"{candidate}:{EXPORT_PATH}")
+            if not artifact:
+                # No EXPORT_PATH blob at this revision
+                continue
+            document = json.loads(artifact)
+        except json.JSONDecodeError:
+            # Malformed JSON artifact at this revision
+            continue
         exploration = document.get("exploration") if isinstance(document, dict) else None
         if (
             not isinstance(exploration, dict)
@@ -922,17 +939,15 @@ def record_challenger_filter_deployment(
         ):
             continue
         challengers = exploration.get("challengers")
-        runnable = (
-            router.KEEPALIVE_AGENTS
-            - router.RESERVE_AGENTS
-            - router.BACKUP_AGENTS
-            - HOSTED_UNRUNNABLE_AGENTS
-        )
+        # Use the immutable v1 contract instead of mutable router sets.
+        # This preserves hosted-unrunnable rejection (gemini) and matches
+        # publication-time semantics for the hosted-runnable-alternatives/v1 filter.
         if (
             not isinstance(challengers, dict)
             or set(challengers) != set(CONSUMER_TASK_TYPES)
             or any(
-                agent is not None and (not isinstance(agent, str) or agent not in runnable)
+                agent is not None
+                and (not isinstance(agent, str) or agent not in CHALLENGER_V1_RUNNABLE_AGENTS)
                 for agent in challengers.values()
             )
         ):
@@ -1357,8 +1372,15 @@ def main() -> int:
                 provenance,
                 state_dir=args.state_dir or Path.home() / ".codex" / "orchestrator",
             )
-        except (OSError, ValueError, subprocess.CalledProcessError) as exc:
-            print(f"deployment provenance refused: {exc}", file=sys.stderr)
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            message = f"deployment provenance refused: {exc}"
+            if isinstance(exc, subprocess.CalledProcessError) and exc.stderr:
+                stderr_text = exc.stderr if isinstance(exc.stderr, str) else exc.stderr.decode("utf-8", errors="replace")
+                message += f"\nstderr: {stderr_text}"
+            elif isinstance(exc, subprocess.SubprocessError):
+                # For other subprocess errors, try to get stderr from the command
+                message += " (subprocess failure)"
+            print(message, file=sys.stderr)
             return 1
         print(json.dumps(receipt, sort_keys=True))
         return 0

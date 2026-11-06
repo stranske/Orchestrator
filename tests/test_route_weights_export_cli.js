@@ -818,3 +818,124 @@ with sqlite3.connect(database) as connection:
     });
   }
 }
+
+test('deployment CLI handles timeout errors with diagnostics', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'route-timeout-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const state = path.join(root, 'state');
+  const audit = path.join(root, 'audit.json');
+  const receipt = path.join(state, 'route-weights-challenger-deployment.json');
+  fs.mkdirSync(state, { recursive: true });
+  const provenance = {
+    published_commit: 'a'.repeat(40),
+    deployed_at: '2026-11-05T00:00:00Z',
+    deployment_evidence: 'publication-audit/run-123/successful-push',
+  };
+  fs.writeFileSync(audit, JSON.stringify(provenance), 'utf8');
+  const env = {
+    PATH: process.env.PATH,
+    HOME: root,
+    PYTHONPATH: modules,
+    PYTHONDONTWRITEBYTECODE: '1',
+    ORCH_STATE_DIR: state,
+    ORCH_LOCAL_RUNTIME: path.join(root, 'runtime'),
+    ORCH_REPOS_DIR: path.join(root, 'repos'),
+    ORCH_FEEDBACK_DB: path.join(root, 'absent.db'),
+    ORCH_CAPABILITIES_PATH: path.join(root, 'capabilities.json'),
+    HANDOFF_DIR: path.join(root, 'handoff'),
+    GIT_CONFIG_NOSYSTEM: '1',
+  };
+  const result = await run(process.env.PYTHON || 'python3', [
+    path.join(modules, 'route_weights_export.py'),
+    '--record-challenger-deployment', audit, '--state-dir', state,
+  ], { cwd: root, env, timeout: 5000 });
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(result.stdout, '');
+  assert.match(result.stderr, /deployment provenance refused:/);
+  assert.doesNotMatch(result.stderr, /Traceback/);
+  assert.equal(fs.existsSync(receipt), false);
+});
+
+test('deployment CLI preserves receipt on timeout error', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'route-timeout-preserve-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const home = path.join(root, 'home');
+  const state = path.join(root, 'state');
+  const remote = path.join(root, 'remote.git');
+  const repositories = path.join(root, 'repos');
+  const checkout = path.join(repositories, 'stranske__Orchestrator');
+  const database = path.join(root, 'absent.db');
+  const audit = path.join(root, 'audit.json');
+  const receipt = path.join(state, 'route-weights-challenger-deployment.json');
+  for (const directory of [home, state, repositories]) fs.mkdirSync(directory);
+  const env = {
+    PATH: process.env.PATH,
+    HOME: home,
+    PYTHONPATH: modules,
+    PYTHONDONTWRITEBYTECODE: '1',
+    ORCH_STATE_DIR: state,
+    ORCH_LOCAL_RUNTIME: path.join(root, 'runtime'),
+    ORCH_REPOS_DIR: repositories,
+    ORCH_FEEDBACK_DB: database,
+    ORCH_CAPABILITIES_PATH: path.join(root, 'capabilities.json'),
+    HANDOFF_DIR: path.join(root, 'handoff'),
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_AUTHOR_NAME: 'Deployment Test',
+    GIT_AUTHOR_EMAIL: 'deploy@example.invalid',
+    GIT_COMMITTER_NAME: 'Deployment Test',
+    GIT_COMMITTER_EMAIL: 'deploy@example.invalid',
+  };
+  async function git(directory, ...args) {
+    const result = await run('git', ['-C', directory, ...args], { env });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  }
+  const branch = 'exports/route-weights';
+  const artifact = path.join(checkout, 'config', 'route-weights.json');
+  await git(root, 'init', '--bare', '--initial-branch=main', remote);
+  await git(root, 'clone', remote, checkout);
+  const document = {
+    generated_at: '2026-11-04T10:00:00Z',
+    exploration: {
+      challenger_filter: 'hosted-runnable-alternatives/v1',
+      challengers: Object.fromEntries(
+        ['implement', 'review', 'testgen', 'mechanical', 'codemod', 'cross_repo']
+          .map((task) => [task, 'codex'])),
+    },
+  };
+  fs.mkdirSync(path.dirname(artifact), { recursive: true });
+  fs.writeFileSync(artifact, JSON.stringify(document));
+  await git(checkout, 'add', '.');
+  await git(checkout, 'commit', '-m', 'publication fixture');
+  await git(checkout, 'push', 'origin', `HEAD:${branch}`);
+  const commit = await git(remote, 'rev-parse', branch);
+  const validProvenance = {
+    published_commit: commit,
+    deployed_at: '2026-11-04T11:00:00Z',
+    deployment_evidence: 'fixture-publication-audit/successful-push',
+  };
+  fs.writeFileSync(audit, JSON.stringify(validProvenance));
+  const result = await run(process.env.PYTHON || 'python3', [
+    path.join(modules, 'route_weights_export.py'),
+    '--record-challenger-deployment', audit, '--state-dir', state,
+  ], { cwd: root, env });
+  assert.equal(result.status, 0, result.stderr);
+  const recorded = JSON.parse(result.stdout);
+  assert.equal(recorded.published_commit, commit);
+  const before = fs.readFileSync(receipt, 'utf8');
+  const beforeStat = fs.statSync(receipt, { bigint: true });
+  const badProvenance = {
+    published_commit: 'b'.repeat(40),
+    deployed_at: '2026-11-05T00:00:00Z',
+    deployment_evidence: 'different-audit',
+  };
+  fs.writeFileSync(audit, JSON.stringify(badProvenance));
+  const timeoutResult = await run(process.env.PYTHON || 'python3', [
+    path.join(modules, 'route_weights_export.py'),
+    '--record-challenger-deployment', audit, '--state-dir', state,
+  ], { cwd: root, env, timeout: 5000 });
+  assert.equal(timeoutResult.status, 1, timeoutResult.stderr);
+  assert.equal(fs.readFileSync(receipt, 'utf8'), before);
+  assert.equal(fs.statSync(receipt, { bigint: true }).mtimeNs, beforeStat.mtimeNs);
+});
+

@@ -265,6 +265,34 @@ class ChallengerDeploymentTests(unittest.TestCase):
         ):
             self.assertEqual(export.main(), 1)
 
+    def test_malformed_json_artifact_skipped_during_history_verify(self):
+        self.document["exploration"]["challenger_filter"] = export.CHALLENGER_FILTER
+        first_commit = self.publish_filter()
+        invalid_doc = copy.deepcopy(self.document)
+        invalid_doc["invalid"] = "not json"
+        target = self.checkout / export.EXPORT_PATH
+        target.write_text("not valid json at all", encoding="utf-8")
+        self.git(self.checkout, "add", ".")
+        self.git(self.checkout, "commit", "-m", "malformed json artifact")
+        self.git(self.checkout, "push", "origin", f"HEAD:{export.EXPORT_BRANCH}")
+        # The recorder should skip the malformed JSON and continue to the first valid one
+        provenance = self.provenance(first_commit)
+        receipt = self.record(provenance)
+        self.assertEqual(receipt["published_commit"], first_commit)
+
+    def test_deleted_export_path_skipped_during_history_verify(self):
+        self.document["exploration"]["challenger_filter"] = export.CHALLENGER_FILTER
+        first_commit = self.publish_filter()
+        target = self.checkout / export.EXPORT_PATH
+        target.unlink()
+        self.git(self.checkout, "add", ".")
+        self.git(self.checkout, "commit", "-m", "delete export path")
+        self.git(self.checkout, "push", "origin", f"HEAD:{export.EXPORT_BRANCH}")
+        # The recorder should skip the deleted path and continue to the first valid one
+        provenance = self.provenance(first_commit)
+        receipt = self.record(provenance)
+        self.assertEqual(receipt["published_commit"], first_commit)
+
 
 if __name__ == "__main__":
     unittest.main()
