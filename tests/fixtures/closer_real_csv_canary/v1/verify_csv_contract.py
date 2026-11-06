@@ -20,7 +20,12 @@ skipped run or a run of the partial revision is not that binding. A keepalive co
 after starting on an earlier revision is reported and is not worker or
 publication proof for this head. The same rule applies to the owned delivery
 head: a keepalive receipt that started earlier and only observed that head is
-not a worker completion of it and is not closer publication proof. A reduced
+not a worker completion of it and is not closer publication proof. An
+earlier-started worker that pushed this head is traced through native commit
+readback: the produced commit's only parent must be that start. The trace does
+not require another worker to start on the output commit. The keepalive receipt
+is still not ``retain_confirmed_result`` custody, and
+``coding_terminal_reference`` is read only from that stored record. A reduced
 publication comment is not the stored producer record. Custody JSON is read
 when that record's schema sits inside the object. The chain report records
 the current head and published merge SHA of PRs 1168 and 989. An open pull
@@ -1053,6 +1058,146 @@ def _keepalive_for_head(comments, corrective_sha):
     return completions, reservations, observed_only
 
 
+def _earlier_produced_commits(comments, head):
+    """Receipts whose pushed commit is this head and whose start is earlier.
+
+    ``observed_head_sha`` is the commit that run pushed. The start head is not
+    required to equal it. A receipt is not publication custody.
+    """
+    found = []
+    seen = set()
+    if not _sha40(head) or head in {_PARTIAL_HEAD, _PARTIAL_MERGE}:
+        return found
+    for comment in comments:
+        for kind, blob in _receipt_blobs(_comment_body(comment)):
+            if kind != "completion":
+                continue
+            payload = _decode_receipt(blob)
+            if payload is None or payload.get("schema") != _RUNNER_RECEIPT_SCHEMA:
+                continue
+            record = payload.get("record")
+            if not isinstance(record, dict):
+                record = payload
+            start = record.get("head_sha")
+            if (
+                record.get("observed_head_sha") != head
+                or not _sha40(start)
+                or start == head
+                or start in {_PARTIAL_HEAD, _PARTIAL_MERGE}
+            ):
+                continue
+            status = str(record.get("status") or "")
+            key = (start, status)
+            if key in seen:
+                continue
+            seen.add(key)
+            found.append({"start_head": start, "produced": head, "status": status})
+    return found
+
+
+def _native_commit_readback(fetch, sha):
+    """Public commit object used by publication readback. Not a stored record."""
+    if not _sha40(sha) or sha in {_PARTIAL_HEAD, _PARTIAL_MERGE}:
+        raise _ObservationError("publication readback commit is not the corrective head")
+    status, raw = fetch(f"/repos/{_REPOSITORY}/commits/{sha}")
+    document = _decode_json(status, raw, f"commit {sha}")
+    if not isinstance(document, dict):
+        raise _ObservationError(f"commit {sha} was not an object")
+    if document.get("sha") != sha:
+        raise _ObservationError(f"commit {sha} identity mismatch")
+    commit = document.get("commit")
+    tree = commit.get("tree") if isinstance(commit, dict) else None
+    tree_sha = tree.get("sha") if isinstance(tree, dict) else None
+    if not _sha40(tree_sha):
+        raise _ObservationError(f"commit {sha} tree was not read")
+    raw_parents = document.get("parents")
+    if not isinstance(raw_parents, list):
+        raise _ObservationError(f"commit {sha} parents were not a list")
+    parents = []
+    for parent in raw_parents:
+        parent_sha = parent.get("sha") if isinstance(parent, dict) else None
+        if not _sha40(parent_sha):
+            raise _ObservationError(f"commit {sha} parent was not a sha")
+        parents.append(parent_sha)
+    return {"oid": sha, "tree_oid": tree_sha, "parent_oids": parents}
+
+
+def _coding_terminal_reference(comments, sha):
+    """The terminal inside retain_confirmed_result. A receipt cannot supply it."""
+    for comment in comments:
+        if not isinstance(comment, dict):
+            continue
+        for value in _publication_objects(comment.get("body") or ""):
+            pr = value.get("pr") if isinstance(value, dict) else None
+            number = str(pr.get("pr_number")) if isinstance(pr, dict) else ""
+            if number not in (_CORRECTIVE_PR, _OWNED_DELIVERY_PR):
+                continue
+            if not _native_comment(comment, number, ("stranske",)):
+                continue
+            if not _producer_publication(value, sha):
+                continue
+            reference = value["provenance"]["coding_terminal_reference"]
+            return reference["sha256"]
+    return ""
+
+
+def _trace_worker_publication(fetch, comments, head):
+    """Native readback of an earlier worker's produced commit.
+
+    A matching single parent means that worker produced the head. Custody is
+    present only when retain_confirmed_result names its coding terminal.
+    Another worker is not required to start on the output commit.
+    """
+    traces = []
+    for item in _earlier_produced_commits(comments, head):
+        native = _native_commit_readback(fetch, item["produced"])
+        terminal = _coding_terminal_reference(comments, item["produced"])
+        traces.append(
+            {
+                **item,
+                "oid": native["oid"],
+                "tree_oid": native["tree_oid"],
+                "parent_oids": list(native["parent_oids"]),
+                "single_parent_matches_start": native["parent_oids"] == [item["start_head"]],
+                "coding_terminal_reference": terminal,
+                "retain_confirmed_result": bool(terminal),
+                "redundant_worker_required": False,
+            }
+        )
+    return traces
+
+
+def _produced_trace_lines(traces):
+    if not traces:
+        return ["worker_produced_commit: none no earlier-started worker pushed this head"]
+    lines = []
+    for trace in traces:
+        parents = ",".join(trace["parent_oids"]) or "none"
+        lines.append(
+            "worker_produced_commit: "
+            + f"start={trace['start_head']} produced={trace['produced']} "
+            + f"earlier_start=yes status={trace['status']} "
+            + "keepalive_is_publication=no"
+        )
+        lines.append(
+            "native_publication_readback: "
+            + f"oid={trace['oid']} tree={trace['tree_oid']} parents={parents} "
+            + "parent_is_worker_start="
+            + _yes_no(trace["single_parent_matches_start"])
+            + " redundant_worker_required=no"
+        )
+        terminal = trace["coding_terminal_reference"]
+        if trace["retain_confirmed_result"] and terminal:
+            lines.append("retain_confirmed_result: present coding_terminal_reference=" + terminal)
+        else:
+            lines.append(
+                "retain_confirmed_result: absent "
+                "coding_terminal_reference=absent "
+                "stored custody not observed; keepalive receipt is not that record"
+            )
+    return lines
+
+
 def _record_named(records, kind, name):
     for record in records:
         if record.get("kind") == kind and str(record.get("name")) == name:
@@ -1175,7 +1320,14 @@ def _assess(
     }
 
 
-def _format_report(assessment, corrective_sha, local_head, verifier_runs=(), earlier_runs=()):
+def _format_report(
+    assessment,
+    corrective_sha,
+    local_head,
+    verifier_runs=(),
+    earlier_runs=(),
+    produced_traces=(),
+):
     lines = [
         "chain-evidence",
         f"repository: {_REPOSITORY}",
@@ -1337,6 +1489,7 @@ def _format_report(assessment, corrective_sha, local_head, verifier_runs=(), ear
             )
     else:
         lines.append("keepalive_prior_completion_observed_head: none")
+    lines.extend(_produced_trace_lines(produced_traces))
     if "merged" in corrective_pr:
         if corrective_pr["merged"]:
             lines.append(
@@ -1845,6 +1998,7 @@ def _observe_chain(fetch):
     if not branch:
         raise _ObservationError("corrective pull request head ref missing")
     earlier = _earlier_commit_runs(_branch_verifier_runs(fetch, branch), commits, corrective_sha)
+    produced = _trace_worker_publication(fetch, comments, corrective_sha)
     return (
         corrective_sha,
         events,
@@ -1857,6 +2011,7 @@ def _observe_chain(fetch):
         earlier,
         partial_corpus,
         unbound_corpus,
+        produced,
     )
 
 
@@ -1874,6 +2029,7 @@ def _report_chain_evidence():
             earlier,
             partial_corpus,
             unbound_corpus,
+            produced,
         ) = _observe_chain(_live_fetch)
     except _ObservationError as exc:
         print(f"chain-evidence observation failed: {exc}", file=sys.stderr)
@@ -1894,6 +2050,7 @@ def _report_chain_evidence():
         _local_head(),
         runs,
         earlier,
+        produced,
     )
     print(text)
     return code
@@ -2030,6 +2187,91 @@ def _self_check():
         raise AssertionError("prior completion start head was not reported")
     if "not publication proof" not in prior_text:
         raise AssertionError("prior observed completion was accepted as publication proof")
+    if "worker_produced_commit: none" not in prior_text:
+        raise AssertionError("untraced report hid the absent produced-commit readback")
+
+    def _commit_document(path, parents):
+        if "/commits/" not in path or "/commits?" in path:
+            raise AssertionError("trace fetch " + path)
+        sha = path.rstrip("/").split("/")[-1]
+        return (
+            200,
+            json.dumps(
+                {
+                    "sha": sha,
+                    "commit": {"tree": {"sha": "1" * 40}},
+                    "parents": [{"sha": parent} for parent in parents],
+                }
+            ).encode(),
+        )
+
+    matched = _trace_worker_publication(
+        lambda path: _commit_document(path, [prior_start]), [prior_body], corrective
+    )
+    if (
+        len(matched) != 1
+        or matched[0]["single_parent_matches_start"] is not True
+        or matched[0]["retain_confirmed_result"]
+        or matched[0]["coding_terminal_reference"]
+        or matched[0]["redundant_worker_required"]
+        or matched[0]["oid"] != corrective
+        or matched[0]["parent_oids"] != [prior_start]
+    ):
+        raise AssertionError("earlier worker product was not read back from its parent")
+    matched_text, matched_code = _format_report(
+        prior_assessment, corrective, corrective, produced_traces=matched
+    )
+    if matched_code != 2 or prior_assessment["publication"]:
+        raise AssertionError("produced-commit readback completed publication")
+    if (
+        "worker_produced_commit: start=" + prior_start + " produced=" + corrective
+        not in matched_text
+        or "parent_is_worker_start=yes" not in matched_text
+        or "redundant_worker_required=no" not in matched_text
+        or "keepalive_is_publication=no" not in matched_text
+        or "retain_confirmed_result: absent" not in matched_text
+        or "coding_terminal_reference=absent" not in matched_text
+    ):
+        raise AssertionError("produced-commit readback was not reported")
+    if "redundant_worker_required=yes" in matched_text:
+        raise AssertionError("earlier producer required a worker that starts on its output")
+    mismatched = _trace_worker_publication(
+        lambda path: _commit_document(path, ["b" * 40]), [prior_body], corrective
+    )
+    if (
+        mismatched[0]["single_parent_matches_start"]
+        or mismatched[0]["redundant_worker_required"]
+        or mismatched[0]["retain_confirmed_result"]
+    ):
+        raise AssertionError("unrelated parent was treated as the worker product")
+    mismatched_text, _mismatched_code = _format_report(
+        prior_assessment, corrective, corrective, produced_traces=mismatched
+    )
+    if "parent_is_worker_start=no" not in mismatched_text:
+        raise AssertionError("unrelated parent was reported as the worker start")
+    if "redundant_worker_required=yes" in mismatched_text:
+        raise AssertionError("unrelated parent required a redundant worker")
+
+    def _refuse_fetch(_path):
+        raise AssertionError("filtered producer was fetched")
+
+    partial_producer = {
+        "schema": _RUNNER_RECEIPT_SCHEMA,
+        "record": {
+            "head_sha": _PARTIAL_HEAD,
+            "observed_head_sha": corrective,
+            "status": "completed",
+        },
+    }
+    partial_producer_body = (
+        "<!-- runner-completion:cursor:1168:v1 base64:"
+        + base64.b64encode(json.dumps(partial_producer).encode()).decode()
+        + " -->"
+    )
+    if _trace_worker_publication(_refuse_fetch, [partial_producer_body], corrective):
+        raise AssertionError("partial revision was treated as the producer")
+    if _trace_worker_publication(_refuse_fetch, [receipt_body], corrective):
+        raise AssertionError("worker that started on the produced commit was treated as earlier")
     if not _text_labeled_test("test: chain", []) or not _text_labeled_test("Work", ["test"]):
         raise AssertionError("visible test label was missed")
     if _text_labeled_test("Controlled Closer E2E", ["agent:cursor"]):
@@ -2617,6 +2859,18 @@ def _self_check():
                     }
                 ).encode(),
             )
+        if "/commits/" in path and "/commits?" not in path:
+            sha = path.rstrip("/").split("/")[-1]
+            return (
+                200,
+                json.dumps(
+                    {
+                        "sha": sha,
+                        "commit": {"tree": {"sha": "1" * 40}},
+                        "parents": [{"sha": ancestor}],
+                    }
+                ).encode(),
+            )
         if "/actions/runs/" in path:
             run_id = path.rstrip("/").split("/")[-1]
             return (
@@ -2920,6 +3174,30 @@ def _self_check():
     }
     if not _publication_tied([publication], corrective):
         raise AssertionError("stored publication record was dropped")
+    if _coding_terminal_reference([publication], corrective) != "a" * 64:
+        raise AssertionError("stored coding_terminal_reference was not read")
+    if _coding_terminal_reference([publication_comment(receipt_body)], corrective):
+        raise AssertionError("keepalive receipt supplied a coding terminal reference")
+    stored_trace = _trace_worker_publication(
+        lambda path: _commit_document(path, [prior_start]),
+        [prior_body, publication],
+        corrective,
+    )
+    if (
+        len(stored_trace) != 1
+        or not stored_trace[0]["retain_confirmed_result"]
+        or stored_trace[0]["coding_terminal_reference"] != "a" * 64
+        or stored_trace[0]["redundant_worker_required"]
+        or stored_trace[0]["single_parent_matches_start"] is not True
+    ):
+        raise AssertionError("stored terminal was not bound to the earlier worker product")
+    stored_text, stored_code = _format_report(
+        prior_assessment, corrective, corrective, produced_traces=stored_trace
+    )
+    if stored_code != 2 or "coding_terminal_reference=" + ("a" * 64) not in stored_text:
+        raise AssertionError("stored coding terminal was not reported on the produced commit")
+    if "retain_confirmed_result: present" not in stored_text:
+        raise AssertionError("stored retain_confirmed_result was not reported")
     if not _publication_tied([dict(publication, body=json.dumps(pub))], corrective):
         raise AssertionError("custody JSON publication record was dropped")
     authorized = json.loads(json.dumps(pub))
@@ -3081,6 +3359,8 @@ def _self_check():
         raise AssertionError("merged corpus decision was treated as unbound")
     if observed[8] != earlier_only:
         raise AssertionError("chain observation dropped the earlier skipped verifier run")
+    if observed[11]:
+        raise AssertionError("chain observation invented a produced-commit trace")
     if observed[9] != [partial_summary]:
         raise AssertionError("chain observation dropped the partial corpus decision")
     observed_text, observed_code = _format_report(
