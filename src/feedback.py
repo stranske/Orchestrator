@@ -3525,13 +3525,22 @@ def ingest_profile_trial(
 
     ``trial_id`` is the idempotency key: a successful verified ingest is recorded in
     ``profile_trial_ingests`` and later calls return without duplicating rows.
+    When the result and the manifest both name a trial, those ids must agree, and
+    that one id is what the rows store. An empty attempt list does not seal the
+    key: sealing nothing would drop the real write on the next call.
     Transport-only recording may omit the marker so a later verified ingest can seal it.
     Omitted token counts stay NULL. A missing measurement must not be stored as zero,
     which the cost learners would treat as free. An explicit zero stays zero.
     """
-    trial_id = str(result.get("trial_id") or manifest.get("trial_id") or "").strip()
+    result_trial = str(result.get("trial_id") or "").strip()
+    manifest_trial = str(manifest.get("trial_id") or "").strip()
+    if result_trial and manifest_trial and result_trial != manifest_trial:
+        raise ValueError("profile trial ingest trial_id does not match the manifest")
+    trial_id = result_trial or manifest_trial
     if not trial_id:
         raise ValueError("profile trial ingest requires trial_id")
+    if not attempts:
+        raise ValueError("profile trial ingest requires attempts")
     _require_quarantine_feedback_db()
     timestamp = int(ts if ts is not None else time.time())
     traces = list(auxiliary_traces or [])
@@ -3559,7 +3568,7 @@ def ingest_profile_trial(
                 profile = execution_profiles.get_profile(attempt["profile_id"])
                 record_run(
                     attempt["run_id"],
-                    manifest["trial_id"],
+                    trial_id,
                     "instrumentation:model_profile_trial",
                     "codex",
                     mode="trial",
@@ -3568,7 +3577,7 @@ def ingest_profile_trial(
                     assignment="instrumentation",
                     work_type="model_profile_trial",
                     routing_metadata={
-                        "trial_id": manifest["trial_id"],
+                        "trial_id": trial_id,
                         "profile_id": attempt["profile_id"],
                         "packet_hash": manifest["packet_hash"],
                         "learning_enabled": False,

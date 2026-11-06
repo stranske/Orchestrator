@@ -252,6 +252,93 @@ def test_ingest_is_idempotent_on_trial_id(
     assert len(after["profile_trial_ingests"]) == 1
 
 
+def test_ingest_refuses_mismatched_trial_id_and_leaves_nothing(
+    tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture
+):
+    """The marker and the rows must name one trial.
+
+    A split id used to seal the result id and write the manifest id.
+    """
+    _use_temp_feedback(tmp_path, monkeypatch)
+    attempts = model_profile_trial._validate_results(trial_manifest, trial_attempt_fixture)
+    forged = copy.deepcopy(trial_attempt_fixture)
+    forged["trial_id"] = trial_manifest["trial_id"] + "-other"
+    with pytest.raises(ValueError, match="does not match the manifest"):
+        feedback.ingest_profile_trial(
+            forged,
+            manifest=trial_manifest,
+            attempts=attempts,
+            auxiliary_traces=forged["auxiliary_traces"],
+            ts=2_000,
+        )
+    with feedback._conn() as conn:
+        _assert_trial_feedback_tables_empty(conn)
+    sealed = feedback.ingest_profile_trial(
+        trial_attempt_fixture,
+        manifest=trial_manifest,
+        attempts=attempts,
+        auxiliary_traces=trial_attempt_fixture["auxiliary_traces"],
+        ts=2_000,
+    )
+    assert sealed["status"] == "ingested"
+    with feedback._conn() as conn:
+        assert conn.execute("SELECT trial_id FROM profile_trial_ingests").fetchone()[0] == (
+            trial_manifest["trial_id"]
+        )
+        assert conn.execute("SELECT DISTINCT target FROM runs").fetchone()[0] == (
+            trial_manifest["trial_id"]
+        )
+
+
+def test_ingest_refuses_to_seal_an_empty_attempt_list(
+    tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture
+):
+    """Sealing a trial id that wrote no rows drops the real ingest as already applied."""
+    _use_temp_feedback(tmp_path, monkeypatch)
+    with pytest.raises(ValueError, match="requires attempts"):
+        feedback.ingest_profile_trial(
+            trial_attempt_fixture,
+            manifest=trial_manifest,
+            attempts=[],
+            ts=2_000,
+        )
+    attempts = model_profile_trial._validate_results(trial_manifest, trial_attempt_fixture)
+    sealed = feedback.ingest_profile_trial(
+        trial_attempt_fixture,
+        manifest=trial_manifest,
+        attempts=attempts,
+        auxiliary_traces=trial_attempt_fixture["auxiliary_traces"],
+        ts=2_000,
+    )
+    assert sealed["status"] == "ingested"
+    assert len(sealed["recorded_attempt_ids"]) == len(attempts)
+
+
+def test_ingest_stores_rows_under_the_result_trial_id_when_the_manifest_omits_it(
+    tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture
+):
+    _use_temp_feedback(tmp_path, monkeypatch)
+    attempts = model_profile_trial._validate_results(trial_manifest, trial_attempt_fixture)
+    manifest = copy.deepcopy(trial_manifest)
+    manifest.pop("trial_id")
+    sealed = feedback.ingest_profile_trial(
+        trial_attempt_fixture,
+        manifest=manifest,
+        attempts=attempts,
+        auxiliary_traces=trial_attempt_fixture["auxiliary_traces"],
+        ts=2_000,
+    )
+    assert sealed["trial_id"] == trial_attempt_fixture["trial_id"]
+    with feedback._conn() as conn:
+        assert conn.execute("SELECT trial_id FROM profile_trial_ingests").fetchone()[0] == (
+            trial_attempt_fixture["trial_id"]
+        )
+        targets = {row[0] for row in conn.execute("SELECT target FROM runs")}
+        metadata = [json.loads(row[0]) for row in conn.execute("SELECT routing_metadata FROM runs")]
+    assert targets == {trial_attempt_fixture["trial_id"]}
+    assert {row["trial_id"] for row in metadata} == {trial_attempt_fixture["trial_id"]}
+
+
 def test_finalize_refuses_ingest_when_identity_is_unverified(
     tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture
 ):
