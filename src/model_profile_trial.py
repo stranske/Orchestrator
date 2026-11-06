@@ -5,7 +5,10 @@ The trial is instrumentation, not a benchmark: one frozen packet, one shared
 Codex capacity snapshot, randomized launch order, and exact registered profiles. It
 never executes a worker itself. ``prepare`` emits launch requests for a guarded
 transport bridge; ``finalize`` validates returned telemetry and proves source
-integrity. An explicit layout supports repeated instances of selected profiles;
+integrity. ``prepare-current`` binds the current strategy experiment's frozen
+spec into a two-profile, three-instance plan when that spec is sealed, and
+refuses when it is absent. It does not execute workers or write the program
+summary. An explicit layout supports repeated instances of selected profiles;
 verified evidence can be ingested atomically into a quarantine feedback database.
 ``--selftest`` exercises prepare, validation, and reporting fully offline.
 """
@@ -19,6 +22,7 @@ import math
 import os
 import random
 import re
+import sys
 import tempfile
 import time
 from collections.abc import Iterable
@@ -48,6 +52,15 @@ LEGACY_PROFILE_IDS = (
     "codex-5.6-terra-high",
     "codex-5.6-luna-high",
 )
+# The task's comparison is two Codex profiles, three instances each. Astra is the full tier
+# and Terra the mid tier; both share the one Codex subscription pool. Luna stays on the
+# three-arm set above and is not part of this layout.
+CURRENT_TRIAL_PROFILE_IDS = (
+    "codex-6-astra-high",
+    "codex-5.6-terra-high",
+)
+CURRENT_TRIAL_INSTANCES = 3
+_EXPERIMENT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
 def _manifest_profile_ids(manifest: dict[str, Any]) -> tuple[str, ...]:
@@ -389,6 +402,152 @@ def build_trial_manifest(
         manifest["selected_profile_ids"] = list(selected)
         manifest["instances_per_profile"] = instances_per_profile
     return manifest
+
+
+class RecurringWorkUnavailable(ValueError):
+    """The current strategy experiment has no sealed frozen spec to reuse."""
+
+
+def _experiments_root(experiments_root: Path | None) -> Path:
+    if experiments_root is not None:
+        return experiments_root
+    override = os.environ.get("ORCH_EXP_DIR")
+    if override:
+        return Path(override)
+    import exp_abcd
+
+    return exp_abcd.EXP_DIR
+
+
+def resolve_strategy_frozen_packet(
+    *,
+    state_dir: Path | None = None,
+    experiments_root: Path | None = None,
+) -> dict[str, Any]:
+    """Load the current strategy experiment's frozen spec as a trial packet.
+
+    The spec is available only when the capability-program receipt names one
+    experiment, that experiment's ``strategy.json`` points at its own ``spec.md``,
+    and the text is not a recovered missing-spec stub. A recorded ``spec_sha256``
+    must match the file. There is no fallback packet: a generic instrumentation
+    packet is a different work shape.
+    """
+    import spec_provenance
+    import strategy_experiment
+
+    receipt_path = strategy_experiment.strategy_result_path(state_dir)
+    try:
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise RecurringWorkUnavailable(
+            f"strategy experiment receipt is absent: {receipt_path}"
+        ) from exc
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RecurringWorkUnavailable(
+            f"strategy experiment receipt is unreadable: {receipt_path}"
+        ) from exc
+    if not isinstance(receipt, dict):
+        raise RecurringWorkUnavailable("strategy experiment receipt is not an object")
+    exp_id = receipt.get("exp_id")
+    if not isinstance(exp_id, str) or not _EXPERIMENT_ID_RE.fullmatch(exp_id):
+        raise RecurringWorkUnavailable("strategy experiment receipt has no experiment id")
+    experiment = _experiments_root(experiments_root) / exp_id
+    spec_path = (experiment / "spec.md").resolve()
+    metadata_path = experiment / "strategy.json"
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise RecurringWorkUnavailable(
+            f"strategy experiment metadata is absent: {metadata_path}"
+        ) from exc
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RecurringWorkUnavailable(
+            f"strategy experiment metadata is unreadable: {metadata_path}"
+        ) from exc
+    if not isinstance(metadata, dict) or not isinstance(metadata.get("spec_file"), str):
+        raise RecurringWorkUnavailable("strategy experiment metadata has no spec_file")
+    recorded = Path(metadata["spec_file"]).expanduser()
+    recorded_path = recorded if recorded.is_absolute() else experiment / recorded
+    try:
+        if recorded_path.resolve() != spec_path or not spec_path.is_file():
+            raise RecurringWorkUnavailable(
+                "strategy experiment spec_file is not the frozen spec.md"
+            )
+        spec_text = spec_path.read_text(encoding="utf-8")
+    except RecurringWorkUnavailable:
+        raise
+    except (OSError, UnicodeError) as exc:
+        raise RecurringWorkUnavailable(
+            f"strategy experiment frozen spec is unreadable: {spec_path}"
+        ) from exc
+    meta: dict[str, Any] = {}
+    meta_path = experiment / "meta.json"
+    if meta_path.exists():
+        try:
+            loaded = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RecurringWorkUnavailable(
+                f"strategy experiment meta.json is unreadable: {meta_path}"
+            ) from exc
+        if not isinstance(loaded, dict):
+            raise RecurringWorkUnavailable("strategy experiment meta.json is not an object")
+        meta = loaded
+        sealed = meta.get("spec_sha256")
+        if sealed is not None:
+            actual = hashlib.sha256(spec_text.encode("utf-8")).hexdigest()
+            if not isinstance(sealed, str) or sealed != actual:
+                raise RecurringWorkUnavailable(
+                    "strategy experiment spec_sha256 does not match spec.md"
+                )
+    if not spec_text.strip() or spec_provenance.is_missing_spec(meta, spec_text):
+        raise RecurringWorkUnavailable("strategy experiment frozen spec is a missing-spec stub")
+    return {
+        "schema": "orchestrator.model-profile-trial-packet",
+        "version": 1,
+        "purpose": "compare two Codex profiles on one frozen recurring-work spec",
+        "work_shape": "strategy-experiment-frozen-spec",
+        "exp_id": exp_id,
+        "spec_sha256": "sha256:" + hashlib.sha256(spec_text.encode("utf-8")).hexdigest(),
+        "instruction": (
+            "Read this frozen recurring-work specification without changing files. "
+            "Return only the bounded identity fields requested by the Workflows "
+            "worker telemetry contract."
+        ),
+        "frozen_spec": spec_text,
+        "expected_output": {
+            "acknowledged": True,
+            "packet_hash": "supplied-by-manifest",
+        },
+    }
+
+
+def build_current_recurring_trial(
+    orchestrator_root: Path,
+    workflows_root: Path,
+    *,
+    seed: int = 56014,
+    now: int | None = None,
+    capacity_state: str = "unknown",
+    state_dir: Path | None = None,
+    experiments_root: Path | None = None,
+) -> dict[str, Any]:
+    """Plan two Codex profiles × three instances on the current frozen spec.
+
+    This builds the launch plan only. Workers stay on the guarded transport,
+    and the capability-program summary is written by ``finalize`` from measured
+    attempts, never from this plan.
+    """
+    packet = resolve_strategy_frozen_packet(state_dir=state_dir, experiments_root=experiments_root)
+    return build_trial_manifest(
+        orchestrator_root,
+        workflows_root,
+        seed=seed,
+        now=now,
+        capacity_state=capacity_state,
+        packet=packet,
+        profile_ids=CURRENT_TRIAL_PROFILE_IDS,
+        instances_per_profile=CURRENT_TRIAL_INSTANCES,
+    )
 
 
 def validate_trial_manifest(manifest: dict[str, Any]) -> None:
@@ -1115,10 +1274,63 @@ def _selftest() -> None:
         finally:
             feedback.DB_PATH = previous_db
 
+        state_dir = root / "recurring-state"
+        experiments = root / "experiments"
+        try:
+            resolve_strategy_frozen_packet(state_dir=state_dir, experiments_root=experiments)
+        except RecurringWorkUnavailable as exc:
+            assert "strategy experiment receipt is absent" in str(exc), exc
+        else:
+            raise AssertionError("a missing strategy experiment spec was accepted")
+        spec_text = "Acceptance criteria: the frozen recurring-work body.\n"
+        exp_id = "strategy434-20261006"
+        experiment = experiments / exp_id
+        experiment.mkdir(parents=True)
+        (experiment / "spec.md").write_text(spec_text, encoding="utf-8")
+        (experiment / "strategy.json").write_text(
+            json.dumps({"exp_id": exp_id, "spec_file": str(experiment / "spec.md")}),
+            encoding="utf-8",
+        )
+        (experiment / "meta.json").write_text(
+            json.dumps({"spec_sha256": hashlib.sha256(spec_text.encode("utf-8")).hexdigest()}),
+            encoding="utf-8",
+        )
+        receipt_path = state_dir / "capability-program" / "strategy-experiment.json"
+        receipt_path.parent.mkdir(parents=True)
+        receipt_path.write_text(json.dumps({"exp_id": exp_id, "status": "completed"}))
+        recurring = build_current_recurring_trial(
+            orchestrator_root,
+            workflows_root,
+            seed=14,
+            now=1_000,
+            capacity_state=capacity.OK,
+            state_dir=state_dir,
+            experiments_root=experiments,
+        )
+        validate_trial_manifest(recurring)
+        assert recurring["frozen_packet"]["frozen_spec"] == spec_text
+        assert recurring["frozen_packet"]["exp_id"] == exp_id
+        assert recurring["selected_profile_ids"] == list(CURRENT_TRIAL_PROFILE_IDS)
+        assert recurring["instances_per_profile"] == CURRENT_TRIAL_INSTANCES
+        assert len(recurring["requests"]) == 6
+        assert not (state_dir / "capability-program" / "profile-trial.json").exists()
+        stub = "[SPEC_PROVENANCE: MISSING_SPEC_STUB]\n"
+        (experiment / "spec.md").write_text(stub, encoding="utf-8")
+        (experiment / "meta.json").write_text(
+            json.dumps({"spec_sha256": hashlib.sha256(stub.encode("utf-8")).hexdigest()}),
+            encoding="utf-8",
+        )
+        try:
+            resolve_strategy_frozen_packet(state_dir=state_dir, experiments_root=experiments)
+        except RecurringWorkUnavailable as exc:
+            assert "missing-spec stub" in str(exc), exc
+        else:
+            raise AssertionError("a stub strategy spec was accepted")
+
     print(
         "model_profile_trial.py selftest: OK "
         "(prepare/source proof, accept/reject validation, shadow report/no promotion, "
-        "forged source seal refuses ingest)"
+        "forged source seal refuses ingest, frozen spec binds the two-by-three plan)"
     )
 
 
@@ -1156,6 +1368,16 @@ def main(argv: list[str] | None = None) -> int:
     prepare.add_argument(
         "--capacity-state", choices=("ok", "warn", "shed", "unknown"), default="unknown"
     )
+    current = sub.add_parser("prepare-current")
+    current.add_argument("--orchestrator-root", type=Path, required=True)
+    current.add_argument("--workflows-root", type=Path, required=True)
+    current.add_argument("--output", type=Path, required=True)
+    current.add_argument("--seed", type=int, default=56014)
+    current.add_argument(
+        "--capacity-state", choices=("ok", "warn", "shed", "unknown"), default="unknown"
+    )
+    current.add_argument("--state-dir", type=Path)
+    current.add_argument("--experiments-root", type=Path)
     finalize = sub.add_parser("finalize")
     finalize.add_argument("--manifest", type=Path, required=True)
     finalize.add_argument("--results", type=Path, required=True)
@@ -1174,7 +1396,7 @@ def main(argv: list[str] | None = None) -> int:
         _selftest()
         return 0
     if args.command is None:
-        parser.error("one of --selftest, prepare, finalize, or report is required")
+        parser.error("one of --selftest, prepare, prepare-current, finalize, or report is required")
 
     _capability_heartbeat()
     if args.command == "prepare":
@@ -1188,6 +1410,21 @@ def main(argv: list[str] | None = None) -> int:
             instances_per_profile=args.instances_per_profile,
             packet=json.loads(args.packet.read_text(encoding="utf-8")) if args.packet else None,
         )
+        _atomic_json(args.output, payload)
+    elif args.command == "prepare-current":
+        ensure_artifact_outside_sources(args.output, (args.orchestrator_root, args.workflows_root))
+        try:
+            payload = build_current_recurring_trial(
+                args.orchestrator_root,
+                args.workflows_root,
+                seed=args.seed,
+                capacity_state=args.capacity_state,
+                state_dir=args.state_dir,
+                experiments_root=args.experiments_root,
+            )
+        except RecurringWorkUnavailable as exc:
+            print(f"model_profile_trial.py: {exc}", file=sys.stderr)
+            return 2
         _atomic_json(args.output, payload)
     elif args.command == "finalize":
         if not args.confirm_instrumentation:
