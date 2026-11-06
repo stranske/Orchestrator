@@ -85,6 +85,7 @@
       "tests/test_issue1154_tick_boundaries.py",
       "tests/test_coverage_round_1138.py",
       "tests/test_coverage_round_1162.py",
+      "tests/test_coverage_round_1182.py",
       "tests/test_coverage_round_881.py",
       "tests/test_coverage_wp_roles.py",
       "tests/test_dispatcher_controlled_data_only.py",
