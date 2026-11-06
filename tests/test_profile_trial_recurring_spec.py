@@ -238,6 +238,148 @@ def test_measured_recurring_trial_records_spec_quality_cost_and_identity(tmp_pat
         assert len(attempts) == 3
 
 
+def test_publish_current_records_measured_usage_quality_and_identity(tmp_path, monkeypatch):
+    state, experiments = _seal(tmp_path)
+    orchestrator, workflows = _sources(tmp_path)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(state))
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "quarantine-feedback.db")
+    manifest = trial.build_current_recurring_trial(
+        orchestrator,
+        workflows,
+        seed=14,
+        now=1000,
+        capacity_state="ok",
+        state_dir=state,
+        experiments_root=experiments,
+    )
+    results = _measured_results(tmp_path, manifest)
+    for attempt in results["attempts"]:
+        if attempt["profile_id"] == trial.CURRENT_TRIAL_PROFILE_IDS[0]:
+            attempt["tokens_in"] = 0
+            attempt["tokens_out"] = 0
+    published = trial.publish_measured_recurring_trial(manifest, results, now=2000)
+    summary = json.loads((state / "capability-program" / "profile-trial.json").read_text())
+    assert published["attempt_count"] == 6
+    assert published["brain_ingest_enabled"] is True
+    assert (summary["profile_count"], summary["instance_count"]) == (2, 6)
+    assert summary["identity_verified"] is True
+    assert summary["quality_by_profile"] == results["quality_by_profile"]
+    assert summary["exp_id"] == EXP_ID
+    zero_profile = trial.CURRENT_TRIAL_PROFILE_IDS[0]
+    assert summary["cost_tokens_by_profile"][zero_profile] == {"tokens_in": 0, "tokens_out": 0}
+    measured = trial.CURRENT_TRIAL_PROFILE_IDS[1]
+    measured_attempts = [row for row in results["attempts"] if row["profile_id"] == measured]
+    assert summary["cost_tokens_by_profile"][measured] == {
+        "tokens_in": sum(row["tokens_in"] for row in measured_attempts),
+        "tokens_out": sum(row["tokens_out"] for row in measured_attempts),
+    }
+    assert summary["provider_resolved_identity_by_profile"][measured]["model"] == (
+        measured_attempts[0]["provider_resolved_model"]
+    )
+
+
+def test_publish_current_refuses_unmeasured_usage_before_any_write(tmp_path, monkeypatch):
+    state, experiments = _seal(tmp_path)
+    orchestrator, workflows = _sources(tmp_path)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(state))
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "quarantine-feedback.db")
+    manifest = trial.build_current_recurring_trial(
+        orchestrator,
+        workflows,
+        seed=14,
+        now=1000,
+        capacity_state="ok",
+        state_dir=state,
+        experiments_root=experiments,
+    )
+    results = _measured_results(tmp_path, manifest)
+    results["attempts"][3].pop("tokens_out")
+    with pytest.raises(ValueError, match="tokens_out"):
+        trial.publish_measured_recurring_trial(manifest, results, now=2000)
+    assert not (state / "capability-program" / "profile-trial.json").exists()
+    assert not (tmp_path / "quarantine-feedback.db").exists()
+
+
+def test_publish_current_cli_writes_the_program_summary(tmp_path, monkeypatch, capsys):
+    state, experiments = _seal(tmp_path)
+    orchestrator, workflows = _sources(tmp_path)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(state))
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "quarantine-feedback.db")
+    manifest = trial.build_current_recurring_trial(
+        orchestrator,
+        workflows,
+        seed=14,
+        now=1000,
+        capacity_state="ok",
+        state_dir=state,
+        experiments_root=experiments,
+    )
+    manifest_path = tmp_path / "manifest.json"
+    results_path = tmp_path / "results.json"
+    state_path = tmp_path / "outside-state.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    results_path.write_text(json.dumps(_measured_results(tmp_path, manifest)), encoding="utf-8")
+    status = trial.main(
+        [
+            "publish-current",
+            "--manifest",
+            str(manifest_path),
+            "--results",
+            str(results_path),
+            "--state",
+            str(state_path),
+        ]
+    )
+    assert status == 0
+    printed = json.loads(capsys.readouterr().out)
+    summary = json.loads((state / "capability-program" / "profile-trial.json").read_text())
+    assert printed["attempt_count"] == 6
+    assert summary["work_shape"] == "strategy-experiment-frozen-spec"
+    assert summary["spec_sha256"] == manifest["frozen_packet"]["spec_sha256"]
+    assert (summary["profile_count"], summary["instance_count"]) == (2, 6)
+    assert set(summary["provider_resolved_identity_by_profile"]) == set(
+        trial.CURRENT_TRIAL_PROFILE_IDS
+    )
+
+
+def test_publish_current_cli_refuses_a_missing_count_without_writing(tmp_path, monkeypatch, capsys):
+    state, experiments = _seal(tmp_path)
+    orchestrator, workflows = _sources(tmp_path)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(state))
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "quarantine-feedback.db")
+    manifest = trial.build_current_recurring_trial(
+        orchestrator,
+        workflows,
+        seed=14,
+        now=1000,
+        capacity_state="ok",
+        state_dir=state,
+        experiments_root=experiments,
+    )
+    results = _measured_results(tmp_path, manifest)
+    results["attempts"][0]["tokens_in"] = None
+    manifest_path = tmp_path / "manifest.json"
+    results_path = tmp_path / "results.json"
+    state_path = tmp_path / "outside-state.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    results_path.write_text(json.dumps(results), encoding="utf-8")
+    status = trial.main(
+        [
+            "publish-current",
+            "--manifest",
+            str(manifest_path),
+            "--results",
+            str(results_path),
+            "--state",
+            str(state_path),
+        ]
+    )
+    assert status == 2
+    assert "tokens_in" in capsys.readouterr().err
+    assert not state_path.exists()
+    assert not (state / "capability-program" / "profile-trial.json").exists()
+
+
 def test_prepare_current_cli_refuses_a_missing_spec_without_writing(tmp_path, capsys):
     orchestrator, workflows = _sources(tmp_path)
     output = tmp_path / "outside" / "manifest.json"

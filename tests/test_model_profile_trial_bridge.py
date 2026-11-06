@@ -277,6 +277,34 @@ def test_failed_or_untrusted_attempt_stops_whole_trial(tmp_path):
         bridge.ingest_transport_results(manifest, envelope, results)
 
 
+def test_missing_transport_usage_stays_unmeasured_and_zero_stays_zero(tmp_path):
+    manifest = _manifest(tmp_path)
+    _preflight, envelope = _envelope(tmp_path, manifest)
+    missing = _transport_results(tmp_path, manifest, envelope)
+    target = missing["attempts"][0]
+    target.pop("tokens_in")
+    target["tokens_out"] = None
+    quarantined = bridge.ingest_transport_results(manifest, envelope, missing)
+    saved = next(row for row in quarantined["attempts"] if row["run_id"] == target["run_id"])
+    assert saved["tokens_in"] is None
+    assert saved["tokens_out"] is None
+
+    explicit = _transport_results(tmp_path, manifest, envelope)
+    explicit["attempts"][0]["tokens_in"] = 0
+    explicit["attempts"][0]["tokens_out"] = 0
+    zeroed = bridge.ingest_transport_results(manifest, envelope, explicit)
+    zero_row = next(
+        row for row in zeroed["attempts"] if row["run_id"] == explicit["attempts"][0]["run_id"]
+    )
+    assert zero_row["tokens_in"] == 0
+    assert zero_row["tokens_out"] == 0
+
+    rejected = _transport_results(tmp_path, manifest, envelope)
+    rejected["attempts"][0]["tokens_in"] = True
+    with pytest.raises(ValueError, match="tokens_in"):
+        bridge.ingest_transport_results(manifest, envelope, rejected)
+
+
 def test_remote_collector_binds_authenticated_actions_metadata(tmp_path, monkeypatch):
     manifest = _manifest(tmp_path)
     _preflight, envelope = _envelope(tmp_path, manifest)

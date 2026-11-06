@@ -12,7 +12,10 @@ summary. A measured finalize of that plan records the experiment id, work
 shape, and spec hash beside quality, cost, and provider-resolved identity.
 An explicit layout supports repeated instances of selected profiles;
 verified evidence can be ingested atomically into a quarantine feedback database.
-``--selftest`` exercises prepare, validation, and reporting fully offline.
+``publish-current`` records one already measured two-profile, three-instance
+trial of the sealed strategy spec. It does not execute workers, and it refuses
+when any instance has no token count. ``--selftest`` exercises prepare,
+validation, and reporting fully offline.
 """
 
 from __future__ import annotations
@@ -970,6 +973,50 @@ def _write_capability_program_trial_summary(
     _atomic_json(out_dir / "profile-trial.json", payload)
 
 
+def publish_measured_recurring_trial(
+    manifest: dict[str, Any],
+    results: dict[str, Any],
+    *,
+    state_path: Path | None = None,
+    now: int | None = None,
+) -> dict[str, Any]:
+    """Record one measured two-profile, three-instance trial of the sealed spec.
+
+    This does not execute a worker. The attempts must already carry provider-resolved
+    identity and a nonnegative token count in both directions. A missing count is
+    refused before any feedback row or program summary is written, so an unmeasured
+    arm cannot be stored as zero.
+    """
+    packet = manifest.get("frozen_packet")
+    if (
+        not isinstance(packet, dict)
+        or packet.get("work_shape") != "strategy-experiment-frozen-spec"
+    ):
+        raise ValueError("measured recurring trial requires the strategy experiment frozen spec")
+    if list(manifest.get("selected_profile_ids") or []) != list(CURRENT_TRIAL_PROFILE_IDS):
+        raise ValueError("measured recurring trial requires the two current Codex profiles")
+    if manifest.get("instances_per_profile") != CURRENT_TRIAL_INSTANCES:
+        raise ValueError("measured recurring trial requires three instances per profile")
+    attempts = results.get("attempts")
+    expected = len(CURRENT_TRIAL_PROFILE_IDS) * CURRENT_TRIAL_INSTANCES
+    if not isinstance(attempts, list) or len(attempts) != expected:
+        raise ValueError("measured recurring trial requires six attempts")
+    for attempt in attempts:
+        if not isinstance(attempt, dict):
+            raise ValueError("measured recurring trial attempt is not an object")
+        for field in ("tokens_in", "tokens_out"):
+            value = attempt.get(field)
+            if type(value) is not int or value < 0:
+                raise ValueError(f"measured recurring trial {field} must be a nonnegative integer")
+    return finalize_trial(
+        manifest,
+        results,
+        state_path=state_path,
+        ingest_brain=True,
+        now=now,
+    )
+
+
 def finalize_trial(
     manifest: dict[str, Any],
     results: dict[str, Any],
@@ -1470,6 +1517,10 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="atomically record verified trial rows in the quarantine Brain",
     )
+    publish = sub.add_parser("publish-current")
+    publish.add_argument("--manifest", type=Path, required=True)
+    publish.add_argument("--results", type=Path, required=True)
+    publish.add_argument("--state", type=Path, required=True)
     report = sub.add_parser("report")
     report.add_argument("--state", type=Path, default=DEFAULT_STATE_PATH)
     args = parser.parse_args(argv)
@@ -1478,7 +1529,10 @@ def main(argv: list[str] | None = None) -> int:
         _selftest()
         return 0
     if args.command is None:
-        parser.error("one of --selftest, prepare, prepare-current, finalize, or report is required")
+        parser.error(
+            "one of --selftest, prepare, prepare-current, publish-current, finalize, "
+            "or report is required"
+        )
 
     _capability_heartbeat()
     if args.command == "prepare":
@@ -1508,6 +1562,29 @@ def main(argv: list[str] | None = None) -> int:
             print(f"model_profile_trial.py: {exc}", file=sys.stderr)
             return 2
         _atomic_json(args.output, payload)
+    elif args.command == "publish-current":
+        try:
+            manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
+            loaded_results = json.loads(args.results.read_text(encoding="utf-8"))
+            if not isinstance(manifest, dict) or not isinstance(loaded_results, dict):
+                raise ValueError("measured recurring trial inputs must be objects")
+            source_before = manifest.get("source_before")
+            if not isinstance(source_before, dict):
+                raise ValueError("measured recurring trial manifest has no source seal")
+            ensure_artifact_outside_sources(
+                args.state,
+                [
+                    Path(row["root"])
+                    for row in source_before.values()
+                    if isinstance(row, dict) and row.get("root")
+                ],
+            )
+            payload = publish_measured_recurring_trial(
+                manifest, loaded_results, state_path=args.state
+            )
+        except (OSError, UnicodeError, json.JSONDecodeError, ValueError, KeyError) as exc:
+            print(f"model_profile_trial.py: {exc}", file=sys.stderr)
+            return 2
     elif args.command == "finalize":
         if not args.confirm_instrumentation:
             parser.error("finalize requires --confirm-instrumentation")

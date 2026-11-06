@@ -138,6 +138,10 @@ IDENTITY_ARTIFACT_FIELDS = {
     "operation_role",
     "source_clean",
     "exit_code",
+    # Optional. Absent usage is unmeasured. A present count is kept; it is never
+    # filled with zero, which the cost record would treat as free.
+    "tokens_in",
+    "tokens_out",
 }
 
 
@@ -830,6 +834,8 @@ def collect_remote_attempt(
     artifact_path.parent.mkdir(parents=True, exist_ok=True)
     artifact_path.write_bytes(raw)
     attempt = {key: artifact.get(key) for key in TRANSPORT_ATTEMPT_FIELDS if key in artifact}
+    # Keep a usage count only when the artifact actually carried one. Filling a
+    # missing count with zero would make an unmeasured arm look free.
     attempt.update(
         {
             "operation_role": "worker",
@@ -840,8 +846,6 @@ def collect_remote_attempt(
             "github_artifact_id": artifact_id,
             "github_artifact_digest": archive_digest,
             "latency_s": 0.0,
-            "tokens_in": 0,
-            "tokens_out": 0,
         }
     )
     return attempt
@@ -884,6 +888,20 @@ def collect_remote_results(
         "acknowledged": True,
         "attempts": attempts,
     }
+
+
+def _usage_count(attempt: dict[str, Any], field: str) -> int | None:
+    """Return one token count, or None when the transport did not measure it.
+
+    An explicit zero stays zero. A missing or null count stays unmeasured, and a
+    bool or other non-integer is rejected rather than coerced.
+    """
+    if field not in attempt or attempt[field] is None:
+        return None
+    value = attempt[field]
+    if type(value) is not int or value < 0:
+        raise ValueError(f"transport attempt {field} must be a nonnegative integer or null")
+    return value
 
 
 def _validate_transport_results(
@@ -1015,8 +1033,8 @@ def _validate_transport_results(
             "cli_version": str(attempt["cli_version"])[:160],
             "status": "success",
             "latency_s": float(attempt.get("latency_s") or 0.0),
-            "tokens_in": int(attempt.get("tokens_in") or 0),
-            "tokens_out": int(attempt.get("tokens_out") or 0),
+            "tokens_in": _usage_count(attempt, "tokens_in"),
+            "tokens_out": _usage_count(attempt, "tokens_out"),
             "artifact_ref": str(attempt["artifact_ref"])[:512],
             "packet_hash": manifest["packet_hash"],
             "acknowledged": True,

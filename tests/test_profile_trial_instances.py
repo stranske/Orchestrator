@@ -394,6 +394,9 @@ class ProfileTrialInstancesTest(unittest.TestCase):
                 "github_run_attempt": 1,
                 "artifact_name": artifact_name,
             }
+            if index == 1:
+                artifact["tokens_in"] = 11
+                artifact["tokens_out"] = 4
             buffer = io.BytesIO()
             with zipfile.ZipFile(buffer, "w") as archive:
                 archive.writestr("model-profile-trial-attempt.json", json.dumps(artifact))
@@ -436,6 +439,11 @@ class ProfileTrialInstancesTest(unittest.TestCase):
                 attempt["artifact_sha256"],
                 "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest(),
             )
+            if request == envelope["requests"][0]:
+                self.assertEqual((attempt["tokens_in"], attempt["tokens_out"]), (11, 4))
+            else:
+                self.assertNotIn("tokens_in", attempt)
+                self.assertNotIn("tokens_out", attempt)
 
 
 if __name__ == "__main__":
