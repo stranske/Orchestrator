@@ -1028,3 +1028,90 @@ test('native inventory rejects dispatch and retry before touching a live WAL jou
     assert.deepEqual(w.snapshot(), before);
   }
 });
+
+for (const input of ['original', 'canonical']) {
+  for (const change of ['atomic_replacement', 'symlink_switch']) {
+    for (const boundary of ['code_observation', 'final_report_read']) {
+      test(`native inventory refuses ${input} ${change} at ${boundary} with identical bytes`, (t) => {
+        const w = world(t);
+        const selected = w[input];
+        const retained = `${selected}.retained`;
+        const replacement = `${selected}.replacement`;
+        fs.copyFileSync(selected, replacement);
+        if (change === 'symlink_switch') {
+          fs.renameSync(selected, retained);
+          fs.symlinkSync(retained, selected);
+        }
+        const initialPath = fs.realpathSync(selected);
+        const initialInode = fs.statSync(selected).ino;
+        const before = w.snapshot();
+        // Switch after the first journal read, or after the final report bytes
+        // have been read but before its location recheck. Hash equality alone
+        // cannot prove these observations still refer to the selected reports.
+        const result = w.execute(['-c', `
+import sys
+from pathlib import Path
+import adjudicator_retro as retro
+
+selected, replacement = map(Path, sys.argv[1:3])
+change, boundary = sys.argv[3:5]
+observe = retro._inventory_code
+read_bytes = Path.read_bytes
+armed = False
+switched = False
+
+def switch():
+    global switched
+    switched = True
+    if change == 'symlink_switch':
+        temporary = selected.with_name(selected.name + '.next')
+        temporary.symlink_to(replacement)
+        temporary.replace(selected)
+    else:
+        replacement.replace(selected)
+
+def observe_after_read(root):
+    global armed
+    result = observe(root)
+    armed = True
+    if boundary == 'code_observation' and not switched:
+        switch()
+    return result
+
+def read_then_switch(path):
+    data = read_bytes(path)
+    if armed and not switched and path == selected:
+        switch()
+    return data
+
+retro._inventory_code = observe_after_read
+Path.read_bytes = read_then_switch
+sys.argv = ['adjudicator_retro.py', *sys.argv[5:]]
+raise SystemExit(retro.main())
+`, selected, replacement, change, boundary, ...w.inventoryArgs.slice(1)]);
+        assert.equal(result.status, 2, result.stderr);
+        assert.match(result.stderr, /native report location changed during inventory/);
+        assert.equal(result.stdout, '', 'a switched report must not emit a partial inventory');
+        assert.notEqual(fs.statSync(selected).ino, initialInode);
+        assert.equal(fs.realpathSync(selected) === initialPath, change === 'atomic_replacement');
+        assert.deepEqual(w.snapshot(), before, 'report and receipt bytes must remain unchanged');
+
+        // Once the selected locations are stable, a new observation retains
+        // the original cohort, recursive paid history and unresolved receipts.
+        const later = w.run(w.inventoryArgs);
+        assert.equal(later.original_report.sha256, w.sourceHash);
+        assert.deepEqual(later.original_report.case_ids, ['original-a']);
+        assert.deepEqual(later.original_paid_attempts.map((item) => item.backend_run_id),
+          ['original-paid', 'earlier-paid']);
+        assert.equal(later.native_journal.attempts.length, 3);
+        assert.equal(later.row_diagnostics[0].unresolved_native_attempts[0].outcome, 'UNKNOWN');
+        assert.equal(later.paid_identity_summary.union_unique, 4);
+        assert.equal(later.canonical_report.summary_authority, 'not_authenticated_by_inventory');
+        assert.equal(later.dispatch_authorized, false);
+        assert.match(later.historical_observations, /^unavailable/);
+        assert.equal(JSON.stringify(later).includes(w.raw), false);
+        assert.deepEqual(w.snapshot(), before);
+      });
+    }
+  }
+}

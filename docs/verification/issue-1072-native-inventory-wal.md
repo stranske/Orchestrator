@@ -315,3 +315,31 @@ cannot be created on the read-only filesystem, so no commit or push was made.
 
 Automatic approval review rejected the blocker comment and `needs-human` label
 because the GitHub mutations require approval and this run's policy is `never`.
+
+## Native report switches during final reads
+
+Checked on 2026-11-06 against checkout
+`58e7884b34fafb004584cd9772c0365ed0f8919a`. Eight new real native-inventory
+CLI regressions cover original/canonical report atomic replacement and symlink
+switches with identical bytes, after the initial journal observation and during
+the final report read. Each switch aborts without emitting a partial inventory.
+A later stable observation preserves the original cohort, recursive paid history,
+UNKNOWN reservations and unauthenticated canonical-summary boundary. Report,
+database and WAL bytes remain unchanged.
+
+Validation: all 117 combined JavaScript inventory tests, 32 diagnostic unittests
+and seven replay/publication unittests pass. In a separate temporary source copy,
+removing the report location guard makes all eight new regressions fail.
+JavaScript syntax and `git diff --check` pass. No repository Python files changed.
+The required `pytest tests/test_adjudicator_retro.py -m "not slow"` check cannot
+start because pytest is absent; dependency installation failed.
+
+These are fixture results. The configured production runtime, canonical report,
+independent outcomes database and default mirror remain absent. Authentic
+original/journal locations and live reader bindings remain unavailable. No
+production pin, dispatch, canonical refresh or live-shadow decision is claimed,
+and no operational checkbox is completed. Git metadata is read-only, so staging
+in this checkout failed; the change is preserved in an isolated local commit and
+`/tmp/orchestrator-1072-report-pins/change.bundle`. No push was made. Automatic
+approval review rejected the blocker comment and `needs-human` label because the
+GitHub writes require approval and this run's policy is `never`.
