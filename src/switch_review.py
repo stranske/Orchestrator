@@ -559,7 +559,9 @@ def _fleet_pr_measures(gh, now: int, repos: list[str], *, flow: bool) -> dict:
         for pr in _fleet_recent_prs(gh, repo, now):
             if not _has_agent_label(_fleet_labels(pr, "PR")):
                 continue
-            merged_at = _fleet_stamp(pr["merged_at"]) if pr["merged_at"] else None
+            # Only REST's explicit null establishes an unmerged PR. A malformed
+            # false value must not silently undercount flow or change the median.
+            merged_at = _fleet_stamp(pr["merged_at"]) if pr["merged_at"] is not None else None
             created_at = _fleet_stamp(pr["created_at"])
             recent_merge = merged_at is not None and now - 48 * 3600 <= merged_at <= now
             recent_open = now - 48 * 3600 <= created_at <= now

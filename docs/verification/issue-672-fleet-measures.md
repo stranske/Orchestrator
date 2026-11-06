@@ -1,4 +1,31 @@
-# Fleet delivery measures — 2026-11-05 runner check
+# Fleet delivery measures — runner checks
+
+## Merge timestamp evidence — 2026-11-06 00:06Z
+
+The PR reader now treats only JSON null as unmerged. Empty strings, false,
+zero, arrays, and objects in `merged_at` previously dropped a PR from the
+closure median and merged flow while reporting numeric measurements. The
+expanded existing regression failed on all five malformed values before the
+fix. It now verifies explicit unmeasured PR rows, preservation of all five text
+rows and independent measurements, and valid null behavior. No test method
+or collection-floor count changed.
+
+All 27 fleet unittest cases, the module selftest, five reader error-swallowing
+mutation/restoration controls, both JavaScript verifier test files, and
+`git diff --check` pass under the available Python 3.14.10. The CLI printed all
+five rows at `2026-11-06T00:06:16+00:00`; GitHub connectivity and the absent
+opener helper were explicitly unmeasured. Runner receipt:
+`/tmp/orch-672-merge-timestamp-live/check.json`.
+
+Pytest and Black are absent; package installation failed because pypi.org DNS
+is unavailable. The formatting command and required repository-wide Black
+check both fail with `No module named black`, preventing a Python commit.
+The issue's fallback `/opt/anaconda3/bin/python3` is absent. An available-Python
+`src/verify.py` attempt, selected through `ORCH_STANDARD_PYTHON`, timed out
+after 60 seconds with no verdict. Owner-machine acceptance and full verification
+remain incomplete; no checkbox is newly marked complete. PR #1130 was confirmed
+open and ready for review. The blocker comment and `needs-human` label were
+rejected with `MCP tool call requires approval, but approval policy is never`.
 
 ## Canary pagination overlap check — 2026-11-05 21:01Z
 

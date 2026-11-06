@@ -472,6 +472,39 @@ class FleetDeliveryTests(unittest.TestCase):
         self.assertIn("UTC GitHub timestamp", row["reason"])
 
         original = json.loads(FIXTURE.read_text())
+        # Only JSON null establishes that a PR is unmerged. Other false values
+        # cannot silently drop a merge from the median or the released flow.
+        for merged_at in ("", False, 0, [], {}):
+            with self.subTest(merged_at=merged_at):
+                self.data = copy.deepcopy(original)
+                self.data["prs"][0]["merged_at"] = merged_at
+                section = self.measure()
+                for key in ("merge_to_close", "released_flow"):
+                    row = section["rows"][key]
+                    self.assertIsNone(row["value"])
+                    self.assertEqual(row["evidence_class"], "unmeasured")
+                    self.assertIn("UTC GitHub timestamp", row["reason"])
+                text = review.format_report(
+                    {
+                        "generated_at": self.now,
+                        "review_days": 7,
+                        "held_off": [],
+                        "on_but_idle": [],
+                        "unconditioned": [],
+                        "raise_count": 0,
+                        "fleet_delivery_measures": section,
+                    }
+                )
+                for name in review.FLEET_DELIVERY_NAMES.values():
+                    self.assertEqual(text.count(name + ":"), 1)
+                self.assertIsNotNone(section["rows"]["oldest_canary"]["value"])
+                self.assertIsNotNone(section["rows"]["opener_cap"]["value"])
+        self.data = copy.deepcopy(original)
+        self.data["prs"][0]["merged_at"] = None
+        rows = self.measure()["rows"]
+        self.assertIn("median 20 min", rows["merge_to_close"]["value"])
+        self.assertIn("opened 2/day, merged 1/day", rows["released_flow"]["value"])
+
         missing = object()
         for body in (missing, False, 0, {}, []):
             with self.subTest(body=body):
