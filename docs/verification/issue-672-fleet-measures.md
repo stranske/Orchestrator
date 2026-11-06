@@ -1,5 +1,72 @@
 # Fleet delivery measures — runner checks
 
+## Structured closing-issue attribution — 2026-11-06 01:00Z
+
+The eligible-PR reader now fetches GraphQL `closingIssuesReferences` through
+the report's cached GitHub reader. Each link must supply a positive integer
+issue number and repository identity. Only same-repository links are combined
+with the existing body references and flow's branch references; repository
+comparison is case-insensitive. Duplicate links count once per PR/issue pair,
+and a PR covering multiple approved issues still counts once in flow. Failed,
+malformed, or truncated connections make the affected PR measures explicitly
+unmeasured. A connection with `hasNextPage=true` requires a complete read before
+it can be measured; this implementation does not paginate that connection.
+
+Verified implementation tasks in the local working tree (pending the mandatory
+formatting gate and commit):
+
+- [x] Fetch structured links for eligible PRs through the cached reader, exclude
+  cross-repository links, and combine with the existing attribution rules.
+- [x] Cover structured-link-only attribution, cross-repository exclusion,
+  duplicate references, cache reuse, and failed/malformed detail reads in the
+  fleet tests and fixture. The fixture includes an unmerged PR with no body
+  reference, duplicate local links, and a foreign link. The merged-PR subcases
+  also establish structured-only attribution for both PR measures.
+- [ ] Record passing acceptance receipts on the target machine with its selected
+  interpreter.
+
+Runner interpreter: `/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3`
+(Python 3.14.10). This is available-runner evidence, not target-machine evidence.
+The expanded regression subcases failed before the implementation and passed
+afterward. All 27 existing test methods remain collected by unittest; no test
+collection floor was changed.
+
+Commands and results:
+
+- `PYTHONPATH=src python3 -m unittest discover -s tests -p
+  test_switch_review_fleet.py -q`: 27 tests passed.
+- `python3 src/switch_review.py --selftest`: passed.
+- `PYTHON=/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3 node
+  scripts/verify_fleet_delivery_mutation.js --unittest --all-readers`: all five
+  deliberate fail-open controls detected, with baseline and restoration passing.
+- `node --test --test-isolation=none
+  tests/test_verify_fleet_delivery_mutation.js
+  tests/test_verify_fleet_delivery_live.js`: all 14 tests passed.
+- `PYTHON=/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3 node
+  scripts/verify_fleet_delivery_live.js /tmp/orch-1186-structured-links-live`:
+  validated all five current text rows at `2026-11-06T01:00:26.750Z`.
+  `/tmp/orch-1186-structured-links-live/check.json` records explicit GitHub
+  connectivity failures for the four GitHub rows and an unavailable opener
+  helper for the local count row. Temporary receipts are local to this runner.
+- `git diff --check`: passed.
+
+The required `python3 -m pytest tests/test_switch_review_fleet.py -m "not slow"`
+and pytest-mode `--all-readers` mutation command cannot run: pytest is absent.
+Both `python3 -m black --line-length 100 src/switch_review.py
+tests/test_switch_review_fleet.py` and the required repository-wide
+`black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .`
+cannot run because Black is absent. Package installation failed because pypi.org
+DNS is unavailable; no local Black/pytest installation was found. The mandatory
+Black gate prevents a Python commit, so these source changes remain uncommitted.
+`ORCH_STANDARD_PYTHON=<available interpreter> PYTEST_ADDOPTS='-m "not slow"'
+timeout 60s python3 -u src/verify.py` timed out with exit 124 and no verdict.
+`/opt/anaconda3/bin/python3` is absent. All target-machine acceptance criteria
+remain open.
+
+PR #1187 was read as open and ready (`draft=false`). Posting the blocker comment
+and adding `needs-human` were rejected with `MCP tool call requires approval,
+but approval policy is never`.
+
 ## Merge timestamp evidence — 2026-11-06 00:06Z
 
 The PR reader now treats only JSON null as unmerged. Empty strings, false,

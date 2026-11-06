@@ -1,6 +1,6 @@
 """Offline response replays for fleet measures; also runnable with unittest.
 
-Fixtures project the REST response fields used by the readers. The canary cohort is
+Fixtures project the REST and GraphQL fields used by the readers. The canary cohort is
 recorded from Workflows/config/consumer_sync_canaries.json; measurement examples
 are synthetic, with fixed UTC times, rather than claims about live campaign results.
 """
@@ -41,7 +41,14 @@ class FleetDeliveryTests(unittest.TestCase):
         self.calls.append(args)
         if any(part in path for part in self.failed):
             return False, "", "unmeasured: HTTP 403 fixture read refused"
-        if "/actions/" in path:
+        if path == "graphql":
+            self.assertIn("closingIssuesReferences(first:100)", " ".join(args))
+            self.assertIn("pageInfo{hasNextPage}", " ".join(args))
+            self.assertIn("owner=stranske", args)
+            self.assertIn("name=Orchestrator", args)
+            number = next(arg.removeprefix("number=") for arg in args if arg.startswith("number="))
+            payload = self.data["pr_details"][number]
+        elif "/actions/" in path:
             self.assertIn("--paginate", args)
             payload = self.data["gate"]
         elif "/contents/" in path:
@@ -125,6 +132,8 @@ class FleetDeliveryTests(unittest.TestCase):
         for endpoint, key in (
             ("/actions/", "gate_cancellations"),
             ("state=all", "merge_to_close"),
+            ("graphql", "merge_to_close"),
+            ("graphql", "released_flow"),
             ("/issues/", "released_flow"),
             ("/contents/", "oldest_canary"),
             ("state=open", "oldest_canary"),
@@ -136,6 +145,68 @@ class FleetDeliveryTests(unittest.TestCase):
                 self.assertIsNone(rows[key]["value"])
                 self.assertTrue(rows[key]["reason"].startswith("gh HTTP 403"))
                 self.assertIsNotNone(rows["opener_cap"]["value"])
+
+        # A failed detail read is shared by both PR measures, never retried into
+        # inconsistent snapshots or treated as an empty connection.
+        self.failed = {"graphql"}
+        self.calls.clear()
+        rows = self.measure()["rows"]
+        self.assertEqual(sum(args[1] == "graphql" for args in self.calls), 1)
+        for key in ("merge_to_close", "released_flow"):
+            self.assertIsNone(rows[key]["value"])
+        self.assertIsNotNone(rows["oldest_canary"]["value"])
+
+        self.failed.clear()
+        original = copy.deepcopy(self.data["pr_details"]["10"])
+        invalid_details = [None, [], {}, {"data": None}, {"errors": [{"message": "refused"}]}]
+        for connection in (
+            None,
+            {},
+            {"nodes": [], "pageInfo": {"hasNextPage": True}},
+            {"nodes": [], "pageInfo": {"hasNextPage": None}},
+            {"nodes": [], "pageInfo": {"hasNextPage": 0}},
+            {"nodes": None, "pageInfo": {"hasNextPage": False}},
+            {"nodes": [None], "pageInfo": {"hasNextPage": False}},
+        ):
+            detail = copy.deepcopy(original)
+            detail["data"]["repository"]["pullRequest"]["closingIssuesReferences"] = connection
+            invalid_details.append(detail)
+        for node in (
+            {},
+            {"number": True, "repository": {"nameWithOwner": "stranske/Orchestrator"}},
+            {"number": 0, "repository": {"nameWithOwner": "stranske/Orchestrator"}},
+            {"number": "1", "repository": {"nameWithOwner": "stranske/Orchestrator"}},
+            {"number": 1, "repository": None},
+            {"number": 1, "repository": {"nameWithOwner": ""}},
+        ):
+            detail = copy.deepcopy(original)
+            detail["data"]["repository"]["pullRequest"]["closingIssuesReferences"]["nodes"] = [node]
+            invalid_details.append(detail)
+        for detail in invalid_details:
+            with self.subTest(detail=detail):
+                self.data["pr_details"]["10"] = detail
+                rows = self.measure()["rows"]
+                self.assertEqual(len(rows), 5)
+                for key in ("merge_to_close", "released_flow"):
+                    self.assertIsNone(rows[key]["value"])
+                    self.assertEqual(rows[key]["evidence_class"], "unmeasured")
+                    self.assertRegex(rows[key]["reason"], "closingIssuesReferences|gh API")
+                self.assertIsNotNone(rows["oldest_canary"]["value"])
+                self.assertIsNotNone(rows["opener_cap"]["value"])
+
+        self.data["pr_details"]["10"] = original
+        gh = self.gh
+
+        def malformed_json(args, **kwargs):
+            if args[1] == "graphql":
+                return True, "{broken", ""
+            return gh(args, **kwargs)
+
+        with patch.object(self, "gh", side_effect=malformed_json):
+            rows = self.measure()["rows"]
+        for key in ("merge_to_close", "released_flow"):
+            self.assertIsNone(rows[key]["value"])
+            self.assertEqual(rows[key]["reason"], "gh invalid JSON response")
 
     def test_failed_or_malformed_canary_repo_does_not_print_a_partial_oldest(self):
         self.failed = {"repos/stranske/trip-planner/pulls"}
@@ -248,6 +319,55 @@ class FleetDeliveryTests(unittest.TestCase):
         pr["body"] = "Closes #2"
         row = self.measure()["rows"]["released_flow"]
         self.assertIn("opened 2/day, merged 1.5/day", row["value"])
+
+        original = json.loads(FIXTURE.read_text())
+        for repo in ("stranske/Orchestrator", "STRANSKE/orchestrator"):
+            with self.subTest(structured_only_repo=repo):
+                self.data = copy.deepcopy(original)
+                pr = self.data["prs"][0]
+                pr["body"] = None
+                refs = self.data["pr_details"]["10"]["data"]["repository"]["pullRequest"]
+                refs["closingIssuesReferences"]["nodes"] = [
+                    {"number": 1, "repository": {"nameWithOwner": repo}}
+                ]
+                self.calls.clear()
+                rows = self.measure()["rows"]
+                self.assertIn("median 15 min (2 PR/issue pairs", rows["merge_to_close"]["value"])
+                self.assertIn("opened 2/day, merged 1.5/day", rows["released_flow"]["value"])
+                details = [args for args in self.calls if args[1] == "graphql"]
+                # Recently opened unmerged #12 is eligible only for flow. The
+                # unlabeled #13 and old #15 must not cause detail reads.
+                self.assertEqual(len(details), 4)
+                self.assertEqual(
+                    {arg for args in details for arg in args if arg.startswith("number=")},
+                    {"number=10", "number=11", "number=12", "number=14"},
+                )
+
+        # Same-number links in another repository never become local issue joins.
+        refs["closingIssuesReferences"]["nodes"] = [
+            {"number": 1, "repository": {"nameWithOwner": "stranske/Workflows"}},
+            {"number": 99, "repository": {"nameWithOwner": "other/Orchestrator"}},
+        ]
+        self.calls.clear()
+        rows = self.measure()["rows"]
+        self.assertIn("median 20 min (1 PR/issue pairs", rows["merge_to_close"]["value"])
+        self.assertIn("opened 1.5/day, merged 1/day", rows["released_flow"]["value"])
+        self.assertFalse(any(args[1].endswith(("/issues/1", "/issues/99")) for args in self.calls))
+
+        # Deduplicate structured links and combine them with body and branch
+        # sources. Flow counts each PR once; latency counts each distinct pair.
+        pr["body"] = "Closes #1\nCloses #2\nCloses #2"
+        pr["head"] = {"ref": "codex/issue-3"}
+        refs["closingIssuesReferences"]["nodes"] = [
+            {"number": n, "repository": {"nameWithOwner": "stranske/Orchestrator"}}
+            for n in (1, 1, 2)
+        ]
+        self.calls.clear()
+        rows = self.measure()["rows"]
+        self.assertIn("median 20 min (3 PR/issue pairs", rows["merge_to_close"]["value"])
+        self.assertIn("opened 2/day, merged 1.5/day", rows["released_flow"]["value"])
+        for number in (1, 2, 3, 4):
+            self.assertEqual(sum(args[1].endswith(f"/issues/{number}") for args in self.calls), 1)
 
     def test_closure_before_merge_does_not_produce_negative_latency(self):
         self.data["issues"]["1"]["closed_at"] = "2026-11-03T00:00:00Z"
