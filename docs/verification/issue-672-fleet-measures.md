@@ -1,5 +1,52 @@
 # Fleet delivery measures — runner checks
 
+## Timeout receipt correction — 2026-11-06 04:02Z
+
+Reconciled the recent commits through `01a3f74`: attribution and its regression
+tests are implemented, but the checked target-machine task and pytest-mode
+all-reader mutation criterion lack supporting receipts. Both should be unchecked
+in every PR checklist copy. No additional task is complete. Updating PR #1187's
+body, posting the blocker comment, and adding `needs-human` were rejected with
+`MCP tool call requires approval, but approval policy is never`.
+
+Reproduced a command-recorder defect with a real child that handles SIGTERM and
+exits zero: the old recorder returned exit code zero, no signal, and no error
+despite its timeout firing. The recorder now saves `timed_out` independently of
+the exit status and rejects any timed-out command in its aggregate result.
+An unfinished check retains `timed_out: null`. Regression tests cover aggregate
+failure, continued independent checks, ordinary subprocess completion, signal
+termination, and a handled timeout. Windows uses unconditional termination;
+the handled-zero-exit assertions run on platforms that support that handler.
+
+Validation: all 33 JavaScript verifier tests pass, including real all-reader
+unittest mutation/restoration controls; all 27 fleet unittest tests pass using
+the repository-standard selector with `ORCH_STANDARD_PYTHON` explicitly set to
+`/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3`. JavaScript syntax checks
+and `git diff --check` pass. No Python files changed; the Python-only Black gate
+does not apply. Pytest/Black installation was attempted but packages remain
+unavailable in this runner.
+
+```sh
+PYTHON=/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3 node scripts/record_fleet_delivery_checks.js /tmp/issue-1186-timeout-receipts-20261106 --timeout-ms 55000
+```
+
+The [command receipt](issue-672-timeout-receipts-20261106/commands.json) records
+`2026-11-06T04:01:11.473Z` through `04:02:08.644Z`, Python 3.14.10 on
+Linux/x86_64, and unchanged named sources. Pytest and pytest-mode mutation exit
+1 because pytest is absent, with `timed_out: false`. Full verification reaches
+the explicit 55-second diagnostic limit with SIGTERM and `timed_out: true`;
+it produces no verdict. Live verification exits zero with `timed_out: false`.
+Its [live receipt](issue-672-timeout-receipts-20261106/live/check.json) validates
+all five current rows with explicit unmeasured reasons. Original command output
+is preserved in [logs.json](issue-672-timeout-receipts-20261106/logs.json).
+These are hosted-runner receipts; target-machine acceptance remains unverified.
+
+The checkout's Git metadata is read-only. The source commit is preserved using
+writable metadata in `/tmp/issue-1186-timeout-handoff/repo/.git`, with a handoff
+bundle at `/tmp/issue-1186-timeout-handoff/timeout-fix.bundle`. A corrected PR
+body is saved at `/tmp/issue-1186-timeout-handoff/pr-body.md` for application by
+an authorized caller.
+
 ## Recorder state overrides — 2026-11-06 03:48Z
 
 Reviewed the eight recent keepalive commits through `f23d53d`. The attribution

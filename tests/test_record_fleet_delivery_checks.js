@@ -15,7 +15,7 @@ function fixture(t) {
 
 const python = path.resolve('/selected/python3.14');
 const runtime = { executable: python, version: [3, 14, 10], platform: 'linux', architecture: 'x86_64' };
-const zero = { exit_code: 0, signal: null, error_code: null };
+const zero = { exit_code: 0, signal: null, error_code: null, timed_out: false };
 
 test('records all four exact commands, selected runtime, logs and isolated environment', async (t) => {
   const { output } = fixture(t);
@@ -188,6 +188,21 @@ test('source changes are recorded even if every command exits zero', async (t) =
   assert.deepEqual(receipt.source_sha256_after, { source: 'after' });
 });
 
+test('a timed-out command cannot pass by handling termination and exiting zero', async (t) => {
+  const { output } = fixture(t);
+  let calls = 0;
+  const receipt = await recordChecks(output, {
+    python, probe: async () => runtime,
+    run: async () => ({ ...zero, timed_out: ++calls === 3 }),
+  });
+  assert.equal(receipt.checks[2].exit_code, 0);
+  assert.equal(receipt.checks[2].timed_out, true);
+  assert.equal(receipt.commands_exited_zero, false);
+  assert.equal(receipt.checks[3].exit_code, 0, 'later independent evidence still runs');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(output, 'commands.json')))
+    .commands_exited_zero, false);
+});
+
 test('real subprocess output, nonzero exit, missing command and timeout are recorded', async (t) => {
   const { root } = fixture(t);
   let index = 0;
@@ -207,4 +222,14 @@ test('real subprocess output, nonzero exit, missing command and timeout are reco
   const timedOut = await run(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], 100);
   assert.notEqual(timedOut.signal, null);
   assert.notEqual(timedOut.exit_code, 0);
+  assert.equal(timedOut.timed_out, true);
+  const handledTimeout = await run(process.execPath, ['-e',
+    'process.on("SIGTERM", () => process.exit(0)); setInterval(() => {}, 1000)'], 1000);
+  // Windows terminates the child unconditionally instead of invoking this handler.
+  if (process.platform !== 'win32') {
+    assert.equal(handledTimeout.exit_code, 0);
+    assert.equal(handledTimeout.signal, null);
+  }
+  assert.equal(handledTimeout.timed_out, true,
+    'a handled timeout must remain distinguishable from normal completion');
 });

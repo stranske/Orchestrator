@@ -30,7 +30,10 @@ function execute(command, args, { cwd, env, timeout, stdoutPath, stderrPath }) {
     child.on('close', (code, signal) => {
       fs.closeSync(stdout);
       fs.closeSync(stderr);
-      resolve({ exit_code: code, signal, error_code: errorCode });
+      // spawn's timeout sends a signal, but a child may handle it and exit zero.
+      // This function never sends any other signal, so killed identifies timeout
+      // delivery even when close reports a normal exit without a signal.
+      resolve({ exit_code: code, signal, error_code: errorCode, timed_out: child.killed });
     });
   });
 }
@@ -102,7 +105,7 @@ async function recordChecks(outputDir, {
   for (const [name, command, args] of commands) {
     const check = {
       name, command: [command, ...args], started_at: now(), finished_at: null,
-      timeout_ms: timeout, exit_code: null, signal: null, error_code: null,
+      timeout_ms: timeout, exit_code: null, signal: null, error_code: null, timed_out: null,
       stdout: `${name}.stdout.log`, stderr: `${name}.stderr.log`,
     };
     receipt.checks.push(check);
@@ -118,7 +121,7 @@ async function recordChecks(outputDir, {
   receipt.source_unchanged = JSON.stringify(receipt.source_sha256_before)
     === JSON.stringify(receipt.source_sha256_after);
   receipt.commands_exited_zero = receipt.checks.every((check) => check.exit_code === 0
-    && check.signal === null && check.error_code === null);
+    && check.signal === null && check.error_code === null && check.timed_out === false);
   receipt.finished_at = now();
   save();
   return receipt;
