@@ -138,6 +138,10 @@ IDENTITY_ARTIFACT_FIELDS = {
     "operation_role",
     "source_clean",
     "exit_code",
+    # Optional. Absent usage is unmeasured. A present count is kept; it is never
+    # filled with zero, which the cost record would treat as free.
+    "tokens_in",
+    "tokens_out",
 }
 
 
@@ -485,6 +489,27 @@ def preflight(
     }
 
 
+_RUNNER_LAUNCH_ORDINALS = {1, 2, 3}
+
+
+def _runner_launch_ordinal(manifest: dict[str, Any], request: dict[str, Any]) -> int:
+    """Ordinal the pinned read-only Workflows runner will accept.
+
+    ``reusable-model-profile-trial.yml`` rejects every ``launch_ordinal`` outside
+    1..3 and copies that value into the artifact name. A one-instance arm's
+    global position is already in that domain. A repeated-instance plan numbers
+    global positions through ``profiles × instances`` (6 for the two-by-three
+    trial), so positions 4..6 cannot be dispatched. Those plans send the
+    per-profile instance index, which is 1..3, and keep the global position on
+    ``plan_launch_ordinal``.
+    """
+    repeated = int(manifest.get("instances_per_profile") or 1) > 1
+    ordinal = request.get("instance_ordinal") if repeated else request.get("launch_ordinal")
+    if type(ordinal) is not int or ordinal not in _RUNNER_LAUNCH_ORDINALS:
+        raise ValueError("runner launch ordinal is outside the pinned workflow domain")
+    return ordinal
+
+
 def build_request_envelope(
     manifest: dict[str, Any],
     *,
@@ -498,11 +523,13 @@ def build_request_envelope(
         trial_root, [Path(row["root"]) for row in manifest["source_before"].values()]
     )
     requests = []
+    repeated = int(manifest.get("instances_per_profile") or 1) > 1
     for request in sorted(manifest["requests"], key=lambda row: row["launch_ordinal"]):
+        runner_ordinal = _runner_launch_ordinal(manifest, request)
         body = {
             "run_id": request["run_id"],
             "profile_id": request["profile_id"],
-            "launch_ordinal": request["launch_ordinal"],
+            "launch_ordinal": runner_ordinal,
             "provider": request["provider"],
             "requested_model": request["requested_model"],
             "reasoning_effort": request["reasoning_effort"],
@@ -516,11 +543,13 @@ def build_request_envelope(
             "runner_ref": preflight_result.get("remote_runner_ref") or RUNNER_VERSION,
             "artifact_dir": str(
                 trial_root / request["profile_id"]
-                if manifest.get("instances_per_profile", 1) == 1
-                else trial_root / request["profile_id"] / f"launch-{request['launch_ordinal']}"
+                if not repeated
+                else trial_root / request["profile_id"] / f"launch-{runner_ordinal}"
             ),
             "expected_result_fields": sorted(TRANSPORT_ATTEMPT_FIELDS),
         }
+        if repeated:
+            body["plan_launch_ordinal"] = request["launch_ordinal"]
         body["request_hash"] = _hash(body)
         body["request_id"] = "trial-request:" + body["request_hash"].split(":", 1)[1][:24]
         requests.append(body)
@@ -578,6 +607,14 @@ def validate_envelope(envelope: dict[str, Any], manifest: dict[str, Any]) -> Non
             raise ValueError("trial bridge request is not replayable")
         if row.get("requested_model") != request["requested_model"]:
             raise ValueError("trial bridge request model drifted")
+        repeated = int(manifest.get("instances_per_profile") or 1) > 1
+        if repeated:
+            if row.get("plan_launch_ordinal") != request["launch_ordinal"]:
+                raise ValueError("trial bridge plan launch ordinal drifted")
+            if row.get("launch_ordinal") != request.get("instance_ordinal"):
+                raise ValueError("trial bridge runner launch ordinal drifted")
+        elif row.get("launch_ordinal") != request["launch_ordinal"]:
+            raise ValueError("trial bridge launch ordinal drifted")
 
 
 def _identity_artifact(
@@ -797,6 +834,8 @@ def collect_remote_attempt(
     artifact_path.parent.mkdir(parents=True, exist_ok=True)
     artifact_path.write_bytes(raw)
     attempt = {key: artifact.get(key) for key in TRANSPORT_ATTEMPT_FIELDS if key in artifact}
+    # Keep a usage count only when the artifact actually carried one. Filling a
+    # missing count with zero would make an unmeasured arm look free.
     attempt.update(
         {
             "operation_role": "worker",
@@ -807,8 +846,6 @@ def collect_remote_attempt(
             "github_artifact_id": artifact_id,
             "github_artifact_digest": archive_digest,
             "latency_s": 0.0,
-            "tokens_in": 0,
-            "tokens_out": 0,
         }
     )
     return attempt
@@ -823,7 +860,13 @@ def collect_remote_results(
 ) -> dict[str, Any]:
     model_profile_trial.validate_trial_manifest(manifest)
     validate_envelope(envelope, manifest)
-    requests = sorted(envelope["requests"], key=lambda row: row["launch_ordinal"])
+    requests = sorted(
+        envelope["requests"],
+        key=lambda row: (
+            int(row.get("plan_launch_ordinal") or row["launch_ordinal"]),
+            str(row.get("run_id") or ""),
+        ),
+    )
     if len(run_ids) != len(requests) or len(set(run_ids)) != len(run_ids):
         raise ValueError("remote trial collection requires one distinct serial run ID per instance")
     attempts = [
@@ -845,6 +888,20 @@ def collect_remote_results(
         "acknowledged": True,
         "attempts": attempts,
     }
+
+
+def _usage_count(attempt: dict[str, Any], field: str) -> int | None:
+    """Return one token count, or None when the transport did not measure it.
+
+    An explicit zero stays zero. A missing or null count stays unmeasured, and a
+    bool or other non-integer is rejected rather than coerced.
+    """
+    if field not in attempt or attempt[field] is None:
+        return None
+    value = attempt[field]
+    if type(value) is not int or value < 0:
+        raise ValueError(f"transport attempt {field} must be a nonnegative integer or null")
+    return value
 
 
 def _validate_transport_results(
@@ -959,7 +1016,29 @@ def _validate_transport_results(
                 raise ValueError(
                     f"transport GitHub artifact provenance missing:{request['profile_id']}"
                 )
-        _identity_artifact(manifest, envelope, request, attempt)
+        id_art = _identity_artifact(manifest, envelope, request, attempt)
+        for field in ("tokens_in", "tokens_out"):
+            if field not in id_art:
+                continue
+            bound = id_art[field]
+            if bound is None:
+                continue
+            if type(bound) is not int or bound < 0:
+                raise ValueError(
+                    f"transport identity artifact {field} is not a nonnegative integer:"
+                    f"{request['profile_id']}"
+                )
+            measured = _usage_count(attempt, field)
+            if measured != bound:
+                raise ValueError(
+                    f"transport {field} disagrees with identity artifact:{request['profile_id']}"
+                )
+        tokens_in = _usage_count(attempt, "tokens_in")
+        tokens_out = _usage_count(attempt, "tokens_out")
+        if "tokens_in" in id_art and id_art["tokens_in"] is not None:
+            tokens_in = id_art["tokens_in"]
+        if "tokens_out" in id_art and id_art["tokens_out"] is not None:
+            tokens_out = id_art["tokens_out"]
         sanitized_attempt = {
             "run_id": attempt["run_id"],
             "profile_id": attempt["profile_id"],
@@ -976,8 +1055,8 @@ def _validate_transport_results(
             "cli_version": str(attempt["cli_version"])[:160],
             "status": "success",
             "latency_s": float(attempt.get("latency_s") or 0.0),
-            "tokens_in": int(attempt.get("tokens_in") or 0),
-            "tokens_out": int(attempt.get("tokens_out") or 0),
+            "tokens_in": tokens_in,
+            "tokens_out": tokens_out,
             "artifact_ref": str(attempt["artifact_ref"])[:512],
             "packet_hash": manifest["packet_hash"],
             "acknowledged": True,

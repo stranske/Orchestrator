@@ -55,3 +55,74 @@ def test_profile_cost_reports_both_token_directions(tmp_path, monkeypatch):
 def test_missing_profile_cost_fields_remain_unknown(tmp_path, monkeypatch):
     write_summary(tmp_path, monkeypatch, {"cost_tokens_by_profile": {"p": {}}})
     assert "cost n/ain+n/aout" in switch_review.profile_trial_summary_line()
+
+
+def test_quality_and_cost_share_one_profile_order(tmp_path, monkeypatch):
+    write_summary(
+        tmp_path,
+        monkeypatch,
+        {
+            "profile_count": 2,
+            "instance_count": 6,
+            "identity_verified": True,
+            "quality_by_profile": {"b": 0.9},
+            "cost_tokens_by_profile": {
+                "a": {"tokens_in": 1, "tokens_out": 2},
+                "b": {"tokens_in": 3, "tokens_out": 4},
+            },
+        },
+    )
+    assert switch_review.profile_trial_summary_line() == (
+        "profile trial: profiles 2, instances 6, identity verified Y, "
+        "quality n/a/0.9, cost 1in+2out/3in+4out"
+    )
+
+
+def test_non_boolean_identity_does_not_count_as_verified(tmp_path, monkeypatch):
+    write_summary(
+        tmp_path,
+        monkeypatch,
+        {
+            "profile_count": 2,
+            "instance_count": 6,
+            "identity_verified": "Y",
+            "quality_by_profile": {"a": 0.8, "b": 0.9},
+            "cost_tokens_by_profile": {
+                "a": {"tokens_in": 12, "tokens_out": 7},
+                "b": {"tokens_in": 20, "tokens_out": 9},
+            },
+        },
+    )
+    assert "identity verified N" in switch_review.profile_trial_summary_line()
+
+
+def test_report_carries_the_profile_trial_line_once(tmp_path, monkeypatch):
+    write_summary(
+        tmp_path,
+        monkeypatch,
+        {
+            "profile_count": 2,
+            "instance_count": 6,
+            "identity_verified": False,
+            "quality_by_profile": {"a": 0.8, "b": 0.9},
+            "cost_tokens_by_profile": {
+                "b": {"tokens_in": 20, "tokens_out": 9},
+                "a": {"tokens_in": 12, "tokens_out": 7},
+            },
+        },
+    )
+    rendered = switch_review.format_report(
+        {
+            "review_days": 7,
+            "raise_count": 0,
+            "held_off": [],
+            "on_but_idle": [],
+            "unconditioned": [],
+            "mirror_drift": {"status": "ok"},
+        }
+    )
+    lines = [line for line in rendered.splitlines() if line.startswith("profile trial:")]
+    assert lines == [
+        "profile trial: profiles 2, instances 6, identity verified N, "
+        "quality 0.8/0.9, cost 12in+7out/20in+9out"
+    ]
