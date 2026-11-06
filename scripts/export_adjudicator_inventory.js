@@ -328,12 +328,33 @@ function journalInventory(journal, locationChecks) {
       ['raw_persisted', 'resume_native_validation_without_redispatch'],
       ['validated', 'reauthenticate_with_native_projection_before_grading'],
     ]);
-    const attempts = connection.prepare(
-      'SELECT attempt_id,case_id,material_revision,case_digest,state,backend_run_id,' +
+    const receiptQuery = 'SELECT attempt_id,case_id,material_revision,case_digest,state,backend_run_id,' +
       'report_sha256,created_at,updated_at,' +
       '(raw_response IS NOT NULL) AS raw_receipt_present,' +
       '(validated_json IS NOT NULL) AS validation_present,validated_json,raw_response FROM native_attempts ' +
-      'ORDER BY created_at,attempt_id').all().map((item, index) => {
+      'ORDER BY created_at,attempt_id';
+    const records = connection.prepare(receiptQuery).all();
+    const receiptDigest = (rows) => createHash('sha256').update(JSON.stringify(rows)).digest('hex');
+    const observedDigest = receiptDigest(records);
+    // Reopen for each final check: the initial transaction cannot see later
+    // WAL commits, and inode equality cannot pin receipt content. Compare full
+    // records, including private raw/validation bytes, without emitting them.
+    locationChecks.push(() => {
+      let fresh;
+      try {
+        fresh = new DatabaseSync(journal, { readOnly: true });
+        fresh.exec('BEGIN');
+        if (fresh.prepare('PRAGMA application_id').get().application_id !== 1313097550 ||
+            receiptDigest(fresh.prepare(receiptQuery).all()) !== observedDigest) {
+          throw new Error('changed receipts');
+        }
+      } catch {
+        throw new Error('native journal receipts changed during inventory');
+      } finally {
+        if (fresh) fresh.close();
+      }
+    });
+    const attempts = records.map((item, index) => {
       const { validated_json, raw_response, ...locator } = item;
       const validation = nativeValidationObservation(validated_json,
         `pre_dispatch.native_journal.attempts[${index}].validated_json`, item);

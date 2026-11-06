@@ -398,3 +398,36 @@ decision is claimed; no operational checkbox is completed. Staging fails on
 the read-only Git metadata. The changes are preserved using an isolated local
 Git repository and `/tmp/orchestrator-1072-retained-journal.bundle`; no push
 was made.
+
+## Receipts committed during retained-report inventory
+
+Checked on 2026-11-06 against checkout
+`deda6f578937855a1c6dfc2e75dced68e74cd172` plus this change. The retained-report
+inventory now reopens the journal during its final checks and compares a digest
+of the full retained records. A same-inode WAL commit can no longer leave stale
+paid identities or receipt observations in the inventory. Raw and validation
+bytes participate in the comparison without appearing in the output.
+
+Four new regressions commit a backend identity, replaced raw receipt, changed
+validation bytes or new reservation after the initial receipt read. All four
+fail before the fix and pass afterward. The control accepts uncommitted changes
+and commits that leave the retained records unchanged. Stable later observations
+preserve paid history, unresolved attempts and the unauthenticated receipt
+boundary; report, database and committed WAL bytes remain unchanged by inventory.
+
+Validation: all 149 tests across the retained-report, native inventory and fixed
+live-cohort JavaScript suites pass, as do 32 diagnostic and seven replay/publication
+unittests. The pre-change inventory baseline passes all 122 tests. JavaScript
+syntax and `git diff --check` pass. No Python files changed. The required
+`python3 -m pytest tests/test_adjudicator_retro.py -m 'not slow' -q` check cannot
+start because pytest is absent.
+
+These are fixture results. The configured canonical report, runtime, independent
+outcomes database and default mirror remain absent. Authentic original/journal
+locations and live reader bindings remain unavailable. No production pin,
+dispatch, canonical refresh, historical proof or next-20 decision is claimed;
+no operational checkbox is completed. Staging fails on the read-only Git metadata.
+The change is preserved in an isolated local commit and
+`/tmp/orchestrator-1072-receipt-race/change.bundle`; no push was made.
+Automatic approval review rejected the `needs-human` label and blocker comment
+because the GitHub writes require approval and this run's policy is `never`.

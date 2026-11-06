@@ -1333,6 +1333,100 @@ function nativeJournal(t) {
   return { ...fixture, journal, options: { ...fixture.options, journal } };
 }
 
+for (const change of ['backend identity', 'raw receipt', 'validation bytes', 'new reservation']) {
+  test(`report inventory rejects committed ${change} during its final report read`, (t) => {
+    const { journal, options } = nativeJournal(t);
+    const writer = new DatabaseSync(journal);
+    t.after(() => writer.close());
+    writer.exec('PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0');
+    const mainBytes = fs.readFileSync(journal);
+    const reportBytes = fs.readFileSync(options.report);
+    const inode = fs.statSync(journal, { bigint: true }).ino;
+    const read = fs.readFileSync;
+    let observations = 0;
+    let committedWal;
+    fs.readFileSync = function observed(file, ...args) {
+      const data = read(file, ...args);
+      if (file === options.report && ++observations === 2) {
+        if (change === 'backend identity') {
+          writer.exec("UPDATE native_attempts SET state='in_flight',backend_run_id='new-paid' WHERE attempt_id='a'");
+        } else if (change === 'raw receipt') {
+          writer.exec("UPDATE native_attempts SET raw_response='private replaced receipt' WHERE attempt_id='d'");
+        } else if (change === 'validation bytes') {
+          // JSON meaning is unchanged; exact retained receipt bytes differ.
+          writer.exec("UPDATE native_attempts SET validated_json=validated_json || ' ' WHERE attempt_id='e'");
+        } else {
+          writer.exec("INSERT INTO native_attempts SELECT 'g',case_id,'new-revision',case_digest,'reserved',NULL,report_sha256,created_at,updated_at,NULL,NULL FROM native_attempts WHERE attempt_id='a'");
+        }
+        committedWal = read(`${journal}-wal`);
+      }
+      return data;
+    };
+    try {
+      assert.throws(() => reportInventory(options), /native journal receipts changed during inventory/);
+    } finally {
+      fs.readFileSync = read;
+    }
+    assert.equal(observations, 2, 'commit follows the initial receipt read');
+    assert.equal(fs.statSync(journal, { bigint: true }).ino, inode);
+    assert.deepEqual(fs.readFileSync(journal), mainBytes, 'commit is WAL-resident');
+    assert.deepEqual(fs.readFileSync(`${journal}-wal`), committedWal);
+    const later = reportInventory(options);
+    const attempts = later.pre_dispatch.native_journal.attempts;
+    if (change === 'backend identity') {
+      assert.equal(attempts.find((row) => row.attempt_id === 'a').backend_run_id, 'new-paid');
+      assert.ok(later.pre_dispatch.paid_identity_reconciliation.journal_only.includes('new-paid'));
+    } else if (change === 'raw receipt') {
+      assert.ok(attempts.find((row) => row.attempt_id === 'd').raw_receipt_present);
+    } else if (change === 'validation bytes') {
+      const text = writer.prepare("SELECT validated_json FROM native_attempts WHERE attempt_id='e'").get().validated_json;
+      assert.equal(attempts.find((row) => row.attempt_id === 'e')
+        .validation_observation.stored_text_sha256,
+      createHash('sha256').update(text).digest('hex'));
+    } else {
+      assert.equal(attempts.find((row) => row.attempt_id === 'g').state, 'reserved');
+    }
+    assert.equal(later.paid_identity_summary.records, 4);
+    assert.equal(later.receipt_authority, 'not_authenticated_by_inventory');
+    assert.equal(later.dispatch_authorized, false);
+    assert.ok(!JSON.stringify(later).includes('private'));
+    assert.deepEqual(fs.readFileSync(options.report), reportBytes);
+    assert.deepEqual(fs.readFileSync(journal), mainBytes);
+    assert.deepEqual(fs.readFileSync(`${journal}-wal`), committedWal);
+  });
+}
+
+test('report inventory ignores uncommitted receipt changes and no-op commits', (t) => {
+  const { journal, options } = nativeJournal(t);
+  const writer = new DatabaseSync(journal);
+  t.after(() => writer.close());
+  writer.exec('PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0');
+  const expected = reportInventory(options);
+  for (const committed of [false, true]) {
+    const read = fs.readFileSync;
+    let observations = 0;
+    fs.readFileSync = function observed(file, ...args) {
+      const data = read(file, ...args);
+      if (file === options.report && ++observations === 2) {
+        writer.exec('BEGIN');
+        writer.exec("UPDATE native_attempts SET backend_run_id='private uncommitted' WHERE attempt_id='a'");
+        if (committed) {
+          writer.exec("UPDATE native_attempts SET backend_run_id=NULL WHERE attempt_id='a'");
+          writer.exec('COMMIT');
+        }
+      }
+      return data;
+    };
+    try {
+      assert.deepEqual(reportInventory(options), expected);
+    } finally {
+      fs.readFileSync = read;
+      if (!committed) writer.exec('ROLLBACK');
+    }
+    assert.equal(observations, 2);
+  }
+});
+
 for (const change of ['atomic replacement', 'symlink retarget', 'removal']) {
   test(`report inventory rejects journal ${change} after reading native receipts`, (t) => {
     const { journal, options } = nativeJournal(t);
