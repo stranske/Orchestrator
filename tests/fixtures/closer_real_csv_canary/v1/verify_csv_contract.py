@@ -19,8 +19,12 @@ publication proof for this head. The same rule applies to the owned delivery
 head: a keepalive receipt that started earlier and only observed that head is
 not a worker completion of it and is not closer publication proof. A reduced
 publication comment is not the stored producer record. Custody JSON is read
-when that record's schema sits inside the object. The command does not change
-the default contract exit.
+when that record's schema sits inside the object. The chain report records
+the current head and published merge SHA of PRs 1168 and 989. An open pull
+request's REST merge_commit_sha is a test merge, not a published merge. A
+prior unmerged report that disagrees with a merged native state is stale.
+Recording that reconciliation does not change either head. The command does
+not change the default contract exit.
 """
 
 from __future__ import annotations
@@ -163,6 +167,42 @@ _PARTIAL_MERGE = "d1947b5b4775c2e6a07bb46b3f85eb2e28c1b001"
 _PARTIAL_PR = "984"
 _CORRECTIVE_PR = "1168"
 _OWNED_DELIVERY_PR = "989"
+# Native readback taken 2026-11-06. PR 1168 is squash-merged and its head ref
+# stays 01e86ae7. PR 989 is open: REST merge_commit_sha is a test merge of that
+# head, while the published merge is absent. This table does not move either head.
+_RECORDED_NATIVE_PR_STATE = {
+    "1168": {
+        "head_sha": "01e86ae7e4ef0e6a06193c916c8c780ca5cab052",
+        "published_merge_sha": "a30b34ada04a30d04360867e14097a8c5b6d731c",
+        "merged": True,
+    },
+    "989": {
+        "head_sha": "85adde2614db7118d6e6d28dd11e5bc4c7611319",
+        "published_merge_sha": "",
+        "merged": False,
+        "rest_test_merge_sha": "771b5525cb6d370159cb292dda5611ee556c4449",
+    },
+}
+# The issue prose says PR 1168 merged. Its verifier excerpt still says unmerged
+# and names an older open test-merge SHA. The excerpt also names an older head
+# of the still-unmerged owned delivery PR.
+_CONTRADICTORY_MERGE_REPORTS = {
+    "1168": (
+        {"source": "issue-1184-why", "merged": True},
+        {
+            "source": "issue-1184-verifier-excerpt",
+            "merged": False,
+            "test_merge_sha": "01fffa725ecdda58189821059d1243ea1c003b12",
+        },
+    ),
+    "989": (
+        {
+            "source": "issue-1184-verifier-excerpt",
+            "merged": False,
+            "head_sha": "926a7a20087f8b2e47d08c4f4ba747944aa78b9b",
+        },
+    ),
+}
 _CHAIN_ISSUES = (983, 988)
 _CHAIN_PRS = (984, 989, 1166, 1168)
 _CHAIN_BRANCHES = (
@@ -358,6 +398,145 @@ def _published_merge_sha(record, corrective_sha):
     ):
         return merge_sha
     return ""
+
+
+def _native_pr_readback(record):
+    """Head plus published merge. An unmerged REST merge_commit_sha is a test merge."""
+    head = record.get("head_sha") or ""
+    if not _sha40(head):
+        head = ""
+    merged = record.get("merged") is True
+    candidate = record.get("merge_sha") or ""
+    if not _sha40(candidate):
+        candidate = ""
+    return {
+        "pr": str(record.get("name") or ""),
+        "head_sha": head,
+        "published_merge_sha": candidate if merged else "",
+        "test_merge_sha": "" if merged else candidate,
+        "merged": merged,
+    }
+
+
+def _recorded_readback(number):
+    recorded = _RECORDED_NATIVE_PR_STATE[number]
+    return {
+        "pr": number,
+        "head_sha": recorded["head_sha"],
+        "published_merge_sha": recorded["published_merge_sha"],
+        "test_merge_sha": recorded.get("rest_test_merge_sha", ""),
+        "merged": recorded["merged"] is True,
+    }
+
+
+def _readback_line(readback):
+    published = readback["published_merge_sha"] or "none"
+    merged = "yes" if readback["merged"] else "no"
+    line = (
+        "native_pr_readback: pr="
+        + readback["pr"]
+        + " head="
+        + (readback["head_sha"] or "missing")
+        + " published_merge="
+        + published
+        + " merged="
+        + merged
+    )
+    if readback["test_merge_sha"]:
+        line += " test_merge=" + readback["test_merge_sha"]
+    return line
+
+
+def _contradictory_report_label(number, native):
+    reports = _CONTRADICTORY_MERGE_REPORTS.get(number, ())
+    labels = []
+    if any(item.get("merged") for item in reports):
+        labels.append("merged")
+    if any(not item.get("merged") for item in reports):
+        labels.append("unmerged")
+    if native["test_merge_sha"]:
+        labels.append("rest_test_merge")
+    return "+".join(labels)
+
+
+def _reconciliation_line(number):
+    """Adopt the recorded native merge. Leave both heads where GitHub has them."""
+    native = _recorded_readback(number)
+    reports = _CONTRADICTORY_MERGE_REPORTS[number]
+    parts = [
+        "native_pr_reconciliation: pr=" + number,
+        "contradictory_reports=" + _contradictory_report_label(number, native),
+        "adopted=" + ("merged" if native["merged"] else "unmerged"),
+        "head=" + native["head_sha"],
+        "published_merge=" + (native["published_merge_sha"] or "none"),
+        "head_unchanged=yes",
+    ]
+    stale = [item for item in reports if item.get("merged") is False and native["merged"]]
+    if stale:
+        parts.append("stale_unmerged_report=yes")
+        superseded = [item.get("test_merge_sha") for item in stale if item.get("test_merge_sha")]
+        if superseded:
+            parts.append("superseded_test_merge=" + superseded[0])
+            parts.append("superseded_test_merge_is_published=no")
+    prior = [
+        item.get("head_sha")
+        for item in reports
+        if item.get("head_sha") and item["head_sha"] != native["head_sha"]
+    ]
+    if prior:
+        parts.append("prior_head=" + prior[0])
+        parts.append("prior_head_not_current=yes")
+    if native["test_merge_sha"]:
+        parts.append("rest_test_merge=" + native["test_merge_sha"])
+        parts.append("rest_test_merge_is_published=no")
+    return " ".join(parts)
+
+
+def _recorded_state_comparison(readback):
+    recorded = _RECORDED_NATIVE_PR_STATE.get(readback["pr"])
+    if recorded is None:
+        return []
+    expected = _recorded_readback(readback["pr"])
+    same = (
+        readback["head_sha"] == expected["head_sha"]
+        and readback["merged"] is expected["merged"]
+        and readback["published_merge_sha"] == expected["published_merge_sha"]
+        and readback["test_merge_sha"] == expected["test_merge_sha"]
+    )
+    if same:
+        return [_reconciliation_line(readback["pr"])]
+    return [
+        "native_pr_record_drift: pr="
+        + readback["pr"]
+        + " recorded_head="
+        + expected["head_sha"]
+        + " live_head="
+        + (readback["head_sha"] or "missing")
+        + " recorded_published_merge="
+        + (expected["published_merge_sha"] or "none")
+        + " live_published_merge="
+        + (readback["published_merge_sha"] or "none")
+        + " head_not_modified=yes"
+    ]
+
+
+def _native_pr_readback_lines(record):
+    if not record or "merged" not in record:
+        return []
+    readback = _native_pr_readback(record)
+    return [_readback_line(readback), *_recorded_state_comparison(readback)]
+
+
+def _recorded_native_pr_reconciliation():
+    """Replay the recorded readback. The recorded heads are not rewritten."""
+    lines = []
+    prs = {}
+    for number in (_CORRECTIVE_PR, _OWNED_DELIVERY_PR):
+        readback = _recorded_readback(number)
+        prs[number] = readback
+        lines.append(_readback_line(readback))
+        lines.append(_reconciliation_line(number))
+    return {"lines": lines, "prs": prs}
 
 
 def _merge_bound_corpus(corpus, corrective_pr, corrective_sha):
@@ -1100,6 +1279,7 @@ def _format_report(assessment, corrective_sha, local_head, verifier_runs=(), ear
                 + _CORRECTIVE_PR
                 + " is unmerged; Agents Verifier refuses an unmerged pull request"
             )
+        lines.extend(_native_pr_readback_lines(corrective_pr))
     if corrective_pr:
         labels = [str(label) for label in (corrective_pr.get("labels") or [])]
         verify_labels = [label for label in _VERIFY_LABELS if label in labels]
@@ -1117,6 +1297,7 @@ def _format_report(assessment, corrective_sha, local_head, verifier_runs=(), ear
         lines.append(
             "owned_delivery_pr: " + f"{_OWNED_DELIVERY_PR} head={owned_head} merged={merged}"
         )
+        lines.extend(_native_pr_readback_lines(owned))
         if owned_head == corrective_sha:
             lines.append(
                 "owned_delivery_publication: same head as corrective pr; not separate proof"
@@ -2814,6 +2995,80 @@ def _self_check():
         raise AssertionError("a verifier run was treated as a decision")
     if "corrective_pr_merged: yes merge_sha=" + merge_only not in run_text:
         raise AssertionError("merged corrective PR was not reported")
+    if (
+        "native_pr_readback: pr=1168 head="
+        + corrective
+        + " published_merge=none merged=no test_merge="
+        + prospective
+        not in open_text
+    ):
+        raise AssertionError("open native readback omitted the test merge")
+    if "head_not_modified=yes" not in open_text:
+        raise AssertionError("open readback comparison modified a head")
+    if (
+        "native_pr_readback: pr=1168 head="
+        + corrective
+        + " published_merge="
+        + ("e" * 40)
+        + " merged=yes"
+        not in complete_text
+    ):
+        raise AssertionError("merged native readback omitted the published merge")
+    if "published_merge=" + ("e" * 40) not in complete_text:
+        raise AssertionError("synthetic published merge was dropped")
+    before_record = json.dumps(_RECORDED_NATIVE_PR_STATE, sort_keys=True)
+    recorded = _recorded_native_pr_reconciliation()
+    if json.dumps(_RECORDED_NATIVE_PR_STATE, sort_keys=True) != before_record:
+        raise AssertionError("native reconciliation changed a recorded head")
+    recorded_text = "\n".join(recorded["lines"])
+    corrective_head = "01e86ae7e4ef0e6a06193c916c8c780ca5cab052"
+    corrective_merge = "a30b34ada04a30d04360867e14097a8c5b6d731c"
+    owned_live_head = "85adde2614db7118d6e6d28dd11e5bc4c7611319"
+    owned_test_merge = "771b5525cb6d370159cb292dda5611ee556c4449"
+    stale_test_merge = "01fffa725ecdda58189821059d1243ea1c003b12"
+    prior_owned_head = "926a7a20087f8b2e47d08c4f4ba747944aa78b9b"
+    if (
+        "native_pr_readback: pr=1168 head="
+        + corrective_head
+        + " published_merge="
+        + corrective_merge
+        + " merged=yes"
+        not in recorded_text
+    ):
+        raise AssertionError("recorded corrective head and published merge were not kept")
+    if (
+        "native_pr_readback: pr=989 head="
+        + owned_live_head
+        + " published_merge=none merged=no test_merge="
+        + owned_test_merge
+        not in recorded_text
+    ):
+        raise AssertionError("recorded owned delivery published merge was not none")
+    if "contradictory_reports=merged+unmerged" not in recorded_text:
+        raise AssertionError("merged and unmerged reports were not both retained")
+    if "adopted=merged" not in recorded_text or "stale_unmerged_report=yes" not in recorded_text:
+        raise AssertionError("stale unmerged report was adopted over the published merge")
+    if "superseded_test_merge=" + stale_test_merge not in recorded_text:
+        raise AssertionError("stale open test-merge sha was not named")
+    if "superseded_test_merge_is_published=no" not in recorded_text:
+        raise AssertionError("stale test merge was treated as published")
+    if "published_merge=" + stale_test_merge in recorded_text:
+        raise AssertionError("stale test merge was adopted as the published merge")
+    if (
+        "prior_head=" + prior_owned_head not in recorded_text
+        or "prior_head_not_current=yes" not in recorded_text
+    ):
+        raise AssertionError("older owned delivery head was treated as current")
+    if "rest_test_merge_is_published=no" not in recorded_text:
+        raise AssertionError("open REST merge_commit_sha was recorded as published")
+    if recorded_text.count("head_unchanged=yes") != 2:
+        raise AssertionError("reconciliation did not keep both heads unchanged")
+    if recorded["prs"]["1168"]["head_sha"] != corrective_head:
+        raise AssertionError("reconciliation replaced the corrective head")
+    if recorded["prs"]["989"]["head_sha"] != owned_live_head:
+        raise AssertionError("reconciliation replaced the owned delivery head")
+    if recorded["prs"]["989"]["published_merge_sha"]:
+        raise AssertionError("unmerged delivery gained a published merge")
     if "verify_label_on_corrective_pr: verify:evaluate" not in run_text:
         raise AssertionError("verify label was not reported")
     if "native_verify_for_corrective_head: PRESENT" in run_text:
