@@ -1,0 +1,1676 @@
+From c80d78d65510c4022a8dde9a7961d1d71f492b6a Mon Sep 17 00:00:00 2001
+From: Codex <codex@users.noreply.github.com>
+Date: Wed, 4 Nov 2026 05:09:06 +0000
+Subject: [PATCH 1/2] fix(adjudicator): explain retained native retry admission
+ refusals
+
+---
+ .../native-admission-followup/plan.md         | 31 +++++++
+ scripts/export_adjudicator_inventory.js       | 20 ++++-
+ tests/test_adjudicator_inventory.js           | 85 +++++++++++++++++++
+ 3 files changed, 134 insertions(+), 2 deletions(-)
+ create mode 100644 docs/verification/issue-1096-recovery/native-admission-followup/plan.md
+
+diff --git a/docs/verification/issue-1096-recovery/native-admission-followup/plan.md b/docs/verification/issue-1096-recovery/native-admission-followup/plan.md
+new file mode 100644
+index 0000000..d626ba0
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/native-admission-followup/plan.md
+@@ -0,0 +1,31 @@
++# Native retry admission diagnostics
++
++Recorded 2026-11-04 UTC before implementation on checkout `5435e6a`.
++The first incomplete task remains original retry reconciliation. Existing evidence
++does not identify an authenticated original retry manifest or current native journal,
++and the current issue read supplies neither. No paid retry is eligible here.
++
++Classify exact current native admission refusal messages in retained error fields.
++Distinguish immutable report changes, collected-case identity, existing binary
++decisions and reserved revisions. A refusal describes a failed admission, not a
++new provider outcome or proof of no historical spend. Contradictory refusal and
++execution fields must remain unresolved. Later retry errors must not overwrite a
++parent's saved decision or borrow its paid receipt.
++
++Run the inventory suite before implementation. Add controls for exact messages,
++changed/contradictory messages and requested-row CLI recovery, and verify they
++fail before implementing the classifications. Rerun the inventory and related
++runner/ledger suites once after implementation; inspect output and input byte
++preservation. No Python source changes are planned.
++
++After committing source in writable Git storage, run once:
++
++```sh
++node scripts/run_adjudicator_acceptance.js --python /opt/hostedtoolcache/Python/3.14.9/x64/bin/python3 --revision FULL_SOURCE_COMMIT --output NEW_ABSOLUTE_DIRECTORY --timeout 60000
++```
++
++Expected acceptance result is four named tests and the full retrospective suite
++passing. The selected interpreter currently lacks pytest; retain failed commands
++without claiming acceptance. Bound each subprocess to 60 seconds and stop after
++this attempt. No production dispatch, publication, mirror write, replacement
++cohort or task completion follows from these diagnostics.
+diff --git a/scripts/export_adjudicator_inventory.js b/scripts/export_adjudicator_inventory.js
+index 3127e80..22918fc 100644
+--- a/scripts/export_adjudicator_inventory.js
++++ b/scripts/export_adjudicator_inventory.js
+@@ -62,12 +62,28 @@ const retainedLauncherRefusals = new Map([
+     'round_boundary_refused_dispatch'],
+ ]);
+ 
++// Exact pre-invocation refusals from adjudicator_retro.admit_collected_retry.
++// A refusal can coexist with prior paid history; it proves neither a new
++// invocation nor that the journal's recorded state has been authenticated.
++const nativeAdmissionRefusals = new Map([
++  ['original report changed before native projection', 'native_source_report_changed'],
++  ['native admission requires a freshly issued collected case', 'native_collected_case_required'],
++  ['collected capability does not bind the original case', 'native_original_case_binding_mismatch'],
++  ['native admission only resumes an original abstention', 'native_original_not_abstained'],
++  ['native case already has a validated binary decision', 'native_binary_decision_already_recorded'],
++  ...['reserved', 'in_flight', 'raw_persisted', 'validated', 'validated_binary'].map((state) =>
++    [`native revision already reserved: ${state}`, `native_revision_already_${state}`]),
++]);
++
+ function failureMessage(value) {
+   if (typeof value !== 'string') return null;
+   if (failureMessages.has(value)) return failureMessages.get(value);
+   if (retainedLauncherRefusals.has(value)) {
+     return ['dispatch_admission', retainedLauncherRefusals.get(value), 2.5, 'retained_launcher'];
+   }
++  if (nativeAdmissionRefusals.has(value)) {
++    return ['dispatch_admission', nativeAdmissionRefusals.get(value), 2.5];
++  }
+   // The roles emitter prefixes nonzero backend exits. Do not infer timeout,
+   // cost, invocation completion or provider failure details from the suffix.
+   const exit = /^backend exit=(-?\d+)(?: [^\r\n]*)?$/.exec(value);
+@@ -83,10 +99,10 @@ function firstRetainedBreak(fields, conflict = false) {
+   if (conflict || fields.some((item) => !item.classification)) {
+     return { status: 'unresolved', ...empty };
+   }
+-  const refusal = fields.find((item) => item.classification[3] === 'retained_launcher');
++  const refusal = fields.find((item) => item.classification[0] === 'dispatch_admission');
+   // A refusal alongside execution/validation errors (or a different refusal)
+   // does not establish which attempt those fields describe. Do not invent an
+-  // ordering between historical launcher fields and repository-emitted errors.
++  // ordering between separate admissions or admission and execution fields.
+   if (refusal && fields.some((item) =>
+     item.classification[1] !== refusal.classification[1])) {
+     return { status: 'unresolved', ...empty };
+diff --git a/tests/test_adjudicator_inventory.js b/tests/test_adjudicator_inventory.js
+index 0f52128..f17ce05 100644
+--- a/tests/test_adjudicator_inventory.js
++++ b/tests/test_adjudicator_inventory.js
+@@ -396,6 +396,91 @@ const retainedRefusals = [
+     'round_boundary_refused_dispatch'],
+ ];
+ 
++const nativeRefusals = [
++  ['original report changed before native projection', 'native_source_report_changed'],
++  ['native admission requires a freshly issued collected case', 'native_collected_case_required'],
++  ['collected capability does not bind the original case', 'native_original_case_binding_mismatch'],
++  ['native admission only resumes an original abstention', 'native_original_not_abstained'],
++  ['native case already has a validated binary decision', 'native_binary_decision_already_recorded'],
++  ...['reserved', 'in_flight', 'raw_persisted', 'validated', 'validated_binary'].map((state) =>
++    [`native revision already reserved: ${state}`, `native_revision_already_${state}`]),
++];
++
++test('current native retry refusals identify admission breaks without inventing paid attempts', (t) => {
++  const { saved, options } = retainedReport(t);
++  saved.rows = nativeRefusals.map(([error], i) => ({ case_id: `case-${i}`,
++    target: `owner/repo#${i}`, error }));
++  fs.writeFileSync(options.report, JSON.stringify(saved));
++  const before = fs.readFileSync(options.report);
++  const result = reportInventory(options);
++  for (const [i, row] of result.retained_attempt_observations.entries()) {
++    assert.deepEqual(row.first_broken_step, { status: 'recorded', stage: 'dispatch_admission',
++      code: nativeRefusals[i][1], message_origin: 'repository_emitter',
++      evidence_locations: [`rows[${i}].error`] });
++    assert.equal(row.backend_run_id, null);
++  }
++  assert.deepEqual(result.paid_attempts, []);
++  assert.equal(result.dispatch_authorized, false);
++  assert.equal(result.requested_cohort_verified, false);
++  assert.deepEqual(fs.readFileSync(options.report), before);
++});
++
++test('native refusal classification rejects changed prose and mixed admission or execution claims', (t) => {
++  const { saved, options } = retainedReport(t);
++  const attempts = nativeRefusals.flatMap(([error]) => [
++    { error: `earlier note: ${error}` }, { error: `${error} private suffix` },
++    { error, errors: ['backend exit=124 private execution error'] },
++    { error, decision: 'reject_blocker' },
++    { error, errors: [retainedRefusals[0][0]] },
++  ]);
++  attempts.push({ error: 'native revision already reserved: private_unknown_state' },
++    { error: nativeRefusals[0][0], errors: [nativeRefusals[1][0]] },
++    { errors: ['native revision already reserved: reserved',
++      'native revision already reserved: in_flight'] });
++  saved.rows = attempts.map((row, i) => ({ ...row, case_id: `case-${i}`,
++    target: `owner/repo#${i}` }));
++  fs.writeFileSync(options.report, JSON.stringify(saved));
++  const result = reportInventory(options);
++  for (const row of result.retained_attempt_observations) {
++    assert.equal(row.first_broken_step.status, 'unresolved');
++    assert.equal(row.first_broken_step.stage, null);
++  }
++  assert.ok(!JSON.stringify(result).includes('private'));
++  assert.equal(result.dispatch_authorized, false);
++});
++
++test('requested retry CLI preserves parent decisions and exposes separate native admission breaks', (t) => {
++  const { root, saved, options } = retainedReport(t);
++  const identity = { run_id: 'original', target: 'owner/repo#1' };
++  const error = 'native revision already reserved: in_flight';
++  saved.rows = [{ ...identity, case_id: 'case-a', decision: 'reject_blocker',
++    later_truth: 'UNKNOWN', backend_run_id: 'original-paid', retry_error: error,
++    retry_attempts: [{ error: nativeRefusals[2][0], backend_run_id: 'historical-paid' }] }];
++  fs.writeFileSync(options.report, JSON.stringify(saved));
++  const manifest = manifestFile(root, [identity]);
++  const inputs = [options.report, manifest];
++  const before = inputs.map((file) => fs.readFileSync(file));
++  const cli = execute(root, process.execPath, [script, '--report', options.report,
++    '--manifest', manifest, '--observed-at', String(now),
++    '--evidence-class', options.evidenceClass, '--evidence-reference', options.evidenceReference]);
++  assert.equal(cli.status, 0, cli.stderr);
++  const result = JSON.parse(cli.stdout);
++  assert.deepEqual(result, reportInventory({ ...options, manifest }));
++  const [parent, retry] = result.retained_attempt_observations;
++  assert.equal(parent.first_broken_step.status, 'not_recorded');
++  assert.equal(parent.later_retry_broken_step.code, 'native_revision_already_in_flight');
++  assert.deepEqual(parent.later_retry_broken_step.evidence_locations, ['rows[0].retry_error']);
++  assert.equal(retry.first_broken_step.code, 'native_original_case_binding_mismatch');
++  assert.equal(result.cases[0].retained_decision, 'reject_blocker');
++  assert.equal(result.cases[0].retained_later_truth, 'UNKNOWN');
++  assert.equal(result.paid_identity_summary.unique, 2);
++  assert.equal(result.manifest_reconciliation.authenticated_outcomes_verified, false);
++  assert.deepEqual(result.manifest_reconciliation.cases[0].retained_attempt_locations,
++    ['rows[0]', 'rows[0].retry_attempts[0]']);
++  assert.equal(result.dispatch_authorized, false);
++  assert.deepEqual(inputs.map((file) => fs.readFileSync(file)), before);
++});
++
+ test('exact retained launcher refusals explain admission without claiming a backend attempt', (t) => {
+   const { saved, options } = retainedReport(t);
+   saved.rows = retainedRefusals.map(([error], i) => ({
+-- 
+2.56.0
+
+
+From c01dbf9a94c65f5b5528dc12b658d8d6ff126c49 Mon Sep 17 00:00:00 2001
+From: Codex <codex@users.noreply.github.com>
+Date: Wed, 4 Nov 2026 05:10:49 +0000
+Subject: [PATCH 2/2] docs(adjudicator): retain native admission verification
+ and blockers
+
+---
+ .../issue-1096-recovery/README.md             |   9 +
+ .../issue-1096-recovery/evidence-ledger.json  |  22 +
+ .../acceptance-run/checks.json                | 105 +++
+ .../acceptance-run/collection.log             |   1 +
+ .../acceptance-run/named-tests.log            |   1 +
+ .../acceptance-run/retrospective-suite.log    |   1 +
+ .../native-admission-followup/baseline.log    |  92 +++
+ .../native-admission-followup/inventory.log   |  95 +++
+ .../ledger-audit.json                         | 676 ++++++++++++++++++
+ .../native-admission-followup/ledger.log      |  34 +
+ .../prior-source-controls.log                 | 153 ++++
+ .../native-admission-followup/results.md      |  44 ++
+ .../native-admission-followup/runner.log      |  41 ++
+ .../native-admission-followup/validation.json |  75 ++
+ 14 files changed, 1349 insertions(+)
+ create mode 100644 docs/verification/issue-1096-recovery/native-admission-followup/acceptance-run/checks.json
+ create mode 100644 docs/verification/issue-1096-recovery/native-admission-followup/acceptance-run/collection.log
+ create mode 100644 docs/verification/issue-1096-recovery/native-admission-followup/acceptance-run/named-tests.log
+ create mode 100644 docs/verification/issue-1096-recovery/native-admission-followup/acceptance-run/retrospective-suite.log
+ create mode 100644 docs/verification/issue-1096-recovery/native-admission-followup/baseline.log
+ create mode 100644 docs/verification/issue-1096-recovery/native-admission-followup/inventory.log
+ create mode 100644 docs/verification/issue-1096-recovery/native-admission-followup/ledger-audit.json
+ create mode 100644 docs/verification/issue-1096-recovery/native-admission-followup/ledger.log
+ create mode 100644 docs/verification/issue-1096-recovery/native-admission-followup/prior-source-controls.log
+ create mode 100644 docs/verification/issue-1096-recovery/native-admission-followup/results.md
+ create mode 100644 docs/verification/issue-1096-recovery/native-admission-followup/runner.log
+ create mode 100644 docs/verification/issue-1096-recovery/native-admission-followup/validation.json
+
+diff --git a/docs/verification/issue-1096-recovery/README.md b/docs/verification/issue-1096-recovery/README.md
+index 5549970..40bd9b8 100644
+--- a/docs/verification/issue-1096-recovery/README.md
++++ b/docs/verification/issue-1096-recovery/README.md
+@@ -1,5 +1,14 @@
+ # Acceptance evidence recovery for #1096
+ 
++## Native retry admission diagnostics, 2026-11-04 UTC
++
++Exact current native retry refusal messages now identify recorded admission
++breaks, including changed source reports, original-case binding and reserved
++revisions. Conflicting fields stay unresolved; parent decisions and paid history
++remain separate. All 146 focused checks pass. [Results and limitations](native-admission-followup/results.md)
++bind the source and failed required Python test attempt. Original retry
++reconciliation and operational acceptance remain incomplete; no new task is complete.
++
+ ## Native receipt consistency recovery, 2026-11-04 UTC
+ 
+ Observed binary results with missing or contradictory backend identity/raw output
+diff --git a/docs/verification/issue-1096-recovery/evidence-ledger.json b/docs/verification/issue-1096-recovery/evidence-ledger.json
+index 2b393b3..c59f723 100644
+--- a/docs/verification/issue-1096-recovery/evidence-ledger.json
++++ b/docs/verification/issue-1096-recovery/evidence-ledger.json
+@@ -390,6 +390,28 @@
+       "canonical_publications": 0,
+       "mirror_writes": 0,
+       "limitation": "Fixture receipt consistency checks only; authenticated outcomes and original operational acceptance remain unverified."
++    },
++    "native_admission_followup": {
++      "checked_at": "2026-11-04T05:10:28.329756+00:00",
++      "source_commit": "c80d78d65510c4022a8dde9a7961d1d71f492b6a",
++      "checkout_parent": "5435e6ad526c2f6ad4450d743d3dd4650591ea7f",
++      "plan": "native-admission-followup/plan.md",
++      "results": "native-admission-followup/results.md",
++      "validation": "native-admission-followup/validation.json",
++      "checks": "native-admission-followup/acceptance-run/checks.json",
++      "focused_checks_passed": 146,
++      "required_tests_passed": false,
++      "original_retry_reconciliation_complete": false,
++      "operational_acceptance_verified": false,
++      "task_checkboxes_newly_verified_complete": 0,
++      "limitation": "Exact-message diagnostics and fixture controls only; original requested retry manifest, authenticated receipts and independent current truth remain unavailable.",
++      "blocker_comment": "rejected_connector_requires_approval_policy_never",
++      "needs_human_label": "rejected_connector_requires_approval_policy_never",
++      "pr_readiness": {
++        "number": 1097,
++        "state": "open",
++        "isDraft": false
++      }
+     }
+   },
+   "mirror_synchronization": [
+diff --git a/docs/verification/issue-1096-recovery/native-admission-followup/acceptance-run/checks.json b/docs/verification/issue-1096-recovery/native-admission-followup/acceptance-run/checks.json
+new file mode 100644
+index 0000000..18d9ffc
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/native-admission-followup/acceptance-run/checks.json
+@@ -0,0 +1,105 @@
++{
++  "schema_version": 1,
++  "checked_at": "2026-11-04T05:09:12.553Z",
++  "evaluated_revision": "c80d78d65510c4022a8dde9a7961d1d71f492b6a",
++  "evaluated_tree": "b2898b89920603741ef63ddf6fcaaf81f9c1d748",
++  "accepted_deployment_verified": false,
++  "interpreter": "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3",
++  "runner_sha256": "19738158e77724d69b0872a901141e8e3c8f1d9bf28807cf9e2e65117029c922",
++  "input_manifest_sha256": "c4412c3aab2ab68eaf664abd7ec90d1cde160021788535854dc625397243d9af",
++  "input_file_count": 1983,
++  "source_sha256": {
++    "pyproject.toml": "2c3462b8b384aeb265dbc51ab742b4ee02d839a34cec6590791a6d5d53fe4a6e",
++    "src/adjudicator_retro.py": "ee172f96ddf0ca56f6c06fcf18bdaacccece5381de61a9896006d0b16a8fb0b8",
++    "src/capability_advisor.py": "fe2f2d0dda2b684d61d42c6aba3952b8a5e5d0d1504c9cbebeca9616109208d5",
++    "src/feedback.py": "eafa930ec4cea9a239bc03a91a00b2ca7c618c40629690658f8276417946412d",
++    "src/roles.py": "4a5e729f4bf797ea448f18c14df69696e3df3bcaaf046729c039099ae7cc3dd7",
++    "src/verifier_evidence.py": "19b2342b6d9b4d097f6fef6b76089f54903dfbe36946dac6fa7467dec3afff59",
++    "tests/test_adjudicator_retro.py": "b44fd6756915069d6a5dc492eecda268053a711899b81decc9d27f8c9793fda2"
++  },
++  "checks": [
++    {
++      "name": "named-tests",
++      "command": [
++        "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3",
++        "-m",
++        "pytest",
++        "-o",
++        "addopts=",
++        "-m",
++        "not slow",
++        "-q",
++        "--junitxml=/home/runner/work/Orchestrator/Orchestrator/docs/verification/issue-1096-recovery/native-admission-followup/acceptance-run/named-tests.xml",
++        "tests/test_adjudicator_retro.py::test_build_packet_includes_diff_and_acceptance_criteria",
++        "tests/test_adjudicator_retro.py::test_adjudicator_validator_accepts_recommendation_prose",
++        "tests/test_adjudicator_retro.py::test_floor_still_demotes_a_metadata_only_packet",
++        "tests/test_adjudicator_retro.py::test_abstained_row_is_reattempted_when_the_packet_gains_diff_and_criteria"
++      ],
++      "exit_code": 1,
++      "signal": null,
++      "error_code": null,
++      "timed_out": false,
++      "log": "named-tests.log",
++      "log_sha256": "3c62bade513fb2347fe3e5a9f91901d9e1bbf2d4a19bbd59d2863c1cdf42e10a",
++      "junit": null,
++      "junit_sha256": null,
++      "junit_reader": null,
++      "test_count": null,
++      "passed": false
++    },
++    {
++      "name": "retrospective-suite",
++      "command": [
++        "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3",
++        "-m",
++        "pytest",
++        "-o",
++        "addopts=",
++        "-m",
++        "not slow",
++        "-q",
++        "--junitxml=/home/runner/work/Orchestrator/Orchestrator/docs/verification/issue-1096-recovery/native-admission-followup/acceptance-run/retrospective-suite.xml",
++        "tests/test_adjudicator_retro.py"
++      ],
++      "exit_code": 1,
++      "signal": null,
++      "error_code": null,
++      "timed_out": false,
++      "log": "retrospective-suite.log",
++      "log_sha256": "3c62bade513fb2347fe3e5a9f91901d9e1bbf2d4a19bbd59d2863c1cdf42e10a",
++      "junit": null,
++      "junit_sha256": null,
++      "junit_reader": null,
++      "test_count": null,
++      "passed": false
++    }
++  ],
++  "source_unchanged": true,
++  "required_tests_passed": false,
++  "interpreter_version": "Python 3.14.9",
++  "interpreter_usable": true,
++  "collection": {
++    "command": [
++      "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3",
++      "-m",
++      "pytest",
++      "-o",
++      "addopts=",
++      "-m",
++      "not slow",
++      "--color=no",
++      "--collect-only",
++      "-q",
++      "tests/test_adjudicator_retro.py"
++    ],
++    "exit_code": 1,
++    "signal": null,
++    "error_code": null,
++    "timed_out": false,
++    "log": "collection.log",
++    "log_sha256": "3c62bade513fb2347fe3e5a9f91901d9e1bbf2d4a19bbd59d2863c1cdf42e10a",
++    "test_names": [],
++    "passed": false
++  },
++  "finished_at": "2026-11-04T05:09:12.709Z"
++}
+diff --git a/docs/verification/issue-1096-recovery/native-admission-followup/acceptance-run/collection.log b/docs/verification/issue-1096-recovery/native-admission-followup/acceptance-run/collection.log
+new file mode 100644
+index 0000000..777b2d7
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/native-admission-followup/acceptance-run/collection.log
+@@ -0,0 +1 @@
++/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3: No module named pytest
+diff --git a/docs/verification/issue-1096-recovery/native-admission-followup/acceptance-run/named-tests.log b/docs/verification/issue-1096-recovery/native-admission-followup/acceptance-run/named-tests.log
+new file mode 100644
+index 0000000..777b2d7
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/native-admission-followup/acceptance-run/named-tests.log
+@@ -0,0 +1 @@
++/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3: No module named pytest
+diff --git a/docs/verification/issue-1096-recovery/native-admission-followup/acceptance-run/retrospective-suite.log b/docs/verification/issue-1096-recovery/native-admission-followup/acceptance-run/retrospective-suite.log
+new file mode 100644
+index 0000000..777b2d7
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/native-admission-followup/acceptance-run/retrospective-suite.log
+@@ -0,0 +1 @@
++/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3: No module named pytest
+diff --git a/docs/verification/issue-1096-recovery/native-admission-followup/baseline.log b/docs/verification/issue-1096-recovery/native-admission-followup/baseline.log
+new file mode 100644
+index 0000000..7938974
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/native-admission-followup/baseline.log
+@@ -0,0 +1,92 @@
++✔ packet floor diagnostics match the production rule without trusting saved flags (1110.585454ms)
++✔ packet diagnostics identify missing and clipped evidence separately on parent and retries (1.420666ms)
++✔ report CLI carries packet floor locators through unique requested-row reconciliation (40.826503ms)
++✔ report recovery preserves ordered rows, recursive paid history and conflicting counts (1.712593ms)
++✔ report recovery rejects missing input without initializing runtime state (1.133516ms)
++✔ attempt observations bind nested failure fields without exposing private error text (1.53385ms)
++✔ saved decisions survive failed retries and remain distinct from independent truth (1.140952ms)
++✔ failure field hashes detect changed evidence even when retained classifications match (1.971215ms)
++✔ later-truth diagnostics distinguish absence, UNKNOWN, binary claims and invalid values (1.324969ms)
++✔ parent and retry truth remain separate without deriving truth from a decision (0.929323ms)
++✔ changed binary truth changes its evidence hash without authenticating either value (0.858617ms)
++✔ recorded failure stages explain collection, execution and validation breaks on real message shapes (0.823174ms)
++✔ unknown and contradictory failure prose cannot borrow a recognized stage (0.75477ms)
++✔ exact retained launcher refusals explain admission without claiming a backend attempt (0.843518ms)
++✔ launcher refusal matching rejects changed prose and contradictory attempt fields (0.966694ms)
++✔ later launcher refusals preserve the parent decision and prior paid history (0.733733ms)
++✔ later retries and persistence breaks cannot replace the parent attempt failure or decision (0.939372ms)
++✔ report recovery refuses malformed and ambiguous retained identities (2.206488ms)
++✔ nested retries cannot borrow a root identity when their saved identities conflict (3.137438ms)
++✔ explicit retry identities must be verifiable while compact histories remain intact (3.621852ms)
++✔ CLI refuses cross-case retries before emitting manifest or native receipt matches (54.534544ms)
++✔ report recovery requires explicit attribution and a valid check time (0.600515ms)
++✔ report recovery aborts if the input changes during observation (0.857353ms)
++✔ retained report reconciliation preserves requested order and explains every identity gap (2.568818ms)
++✔ retained report CLI matches supplied manifests without authenticating saved outcomes (40.871275ms)
++✔ requested recovery dispositions explain identity gaps without borrowing candidate outcomes (1.213542ms)
++✔ requested recovery keeps recorded failures separate from missing packet and truth evidence (2.898987ms)
++✔ decided requested rows retain their outcome and UNKNOWN while historical retry failures stay separate (47.89431ms)
++✔ possible paid attempts require completion recovery before packet recollection (10.571919ms)
++✔ requested rows expose unresolved native case attempts even without backend identities (48.878565ms)
++✔ native case recovery separates unavailable journals from no observed unresolved attempts (12.066579ms)
++✔ unbound requested identities cannot borrow native case recovery from candidate rows (7.511428ms)
++✔ validated native failures and abstentions remain visible with their first recorded break (218.682709ms)
++✔ malformed or missing native validation evidence cannot disappear behind validated state (16.427016ms)
++✔ binary validation still requires receipt presence and remains unauthenticated (13.339149ms)
++✔ native binary results with inconsistent receipt fields remain unresolved (32.605595ms)
++✔ native receipt consistency compares exact stored text without parsing provider output (15.589428ms)
++✔ native receipt consistency CLI retains both mismatches without leaking or changing inputs (51.910199ms)
++✔ legacy report manifest keeps verdict ambiguity visible and empty requests cannot complete accounting (1.161141ms)
++✔ report reconciliation refuses malformed or changing manifests without replacing evidence (1.034884ms)
++✔ report CLI never combines historical recovery with dispatch or current Brain selection (226.427768ms)
++✔ native receipt locators bind both case and backend identity for each retained attempt (9.869076ms)
++✔ missing native identities and receipts remain gaps rather than borrowing another attempt (8.425148ms)
++✔ reused native backend identities remain ambiguous even when one candidate matches the case (10.169787ms)
++✔ pre-dispatch inventory reconciles report and native locators without exposing payloads (9.274322ms)
++✔ all validated native rows still require authentication, independent truth and live writer proof (9.303467ms)
++✔ missing native evidence remains unavailable and never means zero attempts (0.764794ms)
++✔ an observed empty journal cannot establish writer ownership or authorize spending (8.85706ms)
++✔ an active journal writer does not make a read-only snapshot claim ownership (8.051021ms)
++✔ foreign and incomplete journals are refused without schema repair (4.085167ms)
++✔ report without native marker still cannot authorize generic retry (0.677655ms)
++✔ journal CLI stays read-only and requires explicit report attribution (80.942565ms)
++✔ owner exclusions are accounted for without reading excluded outcome evidence: mixed case (52.90492ms)
++✔ owner exclusions are accounted for without reading excluded outcome evidence: spaces (52.001008ms)
++✔ owner exclusions are accounted for without reading excluded outcome evidence: tabs and newlines (49.732265ms)
++✔ owner exclusions are accounted for without reading excluded outcome evidence: Unicode whitespace (48.00182ms)
++✔ requested owner exclusions remain explicit with missing or contradictory inventory: "stranske/Collab-Admin#7" (7.738965ms)
++✔ requested owner exclusions remain explicit with missing or contradictory inventory: "\tstranske/Collab-Admin #7" (5.536876ms)
++✔ inventory exports every synthetic dispute and every exclusion without writes (830.459156ms)
++✔ inventory preserves the fixed cutoff and reports a count discrepancy (8.105105ms)
++✔ inventory distinguishes missing evidence from a complete cohort (2.677483ms)
++✔ inventory distinguishes schema-less evidence from a complete cohort (0.845826ms)
++✔ inventory distinguishes empty evidence from a complete cohort (2.87938ms)
++✔ inventory distinguishes incomplete-schema evidence from a complete cohort (3.328113ms)
++✔ inventory CLI exports JSON, signals unavailable evidence and rejects replay options (219.760229ms)
++✔ matching 71 identities bind the supplied manifest bytes without claiming historical acceptance (91.414411ms)
++✔ equal inventory counts expose substituted identities, exclusions and absent requested runs (8.352673ms)
++✔ a requested run on another target cannot satisfy case identity (4.191193ms)
++✔ inventory accounts for outcomes without run records as unavailable evidence (45.387473ms)
++✔ an outcomes-only Brain is available with exclusions, rather than an observed empty store (4.296979ms)
++✔ manifest retains every requested identity when Brain is empty (3.058038ms)
++✔ manifest retains every requested identity when Brain is unavailable (2.521924ms)
++✔ manifest count discrepancy prevents an exact match even when all supplied identities match (4.334139ms)
++✔ manifest CLI preserves input bytes, rejects malformed identities and signals unavailable Brain (512.055492ms)
++✔ version 2 reconciles all 71 dispute identities without claiming historical provenance (93.477592ms)
++✔ version 2 exposes substituted verdicts NON_PASS/FAIL despite matching run and count (44.637388ms)
++✔ version 2 exposes substituted verdicts FAIL_HOLLOW/PASS despite matching run and count (44.774322ms)
++✔ version 2 exposes substituted verdicts PASS/FAIL despite matching run and count (43.327845ms)
++✔ version 2 retains different disputes on one run and rejects duplicate dispute identities (5.368843ms)
++✔ version 2 preserves full identities for excluded, missing and unavailable cases (43.437969ms)
++✔ version 2 rejects malformed verdicts before publishing any inventory (505.005338ms)
++✔ version 2 distinguishes unavailable verdict evidence from contradictory verdicts (50.154428ms)
++✔ version 2 retains an observed target mismatch when verdict evidence is unavailable (3.740247ms)
++✔ missing stored targets remain eligible disputes with explicit unavailable identity evidence (804.898129ms)
++ℹ tests 84
++ℹ suites 0
++ℹ pass 84
++ℹ fail 0
++ℹ cancelled 0
++ℹ skipped 0
++ℹ todo 0
++ℹ duration_ms 5749.750265
+diff --git a/docs/verification/issue-1096-recovery/native-admission-followup/inventory.log b/docs/verification/issue-1096-recovery/native-admission-followup/inventory.log
+new file mode 100644
+index 0000000..8221d04
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/native-admission-followup/inventory.log
+@@ -0,0 +1,95 @@
++✔ packet floor diagnostics match the production rule without trusting saved flags (733.836055ms)
++✔ packet diagnostics identify missing and clipped evidence separately on parent and retries (1.481271ms)
++✔ report CLI carries packet floor locators through unique requested-row reconciliation (44.457867ms)
++✔ report recovery preserves ordered rows, recursive paid history and conflicting counts (1.589205ms)
++✔ report recovery rejects missing input without initializing runtime state (1.083926ms)
++✔ attempt observations bind nested failure fields without exposing private error text (1.429332ms)
++✔ saved decisions survive failed retries and remain distinct from independent truth (1.147308ms)
++✔ failure field hashes detect changed evidence even when retained classifications match (2.027587ms)
++✔ later-truth diagnostics distinguish absence, UNKNOWN, binary claims and invalid values (1.32489ms)
++✔ parent and retry truth remain separate without deriving truth from a decision (1.014282ms)
++✔ changed binary truth changes its evidence hash without authenticating either value (0.81541ms)
++✔ recorded failure stages explain collection, execution and validation breaks on real message shapes (0.872977ms)
++✔ unknown and contradictory failure prose cannot borrow a recognized stage (0.789195ms)
++✔ current native retry refusals identify admission breaks without inventing paid attempts (1.032347ms)
++✔ native refusal classification rejects changed prose and mixed admission or execution claims (1.95728ms)
++✔ requested retry CLI preserves parent decisions and exposes separate native admission breaks (44.799044ms)
++✔ exact retained launcher refusals explain admission without claiming a backend attempt (0.988582ms)
++✔ launcher refusal matching rejects changed prose and contradictory attempt fields (1.139232ms)
++✔ later launcher refusals preserve the parent decision and prior paid history (0.793788ms)
++✔ later retries and persistence breaks cannot replace the parent attempt failure or decision (1.150091ms)
++✔ report recovery refuses malformed and ambiguous retained identities (3.230128ms)
++✔ nested retries cannot borrow a root identity when their saved identities conflict (3.110002ms)
++✔ explicit retry identities must be verifiable while compact histories remain intact (9.342072ms)
++✔ CLI refuses cross-case retries before emitting manifest or native receipt matches (46.082818ms)
++✔ report recovery requires explicit attribution and a valid check time (0.61055ms)
++✔ report recovery aborts if the input changes during observation (0.838222ms)
++✔ retained report reconciliation preserves requested order and explains every identity gap (1.653944ms)
++✔ retained report CLI matches supplied manifests without authenticating saved outcomes (39.468063ms)
++✔ requested recovery dispositions explain identity gaps without borrowing candidate outcomes (1.2645ms)
++✔ requested recovery keeps recorded failures separate from missing packet and truth evidence (3.076642ms)
++✔ decided requested rows retain their outcome and UNKNOWN while historical retry failures stay separate (51.010593ms)
++✔ possible paid attempts require completion recovery before packet recollection (9.068169ms)
++✔ requested rows expose unresolved native case attempts even without backend identities (47.79916ms)
++✔ native case recovery separates unavailable journals from no observed unresolved attempts (11.569138ms)
++✔ unbound requested identities cannot borrow native case recovery from candidate rows (9.502643ms)
++✔ validated native failures and abstentions remain visible with their first recorded break (223.27818ms)
++✔ malformed or missing native validation evidence cannot disappear behind validated state (14.280813ms)
++✔ binary validation still requires receipt presence and remains unauthenticated (11.851041ms)
++✔ native binary results with inconsistent receipt fields remain unresolved (21.813232ms)
++✔ native receipt consistency compares exact stored text without parsing provider output (11.686062ms)
++✔ native receipt consistency CLI retains both mismatches without leaking or changing inputs (46.137725ms)
++✔ legacy report manifest keeps verdict ambiguity visible and empty requests cannot complete accounting (1.101643ms)
++✔ report reconciliation refuses malformed or changing manifests without replacing evidence (1.54622ms)
++✔ report CLI never combines historical recovery with dispatch or current Brain selection (211.811599ms)
++✔ native receipt locators bind both case and backend identity for each retained attempt (7.995549ms)
++✔ missing native identities and receipts remain gaps rather than borrowing another attempt (7.182326ms)
++✔ reused native backend identities remain ambiguous even when one candidate matches the case (8.461517ms)
++✔ pre-dispatch inventory reconciles report and native locators without exposing payloads (9.368332ms)
++✔ all validated native rows still require authentication, independent truth and live writer proof (7.27093ms)
++✔ missing native evidence remains unavailable and never means zero attempts (0.769776ms)
++✔ an observed empty journal cannot establish writer ownership or authorize spending (7.255823ms)
++✔ an active journal writer does not make a read-only snapshot claim ownership (6.8992ms)
++✔ foreign and incomplete journals are refused without schema repair (3.690022ms)
++✔ report without native marker still cannot authorize generic retry (0.722351ms)
++✔ journal CLI stays read-only and requires explicit report attribution (83.341839ms)
++✔ owner exclusions are accounted for without reading excluded outcome evidence: mixed case (46.928225ms)
++✔ owner exclusions are accounted for without reading excluded outcome evidence: spaces (47.449196ms)
++✔ owner exclusions are accounted for without reading excluded outcome evidence: tabs and newlines (47.610432ms)
++✔ owner exclusions are accounted for without reading excluded outcome evidence: Unicode whitespace (50.085426ms)
++✔ requested owner exclusions remain explicit with missing or contradictory inventory: "stranske/Collab-Admin#7" (6.878655ms)
++✔ requested owner exclusions remain explicit with missing or contradictory inventory: "\tstranske/Collab-Admin #7" (5.243795ms)
++✔ inventory exports every synthetic dispute and every exclusion without writes (819.043323ms)
++✔ inventory preserves the fixed cutoff and reports a count discrepancy (7.185559ms)
++✔ inventory distinguishes missing evidence from a complete cohort (2.583518ms)
++✔ inventory distinguishes schema-less evidence from a complete cohort (0.720377ms)
++✔ inventory distinguishes empty evidence from a complete cohort (2.427171ms)
++✔ inventory distinguishes incomplete-schema evidence from a complete cohort (3.087212ms)
++✔ inventory CLI exports JSON, signals unavailable evidence and rejects replay options (221.766515ms)
++✔ matching 71 identities bind the supplied manifest bytes without claiming historical acceptance (91.022333ms)
++✔ equal inventory counts expose substituted identities, exclusions and absent requested runs (7.61817ms)
++✔ a requested run on another target cannot satisfy case identity (5.121797ms)
++✔ inventory accounts for outcomes without run records as unavailable evidence (44.977992ms)
++✔ an outcomes-only Brain is available with exclusions, rather than an observed empty store (5.478102ms)
++✔ manifest retains every requested identity when Brain is empty (3.00862ms)
++✔ manifest retains every requested identity when Brain is unavailable (3.336118ms)
++✔ manifest count discrepancy prevents an exact match even when all supplied identities match (5.639065ms)
++✔ manifest CLI preserves input bytes, rejects malformed identities and signals unavailable Brain (534.781809ms)
++✔ version 2 reconciles all 71 dispute identities without claiming historical provenance (138.157656ms)
++✔ version 2 exposes substituted verdicts NON_PASS/FAIL despite matching run and count (47.426285ms)
++✔ version 2 exposes substituted verdicts FAIL_HOLLOW/PASS despite matching run and count (45.889503ms)
++✔ version 2 exposes substituted verdicts PASS/FAIL despite matching run and count (44.516202ms)
++✔ version 2 retains different disputes on one run and rejects duplicate dispute identities (5.43195ms)
++✔ version 2 preserves full identities for excluded, missing and unavailable cases (41.292527ms)
++✔ version 2 rejects malformed verdicts before publishing any inventory (533.943381ms)
++✔ version 2 distinguishes unavailable verdict evidence from contradictory verdicts (49.024277ms)
++✔ version 2 retains an observed target mismatch when verdict evidence is unavailable (4.123269ms)
++✔ missing stored targets remain eligible disputes with explicit unavailable identity evidence (836.354061ms)
++ℹ tests 87
++ℹ suites 0
++ℹ pass 87
++ℹ fail 0
++ℹ cancelled 0
++ℹ skipped 0
++ℹ todo 0
++ℹ duration_ms 5492.031667
+diff --git a/docs/verification/issue-1096-recovery/native-admission-followup/ledger-audit.json b/docs/verification/issue-1096-recovery/native-admission-followup/ledger-audit.json
+new file mode 100644
+index 0000000..eca2588
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/native-admission-followup/ledger-audit.json
+@@ -0,0 +1,676 @@
++{
++  "schema_version": 1,
++  "ledger_sha256": "95a379a9bef7aa1cf30128b3577e3baea5a53bbbe0e8895afdc1e7cacd56c630",
++  "audit_scope": "recovery_attribution_and_local_artifact_integrity",
++  "attribution_and_artifact_checks_passed": true,
++  "operational_acceptance_verified": false,
++  "external_references_authenticated": false,
++  "source_revision_bindings_verified": false,
++  "artifacts": [
++    {
++      "path": "historical-inventory.json",
++      "sha256": "76c494a94885bc8972f8c3594cce5cd86d0dc0700738be748ebf4dee433f2b2e"
++    },
++    {
++      "path": "checks.json",
++      "sha256": "05816252eda6b4f6090fba490c40b95a0be5879c71dff564c22c6e28cd708a0b"
++    },
++    {
++      "path": "named-tests.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "retrospective-suite.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "inventory-tests.log",
++      "sha256": "ed03419ab03622a5c0f206c7bf545cc0ebfc7c356208dbc2316917b6ff9a0d89"
++    },
++    {
++      "path": "adjudicator-selftest.log",
++      "sha256": "3f227862f8d1e7b2c35195efe7205621f73d3033db5a3ca88e1e7c24021e1109"
++    },
++    {
++      "path": "pre-dispatch-checks.json",
++      "sha256": "8092128f1df021cdcffcc8c71f57f6023e52d6c246e8f4f3ace52ddcad1339c9"
++    },
++    {
++      "path": "pre-dispatch-observation.json",
++      "sha256": "64a5cabcd1e8596edc149b88640af53ec177a424fc0d91de7f7ce69c5ac869ef"
++    },
++    {
++      "path": "pre-dispatch-inventory-tests.log",
++      "sha256": "4fb63c981a296c529f43135d6978d1c13f07f50744e825a2e6a7aad1020e6389"
++    },
++    {
++      "path": "pre-dispatch-named-tests.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "pre-dispatch-retrospective-suite.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "pre-dispatch-adjudicator-selftest.log",
++      "sha256": "3f227862f8d1e7b2c35195efe7205621f73d3033db5a3ca88e1e7c24021e1109"
++    },
++    {
++      "path": "pre-dispatch-evidence-tests.log",
++      "sha256": "f554d9e1907fbaae8b4ee178cdba6800fa893149d1e3874f2495b84a304c9007"
++    },
++    {
++      "path": "acceptance-run/checks.json",
++      "sha256": "565025a768386e09934c9edb06830f52def9ce022b7e393b337f9d5497dbfcba"
++    },
++    {
++      "path": "acceptance-run/named-tests.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "acceptance-run/retrospective-suite.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "acceptance-run/runner-validation.json",
++      "sha256": "7841392b8a4de5d1bdeded2c2dc53133b2e0e6c59e9d7a4a4e9fe67f1f6a8a49"
++    },
++    {
++      "path": "acceptance-run/runner-tests.log",
++      "sha256": "aa2704887818edeadc0807135cdec575ea7d3b8020426c2c12adb9ee549ed890"
++    },
++    {
++      "path": "acceptance-run/inventory-tests.log",
++      "sha256": "601a69001b966f0d629439f87f7b8e2b2b775e4db20fe526c70774be676d85b9"
++    },
++    {
++      "path": "suite-completeness-run/checks.json",
++      "sha256": "ea088007c9611735fd5f08a72fa421a1f43d8750fbe2e4a9be6abef85103dd57"
++    },
++    {
++      "path": "suite-completeness-run/named-tests.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "suite-completeness-run/retrospective-suite.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "suite-completeness-run/collection.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "suite-completeness-run/runner-validation.json",
++      "sha256": "de7b3a093450b23822742ffc8507214b9373732e86d9ff31b7dd6d78c871182a"
++    },
++    {
++      "path": "suite-completeness-run/runner-tests.log",
++      "sha256": "3cc75fe7aa2e6cc3964eaeeb032f50170839b9843e71f53699b9489107daf502"
++    },
++    {
++      "path": "interpreter-followup/acceptance-run/checks.json",
++      "sha256": "ac206b01d063840618204cc6e837c2a7a8ac68a6a84c6d089cae27a72aff8fe5"
++    },
++    {
++      "path": "interpreter-followup/acceptance-run/named-tests.log",
++      "sha256": "f0dbac0c2508ce31a001ff3f12403c192088997ec3c0bae870a337f703f90152"
++    },
++    {
++      "path": "interpreter-followup/acceptance-run/retrospective-suite.log",
++      "sha256": "f0dbac0c2508ce31a001ff3f12403c192088997ec3c0bae870a337f703f90152"
++    },
++    {
++      "path": "interpreter-followup/acceptance-run/collection.log",
++      "sha256": "f0dbac0c2508ce31a001ff3f12403c192088997ec3c0bae870a337f703f90152"
++    },
++    {
++      "path": "interpreter-followup/validation.json",
++      "sha256": "e8c26e6cd8f44e0efe4dd337ca3ea222a56efd0eda4cdcd1000078034cffae17"
++    },
++    {
++      "path": "interpreter-followup/runner-before.log",
++      "sha256": "9e4e49f09dd87eaf38593f93cc9db74dadc1100950090a665ed33b373e55c222"
++    },
++    {
++      "path": "interpreter-followup/runner-after.log",
++      "sha256": "e93ec3a61ab3bcd22d90cef6766e8a9f5628aa539262fca9c283c38a8eff460e"
++    },
++    {
++      "path": "interpreter-followup/inventory.log",
++      "sha256": "33c5929820fd97d8c37bef0317d1991f2d4b9b548492c1e2feaee4b23ed3ab1f"
++    },
++    {
++      "path": "ledger-audit-tests/checks.json",
++      "sha256": "d725c97b9ed48f4092ae90209389732fb21d0c783de0d5c17fe19518df6f8612"
++    },
++    {
++      "path": "ledger-audit-tests/named-tests.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "ledger-audit-tests/retrospective-suite.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "ledger-audit-tests/collection.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "ledger-audit/validation.json",
++      "sha256": "4f87713cb004e479b4a2637368cf9eba1a4a3b013f7400d03b4e7c383194d91b"
++    },
++    {
++      "path": "ledger-audit/ledger-tests.log",
++      "sha256": "59c5b1e47bd0aad737fe781d9c99876f263214771c6c1349ce6d9e8fcf135d7d"
++    },
++    {
++      "path": "ledger-audit/runner-tests.log",
++      "sha256": "2090b3cb904438679be4851c7cb83b46e28b4262b3eb6dd63df609a9d6d4b177"
++    },
++    {
++      "path": "ledger-audit/inventory-tests.log",
++      "sha256": "a7a4da16604b151003196e81589efc75805395dde38f887f25f670524d95f85d"
++    },
++    {
++      "path": "retry-manifest-followup/acceptance-run/checks.json",
++      "sha256": "4a785fa6ef2640f8d4186977b8e4a974119bea645e68783066c5e6c5b1ec7cba"
++    },
++    {
++      "path": "retry-manifest-followup/acceptance-run/named-tests.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "retry-manifest-followup/acceptance-run/retrospective-suite.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "retry-manifest-followup/acceptance-run/collection.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "retry-manifest-followup/validation.json",
++      "sha256": "07a889e3d1fcfdf53afdccd96178bf8b0476a2a35e6c9998363fb1cb093cc6b0"
++    },
++    {
++      "path": "retry-manifest-followup/inventory-tests.log",
++      "sha256": "7f6b2dfbb09e1b4a876e51d0aa21d8ddd4165ba3eea0f5ff20607b9027e8904e"
++    },
++    {
++      "path": "retry-manifest-followup/runner-tests.log",
++      "sha256": "00233874760733193b2e2e89d05c85cfae619714933e51f45707255bb5b8f0f1"
++    },
++    {
++      "path": "retry-manifest-followup/ledger-tests.log",
++      "sha256": "6e97b661615b98a3fca0cc5288237b7010cfdcbd0da121e24d796e085e9b9d76"
++    },
++    {
++      "path": "attempt-diagnostics/acceptance-run/checks.json",
++      "sha256": "2ceace7de118355b21ca84372518f2f75f7e3ba515ca50c09a16d6f9ef7eb159"
++    },
++    {
++      "path": "attempt-diagnostics/acceptance-run/named-tests.log",
++      "sha256": "3c62bade513fb2347fe3e5a9f91901d9e1bbf2d4a19bbd59d2863c1cdf42e10a"
++    },
++    {
++      "path": "attempt-diagnostics/acceptance-run/retrospective-suite.log",
++      "sha256": "3c62bade513fb2347fe3e5a9f91901d9e1bbf2d4a19bbd59d2863c1cdf42e10a"
++    },
++    {
++      "path": "attempt-diagnostics/acceptance-run/collection.log",
++      "sha256": "3c62bade513fb2347fe3e5a9f91901d9e1bbf2d4a19bbd59d2863c1cdf42e10a"
++    },
++    {
++      "path": "attempt-diagnostics/validation.json",
++      "sha256": "c8821898c3c707a32199fbf492174ba5a85b2f1e5e37b76c253c1a448140f2bd"
++    },
++    {
++      "path": "attempt-diagnostics/inventory-tests.log",
++      "sha256": "40eaa3b8ff6237ccfcfb383a461d9b93cc02f357592763c41d5cd2459c9cedb8"
++    },
++    {
++      "path": "attempt-diagnostics/runner-tests.log",
++      "sha256": "d5ea0c76dbcaf1be1785a702ab378f668730770a305eb5818eebdf51254e0a20"
++    },
++    {
++      "path": "attempt-diagnostics/ledger-tests.log",
++      "sha256": "df070652b60866af068042de292708fc37f00b443eba8519a2c081883b2a964b"
++    },
++    {
++      "path": "failure-stage-followup/acceptance-run/checks.json",
++      "sha256": "5ffb3ca4f8e100a44b9aadbaf8e94816dd7228e99bf2a2baaf55e36857133e13"
++    },
++    {
++      "path": "failure-stage-followup/acceptance-run/named-tests.log",
++      "sha256": "3c62bade513fb2347fe3e5a9f91901d9e1bbf2d4a19bbd59d2863c1cdf42e10a"
++    },
++    {
++      "path": "failure-stage-followup/acceptance-run/retrospective-suite.log",
++      "sha256": "3c62bade513fb2347fe3e5a9f91901d9e1bbf2d4a19bbd59d2863c1cdf42e10a"
++    },
++    {
++      "path": "failure-stage-followup/acceptance-run/collection.log",
++      "sha256": "3c62bade513fb2347fe3e5a9f91901d9e1bbf2d4a19bbd59d2863c1cdf42e10a"
++    },
++    {
++      "path": "failure-stage-followup/validation.json",
++      "sha256": "53ddf21838250b4df772ddc888214ca641bf35fc97a2ec8f10b75c1e0da61023"
++    },
++    {
++      "path": "failure-stage-followup/inventory-before.log",
++      "sha256": "e72767b5f4926945538cc99922f3310bc14568ff8b46ba3a927bb5fdc239fac9"
++    },
++    {
++      "path": "failure-stage-followup/inventory-tests.log",
++      "sha256": "027fcd4da88e725c6d3f4677262eafe827ede1ff52eb20283e6471d28eaf729f"
++    },
++    {
++      "path": "failure-stage-followup/runner-tests.log",
++      "sha256": "98c2d757f3f453522ce1e936858a3d576f572396e8f00357348a7bc27b5c7716"
++    },
++    {
++      "path": "failure-stage-followup/ledger-tests.log",
++      "sha256": "98af1a6164a761757f54fa8f4ccf42556f8e9c4bbd7205d3cf29d0aabe912943"
++    },
++    {
++      "path": "failure-stage-followup/historical-failure-stages.json",
++      "sha256": "9290eada2560c431bc69879bc704b4fbb8597664ef08f31276abae02ea563d32"
++    },
++    {
++      "path": "failure-stage-followup/plan.md",
++      "sha256": "1283a8566f696f407f166c45a556c15939ec3513adc9caa37420f69790bd873a"
++    },
++    {
++      "path": "dispatch-refusal-followup/acceptance-run/checks.json",
++      "sha256": "778fc5bcb2f30bcb4b5847915adeaa634d8bac6e4fcad2a5ec93a2a313697a0f"
++    },
++    {
++      "path": "dispatch-refusal-followup/acceptance-run/named-tests.log",
++      "sha256": "3c62bade513fb2347fe3e5a9f91901d9e1bbf2d4a19bbd59d2863c1cdf42e10a"
++    },
++    {
++      "path": "dispatch-refusal-followup/acceptance-run/retrospective-suite.log",
++      "sha256": "3c62bade513fb2347fe3e5a9f91901d9e1bbf2d4a19bbd59d2863c1cdf42e10a"
++    },
++    {
++      "path": "dispatch-refusal-followup/acceptance-run/collection.log",
++      "sha256": "3c62bade513fb2347fe3e5a9f91901d9e1bbf2d4a19bbd59d2863c1cdf42e10a"
++    },
++    {
++      "path": "dispatch-refusal-followup/validation.json",
++      "sha256": "f03c30687248073b336a8381314e879ea5b90fe8f0f7b5083bdf8627154be6e4"
++    },
++    {
++      "path": "dispatch-refusal-followup/inventory-baseline.log",
++      "sha256": "b662a6309a4dae65a1ecf493bac0998549fa94fb35c976a499939a1218f66333"
++    },
++    {
++      "path": "dispatch-refusal-followup/inventory-before.log",
++      "sha256": "6d8ed6326ac1dc484a5a828cf0dc04b502c91a3e342b094304bc4d1ec43dab19"
++    },
++    {
++      "path": "dispatch-refusal-followup/inventory-tests.log",
++      "sha256": "be015ff724850412e43790d4ddb591d4537b5f3cd16690634bd0bd54a344ebb3"
++    },
++    {
++      "path": "dispatch-refusal-followup/runner-tests.log",
++      "sha256": "34ae8273ee9eba5b71e427aac470c38cdf5fcd3a2b08ba287595cd3e02dd8e55"
++    },
++    {
++      "path": "dispatch-refusal-followup/ledger-tests.log",
++      "sha256": "866cf5312e575f9722b26f43ac828e4e139b916604246d82f4f11139527c6e2e"
++    },
++    {
++      "path": "dispatch-refusal-followup/historical-refusals.json",
++      "sha256": "e0cb20b04c284fce0047b92ebfd06367cabe9e1e706643589c2acd6a17b852fa"
++    },
++    {
++      "path": "dispatch-refusal-followup/selected-fields.json",
++      "sha256": "c87598737485b19011318f369fdafc204d9f9d7732f3420f5e5cd39964885bd8"
++    },
++    {
++      "path": "ignored-input-followup/acceptance-run/checks.json",
++      "sha256": "c6b63845a37a5b7cec286cb1e2cf688dd892c730bb854cd705e7b60ebede906d"
++    },
++    {
++      "path": "ignored-input-followup/acceptance-run/named-tests.log",
++      "sha256": "3c62bade513fb2347fe3e5a9f91901d9e1bbf2d4a19bbd59d2863c1cdf42e10a"
++    },
++    {
++      "path": "ignored-input-followup/acceptance-run/retrospective-suite.log",
++      "sha256": "3c62bade513fb2347fe3e5a9f91901d9e1bbf2d4a19bbd59d2863c1cdf42e10a"
++    },
++    {
++      "path": "ignored-input-followup/acceptance-run/collection.log",
++      "sha256": "3c62bade513fb2347fe3e5a9f91901d9e1bbf2d4a19bbd59d2863c1cdf42e10a"
++    },
++    {
++      "path": "ignored-input-followup/validation.json",
++      "sha256": "e88e0bcc685082a2eba2b1d0118b05bcc22befc673487ee78075ca4b15091a43"
++    },
++    {
++      "path": "ignored-input-followup/runner-negative-controls.log",
++      "sha256": "8f878084959a537a07818f105ede61d4d679b662f681c4eacd5502c5a2ac60fa"
++    },
++    {
++      "path": "ignored-input-followup/plan.md",
++      "sha256": "db9da61d15494a87eff19d07c635d169ed6d492dadbde7329b1fd147d8097195"
++    },
++    {
++      "path": "ignored-input-followup/runner-tests.log",
++      "sha256": "7917c68b0539195a2aeca9a1b1f18c0d1f1f43bc3c86cb77819b1c51a92b0184"
++    },
++    {
++      "path": "ignored-input-followup/inventory-tests.log",
++      "sha256": "049af90a8268f2a817c53a7775bab4a8e17d074cf8ad7860afd83405aef403c0"
++    },
++    {
++      "path": "ignored-input-followup/ledger-tests.log",
++      "sha256": "5e65368c6c20d366a5f5bc546c65a8219918db07cf496e14d8a648029e7d3b29"
++    },
++    {
++      "path": "truth-followup/acceptance-run/checks.json",
++      "sha256": "0996652aa66888fba753384a9f687f45c918e2470bdcd938f7138004fe5a674a"
++    },
++    {
++      "path": "truth-followup/acceptance-run/named-tests.log",
++      "sha256": "3c62bade513fb2347fe3e5a9f91901d9e1bbf2d4a19bbd59d2863c1cdf42e10a"
++    },
++    {
++      "path": "truth-followup/acceptance-run/retrospective-suite.log",
++      "sha256": "3c62bade513fb2347fe3e5a9f91901d9e1bbf2d4a19bbd59d2863c1cdf42e10a"
++    },
++    {
++      "path": "truth-followup/acceptance-run/collection.log",
++      "sha256": "3c62bade513fb2347fe3e5a9f91901d9e1bbf2d4a19bbd59d2863c1cdf42e10a"
++    },
++    {
++      "path": "truth-followup/validation.json",
++      "sha256": "93c31105782cde91f7bfb1288804b5a6f2461cc5c79e452eff305a44d2773227"
++    },
++    {
++      "path": "truth-followup/historical-truth-summary.json",
++      "sha256": "5efc8659d829ae8fce6bbfbda5b64505de3070642f3d5d77d956fba39cfd34c6"
++    },
++    {
++      "path": "truth-followup/baseline.log",
++      "sha256": "8631fe48d6283c801ccd8a0c7fdbe0d4f6afd47ba4705fa016fd3a4a3f1e317f"
++    },
++    {
++      "path": "truth-followup/negative-controls.log",
++      "sha256": "b0959ec4c9601b30d027bc1dd09294d19aa13b45acac8a3c4705c52269e4221d"
++    },
++    {
++      "path": "truth-followup/regressions.log",
++      "sha256": "68a3da553c71345fc8f6a72fbd713c2f9129d60c278043dd37582db570a84cba"
++    },
++    {
++      "path": "packet-floor-followup/acceptance-run/checks.json",
++      "sha256": "644c21e4b6fcf384221e74857dc7dada427c761675ad73748003442f2cb51f17"
++    },
++    {
++      "path": "packet-floor-followup/acceptance-run/named-tests.log",
++      "sha256": "b42f39dcd355244f95f7aaa5b5f8a170efaf813490d508234969b85e25a275d7"
++    },
++    {
++      "path": "packet-floor-followup/acceptance-run/retrospective-suite.log",
++      "sha256": "b42f39dcd355244f95f7aaa5b5f8a170efaf813490d508234969b85e25a275d7"
++    },
++    {
++      "path": "packet-floor-followup/acceptance-run/collection.log",
++      "sha256": "b42f39dcd355244f95f7aaa5b5f8a170efaf813490d508234969b85e25a275d7"
++    },
++    {
++      "path": "packet-floor-followup/validation.json",
++      "sha256": "a20e2ddc8fb66b6e09a3d3b61374abbb825cbc2d05832778c371a714763aaa17"
++    },
++    {
++      "path": "packet-floor-followup/baseline.log",
++      "sha256": "649e85ec25092302eee5e9fc7cf605f5094809be4108100810089da79bcfe093"
++    },
++    {
++      "path": "packet-floor-followup/negative-controls.log",
++      "sha256": "2cefcb9196996c631fe57ca8d79aac834844f375837f53e024e269da24834797"
++    },
++    {
++      "path": "packet-floor-followup/regressions.log",
++      "sha256": "c2ae11a9291f6877ee19999fa132745bffa431208f910c1ccf4447e17e9e68cb"
++    },
++    {
++      "path": "retry-identity-followup/validation.json",
++      "sha256": "ef28f88a8dddf2a537fbda278939eddf748d36ea813b921175b0205bc54e1a40"
++    },
++    {
++      "path": "retry-identity-followup/plan.md",
++      "sha256": "9c1e04036aa8cf642d6eab9aff87fe765265306783cedc6b003f35856c8e96b2"
++    },
++    {
++      "path": "retry-identity-followup/inventory-red.log",
++      "sha256": "a85d471340a91897563dbc79e9486581366e6a1e3a2e5c69e6aa8ac357704cc4"
++    },
++    {
++      "path": "retry-identity-followup/inventory-green.log",
++      "sha256": "6f948aee1393a05907891143e9b77da3056600946cd27e27b4897425a4ae90eb"
++    },
++    {
++      "path": "retry-identity-followup/runner.log",
++      "sha256": "e8d29dfb0eb1d8eb99a1343800421b8a5c3bdd6898cd7b31874be799e641dc13"
++    },
++    {
++      "path": "retry-identity-followup/ledger.log",
++      "sha256": "dac0e6ef2d3416744940f109249d03e145758f2c0c2fbde6adcff02ebdbb767e"
++    },
++    {
++      "path": "retry-identity-followup/results.md",
++      "sha256": "704ee44a83b97cef7a8e33f34c44ed6f41b19d3833beb85cb04f0623f16ac0ca"
++    },
++    {
++      "path": "retry-identity-followup/acceptance-run/checks.json",
++      "sha256": "8b293b4237f8f4381618f260895f16c44205a526c199e614b8686b2f96808f5d"
++    },
++    {
++      "path": "retry-identity-followup/acceptance-run/named-tests.log",
++      "sha256": "f0dbac0c2508ce31a001ff3f12403c192088997ec3c0bae870a337f703f90152"
++    },
++    {
++      "path": "retry-identity-followup/acceptance-run/retrospective-suite.log",
++      "sha256": "f0dbac0c2508ce31a001ff3f12403c192088997ec3c0bae870a337f703f90152"
++    },
++    {
++      "path": "retry-identity-followup/acceptance-run/collection.log",
++      "sha256": "f0dbac0c2508ce31a001ff3f12403c192088997ec3c0bae870a337f703f90152"
++    },
++    {
++      "path": "recovery-dispositions/validation.json",
++      "sha256": "fa5bb1aafce8f1459aca6a30e7a3177bd479777d93327f970b905464df1ea0cb"
++    },
++    {
++      "path": "recovery-dispositions/inventory.log",
++      "sha256": "59b70dc0b68dd8094ff1d739d6ad4521a91b8d3bc7edecab14f7614f98611f3f"
++    },
++    {
++      "path": "recovery-dispositions/runner.log",
++      "sha256": "bad3a0bac49a56b96f87a8576bcb6e904c3bb95cb230b7c82719437f76fb961d"
++    },
++    {
++      "path": "recovery-dispositions/ledger.log",
++      "sha256": "059dd013a8a9a5b132d838f75bec57c748c059c62b67634e4a187df7e2dc7e9b"
++    },
++    {
++      "path": "native-case-followup/validation.json",
++      "sha256": "de48efc4603751951c8dc285a6b6b3b3b9dd1543e3ddd216b93231b570f26f19"
++    },
++    {
++      "path": "native-case-followup/inventory.log",
++      "sha256": "0ea03eaa733487d363ee81532cccd5009982c96489ab9aa798a7b715ed6f4425"
++    },
++    {
++      "path": "native-case-followup/runner.log",
++      "sha256": "38495969980b41261531a9c7f062cb8e6d50f6fbc04979adde74643c522ec083"
++    },
++    {
++      "path": "native-case-followup/ledger.log",
++      "sha256": "44c26d9dba1b6e7ddc796dd1718c43bb12fb8c1e08c8f1c38bf65eb0aee11266"
++    },
++    {
++      "path": "native-case-followup/prior-source-controls.log",
++      "sha256": "68dfe7209424308a24578d3e216157227ad76c0c84434c748908fa60d5f91381"
++    },
++    {
++      "path": "native-consistency-followup/acceptance-run/checks.json",
++      "sha256": "8c6d957b06e4d96c2a40c1cdc2b4428587789744af165c389e0df4ecff275ad7"
++    },
++    {
++      "path": "native-consistency-followup/acceptance-run/named-tests.log",
++      "sha256": "f0dbac0c2508ce31a001ff3f12403c192088997ec3c0bae870a337f703f90152"
++    },
++    {
++      "path": "native-consistency-followup/acceptance-run/retrospective-suite.log",
++      "sha256": "f0dbac0c2508ce31a001ff3f12403c192088997ec3c0bae870a337f703f90152"
++    },
++    {
++      "path": "native-consistency-followup/acceptance-run/collection.log",
++      "sha256": "f0dbac0c2508ce31a001ff3f12403c192088997ec3c0bae870a337f703f90152"
++    },
++    {
++      "path": "native-consistency-followup/validation.json",
++      "sha256": "8fb149042a3bdbf7c541071999480ca06f4e2dbe8c2f10d4f524b120ece68426"
++    },
++    {
++      "path": "native-consistency-followup/plan.md",
++      "sha256": "3fbf1bbf8fca8ad8080589dea841f2a711837ed1889b8ee424f3fa38bbb6933b"
++    },
++    {
++      "path": "native-consistency-followup/results.md",
++      "sha256": "6e5e03e26f89a4f16a6f9908195f4ec501ba52a8bc275d32f3439bd80e7f93ce"
++    },
++    {
++      "path": "native-consistency-followup/recovery-observation.json",
++      "sha256": "f64e0f118b4a175abc205e879c4bd35e98a1e732668b1512dde94d156ea2782f"
++    },
++    {
++      "path": "native-consistency-followup/prior-source-controls.log",
++      "sha256": "8cdc5996e5846147c989449c7252d9972c2be7bb1536e5471e6971d7ae4a3095"
++    },
++    {
++      "path": "native-consistency-followup/inventory.log",
++      "sha256": "51717d4f6737507e030a6958c437ef58510326ebe332b1e27fe49a49178269d1"
++    },
++    {
++      "path": "native-consistency-followup/runner.log",
++      "sha256": "a3e2d8b5b2c33e9136bae517cfe68d7175a3196613e63b3c36302dc42287b9a2"
++    },
++    {
++      "path": "native-consistency-followup/ledger.log",
++      "sha256": "2901aaa2f871181a5340eff184aeaef148683cf7c9530dc36010e77aa93ca022"
++    },
++    {
++      "path": "native-admission-followup/validation.json",
++      "sha256": "b5f5c7cab8e5d7e15c3379ec45cf053c2fa8be5e1e70b9492f32a668c79ee8b4"
++    },
++    {
++      "path": "native-admission-followup/plan.md",
++      "sha256": "5b84e4c37de628d14a74afd77462d175346202d21921de344294374a2a8dffbb"
++    },
++    {
++      "path": "native-admission-followup/results.md",
++      "sha256": "0025f4f19644c915e299cf8ff155869c1ab1076758f7a05c2d1f3b42de0bd249"
++    },
++    {
++      "path": "native-admission-followup/baseline.log",
++      "sha256": "06be328114da97765fe5f8e573067ec3dd37f47b986d59fdea6f71dcfbf095f4"
++    },
++    {
++      "path": "native-admission-followup/prior-source-controls.log",
++      "sha256": "3e161e26b2f66e4a1d9b44aad41ad7173330773435cdfcce48631155c5124fcf"
++    },
++    {
++      "path": "native-admission-followup/inventory.log",
++      "sha256": "bdc76f7f313d9260f36328f673c1522f21c85817cb2ce4ec427dcf05ddbf455e"
++    },
++    {
++      "path": "native-admission-followup/runner.log",
++      "sha256": "f696744bbc57e8420a29d06fbe97bf66ac82a832d4aef9722bceb4d84142ebdc"
++    },
++    {
++      "path": "native-admission-followup/ledger.log",
++      "sha256": "447c16282b4035e4cf5f0dbfc7390594e41056fa3efa0b46463405a3b6d04f4e"
++    },
++    {
++      "path": "native-admission-followup/acceptance-run/checks.json",
++      "sha256": "95f009b924007b7b76122916706389d82e55b46527abfc6e85400483ebfa609f"
++    },
++    {
++      "path": "native-admission-followup/acceptance-run/named-tests.log",
++      "sha256": "3c62bade513fb2347fe3e5a9f91901d9e1bbf2d4a19bbd59d2863c1cdf42e10a"
++    },
++    {
++      "path": "native-admission-followup/acceptance-run/retrospective-suite.log",
++      "sha256": "3c62bade513fb2347fe3e5a9f91901d9e1bbf2d4a19bbd59d2863c1cdf42e10a"
++    },
++    {
++      "path": "native-admission-followup/acceptance-run/collection.log",
++      "sha256": "3c62bade513fb2347fe3e5a9f91901d9e1bbf2d4a19bbd59d2863c1cdf42e10a"
++    }
++  ],
++  "external_references": [
++    {
++      "category": "historical_observations",
++      "reference": "dropbox:id:tDSHdCztYNUAAAAAADfgrw@65de8f715bb690369d613",
++      "authenticated_by_audit": false
++    },
++    {
++      "category": "historical_observations",
++      "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6229128915",
++      "authenticated_by_audit": false
++    },
++    {
++      "category": "historical_observations",
++      "reference": "https://github.com/stranske/Orchestrator/issues/575#issuecomment-6251544073",
++      "authenticated_by_audit": false
++    },
++    {
++      "category": "historical_observations",
++      "reference": "https://github.com/stranske/Orchestrator/issues/575#issuecomment-6344712055",
++      "authenticated_by_audit": false
++    },
++    {
++      "category": "mirror_synchronization",
++      "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6205949903",
++      "authenticated_by_audit": false
++    },
++    {
++      "category": "mirror_synchronization",
++      "reference": "https://github.com/stranske/Orchestrator/issues/575#issuecomment-6251544073",
++      "authenticated_by_audit": false
++    },
++    {
++      "category": "dispatch_receipts",
++      "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6168601695",
++      "authenticated_by_audit": false
++    },
++    {
++      "category": "dispatch_receipts",
++      "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6205949903",
++      "authenticated_by_audit": false
++    },
++    {
++      "category": "dispatch_receipts",
++      "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6217948095",
++      "authenticated_by_audit": false
++    },
++    {
++      "category": "dispatch_receipts",
++      "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6229128915",
++      "authenticated_by_audit": false
++    }
++  ],
++  "missing_evidence": [
++    "Current accepted source/deployed/mirror byte bindings",
++    "Immutable native source report matching 8a6649a27bb5ee05001cc580691a98aa26404f0f3a0c85d845ada9e6046a069c",
++    "Canonical publication bytes and native journal/qualification manifests",
++    "Identity-bound original requested 21 retry rows and outcomes",
++    "Raw authenticated October 18 acceptance proof (a dated scheduled observation was recovered)",
++    "Previously fixed next-20 manifest and at least 15 dated decisions",
++    "Current live writer ownership"
++  ]
++}
+diff --git a/docs/verification/issue-1096-recovery/native-admission-followup/ledger.log b/docs/verification/issue-1096-recovery/native-admission-followup/ledger.log
+new file mode 100644
+index 0000000..573743f
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/native-admission-followup/ledger.log
+@@ -0,0 +1,34 @@
++✔ published recovery ledger is attributable without establishing operational acceptance (29.888655ms)
++✔ rejects modified evidence instead of trusting the recorded result: named-tests.log (31.319401ms)
++✔ rejects modified evidence instead of trusting the recorded result: interpreter-followup/runner-after.log (25.559761ms)
++✔ rejects modified evidence instead of trusting the recorded result: pre-dispatch-observation.json (18.685384ms)
++✔ rejects changed hash-map evidence: plan.md (17.051026ms)
++✔ rejects missing hash-map evidence: plan.md (15.17143ms)
++✔ rejects changed hash-map evidence: results.md (17.616329ms)
++✔ rejects missing hash-map evidence: results.md (15.024959ms)
++✔ rejects missing evidence even when its parent receipt says it passed (10.16614ms)
++✔ rejects a missing checksum on a referenced log: null (17.390391ms)
++✔ rejects a missing checksum on a referenced log: undefined (15.756111ms)
++✔ audits JUnit bytes and refuses an absent JUnit checksum (28.740648ms)
++✔ refuses evidence outside the ledger directory: relative (9.642872ms)
++✔ refuses evidence outside the ledger directory: absolute (9.38493ms)
++✔ refuses evidence outside the ledger directory: symlink (9.42065ms)
++✔ does not equate a historical backup with the canonical report (17.181429ms)
++✔ rejects a retained row count substituted for the saved population (17.341625ms)
++✔ rejects merged historical/current categories (17.344283ms)
++✔ rejects missing dated limitations (18.240649ms)
++✔ rejects missing disclosure (15.61751ms)
++✔ rejects missing October 18 disclosure (16.546277ms)
++✔ rejects advice grade substitution (15.434723ms)
++✔ rejects unproved acceptance (15.823567ms)
++✔ rejects replacement cohort count (16.237691ms)
++✔ rejects mirror identity substitution (17.008075ms)
++✔ rejects historical dispatch substitution (17.184117ms)
++ℹ tests 26
++ℹ suites 0
++ℹ pass 26
++ℹ fail 0
++ℹ cancelled 0
++ℹ skipped 0
++ℹ todo 0
++ℹ duration_ms 465.352369
+diff --git a/docs/verification/issue-1096-recovery/native-admission-followup/prior-source-controls.log b/docs/verification/issue-1096-recovery/native-admission-followup/prior-source-controls.log
+new file mode 100644
+index 0000000..e8acf02
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/native-admission-followup/prior-source-controls.log
+@@ -0,0 +1,153 @@
++✔ packet floor diagnostics match the production rule without trusting saved flags (712.901328ms)
++✔ packet diagnostics identify missing and clipped evidence separately on parent and retries (1.390209ms)
++✔ report CLI carries packet floor locators through unique requested-row reconciliation (38.285607ms)
++✔ report recovery preserves ordered rows, recursive paid history and conflicting counts (1.650192ms)
++✔ report recovery rejects missing input without initializing runtime state (1.084526ms)
++✔ attempt observations bind nested failure fields without exposing private error text (1.491987ms)
++✔ saved decisions survive failed retries and remain distinct from independent truth (1.095407ms)
++✔ failure field hashes detect changed evidence even when retained classifications match (1.161427ms)
++✔ later-truth diagnostics distinguish absence, UNKNOWN, binary claims and invalid values (1.303237ms)
++✔ parent and retry truth remain separate without deriving truth from a decision (1.065625ms)
++✔ changed binary truth changes its evidence hash without authenticating either value (0.931955ms)
++✔ recorded failure stages explain collection, execution and validation breaks on real message shapes (0.823273ms)
++✔ unknown and contradictory failure prose cannot borrow a recognized stage (0.801021ms)
++✖ current native retry refusals identify admission breaks without inventing paid attempts (2.340363ms)
++✔ native refusal classification rejects changed prose and mixed admission or execution claims (1.903708ms)
++✖ requested retry CLI preserves parent decisions and exposes separate native admission breaks (41.858847ms)
++✔ exact retained launcher refusals explain admission without claiming a backend attempt (1.169144ms)
++✔ launcher refusal matching rejects changed prose and contradictory attempt fields (1.108918ms)
++✔ later launcher refusals preserve the parent decision and prior paid history (0.826834ms)
++✔ later retries and persistence breaks cannot replace the parent attempt failure or decision (1.888662ms)
++✔ report recovery refuses malformed and ambiguous retained identities (2.355878ms)
++✔ nested retries cannot borrow a root identity when their saved identities conflict (2.94384ms)
++✔ explicit retry identities must be verifiable while compact histories remain intact (2.474084ms)
++✔ CLI refuses cross-case retries before emitting manifest or native receipt matches (44.482239ms)
++✔ report recovery requires explicit attribution and a valid check time (0.617482ms)
++✔ report recovery aborts if the input changes during observation (1.004975ms)
++✔ retained report reconciliation preserves requested order and explains every identity gap (1.603742ms)
++✔ retained report CLI matches supplied manifests without authenticating saved outcomes (40.859299ms)
++✔ requested recovery dispositions explain identity gaps without borrowing candidate outcomes (1.150148ms)
++✔ requested recovery keeps recorded failures separate from missing packet and truth evidence (2.82988ms)
++✔ decided requested rows retain their outcome and UNKNOWN while historical retry failures stay separate (45.186862ms)
++✔ possible paid attempts require completion recovery before packet recollection (9.667399ms)
++✔ requested rows expose unresolved native case attempts even without backend identities (46.905648ms)
++✔ native case recovery separates unavailable journals from no observed unresolved attempts (9.788487ms)
++✔ unbound requested identities cannot borrow native case recovery from candidate rows (7.527913ms)
++✔ validated native failures and abstentions remain visible with their first recorded break (219.691931ms)
++✔ malformed or missing native validation evidence cannot disappear behind validated state (13.749938ms)
++✔ binary validation still requires receipt presence and remains unauthenticated (12.034572ms)
++✔ native binary results with inconsistent receipt fields remain unresolved (23.723918ms)
++✔ native receipt consistency compares exact stored text without parsing provider output (11.819926ms)
++✔ native receipt consistency CLI retains both mismatches without leaking or changing inputs (48.514847ms)
++✔ legacy report manifest keeps verdict ambiguity visible and empty requests cannot complete accounting (1.09074ms)
++✔ report reconciliation refuses malformed or changing manifests without replacing evidence (1.608761ms)
++✔ report CLI never combines historical recovery with dispatch or current Brain selection (222.068089ms)
++✔ native receipt locators bind both case and backend identity for each retained attempt (7.698353ms)
++✔ missing native identities and receipts remain gaps rather than borrowing another attempt (7.456007ms)
++✔ reused native backend identities remain ambiguous even when one candidate matches the case (6.97685ms)
++✔ pre-dispatch inventory reconciles report and native locators without exposing payloads (7.516141ms)
++✔ all validated native rows still require authentication, independent truth and live writer proof (7.362684ms)
++✔ missing native evidence remains unavailable and never means zero attempts (0.744852ms)
++✔ an observed empty journal cannot establish writer ownership or authorize spending (8.445143ms)
++✔ an active journal writer does not make a read-only snapshot claim ownership (6.939357ms)
++✔ foreign and incomplete journals are refused without schema repair (3.850713ms)
++✔ report without native marker still cannot authorize generic retry (0.695977ms)
++✔ journal CLI stays read-only and requires explicit report attribution (79.83282ms)
++✔ owner exclusions are accounted for without reading excluded outcome evidence: mixed case (48.656932ms)
++✔ owner exclusions are accounted for without reading excluded outcome evidence: spaces (47.036244ms)
++✔ owner exclusions are accounted for without reading excluded outcome evidence: tabs and newlines (44.960771ms)
++✔ owner exclusions are accounted for without reading excluded outcome evidence: Unicode whitespace (46.75528ms)
++✔ requested owner exclusions remain explicit with missing or contradictory inventory: "stranske/Collab-Admin#7" (6.520909ms)
++✔ requested owner exclusions remain explicit with missing or contradictory inventory: "\tstranske/Collab-Admin #7" (5.393944ms)
++✔ inventory exports every synthetic dispute and every exclusion without writes (807.590774ms)
++✔ inventory preserves the fixed cutoff and reports a count discrepancy (7.138651ms)
++✔ inventory distinguishes missing evidence from a complete cohort (2.463806ms)
++✔ inventory distinguishes schema-less evidence from a complete cohort (0.640737ms)
++✔ inventory distinguishes empty evidence from a complete cohort (2.545532ms)
++✔ inventory distinguishes incomplete-schema evidence from a complete cohort (3.056047ms)
++✔ inventory CLI exports JSON, signals unavailable evidence and rejects replay options (220.450005ms)
++✔ matching 71 identities bind the supplied manifest bytes without claiming historical acceptance (101.873985ms)
++✔ equal inventory counts expose substituted identities, exclusions and absent requested runs (9.139437ms)
++✔ a requested run on another target cannot satisfy case identity (4.46101ms)
++✔ inventory accounts for outcomes without run records as unavailable evidence (46.097841ms)
++✔ an outcomes-only Brain is available with exclusions, rather than an observed empty store (4.211645ms)
++✔ manifest retains every requested identity when Brain is empty (3.005356ms)
++✔ manifest retains every requested identity when Brain is unavailable (3.475311ms)
++✔ manifest count discrepancy prevents an exact match even when all supplied identities match (5.058995ms)
++✔ manifest CLI preserves input bytes, rejects malformed identities and signals unavailable Brain (507.097209ms)
++✔ version 2 reconciles all 71 dispute identities without claiming historical provenance (94.37983ms)
++✔ version 2 exposes substituted verdicts NON_PASS/FAIL despite matching run and count (45.228825ms)
++✔ version 2 exposes substituted verdicts FAIL_HOLLOW/PASS despite matching run and count (43.725324ms)
++✔ version 2 exposes substituted verdicts PASS/FAIL despite matching run and count (45.595658ms)
++✔ version 2 retains different disputes on one run and rejects duplicate dispute identities (5.603547ms)
++✔ version 2 preserves full identities for excluded, missing and unavailable cases (41.226624ms)
++✔ version 2 rejects malformed verdicts before publishing any inventory (508.164454ms)
++✔ version 2 distinguishes unavailable verdict evidence from contradictory verdicts (49.191235ms)
++✔ version 2 retains an observed target mismatch when verdict evidence is unavailable (3.729519ms)
++✔ missing stored targets remain eligible disputes with explicit unavailable identity evidence (806.445602ms)
++ℹ tests 87
++ℹ suites 0
++ℹ pass 85
++ℹ fail 2
++ℹ cancelled 0
++ℹ skipped 0
++ℹ todo 0
++ℹ duration_ms 5313.652612
++
++✖ failing tests:
++
++test at tests/test_adjudicator_inventory.js:409:1
++✖ current native retry refusals identify admission breaks without inventing paid attempts (2.340363ms)
++  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
++  + actual - expected
++  
++    {
++  +   code: null,
++  -   code: 'native_source_report_changed',
++      evidence_locations: [
++        'rows[0].error'
++      ],
++  +   stage: null,
++  +   status: 'unresolved'
++  -   message_origin: 'repository_emitter',
++  -   stage: 'dispatch_admission',
++  -   status: 'recorded'
++    }
++  
++      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_inventory.js:417:12)
++      at Test.runInAsyncScope (node:async_hooks:227:14)
++      at Test.run (node:internal/test_runner/test:1402:25)
++      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
++      at Test.postRun (node:internal/test_runner/test:1542:19)
++      at Test.run (node:internal/test_runner/test:1467:12)
++      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
++    generatedMessage: true,
++    code: 'ERR_ASSERTION',
++    actual: [Object],
++    expected: [Object],
++    operator: 'deepStrictEqual',
++    diff: 'simple'
++  }
++
++test at tests/test_adjudicator_inventory.js:452:1
++✖ requested retry CLI preserves parent decisions and exposes separate native admission breaks (41.858847ms)
++  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
++  + actual - expected
++  
++  + null
++  - 'native_revision_already_in_flight'
++  
++      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_inventory.js:471:10)
++      at Test.runInAsyncScope (node:async_hooks:227:14)
++      at Test.run (node:internal/test_runner/test:1402:25)
++      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
++      at Test.postRun (node:internal/test_runner/test:1542:19)
++      at Test.run (node:internal/test_runner/test:1467:12)
++      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
++    generatedMessage: true,
++    code: 'ERR_ASSERTION',
++    actual: null,
++    expected: 'native_revision_already_in_flight',
++    operator: 'strictEqual',
++    diff: 'simple'
++  }
+diff --git a/docs/verification/issue-1096-recovery/native-admission-followup/results.md b/docs/verification/issue-1096-recovery/native-admission-followup/results.md
+new file mode 100644
+index 0000000..d7b24b4
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/native-admission-followup/results.md
+@@ -0,0 +1,44 @@
++# Native retry admission diagnostic results
++
++Checked 2026-11-04 UTC. Source commit `c80d78d65510c4022a8dde9a7961d1d71f492b6a` has
++checkout `5435e6ad526c2f6ad4450d743d3dd4650591ea7f` as parent.
++
++The inventory now classifies exact native refusal messages for changed source
++reports, missing fresh collected cases, original case binding mismatches,
++non-abstaining originals, already recorded binary decisions and five reserved
++revision states. These are recorded admission failures, not authenticated native
++outcomes or proof of no prior spend. Changed prose, unknown states and mixed
++refusal/execution fields remain unresolved. Later retry refusals remain separate
++from primary saved decisions, UNKNOWN truth and paid history.
++
++All 146 focused checks pass: 87 inventory, 33 acceptance-runner and 26 ledger
++checks. Two of the three added controls fail against the prior implementation;
++the contradiction control already passes there. CLI parity and report/manifest
++byte preservation pass. Syntax and whitespace checks pass. No Python files changed.
++[Validation](validation.json) binds logs and source hashes.
++
++The [pre-execution plan](plan.md) preceded the bounded required-test attempt on
++this source commit. [Its receipt](acceptance-run/checks.json) records collection,
++four named tests and the full retrospective suite failing before collection with
++`No module named pytest` under selected Python 3.14.9. No accepted deployment
++binding is established. Repository regression passes are not operational proof.
++
++A fresh read of issue #1096 supplies no original retry manifest or native journal.
++A quoted Dropbox filename search for `579-original-results.json` returns no
++matches; the broader query returns references, with no exact filename match among
++its 100 results. Search absence does not prove that the original is unavailable
++everywhere. No original cohort is reconstructed from those references.
++Authenticated native receipts, independent current truth, accepted/deployed/mirror
++bindings, live writer ownership and fixed next-20 membership remain unavailable
++in this run. Raw October 18 proof remains unavailable separately from its retained
++dated observation. No operational task checkbox is newly completed. No paid
++retry, canonical publication, production write or mirror sync occurred.
++
++PR #1097 was observed open with `isDraft=false`. The blocker comment and
++`needs-human` label were rejected because connector mutations require approval
++while run policy is `never`; neither remote update was applied.
++
++Checkout Git metadata is read-only. The source and evidence commits are preserved
++in `/tmp/issue1096-native-admission-git-qt8ntu2_/repo.git`; the reviewable handoff is the
++[applyable patch](../../../../artifacts/issue-1096-native-admission.patch).
++The checkout branch itself was not advanced.
+diff --git a/docs/verification/issue-1096-recovery/native-admission-followup/runner.log b/docs/verification/issue-1096-recovery/native-admission-followup/runner.log
+new file mode 100644
+index 0000000..11a1cbc
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/native-admission-followup/runner.log
+@@ -0,0 +1,41 @@
++✔ records exact commands, source hashes, complete JUnit and logs for both checks (415.624733ms)
++✔ full-suite success requires the complete collected identities: {"omitExtra":true} (334.613931ms)
++✔ full-suite success requires the complete collected identities: {"duplicateExtra":true} (327.039834ms)
++✔ full-suite success requires the complete collected identities: {"collectionFailure":true} (329.077294ms)
++✔ full-suite success requires the complete collected identities: {"collectionEmpty":true} (318.293765ms)
++✔ full-suite success requires the complete collected identities: {"collectionDuplicate":true} (330.546512ms)
++✔ missing pytest preserves two failures and cannot complete acceptance (162.242521ms)
++✔ preserves JUnit reader failures: {"parserFailure":true} (243.45127ms)
++✔ preserves JUnit reader failures: {"parserInvalidJson":true} (226.964291ms)
++✔ preserves JUnit reader failures: {"malformed":true} (358.094825ms)
++✔ refuses a successful claim for incomplete evidence: {"noXml":true} (159.687118ms)
++✔ refuses a successful claim for incomplete evidence: {"malformed":true} (356.951343ms)
++✔ refuses a successful claim for incomplete evidence: {"empty":true} (320.193898ms)
++✔ refuses a successful claim for incomplete evidence: {"incomplete":true} (328.54805ms)
++✔ refuses a successful claim for incomplete evidence: {"duplicate":true} (314.65984ms)
++✔ refuses a successful claim for incomplete evidence: {"skipped":true} (308.863304ms)
++✔ refuses a successful claim for incomplete evidence: {"foreign":true} (309.523796ms)
++✔ refuses a successful claim for incomplete evidence: {"exit":1} (316.806291ms)
++✔ source changes during execution invalidate otherwise passing checks (311.539553ms)
++✔ timeout preserves both failed checks without retrying either command (1586.453823ms)
++✔ refuses revision mismatch, modified tracked inputs and untracked inputs before execution (34.914444ms)
++✔ refuses uncommitted test execution input: conftest.py (22.848772ms)
++✔ refuses uncommitted test execution input: pytest.ini (22.124751ms)
++✔ refuses uncommitted test execution input: setup.cfg (22.934564ms)
++✔ refuses uncommitted test execution input: scripts/run_adjudicator_acceptance.js (23.553643ms)
++✔ requires explicit interpreter/revision/bounds and never overwrites a receipt (170.787897ms)
++✔ refuses ignored execution inputs before running pytest: tests/conftest.py (27.649579ms)
++✔ refuses ignored execution inputs before running pytest: src/local_override.py (26.095521ms)
++✔ refuses ignored execution inputs before running pytest: tests/fixtures/local-evidence.json (26.391735ms)
++✔ refuses ignored execution inputs before running pytest: src/legacy.pyc (26.688066ms)
++✔ refuses ignored execution inputs before running pytest: tests/__pycache__/conftest.py (27.465985ms)
++✔ ordinary ignored Python and pytest caches do not invalidate source receipts (314.890479ms)
++✔ ignored inputs introduced during execution invalidate otherwise passing checks (314.172872ms)
++ℹ tests 33
++ℹ suites 0
++ℹ pass 33
++ℹ fail 0
++ℹ cancelled 0
++ℹ skipped 0
++ℹ todo 0
++ℹ duration_ms 8434.062518
+diff --git a/docs/verification/issue-1096-recovery/native-admission-followup/validation.json b/docs/verification/issue-1096-recovery/native-admission-followup/validation.json
+new file mode 100644
+index 0000000..e86443c
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/native-admission-followup/validation.json
+@@ -0,0 +1,75 @@
++{
++  "checked_at": "2026-11-04T05:10:28.329756+00:00",
++  "git_dir": "/tmp/issue1096-native-admission-git-qt8ntu2_/repo.git",
++  "source_commit": "c80d78d65510c4022a8dde9a7961d1d71f492b6a",
++  "checkout_parent": "5435e6ad526c2f6ad4450d743d3dd4650591ea7f",
++  "source_sha256": {
++    "scripts/export_adjudicator_inventory.js": "adca18e4ef02db3053bc2d00e759e5e2983d508f551ce29a090ed003722568bd",
++    "tests/test_adjudicator_inventory.js": "83764e20c0f594adb8e36cc27725283afb211c20a583b37a75b7116adab0bfca"
++  },
++  "checks": [
++    {
++      "command": "node tests/test_adjudicator_inventory.js",
++      "phase": "prior source and tests",
++      "exit_status": 0,
++      "log": "baseline.log",
++      "log_sha256": "06be328114da97765fe5f8e573067ec3dd37f47b986d59fdea6f71dcfbf095f4",
++      "passed": 84,
++      "failed": 0
++    },
++    {
++      "command": "node tests/test_adjudicator_inventory.js",
++      "phase": "prior source with added controls",
++      "exit_status": 1,
++      "log": "prior-source-controls.log",
++      "log_sha256": "3e161e26b2f66e4a1d9b44aad41ad7173330773435cdfcce48631155c5124fcf",
++      "passed": 85,
++      "failed": 2
++    },
++    {
++      "command": "node tests/test_adjudicator_inventory.js",
++      "phase": "implemented source",
++      "exit_status": 0,
++      "log": "inventory.log",
++      "log_sha256": "bdc76f7f313d9260f36328f673c1522f21c85817cb2ce4ec427dcf05ddbf455e",
++      "passed": 87,
++      "failed": 0
++    },
++    {
++      "command": "node tests/test_adjudicator_acceptance_runner.js",
++      "phase": "related acceptance runner regressions",
++      "exit_status": 0,
++      "log": "runner.log",
++      "log_sha256": "f696744bbc57e8420a29d06fbe97bf66ac82a832d4aef9722bceb4d84142ebdc",
++      "passed": 33,
++      "failed": 0
++    },
++    {
++      "command": "node tests/test_adjudicator_evidence_ledger.js",
++      "phase": "related ledger regressions",
++      "exit_status": 0,
++      "log": "ledger.log",
++      "log_sha256": "447c16282b4035e4cf5f0dbfc7390594e41056fa3efa0b46463405a3b6d04f4e",
++      "passed": 26,
++      "failed": 0
++    }
++  ],
++  "focused_passed": 146,
++  "evidence_sha256": {
++    "plan.md": "5b84e4c37de628d14a74afd77462d175346202d21921de344294374a2a8dffbb",
++    "results.md": "0025f4f19644c915e299cf8ff155869c1ab1076758f7a05c2d1f3b42de0bd249"
++  },
++  "required_python_acceptance": "acceptance-run/checks.json",
++  "required_tests_passed": false,
++  "original_retry_reconciliation_complete": false,
++  "operational_acceptance_complete": false,
++  "dispatch_authorized": false,
++  "paid_dispatches": 0,
++  "blocker_comment": "rejected_connector_requires_approval_policy_never",
++  "needs_human_label": "rejected_connector_requires_approval_policy_never",
++  "pr_readiness": {
++    "number": 1097,
++    "state": "open",
++    "isDraft": false
++  }
++}
+-- 
+2.56.0
+

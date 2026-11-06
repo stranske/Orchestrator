@@ -1,0 +1,109 @@
+✔ report recovery preserves ordered rows, recursive paid history and conflicting counts (4.01819ms)
+✔ report recovery rejects missing input without initializing runtime state (0.767719ms)
+✔ attempt observations bind nested failure fields without exposing private error text (1.334824ms)
+✔ saved decisions survive failed retries and remain distinct from independent truth (1.172274ms)
+✔ failure field hashes detect changed evidence even when retained classifications match (1.081921ms)
+✔ recorded failure stages explain collection, execution and validation breaks on real message shapes (0.997067ms)
+✔ unknown and contradictory failure prose cannot borrow a recognized stage (0.896579ms)
+✖ exact retained launcher refusals explain admission without claiming a backend attempt (1.608847ms)
+✔ launcher refusal matching rejects changed prose and contradictory attempt fields (1.066559ms)
+✖ later launcher refusals preserve the parent decision and prior paid history (0.946482ms)
+✔ later retries and persistence breaks cannot replace the parent attempt failure or decision (1.08725ms)
+✔ report recovery refuses malformed and ambiguous retained identities (2.640614ms)
+✔ report recovery requires explicit attribution and a valid check time (0.47573ms)
+✔ report recovery aborts if the input changes during observation (0.693259ms)
+✔ retained report reconciliation preserves requested order and explains every identity gap (1.75379ms)
+✔ retained report CLI matches supplied manifests without authenticating saved outcomes (35.480501ms)
+✔ legacy report manifest keeps verdict ambiguity visible and empty requests cannot complete accounting (1.391847ms)
+✔ report reconciliation refuses malformed or changing manifests without replacing evidence (1.14219ms)
+✔ report CLI never combines historical recovery with dispatch or current Brain selection (182.020986ms)
+✔ pre-dispatch inventory reconciles report and native locators without exposing payloads (9.365707ms)
+✔ all validated native rows still require authentication, independent truth and live writer proof (7.684805ms)
+✔ missing native evidence remains unavailable and never means zero attempts (0.720219ms)
+✔ an observed empty journal cannot establish writer ownership or authorize spending (10.149139ms)
+✔ an active journal writer does not make a read-only snapshot claim ownership (89.249806ms)
+✔ foreign and incomplete journals are refused without schema repair (3.764197ms)
+✔ report without native marker still cannot authorize generic retry (0.687411ms)
+✔ journal CLI stays read-only and requires explicit report attribution (70.34031ms)
+✔ inventory exports every synthetic dispute and every exclusion without writes (756.622126ms)
+✔ inventory preserves the fixed cutoff and reports a count discrepancy (7.889235ms)
+✔ inventory distinguishes missing evidence from a complete cohort (2.413951ms)
+✔ inventory distinguishes schema-less evidence from a complete cohort (0.556118ms)
+✔ inventory distinguishes empty evidence from a complete cohort (2.4547ms)
+✔ inventory distinguishes incomplete-schema evidence from a complete cohort (4.223222ms)
+✔ inventory CLI exports JSON, signals unavailable evidence and rejects replay options (180.80703ms)
+✔ matching 71 identities bind the supplied manifest bytes without claiming historical acceptance (111.750564ms)
+✔ equal inventory counts expose substituted identities, exclusions and absent requested runs (8.839032ms)
+✔ a requested run on another target cannot satisfy case identity (5.553419ms)
+✔ inventory accounts for outcomes without run records as unavailable evidence (37.855856ms)
+✔ an outcomes-only Brain is available with exclusions, rather than an observed empty store (4.850365ms)
+✔ manifest retains every requested identity when Brain is empty (2.843783ms)
+✔ manifest retains every requested identity when Brain is unavailable (2.56286ms)
+✔ manifest count discrepancy prevents an exact match even when all supplied identities match (4.010509ms)
+✔ manifest CLI preserves input bytes, rejects malformed identities and signals unavailable Brain (428.253937ms)
+✔ version 2 reconciles all 71 dispute identities without claiming historical provenance (120.048731ms)
+✔ version 2 exposes substituted verdicts NON_PASS/FAIL despite matching run and count (39.025563ms)
+✔ version 2 exposes substituted verdicts FAIL_HOLLOW/PASS despite matching run and count (38.107393ms)
+✔ version 2 exposes substituted verdicts PASS/FAIL despite matching run and count (38.042577ms)
+✔ version 2 retains different disputes on one run and rejects duplicate dispute identities (5.713174ms)
+✔ version 2 preserves full identities for excluded, missing and unavailable cases (37.019061ms)
+✔ version 2 rejects malformed verdicts before publishing any inventory (430.571638ms)
+✔ version 2 distinguishes unavailable verdict evidence from contradictory verdicts (42.006028ms)
+✔ version 2 retains an observed target mismatch when verdict evidence is unavailable (3.998101ms)
+✔ missing stored targets remain eligible disputes with explicit unavailable identity evidence (718.428907ms)
+ℹ tests 53
+ℹ suites 0
+ℹ pass 51
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3477.687289
+
+✖ failing tests:
+
+test at tests/test_adjudicator_inventory.js:218:1
+✖ exact retained launcher refusals explain admission without claiming a backend attempt (1.608847ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'unresolved'
+  - 'recorded'
+  
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_inventory.js:227:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'unresolved',
+    expected: 'recorded',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/test_adjudicator_inventory.js:266:1
+✖ later launcher refusals preserve the parent decision and prior paid history (0.946482ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + null
+  - 'dispatch_admission'
+  
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_inventory.js:277:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: null,
+    expected: 'dispatch_admission',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

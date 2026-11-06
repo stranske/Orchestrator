@@ -1,0 +1,62 @@
+{
+  "checked_at": "2026-11-03T18:51:58.245Z",
+  "command": [
+    "node",
+    "scripts/export_adjudicator_inventory.js",
+    "--report",
+    "/tmp/issue-1096-recovered-historical-report.json",
+    "--observed-at",
+    "1793731918",
+    "--evidence-class",
+    "historical_snapshot",
+    "--evidence-reference",
+    "dropbox:id:tDSHdCztYNUAAAAAADfgrw@65de8f715bb690369d613"
+  ],
+  "source_parent": "ed048b3417585c8d3f5353b098341eeab7c2bd8c",
+  "evidence_class": "historical_snapshot",
+  "evidence_reference": "dropbox:id:tDSHdCztYNUAAAAAADfgrw@65de8f715bb690369d613",
+  "report_sha256": "e55a63bd4f458d3c747f7d14321aa4fa81ed34731ab8add3bf6aba920ad262b1",
+  "report_byte_length": 2386541,
+  "complete_inventory_stdout_sha256": "03ca9070c496611c090f4e895b64b2a60c1df8452deef2ae4ff7cfe1c3dc3354",
+  "case_count": 58,
+  "retained_population": 40,
+  "paid_identity_summary": {
+    "records": 38,
+    "unique": 38,
+    "repeated": []
+  },
+  "retained_graded": 0,
+  "native_publication_present": false,
+  "pre_dispatch": {
+    "requested_generic_command": "--dispatch --retry --limit 21",
+    "generic_retry_route": "not_authorized_by_inventory",
+    "native_route": "admit_collected_retry_then_publish_native_cohort",
+    "native_journal": {
+      "status": "unavailable",
+      "path": null,
+      "attempts": null,
+      "receipt_authority": "not_authenticated_by_inventory",
+      "reason": "native_journal_not_supplied"
+    },
+    "paid_identity_reconciliation": {
+      "report_unique": 38,
+      "journal_unique": null,
+      "union_unique": null,
+      "report_only": null,
+      "journal_only": null,
+      "unresolved_without_backend_id": null
+    },
+    "live_writer_ownership": "unverified",
+    "dispatch_authorized": false,
+    "stop_reasons": [
+      "native_journal_not_supplied",
+      "live_writer_ownership_unverified",
+      "accepted_deployed_mirror_bindings_unverified",
+      "immutable_source_and_case_qualification_unverified",
+      "native_receipt_authentication_and_independent_truth_required"
+    ]
+  },
+  "provider_calls": 0,
+  "production_dispatches": 0,
+  "canonical_publications": 0
+}

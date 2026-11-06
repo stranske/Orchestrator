@@ -432,6 +432,33 @@ def _worktree_git_refusals_stay_in_the_test(_worktree_git_refusal_log, monkeypat
     monkeypatch.setenv("ORCH_WORKTREE_GIT_REFUSAL_LOG", str(_worktree_git_refusal_log))
 
 
+@pytest.fixture(scope="session")
+def _claude_token_test_root(tmp_path_factory):
+    return tmp_path_factory.mktemp("claude-token-fixtures")
+
+
+@pytest.fixture(autouse=True)
+def isolate_claude_token_history(monkeypatch, _claude_token_test_root):
+    """Unit tests must supply Claude logs instead of reading the user's history.
+
+    Capacity builds occur throughout the suite. The new fallback otherwise makes
+    unrelated tests depend on gigabytes of changing local data. Producer tests
+    override this directory with their own explicit fixtures; live acceptance is
+    run separately through capacity.py pacing-report.
+    """
+    try:
+        import pacing_usage
+    except ModuleNotFoundError as exc:
+        # The tracked-input guard copies this conftest into tiny synthetic repos.
+        # There is no usage source to isolate when the module is absent there.
+        if exc.name != "pacing_usage":
+            raise
+        return
+
+    monkeypatch.setattr(pacing_usage, "CLAUDE_PROJECTS", _claude_token_test_root)
+    monkeypatch.setenv("ORCH_CLAUDE_PROJECTS", str(_claude_token_test_root))
+
+
 @pytest.fixture(autouse=True)
 def isolate_feature_goals(request, tmp_path, monkeypatch):
     """Every test owns its goal-ledger history; only marked goal-ledger tests execute real reports.
@@ -448,6 +475,30 @@ def isolate_feature_goals(request, tmp_path, monkeypatch):
         monkeypatch.setattr(
             feature_goals, "report", lambda now=None, **kw: feature_goals.drift([], now)
         )
+
+
+@pytest.fixture(autouse=True)
+def isolated_advisor_runtime(request, monkeypatch):
+    """Capability-advisor tests run against temporary runtime roots.
+
+    The roots are installed before ``capability_advisor`` is imported
+    (``advisor_hermetic.import_under_temporary_runtime``). This fixture repoints paths
+    that import already captured, then monkeypatch restores them with the rest of the test.
+    Copies of this conftest in synthetic repos have no advisor suite and never import the helper.
+    """
+    filename = Path(str(getattr(request.node, "path", request.node.fspath))).name
+    if not (
+        filename.startswith("test_capability_advisor_") or filename.startswith("test_advisor_")
+    ):
+        yield
+        return
+    try:
+        import advisor_hermetic
+    except ModuleNotFoundError:
+        yield
+        return
+    with advisor_hermetic.activated(monkeypatch):
+        yield advisor_hermetic.root()
 
 
 def pytest_runtest_setup(item: pytest.Item) -> None:

@@ -1,0 +1,47 @@
+{
+  "git_directory": "/tmp/issue-1096-truth-git-dc5twqhn/repo.git",
+  "source_commit": "e81b3e77c0ad615eeed479fb8f1e566cdec073c0",
+  "source_parent": "9c00d5bda5a429e48310a2bd5e7b27c4f5b30fba",
+  "checked_at": "2026-11-03T22:18:46.055133+00:00",
+  "regression_command": [
+    "node",
+    "--test",
+    "--test-isolation=none",
+    "tests/test_adjudicator_inventory.js",
+    "tests/test_adjudicator_acceptance_runner.js",
+    "tests/test_adjudicator_evidence_ledger.js"
+  ],
+  "regression_tests": {
+    "passed": 111,
+    "failed": 0,
+    "skipped": 0
+  },
+  "negative_controls": {
+    "passed": 0,
+    "failed": 3
+  },
+  "regression_logs": {
+    "baseline.log": {
+      "sha256": "8631fe48d6283c801ccd8a0c7fdbe0d4f6afd47ba4705fa016fd3a4a3f1e317f"
+    },
+    "negative-controls.log": {
+      "sha256": "b0959ec4c9601b30d027bc1dd09294d19aa13b45acac8a3c4705c52269e4221d"
+    },
+    "regressions.log": {
+      "sha256": "68a3da553c71345fc8f6a72fbd713c2f9129d60c278043dd37582db570a84cba"
+    }
+  },
+  "historical_summary": "historical-truth-summary.json",
+  "historical_summary_sha256": "5efc8659d829ae8fce6bbfbda5b64505de3070642f3d5d77d956fba39cfd34c6",
+  "source_sha256": {
+    "scripts/export_adjudicator_inventory.js": "51a4072f4b38d7fece2fa7155f8f64fa28e52cce656f2463eb97371f839a49d5",
+    "tests/test_adjudicator_inventory.js": "bb6aebbae6417224a65f4067ac2444ef415dd5fc4762070d32ca7cdf01fa7157"
+  },
+  "python_files_changed": false,
+  "required_tests_passed": false,
+  "accepted_deployment_verified": false,
+  "newly_completed_tasks": 0,
+  "pr_body_update": "rejected_connector_requires_approval_policy_never",
+  "blocker_comment": "rejected_connector_requires_approval_policy_never",
+  "needs_human_label": "rejected_connector_requires_approval_policy_never"
+}

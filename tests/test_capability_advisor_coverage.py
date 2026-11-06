@@ -10,14 +10,17 @@ import os
 import sys
 from pathlib import Path
 
+import advisor_hermetic
 import pytest
 
-import capabilities
-import capability_advisor as advisor
+_modules = advisor_hermetic.import_under_temporary_runtime("capabilities", "capability_advisor")
+capabilities = _modules["capabilities"]
+advisor = _modules["capability_advisor"]
 
-# The live runtime directories as this process found them, before the guard below replaces them.
-# The checkout itself may sit under the live state dir (agents work in its `worktrees/`), so the
-# checkout is exempt: reading source is not reading runtime state.
+# The live runtime directories as this process found them, after the import-time redirect above
+# has put any path that import captured back. The checkout itself may sit under the live state dir
+# (agents work in its `worktrees/`), so the checkout is exempt: reading source is not reading
+# runtime state.
 _LIVE_RUNTIME_ROOTS = tuple(
     {
         Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex" / "orchestrator")).resolve(),
@@ -29,8 +32,10 @@ _LIVE_RUNTIME_ROOTS = tuple(
     }
 )
 # pytest's own temporary root is exempt too: an agent's TMPDIR can itself sit under the live
-# runtime dir, and every redirected path below lives there.
+# runtime dir, and every redirected path below lives there. The hermetic root is exempt for the
+# same reason when TMPDIR itself is the live state dir.
 _EXEMPT_ROOTS: list[Path] = [Path(__file__).resolve().parent.parent]
+_EXEMPT_ROOTS.append(advisor_hermetic.root().resolve())
 # Every process-start and network boundary the exercised code could reach, by audit event rather
 # than by helper, so an agent launch through any wrapper (dispatcher, fleet_shapes' `gh`, os.system,
 # posix_spawn) is caught the same way.
@@ -80,28 +85,20 @@ sys.addaudithook(_guard)
 
 @pytest.fixture(scope="module", autouse=True)
 def isolated_runtime_and_external_calls(tmp_path_factory):
-    """Redirect both runtime directories and arm the external-operation recorder for the module.
+    """Arm the external-operation recorder for this module.
 
-    `capabilities` resolved its ledger path when it was imported, before any fixture could run, so
-    the import-time constants are repointed too; the audit hook then proves no read reached the
-    live directories by any path that was resolved earlier. The guard is a MonkeyPatch of its own,
-    so no test's `monkeypatch` can undo it mid-test.
+    ``advisor_hermetic`` sets ``ORCH_STATE_DIR`` and ``ORCH_LOCAL_RUNTIME`` before the import and
+    the conftest fixture repoints paths already captured then. This recorder only proves no read
+    reached the live directories. It is not a MonkeyPatch, so a test's ``monkeypatch`` cannot
+    disarm it.
     """
     global _attempted
-    root = tmp_path_factory.mktemp("advisor-coverage")
     _EXEMPT_ROOTS.append(tmp_path_factory.getbasetemp().resolve())
-    guard = pytest.MonkeyPatch()
-    guard.setenv("ORCH_STATE_DIR", str(root / "state"))
-    guard.setenv("ORCH_LOCAL_RUNTIME", str(root / "runtime"))
-    guard.setenv(capabilities.LEDGER_PATH_ENV, str(root / "runtime" / "capabilities.json"))
-    guard.setattr(capabilities, "LOCAL_RUNTIME", root / "runtime")
-    guard.setattr(capabilities, "REG", root / "runtime" / "capabilities.json")
     _attempted = []
     try:
         yield _attempted
     finally:
         attempted, _attempted = _attempted, None
-        guard.undo()
         del _EXEMPT_ROOTS[1:]
     assert attempted == []
 
@@ -483,3 +480,312 @@ def test_consulting_surfaces_reports_verified_missing_and_drifted_callers(tmp_pa
         }
     ]
     assert report["reached"] == ["test:missing", "test:verified"]
+
+
+def _block_module_import(monkeypatch, module_name: str) -> list[str]:
+    """Make a fresh import of `module_name` raise, and record each attempt.
+
+    The defensive `except` arms only when the import itself fails. Patching a helper after a
+    successful import, which is what the earlier coverage tests do, never enters that handler.
+    """
+    import builtins
+
+    attempts: list[str] = []
+    real_import = builtins.__import__
+
+    def blocked(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == module_name or name.startswith(module_name + "."):
+            attempts.append(name)
+            raise ImportError(f"synthetic import failure for {module_name}")
+        return real_import(name, globals, locals, fromlist, level)
+
+    for key in list(sys.modules):
+        if key == module_name or key.startswith(module_name + "."):
+            monkeypatch.delitem(sys.modules, key, raising=False)
+    monkeypatch.setattr(builtins, "__import__", blocked)
+    return attempts
+
+
+def _rank_raises(monkeypatch) -> list[str]:
+    import capability_propensity
+
+    calls: list[str] = []
+
+    def boom(entries, *, path=None, window_days=0):
+        calls.append("rank")
+        raise OSError("propensity store unreadable")
+
+    monkeypatch.setattr(capability_propensity, "rank", boom)
+    return calls
+
+
+def test_dispatcher_import_failure_degrades_direct_entry(monkeypatch):
+    """Gate head lines 201-202. An unimportable dispatcher yields an empty map, then offload only."""
+    attempts = _block_module_import(monkeypatch, "dispatcher")
+    assert advisor._dispatcher_task_type_capability() == {}
+    assert advisor.direct_entry() == {"offload": "offload"}
+    assert attempts == ["dispatcher", "dispatcher"]
+
+
+def test_propensity_import_failure_records_nothing(monkeypatch):
+    """Gate head lines 533-534 and 3013-3014. A missing propensity module writes no events."""
+    attempts = _block_module_import(monkeypatch, "capability_propensity")
+    assert (
+        advisor._record_fact_missing(
+            {"task": "retry helper"},
+            [{"capability_id": "cap-a", "fact": "PR size unknown"}],
+        )
+        == 0
+    )
+    assert (
+        advisor._record_auto_declines(
+            {
+                "experiment_id": "advice:test",
+                "capabilities": [
+                    {"capability_id": "cap-a", "auto_declined": {"reason": "no", "kind": "x"}}
+                ],
+            }
+        )
+        == 0
+    )
+    assert attempts == ["capability_propensity", "capability_propensity"]
+
+
+def test_classification_miss_survives_unreadable_propensity(monkeypatch, tmp_path: Path):
+    """Gate head lines 700-701. A bound answer is still returned when ranking raises."""
+    calls = _rank_raises(monkeypatch)
+    monkeypatch.setattr(advisor, "classify_task", lambda _text: [])
+    monkeypatch.setattr(advisor, "binding_for", lambda *_args, **_kwargs: {"cap-a": "declared"})
+    monkeypatch.setattr(
+        capabilities,
+        "load_declared",
+        lambda path=None: {"cap-a": {"status": "generated", "entrypoint": "cap_a.py"}},
+    )
+    monkeypatch.setattr(
+        advisor,
+        "_usability",
+        lambda cap: {
+            "status": cap.get("status"),
+            "dispatch_ready": False,
+            "blocker": None,
+            "next_step": None,
+            "gate_ready": None,
+        },
+    )
+    result = advisor.advise(
+        "xyzzy plugh",
+        surface="t-rank-miss",
+        record=False,
+        path=tmp_path / "ledger.json",
+    )
+    assert calls == ["rank"]
+    assert result["confidence"] == "binding_only"
+    assert result["capabilities"][0]["capability_id"] == "cap-a"
+    assert "propensity" not in result["capabilities"][0]
+
+
+def test_classified_advice_survives_unreadable_propensity(monkeypatch, tmp_path: Path):
+    """Gate head lines 935 and 938. Classification still answers when ranking raises."""
+    calls = _rank_raises(monkeypatch)
+    monkeypatch.setattr(
+        advisor,
+        "classify_task",
+        lambda _text: [{"task_type": "testgen", "hits": ["test", "unit"], "score": 2}],
+    )
+    monkeypatch.setattr(capabilities, "load_declared", lambda path=None: {})
+    monkeypatch.setattr(advisor, "binding_for", lambda *_args, **_kwargs: {})
+    result = advisor.advise("add unit tests", record=False, path=tmp_path / "ledger.json")
+    assert calls == ["rank"]
+    assert result["confidence"] == "high"
+    assert result["task_types"] == ["testgen"]
+    assert result["capabilities"] == []
+    assert result["useful"] is False
+
+
+def test_promoted_index_keeps_binding_promotion_events():
+    """Gate head line 1684, now the promotion write in `_promoted_index`."""
+    ledger = {
+        "cap-a": {
+            "event_history": [
+                {"metadata": {"source": "match"}},
+                {
+                    "metadata": {
+                        "source": "binding_promotion",
+                        "surface": "tick:phase",
+                        "reason": "used by hand",
+                    }
+                },
+                {"metadata": {"source": "binding_promotion", "surface": ""}},
+                {"metadata": {"source": "binding_promotion", "surface": "tick:other"}},
+            ]
+        }
+    }
+    index = advisor._promoted_index(ledger=ledger)
+    assert index == {
+        "tick:phase": {"cap-a": "used by hand"},
+        "tick:other": {"cap-a": "promoted from observed use"},
+    }
+
+
+def test_guarded_consult_swallows_alarm_cleanup_failure(monkeypatch):
+    """Gate head lines 2206-2207, now the finally handler. Cleanup failure stays inside the report."""
+    import signal
+
+    cleanup: list[int] = []
+
+    def fake_signal(_signum, _handler):
+        return signal.SIG_DFL
+
+    def fake_alarm(seconds: int):
+        cleanup.append(seconds)
+        if seconds == 0:
+            raise OSError("cannot disarm")
+        return 0
+
+    monkeypatch.setattr(signal, "signal", fake_signal)
+    monkeypatch.setattr(signal, "alarm", fake_alarm)
+    monkeypatch.setattr(
+        advisor,
+        "consult_phases",
+        lambda **_kwargs: {
+            "day": "2026-11-05",
+            "phases": 1,
+            "rows": [],
+            "offered": 0,
+            "recorded": 0,
+            "errors": [],
+        },
+    )
+    report = advisor.consult_phases_guarded(day="2026-11-05")
+    assert cleanup == [advisor.CONSULT_BUDGET_S + 5, 0]
+    assert report["phases"] == 1
+    assert "error" not in report
+
+
+def test_consult_expiry_handler_raises_timeout():
+    """Gate head line 2211. The SIGALRM handler is the timeout, and nothing else calls it."""
+    with pytest.raises(TimeoutError, match="phase consult exceeded"):
+        advisor._consult_expired(0, None)
+
+
+def test_format_phase_consult_renders_a_successful_phase():
+    """Gate head line 2228. A row without an error renders the offer counts."""
+    text = advisor.format_phase_consult(
+        {
+            "day": "2026-11-05",
+            "phases": 1,
+            "offered": 2,
+            "recorded": 1,
+            "rows": [
+                {"surface": "tick:one", "offered": 2, "bound": ["cap-a"], "recorded": 1},
+            ],
+        }
+    )
+    assert "FAILED" not in text
+    assert "tick:one: offered 2 (bound 1), recorded 1" in text
+
+
+def test_observable_surface_stops_once_six_markers_are_found(tmp_path: Path):
+    """Gate head line 2703. The walk returns at `_SURFACE_MAX_MARKERS` instead of finishing the tree."""
+    for index in range(advisor._SURFACE_MAX_MARKERS + 3):
+        (tmp_path / f"page{index}.html").write_text("<main></main>")
+    result = advisor.detect_observable_surface(tmp_path)
+    assert result["observable"] is True
+    assert len(result["markers"]) == advisor._SURFACE_MAX_MARKERS
+    assert result["detail"] == f"{advisor._SURFACE_MAX_MARKERS} surface marker(s) found"
+    assert "truncated" not in result
+
+
+def test_unregistered_repo_fact_probe_stays_unevaluated(monkeypatch):
+    """Gate head line 2790. A declared repo fact with no probe is unevaluated, not false."""
+    monkeypatch.setitem(
+        advisor.CAPABILITY_PRECONDITIONS,
+        "coverage-noprobe",
+        {"requires": "no-such-fact"},
+    )
+    out = advisor.evaluate_precondition(
+        "coverage-noprobe", repository="owner/repo", repo_path="/tmp/checkout"
+    )
+    assert out["unevaluated_because"] == ["no probe is registered for 'no-such-fact'"]
+    assert out["requirement_met"] is None
+    assert out["precondition_met"] is None
+
+
+def test_cli_without_a_task_exits_with_the_three_ways_in(capsys):
+    """Gate head line 5578. Empty argv is an argparse error, not a silent advise of nothing."""
+    with pytest.raises(SystemExit) as exc:
+        advisor.main([])
+    assert exc.value.code == 2
+    assert "give the task in plain words" in capsys.readouterr().err
+
+
+# Selftest statements the Gate head left uncovered. Each one runs only inside a `_selftest_*`
+# function, and only on a branch the selftest itself does not take unless the temporary key was
+# already in SURFACE_BINDINGS, or only after the live ledger holds rows this checkout does not
+# synthesize. Executing those functions here would rerun the module selftest, including its
+# consult-site scan and its machine-local ledger gate. The locations below are the limit.
+SELFTEST_PATH_LIMITS = (
+    (
+        3860,
+        'SURFACE_BINDINGS["t-howto"] = real_surface',
+        "else restores a pre-seeded t-howto entry; the selftest pops the key when it was absent, "
+        "and production never pre-seeds that key",
+    ),
+    (
+        3958,
+        'SURFACE_BINDINGS["t-concept"] = real_surface',
+        "else restores a pre-seeded t-concept entry; same pop-versus-restore split as t-howto",
+    ),
+    (
+        4253,
+        'SURFACE_BINDINGS["t-contra"] = real_binding',
+        "else restores a pre-seeded t-contra entry inside _selftest_contraindications",
+    ),
+    (
+        4590,
+        'SURFACE_BINDINGS["t-empty"] = real_empty',
+        "else restores a pre-seeded t-empty entry inside _selftest_bindings",
+    ),
+    (
+        4651,
+        'SURFACE_BINDINGS["t-surface"] = real',
+        "else restores a pre-seeded t-surface entry inside _selftest_bindings",
+    ),
+    (
+        5160,
+        'SURFACE_BINDINGS["t-precond"] = real',
+        "else restores a pre-seeded t-precond entry inside _selftest_preconditions",
+    ),
+    (
+        3993,
+        "for text, expected in cases:",
+        "_selftest_front_door returns at the ledger-row gate unless offload, codemod-campaign, "
+        "and testgen-lane are already registered; those rows are machine-local, and a stand-in "
+        "ledger would not satisfy the real matcher assertions",
+    ),
+    (
+        5296,
+        "for surface, why in KNOWN_UNCONSULTED.items():",
+        "the loop body is the tail of _selftest_findability, after that function has checked "
+        "every consult-site caller; a copied assert would not execute these lines, and running "
+        "the selftest section is the module selftest rather than a focused path test",
+    ),
+)
+
+
+def test_selftest_only_paths_stay_recorded_as_limits():
+    """The remaining Gate-head statements are selftest-only, and each limit names its line."""
+    source = Path(advisor.__file__).read_text(encoding="utf-8").splitlines()
+    seen = set()
+    for line_no, token, reason in SELFTEST_PATH_LIMITS:
+        assert line_no not in seen
+        seen.add(line_no)
+        assert token in source[line_no - 1]
+        assert reason
+    report = (
+        Path(__file__).resolve().parents[1] / "docs" / "verification" / "issue-1102" / "README.md"
+    )
+    text = report.read_text(encoding="utf-8")
+    for line_no, _token, reason in SELFTEST_PATH_LIMITS:
+        assert f"src/capability_advisor.py:{line_no}" in text
+        assert reason in text

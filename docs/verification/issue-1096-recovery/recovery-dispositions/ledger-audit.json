@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "ledger_sha256": "3a34a314350836386f67785e14a17a0a7696db39d8d29d85c17e1baeecf53e48",
+  "audit_scope": "recovery_attribution_and_local_artifact_integrity",
+  "attribution_and_artifact_checks_passed": true,
+  "operational_acceptance_verified": false,
+  "external_references_authenticated": false,
+  "source_revision_bindings_verified": false,
+  "result_type": "summary_of_successful_local_audit",
+  "artifacts_checked": 120,
+  "external_references_observed": 10,
+  "full_output_sha256": "494e9aea463b838ed7b9b4c3e576c3618d62770d5aa3ac2e535e20efe2531e58"
+}

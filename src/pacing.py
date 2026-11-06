@@ -24,6 +24,13 @@ POLL_STALE_TICKS = 3
 STALE_AFTER_SECONDS = POLL_STALE_TICKS * POLL_TICK_SECONDS
 SAMPLE_TICK_SECONDS = 3600  # Allowance for sparse sampling; observed p95 ≈ 26 min.
 BURN_ANCHOR_MAX_AGE_SECONDS = BURN_WINDOW_HOURS * 3600 + 2 * SAMPLE_TICK_SECONDS
+CLAUDE_USAGE_MAX_AGE_SECONDS = 7200
+# Measured Claude T1 (2026-10-18 04:59Z). Used only when no provider-observed end is calibrated.
+CLAUDE_RESET_ANCHOR = datetime(2026, 10, 18, 4, 59, tzinfo=timezone.utc).timestamp()
+
+
+def usage_max_age(pool: str) -> int:
+    return CLAUDE_USAGE_MAX_AGE_SECONDS if pool == "claude" else STALE_AFTER_SECONDS
 
 
 def timestamp(value) -> float | None:
@@ -59,8 +66,16 @@ def period(
 ) -> tuple[float, float] | None:
     if pool == "claude":
         finish = timestamp(end)
-        # Only a provider-observed weekly boundary is authoritative. No guessed anchor.
-        return (finish - PERIOD_SECONDS, finish) if finish is not None else None
+        if finish is not None:
+            # Provider-observed weekly boundary is authoritative when calibrated.
+            return finish - PERIOD_SECONDS, finish
+        # Without a calibrated end, roll the measured T1 anchor so ccusage fallback
+        # and desktop-token pairs stay aligned to the live subscription week (#695).
+        finish = CLAUDE_RESET_ANCHOR
+        finish += math.floor((now - finish) / PERIOD_SECONDS) * PERIOD_SECONDS
+        if finish <= now:
+            finish += PERIOD_SECONDS
+        return finish - PERIOD_SECONDS, finish
     origin = timestamp(reset_at if reset_at is not None else start)
     if origin is None or origin > now:
         return None
@@ -201,7 +216,7 @@ def evaluate(
         source=source,
         ts=source_ts,
         effective_reserve=reserve,
-        stale=source_ts is not None and now - source_ts > STALE_AFTER_SECONDS,
+        stale=source_ts is not None and now - source_ts > usage_max_age(pool),
         fyi=[],
         reason="usage or period unmeasured; clears on a fresh usage/period sample",
     )

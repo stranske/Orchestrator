@@ -1,0 +1,133 @@
+✔ packet floor diagnostics match the production rule without trusting saved flags (751.349057ms)
+✔ packet diagnostics identify missing and clipped evidence separately on parent and retries (1.458003ms)
+✔ report CLI carries packet floor locators through unique requested-row reconciliation (36.878569ms)
+✔ report recovery preserves ordered rows, recursive paid history and conflicting counts (1.725927ms)
+✔ report recovery rejects missing input without initializing runtime state (1.226337ms)
+✔ attempt observations bind nested failure fields without exposing private error text (1.608265ms)
+✔ saved decisions survive failed retries and remain distinct from independent truth (1.268026ms)
+✔ failure field hashes detect changed evidence even when retained classifications match (1.299955ms)
+✔ later-truth diagnostics distinguish absence, UNKNOWN, binary claims and invalid values (2.334431ms)
+✔ parent and retry truth remain separate without deriving truth from a decision (1.115979ms)
+✔ changed binary truth changes its evidence hash without authenticating either value (1.010982ms)
+✔ recorded failure stages explain collection, execution and validation breaks on real message shapes (1.004559ms)
+✔ unknown and contradictory failure prose cannot borrow a recognized stage (0.906756ms)
+✔ exact retained launcher refusals explain admission without claiming a backend attempt (1.026562ms)
+✔ launcher refusal matching rejects changed prose and contradictory attempt fields (1.144423ms)
+✔ later launcher refusals preserve the parent decision and prior paid history (0.843387ms)
+✔ later retries and persistence breaks cannot replace the parent attempt failure or decision (1.163699ms)
+✔ report recovery refuses malformed and ambiguous retained identities (3.023597ms)
+✔ nested retries cannot borrow a root identity when their saved identities conflict (3.92827ms)
+✔ explicit retry identities must be verifiable while compact histories remain intact (4.590237ms)
+✔ CLI refuses cross-case retries before emitting manifest or native receipt matches (45.689729ms)
+✔ report recovery requires explicit attribution and a valid check time (0.791449ms)
+✔ report recovery aborts if the input changes during observation (1.037782ms)
+✔ retained report reconciliation preserves requested order and explains every identity gap (2.327088ms)
+✔ retained report CLI matches supplied manifests without authenticating saved outcomes (40.670291ms)
+✔ requested recovery dispositions explain identity gaps without borrowing candidate outcomes (1.18559ms)
+✔ requested recovery keeps recorded failures separate from missing packet and truth evidence (3.759642ms)
+✔ decided requested rows retain their outcome and UNKNOWN while historical retry failures stay separate (49.271944ms)
+✔ possible paid attempts require completion recovery before packet recollection (11.224775ms)
+✖ requested rows expose unresolved native case attempts even without backend identities (12.304004ms)
+✖ native case recovery separates unavailable journals from no observed unresolved attempts (8.270651ms)
+✖ unbound requested identities cannot borrow native case recovery from candidate rows (9.592304ms)
+✔ legacy report manifest keeps verdict ambiguity visible and empty requests cannot complete accounting (1.444167ms)
+✔ report reconciliation refuses malformed or changing manifests without replacing evidence (1.395175ms)
+✔ report CLI never combines historical recovery with dispatch or current Brain selection (227.904136ms)
+✔ native receipt locators bind both case and backend identity for each retained attempt (8.195743ms)
+✔ missing native identities and receipts remain gaps rather than borrowing another attempt (8.443677ms)
+✔ reused native backend identities remain ambiguous even when one candidate matches the case (8.919408ms)
+✔ pre-dispatch inventory reconciles report and native locators without exposing payloads (8.989436ms)
+✔ all validated native rows still require authentication, independent truth and live writer proof (9.761181ms)
+✔ missing native evidence remains unavailable and never means zero attempts (1.247527ms)
+✔ an observed empty journal cannot establish writer ownership or authorize spending (12.800851ms)
+✔ an active journal writer does not make a read-only snapshot claim ownership (10.311484ms)
+✔ foreign and incomplete journals are refused without schema repair (4.402711ms)
+✔ report without native marker still cannot authorize generic retry (2.001315ms)
+✔ journal CLI stays read-only and requires explicit report attribution (84.292076ms)
+✔ owner exclusions are accounted for without reading excluded outcome evidence: mixed case (46.929782ms)
+✔ owner exclusions are accounted for without reading excluded outcome evidence: spaces (47.705073ms)
+✔ owner exclusions are accounted for without reading excluded outcome evidence: tabs and newlines (53.192254ms)
+✔ owner exclusions are accounted for without reading excluded outcome evidence: Unicode whitespace (49.585169ms)
+✔ requested owner exclusions remain explicit with missing or contradictory inventory: "stranske/Collab-Admin#7" (8.033922ms)
+✔ requested owner exclusions remain explicit with missing or contradictory inventory: "\tstranske/Collab-Admin #7" (6.364592ms)
+✔ inventory exports every synthetic dispute and every exclusion without writes (950.791498ms)
+✔ inventory preserves the fixed cutoff and reports a count discrepancy (9.083352ms)
+✔ inventory distinguishes missing evidence from a complete cohort (3.304165ms)
+✔ inventory distinguishes schema-less evidence from a complete cohort (0.783619ms)
+✔ inventory distinguishes empty evidence from a complete cohort (3.547091ms)
+✔ inventory distinguishes incomplete-schema evidence from a complete cohort (4.49553ms)
+✔ inventory CLI exports JSON, signals unavailable evidence and rejects replay options (210.999867ms)
+✔ matching 71 identities bind the supplied manifest bytes without claiming historical acceptance (141.912424ms)
+✔ equal inventory counts expose substituted identities, exclusions and absent requested runs (14.460976ms)
+✔ a requested run on another target cannot satisfy case identity (5.876209ms)
+✔ inventory accounts for outcomes without run records as unavailable evidence (53.099304ms)
+✔ an outcomes-only Brain is available with exclusions, rather than an observed empty store (4.784995ms)
+✔ manifest retains every requested identity when Brain is empty (3.693886ms)
+✔ manifest retains every requested identity when Brain is unavailable (3.542222ms)
+✔ manifest count discrepancy prevents an exact match even when all supplied identities match (5.770815ms)
+✔ manifest CLI preserves input bytes, rejects malformed identities and signals unavailable Brain (498.891366ms)
+✔ version 2 reconciles all 71 dispute identities without claiming historical provenance (132.95904ms)
+✔ version 2 exposes substituted verdicts NON_PASS/FAIL despite matching run and count (47.887482ms)
+✔ version 2 exposes substituted verdicts FAIL_HOLLOW/PASS despite matching run and count (53.676199ms)
+✔ version 2 exposes substituted verdicts PASS/FAIL despite matching run and count (41.886573ms)
+✔ version 2 retains different disputes on one run and rejects duplicate dispute identities (5.193148ms)
+✔ version 2 preserves full identities for excluded, missing and unavailable cases (41.315447ms)
+✔ version 2 rejects malformed verdicts before publishing any inventory (515.640022ms)
+✔ version 2 distinguishes unavailable verdict evidence from contradictory verdicts (50.091687ms)
+✔ version 2 retains an observed target mismatch when verdict evidence is unavailable (3.762344ms)
+✔ missing stored targets remain eligible disputes with explicit unavailable identity evidence (855.37808ms)
+ℹ tests 78
+ℹ suites 0
+ℹ pass 75
+ℹ fail 3
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 5285.743183
+
+✖ failing tests:
+
+test at ../../../../../tmp/issue1096-native-case-red-CPDCQ2/tests/test_adjudicator_inventory.js:811:1
+✖ requested rows expose unresolved native case attempts even without backend identities (12.304004ms)
+  TypeError: Cannot read properties of undefined (reading 'status')
+      at TestContext.<anonymous> (/tmp/issue1096-native-case-red-CPDCQ2/tests/test_adjudicator_inventory.js:823:25)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+
+test at ../../../../../tmp/issue1096-native-case-red-CPDCQ2/tests/test_adjudicator_inventory.js:856:1
+✖ native case recovery separates unavailable journals from no observed unresolved attempts (8.270651ms)
+  TypeError: Cannot read properties of undefined (reading 'status')
+      at TestContext.<anonymous> (/tmp/issue1096-native-case-red-CPDCQ2/tests/test_adjudicator_inventory.js:866:30)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+
+test at ../../../../../tmp/issue1096-native-case-red-CPDCQ2/tests/test_adjudicator_inventory.js:887:1
+✖ unbound requested identities cannot borrow native case recovery from candidate rows (9.592304ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + undefined
+  - null
+  
+      at TestContext.<anonymous> (/tmp/issue1096-native-case-red-CPDCQ2/tests/test_adjudicator_inventory.js:897:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: null,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

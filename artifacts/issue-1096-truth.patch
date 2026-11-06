@@ -1,0 +1,714 @@
+diff --git a/docs/verification/issue-1096-recovery/README.md b/docs/verification/issue-1096-recovery/README.md
+index 39b5d35..e032641 100644
+--- a/docs/verification/issue-1096-recovery/README.md
++++ b/docs/verification/issue-1096-recovery/README.md
+@@ -1,5 +1,15 @@
+ # Acceptance evidence recovery for #1096
+ 
++## Retained later-truth diagnostics, 2026-11-03 UTC
++
++The inventory now separates missing, explicit UNKNOWN, invalid and binary-but-
++unverified later truth, with per-attempt value hashes and evidence steps. Parent
++and retry truth stay separate. All 111 focused regressions pass; the historical
++projection identifies five saved binary decisions without recorded truth.
++[Results and limitations](truth-followup/results.md) link the command receipts,
++source identity and historical summary. Required pytest execution still fails
++before collection; recovery and operational acceptance remain incomplete.
++
+ ## Recorded failure stages, 2026-11-03 UTC
+ 
+ The retained-report reader now identifies recorded failure stages from exact
+diff --git a/docs/verification/issue-1096-recovery/evidence-ledger.json b/docs/verification/issue-1096-recovery/evidence-ledger.json
+index a4a03e6..993689d 100644
+--- a/docs/verification/issue-1096-recovery/evidence-ledger.json
++++ b/docs/verification/issue-1096-recovery/evidence-ledger.json
+@@ -306,6 +306,21 @@
+       "checks": "ignored-input-followup/acceptance-run/checks.json",
+       "validation": "ignored-input-followup/validation.json",
+       "limitation": "Runner controls pass, but pytest is unavailable before collection. Accepted deployment binding remains unverified; no task newly completed."
++    },
++    "retained_truth_followup": {
++      "checked_at": "2026-11-03T22:18:46.055133+00:00",
++      "source_commit": "e81b3e77c0ad615eeed479fb8f1e566cdec073c0",
++      "source_parent": "9c00d5bda5a429e48310a2bd5e7b27c4f5b30fba",
++      "plan": "truth-followup/plan.md",
++      "checks": "truth-followup/acceptance-run/checks.json",
++      "validation": "truth-followup/validation.json",
++      "historical_input_scope": "committed_selected_historical_fields_only",
++      "saved_binary_decisions_without_recorded_truth": 5,
++      "required_tests_passed": false,
++      "authenticated_outcomes_verified": false,
++      "original_retry_manifest_recovered": false,
++      "task_checkboxes_newly_verified_complete": 0,
++      "limitation": "Retained truth diagnostics only. Missing and UNKNOWN truth are not retry permission; binary values are not authenticated independent truth or grades."
+     }
+   },
+   "mirror_synchronization": [
+diff --git a/docs/verification/issue-1096-recovery/truth-followup/acceptance-run/checks.json b/docs/verification/issue-1096-recovery/truth-followup/acceptance-run/checks.json
+new file mode 100644
+index 0000000..0b9344f
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/truth-followup/acceptance-run/checks.json
+@@ -0,0 +1,105 @@
++{
++  "schema_version": 1,
++  "checked_at": "2026-11-03T22:15:40.679Z",
++  "evaluated_revision": "9c00d5bda5a429e48310a2bd5e7b27c4f5b30fba",
++  "evaluated_tree": "9dad50374d238c07678d171179bf7eab9dd41005",
++  "accepted_deployment_verified": false,
++  "interpreter": "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3",
++  "runner_sha256": "19738158e77724d69b0872a901141e8e3c8f1d9bf28807cf9e2e65117029c922",
++  "input_manifest_sha256": "4b2461983a1b3f01cf7eb035c490f5aac2c24075951b7705d1edfb7f61eb53db",
++  "input_file_count": 1996,
++  "source_sha256": {
++    "pyproject.toml": "2c3462b8b384aeb265dbc51ab742b4ee02d839a34cec6590791a6d5d53fe4a6e",
++    "src/adjudicator_retro.py": "ee172f96ddf0ca56f6c06fcf18bdaacccece5381de61a9896006d0b16a8fb0b8",
++    "src/capability_advisor.py": "fe2f2d0dda2b684d61d42c6aba3952b8a5e5d0d1504c9cbebeca9616109208d5",
++    "src/feedback.py": "eafa930ec4cea9a239bc03a91a00b2ca7c618c40629690658f8276417946412d",
++    "src/roles.py": "4a5e729f4bf797ea448f18c14df69696e3df3bcaaf046729c039099ae7cc3dd7",
++    "src/verifier_evidence.py": "19b2342b6d9b4d097f6fef6b76089f54903dfbe36946dac6fa7467dec3afff59",
++    "tests/test_adjudicator_retro.py": "b44fd6756915069d6a5dc492eecda268053a711899b81decc9d27f8c9793fda2"
++  },
++  "checks": [
++    {
++      "name": "named-tests",
++      "command": [
++        "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3",
++        "-m",
++        "pytest",
++        "-o",
++        "addopts=",
++        "-m",
++        "not slow",
++        "-q",
++        "--junitxml=/home/runner/work/Orchestrator/Orchestrator/docs/verification/issue-1096-recovery/truth-followup/acceptance-run/named-tests.xml",
++        "tests/test_adjudicator_retro.py::test_build_packet_includes_diff_and_acceptance_criteria",
++        "tests/test_adjudicator_retro.py::test_adjudicator_validator_accepts_recommendation_prose",
++        "tests/test_adjudicator_retro.py::test_floor_still_demotes_a_metadata_only_packet",
++        "tests/test_adjudicator_retro.py::test_abstained_row_is_reattempted_when_the_packet_gains_diff_and_criteria"
++      ],
++      "exit_code": 1,
++      "signal": null,
++      "error_code": null,
++      "timed_out": false,
++      "log": "named-tests.log",
++      "log_sha256": "3c62bade513fb2347fe3e5a9f91901d9e1bbf2d4a19bbd59d2863c1cdf42e10a",
++      "junit": null,
++      "junit_sha256": null,
++      "junit_reader": null,
++      "test_count": null,
++      "passed": false
++    },
++    {
++      "name": "retrospective-suite",
++      "command": [
++        "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3",
++        "-m",
++        "pytest",
++        "-o",
++        "addopts=",
++        "-m",
++        "not slow",
++        "-q",
++        "--junitxml=/home/runner/work/Orchestrator/Orchestrator/docs/verification/issue-1096-recovery/truth-followup/acceptance-run/retrospective-suite.xml",
++        "tests/test_adjudicator_retro.py"
++      ],
++      "exit_code": 1,
++      "signal": null,
++      "error_code": null,
++      "timed_out": false,
++      "log": "retrospective-suite.log",
++      "log_sha256": "3c62bade513fb2347fe3e5a9f91901d9e1bbf2d4a19bbd59d2863c1cdf42e10a",
++      "junit": null,
++      "junit_sha256": null,
++      "junit_reader": null,
++      "test_count": null,
++      "passed": false
++    }
++  ],
++  "source_unchanged": true,
++  "required_tests_passed": false,
++  "interpreter_version": "Python 3.14.9",
++  "interpreter_usable": true,
++  "collection": {
++    "command": [
++      "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3",
++      "-m",
++      "pytest",
++      "-o",
++      "addopts=",
++      "-m",
++      "not slow",
++      "--color=no",
++      "--collect-only",
++      "-q",
++      "tests/test_adjudicator_retro.py"
++    ],
++    "exit_code": 1,
++    "signal": null,
++    "error_code": null,
++    "timed_out": false,
++    "log": "collection.log",
++    "log_sha256": "3c62bade513fb2347fe3e5a9f91901d9e1bbf2d4a19bbd59d2863c1cdf42e10a",
++    "test_names": [],
++    "passed": false
++  },
++  "finished_at": "2026-11-03T22:15:40.880Z"
++}
+diff --git a/docs/verification/issue-1096-recovery/truth-followup/acceptance-run/collection.log b/docs/verification/issue-1096-recovery/truth-followup/acceptance-run/collection.log
+new file mode 100644
+index 0000000..777b2d7
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/truth-followup/acceptance-run/collection.log
+@@ -0,0 +1 @@
++/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3: No module named pytest
+diff --git a/docs/verification/issue-1096-recovery/truth-followup/acceptance-run/named-tests.log b/docs/verification/issue-1096-recovery/truth-followup/acceptance-run/named-tests.log
+new file mode 100644
+index 0000000..777b2d7
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/truth-followup/acceptance-run/named-tests.log
+@@ -0,0 +1 @@
++/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3: No module named pytest
+diff --git a/docs/verification/issue-1096-recovery/truth-followup/acceptance-run/retrospective-suite.log b/docs/verification/issue-1096-recovery/truth-followup/acceptance-run/retrospective-suite.log
+new file mode 100644
+index 0000000..777b2d7
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/truth-followup/acceptance-run/retrospective-suite.log
+@@ -0,0 +1 @@
++/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3: No module named pytest
+diff --git a/docs/verification/issue-1096-recovery/truth-followup/baseline.log b/docs/verification/issue-1096-recovery/truth-followup/baseline.log
+new file mode 100644
+index 0000000..72ccd06
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/truth-followup/baseline.log
+@@ -0,0 +1,11 @@
++✔ tests/test_adjudicator_acceptance_runner.js (9342.074672ms)
++✔ tests/test_adjudicator_evidence_ledger.js (594.748343ms)
++✔ tests/test_adjudicator_inventory.js (4852.600971ms)
++ℹ tests 3
++ℹ suites 0
++ℹ pass 3
++ℹ fail 0
++ℹ cancelled 0
++ℹ skipped 0
++ℹ todo 0
++ℹ duration_ms 9354.35883
+diff --git a/docs/verification/issue-1096-recovery/truth-followup/historical-truth-summary.json b/docs/verification/issue-1096-recovery/truth-followup/historical-truth-summary.json
+new file mode 100644
+index 0000000..2f38985
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/truth-followup/historical-truth-summary.json
+@@ -0,0 +1,71 @@
++{
++  "git_directory": "/tmp/issue-1096-truth-git-dc5twqhn/repo.git",
++  "source_commit": "e81b3e77c0ad615eeed479fb8f1e566cdec073c0",
++  "source_parent": "9c00d5bda5a429e48310a2bd5e7b27c4f5b30fba",
++  "observed_at": 1793744254,
++  "command": [
++    "node",
++    "scripts/export_adjudicator_inventory.js",
++    "--report",
++    "/home/runner/work/Orchestrator/Orchestrator/docs/verification/issue-1096-recovery/dispatch-refusal-followup/selected-fields.json",
++    "--observed-at",
++    "1793744254",
++    "--evidence-class",
++    "historical_snapshot",
++    "--evidence-reference",
++    "repository diagnostic projection of dropbox:id:tDSHdCztYNUAAAAAADfgrw@65de8f715bb690369d613; not original report bytes"
++  ],
++  "exit_code": 0,
++  "input_sha256": "c87598737485b19011318f369fdafc204d9f9d7732f3420f5e5cd39964885bd8",
++  "input_scope": "committed_selected_historical_fields_only",
++  "output_sha256": "138fab936bd24c6f116a9568f0693d4cf60974a14ff47dd72d0041aa96a1d277",
++  "case_count": 58,
++  "attempt_count": 64,
++  "later_truth_status_counts": {
++    "binary_unverified": 30,
++    "not_recorded": 34
++  },
++  "binary_decision_truth_counts": {
++    "binary_unverified": 14,
++    "not_recorded": 5
++  },
++  "binary_decisions_without_recorded_truth": [
++    {
++      "case_id": "d7397039ec9efc9f2a611efa8cff829a1c079e9874c2745a3cdaa52a53b0af81",
++      "location": "rows[6]",
++      "backend_run_id": "offload:gemini:1791199355831889000",
++      "target": "stranske/Orchestrator#414"
++    },
++    {
++      "case_id": "9ab1c0c6a06eb0be33acf87720ca46bcbc4b6da7957d79e816030d161388ed1a",
++      "location": "rows[8]",
++      "backend_run_id": "offload:gemini:1791289901905524000",
++      "target": "stranske/Orchestrator#485"
++    },
++    {
++      "case_id": "492f957d9a4fd477ee97f458d71ee87e8e14cde9d09ffb153f488e9dbc42ac02",
++      "location": "rows[9]",
++      "backend_run_id": "offload:gemini:1791289952278060000",
++      "target": "stranske/Orchestrator#484"
++    },
++    {
++      "case_id": "3a74d31c7041ef63dc7db6f830877dc1d1d72a78e434076a54bd08fb52816ab9",
++      "location": "rows[12]",
++      "backend_run_id": "offload:gemini:1791290140351965000",
++      "target": "stranske/Orchestrator#468"
++    },
++    {
++      "case_id": "c53289cd21ec4997f40d03facbf51f75794c4150f9ff9839983dcec85aee85d5",
++      "location": "rows[15]",
++      "backend_run_id": "offload:gemini:1791290266140836000",
++      "target": "stranske/Orchestrator#469"
++    }
++  ],
++  "input_unchanged": true,
++  "original_retry_manifest_recovered": false,
++  "independent_truth_verified": false,
++  "authenticated_outcomes_verified": false,
++  "dispatch_authorized": false,
++  "graded_claimed": false,
++  "limitation": "Historical selected-field projection only; not original authenticated native report, retry manifest, independent current truth or canonical grading."
++}
+diff --git a/docs/verification/issue-1096-recovery/truth-followup/negative-controls.log b/docs/verification/issue-1096-recovery/truth-followup/negative-controls.log
+new file mode 100644
+index 0000000..2b4251c
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/truth-followup/negative-controls.log
+@@ -0,0 +1,48 @@
++✖ later-truth diagnostics distinguish absence, UNKNOWN, binary claims and invalid values (5.185716ms)
++✖ parent and retry truth remain separate without deriving truth from a decision (1.122396ms)
++✖ changed binary truth changes its evidence hash without authenticating either value (1.645103ms)
++ℹ tests 3
++ℹ suites 0
++ℹ pass 0
++ℹ fail 3
++ℹ cancelled 0
++ℹ skipped 0
++ℹ todo 0
++ℹ duration_ms 32.947749
++
++✖ failing tests:
++
++test at tests/test_adjudicator_inventory.js:165:1
++✖ later-truth diagnostics distinguish absence, UNKNOWN, binary claims and invalid values (5.185716ms)
++  TypeError: Cannot read properties of undefined (reading 'status')
++      at /home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_inventory.js:176:45
++      at Array.map (<anonymous>)
++      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_inventory.js:176:26)
++      at Test.runInAsyncScope (node:async_hooks:227:14)
++      at Test.run (node:internal/test_runner/test:1402:25)
++      at Test.start (node:internal/test_runner/test:1262:17)
++      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17)
++
++test at tests/test_adjudicator_inventory.js:199:1
++✖ parent and retry truth remain separate without deriving truth from a decision (1.122396ms)
++  TypeError: Cannot read properties of undefined (reading 'status')
++      at /home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_inventory.js:209:33
++      at Array.map (<anonymous>)
++      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_inventory.js:208:57)
++      at Test.runInAsyncScope (node:async_hooks:227:14)
++      at Test.run (node:internal/test_runner/test:1402:25)
++      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
++      at Test.postRun (node:internal/test_runner/test:1542:19)
++      at Test.run (node:internal/test_runner/test:1467:12)
++      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)
++
++test at tests/test_adjudicator_inventory.js:220:1
++✖ changed binary truth changes its evidence hash without authenticating either value (1.645103ms)
++  TypeError: Cannot read properties of undefined (reading 'status')
++      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_inventory.js:226:22)
++      at Test.runInAsyncScope (node:async_hooks:227:14)
++      at Test.run (node:internal/test_runner/test:1402:25)
++      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
++      at Test.postRun (node:internal/test_runner/test:1542:19)
++      at Test.run (node:internal/test_runner/test:1467:12)
++      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+diff --git a/docs/verification/issue-1096-recovery/truth-followup/plan.md b/docs/verification/issue-1096-recovery/truth-followup/plan.md
+new file mode 100644
+index 0000000..9407980
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/truth-followup/plan.md
+@@ -0,0 +1,37 @@
++# Retained later-truth diagnostics, 2026-11-03 UTC
++
++Recent commits through `9c00d5bda5a429e48310a2bd5e7b27c4f5b30fba` were reviewed.
++They do not establish required pytest execution or operational acceptance.
++Recovery remains partial: accepted/deployed/mirror bindings, original retry
++manifest and fixed next-20 manifest are unavailable. Only the pre-execution
++inventory and ledger tasks, plus attribution/disclosure criterion, are verified.
++The attempted PR-body reconciliation was rejected because the connector requires
++approval while this run's policy is `never`. No remote update is claimed.
++
++Run the required checks once, before source edits:
++
++```sh
++node scripts/run_adjudicator_acceptance.js \
++  --python /opt/hostedtoolcache/Python/3.14.9/x64/bin/python3 \
++  --revision 9c00d5bda5a429e48310a2bd5e7b27c4f5b30fba \
++  --output /home/runner/work/Orchestrator/Orchestrator/docs/verification/issue-1096-recovery/truth-followup/acceptance-run
++```
++
++Expected: pytest is unavailable before collection; preserve both required test
++commands and their failures without claiming success. Ordinary and isolated
++installation attempts found no distribution, and the local interpreter/cache
++search found no pytest copy. Stop after this invocation, with the runner's
++60-second per-command bounds and `-m "not slow"`. The selected revision is the
++checkout, not a verified accepted deployment.
++
++With that task blocked, add read-only diagnostics for retained later truth.
++Distinguish missing, explicit UNKNOWN, invalid and binary-but-unverified values;
++bind each recorded value by location and hash, without deriving truth from the
++adjudicator decision or borrowing truth across parent/retry attempts. Preserve
++paid history, saved decisions and all existing receipt/authentication boundaries.
++Verify new regressions fail before implementation and pass afterward. Exercise
++the CLI on the already-committed historical diagnostic projection, which is not
++the original authenticated report or requested retry cohort.
++
++No dispatch, production write, canonical publication or mirror synchronization.
++No grading or operational task is complete from diagnostic classifications.
+diff --git a/docs/verification/issue-1096-recovery/truth-followup/regressions.log b/docs/verification/issue-1096-recovery/truth-followup/regressions.log
+new file mode 100644
+index 0000000..5cdccf7
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/truth-followup/regressions.log
+@@ -0,0 +1,119 @@
++✔ records exact commands, source hashes, complete JUnit and logs for both checks (331.78431ms)
++✔ full-suite success requires the complete collected identities: {"omitExtra":true} (320.988224ms)
++✔ full-suite success requires the complete collected identities: {"duplicateExtra":true} (329.515337ms)
++✔ full-suite success requires the complete collected identities: {"collectionFailure":true} (328.819233ms)
++✔ full-suite success requires the complete collected identities: {"collectionEmpty":true} (320.317393ms)
++✔ full-suite success requires the complete collected identities: {"collectionDuplicate":true} (327.160049ms)
++✔ missing pytest preserves two failures and cannot complete acceptance (162.270377ms)
++✔ preserves JUnit reader failures: {"parserFailure":true} (215.810216ms)
++✔ preserves JUnit reader failures: {"parserInvalidJson":true} (217.011973ms)
++✔ preserves JUnit reader failures: {"malformed":true} (363.045871ms)
++✔ refuses a successful claim for incomplete evidence: {"noXml":true} (159.74304ms)
++✔ refuses a successful claim for incomplete evidence: {"malformed":true} (352.199195ms)
++✔ refuses a successful claim for incomplete evidence: {"empty":true} (324.730068ms)
++✔ refuses a successful claim for incomplete evidence: {"incomplete":true} (322.858149ms)
++✔ refuses a successful claim for incomplete evidence: {"duplicate":true} (326.368248ms)
++✔ refuses a successful claim for incomplete evidence: {"skipped":true} (343.467271ms)
++✔ refuses a successful claim for incomplete evidence: {"foreign":true} (322.863467ms)
++✔ refuses a successful claim for incomplete evidence: {"exit":1} (332.006829ms)
++✔ source changes during execution invalidate otherwise passing checks (318.505277ms)
++✔ timeout preserves both failed checks without retrying either command (1594.947479ms)
++✔ refuses revision mismatch, modified tracked inputs and untracked inputs before execution (39.13468ms)
++✔ refuses uncommitted test execution input: conftest.py (26.901276ms)
++✔ refuses uncommitted test execution input: pytest.ini (26.770993ms)
++✔ refuses uncommitted test execution input: setup.cfg (26.980433ms)
++✔ refuses uncommitted test execution input: scripts/run_adjudicator_acceptance.js (27.05835ms)
++✔ requires explicit interpreter/revision/bounds and never overwrites a receipt (183.993106ms)
++✔ refuses ignored execution inputs before running pytest: tests/conftest.py (35.149902ms)
++✔ refuses ignored execution inputs before running pytest: src/local_override.py (35.30202ms)
++✔ refuses ignored execution inputs before running pytest: tests/fixtures/local-evidence.json (35.689902ms)
++✔ refuses ignored execution inputs before running pytest: src/legacy.pyc (34.451618ms)
++✔ refuses ignored execution inputs before running pytest: tests/__pycache__/conftest.py (34.408007ms)
++✔ ordinary ignored Python and pytest caches do not invalidate source receipts (332.296571ms)
++✔ ignored inputs introduced during execution invalidate otherwise passing checks (321.692542ms)
++✔ published recovery ledger is attributable without establishing operational acceptance (13.803933ms)
++✔ rejects modified evidence instead of trusting the recorded result: named-tests.log (17.553887ms)
++✔ rejects modified evidence instead of trusting the recorded result: interpreter-followup/runner-after.log (19.291833ms)
++✔ rejects modified evidence instead of trusting the recorded result: pre-dispatch-observation.json (18.818259ms)
++✔ rejects missing evidence even when its parent receipt says it passed (13.115217ms)
++✔ rejects a missing checksum on a referenced log: null (17.090682ms)
++✔ rejects a missing checksum on a referenced log: undefined (16.668473ms)
++✔ audits JUnit bytes and refuses an absent JUnit checksum (22.928306ms)
++✔ refuses evidence outside the ledger directory: relative (10.43989ms)
++✔ refuses evidence outside the ledger directory: absolute (10.01143ms)
++✔ refuses evidence outside the ledger directory: symlink (10.342909ms)
++✔ does not equate a historical backup with the canonical report (17.372308ms)
++✔ rejects a retained row count substituted for the saved population (17.105209ms)
++✔ rejects merged historical/current categories (16.721462ms)
++✔ rejects missing dated limitations (15.889628ms)
++✔ rejects missing disclosure (16.199047ms)
++✔ rejects missing October 18 disclosure (16.970127ms)
++✔ rejects advice grade substitution (16.090143ms)
++✔ rejects unproved acceptance (15.847179ms)
++✔ rejects replacement cohort count (16.490812ms)
++✔ rejects mirror identity substitution (16.246515ms)
++✔ rejects historical dispatch substitution (16.155254ms)
++✔ report recovery preserves ordered rows, recursive paid history and conflicting counts (2.265822ms)
++✔ report recovery rejects missing input without initializing runtime state (0.523227ms)
++✔ attempt observations bind nested failure fields without exposing private error text (3.199806ms)
++✔ saved decisions survive failed retries and remain distinct from independent truth (1.208968ms)
++✔ failure field hashes detect changed evidence even when retained classifications match (1.10282ms)
++✔ later-truth diagnostics distinguish absence, UNKNOWN, binary claims and invalid values (1.147032ms)
++✔ parent and retry truth remain separate without deriving truth from a decision (0.886025ms)
++✔ changed binary truth changes its evidence hash without authenticating either value (0.859686ms)
++✔ recorded failure stages explain collection, execution and validation breaks on real message shapes (0.97453ms)
++✔ unknown and contradictory failure prose cannot borrow a recognized stage (0.859065ms)
++✔ exact retained launcher refusals explain admission without claiming a backend attempt (1.613834ms)
++✔ launcher refusal matching rejects changed prose and contradictory attempt fields (1.024654ms)
++✔ later launcher refusals preserve the parent decision and prior paid history (0.797851ms)
++✔ later retries and persistence breaks cannot replace the parent attempt failure or decision (1.02274ms)
++✔ report recovery refuses malformed and ambiguous retained identities (2.8164ms)
++✔ report recovery requires explicit attribution and a valid check time (0.499613ms)
++✔ report recovery aborts if the input changes during observation (0.826874ms)
++✔ retained report reconciliation preserves requested order and explains every identity gap (2.05595ms)
++✔ retained report CLI matches supplied manifests without authenticating saved outcomes (39.822544ms)
++✔ legacy report manifest keeps verdict ambiguity visible and empty requests cannot complete accounting (1.327991ms)
++✔ report reconciliation refuses malformed or changing manifests without replacing evidence (1.134318ms)
++✔ report CLI never combines historical recovery with dispatch or current Brain selection (208.514318ms)
++✔ pre-dispatch inventory reconciles report and native locators without exposing payloads (12.372594ms)
++✔ all validated native rows still require authentication, independent truth and live writer proof (11.982ms)
++✔ missing native evidence remains unavailable and never means zero attempts (0.779166ms)
++✔ an observed empty journal cannot establish writer ownership or authorize spending (9.1069ms)
++✔ an active journal writer does not make a read-only snapshot claim ownership (8.235999ms)
++✔ foreign and incomplete journals are refused without schema repair (4.571749ms)
++✔ report without native marker still cannot authorize generic retry (0.664942ms)
++✔ journal CLI stays read-only and requires explicit report attribution (81.233602ms)
++✔ inventory exports every synthetic dispute and every exclusion without writes (928.18638ms)
++✔ inventory preserves the fixed cutoff and reports a count discrepancy (7.21856ms)
++✔ inventory distinguishes missing evidence from a complete cohort (2.615891ms)
++✔ inventory distinguishes schema-less evidence from a complete cohort (0.680622ms)
++✔ inventory distinguishes empty evidence from a complete cohort (2.729454ms)
++✔ inventory distinguishes incomplete-schema evidence from a complete cohort (4.034273ms)
++✔ inventory CLI exports JSON, signals unavailable evidence and rejects replay options (215.988361ms)
++✔ matching 71 identities bind the supplied manifest bytes without claiming historical acceptance (124.785528ms)
++✔ equal inventory counts expose substituted identities, exclusions and absent requested runs (10.914148ms)
++✔ a requested run on another target cannot satisfy case identity (4.933224ms)
++✔ inventory accounts for outcomes without run records as unavailable evidence (46.283212ms)
++✔ an outcomes-only Brain is available with exclusions, rather than an observed empty store (4.885566ms)
++✔ manifest retains every requested identity when Brain is empty (2.908478ms)
++✔ manifest retains every requested identity when Brain is unavailable (2.509062ms)
++✔ manifest count discrepancy prevents an exact match even when all supplied identities match (4.335787ms)
++✔ manifest CLI preserves input bytes, rejects malformed identities and signals unavailable Brain (503.432436ms)
++✔ version 2 reconciles all 71 dispute identities without claiming historical provenance (118.824756ms)
++✔ version 2 exposes substituted verdicts NON_PASS/FAIL despite matching run and count (52.964014ms)
++✔ version 2 exposes substituted verdicts FAIL_HOLLOW/PASS despite matching run and count (42.42752ms)
++✔ version 2 exposes substituted verdicts PASS/FAIL despite matching run and count (43.178718ms)
++✔ version 2 retains different disputes on one run and rejects duplicate dispute identities (5.206756ms)
++✔ version 2 preserves full identities for excluded, missing and unavailable cases (40.921737ms)
++✔ version 2 rejects malformed verdicts before publishing any inventory (499.137579ms)
++✔ version 2 distinguishes unavailable verdict evidence from contradictory verdicts (50.089339ms)
++✔ version 2 retains an observed target mismatch when verdict evidence is unavailable (3.803963ms)
++✔ missing stored targets remain eligible disputes with explicit unavailable identity evidence (877.255143ms)
++ℹ tests 111
++ℹ suites 0
++ℹ pass 111
++ℹ fail 0
++ℹ cancelled 0
++ℹ skipped 0
++ℹ todo 0
++ℹ duration_ms 12883.117517
+diff --git a/docs/verification/issue-1096-recovery/truth-followup/results.md b/docs/verification/issue-1096-recovery/truth-followup/results.md
+new file mode 100644
+index 0000000..247354e
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/truth-followup/results.md
+@@ -0,0 +1,39 @@
++# Retained later-truth results
++
++The exporter now distinguishes missing truth, explicit `UNKNOWN`, invalid values
++and retained binary values that remain unverified. Each attempt has its own
++value hash, location and next evidence step. Parent/retry values and adjudicator
++decisions cannot supply missing independent truth. Existing saved decisions,
++paid history, authentication boundaries and dispatch restrictions are preserved.
++
++The three [negative controls](negative-controls.log) failed before implementation.
++All [111 focused regressions](regressions.log) pass afterward, with no skipped
++tests. [Validation](validation.json) binds the logs and source hashes to source
++commit `e81b3e77c0ad615eeed479fb8f1e566cdec073c0`, whose parent is `9c00d5b`.
++No Python files changed, so the Python-specific Black gate does not apply.
++
++The CLI was exercised on the existing selected-field historical projection:
++58 rows, 64 attempts, 30 retained binary truth values and 34 missing values.
++Of 19 saved binary decisions, five have no recorded truth. Their case identities,
++targets, locations and paid locators are in the [historical summary](historical-truth-summary.json).
++These are historical observations from an earlier backup, not authenticated
++outcomes, original retry-manifest reconciliation, independent current truth or
++canonical grades. No threshold or live-cohort result is established.
++
++The [required-test attempt](acceptance-run/checks.json), made on the checkout
++revision before edits, preserves collection and both required commands failing
++before collection because pytest is absent. Accepted deployment identity remains
++unverified. No new task checkbox is complete.
++
++Correct both PR checklists consistently: recovery remains unchecked; only the
++pre-execution inventory and ledger tasks, plus attribution/disclosure criterion,
++are complete. This corrects the preceding follow-up's claim that partial recovery
++completed the recovery task. PR-body correction, blocker comment and `needs-human`
++label were all rejected because connector mutations require approval and this
++run's policy is `never`. No remote update is claimed.
++
++Checkout Git metadata is read-only. The source commit is in
++`/tmp/issue-1096-truth-git-dc5twqhn/repo.git`; the source/evidence patch is
++[`artifacts/issue-1096-truth.patch`](../../../../artifacts/issue-1096-truth.patch).
++The checkout branch has not advanced. No provider call, production write,
++canonical publication or mirror synchronization occurred.
+diff --git a/docs/verification/issue-1096-recovery/truth-followup/validation.json b/docs/verification/issue-1096-recovery/truth-followup/validation.json
+new file mode 100644
+index 0000000..1499399
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/truth-followup/validation.json
+@@ -0,0 +1,47 @@
++{
++  "git_directory": "/tmp/issue-1096-truth-git-dc5twqhn/repo.git",
++  "source_commit": "e81b3e77c0ad615eeed479fb8f1e566cdec073c0",
++  "source_parent": "9c00d5bda5a429e48310a2bd5e7b27c4f5b30fba",
++  "checked_at": "2026-11-03T22:18:46.055133+00:00",
++  "regression_command": [
++    "node",
++    "--test",
++    "--test-isolation=none",
++    "tests/test_adjudicator_inventory.js",
++    "tests/test_adjudicator_acceptance_runner.js",
++    "tests/test_adjudicator_evidence_ledger.js"
++  ],
++  "regression_tests": {
++    "passed": 111,
++    "failed": 0,
++    "skipped": 0
++  },
++  "negative_controls": {
++    "passed": 0,
++    "failed": 3
++  },
++  "regression_logs": {
++    "baseline.log": {
++      "sha256": "8631fe48d6283c801ccd8a0c7fdbe0d4f6afd47ba4705fa016fd3a4a3f1e317f"
++    },
++    "negative-controls.log": {
++      "sha256": "b0959ec4c9601b30d027bc1dd09294d19aa13b45acac8a3c4705c52269e4221d"
++    },
++    "regressions.log": {
++      "sha256": "68a3da553c71345fc8f6a72fbd713c2f9129d60c278043dd37582db570a84cba"
++    }
++  },
++  "historical_summary": "historical-truth-summary.json",
++  "historical_summary_sha256": "5efc8659d829ae8fce6bbfbda5b64505de3070642f3d5d77d956fba39cfd34c6",
++  "source_sha256": {
++    "scripts/export_adjudicator_inventory.js": "51a4072f4b38d7fece2fa7155f8f64fa28e52cce656f2463eb97371f839a49d5",
++    "tests/test_adjudicator_inventory.js": "bb6aebbae6417224a65f4067ac2444ef415dd5fc4762070d32ca7cdf01fa7157"
++  },
++  "python_files_changed": false,
++  "required_tests_passed": false,
++  "accepted_deployment_verified": false,
++  "newly_completed_tasks": 0,
++  "pr_body_update": "rejected_connector_requires_approval_policy_never",
++  "blocker_comment": "rejected_connector_requires_approval_policy_never",
++  "needs_human_label": "rejected_connector_requires_approval_policy_never"
++}
+diff --git a/scripts/export_adjudicator_inventory.js b/scripts/export_adjudicator_inventory.js
+index 5058152..cc25634 100644
+--- a/scripts/export_adjudicator_inventory.js
++++ b/scripts/export_adjudicator_inventory.js
+@@ -115,6 +115,31 @@ function retainedBreaks(attempt, location, conflict) {
+     }]) : null };
+ }
+ 
++function retainedTruth(attempt, location) {
++  const truth = attempt.later_truth;
++  let status;
++  let nextStep;
++  if (truth === undefined || truth === null) {
++    status = 'not_recorded';
++    nextStep = 'recover_independent_later_truth_without_redispatch';
++  } else if (truth === 'UNKNOWN') {
++    status = 'unknown';
++    nextStep = 'preserve_UNKNOWN_until_independent_truth_available';
++  } else if (['PASS', 'FAIL'].includes(truth)) {
++    status = 'binary_unverified';
++    nextStep = 'authenticate_independent_later_truth';
++  } else {
++    status = 'invalid';
++    nextStep = 'inspect_invalid_retained_truth_before_grading';
++  }
++  // A saved value (even one matching the decision) proves neither provenance
++  // nor freshness. Observe this attempt only; never borrow parent/retry truth.
++  return { status, location: `${location}.later_truth`,
++    json_value_sha256: truth === undefined ? null
++      : createHash('sha256').update(JSON.stringify(truth)).digest('hex'),
++    independent_truth_verified: false, next_evidence_step: nextStep };
++}
++
+ // These observations describe saved fields, never a freshly validated result.
+ // Error prose can include private provider material. Bind it by JSON-value hash
+ // and location so recovery can inspect the original without publishing the text.
+@@ -152,6 +177,7 @@ function attemptObservation(attempt, caseId, location) {
+   return { case_id: caseId, location, retained_result: result,
+     backend_run_id: attempt.backend_run_id ?? null,
+     retained_binary_truth_present: ['PASS', 'FAIL'].includes(attempt.later_truth),
++    later_truth_observation: retainedTruth(attempt, location),
+     failure_fields: failureFields, next_evidence_step: nextStep,
+     ...retainedBreaks(attempt, location, (binary || abstained) && runFailed) };
+ }
+diff --git a/tests/test_adjudicator_inventory.js b/tests/test_adjudicator_inventory.js
+index 0818749..eab134d 100644
+--- a/tests/test_adjudicator_inventory.js
++++ b/tests/test_adjudicator_inventory.js
+@@ -162,6 +162,73 @@ test('failure field hashes detect changed evidence even when retained classifica
+   assert.ok(!JSON.stringify(changed).includes('private'));
+ });
+ 
++test('later-truth diagnostics distinguish absence, UNKNOWN, binary claims and invalid values', (t) => {
++  const { saved, options } = retainedReport(t);
++  const attempts = [{}, { later_truth: null }, { later_truth: 'UNKNOWN' },
++    { later_truth: 'PASS' }, { later_truth: 'FAIL' }, { later_truth: 'PASS ' },
++    { later_truth: true }, { later_truth: [] }, { later_truth: { note: 'private detail' } }];
++  saved.rows = attempts.map((row, i) => ({ ...row, case_id: `case-${i}`,
++    target: `owner/repo#${i}`, decision: 'reject_blocker', backend_run_id: `paid-${i}` }));
++  fs.writeFileSync(options.report, JSON.stringify(saved));
++  const before = fs.readFileSync(options.report);
++  const result = reportInventory(options);
++  const truth = result.retained_attempt_observations.map((row) => row.later_truth_observation);
++  assert.deepEqual(truth.map((item) => item.status), [
++    'not_recorded', 'not_recorded', 'unknown', 'binary_unverified', 'binary_unverified',
++    'invalid', 'invalid', 'invalid', 'invalid',
++  ]);
++  assert.equal(truth[0].json_value_sha256, null, 'absent is distinct from an explicit null');
++  for (const [i, item] of truth.entries()) {
++    assert.equal(item.location, `rows[${i}].later_truth`);
++    assert.equal(item.independent_truth_verified, false);
++    if (i > 0) assert.equal(item.json_value_sha256, createHash('sha256')
++      .update(JSON.stringify(attempts[i].later_truth)).digest('hex'));
++  }
++  assert.equal(truth[0].next_evidence_step, 'recover_independent_later_truth_without_redispatch');
++  assert.equal(truth[2].next_evidence_step, 'preserve_UNKNOWN_until_independent_truth_available');
++  assert.equal(truth[3].next_evidence_step, 'authenticate_independent_later_truth');
++  assert.equal(truth[5].next_evidence_step, 'inspect_invalid_retained_truth_before_grading');
++  assert.ok(!JSON.stringify(truth).includes('private detail'));
++  assert.equal(result.paid_attempts.length, attempts.length);
++  assert.ok(result.cases.every((row) => row.retained_decision === 'reject_blocker'));
++  assert.equal(Object.hasOwn(result, 'graded'), false);
++  assert.equal(result.dispatch_authorized, false);
++  assert.deepEqual(fs.readFileSync(options.report), before);
++});
++
++test('parent and retry truth remain separate without deriving truth from a decision', (t) => {
++  const { saved, options } = retainedReport(t);
++  saved.rows = [{ case_id: 'case-a', target: 'owner/repo#1', decision: 'uphold_blocker',
++    later_truth: 'UNKNOWN', backend_run_id: 'parent-paid', retry_attempts: [
++      { decision: 'reject_blocker', later_truth: 'PASS', backend_run_id: 'earlier-paid' },
++      { decision: 'uphold_blocker' },
++    ] }];
++  fs.writeFileSync(options.report, JSON.stringify(saved));
++  const result = reportInventory(options);
++  assert.deepEqual(result.retained_attempt_observations.map((row) => [
++    row.later_truth_observation.status, row.later_truth_observation.location,
++  ]), [
++    ['unknown', 'rows[0].later_truth'],
++    ['binary_unverified', 'rows[0].retry_attempts[0].later_truth'],
++    ['not_recorded', 'rows[0].retry_attempts[1].later_truth'],
++  ]);
++  assert.equal(result.cases[0].retained_later_truth, 'UNKNOWN');
++  assert.deepEqual(result.paid_attempts.map((row) => row.backend_run_id), ['parent-paid', 'earlier-paid']);
++  assert.equal(result.receipt_authority, 'not_authenticated_by_inventory');
++});
++
++test('changed binary truth changes its evidence hash without authenticating either value', (t) => {
++  const { saved, options } = retainedReport(t);
++  const first = reportInventory(options).retained_attempt_observations[3].later_truth_observation;
++  saved.rows[1].later_truth = 'FAIL';
++  fs.writeFileSync(options.report, JSON.stringify(saved));
++  const changed = reportInventory(options).retained_attempt_observations[3].later_truth_observation;
++  assert.equal(first.status, 'binary_unverified');
++  assert.equal(changed.status, first.status);
++  assert.notEqual(changed.json_value_sha256, first.json_value_sha256);
++  assert.equal(changed.independent_truth_verified, false);
++});
++
+ test('recorded failure stages explain collection, execution and validation breaks on real message shapes', (t) => {
+   const { saved, options } = retainedReport(t);
+   const attempts = [

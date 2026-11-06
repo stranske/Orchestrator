@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import capabilities
 import dispatcher
 import exploration_evidence_plan
 import partitioned_review as review
@@ -33,7 +34,7 @@ def test_module_selftest_exercises_hermetic_review_boundaries(monkeypatch):
     assert started == []
 
 
-def test_periodic_report_selftest_remains_local(monkeypatch):
+def test_periodic_report_selftest_remains_local(monkeypatch, tmp_path):
     """Regression coverage for report aggregation must not launch a subprocess.
 
     The report's capacity read is the one external seam: with no cached capacity.json it runs
@@ -50,6 +51,7 @@ def test_periodic_report_selftest_remains_local(monkeypatch):
     monkeypatch.setattr(
         exploration_evidence_plan, "_capacity_snapshot", lambda *_a, **_k: {"agents": {}}
     )
+    monkeypatch.setattr(capabilities, "REG", tmp_path / "capabilities.json")
     monkeypatch.setattr(subprocess, "run", forbidden)
     periodic_report._selftest()
     assert started == []

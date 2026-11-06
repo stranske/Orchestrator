@@ -4,8 +4,12 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawn } = require('node:child_process');
+const { pathToFileURL } = require('node:url');
+const { spawn, execFile } = require('node:child_process');
+const { promisify } = require('node:util');
 const { test } = require('node:test');
+
+const execFileAsync = promisify(execFile);
 
 const repo = path.resolve(__dirname, '..');
 const modules = fs.existsSync(path.join(repo, 'src')) ? path.join(repo, 'src') : repo;
@@ -19,6 +23,687 @@ function run(command, args, options = {}) {
     child.stderr.on('data', (data) => { stderr += data; });
     child.on('error', reject);
     child.on('close', (status, signal) => resolve({ status, signal, stdout, stderr }));
+  });
+}
+
+const validProvenance = {
+  published_commit: 'a'.repeat(40),
+  deployed_at: '2026-11-05T00:00:00Z',
+  deployment_evidence: 'publication-audit/run-123/successful-push',
+};
+const invalidProvenance = [
+  ['missing file', undefined, /No such file/],
+  ['invalid JSON', '{', /Expecting property name/],
+  ['null provenance', 'null', /provenance must be an object/],
+  ['array provenance', '[]', /provenance must be an object/],
+  ['missing commit', { ...validProvenance, published_commit: undefined }, /full Git commit SHA/],
+  ['abbreviated commit', { ...validProvenance, published_commit: 'a'.repeat(7) }, /full Git commit SHA/],
+  ['missing deployment time', { ...validProvenance, deployed_at: undefined }, /deployed_at/],
+  ['malformed deployment time', { ...validProvenance, deployed_at: 'yesterday' }, /deployed_at/],
+  ['date without instant', { ...validProvenance, deployed_at: '2026-11-05' }, /deployed_at/],
+  ['timezone missing', { ...validProvenance, deployed_at: '2026-11-05T00:00:00' }, /deployed_at/],
+  ['future deployment', { ...validProvenance, deployed_at: '9999-01-01T00:00:00Z' }, /in the future/],
+  ['missing audit evidence', { ...validProvenance, deployment_evidence: undefined }, /deployment_evidence/],
+  ['blank audit evidence', { ...validProvenance, deployment_evidence: '  ' }, /deployment_evidence/],
+];
+
+const invalidPublishedContracts = [
+  ['missing challengers', (doc) => { delete doc.exploration.challengers; }, /contract is malformed/],
+  ['array challengers', (doc) => { doc.exploration.challengers = []; }, /contract is malformed/],
+  ['missing task', (doc) => { delete doc.exploration.challengers.review; }, /contract is malformed/],
+  ['extra task', (doc) => { doc.exploration.challengers.unknown = 'codex'; }, /contract is malformed/],
+  ['hosted-unrunnable challenger', (doc) => { doc.exploration.challengers.review = 'gemini'; }, /contract is malformed/],
+  ['non-string challenger', (doc) => { doc.exploration.challengers.review = []; }, /contract is malformed/],
+  ['missing generation time', (doc) => { delete doc.generated_at; }, /generated_at/],
+  ['malformed generation time', (doc) => { doc.generated_at = 'yesterday'; }, /generated_at/],
+];
+
+// Each case needs its own history: an earlier malformed marked artifact would
+// otherwise stop verification before the defect under test is reached.
+for (const [name, corrupt, diagnostic] of invalidPublishedContracts) {
+  test(`deployment CLI refuses ${name} even after a later repair`, async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'route-invalid-publication-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const home = path.join(root, 'home');
+    const state = path.join(root, 'state');
+    const repositories = path.join(root, 'repos');
+    const checkout = path.join(repositories, 'stranske__Orchestrator');
+    const remote = path.join(root, 'remote.git');
+    const audit = path.join(root, 'audit.json');
+    const receipt = path.join(state, 'route-weights-challenger-deployment.json');
+    const database = path.join(root, 'absent.db');
+    for (const directory of [home, state, repositories]) fs.mkdirSync(directory);
+    const env = {
+      PATH: process.env.PATH,
+      HOME: home,
+      PYTHONPATH: modules,
+      PYTHONDONTWRITEBYTECODE: '1',
+      ORCH_STATE_DIR: state,
+      ORCH_LOCAL_RUNTIME: path.join(root, 'runtime'),
+      ORCH_REPOS_DIR: repositories,
+      ORCH_FEEDBACK_DB: database,
+      ORCH_CAPABILITIES_PATH: path.join(root, 'capabilities.json'),
+      HANDOFF_DIR: path.join(root, 'handoff'),
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_AUTHOR_NAME: 'Deployment Test',
+      GIT_AUTHOR_EMAIL: 'deploy@example.invalid',
+      GIT_COMMITTER_NAME: 'Deployment Test',
+      GIT_COMMITTER_EMAIL: 'deploy@example.invalid',
+    };
+    async function git(directory, ...args) {
+      const result = await run('git', ['-C', directory, ...args], { env });
+      assert.equal(result.status, 0, result.stderr);
+      return result.stdout.trim();
+    }
+    const branch = 'exports/route-weights';
+    const artifact = path.join(checkout, 'config', 'route-weights.json');
+    await git(root, 'init', '--bare', '--initial-branch=main', remote);
+    await git(root, 'clone', remote, checkout);
+    const valid = {
+      generated_at: '2026-11-04T10:00:00Z',
+      exploration: {
+        challenger_filter: 'hosted-runnable-alternatives/v1',
+        challengers: Object.fromEntries(
+          ['implement', 'review', 'testgen', 'mechanical', 'codemod', 'cross_repo']
+            .map((task) => [task, 'codex'])),
+      },
+    };
+    const invalid = structuredClone(valid);
+    corrupt(invalid);
+    async function publishFixture(document) {
+      fs.mkdirSync(path.dirname(artifact), { recursive: true });
+      fs.writeFileSync(artifact, JSON.stringify(document));
+      await git(checkout, 'add', '.');
+      await git(checkout, 'commit', '-m', 'publication fixture');
+      await git(checkout, 'push', 'origin', `HEAD:${branch}`);
+      return git(remote, 'rev-parse', branch);
+    }
+    async function refuse(commit, retained) {
+      fs.writeFileSync(audit, JSON.stringify({
+        published_commit: commit,
+        deployed_at: '2026-11-04T11:00:00Z',
+        deployment_evidence: 'fixture-publication-audit/successful-push',
+      }));
+      const modified = retained === null ? null : fs.statSync(receipt, { bigint: true }).mtimeNs;
+      const result = await run(process.env.PYTHON || 'python3', [
+        path.join(modules, 'route_weights_export.py'),
+        '--record-challenger-deployment', audit, '--state-dir', state,
+      ], { cwd: root, env });
+      assert.equal(result.status, 1, result.stderr);
+      assert.equal(result.stdout, '');
+      assert.match(result.stderr, /deployment provenance refused:/);
+      assert.match(result.stderr, diagnostic);
+      assert.doesNotMatch(result.stderr, /Traceback/);
+      if (retained === null) {
+        assert.equal(fs.existsSync(receipt), false);
+      } else {
+        assert.equal(fs.readFileSync(receipt, 'utf8'), retained);
+        assert.equal(fs.statSync(receipt, { bigint: true }).mtimeNs, modified);
+      }
+    }
+    const first = await publishFixture(invalid);
+    await refuse(first, null);
+    const repaired = await publishFixture(valid);
+    assert.notEqual(first, repaired);
+    for (const retained of [null, '{"earlier_receipt":"preserve"}\n']) {
+      if (retained !== null) fs.writeFileSync(receipt, retained);
+      // Neither the invalid original nor the repaired tip establishes a valid
+      // first publication. A later repair must not reset the observation clock.
+      await refuse(first, retained);
+      await refuse(repaired, retained);
+    }
+    assert.equal(await git(remote, 'rev-parse', branch), repaired);
+    assert.equal(fs.existsSync(database), false);
+    assert.deepEqual(fs.readdirSync(home), []);
+  });
+}
+
+test('deployment CLI records the export merge rather than an unpublished or side-branch commit', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'route-deployment-merge-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const home = path.join(root, 'home');
+  const state = path.join(root, 'state');
+  const repositories = path.join(root, 'repos');
+  const checkout = path.join(repositories, 'stranske__Orchestrator');
+  const remote = path.join(root, 'remote.git');
+  const audit = path.join(root, 'audit.json');
+  const receipt = path.join(state, 'route-weights-challenger-deployment.json');
+  const database = path.join(root, 'absent.db');
+  for (const directory of [home, state, repositories]) fs.mkdirSync(directory);
+  const env = {
+    PATH: process.env.PATH,
+    HOME: home,
+    PYTHONPATH: modules,
+    PYTHONDONTWRITEBYTECODE: '1',
+    ORCH_STATE_DIR: state,
+    ORCH_LOCAL_RUNTIME: path.join(root, 'runtime'),
+    ORCH_REPOS_DIR: repositories,
+    ORCH_FEEDBACK_DB: database,
+    ORCH_CAPABILITIES_PATH: path.join(root, 'capabilities.json'),
+    HANDOFF_DIR: path.join(root, 'handoff'),
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_AUTHOR_NAME: 'Deployment Test',
+    GIT_AUTHOR_EMAIL: 'deploy@example.invalid',
+    GIT_COMMITTER_NAME: 'Deployment Test',
+    GIT_COMMITTER_EMAIL: 'deploy@example.invalid',
+  };
+  async function git(directory, ...args) {
+    const result = await run('git', ['-C', directory, ...args], { env });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  }
+  const branch = 'exports/route-weights';
+  const artifact = path.join(checkout, 'config', 'route-weights.json');
+  const document = {
+    generated_at: '2026-11-04T10:00:00Z',
+    exploration: {
+      challenger_filter: 'hosted-runnable-alternatives/v1',
+      challengers: Object.fromEntries(
+        ['implement', 'review', 'testgen', 'mechanical', 'codemod', 'cross_repo']
+          .map((task) => [task, null])),
+    },
+  };
+  await git(root, 'init', '--bare', '--initial-branch=main', remote);
+  await git(root, 'clone', remote, checkout);
+  fs.mkdirSync(path.dirname(artifact), { recursive: true });
+  fs.writeFileSync(artifact, JSON.stringify({ generated_at: document.generated_at }));
+  await git(checkout, 'add', '.');
+  await git(checkout, 'commit', '-m', 'unmarked export fixture');
+  await git(checkout, 'switch', '-c', branch);
+  await git(checkout, 'push', 'origin', branch);
+  const initial = await git(remote, 'rev-parse', branch);
+
+  // A valid artifact exists locally, then on another remote branch. Neither
+  // establishes a publication on the export branch named in the receipt.
+  await git(checkout, 'switch', '-c', 'filter-candidate');
+  fs.writeFileSync(artifact, JSON.stringify(document));
+  await git(checkout, 'add', '.');
+  await git(checkout, 'commit', '-m', 'candidate filter fixture');
+  const candidate = await git(checkout, 'rev-parse', 'HEAD');
+  const record = async (commit) => {
+    fs.writeFileSync(audit, JSON.stringify({
+      published_commit: commit,
+      deployed_at: '2026-11-04T11:00:00Z',
+      deployment_evidence: 'fixture-publication-audit/successful-push',
+    }));
+    return run(process.env.PYTHON || 'python3', [
+      path.join(modules, 'route_weights_export.py'),
+      '--record-challenger-deployment', audit, '--state-dir', state,
+    ], { cwd: root, env });
+  };
+  const refuse = async (commit) => {
+    const result = await record(commit);
+    assert.equal(result.status, 1, result.stderr);
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr, /not the first verified challenger-filter publication/);
+    assert.doesNotMatch(result.stderr, /Traceback/);
+    assert.deepEqual(fs.readdirSync(state), []);
+  };
+  await refuse(candidate);
+  await git(checkout, 'push', 'origin', 'filter-candidate');
+  await refuse(candidate);
+  assert.equal(await git(remote, 'rev-parse', branch), initial);
+
+  // A merge is the first commit exposing the filter on the export branch.
+  // The candidate is now reachable, but it was never the published branch tip.
+  await git(checkout, 'switch', branch);
+  await git(checkout, 'merge', '--no-ff', 'filter-candidate', '-m', 'export filter fixture');
+  const merged = await git(checkout, 'rev-parse', 'HEAD');
+  assert.notEqual(merged, candidate);
+  await refuse(merged);
+  await git(checkout, 'push', 'origin', branch);
+  assert.equal(await git(remote, 'rev-parse', `${branch}^2`), candidate);
+  await refuse(candidate);
+  const accepted = await record(merged);
+  assert.equal(accepted.status, 0, accepted.stderr);
+  const recorded = JSON.parse(accepted.stdout);
+  const publishedDocument = JSON.parse(await git(remote, 'show', `${merged}:config/route-weights.json`));
+  assert.ok(Object.values(publishedDocument.exploration.challengers).every((agent) => agent === null),
+    'a verified filter may have no runnable alternatives for any task');
+  assert.equal(recorded.branch, branch);
+  assert.equal(recorded.published_commit, merged);
+  assert.equal(recorded.generated_at, document.generated_at);
+  assert.equal(recorded.deployed_at, '2026-11-04T11:00:00Z');
+  assert.equal(recorded.deployed_epoch, Date.parse(recorded.deployed_at) / 1000);
+  assert.deepEqual(JSON.parse(fs.readFileSync(receipt, 'utf8')), recorded);
+  assert.equal(await git(remote, 'rev-parse', branch), merged);
+  assert.equal(fs.existsSync(database), false);
+  assert.deepEqual(fs.readdirSync(home), []);
+});
+
+test('deployment CLI recovers fetch and receipt failures after an unchanged real publication', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'route-deployment-recovery-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const home = path.join(root, 'home');
+  const state = path.join(root, 'state');
+  const remote = path.join(root, 'remote.git');
+  const repositories = path.join(root, 'repos');
+  const checkout = path.join(repositories, 'stranske__Orchestrator');
+  const database = path.join(root, 'absent.db');
+  const audit = path.join(root, 'audit.json');
+  const receipt = path.join(state, 'route-weights-challenger-deployment.json');
+  for (const directory of [home, state, repositories]) fs.mkdirSync(directory);
+  const env = {
+    PATH: process.env.PATH,
+    HOME: home,
+    PYTHONPATH: modules,
+    PYTHONDONTWRITEBYTECODE: '1',
+    ORCH_STATE_DIR: state,
+    ORCH_LOCAL_RUNTIME: path.join(root, 'runtime'),
+    ORCH_REPOS_DIR: repositories,
+    ORCH_FEEDBACK_DB: database,
+    ORCH_CAPABILITIES_PATH: path.join(root, 'capabilities.json'),
+    HANDOFF_DIR: path.join(root, 'handoff'),
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_AUTHOR_NAME: 'Deployment Test',
+    GIT_AUTHOR_EMAIL: 'deploy@example.invalid',
+    GIT_COMMITTER_NAME: 'Deployment Test',
+    GIT_COMMITTER_EMAIL: 'deploy@example.invalid',
+  };
+  async function git(directory, ...args) {
+    const result = await run('git', ['-C', directory, ...args], { env });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  }
+  const python = process.env.PYTHON || 'python3';
+  const branch = 'exports/route-weights';
+  const artifact = path.join(checkout, 'config', 'route-weights.json');
+  await git(root, 'init', '--bare', '--initial-branch=main', remote);
+  await git(root, 'clone', remote, checkout);
+  const document = {
+    generated_at: new Date(Date.now() - 3600000).toISOString().replace(/\.\d{3}Z$/, 'Z'),
+    source_version: 1,
+    task_types: { implement: { evidence_ok: true } },
+  };
+  fs.mkdirSync(path.dirname(artifact), { recursive: true });
+  fs.writeFileSync(artifact, JSON.stringify(document));
+  await git(checkout, 'add', '.');
+  await git(checkout, 'commit', '-m', 'unmarked publication fixture');
+  await git(checkout, 'push', 'origin', `HEAD:${branch}`);
+  const initial = await git(remote, 'rev-parse', branch);
+  const provenance = {
+    published_commit: initial,
+    deployed_at: new Date(Date.now() - 1800000).toISOString().replace(/\.\d{3}Z$/, 'Z'),
+    deployment_evidence: 'fixture-publication-audit/successful-push',
+  };
+  const record = (recordEnv = env) => run(python, [
+    path.join(modules, 'route_weights_export.py'),
+    '--record-challenger-deployment', audit, '--state-dir', state,
+  ], { cwd: root, env: recordEnv });
+  fs.writeFileSync(audit, JSON.stringify(provenance));
+  const unmarked = await record();
+  assert.equal(unmarked.status, 1, unmarked.stderr);
+  assert.match(unmarked.stderr, /first verified challenger-filter publication/);
+  assert.equal(fs.existsSync(receipt), false);
+
+  // Build the real filter contract, then exercise publish_document and provisioning
+  // against the isolated bare remote. Neither publication nor recording is mocked.
+  const publish = () => run(python, ['-c', `
+import json
+import sys
+from pathlib import Path
+import route_weights_export as export
+document = json.loads(sys.argv[1])
+document["exploration"] = export._exploration_block(
+    1,
+    {task: [] for task in export.CONSUMER_TASK_TYPES},
+    {task: {"ranking": []} for task in export.CONSUMER_TASK_TYPES},
+    100,
+)
+published = export.publish_document(document, state_dir=Path(sys.argv[2]))
+print("publication_result=" + str(published))
+`, JSON.stringify(document), state], { cwd: root, env });
+  // A real rejected push leaves a valid local filter commit. It must not
+  // establish deployment provenance until that exact commit reaches the remote.
+  const rejectPush = path.join(remote, 'hooks', 'pre-receive');
+  fs.writeFileSync(rejectPush, '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+  let rejectedCommit;
+  try {
+    const rejected = await publish();
+    assert.equal(rejected.status, 1, rejected.stderr);
+    assert.match(rejected.stderr, /remote rejected.*pre-receive hook declined/);
+    assert.doesNotMatch(rejected.stdout, /publication_result=True/);
+    rejectedCommit = await git(checkout, 'rev-parse', 'HEAD');
+    assert.notEqual(rejectedCommit, initial);
+    const localDocument = JSON.parse(await git(checkout, 'show', `${rejectedCommit}:config/route-weights.json`));
+    assert.equal(localDocument.exploration.challenger_filter, 'hosted-runnable-alternatives/v1');
+    assert.equal(await git(remote, 'rev-parse', branch), initial);
+    fs.writeFileSync(audit, JSON.stringify({ ...provenance, published_commit: rejectedCommit }));
+    const unpublished = await record();
+    assert.equal(unpublished.status, 1, unpublished.stderr);
+    assert.equal(unpublished.stdout, '');
+    assert.match(unpublished.stderr, /not the first verified challenger-filter publication/);
+    assert.doesNotMatch(unpublished.stderr, /Traceback/);
+    assert.equal(fs.existsSync(receipt), false);
+    assert.equal(fs.existsSync(database), false);
+    assert.deepEqual(fs.readdirSync(home), []);
+  } finally {
+    fs.unlinkSync(rejectPush);
+  }
+  // Retry the rejected Git push explicitly; recording itself cannot publish.
+  await git(checkout, 'push', 'origin', `HEAD:${branch}`);
+  assert.equal(await git(remote, 'rev-parse', branch), rejectedCommit);
+  const published = await publish();
+  assert.equal(published.status, 0, published.stderr);
+  assert.match(published.stdout, /publication_result=False/);
+  provenance.published_commit = await git(remote, 'rev-parse', branch);
+  assert.notEqual(provenance.published_commit, initial);
+  fs.writeFileSync(audit, JSON.stringify(provenance));
+
+  async function refuseBeforeGeneration() {
+    const before = fs.existsSync(receipt) ? fs.readFileSync(receipt) : null;
+    const modified = before === null ? null : fs.statSync(receipt, { bigint: true }).mtimeNs;
+    const early = new Date(Date.parse(document.generated_at) - 1000)
+      .toISOString().replace(/\.\d{3}Z$/, 'Z');
+    fs.writeFileSync(audit, JSON.stringify({ ...provenance, deployed_at: early }));
+    try {
+      const refused = await record();
+      assert.equal(refused.status, 1, refused.stderr);
+      assert.equal(refused.stdout, '');
+      assert.match(refused.stderr, /deployed_at precedes the published artifact's generated_at/);
+      assert.doesNotMatch(refused.stderr, /Traceback/);
+      if (before === null) {
+        assert.equal(fs.existsSync(receipt), false);
+      } else {
+        assert.deepEqual(fs.readFileSync(receipt), before);
+        assert.equal(fs.statSync(receipt, { bigint: true }).mtimeNs, modified);
+      }
+      assert.equal(await git(remote, 'rev-parse', branch), provenance.published_commit);
+    } finally {
+      fs.writeFileSync(audit, JSON.stringify(provenance));
+    }
+  }
+  await refuseBeforeGeneration();
+
+  // Publication can occur within the same whole second as artifact generation.
+  // Use separate receipt directories so these boundary checks cannot replace
+  // the original audit used by the failure/recovery scenario below.
+  for (const [name, timestamp] of [
+    ['zulu', document.generated_at],
+    ['utc-offset', document.generated_at.replace(/Z$/, '+00:00')],
+  ]) {
+    await t.test(`accepts deployment at generation instant with ${name}`, async () => {
+      const boundaryState = path.join(root, `boundary-${name}`);
+      fs.writeFileSync(audit, JSON.stringify({ ...provenance, deployed_at: timestamp }));
+      try {
+        const accepted = await run(python, [
+          path.join(modules, 'route_weights_export.py'),
+          '--record-challenger-deployment', audit, '--state-dir', boundaryState,
+        ], { cwd: root, env });
+        assert.equal(accepted.status, 0, accepted.stderr);
+        const boundaryReceipt = JSON.parse(accepted.stdout);
+        assert.equal(boundaryReceipt.deployed_at, timestamp);
+        assert.equal(boundaryReceipt.deployed_epoch, Date.parse(document.generated_at) / 1000);
+        assert.equal(boundaryReceipt.published_commit, provenance.published_commit);
+        assert.deepEqual(JSON.parse(fs.readFileSync(
+          path.join(boundaryState, path.basename(receipt)), 'utf8')), boundaryReceipt);
+        assert.equal(fs.existsSync(receipt), false);
+        assert.equal(await git(remote, 'rev-parse', branch), provenance.published_commit);
+      } finally {
+        fs.writeFileSync(audit, JSON.stringify(provenance));
+      }
+    });
+  }
+
+  // Cached origin refs cannot establish that a publication is still remote.
+  // Exercise real fetch failure both before and after a receipt is retained.
+  async function refuseUnavailableRemote() {
+    const offline = path.join(root, 'offline.git');
+    const before = fs.existsSync(receipt) ? fs.readFileSync(receipt) : null;
+    const modified = before === null ? null : fs.statSync(receipt, { bigint: true }).mtimeNs;
+    assert.equal(await git(checkout, 'rev-parse', `origin/${branch}`), provenance.published_commit);
+    fs.renameSync(remote, offline);
+    try {
+      const refused = await record();
+      assert.equal(refused.status, 1, refused.stderr);
+      assert.equal(refused.stdout, '', 'a failed fetch must not print a successful receipt');
+      assert.match(refused.stderr, /deployment provenance refused:.*fetch/);
+      assert.doesNotMatch(refused.stderr, /Traceback/);
+      if (before === null) {
+        assert.equal(fs.existsSync(receipt), false, 'cached refs must not create provenance');
+      } else {
+        assert.deepEqual(fs.readFileSync(receipt), before);
+        assert.equal(fs.statSync(receipt, { bigint: true }).mtimeNs, modified);
+      }
+      assert.equal(await git(checkout, 'rev-parse', `origin/${branch}`), provenance.published_commit);
+    } finally {
+      fs.renameSync(offline, remote);
+    }
+  }
+  await refuseUnavailableRemote();
+
+  // A directory at the atomic-write path causes an actual filesystem failure,
+  // including when running as root, without changing permissions or mocking I/O.
+  const blockedWrite = path.join(state, `.${path.basename(receipt)}.tmp`);
+  fs.mkdirSync(blockedWrite);
+  const failed = await record();
+  assert.equal(failed.status, 1, failed.stderr);
+  assert.equal(failed.stdout, '');
+  assert.match(failed.stderr, /deployment provenance refused:.*[Ii]s a directory/);
+  assert.doesNotMatch(failed.stderr, /Traceback/);
+  assert.equal(fs.existsSync(receipt), false);
+  assert.equal(await git(remote, 'rev-parse', branch), provenance.published_commit);
+  fs.rmdirSync(blockedWrite);
+
+  const unchanged = await publish();
+  assert.equal(unchanged.status, 0, unchanged.stderr);
+  assert.match(unchanged.stdout, /publication_result=False/);
+  const recovered = await record();
+  assert.equal(recovered.status, 0, recovered.stderr);
+  const recorded = JSON.parse(recovered.stdout);
+  assert.equal(recorded.published_commit, provenance.published_commit);
+  assert.equal(recorded.deployed_at, provenance.deployed_at);
+  assert.equal(recorded.deployed_epoch, Date.parse(provenance.deployed_at) / 1000);
+  assert.equal(recorded.deployment_evidence, provenance.deployment_evidence);
+  assert.equal(recorded.generated_at, document.generated_at);
+  assert.deepEqual(JSON.parse(fs.readFileSync(receipt, 'utf8')), recorded);
+  const before = fs.readFileSync(receipt);
+  const modified = fs.statSync(receipt, { bigint: true }).mtimeNs;
+  await refuseBeforeGeneration();
+  await refuseUnavailableRemote();
+  const repeated = await record();
+  assert.equal(repeated.status, 0, repeated.stderr);
+  assert.deepEqual(JSON.parse(repeated.stdout), recorded);
+  assert.deepEqual(fs.readFileSync(receipt), before);
+  assert.equal(fs.statSync(receipt, { bigint: true }).mtimeNs, modified);
+  assert.equal(await git(remote, 'rev-parse', branch), provenance.published_commit);
+  assert.equal(fs.existsSync(database), false, 'publication must not create a feedback database');
+  assert.deepEqual(fs.readdirSync(home), [], 'the live state fallback must stay unused');
+
+  // A new publication must not move the observation boundary to the latest
+  // artifact. Exercise the CLI against multi-commit remote history, including
+  // an attempted replacement of the retained receipt with that later commit.
+  document.source_version += 1;
+  const laterPublication = await publish();
+  assert.equal(laterPublication.status, 0, laterPublication.stderr);
+  assert.match(laterPublication.stdout, /publication_result=True/);
+  const laterCommit = await git(remote, 'rev-parse', branch);
+  assert.notEqual(laterCommit, provenance.published_commit);
+  const original = await record();
+  assert.equal(original.status, 0, original.stderr);
+  assert.deepEqual(JSON.parse(original.stdout), recorded);
+  assert.deepEqual(fs.readFileSync(receipt), before);
+  assert.equal(fs.statSync(receipt, { bigint: true }).mtimeNs, modified);
+
+  fs.writeFileSync(audit, JSON.stringify({ ...provenance, published_commit: laterCommit }));
+  const replacement = await record();
+  assert.equal(replacement.status, 1, replacement.stderr);
+  assert.equal(replacement.stdout, '');
+  assert.match(replacement.stderr, /not the first verified challenger-filter publication/);
+  assert.doesNotMatch(replacement.stderr, /Traceback/);
+  assert.deepEqual(fs.readFileSync(receipt), before);
+  assert.equal(fs.statSync(receipt, { bigint: true }).mtimeNs, modified);
+
+  // An absent receipt must not make the latest commit acceptable either.
+  fs.unlinkSync(receipt);
+  const missingReceipt = await record();
+  assert.equal(missingReceipt.status, 1, missingReceipt.stderr);
+  assert.match(missingReceipt.stderr, /not the first verified challenger-filter publication/);
+  assert.equal(missingReceipt.stdout, '');
+  assert.equal(fs.existsSync(receipt), false);
+  fs.writeFileSync(audit, JSON.stringify(provenance));
+  const firstReceipt = await record();
+  assert.equal(firstReceipt.status, 0, firstReceipt.stderr);
+  assert.deepEqual(JSON.parse(firstReceipt.stdout), recorded);
+  assert.deepEqual(fs.readFileSync(receipt), before);
+  assert.equal(await git(remote, 'rev-parse', branch), laterCommit,
+    'recording the original deployment must not publish or rewind the export branch');
+
+  // A depth-one clone hides the actual first publication. Even though its tip
+  // carries a valid contract, it cannot establish a deployment boundary.
+  const shallowRepositories = path.join(root, 'shallow-repos');
+  const shallowCheckout = path.join(shallowRepositories, 'stranske__Orchestrator');
+  fs.mkdirSync(shallowRepositories);
+  await git(root, 'clone', '--depth=1', '--branch', branch,
+    pathToFileURL(remote).href, shallowCheckout);
+  const shallowEnv = { ...env, ORCH_REPOS_DIR: shallowRepositories };
+  assert.equal(await git(shallowCheckout, 'rev-parse', '--is-shallow-repository'), 'true');
+  assert.equal(await git(shallowCheckout, 'rev-list', '--count', `origin/${branch}`), '1');
+  assert.equal(await git(shallowCheckout, 'rev-parse', `origin/${branch}`), laterCommit);
+
+  const retained = fs.readFileSync(receipt);
+  const retainedModified = fs.statSync(receipt, { bigint: true }).mtimeNs;
+  for (const existing of [true, false]) {
+    if (!existing) fs.unlinkSync(receipt);
+    // Neither an accurate audit nor one falsely naming the visible tip can be
+    // verified from truncated history. Preserve any receipt already retained.
+    for (const commit of [provenance.published_commit, laterCommit]) {
+      fs.writeFileSync(audit, JSON.stringify({ ...provenance, published_commit: commit }));
+      const refused = await record(shallowEnv);
+      assert.equal(refused.status, 1, refused.stderr);
+      assert.equal(refused.stdout, '');
+      assert.match(refused.stderr, /complete export history is required/);
+      assert.doesNotMatch(refused.stderr, /Traceback/);
+      if (existing) {
+        assert.deepEqual(fs.readFileSync(receipt), retained);
+        assert.equal(fs.statSync(receipt, { bigint: true }).mtimeNs, retainedModified);
+      } else {
+        assert.equal(fs.existsSync(receipt), false);
+      }
+    }
+  }
+
+  // Restoring history must uncover the original publication, reject the later
+  // audit, and recover the original receipt without publishing another commit.
+  await git(shallowCheckout, 'fetch', '--unshallow', 'origin');
+  assert.equal(await git(shallowCheckout, 'rev-parse', '--is-shallow-repository'), 'false');
+  const laterAfterRecovery = await record(shallowEnv);
+  assert.equal(laterAfterRecovery.status, 1, laterAfterRecovery.stderr);
+  assert.equal(laterAfterRecovery.stdout, '');
+  assert.match(laterAfterRecovery.stderr, /not the first verified challenger-filter publication/);
+  assert.equal(fs.existsSync(receipt), false);
+  fs.writeFileSync(audit, JSON.stringify(provenance));
+  const originalAfterRecovery = await record(shallowEnv);
+  assert.equal(originalAfterRecovery.status, 0, originalAfterRecovery.stderr);
+  assert.deepEqual(JSON.parse(originalAfterRecovery.stdout), recorded);
+  assert.deepEqual(fs.readFileSync(receipt), retained);
+  assert.equal(await git(remote, 'rev-parse', branch), laterCommit);
+
+  // The same verified commit does not authorize replacing its retained audit
+  // or silently repairing a damaged receipt. Either could reset observation.
+  const conflicts = [
+    ['changed audit timestamp', { ...provenance, deployed_at: document.generated_at }, retained],
+    ['changed audit evidence', {
+      ...provenance, deployment_evidence: 'different-publication-audit/successful-push',
+    }, retained],
+    ['conflicting receipt epoch', provenance,
+      JSON.stringify({ ...recorded, deployed_epoch: recorded.deployed_epoch + 1 })],
+    ['missing receipt evidence', provenance,
+      JSON.stringify({ ...recorded, deployment_evidence: undefined })],
+    ['null receipt', provenance, 'null\n'],
+    ['truncated receipt', provenance, '{'],
+  ];
+  for (const [name, attemptedAudit, retainedReceipt] of conflicts) {
+    await t.test(`preserves deployment boundary with ${name}`, async () => {
+      fs.writeFileSync(audit, JSON.stringify(attemptedAudit));
+      fs.writeFileSync(receipt, retainedReceipt);
+      const saved = fs.readFileSync(receipt);
+      const savedModified = fs.statSync(receipt, { bigint: true }).mtimeNs;
+      try {
+        const refused = await record();
+        assert.equal(refused.status, 1, refused.stderr);
+        assert.equal(refused.stdout, '');
+        assert.match(refused.stderr, /deployment provenance refused:/);
+        assert.match(refused.stderr, name === 'truncated receipt'
+          ? /Expecting property name/ : /refusing to replace the first recorded deployment/);
+        assert.doesNotMatch(refused.stderr, /Traceback/);
+        assert.deepEqual(fs.readFileSync(receipt), saved);
+        assert.equal(fs.statSync(receipt, { bigint: true }).mtimeNs, savedModified);
+        assert.equal(fs.existsSync(blockedWrite), false, 'refusal must precede atomic writes');
+        assert.equal(await git(remote, 'rev-parse', branch), laterCommit);
+      } finally {
+        // Recovery requires restoring the original evidence, not another push.
+        fs.writeFileSync(audit, JSON.stringify(provenance));
+        fs.writeFileSync(receipt, retained);
+      }
+      const restoredModified = fs.statSync(receipt, { bigint: true }).mtimeNs;
+      const recoveredReceipt = await record();
+      assert.equal(recoveredReceipt.status, 0, recoveredReceipt.stderr);
+      assert.deepEqual(JSON.parse(recoveredReceipt.stdout), recorded);
+      assert.deepEqual(fs.readFileSync(receipt), retained);
+      assert.equal(fs.statSync(receipt, { bigint: true }).mtimeNs, restoredModified);
+      assert.equal(await git(remote, 'rev-parse', branch), laterCommit);
+      assert.equal(fs.existsSync(database), false);
+      assert.deepEqual(fs.readdirSync(home), []);
+    });
+  }
+  assert.equal(fs.existsSync(database), false);
+  assert.deepEqual(fs.readdirSync(home), []);
+});
+
+for (const [name, provenance, diagnostic] of invalidProvenance) {
+  test(`deployment provenance CLI refuses ${name} without side effects`, async (t) => {
+    const interpreter = await run(process.env.PYTHON || 'python3', ['-c',
+      'import sys; print(sys.executable)']);
+    assert.equal(interpreter.status, 0, interpreter.stderr);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'route-deployment-cli-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const bin = path.join(root, 'bin');
+    const home = path.join(root, 'home');
+    const state = path.join(root, 'state');
+    const audit = path.join(root, 'audit.json');
+    const gitLog = path.join(root, 'git.log');
+    const receipt = path.join(state, 'route-weights-challenger-deployment.json');
+    for (const directory of [bin, home, state]) fs.mkdirSync(directory);
+    fs.writeFileSync(path.join(bin, 'git'),
+      '#!/bin/sh\nprintf "%s\\n" "$*" >> "$ROUTE_EXPORT_GIT_LOG"\nexit 99\n',
+      { mode: 0o755 });
+    if (provenance !== undefined) {
+      fs.writeFileSync(audit, typeof provenance === 'string'
+        ? provenance : JSON.stringify(provenance));
+    }
+    const env = {
+      PATH: bin,
+      HOME: home,
+      PYTHONPATH: modules,
+      PYTHONDONTWRITEBYTECODE: '1',
+      ORCH_STATE_DIR: state,
+      ORCH_LOCAL_RUNTIME: path.join(root, 'runtime'),
+      ORCH_FEEDBACK_DB: path.join(root, 'absent.db'),
+      ORCH_CAPABILITIES_PATH: path.join(root, 'capabilities.json'),
+      HANDOFF_DIR: path.join(root, 'handoff'),
+      ROUTE_EXPORT_GIT_LOG: gitLog,
+    };
+    // Invalid input must neither create a receipt nor replace an earlier one.
+    for (const existing of [false, true]) {
+      const before = `${JSON.stringify(validProvenance)}\n`;
+      if (existing) fs.writeFileSync(receipt, before);
+      const result = await run(interpreter.stdout.trim(), [
+        path.join(modules, 'route_weights_export.py'),
+        '--record-challenger-deployment', audit, '--state-dir', state,
+      ], { cwd: repo, env });
+      assert.equal(result.signal, null, result.stderr);
+      assert.equal(result.status, 1, result.stderr);
+      assert.equal(result.stdout, '', 'refusal must not print a successful receipt');
+      assert.match(result.stderr, /deployment provenance refused:/);
+      assert.match(result.stderr, diagnostic);
+      assert.doesNotMatch(result.stderr, /Traceback/);
+      assert.equal(fs.existsSync(gitLog), false, 'invalid provenance must stop before Git');
+      assert.deepEqual(fs.readdirSync(state), existing ? [path.basename(receipt)] : []);
+      if (existing) assert.equal(fs.readFileSync(receipt, 'utf8'), before);
+      assert.equal(fs.existsSync(env.ORCH_FEEDBACK_DB), false);
+      assert.deepEqual(fs.readdirSync(home), [], 'the live state fallback must stay unused');
+    }
   });
 }
 
@@ -136,3 +821,182 @@ with sqlite3.connect(database) as connection:
     });
   }
 }
+
+function timeoutInjectScript(mode) {
+  // mode: 'fetch' | 'after_fetch'
+  return `
+import json
+import sys
+from pathlib import Path
+from unittest.mock import patch
+import subprocess
+
+modules = Path(sys.argv[1])
+sys.path.insert(0, str(modules))
+import route_weights_export as export
+
+audit = Path(sys.argv[2])
+state = Path(sys.argv[3])
+real_run = subprocess.run
+
+def run(*a, **k):
+    cmd = a[0] if a else k.get("args", ())
+    if not isinstance(cmd, (list, tuple)):
+        return real_run(*a, **k)
+    to = k.get("timeout", 60)
+    if "${mode}" == "fetch" and "fetch" in cmd:
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=to)
+    if "${mode}" == "after_fetch":
+        if "fetch" in cmd:
+            return real_run(*a, **k)
+        if cmd and cmd[0] == "git":
+            raise subprocess.TimeoutExpired(cmd=list(cmd), timeout=to)
+    return real_run(*a, **k)
+
+with patch.object(export.subprocess, "run", side_effect=run):
+    export.sys.argv = [
+        "route_weights_export",
+        "--record-challenger-deployment",
+        str(audit),
+        "--state-dir",
+        str(state),
+    ]
+    raise SystemExit(export.main())
+`;
+}
+
+async function runRecorderWithTimeoutInject(mode, audit, state, env, cwd) {
+  const python = process.env.PYTHON || 'python3';
+  const { stdout, stderr } = await execFileAsync(python, [
+    '-c', timeoutInjectScript(mode), modules, audit, state,
+  ], { env: { ...process.env, ...env }, cwd, maxBuffer: 2 * 1024 * 1024 });
+  return { status: 0, stdout, stderr };
+}
+
+test('deployment CLI refuses subprocess.TimeoutExpired at fetch without receipt', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'route-timeout-fetch-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const state = path.join(root, 'state');
+  const reposDir = path.join(root, 'repos');
+  const canon = path.join(reposDir, 'stranske__Orchestrator');
+  fs.mkdirSync(canon, { recursive: true });
+  const init = await run('git', ['init', canon], { env: { PATH: process.env.PATH } });
+  assert.equal(init.status, 0, init.stderr);
+  const audit = path.join(root, 'audit.json');
+  const receipt = path.join(state, 'route-weights-challenger-deployment.json');
+  fs.mkdirSync(state, { recursive: true });
+  fs.writeFileSync(audit, JSON.stringify({
+    published_commit: 'a'.repeat(40),
+    deployed_at: '2026-11-05T00:00:00Z',
+    deployment_evidence: 'publication-audit/run-123/successful-push',
+  }), 'utf8');
+  const env = {
+    PATH: process.env.PATH,
+    HOME: root,
+    PYTHONPATH: modules,
+    PYTHONDONTWRITEBYTECODE: '1',
+    ORCH_STATE_DIR: state,
+    ORCH_LOCAL_RUNTIME: path.join(root, 'runtime'),
+    ORCH_REPOS_DIR: reposDir,
+    ORCH_FEEDBACK_DB: path.join(root, 'absent.db'),
+    ORCH_CAPABILITIES_PATH: path.join(root, 'capabilities.json'),
+    HANDOFF_DIR: path.join(root, 'handoff'),
+    GIT_CONFIG_NOSYSTEM: '1',
+  };
+  let err;
+  try {
+    await runRecorderWithTimeoutInject('fetch', audit, state, env, root);
+  } catch (e) {
+    err = e;
+  }
+  assert.ok(err && err.code === 1, err && err.stderr);
+  assert.equal(err.stdout || '', '');
+  assert.match(err.stderr, /deployment provenance refused: git subprocess timed out/);
+  assert.doesNotMatch(err.stderr, /Traceback/);
+  assert.equal(fs.existsSync(receipt), false);
+});
+
+test('deployment CLI refuses TimeoutExpired after fetch and preserves receipt', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'route-timeout-after-fetch-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const home = path.join(root, 'home');
+  const state = path.join(root, 'state');
+  const remote = path.join(root, 'remote.git');
+  const repositories = path.join(root, 'repos');
+  const checkout = path.join(repositories, 'stranske__Orchestrator');
+  const database = path.join(root, 'absent.db');
+  const audit = path.join(root, 'audit.json');
+  const receipt = path.join(state, 'route-weights-challenger-deployment.json');
+  for (const directory of [home, state, repositories]) fs.mkdirSync(directory);
+  const env = {
+    PATH: process.env.PATH,
+    HOME: home,
+    PYTHONPATH: modules,
+    PYTHONDONTWRITEBYTECODE: '1',
+    ORCH_STATE_DIR: state,
+    ORCH_LOCAL_RUNTIME: path.join(root, 'runtime'),
+    ORCH_REPOS_DIR: repositories,
+    ORCH_FEEDBACK_DB: database,
+    ORCH_CAPABILITIES_PATH: path.join(root, 'capabilities.json'),
+    HANDOFF_DIR: path.join(root, 'handoff'),
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_AUTHOR_NAME: 'Deployment Test',
+    GIT_AUTHOR_EMAIL: 'deploy@example.invalid',
+    GIT_COMMITTER_NAME: 'Deployment Test',
+    GIT_COMMITTER_EMAIL: 'deploy@example.invalid',
+  };
+  async function git(directory, ...args) {
+    const result = await run('git', ['-C', directory, ...args], { env });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  }
+  const branch = 'exports/route-weights';
+  const artifact = path.join(checkout, 'config', 'route-weights.json');
+  await git(root, 'init', '--bare', '--initial-branch=main', remote);
+  await git(root, 'clone', remote, checkout);
+  const document = {
+    generated_at: '2026-11-04T10:00:00Z',
+    exploration: {
+      challenger_filter: 'hosted-runnable-alternatives/v1',
+      challengers: Object.fromEntries(
+        ['implement', 'review', 'testgen', 'mechanical', 'codemod', 'cross_repo']
+          .map((task) => [task, 'codex'])),
+    },
+  };
+  fs.mkdirSync(path.dirname(artifact), { recursive: true });
+  fs.writeFileSync(artifact, JSON.stringify(document));
+  await git(checkout, 'add', '.');
+  await git(checkout, 'commit', '-m', 'publication fixture');
+  await git(checkout, 'push', 'origin', `HEAD:${branch}`);
+  const commit = await git(remote, 'rev-parse', branch);
+  fs.writeFileSync(audit, JSON.stringify({
+    published_commit: commit,
+    deployed_at: '2026-11-04T11:00:00Z',
+    deployment_evidence: 'fixture-publication-audit/successful-push',
+  }));
+  const ok = await run(process.env.PYTHON || 'python3', [
+    path.join(modules, 'route_weights_export.py'),
+    '--record-challenger-deployment', audit, '--state-dir', state,
+  ], { cwd: root, env });
+  assert.equal(ok.status, 0, ok.stderr);
+  const before = fs.readFileSync(receipt, 'utf8');
+  const beforeStat = fs.statSync(receipt, { bigint: true });
+  fs.writeFileSync(audit, JSON.stringify({
+    published_commit: 'b'.repeat(40),
+    deployed_at: '2026-11-05T00:00:00Z',
+    deployment_evidence: 'different-audit',
+  }));
+  let err;
+  try {
+    await runRecorderWithTimeoutInject('after_fetch', audit, state, env, root);
+  } catch (e) {
+    err = e;
+  }
+  assert.ok(err && err.code === 1, err && err.stderr);
+  assert.equal(err.stdout || '', '');
+  assert.match(err.stderr, /deployment provenance refused: git subprocess timed out/);
+  assert.doesNotMatch(err.stderr, /Traceback/);
+  assert.equal(fs.readFileSync(receipt, 'utf8'), before);
+  assert.equal(fs.statSync(receipt, { bigint: true }).mtimeNs, beforeStat.mtimeNs);
+});
+

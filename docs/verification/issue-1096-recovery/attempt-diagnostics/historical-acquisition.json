@@ -1,0 +1,18 @@
+{
+  "checked_at": "2026-11-03T20:30:34.741698+00:00",
+  "evidence_class": "recovered_historical_text",
+  "file_id": "id:tDSHdCztYNUAAAAAADfgrw",
+  "revision": "65de8f715bb690369d613",
+  "metadata_server_modified": "2026-10-15T22:56:59Z",
+  "metadata_size": 2386539,
+  "retained_rows": 58,
+  "recursive_attempt_records": 64,
+  "retained_failure_field_counts": {
+    "error": 26,
+    "errors": 8,
+    "retry_error": 11
+  },
+  "raw_report_written": false,
+  "original_retry_manifest_recovered": false,
+  "limitation": "Repeated text extraction of the earlier backup only. Counts include nested attempts; fields may overlap. No byte identity, original cohort provenance, native authentication or fresh diagnostic CLI run on this extracted report is claimed."
+}

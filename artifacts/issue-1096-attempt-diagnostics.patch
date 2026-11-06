@@ -1,0 +1,984 @@
+diff --git a/docs/verification/issue-1096-recovery/README.md b/docs/verification/issue-1096-recovery/README.md
+index c0c1019..e861762 100644
+--- a/docs/verification/issue-1096-recovery/README.md
++++ b/docs/verification/issue-1096-recovery/README.md
+@@ -1,5 +1,41 @@
+ # Acceptance evidence recovery for #1096
+ 
++## Retained attempt diagnostics, 2026-11-03 UTC
++
++The retry inventory now exposes ordered attempt observations, including nested
++paid history, failure-field locations and JSON-value SHA-256 hashes. It separates
++saved decisions, abstentions, failures, missing decisions and conflicting saved
++fields. Failed retries and Brain persistence errors do not erase a parent binary
++decision. Only uniquely matched manifest identities receive attempt references.
++Private failure prose is omitted; inspect the original field to establish the
++first actual broken step. These observations do not authenticate any outcome.
++
++All [95 relevant regressions](attempt-diagnostics/validation.json) pass: 47 inventory,
++26 runner and 22 ledger checks. Source commit `eac39f3eb8b6a1a59457d39a6ceeb0e5bcfc3275`
++has checkout `6749ae79c00be3c9362a01ce117e46dc304d931e` as its parent.
++The [required-test receipt](attempt-diagnostics/acceptance-run/checks.json), captured
++before editing, again records missing pytest before collection. The
++[pre-execution plan](attempt-diagnostics-plan.md) preserves the command and bounds.
++No Python files changed.
++
++The same earlier backup was [re-fetched and counted in memory](attempt-diagnostics/historical-acquisition.json):
++58 rows, 64 recursive attempts, 26 `error`, eight `errors` and 11 `retry_error`
++fields. These overlapping field counts are historical observations. Raw report
++text was not written or passed through the new CLI. It is not the authenticated
++native original, and no requested retry manifest was recovered.
++
++Recent commits were reviewed; no additional task is complete. The local task
++reconciliation below remains authoritative: recovery is partial, only the
++pre-execution inventory and ledger tasks plus attribution/disclosure criterion
++are verified complete. PR-body correction, blocker comment and `needs-human`
++label were rejected because connector mutations require approval and this run's
++policy is `never`. Remote checkboxes are unchanged. No provider call, publication,
++production write or mirror synchronization occurred.
++
++Git metadata is read-only. Source/evidence commits are preserved under
++`/tmp/issue1096-attempt-diagnostics-git-8to3n09t/repo.git` and in the
++[applyable patch](../../../artifacts/issue-1096-attempt-diagnostics.patch).
++
+ ## Retained retry-manifest matching, 2026-11-03 UTC
+ 
+ The [bounded required-test attempt](retry-manifest-followup/acceptance-run/checks.json)
+diff --git a/docs/verification/issue-1096-recovery/attempt-diagnostics-plan.md b/docs/verification/issue-1096-recovery/attempt-diagnostics-plan.md
+new file mode 100644
+index 0000000..0a6e745
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/attempt-diagnostics-plan.md
+@@ -0,0 +1,37 @@
++# Retained attempt diagnostics, 2026-11-03 UTC
++
++Recent commits through `6749ae79c00be3c9362a01ce117e46dc304d931e` were reviewed.
++Recovery remains partial; only the pre-execution inventory and evidence ledger
++tasks and the attribution/disclosure criterion are verified complete. Duplicate
++PR checklists need the same states. The connector rejected the body correction
++because approval is required and the run policy is `never`.
++
++The selected interpreter still reports `ModuleNotFoundError: No module named
++pytest`. Do not repeat package installation. Before source edits, preserve one
++bounded required-test attempt against this checkout:
++
++```sh
++node scripts/run_adjudicator_acceptance.js \
++  --python /opt/hostedtoolcache/Python/3.14.9/x64/bin/python3 \
++  --revision 6749ae79c00be3c9362a01ce117e46dc304d931e \
++  --output /home/runner/work/Orchestrator/Orchestrator/docs/verification/issue-1096-recovery/attempt-diagnostics/acceptance-run
++```
++
++Expected: collection and both groups fail before collection; required tests stay
++incomplete. Stop after one invocation per command, each at most 60 seconds, using
++`-m "not slow"` and temporary state. This checkout is not an accepted deployment.
++
++With the test task blocked, advance retry reconciliation by preserving ordered
++attempt observations, including nested paid attempts, with locations and hashes
++of failure fields. Explain retained failures without copying private error text
++or inferring an unrecorded provider/validator failure stage. Distinguish a saved
++binary decision, abstention, missing decision and contradictory saved evidence.
++Attach observations only to uniquely matched manifest identities. Saved truth,
++native markers and complete identity matching cannot authenticate outcomes.
++
++Verify Node regressions, CLI parity, retained input immutability, failure hash
++binding and protection against treating nested failures as a failed parent
++decision. Do not dispatch, publish, alter production state, write mirrors, select
++a replacement cohort or claim operational acceptance. No protected or Python
++files are required. Git metadata is read-only; retain source commits and a patch
++using an isolated Git directory under `/tmp`.
+diff --git a/docs/verification/issue-1096-recovery/attempt-diagnostics/acceptance-run/checks.json b/docs/verification/issue-1096-recovery/attempt-diagnostics/acceptance-run/checks.json
+new file mode 100644
+index 0000000..ab3e8e4
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/attempt-diagnostics/acceptance-run/checks.json
+@@ -0,0 +1,105 @@
++{
++  "schema_version": 1,
++  "checked_at": "2026-11-03T20:26:45.709Z",
++  "evaluated_revision": "6749ae79c00be3c9362a01ce117e46dc304d931e",
++  "evaluated_tree": "f6bd5aa26a2121872b4c1464af4c5cb71e1a4e4f",
++  "accepted_deployment_verified": false,
++  "interpreter": "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3",
++  "runner_sha256": "a0b92097e80f67c7df16970e85ff484592d46bed126c02c6423d4a6406e91bbb",
++  "input_manifest_sha256": "ecdba9fd4b13d93e47a605b865adfdf11ebfc25ffb20fcbd0492b992a579482e",
++  "input_file_count": 1996,
++  "source_sha256": {
++    "pyproject.toml": "2c3462b8b384aeb265dbc51ab742b4ee02d839a34cec6590791a6d5d53fe4a6e",
++    "src/adjudicator_retro.py": "ee172f96ddf0ca56f6c06fcf18bdaacccece5381de61a9896006d0b16a8fb0b8",
++    "src/capability_advisor.py": "fe2f2d0dda2b684d61d42c6aba3952b8a5e5d0d1504c9cbebeca9616109208d5",
++    "src/feedback.py": "eafa930ec4cea9a239bc03a91a00b2ca7c618c40629690658f8276417946412d",
++    "src/roles.py": "4a5e729f4bf797ea448f18c14df69696e3df3bcaaf046729c039099ae7cc3dd7",
++    "src/verifier_evidence.py": "19b2342b6d9b4d097f6fef6b76089f54903dfbe36946dac6fa7467dec3afff59",
++    "tests/test_adjudicator_retro.py": "b44fd6756915069d6a5dc492eecda268053a711899b81decc9d27f8c9793fda2"
++  },
++  "checks": [
++    {
++      "name": "named-tests",
++      "command": [
++        "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3",
++        "-m",
++        "pytest",
++        "-o",
++        "addopts=",
++        "-m",
++        "not slow",
++        "-q",
++        "--junitxml=/home/runner/work/Orchestrator/Orchestrator/docs/verification/issue-1096-recovery/attempt-diagnostics/acceptance-run/named-tests.xml",
++        "tests/test_adjudicator_retro.py::test_build_packet_includes_diff_and_acceptance_criteria",
++        "tests/test_adjudicator_retro.py::test_adjudicator_validator_accepts_recommendation_prose",
++        "tests/test_adjudicator_retro.py::test_floor_still_demotes_a_metadata_only_packet",
++        "tests/test_adjudicator_retro.py::test_abstained_row_is_reattempted_when_the_packet_gains_diff_and_criteria"
++      ],
++      "exit_code": 1,
++      "signal": null,
++      "error_code": null,
++      "timed_out": false,
++      "log": "named-tests.log",
++      "log_sha256": "3c62bade513fb2347fe3e5a9f91901d9e1bbf2d4a19bbd59d2863c1cdf42e10a",
++      "junit": null,
++      "junit_sha256": null,
++      "junit_reader": null,
++      "test_count": null,
++      "passed": false
++    },
++    {
++      "name": "retrospective-suite",
++      "command": [
++        "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3",
++        "-m",
++        "pytest",
++        "-o",
++        "addopts=",
++        "-m",
++        "not slow",
++        "-q",
++        "--junitxml=/home/runner/work/Orchestrator/Orchestrator/docs/verification/issue-1096-recovery/attempt-diagnostics/acceptance-run/retrospective-suite.xml",
++        "tests/test_adjudicator_retro.py"
++      ],
++      "exit_code": 1,
++      "signal": null,
++      "error_code": null,
++      "timed_out": false,
++      "log": "retrospective-suite.log",
++      "log_sha256": "3c62bade513fb2347fe3e5a9f91901d9e1bbf2d4a19bbd59d2863c1cdf42e10a",
++      "junit": null,
++      "junit_sha256": null,
++      "junit_reader": null,
++      "test_count": null,
++      "passed": false
++    }
++  ],
++  "source_unchanged": true,
++  "required_tests_passed": false,
++  "interpreter_version": "Python 3.14.9",
++  "interpreter_usable": true,
++  "collection": {
++    "command": [
++      "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3",
++      "-m",
++      "pytest",
++      "-o",
++      "addopts=",
++      "-m",
++      "not slow",
++      "--color=no",
++      "--collect-only",
++      "-q",
++      "tests/test_adjudicator_retro.py"
++    ],
++    "exit_code": 1,
++    "signal": null,
++    "error_code": null,
++    "timed_out": false,
++    "log": "collection.log",
++    "log_sha256": "3c62bade513fb2347fe3e5a9f91901d9e1bbf2d4a19bbd59d2863c1cdf42e10a",
++    "test_names": [],
++    "passed": false
++  },
++  "finished_at": "2026-11-03T20:26:45.823Z"
++}
+diff --git a/docs/verification/issue-1096-recovery/attempt-diagnostics/acceptance-run/collection.log b/docs/verification/issue-1096-recovery/attempt-diagnostics/acceptance-run/collection.log
+new file mode 100644
+index 0000000..777b2d7
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/attempt-diagnostics/acceptance-run/collection.log
+@@ -0,0 +1 @@
++/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3: No module named pytest
+diff --git a/docs/verification/issue-1096-recovery/attempt-diagnostics/acceptance-run/named-tests.log b/docs/verification/issue-1096-recovery/attempt-diagnostics/acceptance-run/named-tests.log
+new file mode 100644
+index 0000000..777b2d7
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/attempt-diagnostics/acceptance-run/named-tests.log
+@@ -0,0 +1 @@
++/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3: No module named pytest
+diff --git a/docs/verification/issue-1096-recovery/attempt-diagnostics/acceptance-run/retrospective-suite.log b/docs/verification/issue-1096-recovery/attempt-diagnostics/acceptance-run/retrospective-suite.log
+new file mode 100644
+index 0000000..777b2d7
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/attempt-diagnostics/acceptance-run/retrospective-suite.log
+@@ -0,0 +1 @@
++/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3: No module named pytest
+diff --git a/docs/verification/issue-1096-recovery/attempt-diagnostics/historical-acquisition.json b/docs/verification/issue-1096-recovery/attempt-diagnostics/historical-acquisition.json
+new file mode 100644
+index 0000000..60d7f8b
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/attempt-diagnostics/historical-acquisition.json
+@@ -0,0 +1,18 @@
++{
++  "checked_at": "2026-11-03T20:30:34.741698+00:00",
++  "evidence_class": "recovered_historical_text",
++  "file_id": "id:tDSHdCztYNUAAAAAADfgrw",
++  "revision": "65de8f715bb690369d613",
++  "metadata_server_modified": "2026-10-15T22:56:59Z",
++  "metadata_size": 2386539,
++  "retained_rows": 58,
++  "recursive_attempt_records": 64,
++  "retained_failure_field_counts": {
++    "error": 26,
++    "errors": 8,
++    "retry_error": 11
++  },
++  "raw_report_written": false,
++  "original_retry_manifest_recovered": false,
++  "limitation": "Repeated text extraction of the earlier backup only. Counts include nested attempts; fields may overlap. No byte identity, original cohort provenance, native authentication or fresh diagnostic CLI run on this extracted report is claimed."
++}
+diff --git a/docs/verification/issue-1096-recovery/attempt-diagnostics/inventory-tests.log b/docs/verification/issue-1096-recovery/attempt-diagnostics/inventory-tests.log
+new file mode 100644
+index 0000000..5a472d8
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/attempt-diagnostics/inventory-tests.log
+@@ -0,0 +1,55 @@
++✔ report recovery preserves ordered rows, recursive paid history and conflicting counts (3.366164ms)
++✔ report recovery rejects missing input without initializing runtime state (0.694695ms)
++✔ attempt observations bind nested failure fields without exposing private error text (1.110634ms)
++✔ saved decisions survive failed retries and remain distinct from independent truth (0.898058ms)
++✔ failure field hashes detect changed evidence even when retained classifications match (0.892059ms)
++✔ report recovery refuses malformed and ambiguous retained identities (2.454907ms)
++✔ report recovery requires explicit attribution and a valid check time (0.425453ms)
++✔ report recovery aborts if the input changes during observation (0.663348ms)
++✔ retained report reconciliation preserves requested order and explains every identity gap (1.415218ms)
++✔ retained report CLI matches supplied manifests without authenticating saved outcomes (27.224269ms)
++✔ legacy report manifest keeps verdict ambiguity visible and empty requests cannot complete accounting (1.22161ms)
++✔ report reconciliation refuses malformed or changing manifests without replacing evidence (0.847863ms)
++✔ report CLI never combines historical recovery with dispatch or current Brain selection (146.584234ms)
++✔ pre-dispatch inventory reconciles report and native locators without exposing payloads (9.932243ms)
++✔ all validated native rows still require authentication, independent truth and live writer proof (8.750133ms)
++✔ missing native evidence remains unavailable and never means zero attempts (0.538883ms)
++✔ an observed empty journal cannot establish writer ownership or authorize spending (8.987437ms)
++✔ an active journal writer does not make a read-only snapshot claim ownership (7.957322ms)
++✔ foreign and incomplete journals are refused without schema repair (3.639831ms)
++✔ report without native marker still cannot authorize generic retry (0.606904ms)
++✔ journal CLI stays read-only and requires explicit report attribution (63.894679ms)
++✔ inventory exports every synthetic dispute and every exclusion without writes (589.080498ms)
++✔ inventory preserves the fixed cutoff and reports a count discrepancy (6.446903ms)
++✔ inventory distinguishes missing evidence from a complete cohort (2.556979ms)
++✔ inventory distinguishes schema-less evidence from a complete cohort (0.445834ms)
++✔ inventory distinguishes empty evidence from a complete cohort (2.544079ms)
++✔ inventory distinguishes incomplete-schema evidence from a complete cohort (3.401807ms)
++✔ inventory CLI exports JSON, signals unavailable evidence and rejects replay options (149.030277ms)
++✔ matching 71 identities bind the supplied manifest bytes without claiming historical acceptance (117.136431ms)
++✔ equal inventory counts expose substituted identities, exclusions and absent requested runs (13.974415ms)
++✔ a requested run on another target cannot satisfy case identity (4.10191ms)
++✔ inventory accounts for outcomes without run records as unavailable evidence (33.154643ms)
++✔ an outcomes-only Brain is available with exclusions, rather than an observed empty store (4.015681ms)
++✔ manifest retains every requested identity when Brain is empty (2.762986ms)
++✔ manifest retains every requested identity when Brain is unavailable (2.542727ms)
++✔ manifest count discrepancy prevents an exact match even when all supplied identities match (4.887139ms)
++✔ manifest CLI preserves input bytes, rejects malformed identities and signals unavailable Brain (344.45806ms)
++✔ version 2 reconciles all 71 dispute identities without claiming historical provenance (114.679031ms)
++✔ version 2 exposes substituted verdicts NON_PASS/FAIL despite matching run and count (30.840796ms)
++✔ version 2 exposes substituted verdicts FAIL_HOLLOW/PASS despite matching run and count (28.891132ms)
++✔ version 2 exposes substituted verdicts PASS/FAIL despite matching run and count (29.316747ms)
++✔ version 2 retains different disputes on one run and rejects duplicate dispute identities (5.523757ms)
++✔ version 2 preserves full identities for excluded, missing and unavailable cases (29.303647ms)
++✔ version 2 rejects malformed verdicts before publishing any inventory (380.424362ms)
++✔ version 2 distinguishes unavailable verdict evidence from contradictory verdicts (36.307819ms)
++✔ version 2 retains an observed target mismatch when verdict evidence is unavailable (3.458842ms)
++✔ missing stored targets remain eligible disputes with explicit unavailable identity evidence (552.479376ms)
++ℹ tests 47
++ℹ suites 0
++ℹ pass 47
++ℹ fail 0
++ℹ cancelled 0
++ℹ skipped 0
++ℹ todo 0
++ℹ duration_ms 2791.484102
+diff --git a/docs/verification/issue-1096-recovery/attempt-diagnostics/ledger-audit.json b/docs/verification/issue-1096-recovery/attempt-diagnostics/ledger-audit.json
+new file mode 100644
+index 0000000..af36647
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/attempt-diagnostics/ledger-audit.json
+@@ -0,0 +1,300 @@
++{
++  "schema_version": 1,
++  "ledger_sha256": "8d349b7fe3e87cddda2ca58eef86829868cd15c93c0afb3fe24d75dc95882719",
++  "audit_scope": "recovery_attribution_and_local_artifact_integrity",
++  "attribution_and_artifact_checks_passed": true,
++  "operational_acceptance_verified": false,
++  "external_references_authenticated": false,
++  "source_revision_bindings_verified": false,
++  "artifacts": [
++    {
++      "path": "historical-inventory.json",
++      "sha256": "76c494a94885bc8972f8c3594cce5cd86d0dc0700738be748ebf4dee433f2b2e"
++    },
++    {
++      "path": "checks.json",
++      "sha256": "05816252eda6b4f6090fba490c40b95a0be5879c71dff564c22c6e28cd708a0b"
++    },
++    {
++      "path": "named-tests.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "retrospective-suite.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "inventory-tests.log",
++      "sha256": "ed03419ab03622a5c0f206c7bf545cc0ebfc7c356208dbc2316917b6ff9a0d89"
++    },
++    {
++      "path": "adjudicator-selftest.log",
++      "sha256": "3f227862f8d1e7b2c35195efe7205621f73d3033db5a3ca88e1e7c24021e1109"
++    },
++    {
++      "path": "pre-dispatch-checks.json",
++      "sha256": "8092128f1df021cdcffcc8c71f57f6023e52d6c246e8f4f3ace52ddcad1339c9"
++    },
++    {
++      "path": "pre-dispatch-observation.json",
++      "sha256": "64a5cabcd1e8596edc149b88640af53ec177a424fc0d91de7f7ce69c5ac869ef"
++    },
++    {
++      "path": "pre-dispatch-inventory-tests.log",
++      "sha256": "4fb63c981a296c529f43135d6978d1c13f07f50744e825a2e6a7aad1020e6389"
++    },
++    {
++      "path": "pre-dispatch-named-tests.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "pre-dispatch-retrospective-suite.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "pre-dispatch-adjudicator-selftest.log",
++      "sha256": "3f227862f8d1e7b2c35195efe7205621f73d3033db5a3ca88e1e7c24021e1109"
++    },
++    {
++      "path": "pre-dispatch-evidence-tests.log",
++      "sha256": "f554d9e1907fbaae8b4ee178cdba6800fa893149d1e3874f2495b84a304c9007"
++    },
++    {
++      "path": "acceptance-run/checks.json",
++      "sha256": "565025a768386e09934c9edb06830f52def9ce022b7e393b337f9d5497dbfcba"
++    },
++    {
++      "path": "acceptance-run/named-tests.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "acceptance-run/retrospective-suite.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "acceptance-run/runner-validation.json",
++      "sha256": "7841392b8a4de5d1bdeded2c2dc53133b2e0e6c59e9d7a4a4e9fe67f1f6a8a49"
++    },
++    {
++      "path": "acceptance-run/runner-tests.log",
++      "sha256": "aa2704887818edeadc0807135cdec575ea7d3b8020426c2c12adb9ee549ed890"
++    },
++    {
++      "path": "acceptance-run/inventory-tests.log",
++      "sha256": "601a69001b966f0d629439f87f7b8e2b2b775e4db20fe526c70774be676d85b9"
++    },
++    {
++      "path": "suite-completeness-run/checks.json",
++      "sha256": "ea088007c9611735fd5f08a72fa421a1f43d8750fbe2e4a9be6abef85103dd57"
++    },
++    {
++      "path": "suite-completeness-run/named-tests.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "suite-completeness-run/retrospective-suite.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "suite-completeness-run/collection.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "suite-completeness-run/runner-validation.json",
++      "sha256": "de7b3a093450b23822742ffc8507214b9373732e86d9ff31b7dd6d78c871182a"
++    },
++    {
++      "path": "suite-completeness-run/runner-tests.log",
++      "sha256": "3cc75fe7aa2e6cc3964eaeeb032f50170839b9843e71f53699b9489107daf502"
++    },
++    {
++      "path": "interpreter-followup/acceptance-run/checks.json",
++      "sha256": "ac206b01d063840618204cc6e837c2a7a8ac68a6a84c6d089cae27a72aff8fe5"
++    },
++    {
++      "path": "interpreter-followup/acceptance-run/named-tests.log",
++      "sha256": "f0dbac0c2508ce31a001ff3f12403c192088997ec3c0bae870a337f703f90152"
++    },
++    {
++      "path": "interpreter-followup/acceptance-run/retrospective-suite.log",
++      "sha256": "f0dbac0c2508ce31a001ff3f12403c192088997ec3c0bae870a337f703f90152"
++    },
++    {
++      "path": "interpreter-followup/acceptance-run/collection.log",
++      "sha256": "f0dbac0c2508ce31a001ff3f12403c192088997ec3c0bae870a337f703f90152"
++    },
++    {
++      "path": "interpreter-followup/validation.json",
++      "sha256": "e8c26e6cd8f44e0efe4dd337ca3ea222a56efd0eda4cdcd1000078034cffae17"
++    },
++    {
++      "path": "interpreter-followup/runner-before.log",
++      "sha256": "9e4e49f09dd87eaf38593f93cc9db74dadc1100950090a665ed33b373e55c222"
++    },
++    {
++      "path": "interpreter-followup/runner-after.log",
++      "sha256": "e93ec3a61ab3bcd22d90cef6766e8a9f5628aa539262fca9c283c38a8eff460e"
++    },
++    {
++      "path": "interpreter-followup/inventory.log",
++      "sha256": "33c5929820fd97d8c37bef0317d1991f2d4b9b548492c1e2feaee4b23ed3ab1f"
++    },
++    {
++      "path": "ledger-audit-tests/checks.json",
++      "sha256": "d725c97b9ed48f4092ae90209389732fb21d0c783de0d5c17fe19518df6f8612"
++    },
++    {
++      "path": "ledger-audit-tests/named-tests.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "ledger-audit-tests/retrospective-suite.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "ledger-audit-tests/collection.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "ledger-audit/validation.json",
++      "sha256": "4f87713cb004e479b4a2637368cf9eba1a4a3b013f7400d03b4e7c383194d91b"
++    },
++    {
++      "path": "ledger-audit/ledger-tests.log",
++      "sha256": "59c5b1e47bd0aad737fe781d9c99876f263214771c6c1349ce6d9e8fcf135d7d"
++    },
++    {
++      "path": "ledger-audit/runner-tests.log",
++      "sha256": "2090b3cb904438679be4851c7cb83b46e28b4262b3eb6dd63df609a9d6d4b177"
++    },
++    {
++      "path": "ledger-audit/inventory-tests.log",
++      "sha256": "a7a4da16604b151003196e81589efc75805395dde38f887f25f670524d95f85d"
++    },
++    {
++      "path": "retry-manifest-followup/acceptance-run/checks.json",
++      "sha256": "4a785fa6ef2640f8d4186977b8e4a974119bea645e68783066c5e6c5b1ec7cba"
++    },
++    {
++      "path": "retry-manifest-followup/acceptance-run/named-tests.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "retry-manifest-followup/acceptance-run/retrospective-suite.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "retry-manifest-followup/acceptance-run/collection.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "retry-manifest-followup/validation.json",
++      "sha256": "07a889e3d1fcfdf53afdccd96178bf8b0476a2a35e6c9998363fb1cb093cc6b0"
++    },
++    {
++      "path": "retry-manifest-followup/inventory-tests.log",
++      "sha256": "7f6b2dfbb09e1b4a876e51d0aa21d8ddd4165ba3eea0f5ff20607b9027e8904e"
++    },
++    {
++      "path": "retry-manifest-followup/runner-tests.log",
++      "sha256": "00233874760733193b2e2e89d05c85cfae619714933e51f45707255bb5b8f0f1"
++    },
++    {
++      "path": "retry-manifest-followup/ledger-tests.log",
++      "sha256": "6e97b661615b98a3fca0cc5288237b7010cfdcbd0da121e24d796e085e9b9d76"
++    },
++    {
++      "path": "attempt-diagnostics/acceptance-run/checks.json",
++      "sha256": "2ceace7de118355b21ca84372518f2f75f7e3ba515ca50c09a16d6f9ef7eb159"
++    },
++    {
++      "path": "attempt-diagnostics/acceptance-run/named-tests.log",
++      "sha256": "3c62bade513fb2347fe3e5a9f91901d9e1bbf2d4a19bbd59d2863c1cdf42e10a"
++    },
++    {
++      "path": "attempt-diagnostics/acceptance-run/retrospective-suite.log",
++      "sha256": "3c62bade513fb2347fe3e5a9f91901d9e1bbf2d4a19bbd59d2863c1cdf42e10a"
++    },
++    {
++      "path": "attempt-diagnostics/acceptance-run/collection.log",
++      "sha256": "3c62bade513fb2347fe3e5a9f91901d9e1bbf2d4a19bbd59d2863c1cdf42e10a"
++    },
++    {
++      "path": "attempt-diagnostics/validation.json",
++      "sha256": "c8821898c3c707a32199fbf492174ba5a85b2f1e5e37b76c253c1a448140f2bd"
++    },
++    {
++      "path": "attempt-diagnostics/inventory-tests.log",
++      "sha256": "40eaa3b8ff6237ccfcfb383a461d9b93cc02f357592763c41d5cd2459c9cedb8"
++    },
++    {
++      "path": "attempt-diagnostics/runner-tests.log",
++      "sha256": "d5ea0c76dbcaf1be1785a702ab378f668730770a305eb5818eebdf51254e0a20"
++    },
++    {
++      "path": "attempt-diagnostics/ledger-tests.log",
++      "sha256": "df070652b60866af068042de292708fc37f00b443eba8519a2c081883b2a964b"
++    }
++  ],
++  "external_references": [
++    {
++      "category": "historical_observations",
++      "reference": "dropbox:id:tDSHdCztYNUAAAAAADfgrw@65de8f715bb690369d613",
++      "authenticated_by_audit": false
++    },
++    {
++      "category": "historical_observations",
++      "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6229128915",
++      "authenticated_by_audit": false
++    },
++    {
++      "category": "historical_observations",
++      "reference": "https://github.com/stranske/Orchestrator/issues/575#issuecomment-6251544073",
++      "authenticated_by_audit": false
++    },
++    {
++      "category": "historical_observations",
++      "reference": "https://github.com/stranske/Orchestrator/issues/575#issuecomment-6344712055",
++      "authenticated_by_audit": false
++    },
++    {
++      "category": "mirror_synchronization",
++      "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6205949903",
++      "authenticated_by_audit": false
++    },
++    {
++      "category": "mirror_synchronization",
++      "reference": "https://github.com/stranske/Orchestrator/issues/575#issuecomment-6251544073",
++      "authenticated_by_audit": false
++    },
++    {
++      "category": "dispatch_receipts",
++      "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6168601695",
++      "authenticated_by_audit": false
++    },
++    {
++      "category": "dispatch_receipts",
++      "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6205949903",
++      "authenticated_by_audit": false
++    },
++    {
++      "category": "dispatch_receipts",
++      "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6217948095",
++      "authenticated_by_audit": false
++    },
++    {
++      "category": "dispatch_receipts",
++      "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6229128915",
++      "authenticated_by_audit": false
++    }
++  ],
++  "missing_evidence": [
++    "Current accepted source/deployed/mirror byte bindings",
++    "Immutable native source report matching 8a6649a27bb5ee05001cc580691a98aa26404f0f3a0c85d845ada9e6046a069c",
++    "Canonical publication bytes and native journal/qualification manifests",
++    "Identity-bound original requested 21 retry rows and outcomes",
++    "Raw authenticated October 18 acceptance proof (a dated scheduled observation was recovered)",
++    "Previously fixed next-20 manifest and at least 15 dated decisions",
++    "Current live writer ownership"
++  ]
++}
+diff --git a/docs/verification/issue-1096-recovery/attempt-diagnostics/ledger-tests.log b/docs/verification/issue-1096-recovery/attempt-diagnostics/ledger-tests.log
+new file mode 100644
+index 0000000..6e3c858
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/attempt-diagnostics/ledger-tests.log
+@@ -0,0 +1,30 @@
++✔ published recovery ledger is attributable without establishing operational acceptance (9.254546ms)
++✔ rejects modified evidence instead of trusting the recorded result: named-tests.log (13.302466ms)
++✔ rejects modified evidence instead of trusting the recorded result: interpreter-followup/runner-after.log (7.274557ms)
++✔ rejects modified evidence instead of trusting the recorded result: pre-dispatch-observation.json (7.118164ms)
++✔ rejects missing evidence even when its parent receipt says it passed (6.271522ms)
++✔ rejects a missing checksum on a referenced log: null (7.826369ms)
++✔ rejects a missing checksum on a referenced log: undefined (7.994329ms)
++✔ audits JUnit bytes and refuses an absent JUnit checksum (12.95563ms)
++✔ refuses evidence outside the ledger directory: relative (6.105616ms)
++✔ refuses evidence outside the ledger directory: absolute (5.445372ms)
++✔ refuses evidence outside the ledger directory: symlink (5.025446ms)
++✔ does not equate a historical backup with the canonical report (6.999597ms)
++✔ rejects a retained row count substituted for the saved population (8.356188ms)
++✔ rejects merged historical/current categories (7.298723ms)
++✔ rejects missing dated limitations (6.76634ms)
++✔ rejects missing disclosure (7.642405ms)
++✔ rejects missing October 18 disclosure (7.174237ms)
++✔ rejects advice grade substitution (7.26329ms)
++✔ rejects unproved acceptance (6.898636ms)
++✔ rejects replacement cohort count (6.960428ms)
++✔ rejects mirror identity substitution (6.801803ms)
++✔ rejects historical dispatch substitution (7.237121ms)
++ℹ tests 22
++ℹ suites 0
++ℹ pass 22
++ℹ fail 0
++ℹ cancelled 0
++ℹ skipped 0
++ℹ todo 0
++ℹ duration_ms 174.96643
+diff --git a/docs/verification/issue-1096-recovery/attempt-diagnostics/runner-tests.log b/docs/verification/issue-1096-recovery/attempt-diagnostics/runner-tests.log
+new file mode 100644
+index 0000000..333e6ea
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/attempt-diagnostics/runner-tests.log
+@@ -0,0 +1,34 @@
++✔ records exact commands, source hashes, complete JUnit and logs for both checks (273.59916ms)
++✔ full-suite success requires the complete collected identities: {"omitExtra":true} (249.153914ms)
++✔ full-suite success requires the complete collected identities: {"duplicateExtra":true} (242.905641ms)
++✔ full-suite success requires the complete collected identities: {"collectionFailure":true} (236.376511ms)
++✔ full-suite success requires the complete collected identities: {"collectionEmpty":true} (242.390875ms)
++✔ full-suite success requires the complete collected identities: {"collectionDuplicate":true} (233.242994ms)
++✔ missing pytest preserves two failures and cannot complete acceptance (125.99885ms)
++✔ preserves JUnit reader failures: {"parserFailure":true} (163.332874ms)
++✔ preserves JUnit reader failures: {"parserInvalidJson":true} (165.898415ms)
++✔ preserves JUnit reader failures: {"malformed":true} (268.80754ms)
++✔ refuses a successful claim for incomplete evidence: {"noXml":true} (123.327801ms)
++✔ refuses a successful claim for incomplete evidence: {"malformed":true} (257.994873ms)
++✔ refuses a successful claim for incomplete evidence: {"empty":true} (233.269075ms)
++✔ refuses a successful claim for incomplete evidence: {"incomplete":true} (237.375894ms)
++✔ refuses a successful claim for incomplete evidence: {"duplicate":true} (240.507688ms)
++✔ refuses a successful claim for incomplete evidence: {"skipped":true} (240.711994ms)
++✔ refuses a successful claim for incomplete evidence: {"foreign":true} (256.260053ms)
++✔ refuses a successful claim for incomplete evidence: {"exit":1} (287.659341ms)
++✔ source changes during execution invalidate otherwise passing checks (229.141183ms)
++✔ timeout preserves both failed checks without retrying either command (1570.6482ms)
++✔ refuses revision mismatch, modified tracked inputs and untracked inputs before execution (30.385924ms)
++✔ refuses uncommitted test execution input: conftest.py (21.177696ms)
++✔ refuses uncommitted test execution input: pytest.ini (20.057093ms)
++✔ refuses uncommitted test execution input: setup.cfg (20.732023ms)
++✔ refuses uncommitted test execution input: scripts/run_adjudicator_acceptance.js (20.630592ms)
++✔ requires explicit interpreter/revision/bounds and never overwrites a receipt (129.745531ms)
++ℹ tests 26
++ℹ suites 0
++ℹ pass 26
++ℹ fail 0
++ℹ cancelled 0
++ℹ skipped 0
++ℹ todo 0
++ℹ duration_ms 6129.674422
+diff --git a/docs/verification/issue-1096-recovery/attempt-diagnostics/validation.json b/docs/verification/issue-1096-recovery/attempt-diagnostics/validation.json
+new file mode 100644
+index 0000000..41e73ef
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/attempt-diagnostics/validation.json
+@@ -0,0 +1,55 @@
++{
++  "checked_at": "2026-11-03T20:30:34.741698+00:00",
++  "evaluated_revision": "eac39f3eb8b6a1a59457d39a6ceeb0e5bcfc3275",
++  "source_parent": "6749ae79c00be3c9362a01ce117e46dc304d931e",
++  "source_sha256": {
++    "scripts/export_adjudicator_inventory.js": "d0272dc2cd716c5ba390c64f7db6a7edfcb2587d047c9c0f170173ddd24ada8a",
++    "tests/test_adjudicator_inventory.js": "0ebdc020cd5e43b11b4acc2b11c134bb4f9be16e2763d1c0ec46ca7733973a61"
++  },
++  "checks": {
++    "inventory": {
++      "command": [
++        "node",
++        "tests/test_adjudicator_inventory.js"
++      ],
++      "log": "inventory-tests.log",
++      "log_sha256": "40eaa3b8ff6237ccfcfb383a461d9b93cc02f357592763c41d5cd2459c9cedb8",
++      "passed": 47,
++      "failed": 0,
++      "skipped": 0
++    },
++    "runner": {
++      "command": [
++        "node",
++        "tests/test_adjudicator_acceptance_runner.js"
++      ],
++      "log": "runner-tests.log",
++      "log_sha256": "d5ea0c76dbcaf1be1785a702ab378f668730770a305eb5818eebdf51254e0a20",
++      "passed": 26,
++      "failed": 0,
++      "skipped": 0
++    },
++    "ledger": {
++      "command": [
++        "node",
++        "tests/test_adjudicator_evidence_ledger.js"
++      ],
++      "log": "ledger-tests.log",
++      "log_sha256": "df070652b60866af068042de292708fc37f00b443eba8519a2c081883b2a964b",
++      "passed": 22,
++      "failed": 0,
++      "skipped": 0
++    }
++  },
++  "regressions_passed": 95,
++  "required_test_receipt": "acceptance-run/checks.json",
++  "required_tests_passed": false,
++  "original_manifest_recovered": false,
++  "operational_acceptance_verified": false,
++  "newly_completed_tasks": 0,
++  "remote_reconciliation": "rejected_connector_requires_approval_policy_never",
++  "blocker_comment": "rejected_connector_requires_approval_policy_never",
++  "needs_human_label": "rejected_connector_requires_approval_policy_never",
++  "source_commit_storage": "/tmp/issue1096-attempt-diagnostics-git-8to3n09t/repo.git",
++  "patch": "artifacts/issue-1096-attempt-diagnostics.patch"
++}
+diff --git a/docs/verification/issue-1096-recovery/evidence-ledger.json b/docs/verification/issue-1096-recovery/evidence-ledger.json
+index ebfb79a..60c1b52 100644
+--- a/docs/verification/issue-1096-recovery/evidence-ledger.json
++++ b/docs/verification/issue-1096-recovery/evidence-ledger.json
+@@ -245,6 +245,17 @@
+       "plan": "retry-manifest-followup/plan.md",
+       "original_manifest_recovered": false,
+       "limitation": "Fixture-verified identity matching only. Required pytest execution remains blocked before collection; accepted deployment and original retry manifest remain unverified."
++    },
++    "retained_attempt_diagnostics_followup": {
++      "checked_at": "2026-11-03T20:30:34.741698+00:00",
++      "evaluated_revision": "eac39f3eb8b6a1a59457d39a6ceeb0e5bcfc3275",
++      "plan": "attempt-diagnostics-plan.md",
++      "checks": "attempt-diagnostics/acceptance-run/checks.json",
++      "validation": "attempt-diagnostics/validation.json",
++      "historical_acquisition": "attempt-diagnostics/historical-acquisition.json",
++      "required_tests_passed": false,
++      "newly_completed_tasks": 0,
++      "limitation": "Fixture-verified failure field locations, hashes and retained result classification only. Re-fetched historical report was counted in memory, not run through the new CLI. Original requested retry manifest, native authentication and deployment binding remain unavailable."
+     }
+   },
+   "mirror_synchronization": [
+diff --git a/scripts/export_adjudicator_inventory.js b/scripts/export_adjudicator_inventory.js
+index 7c74184..4ac2e94 100644
+--- a/scripts/export_adjudicator_inventory.js
++++ b/scripts/export_adjudicator_inventory.js
+@@ -22,6 +22,46 @@ function hasTarget(row) {
+   return typeof row.target === 'string' && Boolean(row.target.trim());
+ }
+ 
++// These observations describe saved fields, never a freshly validated result.
++// Error prose can include private provider material. Bind it by JSON-value hash
++// and location so recovery can inspect the original without publishing the text.
++function attemptObservation(attempt, caseId, location) {
++  const failureFields = ['error', 'errors', 'retry_error', 'role_record_error']
++    .filter((field) => Boolean(attempt[field]) &&
++      (!Array.isArray(attempt[field]) || attempt[field].length > 0))
++    .map((field) => ({ location: `${location}.${field}`,
++      json_value_sha256: createHash('sha256').update(JSON.stringify(attempt[field])).digest('hex') }));
++  const runFailed = failureFields.some((item) =>
++    item.location === `${location}.error` || item.location === `${location}.errors`);
++  const binary = ['reject_blocker', 'uphold_blocker'].includes(attempt.decision);
++  const abstained = attempt.decision === 'needs_more_evidence';
++  let result;
++  let nextStep;
++  if ((binary || abstained) && runFailed) {
++    result = 'conflicting_retained_decision_and_failure';
++    nextStep = 'inspect_retained_conflict_before_any_retry';
++  } else if (runFailed) {
++    result = 'retained_run_failure';
++    nextStep = 'inspect_failure_fields_for_first_actual_broken_step';
++  } else if (binary) {
++    result = 'retained_binary_decision';
++    nextStep = 'authenticate_native_receipt_then_refresh_independent_truth';
++  } else if (abstained) {
++    result = 'retained_abstention';
++    nextStep = 'recover_fresh_collected_evidence_before_any_retry';
++  } else if (attempt.decision) {
++    result = 'unrecognized_retained_decision';
++    nextStep = 'inspect_unrecognized_decision_before_any_retry';
++  } else {
++    result = 'no_retained_decision';
++    nextStep = 'recover_attempt_completion_without_redispatch';
++  }
++  return { case_id: caseId, location, retained_result: result,
++    backend_run_id: attempt.backend_run_id ?? null,
++    retained_binary_truth_present: ['PASS', 'FAIL'].includes(attempt.later_truth),
++    failure_fields: failureFields, next_evidence_step: nextStep };
++}
++
+ // Observe native receipt locators in one read-only SQLite snapshot. This does
+ // not instantiate NativeAttemptJournal, parse provider output, authenticate a
+ // decision, acquire the publication lock, or establish live writer ownership.
+@@ -119,6 +159,7 @@ function reportInventory({ report, observedAt, evidenceClass, evidenceReference,
+   if (!saved || !Array.isArray(saved.rows)) throw new Error('report requires a rows array');
+   const seen = new Set();
+   const paid = [];
++  const observations = [];
+   const cases = saved.rows.map((row, index) => {
+     if (!row || typeof row.case_id !== 'string' || !row.case_id.trim() || !hasTarget(row)) {
+       throw new Error(`rows[${index}] requires nonblank case_id and target`);
+@@ -139,6 +180,7 @@ function reportInventory({ report, observedAt, evidenceClass, evidenceReference,
+         }
+         paid.push({ case_id: row.case_id, backend_run_id: attempt.backend_run_id, location });
+       }
++      observations.push(attemptObservation(attempt, row.case_id, location));
+       const history = attempt.retry_attempts === undefined ? [] : attempt.retry_attempts;
+       if (!Array.isArray(history)) throw new Error(`invalid retry_attempts at ${location}`);
+       for (let child = history.length - 1; child >= 0; child -= 1) {
+@@ -163,7 +205,8 @@ function reportInventory({ report, observedAt, evidenceClass, evidenceReference,
+     identities.set(item.backend_run_id, occurrences);
+   }
+   const preDispatch = preDispatchInventory(saved, paid, journal);
+-  const reconciliation = requestedManifest ? reconcileRetainedRows(cases, requestedManifest) : null;
++  const reconciliation = requestedManifest
++    ? reconcileRetainedRows(cases, requestedManifest, observations) : null;
+   if (!fs.readFileSync(report).equals(bytes)) {
+     throw new Error('report changed during inventory');
+   }
+@@ -182,6 +225,7 @@ function reportInventory({ report, observedAt, evidenceClass, evidenceReference,
+     retained_summary: saved.summary ?? null,
+     native_publication_present: Object.hasOwn(saved, 'native_publication'),
+     cases, case_count: cases.length, paid_attempts: paid,
++    retained_attempt_observations: observations,
+     manifest_reconciliation: reconciliation,
+     pre_dispatch: preDispatch,
+     paid_identity_summary: {
+@@ -203,7 +247,7 @@ function reportInventory({ report, observedAt, evidenceClass, evidenceReference,
+ 
+ // Reconcile identities only. A saved decision/truth pair, native marker, paid
+ // locator or a perfect manifest match cannot authenticate an actual outcome.
+-function reconcileRetainedRows(cases, manifest) {
++function reconcileRetainedRows(cases, manifest, observations) {
+   const exact = (requested, row) => requested.target === row.target &&
+     (manifest.schema_version === 1 ||
+       (requested.verifier_verdict === row.verifier_verdict &&
+@@ -240,6 +284,11 @@ function reconcileRetainedRows(cases, manifest) {
+       }
+     }
+     return { ...item, status, reasons,
++      // Ambiguous/conflicting rows cannot lend their failures to a requested
++      // identity. A unique match still authenticates neither outcome nor truth.
++      retained_attempt_locations: matches.length === 1
++        ? observations.filter((row) => row.case_id === matches[0].case_id)
++          .map((row) => row.location) : [],
+       retained_locations: (matches.length ? matches : candidates).map((row) => row.location) };
+   });
+   return { scope: 'supplied_manifest_against_retained_report_only',
+diff --git a/tests/test_adjudicator_inventory.js b/tests/test_adjudicator_inventory.js
+index b9827f9..053eee1 100644
+--- a/tests/test_adjudicator_inventory.js
++++ b/tests/test_adjudicator_inventory.js
+@@ -76,6 +76,92 @@ test('report recovery rejects missing input without initializing runtime state',
+   assert.equal(fs.existsSync(path.dirname(missing)), false);
+ });
+ 
++test('attempt observations bind nested failure fields without exposing private error text', (t) => {
++  const { root, saved, options } = retainedReport(t);
++  saved.rows[0].errors = ['private validation error', { detail: 'private backend detail' }];
++  saved.rows[0].retry_error = 'private retry failure';
++  saved.rows[0].role_record_error = 'private persistence failure';
++  saved.rows[0].retry_attempts[0].error = 'private earlier failure';
++  fs.writeFileSync(options.report, JSON.stringify(saved));
++  const before = fs.readFileSync(options.report);
++  const files = fs.readdirSync(root);
++  const result = reportInventory(options);
++  const observed = result.retained_attempt_observations;
++  assert.deepEqual(observed.map((row) => row.location), [
++    'rows[0]', 'rows[0].retry_attempts[0]',
++    'rows[0].retry_attempts[0].retry_attempts[0]', 'rows[1]',
++  ]);
++  assert.deepEqual(observed.map((row) => row.backend_run_id),
++    ['primary', 'prior', 'oldest', 'prior']);
++  for (const [field, index] of [['error', 0], ['errors', 1],
++    ['retry_error', 2], ['role_record_error', 3]]) {
++    assert.deepEqual(observed[0].failure_fields[index], {
++      location: `rows[0].${field}`,
++      json_value_sha256: createHash('sha256').update(JSON.stringify(saved.rows[0][field])).digest('hex'),
++    });
++  }
++  assert.deepEqual(observed[1].failure_fields, [{
++    location: 'rows[0].retry_attempts[0].error',
++    json_value_sha256: createHash('sha256')
++      .update(JSON.stringify(saved.rows[0].retry_attempts[0].error)).digest('hex'),
++  }]);
++  assert.equal(observed[0].retained_result, 'conflicting_retained_decision_and_failure');
++  assert.equal(observed[1].retained_result, 'retained_run_failure');
++  assert.equal(observed[1].next_evidence_step, 'inspect_failure_fields_for_first_actual_broken_step');
++  assert.equal(observed[2].retained_result, 'no_retained_decision');
++  assert.equal(observed[3].retained_result, 'retained_binary_decision');
++  assert.equal(result.dispatch_authorized, false);
++  assert.equal(result.receipt_authority, 'not_authenticated_by_inventory');
++  assert.ok(!JSON.stringify(result).includes('private'));
++  assert.deepEqual(fs.readFileSync(options.report), before);
++  assert.deepEqual(fs.readdirSync(root), files);
++});
++
++test('saved decisions survive failed retries and remain distinct from independent truth', (t) => {
++  const { saved, options } = retainedReport(t);
++  saved.rows = [
++    { decision: 'uphold_blocker', later_truth: null,
++      retry_error: 'private retry failure', role_record_error: 'private Brain failure',
++      retry_attempts: [{ error: 'private failed retry', backend_run_id: 'paid-retry' }] },
++    { decision: 'reject_blocker', later_truth: 'PASS', errors: [], error: null },
++    { decision: 'needs_more_evidence' },
++    { decision: 'unrecognized-private-value', later_truth: 'UNKNOWN' },
++    {},
++  ].map((row, i) => ({ ...row, case_id: `case-${i}`, target: `owner/repo#${i + 1}` }));
++  fs.writeFileSync(options.report, JSON.stringify(saved));
++  const result = reportInventory(options);
++  const observed = result.retained_attempt_observations;
++  assert.deepEqual(observed.map((row) => row.retained_result), [
++    'retained_binary_decision', 'retained_run_failure', 'retained_binary_decision',
++    'retained_abstention', 'unrecognized_retained_decision', 'no_retained_decision',
++  ]);
++  assert.deepEqual(observed.map((row) => row.retained_binary_truth_present),
++    [false, false, true, false, false, false]);
++  assert.equal(observed[0].failure_fields.length, 2, 'persistence and retry failures stay visible');
++  assert.equal(observed[0].next_evidence_step,
++    'authenticate_native_receipt_then_refresh_independent_truth');
++  assert.equal(observed[3].next_evidence_step, 'recover_fresh_collected_evidence_before_any_retry');
++  assert.equal(observed[4].next_evidence_step, 'inspect_unrecognized_decision_before_any_retry');
++  assert.equal(observed[5].next_evidence_step, 'recover_attempt_completion_without_redispatch');
++  assert.equal(result.cases[0].retained_decision, 'uphold_blocker');
++  assert.equal(result.cases[0].retained_later_truth, null);
++  assert.equal(Object.hasOwn(result, 'graded'), false);
++});
++
++test('failure field hashes detect changed evidence even when retained classifications match', (t) => {
++  const { saved, options } = retainedReport(t);
++  const original = reportInventory(options);
++  saved.rows[0].error = 'different private failure';
++  fs.writeFileSync(options.report, JSON.stringify(saved));
++  const changed = reportInventory(options);
++  assert.equal(original.retained_attempt_observations[0].retained_result,
++    changed.retained_attempt_observations[0].retained_result);
++  assert.notEqual(original.retained_attempt_observations[0].failure_fields[0].json_value_sha256,
++    changed.retained_attempt_observations[0].failure_fields[0].json_value_sha256);
++  assert.notEqual(original.report_sha256, changed.report_sha256);
++  assert.ok(!JSON.stringify(changed).includes('private'));
++});
++
+ test('report recovery refuses malformed and ambiguous retained identities', (t) => {
+   const { saved, options } = retainedReport(t);
+   for (const change of [
+@@ -158,6 +244,9 @@ test('retained report reconciliation preserves requested order and explains ever
+     { status: 'matched', reasons: [], retained_locations: ['rows[7]'] },
+   ]);
+   assert.equal(reconciliation.all_requested_rows_uniquely_matched, false);
++  assert.deepEqual(reconciliation.cases.map((row) => row.retained_attempt_locations), [
++    [], [], [], [], [], ['rows[0]', 'rows[0].retry_attempts[0]'], ['rows[7]'],
++  ], 'only unique requested identities receive retained attempt evidence');
+   assert.deepEqual(reconciliation.unmatched_retained_locations,
+     ['rows[1]', 'rows[2]', 'rows[3]', 'rows[6]', 'rows[8]']);
+   assert.equal(result.cases[0].retained_decision, 'reject_blocker');
