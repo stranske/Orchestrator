@@ -473,3 +473,40 @@ change is retained as a commit in `/tmp/orchestrator-1175-history-read-commit`,
 with a handoff patch at `/tmp/orchestrator-1175-history-read.patch`. Posting the
 blocker comment and adding `needs-human` to PR #1196 were rejected with
 `MCP tool call requires approval, but approval policy is never`.
+
+## Truncated publication history regression (2026-11-06)
+
+Reconciled commits `17a54f2` and `83c8e9c`: PR #1196 changes three files,
+not the reported 34. No verified production receipt has been retained. The
+first publication task and production observation criteria remain incomplete.
+The two conditional implementation tasks are satisfied because the hosted-pass
+helpers and reporting remain absent (verified in both source files):
+
+- [x] Conditional hosted-pass helper retention task: helpers remain absent.
+- [x] Conditional hosted-pass reporting task: reporting remains absent.
+
+Updating both copies of these checkboxes in the PR body was rejected with
+`MCP tool call requires approval, but approval policy is never`. The same
+rejection prevented the blocker comment and `needs-human` label. Remote
+checkboxes remain unchanged. PR #1196 was verified open with `draft=false`.
+
+Added a real CLI regression with two marked publications and a depth-one
+`file://` clone. Both the original and later commit are refused while history
+is shallow, before and after a valid receipt exists. Restoring complete history
+recovers the original publication and audit timestamp without changing receipt
+bytes or modification time. With complete history, claiming the later commit
+is also refused. The remote tip stays unchanged, the feedback database stays
+absent, and all repositories, home directories, and state are temporary.
+
+The publication CLI suite passed all 52 tests, the deployment unittest suite
+passed all 16 tests, and the report CLI suite passed all 5 tests. The focused
+shallow-history regression, JavaScript syntax, and diff whitespace checks also
+passed. No Python or protected files changed.
+
+Production observation remains blocked by the absent production database and
+verified deployment audit, and must wait until both 2026-11-08 and fourteen days
+after verified deployment. The Anaconda interpreter, pytest, and Black are absent;
+the named pytest acceptance check remains unverified. This checkout's read-only
+`.git` rejected staging. The changes are retained in an isolated commit at
+`/tmp/orchestrator-1175-shallow-history-commit`, with a handoff patch at
+`/tmp/orchestrator-1175-shallow-history.patch`.
