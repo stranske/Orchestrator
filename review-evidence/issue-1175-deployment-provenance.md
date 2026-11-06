@@ -561,3 +561,29 @@ after verified deployment.
 The checkout's read-only Git index rejected staging. The tested changes are
 retained in `/tmp/orchestrator-1175-deleted-branch-commit`, with a handoff patch
 at `/tmp/orchestrator-1175-deleted-branch.patch`.
+
+## Rewritten export history refusal and recovery (2026-11-06)
+
+Added four real CLI cases for a branch rewound to an unmarked commit or replaced
+with a different marked commit containing the identical filter artifact, each
+with and without a receipt. Verification must fetch the changed branch and reject
+the displaced original commit even though its objects remain available locally.
+An audit naming the replacement commit must also fail when an original receipt
+already exists. Restoring the original history recovers the original commit,
+deployment instant, and evidence without changing retained receipt bytes or
+modification time. All Git repositories, home directories, and state are temporary.
+
+Verification: 62 publication CLI tests, 16 deployment unittests, and 5 report CLI
+tests passed. JavaScript syntax and diff whitespace checks passed. No Python or
+protected files changed; the Python formatting gate does not apply to these edits.
+
+No production checkbox is newly complete. The production database and verified
+deployment audit remain unavailable. Observation must wait until both 2026-11-08
+and fourteen days after verified deployment. The required Anaconda pytest command
+could not start because `/opt/anaconda3/bin/python3` is absent. PR #1196 is open
+and ready for review. The connector rejected the blocker comment and `needs-human`
+label with `MCP tool call requires approval, but approval policy is never`.
+
+The checkout's read-only Git index rejected staging. The tested changes are
+retained in `/tmp/orchestrator-1175-rewritten-history-commit`, with a handoff patch
+at `/tmp/orchestrator-1175-rewritten-history.patch`.
