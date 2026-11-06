@@ -1,5 +1,50 @@
 # Fleet delivery measures — runner checks
 
+## Windows text-report validation — 2026-11-06 02:43Z
+
+The live verifier now accepts CRLF output from Python's Windows text-mode writer.
+It normalizes line endings only for validation and preserves the original report
+bytes in the evidence directory. The CRLF regression failed before the fix with
+`must print the fleet section exactly once`. It now passes while still rejecting
+duplicate sections, stale timestamps, changed values, missing rows and duplicate
+rows. A second regression checks the saved CRLF bytes and receipt.
+
+Runner evidence at base head `2f67673b392a796c63cdca935f447e2c073adda3`, with
+`/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3` explicitly selected through
+`ORCH_STANDARD_PYTHON` and `scripts/usage_poll/py-standard.sh`:
+
+- `PYTHON=<runner interpreter> node --test --test-isolation=none
+  tests/test_verify_fleet_delivery_live.js
+  tests/test_verify_fleet_delivery_mutation.js`: all 23 tests pass, including
+  the CRLF regressions and real unittest mutation/restoration controls.
+- `PYTHONPATH=src <runner interpreter> -m unittest discover -s tests -p
+  test_switch_review_fleet.py -q`: all 27 tests pass.
+- `<runner interpreter> -m pytest tests/test_switch_review_fleet.py -m
+  "not slow"` and `PYTHON=<runner interpreter> node
+  scripts/verify_fleet_delivery_mutation.js --all-readers`: both exit 1 because
+  pytest is absent. Installing pytest and Black into a temporary directory
+  fails because the available package index has no matching distributions.
+- `ORCH_STANDARD_PYTHON=<runner interpreter> PYTEST_ADDOPTS='-m "not slow"'
+  timeout 55s <runner interpreter> -u src/verify.py`: exits 124 without a verdict.
+- `PYTHON=<runner interpreter> node scripts/verify_fleet_delivery_live.js
+  /tmp/issue-1186-crlf-20261106`: exits zero and validates all five current rows
+  at `2026-11-06T02:43:53.880Z`. The saved
+  [receipt](issue-672-crlf-20261106/check.json) includes runtime identity and
+  source fingerprints. Four rows explicitly report GitHub connectivity failures;
+  the opener row explicitly reports a failed helper invocation (exit 2).
+
+No acceptance task is newly complete: these are Linux hosted-runner checks, not
+target-machine receipts. PR #1187 remains open and ready (`draft=false`).
+Correcting its unsupported checked target-machine and pytest mutation claims,
+posting a blocker comment, and adding `needs-human` were each rejected with
+`MCP tool call requires approval, but approval policy is never`.
+
+No Python files changed, so the Python-only Black gate does not apply.
+`git diff --check` passes. The checkout's `.git` directory is read-only, so staging
+fails at `.git/index.lock`. The source commit is preserved using writable Git
+metadata under `/tmp/issue-1186-crlf-commit/.git` and exported as
+`/tmp/issue-1186-crlf.bundle`; the checkout branch cannot be advanced here.
+
 ## Source fingerprints in live receipts — 2026-11-06 02:26Z
 
 Live receipts now identify the exact bytes of the fleet implementation, fleet

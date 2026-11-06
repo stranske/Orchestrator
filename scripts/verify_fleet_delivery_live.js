@@ -25,7 +25,8 @@ function validateReport(report, text, started, finished) {
     && delivery.as_of <= Math.ceil(finished / 1000), 'check timestamp is outside this live run');
   assert.deepEqual(Object.keys(delivery.rows).sort(), Object.keys(names).sort(),
     'must retain exactly the five fleet rows');
-  const sections = text.split('## Fleet delivery measures\n');
+  // Python's text-mode writer emits CRLF on Windows target machines.
+  const sections = text.replaceAll('\r\n', '\n').split('## Fleet delivery measures\n');
   assert.equal(sections.length, 2, 'must print the fleet section exactly once');
   const section = sections[1].split(/^## /m)[0];
   // Python's UTC isoformat uses +00:00 rather than JavaScript's Z.

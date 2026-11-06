@@ -42,6 +42,23 @@ test('mixed measured and failed live rows are valid with a current check date', 
   assert.equal(validateReport(report, text, checked, checked + 2000), report.fleet_delivery_measures);
 });
 
+test('Windows report newlines preserve validation of all five rows', () => {
+  const { report, text } = example();
+  const windowsText = text.replaceAll('\n', '\r\n');
+  assert.equal(validateReport(report, windowsText, checked, checked + 2000),
+    report.fleet_delivery_measures);
+  for (const broken of [
+    windowsText + windowsText,
+    windowsText.replace('  As of 2026-11-05', '  As of 2026-10-19'),
+    windowsText.replace('2 [recorded example]', '0 [recorded example]'),
+    windowsText.replace(`  ${names.released_flow}: 2 [recorded example]\r\n`, ''),
+    windowsText.replace('\r\n\r\n## Other',
+      `\r\n  ${names.merge_to_close}: 2 [recorded example]\r\n\r\n## Other`),
+  ]) {
+    assert.throws(() => validateReport(report, broken, checked, checked + 2000));
+  }
+});
+
 test('missing rows, evidence, explicit errors, or current dates cannot pass', () => {
   const mutations = [
     (r) => { delete r.fleet_delivery_measures.rows.released_flow; },
@@ -106,6 +123,25 @@ test('live command uses the selected interpreter and records validated output', 
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(output, 'check.json'))), receipt);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(output, 'report.json'))), report);
   await assert.rejects(verifyLive(output), /EEXIST/);
+});
+
+test('live verification retains Windows report bytes in the evidence directory', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-live-crlf-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const output = path.join(root, 'evidence');
+  const { report, text } = example();
+  const windowsText = text.replaceAll('\n', '\r\n');
+  const receipt = await verifyLive(output, {
+    python: '/selected/python', now: () => checked,
+    run: async (python, args) => {
+      if (args[0] === '-c') return JSON.stringify(runtime);
+      fs.writeFileSync(args.at(-1), windowsText);
+      return JSON.stringify(report);
+    },
+  });
+  assert.equal(fs.readFileSync(path.join(output, 'report.txt'), 'utf8'), windowsText);
+  assert.deepEqual(receipt.rows, report.fleet_delivery_measures.rows);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(output, 'check.json'))), receipt);
 });
 
 test('live receipts fingerprint the fleet implementation, tests, fixture and verifier bytes', (t) => {
