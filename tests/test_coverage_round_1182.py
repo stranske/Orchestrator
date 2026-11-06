@@ -50,8 +50,14 @@ def isolated_runtime(tmp_path, monkeypatch):
         if cmd and cmd[0] == "cursor-agent" and "--list-models" in cmd:
             body = "composer-2.5 - Composer 2.5 (current)\n"
             return type("Proc", (), {"returncode": 0, "stdout": body, "stderr": ""})()
-        if cmd and cmd[0] == "npx" and "ccusage" in cmd:
-            return type("Proc", (), {"returncode": 0, "stdout": "{}", "stderr": ""})()
+        if cmd:
+            joined = " ".join(str(c) for c in cmd)
+            if "ccusage" in joined and ("session" in joined or "blocks" in joined):
+                if "blocks" in joined:
+                    body = json.dumps({"blocks": []})
+                else:
+                    body = "{}"
+                return type("Proc", (), {"returncode": 0, "stdout": body, "stderr": ""})()
         attempted_external.append((cmd, kwargs))
         pytest.fail("tests/test_coverage_round_1182.py attempted unstubbed external I/O")
 
