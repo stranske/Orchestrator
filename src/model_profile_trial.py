@@ -8,7 +8,9 @@ transport bridge; ``finalize`` validates returned telemetry and proves source
 integrity. ``prepare-current`` binds the current strategy experiment's frozen
 spec into a two-profile, three-instance plan when that spec is sealed, and
 refuses when it is absent. It does not execute workers or write the program
-summary. An explicit layout supports repeated instances of selected profiles;
+summary. A measured finalize of that plan records the experiment id, work
+shape, and spec hash beside quality, cost, and provider-resolved identity.
+An explicit layout supports repeated instances of selected profiles;
 verified evidence can be ingested atomically into a quarantine feedback database.
 ``--selftest`` exercises prepare, validation, and reporting fully offline.
 """
@@ -933,6 +935,15 @@ def _write_capability_program_trial_summary(
         "aggregate_tokens_in": tokens_in,
         "aggregate_tokens_out": tokens_out,
     }
+    # The plan refuses to invent this file. Once measured attempts publish it, the
+    # frozen spec that selected the work shape has to be on the file: quality and
+    # cost without the experiment id are not identifiable as that recurring trial.
+    packet = manifest.get("frozen_packet")
+    if isinstance(packet, dict):
+        for field in ("work_shape", "exp_id", "spec_sha256"):
+            value = packet.get(field)
+            if isinstance(value, str) and value:
+                payload[field] = value
     _atomic_json(out_dir / "profile-trial.json", payload)
 
 
@@ -1314,6 +1325,46 @@ def _selftest() -> None:
         assert recurring["instances_per_profile"] == CURRENT_TRIAL_INSTANCES
         assert len(recurring["requests"]) == 6
         assert not (state_dir / "capability-program" / "profile-trial.json").exists()
+        saved_state = os.environ.get("ORCH_STATE_DIR")
+        os.environ["ORCH_STATE_DIR"] = str(state_dir)
+        try:
+            _write_capability_program_trial_summary(
+                recurring,
+                [
+                    {
+                        "profile_id": profile_id,
+                        "provider_resolved_provider": "openai",
+                        "provider_resolved_model": execution_profiles.get_profile(profile_id)[
+                            "requested_model"
+                        ],
+                        "tokens_in": 3,
+                        "tokens_out": 1,
+                    }
+                    for profile_id in CURRENT_TRIAL_PROFILE_IDS
+                    for _ in range(CURRENT_TRIAL_INSTANCES)
+                ],
+                identity_verified=True,
+                brain_ingest_enabled=False,
+                quality_by_profile={profile_id: 1.0 for profile_id in CURRENT_TRIAL_PROFILE_IDS},
+                timestamp=1_001,
+            )
+            published = json.loads(
+                (state_dir / "capability-program" / "profile-trial.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+        finally:
+            if saved_state is None:
+                os.environ.pop("ORCH_STATE_DIR", None)
+            else:
+                os.environ["ORCH_STATE_DIR"] = saved_state
+        assert published["exp_id"] == exp_id, published
+        assert published["work_shape"] == "strategy-experiment-frozen-spec", published
+        assert published["spec_sha256"] == recurring["frozen_packet"]["spec_sha256"], published
+        assert (published["profile_count"], published["instance_count"]) == (2, 6), published
+        assert set(published["provider_resolved_identity_by_profile"]) == set(
+            CURRENT_TRIAL_PROFILE_IDS
+        )
         stub = "[SPEC_PROVENANCE: MISSING_SPEC_STUB]\n"
         (experiment / "spec.md").write_text(stub, encoding="utf-8")
         (experiment / "meta.json").write_text(
@@ -1330,7 +1381,8 @@ def _selftest() -> None:
     print(
         "model_profile_trial.py selftest: OK "
         "(prepare/source proof, accept/reject validation, shadow report/no promotion, "
-        "forged source seal refuses ingest, frozen spec binds the two-by-three plan)"
+        "forged source seal refuses ingest, frozen spec binds the two-by-three plan "
+        "and its published summary)"
     )
 
 

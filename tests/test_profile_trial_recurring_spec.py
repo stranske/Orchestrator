@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+import feedback
 import model_profile_trial as trial
 
 SPEC = "Acceptance criteria: keep the frozen recurring-work body unchanged.\n"
@@ -146,6 +147,95 @@ def test_prepare_current_cli_writes_the_plan_and_not_the_program_summary(tmp_pat
     assert manifest["frozen_packet"]["frozen_spec"] == SPEC
     assert len(manifest["requests"]) == 6
     assert not (state / "capability-program" / "profile-trial.json").exists()
+
+
+def _measured_results(root: Path, manifest: dict) -> dict:
+    """Six provider-resolved attempts. The model comes from each request's registry row."""
+    attempts = []
+    for request in manifest["requests"]:
+        artifact = root / f"identity-{request['launch_ordinal']}.json"
+        identity = {
+            "profile_id": request["profile_id"],
+            "provider_resolved_provider": request["provider"],
+            "provider_resolved_model": request["requested_model"],
+        }
+        artifact.write_text(json.dumps(identity), encoding="utf-8")
+        digest = "sha256:" + hashlib.sha256(artifact.read_bytes()).hexdigest()
+        attempts.append(
+            {
+                **identity,
+                "run_id": request["run_id"],
+                "operation_role": "worker",
+                "requested_model": request["requested_model"],
+                "selected_model": request["requested_model"],
+                "reported_model": request["requested_model"],
+                "runner_version": "offline-recurring",
+                "cli_version": "offline-recurring",
+                "status": "success",
+                "packet_hash": manifest["packet_hash"],
+                "acknowledged": True,
+                "tokens_in": 10 * request["launch_ordinal"],
+                "tokens_out": request["launch_ordinal"],
+                "identity_evidence": {
+                    "schema": trial.IDENTITY_EVIDENCE_SCHEMA,
+                    "version": trial.IDENTITY_EVIDENCE_VERSION,
+                    "authority": "openai-response-metadata/v1",
+                    "artifact_ref": str(artifact),
+                    "artifact_sha256": digest,
+                },
+            }
+        )
+    return {
+        "schema": trial.RESULT_SCHEMA,
+        "version": trial.SCHEMA_VERSION,
+        "trial_id": manifest["trial_id"],
+        "packet_hash": manifest["packet_hash"],
+        "acknowledged": True,
+        "identity_verified": True,
+        "attempts": attempts,
+        "quality_by_profile": {
+            "codex-5.6-terra-high": 0.5,
+            "codex-6-astra-high": 0.75,
+        },
+    }
+
+
+def test_measured_recurring_trial_records_spec_quality_cost_and_identity(tmp_path, monkeypatch):
+    state, experiments = _seal(tmp_path)
+    orchestrator, workflows = _sources(tmp_path)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(state))
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "quarantine-feedback.db")
+    manifest = trial.build_current_recurring_trial(
+        orchestrator,
+        workflows,
+        seed=14,
+        now=1000,
+        capacity_state="ok",
+        state_dir=state,
+        experiments_root=experiments,
+    )
+    results = _measured_results(tmp_path, manifest)
+    state_out = trial.finalize_trial(manifest, results, ingest_brain=True, now=2000)
+    summary = json.loads((state / "capability-program" / "profile-trial.json").read_text())
+    assert state_out["attempt_count"] == 6
+    assert state_out["brain_ingest_enabled"] is True
+    assert summary["exp_id"] == EXP_ID
+    assert summary["work_shape"] == "strategy-experiment-frozen-spec"
+    assert summary["spec_sha256"] == manifest["frozen_packet"]["spec_sha256"]
+    assert (summary["profile_count"], summary["instance_count"]) == (2, 6)
+    assert summary["identity_verified"] is True
+    assert summary["quality_by_profile"] == results["quality_by_profile"]
+    for profile_id in trial.CURRENT_TRIAL_PROFILE_IDS:
+        attempts = [row for row in results["attempts"] if row["profile_id"] == profile_id]
+        assert summary["cost_tokens_by_profile"][profile_id] == {
+            "tokens_in": sum(row["tokens_in"] for row in attempts),
+            "tokens_out": sum(row["tokens_out"] for row in attempts),
+        }
+        assert summary["provider_resolved_identity_by_profile"][profile_id] == {
+            "provider": attempts[0]["provider_resolved_provider"],
+            "model": attempts[0]["provider_resolved_model"],
+        }
+        assert len(attempts) == 3
 
 
 def test_prepare_current_cli_refuses_a_missing_spec_without_writing(tmp_path, capsys):
