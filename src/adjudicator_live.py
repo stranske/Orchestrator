@@ -577,7 +577,10 @@ def _reconcile_live(*, db: Path | None = None, path: Path | None = None) -> dict
             merged["proposal"] = previous_row["proposal"]
         by_id[row["case_id"]] = merged
     rows = list(by_id.values())
-    _refresh_live_truth(rows, db)
+    try:
+        _refresh_live_truth(rows, db)
+    except sqlite3.Error:
+        pass  # SQLite unavailable, proceed without refreshing truth
     summary = live_summary(rows)
     retirement = previous.get("retirement")
     rate = summary["agree"] / summary["graded"] if summary["graded"] else None
@@ -791,7 +794,10 @@ def _run_live(
     # report), so its writer would demote every live decision to needs_more_evidence. A live row
     # was decided on a case certified IN THIS PROCESS at dispatch time; this module records that
     # fact itself (`certification`), grades the advice itself, and labels the number `live`.
-    _refresh_live_truth(rows, db)
+    try:
+        _refresh_live_truth(rows, db)
+    except sqlite3.Error:
+        pass  # SQLite unavailable, proceed without refreshing truth
     summary = live_summary(rows)
     pending_ts = [row["dispute_ts"] for row in rows if not _final(row) and "dispute_ts" in row]
     processed_ts = [row["dispute_ts"] for row in rows if "dispute_ts" in row]
@@ -829,7 +835,7 @@ def _refresh_live_truth(rows: list[dict], db: Path | None) -> None:
             continue
         try:
             row["later_truth"] = retro.native_later_truth(run_id, db)
-        except (OSError, ValueError, TypeError, AttributeError, sqlite3.Error):
+        except (OSError, ValueError, TypeError, AttributeError):
             pass
 
 

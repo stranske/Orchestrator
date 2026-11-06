@@ -803,6 +803,63 @@ def test_weekly_readers_survive_a_bad_report_and_an_unreadable_brain(tmp_path):
     assert "agreement UNKNOWN against 0.75" in evidence
 
 
+def test_weekly_line_survives_malformed_json(tmp_path):
+    path = tmp_path / "live.json"
+    # Malformed JSON (not valid JSON at all)
+    path.write_text("not valid json {{{")
+    assert "disputes UNKNOWN" in live.weekly_line(path)
+    assert "disputes UNKNOWN" in live.weekly_evidence(path=path)
+
+
+def test_weekly_line_survives_json_list(tmp_path):
+    path = tmp_path / "live.json"
+    # JSON list instead of object
+    path.write_text("[]")
+    assert "disputes UNKNOWN" in live.weekly_line(path)
+    assert "disputes UNKNOWN" in live.weekly_evidence(path=path)
+
+
+def test_weekly_line_survives_invalid_rows(tmp_path):
+    path = tmp_path / "live.json"
+    # Valid JSON object but rows are not dicts
+    path.write_text(json.dumps({"population": 2, "rows": ["not a dict", 123, None]}))
+    # weekly_line should still work and filter out non-dict rows
+    line = live.weekly_line(path)
+    assert "adjudicator live:" in line
+    assert "disputes 2" in line
+    assert "graded 0" in line
+    # weekly_evidence should also work
+    evidence = live.weekly_evidence(path=path)
+    assert "adjudicator live:" in evidence
+    assert "disputes 2" in evidence
+
+
+def test_weekly_evidence_reports_unknown_on_sqlite_operational_error(tmp_path):
+    path = tmp_path / "live.json"
+    brain = tmp_path / "brain.db"
+    # Valid JSON with certified rows that need truth refresh
+    path.write_text(
+        json.dumps(
+            {
+                "population": 1,
+                "rows": [
+                    {
+                        "run_id": "test-run-id",
+                        "decision": "uphold_blocker",
+                        "certification": {"status": "certified"},
+                    }
+                ],
+            }
+        )
+    )
+    brain.write_text("not sqlite")
+    evidence = live.weekly_evidence(db=brain, path=path)
+    # With SQLite unavailable, should report UNKNOWN for grading and retirement
+    assert "retirement UNKNOWN" in evidence
+    assert "graded UNKNOWN of 20" in evidence
+    assert "agreement UNKNOWN against 0.75" in evidence
+
+
 def test_the_tick_asks_the_module_whether_the_switch_is_on(monkeypatch):
     monkeypatch.delenv(live.LIVE_SWITCH, raising=False)
     assert live.main(["--enabled"]) == 0
