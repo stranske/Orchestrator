@@ -32,11 +32,21 @@ const controls = {
     args: 'gh, now, repos, flow=flow', flow: true,
     testName: 'test_each_gh_failure_preserves_every_row',
   },
+  closing_issue_refs: {
+    // Returning no links after a failed detail read produces partial numeric PR
+    // measures without raising an error to either outer reader.
+    signature: '_fleet_closing_issue_refs(gh, repo: str, number: int)',
+    args: 'gh, repo, number', returnType: 'set[str]', fallback: 'set()',
+    testName: 'test_each_gh_failure_preserves_every_row',
+    failurePattern: /AssertionError: '(?:median|opened) [^\r\n]+' is not None/,
+  },
 };
 
 function mutation(control) {
   const name = control.signature.split('(')[0];
-  const anchor = `def ${control.signature} -> dict:\n`;
+  const returnType = control.returnType || 'dict';
+  const anchor = `def ${control.signature} -> ${returnType}:\n`;
+  const fallback = control.fallback || '_fleet_measured("0%", "deliberate fail-open control")';
   // The PR readers share a function. Mutate only the selected arm, so each verdict
   // demonstrates that arm's failure is detected independently of the other one.
   const guard = control.flow === undefined ? ''
@@ -44,10 +54,10 @@ function mutation(control) {
   const mutant = `${anchor}    try:
         return ${name}_original(${control.args})
     except _FleetReadError:
-${guard}        return _fleet_measured("0%", "deliberate fail-open control")
+${guard}        return ${fallback}  # deliberate fail-open control
 
 
-def ${control.signature.replace(name, `${name}_original`)} -> dict:
+def ${control.signature.replace(name, `${name}_original`)} -> ${returnType}:
 `;
   return { anchor, mutant };
 }
@@ -85,7 +95,7 @@ function requireVerdict(result, runner, failed, control = controls.gate_cancella
   }
   if (failed) {
     // An import failure or a different assertion is not proof of detecting the mutant.
-    assert.match(output, /AssertionError: '0%' is not None/);
+    assert.match(output, control.failurePattern || /AssertionError: '0%' is not None/);
   }
 }
 

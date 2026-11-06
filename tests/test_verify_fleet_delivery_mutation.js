@@ -19,7 +19,8 @@ test('every real reader rejects a swallowed error and passes after restoration',
   const repo = path.resolve(__dirname, '..');
   const source = fs.readFileSync(path.join(repo, 'src/switch_review.py'));
   const result = await runIsolated(['--all-readers', '--unittest'], process.env.PYTHON || 'python3');
-  const keys = ['gate_cancellations', 'merge_to_close', 'oldest_canary', 'opener_cap', 'released_flow'];
+  const keys = ['gate_cancellations', 'merge_to_close', 'oldest_canary', 'opener_cap',
+    'released_flow', 'closing_issue_refs'];
   assert.deepEqual(Object.keys(controls), keys);
   assert.deepEqual(result.split('\n'), keys.map((key) =>
     `${key}: unittest: baseline passed; fail-open mutation detected; restored test passed`));
@@ -35,6 +36,20 @@ test('all-readers evidence must name the selected test', () => {
       }, runner, true, control));
     }
   }
+});
+
+test('structured-link mutation evidence must detect a partial numeric PR measure', () => {
+  const control = controls.closing_issue_refs;
+  assert.ok(control, 'all-readers must mutate the structured-link reader itself');
+  const node = `tests/test_switch_review_fleet.py::FleetDeliveryTests::${control.testName}`;
+  const output = `${node} FAILED [100%]\n`
+    + "AssertionError: 'median 15 min (2 PR/issue pairs; 1 still open)' is not None\n1 failed";
+  requireVerdict({ status: 1, signal: null, stdout: output }, 'pytest', true, control);
+  assert.throws(() => requireVerdict({
+    status: 1, signal: null, stdout: output.replace(
+      "'median 15 min (2 PR/issue pairs; 1 still open)' is not None",
+      "'0%' is not None"),
+  }, 'pytest', true, control));
 });
 
 test('unittest subtest evidence must contain only failures from the selected method', () => {

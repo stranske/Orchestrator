@@ -1,5 +1,55 @@
 # Fleet delivery measures — runner checks
 
+## Structured-link mutation control — 2026-11-06 02:10Z
+
+Reviewed all four keepalive commits since the bootstrap, at base head
+`4f2b2a3cd2ef1efb4f89a8927a6695a456c6ca4f`. The structured-attribution and
+fixture tasks are implemented and verified by the fleet unittest suite. The
+PR's checked target-machine task and pytest-mode mutation criterion are not
+supported by the runner receipts. Attempts to uncheck both, post the blocker
+comment, and add `needs-human` were rejected with `MCP tool call requires
+approval, but approval policy is never`. Neither criterion is newly complete.
+
+`--all-readers` now also mutates `_fleet_closing_issue_refs` itself, returning
+an empty set after a failed detail read. This exercises partial attribution
+that can produce numeric closure and flow rows without raising an error to
+the outer readers. The control requires the selected fixture test to reject
+the resulting numeric PR measure; the other controls still require their
+deliberate `0%` assertion. All source bytes are restored before retesting.
+The new JavaScript regression failed before the control was added and passes
+afterward. The real control detects the swallowed error using the existing
+structured-detail failure cases; no Python file or collection floor changed.
+
+Runner interpreter: `/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3`,
+selected through `ORCH_STANDARD_PYTHON` and `py-standard.sh`:
+
+- `PYTHON=<selected interpreter> node --test --test-isolation=none
+  tests/test_verify_fleet_delivery_mutation.js
+  tests/test_verify_fleet_delivery_live.js`: all 19 tests pass.
+- `PYTHONPATH=src <selected interpreter> -m unittest discover -s tests -p
+  test_switch_review_fleet.py -q`: all 27 tests pass.
+- `PYTHON=<selected interpreter> node scripts/verify_fleet_delivery_mutation.js
+  --unittest --all-readers`: all six controls detect mutations and pass their
+  baseline and restoration runs. This does not replace pytest acceptance.
+- `<selected interpreter> -m pytest tests/test_switch_review_fleet.py -m
+  "not slow"` and the required pytest-mode `--all-readers` command cannot run:
+  pytest is absent. Installing pytest into `/tmp` found no distribution.
+- `ORCH_STANDARD_PYTHON=<selected interpreter> PYTEST_ADDOPTS='-m "not slow"'
+  timeout 55s <selected interpreter> -u src/verify.py`: exits 124 without
+  output or a verification verdict.
+- `PYTHON=<selected interpreter> node scripts/verify_fleet_delivery_live.js
+  /tmp/issue-1186-structured-mutation-live`: exits zero, validating all five
+  rows at `2026-11-06T02:10:23.330Z`. The committed
+  [receipt](issue-672-structured-mutation-20261106/check.json) records Python
+  3.14.10 on Linux x86_64. Four rows report GitHub connectivity failures;
+  opener count reports an unsuccessful helper invocation (exit 2).
+
+This is hosted-runner evidence; target-machine acceptance remains outstanding.
+The checkout's `.git` is read-only: ordinary staging fails creating
+`.git/index.lock`. The source commit is retained with writable local-clone
+metadata and exported to `/tmp/issue-1186-structured-mutation.bundle`; the
+checkout branch cannot be advanced here.
+
 ## Interpreter provenance in live receipts — 2026-11-06 01:56Z
 
 The live verifier now probes the explicitly selected interpreter before collecting
