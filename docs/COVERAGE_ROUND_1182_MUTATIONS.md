@@ -1,6 +1,9 @@
 # Mutation evidence: `tests/test_coverage_round_1182.py`
 
-Each row: real production code mutation in src/ that causes the test to FAIL, then PASSED after revert.
+Each row: verified production code mutation in src/ that causes the test to FAIL, then PASSED after revert.
+
+To verify: Apply the edit to src/, run `pytest tests/test_coverage_round_1182.py::<test_name> -x -q` (expect FAILED),
+then `git checkout -- src/` and run the same test again (expect PASSED).
 
 ## test_choose_mode_aliases_and_deficits
 - **src/ line**: `src/exploration_collection.py:65`
