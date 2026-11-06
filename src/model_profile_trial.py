@@ -18,12 +18,14 @@ when any instance has no token count. ``run-current`` is the live read-only
 execution of that plan: six ``codex exec --sandbox read-only`` arms on the
 frozen spec. Transport acknowledgement requires four binding lines in the final
 message; recurring-work quality is scored separately from a read-only rubric
-on the frozen specification text. Cost is token counts from the session stream,
-and provider identity is taken only from a ``response.completed`` event whose
-``response`` object has OpenAI ``response`` metadata in that stream—never from
-``--model``, argv, or ``turn_context`` alone. The Codex CLI does not currently
-emit that event in every subscription session; when the stream lacks it,
-``run-current`` refuses and writes nothing. ``--selftest`` exercises
+on the frozen specification text. The prompt names the line to quote and does
+not include the completed ``work_evidence=`` answer. Cost is token counts from
+the session stream. Provider identity is taken from a ``response.completed``
+OpenAI response object, or from ``turn.completed``'s ``server_model`` field
+when the CLI copied it from provider response metadata. ``--model``, argv,
+``turn_context``, and a generic ``model`` field on ``turn.completed`` are not
+that witness. Current subscription sessions omit both, and ``run-current``
+then refuses and writes nothing. ``--selftest`` exercises
 prepare, validation, and reporting fully offline.
 """
 
@@ -1004,15 +1006,12 @@ def recurring_trial_prompt(manifest: dict[str, Any], request: dict[str, Any]) ->
     instruction = packet.get("instruction")
     if not isinstance(instruction, str) or not instruction.strip():
         instruction = "Read this frozen recurring-work specification without changing files."
-    rubric = _recurring_work_rubric_line(spec)
     return (
         instruction.rstrip()
         + "\nDo not edit, create, commit, or push files.\n"
         + "First, return exactly these four lines (transport acknowledgement), then a blank line, "
         "then one line of recurring-work evidence.\n"
-        + "The evidence line must be exactly:\n"
-        + f"work_evidence={rubric}\n"
-        + "Replace the rubric segment after the equals sign with a single line copied verbatim "
+        + "The evidence line must be `work_evidence=` followed by one line copied verbatim "
         'from the frozen specification below: the line that begins with "Acceptance criteria:" '
         "if there is one; otherwise the first non-empty line of the specification.\n"
         + "Do not add any other text.\n"
@@ -1092,13 +1091,8 @@ def _jsonl_objects(session_text: str) -> list[dict[str, Any]]:
     return events
 
 
-def _one_provider_response(events: list[dict[str, Any]]) -> dict[str, Any]:
-    """The OpenAI response object, never the CLI's configured model.
-
-    ``turn_context`` is what the CLI was asked to run. Subscription sessions
-    have no separate provider identity unless the stream carries one response
-    object (``object`` of ``response`` and an id beginning with ``resp_``).
-    """
+def _optional_provider_response(events: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """One OpenAI response object, or none when the stream has no such event."""
     found: list[dict[str, Any]] = []
     for event in events:
         if event.get("type") != "response.completed":
@@ -1121,10 +1115,65 @@ def _one_provider_response(events: list[dict[str, Any]]) -> dict[str, Any]:
             }
         )
     if not found:
-        raise ValueError("provider_resolved_identity_unavailable")
+        return None
     if len(found) != 1:
         raise ValueError("codex session has multiple provider responses")
     return found[0]
+
+
+def _one_provider_response(events: list[dict[str, Any]]) -> dict[str, Any]:
+    """The OpenAI response object, never the CLI's configured model.
+
+    ``turn_context`` is what the CLI was asked to run. Subscription sessions
+    have no separate provider identity unless the stream carries one response
+    object (``object`` of ``response`` and an id beginning with ``resp_``).
+    """
+    found = _optional_provider_response(events)
+    if found is None:
+        raise ValueError("provider_resolved_identity_unavailable")
+    return found
+
+
+def _completed_server_model(events: list[dict[str, Any]]) -> str | None:
+    """Provider model copied onto ``turn.completed`` as ``server_model``.
+
+    A generic ``model`` field on that event is the CLI's configured name and is
+    ignored. ``null`` means the provider omitted the id. Two non-null values
+    are a conflict even when they match.
+    """
+    found: list[str] = []
+    for event in events:
+        if event.get("type") != "turn.completed" or "server_model" not in event:
+            continue
+        value = event.get("server_model")
+        if value is None:
+            continue
+        if type(value) is not str or not value.strip():
+            raise ValueError("codex server_model is not a provider model id")
+        found.append(value)
+    if not found:
+        return None
+    if len(found) != 1:
+        raise ValueError("codex session has multiple provider models")
+    return found[0]
+
+
+def _provider_witness(events: list[dict[str, Any]]) -> dict[str, Any]:
+    """The served model, from response metadata or ``server_model``, not argv."""
+    response = _optional_provider_response(events)
+    server_model = _completed_server_model(events)
+    if response is not None and server_model is not None and response["model"] != server_model:
+        raise ValueError("codex response model disagrees with server_model")
+    if response is not None:
+        return {
+            "model": response["model"],
+            "id": response["id"],
+            "usage": response["usage"],
+            "source": "openai-response",
+        }
+    if server_model is not None:
+        return {"model": server_model, "id": None, "usage": None, "source": "server_model"}
+    raise ValueError("provider_resolved_identity_unavailable")
 
 
 def _one_cli_model(events: list[dict[str, Any]]) -> str | None:
@@ -1181,9 +1230,9 @@ def measure_codex_session(
     session_text: str,
     final_text: str,
 ) -> dict[str, Any]:
-    """Measure one read-only arm. The recorded model is the response object's."""
+    """Measure one read-only arm. The recorded model is the provider witness."""
     events = _jsonl_objects(session_text)
-    metadata = _one_provider_response(events)
+    metadata = _provider_witness(events)
     cli_model = _one_cli_model(events)
     if cli_model is not None and cli_model != metadata["model"]:
         raise ValueError("codex CLI model disagrees with the provider response")
@@ -1198,6 +1247,7 @@ def measure_codex_session(
     return {
         "model": metadata["model"],
         "response_id": metadata["id"],
+        "identity_source": metadata["source"],
         "tokens_in": tokens_in,
         "tokens_out": tokens_out,
         "quality": quality,
@@ -1206,13 +1256,19 @@ def measure_codex_session(
 
 
 def _identity_artifact(directory: Path, request: dict[str, Any], measured: dict[str, Any]) -> dict:
-    payload = {
-        "object": "response",
+    payload: dict[str, Any] = {
         "profile_id": request["profile_id"],
         "provider_resolved_model": measured["model"],
         "provider_resolved_provider": measured["provider"],
-        "response_id": measured["response_id"],
     }
+    if measured.get("response_id"):
+        payload["object"] = "response"
+        payload["response_id"] = measured["response_id"]
+    else:
+        # server_model is the provider id on turn.completed. It is not an
+        # OpenAI response id, so the artifact must not invent a resp_ value.
+        payload["object"] = "turn.completed"
+        payload["server_model"] = measured["model"]
     path = directory / f"identity-{int(request['launch_ordinal'])}.json"
     _atomic_json(path, payload)
     digest = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
@@ -1322,9 +1378,11 @@ def execute_codex_read_only(
 
     Provider identity and usage are interpreted only from ``stdout`` (JSONL). The
     ``--model`` argv names the profile contract; it is not treated as provider
-    resolution. Until the CLI reliably emits ``response.completed`` with OpenAI
-    response metadata in read-only sessions, ``run-current`` may refuse for
-    ``provider_resolved_identity_unavailable``.
+    resolution. ``turn.completed.server_model`` is also accepted when the CLI
+    copied it from provider response metadata. A session whose JSONL has usage
+    and only ``turn_context`` or a generic ``model`` field still refuses with
+    ``provider_resolved_identity_unavailable``, which is what current
+    subscription ``codex exec --json`` streams do.
     """
     if not binary.is_file() or not os.access(binary, os.X_OK):
         raise ValueError(f"codex read-only runner is absent: {binary}")
@@ -1931,15 +1989,44 @@ def _selftest() -> None:
         else:
             raise AssertionError("a stub strategy spec was accepted")
 
-        # DELIBERATE BREAK: treating the CLI's turn_context model as provider
-        # identity would make this assertion fail. Revert by deleting the
-        # response-object requirement in _one_provider_response.
+        # DELIBERATE BREAK: treating the CLI's turn_context model, or a generic
+        # model field on turn.completed, as provider identity would make these
+        # assertions fail. Revert by reading that field inside _provider_witness.
         try:
-            _one_provider_response([{"type": "turn_context", "payload": {"model": "gpt-6-astra"}}])
+            _provider_witness([{"type": "turn_context", "payload": {"model": "gpt-6-astra"}}])
         except ValueError as exc:
             assert "provider_resolved_identity_unavailable" in str(exc), exc
         else:
             raise AssertionError("CLI turn_context was accepted as provider identity")
+        try:
+            _provider_witness(
+                [
+                    {
+                        "type": "turn.completed",
+                        "usage": {"input_tokens": 1, "output_tokens": 1},
+                        "model": "gpt-6-astra",
+                    }
+                ]
+            )
+        except ValueError as exc:
+            assert "provider_resolved_identity_unavailable" in str(exc), exc
+        else:
+            raise AssertionError("turn.completed model was accepted as provider identity")
+        witnessed = _provider_witness(
+            [
+                {
+                    "type": "turn.completed",
+                    "usage": {"input_tokens": 3, "output_tokens": 1},
+                    "server_model": "gpt-6-astra",
+                }
+            ]
+        )
+        assert witnessed == {
+            "model": "gpt-6-astra",
+            "id": None,
+            "usage": None,
+            "source": "server_model",
+        }, witnessed
         parsed = _one_provider_response(
             [
                 {
@@ -1959,7 +2046,8 @@ def _selftest() -> None:
         "model_profile_trial.py selftest: OK "
         "(prepare/source proof, accept/reject validation, shadow report/no promotion, "
         "forged source seal refuses ingest, frozen spec binds the two-by-three plan "
-        "and its published summary, CLI turn_context is not provider identity)"
+        "and its published summary, CLI turn_context and turn.completed model are "
+        "not provider identity, server_model is)"
     )
 
 

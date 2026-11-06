@@ -2,9 +2,11 @@
 
 Transport acknowledgement requires four binding lines in the final message;
 recurring-work quality needs a ``work_evidence=`` line quoting the rubric from
-the frozen spec. Cost is token counts from the session, and the provider model
-comes only from a ``response.completed`` OpenAI response object. The CLI's
-``turn_context`` alone does not publish.
+the frozen spec. Cost is token counts from the session. The provider model comes from a
+``response.completed`` OpenAI response object or from ``turn.completed``'s
+``server_model`` field. The CLI's ``turn_context``, and a generic ``model``
+on ``turn.completed``, do not publish. The prompt must not contain the
+completed ``work_evidence=`` answer.
 """
 
 from __future__ import annotations
@@ -83,6 +85,29 @@ def test_sanitized_real_stream_fixture_yields_one_openai_response():
     assert got["model"] == "gpt-6-2025-astra"
     assert str(got["id"]).startswith("resp_")
     assert got["usage"] == {"input_tokens": 42, "output_tokens": 7}
+
+
+def test_prompt_names_the_rubric_without_embedding_the_answer(tmp_path):
+    """Quality is a quote from the spec. The instruction must not hand over that line."""
+    state, experiments = _seal(tmp_path)
+    orchestrator, workflows = _sources(tmp_path)
+    manifest = trial.build_current_recurring_trial(
+        orchestrator,
+        workflows,
+        seed=14,
+        now=1000,
+        capacity_state="ok",
+        state_dir=state,
+        experiments_root=experiments,
+    )
+    prompt = trial.recurring_trial_prompt(manifest, manifest["requests"][0])
+    rubric = trial._recurring_work_rubric_line(SPEC)
+    head, marker, tail = prompt.partition("Frozen specification:\n")
+    assert marker == "Frozen specification:\n"
+    assert rubric in tail
+    assert f"work_evidence={rubric}" not in head
+    assert "work_evidence=" in head
+    assert "workspace-write" not in prompt
 
 
 def test_echo_only_ack_lines_score_zero_recurring_work_quality(tmp_path):
@@ -211,6 +236,183 @@ def test_run_current_records_measured_quality_cost_and_response_identity(tmp_pat
         row["requested_model"] for row in manifest["requests"]
     }
     assert "turn_context" not in artifact.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "turn_fields",
+    [{}, {"server_model": None}, {"model": "configured"}],
+)
+def test_cli_usage_without_a_provider_model_does_not_publish(tmp_path, monkeypatch, turn_fields):
+    """The live Codex JSONL shape: usage, and at most the configured model."""
+    state, experiments = _seal(tmp_path)
+    orchestrator, workflows = _sources(tmp_path)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(state))
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "quarantine-feedback.db")
+    manifest = trial.build_current_recurring_trial(
+        orchestrator,
+        workflows,
+        seed=14,
+        now=1000,
+        capacity_state="ok",
+        state_dir=state,
+        experiments_root=experiments,
+    )
+
+    def execute(request, _prompt):
+        fields = dict(turn_fields)
+        if fields.get("model") == "configured":
+            fields["model"] = request["requested_model"]
+        session = "\n".join(
+            [
+                json.dumps({"type": "thread.started", "thread_id": "thread-live"}),
+                json.dumps({"type": "turn.started"}),
+                json.dumps(
+                    {
+                        "type": "turn_context",
+                        "payload": {"model": request["requested_model"]},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "turn.completed",
+                        "usage": {"input_tokens": 11, "output_tokens": 2},
+                        **fields,
+                    }
+                ),
+            ]
+        )
+        final_text = _final_message_ack_and_work(manifest, request, include_work=True)
+        return session + "\n", final_text, "codex-cli 0.166.0"
+
+    with pytest.raises(ValueError, match="provider_resolved_identity_unavailable"):
+        trial.run_current_recurring_trial(
+            orchestrator,
+            workflows,
+            seed=14,
+            now=1000,
+            capacity_state="ok",
+            state_dir=state,
+            experiments_root=experiments,
+            state_path=tmp_path / "outside-state.json",
+            artifact_dir=tmp_path / "artifacts",
+            execute=execute,
+        )
+    assert not (state / "capability-program" / "profile-trial.json").exists()
+    assert not (tmp_path / "quarantine-feedback.db").exists()
+    assert list((tmp_path / "artifacts").glob("identity-*.json")) == []
+
+
+def test_server_model_publishes_quality_cost_and_provider_identity(tmp_path, monkeypatch):
+    """A provider server_model is identity. The configured model is not copied in."""
+    state, experiments = _seal(tmp_path)
+    orchestrator, workflows = _sources(tmp_path)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(state))
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "quarantine-feedback.db")
+    manifest = trial.build_current_recurring_trial(
+        orchestrator,
+        workflows,
+        seed=14,
+        now=1000,
+        capacity_state="ok",
+        state_dir=state,
+        experiments_root=experiments,
+    )
+    full_profile = trial.CURRENT_TRIAL_PROFILE_IDS[0]
+
+    def execute(request, prompt):
+        head, _, _tail = prompt.partition("Frozen specification:\n")
+        rubric = trial._recurring_work_rubric_line(SPEC)
+        assert f"work_evidence={rubric}" not in head
+        include_work = request["profile_id"] == full_profile
+        session = json.dumps(
+            {
+                "type": "turn.completed",
+                "usage": {
+                    "input_tokens": 10 * int(request["launch_ordinal"]),
+                    "output_tokens": int(request["launch_ordinal"]),
+                },
+                "server_model": request["requested_model"],
+            }
+        )
+        final_text = _final_message_ack_and_work(manifest, request, include_work=include_work)
+        return session + "\n", final_text, "codex-cli 0.166.0"
+
+    published = trial.run_current_recurring_trial(
+        orchestrator,
+        workflows,
+        seed=14,
+        now=1000,
+        capacity_state="ok",
+        state_dir=state,
+        experiments_root=experiments,
+        state_path=tmp_path / "outside-state.json",
+        artifact_dir=tmp_path / "artifacts",
+        execute=execute,
+    )
+    summary = json.loads((state / "capability-program" / "profile-trial.json").read_text())
+    assert published["attempt_count"] == 6
+    assert published["brain_ingest_enabled"] is True
+    assert summary["identity_verified"] is True
+    assert (summary["profile_count"], summary["instance_count"]) == (2, 6)
+    assert summary["quality_by_profile"][full_profile] == 1.0
+    assert summary["quality_by_profile"][trial.CURRENT_TRIAL_PROFILE_IDS[1]] == 0.0
+    for profile_id in trial.CURRENT_TRIAL_PROFILE_IDS:
+        attempts = [row for row in manifest["requests"] if row["profile_id"] == profile_id]
+        assert summary["provider_resolved_identity_by_profile"][profile_id] == {
+            "provider": "openai",
+            "model": attempts[0]["requested_model"],
+        }
+        assert summary["cost_tokens_by_profile"][profile_id]["tokens_in"] == sum(
+            10 * int(row["launch_ordinal"]) for row in attempts
+        )
+    artifact = json.loads(next((tmp_path / "artifacts").glob("identity-*.json")).read_text())
+    assert artifact["object"] == "turn.completed"
+    assert artifact["server_model"] == artifact["provider_resolved_model"]
+    assert "response_id" not in artifact
+
+
+def test_server_model_disagrees_with_the_response_object(tmp_path):
+    state, experiments = _seal(tmp_path)
+    orchestrator, workflows = _sources(tmp_path)
+    manifest = trial.build_current_recurring_trial(
+        orchestrator,
+        workflows,
+        seed=14,
+        now=1000,
+        capacity_state="ok",
+        state_dir=state,
+        experiments_root=experiments,
+    )
+    request = manifest["requests"][0]
+    session = "\n".join(
+        [
+            json.dumps(
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "object": "response",
+                        "id": "resp_arm",
+                        "model": request["requested_model"],
+                        "usage": {"input_tokens": 4, "output_tokens": 1},
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "turn.completed",
+                    "usage": {"input_tokens": 4, "output_tokens": 1},
+                    "server_model": request["requested_model"] + "-other",
+                }
+            ),
+        ]
+    )
+    with pytest.raises(ValueError, match="disagrees with server_model"):
+        trial.measure_codex_session(
+            manifest,
+            request,
+            session,
+            _final_message_ack_and_work(manifest, request, include_work=True),
+        )
 
 
 def test_cli_turn_context_does_not_publish_a_trial(tmp_path, monkeypatch):
