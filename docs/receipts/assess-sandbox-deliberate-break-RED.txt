@@ -1,3 +1,7 @@
+# HISTORICAL BRANCH EVIDENCE ONLY — NOT OPERATIONAL ACCEPTANCE
+# Retained from PR #1141 before salvage; these runtime tests are removed.
+# Runtime revision: a459028c330375ec1d9567f0090a8775f6a5bb83
+
 $ /opt/hostedtoolcache/Python/3.14.9/x64/bin/python3 -m pytest tests/test_dispatcher_offload.py -k sandbox_network_failure_falls_back
 # mutation: src/dispatcher.py::_sandbox_has_network returned True immediately
 # exit 1

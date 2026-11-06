@@ -1,3 +1,7 @@
+# HISTORICAL BRANCH EVIDENCE ONLY — NOT OPERATIONAL ACCEPTANCE
+# Retained from PR #1141 before salvage; these runtime tests are removed.
+# Runtime revision: a459028c330375ec1d9567f0090a8775f6a5bb83
+
 $ /opt/hostedtoolcache/Python/3.14.9/x64/bin/python3 -m pytest tests/test_dispatcher_offload.py -k sandbox
 # exit 0; 12 passed; elapsed about 1s (bound is two minutes)
 # interpreter: /opt/hostedtoolcache/Python/3.14.9/x64/bin/python3

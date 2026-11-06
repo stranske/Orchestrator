@@ -2140,7 +2140,7 @@ def build_command(
         # the parent seatbelt remains authoritative. It must never defeat an
         # explicit read-only narrowing: in that case keep the child sandbox and
         # fail closed if macOS refuses nested seatbelt application.
-        # An explicit sandbox_mode (the assess network fallback) is also not
+        # An explicit sandbox_mode is also not
         # replaced by the bypass: the caller asked for that sandbox argument.
         if sandbox_mode is not None:
             sandbox = sandbox_mode

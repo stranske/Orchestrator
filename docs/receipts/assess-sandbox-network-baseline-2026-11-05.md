@@ -1,5 +1,9 @@
 # Assess sandbox network baseline — 2026-11-05
 
+> Historical branch evidence only, not operational acceptance. The automatic dispatcher
+> path is removed by the PR #1141 salvage. Runtime follow-up remains in #1133;
+> its original implementation/tests are preserved at `a459028c330375ec1d9567f0090a8775f6a5bb83`.
+
 Recorded before any edit to `src/dispatcher.py` for the Codex assess network fallback
 (issue #1133, source #673). Main had no `_sandbox_has_network` and no `sandbox_fallback`
 writer. `adapters.build_command(..., mode="assess")` selected `--sandbox read-only`.
