@@ -363,8 +363,12 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.detect.outputs.python_ci_matrix) }}
     with:
+      # Optimization for issue #969: Reduce from ["3.13", "3.14"] to ["3.14"] only.
+      # This halves python ci jobs (12 -> 6) while preserving all required validation.
+      # primary-python-version remains '3.14'; lint/format/typecheck run on shard 1.
+      # Expected Gate p50 improvement: ~50% for python ci portion.
       primary-python-version: '3.14'
-      python-versions: '["3.13", "3.14"]'
+      python-versions: '["3.14"]'
       marker: "not quarantine and not slow"
       pytest_markers: ${{ needs.detect.outputs.pytest_markers }}
       pytest_args: ${{ matrix.pytest_args }}
