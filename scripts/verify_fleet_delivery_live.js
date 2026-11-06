@@ -68,6 +68,33 @@ function runCommand(python, args, options) {
   });
 }
 
+async function pythonRuntime(python, run, options) {
+  // A selected path may be a shim. Ask the same interpreter that runs the report
+  // for its actual identity, rather than treating the requested path as proof.
+  const probe = 'import json, platform, sys; print(json.dumps({'
+    + '"executable": sys.executable, "version": list(sys.version_info[:3]), '
+    + '"platform": sys.platform, "architecture": platform.machine()}))';
+  const stdout = await run(python, ['-c', probe], { ...options, timeout: 10000 });
+  let runtime;
+  try {
+    runtime = JSON.parse(stdout);
+  } catch {
+    throw new Error('Python runtime metadata is not JSON');
+  }
+  assert.ok(runtime && typeof runtime === 'object' && !Array.isArray(runtime),
+    'Python runtime metadata must be an object');
+  assert.ok(Array.isArray(runtime.version) && runtime.version.length === 3
+    && runtime.version.every((part) => Number.isInteger(part) && part >= 0)
+    && runtime.version[0] === 3 && [14, 13].includes(runtime.version[1]),
+  'Python runtime must use repository standard Python 3.14 or backup 3.13');
+  for (const field of ['executable', 'platform', 'architecture']) {
+    assert.ok(typeof runtime[field] === 'string' && /^\S[^\r\n]*$/.test(runtime[field]),
+      `Python runtime is missing ${field}`);
+  }
+  assert.ok(path.isAbsolute(runtime.executable), 'Python runtime executable must be absolute');
+  return runtime;
+}
+
 async function verifyLive(outputDir, {
   python = process.env.PYTHON,
   run = runCommand,
@@ -81,8 +108,7 @@ async function verifyLive(outputDir, {
   fs.mkdirSync(destination);
   const textPath = path.join(destination, 'report.txt');
   const args = [path.join(root, 'src/switch_review.py'), '--json', '--text-out', textPath];
-  const started = now();
-  const stdout = await run(python, args, {
+  const options = {
     cwd: root,
     env: {
       ...process.env,
@@ -90,7 +116,10 @@ async function verifyLive(outputDir, {
       ORCH_STATE_DIR: path.join(destination, 'state'),
     },
     encoding: 'utf8', timeout: 300000, maxBuffer: 16 * 1024 * 1024,
-  });
+  };
+  const runtime = await pythonRuntime(python, run, options);
+  const started = now();
+  const stdout = await run(python, args, options);
   const finished = now();
   const report = JSON.parse(stdout);
   const delivery = validateReport(report, fs.readFileSync(textPath, 'utf8'), started, finished);
@@ -98,6 +127,7 @@ async function verifyLive(outputDir, {
   const receipt = {
     checked_at: new Date(finished).toISOString(),
     command: [python, ...args],
+    python_runtime: runtime,
     as_of: delivery.as_of,
     rows: delivery.rows,
   };

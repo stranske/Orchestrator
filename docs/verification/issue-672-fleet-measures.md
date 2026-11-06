@@ -1,5 +1,47 @@
 # Fleet delivery measures — runner checks
 
+## Interpreter provenance in live receipts — 2026-11-06 01:56Z
+
+The live verifier now probes the explicitly selected interpreter before collecting
+the report. Receipts record its actual executable, version, platform and
+architecture, including when `PYTHON` names a shim. Unsupported versions and
+malformed metadata block collection without a success receipt. The version check
+matches `scripts/usage_poll/py-standard.sh`: Python 3.14, with 3.13 as backup.
+The new receipt assertions failed before the implementation and pass afterward.
+
+Runner evidence at base head `86f28418325aeb419444c8a78d77c70f5b71d98a`:
+
+- Selected `/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3` through
+  `ORCH_STANDARD_PYTHON` and `py-standard.sh`.
+- `PYTHON=<selected interpreter> node --test --test-isolation=none
+  tests/test_verify_fleet_delivery_live.js
+  tests/test_verify_fleet_delivery_mutation.js`: all 18 tests pass. The real
+  unittest controls detect each of the five mutations and pass after restoration.
+- `PYTHONPATH=src <selected interpreter> -m unittest discover -s tests -p
+  test_switch_review_fleet.py -q`: all 27 tests pass, including structured-link
+  attribution and failed-read cases. This supplements, but does not replace, pytest.
+- `PYTHON=<selected interpreter> node scripts/verify_fleet_delivery_live.js
+  /tmp/issue-1186-runtime-evidence-20261106`: exits zero and validates five current
+  text rows at `2026-11-06T01:56:21.695Z`. The committed
+  [receipt](issue-672-runtime-20261106/check.json) records Python 3.14.10 on Linux
+  x86_64. Four rows explicitly report GitHub connectivity failures; opener count
+  reports an unsuccessful helper invocation (exit 2). All five are unmeasured.
+- `<selected interpreter> -m pytest tests/test_switch_review_fleet.py -m
+  "not slow"` and pytest-mode `--all-readers` remain blocked by missing pytest.
+  Installation into `/tmp` failed because no distribution could be obtained.
+- `ORCH_STANDARD_PYTHON=<selected interpreter> PYTEST_ADDOPTS='-m "not slow"'
+  timeout 55s <selected interpreter> -u src/verify.py` exits 124 without output
+  or a verdict.
+
+This is hosted-runner evidence. Target-machine verification remains incomplete;
+no acceptance checkbox is newly complete. No Python files changed in this round.
+PR #1187 was confirmed open and ready (`draft=false`). The blocker comment and
+`needs-human` label were rejected with `MCP tool call requires approval, but
+approval policy is never`. The normal commit cannot create `.git/index.lock`
+because this checkout's Git metadata is read-only. The source commit is retained
+using a writable local clone's metadata and exported to
+`/tmp/issue-1186-runtime-provenance.bundle`; the checkout's branch is not advanced.
+
 ## Explicit interpreter selection — 2026-11-06 01:38Z
 
 Both fleet verification scripts now require an explicit `PYTHON` selection
