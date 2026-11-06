@@ -42,6 +42,7 @@
       "tests/test_capability_propensity_coverage_guards.py",
       "tests/test_capacity_publish_cadence.py",
       "tests/test_checks_reported.py",
+      "tests/test_closer_csv_canary_contract.py",
       "tests/test_ci_gate_config.py",
       "tests/test_closer_batch_delivery.py",
       "tests/test_closer_campaign_demand_integration.py",

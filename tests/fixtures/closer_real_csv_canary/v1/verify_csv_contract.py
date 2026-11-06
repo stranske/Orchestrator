@@ -13,30 +13,14 @@ request's test-merge SHA is reported and is not that proof either: Agents
 Verifier refuses an unmerged pull request, and that SHA is not a published
 merge. Skipped Agents Verifier runs on earlier commits of the corrective PR,
 and publication text that names only the owned delivery PR, are reported and
-are not that proof either. A workflow_dispatch run checked out at the default
-branch is retained when an authenticated comment binds that run to this head
-and its published merge; the checkout SHA is not the evaluated commit, and a
-skipped run or a run of the partial revision is not that binding. A keepalive completion that only observed this head
+are not that proof either. A keepalive completion that only observed this head
 after starting on an earlier revision is reported and is not worker or
 publication proof for this head. The same rule applies to the owned delivery
 head: a keepalive receipt that started earlier and only observed that head is
-not a worker completion of it and is not closer publication proof. An
-earlier-started worker that pushed this head is traced through native commit
-readback: the produced commit's only parent must be that start. The trace does
-not require another worker to start on the output commit. The keepalive receipt
-is still not ``retain_confirmed_result`` custody, and
-``coding_terminal_reference`` is read only from that stored record. A reduced
+not a worker completion of it and is not closer publication proof. A reduced
 publication comment is not the stored producer record. Custody JSON is read
-when that record's schema sits inside the object. The chain report records
-the current head and published merge SHA of PRs 1168 and 989. An open pull
-request's REST merge_commit_sha is a test merge, not a published merge. A
-prior unmerged report that disagrees with a merged native state is stale.
-Recording that reconciliation does not change either head. An already-merged
-PR 1168 is not sent through ``merge_guard --confirm-merge``. An open PR names
-the dry-run ``src/merge_guard.py`` command and still withholds confirm-merge
-until the review floor and every merge gate pass. This script does not invoke
-that command. The report names the first remaining blocker and does not change
-the head. The command does not change the default contract exit.
+when that record's schema sits inside the object. The command does not change
+the default contract exit.
 """
 
 from __future__ import annotations
@@ -179,41 +163,6 @@ _PARTIAL_MERGE = "d1947b5b4775c2e6a07bb46b3f85eb2e28c1b001"
 _PARTIAL_PR = "984"
 _CORRECTIVE_PR = "1168"
 _OWNED_DELIVERY_PR = "989"
-# Native readback taken 2026-11-06. PR 1168 is squash-merged and its head ref
-# stays 01e86ae7. PR 989 merged after that snapshot; both heads stay where
-# GitHub left them. This table does not move either head.
-_RECORDED_NATIVE_PR_STATE = {
-    "1168": {
-        "head_sha": "01e86ae7e4ef0e6a06193c916c8c780ca5cab052",
-        "published_merge_sha": "a30b34ada04a30d04360867e14097a8c5b6d731c",
-        "merged": True,
-    },
-    "989": {
-        "head_sha": "85adde2614db7118d6e6d28dd11e5bc4c7611319",
-        "published_merge_sha": "97647baf97085724af7cb8f684af2331f73fb612",
-        "merged": True,
-    },
-}
-# The issue prose says PR 1168 merged. Its verifier excerpt still says unmerged
-# and names an older open test-merge SHA. The excerpt also names an older head
-# of an earlier state of the owned delivery PR.
-_CONTRADICTORY_MERGE_REPORTS = {
-    "1168": (
-        {"source": "issue-1184-why", "merged": True},
-        {
-            "source": "issue-1184-verifier-excerpt",
-            "merged": False,
-            "test_merge_sha": "01fffa725ecdda58189821059d1243ea1c003b12",
-        },
-    ),
-    "989": (
-        {
-            "source": "issue-1184-verifier-excerpt",
-            "merged": False,
-            "head_sha": "926a7a20087f8b2e47d08c4f4ba747944aa78b9b",
-        },
-    ),
-}
 _CHAIN_ISSUES = (983, 988)
 _CHAIN_PRS = (984, 989, 1166, 1168)
 _CHAIN_BRANCHES = (
@@ -409,212 +358,6 @@ def _published_merge_sha(record, corrective_sha):
     ):
         return merge_sha
     return ""
-
-
-def _native_pr_readback(record):
-    """Head plus published merge. An unmerged REST merge_commit_sha is a test merge."""
-    head = record.get("head_sha") or ""
-    if not _sha40(head):
-        head = ""
-    merged = record.get("merged") is True
-    candidate = record.get("merge_sha") or ""
-    if not _sha40(candidate):
-        candidate = ""
-    return {
-        "pr": str(record.get("name") or ""),
-        "head_sha": head,
-        "published_merge_sha": candidate if merged else "",
-        "test_merge_sha": "" if merged else candidate,
-        "merged": merged,
-    }
-
-
-def _recorded_readback(number):
-    recorded = _RECORDED_NATIVE_PR_STATE[number]
-    return {
-        "pr": number,
-        "head_sha": recorded["head_sha"],
-        "published_merge_sha": recorded["published_merge_sha"],
-        "test_merge_sha": recorded.get("rest_test_merge_sha", ""),
-        "merged": recorded["merged"] is True,
-    }
-
-
-def _readback_line(readback):
-    published = readback["published_merge_sha"] or "none"
-    merged = "yes" if readback["merged"] else "no"
-    line = (
-        "native_pr_readback: pr="
-        + readback["pr"]
-        + " head="
-        + (readback["head_sha"] or "missing")
-        + " published_merge="
-        + published
-        + " merged="
-        + merged
-    )
-    if readback["test_merge_sha"]:
-        line += " test_merge=" + readback["test_merge_sha"]
-    return line
-
-
-def _contradictory_report_label(number, native):
-    reports = _CONTRADICTORY_MERGE_REPORTS.get(number, ())
-    labels = []
-    if any(item.get("merged") for item in reports):
-        labels.append("merged")
-    if any(not item.get("merged") for item in reports):
-        labels.append("unmerged")
-    if native["test_merge_sha"]:
-        labels.append("rest_test_merge")
-    return "+".join(labels)
-
-
-def _reconciliation_line(number):
-    """Adopt the recorded native merge. Leave both heads where GitHub has them."""
-    native = _recorded_readback(number)
-    reports = _CONTRADICTORY_MERGE_REPORTS[number]
-    parts = [
-        "native_pr_reconciliation: pr=" + number,
-        "contradictory_reports=" + _contradictory_report_label(number, native),
-        "adopted=" + ("merged" if native["merged"] else "unmerged"),
-        "head=" + native["head_sha"],
-        "published_merge=" + (native["published_merge_sha"] or "none"),
-        "head_unchanged=yes",
-    ]
-    stale = [item for item in reports if item.get("merged") is False and native["merged"]]
-    if stale:
-        parts.append("stale_unmerged_report=yes")
-        superseded = [item.get("test_merge_sha") for item in stale if item.get("test_merge_sha")]
-        if superseded:
-            parts.append("superseded_test_merge=" + superseded[0])
-            parts.append("superseded_test_merge_is_published=no")
-    prior = [
-        item.get("head_sha")
-        for item in reports
-        if item.get("head_sha") and item["head_sha"] != native["head_sha"]
-    ]
-    if prior:
-        parts.append("prior_head=" + prior[0])
-        parts.append("prior_head_not_current=yes")
-    if native["test_merge_sha"]:
-        parts.append("rest_test_merge=" + native["test_merge_sha"])
-        parts.append("rest_test_merge_is_published=no")
-    return " ".join(parts)
-
-
-def _recorded_state_comparison(readback):
-    recorded = _RECORDED_NATIVE_PR_STATE.get(readback["pr"])
-    if recorded is None:
-        return []
-    expected = _recorded_readback(readback["pr"])
-    same = (
-        readback["head_sha"] == expected["head_sha"]
-        and readback["merged"] is expected["merged"]
-        and readback["published_merge_sha"] == expected["published_merge_sha"]
-        and readback["test_merge_sha"] == expected["test_merge_sha"]
-    )
-    if same:
-        return [_reconciliation_line(readback["pr"])]
-    return [_drift_line(readback, expected)]
-
-
-def _yes_no(value):
-    return "yes" if value else "no"
-
-
-def _sha_or_none(value):
-    return value or "none"
-
-
-def _drift_line(readback, expected):
-    """Name every field ``_recorded_state_comparison`` uses to decide sameness."""
-    return (
-        "native_pr_record_drift: pr="
-        + readback["pr"]
-        + " recorded_head="
-        + expected["head_sha"]
-        + " live_head="
-        + (readback["head_sha"] or "missing")
-        + " recorded_merged="
-        + _yes_no(expected["merged"])
-        + " live_merged="
-        + _yes_no(readback["merged"])
-        + " recorded_published_merge="
-        + _sha_or_none(expected["published_merge_sha"])
-        + " live_published_merge="
-        + _sha_or_none(readback["published_merge_sha"])
-        + " recorded_test_merge="
-        + _sha_or_none(expected["test_merge_sha"])
-        + " live_test_merge="
-        + _sha_or_none(readback["test_merge_sha"])
-        + " head_not_modified=yes"
-    )
-
-
-def _merge_guard_line(readback, *, corpus_bound, publication):
-    """Report the authorized merge path without sending confirm-merge.
-
-    A merged pull request stays merged. An open one is named as the dry-run
-    ``src/merge_guard.py`` command. Neither branch rewrites the head or skips
-    the review floor and merge gates.
-    """
-    head = readback["head_sha"] or "missing"
-    if readback["merged"]:
-        reason = "already_merged"
-        command = "not_sent"
-        if not corpus_bound:
-            blocker = "verifier-corpus-decision/v1"
-        elif not publication:
-            blocker = "retain_confirmed_result"
-        else:
-            blocker = "none"
-    else:
-        reason = "open_review_floor_and_gates"
-        blocker = "review_floor_and_merge_gates"
-        command = (
-            "python3 src/merge_guard.py "
-            + _REPOSITORY
-            + "#"
-            + _CORRECTIVE_PR
-            + " --expected-head "
-            + head
-        )
-    return (
-        "merge_guard_path: pr="
-        + readback["pr"]
-        + " invoked=no"
-        + " confirm_merge=no"
-        + " head_unchanged=yes"
-        + " gates_preserved=yes"
-        + " reason="
-        + reason
-        + " expected_head="
-        + head
-        + " command="
-        + command
-        + " first_remaining_blocker="
-        + blocker
-    )
-
-
-def _native_pr_readback_lines(record):
-    if not record or "merged" not in record:
-        return []
-    readback = _native_pr_readback(record)
-    return [_readback_line(readback), *_recorded_state_comparison(readback)]
-
-
-def _recorded_native_pr_reconciliation():
-    """Replay the recorded readback. The recorded heads are not rewritten."""
-    lines = []
-    prs = {}
-    for number in (_CORRECTIVE_PR, _OWNED_DELIVERY_PR):
-        readback = _recorded_readback(number)
-        prs[number] = readback
-        lines.append(_readback_line(readback))
-        lines.append(_reconciliation_line(number))
-    return {"lines": lines, "prs": prs}
 
 
 def _merge_bound_corpus(corpus, corrective_pr, corrective_sha):
@@ -1057,146 +800,6 @@ def _keepalive_for_head(comments, corrective_sha):
     return completions, reservations, observed_only
 
 
-def _earlier_produced_commits(comments, head):
-    """Receipts whose pushed commit is this head and whose start is earlier.
-
-    ``observed_head_sha`` is the commit that run pushed. The start head is not
-    required to equal it. A receipt is not publication custody.
-    """
-    found = []
-    seen = set()
-    if not _sha40(head) or head in {_PARTIAL_HEAD, _PARTIAL_MERGE}:
-        return found
-    for comment in comments:
-        for kind, blob in _receipt_blobs(_comment_body(comment)):
-            if kind != "completion":
-                continue
-            payload = _decode_receipt(blob)
-            if payload is None or payload.get("schema") != _RUNNER_RECEIPT_SCHEMA:
-                continue
-            record = payload.get("record")
-            if not isinstance(record, dict):
-                record = payload
-            start = record.get("head_sha")
-            if (
-                record.get("observed_head_sha") != head
-                or not _sha40(start)
-                or start == head
-                or start in {_PARTIAL_HEAD, _PARTIAL_MERGE}
-            ):
-                continue
-            status = str(record.get("status") or "")
-            key = (start, status)
-            if key in seen:
-                continue
-            seen.add(key)
-            found.append({"start_head": start, "produced": head, "status": status})
-    return found
-
-
-def _native_commit_readback(fetch, sha):
-    """Public commit object used by publication readback. Not a stored record."""
-    if not _sha40(sha) or sha in {_PARTIAL_HEAD, _PARTIAL_MERGE}:
-        raise _ObservationError("publication readback commit is not the corrective head")
-    status, raw = fetch(f"/repos/{_REPOSITORY}/commits/{sha}")
-    document = _decode_json(status, raw, f"commit {sha}")
-    if not isinstance(document, dict):
-        raise _ObservationError(f"commit {sha} was not an object")
-    if document.get("sha") != sha:
-        raise _ObservationError(f"commit {sha} identity mismatch")
-    commit = document.get("commit")
-    tree = commit.get("tree") if isinstance(commit, dict) else None
-    tree_sha = tree.get("sha") if isinstance(tree, dict) else None
-    if not _sha40(tree_sha):
-        raise _ObservationError(f"commit {sha} tree was not read")
-    raw_parents = document.get("parents")
-    if not isinstance(raw_parents, list):
-        raise _ObservationError(f"commit {sha} parents were not a list")
-    parents = []
-    for parent in raw_parents:
-        parent_sha = parent.get("sha") if isinstance(parent, dict) else None
-        if not _sha40(parent_sha):
-            raise _ObservationError(f"commit {sha} parent was not a sha")
-        parents.append(parent_sha)
-    return {"oid": sha, "tree_oid": tree_sha, "parent_oids": parents}
-
-
-def _coding_terminal_reference(comments, sha):
-    """The terminal inside retain_confirmed_result. A receipt cannot supply it."""
-    for comment in comments:
-        if not isinstance(comment, dict):
-            continue
-        for value in _publication_objects(comment.get("body") or ""):
-            pr = value.get("pr") if isinstance(value, dict) else None
-            number = str(pr.get("pr_number")) if isinstance(pr, dict) else ""
-            if number not in (_CORRECTIVE_PR, _OWNED_DELIVERY_PR):
-                continue
-            if not _native_comment(comment, number, ("stranske",)):
-                continue
-            if not _producer_publication(value, sha):
-                continue
-            reference = value["provenance"]["coding_terminal_reference"]
-            return reference["sha256"]
-    return ""
-
-
-def _trace_worker_publication(fetch, comments, head):
-    """Native readback of an earlier worker's produced commit.
-
-    A matching single parent means that worker produced the head. Custody is
-    present only when retain_confirmed_result names its coding terminal.
-    Another worker is not required to start on the output commit.
-    """
-    traces = []
-    for item in _earlier_produced_commits(comments, head):
-        native = _native_commit_readback(fetch, item["produced"])
-        terminal = _coding_terminal_reference(comments, item["produced"])
-        traces.append(
-            {
-                **item,
-                "oid": native["oid"],
-                "tree_oid": native["tree_oid"],
-                "parent_oids": list(native["parent_oids"]),
-                "single_parent_matches_start": native["parent_oids"] == [item["start_head"]],
-                "coding_terminal_reference": terminal,
-                "retain_confirmed_result": bool(terminal),
-                "redundant_worker_required": False,
-            }
-        )
-    return traces
-
-
-def _produced_trace_lines(traces):
-    if not traces:
-        return ["worker_produced_commit: none no earlier-started worker pushed this head"]
-    lines = []
-    for trace in traces:
-        parents = ",".join(trace["parent_oids"]) or "none"
-        lines.append(
-            "worker_produced_commit: "
-            + f"start={trace['start_head']} produced={trace['produced']} "
-            + f"earlier_start=yes status={trace['status']} "
-            + "keepalive_is_publication=no"
-        )
-        lines.append(
-            "native_publication_readback: "
-            + f"oid={trace['oid']} tree={trace['tree_oid']} parents={parents} "
-            + "parent_is_worker_start="
-            + _yes_no(trace["single_parent_matches_start"])
-            + " redundant_worker_required=no"
-        )
-        terminal = trace["coding_terminal_reference"]
-        if trace["retain_confirmed_result"] and terminal:
-            lines.append("retain_confirmed_result: present coding_terminal_reference=" + terminal)
-        else:
-            lines.append(
-                "retain_confirmed_result: absent "
-                "coding_terminal_reference=absent "
-                "stored custody not observed; keepalive receipt is not that record"
-            )
-    return lines
-
-
 def _record_named(records, kind, name):
     for record in records:
         if record.get("kind") == kind and str(record.get("name")) == name:
@@ -1230,14 +833,8 @@ def _branch_label_reason(record, records):
     visible through ``visible_name``. The live head ``cursor/issue-983`` cannot
     be renamed without the bootstrap recreating the unlabeled name, so the PR
     that points at it has to carry the ``test`` label or a ``test:`` title.
-    After merge the ref is often deleted; the same label proof is read from the
-    merged pull request whose head was this branch.
     """
     if not record.get("present"):
-        merged = record.get("merged_pr")
-        if isinstance(merged, dict) and merged.get("head_ref") == record.get("name"):
-            if _text_labeled_test(merged.get("title"), merged.get("labels") or []):
-                return "merged-pr:" + str(merged.get("number"))
         return ""
     if _branch_labeled_test(record.get("name") or ""):
         return "name"
@@ -1325,14 +922,7 @@ def _assess(
     }
 
 
-def _format_report(
-    assessment,
-    corrective_sha,
-    local_head,
-    verifier_runs=(),
-    earlier_runs=(),
-    produced_traces=(),
-):
+def _format_report(assessment, corrective_sha, local_head, verifier_runs=(), earlier_runs=()):
     lines = [
         "chain-evidence",
         f"repository: {_REPOSITORY}",
@@ -1425,15 +1015,11 @@ def _format_report(
             "agents_verifier_workflow_for_corrective_head: observed; a run is not a decision"
         )
         for run in verifier_runs:
-            line = (
+            lines.append(
                 "agents_verifier_run: "
                 + f"id={run['id']} event={run['event']} status={run['status']} "
                 + f"conclusion={run['conclusion']}"
             )
-            checkout = run.get("head_sha")
-            if _sha40(checkout):
-                line += " head=" + checkout + " checkout_is_not_evaluated_commit=yes"
-            lines.append(line)
     else:
         lines.append(
             "agents_verifier_workflow_for_corrective_head: NONE "
@@ -1494,7 +1080,6 @@ def _format_report(
             )
     else:
         lines.append("keepalive_prior_completion_observed_head: none")
-    lines.extend(_produced_trace_lines(produced_traces))
     if "merged" in corrective_pr:
         if corrective_pr["merged"]:
             lines.append(
@@ -1515,14 +1100,6 @@ def _format_report(
                 + _CORRECTIVE_PR
                 + " is unmerged; Agents Verifier refuses an unmerged pull request"
             )
-        lines.extend(_native_pr_readback_lines(corrective_pr))
-        lines.append(
-            _merge_guard_line(
-                _native_pr_readback(corrective_pr),
-                corpus_bound=bool(bound_corpus),
-                publication=bool(assessment["publication"]),
-            )
-        )
     if corrective_pr:
         labels = [str(label) for label in (corrective_pr.get("labels") or [])]
         verify_labels = [label for label in _VERIFY_LABELS if label in labels]
@@ -1540,7 +1117,6 @@ def _format_report(
         lines.append(
             "owned_delivery_pr: " + f"{_OWNED_DELIVERY_PR} head={owned_head} merged={merged}"
         )
-        lines.extend(_native_pr_readback_lines(owned))
         if owned_head == corrective_sha:
             lines.append(
                 "owned_delivery_publication: same head as corrective pr; not separate proof"
@@ -1730,9 +1306,8 @@ def _verifier_workflow_runs(fetch, sha):
 def _bound_verifier_runs(fetch, corrective_sha, merge_sha):
     """A run on the partial merge is not evidence for the corrected head.
 
-    A workflow_dispatch whose GitHub head is exactly this merge commit is
-    included here. A dispatch checked out at a later default-branch tip is not
-    visible by that query; the comment that names its run id supplies it.
+    After a real merge, workflow_dispatch records the default-branch SHA. That
+    SHA can be this PR's merge commit. The partial merge commit stays excluded.
     """
     runs = _verifier_workflow_runs(fetch, corrective_sha)
     if not merge_sha or merge_sha in {corrective_sha, _PARTIAL_HEAD, _PARTIAL_MERGE}:
@@ -1742,68 +1317,6 @@ def _bound_verifier_runs(fetch, corrective_sha, merge_sha):
         if run["id"] not in seen:
             runs.append(run)
     return runs
-
-
-def _comment_bound_run_ids(record, corrective_sha, merge_sha):
-    """Run ids an authenticated comment binds to this head and published merge."""
-    if not merge_sha:
-        return []
-    found = []
-    for decision in _corpus_from_comment(record, corrective_sha):
-        if decision.get("evaluated_sha") == merge_sha:
-            found.append(str(decision["run_id"]))
-    for event in _events_from_comment(record, _CORRECTIVE_PR, corrective_sha, merge_sha):
-        found.append(str(event["run_id"]))
-    return found
-
-
-def _verifier_run_by_id(fetch, run_id):
-    """Read one Agents Verifier run. The partial revision's checkout is not it.
-
-    ``workflow_dispatch`` records the default-branch SHA, which is not the
-    evaluated merge. A skipped conclusion stays a run record, not a decision.
-    """
-    if not _positive_identifier(run_id):
-        return None
-    status, raw = fetch(f"/repos/{_REPOSITORY}/actions/runs/{run_id}")
-    document = _decode_json(status, raw, f"agents verifier run {run_id}")
-    if not isinstance(document, dict):
-        raise _ObservationError(f"agents verifier run {run_id} was not an object")
-    path = document.get("path") or ""
-    if path != ".github/workflows/" + _VERIFIER_WORKFLOW:
-        return None
-    if document.get("event") not in {"workflow_dispatch", "pull_request_target"}:
-        return None
-    head = document.get("head_sha")
-    if not _sha40(head) or head in {_PARTIAL_HEAD, _PARTIAL_MERGE}:
-        return None
-    if str(document.get("id")) != str(run_id):
-        raise _ObservationError(f"agents verifier run {run_id} identity mismatch")
-    return {
-        "id": document.get("id"),
-        "event": document.get("event"),
-        "status": document.get("status"),
-        "conclusion": document.get("conclusion"),
-        "head_sha": head,
-    }
-
-
-def _retain_comment_bound_runs(fetch, runs, comments, corrective_sha, merge_sha):
-    """Keep a dispatch the head-SHA query cannot see, without duplicating it."""
-    if not merge_sha:
-        return runs
-    seen = {str(run.get("id")) for run in runs}
-    retained = list(runs)
-    for record in comments:
-        for run_id in _comment_bound_run_ids(record, corrective_sha, merge_sha):
-            if run_id in seen:
-                continue
-            named = _verifier_run_by_id(fetch, run_id)
-            seen.add(run_id)
-            if named is None:
-                continue
-            retained.append(named)
-    return retained
 
 
 def _pull_commit_shas(fetch, number):
@@ -1927,45 +1440,6 @@ def _pull_head(fetch, number):
     return sha
 
 
-def _merged_pr_for_deleted_branch(fetch, branch_name):
-    """When the ref is gone, recover test labeling from the merged PR that owned it."""
-    owner = _REPOSITORY.split("/", 1)[0]
-    head = owner + ":" + branch_name
-    status, raw = fetch(
-        "/repos/"
-        + _REPOSITORY
-        + "/pulls?state=all&head="
-        + urllib.parse.quote(head, safe="")
-        + "&per_page=30"
-    )
-    if status != 200:
-        return None
-    batch = _decode_json(status, raw, "pulls for head " + branch_name)
-    if not isinstance(batch, list):
-        raise _ObservationError("pulls for head were not a list")
-    candidates = []
-    for item in batch:
-        if not isinstance(item, dict):
-            continue
-        merged_at = item.get("merged_at")
-        if merged_at is None:
-            continue
-        ref = item.get("head") or {}
-        if ref.get("ref") != branch_name:
-            continue
-        candidates.append((merged_at, item))
-    if not candidates:
-        return None
-    candidates.sort(key=lambda row: row[0], reverse=True)
-    pull = candidates[0][1]
-    return {
-        "number": str(pull.get("number")),
-        "title": pull.get("title") or "",
-        "labels": _label_names(pull),
-        "head_ref": (pull.get("head") or {}).get("ref"),
-    }
-
-
 def _branch_record(fetch, name):
     encoded = urllib.parse.quote(name, safe="")
     status, raw = fetch(f"/repos/{_REPOSITORY}/branches/{encoded}")
@@ -1976,7 +1450,6 @@ def _branch_record(fetch, name):
             "title": "",
             "labels": [],
             "present": False,
-            "merged_pr": _merged_pr_for_deleted_branch(fetch, name),
         }
     document = _decode_json(status, raw, f"branch {name}")
     visible = document.get("name") if isinstance(document.get("name"), str) else name
@@ -2028,13 +1501,8 @@ def _observe_chain(fetch):
                     else:
                         unbound_corpus.append(decision)
     corrective_pr = _corrective_record(records)
-    published_merge = _published_merge_sha(corrective_pr, corrective_sha)
-    runs = _retain_comment_bound_runs(
-        fetch,
-        _bound_verifier_runs(fetch, corrective_sha, published_merge),
-        comments,
-        corrective_sha,
-        published_merge,
+    runs = _bound_verifier_runs(
+        fetch, corrective_sha, _published_merge_sha(corrective_pr, corrective_sha)
     )
     commits = _pull_commit_shas(fetch, int(_CORRECTIVE_PR))
     if corrective_sha not in commits:
@@ -2043,7 +1511,6 @@ def _observe_chain(fetch):
     if not branch:
         raise _ObservationError("corrective pull request head ref missing")
     earlier = _earlier_commit_runs(_branch_verifier_runs(fetch, branch), commits, corrective_sha)
-    produced = _trace_worker_publication(fetch, comments, corrective_sha)
     return (
         corrective_sha,
         events,
@@ -2056,7 +1523,6 @@ def _observe_chain(fetch):
         earlier,
         partial_corpus,
         unbound_corpus,
-        produced,
     )
 
 
@@ -2074,7 +1540,6 @@ def _report_chain_evidence():
             earlier,
             partial_corpus,
             unbound_corpus,
-            produced,
         ) = _observe_chain(_live_fetch)
     except _ObservationError as exc:
         print(f"chain-evidence observation failed: {exc}", file=sys.stderr)
@@ -2095,7 +1560,6 @@ def _report_chain_evidence():
         _local_head(),
         runs,
         earlier,
-        produced,
     )
     print(text)
     return code
@@ -2232,91 +1696,6 @@ def _self_check():
         raise AssertionError("prior completion start head was not reported")
     if "not publication proof" not in prior_text:
         raise AssertionError("prior observed completion was accepted as publication proof")
-    if "worker_produced_commit: none" not in prior_text:
-        raise AssertionError("untraced report hid the absent produced-commit readback")
-
-    def _commit_document(path, parents):
-        if "/commits/" not in path or "/commits?" in path:
-            raise AssertionError("trace fetch " + path)
-        sha = path.rstrip("/").split("/")[-1]
-        return (
-            200,
-            json.dumps(
-                {
-                    "sha": sha,
-                    "commit": {"tree": {"sha": "1" * 40}},
-                    "parents": [{"sha": parent} for parent in parents],
-                }
-            ).encode(),
-        )
-
-    matched = _trace_worker_publication(
-        lambda path: _commit_document(path, [prior_start]), [prior_body], corrective
-    )
-    if (
-        len(matched) != 1
-        or matched[0]["single_parent_matches_start"] is not True
-        or matched[0]["retain_confirmed_result"]
-        or matched[0]["coding_terminal_reference"]
-        or matched[0]["redundant_worker_required"]
-        or matched[0]["oid"] != corrective
-        or matched[0]["parent_oids"] != [prior_start]
-    ):
-        raise AssertionError("earlier worker product was not read back from its parent")
-    matched_text, matched_code = _format_report(
-        prior_assessment, corrective, corrective, produced_traces=matched
-    )
-    if matched_code != 2 or prior_assessment["publication"]:
-        raise AssertionError("produced-commit readback completed publication")
-    if (
-        "worker_produced_commit: start=" + prior_start + " produced=" + corrective
-        not in matched_text
-        or "parent_is_worker_start=yes" not in matched_text
-        or "redundant_worker_required=no" not in matched_text
-        or "keepalive_is_publication=no" not in matched_text
-        or "retain_confirmed_result: absent" not in matched_text
-        or "coding_terminal_reference=absent" not in matched_text
-    ):
-        raise AssertionError("produced-commit readback was not reported")
-    if "redundant_worker_required=yes" in matched_text:
-        raise AssertionError("earlier producer required a worker that starts on its output")
-    mismatched = _trace_worker_publication(
-        lambda path: _commit_document(path, ["b" * 40]), [prior_body], corrective
-    )
-    if (
-        mismatched[0]["single_parent_matches_start"]
-        or mismatched[0]["redundant_worker_required"]
-        or mismatched[0]["retain_confirmed_result"]
-    ):
-        raise AssertionError("unrelated parent was treated as the worker product")
-    mismatched_text, _mismatched_code = _format_report(
-        prior_assessment, corrective, corrective, produced_traces=mismatched
-    )
-    if "parent_is_worker_start=no" not in mismatched_text:
-        raise AssertionError("unrelated parent was reported as the worker start")
-    if "redundant_worker_required=yes" in mismatched_text:
-        raise AssertionError("unrelated parent required a redundant worker")
-
-    def _refuse_fetch(_path):
-        raise AssertionError("filtered producer was fetched")
-
-    partial_producer = {
-        "schema": _RUNNER_RECEIPT_SCHEMA,
-        "record": {
-            "head_sha": _PARTIAL_HEAD,
-            "observed_head_sha": corrective,
-            "status": "completed",
-        },
-    }
-    partial_producer_body = (
-        "<!-- runner-completion:cursor:1168:v1 base64:"
-        + base64.b64encode(json.dumps(partial_producer).encode()).decode()
-        + " -->"
-    )
-    if _trace_worker_publication(_refuse_fetch, [partial_producer_body], corrective):
-        raise AssertionError("partial revision was treated as the producer")
-    if _trace_worker_publication(_refuse_fetch, [receipt_body], corrective):
-        raise AssertionError("worker that started on the produced commit was treated as earlier")
     if not _text_labeled_test("test: chain", []) or not _text_labeled_test("Work", ["test"]):
         raise AssertionError("visible test label was missed")
     if _text_labeled_test("Controlled Closer E2E", ["agent:cursor"]):
@@ -2904,33 +2283,6 @@ def _self_check():
                     }
                 ).encode(),
             )
-        if "/commits/" in path and "/commits?" not in path:
-            sha = path.rstrip("/").split("/")[-1]
-            return (
-                200,
-                json.dumps(
-                    {
-                        "sha": sha,
-                        "commit": {"tree": {"sha": "1" * 40}},
-                        "parents": [{"sha": ancestor}],
-                    }
-                ).encode(),
-            )
-        if "/actions/runs/" in path:
-            run_id = path.rstrip("/").split("/")[-1]
-            return (
-                200,
-                json.dumps(
-                    {
-                        "id": int(run_id),
-                        "event": "workflow_dispatch",
-                        "status": "completed",
-                        "conclusion": "success",
-                        "head_sha": "d" * 40,
-                        "path": ".github/workflows/" + _VERIFIER_WORKFLOW,
-                    }
-                ).encode(),
-            )
         if "/branches/" in path:
             branch_name = urllib.parse.unquote(path.rstrip("/").split("/")[-1])
             visible = branch_name
@@ -3219,30 +2571,6 @@ def _self_check():
     }
     if not _publication_tied([publication], corrective):
         raise AssertionError("stored publication record was dropped")
-    if _coding_terminal_reference([publication], corrective) != "a" * 64:
-        raise AssertionError("stored coding_terminal_reference was not read")
-    if _coding_terminal_reference([publication_comment(receipt_body)], corrective):
-        raise AssertionError("keepalive receipt supplied a coding terminal reference")
-    stored_trace = _trace_worker_publication(
-        lambda path: _commit_document(path, [prior_start]),
-        [prior_body, publication],
-        corrective,
-    )
-    if (
-        len(stored_trace) != 1
-        or not stored_trace[0]["retain_confirmed_result"]
-        or stored_trace[0]["coding_terminal_reference"] != "a" * 64
-        or stored_trace[0]["redundant_worker_required"]
-        or stored_trace[0]["single_parent_matches_start"] is not True
-    ):
-        raise AssertionError("stored terminal was not bound to the earlier worker product")
-    stored_text, stored_code = _format_report(
-        prior_assessment, corrective, corrective, produced_traces=stored_trace
-    )
-    if stored_code != 2 or "coding_terminal_reference=" + ("a" * 64) not in stored_text:
-        raise AssertionError("stored coding terminal was not reported on the produced commit")
-    if "retain_confirmed_result: present" not in stored_text:
-        raise AssertionError("stored retain_confirmed_result was not reported")
     if not _publication_tied([dict(publication, body=json.dumps(pub))], corrective):
         raise AssertionError("custody JSON publication record was dropped")
     authorized = json.loads(json.dumps(pub))
@@ -3353,59 +2681,10 @@ def _self_check():
     observed = _observe_chain(fake_fetch)
     if observed[6] != [_summarize_corpus(decision)] or observed[7][0]["conclusion"] != "skipped":
         raise AssertionError("chain observation dropped the corpus decision or the verifier run")
-    dispatch_run = {
-        "id": 40603448727,
-        "event": "workflow_dispatch",
-        "status": "completed",
-        "conclusion": "success",
-        "head_sha": "d" * 40,
-    }
-    if dispatch_run not in observed[7]:
-        raise AssertionError(
-            "default-branch workflow_dispatch bound by the corpus decision was dropped"
-        )
-    if any(run.get("head_sha") in {_PARTIAL_HEAD, _PARTIAL_MERGE} for run in observed[7]):
-        raise AssertionError("partial revision checkout was retained for the corrective head")
-
-    def _run_override(request_path, **fields):
-        if "/actions/runs/" not in request_path:
-            return fake_fetch(request_path)
-        run_id = request_path.rstrip("/").split("/")[-1]
-        payload = {
-            "id": int(run_id),
-            "event": "workflow_dispatch",
-            "status": "completed",
-            "conclusion": "success",
-            "head_sha": "d" * 40,
-            "path": ".github/workflows/" + _VERIFIER_WORKFLOW,
-        }
-        payload.update(fields)
-        return 200, json.dumps(payload).encode()
-
-    partial_checkout = _observe_chain(
-        lambda request_path: _run_override(
-            request_path, head_sha=_PARTIAL_MERGE, conclusion="skipped"
-        )
-    )
-    if any(str(run.get("id")) == "40603448727" for run in partial_checkout[7]):
-        raise AssertionError("partial-revision workflow_dispatch was retained")
-    other_workflow = _observe_chain(
-        lambda request_path: _run_override(request_path, path=".github/workflows/ci.yml")
-    )
-    if any(str(run.get("id")) == "40603448727" for run in other_workflow[7]):
-        raise AssertionError("a non-verifier workflow run was retained")
-    skipped_dispatch = _observe_chain(
-        lambda request_path: _run_override(request_path, conclusion="skipped")
-    )
-    skipped_named = [run for run in skipped_dispatch[7] if run.get("head_sha") == "d" * 40]
-    if skipped_named != [dict(dispatch_run, conclusion="skipped")]:
-        raise AssertionError("skipped default-branch dispatch was hidden or substituted")
     if observed[10]:
         raise AssertionError("merged corpus decision was treated as unbound")
     if observed[8] != earlier_only:
         raise AssertionError("chain observation dropped the earlier skipped verifier run")
-    if observed[11]:
-        raise AssertionError("chain observation invented a produced-commit trace")
     if observed[9] != [partial_summary]:
         raise AssertionError("chain observation dropped the partial corpus decision")
     observed_text, observed_code = _format_report(
@@ -3426,15 +2705,6 @@ def _self_check():
     )
     if observed_code != 2 or "native_verify_for_corrective_head: PRESENT" not in observed_text:
         raise AssertionError("observed corpus decision was not reported")
-    if (
-        "id=40603448727" not in observed_text
-        or "checkout_is_not_evaluated_commit=yes" not in observed_text
-    ):
-        raise AssertionError("comment-bound workflow_dispatch was not reported")
-    if "agents_verifier_workflow_for_corrective_head: NONE" in observed_text:
-        raise AssertionError("comment-bound workflow_dispatch was reported as absent")
-    if "a run is not a decision" not in observed_text:
-        raise AssertionError("workflow_dispatch run was treated as the corpus decision")
     if "closer_publication_proof_for_corrective_head: MISSING" not in observed_text:
         raise AssertionError("observed chain invented publication proof")
     if partial_line not in observed_text or "completion: evidence present" in observed_text:
@@ -3544,190 +2814,6 @@ def _self_check():
         raise AssertionError("a verifier run was treated as a decision")
     if "corrective_pr_merged: yes merge_sha=" + merge_only not in run_text:
         raise AssertionError("merged corrective PR was not reported")
-    run_guard = [line for line in run_text.splitlines() if line.startswith("merge_guard_path:")]
-    if (
-        len(run_guard) != 1
-        or "reason=already_merged" not in run_guard[0]
-        or "confirm_merge=no" not in run_guard[0]
-        or "command=not_sent" not in run_guard[0]
-        or "first_remaining_blocker=verifier-corpus-decision/v1" not in run_guard[0]
-        or "--confirm-merge" in run_guard[0]
-    ):
-        raise AssertionError("merged PR without a corpus decision was sent to confirm-merge")
-    if (
-        "native_pr_readback: pr=1168 head="
-        + corrective
-        + " published_merge=none merged=no test_merge="
-        + prospective
-        not in open_text
-    ):
-        raise AssertionError("open native readback omitted the test merge")
-    if "head_not_modified=yes" not in open_text:
-        raise AssertionError("open readback comparison modified a head")
-    if (
-        "native_pr_readback: pr=1168 head="
-        + corrective
-        + " published_merge="
-        + ("e" * 40)
-        + " merged=yes"
-        not in complete_text
-    ):
-        raise AssertionError("merged native readback omitted the published merge")
-    if "published_merge=" + ("e" * 40) not in complete_text:
-        raise AssertionError("synthetic published merge was dropped")
-    before_record = json.dumps(_RECORDED_NATIVE_PR_STATE, sort_keys=True)
-    recorded = _recorded_native_pr_reconciliation()
-    if json.dumps(_RECORDED_NATIVE_PR_STATE, sort_keys=True) != before_record:
-        raise AssertionError("native reconciliation changed a recorded head")
-    recorded_text = "\n".join(recorded["lines"])
-    corrective_head = "01e86ae7e4ef0e6a06193c916c8c780ca5cab052"
-    corrective_merge = "a30b34ada04a30d04360867e14097a8c5b6d731c"
-    owned_live_head = "85adde2614db7118d6e6d28dd11e5bc4c7611319"
-    owned_merge = "97647baf97085724af7cb8f684af2331f73fb612"
-    stale_test_merge = "01fffa725ecdda58189821059d1243ea1c003b12"
-    prior_owned_head = "926a7a20087f8b2e47d08c4f4ba747944aa78b9b"
-    if (
-        "native_pr_readback: pr=1168 head="
-        + corrective_head
-        + " published_merge="
-        + corrective_merge
-        + " merged=yes"
-        not in recorded_text
-    ):
-        raise AssertionError("recorded corrective head and published merge were not kept")
-    if (
-        "native_pr_readback: pr=989 head="
-        + owned_live_head
-        + " published_merge="
-        + owned_merge
-        + " merged=yes"
-        not in recorded_text
-    ):
-        raise AssertionError("recorded owned delivery merge was not kept")
-    if "contradictory_reports=merged+unmerged" not in recorded_text:
-        raise AssertionError("merged and unmerged reports were not both retained")
-    if "adopted=merged" not in recorded_text or "stale_unmerged_report=yes" not in recorded_text:
-        raise AssertionError("stale unmerged report was adopted over the published merge")
-    if "superseded_test_merge=" + stale_test_merge not in recorded_text:
-        raise AssertionError("stale open test-merge sha was not named")
-    if "superseded_test_merge_is_published=no" not in recorded_text:
-        raise AssertionError("stale test merge was treated as published")
-    if "published_merge=" + stale_test_merge in recorded_text:
-        raise AssertionError("stale test merge was adopted as the published merge")
-    if (
-        "prior_head=" + prior_owned_head not in recorded_text
-        or "prior_head_not_current=yes" not in recorded_text
-    ):
-        raise AssertionError("older owned delivery head was treated as current")
-    if "rest_test_merge_is_published=no" in recorded_text:
-        raise AssertionError("merged delivery was reported with open test-merge prose")
-    if recorded_text.count("head_unchanged=yes") != 2:
-        raise AssertionError("reconciliation did not keep both heads unchanged")
-    if recorded["prs"]["1168"]["head_sha"] != corrective_head:
-        raise AssertionError("reconciliation replaced the corrective head")
-    if recorded["prs"]["989"]["head_sha"] != owned_live_head:
-        raise AssertionError("reconciliation replaced the owned delivery head")
-    if recorded["prs"]["989"]["published_merge_sha"] != owned_merge:
-        raise AssertionError("reconciliation replaced the recorded owned delivery merge")
-    recorded_guard = _merge_guard_line(
-        recorded["prs"]["1168"], corpus_bound=False, publication=False
-    )
-    if (
-        "reason=already_merged" not in recorded_guard
-        or "expected_head=" + corrective_head not in recorded_guard
-        or "command=not_sent" not in recorded_guard
-        or "confirm_merge=no" not in recorded_guard
-        or "head_unchanged=yes" not in recorded_guard
-        or "gates_preserved=yes" not in recorded_guard
-        or "first_remaining_blocker=verifier-corpus-decision/v1" not in recorded_guard
-        or "--confirm-merge" in recorded_guard
-    ):
-        raise AssertionError("recorded merged head was routed through confirm-merge")
-    if recorded["prs"]["1168"]["head_sha"] != corrective_head:
-        raise AssertionError("merge guard disposition replaced the corrective head")
-    open_guard = [line for line in open_text.splitlines() if line.startswith("merge_guard_path:")]
-    open_command = (
-        "command=python3 src/merge_guard.py "
-        + _REPOSITORY
-        + "#"
-        + _CORRECTIVE_PR
-        + " --expected-head "
-        + corrective
-    )
-    if (
-        len(open_guard) != 1
-        or "reason=open_review_floor_and_gates" not in open_guard[0]
-        or "confirm_merge=no" not in open_guard[0]
-        or "gates_preserved=yes" not in open_guard[0]
-        or "head_unchanged=yes" not in open_guard[0]
-        or open_command not in open_guard[0]
-        or "--confirm-merge" in open_guard[0]
-        or "first_remaining_blocker=review_floor_and_merge_gates" not in open_guard[0]
-    ):
-        raise AssertionError("open merge guard path dropped a gate or sent confirm-merge")
-    blocked_guard = [
-        line for line in blocked_text.splitlines() if line.startswith("merge_guard_path:")
-    ]
-    if (
-        len(blocked_guard) != 1
-        or "confirm_merge=no" not in blocked_guard[0]
-        or "--confirm-merge" in blocked_guard[0]
-        or "expected_head=missing" not in blocked_guard[0]
-        or "gates_preserved=yes" not in blocked_guard[0]
-    ):
-        raise AssertionError("headless open PR was sent through confirm-merge")
-    complete_guard = [
-        line for line in complete_text.splitlines() if line.startswith("merge_guard_path:")
-    ]
-    if (
-        len(complete_guard) != 1
-        or "reason=already_merged" not in complete_guard[0]
-        or "command=not_sent" not in complete_guard[0]
-        or "first_remaining_blocker=none" not in complete_guard[0]
-        or "--confirm-merge" in complete_guard[0]
-    ):
-        raise AssertionError("complete merged evidence was sent back through confirm-merge")
-    drifted = _recorded_state_comparison(
-        {
-            "pr": "989",
-            "head_sha": owned_live_head,
-            "published_merge_sha": "",
-            "test_merge_sha": "f" * 40,
-            "merged": False,
-        }
-    )
-    if len(drifted) != 1:
-        raise AssertionError("test-merge drift was not reported")
-    drift_line = drifted[0]
-    if (
-        "recorded_merged=yes" not in drift_line
-        or "live_merged=no" not in drift_line
-        or "recorded_published_merge=" + owned_merge not in drift_line
-        or "live_published_merge=none" not in drift_line
-        or "recorded_test_merge=none" not in drift_line
-        or "live_test_merge=" + ("f" * 40) not in drift_line
-        or "head_not_modified=yes" not in drift_line
-    ):
-        raise AssertionError("drift omitted merged published and live test-merge values")
-    merged_flag_drift = _recorded_state_comparison(
-        {
-            "pr": "1168",
-            "head_sha": corrective_head,
-            "published_merge_sha": "",
-            "test_merge_sha": "",
-            "merged": False,
-        }
-    )
-    if (
-        len(merged_flag_drift) != 1
-        or "recorded_merged=yes" not in merged_flag_drift[0]
-        or "live_merged=no" not in merged_flag_drift[0]
-        or "recorded_published_merge=" + corrective_merge not in merged_flag_drift[0]
-        or "live_published_merge=none" not in merged_flag_drift[0]
-        or "recorded_test_merge=none" not in merged_flag_drift[0]
-        or "live_test_merge=none" not in merged_flag_drift[0]
-    ):
-        raise AssertionError("merged-flag drift omitted recorded and live merge fields")
     if "verify_label_on_corrective_pr: verify:evaluate" not in run_text:
         raise AssertionError("verify label was not reported")
     if "native_verify_for_corrective_head: PRESENT" in run_text:
