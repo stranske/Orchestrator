@@ -145,6 +145,7 @@
       "tests/test_verifier_incomplete_roots.py",
       "tests/test_verify_private_state.py",
       "tests/test_verify_sharding.py",
+      "tests/test_issue1207_ranked_coverage.py",
       "tests/test_workflow_compiler.py"
     ],
     [
