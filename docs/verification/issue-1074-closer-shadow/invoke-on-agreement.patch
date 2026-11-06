@@ -1,0 +1,11 @@
+--- a/src/roles.py
++++ b/src/roles.py
+@@ -1905,7 +1905,7 @@
+         or item.get("review_verdict")
+         or ""
+     ).upper()
+-    if not gate_verdict or not panel_verdict or gate_verdict == panel_verdict:
++    if not gate_verdict or not panel_verdict:
+         return None
+     return {
+         "case_type": "runtime_ac" if gate_verdict else "review",

@@ -1,0 +1,172 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-11-04T00:42:11.249074+00:00",
+  "base_revision": "1021c9074bc2a60160204a08389323574127e251",
+  "source_commit": "ac5a7b41f03cdc1800c564690488caf0f53e8553",
+  "delivery": {
+    "checkout_git_metadata_read_only": true,
+    "checkout_branch_advanced": false,
+    "alternate_git_metadata": "/tmp/issue-1111-role-delivery.git",
+    "transfer_patch": "source-commit.patch.gz"
+  },
+  "selected_interpreter": "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3",
+  "python_files_changed": [],
+  "checks": {
+    "baseline": {
+      "command": "node tests/test_adjudicator_case_gaps.js",
+      "log": "baseline.log",
+      "exit": 0,
+      "passed": 10
+    },
+    "parent_with_expanded_tests": {
+      "description": "Copy both parent exporter scripts and the expanded test into a private temporary tree, then run node tests/test_adjudicator_case_gaps.js.",
+      "log": "parent.log.gz",
+      "exit": 1,
+      "passed": 11,
+      "failed": 8,
+      "skipped": 0
+    },
+    "candidate": {
+      "command": "node tests/test_adjudicator_case_gaps.js",
+      "log": "expanded.log",
+      "exit": 0,
+      "passed": 19,
+      "failed": 0,
+      "skipped": 0
+    },
+    "related": {
+      "command": "node --test tests/test_adjudicator_inventory.js tests/test_adjudicator_case_gaps.js tests/test_adjudicator_retrospective_batch.js tests/test_adjudicator_closer_shadow.js tests/test_adjudicator_receipts.js tests/test_adjudicator_completion.js",
+      "log": "related.log",
+      "exit": 0,
+      "files_passed": 6
+    },
+    "focused_cli": {
+      "command": "node --test-name-pattern='dispute inventory|retro saves Gate gaps' tests/test_adjudicator_retro_cli.js",
+      "log": "focused.log",
+      "exit": 0,
+      "passed": 8
+    },
+    "selftest": {
+      "command": "PYTHONPATH=src python3 src/adjudicator_retro.py --selftest",
+      "log": "selftest.log",
+      "exit": 0,
+      "checks_passed": 23
+    },
+    "syntax": {
+      "commands": [
+        "node --check scripts/export_adjudicator_case_gaps.js",
+        "node --check scripts/export_adjudicator_inventory.js",
+        "node --check tests/test_adjudicator_case_gaps.js"
+      ],
+      "exit": 0
+    },
+    "diff_whitespace": {
+      "command": "git diff --check",
+      "exit": 0
+    },
+    "named_acceptance": {
+      "argv": [
+        "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3",
+        "-m",
+        "pytest",
+        "tests/test_adjudicator_retro.py::test_packet_builder_needs_target_finding_and_ground_truth",
+        "tests/test_adjudicator_retro.py::test_retro_records_verdicts_without_changing_outcomes",
+        "tests/test_adjudicator_retro.py::test_closer_lane_offers_the_adjudicator_only_on_a_contested_verdict",
+        "-m",
+        "not slow",
+        "-v"
+      ],
+      "log": "named.log",
+      "exit": 1,
+      "tests_executed": 0,
+      "reason": "No module named pytest",
+      "specified_mutations_performed": false
+    },
+    "default_inventory": {
+      "argv": [
+        "node",
+        "scripts/export_adjudicator_inventory.js",
+        "--db",
+        "/home/runner/.codex/orchestrator/feedback/orchestrator.db",
+        "--observed-at",
+        "1793752931"
+      ],
+      "exit": 2,
+      "report": "runner-inventory.json"
+    }
+  },
+  "source_sha256": {
+    "scripts/export_adjudicator_case_gaps.js": "0f73f47df5c9d52549929c3c532579642fec4542feba72c421c767754126c9c0",
+    "scripts/export_adjudicator_inventory.js": "dc4242335a8309fb99e4b303f4ea13b0ac13bcf95ed7b1461a1cf2e89749e1b3",
+    "tests/test_adjudicator_case_gaps.js": "0268b39a4c0a77d2fc26b37ea45055330b4475b0e933d43cca121707c0e941bd",
+    "src/feedback.py": "eafa930ec4cea9a239bc03a91a00b2ca7c618c40629690658f8276417946412d",
+    "src/adjudicator_retro.py": "ee172f96ddf0ca56f6c06fcf18bdaacccece5381de61a9896006d0b16a8fb0b8",
+    "src/roles.py": "4a5e729f4bf797ea448f18c14df69696e3df3bcaaf046729c039099ae7cc3dd7"
+  },
+  "acceptance": {
+    "completed_checkboxes": 0,
+    "total_checkboxes": 26,
+    "authenticated_original_cohort_recovered": false,
+    "real_contested_observation_captured": false,
+    "persisted_original_cases_reconciled": false,
+    "metadata_publication_completed": false
+  },
+  "evidence_files": {
+    "baseline.log": {
+      "sha256": "03499092a6b98f5e24f260179672f2be55f31b7d3ce876c6045ad96a5f62da5e",
+      "bytes": 1124
+    },
+    "expanded.log": {
+      "sha256": "7281453b0e61d083364184884ed959aa656ea818cdba3ac1cd4972904696e0c5",
+      "bytes": 1994
+    },
+    "focused.log": {
+      "sha256": "1913f121c478d7c04b937dbac429e540f5e3931f3690df3e7d18cae8d908489a",
+      "bytes": 985
+    },
+    "metadata-readbacks.json.gz": {
+      "sha256": "2023d64299970d74ec08a0e91984eb5c62dd81b8c382d50ff8abfa9f67135edb",
+      "bytes": 10644
+    },
+    "named.log": {
+      "sha256": "3c62bade513fb2347fe3e5a9f91901d9e1bbf2d4a19bbd59d2863c1cdf42e10a",
+      "bytes": 75
+    },
+    "parent.log.gz": {
+      "sha256": "89025e4c6997c2711d81f3728b0a4e4f1e0712ba93b492a2c9bdf326d22679c6",
+      "bytes": 2056
+    },
+    "proposed-pr-body.md": {
+      "sha256": "cd3554524276ce49b9ff913f07d2becf9717c3697af08d041ba101c69930475f",
+      "bytes": 11243
+    },
+    "proposed-thread-reply.md": {
+      "sha256": "4d2af6ac17cc3ae15beff1b81c2d7d43db16fb9ba77f04ef50087435cac181a3",
+      "bytes": 724
+    },
+    "publication.json": {
+      "sha256": "575aad287a9b889daa5bbfc2546359a83c1d36915c7b4204f54debcc24825652",
+      "bytes": 1979
+    },
+    "related.log": {
+      "sha256": "c95b7adc8f2558cd25f520423d8706785654f16be18bf1f18ac3ae2f0a80b543",
+      "bytes": 464
+    },
+    "runner-inventory-stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "runner-inventory.json": {
+      "sha256": "2938bf7695096e026b74c558d3c42f56b3192ceffd6bbfc4eb882c766c9eec7c",
+      "bytes": 928
+    },
+    "selftest.log": {
+      "sha256": "3f227862f8d1e7b2c35195efe7205621f73d3033db5a3ca88e1e7c24021e1109",
+      "bytes": 45
+    },
+    "source-commit.patch.gz": {
+      "sha256": "5c8853adb8cbb85fe658a68a70444b126724ed4dd4bc77b481f13edfcd323119",
+      "bytes": 6575
+    }
+  }
+}

@@ -365,10 +365,13 @@ def build_plan(
     direct_ready = bool(
         (review.get("recorded_exploration_evidence") or {}).get("ready_for_direct_comparison")
     )
+    # A measured 0.0 means every route cell has observations. `or 1.0` cannot tell
+    # that from a missing rate, and it blocked stage 4 on a fully observed table.
+    cell_rate = review.get("zero_observation_cell_rate")
+    observed_cell_rate = 1.0 if cell_rate is None else float(cell_rate)
     route_ready = (
         int(review.get("ready_task_count") or 0) >= review["thresholds"]["min_ready_tasks"]
-        and float(review.get("zero_observation_cell_rate") or 1.0)
-        <= review["thresholds"]["max_zero_cell_rate"]
+        and observed_cell_rate <= review["thresholds"]["max_zero_cell_rate"]
     )
     default_mode = review.get("current_default")
     recommendation = review.get("recommendation")

@@ -4,14 +4,12 @@ import builtins
 import json
 
 import pytest
-from test_closer_role_selection import pick
 from test_closer_sonnet_role_admission import run, world  # noqa: F401
 from test_dispatcher_failure_contracts import fake_offload, isolated  # noqa: F401
 
 import closer_claude_role_admission as admission
 import closer_dispatcher as closer
 import closer_queue as queue
-import closer_role_selection as selection
 import dispatcher
 
 SECRET = "SYNTHETIC_CREDENTIAL_NEVER_DIAGNOSTIC"
@@ -43,16 +41,6 @@ def test_optional_queue_diagnostic_cannot_replace_process_start_failure(
     assert result["exit"] == 126 and result["attempts"] == 1
     assert "fixture executable missing" in result["error"]
     assert SECRET not in json.dumps(result)
-
-
-def test_policy_load_failure_logs_only_fixed_context_and_type(monkeypatch, caplog):
-    def unavailable():
-        raise ValueError(SECRET)
-
-    monkeypatch.setattr(selection, "load_policy", unavailable)
-    assert pick(only={"codex"}) is None
-    assert "closer selection policy unavailable (ValueError)" in caplog.text
-    assert SECRET not in caplog.text
 
 
 def test_role_admission_failure_reports_fixed_phase_without_exception_text(

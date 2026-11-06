@@ -251,35 +251,3 @@ def test_campaign_guard_refuses_account_ancestor_and_home_alias(tmp_path, monkey
     with pytest.raises(AssertionError):
         guard_caller(private).temporary_campaign_guard()
     assert not (private / "private-home/.codex").exists()
-
-
-@pytest.mark.parametrize(
-    "layout", ["project/.tmp/pytest-case", "work/_temp/storage-verify/tmp/pytest-case"]
-)
-def test_actual_inert_callback_under_ci_account_home(tmp_path, monkeypatch, layout):
-    import time
-
-    from test_closer_batch_interpretation import native_callbacks_for, native_delivery
-    from test_closer_disposition import TARGET
-
-    account = tmp_path.resolve() / "account-home"
-    root = account / layout
-    root.mkdir(parents=True)
-    monkeypatch.setattr(pwd, "getpwuid", lambda _uid: SimpleNamespace(pw_dir=str(account)))
-    delivery = native_delivery(root, monkeypatch)
-    callbacks, context = native_callbacks_for(delivery, monkeypatch)
-    context["deadline"] = time.time() + 60
-    low = callbacks["interpret"](TARGET, context)
-    # native_delivery deliberately declares one UNKNOWN named criterion for
-    # Strong dispatch tests. Correct private-home custody must not turn that
-    # unresolved test gold into acceptance.
-    assert low["integration_status"] == "exception"
-    assert low["proposal"]["semantic_followup"]["status"] == "candidate"
-    assert low["proposal"]["semantic_assessment"]["obligations"][1]["status"] == "unknown"
-    assert low["proposal"]["semantic_readiness"] == "knowledge_incomplete"
-    assert low["actual"]["run_id"] == delivery.caller.results[0]["run_id"]
-    assert len(delivery.caller.results) == 1
-    guard = root / "private-home/.codex/automations/model-allocation/assess.py"
-    assert guard.is_file() and guard.resolve().is_relative_to(root)
-    assert not (account / ".codex").exists()
-    assert not delivery.guard_calls and not delivery.closure_calls

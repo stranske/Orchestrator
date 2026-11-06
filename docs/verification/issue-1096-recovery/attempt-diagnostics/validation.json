@@ -1,0 +1,55 @@
+{
+  "checked_at": "2026-11-03T20:30:34.741698+00:00",
+  "evaluated_revision": "eac39f3eb8b6a1a59457d39a6ceeb0e5bcfc3275",
+  "source_parent": "6749ae79c00be3c9362a01ce117e46dc304d931e",
+  "source_sha256": {
+    "scripts/export_adjudicator_inventory.js": "d0272dc2cd716c5ba390c64f7db6a7edfcb2587d047c9c0f170173ddd24ada8a",
+    "tests/test_adjudicator_inventory.js": "0ebdc020cd5e43b11b4acc2b11c134bb4f9be16e2763d1c0ec46ca7733973a61"
+  },
+  "checks": {
+    "inventory": {
+      "command": [
+        "node",
+        "tests/test_adjudicator_inventory.js"
+      ],
+      "log": "inventory-tests.log",
+      "log_sha256": "40eaa3b8ff6237ccfcfb383a461d9b93cc02f357592763c41d5cd2459c9cedb8",
+      "passed": 47,
+      "failed": 0,
+      "skipped": 0
+    },
+    "runner": {
+      "command": [
+        "node",
+        "tests/test_adjudicator_acceptance_runner.js"
+      ],
+      "log": "runner-tests.log",
+      "log_sha256": "d5ea0c76dbcaf1be1785a702ab378f668730770a305eb5818eebdf51254e0a20",
+      "passed": 26,
+      "failed": 0,
+      "skipped": 0
+    },
+    "ledger": {
+      "command": [
+        "node",
+        "tests/test_adjudicator_evidence_ledger.js"
+      ],
+      "log": "ledger-tests.log",
+      "log_sha256": "df070652b60866af068042de292708fc37f00b443eba8519a2c081883b2a964b",
+      "passed": 22,
+      "failed": 0,
+      "skipped": 0
+    }
+  },
+  "regressions_passed": 95,
+  "required_test_receipt": "acceptance-run/checks.json",
+  "required_tests_passed": false,
+  "original_manifest_recovered": false,
+  "operational_acceptance_verified": false,
+  "newly_completed_tasks": 0,
+  "remote_reconciliation": "rejected_connector_requires_approval_policy_never",
+  "blocker_comment": "rejected_connector_requires_approval_policy_never",
+  "needs_human_label": "rejected_connector_requires_approval_policy_never",
+  "source_commit_storage": "/tmp/issue1096-attempt-diagnostics-git-8to3n09t/repo.git",
+  "patch": "artifacts/issue-1096-attempt-diagnostics.patch"
+}

@@ -1,0 +1,229 @@
+........<frozen codecs>:189: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c06f3100>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen codecs>:189: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c06f3b50>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen codecs>:189: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c06f3880>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen codecs>:189: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c06f35b0>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen codecs>:189: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0654040>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen codecs>:189: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0654130>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen codecs>:189: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0654220>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen codecs>:189: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c06548b0>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen codecs>:189: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0654a90>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen codecs>:189: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0654b80>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c06f2e30>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c06546d0>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c06f3880>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c06f3b50>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0654b80>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c06f3100>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c06548b0>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0654a90>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0654130>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0654220>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0655120>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0655210>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c06547c0>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0655300>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c06557b0>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0655990>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c06558a0>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0654040>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0655b70>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c06f35b0>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0655d50>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0655e40>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0655f30>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0656200>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c06562f0>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c06563e0>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c06f3100>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c06f3880>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c06f3b50>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c06563e0>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c06f2e30>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0656200>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c06562f0>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0655e40>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0655d50>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0655b70>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0654040>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0655c60>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c06558a0>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0655990>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0655300>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c06557b0>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0655f30>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0655210>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c06f35b0>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c06544f0>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0654400>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c06545e0>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0655120>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0654220>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0654310>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c06547c0>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0654a90>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c06548b0>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c06546d0>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0654130>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0654b80>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c06564d0>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c06565c0>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c06567a0>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0656110>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c06566b0>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0656980>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0656a70>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0656c50>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0656890>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0656e30>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/hostedtoolcache/Python/3.14.9/x64/lib/python3.14/pathlib/__init__.py:330: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7127c0656f20>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+..
+----------------------------------------------------------------------
+Ran 11 tests in 0.301s
+
+OK

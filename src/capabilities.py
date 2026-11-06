@@ -1768,6 +1768,8 @@ def renew(
 DECLARATION_FIELDS: tuple[str, ...] = (
     "status",
     "entrypoint",
+    "external_caller",
+    "external_heartbeat_max_age_seconds",
     "matcher",
     "trigger_cadence",
     "flags_defaults",
@@ -1819,6 +1821,36 @@ DECLARATION_FIELDS: tuple[str, ...] = (
 # registering caller was refused on every attempt. `rail-exercise-cadence` had no registering caller
 # at all, so a fresh machine never got its row.
 KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
+    "closer-core": {
+        "status": "wired",
+        "entrypoint": str(Path.home() / ".codex/closer-core/closer_core.py"),
+        "external_caller": {
+            "path": str(
+                Path.home() / ".codex/automations/reviewed-repo-automation-controller/controller.py"
+            ),
+            "function": "start_closer_core",
+        },
+        "external_heartbeat_max_age_seconds": 86400,
+        "matcher": {"kind": "tick_phase", "equals": "closer-core"},
+        "trigger_cadence": "Luna controller start_closer_core(), once per 15-minute tick",
+        "output_artifact": "~/.codex/orchestrator/closer-core/rounds.jsonl",
+        "downstream_consumer": "value_chain_monitor.py:report via switch_review.py",
+        "learning_sink": "feedback.py runs and durable issue_closure outcomes",
+        "kill_switch": "remove the closer-core hook from the external controller",
+        "rollback": {"restore": "rebuild/controller.py.before-closer-core"},
+        "findability_category": "exercise_bound",
+        "findability_rationale": "The external controller invokes the core; rail-exercise:brain offers its read-only accounting fixture.",
+        "notes": (
+            "dedup: the external thin core already closes merged-PR source issues; "
+            "the existing closer construction remains idle. This declaration adds accounting, "
+            "not activation. Read demand and target dispositions from its existing round journal "
+            "and accepted outcomes from the Brain; no additional event store or advisor surface. "
+            "Caller: ~/.codex/automations/reviewed-repo-automation-controller/"
+            "controller.py:start_closer_core(). Heartbeat source: "
+            "~/.codex/orchestrator/closer-core/rounds.jsonl, one JSON line per round. "
+            "The caller is declared explicitly; recent runtime invocation events prove heartbeat."
+        ),
+    },
     "testgen-lane": {
         "downstream_consumer": "testgen_gate.py:main consumes candidate tests for the acceptance gate",
         "notes": (

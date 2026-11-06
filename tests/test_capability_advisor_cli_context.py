@@ -6,15 +6,16 @@ import json
 import socket
 import subprocess
 
+import advisor_hermetic
 import pytest
 
-import capability_advisor as advisor
+_modules = advisor_hermetic.import_under_temporary_runtime("capability_advisor")
+advisor = _modules["capability_advisor"]
 
 
 @pytest.fixture(autouse=True)
-def isolated_cli(monkeypatch, tmp_path):
-    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
-    monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path))
+def isolated_cli(monkeypatch):
+    """Process and socket calls stay local. Runtime roots come from advisor_hermetic."""
     attempted = []
 
     def forbid_external(*args, **kwargs):

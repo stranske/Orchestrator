@@ -1,0 +1,18 @@
+✔ gap export preserves every dispute and explicit UNKNOWN execution evidence without writes (81.644184ms)
+✔ owner-excluded evidence is never evaluated and remains an identity-only gap (74.170955ms)
+✔ schema 1 retains requested identities and unknown counts with an unavailable Brain (61.987315ms)
+✔ schema 2 retains requested identities and unknown counts with an unavailable Brain (61.72532ms)
+✔ an empty supplied manifest cannot claim recovery or hide the missing requested slots (6.11781ms)
+✔ invalid arguments and manifests produce no partial ledger or Brain writes (423.969521ms)
+✔ saved report joins the complete dispute identity and binds unverified claims to retained bytes (65.576071ms)
+✔ ambiguous saved rows and owner-excluded cases cannot contribute execution claims (6.731583ms)
+✔ mismatched packets, invalid revisions and invalid costs remain specific gaps (14.816701ms)
+✔ invalid saved reports and run-only manifests fail without partial output or writes (360.502101ms)
+ℹ tests 10
+ℹ suites 0
+ℹ pass 10
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1168.911882

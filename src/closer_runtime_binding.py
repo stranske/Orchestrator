@@ -1442,7 +1442,12 @@ class PinnedNativeHooks:
 
         self.terminal_watermark = None
         manifest = load_manifest(cfg["runtime_manifest"])
-        context = native.validate_admission(manifest, cfg["native_admission"], for_effects=True)
+        try:
+            context = native.validate_admission(manifest, cfg["native_admission"], for_effects=True)
+        except mechanisms.MechanismError as exc:
+            raise BindingError(
+                "native admission unavailable before dispatcher: " + str(exc)[:256]
+            ) from None
         pipeline = Path(str(cfg["dispatch_state"]) + ".pipeline.json")
         directory = closer_resources.scoped_root(pipeline) / "rounds"
         names: list[str] = []
@@ -2075,6 +2080,15 @@ def _observed_correction_b(command, cfg, hooks, timeout):
             witness["coding_delivery_diagnostic"] = native.coding_b_error_diagnostic(
                 error, stage="coding_b_delivery"
             )
+    elif cfg.get("native_admission") is not None:
+        try:
+            witness["initial_b_observation"] = native.record_initial_b_observation(
+                cfg, done, witness
+            )
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError, AttributeError):
+            # The generic observation is diagnostic only. Its absence never changes
+            # B/C authority, the named-receipt refusal, or UNKNOWN outcome handling.
+            witness["initial_b_observation"] = None
     return done, witness
 
 

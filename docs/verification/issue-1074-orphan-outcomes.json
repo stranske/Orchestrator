@@ -1,0 +1,34 @@
+{
+  "scope": "Synthetic read-only inventory regressions for outcomes lacking run records; no historical cohort or operational acceptance claim.",
+  "evaluated_parent": "3a318630abbe113df051f0e77c2055e2548a8e72",
+  "test_sha256": "11dd6861e4933981dbcf8406f7e86cff0145d59cef5a050bf675d7c71ecbe83e",
+  "command": [
+    "node",
+    "--test-name-pattern=outcomes without run records|outcomes-only Brain",
+    "tests/test_adjudicator_inventory.js"
+  ],
+  "checks": [
+    {
+      "name": "parent-source",
+      "exit_code": 1,
+      "source_sha256": "57495dc865428dc1d2db2a2a1364c0f31b624ac1a12878760fbb435bd43598df",
+      "output": "\u2716 inventory accounts for outcomes without run records as unavailable evidence (11.703713ms)\n\u2716 an outcomes-only Brain is available with exclusions, rather than an observed empty store (9.84176ms)\n\u2139 tests 2\n\u2139 suites 0\n\u2139 pass 0\n\u2139 fail 2\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 27.787988\n\n\u2716 failing tests:\n\ntest at tests/test_adjudicator_inventory.js:270:1\n\u2716 inventory accounts for outcomes without run records as unavailable evidence (11.703713ms)\n  AssertionError [ERR_ASSERTION]: every run and unmatched outcome is accounted for\n  \n  2 !== 4\n  \n      at TestContext.<anonymous> (/tmp/1074-orphan-outcomes-rataeoop/tests/test_adjudicator_inventory.js:286:10)\n      at Test.runInAsyncScope (node:async_hooks:227:14)\n      at Test.run (node:internal/test_runner/test:1402:25)\n      at Test.start (node:internal/test_runner/test:1262:17)\n      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {\n    generatedMessage: false,\n    code: 'ERR_ASSERTION',\n    actual: 2,\n    expected: 4,\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n\ntest at tests/test_adjudicator_inventory.js:326:1\n\u2716 an outcomes-only Brain is available with exclusions, rather than an observed empty store (9.84176ms)\n  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  \n  0 !== 1\n  \n      at TestContext.<anonymous> (/tmp/1074-orphan-outcomes-rataeoop/tests/test_adjudicator_inventory.js:335:10)\n      at Test.runInAsyncScope (node:async_hooks:227:14)\n      at Test.run (node:internal/test_runner/test:1402:25)\n      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)\n      at Test.postRun (node:internal/test_runner/test:1542:19)\n      at Test.run (node:internal/test_runner/test:1467:12)\n      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: 0,\n    expected: 1,\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n"
+    },
+    {
+      "name": "candidate-source",
+      "exit_code": 0,
+      "source_sha256": "a82430ac8e20c2d93641b5e6a832f4d43176c91d9bd950356775da16d5af8e96",
+      "output": "\u2714 inventory accounts for outcomes without run records as unavailable evidence (40.95265ms)\n\u2714 an outcomes-only Brain is available with exclusions, rather than an observed empty store (4.167672ms)\n\u2139 tests 2\n\u2139 suites 0\n\u2139 pass 2\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 49.550318\n"
+    }
+  ],
+  "real_inventory": {
+    "status": "unavailable",
+    "requested_case_count": 71,
+    "observed_case_count": null,
+    "missing_evidence": [
+      "original Brain database",
+      "historical 71-case identity manifest"
+    ]
+  },
+  "operational_acceptance_complete": false
+}

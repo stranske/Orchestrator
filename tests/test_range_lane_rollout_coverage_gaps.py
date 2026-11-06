@@ -63,11 +63,13 @@ def test_filter_backlog_keeps_only_limited_eligible_opener_tasks():
                 {"target": "o/r#3", "task_type": "implement", "lane": "opener"},
                 {"task_type": "testgen", "lane": "opener"},
                 {"target": "o/r#4", "task_type": "testgen", "lane": "opener"},
+                {"target": "o/r#5", "task_type": "testgen", "lane": "opener"},
             ]
         },
         task_types={"testgen"},
         max_items=2,
     )
+    # o/r#5 is eligible too: only the max_items cap keeps it out.
     assert [item["target"] for item in selected] == ["o/r#1", "o/r#4"]
     assert selected[0]["labels"] == ["x"]
     assert [item["reason"] for item in skipped] == [
@@ -93,7 +95,12 @@ def test_sanitize_decision_rejects_each_unsafe_assignment_kind():
         {"o/r#4"},
     )
     assert [item["target"] for item in decision["assignments"]] == ["o/r#4"]
-    assert len(rejected) == 4
+    assert [row["reason"] for row in rejected] == [
+        "not opener lane",
+        "not a selected range-lane task type",
+        "backup/paygo agent is not allowed in automatic range-lane rollout",
+        "assignment escaped the explicit campaign targets",
+    ]
     assert decision["notes"] == ["router result", "rejected 4 unsafe range-lane assignments"]
 
 
@@ -337,12 +344,15 @@ def test_build_rollout_releases_rejected_claims_when_not_dry_run(monkeypatch):
 
 
 def test_main_selftest_skips_when_codex_profile_binary_absent(monkeypatch):
+    ran = []
     monkeypatch.setattr(
         rollout.env_prereq,
         "selftest_skipped",
         lambda name, reason: True,
     )
+    monkeypatch.setattr(rollout, "_selftest", lambda: ran.append("ran"))
     assert rollout.main(["--selftest"]) == 0
+    assert ran == []
 
 
 def test_main_selftest_runs_when_prereq_present(monkeypatch):

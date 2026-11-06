@@ -1,0 +1,774 @@
+#!/usr/bin/env python3
+"""Single-pass reviewed-repo automation controller.
+
+This script intentionally owns the loop boundary. It performs one bounded
+discovery pass, applies at most the needed schedule changes, writes one memory
+entry, and exits.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from collections import Counter, defaultdict
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path("/Users/teacher/.codex/automations")
+MEMORY = ROOT / "reviewed-repo-automation-controller" / "memory.md"
+ORPHAN_MEMORY = ROOT / "reviewed-repo-orphan-pr-steward" / "memory.md"
+MAINTENANCE_MEMORY = ROOT / "sync-dependabot-pr-closer/memory.md"
+CODE_ROOT = Path("/Users/teacher/Library/CloudStorage/Dropbox/Learning/Code")
+APPROVED_QUEUE = (
+    CODE_ROOT
+    / "Workflows-steward/docs/reports/repo-review/approved-issue-queue.json"
+)
+HANDOFF = Path("/Users/teacher/.codex/handoff/lane-handoff.json")
+
+TARGETS = {
+    "opener": ROOT / "pd-workloop-resume/automation.toml",
+    "closer": ROOT / "imi-merge-verify-closer/automation.toml",
+    "maintenance": ROOT / "sync-dependency-pr-closer/automation.toml",
+    "orphan": ROOT / "reviewed-repo-orphan-pr-steward/automation.toml",
+    "escalator": ROOT / "reviewed-repo-stall-escalator/automation.toml",
+}
+
+RRULES = {
+    "opener_active": "FREQ=HOURLY;INTERVAL=1;BYMINUTE=0",
+    "closer_active": "FREQ=HOURLY;INTERVAL=1;BYMINUTE=20",
+    "opener_dormant": "FREQ=DAILY;BYHOUR=6;BYMINUTE=0",
+    "closer_dormant": "FREQ=DAILY;BYHOUR=6;BYMINUTE=20",
+    "maintenance_active": "FREQ=HOURLY;INTERVAL=1;BYMINUTE=1,16,31,46",
+    "maintenance_dormant": "FREQ=WEEKLY;BYDAY=TU;BYHOUR=1;BYMINUTE=0",
+    "orphan_active": "FREQ=HOURLY;INTERVAL=1;BYMINUTE=40",
+    "orphan_dormant": "FREQ=WEEKLY;BYDAY=TU;BYHOUR=1;BYMINUTE=40",
+    "escalator_active": "FREQ=HOURLY;INTERVAL=1;BYMINUTE=50",
+}
+
+EXCLUDED_REPO = "stranske/Collab-Deliverables"
+ADMIN_REPO = "stranske/Collab-Admin"
+WORKFLOWS_REPO = "stranske/Workflows"
+RUN_DIR = Path("/private/tmp/reviewed-repo-automation-controller")
+FRESH_GUARD_SECONDS = 30 * 60
+ORPHAN_WORKER_NOOP_FRESH_SECONDS = 30 * 60
+MAINTENANCE_EARLY_START_SECONDS = 6 * 24 * 60 * 60
+
+
+@dataclass(frozen=True)
+class Schedule:
+    status: str
+    rrule: str
+    updated_at: int | None = None
+
+
+def iso_now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def parse_iso(ts: str) -> float | None:
+    try:
+        return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def run(cmd: list[str], timeout: int = 120) -> tuple[int, str, str]:
+    proc = subprocess.run(
+        cmd,
+        cwd=str(CODE_ROOT),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=timeout,
+    )
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+def load_toml_schedule(path: Path) -> Schedule:
+    text = path.read_text()
+    status = re.search(r'^status\s*=\s*"([^"]*)"', text, re.M)
+    rrule = re.search(r'^rrule\s*=\s*"([^"]*)"', text, re.M)
+    updated = re.search(r"^updated_at\s*=\s*(\d+)", text, re.M)
+    return Schedule(
+        status.group(1) if status else "UNKNOWN",
+        rrule.group(1) if rrule else "UNKNOWN",
+        int(updated.group(1)) if updated else None,
+    )
+
+
+def read_schedules() -> dict[str, Schedule]:
+    return {name: load_toml_schedule(path) for name, path in TARGETS.items()}
+
+
+def schedule_payload(schedules: dict[str, Schedule]) -> dict[str, dict[str, str]]:
+    return {name: {"status": sched.status, "rrule": sched.rrule} for name, sched in schedules.items()}
+
+
+def memory_sections() -> list[tuple[str, str]]:
+    if not MEMORY.exists():
+        return []
+    text = MEMORY.read_text()
+    matches = list(re.finditer(r"^##\s+(\S+)\s*$", text, re.M))
+    sections: list[tuple[str, str]] = []
+    for i, match in enumerate(matches):
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        sections.append((match.group(1), text[match.start() : end].rstrip()))
+    return sections
+
+
+def newest_fresh_decision() -> tuple[str, str, float] | None:
+    for ts, body in memory_sections():
+        lower = body.lower()
+        if "duplicate-run guard suppressed" in lower:
+            continue
+        if "issue-work event trigger" in lower:
+            continue
+        if "config-maintenance" in lower or "permanent loop fix" in lower:
+            continue
+        if all(label in body for label in ("Issue work signal", "Maintenance work signal", "Orphan PR steward signal")):
+            parsed = parse_iso(ts)
+            if parsed is not None:
+                return ts, body, parsed
+    return None
+
+
+def prepend_memory(entry: str) -> None:
+    old = MEMORY.read_text() if MEMORY.exists() else ""
+    MEMORY.write_text(entry.rstrip() + "\n\n" + old)
+
+
+def gh_graphql(query: str, q: str, out_path: Path) -> tuple[dict[str, Any] | None, str | None]:
+    """Fetch a complete search, or reject the inventory instead of classifying a prefix."""
+    nodes: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
+    seen_cursors: set[str] = set()
+    cursor = None
+    expected = None
+    deadline = time.monotonic() + 60
+
+    def incomplete(reason: str) -> tuple[None, str]:
+        out_path.write_text(json.dumps({"complete": False, "error": reason,
+                                        "fetched_count": len(nodes), "issueCount": expected}))
+        return None, reason
+
+    for page in range(1, 11):
+        remaining = int(deadline - time.monotonic())
+        if remaining <= 0:
+            return incomplete("search pagination exceeded 60-second deadline")
+        cmd = ["gh", "api", "graphql", "-f", f"query={query}", "-f", f"q={q}"]
+        if cursor is not None:
+            cmd.extend(["-f", f"after={cursor}"])
+        try:
+            code, stdout, stderr = run(cmd, timeout=remaining)
+        except subprocess.TimeoutExpired:
+            return incomplete("search pagination timed out")
+        if code != 0:
+            return incomplete(stderr.strip() or f"gh exited {code}")
+        try:
+            data = json.loads(stdout)
+        except json.JSONDecodeError as exc:
+            return incomplete(f"invalid JSON: {exc}")
+        if not isinstance(data, dict) or data.get("errors"):
+            return incomplete("GraphQL returned errors or an invalid response")
+        search = (data.get("data") or {}).get("search")
+        if not isinstance(search, dict) or not isinstance(search.get("issueCount"), int) or not isinstance(search.get("nodes"), list):
+            return incomplete("missing data.search.issueCount or data.search.nodes")
+        count = search["issueCount"]
+        if expected is not None and count != expected:
+            return incomplete("search count changed during pagination; retry a fresh inventory")
+        expected = count
+        if count > 1000:
+            return incomplete("search exceeds GitHub's 1000-result limit; partition the query")
+        for node in search["nodes"]:
+            url = node.get("url") if isinstance(node, dict) else None
+            if not url or url in seen_urls:
+                return incomplete("search returned missing or duplicate issue identities")
+            seen_urls.add(url)
+            nodes.append(node)
+        info = search.get("pageInfo") or {}
+        if not isinstance(info.get("hasNextPage"), bool):
+            return incomplete("search response lacks pagination evidence")
+        if not info["hasNextPage"]:
+            if len(nodes) != expected:
+                return incomplete(f"search count mismatch: fetched {len(nodes)} of {expected}")
+            result = {"issueCount": expected, "nodes": nodes, "complete": True,
+                      "fetched_count": len(nodes), "page_count": page}
+            out_path.write_text(json.dumps({"data": {"search": result}}))
+            return result, None
+        cursor = info.get("endCursor")
+        if not cursor or cursor in seen_cursors or not search["nodes"]:
+            return incomplete("search pagination made no progress")
+        seen_cursors.add(cursor)
+    return incomplete("search pagination exceeded 10 pages")
+
+
+def labels(node: dict[str, Any]) -> list[str]:
+    return [x.get("name", "") for x in node.get("labels", {}).get("nodes", [])]
+
+
+def repo(node: dict[str, Any]) -> str:
+    return node.get("repository", {}).get("nameWithOwner", "")
+
+
+def author_login(node: dict[str, Any]) -> str:
+    return (node.get("author") or {}).get("login", "").lower()
+
+
+def node_text(node: dict[str, Any]) -> str:
+    return " ".join(
+        [
+            node.get("title") or "",
+            node.get("body") or "",
+            node.get("headRefName") or "",
+            " ".join(labels(node)),
+        ]
+    ).lower()
+
+
+def maintenance_category(node: dict[str, Any]) -> str | None:
+    title = (node.get("title") or "").lower()
+    branch = (node.get("headRefName") or "").lower()
+    login = author_login(node)
+    lower_labels = [label.lower() for label in labels(node)]
+    if title.startswith("chore: sync workflow templates"):
+        return "sync-generated"
+    if title.startswith("deps: sync dev tool versions") or branch.startswith("deps/sync-dev-versions-"):
+        return "dev-tool-sync"
+    # Source repairs opened by the sync-maintenance campaign are part of the
+    # same owned lifecycle as their generated consumer PRs.  Without this
+    # branch/title rule, a live Maint 68/71 repair is classified as a quiet
+    # orphan and can leave the real maintenance owner invisible to scheduling.
+    if repo(node) == WORKFLOWS_REPO and (
+        branch.startswith("automation/maint")
+        or (
+            title.startswith(("fix(sync):", "chore(sync):"))
+            and "codex-automation" in lower_labels
+        )
+    ):
+        return "dev-tool-sync"
+    if "renovate" in login or "dependabot" in login or branch.startswith(("renovate/", "dependabot/")):
+        return "dependency-bot"
+    return None
+
+
+def is_issue_linked_pr(node: dict[str, Any]) -> bool:
+    text = node_text(node)
+    branch = (node.get("headRefName") or "").lower()
+    lower_labels = [label.lower() for label in labels(node)]
+    if re.search(r"(close[sd]?|fix(e[sd])?|resolve[sd]?|related to|part of|stacked on)\s+#\d+", text):
+        return True
+    if re.search(r"\[#\d+\]|issue-\d+|meta:issue:\d+", text) or re.search(r"issue-\d+", branch):
+        return True
+    if "generated with claude code" in text or "generated by claude" in text or "generated by codex" in text:
+        return True
+    return any(label.startswith(("agent:", "agents:")) or label in {"autofix", "from:codex"} for label in lower_labels)
+
+
+def is_release_pr(node: dict[str, Any]) -> bool:
+    title = (node.get("title") or "").lower()
+    text = node_text(node)
+    lower_labels = [label.lower() for label in labels(node)]
+    return (
+        title.startswith("chore(main): release")
+        or "release-please" in text
+        or any(label.startswith("autorelease:") for label in lower_labels)
+    )
+
+
+def is_generated_or_durable_pr(node: dict[str, Any]) -> bool:
+    if repo(node) == ADMIN_REPO:
+        return True
+    text = node_text(node)
+    lower_labels = [label.lower() for label in labels(node)]
+    title = (node.get("title") or "").lower()
+    if "dashboard" in text or "metrics" in text or "tracker:durable" in lower_labels:
+        return True
+    if title.startswith("agent metrics weekly summary"):
+        return True
+    if is_release_pr(node):
+        return True
+    return False
+
+
+def is_actionable_orphan_candidate(node: dict[str, Any]) -> bool:
+    if node.get("isDraft"):
+        return False
+    lower_labels = [label.lower() for label in labels(node)]
+    text = node_text(node)
+    if "hold" in lower_labels or "do-not-merge" in lower_labels or "blocked" in lower_labels:
+        return False
+    if is_release_pr(node):
+        return True
+    return any(label in {"agent:needs-attention", "autofix:escalated"} for label in lower_labels) or "needs attention" in text
+
+
+def is_actionable_issue_pr_candidate(node: dict[str, Any]) -> bool:
+    """Issue-linked PRs belong to opener/closer, but should still wake them."""
+    if repo(node) == ADMIN_REPO:
+        return False
+    if is_release_pr(node):
+        return False
+    return is_issue_linked_pr(node)
+
+
+def classify_prs(
+    nodes: list[dict[str, Any]],
+    scoped: set[str],
+    challenge_due: set[str] | None = None,
+    retry_due: set[str] | None = None,
+) -> tuple[Counter[str], Counter[str], dict[str, list[str]]]:
+    buckets: Counter[str] = Counter()
+    maintenance: Counter[str] = Counter({"sync-generated": 0, "dev-tool-sync": 0, "dependency-bot": 0})
+    samples: dict[str, list[str]] = defaultdict(list)
+    challenge_due = challenge_due or set()
+    retry_due = retry_due or set()
+    for node in nodes:
+        r = repo(node)
+        url = node.get("url", "")
+        if r == ADMIN_REPO:
+            continue
+        if r == EXCLUDED_REPO:
+            buckets["excluded"] += 1
+            continue
+        key = f"{r}#{node.get('number')}"
+        maint = maintenance_category(node)
+        if r != ADMIN_REPO and maint:
+            maintenance[maint] += 1
+            buckets["maintenance-worker-scope"] += 1
+            samples["maintenance"].append(url)
+            continue
+        if key in challenge_due:
+            buckets["automation-challenge-due"] += 1
+            buckets["orphan-steward-scope"] += 1
+            buckets["actionable_orphan_steward_scope"] += 1
+            samples["challenge_due"].append(url)
+            samples["orphan"].append(url)
+            continue
+        if key in retry_due:
+            buckets["automation-retry-due"] += 1
+            buckets["orphan-steward-scope"] += 1
+            buckets["actionable_orphan_steward_scope"] += 1
+            samples["retry_due"].append(url)
+            samples["orphan"].append(url)
+            continue
+        if key in scoped:
+            buckets["scoped-blocked"] += 1
+            samples["scoped"].append(url)
+            continue
+        # Release PRs can contain changelog text that GitHub interprets as
+        # closing references. Route them to the release/orphan steward before
+        # generic issue-lineage classification; otherwise clean release PRs
+        # are misrouted to the issue workloop and can sit indefinitely.
+        if is_release_pr(node):
+            buckets["orphan-steward-scope"] += 1
+            if is_actionable_orphan_candidate(node):
+                buckets["actionable_orphan_steward_scope"] += 1
+            samples["orphan"].append(url)
+            continue
+        if is_issue_linked_pr(node):
+            buckets["issue-workloop-scope"] += 1
+            if is_actionable_issue_pr_candidate(node):
+                buckets["actionable_issue_workloop_pr_scope"] += 1
+            samples["issue_pr"].append(url)
+            continue
+        if is_actionable_orphan_candidate(node):
+            buckets["orphan-steward-scope"] += 1
+            buckets["actionable_orphan_steward_scope"] += 1
+            samples["orphan"].append(url)
+            continue
+        if is_generated_or_durable_pr(node):
+            buckets["durable/generated/repo-management"] += 1
+            samples["durable"].append(url)
+            continue
+        buckets["orphan-steward-scope"] += 1
+        samples["orphan"].append(url)
+    return buckets, maintenance, {k: v[:8] for k, v in samples.items()}
+
+
+def issue_category(node: dict[str, Any]) -> str:
+    if repo(node) in {EXCLUDED_REPO, ADMIN_REPO}:
+        return "excluded"
+    text = node_text(node)
+    title = (node.get("title") or "").lower()
+    login = author_login(node)
+    lower_labels = [label.lower() for label in labels(node)]
+    if "dependency dashboard" in title or ("renovate" in login and "dashboard" in title):
+        return "dependency-dashboard"
+    if "blocked epic" in title:
+        return "blocked-epic"
+    if "sync drift detected" in text:
+        return "operational-alert"
+    if "metrics" in text or "dashboard" in text or "weekly summary" in text or "langsmith fleet coverage" in text:
+        return "metrics-data"
+    if "tracker:durable" in lower_labels or "campaign" in text or "tracker" in text:
+        return "tracker"
+    if "sync failed" in text or "alert" in text or "expiry" in text or "outage" in text:
+        return "operational-alert"
+    if "epic" in title:
+        return "epic"
+    if any(label in lower_labels for label in ("enhancement", "bug", "repo-review-approved")) or title.startswith(
+        (
+            "[minor]",
+            "[deployment-hardening]",
+            "[enhancement]",
+            "[audit ",
+            "[capability pilot]",
+            "correct ",
+            "legacy removal",
+            "verifier follow-up",
+        )
+    ):
+        return "issue-implementation"
+    return "other"
+
+
+def classify_issues(nodes: list[dict[str, Any]]) -> Counter[str]:
+    return Counter(issue_category(node) for node in nodes if repo(node) != ADMIN_REPO)
+
+
+ISSUE_STATE_NEXT_ACTIONS = {
+    "automation-ready": "Issue workloop opener selects and routes the next bounded item.",
+    "in-flight-or-dispositioned": "Issue workloop/closer follows the recorded PR, verifier, or disposition until completion.",
+    "automation-challenge-due": "Automation independently challenges the claimed human boundary and routes any solvable work.",
+    "automation-retry": "Owning automation retries after the recorded TTL or clears the mechanical blocker on recovery.",
+    "human-input-required": "Human supplies the exact recorded decision; opener re-evaluates on its next run.",
+    "durable-holder": "Keep open as durable state; monitoring automation updates it and routine delivery must not close it.",
+    "generated-exclusion": "Generated-system owner refreshes it; issue workloop intentionally does not implement it.",
+    "policy-exclusion": "Review the policy disposition before routing or retaining the exclusion.",
+    "outside-opener-scope": "Review repository coverage; add it to the supported set or assign a concrete alternate worker.",
+    "unmapped-supported": "Repair the controller/guard mapping because a supported-repository issue lacks an automation disposition.",
+}
+
+
+def issue_automation_summary(
+    nodes: list[dict[str, Any]], liveness: dict[str, Any] | None
+) -> dict[str, dict[str, Any]]:
+    state_by_target: dict[tuple[str, int], str] = {}
+    if liveness:
+        state_sources = (
+            ("actionable_candidates", "automation-ready"),
+            ("dispositioned_candidates", "in-flight-or-dispositioned"),
+            ("challenge_due", "automation-challenge-due"),
+            ("automation_retry", "automation-retry"),
+            ("human_attention", "human-input-required"),
+            ("durable_holders", "durable-holder"),
+            # These remain durable holders: the guard emits them separately so
+            # it can report their long-horizon evidence dependency without
+            # turning them into immediate human-input requests.
+            ("standing_human_dependencies", "durable-holder"),
+            ("generated_exclusions", "generated-exclusion"),
+            ("policy_exclusions", "policy-exclusion"),
+        )
+        for source, state in state_sources:
+            for item in liveness.get(source) or []:
+                try:
+                    key = (str(item.get("repository") or ""), int(item.get("number")))
+                except (TypeError, ValueError):
+                    continue
+                state_by_target[key] = state
+
+    supported = set(liveness.get("supported_repos") or []) if liveness else set()
+    grouped: dict[str, Counter[str]] = defaultdict(Counter)
+    for node in nodes:
+        if repo(node) == ADMIN_REPO:
+            continue
+        category = issue_category(node)
+        key = (repo(node), int(node.get("number") or 0))
+        state = state_by_target.get(key)
+        if state is None:
+            state = "unmapped-supported" if key[0] in supported else "outside-opener-scope"
+        grouped[category][state] += 1
+
+    result: dict[str, dict[str, Any]] = {}
+    for category in sorted(grouped):
+        states = grouped[category]
+        result[category] = {
+            "total": sum(states.values()),
+            "automation_states": dict(sorted(states.items())),
+            "next_actions": [
+                ISSUE_STATE_NEXT_ACTIONS[state]
+                for state in ISSUE_STATE_NEXT_ACTIONS
+                if states.get(state, 0) > 0
+            ],
+        }
+    return result
+
+
+def pr_automation_summary(
+    buckets: Counter[str],
+    maintenance: Counter[str],
+    schedules: dict[str, Schedule],
+) -> dict[str, dict[str, Any]]:
+    issue_count = buckets.get("issue-workloop-scope", 0)
+    actionable_issue_count = buckets.get("actionable_issue_workloop_pr_scope", 0)
+    maintenance_count = buckets.get("maintenance-worker-scope", 0)
+    orphan_count = buckets.get("orphan-steward-scope", 0)
+    actionable_orphan_count = (
+        buckets.get("actionable_orphan_steward_scope", 0)
+        + buckets.get("unassigned-review", 0)
+    )
+    scoped_count = buckets.get("scoped-blocked", 0)
+    durable_count = buckets.get("durable/generated/repo-management", 0)
+    return {
+        "issue-workloop": {
+            "total": issue_count,
+            "actionable": actionable_issue_count,
+            "worker_state": (
+                "ACTIVE"
+                if schedules["opener"].status == "ACTIVE"
+                and schedules["closer"].status == "ACTIVE"
+                and schedules["opener"].rrule == RRULES["opener_active"]
+                and schedules["closer"].rrule == RRULES["closer_active"]
+                else "DORMANT"
+            ),
+            "next_action": (
+                "Opener/closer reviews, fixes, merges, and verify:compare-completes the issue-linked PR queue."
+                if issue_count
+                else "No issue-linked PR action sampled."
+            ),
+        },
+        "maintenance": {
+            "total": maintenance_count,
+            "actionable": maintenance_count,
+            "worker_state": (
+                "ACTIVE"
+                if schedules["maintenance"].status == "ACTIVE"
+                and schedules["maintenance"].rrule == RRULES["maintenance_active"]
+                else "DORMANT"
+            ),
+            "types": dict(maintenance),
+            "next_action": (
+                "Maintenance worker processes sync, dev-tool, and dependency PRs through checks and ownership rules."
+                if maintenance_count
+                else "No maintenance PR action sampled."
+            ),
+        },
+        "orphan-steward": {
+            "total": orphan_count,
+            "actionable": actionable_orphan_count,
+            "automation_challenge_due": buckets.get("automation-challenge-due", 0),
+            "automation_retry_due": buckets.get("automation-retry-due", 0),
+            "worker_state": (
+                "ACTIVE"
+                if schedules["orphan"].status == "ACTIVE"
+                and schedules["orphan"].rrule == RRULES["orphan_active"]
+                else "DORMANT"
+            ),
+            "next_action": (
+                "Orphan steward independently challenges stale human-authority claims, retries due automation blockers, and routes each actionable release/unassigned PR to merge, repair, or a concrete blocker."
+                if orphan_count
+                else "No orphan-steward PR action sampled."
+            ),
+        },
+        "scoped-blocked": {
+            "total": scoped_count,
+            "actionable": 0,
+            "worker_state": "HELD",
+            "next_action": "Clear or revalidate the recorded scoped blocker; the owning worker then resumes.",
+        },
+        "durable-generated-repo-management": {
+            "total": durable_count,
+            "actionable": 0,
+            "worker_state": "MONITORED",
+            "next_action": "Leave generated/status PRs with their designated management owner unless an attention signal appears.",
+        },
+        "stall-escalation-backstop": {
+            "total": issue_count + maintenance_count + orphan_count,
+            "actionable": 0,
+            "worker_state": (
+                "ACTIVE"
+                if schedules["escalator"].status == "ACTIVE"
+                and schedules["escalator"].rrule == RRULES["escalator_active"]
+                else "DORMANT"
+            ),
+            "next_action": (
+                "Independently diagnose any PR whose ordinary owner records no concrete action, then repair the automation contract, wake an owner, or record a genuine blocker."
+            ),
+        },
+    }
+
+
+def scoped_blocker_states() -> tuple[set[str], set[str], set[str]]:
+    try:
+        data = json.loads(HANDOFF.read_text())
+    except Exception:
+        return set(), set(), set()
+    blockers = (data.get("stop") or {}).get("scoped_blockers") or {}
+    held: set[str] = set()
+    challenge_due: set[str] = set()
+    retry_due: set[str] = set()
+    now = time.time()
+    for target, entry in blockers.items():
+        if not isinstance(entry, dict):
+            held.add(target)
+            continue
+        if entry.get("await_human") is True:
+            if entry.get("human_confirmed") is True or entry.get("attention_state") == "human-confirmed":
+                held.add(target)
+            else:
+                challenge_due.add(target)
+            continue
+        expires_at = parse_iso(str(entry.get("expires_at") or ""))
+        if expires_at is not None and expires_at <= now:
+            retry_due.add(target)
+        else:
+            held.add(target)
+    return held, challenge_due, retry_due
+
+
+def run_json(cmd: list[str], timeout: int = 25) -> tuple[dict[str, Any] | None, str | None]:
+    try:
+        code, stdout, stderr = run(cmd, timeout=timeout)
+    except Exception as exc:
+        return None, str(exc)
+    if code != 0:
+        return None, stderr.strip() or f"exit {code}"
+    try:
+        return json.loads(stdout), None
+    except json.JSONDecodeError as exc:
+        return None, f"invalid JSON: {exc}"
+
+
+def approved_queue_info() -> dict[str, Any]:
+    info: dict[str, Any] = {"exists": APPROVED_QUEUE.exists(), "path": str(APPROVED_QUEUE)}
+    if not APPROVED_QUEUE.exists():
+        return info
+    stat = APPROVED_QUEUE.stat()
+    text = APPROVED_QUEUE.read_text(errors="replace")
+    info["mtime_utc"] = datetime.fromtimestamp(stat.st_mtime, timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    info["age_hours"] = round((time.time() - stat.st_mtime) / 3600, 2)
+    info["approved_token_count"] = len(re.findall("approved", text, re.I))
+    info["github_url_count"] = len(re.findall(r"https://github.com/[^\s\]\")]+", text))
+    try:
+        data = json.loads(text)
+        if isinstance(data, list):
+            items = data
+        elif isinstance(data, dict):
+            items = data.get("items") or data.get("issues") or data.get("candidates") or []
+        else:
+            items = []
+        info["items_count"] = len(items) if isinstance(items, list) else 0
+        info["uploadable_true_count"] = sum(1 for item in items if isinstance(item, dict) and (item.get("uploadable") is True or item.get("approved") is True))
+    except json.JSONDecodeError as exc:
+        info["json_error"] = str(exc)
+    return info
+
+
+def maintenance_memory_state() -> tuple[bool, str | None]:
+    if not MAINTENANCE_MEMORY.exists():
+        return False, None
+    head = MAINTENANCE_MEMORY.read_text(errors="replace")[:2000].lower()
+    match = re.search(r"last_completed_campaign:\s*([^\s]+)", head)
+    return "active_campaign: true" in head, match.group(1) if match else None
+
+
+def maintenance_memory_active() -> bool:
+    active, _last_completed = maintenance_memory_state()
+    return active
+
+
+def dependency_has_early_signal(node: dict[str, Any]) -> bool:
+    if maintenance_category(node) != "dependency-bot":
+        return False
+    lower_labels = [label.lower() for label in labels(node)]
+    text = node_text(node)
+    signal_terms = (
+        "security",
+        "major",
+        "breaking",
+        "breaking-change",
+        "failing-check",
+        "failed check",
+        "ci failure",
+        "agent:needs-attention",
+        "needs attention",
+        "needs-attention",
+    )
+    return any(term in text for term in signal_terms) or any(
+        any(term in label for term in signal_terms) for label in lower_labels
+    )
+
+
+def maintenance_early_start_reason(
+    maintenance: Counter[str],
+    pr_nodes: list[dict[str, Any]],
+    active_campaign: bool,
+    last_completed_campaign: str | None,
+) -> str | None:
+    if active_campaign:
+        return "active campaign already recorded"
+    if maintenance.get("sync-generated", 0) > 0:
+        return f"sync-generated wave ({maintenance['sync-generated']})"
+    if maintenance.get("dev-tool-sync", 0) > 0:
+        return f"dev-tool-sync wave ({maintenance['dev-tool-sync']})"
+    if maintenance.get("dependency-bot", 0) >= 5:
+        return f"dependency-bot threshold ({maintenance['dependency-bot']})"
+    if last_completed_campaign:
+        parsed = parse_iso(last_completed_campaign)
+        if parsed is not None and time.time() - parsed >= MAINTENANCE_EARLY_START_SECONDS:
+            return "last completed campaign age >= 6 days"
+    for node in pr_nodes:
+        if repo(node) in {EXCLUDED_REPO, ADMIN_REPO}:
+            continue
+        if dependency_has_early_signal(node):
+            return f"dependency PR signal ({repo(node)}#{node.get('number')})"
+    return None
+
+
+def quiet_counts(issue_signal: bool, maintenance_signal: bool, orphan_signal: bool) -> tuple[int, int, int]:
+    previous = (0, 0, 0)
+    for _ts, body in memory_sections():
+        match = re.search(
+            r"Consecutive quiet counts: issue workloop `?(\d+)`?; maintenance lane `?(\d+)`?.*?orphan PR steward `?(\d+)`?",
+            body,
+            re.S,
+        )
+        if match:
+            previous = tuple(int(match.group(i)) for i in range(1, 4))  # type: ignore[assignment]
+            break
+    issue_q = 0 if issue_signal else previous[0] + 1
+    maint_q = 0 if maintenance_signal else previous[1] + 1
+    orphan_q = 0 if orphan_signal else previous[2] + 1
+    return issue_q, maint_q, orphan_q
+
+
+def latest_orphan_worker_noop_is_fresh() -> tuple[bool, str | None]:
+    if not ORPHAN_MEMORY.exists():
+        return False, None
+    text = ORPHAN_MEMORY.read_text(errors="replace")
+    matches = list(re.finditer(r"^##\s+(\S+)\s*$", text, re.M))
+    if not matches:
+        return False, None
+    first = matches[0]
+    end = matches[1].start() if len(matches) > 1 else len(text)
+    ts = first.group(1)
+    parsed = parse_iso(ts)
+    if parsed is None or time.time() - parsed > ORPHAN_WORKER_NOOP_FRESH_SECONDS:
+        return False, ts
+    body = text[first.start() : end]
+    if "actionable_orphan_steward_scope=0" in body and "Selected target: none" in body:
+        return True, ts
+    return False, ts
+
+
+def format_schedules(schedules: dict[str, Schedule]) -> str:
+    return "; ".join(f"{name} `{sched.status}` / `{sched.rrule}`" for name, sched in schedules.items())
+
+
+def main(argv: list[str] | None = None) -> int:
+    # The demand planner is read-only for automation settings. The Luna task
+    # applies its full configurations through the app's automation_update tool.
+    import demand_router
+    return demand_router.main(argv)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

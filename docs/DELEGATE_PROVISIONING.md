@@ -32,8 +32,18 @@ checking out the existing branch. It preserves commits rather than resetting to 
 current base. Git refuses a branch still checked out by a live or locked worktree;
 no forced checkout, branch deletion or `-B` reset is used on this retry. Other Git
 failures propagate immediately. An existing target worktree on a different branch
-is refused for inspection, even with stale-reuse enabled. Existing cleanliness and
-divergence checks still apply to reusable worktrees.
+is refused for inspection, even with stale-reuse enabled.
+
+An existing worktree that fails the cleanliness or divergence check no longer blocks
+every later dispatch (owner decision 2026-11-05: 359 closer dispatches across 27 issues
+were refused 2026-11-03..05, with nothing to clear them). A clean worktree that is only
+**behind** its upstream holds no work: it is fetched, fast-forwarded and reused (event
+cause `fast-forwarded`). A worktree with **unpushed commits or uncommitted changes** is
+set aside: its HEAD moves to a new `preserved/<worktree>-<UTC stamp>` branch, any
+uncommitted changes are committed onto that branch, the worktree is removed, and the
+dispatch provisions fresh (event fields `set_aside`, `preserved_branch`). Nothing is
+deleted. A worktree that a live process is still using is never touched: that refusal
+says `blocking 1, drainable 1` and clears when the process exits.
 
 Offline verification:
 

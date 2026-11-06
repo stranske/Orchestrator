@@ -1,0 +1,32 @@
+{
+  "commit": "e1bda42432fb82a905864cf8b395288e9a0aea3b",
+  "parent": "13a0cd09f689488616674fc54a556ebdf8d9f229",
+  "git_metadata": "/tmp/issue-1111-summary-delivery.git",
+  "checkout_branch_advanced": false,
+  "reason": "Repository .git/index.lock is read-only; git add failed with exit 128.",
+  "patch": "source-commit.patch.gz",
+  "patch_sha256": "48aafe312e75e174bcfd2131e39bb0b847b6fcea52c02dad279d23337975a8bd",
+  "changed_paths": [
+    "docs/verification/issue-1111-summary-reconciliation/README.md",
+    "docs/verification/issue-1111-summary-reconciliation/historical-reconciliation.json",
+    "docs/verification/issue-1111-summary-reconciliation/historical-reconciliation.json.stderr",
+    "docs/verification/issue-1111-summary-reconciliation/runner-inventory.json",
+    "docs/verification/issue-1111-summary-reconciliation/runner-inventory.json.stderr",
+    "docs/verification/issue-1111-summary-reconciliation/summary-final.log",
+    "docs/verification/issue-1111-summary-reconciliation/summary-final.log.stderr",
+    "docs/verification/issue-1111-summary-reconciliation/switch-reader.log",
+    "docs/verification/issue-1111-summary-reconciliation/switch-reader.log.stderr",
+    "docs/verification/issue-1111-summary-reconciliation/syntax.log",
+    "docs/verification/issue-1111-summary-reconciliation/syntax.log.stderr",
+    "docs/verification/issue-1111-summary-reconciliation/test-syntax.log",
+    "docs/verification/issue-1111-summary-reconciliation/test-syntax.log.stderr",
+    "docs/verification/issue-1111-summary-reconciliation/tests.log",
+    "docs/verification/issue-1111-summary-reconciliation/tests.log.stderr",
+    "docs/verification/issue-1111-summary-reconciliation/validation.json",
+    "scripts/reconcile_adjudicator_summary.js",
+    "tests/test_adjudicator_summary.js"
+  ],
+  "staged_whitespace_check_exit": 0,
+  "python_files_changed": false,
+  "transfer_patch_apply_check_exit": 0
+}

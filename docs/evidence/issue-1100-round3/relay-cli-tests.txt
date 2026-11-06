@@ -1,0 +1,19 @@
+✔ a pre-deployment decision exiting later does not satisfy the deployment window (536.603754ms)
+✔ an importer failure retains the explicit round and provider incident for recovery (421.079374ms)
+✔ an explicit exit remains a boundary for later legacy adjacency (417.76712ms)
+✔ interleaved decisions retain exact attribution while an unfinished decision stays pending (544.972844ms)
+✔ a completed exit after the deadline cannot establish an outcome before the deadline (422.336721ms)
+✔ the deployment boundary excludes an earlier decision despite both exits being in-window (417.022197ms)
+✔ the report separates cumulative bindings from completed joins in the selected window (513.711002ms)
+✔ positive window totals do not conceal a matching completed exit with no accepted join (423.996559ms)
+✔ ambiguous persisted exits cannot be reported as an attributable accepted join (291.230228ms)
+✔ unavailable Brain reports unknown counts without creating a database (1.376622ms)
+✔ an accepted flag cannot substitute for matching round facts and relay outcome evidence (218.832804ms)
+ℹ tests 11
+ℹ suites 0
+ℹ pass 11
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4220.061629

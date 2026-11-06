@@ -16,6 +16,7 @@ import pytest
 
 import capabilities
 import capability_activation_audit as audit
+import capability_admission as admission
 import capability_advisor
 
 
@@ -55,6 +56,8 @@ def test_a_retired_or_superseded_row_is_never_reported_blocked(tmp_path, monkeyp
 
 
 def test_the_whole_ledger_is_still_accounted_for(tmp_path, monkeypatch):
+    with monkeypatch.context() as patch:
+        _external_proof_fixture(tmp_path / "external-proof", patch)
     rep = _report(tmp_path, monkeypatch)
     assert rep["ledger_total"] == 3
     assert rep["not_audited"] == {
@@ -92,6 +95,97 @@ def test_the_audit_declares_the_population_it_audits(tmp_path, monkeypatch):
 def test_not_live_states_are_canonical_lifecycle_states():
     assert capabilities.NOT_LIVE_STATES
     assert capabilities.NOT_LIVE_STATES <= set(capabilities.CANONICAL_STATES)
+
+
+def _external_proof_fixture(root, monkeypatch):
+    from copy import deepcopy
+
+    root.mkdir()
+    tree = root / "tree"
+    tree.mkdir()
+    entry = root / "external_core.py"
+    entry.write_text("def run():\n    pass\n")
+    caller = root / "controller.py"
+    caller.write_text("def start():\n    pass\n")
+    now = 1800000000
+    clock = {"now": now}
+    monkeypatch.setattr(audit, "HERE", tree)
+    monkeypatch.setattr(audit.time, "time", lambda: clock["now"])
+    ledger = root / "capabilities.json"
+    capabilities.register(
+        "external-fixture",
+        {
+            "status": "wired",
+            "entrypoint": str(entry),
+            "matcher": {"kind": "tick_phase", "equals": "external-fixture"},
+            "external_caller": {"path": str(caller), "function": "start"},
+            "external_heartbeat_max_age_seconds": 86400,
+        },
+        ledger,
+    )
+
+    def cap():
+        return capabilities.load_declared(ledger)["external-fixture"]
+
+    def caller_ok(record):
+        return admission.req_caller_exists(record, {"audit_rows": {}})[0]
+
+    record = cap()
+    assert caller_ok(record)
+    assert not admission.req_heartbeat(record, {})[0]
+    (root / "rounds.jsonl").write_text('{"ts": "recent"}\n')
+    record["last_invocation"] = now
+    assert not admission.req_heartbeat(record, {})[0], "a timestamp or file is not event proof"
+    assert capabilities.heartbeat(
+        "external-fixture",
+        "invocation",
+        path=ledger,
+        timestamp=now,
+        ref="round:1",
+        idempotency_key="round:1",
+    )
+    assert not capabilities.heartbeat(
+        "external-fixture",
+        "invocation",
+        path=ledger,
+        timestamp=now,
+        ref="round:1",
+        idempotency_key="round:1",
+    )
+    assert admission.req_heartbeat(cap(), {})[0]
+    clock["now"] = now + 86401
+    assert caller_ok(cap()), "caller proof is independent of stale heartbeat"
+    assert not admission.req_heartbeat(cap(), {})[0]
+    capabilities.heartbeat(
+        "external-fixture", "invocation", path=ledger, timestamp=clock["now"], ref="round:2"
+    )
+    assert admission.req_heartbeat(cap(), {})[0], "normal events drain the closed proof gate"
+    good = cap()
+    for event in (
+        {"type": "invocation", "timestamp": clock["now"] + 1},
+        {"type": "success", "timestamp": clock["now"]},
+        {
+            "type": "invocation",
+            "timestamp": clock["now"],
+            "metadata": {"evidence_provenance": "fixture_observed"},
+        },
+        {"type": "invocation", "timestamp": clock["now"], "metadata": {"counterfactual": True}},
+    ):
+        bad = {**good, "event_history": [event]}
+        assert not admission.req_heartbeat(bad, {})[0]
+    for declaration in (
+        {"path": str(caller), "function": "absent"},
+        {"path": str(root / "absent.py"), "function": "start"},
+    ):
+        bad = {**good, "external_caller": declaration}
+        assert not caller_ok(bad)
+    internal = tree / "internal.py"
+    internal.write_text("def run():\n    pass\n")
+    bad = deepcopy(good)
+    bad["entrypoint"] = str(internal)
+    assert not caller_ok(bad), "external declarations cannot bypass an in-tree audit"
+    bad = {**good, "external_heartbeat_max_age_seconds": 0}
+    assert not admission.req_heartbeat(bad, {})[0]
 
 
 # --------------------------------------------------------------------------- progress

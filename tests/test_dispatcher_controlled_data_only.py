@@ -260,10 +260,14 @@ def test_native_completion_identity_protocol_and_bounds_never_fall_back(world, m
 
 def test_timeout_keeps_original_observed_run_and_never_retries(world):
     world.configure("timeout")
-    result = run(world, timeout=0.2)
+    # The original budget includes real prelaunch validation. Give the inert
+    # child time to start on a loaded CI runner before its ten-second sleep
+    # triggers the running-process timeout that this test is meant to cover.
+    result = run(world, timeout=2)
     assert result["exit"] == 124 and result["outcome_uncertain"] is True
     assert result["attempts"] == 1 and result["process_started"] is True
     assert result["process_observation"]["run_id"] == result["run_id"]
+    assert len(world.events["started"]) == len(world.events["finished"]) == 1
 
 
 def test_legacy_generic_route_is_not_silently_controlled(world, monkeypatch):

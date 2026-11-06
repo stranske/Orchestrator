@@ -47,12 +47,12 @@ from __future__ import annotations
 
 import argparse
 import base64
-import hashlib
 import json
 import math
 import os
 import re
 import sqlite3
+import statistics
 import subprocess
 import sys
 import time
@@ -60,21 +60,10 @@ from collections.abc import Callable, Mapping
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 import capabilities
 import paths
 import python_standard_audit
-
-CURSOR_CLOSER_LOG = Path.home() / ".codex/automations/logs/cursor-closer.out"
-CURSOR_LANE_WRAPPER = Path.home() / ".codex/bin/cursor-lane.sh"
-_CURSOR_MANIFEST_RE = re.compile(r"--manifest\s+(?:'([^']+)'|\"([^\"]+)\"|(\S+))")
-_CURSOR_POLICY_PINS = frozenset(
-    {
-        "imi-merge-verify-closer/automation.toml",
-        "reviewed-repo-automation-controller/automation.toml",
-    }
-)
 
 # How long a switch may sit unreviewed before the question comes back.
 REVIEW_DAYS = 7
@@ -431,6 +420,353 @@ def _gh_call(args: list[str], *, timeout_s: int = GH_TIMEOUT_S) -> tuple[bool, s
         err = (proc.stderr or proc.stdout or "gh failed").strip().replace("\n", " ")[:160]
         return False, "", f"unmeasured: {err}"
     return True, proc.stdout or "", ""
+
+
+class _FleetReadError(Exception):
+    """A missing population is not a measured zero."""
+
+
+FLEET_DELIVERY_NAMES = {
+    "gate_cancellations": "Gate cancellation share (48 h, labeled versus synchronize)",
+    "merge_to_close": "Merge to issue closure (48 h)",
+    "oldest_canary": "Oldest open canary sync PR",
+    "opener_cap": "Opener-owned PR count against cap",
+    "released_flow": "Released-issue agent PRs per day (48 h)",
+}
+
+
+def _fleet_json(gh, args: list[str]):
+    ok, out, reason = gh(args)
+    if not ok:
+        detail = (reason or "read failed").removeprefix("unmeasured: ").removeprefix("gh ")
+        raise _FleetReadError(f"gh {detail}")
+    try:
+        payload = json.loads(out)
+    except ValueError as exc:
+        raise _FleetReadError("gh invalid JSON response") from exc
+    if isinstance(payload, dict) and payload.get("errors"):
+        raise _FleetReadError("gh API returned errors")
+    return payload
+
+
+def _fleet_stamp(value) -> int:
+    if not isinstance(value, str) or not value.endswith(("Z", "+00:00")):
+        raise _FleetReadError("would need a UTC GitHub timestamp")
+    stamp = _parse_iso_ts(value)
+    if stamp is None:
+        raise _FleetReadError("would need a valid GitHub timestamp")
+    return stamp
+
+
+def _fleet_measured(value: str, evidence: str) -> dict:
+    return {"value": value, "evidence_class": evidence, "reason": ""}
+
+
+def _fleet_gate_cancellations(gh, now: int) -> dict:
+    since = datetime.fromtimestamp(now - 48 * 3600, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    pages = _fleet_json(
+        gh,
+        [
+            "api",
+            f"repos/{WORKFLOWS_REPO}/actions/workflows/pr-00-gate.yml/runs"
+            f"?per_page=100&created=>={since}",
+            "--paginate",
+            "--slurp",
+        ],
+    )
+    runs = []
+    for page in pages:
+        runs.extend(page["workflow_runs"])
+    # The REST run schema gives `event=pull_request`, not github.event.action. A label
+    # timeline near a run is correlation, not its trigger; neither actor nor title proves it.
+    # Keep the read so an API failure is distinguished from this missing join.
+    raise _FleetReadError(
+        "would need run-ID-keyed github.event.action receipts (labeled/synchronize) "
+        f"joined to Gate conclusions over 48 h ({len(runs)} runs read)"
+    )
+
+
+def _fleet_recent_prs(gh, repo: str, now: int) -> list[dict]:
+    """Complete updated population; no search ceiling or fixed `pr list --limit`."""
+    rows: list[dict] = []
+    oldest_updated: int | None = None
+    seen: set[int] = set()
+    for page in range(1, 11):
+        batch = _fleet_json(
+            gh,
+            [
+                "api",
+                f"repos/{repo}/pulls?state=all&sort=updated&direction=desc"
+                f"&per_page=100&page={page}",
+            ],
+        )
+        if not isinstance(batch, list):
+            raise _FleetReadError("gh PR list is not an array")
+        for pr in batch:
+            updated = _fleet_stamp(pr["updated_at"])
+            if oldest_updated is not None and updated > oldest_updated:
+                raise _FleetReadError("would need consistent descending updated PR order")
+            oldest_updated = updated
+            number = pr.get("number")
+            if type(number) is not int or number <= 0:
+                raise _FleetReadError("would need complete GitHub PR numbers")
+            # PRs can move between pages while GitHub handles separate requests.
+            # Deduplicating hides that the same shift may also have omitted a PR.
+            if number in seen:
+                raise _FleetReadError("would need consistent non-overlapping PR pages")
+            seen.add(number)
+            if updated >= now - 48 * 3600:
+                rows.append(pr)
+        # Validate the whole page before trusting its cutoff. An old row followed
+        # by a recent one must not silently truncate either PR measurement.
+        if oldest_updated is not None and oldest_updated < now - 48 * 3600:
+            return rows
+        if len(batch) < 100:
+            return rows
+    raise _FleetReadError("would need complete updated PR pagination beyond 1000 rows per repo")
+
+
+def _fleet_labels(record: Mapping[str, object], subject: str) -> list[str]:
+    """Distinguish an explicitly empty label list from missing classification evidence."""
+    labels = record.get("labels")
+    if not isinstance(labels, list):
+        raise _FleetReadError(f"would need complete GitHub {subject} labels")
+
+    names: list[str] = []
+    for label in labels:
+        name = label.get("name") if isinstance(label, Mapping) else label
+        if not isinstance(name, str) or not name.strip():
+            raise _FleetReadError(f"would need complete GitHub {subject} labels")
+        names.append(name)
+    return names
+
+
+def _fleet_head_ref(record: Mapping[str, object], subject: str) -> str:
+    head = record.get("head")
+    branch = head.get("ref") if isinstance(head, Mapping) else None
+    if not isinstance(branch, str) or not branch.strip():
+        raise _FleetReadError(f"would need complete GitHub {subject} head branch")
+    return branch
+
+
+def _fleet_pr_measures(gh, now: int, repos: list[str], *, flow: bool) -> dict:
+    from backlog import _has_agent_label, _pr_issue_refs
+
+    intervals = []
+    opened = merged = pending = preclosed = 0
+    issues = {}
+    for repo in repos:
+        for pr in _fleet_recent_prs(gh, repo, now):
+            if not _has_agent_label(_fleet_labels(pr, "PR")):
+                continue
+            # Only REST's explicit null establishes an unmerged PR. A malformed
+            # false value must not silently undercount flow or change the median.
+            merged_at = _fleet_stamp(pr["merged_at"]) if pr["merged_at"] is not None else None
+            created_at = _fleet_stamp(pr["created_at"])
+            recent_merge = merged_at is not None and now - 48 * 3600 <= merged_at <= now
+            recent_open = now - 48 * 3600 <= created_at <= now
+            if not (recent_merge or (flow and recent_open)):
+                continue
+            # The latency arm below subtracts the merge time. The preceding predicate makes a
+            # missing value unreachable when `flow` is false, but retain that fact explicitly for
+            # both readers and the type checker rather than relying on a boolean expression above.
+            if not flow and merged_at is None:
+                continue
+            # A null body is GitHub's explicit empty value. Missing or malformed
+            # bodies cannot establish that a PR has no source-issue references.
+            body = pr.get("body")
+            if "body" not in pr or (body is not None and not isinstance(body, str)):
+                raise _FleetReadError("would need complete GitHub PR body")
+            # Latency requires a literal Closes reference. Flow uses backlog's existing
+            # source-issue rule, adapting REST head.ref to its GraphQL field name.
+            # Never join #N to a different repository.
+            refs = (
+                {
+                    str(n)
+                    for n in _pr_issue_refs(repo, {**pr, "headRefName": _fleet_head_ref(pr, "PR")})
+                }
+                if flow
+                else set(re.findall(r"\bCloses\s+#([1-9]\d*)\b", body or "", re.I))
+            )
+            released = False
+            for number in sorted(refs, key=int):
+                key = (repo, number)
+                if key not in issues:
+                    issues[key] = _fleet_json(gh, ["api", f"repos/{repo}/issues/{number}"])
+                issue = issues[key]
+                if "pull_request" in issue:
+                    raise _FleetReadError("would need Closes references resolving to issues")
+                if flow:
+                    released |= "repo-review-approved" in _fleet_labels(issue, "issue")
+                    continue
+                if merged_at is None:
+                    continue
+                if issue["state"] == "open":
+                    pending += 1
+                elif issue["state"] == "closed":
+                    closed = _fleet_stamp(issue["closed_at"])
+                    if closed < merged_at:
+                        preclosed += 1
+                    elif closed <= now:
+                        intervals.append((closed - merged_at) / 60)
+                    else:
+                        raise _FleetReadError(
+                            "would need issue closure timestamps at or before now"
+                        )
+                else:
+                    raise _FleetReadError("would need issue state and closed_at")
+            if flow and released:
+                opened += recent_open
+                merged += recent_merge
+    join = "backlog source-issue references" if flow else "Closes issue joins"
+    evidence = f"GitHub REST; backlog agent-label rule; same-repo {join}"
+    if flow:
+        return _fleet_measured(
+            f"opened {opened / 2:g}/day, merged {merged / 2:g}/day "
+            f"({opened} opened, {merged} merged; current issue approval labels)",
+            evidence,
+        )
+    if not intervals:
+        raise _FleetReadError(
+            f"would need closed issues after agent PR merges in 48 h "
+            f"(0 observed pairs; {pending} still open; {preclosed} closed before merge)"
+        )
+    return _fleet_measured(
+        f"median {statistics.median(intervals):g} min ({len(intervals)} PR/issue pairs; "
+        f"{pending} still open; {preclosed} closed before merge)",
+        evidence,
+    )
+
+
+def _fleet_oldest_canary(gh, now: int) -> dict:
+    config = _fleet_json(
+        gh,
+        [
+            "api",
+            f"repos/{WORKFLOWS_REPO}/contents/config/consumer_sync_canaries.json",
+            "-H",
+            "Accept: application/vnd.github.raw+json",
+        ],
+    )
+    repos = list(dict.fromkeys(row["repo"] for row in config["canaries"]))
+    # Never substitute the fleet registry for the explicitly configured canary cohort.
+    repos = [repo for repo in repos if repo != "stranske/Collab-Admin"]
+    if len(repos) != 3:
+        raise _FleetReadError("would need the configured three non-excluded canary repositories")
+    candidates = []
+    for repo in repos:
+        pages = _fleet_json(
+            gh,
+            ["api", f"repos/{repo}/pulls?state=open&per_page=100", "--paginate", "--slurp"],
+        )
+        # A complete empty REST population is `[[]]`. Missing or malformed pages
+        # cannot establish absence, or an oldest PR from the remaining canaries.
+        if (
+            not isinstance(pages, list)
+            or not pages
+            or any(not isinstance(page, list) for page in pages)
+        ):
+            raise _FleetReadError(f"would need complete paginated canary PR arrays for {repo}")
+        seen: set[int] = set()
+        for page in pages:
+            for pr in page:
+                number = pr.get("number")
+                if type(number) is not int or number <= 0:
+                    raise _FleetReadError("would need complete GitHub canary PR numbers")
+                # A repeated PR can accompany an omitted PR when the open
+                # population shifts during pagination, including non-sync PRs.
+                if number in seen:
+                    raise _FleetReadError("would need consistent non-overlapping canary PR pages")
+                seen.add(number)
+                if _fleet_head_ref(pr, "canary PR").startswith("sync/workflows-"):
+                    # Draft PRs still have age and still represent undelivered work.
+                    created = _fleet_stamp(pr["created_at"])
+                    if created > now:
+                        raise _FleetReadError("would need canary creation timestamps before now")
+                    candidates.append((created, repo, number))
+    evidence = "GitHub REST; Workflows configured three-canary cohort"
+    if not candidates:
+        return _fleet_measured("none open (0 sync PRs across 3 canaries)", evidence)
+    created, repo, number = min(candidates)
+    return _fleet_measured(f"{(now - created) / 86400:.1f} days ({repo}#{number})", evidence)
+
+
+def _fleet_opener_cap(runner) -> dict:
+    helper = Path.home() / ".codex" / "bin" / "opener-cap-health.py"
+    try:
+        proc = runner(
+            [sys.executable, str(helper), "--json"],
+            capture_output=True,
+            text=True,
+            timeout=GH_TIMEOUT_S,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise _FleetReadError(f"would need {helper} --json ({type(exc).__name__})") from exc
+    if proc.returncode:
+        raise _FleetReadError(f"would need successful {helper} --json (exit {proc.returncode})")
+    try:
+        data = json.loads(proc.stdout)
+    except ValueError:
+        raise _FleetReadError(f"would need valid JSON from {helper} --json")
+    if not isinstance(data, dict):
+        raise _FleetReadError(f"would need a JSON object from {helper} --json")
+    fields = ("total_opener_owned", "human_held_exempt_count", "coverage_exempt_count")
+    if any(type(data.get(key)) is not int or data[key] < 0 for key in fields):
+        raise _FleetReadError("would need opener health ownership and both exempt counts")
+    # The cap is machine-local policy. No checked-in source establishes its key/value;
+    # preserve the observed counts, explicitly naming the missing half of the measure.
+    return _fleet_measured(
+        f"{data['total_opener_owned']} owned; human-held exempt {data['human_held_exempt_count']}; "
+        f"coverage exempt {data['coverage_exempt_count']}; "
+        "cap unmeasured — would need opener's configured cap",
+        "opener-cap-health.py --json (counts only)",
+    )
+
+
+def fleet_delivery_measures(*, now: int | None = None, gh_fn=None, opener_runner=None) -> dict:
+    """Five independent report-only rows. Missing facts never become invented numbers.
+
+    Agent ownership follows backlog's explicit agent-label rule. GitHub run action and
+    the machine-local opener cap have no authoritative reader in this tree; those gaps
+    are printed until their required evidence exists, even when the other reads succeed.
+    """
+    from backlog import SUPPORTED_REPOS
+
+    now = int(time.time()) if now is None else int(now)
+    source_gh = gh_fn or _gh_call
+    responses = {}
+
+    def gh(args):
+        # The two PR measures share one snapshot, including failed reads. This cache
+        # lasts only this report; no persisted result can masquerade as a live read.
+        key = tuple(args)
+        if key not in responses:
+            responses[key] = source_gh(args)
+        return responses[key]
+
+    repos = list(dict.fromkeys(r for r in SUPPORTED_REPOS if r != "stranske/Collab-Admin"))
+    readers = {
+        "gate_cancellations": lambda: _fleet_gate_cancellations(gh, now),
+        "merge_to_close": lambda: _fleet_pr_measures(gh, now, repos, flow=False),
+        "oldest_canary": lambda: _fleet_oldest_canary(gh, now),
+        "opener_cap": lambda: _fleet_opener_cap(opener_runner or subprocess.run),
+        "released_flow": lambda: _fleet_pr_measures(gh, now, repos, flow=True),
+    }
+    rows = {}
+    for key, reader in readers.items():
+        try:
+            row = reader()
+        except _FleetReadError as exc:
+            row = {"value": None, "evidence_class": "unmeasured", "reason": str(exc)}
+        except Exception as exc:  # noqa: BLE001 — isolate reader failures, retaining every row
+            row = {
+                "value": None,
+                "evidence_class": "unmeasured",
+                "reason": f"would need valid {key} response ({type(exc).__name__})",
+            }
+        rows[key] = {"name": FLEET_DELIVERY_NAMES[key], **row}
+    return {"as_of": now, "window_hours": 48, "rows": rows}
 
 
 def _parse_maint_68_registry_yaml(content: str) -> list[str]:
@@ -1749,7 +2085,6 @@ def review(
     value_chain_inputs: dict | None = None,
     credential_exposure_report: dict | None = None,
     python_standard_report: dict | None = None,
-    cursor_closer_native_entry_report: dict | None = None,
     feature_goals_fn=None,
 ) -> dict:
     """Which held-or-idle switches are due for an owner decision, and why.
@@ -1852,9 +2187,6 @@ def review(
         "weekly_pacing": weekly_pacing_check(now=now),
         # Collected by the CLI, so pure readers/selftests never probe the host's interpreters.
         "python_standard": python_standard_report,
-        # Same collection boundary: formatting a stored weekly report must not reread a growing log
-        # or compare a newer automation policy than the snapshot that produced the report.
-        "cursor_closer_native_entry": cursor_closer_native_entry_report,
         # And a guard refusal is evidence that an agent's worktree disagreed with where the tool
         # put it. FYI only, real clock, never counted in `raise_count`.
         "worktree_git_refusals": worktree_git_refusals(),
@@ -2142,231 +2474,6 @@ def review_loop_share_line(rows) -> str:
     return f"  review loop first-pass MERGE-WHEN-GREEN: {accepted}/{len(first)} ({accepted / len(first):.0%})"
 
 
-def _cursor_closer_manifest_path(wrapper_path: Path) -> Path:
-    """Return the manifest named by the live wrapper's pinned native-entry block."""
-    wrapper = wrapper_path.read_text(encoding="utf-8")
-    match = _CURSOR_MANIFEST_RE.search(wrapper)
-    if not match:
-        raise ValueError("wrapper has no --manifest argument")
-    return Path(next(part for part in match.groups() if part is not None))
-
-
-def _cursor_closer_native_successes(manifest: dict) -> tuple[int, int | None]:
-    """Count authenticated successful entries for this exact retained package binding."""
-    import closer_mechanisms
-
-    contract = manifest["mechanism_contract"]
-    root = Path(contract["observation_root"])
-    if not root.is_absolute() or root.resolve() != root or not root.is_dir():
-        raise ValueError("native observation root is not a canonical directory")
-    expected_binding = {
-        "mechanism": closer_mechanisms.NATIVE,
-        "mechanism_contract_digest": closer_mechanisms.digest(contract),
-        "policy_digest": closer_mechanisms.digest(manifest["policy"]),
-        **{key: manifest.get(key) for key in closer_mechanisms.PIN_KEYS},
-    }
-    successes = []
-    for terminal in root.glob("*/terminal.json"):
-        if (
-            terminal.is_symlink()
-            or terminal.resolve() != terminal
-            or terminal.parent.parent != root
-            or not re.fullmatch(r"[0-9a-f]{32}", terminal.parent.name)
-        ):
-            raise ValueError("native terminal receipt path is invalid")
-        signed = json.loads(terminal.read_text(encoding="utf-8"))
-        record = closer_mechanisms.verify_signed_record(root, signed)
-        if record.get("binding") != expected_binding:
-            continue
-        if (
-            record.get("schema") == "native-wrapper-lifecycle/v1"
-            and record.get("kind") == "native-wrapper-invocation"
-            and record.get("passed") is True
-        ):
-            started = record.get("entry", {}).get("started")
-            if not isinstance(started, str):
-                raise ValueError("native terminal receipt has no signed entry timestamp")
-            successes.append(
-                int(datetime.strptime(started, "%a %b %d %H:%M:%S %Y").timestamp() * 1e9)
-            )
-    return len(successes), max(successes, default=None)
-
-
-def cursor_closer_native_entry_snapshot(
-    log_path: Path | str | None = None,
-    manifest_path: Path | str | None = None,
-    wrapper_path: Path | str | None = None,
-) -> dict:
-    """Measure native launcher refusals and configured-policy hash drift.
-
-    Explicit arguments win over environment overrides so fixture tests never need to inspect the
-    host. The manifest defaults to the one pinned by the live wrapper; this keeps the sweep aligned
-    after a guarded roll-forward rather than freezing another package path here.
-    """
-    import closer_mechanisms
-
-    log = Path(log_path or os.environ.get("ORCH_CURSOR_CLOSER_LOG", "") or CURSOR_CLOSER_LOG)
-    wrapper = Path(
-        wrapper_path or os.environ.get("ORCH_CURSOR_LANE_WRAPPER", "") or CURSOR_LANE_WRAPPER
-    )
-    report: dict[str, Any] = {
-        "log_path": str(log),
-        "launcher_results": None,
-        "refused": None,
-        "log_mtime_ns": None,
-        "log_error": None,
-        "manifest_path": None,
-        "successes_seen": None,
-        "last_success_mtime_ns": None,
-        "success_error": None,
-        "refused_since_success": None,
-        "results_since_success": None,
-        "hash_mismatch_count": None,
-        "hash_mismatches": [],
-        "pin_set_error": None,
-        "hash_error": None,
-    }
-
-    try:
-        launcher_results = refused = 0
-        with log.open(encoding="utf-8", errors="replace") as stream:
-            for raw in stream:
-                try:
-                    row = json.loads(raw)
-                except (json.JSONDecodeError, TypeError):
-                    continue
-                if not isinstance(row, dict) or "launcher" not in row:
-                    continue
-                launcher_results += 1
-                refused += row.get("launcher") == "refused"
-        report.update(
-            launcher_results=launcher_results,
-            refused=refused,
-            log_mtime_ns=log.stat().st_mtime_ns,
-        )
-    except OSError as exc:
-        report["log_error"] = type(exc).__name__
-
-    payload = None
-    try:
-        manifest_override = (
-            manifest_path or os.environ.get("ORCH_CURSOR_CLOSER_MANIFEST", "") or None
-        )
-        manifest = (
-            Path(manifest_override) if manifest_override else _cursor_closer_manifest_path(wrapper)
-        )
-        report["manifest_path"] = str(manifest)
-        payload = json.loads(manifest.read_text(encoding="utf-8"))
-    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
-        report["hash_error"] = type(exc).__name__
-
-    if payload is not None:
-        try:
-            successes, latest = _cursor_closer_native_successes(payload)
-            report.update(successes_seen=successes, last_success_mtime_ns=latest)
-        except (
-            OSError,
-            ValueError,
-            KeyError,
-            TypeError,
-            json.JSONDecodeError,
-            closer_mechanisms.MechanismError,
-        ) as exc:
-            report["success_error"] = type(exc).__name__
-
-        try:
-            pins = payload["policy"]["toml_sha256"]
-            if not isinstance(pins, dict) or not pins:
-                raise ValueError("manifest policy.toml_sha256 is empty")
-            expected_pins = {
-                str(closer_mechanisms.AUTOMATIONS / relative): relative
-                for relative in _CURSOR_POLICY_PINS
-            }
-            if not all(isinstance(name, str) for name in pins) or set(pins) != set(expected_pins):
-                report["pin_set_error"] = {
-                    "missing": sorted(
-                        expected_pins[name] for name in set(expected_pins) - set(pins)
-                    ),
-                    "unexpected": sorted(str(name) for name in set(pins) - set(expected_pins)),
-                }
-            else:
-                mismatches = []
-                for filename, pinned in sorted(pins.items()):
-                    path = Path(filename)
-                    if not path.is_absolute() or path.resolve() != path or path.is_symlink():
-                        raise ValueError("canonical policy path retargeted")
-                    current = hashlib.sha256(path.read_bytes()).hexdigest()
-                    if current != pinned:
-                        mismatches.append(expected_pins[filename])
-                report.update(hash_mismatch_count=len(mismatches), hash_mismatches=mismatches)
-        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
-            report["hash_error"] = type(exc).__name__
-
-    if (
-        report.get("last_success_mtime_ns") is not None
-        and report.get("log_mtime_ns") is not None
-        and report["last_success_mtime_ns"] >= report["log_mtime_ns"]
-    ):
-        # The refusal stream has no per-line timestamps. A newer authenticated terminal receipt's
-        # signed process-start time is the one exact boundary it can prove: every retained refusal
-        # predates that successful entry.
-        report.update(refused_since_success=0, results_since_success=1)
-    return report
-
-
-def format_cursor_closer_native_entry(report: dict) -> str:
-    prefix = "Cursor closer native entry: "
-    if report.get("log_error"):
-        launcher = f"cannot read launcher log ({report['log_error']})"
-    elif report.get("results_since_success"):
-        authenticated_drain = (
-            not report.get("success_error")
-            and report.get("successes_seen", 0) > 0
-            and not report.get("hash_error")
-            and not report.get("pin_set_error")
-            and report.get("hash_mismatch_count") == 0
-        )
-        launcher = ("drained: " if authenticated_drain else "") + (
-            f"since last retained success: refused {report['refused_since_success']}/"
-            f"{report['results_since_success']}"
-        )
-    elif report.get("launcher_results") == 0:
-        launcher = "unmeasured — no launcher results"
-    elif report.get("refused") == 0:
-        launcher = f"refused 0/{report['launcher_results']} launcher results"
-    elif report.get("launcher_results") is None or report.get("refused") is None:
-        launcher = "cannot read launcher log (no snapshot)"
-    else:
-        launcher = f"refused {report['refused']}/{report['launcher_results']} launcher results"
-
-    if report.get("success_error"):
-        successes = f"successes seen cannot read ({report['success_error']})"
-    elif report.get("successes_seen") is None:
-        successes = "successes seen cannot read (no snapshot)"
-    else:
-        successes = f"successes seen {report['successes_seen']}"
-
-    if report.get("pin_set_error"):
-        detail = report["pin_set_error"]
-        parts = []
-        if detail.get("missing"):
-            parts.append("missing " + ", ".join(detail["missing"]))
-        if detail.get("unexpected"):
-            parts.append("unexpected " + ", ".join(detail["unexpected"]))
-        hashes = "pinned-vs-current automation.toml incomplete pin set (" + "; ".join(parts) + ")"
-    elif report.get("hash_error"):
-        hashes = f"pinned-vs-current automation.toml hashes cannot read ({report['hash_error']})"
-    elif report.get("hash_mismatch_count") is None:
-        hashes = "pinned-vs-current automation.toml hashes cannot read (no snapshot)"
-    else:
-        names = ", ".join(report.get("hash_mismatches") or []) or "none"
-        hashes = (
-            "pinned-vs-current automation.toml hash mismatches "
-            f"{report['hash_mismatch_count']} ({names})"
-        )
-    return prefix + launcher + "; " + successes + "; " + hashes
-
-
 def format_report(rep: dict) -> str:
     lines = [
         "# Switch review — held switches must be revisited, not forgotten",
@@ -2504,6 +2611,17 @@ def format_report(rep: dict) -> str:
                 "between an agent's change and the dispatcher that dispatches agents.",
                 "",
             ]
+    delivery = rep.get("fleet_delivery_measures") or {}
+    if delivery:
+        checked = datetime.fromtimestamp(delivery["as_of"], timezone.utc).isoformat()
+        lines += ["## Fleet delivery measures", "", f"  As of {checked}"]
+        for row in delivery["rows"].values():
+            if row["value"] is None:
+                value = f"unmeasured — {row['reason']}"
+            else:
+                value = f"{row['value']} [{row['evidence_class']}]"
+            lines.append(f"  {row['name']}: {value}")
+        lines.append("")
     fleet = rep.get("fleet_gates") or {}
     if fleet:
         lines += ["## Fleet template-delivery gates (Maint 68 promote + sync canaries)", ""]
@@ -2611,7 +2729,6 @@ def format_report(rep: dict) -> str:
     if rep.get("weekly_pacing") is not None:
         lines += [rep["weekly_pacing"], ""]
     lines += [python_standard_audit.format_line(rep.get("python_standard") or {}), ""]
-    lines += [format_cursor_closer_native_entry(rep.get("cursor_closer_native_entry") or {}), ""]
     shed = rep.get("capacity_shed")
     if shed is not None:
         lines += format_capacity_shed(shed)
@@ -3435,8 +3552,10 @@ def main(argv: list[str]) -> int:
         value_chain_inputs=value_chain_inputs,
         credential_exposure_report=credential_exposure(),
         python_standard_report=python_standard_audit.snapshot(),
-        cursor_closer_native_entry_report=cursor_closer_native_entry_snapshot(),
     )
+    # Like the interpreter audit, host-dependent fleet reads belong to the production
+    # CLI, not isolated callers of review(). Both JSON and text carry this same snapshot.
+    rep["fleet_delivery_measures"] = fleet_delivery_measures(now=rep.get("generated_at"))
     # The production weekly caller collects the curve, rather than leaving a CLI-only instrument.
     # Pure report/selftest readers keep their no-network and no-state-write contract.
     if (

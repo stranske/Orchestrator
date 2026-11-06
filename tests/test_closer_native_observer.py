@@ -102,6 +102,97 @@ def test_native_policy_is_distinct_and_pause_wins(host):
 
 
 @pytest.mark.parametrize(
+    "boundary", ["controlled_demand", "malformed_controlled_demand", "preparation_known"]
+)
+def test_unadmitted_campaign_refuses_before_global_assignment(host, monkeypatch, boundary):
+    manifest, manifest_path, _wrapper = host
+    root = Path(manifest["mechanism_contract"]["observation_root"])
+    nonce = "a" * 32
+    state = Path(manifest["mechanism_contract"]["campaign_root"]) / "controlled.campaign.json"
+    manifest["mechanism_contract"]["controller_demand"] = {
+        "schema": "closer-controller-demand/v1",
+        "campaign_state": str(state),
+        "campaign_id": "controlled",
+        "owner": "source-owner",
+    }
+    document = {
+        "campaign_id": "controlled",
+        "owner": "source-owner",
+        "generation": 1,
+        "phase": "work",
+        "hold": None,
+        "targets": {"*round*": "pending"},
+        "workers": [],
+        "worker_config": {
+            "granularity": "round",
+            "coordinator_mode": "resource_scoped",
+            "apply": True,
+        },
+    }
+    if boundary == "preparation_known":
+        import hashlib
+
+        manifest["mechanism_contract"].pop("controller_demand")
+        intent = root / "preparation-intent.json"
+        intent.write_text("{}")
+        document["preparation_origin"] = {
+            "path": str(intent),
+            "sha256": hashlib.sha256(intent.read_bytes()).hexdigest(),
+        }
+    elif boundary == "malformed_controlled_demand":
+        manifest["mechanism_contract"]["controller_demand"] = {}
+    monkeypatch.setattr(native, "capacity_contract", lambda *_a, **_k: {"scoped": True})
+    monkeypatch.setattr(native, "entry_active", lambda *_a: True)
+    monkeypatch.setattr(
+        native,
+        "private_test_assignment_source",
+        lambda *_a: pytest.fail("must not read global assignment"),
+    )
+    native._CURRENT_ENTRY[str(root)] = nonce
+    native._CURRENT_ADMISSION[str(root)] = {"nonce": nonce, "context": None}
+    try:
+        expected = (
+            "requires admitted source demand"
+            if boundary != "preparation_known"
+            else "preparation creation is not sealed"
+        )
+        with pytest.raises(mechanisms.MechanismError, match=expected):
+            native.publish_admission(manifest, manifest_path, state, document)
+    finally:
+        native._CURRENT_ENTRY.pop(str(root), None)
+        native._CURRENT_ADMISSION.pop(str(root), None)
+
+
+@pytest.mark.parametrize(
+    "lane,opt_in,expected", [("closer", False, 78), ("closer", True, 0), ("implement", False, 0)]
+)
+def test_rendered_native_closer_never_falls_through_without_optin(tmp_path, lane, opt_in, expected):
+    import subprocess
+
+    home = tmp_path / "home"
+    handoff = home / ".codex/handoff"
+    handoff.mkdir(parents=True)
+    if opt_in:
+        (handoff / "closer-native-handoff.enabled").touch()
+    script = tmp_path / "wrapper.sh"
+    script.write_text(
+        '#!/bin/bash\nLANE="$1"\n'
+        + native.wrapper_block(tmp_path / "manifest", tmp_path, "/bin/echo", "/bin/echo")
+        + "echo LEGACY_REACHED\n"
+    )
+    result = subprocess.run(
+        ["/bin/bash", str(script), lane],
+        env={"HOME": str(home)},
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == expected
+    assert ("LEGACY_REACHED" in result.stdout) is (lane != "closer")
+    assert ("native-entry" in result.stdout) is (lane == "closer" and opt_in)
+
+
+@pytest.mark.parametrize(
     "change", ["wrapper", "interpreter", "actor", "policy", "closure", "optin"]
 )
 def test_bad_host_binding_holds_before_any_wrapper_start(host, monkeypatch, change):

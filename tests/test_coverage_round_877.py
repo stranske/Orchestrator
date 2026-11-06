@@ -113,6 +113,60 @@ def test_env_prerequisites_name_the_specific_missing_state(tmp_path, monkeypatch
     assert env_prereq.core_sibling_absent() is None
 
 
+def test_environment_file_and_binary_prerequisites_name_each_failure(monkeypatch, tmp_path):
+    """Missing tools and paths are named, while an available prerequisite stays runnable."""
+    import adapters
+    import paths
+
+    monkeypatch.setattr(paths, "checkout_root", lambda _module: tmp_path)
+    (tmp_path / "present.txt").write_text("present\n")
+    assert env_prereq.repo_files_absent("present.txt") is None
+    assert "missing.txt" in env_prereq.repo_files_absent("present.txt", "missing.txt")
+
+    monkeypatch.setattr(env_prereq.shutil, "which", lambda _name: None)
+    assert "git is not on PATH" in env_prereq.git_repo_absent()
+    assert "node is not on PATH" in env_prereq.node_absent()
+    monkeypatch.setattr(env_prereq.shutil, "which", lambda _name: "/usr/bin/tool")
+    monkeypatch.setattr(
+        env_prereq.subprocess,
+        "run",
+        lambda *_args, **_kwargs: type("Result", (), {"returncode": 1})(),
+    )
+    assert "not a git repository" in env_prereq.git_repo_absent()
+    monkeypatch.setattr(
+        env_prereq.subprocess,
+        "run",
+        lambda *_args, **_kwargs: type("Result", (), {"returncode": 0})(),
+    )
+    assert env_prereq.git_repo_absent() is None
+
+    monkeypatch.setattr(adapters, "AUTH_PROBES", {"agent-a": {"cmd": ["agent-a"]}})
+    monkeypatch.setattr(env_prereq.shutil, "which", lambda _name: None)
+    assert "agent-a (agent-a)" in env_prereq.agent_cli_absent("agent-a")
+    monkeypatch.setattr(env_prereq.shutil, "which", lambda _name: "/usr/bin/agent-a")
+    assert env_prereq.agent_cli_absent("agent-a") is None
+
+
+def test_run_or_replay_preserves_pytest_skip_and_failure_verdicts():
+    """A standalone gate replays pytest outcomes instead of silently rerunning unsafe work."""
+    calls = []
+
+    def check():
+        calls.append("ran")
+
+    env_prereq.run_or_replay(check, {})
+    assert calls == ["ran"]
+    with pytest.raises(env_prereq.MissingPrerequisite, match="ledger absent"):
+        env_prereq.run_or_replay(
+            check, {"check": {"outcome": "skipped", "message": "ledger absent"}}
+        )
+    with pytest.raises(AssertionError, match="expected evidence"):
+        env_prereq.run_or_replay(
+            check, {"check": {"outcome": "failed", "message": "AssertionError: expected evidence"}}
+        )
+    assert calls == ["ran"]
+
+
 def test_ledger_evidence_readers_ignore_other_runs_and_malformed_records(tmp_path):
     """Only a run's own valid evidence may contribute usage, cost, or resumability."""
     ledger = tmp_path / "ledger.ndjson"

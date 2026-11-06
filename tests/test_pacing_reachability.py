@@ -162,29 +162,54 @@ def test_low_weight_survives_repeated_gaps_until_real_boundary(tmp_path, monkeyp
     monkeypatch.setattr(pacing_usage, "POLL_DIR", tmp_path / "polls")
     pacing_usage.RESETS_FILE.write_text(json.dumps(dict(codex=[], claude=[])))
     now = START + pacing.DAY_SECONDS
-    prior = dict(period_start=START, period_end=END, ts=now - 3600, routing_weight=0.07)
-    previous = dict(agents={p: dict(pacing=prior) for p in ("codex", "claude")})
+    # Without calibration Claude uses the measured T1 anchor week (#695), so its
+    # fixture week is that one; a "gap" is then missing calibration, not a new week.
+    claude_end = pacing.period("claude", now)[1]
+    ends = dict(codex=END, claude=claude_end)
+    previous = dict(
+        agents={
+            p: dict(
+                pacing=dict(
+                    period_start=ends[p] - pacing.PERIOD_SECONDS,
+                    period_end=ends[p],
+                    ts=now - 3600,
+                    routing_weight=0.07,
+                )
+            )
+            for p in ("codex", "claude")
+        }
+    )
     for step in range(4):
         tick = now + step * pacing.TICK_SECONDS
         fresh = step == 3
         calibration = (
             {}
             if gap == "no_period" and not fresh
-            else dict(codex_period_start=START, claude_period_end=END)
+            else dict(codex_period_start=START, claude_period_end=claude_end)
         )
         pacing_usage.CALIBRATION_FILE.write_text(json.dumps(calibration))
         (tmp_path / "capacity.json").write_text(json.dumps(previous))
         datum = dict(
             used_fraction=None if gap == "missing" and not fresh else 0.01,
-            ts=now - 3600 if gap == "stale" and not fresh else tick,
+            # Older than both pools' freshness limits (Claude's is two hours).
+            ts=(
+                now - pacing.CLAUDE_USAGE_MAX_AGE_SECONDS - 1
+                if gap == "stale" and not fresh
+                else tick
+            ),
             source=SOURCE,
         )
         agents = {p: dict(state="ok", reason="native") for p in ("codex", "claude")}
         pacing_usage.integrate(
             agents, now=tick, handoff=tmp_path, usage_data={p: dict(datum) for p in agents}
         )
-        for agent in agents.values():
-            if fresh:
+        for pool, agent in agents.items():
+            if gap == "no_period" and pool == "claude":
+                # The anchor gives Claude a period without calibration, so it is
+                # measured, and each step is bounded by the previous tick's weight.
+                before = previous["agents"][pool]["pacing"]["routing_weight"]
+                assert agent["pacing"]["routing_weight"] <= before + pacing.MAX_WEIGHT_CHANGE
+            elif fresh:
                 assert agent["pacing"]["routing_weight"] <= 0.07 + pacing.MAX_WEIGHT_CHANGE
             else:
                 assert agent["pacing"]["routing_weight"] is None

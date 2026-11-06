@@ -1,0 +1,729 @@
+{
+  "generated_at": 1791980834,
+  "population": 40,
+  "rows": [
+    {
+      "case_id": "dc56d3f817373c4ba91a6c6aeb86eb9bfa85865fd3c20336e753b88b0dbbebd5",
+      "target": "stranske/Orchestrator#458",
+      "run_id": "keepalive:stranske/Orchestrator#458:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "decision": "reject_blocker",
+      "later_truth": "FAIL",
+      "backend_run_id": "offload:gemini:1791199180693032000",
+      "errors": [],
+      "role_record_error": null
+    },
+    {
+      "case_id": "07a141fae1fd2f2e1525897935ef093cc01b665cb29a2c50ec8848a77152ca0b",
+      "target": "stranske/Orchestrator#446",
+      "run_id": "keepalive:stranske/Orchestrator#446:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "decision": "reject_blocker",
+      "later_truth": "FAIL",
+      "backend_run_id": "offload:gemini:1791199491873065000",
+      "errors": [],
+      "role_record_error": null
+    },
+    {
+      "case_id": "14bb0141017ad111a51386095994f8c499311e735c607b27333b0fed268743e5",
+      "target": "stranske/Workflows#3748",
+      "run_id": "keepalive:stranske/Workflows#3748:none",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "decision": "reject_blocker",
+      "later_truth": "PASS",
+      "backend_run_id": "offload:gemini:1791199531808936000",
+      "errors": [],
+      "role_record_error": null
+    },
+    {
+      "case_id": "4fef6b5e3688f7713837878f3bd0e2c3d85c8383e85a20cb7433d932961f05af",
+      "target": "stranske/Manager-Database#1751",
+      "run_id": "keepalive:stranske/Manager-Database#1751:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "decision": "reject_blocker",
+      "later_truth": "PASS",
+      "backend_run_id": "offload:gemini:1791199585086934000",
+      "errors": [],
+      "role_record_error": null
+    },
+    {
+      "case_id": "2ff8a43f6c3a628cd0b31f963cf7193cbe0aae84eb59b9f972a31b44153ec464",
+      "target": "stranske/Orchestrator#443",
+      "run_id": "keepalive:stranske/Orchestrator#443:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "decision": "reject_blocker",
+      "later_truth": "PASS",
+      "backend_run_id": "offload:gemini:1791199633328958000",
+      "errors": [],
+      "role_record_error": null
+    },
+    {
+      "case_id": "0c7a5700d772df4a5d4cd03e84342475401c6caf33940ebf5995d181086d2efa",
+      "target": "stranske/Orchestrator#456",
+      "run_id": "keepalive:stranske/Orchestrator#456:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "decision": "reject_blocker",
+      "later_truth": "PASS",
+      "backend_run_id": "offload:gemini:1791199088477569000",
+      "errors": [],
+      "role_record_error": null
+    },
+    {
+      "case_id": "d7397039ec9efc9f2a611efa8cff829a1c079e9874c2745a3cdaa52a53b0af81",
+      "target": "stranske/Orchestrator#414",
+      "run_id": "keepalive:stranske/Orchestrator#414:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "decision": "reject_blocker",
+      "later_truth": null,
+      "backend_run_id": "offload:gemini:1791199355831889000",
+      "errors": [],
+      "role_record_error": null
+    },
+    {
+      "case_id": "afd30da1584df1b933711d17348ad2449cac90491095b6ae5bcedac261c0a1f1",
+      "target": "stranske/Workflows#3772",
+      "run_id": "keepalive:stranske/Workflows#3772:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "later_truth": "PASS",
+      "error": "current merge-bound verifier decision missing or changed"
+    },
+    {
+      "case_id": "9ab1c0c6a06eb0be33acf87720ca46bcbc4b6da7957d79e816030d161388ed1a",
+      "target": "stranske/Orchestrator#485",
+      "run_id": "keepalive:stranske/Orchestrator#485:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "decision": "reject_blocker",
+      "later_truth": null,
+      "backend_run_id": "offload:gemini:1791289901905524000",
+      "errors": [],
+      "role_record_error": null
+    },
+    {
+      "case_id": "492f957d9a4fd477ee97f458d71ee87e8e14cde9d09ffb153f488e9dbc42ac02",
+      "target": "stranske/Orchestrator#484",
+      "run_id": "keepalive:stranske/Orchestrator#484:claude",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "decision": "reject_blocker",
+      "later_truth": null,
+      "backend_run_id": "offload:gemini:1791289952278060000",
+      "errors": [],
+      "role_record_error": null
+    },
+    {
+      "case_id": "d0451358e26471e342f4b2fdb93ce02e912dd0f414b003d921aaa1fbf8a09081",
+      "target": "stranske/Workflows#3767",
+      "run_id": "keepalive:stranske/Workflows#3767:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "decision": "reject_blocker",
+      "later_truth": "PASS",
+      "backend_run_id": "offload:gemini:1791289989250716000",
+      "errors": [],
+      "role_record_error": null
+    },
+    {
+      "case_id": "4082e9c2a2bc82c61065470e0d05fec18bc3e1190314d25f61f1e21045bcf74f",
+      "target": "stranske/Workflows#3769",
+      "run_id": "keepalive:stranske/Workflows#3769:none",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "decision": "reject_blocker",
+      "later_truth": "FAIL",
+      "backend_run_id": "offload:gemini:1791290019591073000",
+      "errors": [],
+      "role_record_error": null
+    },
+    {
+      "case_id": "3a74d31c7041ef63dc7db6f830877dc1d1d72a78e434076a54bd08fb52816ab9",
+      "target": "stranske/Orchestrator#468",
+      "run_id": "keepalive:stranske/Orchestrator#468:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "decision": "reject_blocker",
+      "later_truth": null,
+      "backend_run_id": "offload:gemini:1791290140351965000",
+      "errors": [],
+      "role_record_error": null
+    },
+    {
+      "case_id": "2bde35dd815a347068d51e8d44493fc635d15bfeafd756c2328e6c8418a938f5",
+      "target": "stranske/Orchestrator#475",
+      "run_id": "keepalive:stranske/Orchestrator#475:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "decision": "reject_blocker",
+      "later_truth": "PASS",
+      "backend_run_id": "offload:gemini:1791290198612222000",
+      "errors": [],
+      "role_record_error": null
+    },
+    {
+      "case_id": "c0255daf58c35dc6dbf9690783964a28d2853838efdbd47e167c63c37f6b5739",
+      "target": "stranske/Orchestrator#477",
+      "run_id": "keepalive:stranske/Orchestrator#477:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "later_truth": "PASS",
+      "error": "native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch",
+      "retry_attempts": [
+        {
+          "case_id": "c0255daf58c35dc6dbf9690783964a28d2853838efdbd47e167c63c37f6b5739",
+          "target": "stranske/Orchestrator#477",
+          "run_id": "keepalive:stranske/Orchestrator#477:codex",
+          "verifier_verdict": "NON_PASS",
+          "adjudicated_verdict": "PASS",
+          "later_truth": null,
+          "backend_run_id": "offload:gemini:1791290239657061000",
+          "errors": [
+            "recommended_next_step must not contain mutating execution instructions"
+          ],
+          "role_record_error": null
+        }
+      ]
+    },
+    {
+      "case_id": "c53289cd21ec4997f40d03facbf51f75794c4150f9ff9839983dcec85aee85d5",
+      "target": "stranske/Orchestrator#469",
+      "run_id": "keepalive:stranske/Orchestrator#469:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "decision": "reject_blocker",
+      "later_truth": null,
+      "backend_run_id": "offload:gemini:1791290266140836000",
+      "errors": [],
+      "role_record_error": null
+    },
+    {
+      "case_id": "44e85dfcdd64335e346a7132a927917e61846910b9ca04e81e346a654c5e88a5",
+      "target": "stranske/Orchestrator#478",
+      "run_id": "keepalive:stranske/Orchestrator#478:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "later_truth": "PASS",
+      "error": "native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch",
+      "retry_attempts": [
+        {
+          "case_id": "44e85dfcdd64335e346a7132a927917e61846910b9ca04e81e346a654c5e88a5",
+          "target": "stranske/Orchestrator#478",
+          "run_id": "keepalive:stranske/Orchestrator#478:codex",
+          "verifier_verdict": "NON_PASS",
+          "adjudicated_verdict": "PASS",
+          "later_truth": null,
+          "backend_run_id": "offload:gemini:1791290283334579000",
+          "errors": [
+            "recommended_next_step must not contain mutating execution instructions"
+          ],
+          "role_record_error": null
+        }
+      ]
+    },
+    {
+      "case_id": "d880ad7abb0729067f5a72e71928e0036f0f970785d78a5e63dbef8f3a682604",
+      "target": "stranske/Orchestrator#467",
+      "run_id": "keepalive:stranske/Orchestrator#467:cursor",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "decision": "needs_more_evidence",
+      "later_truth": "PASS",
+      "backend_run_id": "offload:codex:1791290909657304000",
+      "errors": [],
+      "retry_error": "native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch",
+      "role_record_error": null
+    },
+    {
+      "case_id": "bf078dca610277353e79e28d7f62693d5f6f9236551e0c1ac1d8a44800d642ab",
+      "target": "stranske/Workflows#3764",
+      "run_id": "keepalive:stranske/Workflows#3764:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "later_truth": "FAIL",
+      "error": "native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch",
+      "retry_attempts": [
+        {
+          "case_id": "bf078dca610277353e79e28d7f62693d5f6f9236551e0c1ac1d8a44800d642ab",
+          "target": "stranske/Workflows#3764",
+          "run_id": "keepalive:stranske/Workflows#3764:codex",
+          "verifier_verdict": "NON_PASS",
+          "adjudicated_verdict": "PASS",
+          "later_truth": null,
+          "backend_run_id": "offload:codex:1791290951843211000",
+          "errors": [
+            "recommended_next_step must not contain mutating execution instructions"
+          ],
+          "role_record_error": null
+        }
+      ]
+    },
+    {
+      "case_id": "523f3f55d9f384ecc5fe12d8dde4c9040c71607bbb5775a0d28df5c608107e99",
+      "target": "stranske/Orchestrator#473",
+      "run_id": "keepalive:stranske/Orchestrator#473:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "decision": "needs_more_evidence",
+      "later_truth": "PASS",
+      "backend_run_id": "offload:codex:1791290989093567000",
+      "errors": [],
+      "retry_error": "native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch",
+      "role_record_error": null
+    },
+    {
+      "case_id": "d583afb7c56b931343d2454023ac99eb66963ffac5d29ec47e0d60700680df05",
+      "target": "stranske/Orchestrator#474",
+      "run_id": "keepalive:stranske/Orchestrator#474:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "decision": "needs_more_evidence",
+      "later_truth": "PASS",
+      "backend_run_id": "offload:codex:1791291019784465000",
+      "errors": [],
+      "retry_error": "native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch",
+      "role_record_error": null
+    },
+    {
+      "case_id": "76288bb67aff7a8db7d2a5f5c647b864af73e0629b028c07c146e81739a9c64b",
+      "target": "stranske/Orchestrator#472",
+      "run_id": "keepalive:stranske/Orchestrator#472:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "decision": "needs_more_evidence",
+      "later_truth": "PASS",
+      "backend_run_id": "offload:codex:1791291053615999000",
+      "errors": [],
+      "retry_error": "native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch",
+      "role_record_error": null
+    },
+    {
+      "case_id": "584acf2416195efde43cf4df15aebfd9ae43f0a1202dcab552d54b3c75b1e37d",
+      "target": "stranske/Orchestrator#471",
+      "run_id": "keepalive:stranske/Orchestrator#471:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "decision": "needs_more_evidence",
+      "later_truth": "PASS",
+      "backend_run_id": "offload:codex:1791307558106777000",
+      "errors": [],
+      "retry_error": "native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch",
+      "role_record_error": null
+    },
+    {
+      "case_id": "dfccaa2f511f87f64adf1ef237a865141d7b9e25ffc67700e0ead2160c437f2e",
+      "target": "stranske/Orchestrator#470",
+      "run_id": "keepalive:stranske/Orchestrator#470:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "decision": "needs_more_evidence",
+      "later_truth": "PASS",
+      "backend_run_id": "offload:codex:1791307595850460000",
+      "errors": [],
+      "retry_error": "native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch",
+      "role_record_error": null
+    },
+    {
+      "case_id": "cc872bb0e729e8209d81a618e46f1a1399d5e9af482a0dcb0d8018c4cba7d55b",
+      "target": "stranske/Workflows#3756",
+      "run_id": "keepalive:stranske/Workflows#3756:none",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "later_truth": null,
+      "error": "native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch",
+      "retry_attempts": [
+        {
+          "case_id": "cc872bb0e729e8209d81a618e46f1a1399d5e9af482a0dcb0d8018c4cba7d55b",
+          "target": "stranske/Workflows#3756",
+          "run_id": "keepalive:stranske/Workflows#3756:none",
+          "verifier_verdict": "NON_PASS",
+          "adjudicated_verdict": "PASS",
+          "later_truth": null,
+          "backend_run_id": "offload:codex:1791307631629708000",
+          "errors": [
+            "recommended_next_step must not contain mutating execution instructions"
+          ],
+          "role_record_error": null
+        }
+      ]
+    },
+    {
+      "case_id": "1f7c00d08df7b5fea0801b6e0dcb006c08f157396582f05afc87f8e6ddaf9604",
+      "target": "stranske/Orchestrator#461",
+      "run_id": "keepalive:stranske/Orchestrator#461:claude",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "later_truth": "FAIL",
+      "error": "native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch",
+      "retry_attempts": [
+        {
+          "case_id": "1f7c00d08df7b5fea0801b6e0dcb006c08f157396582f05afc87f8e6ddaf9604",
+          "target": "stranske/Orchestrator#461",
+          "run_id": "keepalive:stranske/Orchestrator#461:claude",
+          "verifier_verdict": "NON_PASS",
+          "adjudicated_verdict": "PASS",
+          "later_truth": null,
+          "backend_run_id": "offload:codex:1791307663046867000",
+          "errors": [
+            "recommended_next_step must not contain mutating execution instructions"
+          ],
+          "role_record_error": null
+        }
+      ]
+    },
+    {
+      "case_id": "15b6120aa5b8d25e481e7339703ed0ee4ac36e65c684fc66285cfe3f921c1395",
+      "target": "stranske/Workflows#3759",
+      "run_id": "keepalive:stranske/Workflows#3759:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "decision": "needs_more_evidence",
+      "later_truth": "PASS",
+      "backend_run_id": "offload:codex:1791307699323841000",
+      "errors": [],
+      "retry_error": "native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch",
+      "role_record_error": null
+    },
+    {
+      "case_id": "20b55da1130e68a4e519d79fcb2408d8aad62434ea60ce85de9f43511b8584e0",
+      "target": "stranske/Orchestrator#464",
+      "run_id": "keepalive:stranske/Orchestrator#464:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "decision": "needs_more_evidence",
+      "later_truth": "PASS",
+      "backend_run_id": "offload:codex:1791307796942455000",
+      "errors": [],
+      "retry_error": "native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch",
+      "role_record_error": null
+    },
+    {
+      "case_id": "05ffc5fb2ffa8a2c2236c3b3daf2be6f29377a7f52524a6e3a77a8fe6b6b22e1",
+      "target": "stranske/Orchestrator#466",
+      "run_id": "keepalive:stranske/Orchestrator#466:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "decision": "needs_more_evidence",
+      "later_truth": "PASS",
+      "backend_run_id": "offload:codex:1791307834387822000",
+      "errors": [],
+      "retry_error": "native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch",
+      "role_record_error": null
+    },
+    {
+      "case_id": "969408d1bfba59699c294e57b7fc2dbaff9134a18424cd6dc07840accf1c18da",
+      "target": "stranske/Orchestrator#465",
+      "run_id": "keepalive:stranske/Orchestrator#465:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "later_truth": null,
+      "error": "native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch",
+      "retry_attempts": [
+        {
+          "case_id": "969408d1bfba59699c294e57b7fc2dbaff9134a18424cd6dc07840accf1c18da",
+          "target": "stranske/Orchestrator#465",
+          "run_id": "keepalive:stranske/Orchestrator#465:codex",
+          "verifier_verdict": "NON_PASS",
+          "adjudicated_verdict": "PASS",
+          "later_truth": null,
+          "backend_run_id": "offload:codex:1791307866037254000",
+          "errors": [
+            "recommended_next_step must not contain mutating execution instructions"
+          ],
+          "role_record_error": null
+        }
+      ]
+    },
+    {
+      "case_id": "e0d9ae56aa6fd869a9386c25faca3c182492f150b419494c8c0ca5922accb672",
+      "target": "stranske/Orchestrator#463",
+      "run_id": "keepalive:stranske/Orchestrator#463:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "decision": "needs_more_evidence",
+      "later_truth": "PASS",
+      "backend_run_id": "offload:codex:1791307905011949000",
+      "errors": [],
+      "retry_error": "native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch",
+      "role_record_error": null
+    },
+    {
+      "case_id": "5410abf87e93df308e8c633230776c74a0a8d7b10f6d155236bd2d1f4108c3ad",
+      "target": "stranske/Workflows#3753",
+      "run_id": "keepalive:stranske/Workflows#3753:none",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "decision": "needs_more_evidence",
+      "later_truth": "PASS",
+      "backend_run_id": "offload:codex:1791307952886313000",
+      "errors": [],
+      "retry_error": "native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch",
+      "role_record_error": null
+    },
+    {
+      "case_id": "926d24eedb92a2369269ee5fd1ae903528cd9ea58ef9d2c19dfe05b8d89bc7ae",
+      "target": "stranske/Orchestrator#457",
+      "run_id": "keepalive:stranske/Orchestrator#457:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "decision": "reject_blocker",
+      "later_truth": "PASS",
+      "backend_run_id": "offload:gemini:1791318175585166000",
+      "errors": [],
+      "role_record_error": null
+    },
+    {
+      "case_id": "5811f1bda13f38544f84194bb6e9ed44bbce721d0f60f862da342a649c84595b",
+      "target": "stranske/Workflows#3754",
+      "run_id": "keepalive:stranske/Workflows#3754:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "decision": "reject_blocker",
+      "later_truth": "FAIL",
+      "backend_run_id": "offload:gemini:1791318272577011000",
+      "errors": [],
+      "role_record_error": null
+    },
+    {
+      "case_id": "26b4ea99e625a3484c8bf5bcb8e68f931550a46b01ff48c72db60408eb7e9d94",
+      "target": "stranske/Workflows#3750",
+      "run_id": "keepalive:stranske/Workflows#3750:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "decision": "reject_blocker",
+      "later_truth": "PASS",
+      "backend_run_id": "offload:gemini:1791318296391632000",
+      "errors": [],
+      "role_record_error": null
+    },
+    {
+      "case_id": "067c30a21223920b43609a71894a1d95876a35bd04e3a6a69776cf6e41f417ed",
+      "target": "stranske/Orchestrator#445",
+      "run_id": "keepalive:stranske/Orchestrator#445:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "decision": "reject_blocker",
+      "later_truth": "PASS",
+      "backend_run_id": "offload:gemini:1791318345726259000",
+      "errors": [],
+      "role_record_error": null
+    },
+    {
+      "case_id": "a92fe42979e12ed9115eab947561ab07647d9581fbf6962bea8af7114632896b",
+      "target": "stranske/Workflows#3749",
+      "run_id": "keepalive:stranske/Workflows#3749:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "decision": "reject_blocker",
+      "later_truth": "PASS",
+      "backend_run_id": "offload:gemini:1791318365537550000",
+      "errors": [],
+      "role_record_error": null
+    },
+    {
+      "case_id": "7bc3efdad7d67c6252efd96cf1bf5899ab5b11135beafee82a514c92d46f9f01",
+      "target": "stranske/Deliverable-Render#82",
+      "run_id": "keepalive:stranske/Deliverable-Render#82:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "later_truth": null,
+      "backend_run_id": "offload:gemini:1791980537173148000",
+      "errors": [
+        "backend exit=124 timed out after 180s; agy log tail captured",
+        "could not parse a JSON adjudication proposal from the backend output"
+      ],
+      "role_record_error": null
+    },
+    {
+      "case_id": "94ba2a422838643f6417add4ec0d7ed616633833e38a5885e12aaf5cc761c36f",
+      "target": "stranske/Deliverable-Render#80",
+      "run_id": "keepalive:stranske/Deliverable-Render#80:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "later_truth": null,
+      "error": "native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch"
+    },
+    {
+      "case_id": "79c014c56576c49181fa10a9f799fd007ecebf7653246d836321b813dd2301a6",
+      "target": "stranske/Workflows#3875",
+      "run_id": "keepalive:stranske/Workflows#3875:none",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "later_truth": null,
+      "error": "native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch"
+    },
+    {
+      "case_id": "f2744c7cdd7e5262de9e4ceb2e2e92464f8eb06b4e6ca32825893c3debd9a073",
+      "target": "stranske/Orchestrator#597",
+      "run_id": "keepalive:stranske/Orchestrator#597:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "later_truth": null,
+      "backend_run_id": "offload:gemini:1791979959400381000",
+      "errors": [
+        "backend exit=124 timed out after 180s; agy log tail captured",
+        "could not parse a JSON adjudication proposal from the backend output"
+      ],
+      "role_record_error": null
+    },
+    {
+      "case_id": "e11a460dc127a84ba3edd724d6ffcc580214b5c67ba2b1710b89bbe3452e47c7",
+      "target": "stranske/Orchestrator#588",
+      "run_id": "keepalive:stranske/Orchestrator#588:claude",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "later_truth": null,
+      "error": "native round boundary before new evidence/provider attempt"
+    },
+    {
+      "case_id": "f57ee84df61f9b1204f05ecc0013f6206a1c29c5b06d9927c5570d8673313a66",
+      "target": "stranske/Orchestrator#595",
+      "run_id": "keepalive:stranske/Orchestrator#595:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "later_truth": null,
+      "error": "native round boundary before new evidence/provider attempt"
+    },
+    {
+      "case_id": "9f45f7163b41d571dd7667e4f7fa81241c5ee08c37816f2818081ffb691e1e7f",
+      "target": "stranske/Orchestrator#591",
+      "run_id": "keepalive:stranske/Orchestrator#591:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "later_truth": null,
+      "error": "native round boundary before new evidence/provider attempt"
+    },
+    {
+      "case_id": "76c5be487fb21a51f64cb250e5b70fcf043cbb2f9544e3d4f772d3eb89a09b92",
+      "target": "stranske/Orchestrator#592",
+      "run_id": "keepalive:stranske/Orchestrator#592:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "later_truth": null,
+      "error": "native round boundary before new evidence/provider attempt"
+    },
+    {
+      "case_id": "be86abfcd24f2416632467396b78419e33e4917247fed537653150b4e1c6cbf2",
+      "target": "stranske/Orchestrator#594",
+      "run_id": "keepalive:stranske/Orchestrator#594:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "later_truth": null,
+      "error": "native round boundary before new evidence/provider attempt"
+    },
+    {
+      "case_id": "7b36755327028d1944bccda90da18da7d0d3b44d5ec157d7d3098a3055433002",
+      "target": "stranske/Orchestrator#589",
+      "run_id": "keepalive:stranske/Orchestrator#589:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "later_truth": null,
+      "error": "native round boundary before new evidence/provider attempt"
+    },
+    {
+      "case_id": "90305f8964a8e768480b4d33bc7257fea2440d2d9467767634a3e33c8d512669",
+      "target": "stranske/Orchestrator#590",
+      "run_id": "keepalive:stranske/Orchestrator#590:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "later_truth": null,
+      "error": "native round boundary before new evidence/provider attempt"
+    },
+    {
+      "case_id": "6e5de75fe3a50596907edb4aede24aaf689f53ecc7639175baffd7b8396e2b06",
+      "target": "stranske/Orchestrator#587",
+      "run_id": "keepalive:stranske/Orchestrator#587:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "later_truth": null,
+      "error": "native round boundary before new evidence/provider attempt"
+    },
+    {
+      "case_id": "0f773a0c9302ba7cebb3d0dc8f89d2bfd05dac0511c4570206d788d4449dc413",
+      "target": "stranske/Orchestrator#586",
+      "run_id": "keepalive:stranske/Orchestrator#586:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "later_truth": null,
+      "error": "native round boundary before new evidence/provider attempt"
+    },
+    {
+      "case_id": "3b1c392387c7ad0c33c189004ae639e048dda3d03867cbb6a4fb68fd55f719a7",
+      "target": "stranske/Deliverable-Render#78",
+      "run_id": "keepalive:stranske/Deliverable-Render#78:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "later_truth": null,
+      "error": "native round boundary before new evidence/provider attempt"
+    },
+    {
+      "case_id": "82ccd20156f37673644fc6fae36ee850fe7955892761b07d982468079e64c052",
+      "target": "stranske/Workflows#3874",
+      "run_id": "keepalive:stranske/Workflows#3874:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "later_truth": null,
+      "error": "native round boundary before new evidence/provider attempt"
+    },
+    {
+      "case_id": "e490fc33a4580456329bac982e23f4e6f526fae2279762ca953a9f20d2037059",
+      "target": "stranske/Counter_Risk#1152",
+      "run_id": "keepalive:stranske/Counter_Risk#1152:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "later_truth": null,
+      "error": "native round boundary before new evidence/provider attempt"
+    },
+    {
+      "case_id": "b96bc60269f5e897a0a6d33ac43e258726f988b225f3af2caa777e1e7e361ca7",
+      "target": "stranske/Counter_Risk#1150",
+      "run_id": "keepalive:stranske/Counter_Risk#1150:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "later_truth": null,
+      "error": "native round boundary before new evidence/provider attempt"
+    },
+    {
+      "case_id": "67858e41354f0a936c6056ca5def8bda5679f9444327a9e6dd23b978d42ed2c4",
+      "target": "stranske/Workflows#3871",
+      "run_id": "keepalive:stranske/Workflows#3871:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "later_truth": null,
+      "error": "native round boundary before new evidence/provider attempt"
+    },
+    {
+      "case_id": "a69eb2efb184002ce7e2c6ad7b71f6443f1348ad292c878150e6544c682cbac9",
+      "target": "stranske/Orchestrator#570",
+      "run_id": "keepalive:stranske/Orchestrator#570:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "later_truth": null,
+      "error": "native round boundary before new evidence/provider attempt"
+    },
+    {
+      "case_id": "97a31f3f98def6920a870c106eaf28667a75a9f0cd9f722d08a61a91c36c18a7",
+      "target": "stranske/Orchestrator#573",
+      "run_id": "keepalive:stranske/Orchestrator#573:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "later_truth": null,
+      "error": "native round boundary before new evidence/provider attempt"
+    },
+    {
+      "case_id": "b6b26c9f0eebbd5a7211ff1cea641df853e6f97a9e4de31253a030e8e7600ef6",
+      "target": "stranske/Orchestrator#568",
+      "run_id": "keepalive:stranske/Orchestrator#568:codex",
+      "verifier_verdict": "NON_PASS",
+      "adjudicated_verdict": "PASS",
+      "later_truth": null,
+      "error": "native round boundary before new evidence/provider attempt"
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+--- a/src/merge_guard.py
++++ b/src/merge_guard.py
+@@ -644,7 +644,7 @@
+         except Exception as exc:
+             panel = {"status": "error", "error": str(exc)[:500]}
+     result["adversarial_review"] = panel
+-    if not skip_immediate_advisory:
++    if False:
+         try:
+             adjudication = (adjudicate_fn or adjudicate_disagreement)(
+                 target, gate_result.get("gate"), panel, env=env, dry_run=dry_run

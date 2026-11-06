@@ -1,0 +1,68 @@
+{
+  "recorded_at": "2026-11-03T23:23:55.179Z",
+  "searches": [
+    {
+      "query": "redirect-apply.log",
+      "requested_last_modified_after": "2026-11-03T00:00:00Z",
+      "returned_results": 25,
+      "has_more": false,
+      "total_results": 25,
+      "returned_modified_dates": [
+        "2026-09-07",
+        "2026-09-16",
+        "2026-09-19",
+        "2026-09-20",
+        "2026-10-20",
+        "2026-10-21",
+        "2026-10-22",
+        "2026-10-23",
+        "2026-10-24",
+        "2026-10-27",
+        "2026-10-28"
+      ],
+      "exact_filename_results": [
+        {
+          "id": "id:tDSHdCztYNUAAAAAADqcoQ",
+          "path": "ns:57267731//My Mac (TRS MacBook)/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_an_authenticated_tick_run1/state/redirect-apply.log",
+          "last_modified": "2026-10-21T04:36:12Z"
+        },
+        {
+          "id": "id:tDSHdCztYNUAAAAAADqcWg",
+          "path": "ns:57267731//My Mac (TRS MacBook)/Documents/Codex/2026-10-18/task/work/closer-independent-implementation/release-evidence/closer836-strict-pytest-temp-root/pytest-of-teacher/pytest-0/test_an_authenticated_tick_run0/state/redirect-apply.log",
+          "last_modified": "2026-10-21T04:36:04Z"
+        }
+      ],
+      "limitation": "Results include items older than the requested lower bound; filter enforcement and search completeness are not established. No authentic November 3 owner-host artifact recovered."
+    },
+    {
+      "query": "switch-review.json",
+      "requested_last_modified_after": "2026-11-03T00:00:00Z",
+      "returned_results": 20,
+      "has_more": false,
+      "total_results": 20,
+      "returned_modified_dates": [
+        "2026-09-20",
+        "2026-10-15",
+        "2026-10-16",
+        "2026-10-21",
+        "2026-10-22",
+        "2026-10-23",
+        "2026-10-31"
+      ],
+      "exact_filename_results": [],
+      "limitation": "Results include items older than the requested lower bound; filter enforcement and search completeness are not established. No authentic November 3 owner-host artifact recovered."
+    }
+  ],
+  "issue_comments": {
+    "count": 13,
+    "non_bot_comments": 0,
+    "limitation": "No owner-host evidence in the retrieved issue #1106 comments."
+  },
+  "reconciliation": {
+    "body_update": "rejected: MCP tool call requires approval, but approval policy is never",
+    "blocker_comment": "rejected: MCP tool call requires approval, but approval policy is never",
+    "needs_human_label": "rejected: MCP tool call requires approval, but approval policy is never",
+    "local_proposal": "docs/verification/issue-1106/proposed-pr-body.md",
+    "complete": false
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "command": [
+    "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3",
+    "src/verify.py"
+  ],
+  "exit_code": 124,
+  "elapsed_seconds": 120.012,
+  "timeout_seconds": 120
+}

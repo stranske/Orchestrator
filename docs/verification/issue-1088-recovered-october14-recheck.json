@@ -1,0 +1,41 @@
+{
+  "evaluated_sha": "81fbab57e6622cd67c28dd7b7b3507a8d3ff55c0",
+  "results": [
+    {
+      "case": "daily-cap",
+      "evaluated_sha": "81fbab57e6622cd67c28dd7b7b3507a8d3ff55c0",
+      "argv": [
+        "python3",
+        "-m",
+        "pytest",
+        "tests/test_redirect_apply_prescreen.py::test_redirect_apply_daily_cap_refuses_second_apply",
+        "-q"
+      ],
+      "mutation": "disable applies_today guard",
+      "before_sha256": "b0908ad15d28b348dd526f8227a50080502bf682950f3dd48be8f2490bbd1be7",
+      "restored_sha256": "b0908ad15d28b348dd526f8227a50080502bf682950f3dd48be8f2490bbd1be7",
+      "red_returncode": 1,
+      "green_returncode": 0,
+      "red_assertion": true,
+      "restored_identical": true
+    },
+    {
+      "case": "fixture-count",
+      "evaluated_sha": "81fbab57e6622cd67c28dd7b7b3507a8d3ff55c0",
+      "argv": [
+        "python3",
+        "-m",
+        "pytest",
+        "tests/test_redirect_chain_gate.py::test_replay_of_the_twelve_historical_stalls_authorizes_at_least_nine",
+        "-q"
+      ],
+      "mutation": "remove historical-12.json",
+      "before_sha256": "cb382589b66d4274486129d90cbc076286aa19b4a57fdd493acc4f1f4d6d45c4",
+      "restored_sha256": "cb382589b66d4274486129d90cbc076286aa19b4a57fdd493acc4f1f4d6d45c4",
+      "red_returncode": 1,
+      "green_returncode": 0,
+      "red_assertion": true,
+      "restored_identical": true
+    }
+  ]
+}

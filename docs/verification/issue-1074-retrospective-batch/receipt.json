@@ -1,0 +1,126 @@
+{
+  "scope": "Synthetic cohort replay regression only; no historical case, native semantic verdict, or named pytest acceptance claim.",
+  "evaluated_parent": "826edfb6a9f75402dcc0863ae6844ea6fbe8f5d9",
+  "main_retro_blob": "acb3d5d40e0a1326c07dd69d95b8c0e3915797fe",
+  "merged_validation_commit": "b9267a0",
+  "source_sha256": {
+    "src/adjudicator_retro.py": "ee172f96ddf0ca56f6c06fcf18bdaacccece5381de61a9896006d0b16a8fb0b8",
+    "src/roles.py": "4a5e729f4bf797ea448f18c14df69696e3df3bcaaf046729c039099ae7cc3dd7",
+    "src/feedback.py": "eafa930ec4cea9a239bc03a91a00b2ca7c618c40629690658f8276417946412d",
+    "scripts/export_adjudicator_inventory.js": "21240bdc0b0d9b0f0048e82994418f3b176874ff05973db7da87eff41a44811a",
+    "tests/test_adjudicator_retrospective_batch.js": "6f3d0954a8786d53d1d1a0d72615c65a5dfd44c1a3816435635da6758e67d62c"
+  },
+  "checks": {
+    "batch-green": {
+      "command": "node tests/test_adjudicator_retrospective_batch.js",
+      "exit": 0,
+      "passed": 1,
+      "log": "batch-green.log.gz",
+      "uncompressed_sha256": "eea5d5fc33f48c355e62cfd693124647eca8adfea14cd97cf596d8a1e0ff31f1"
+    },
+    "inventory": {
+      "command": "node tests/test_adjudicator_inventory.js",
+      "exit": 0,
+      "passed": 7,
+      "log": "inventory.log.gz",
+      "uncompressed_sha256": "c567c3bf8dbfcccbf2ed99ff25e05bcb07c0c2656e329e35a1e266e42d550420"
+    },
+    "gate-and-inventory": {
+      "command": "node --test-name-pattern='dispute inventory|retro saves Gate gaps' tests/test_adjudicator_retro_cli.js",
+      "exit": 0,
+      "passed": 8,
+      "log": "gate-and-inventory.log.gz",
+      "uncompressed_sha256": "901f798381dd76b4b081f907be677b3891ad4922891921bef579b126874503c7"
+    },
+    "selftest": {
+      "command": "python3 src/adjudicator_retro.py --selftest",
+      "exit": 0,
+      "passed": 23,
+      "log": "selftest.log.gz",
+      "uncompressed_sha256": "3f227862f8d1e7b2c35195efe7205621f73d3033db5a3ca88e1e7c24021e1109"
+    },
+    "evidence": {
+      "command": "PYTHONPATH=src python3 -m unittest discover -s tests -p test_adjudicator_retro_evidence.py",
+      "exit": 0,
+      "passed": 11,
+      "log": "evidence.log.gz",
+      "uncompressed_sha256": "7408283e62ea254b76e1e89d1977f882294d6d2c40b5d837ef1d69e2b74ecb54"
+    },
+    "baseline-cli": {
+      "command": "node tests/test_adjudicator_retro_cli.js",
+      "exit": 1,
+      "passed": 51,
+      "log": "baseline-cli.log.gz",
+      "uncompressed_sha256": "401e40fd9a3a156cd6cb96d0ad0d3042c2c20687305d4eadb3657868675b5ceb",
+      "failed": 16,
+      "failure_names": [
+        "retro CLI compares both rules on the same cases with mixed merge dispositions",
+        "retro CLI preserves raw proposals without grading metadata and refreshes measured costs",
+        "retro CLI publishes an empty report without inventing agreement or cost",
+        "retro CLI refreshes late abstention costs after its outcome leaves the Brain",
+        "retro CLI refreshes late invalid-response costs without grading or redispatch",
+        "retro CLI removes stale comparisons until durability is judged again",
+        "retro CLI reuses saved cases when later durability and costs arrive",
+        "retro CLI withdraws stale costs without changing the comparison cohort",
+        "retro bounded batches count paid abstentions and invalid responses outside agreement rates",
+        "retro collects complete gate pages before shadow dispatch: numeric-attempt-order",
+        "retro collects complete gate pages before shadow dispatch: numeric-run-order",
+        "retro dispatch records shadow roles without writing outcomes (newest PR #1)",
+        "retro dispatch records shadow roles without writing outcomes (newest PR #2)",
+        "retro replays each persisted dispute on the same PR (newest run 1)",
+        "retro replays each persisted dispute on the same PR (newest run 2)",
+        "switch review reads and renders saved adjudicator evidence without replay or writes"
+      ],
+      "previous_passed": 51,
+      "previous_failed": 16
+    }
+  },
+  "controls": [
+    {
+      "name": "attempt-noop-outcome-write",
+      "exit": 1,
+      "source_sha256": "8f853b6f9c40ae162a557a8e24c10f6b94b5a1d8ad2d7e5f666e39d7ead97f46",
+      "log": "attempt-noop-outcome-write.log.gz",
+      "uncompressed_sha256": "b718f2dbd74a0148a6471c9ba4c675319efa1640e394d352bcc01cf60b03b0fe",
+      "patch": "attempt-noop-outcome-write.patch"
+    },
+    {
+      "name": "discard-evidence-gap",
+      "exit": 1,
+      "source_sha256": "7b6d14819764e73382c00efe298414890e47a785ba2ea7e72a26cfcf0e7ba2fb",
+      "log": "discard-evidence-gap.log.gz",
+      "uncompressed_sha256": "43c2d6c91baeb49604fbf8e2217598a9d83cb5e8796559ae8468ae0a55ca8214",
+      "patch": "discard-evidence-gap.patch"
+    },
+    {
+      "name": "invent-missing-cost",
+      "exit": 1,
+      "source_sha256": "7fed40e283f076ce1acd483e55d78e4a052bd073c1b90c27971d3e0b14d33492",
+      "log": "invent-missing-cost.log.gz",
+      "uncompressed_sha256": "2b98ca5041356a42809520feafba4647527143e5d54e7b2b6966cdb239e6eb45",
+      "patch": "invent-missing-cost.patch"
+    },
+    {
+      "name": "restored",
+      "exit": 0,
+      "source_sha256": "ee172f96ddf0ca56f6c06fcf18bdaacccece5381de61a9896006d0b16a8fb0b8",
+      "log": "restored.log.gz",
+      "uncompressed_sha256": "893ad68492040cec262248a60f7b73c2ea8a3355583bc7b156fd85d90705ff72",
+      "byte_identical_to_evaluated_source": true
+    }
+  ],
+  "operational_acceptance": {
+    "historical_inventory": "UNKNOWN: original Brain and requested cohort manifest unavailable",
+    "historical_replay": "NOT RUN",
+    "observed_closer_shadow": "NOT RUN",
+    "fresh_named_pytest": "NOT RUN: pytest unavailable",
+    "real_costs_and_later_truth": "UNKNOWN"
+  },
+  "publication": {
+    "pr": 1075,
+    "state": "open",
+    "isDraft": false,
+    "remote_metadata_updates": "Rejected: connector requires approval; policy is never",
+    "workspace_staging": "Blocked: .git/index.lock cannot be created on read-only filesystem"
+  }
+}

@@ -1,0 +1,16 @@
+✔ dispute inventory preserves every synthetic case and excludes ineligible Brain rows read-only (839.903352ms)
+✔ dispute inventory distinguishes unavailable evidence from an empty Brain: missing (777.794ms)
+✔ dispute inventory distinguishes unavailable evidence from an empty Brain: schema-less (764.427289ms)
+✔ dispute inventory distinguishes unavailable evidence from an empty Brain: empty (823.525634ms)
+✔ retro saves Gate gaps, continues the batch and recovers only on retry: missing-initial-commit (1334.696183ms)
+✔ retro saves Gate gaps, continues the batch and recovers only on retry: missing-paginated-commit (1317.947013ms)
+✔ retro saves Gate gaps, continues the batch and recovers only on retry: null-initial-rollup (1350.883951ms)
+✔ retro saves Gate gaps, continues the batch and recovers only on retry: null-paginated-rollup (1301.349348ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 8
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 8525.908994

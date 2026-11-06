@@ -273,8 +273,13 @@ def _selected_defect(
     seeds = [s for s in inputs["seed_bundle"]["seeds"] if s["finding"]["id"] == raw["id"]]
     _need(len(seeds) == 1, "owner selected seed ambiguous")
     seed = seeds[0]
+    import closer_correction_controller as controller
+
+    source_repository, separator, source_number = source_target.rpartition("#")
     _need(
-        source_target == seed["target"]["repository"] + "#" + seed["source_issue"]["number"],
+        separator == "#"
+        and controller.native_repository_name(source_repository, seed["target"]["repository"])
+        and source_number == seed["source_issue"]["number"],
         "owner source criterion differs from seed",
     )
     test_id = "source-test-" + contract.digest({"seed": seed, "criterion": criterion})
@@ -398,8 +403,12 @@ def build_owner_request(
             strong_basis.get("request_id") == named["request_id"],
             "owner original STRONG named request differs",
         )
+        # The ownership reader's freshness boundary starts here, after the
+        # retained packet and qualified LOW/STRONG evidence have been checked.
+        # Reusing the builder-entry clock can turn otherwise valid bounded
+        # validation into a false stale-observation hold.
         observed = ownership.collect_ownership(
-            github=github, seed=seed, deadline=context["deadline"], now=clock
+            github=github, seed=seed, deadline=context["deadline"], now=time.time()
         ).document()
         fence()
         # Re-check queue custody and clock after bounded external observations.

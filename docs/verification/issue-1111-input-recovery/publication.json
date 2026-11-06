@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "pr_readback": {
+    "number": 1112,
+    "url": "https://github.com/stranske/Orchestrator/pull/1112",
+    "state": "open",
+    "isDraft": false,
+    "head": "43e88676c08ea1a98f74873fb4045ca571b9b9d0",
+    "branch": "codex/issue-1111"
+  },
+  "attempts": [
+    {
+      "action": "Add needs-human label to issue #1111",
+      "status": "blocked",
+      "tool": "github_add_issue_labels",
+      "error": "MCP tool call requires approval, but approval policy is never"
+    },
+    {
+      "action": "Publish blocker and validation comment on PR #1112",
+      "status": "blocked",
+      "tool": "github_add_comment_to_issue",
+      "error": "MCP tool call requires approval, but approval policy is never"
+    }
+  ],
+  "remote_mutations_completed": false,
+  "completion_metadata_reconciled": false
+}

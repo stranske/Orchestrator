@@ -545,8 +545,15 @@ def _body(value):
 
 def _fresh(backend, target, record):
     expected, scope = record["pr"], record["provenance"]["scope_issue"]
-    wanted = expected["repository"] + "#" + str(expected["pr_number"])
-    _need(target == wanted, "publication target differs")
+    target_repository, delimiter, target_pr = (
+        target.rpartition("#") if type(target) is str else (None, None, None)
+    )
+    _need(
+        delimiter == "#"
+        and target_repository.casefold() == expected["repository"].casefold()
+        and target_pr == str(expected["pr_number"]),
+        "publication target differs",
+    )
     observation = native.Closer.observe(backend, target)
     snapshot = observation.get("evidence") or {}
     _need(
@@ -554,7 +561,8 @@ def _fresh(backend, target, record):
         and snapshot.get("kind") == "pr"
         and snapshot.get("head") == expected["head_oid"]
         and snapshot.get("head_branch") == expected["head_ref"]
-        and snapshot.get("head_repository") == expected["repository"]
+        and type(snapshot.get("head_repository")) is str
+        and snapshot["head_repository"].casefold() == expected["repository"].casefold()
         and snapshot.get("state") in {"OPEN", "MERGED"}
         and snapshot.get("draft") is False
         and not snapshot.get("_local_cached"),
@@ -769,8 +777,13 @@ def bind_verifier_inputs(continuation, backend, target, snapshot, prepared):
     """
     record = _record(continuation)
     _need(type(backend) is native.Closer, "existing native Closer backend required")
+    target_repository, delimiter, target_pr = (
+        target.rpartition("#") if type(target) is str else (None, None, None)
+    )
     _need(
-        target == record["pr"]["repository"] + "#" + str(record["pr"]["pr_number"])
+        delimiter == "#"
+        and target_repository.casefold() == record["pr"]["repository"].casefold()
+        and target_pr == str(record["pr"]["pr_number"])
         and snapshot.get("head") == record["pr"]["head_oid"]
         and snapshot.get("state") == "MERGED",
         "corrective verification subject differs",

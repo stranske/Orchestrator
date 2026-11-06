@@ -133,7 +133,7 @@ def test_pacing_report_exact_line_and_difference_threshold(tmp_path, routed, com
         "w_p_target=unmeasured state=shed pacing=measured "
         f"routed_weight={routed:.3f} (tick ts={NOW - 60}, age=60s) "
         f"report_weight={computed:.3f}{difference} w_p_prev→w_p=unmeasured→{computed:.3f} "
-        f"resets=unknown source=none T1=None reset_expiries=None ts={NOW} stale=False; "
+        f"resets=unknown source=none sample_age_s=0 desktop_sample_age_s=unknown T1=None reset_expiries=None ts={NOW} stale=False; "
         f"fixture; {SHED_NOTE}"
     )
 
@@ -146,8 +146,7 @@ def test_pacing_report_partial_snapshot_keeps_missing_values_unmeasured(tmp_path
     line = next(line for line in text.splitlines() if line.startswith("pool claude: u="))
     expected = "unmeasured" if persisted_weight is None else "0.000"
     assert (
-        f"routed_weight={expected} (tick ts=unmeasured, age=unmeasured) "
-        "report_weight=unmeasured "
+        f"routed_weight={expected} (tick ts=unmeasured, age=unmeasured) report_weight=unmeasured "
     ) in line
     assert "weight_delta=" not in line
     assert SHED_NOTE not in line

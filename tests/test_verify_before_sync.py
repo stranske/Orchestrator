@@ -594,7 +594,13 @@ def test_floor_may_lag_reaches_verify_py_only_when_asked(world, flag, args):
     extra = {"VERIFY_BEFORE_SYNC_FLOOR_MAY_LAG": flag} if flag else {}
     result, record = _run(world, **extra)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert record["verify_args"] == args, record
+    pieces = record["verify_args"].split()
+    if args:
+        assert pieces.pop(0) == args
+    assert pieces[0] == "--failure-evidence-out"
+    evidence = Path(pieces[1])
+    assert evidence.name == "pytest-failure-evidence.json"
+    assert evidence.parent.name.startswith("verify-before-sync.")
 
 
 def test_identity_mode_prints_the_fingerprint_a_green_verdict_was_taken_on(world):
@@ -722,6 +728,7 @@ def test_keep_leaves_the_scratch_mirror_for_inspection(world):
     assert result.returncode == 0, result.stdout + result.stderr
     assert "scratch directory kept: " in result.stdout, result.stdout
     assert (Path(record["sync_mirror"]) / "verify.py").is_file(), record
+    assert not (Path(record["sync_mirror"]).parent / "pytest-failure-evidence.json").exists()
 
 
 def test_the_script_feeds_no_here_document_to_anything():

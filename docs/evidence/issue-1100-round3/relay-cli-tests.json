@@ -1,0 +1,11 @@
+{
+  "command": [
+    "node",
+    "--test",
+    "--test-isolation=none",
+    "tests/test_relay_acceptance_cli.js"
+  ],
+  "exit_code": 0,
+  "elapsed_seconds": 4.271,
+  "timeout_seconds": 120
+}

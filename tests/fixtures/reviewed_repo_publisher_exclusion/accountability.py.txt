@@ -1,0 +1,168 @@
+"""Deterministic delivery deadlines, independent of routing and parked state."""
+from __future__ import annotations
+
+import hashlib
+import importlib.util
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+
+SPEC = importlib.util.spec_from_file_location("accountability_guard", "/Users/teacher/.codex/bin/opener-liveness-guard.py")
+guard_rules = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(guard_rules)
+RECOVERY_SECONDS = 3 * 3600
+HUMAN_SECONDS = 7 * 24 * 3600
+REMINDER_SECONDS = 24 * 3600
+
+
+def timestamp(value):
+    parsed = guard_rules.parse_timestamp(value)
+    return parsed.timestamp() if parsed else None
+
+
+def iso(value):
+    return datetime.fromtimestamp(value, timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def identity(node):
+    return f"{node['repository']['nameWithOwner']}#{node['number']}"
+
+
+def delivery_issue(node):
+    # Use the guard's explicit holder/exclusion rules across the whole fleet.
+    # Draft status, a policy disposition, unsupported routing, and blockers are
+    # not holder/exclusion proofs.
+    rest = dict(node)
+    rest['labels'] = (node.get('labels') or {}).get('nodes', [])
+    return not (guard_rules.durable_holder_reason(rest) or guard_rules.generated_reason(rest))
+
+
+def delivery_pr(node):
+    names = {n['name'].lower() for n in (node.get('labels') or {}).get('nodes', [])}
+    title = node.get('title', '').lower()
+    # Do not exempt ordinary PRs merely because "metrics" occurs in their diff/body.
+    return not (names & {'tracker:durable', 'holder:durable', 'publication:durable'} or
+                title.startswith('agent metrics weekly summary') or
+                node.get('headRefName', '').startswith('exports/route-weights'))
+
+
+def progress_evidence(pr, previous=None):
+    commits = (pr.get('commits') or {}).get('nodes') or []
+    commit = commits[-1].get('commit', {}) if commits else {}
+    tree = (commit.get('tree') or {}).get('oid')
+    previous = previous or {}
+    if tree and tree == previous.get('content_tree') and previous.get('last_progress_at') is not None:
+        # A new SHA/timestamp with the same tree is metadata, not new content.
+        return previous['last_progress_at'], previous['progress_token']
+    evidence = []
+    for kind, value in [('pr_created', pr.get('createdAt')), ('pr_head', commit.get('committedDate'))]:
+        when = timestamp(value)
+        if when is not None:
+            evidence.append((when, f"{identity(pr)}:{kind}:{pr.get('headRefOid') or ''}"))
+    return max(evidence) if evidence else None
+
+
+def issue_links(pr):
+    linked = set()
+    for node in (pr.get('closingIssuesReferences') or {}).get('nodes', []):
+        linked.add(identity(node))
+    # Closing references may be absent for a draft; use only explicit closing
+    # references, not arbitrary issue mentions, to inherit progress evidence.
+    import re
+    repo = pr['repository']['nameWithOwner']
+    for match in re.finditer(r'(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+(?:https://github.com/([\w.-]+/[\w.-]+)/issues/|([\w.-]+/[\w.-]+)#|#)(\d+)', pr.get('body', '')):
+        linked.add(f"{match.group(1) or match.group(2) or repo}#{match.group(3)}")
+    return linked
+
+
+def evaluate(prs, issues, guard, prior, coverage, observations, now):
+    """Return persistent per-item records, early recovery, and sticky human debt.
+
+    Dates on bot comments, labels, dispositions, check reruns and controller
+    observations never renew a delivery deadline. Only PR creation/head evidence
+    renews it here; closure removes the item. Legacy issue history with no
+    current linked PR has unknown progress and is raised truthfully as unverified.
+    """
+    linked_progress = {}
+    for pr in prs:
+        evidence = progress_evidence(pr, prior.get(identity(pr)))
+        if evidence:
+            for target in issue_links(pr):
+                linked_progress[target] = max(linked_progress.get(target, evidence), evidence)
+    human = {f"{i['repository']}#{i['number']}": i for i in guard.get('human_attention', [])}
+    records, recoveries, human_due, exclusions = {}, [], [], []
+    for kind, node in [('pr', n) for n in prs] + [('issue', n) for n in issues]:
+        target = identity(node)
+        if not (delivery_pr(node) if kind == 'pr' else delivery_issue(node)):
+            exclusions.append(target)
+            continue
+        old = prior.get(target, {})
+        created = timestamp(node.get('createdAt'))
+        evidence = progress_evidence(node, old) if kind == 'pr' else linked_progress.get(target)
+        baseline = max(v for v in [created, old.get('last_progress_at'), evidence[0] if evidence else None] if v is not None) if any(v is not None for v in [created, old.get('last_progress_at'), evidence[0] if evidence else None]) else None
+        token = evidence[1] if evidence and baseline == evidence[0] else old.get('progress_token') or f"created:{created}"
+        episode = hashlib.sha256(json.dumps([target, baseline, token]).encode()).hexdigest()
+        row = dict(old, target=target, kind=kind, url=node.get('url'),
+                   first_seen_at=old.get('first_seen_at', now), last_seen_at=now,
+                   last_progress_at=baseline, progress_token=token, episode=episode,
+                   progress_evidence='verified_pr_creation_or_head' if evidence else 'historical_issue_progress_unverified',
+                   recovery_due_at=baseline + RECOVERY_SECONDS if baseline is not None else now,
+                   human_due_at=baseline + HUMAN_SECONDS if baseline is not None else now,
+                   owner=(observations.get(target) or {}).get('delivery_owner') or (observations.get(target) or {}).get('lane') or ('opener' if kind == 'issue' else 'unmapped'),
+                   head=node.get('headRefOid'),
+                   fingerprint=(observations.get(target) or {}).get('fingerprint') or node.get('updatedAt'))
+        if kind == 'pr':
+            commits = (node.get('commits') or {}).get('nodes') or []
+            row['content_tree'] = ((commits[-1].get('commit') or {}).get('tree') or {}).get('oid') if commits else None
+        elif (node['repository']['nameWithOwner'] not in guard.get('supported_repos', [])
+              and not (observations.get(target) or {}).get('delivery_owner')):
+            row['owner'] = 'unmapped'
+        if old.get('episode') != episode:
+            row.pop('last_human_alert_at', None)
+        result = coverage.get(target) or {}
+        completed = timestamp(result.get('completed_at_utc'))
+        diagnosed = result.get('accountability_episode') == episode and not result.get('execution_error')
+        # Adopt exact-target ordinary diagnostic evidence only if it is current.
+        if not diagnosed and completed and (baseline is None or completed >= baseline) and not result.get('execution_error'):
+            diagnosed = bool(row['fingerprint'] and result.get('fingerprint') == row['fingerprint'])
+        human_block = human.get(target)
+        if human_block:
+            row['blocker_owner'] = 'human'
+            row['owner'] = (observations.get(target) or {}).get('delivery_owner') or 'opener'
+        else:
+            row.pop('blocker_owner', None)
+        if (observations.get(target) or {}).get('execution_state'):
+            row['execution_state'] = observations[target]['execution_state']
+        if baseline is None or now >= row['human_due_at']:
+            row['deadline_state'] = 'HUMAN_OVERDUE'
+            row['human_action'] = ((human_block or {}).get('human_action') or
+                'Resolve the documented blocker, supply a concrete priority/scope/owner decision, or move this item forward. Automation must perform any remaining bounded repair or safe lifecycle cleanup; a bot waiting record is insufficient.')
+            row['new_alert_due'] = now - row.get('last_human_alert_at', 0) >= REMINDER_SECONDS
+            human_due.append(row)
+        elif now >= row['recovery_due_at']:
+            row['deadline_state'] = 'HUMAN_WAIT' if human_block else ('DIAGNOSED_WAIT' if diagnosed else 'LUNA_REVIEW_DUE')
+        else:
+            row['deadline_state'] = 'WITHIN_LIMIT'
+        # Age is a monitoring/escalation clock, never proof of productive work.
+        # Concrete recovery eligibility is decided by the ordinary route/stall
+        # detector; Luna can report deadline debt without waking any Sol lane.
+        records[target] = row
+    # Earliest hard deadlines are processed first, so a fixed per-run target
+    # bound cannot indefinitely starve an old issue behind a newer PR.
+    recoveries.sort(key=lambda r: (r['human_due_at'], r['target']))
+    human_due.sort(key=lambda r: (r['human_due_at'], r['target']))
+    return records, recoveries, human_due, exclusions
+
+
+def unknown_due(prior, now, last_complete, errors):
+    """A failed discovery cannot silence a last-known breached deadline."""
+    due = []
+    for old in prior.values():
+        if now < old.get('human_due_at', now + 1):
+            continue
+        row = dict(old, deadline_state='UNKNOWN_OVERDUE', last_verified_at=last_complete,
+                   new_alert_due=now - old.get('last_human_alert_at', 0) >= REMINDER_SECONDS,
+                   human_action='Restore live inventory coverage or confirm the current disposition of this last-known overdue delivery item. Current open/closed state and progress are unverified.',
+                   coverage_errors=errors)
+        due.append(row)
+    return sorted(due, key=lambda r: (r['human_due_at'], r['target']))

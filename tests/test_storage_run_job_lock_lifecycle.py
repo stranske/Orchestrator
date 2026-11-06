@@ -14,18 +14,34 @@ def ledger(job):
     return json.loads((job.state_dir / "reservations.json").read_text())
 
 
-def test_child_outlives_acquisition_deadline_and_still_retires(job):
+def test_child_outlives_acquisition_deadline_and_still_retires(job, monkeypatch):
     script = job.source / "verify.sh"
     script.write_text(script.read_text().replace('exit "$1"', 'sleep .35\nexit "$1"'))
+    clock = [100.0]
+    deadline = clock[0] + 0.06
+    monkeypatch.setattr(storage.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(storage, "identity", lambda _: "stable-source")
+    real_popen = storage.subprocess.Popen
+
+    def child_after_acquisition(*args, **kwargs):
+        child = real_popen(*args, **kwargs)
+        # The owner lock was acquired under the request deadline.  The real
+        # child now runs after it, so later lifecycle work must use its fresh
+        # deadline rather than the expired acquisition budget.
+        clock[0] = deadline + 0.01
+        return child
+
+    monkeypatch.setattr(storage.subprocess, "Popen", child_after_acquisition)
     assert (
         storage.run_job(
             job,
             free=lambda _: storage.GIB,
             probe=lambda _: None,
-            lock_deadline=time.monotonic() + 0.2,
+            lock_deadline=deadline,
         )
         == 0
     )
+    assert clock[0] > deadline
     receipt = json.loads(next((job.state_dir / "receipts").glob("*.json")).read_text())
     assert receipt["status"] == "retired"
     assert receipt["exit_code"] == 0
@@ -69,10 +85,16 @@ def test_owner_refusal_after_deadline_uses_fresh_finish_budget(job, monkeypatch)
 def test_pre_spawn_failure_after_initial_deadline_retires_and_finishes(job, monkeypatch):
     foreign = seed_foreign(job)
     monkeypatch.setattr(storage, "identity", lambda _: "original")
+    clock = [100.0]
+    deadline = clock[0] + 0.06
+    monkeypatch.setattr(storage.time, "monotonic", lambda: clock[0])
 
     def refused_bind(*args, **metadata):
         assert "deadline" not in metadata
-        time.sleep(0.08)
+        # Binding starts only after the real owner lock was acquired.  Cross
+        # the request deadline here so the terminal lifecycle finish has to
+        # obtain its own bounded budget.
+        clock[0] = deadline + 0.02
         raise PermissionError("metadata refused before spawn")
 
     monkeypatch.setattr(storage.Reservations, "bind", refused_bind)
@@ -82,10 +104,11 @@ def test_pre_spawn_failure_after_initial_deadline_retires_and_finishes(job, monk
             job,
             free=lambda _: storage.GIB,
             probe=lambda _: None,
-            lock_deadline=time.monotonic() + 0.06,
+            lock_deadline=deadline,
             lifecycle_lock_timeout_seconds=0.04,
         )
     assert ledger(job)["jobs"] == {"foreign": foreign}
+    assert clock[0] > deadline
     assert not list(job.temp_parent.glob("storage-verify-*"))
     receipts = [json.loads(p.read_text()) for p in (job.state_dir / "receipts").glob("*.json")]
     assert any(r.get("status") == "not_started_retired" for r in receipts)

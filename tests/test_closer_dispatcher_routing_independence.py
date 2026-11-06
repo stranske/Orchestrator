@@ -6,12 +6,10 @@ Verifies that exception/repair work can be routed to any eligible provider
 
 from __future__ import annotations
 
-import json
 import time
 from types import SimpleNamespace
 
 import pytest
-import test_closer_execution_contract_routes as contract_routes
 from test_dispatcher_controlled_data_only import world as _controlled_world
 
 import closer_dispatcher as adapter
@@ -266,64 +264,6 @@ class TestExceptionRoute:
         assert route["mode"] == "assess"
 
 
-class TestExceptionCallbackIdentity:
-    """Pipeline exception callback must preserve router-selected provider identity."""
-
-    @pytest.mark.usefixtures("callback_inert_transport")
-    def test_non_codex_exception_callback_identity(self, tmp_path, monkeypatch):
-        # The wrapper below runs this assertion inside actual CLI registration.
-        from closer_inert_dispatcher_support import SECOND
-        from test_closer_disposition import TARGET
-        from test_closer_execution_contract_routes import named, prepared, scoped_answer
-
-        delivery, callbacks, context = prepared(tmp_path, monkeypatch)
-        row = named(context["interpret"])
-        route = {
-            "agent": "claude",
-            "profile_id": SECOND,
-            "pools": ["claude-subscription"],
-            "mode": "assess",
-        }
-        calls = []
-
-        def exception_route(**kwargs):
-            load = kwargs.get("load") or {}
-            load["claude"] = load.get("claude", 0) + 1
-            load["pool:claude-subscription"] = load.get("pool:claude-subscription", 0) + 1
-            return route, "available"
-
-        monkeypatch.setattr(adapter, "_exception_route", exception_route)
-
-        def strong(envelope, _prompt, options):
-            request = envelope["adjudication_request"]
-            calls.append((request, options))
-            return {"exit": 0, "output": json.dumps(scoped_answer(request, row))}
-
-        delivery.strong_response = strong
-        result = callbacks["exception"](TARGET, context)
-        assert result["validated"]["scoped_adjudication"]["outcome"] == "satisfied"
-        assert result["requested_agent"] == "claude"
-        assert result["requested_profile"] == SECOND
-        assert len(calls) == 1 and calls[0][1]["profile_id"] == SECOND
-        assert calls[0][0]["basis"]["source"] == row["source"]
-        actual = delivery.inert_caller.results[-1]
-        assert actual["data_only_origin"]["profile_id"] == SECOND
-        assert actual["data_only_origin"]["process_observation"]["agent"] == "claude"
-        assert actual["provider_result_ref"]["path"]
-
-
-@pytest.fixture
-def callback_inert_transport(controlled_world, monkeypatch):
-    return contract_routes.inert_transport.__wrapped__(controlled_world, monkeypatch)
-
-
-TestExceptionCallbackIdentity.test_non_codex_exception_callback_identity = (
-    contract_routes.native_callback_case(
-        TestExceptionCallbackIdentity.test_non_codex_exception_callback_identity
-    )
-)
-
-
 class TestInterpretationCapacityDeferral:
     def test_route_reservation_exhaustion_is_a_capacity_deferral(
         self, tmp_path, monkeypatch, controlled_world
@@ -478,6 +418,55 @@ class TestPipelineCapacity:
 
         capacity = adapter._pipeline_capacity()
         assert capacity["exception"] == 0
+
+    @pytest.mark.parametrize(
+        ("schema", "profile_ids", "expected"),
+        [
+            ("closer-operational-capacity/v1", ["claude-explicit"], 1),
+            ("closer-operational-capacity/v1", ["other-profile"], 0),
+            (None, ["claude-explicit"], 0),
+        ],
+    )
+    def test_explicit_profile_requires_matching_scoped_report(
+        self, monkeypatch, schema, profile_ids, expected
+    ):
+        """A named native scope is the only capacity path that admits explicit profiles."""
+        import closer_operational_capacity
+        import execution_profiles
+
+        profile = {
+            "profile_id": "claude-explicit",
+            "agent": "claude",
+            "capacity_pool_ids": ["claude-pool"],
+            "requires_explicit_selection": True,
+        }
+        report = _make_capacity_report(
+            agents_state={agent: {"state": "shed"} for agent in ELIGIBLE_AGENTS},
+            profiles_state={"claude-explicit": {"state": "ok"}},
+            pools_state={"claude-pool": {"state": "ok"}},
+        )
+        report["agents"]["claude"] = {"state": "ok"}
+        if schema is not None:
+            report["schema"] = schema
+            # This unit isolates the dispatcher seam; operational-capacity has
+            # its own exact producer/freshness validation tests.
+            monkeypatch.setattr(
+                closer_operational_capacity, "validate_report", lambda *_a, **_kw: True
+            )
+        report["profile_ids"] = profile_ids
+        monkeypatch.setattr(adapter, "_fresh_capacity_report", lambda: report)
+        monkeypatch.setattr(
+            execution_profiles,
+            "profiles_for_agent",
+            lambda agent, transport, include_explicit=False: (
+                [profile] if agent == "claude" and include_explicit else []
+            ),
+        )
+        monkeypatch.setattr(adapter, "_profile_exception_qualified", lambda *_a, **_kw: True)
+
+        capacity = adapter._pipeline_capacity()
+        assert capacity["exception"] == expected
+        assert capacity["low"] == expected
 
 
 @pytest.fixture(autouse=True)

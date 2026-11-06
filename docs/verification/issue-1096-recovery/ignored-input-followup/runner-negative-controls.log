@@ -1,0 +1,132 @@
+✔ records exact commands, source hashes, complete JUnit and logs for both checks (291.869516ms)
+✔ full-suite success requires the complete collected identities: {"omitExtra":true} (281.470448ms)
+✔ full-suite success requires the complete collected identities: {"duplicateExtra":true} (284.029039ms)
+✔ full-suite success requires the complete collected identities: {"collectionFailure":true} (285.900576ms)
+✔ full-suite success requires the complete collected identities: {"collectionEmpty":true} (284.03556ms)
+✔ full-suite success requires the complete collected identities: {"collectionDuplicate":true} (289.690875ms)
+✔ missing pytest preserves two failures and cannot complete acceptance (137.8923ms)
+✔ preserves JUnit reader failures: {"parserFailure":true} (183.417901ms)
+✔ preserves JUnit reader failures: {"parserInvalidJson":true} (190.357598ms)
+✔ preserves JUnit reader failures: {"malformed":true} (316.498412ms)
+✔ refuses a successful claim for incomplete evidence: {"noXml":true} (137.21705ms)
+✔ refuses a successful claim for incomplete evidence: {"malformed":true} (312.437022ms)
+✔ refuses a successful claim for incomplete evidence: {"empty":true} (286.125491ms)
+✔ refuses a successful claim for incomplete evidence: {"incomplete":true} (281.163416ms)
+✔ refuses a successful claim for incomplete evidence: {"duplicate":true} (279.884129ms)
+✔ refuses a successful claim for incomplete evidence: {"skipped":true} (288.753908ms)
+✔ refuses a successful claim for incomplete evidence: {"foreign":true} (285.703029ms)
+✔ refuses a successful claim for incomplete evidence: {"exit":1} (290.524224ms)
+✔ source changes during execution invalidate otherwise passing checks (277.169246ms)
+✔ timeout preserves both failed checks without retrying either command (1571.653543ms)
+✔ refuses revision mismatch, modified tracked inputs and untracked inputs before execution (29.000621ms)
+✔ refuses uncommitted test execution input: conftest.py (18.918883ms)
+✔ refuses uncommitted test execution input: pytest.ini (19.213995ms)
+✔ refuses uncommitted test execution input: setup.cfg (19.831487ms)
+✔ refuses uncommitted test execution input: scripts/run_adjudicator_acceptance.js (19.240073ms)
+✔ requires explicit interpreter/revision/bounds and never overwrites a receipt (146.485017ms)
+✖ refuses ignored execution inputs before running pytest: tests/conftest.py (287.976311ms)
+✖ refuses ignored execution inputs before running pytest: src/local_override.py (282.320143ms)
+✖ refuses ignored execution inputs before running pytest: tests/fixtures/local-evidence.json (285.855813ms)
+✖ refuses ignored execution inputs before running pytest: src/legacy.pyc (284.873361ms)
+✖ refuses ignored execution inputs before running pytest: tests/__pycache__/conftest.py (285.867795ms)
+✔ ordinary ignored Python and pytest caches do not invalidate source receipts (289.661161ms)
+ℹ tests 32
+ℹ suites 0
+ℹ pass 27
+ℹ fail 5
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 8534.306584
+
+✖ failing tests:
+
+test at tests/test_adjudicator_acceptance_runner.js:229:3
+✖ refuses ignored execution inputs before running pytest: tests/conftest.py (287.976311ms)
+  AssertionError [ERR_ASSERTION]: Missing expected exception.
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_acceptance_runner.js:235:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: /Ignored acceptance inputs/,
+    operator: 'throws',
+    diff: 'simple'
+  }
+
+test at tests/test_adjudicator_acceptance_runner.js:229:3
+✖ refuses ignored execution inputs before running pytest: src/local_override.py (282.320143ms)
+  AssertionError [ERR_ASSERTION]: Missing expected exception.
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_acceptance_runner.js:235:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: /Ignored acceptance inputs/,
+    operator: 'throws',
+    diff: 'simple'
+  }
+
+test at tests/test_adjudicator_acceptance_runner.js:229:3
+✖ refuses ignored execution inputs before running pytest: tests/fixtures/local-evidence.json (285.855813ms)
+  AssertionError [ERR_ASSERTION]: Missing expected exception.
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_acceptance_runner.js:235:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: /Ignored acceptance inputs/,
+    operator: 'throws',
+    diff: 'simple'
+  }
+
+test at tests/test_adjudicator_acceptance_runner.js:229:3
+✖ refuses ignored execution inputs before running pytest: src/legacy.pyc (284.873361ms)
+  AssertionError [ERR_ASSERTION]: Missing expected exception.
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_acceptance_runner.js:235:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: /Ignored acceptance inputs/,
+    operator: 'throws',
+    diff: 'simple'
+  }
+
+test at tests/test_adjudicator_acceptance_runner.js:229:3
+✖ refuses ignored execution inputs before running pytest: tests/__pycache__/conftest.py (285.867795ms)
+  AssertionError [ERR_ASSERTION]: Missing expected exception.
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_acceptance_runner.js:235:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: /Ignored acceptance inputs/,
+    operator: 'throws',
+    diff: 'simple'
+  }

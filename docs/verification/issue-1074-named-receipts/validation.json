@@ -1,0 +1,27 @@
+{
+  "evaluated_revision": "6ed980924ec1d7d83a06f9b6a181dc76ba5eb910",
+  "historical_receipts_valid": true,
+  "focused_suite_passes": 39,
+  "mutations": [
+    {
+      "mutation": "outcomes",
+      "red_failures": 1,
+      "restored_passes": 1,
+      "byte_identical_restoration": true
+    },
+    {
+      "mutation": "unconditional-offer",
+      "red_failures": 3,
+      "restored_passes": 5,
+      "byte_identical_restoration": true
+    }
+  ],
+  "fresh_current_source_run": false,
+  "operational_acceptance_complete": false,
+  "changed_since_evaluation": [
+    "src/adjudicator_retro.py",
+    "src/capability_advisor.py",
+    "src/switch_review.py",
+    "tests/test_adjudicator_retro.py"
+  ]
+}

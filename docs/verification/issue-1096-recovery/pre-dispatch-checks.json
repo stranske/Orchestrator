@@ -1,0 +1,93 @@
+{
+  "checked_at": "2026-11-03T18:51:58.245Z",
+  "source_parent": "ed048b3417585c8d3f5353b098341eeab7c2bd8c",
+  "accepted_deployment_verified": false,
+  "interpreter": "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python",
+  "checks": [
+    {
+      "name": "pre-dispatch-inventory-tests",
+      "command": [
+        "node",
+        "tests/test_adjudicator_inventory.js"
+      ],
+      "exit_code": 0,
+      "log": "pre-dispatch-inventory-tests.log",
+      "log_sha256": "4fb63c981a296c529f43135d6978d1c13f07f50744e825a2e6a7aad1020e6389",
+      "timed_out": false
+    },
+    {
+      "name": "pre-dispatch-named-tests",
+      "command": [
+        "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python",
+        "-m",
+        "pytest",
+        "-m",
+        "not slow",
+        "-q",
+        "tests/test_adjudicator_retro.py::test_build_packet_includes_diff_and_acceptance_criteria",
+        "tests/test_adjudicator_retro.py::test_adjudicator_validator_accepts_recommendation_prose",
+        "tests/test_adjudicator_retro.py::test_floor_still_demotes_a_metadata_only_packet",
+        "tests/test_adjudicator_retro.py::test_abstained_row_is_reattempted_when_the_packet_gains_diff_and_criteria"
+      ],
+      "exit_code": 1,
+      "log": "pre-dispatch-named-tests.log",
+      "log_sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599",
+      "timed_out": false
+    },
+    {
+      "name": "pre-dispatch-retrospective-suite",
+      "command": [
+        "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python",
+        "-m",
+        "pytest",
+        "tests/test_adjudicator_retro.py",
+        "-m",
+        "not slow",
+        "-q"
+      ],
+      "exit_code": 1,
+      "log": "pre-dispatch-retrospective-suite.log",
+      "log_sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599",
+      "timed_out": false
+    },
+    {
+      "name": "pre-dispatch-adjudicator-selftest",
+      "command": [
+        "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python",
+        "src/adjudicator_retro.py",
+        "--selftest"
+      ],
+      "exit_code": 0,
+      "log": "pre-dispatch-adjudicator-selftest.log",
+      "log_sha256": "3f227862f8d1e7b2c35195efe7205621f73d3033db5a3ca88e1e7c24021e1109",
+      "timed_out": false
+    },
+    {
+      "name": "pre-dispatch-evidence-tests",
+      "command": [
+        "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests",
+        "-p",
+        "test_adjudicator_retro_evidence.py"
+      ],
+      "exit_code": 0,
+      "log": "pre-dispatch-evidence-tests.log",
+      "log_sha256": "f554d9e1907fbaae8b4ee178cdba6800fa893149d1e3874f2495b84a304c9007",
+      "timed_out": false
+    }
+  ],
+  "source_sha256": {
+    "scripts/export_adjudicator_inventory.js": "39b6ff782685920c3ba56895c7d1b6a8ceb3f1f981c0d1bf25f4e4cf1e72921b",
+    "tests/test_adjudicator_inventory.js": "d4687537064ebe0f0d28aa308110fb08bcbc78c17ee7b52b4540452d1969f270",
+    "src/adjudicator_retro.py": "ee172f96ddf0ca56f6c06fcf18bdaacccece5381de61a9896006d0b16a8fb0b8",
+    "tests/test_adjudicator_retro.py": "b44fd6756915069d6a5dc492eecda268053a711899b81decc9d27f8c9793fda2",
+    "docs/verification/issue-1096-recovery/pre-dispatch-plan.md": "7ff5e4904aefba80d41e9cf2baafa6730c425d7534ce13782cc7960c722dc6fb"
+  },
+  "real_input_observation": "pre-dispatch-observation.json",
+  "real_input_observation_sha256": "64a5cabcd1e8596edc149b88640af53ec177a424fc0d91de7f7ce69c5ac869ef",
+  "production_execution_complete": false
+}

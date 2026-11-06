@@ -1,0 +1,34 @@
+✔ records exact commands, source hashes, complete JUnit and logs for both checks (319.780611ms)
+✔ full-suite success requires the complete collected identities: {"omitExtra":true} (263.634852ms)
+✔ full-suite success requires the complete collected identities: {"duplicateExtra":true} (268.933832ms)
+✔ full-suite success requires the complete collected identities: {"collectionFailure":true} (266.782463ms)
+✔ full-suite success requires the complete collected identities: {"collectionEmpty":true} (396.841687ms)
+✔ full-suite success requires the complete collected identities: {"collectionDuplicate":true} (269.368126ms)
+✔ missing pytest preserves two failures and cannot complete acceptance (129.582694ms)
+✔ preserves JUnit reader failures: {"parserFailure":true} (177.680839ms)
+✔ preserves JUnit reader failures: {"parserInvalidJson":true} (179.774083ms)
+✔ preserves JUnit reader failures: {"malformed":true} (291.670886ms)
+✔ refuses a successful claim for incomplete evidence: {"noXml":true} (130.945248ms)
+✔ refuses a successful claim for incomplete evidence: {"malformed":true} (293.338358ms)
+✔ refuses a successful claim for incomplete evidence: {"empty":true} (264.050384ms)
+✔ refuses a successful claim for incomplete evidence: {"incomplete":true} (668.932749ms)
+✔ refuses a successful claim for incomplete evidence: {"duplicate":true} (267.727954ms)
+✔ refuses a successful claim for incomplete evidence: {"skipped":true} (265.022333ms)
+✔ refuses a successful claim for incomplete evidence: {"foreign":true} (270.584536ms)
+✔ refuses a successful claim for incomplete evidence: {"exit":1} (270.507563ms)
+✔ source changes during execution invalidate otherwise passing checks (379.841834ms)
+✔ timeout preserves both failed checks without retrying either command (1571.399293ms)
+✔ refuses revision mismatch, modified tracked inputs and untracked inputs before execution (242.236089ms)
+✔ refuses uncommitted test execution input: conftest.py (50.600365ms)
+✔ refuses uncommitted test execution input: pytest.ini (22.445113ms)
+✔ refuses uncommitted test execution input: setup.cfg (21.95638ms)
+✔ refuses uncommitted test execution input: scripts/run_adjudicator_acceptance.js (356.959598ms)
+✔ requires explicit interpreter/revision/bounds and never overwrites a receipt (147.563029ms)
+ℹ tests 26
+ℹ suites 0
+ℹ pass 26
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 7795.876371

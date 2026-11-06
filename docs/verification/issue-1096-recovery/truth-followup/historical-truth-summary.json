@@ -1,0 +1,71 @@
+{
+  "git_directory": "/tmp/issue-1096-truth-git-dc5twqhn/repo.git",
+  "source_commit": "e81b3e77c0ad615eeed479fb8f1e566cdec073c0",
+  "source_parent": "9c00d5bda5a429e48310a2bd5e7b27c4f5b30fba",
+  "observed_at": 1793744254,
+  "command": [
+    "node",
+    "scripts/export_adjudicator_inventory.js",
+    "--report",
+    "/home/runner/work/Orchestrator/Orchestrator/docs/verification/issue-1096-recovery/dispatch-refusal-followup/selected-fields.json",
+    "--observed-at",
+    "1793744254",
+    "--evidence-class",
+    "historical_snapshot",
+    "--evidence-reference",
+    "repository diagnostic projection of dropbox:id:tDSHdCztYNUAAAAAADfgrw@65de8f715bb690369d613; not original report bytes"
+  ],
+  "exit_code": 0,
+  "input_sha256": "c87598737485b19011318f369fdafc204d9f9d7732f3420f5e5cd39964885bd8",
+  "input_scope": "committed_selected_historical_fields_only",
+  "output_sha256": "138fab936bd24c6f116a9568f0693d4cf60974a14ff47dd72d0041aa96a1d277",
+  "case_count": 58,
+  "attempt_count": 64,
+  "later_truth_status_counts": {
+    "binary_unverified": 30,
+    "not_recorded": 34
+  },
+  "binary_decision_truth_counts": {
+    "binary_unverified": 14,
+    "not_recorded": 5
+  },
+  "binary_decisions_without_recorded_truth": [
+    {
+      "case_id": "d7397039ec9efc9f2a611efa8cff829a1c079e9874c2745a3cdaa52a53b0af81",
+      "location": "rows[6]",
+      "backend_run_id": "offload:gemini:1791199355831889000",
+      "target": "stranske/Orchestrator#414"
+    },
+    {
+      "case_id": "9ab1c0c6a06eb0be33acf87720ca46bcbc4b6da7957d79e816030d161388ed1a",
+      "location": "rows[8]",
+      "backend_run_id": "offload:gemini:1791289901905524000",
+      "target": "stranske/Orchestrator#485"
+    },
+    {
+      "case_id": "492f957d9a4fd477ee97f458d71ee87e8e14cde9d09ffb153f488e9dbc42ac02",
+      "location": "rows[9]",
+      "backend_run_id": "offload:gemini:1791289952278060000",
+      "target": "stranske/Orchestrator#484"
+    },
+    {
+      "case_id": "3a74d31c7041ef63dc7db6f830877dc1d1d72a78e434076a54bd08fb52816ab9",
+      "location": "rows[12]",
+      "backend_run_id": "offload:gemini:1791290140351965000",
+      "target": "stranske/Orchestrator#468"
+    },
+    {
+      "case_id": "c53289cd21ec4997f40d03facbf51f75794c4150f9ff9839983dcec85aee85d5",
+      "location": "rows[15]",
+      "backend_run_id": "offload:gemini:1791290266140836000",
+      "target": "stranske/Orchestrator#469"
+    }
+  ],
+  "input_unchanged": true,
+  "original_retry_manifest_recovered": false,
+  "independent_truth_verified": false,
+  "authenticated_outcomes_verified": false,
+  "dispatch_authorized": false,
+  "graded_claimed": false,
+  "limitation": "Historical selected-field projection only; not original authenticated native report, retry manifest, independent current truth or canonical grading."
+}

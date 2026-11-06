@@ -1,0 +1,175 @@
+{
+  "measured_head_sha": "ea6255b9c477f9abe31c81d3ef6ec48b3e023bb0",
+  "base_sha": "555c1f1cf0ac8a6fb3e64d4081ecf952df126021",
+  "previous_head_sha": "88df48213b0ed08c6cb3eacdd56ce64690707ab6",
+  "run_id": 41975530292,
+  "run_url": "https://github.com/stranske/Orchestrator/actions/runs/41975530292",
+  "artifact_id": 13391989393,
+  "base_run_id": 41952625547,
+  "base_artifact_id": 13382156456,
+  "previous_run_id": 41970034748,
+  "previous_artifact_id": 13390415529,
+  "producer": "python3 src/verify.py --aggregate shard-evidence --coverage --floor-may-lag",
+  "branch_coverage": false,
+  "base_missing": 317,
+  "head_missing": 21,
+  "gain": 296,
+  "shortfall_from_180": 0,
+  "previous_head_gain": 88,
+  "previous_head_shortfall_from_180": 92,
+  "repo": {
+    "base_missing_lines": 17006,
+    "head_missing_lines": 16717,
+    "repo_missing_reduction": 289,
+    "base_percent_covered": 85.72567716158709,
+    "head_percent_covered": 85.97402379474099,
+    "base_num_statements": 119137,
+    "head_num_statements": 119186
+  },
+  "non_target_missing_delta": {
+    "capacity": -2,
+    "switch_review": 1,
+    "provision": 8
+  },
+  "provision_statement_delta": 49,
+  "note": "Six-target gain is 296. Repo-wide missing lines fell by 289 because the pull-request coverage job measures the merge with main: provision.py gained 49 statements and 8 missing lines, switch_review.py lost one covered line, and capacity.py gained two. 296 - 8 - 1 + 2 = 289. Branch coverage is off in this configuration.",
+  "targets": {
+    "local_verify": {
+      "base_missing": 10,
+      "previous_head_88df482_missing": 9,
+      "head_missing": 0,
+      "gain": 10,
+      "num_statements": 441,
+      "still_missing": []
+    },
+    "capability_activation_audit": {
+      "base_missing": 46,
+      "previous_head_88df482_missing": 17,
+      "head_missing": 4,
+      "gain": 42,
+      "num_statements": 1171,
+      "still_missing": [
+        {
+          "line": 2432,
+          "text": "                anywhere = external_caller(_real_cap)"
+        },
+        {
+          "line": 2433,
+          "text": "                assert ("
+        },
+        {
+          "line": 2436,
+          "text": "                assert anywhere.get(\"root_origin\") == \"home-anchored-workspace\", anywhere"
+        },
+        {
+          "line": 2448,
+          "text": "                    os.environ[\"ORCH_FLEET_ROOT\"] = _saved_env"
+        }
+      ]
+    },
+    "exp_abcd": {
+      "base_missing": 9,
+      "previous_head_88df482_missing": 9,
+      "head_missing": 9,
+      "gain": 0,
+      "num_statements": 1688,
+      "still_missing": [
+        {
+          "line": 3158,
+          "text": "                os.environ[\"ORCH_CODEX_BYPASS_INNER_SANDBOX\"] = old_bypass"
+        },
+        {
+          "line": 3170,
+          "text": "            raise AssertionError(\"an evaluator was given / as its workspace\")"
+        },
+        {
+          "line": 3179,
+          "text": "                os.environ.pop(\"ORCH_STATE_DIR\", None)"
+        },
+        {
+          "line": 3301,
+          "text": "            return {\"status\": \"pending\"}"
+        },
+        {
+          "line": 3473,
+          "text": "            os.environ[\"ORCH_RESEARCH_ARM\"] = old_research_arm"
+        },
+        {
+          "line": 3548,
+          "text": "        assert False, \"all fallback-excluded judges must not be silently re-included\""
+        },
+        {
+          "line": 3618,
+          "text": "            self.killed = True"
+        },
+        {
+          "line": 3772,
+          "text": "            os.environ[\"ORCH_MODEL_PROBE\"] = old_model_probe"
+        },
+        {
+          "line": 3774,
+          "text": "            os.environ.pop(\"ORCH_STATE_DIR\", None)"
+        }
+      ]
+    },
+    "periodic_report": {
+      "base_missing": 69,
+      "previous_head_88df482_missing": 43,
+      "head_missing": 2,
+      "gain": 67,
+      "num_statements": 1077,
+      "still_missing": [
+        {
+          "line": 2998,
+          "text": "            raise AssertionError(\"expected --apply with --snapshot-json to fail\")"
+        },
+        {
+          "line": 3119,
+          "text": "                assert row[\"worker_attempts\"] > 0 and row[\"resolved_worker_attempts\"] == 0, ("
+        }
+      ]
+    },
+    "tick": {
+      "base_missing": 23,
+      "previous_head_88df482_missing": 17,
+      "head_missing": 3,
+      "gain": 20,
+      "num_statements": 583,
+      "still_missing": [
+        {
+          "line": 897,
+          "text": "            _os.environ[DISPATCH_LANE_ENV] = saved"
+        },
+        {
+          "line": 1289,
+          "text": "            os.environ[\"ORCH_EXPLORATION_RATE\"] = old_exploration_rate"
+        },
+        {
+          "line": 1293,
+          "text": "            os.environ[\"HANDOFF_DIR\"] = old_handoff"
+        }
+      ]
+    },
+    "repo_knowledge": {
+      "base_missing": 160,
+      "previous_head_88df482_missing": 134,
+      "head_missing": 3,
+      "gain": 157,
+      "num_statements": 1335,
+      "still_missing": [
+        {
+          "line": 1994,
+          "text": "            seeded = (SEED[\"repos\"].get(repo) or {}).get(\"base_branch\")"
+        },
+        {
+          "line": 1995,
+          "text": "            assert seeded in (None, base), (repo, seeded, base)"
+        },
+        {
+          "line": 2490,
+          "text": "            raise AssertionError(\"expected gh failure to be surfaced\")"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,77 @@
+✔ missing owner corpus is unknown, never a verified empty population or source defaults (4.800054ms)
+✔ captures zero from the authoritative screen with hashes and no runtime writes (54.074237ms)
+✔ retains private refusal and lineage bindings without promoting recorded applies to outcomes (39.719329ms)
+✔ unavailable populations and invalid corpora cannot become demand-derived counts (36.047241ms)
+✔ retains accepted and rejected outcome-link dispositions under the same role binding (39.289362ms)
+✔ retains persisted authorization and apply refusals without turning absent facts into false (35.366934ms)
+✔ changing input, failed processes and malformed screen output invalidate capture (177.061596ms)
+✔ source edits during screening invalidate counts for the entry point and imported modules (108.119159ms)
+✔ source fingerprints bind nested module bytes and roster without modifying the tree (3.690573ms)
+✔ unreadable source trees refuse screening rather than accepting unattributed counts (24.054343ms)
+✔ report directory refreshes invalidate capture for default and overridden paths (463.010262ms)
+✔ report directory fingerprints are private, deterministic and read-only (127.441975ms)
+✖ real screen distinguishes empty, refused and stale populations without writes (568.948013ms)
+✔ CLI requires an explicit owner path (0.243587ms)
+✔ retains the recorded redirect chain and its time window independently of current candidates (39.829305ms)
+✔ missing, disabled, ambiguous and malformed review rows never become zero acted-on counts (486.758901ms)
+✔ a review rewritten during screening cannot retain verified chain counts (31.874453ms)
+ℹ tests 17
+ℹ suites 0
+ℹ pass 16
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2249.607609
+
+✖ failing tests:
+
+test at tests/test_observe_redirect_runtime.js:392:1
+✖ real screen distinguishes empty, refused and stale populations without writes (568.948013ms)
+  AssertionError [ERR_ASSERTION]: real screen must have a clean process result
+  + actual - expected
+  
+  + Error: spawnSync python3 EPERM
+  +     at Object.spawnSync (node:internal/child_process:1191:20)
+  +     at spawnSync (node:child_process:929:24)
+  +     at run (/home/runner/work/Orchestrator/Orchestrator/tests/test_observe_redirect_runtime.js:404:19)
+  +     at observe (/home/runner/work/Orchestrator/Orchestrator/scripts/observe_redirect_runtime.js:183:21)
+  +     at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_observe_redirect_runtime.js:403:20)
+  +     at Test.runInAsyncScope (node:async_hooks:227:14)
+  +     at Test.run (node:internal/test_runner/test:1402:25)
+  +     at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+  +     at Test.postRun (node:internal/test_runner/test:1542:19)
+  +     at Test.run (node:internal/test_runner/test:1467:12) {
+  +   code: 'EPERM',
+  +   errno: -1,
+  +   path: 'python3',
+  +   spawnargs: [
+  +     '-B',
+  +     '/home/runner/work/Orchestrator/Orchestrator/src/redirect_apply.py',
+  +     '--screen',
+  +     '--json',
+  +     '--corpus',
+  +     '/tmp/redirect-observation-control-aErPYa/runtime/redirect-shadow/shadow.jsonl',
+  +     '--stage2-plan',
+  +     '/tmp/redirect-observation-control-aErPYa/state/keepalive-supervisor-stage2-plan.json',
+  +     '--report-dir',
+  +     '/tmp/redirect-observation-control-aErPYa/state/keepalive-supervisor-stage2'
+  +   ],
+  +   syscall: 'spawnSync python3'
+  + }
+  - undefined
+  
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_observe_redirect_runtime.js:408:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: [Error],
+    expected: undefined,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

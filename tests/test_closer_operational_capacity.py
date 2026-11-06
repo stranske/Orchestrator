@@ -89,6 +89,34 @@ def test_fresh_metrics_exact_new_profiles_and_shared_balance(host):
     assert scoped.validate_report(report, now=NOW)
 
 
+def test_declared_profiles_require_a_current_valid_operational_report(host, monkeypatch):
+    """Scoped admission cannot be forged by a schema/profile_ids lookalike."""
+    cfg, _, _ = host
+    report = scoped.evaluate(cfg, now=NOW)
+    monkeypatch.setattr(scoped.time, "time", lambda: NOW)
+    assert scoped.declared_profile_ids(report) == (PROFILE,)
+
+    stale = copy.deepcopy(report)
+    stale["expires_at"] = NOW
+    assert scoped.declared_profile_ids(stale) == ()
+
+    malformed = {"schema": scoped.SCHEMA, "profile_ids": [PROFILE]}
+    assert scoped.declared_profile_ids(malformed) == ()
+
+    global_report = copy.deepcopy(report)
+    global_report.pop("schema")
+    assert scoped.declared_profile_ids(global_report) is None
+
+    report_path = Path(cfg["runtime_manifest"]).parent / "oversized-report.json"
+    monkeypatch.setenv("CLOSER_CAPACITY_REPORT", str(report_path))
+    for field in ("original_deadline", "generated_at", "expires_at"):
+        overflowing = copy.deepcopy(report)
+        overflowing[field] = 10**4000
+        assert scoped.declared_profile_ids(overflowing) == ()
+        report_path.write_text(json.dumps(overflowing))
+        assert closer_dispatcher._fresh_capacity_report() is None
+
+
 @pytest.mark.parametrize("kind", ["missing", "stale"])
 def test_trial_permission_is_not_quota_freshness(host, kind):
     cfg, polls, _ = host
@@ -204,7 +232,19 @@ def test_foreign_or_invalid_observation_never_becomes_trial(host, field, value):
     data = poll()
     data[field] = value
     (polls / "claude-usage.json").write_text(json.dumps(data))
-    assert scoped.evaluate(cfg, now=NOW)["agents"]["claude"]["state"] == "unknown"
+    report = scoped.evaluate(cfg, now=NOW)
+    assert report["agents"]["claude"]["state"] == "unknown"
+    assert not scoped.validate_admitted_report(
+        report,
+        now=NOW,
+        policy={
+            "owner": cfg["owner"],
+            "profile_ids": cfg["profile_ids"],
+            "bounded_trial_agents": cfg["bounded_trial_agents"],
+        },
+        runtime_manifest=cfg["runtime_manifest"],
+        runtime_manifest_sha256=cfg["runtime_manifest_sha256"],
+    )
 
 
 @pytest.mark.parametrize("new_constraint", ["marker", "ordinary_false"])
@@ -216,11 +256,77 @@ def test_new_operational_constraint_invalidates_prior_report_without_mutation(ho
         changed = sheds / "claude"
         changed.write_text(json.dumps({"expires_at": NOW + 600, "category": "quota"}))
     else:
-        changed = polls / "codex-usage.json"
-        changed.write_text(json.dumps({**poll(codex=True), "ordinary_usage_allowed": False}))
+        changed = polls / "claude-usage.json"
+        changed.write_text(
+            json.dumps(
+                {
+                    **poll(),
+                    "weekly": {
+                        "used_percent": 100,
+                        "resets_at": NOW + 10_000,
+                        "label": "all models",
+                    },
+                }
+            )
+        )
     original = changed.read_bytes()
     assert not scoped.validate_report(report, now=NOW)
     assert changed.read_bytes() == original
+
+
+def test_unselected_usage_poll_does_not_invalidate_selected_scope(host):
+    cfg, polls, _ = host
+    (polls / "claude-usage.json").write_text(json.dumps(poll(percent=82)))
+    report = scoped.evaluate(cfg, now=NOW)
+    assert set(report["input_sha256"]) == {
+        str(polls.parent.parent / "handoff/capacity-shed/claude"),
+        str(polls / "claude-usage.json"),
+    }
+    policy = {
+        "owner": cfg["owner"],
+        "profile_ids": cfg["profile_ids"],
+        "bounded_trial_agents": cfg["bounded_trial_agents"],
+    }
+    (polls / "codex-usage.json").write_text("{malformed")
+    assert scoped.validate_report(report, now=NOW)
+    assert scoped.validate_admitted_report(
+        report,
+        now=NOW,
+        policy=policy,
+        runtime_manifest=cfg["runtime_manifest"],
+        runtime_manifest_sha256=cfg["runtime_manifest_sha256"],
+    )
+
+
+def test_selected_codex_usage_remains_a_fail_closed_input(host):
+    cfg, polls, _ = host
+    cfg["profile_ids"].append("codex-6.1-sol-low")
+    (polls / "codex-usage.json").write_text(json.dumps(poll(codex=True)))
+    report = scoped.evaluate(cfg, now=NOW)
+    assert scoped.validate_report(report, now=NOW)
+    policy = {
+        "owner": cfg["owner"],
+        "profile_ids": cfg["profile_ids"],
+        "bounded_trial_agents": cfg["bounded_trial_agents"],
+    }
+    assert scoped.validate_admitted_report(
+        report,
+        now=NOW,
+        policy=policy,
+        runtime_manifest=cfg["runtime_manifest"],
+        runtime_manifest_sha256=cfg["runtime_manifest_sha256"],
+    )
+    (polls / "codex-usage.json").write_text(
+        json.dumps({**poll(codex=True), "ordinary_usage_allowed": False})
+    )
+    assert not scoped.validate_report(report, now=NOW)
+    assert not scoped.validate_admitted_report(
+        report,
+        now=NOW,
+        policy=policy,
+        runtime_manifest=cfg["runtime_manifest"],
+        runtime_manifest_sha256=cfg["runtime_manifest_sha256"],
+    )
 
 
 def test_marker_hash_and_decision_are_same_observation(host, monkeypatch):

@@ -1,0 +1,86 @@
+{
+  "observed_at": "2026-11-03T22:49:12.041Z",
+  "status": "verified",
+  "revision": "e86313cb6f1f6f047896b5c1bbb5d9c3c68d339e",
+  "historical_replay_receipt": "not_established",
+  "operational_acceptance": "not_established",
+  "executions": [
+    {
+      "name": "interpreter",
+      "argv": [
+        "/tmp/issue-1106-python/bin/python3",
+        "-B",
+        "-c",
+        "import json, sys; print(json.dumps({\"executable\": sys.executable, \"version\": sys.version}))"
+      ],
+      "exit_code": 0,
+      "signal": null,
+      "error_code": null,
+      "stdout": "{\"executable\": \"/tmp/issue-1106-python/bin/python3\", \"version\": \"3.14.8 (main, Oct  1 2026, 02:39:56) [GCC 15.2.0]\"}\n",
+      "stderr": ""
+    },
+    {
+      "name": "named_tests",
+      "argv": [
+        "/tmp/issue-1106-python/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "tests/test_redirect_chain_gate.py::test_replay_of_the_twelve_historical_stalls_authorizes_at_least_nine",
+        "tests/test_redirect_apply_prescreen.py::test_redirect_apply_daily_cap_refuses_second_apply",
+        "--color=no",
+        "-v",
+        "-m",
+        "not slow"
+      ],
+      "exit_code": 0,
+      "signal": null,
+      "error_code": null,
+      "stdout": "============================= test session starts ==============================\nplatform linux -- Python 3.14.8, pytest-9.1.1, pluggy-1.7.0 -- /tmp/issue-1106-python/bin/python3\ncachedir: .pytest_cache\nrootdir: /tmp/redirect-merged-revision-rOIfrU/checkout\nconfigfile: pyproject.toml\ncollecting ... collected 2 items\n\ntests/test_redirect_chain_gate.py::test_replay_of_the_twelve_historical_stalls_authorizes_at_least_nine PASSED [ 50%]\ntests/test_redirect_apply_prescreen.py::test_redirect_apply_daily_cap_refuses_second_apply PASSED [100%]\n\ntracked test inputs: NOT CHECKED -- /tmp/redirect-merged-revision-rOIfrU/checkout is not a git checkout. In the exec mirror that loses nothing: its tests/ IS `git archive HEAD tests`, so every file in it was tracked\n============================== 2 passed in 0.46s ===============================\n",
+      "stderr": ""
+    },
+    {
+      "name": "focused_files",
+      "argv": [
+        "/tmp/issue-1106-python/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "tests/test_redirect_chain_gate.py",
+        "tests/test_redirect_apply_prescreen.py",
+        "--color=no",
+        "-v",
+        "-m",
+        "not slow"
+      ],
+      "exit_code": 0,
+      "signal": null,
+      "error_code": null,
+      "stdout": "============================= test session starts ==============================\nplatform linux -- Python 3.14.8, pytest-9.1.1, pluggy-1.7.0 -- /tmp/issue-1106-python/bin/python3\ncachedir: .pytest_cache\nrootdir: /tmp/redirect-merged-revision-rOIfrU/checkout\nconfigfile: pyproject.toml\ncollecting ... collected 25 items\n\ntests/test_redirect_chain_gate.py::test_any_differing_applied_action_earns_disagreement_credit[decompose-cursor] PASSED [  4%]\ntests/test_redirect_chain_gate.py::test_any_differing_applied_action_earns_disagreement_credit[redirect-codex] PASSED [  8%]\ntests/test_redirect_chain_gate.py::test_link_step_survives_one_bad_row_and_counts_it PASSED [ 12%]\ntests/test_redirect_chain_gate.py::test_same_or_unapplied_decision_gets_no_credit[redirect-cursor] PASSED [ 16%]\ntests/test_redirect_chain_gate.py::test_same_or_unapplied_decision_gets_no_credit[inspect-codex] PASSED [ 20%]\ntests/test_redirect_chain_gate.py::test_dry_link_preview_does_not_write_failures_or_join PASSED [ 24%]\ntests/test_redirect_chain_gate.py::test_an_open_gate_writes_a_plan_and_heartbeats PASSED [ 28%]\ntests/test_redirect_chain_gate.py::test_replay_runs_the_fixtures_to_authorize_with_named_agents PASSED [ 32%]\ntests/test_redirect_chain_gate.py::test_replay_of_the_twelve_historical_stalls_authorizes_at_least_nine PASSED [ 36%]\ntests/test_redirect_apply_prescreen.py::test_selftest_ignores_ambient_current_sweep PASSED [ 40%]\ntests/test_redirect_apply_prescreen.py::test_pidless_running_lane_is_refused_even_when_the_judge_says_redirect PASSED [ 44%]\ntests/test_redirect_apply_prescreen.py::test_pidless_lane_nothing_shows_dead_never_reaches_apply_plan PASSED [ 48%]\ntests/test_redirect_apply_prescreen.py::test_unknown_liveness_is_a_refusal_and_only_the_supervisors_word_lifts_it PASSED [ 52%]\ntests/test_redirect_apply_prescreen.py::test_live_pid_message_is_the_one_seven_rail_exercise_harnesses_grep_for PASSED [ 56%]\ntests/test_redirect_apply_prescreen.py::test_free_screen_and_authorisation_agree_on_every_lane PASSED [ 60%]\ntests/test_redirect_apply_prescreen.py::test_a_stale_report_on_disk_is_counted_and_never_judged PASSED [ 64%]\ntests/test_redirect_apply_prescreen.py::test_the_measured_incident_spends_nothing PASSED [ 68%]\ntests/test_redirect_apply_prescreen.py::test_a_screened_out_candidate_spends_no_offload PASSED [ 72%]\ntests/test_redirect_apply_prescreen.py::test_identical_input_is_judged_once_and_a_changed_report_is_judged_again PASSED [ 76%]\ntests/test_redirect_apply_prescreen.py::test_an_applyable_verdict_does_not_suppress_a_rejudge PASSED [ 80%]\ntests/test_redirect_apply_prescreen.py::test_the_cap_defers_without_starving_anyone PASSED [ 84%]\ntests/test_redirect_apply_prescreen.py::test_an_unknown_population_is_none_and_an_empty_one_is_zero PASSED [ 88%]\ntests/test_redirect_apply_prescreen.py::test_the_stale_bound_is_the_cadence_registrys_own_rule PASSED [ 92%]\ntests/test_redirect_apply_prescreen.py::test_a_drained_gate_says_finished_through_the_real_gate_state PASSED [ 96%]\ntests/test_redirect_apply_prescreen.py::test_redirect_apply_daily_cap_refuses_second_apply PASSED [100%]\n\ntracked test inputs: NOT CHECKED -- /tmp/redirect-merged-revision-rOIfrU/checkout is not a git checkout. In the exec mirror that loses nothing: its tests/ IS `git archive HEAD tests`, so every file in it was tracked\n============================== 25 passed in 0.85s ==============================\n",
+      "stderr": ""
+    },
+    {
+      "name": "offline_replay",
+      "argv": [
+        "/tmp/issue-1106-python/bin/python3",
+        "-B",
+        "src/redirect_apply.py",
+        "--replay-stalls",
+        "tests/fixtures/redirect_stalls"
+      ],
+      "exit_code": 0,
+      "signal": null,
+      "error_code": null,
+      "stdout": "authorized 12/12 with named agents (dry-run)\n",
+      "stderr": ""
+    }
+  ],
+  "merged_main_sha": "e58ba8e23abbe5d7888f3bca94796fe07ffdb427",
+  "archive_paths": [
+    "src",
+    "tests",
+    "pyproject.toml"
+  ],
+  "archive_sha256": "7e4e0aa7f258787e9e31dcdb4840563453d24a2685c9161dc45b9ba67684333f",
+  "authorized": 12
+}

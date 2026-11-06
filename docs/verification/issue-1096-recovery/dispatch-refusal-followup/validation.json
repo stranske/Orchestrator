@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "checked_at": "2026-11-03T21:38:20.654Z",
+  "source_commit": "17a86642dd506b9f45938b252d1649699e8634f7",
+  "source_parent": "441f22ebb3550d88c42061d85fa1275cd1da8116",
+  "source_sha256": {
+    "scripts/export_adjudicator_inventory.js": "34d78b9472bcf14cf3d11894e21081ad48db612d3f907097dc418fa3ef473187",
+    "tests/test_adjudicator_inventory.js": "9f489653c53445341074ba8a6821250b1a85ce281e85b270e27850aedca6cb5d"
+  },
+  "commands": [
+    {
+      "command": [
+        "node",
+        "tests/test_adjudicator_inventory.js"
+      ],
+      "phase": "existing_tests_before_edits",
+      "log": "inventory-baseline.log",
+      "exit_code": 0,
+      "tests": 50,
+      "pass": 50,
+      "fail": 0,
+      "log_sha256": "b662a6309a4dae65a1ecf493bac0998549fa94fb35c976a499939a1218f66333"
+    },
+    {
+      "command": [
+        "node",
+        "tests/test_adjudicator_inventory.js"
+      ],
+      "phase": "new_controls_before_implementation",
+      "log": "inventory-before.log",
+      "exit_code": 1,
+      "tests": 53,
+      "pass": 51,
+      "fail": 2,
+      "log_sha256": "6d8ed6326ac1dc484a5a828cf0dc04b502c91a3e342b094304bc4d1ec43dab19"
+    },
+    {
+      "command": [
+        "node",
+        "tests/test_adjudicator_inventory.js"
+      ],
+      "phase": "after_implementation",
+      "log": "inventory-tests.log",
+      "exit_code": 0,
+      "tests": 53,
+      "pass": 53,
+      "fail": 0,
+      "log_sha256": "be015ff724850412e43790d4ddb591d4537b5f3cd16690634bd0bd54a344ebb3"
+    },
+    {
+      "command": [
+        "node",
+        "tests/test_adjudicator_acceptance_runner.js"
+      ],
+      "phase": "after_implementation",
+      "log": "runner-tests.log",
+      "exit_code": 0,
+      "tests": 26,
+      "pass": 26,
+      "fail": 0,
+      "log_sha256": "34ae8273ee9eba5b71e427aac470c38cdf5fcd3a2b08ba287595cd3e02dd8e55"
+    },
+    {
+      "command": [
+        "node",
+        "tests/test_adjudicator_evidence_ledger.js"
+      ],
+      "phase": "after_evidence_update",
+      "log": "ledger-tests.log",
+      "exit_code": 0,
+      "tests": 22,
+      "pass": 22,
+      "fail": 0,
+      "log_sha256": "866cf5312e575f9722b26f43ac828e4e139b916604246d82f4f11139527c6e2e"
+    }
+  ],
+  "historical_refusals": "historical-refusals.json",
+  "historical_refusals_sha256": "e0cb20b04c284fce0047b92ebfd06367cabe9e1e706643589c2acd6a17b852fa",
+  "input_projection": "selected-fields.json",
+  "input_projection_sha256": "c87598737485b19011318f369fdafc204d9f9d7732f3420f5e5cd39964885bd8",
+  "required_tests_passed": false,
+  "newly_completed_tasks": 0,
+  "blocker_comment": "rejected_connector_requires_approval_policy_never",
+  "needs_human_label": "rejected_connector_requires_approval_policy_never",
+  "historical_projection_checks": {
+    "retained_case_fields_unchanged": true,
+    "paid_attempt_locators_unchanged": true,
+    "retained_attempt_count": 64,
+    "unique_paid_identities": 38,
+    "unresolved_primary_failure_classifications": 0,
+    "authenticated_outcomes_verified": false
+  }
+}

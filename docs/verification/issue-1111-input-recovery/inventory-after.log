@@ -1,0 +1,40 @@
+✔ owner exclusions are accounted for without reading excluded outcome evidence: mixed case (70.630854ms)
+✔ owner exclusions are accounted for without reading excluded outcome evidence: spaces (61.760754ms)
+✔ owner exclusions are accounted for without reading excluded outcome evidence: tabs and newlines (53.835967ms)
+✔ owner exclusions are accounted for without reading excluded outcome evidence: Unicode whitespace (49.687066ms)
+✔ requested owner exclusions remain explicit with missing or contradictory inventory: "stranske/Collab-Admin#7" (8.754321ms)
+✔ requested owner exclusions remain explicit with missing or contradictory inventory: "\tstranske/Collab-Admin #7" (6.110124ms)
+✔ inventory exports every synthetic dispute and every exclusion without writes (847.886002ms)
+✔ inventory preserves the fixed cutoff and reports a count discrepancy (9.39249ms)
+✔ inventory distinguishes missing evidence from a complete cohort (3.557628ms)
+✔ inventory distinguishes schema-less evidence from a complete cohort (0.981927ms)
+✔ inventory distinguishes empty evidence from a complete cohort (2.812452ms)
+✔ inventory distinguishes incomplete-schema evidence from a complete cohort (3.377123ms)
+✔ inventory CLI exports JSON, signals unavailable evidence and rejects replay options (229.363145ms)
+✔ matching 71 identities bind the supplied manifest bytes without claiming historical acceptance (128.674509ms)
+✔ equal inventory counts expose substituted identities, exclusions and absent requested runs (10.607271ms)
+✔ a requested run on another target cannot satisfy case identity (4.898603ms)
+✔ inventory accounts for outcomes without run records as unavailable evidence (47.160795ms)
+✔ an outcomes-only Brain is available with exclusions, rather than an observed empty store (4.442975ms)
+✔ manifest retains every requested identity when Brain is empty (3.618582ms)
+✔ manifest retains every requested identity when Brain is unavailable (3.520229ms)
+✔ manifest count discrepancy prevents an exact match even when all supplied identities match (5.084118ms)
+✔ manifest CLI preserves input bytes, rejects malformed identities and signals unavailable Brain (539.561255ms)
+✔ version 2 reconciles all 71 dispute identities without claiming historical provenance (134.155254ms)
+✔ version 2 exposes substituted verdicts NON_PASS/FAIL despite matching run and count (48.271534ms)
+✔ version 2 exposes substituted verdicts FAIL_HOLLOW/PASS despite matching run and count (51.446347ms)
+✔ version 2 exposes substituted verdicts PASS/FAIL despite matching run and count (47.952377ms)
+✔ version 2 retains different disputes on one run and rejects duplicate dispute identities (7.673954ms)
+✔ version 2 preserves full identities for excluded, missing and unavailable cases (45.39506ms)
+✔ version 2 rejects malformed verdicts before publishing any inventory (569.636047ms)
+✔ version 2 distinguishes unavailable verdict evidence from contradictory verdicts (54.098349ms)
+✔ version 2 retains an observed target mismatch when verdict evidence is unavailable (4.263564ms)
+✔ missing stored targets remain eligible disputes with explicit unavailable identity evidence (818.5729ms)
+ℹ tests 32
+ℹ suites 0
+ℹ pass 32
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3888.801276

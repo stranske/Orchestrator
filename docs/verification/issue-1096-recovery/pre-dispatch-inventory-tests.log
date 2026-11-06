@@ -1,0 +1,48 @@
+✔ report recovery preserves ordered rows, recursive paid history and conflicting counts (6.702476ms)
+✔ report recovery rejects missing input without initializing runtime state (1.201594ms)
+✔ report recovery refuses malformed and ambiguous retained identities (3.0573ms)
+✔ report recovery requires explicit attribution and a valid check time (0.754158ms)
+✔ report recovery aborts if the input changes during observation (1.133808ms)
+✔ report CLI never combines historical recovery with dispatch or current Brain selection (219.298881ms)
+✔ pre-dispatch inventory reconciles report and native locators without exposing payloads (9.723778ms)
+✔ all validated native rows still require authentication, independent truth and live writer proof (10.057111ms)
+✔ missing native evidence remains unavailable and never means zero attempts (1.152262ms)
+✔ an observed empty journal cannot establish writer ownership or authorize spending (11.46125ms)
+✔ an active journal writer does not make a read-only snapshot claim ownership (8.711428ms)
+✔ foreign and incomplete journals are refused without schema repair (4.902545ms)
+✔ report without native marker still cannot authorize generic retry (0.743107ms)
+✔ journal CLI stays read-only and requires explicit report attribution (77.643902ms)
+✔ inventory exports every synthetic dispute and every exclusion without writes (489.889292ms)
+✔ inventory preserves the fixed cutoff and reports a count discrepancy (8.346809ms)
+✔ inventory distinguishes missing evidence from a complete cohort (3.347999ms)
+✔ inventory distinguishes schema-less evidence from a complete cohort (0.791659ms)
+✔ inventory distinguishes empty evidence from a complete cohort (2.968704ms)
+✔ inventory distinguishes incomplete-schema evidence from a complete cohort (3.972699ms)
+✔ inventory CLI exports JSON, signals unavailable evidence and rejects replay options (221.281705ms)
+✔ matching 71 identities bind the supplied manifest bytes without claiming historical acceptance (133.32156ms)
+✔ equal inventory counts expose substituted identities, exclusions and absent requested runs (9.293605ms)
+✔ a requested run on another target cannot satisfy case identity (4.963068ms)
+✔ inventory accounts for outcomes without run records as unavailable evidence (45.121015ms)
+✔ an outcomes-only Brain is available with exclusions, rather than an observed empty store (4.307714ms)
+✔ manifest retains every requested identity when Brain is empty (3.144953ms)
+✔ manifest retains every requested identity when Brain is unavailable (2.874257ms)
+✔ manifest count discrepancy prevents an exact match even when all supplied identities match (7.684039ms)
+✔ manifest CLI preserves input bytes, rejects malformed identities and signals unavailable Brain (502.553073ms)
+✔ version 2 reconciles all 71 dispute identities without claiming historical provenance (145.500337ms)
+✔ version 2 exposes substituted verdicts NON_PASS/FAIL despite matching run and count (44.803586ms)
+✔ version 2 exposes substituted verdicts FAIL_HOLLOW/PASS despite matching run and count (42.636339ms)
+✔ version 2 exposes substituted verdicts PASS/FAIL despite matching run and count (43.553131ms)
+✔ version 2 retains different disputes on one run and rejects duplicate dispute identities (5.873309ms)
+✔ version 2 preserves full identities for excluded, missing and unavailable cases (40.989554ms)
+✔ version 2 rejects malformed verdicts before publishing any inventory (489.167216ms)
+✔ version 2 distinguishes unavailable verdict evidence from contradictory verdicts (50.713737ms)
+✔ version 2 retains an observed target mismatch when verdict evidence is unavailable (4.355023ms)
+✔ missing stored targets remain eligible disputes with explicit unavailable identity evidence (459.806348ms)
+ℹ tests 40
+ℹ suites 0
+ℹ pass 40
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3139.698003

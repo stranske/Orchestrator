@@ -1,0 +1,43 @@
+{
+  "observed_at": "2026-11-03T22:49:43.927Z",
+  "status": "unavailable",
+  "operational_acceptance": "not_established",
+  "historical_replay_receipt": "not_established",
+  "blocking": null,
+  "drainable": null,
+  "candidates": null,
+  "process_flag": null,
+  "flag_scope": "invoking_process_only; deployed_tick_flag_not_established",
+  "artifacts": {
+    "corpus": {
+      "status": "missing"
+    },
+    "plan": {
+      "status": "missing"
+    },
+    "sweep": {
+      "status": "missing"
+    },
+    "success": {
+      "status": "missing"
+    },
+    "failure": {
+      "status": "missing"
+    },
+    "log": {
+      "status": "missing"
+    },
+    "switch_review": {
+      "status": "missing"
+    },
+    "report_dir": {
+      "status": "missing"
+    }
+  },
+  "limitations": [
+    "owner_corpus_unavailable"
+  ],
+  "recorded_switch_review": {
+    "status": "missing"
+  }
+}

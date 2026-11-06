@@ -1,0 +1,22 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.2, pytest-9.1.1, pluggy-1.6.0 -- /opt/anaconda3/bin/python3
+cachedir: .pytest_cache
+hypothesis profile 'default'
+rootdir: /Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__839__closer-repair-2
+configfile: pyproject.toml
+plugins: hypothesis-6.161.5, cov-7.1.0, xdist-3.8.0, rerunfailures-16.3, anyio-4.14.2, datadir-1.8.0, typeguard-4.5.1, asyncio-1.3.0, langsmith-0.10.10, pytest_httpserver-1.1.3, regressions-2.11.0, Faker-40.39.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 10 items
+
+tests/test_issue839_ranked_coverage.py::test_redirect_helpers_keep_invalid_corpus_rows_nonfatal PASSED [ 10%]
+tests/test_issue839_ranked_coverage.py::test_claim_inputs_and_experiment_recording_cover_skip_paths PASSED [ 20%]
+tests/test_issue839_ranked_coverage.py::test_sweep_and_recording_are_advisory_and_count_every_skip PASSED [ 30%]
+tests/test_issue839_ranked_coverage.py::test_doctor_and_watch_helpers_handle_bad_inputs_without_live_access PASSED [ 40%]
+tests/test_issue839_ranked_coverage.py::test_classify_format_and_cli_paths_stay_read_only PASSED [ 50%]
+tests/test_issue839_ranked_coverage.py::test_redirect_sweep_main_cli_paths_are_advisory PASSED [ 60%]
+tests/test_issue839_ranked_coverage.py::test_nonfinite_corpus_timestamp_is_skipped[inf] PASSED [ 70%]
+tests/test_issue839_ranked_coverage.py::test_nonfinite_corpus_timestamp_is_skipped[-inf] PASSED [ 80%]
+tests/test_issue839_ranked_coverage.py::test_nonfinite_report_timestamp_has_unknown_age[inf] PASSED [ 90%]
+tests/test_issue839_ranked_coverage.py::test_nonfinite_report_timestamp_has_unknown_age[-inf] PASSED [100%]
+
+============================== 10 passed in 0.29s ==============================

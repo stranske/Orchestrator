@@ -1,0 +1,17 @@
+✔ production summaries, rendered output and read-only persisted exports reconcile with explicit limits (1618.062065ms)
+✔ saved aggregate corruption is detected even when captured rendering repeats it (1490.849466ms)
+✔ shared whole-run receipts count once; zero telemetry and retained attempts stay unresolved (4397.810029ms)
+✔ stale report digests, changed row digests, duplicate and missing exports cannot supply costs (4506.434586ms)
+✔ unexpected export cases and ambiguous or mismatched switch captures remain gaps (2683.942226ms)
+✔ aggregate-only historical artifact records missing inputs without substituting a cohort (0.396565ms)
+✔ owner exclusions suppress execution claims and recount, including an excluded inventory identity (870.727085ms)
+✔ excluded retry identities withhold recount and conflicting shared receipts stay unknown (2324.28595ms)
+✔ CLI emits reviewable incomplete JSON; invalid input and failed interpreter emit none (1793.015542ms)
+ℹ tests 9
+ℹ suites 0
+ℹ pass 9
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 19691.211077

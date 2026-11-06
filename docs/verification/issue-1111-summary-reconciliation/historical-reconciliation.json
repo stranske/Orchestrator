@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "scope": "retained_summary_reconciliation",
+  "requested_cohort_verified": false,
+  "operational_acceptance_complete": false,
+  "reconciliation_complete": false,
+  "sources": {
+    "saved_report": {
+      "path": "/home/runner/work/Orchestrator/Orchestrator/docs/evidence/issue-428-metadata-floor-20261006/private-replay-summary.json",
+      "sha256": "86a8b02bd8d58c5ff69e22111e6ad2fb03788b533b6a55708321bf20bae027d7"
+    },
+    "case_export": null,
+    "switch_review": null,
+    "reconciler_sha256": "7edaee7e2abf3168605e33abeb69bb0972793574e026c2e8defed7a7ee643e62"
+  },
+  "saved_summary": {
+    "cases": 37,
+    "adjudicated": 0,
+    "proposed_decisions": 19,
+    "metadata_only_cases": 37,
+    "graded": 0,
+    "agree": 0,
+    "disagree": 0,
+    "agreement_rate": null,
+    "merge_rule_agreement_rate": null,
+    "cost_usd": null,
+    "cost_measured_cases": 0,
+    "cost_per_case": null
+  },
+  "saved_population": 122,
+  "saved_case_row_count": null,
+  "summary_comparison": null,
+  "recount_provenance": null,
+  "switch_review_comparison": {
+    "status": "unavailable",
+    "observed_lines": [],
+    "expected_saved_line": "UNKNOWN",
+    "persisted_totals_verified": false
+  },
+  "exported_record_totals": {
+    "scope": "current_case_role_matches_only; retry records and original revision binding unverified",
+    "matched_role_records": 0,
+    "distinct_measured_backends": 0,
+    "known_backend_cost_subtotal_usd": null,
+    "unknown_current_case_costs": null,
+    "complete_cost_usd": "UNKNOWN"
+  },
+  "cases": [],
+  "evidence_gaps": [
+    {
+      "kind": "persisted_case_export_unavailable"
+    },
+    {
+      "kind": "actual_switch_review_output_unavailable"
+    },
+    {
+      "kind": "saved_case_rows_unavailable"
+    }
+  ]
+}

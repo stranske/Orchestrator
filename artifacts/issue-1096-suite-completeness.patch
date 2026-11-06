@@ -1,0 +1,508 @@
+From b2e375553429ab2f632b41214e02f904204b9fa2 Mon Sep 17 00:00:00 2001
+From: Codex <codex@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 19:28:33 +0000
+Subject: [PATCH 1/2] fix: verify retrospective suite against collected test
+ identities
+
+---
+ scripts/run_adjudicator_acceptance.js       | 28 ++++++++++--
+ tests/test_adjudicator_acceptance_runner.js | 50 ++++++++++++++++++---
+ 2 files changed, 67 insertions(+), 11 deletions(-)
+
+diff --git a/scripts/run_adjudicator_acceptance.js b/scripts/run_adjudicator_acceptance.js
+index 5f95b7e..7e6690e 100644
+--- a/scripts/run_adjudicator_acceptance.js
++++ b/scripts/run_adjudicator_acceptance.js
+@@ -15,7 +15,8 @@ const namedTests = [
+   'test_floor_still_demotes_a_metadata_only_packet',
+   'test_abstained_row_is_reattempted_when_the_packet_gains_diff_and_criteria',
+ ];
+-const sourcePaths = ['src', 'tests', 'pyproject.toml', 'requirements.lock'];
++const sourcePaths = ['src', 'tests', 'scripts/run_adjudicator_acceptance.js',
++  'conftest.py', 'pytest.ini', 'setup.cfg', 'pyproject.toml', 'requirements.lock'];
+ const junitReader = `
+ import json, sys, xml.etree.ElementTree as ET
+ root = ET.parse(sys.argv[1]).getroot()
+@@ -81,6 +82,7 @@ function runAcceptance({ root = path.resolve(__dirname, '..'), python, revision,
+   const env = { ...process.env, PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1',
+     ORCH_STATE_DIR: state, ORCH_CAPABILITIES_PATH: path.join(state, 'capabilities.json') };
+   delete env.PYTEST_ADDOPTS;
++  delete env.PYTEST_PLUGINS;
+   const receipt = { schema_version: 1, checked_at: new Date().toISOString(),
+     evaluated_revision: revision, evaluated_tree: git(root, ['rev-parse', `${revision}^{tree}`]),
+     accepted_deployment_verified: false, interpreter: python,
+@@ -95,6 +97,23 @@ function runAcceptance({ root = path.resolve(__dirname, '..'), python, revision,
+     const version = execute(python, ['--version'], { cwd: root, env, timeout });
+     receipt.interpreter_version = Buffer.concat([version.stdout, version.stderr]).toString().trim();
+     receipt.interpreter_usable = version.exit_code === 0 && !version.error_code && !version.signal;
++    // A zero exit and the four named cases cannot establish that the full suite
++    // ran. Bind its JUnit identities to an independent collection at this tree.
++    const collectionCommand = [python, '-m', 'pytest', '-o', 'addopts=', '-m', 'not slow',
++      '--color=no', '--collect-only', '-q', 'tests/test_adjudicator_retro.py'];
++    const collection = execute(python, collectionCommand.slice(1), { cwd: root, env, timeout });
++    const collectionLog = Buffer.concat([collection.stdout, collection.stderr]);
++    fs.writeFileSync(path.join(output, 'collection.log'), collectionLog, { flag: 'wx' });
++    const prefix = 'tests/test_adjudicator_retro.py::';
++    const collected = collection.stdout.toString('utf8').split(/\r?\n/)
++      .filter((line) => line.startsWith(prefix)).map((line) => line.slice(prefix.length));
++    const collectionPassed = collection.exit_code === 0 && !collection.error_code &&
++      !collection.signal && collected.length > 0 && new Set(collected).size === collected.length &&
++      namedTests.every((test) => collected.includes(test));
++    receipt.collection = { command: collectionCommand, exit_code: collection.exit_code,
++      signal: collection.signal, error_code: collection.error_code,
++      timed_out: collection.error_code === 'ETIMEDOUT', log: 'collection.log',
++      log_sha256: digest(collectionLog), test_names: collected, passed: collectionPassed };
+     for (const [name, nodes] of [
+       ['named-tests', namedTests.map((test) => `tests/test_adjudicator_retro.py::${test}`)],
+       ['retrospective-suite', ['tests/test_adjudicator_retro.py']],
+@@ -112,10 +131,11 @@ function runAcceptance({ root = path.resolve(__dirname, '..'), python, revision,
+           try { cases = JSON.parse(parsed.stdout.toString()); } catch { /* Invalid receipt. */ }
+         }
+       }
+-      const complete = Array.isArray(cases) && cases.length > 0 &&
++      const expected = name === 'named-tests' ? namedTests : collected;
++      const complete = (name === 'named-tests' || collectionPassed) &&
++        Array.isArray(cases) && cases.length === expected.length && cases.length > 0 &&
+         cases.every((item) => !item.unsuccessful && item.classname === 'tests.test_adjudicator_retro') &&
+-        namedTests.every((test) => cases.filter((item) => item.name === test).length === 1) &&
+-        (name !== 'named-tests' || cases.length === namedTests.length);
++        expected.every((test) => cases.filter((item) => item.name === test).length === 1);
+       receipt.checks.push({ name, command, exit_code: result.exit_code, signal: result.signal,
+         error_code: result.error_code, timed_out: result.error_code === 'ETIMEDOUT',
+         log: `${name}.log`, log_sha256: digest(log),
+diff --git a/tests/test_adjudicator_acceptance_runner.js b/tests/test_adjudicator_acceptance_runner.js
+index e01dd69..59dc2c7 100644
+--- a/tests/test_adjudicator_acceptance_runner.js
++++ b/tests/test_adjudicator_acceptance_runner.js
+@@ -16,12 +16,13 @@ function fixture(t, scenario = {}) {
+     assert.equal(result.exit_code, 0, result.stderr.toString());
+     return result.stdout.toString().trim();
+   }
+-  for (const directory of ['src', 'tests']) fs.mkdirSync(path.join(root, directory));
+-  for (const file of ['src/adjudicator_retro.py', 'tests/test_adjudicator_retro.py', 'pyproject.toml']) {
++  for (const directory of ['src', 'tests', 'scripts']) fs.mkdirSync(path.join(root, directory));
++  for (const file of ['src/adjudicator_retro.py', 'tests/test_adjudicator_retro.py',
++    'scripts/run_adjudicator_acceptance.js', 'conftest.py', 'pytest.ini', 'setup.cfg', 'pyproject.toml']) {
+     fs.writeFileSync(path.join(root, file), '# fixture\n');
+   }
+   git('init', '-q');
+-  git('add', 'src', 'tests', 'pyproject.toml');
++  git('add', 'src', 'tests', 'scripts', 'conftest.py', 'pytest.ini', 'setup.cfg', 'pyproject.toml');
+   git('-c', 'user.name=Acceptance test', '-c', 'user.email=acceptance@example.invalid',
+     'commit', '-qm', 'fixture');
+   const revision = git('rev-parse', 'HEAD');
+@@ -43,9 +44,18 @@ if (args[0] === '-I') {
+ fs.appendFileSync(path.join(__dirname, 'calls.jsonl'), JSON.stringify(args) + '\\n');
+ if (options.timeout) { setTimeout(() => {}, 10000); }
+ else if (options.missing) { console.error('No module named pytest'); process.exit(1); }
++else if (args.includes('--collect-only')) {
++  const names = options.collectionDuplicate ? [...required, required[0]] : [...required, 'test_extra[param-1]', 'test_extra[param-2]'];
++  if (!options.collectionEmpty) for (const name of names) {
++    console.log('tests/test_adjudicator_retro.py::' + name);
++  }
++  process.exit(options.collectionFailure ? 2 : 0);
++}
+ else {
+   const full = !args.some((arg) => arg.includes('::'));
+-  let names = full ? [...required, 'test_extra'] : required;
++  let names = full ? [...required, 'test_extra[param-1]', 'test_extra[param-2]'] : required;
++  if (full && options.omitExtra) names = required;
++  if (full && options.duplicateExtra) names = [...names, names[names.length - 1]];
+   if (options.incomplete) names = names.slice(1);
+   if (options.empty) names = [];
+   if (options.duplicate) names = [...names, names[0]];
+@@ -70,12 +80,16 @@ test('records exact commands, source hashes, complete JUnit and logs for both ch
+   assert.equal(receipt.source_unchanged, true);
+   assert.equal(receipt.evaluated_revision, options.revision);
+   assert.equal(receipt.interpreter, options.python);
+-  assert.deepEqual(receipt.checks.map((item) => item.test_count), [4, 5]);
++  assert.equal(receipt.collection.passed, true);
++  assert.deepEqual(receipt.collection.test_names, [...namedTests,
++    'test_extra[param-1]', 'test_extra[param-2]']);
++  assert.deepEqual(receipt.checks.map((item) => item.test_count), [4, 6]);
+   assert.equal(Object.keys(receipt.source_sha256).length, 3);
+   for (const item of receipt.checks) {
+     const calls = fs.readFileSync(path.join(options.root, 'calls.jsonl'), 'utf8')
+       .trim().split('\n').map(JSON.parse);
+-    assert.deepEqual(item.command.slice(1), calls[receipt.checks.indexOf(item)]);
++    assert.deepEqual(receipt.collection.command.slice(1), calls[0]);
++    assert.deepEqual(item.command.slice(1), calls[receipt.checks.indexOf(item) + 1]);
+     assert.ok(item.command.includes('not slow'));
+     const log = fs.readFileSync(path.join(options.output, item.log));
+     assert.match(log.toString(), /fixture stdout\nfixture stderr/);
+@@ -86,11 +100,22 @@ test('records exact commands, source hashes, complete JUnit and logs for both ch
+   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(options.output, 'checks.json'))), receipt);
+ });
+ 
++for (const scenario of [{ omitExtra: true }, { duplicateExtra: true },
++  { collectionFailure: true }, { collectionEmpty: true }, { collectionDuplicate: true }]) {
++  test(`full-suite success requires the complete collected identities: ${JSON.stringify(scenario)}`, (t) => {
++    const receipt = runAcceptance(fixture(t, scenario));
++    assert.equal(receipt.checks[0].passed, true, 'named results remain separately attributable');
++    assert.equal(receipt.checks[1].passed, false);
++    assert.equal(receipt.required_tests_passed, false);
++  });
++}
++
+ test('missing pytest preserves two failures and cannot complete acceptance', (t) => {
+   const options = fixture(t, { missing: true });
+   const receipt = runAcceptance(options);
+   assert.equal(receipt.required_tests_passed, false);
+   assert.equal(receipt.source_unchanged, true);
++  assert.equal(receipt.collection.passed, false);
+   for (const item of receipt.checks) {
+     assert.equal(item.exit_code, 1);
+     assert.equal(item.test_count, null);
+@@ -120,7 +145,8 @@ test('timeout preserves both failed checks without retrying either command', (t)
+   assert.equal(receipt.checks.length, 2);
+   assert.ok(receipt.checks.every((item) => item.timed_out && !item.passed));
+   assert.equal(receipt.required_tests_passed, false);
+-  assert.equal(fs.readFileSync(path.join(options.root, 'calls.jsonl'), 'utf8').trim().split('\n').length, 2);
++  assert.equal(receipt.collection.timed_out, true);
++  assert.equal(fs.readFileSync(path.join(options.root, 'calls.jsonl'), 'utf8').trim().split('\n').length, 3);
+ });
+ 
+ test('refuses revision mismatch, modified tracked inputs and untracked inputs before execution', (t) => {
+@@ -135,6 +161,16 @@ test('refuses revision mismatch, modified tracked inputs and untracked inputs be
+   assert.equal(fs.existsSync(path.join(options.root, 'calls.jsonl')), false);
+ });
+ 
++for (const file of ['conftest.py', 'pytest.ini', 'setup.cfg', 'scripts/run_adjudicator_acceptance.js']) {
++  test(`refuses uncommitted test execution input: ${file}`, (t) => {
++    const options = fixture(t);
++    fs.appendFileSync(path.join(options.root, file), '# changed\n');
++    assert.throws(() => runAcceptance(options), /Git source check failed/);
++    assert.equal(fs.existsSync(options.output), false);
++    assert.equal(fs.existsSync(path.join(options.root, 'calls.jsonl')), false);
++  });
++}
++
+ test('requires explicit interpreter/revision/bounds and never overwrites a receipt', (t) => {
+   const options = fixture(t, { missing: true });
+   for (const change of [{ python: 'python' }, { revision: 'HEAD' }, { timeout: 0 },
+-- 
+2.56.0
+
+
+From 1324da721fbc12cc25428f5a9c4f57d58c7f24e6 Mon Sep 17 00:00:00 2001
+From: Codex <codex@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 19:30:12 +0000
+Subject: [PATCH 2/2] docs: preserve bounded retrospective completeness
+ verification
+
+---
+ .../issue-1096-recovery/README.md             |  22 ++++
+ .../issue-1096-recovery/evidence-ledger.json  |  22 ++++
+ .../suite-completeness-plan.md                |  38 +++++++
+ .../suite-completeness-run/checks.json        | 103 ++++++++++++++++++
+ .../suite-completeness-run/collection.log     |   1 +
+ .../suite-completeness-run/named-tests.log    |   1 +
+ .../retrospective-suite.log                   |   1 +
+ .../suite-completeness-run/runner-tests.log   |  31 ++++++
+ .../runner-validation.json                    |  12 ++
+ 9 files changed, 231 insertions(+)
+ create mode 100644 docs/verification/issue-1096-recovery/suite-completeness-plan.md
+ create mode 100644 docs/verification/issue-1096-recovery/suite-completeness-run/checks.json
+ create mode 100644 docs/verification/issue-1096-recovery/suite-completeness-run/collection.log
+ create mode 100644 docs/verification/issue-1096-recovery/suite-completeness-run/named-tests.log
+ create mode 100644 docs/verification/issue-1096-recovery/suite-completeness-run/retrospective-suite.log
+ create mode 100644 docs/verification/issue-1096-recovery/suite-completeness-run/runner-tests.log
+ create mode 100644 docs/verification/issue-1096-recovery/suite-completeness-run/runner-validation.json
+
+diff --git a/docs/verification/issue-1096-recovery/README.md b/docs/verification/issue-1096-recovery/README.md
+index 53b0d10..454e8fb 100644
+--- a/docs/verification/issue-1096-recovery/README.md
++++ b/docs/verification/issue-1096-recovery/README.md
+@@ -1,5 +1,27 @@
+ # Acceptance evidence recovery for #1096
+ 
++## Suite completeness follow-up, 2026-11-03
++
++The runner previously accepted a full-suite JUnit file containing only the four
++named tests. It now requires exact identities from a separate collection,
++including parameterized cases, and rejects missing or duplicate suite results.
++Its revision check also covers the runner and root pytest configuration.
++All [23 runner regressions](suite-completeness-run/runner-tests.log) pass.
++
++[The bounded run](suite-completeness-run/checks.json) evaluates source commit
++`b2e375553429ab2f632b41214e02f904204b9fa2`, parent `bfee009c368dd170682524924dd7e3a58678d1ee`.
++Collection, named tests and the full suite still fail before collection because
++the selected interpreter lacks pytest. A bounded temporary installation attempt
++found no available distribution. The accepted deployment remains unverified;
++no task checkbox is newly complete. [The plan](suite-completeness-plan.md) records
++the command and stop rule. Checkout Git metadata is read-only, so the source and
++evidence commits are preserved in isolated Git storage and
++`artifacts/issue-1096-suite-completeness.patch`.
++
++The connector rejected the blocker comment and `needs-human` label because they
++require approval and this run's approval policy is `never`. PR #1097 was observed
++open with `draft=false`; this run made no remote changes.
++
+ ## Required-test follow-up at 19:06 UTC
+ 
+ The four named tests and full retrospective suite were attempted using the selected
+diff --git a/docs/verification/issue-1096-recovery/evidence-ledger.json b/docs/verification/issue-1096-recovery/evidence-ledger.json
+index a9685a2..828e80a 100644
+--- a/docs/verification/issue-1096-recovery/evidence-ledger.json
++++ b/docs/verification/issue-1096-recovery/evidence-ledger.json
+@@ -163,6 +163,28 @@
+         "state": "open",
+         "isDraft": false
+       }
++    },
++    "suite_completeness_followup": {
++      "checked_at": "2026-11-03T19:28:57.268Z",
++      "evaluated_revision": "b2e375553429ab2f632b41214e02f904204b9fa2",
++      "source_parent": "bfee009c368dd170682524924dd7e3a58678d1ee",
++      "plan": "suite-completeness-plan.md",
++      "checks": "suite-completeness-run/checks.json",
++      "runner_validation": "suite-completeness-run/runner-validation.json",
++      "runner_tests_passed": 23,
++      "collection_exit_code": 1,
++      "named_tests_exit_code": 1,
++      "retrospective_suite_exit_code": 1,
++      "source_unchanged": true,
++      "required_tests_passed": false,
++      "accepted_deployment_verified": false,
++      "pytest_status": "blocked_before_collection_missing_pytest",
++      "bounded_install_attempt": "no_available_distribution",
++      "task_checkboxes_verified_complete": 0,
++      "blocker_comment": "rejected_connector_requires_approval_policy_never",
++      "needs_human_label": "rejected_connector_requires_approval_policy_never",
++      "source_commit_storage": "isolated_git_directory_because_checkout_metadata_is_read_only",
++      "limitation": "Runner regression tests verify evidence validation only; no operational acceptance established."
+     }
+   },
+   "mirror_synchronization": [
+diff --git a/docs/verification/issue-1096-recovery/suite-completeness-plan.md b/docs/verification/issue-1096-recovery/suite-completeness-plan.md
+new file mode 100644
+index 0000000..2b2c713
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/suite-completeness-plan.md
+@@ -0,0 +1,38 @@
++# Retrospective suite completeness follow-up, 2026-11-03 UTC
++
++Recorded before executing the revised runner against source revision
++`b2e375553429ab2f632b41214e02f904204b9fa2`, parent
++`bfee009c368dd170682524924dd7e3a58678d1ee`. This revision changes only the
++JavaScript acceptance runner and its regression tests. Accepted production and
++mirror revision bindings remain unavailable.
++
++The selected repository interpreter remains
++`/opt/hostedtoolcache/Python/3.14.9/x64/bin/python`. Its pytest import fails.
++A bounded installation attempt in a temporary directory found no available
++pytest distribution; do not repeat installation or replace pytest with a test
++double for acceptance evidence.
++
++```sh
++GIT_DIR="$(cat /tmp/issue-1096-suite-git-path)" \
++GIT_WORK_TREE=/home/runner/work/Orchestrator/Orchestrator \
++node scripts/run_adjudicator_acceptance.js \
++  --python /opt/hostedtoolcache/Python/3.14.9/x64/bin/python \
++  --revision b2e375553429ab2f632b41214e02f904204b9fa2 \
++  --output /home/runner/work/Orchestrator/Orchestrator/docs/verification/issue-1096-recovery/suite-completeness-run
++```
++
++Expected result: collection, the four named tests and the full retrospective
++suite each fail before collection with missing pytest. The runner exits 1,
++records both test commands and the collection command, and leaves
++`required_tests_passed=false` and `accepted_deployment_verified=false`.
++
++Bounded stop rule: one collection and one invocation of each required check,
++each capped at 60 seconds, all using `-m "not slow"`. Use isolated temporary test
++state and a new output directory. Do not dispatch, publish, touch the native
++journal or synchronize a mirror. Regression tests use interpreter doubles only
++to test the runner; their successes cannot establish retrospective acceptance.
++
++Normal staging failed because `.git/index.lock` is read-only. The source commit
++is preserved in the isolated Git directory named by the command above; the
++checkout branch is unchanged. No acceptance task may be checked off from the
++expected failures.
+diff --git a/docs/verification/issue-1096-recovery/suite-completeness-run/checks.json b/docs/verification/issue-1096-recovery/suite-completeness-run/checks.json
+new file mode 100644
+index 0000000..ab72b65
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/suite-completeness-run/checks.json
+@@ -0,0 +1,103 @@
++{
++  "schema_version": 1,
++  "checked_at": "2026-11-03T19:28:57.268Z",
++  "evaluated_revision": "b2e375553429ab2f632b41214e02f904204b9fa2",
++  "evaluated_tree": "f2681be4e8f14acd8e6162e0bb271888089296a2",
++  "accepted_deployment_verified": false,
++  "interpreter": "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python",
++  "runner_sha256": "66bac85537cd59bcab2d88d1874f7e4eaa20bb536c3a45a8cba582c9fd8abe2c",
++  "input_manifest_sha256": "6714e4617e3e2deb685fdba04ade9597d06a7c77472ad159adfaa9b218c300e1",
++  "input_file_count": 1995,
++  "source_sha256": {
++    "pyproject.toml": "2c3462b8b384aeb265dbc51ab742b4ee02d839a34cec6590791a6d5d53fe4a6e",
++    "src/adjudicator_retro.py": "ee172f96ddf0ca56f6c06fcf18bdaacccece5381de61a9896006d0b16a8fb0b8",
++    "src/capability_advisor.py": "fe2f2d0dda2b684d61d42c6aba3952b8a5e5d0d1504c9cbebeca9616109208d5",
++    "src/feedback.py": "eafa930ec4cea9a239bc03a91a00b2ca7c618c40629690658f8276417946412d",
++    "src/roles.py": "4a5e729f4bf797ea448f18c14df69696e3df3bcaaf046729c039099ae7cc3dd7",
++    "src/verifier_evidence.py": "19b2342b6d9b4d097f6fef6b76089f54903dfbe36946dac6fa7467dec3afff59",
++    "tests/test_adjudicator_retro.py": "b44fd6756915069d6a5dc492eecda268053a711899b81decc9d27f8c9793fda2"
++  },
++  "checks": [
++    {
++      "name": "named-tests",
++      "command": [
++        "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python",
++        "-m",
++        "pytest",
++        "-o",
++        "addopts=",
++        "-m",
++        "not slow",
++        "-q",
++        "--junitxml=/home/runner/work/Orchestrator/Orchestrator/docs/verification/issue-1096-recovery/suite-completeness-run/named-tests.xml",
++        "tests/test_adjudicator_retro.py::test_build_packet_includes_diff_and_acceptance_criteria",
++        "tests/test_adjudicator_retro.py::test_adjudicator_validator_accepts_recommendation_prose",
++        "tests/test_adjudicator_retro.py::test_floor_still_demotes_a_metadata_only_packet",
++        "tests/test_adjudicator_retro.py::test_abstained_row_is_reattempted_when_the_packet_gains_diff_and_criteria"
++      ],
++      "exit_code": 1,
++      "signal": null,
++      "error_code": null,
++      "timed_out": false,
++      "log": "named-tests.log",
++      "log_sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599",
++      "junit": null,
++      "junit_sha256": null,
++      "test_count": null,
++      "passed": false
++    },
++    {
++      "name": "retrospective-suite",
++      "command": [
++        "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python",
++        "-m",
++        "pytest",
++        "-o",
++        "addopts=",
++        "-m",
++        "not slow",
++        "-q",
++        "--junitxml=/home/runner/work/Orchestrator/Orchestrator/docs/verification/issue-1096-recovery/suite-completeness-run/retrospective-suite.xml",
++        "tests/test_adjudicator_retro.py"
++      ],
++      "exit_code": 1,
++      "signal": null,
++      "error_code": null,
++      "timed_out": false,
++      "log": "retrospective-suite.log",
++      "log_sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599",
++      "junit": null,
++      "junit_sha256": null,
++      "test_count": null,
++      "passed": false
++    }
++  ],
++  "source_unchanged": true,
++  "required_tests_passed": false,
++  "interpreter_version": "Python 3.14.9",
++  "interpreter_usable": true,
++  "collection": {
++    "command": [
++      "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python",
++      "-m",
++      "pytest",
++      "-o",
++      "addopts=",
++      "-m",
++      "not slow",
++      "--color=no",
++      "--collect-only",
++      "-q",
++      "tests/test_adjudicator_retro.py"
++    ],
++    "exit_code": 1,
++    "signal": null,
++    "error_code": null,
++    "timed_out": false,
++    "log": "collection.log",
++    "log_sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599",
++    "test_names": [],
++    "passed": false
++  },
++  "finished_at": "2026-11-03T19:28:57.401Z"
++}
+diff --git a/docs/verification/issue-1096-recovery/suite-completeness-run/collection.log b/docs/verification/issue-1096-recovery/suite-completeness-run/collection.log
+new file mode 100644
+index 0000000..7d7a543
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/suite-completeness-run/collection.log
+@@ -0,0 +1 @@
++/opt/hostedtoolcache/Python/3.14.9/x64/bin/python: No module named pytest
+diff --git a/docs/verification/issue-1096-recovery/suite-completeness-run/named-tests.log b/docs/verification/issue-1096-recovery/suite-completeness-run/named-tests.log
+new file mode 100644
+index 0000000..7d7a543
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/suite-completeness-run/named-tests.log
+@@ -0,0 +1 @@
++/opt/hostedtoolcache/Python/3.14.9/x64/bin/python: No module named pytest
+diff --git a/docs/verification/issue-1096-recovery/suite-completeness-run/retrospective-suite.log b/docs/verification/issue-1096-recovery/suite-completeness-run/retrospective-suite.log
+new file mode 100644
+index 0000000..7d7a543
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/suite-completeness-run/retrospective-suite.log
+@@ -0,0 +1 @@
++/opt/hostedtoolcache/Python/3.14.9/x64/bin/python: No module named pytest
+diff --git a/docs/verification/issue-1096-recovery/suite-completeness-run/runner-tests.log b/docs/verification/issue-1096-recovery/suite-completeness-run/runner-tests.log
+new file mode 100644
+index 0000000..499f045
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/suite-completeness-run/runner-tests.log
+@@ -0,0 +1,31 @@
++✔ records exact commands, source hashes, complete JUnit and logs for both checks (282.907958ms)
++✔ full-suite success requires the complete collected identities: {"omitExtra":true} (275.746157ms)
++✔ full-suite success requires the complete collected identities: {"duplicateExtra":true} (272.106178ms)
++✔ full-suite success requires the complete collected identities: {"collectionFailure":true} (281.70793ms)
++✔ full-suite success requires the complete collected identities: {"collectionEmpty":true} (275.916415ms)
++✔ full-suite success requires the complete collected identities: {"collectionDuplicate":true} (273.805781ms)
++✔ missing pytest preserves two failures and cannot complete acceptance (143.517923ms)
++✔ refuses a successful claim for incomplete evidence: {"noXml":true} (149.651183ms)
++✔ refuses a successful claim for incomplete evidence: {"malformed":true} (297.806503ms)
++✔ refuses a successful claim for incomplete evidence: {"empty":true} (272.433932ms)
++✔ refuses a successful claim for incomplete evidence: {"incomplete":true} (280.297611ms)
++✔ refuses a successful claim for incomplete evidence: {"duplicate":true} (273.775952ms)
++✔ refuses a successful claim for incomplete evidence: {"skipped":true} (277.97811ms)
++✔ refuses a successful claim for incomplete evidence: {"foreign":true} (270.847152ms)
++✔ refuses a successful claim for incomplete evidence: {"exit":1} (323.306578ms)
++✔ source changes during execution invalidate otherwise passing checks (268.626339ms)
++✔ timeout preserves both failed checks without retrying either command (1582.478126ms)
++✔ refuses revision mismatch, modified tracked inputs and untracked inputs before execution (38.984537ms)
++✔ refuses uncommitted test execution input: conftest.py (26.499178ms)
++✔ refuses uncommitted test execution input: pytest.ini (26.319562ms)
++✔ refuses uncommitted test execution input: setup.cfg (26.788414ms)
++✔ refuses uncommitted test execution input: scripts/run_adjudicator_acceptance.js (26.537256ms)
++✔ requires explicit interpreter/revision/bounds and never overwrites a receipt (153.453153ms)
++ℹ tests 23
++ℹ suites 0
++ℹ pass 23
++ℹ fail 0
++ℹ cancelled 0
++ℹ skipped 0
++ℹ todo 0
++ℹ duration_ms 6109.847823
+diff --git a/docs/verification/issue-1096-recovery/suite-completeness-run/runner-validation.json b/docs/verification/issue-1096-recovery/suite-completeness-run/runner-validation.json
+new file mode 100644
+index 0000000..3681f88
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/suite-completeness-run/runner-validation.json
+@@ -0,0 +1,12 @@
++{
++  "checked_at": "2026-11-03T19:29:25.939Z",
++  "source_revision": "b2e375553429ab2f632b41214e02f904204b9fa2",
++  "command": [
++    "/opt/hostedtoolcache/node/24.22.1/x64/bin/node",
++    "tests/test_adjudicator_acceptance_runner.js"
++  ],
++  "exit_code": 0,
++  "log": "runner-tests.log",
++  "log_sha256": "3cc75fe7aa2e6cc3964eaeeb032f50170839b9843e71f53699b9489107daf502",
++  "acceptance_evidence": false
++}
+-- 
+2.56.0
+

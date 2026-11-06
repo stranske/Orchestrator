@@ -1,0 +1,116 @@
+{
+  "recorded_at": "2026-11-04T01:33:42.344853+00:00",
+  "base_revision": "13a0cd09f689488616674fc54a556ebdf8d9f229",
+  "commands": [
+    {
+      "argv": [
+        "node",
+        "--test",
+        "tests/test_adjudicator_summary.js",
+        "tests/test_adjudicator_case_gaps.js",
+        "tests/test_adjudicator_inventory.js",
+        "tests/test_adjudicator_retrospective_batch.js"
+      ],
+      "exit": 0,
+      "stdout": "tests.log",
+      "stderr": "tests.log.stderr"
+    },
+    {
+      "argv": [
+        "node",
+        "--test-name-pattern=switch review reads and renders",
+        "tests/test_adjudicator_retro_cli.js"
+      ],
+      "exit": 0,
+      "stdout": "switch-reader.log",
+      "stderr": "switch-reader.log.stderr"
+    },
+    {
+      "argv": [
+        "node",
+        "scripts/export_adjudicator_inventory.js",
+        "--db",
+        "/home/runner/.codex/orchestrator/feedback/orchestrator.db",
+        "--observed-at",
+        "1793755997"
+      ],
+      "exit": 2,
+      "stdout": "runner-inventory.json",
+      "stderr": "runner-inventory.json.stderr"
+    },
+    {
+      "argv": [
+        "node",
+        "tests/test_adjudicator_summary.js"
+      ],
+      "exit": 0,
+      "stdout": "summary-final.log",
+      "stderr": "summary-final.log.stderr"
+    },
+    {
+      "argv": [
+        "node",
+        "scripts/reconcile_adjudicator_summary.js",
+        "--report",
+        "docs/evidence/issue-428-metadata-floor-20261006/private-replay-summary.json"
+      ],
+      "exit": 2,
+      "stdout": "historical-reconciliation.json",
+      "stderr": "historical-reconciliation.json.stderr"
+    },
+    {
+      "argv": [
+        "node",
+        "--check",
+        "scripts/reconcile_adjudicator_summary.js"
+      ],
+      "exit": 0,
+      "stdout": "syntax.log",
+      "stderr": "syntax.log.stderr"
+    },
+    {
+      "argv": [
+        "node",
+        "--check",
+        "tests/test_adjudicator_summary.js"
+      ],
+      "exit": 0,
+      "stdout": "test-syntax.log",
+      "stderr": "test-syntax.log.stderr"
+    }
+  ],
+  "source_sha256": {
+    "scripts/reconcile_adjudicator_summary.js": "7edaee7e2abf3168605e33abeb69bb0972793574e026c2e8defed7a7ee643e62",
+    "tests/test_adjudicator_summary.js": "80773534ff352bba34ec474f0915e58d74c9c6c3aeb6d74e31647ed2ee8d55c8",
+    "scripts/export_adjudicator_case_gaps.js": "0f73f47df5c9d52549929c3c532579642fec4542feba72c421c767754126c9c0",
+    "scripts/export_adjudicator_inventory.js": "dc4242335a8309fb99e4b303f4ea13b0ac13bcf95ed7b1461a1cf2e89749e1b3",
+    "src/adjudicator_retro.py": "ee172f96ddf0ca56f6c06fcf18bdaacccece5381de61a9896006d0b16a8fb0b8",
+    "src/roles.py": "4a5e729f4bf797ea448f18c14df69696e3df3bcaaf046729c039099ae7cc3dd7",
+    "src/feedback.py": "eafa930ec4cea9a239bc03a91a00b2ca7c618c40629690658f8276417946412d",
+    "docs/evidence/issue-428-metadata-floor-20261006/private-replay-summary.json": "86a8b02bd8d58c5ff69e22111e6ad2fb03788b533b6a55708321bf20bae027d7",
+    "docs/verification/issue-1111-input-recovery/recovery.json": "41a959c4929b97c42344cb9d81a13dbac8b9b619c7a7444fe1e959880ea01323"
+  },
+  "artifact_sha256": {
+    "README.md": "1bcfcb8b792f020aee31ddec5d6c109628a20efd42536fe3f981158dacce963b",
+    "historical-reconciliation.json": "51e5c64cbd58d72e53819735ffdfe5a8bc3d59f48a93cf47d65fe38c69c08773",
+    "historical-reconciliation.json.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "runner-inventory.json": "3d6184a5ad559656ecfcfbab2bac0cfbbdd2b49575f4e93eadccd3a1b7bd961b",
+    "runner-inventory.json.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "summary-final.log": "78f5cc7fac1f7e42633560152e34d576234a6dcf50e74b0a92f0968e181c4629",
+    "summary-final.log.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "switch-reader.log": "3ea393afc24c4ff3b0ed592f8d55c9fba17a455c4e93eee2775d9f71fd1d9a0a",
+    "switch-reader.log.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "syntax.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "syntax.log.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "test-syntax.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "test-syntax.log.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "tests.log": "fe747d02877b2bf20bc9f884d9977f0156959efd8834cecec26692d5fa1b611a",
+    "tests.log.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "requested_cohort_verified": false,
+  "operational_acceptance_complete": false,
+  "task_complete": false,
+  "remote_mutations_attempted": false,
+  "final_recorded_at": "2026-11-04T01:36:06.096757+00:00",
+  "verification_scope": "Initial related suites precede the final ccusage-source check; summary-final.log verifies the final comparator and tests. Unchanged dependencies retain their source hashes."
+}

@@ -1,0 +1,9 @@
+{
+  "command": [
+    "/opt/anaconda3/bin/python3",
+    "src/verify.py"
+  ],
+  "exit_code": 127,
+  "elapsed_seconds": 0.0,
+  "timeout_seconds": 120
+}

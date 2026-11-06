@@ -1,0 +1,89 @@
+{
+  "run_id": 41952625547,
+  "head_sha": "555c1f1cf0ac8a6fb3e64d4081ecf952df126021",
+  "artifact_id": 13382156456,
+  "meta": {
+    "format": 3,
+    "version": "7.17.2",
+    "timestamp": "2026-11-05T02:13:19.797893",
+    "branch_coverage": false,
+    "show_contexts": false
+  },
+  "totals": {
+    "covered_lines": 102131,
+    "num_statements": 119137,
+    "percent_covered": 85.72567716158709,
+    "percent_covered_display": "85.7",
+    "missing_lines": 17006,
+    "excluded_lines": 376,
+    "percent_statements_covered": 85.72567716158709,
+    "percent_statements_covered_display": "85.7"
+  },
+  "targets": {
+    "local_verify": {
+      "covered_lines": 431,
+      "num_statements": 441,
+      "percent_covered": 97.73242630385488,
+      "percent_covered_display": "97.7",
+      "missing_lines": 10,
+      "excluded_lines": 2,
+      "percent_statements_covered": 97.73242630385488,
+      "percent_statements_covered_display": "97.7"
+    },
+    "capability_activation_audit": {
+      "covered_lines": 1125,
+      "num_statements": 1171,
+      "percent_covered": 96.07173356105892,
+      "percent_covered_display": "96.1",
+      "missing_lines": 46,
+      "excluded_lines": 2,
+      "percent_statements_covered": 96.07173356105892,
+      "percent_statements_covered_display": "96.1"
+    },
+    "exp_abcd": {
+      "covered_lines": 1679,
+      "num_statements": 1688,
+      "percent_covered": 99.46682464454976,
+      "percent_covered_display": "99.5",
+      "missing_lines": 9,
+      "excluded_lines": 2,
+      "percent_statements_covered": 99.46682464454976,
+      "percent_statements_covered_display": "99.5"
+    },
+    "periodic_report": {
+      "covered_lines": 1008,
+      "num_statements": 1077,
+      "percent_covered": 93.59331476323119,
+      "percent_covered_display": "93.6",
+      "missing_lines": 69,
+      "excluded_lines": 2,
+      "percent_statements_covered": 93.59331476323119,
+      "percent_statements_covered_display": "93.6"
+    },
+    "tick": {
+      "covered_lines": 560,
+      "num_statements": 583,
+      "percent_covered": 96.0548885077187,
+      "percent_covered_display": "96.1",
+      "missing_lines": 23,
+      "excluded_lines": 2,
+      "percent_statements_covered": 96.0548885077187,
+      "percent_statements_covered_display": "96.1"
+    },
+    "repo_knowledge": {
+      "covered_lines": 1175,
+      "num_statements": 1335,
+      "percent_covered": 88.01498127340824,
+      "percent_covered_display": "88.0",
+      "missing_lines": 160,
+      "excluded_lines": 2,
+      "percent_statements_covered": 88.01498127340824,
+      "percent_statements_covered_display": "88.0"
+    }
+  },
+  "limitations": [
+    "The run was cancelled; all six pytest coverage shards succeeded and the aggregate published combined coverage from 141 instrumented processes.",
+    "The aggregate failed only on a seven-test collection-floor lag (14203 collected vs floor 14196), not test failures.",
+    "branch_coverage=false; count statements only."
+  ]
+}

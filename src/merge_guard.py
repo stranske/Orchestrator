@@ -36,6 +36,9 @@ import outcomes
 import provision
 import runtime_ac_gate
 
+# Preserve the existing admission-read budget without loading the retired policy.
+READ_ONLY_REQUEST_TIMEOUT_SECONDS = 120.0
+
 MERGE_METHOD_FLAGS = {
     "squash": "--squash",
     "merge": "--merge",
@@ -500,9 +503,7 @@ def _admission_read(command, **kwargs):
 
 def read_only_admission(target, expected_head):
     """Run this same guard through final checks without local/runtime/provider effects."""
-    import closer_frontier_policy
-
-    deadline = time.monotonic() + closer_frontier_policy.MAX_REQUEST_TIMEOUT_SECONDS
+    deadline = time.monotonic() + READ_ONLY_REQUEST_TIMEOUT_SECONDS
 
     def read(command, **kwargs):
         remaining = deadline - time.monotonic()

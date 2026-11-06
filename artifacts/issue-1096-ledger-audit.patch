@@ -1,0 +1,1087 @@
+From ff02e2e756f61828862b206c1a3795b1b3182b17 Mon Sep 17 00:00:00 2001
+From: Codex <codex@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 19:56:23 +0000
+Subject: [PATCH 1/2] feat: audit adjudicator recovery ledger attribution and
+ artifact hashes
+
+---
+ scripts/audit_adjudicator_evidence_ledger.js | 178 +++++++++++++++++++
+ tests/test_adjudicator_evidence_ledger.js    | 141 +++++++++++++++
+ 2 files changed, 319 insertions(+)
+ create mode 100644 scripts/audit_adjudicator_evidence_ledger.js
+ create mode 100644 tests/test_adjudicator_evidence_ledger.js
+
+diff --git a/scripts/audit_adjudicator_evidence_ledger.js b/scripts/audit_adjudicator_evidence_ledger.js
+new file mode 100644
+index 0000000..5e77f0f
+--- /dev/null
++++ b/scripts/audit_adjudicator_evidence_ledger.js
+@@ -0,0 +1,178 @@
++'use strict';
++
++// Audit the recovery ledger's attribution and local artifact integrity. External
++// references remain references: this does not authenticate a native receipt,
++// establish a deployed revision, regrade a report, or dispatch a retry.
++const fs = require('node:fs');
++const path = require('node:path');
++const { createHash } = require('node:crypto');
++const { parseArgs } = require('node:util');
++
++function sha256(bytes) {
++  return createHash('sha256').update(bytes).digest('hex');
++}
++
++function auditLedger(file) {
++  const ledgerPath = fs.realpathSync(file);
++  const base = path.dirname(ledgerPath);
++  const bytes = fs.readFileSync(ledgerPath);
++  const ledger = JSON.parse(bytes);
++  const artifacts = new Map();
++  const external = [];
++  const errors = [];
++  function requireValue(condition, message) {
++    if (!condition) errors.push(message);
++  }
++  const nonblank = (value) => typeof value === 'string' && Boolean(value.trim());
++  function local(reference, directory = base) {
++    if (!nonblank(reference) || path.isAbsolute(reference)) {
++      throw new Error('Artifact reference must be relative to the ledger');
++    }
++    const target = fs.realpathSync(path.resolve(directory, reference));
++    const relative = path.relative(base, target);
++    if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
++      throw new Error('Artifact reference escapes the ledger directory');
++    }
++    const content = fs.readFileSync(target);
++    artifacts.set(relative, { path: relative, sha256: sha256(content) });
++    return { target, content };
++  }
++  function checkHash(reference, expected, directory) {
++    requireValue(typeof expected === 'string' && /^[a-f0-9]{64}$/.test(expected),
++      `Missing or invalid SHA-256 for ${reference}`);
++    const artifact = local(reference, directory);
++    requireValue(sha256(artifact.content) === expected, `SHA-256 mismatch for ${reference}`);
++  }
++  function receipt(reference) {
++    const { target, content } = local(reference);
++    const directory = path.dirname(target);
++    const saved = JSON.parse(content);
++    // Each historical receipt keeps its own source identity. Do not compare an
++    // older source manifest to today's checkout or treat it as a deployment.
++    function visit(value) {
++      if (!value || typeof value !== 'object') return;
++      for (const key of ['log', 'junit', 'real_input_observation']) {
++        if (Object.hasOwn(value, key) &&
++            (key !== 'junit' || value[key] !== null || value[`${key}_sha256`] !== null)) {
++          checkHash(value[key], value[`${key}_sha256`], directory);
++        }
++      }
++      for (const [key, item] of Object.entries(value)) {
++        if (!['log_sha256', 'junit_sha256', 'real_input_observation_sha256'].includes(key) &&
++            key.endsWith('_sha256') &&
++            Object.hasOwn(value, key.slice(0, -7))) {
++          const referenceKey = key.slice(0, -7);
++          if (item !== null || value[referenceKey] !== null) {
++            checkHash(value[referenceKey], item, directory);
++          }
++        }
++        if (key !== 'source_sha256') visit(item);
++      }
++    }
++    visit(saved);
++    for (const [log, observation] of Object.entries(saved.regression_logs || {})) {
++      checkHash(log, observation.sha256, directory);
++    }
++  }
++  function referenceOnly(category, item) {
++    requireValue(nonblank(item.reference), `${category} requires an external reference`);
++    external.push({ category, reference: item.reference, authenticated_by_audit: false });
++  }
++
++  requireValue(ledger.schema_version === 1, 'Unsupported ledger schema');
++  requireValue(ledger.acceptance_complete === false,
++    'Recovery artifacts alone cannot establish acceptance_complete');
++  requireValue(nonblank(ledger.checked_date), 'Ledger check date is required');
++  requireValue(Array.isArray(ledger.missing_evidence) && ledger.missing_evidence.length > 0 &&
++    ledger.missing_evidence.every(nonblank), 'Missing historical proof must be disclosed');
++  requireValue(ledger.missing_evidence?.some((item) =>
++    nonblank(item) && item.includes('October 18')),
++  'Missing raw October 18 proof must remain explicitly disclosed');
++  requireValue(ledger.grade_thresholds?.intermediate_graded_25 === 'not_verified' &&
++    ledger.grade_thresholds?.canonical_graded_29 === 'not_verified' &&
++    ledger.grade_thresholds?.advice_graded_is_substitute === false,
++  'Recovery ledger must keep unverified canonical thresholds separate from advice_graded');
++  requireValue(ledger.fixed_next_20?.status === 'unavailable' &&
++    ledger.fixed_next_20.manifest === null &&
++    ledger.fixed_next_20.verified_members_with_decisions === null,
++  'Recovery ledger cannot substitute aggregate observations for fixed membership');
++  const identities = ledger.revision_identity;
++  requireValue(identities?.accepted_source?.status === 'unverified' &&
++    identities?.current_deployed_revision?.status === 'unavailable' &&
++    identities?.current_mirror_revision?.status === 'unavailable',
++  'Recovery ledger must disclose unverified accepted/deployed/mirror bindings');
++
++  requireValue(Array.isArray(ledger.historical_observations) &&
++    ledger.historical_observations.length > 0, 'Historical observations must remain separate');
++  for (const item of ledger.historical_observations || []) {
++    referenceOnly('historical_observations', item);
++    requireValue(nonblank(item.date) && nonblank(item.class) && nonblank(item.limitation),
++      'Historical observations need dates, classes and limitations');
++    if (item.inventory) {
++      const saved = JSON.parse(local(item.inventory).content);
++      requireValue(saved.evidence_class === 'historical_snapshot' &&
++        saved.evidence_reference === item.reference &&
++        saved.retained_population === item.retained_population &&
++        saved.case_count === item.retained_rows &&
++        saved.retained_summary?.graded === item.retained_graded &&
++        saved.receipt_authority === 'not_authenticated_by_inventory',
++      'Historical inventory attribution or retained counts disagree with the ledger');
++    }
++  }
++  const current = ledger.current_observations;
++  requireValue(current && !Array.isArray(current) && typeof current === 'object' &&
++    nonblank(current.checks), 'Current observations need their own check receipt');
++  const receipts = new Set();
++  function collect(value) {
++    if (!value || typeof value !== 'object') return;
++    for (const [key, item] of Object.entries(value)) {
++      if (['checks', 'validation', 'runner_validation'].includes(key)) {
++        requireValue(nonblank(item), `Current ${key} needs a receipt path`);
++        if (nonblank(item)) receipts.add(item);
++      } else collect(item);
++    }
++  }
++  collect(current);
++  for (const reference of receipts) receipt(reference);
++
++  requireValue(Array.isArray(ledger.mirror_synchronization) &&
++    ledger.mirror_synchronization.length > 0, 'Mirror synchronization must remain separate');
++  for (const item of ledger.mirror_synchronization || []) {
++    if (item.class === 'historical_sync_observation') {
++      referenceOnly('mirror_synchronization', item);
++      requireValue(nonblank(item.date), 'Historical mirror synchronization needs a date');
++    } else requireValue(item.class === 'current_sync_observation' &&
++      item.status === 'unavailable' && item.writes_performed === 0,
++    'Current mirror synchronization must disclose unavailable proof');
++  }
++  const dispatch = ledger.dispatch_receipts;
++  requireValue(dispatch && Array.isArray(dispatch.historical_receipt_index),
++    'Dispatch references must remain separate');
++  for (const item of dispatch?.historical_receipt_index || []) {
++    referenceOnly('dispatch_receipts', item);
++  }
++  requireValue(['provider_calls', 'production_dispatches', 'canonical_publications']
++    .every((key) => dispatch?.current_run?.[key] === 0),
++  'Recovery audit does not support a current dispatch/publication claim');
++  requireValue(fs.readFileSync(ledgerPath).equals(bytes), 'Ledger changed during audit');
++  if (errors.length) throw new Error(errors.join('\n'));
++  return { schema_version: 1, ledger_sha256: sha256(bytes),
++    audit_scope: 'recovery_attribution_and_local_artifact_integrity',
++    attribution_and_artifact_checks_passed: true, operational_acceptance_verified: false,
++    external_references_authenticated: false, source_revision_bindings_verified: false,
++    artifacts: [...artifacts.values()], external_references: external,
++    missing_evidence: ledger.missing_evidence };
++}
++
++if (require.main === module) {
++  try {
++    const { values } = parseArgs({ options: { ledger: { type: 'string' } } });
++    if (!values.ledger) throw new Error('Select a ledger with --ledger');
++    process.stdout.write(`${JSON.stringify(auditLedger(values.ledger), null, 2)}\n`);
++  } catch (error) {
++    process.stderr.write(`${error.message}\n`);
++    process.exitCode = 1;
++  }
++}
++
++module.exports = { auditLedger };
+diff --git a/tests/test_adjudicator_evidence_ledger.js b/tests/test_adjudicator_evidence_ledger.js
+new file mode 100644
+index 0000000..05f9755
+--- /dev/null
++++ b/tests/test_adjudicator_evidence_ledger.js
+@@ -0,0 +1,141 @@
++'use strict';
++
++const assert = require('node:assert/strict');
++const fs = require('node:fs');
++const os = require('node:os');
++const path = require('node:path');
++const { createHash } = require('node:crypto');
++const { test } = require('node:test');
++const { auditLedger } = require('../scripts/audit_adjudicator_evidence_ledger');
++
++const evidence = path.resolve(__dirname, '../docs/verification/issue-1096-recovery');
++
++function fixture(t) {
++  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'adjudicator-ledger-'));
++  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
++  const directory = path.join(root, 'evidence');
++  fs.cpSync(evidence, directory, { recursive: true });
++  const file = path.join(directory, 'evidence-ledger.json');
++  const ledger = JSON.parse(fs.readFileSync(file));
++  return { root, directory, file, ledger,
++    save() { fs.writeFileSync(file, JSON.stringify(ledger)); } };
++}
++
++test('published recovery ledger is attributable without establishing operational acceptance', () => {
++  const result = auditLedger(path.join(evidence, 'evidence-ledger.json'));
++  assert.equal(result.attribution_and_artifact_checks_passed, true);
++  assert.equal(result.operational_acceptance_verified, false);
++  assert.equal(result.external_references_authenticated, false);
++  assert.equal(result.source_revision_bindings_verified, false);
++  assert.deepEqual([...new Set(result.external_references.map((item) => item.category))],
++    ['historical_observations', 'mirror_synchronization', 'dispatch_receipts']);
++  assert.ok(result.external_references.every((item) => item.authenticated_by_audit === false));
++  assert.ok(result.artifacts.some((item) => item.path === 'historical-inventory.json'));
++  assert.ok(result.artifacts.some((item) => item.path === 'named-tests.log'));
++  assert.ok(result.artifacts.some((item) => item.path === 'interpreter-followup/runner-before.log'));
++  assert.ok(result.missing_evidence.some((item) => item.includes('October 18')));
++});
++
++for (const log of ['named-tests.log', 'interpreter-followup/runner-after.log',
++  'pre-dispatch-observation.json']) {
++  test(`rejects modified evidence instead of trusting the recorded result: ${log}`, (t) => {
++    const options = fixture(t);
++    fs.appendFileSync(path.join(options.directory, log), '\nchanged\n');
++    assert.throws(() => auditLedger(options.file), /SHA-256 mismatch/);
++  });
++}
++
++test('rejects missing evidence even when its parent receipt says it passed', (t) => {
++  const options = fixture(t);
++  fs.unlinkSync(path.join(options.directory, 'acceptance-run/runner-tests.log'));
++  assert.throws(() => auditLedger(options.file), /ENOENT/);
++});
++
++for (const missing of [null, undefined]) {
++  test(`rejects a missing checksum on a referenced log: ${missing}`, (t) => {
++    const options = fixture(t);
++    const file = path.join(options.directory, 'checks.json');
++    const checks = JSON.parse(fs.readFileSync(file));
++    checks.checks[0].log_sha256 = missing;
++    fs.writeFileSync(file, JSON.stringify(checks));
++    assert.throws(() => auditLedger(options.file), /Missing or invalid SHA-256/);
++  });
++}
++
++test('audits JUnit bytes and refuses an absent JUnit checksum', (t) => {
++  const options = fixture(t);
++  const file = path.join(options.directory, 'checks.json');
++  const checks = JSON.parse(fs.readFileSync(file));
++  const xml = '<testsuites />';
++  fs.writeFileSync(path.join(options.directory, 'result.xml'), xml);
++  checks.checks[0].junit = 'result.xml';
++  checks.checks[0].junit_sha256 = createHash('sha256').update(xml).digest('hex');
++  fs.writeFileSync(file, JSON.stringify(checks));
++  assert.equal(auditLedger(options.file).operational_acceptance_verified, false);
++  delete checks.checks[0].junit_sha256;
++  fs.writeFileSync(file, JSON.stringify(checks));
++  assert.throws(() => auditLedger(options.file), /Missing or invalid SHA-256/);
++});
++
++for (const mode of ['relative', 'absolute', 'symlink']) {
++  test(`refuses evidence outside the ledger directory: ${mode}`, (t) => {
++    const options = fixture(t);
++    const outside = path.join(options.root, 'outside.json');
++    fs.writeFileSync(outside, '{}');
++    if (mode === 'symlink') fs.symlinkSync(outside, path.join(options.directory, 'link.json'));
++    options.ledger.current_observations.checks = mode === 'relative' ? '../outside.json' :
++      mode === 'absolute' ? outside : 'link.json';
++    options.save();
++    assert.throws(() => auditLedger(options.file), /relative to the ledger|escapes/);
++  });
++}
++
++test('does not equate a historical backup with the canonical report', (t) => {
++  const options = fixture(t);
++  options.ledger.historical_observations[0].reference =
++    options.ledger.revision_identity.canonical_report.reference;
++  options.save();
++  assert.throws(() => auditLedger(options.file), /Historical inventory attribution/);
++});
++
++test('rejects a retained row count substituted for the saved population', (t) => {
++  const options = fixture(t);
++  const observation = options.ledger.historical_observations[0];
++  assert.notEqual(observation.retained_rows, observation.retained_population);
++  observation.retained_population = observation.retained_rows;
++  options.save();
++  assert.throws(() => auditLedger(options.file), /retained counts disagree/);
++});
++
++for (const [name, mutate, message] of [
++  ['merged historical/current categories', (ledger) => {
++    ledger.historical_observations = [];
++  }, /Historical observations must remain separate/],
++  ['missing dated limitations', (ledger) => {
++    delete ledger.historical_observations[2].limitation;
++  }, /dates, classes and limitations/],
++  ['missing disclosure', (ledger) => { ledger.missing_evidence = []; }, /must be disclosed/],
++  ['missing October 18 disclosure', (ledger) => {
++    ledger.missing_evidence = ledger.missing_evidence.filter((item) => !item.includes('October 18'));
++  }, /October 18 proof/],
++  ['advice grade substitution', (ledger) => {
++    ledger.grade_thresholds.advice_graded_is_substitute = true;
++  }, /separate from advice_graded/],
++  ['unproved acceptance', (ledger) => { ledger.acceptance_complete = true; }, /acceptance_complete/],
++  ['replacement cohort count', (ledger) => {
++    ledger.fixed_next_20.verified_members_with_decisions = 15;
++  }, /fixed membership/],
++  ['mirror identity substitution', (ledger) => {
++    ledger.revision_identity.current_mirror_revision.status = 'verified';
++  }, /unverified accepted\/deployed\/mirror/],
++  ['historical dispatch substitution', (ledger) => {
++    ledger.dispatch_receipts.current_run.production_dispatches = 27;
++  }, /current dispatch\/publication claim/],
++]) {
++  test(`rejects ${name}`, (t) => {
++    const options = fixture(t);
++    mutate(options.ledger);
++    options.save();
++    assert.throws(() => auditLedger(options.file), message);
++  });
++}
+-- 
+2.56.0
+
+
+From 36bbef56530ddaca660874485de585a86024ae3b Mon Sep 17 00:00:00 2001
+From: Codex <codex@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 19:57:58 +0000
+Subject: [PATCH 2/2] docs: publish audited recovery ledger and reconcile
+ incomplete acceptance
+
+---
+ .../issue-1096-recovery/README.md             |  49 ++++
+ .../issue-1096-recovery/evidence-ledger.json  |  33 ++-
+ .../issue-1096-recovery/ledger-audit-plan.md  |  32 +++
+ .../ledger-audit-tests/checks.json            | 105 ++++++++
+ .../ledger-audit-tests/collection.log         |   1 +
+ .../ledger-audit-tests/named-tests.log        |   1 +
+ .../retrospective-suite.log                   |   1 +
+ .../ledger-audit/audit.json                   | 236 ++++++++++++++++++
+ .../ledger-audit/inventory-tests.log          |  48 ++++
+ .../ledger-audit/ledger-tests.log             |  30 +++
+ .../ledger-audit/runner-tests.log             |  34 +++
+ .../ledger-audit/validation.json              |  49 ++++
+ 12 files changed, 618 insertions(+), 1 deletion(-)
+ create mode 100644 docs/verification/issue-1096-recovery/ledger-audit-plan.md
+ create mode 100644 docs/verification/issue-1096-recovery/ledger-audit-tests/checks.json
+ create mode 100644 docs/verification/issue-1096-recovery/ledger-audit-tests/collection.log
+ create mode 100644 docs/verification/issue-1096-recovery/ledger-audit-tests/named-tests.log
+ create mode 100644 docs/verification/issue-1096-recovery/ledger-audit-tests/retrospective-suite.log
+ create mode 100644 docs/verification/issue-1096-recovery/ledger-audit/audit.json
+ create mode 100644 docs/verification/issue-1096-recovery/ledger-audit/inventory-tests.log
+ create mode 100644 docs/verification/issue-1096-recovery/ledger-audit/ledger-tests.log
+ create mode 100644 docs/verification/issue-1096-recovery/ledger-audit/runner-tests.log
+ create mode 100644 docs/verification/issue-1096-recovery/ledger-audit/validation.json
+
+diff --git a/docs/verification/issue-1096-recovery/README.md b/docs/verification/issue-1096-recovery/README.md
+index 41f7ccd..2ff2edf 100644
+--- a/docs/verification/issue-1096-recovery/README.md
++++ b/docs/verification/issue-1096-recovery/README.md
+@@ -1,5 +1,54 @@
+ # Acceptance evidence recovery for #1096
+ 
++## Ledger audit follow-up, 2026-11-03 UTC
++
++The published [evidence ledger](evidence-ledger.json) now has a read-only
++[audit command](../../../scripts/audit_adjudicator_evidence_ledger.js):
++
++```sh
++node scripts/audit_adjudicator_evidence_ledger.js \
++  --ledger docs/verification/issue-1096-recovery/evidence-ledger.json
++```
++
++The [audit result](ledger-audit/audit.json) binds the ledger bytes, inventories
++local artifacts, checks referenced receipt/log hashes, and retains separate
++historical, current, mirror and dispatch attribution. External references remain
++unauthenticated. This recovery audit does not verify historical source revisions,
++deployment identity, native receipts or operational acceptance. It rejects grade
++substitution, replacement cohort counts, lost October 18 disclosures, changed
++logs, missing checksums and artifact references that escape its directory.
++
++All [88 regressions](ledger-audit/validation.json) pass: 22 ledger, 26 runner and
++40 inventory tests. Source commit `ff02e2e756f61828862b206c1a3795b1b3182b17`
++has checkout `d84ae822cb6181d53e9a993712807dfc49fd41a5` as its parent.
++The new [required-test receipt](ledger-audit-tests/checks.json), evaluated against
++that checkout before source edits, still records missing pytest before collection
++for both required test commands. The [plan](ledger-audit-plan.md) was written first.
++
++Reconciled local tasks, after reviewing the recent commits and verifying the
++ledger audit:
++
++- [ ] Recover accepted/deployed/mirror bindings, original rows and fixed cohort;
++  recovery remains partial, including unavailable raw October 18 proof.
++- [x] Record the pre-execution command, expectation and stop rule; inventory paid
++  attempts and reconcile dispatch protection with unverified writer ownership.
++- [ ] Pass the four named tests and full retrospective suite on the accepted revision.
++- [ ] Reconcile all original retries and perform eligible authenticated retries.
++- [ ] Establish intermediate graded >=25 and canonical graded >=29.
++- [ ] Recover at least 15 dated decisions in the original fixed next-20 cohort.
++- [x] Publish the separately attributed evidence ledger.
++
++The attribution/missing-proof disclosure acceptance criterion is verified; the
++other four acceptance criteria remain open. No provider call, native journal
++write, publication or mirror synchronization occurred. No Python files changed,
++so the Python-specific Black gate does not apply.
++
++Remote reconciliation, the blocker comment and `needs-human` label were rejected
++because connector mutations require approval and this run's policy is `never`.
++Remote checkboxes were not changed. Git metadata is read-only, so the source and
++evidence commits are preserved under `/tmp/issue1096-ledger-git-vlq_uknf/.git` and
++in the [applyable patch](../../../artifacts/issue-1096-ledger-audit.patch).
++
+ ## Interpreter portability follow-up, 2026-11-03 at 19:43 UTC
+ 
+ The previous runner regression fixture hardcoded Python 3.14.9, which is absent
+diff --git a/docs/verification/issue-1096-recovery/evidence-ledger.json b/docs/verification/issue-1096-recovery/evidence-ledger.json
+index 914f5dc..ef356f1 100644
+--- a/docs/verification/issue-1096-recovery/evidence-ledger.json
++++ b/docs/verification/issue-1096-recovery/evidence-ledger.json
+@@ -215,6 +215,26 @@
+         "isDraft": false
+       },
+       "limitation": "Test-double regressions and failed real commands only. No deployment, native grade, retry outcome or live-cohort acceptance established."
++    },
++    "ledger_audit_followup": {
++      "checked_at": "2026-11-03T19:57:12.856565+00:00",
++      "evaluated_revision": "ff02e2e756f61828862b206c1a3795b1b3182b17",
++      "checks": "ledger-audit-tests/checks.json",
++      "validation": "ledger-audit/validation.json",
++      "audit_command": [
++        "node",
++        "scripts/audit_adjudicator_evidence_ledger.js",
++        "--ledger",
++        "docs/verification/issue-1096-recovery/evidence-ledger.json"
++      ],
++      "plan": "ledger-audit-plan.md",
++      "regressions_passed": 88,
++      "required_tests_passed": false,
++      "operational_acceptance_verified": false,
++      "pr_body_update": "rejected_connector_requires_approval_policy_never",
++      "blocker_comment": "rejected_connector_requires_approval_policy_never",
++      "needs_human_label": "rejected_connector_requires_approval_policy_never",
++      "limitation": "Recovery attribution and local receipt hashes only; no external authentication or source/deployment binding."
+     }
+   },
+   "mirror_synchronization": [
+@@ -293,5 +313,16 @@
+     "Raw authenticated October 18 acceptance proof (a dated scheduled observation was recovered)",
+     "Previously fixed next-20 manifest and at least 15 dated decisions",
+     "Current live writer ownership"
+-  ]
++  ],
++  "local_task_reconciliation": {
++    "recovery_complete": false,
++    "pre_execution_inventory_complete": true,
++    "required_tests_complete": false,
++    "original_retry_reconciliation_complete": false,
++    "canonical_grade_thresholds_complete": false,
++    "fixed_next_20_complete": false,
++    "evidence_ledger_publication_complete": true,
++    "evidence_attribution_and_missing_proof_disclosure_complete": true,
++    "remote_checkboxes_updated": false
++  }
+ }
+diff --git a/docs/verification/issue-1096-recovery/ledger-audit-plan.md b/docs/verification/issue-1096-recovery/ledger-audit-plan.md
+new file mode 100644
+index 0000000..130ecc3
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/ledger-audit-plan.md
+@@ -0,0 +1,32 @@
++# Evidence ledger audit plan
++
++Recorded on 2026-11-03 UTC before execution. The source checkout under test is
++`d84ae822cb6181d53e9a993712807dfc49fd41a5`; its accepted deployment remains
++unverified. The available CI-major interpreter is
++`/opt/hostedtoolcache/Python/3.14.9/x64/bin/python`.
++
++```sh
++node scripts/run_adjudicator_acceptance.js \
++  --python /opt/hostedtoolcache/Python/3.14.9/x64/bin/python \
++  --revision d84ae822cb6181d53e9a993712807dfc49fd41a5 \
++  --output /home/runner/work/Orchestrator/Orchestrator/docs/verification/issue-1096-recovery/ledger-audit-tests
++```
++
++Expected: collection and both required test invocations fail before collection
++because pytest is unavailable. Preserve their revision-bound logs. One invocation
++per command, with the runner's 60-second limit and `-m "not slow"`; do not repeat
++installation attempts. Local package/cache discovery found no usable pytest.
++
++Then run the new ledger audit once against `evidence-ledger.json`. Expected:
++separate evidence categories and referenced local receipt hashes are checked;
++unavailable accepted/deployed/mirror bindings, authenticated native receipts,
++original retry/cohort provenance and October 18 raw evidence remain disclosed.
++Historical statements and local log integrity cannot establish operational
++acceptance. No provider calls, journal writes, publication or mirror writes.
++
++Recent commits were reconciled before proceeding. Recovery is partial, the
++pre-execution inventory is implemented, and no retrospective test, retry, grade
++or fixed-cohort task is complete. The remote PR-body correction was rejected
++because connector mutations require approval while approval policy is `never`.
++The ledger publication task will be completed locally only after its audit and
++regressions pass; remote updates must not be claimed without a successful write.
+diff --git a/docs/verification/issue-1096-recovery/ledger-audit-tests/checks.json b/docs/verification/issue-1096-recovery/ledger-audit-tests/checks.json
+new file mode 100644
+index 0000000..b0269df
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/ledger-audit-tests/checks.json
+@@ -0,0 +1,105 @@
++{
++  "schema_version": 1,
++  "checked_at": "2026-11-03T19:53:52.460Z",
++  "evaluated_revision": "d84ae822cb6181d53e9a993712807dfc49fd41a5",
++  "evaluated_tree": "5896fc8271e6d9005ddf0161d70ba6e2c033d0e8",
++  "accepted_deployment_verified": false,
++  "interpreter": "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python",
++  "runner_sha256": "a0b92097e80f67c7df16970e85ff484592d46bed126c02c6423d4a6406e91bbb",
++  "input_manifest_sha256": "f7d4a32a6d63dd87d9314e8b11eda277965cbafa6da65a336a8eedefd6e3c471",
++  "input_file_count": 1995,
++  "source_sha256": {
++    "pyproject.toml": "2c3462b8b384aeb265dbc51ab742b4ee02d839a34cec6590791a6d5d53fe4a6e",
++    "src/adjudicator_retro.py": "ee172f96ddf0ca56f6c06fcf18bdaacccece5381de61a9896006d0b16a8fb0b8",
++    "src/capability_advisor.py": "fe2f2d0dda2b684d61d42c6aba3952b8a5e5d0d1504c9cbebeca9616109208d5",
++    "src/feedback.py": "eafa930ec4cea9a239bc03a91a00b2ca7c618c40629690658f8276417946412d",
++    "src/roles.py": "4a5e729f4bf797ea448f18c14df69696e3df3bcaaf046729c039099ae7cc3dd7",
++    "src/verifier_evidence.py": "19b2342b6d9b4d097f6fef6b76089f54903dfbe36946dac6fa7467dec3afff59",
++    "tests/test_adjudicator_retro.py": "b44fd6756915069d6a5dc492eecda268053a711899b81decc9d27f8c9793fda2"
++  },
++  "checks": [
++    {
++      "name": "named-tests",
++      "command": [
++        "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python",
++        "-m",
++        "pytest",
++        "-o",
++        "addopts=",
++        "-m",
++        "not slow",
++        "-q",
++        "--junitxml=/home/runner/work/Orchestrator/Orchestrator/docs/verification/issue-1096-recovery/ledger-audit-tests/named-tests.xml",
++        "tests/test_adjudicator_retro.py::test_build_packet_includes_diff_and_acceptance_criteria",
++        "tests/test_adjudicator_retro.py::test_adjudicator_validator_accepts_recommendation_prose",
++        "tests/test_adjudicator_retro.py::test_floor_still_demotes_a_metadata_only_packet",
++        "tests/test_adjudicator_retro.py::test_abstained_row_is_reattempted_when_the_packet_gains_diff_and_criteria"
++      ],
++      "exit_code": 1,
++      "signal": null,
++      "error_code": null,
++      "timed_out": false,
++      "log": "named-tests.log",
++      "log_sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599",
++      "junit": null,
++      "junit_sha256": null,
++      "junit_reader": null,
++      "test_count": null,
++      "passed": false
++    },
++    {
++      "name": "retrospective-suite",
++      "command": [
++        "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python",
++        "-m",
++        "pytest",
++        "-o",
++        "addopts=",
++        "-m",
++        "not slow",
++        "-q",
++        "--junitxml=/home/runner/work/Orchestrator/Orchestrator/docs/verification/issue-1096-recovery/ledger-audit-tests/retrospective-suite.xml",
++        "tests/test_adjudicator_retro.py"
++      ],
++      "exit_code": 1,
++      "signal": null,
++      "error_code": null,
++      "timed_out": false,
++      "log": "retrospective-suite.log",
++      "log_sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599",
++      "junit": null,
++      "junit_sha256": null,
++      "junit_reader": null,
++      "test_count": null,
++      "passed": false
++    }
++  ],
++  "source_unchanged": true,
++  "required_tests_passed": false,
++  "interpreter_version": "Python 3.14.9",
++  "interpreter_usable": true,
++  "collection": {
++    "command": [
++      "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python",
++      "-m",
++      "pytest",
++      "-o",
++      "addopts=",
++      "-m",
++      "not slow",
++      "--color=no",
++      "--collect-only",
++      "-q",
++      "tests/test_adjudicator_retro.py"
++    ],
++    "exit_code": 1,
++    "signal": null,
++    "error_code": null,
++    "timed_out": false,
++    "log": "collection.log",
++    "log_sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599",
++    "test_names": [],
++    "passed": false
++  },
++  "finished_at": "2026-11-03T19:53:52.638Z"
++}
+diff --git a/docs/verification/issue-1096-recovery/ledger-audit-tests/collection.log b/docs/verification/issue-1096-recovery/ledger-audit-tests/collection.log
+new file mode 100644
+index 0000000..7d7a543
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/ledger-audit-tests/collection.log
+@@ -0,0 +1 @@
++/opt/hostedtoolcache/Python/3.14.9/x64/bin/python: No module named pytest
+diff --git a/docs/verification/issue-1096-recovery/ledger-audit-tests/named-tests.log b/docs/verification/issue-1096-recovery/ledger-audit-tests/named-tests.log
+new file mode 100644
+index 0000000..7d7a543
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/ledger-audit-tests/named-tests.log
+@@ -0,0 +1 @@
++/opt/hostedtoolcache/Python/3.14.9/x64/bin/python: No module named pytest
+diff --git a/docs/verification/issue-1096-recovery/ledger-audit-tests/retrospective-suite.log b/docs/verification/issue-1096-recovery/ledger-audit-tests/retrospective-suite.log
+new file mode 100644
+index 0000000..7d7a543
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/ledger-audit-tests/retrospective-suite.log
+@@ -0,0 +1 @@
++/opt/hostedtoolcache/Python/3.14.9/x64/bin/python: No module named pytest
+diff --git a/docs/verification/issue-1096-recovery/ledger-audit/audit.json b/docs/verification/issue-1096-recovery/ledger-audit/audit.json
+new file mode 100644
+index 0000000..33a2bad
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/ledger-audit/audit.json
+@@ -0,0 +1,236 @@
++{
++  "schema_version": 1,
++  "ledger_sha256": "c6223903834a3115ba1b3e1793e83d7af2991d286a26cfd08e361390ff93f860",
++  "audit_scope": "recovery_attribution_and_local_artifact_integrity",
++  "attribution_and_artifact_checks_passed": true,
++  "operational_acceptance_verified": false,
++  "external_references_authenticated": false,
++  "source_revision_bindings_verified": false,
++  "artifacts": [
++    {
++      "path": "historical-inventory.json",
++      "sha256": "76c494a94885bc8972f8c3594cce5cd86d0dc0700738be748ebf4dee433f2b2e"
++    },
++    {
++      "path": "checks.json",
++      "sha256": "05816252eda6b4f6090fba490c40b95a0be5879c71dff564c22c6e28cd708a0b"
++    },
++    {
++      "path": "named-tests.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "retrospective-suite.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "inventory-tests.log",
++      "sha256": "ed03419ab03622a5c0f206c7bf545cc0ebfc7c356208dbc2316917b6ff9a0d89"
++    },
++    {
++      "path": "adjudicator-selftest.log",
++      "sha256": "3f227862f8d1e7b2c35195efe7205621f73d3033db5a3ca88e1e7c24021e1109"
++    },
++    {
++      "path": "pre-dispatch-checks.json",
++      "sha256": "8092128f1df021cdcffcc8c71f57f6023e52d6c246e8f4f3ace52ddcad1339c9"
++    },
++    {
++      "path": "pre-dispatch-observation.json",
++      "sha256": "64a5cabcd1e8596edc149b88640af53ec177a424fc0d91de7f7ce69c5ac869ef"
++    },
++    {
++      "path": "pre-dispatch-inventory-tests.log",
++      "sha256": "4fb63c981a296c529f43135d6978d1c13f07f50744e825a2e6a7aad1020e6389"
++    },
++    {
++      "path": "pre-dispatch-named-tests.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "pre-dispatch-retrospective-suite.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "pre-dispatch-adjudicator-selftest.log",
++      "sha256": "3f227862f8d1e7b2c35195efe7205621f73d3033db5a3ca88e1e7c24021e1109"
++    },
++    {
++      "path": "pre-dispatch-evidence-tests.log",
++      "sha256": "f554d9e1907fbaae8b4ee178cdba6800fa893149d1e3874f2495b84a304c9007"
++    },
++    {
++      "path": "acceptance-run/checks.json",
++      "sha256": "565025a768386e09934c9edb06830f52def9ce022b7e393b337f9d5497dbfcba"
++    },
++    {
++      "path": "acceptance-run/named-tests.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "acceptance-run/retrospective-suite.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "acceptance-run/runner-validation.json",
++      "sha256": "7841392b8a4de5d1bdeded2c2dc53133b2e0e6c59e9d7a4a4e9fe67f1f6a8a49"
++    },
++    {
++      "path": "acceptance-run/runner-tests.log",
++      "sha256": "aa2704887818edeadc0807135cdec575ea7d3b8020426c2c12adb9ee549ed890"
++    },
++    {
++      "path": "acceptance-run/inventory-tests.log",
++      "sha256": "601a69001b966f0d629439f87f7b8e2b2b775e4db20fe526c70774be676d85b9"
++    },
++    {
++      "path": "suite-completeness-run/checks.json",
++      "sha256": "ea088007c9611735fd5f08a72fa421a1f43d8750fbe2e4a9be6abef85103dd57"
++    },
++    {
++      "path": "suite-completeness-run/named-tests.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "suite-completeness-run/retrospective-suite.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "suite-completeness-run/collection.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "suite-completeness-run/runner-validation.json",
++      "sha256": "de7b3a093450b23822742ffc8507214b9373732e86d9ff31b7dd6d78c871182a"
++    },
++    {
++      "path": "suite-completeness-run/runner-tests.log",
++      "sha256": "3cc75fe7aa2e6cc3964eaeeb032f50170839b9843e71f53699b9489107daf502"
++    },
++    {
++      "path": "interpreter-followup/acceptance-run/checks.json",
++      "sha256": "ac206b01d063840618204cc6e837c2a7a8ac68a6a84c6d089cae27a72aff8fe5"
++    },
++    {
++      "path": "interpreter-followup/acceptance-run/named-tests.log",
++      "sha256": "f0dbac0c2508ce31a001ff3f12403c192088997ec3c0bae870a337f703f90152"
++    },
++    {
++      "path": "interpreter-followup/acceptance-run/retrospective-suite.log",
++      "sha256": "f0dbac0c2508ce31a001ff3f12403c192088997ec3c0bae870a337f703f90152"
++    },
++    {
++      "path": "interpreter-followup/acceptance-run/collection.log",
++      "sha256": "f0dbac0c2508ce31a001ff3f12403c192088997ec3c0bae870a337f703f90152"
++    },
++    {
++      "path": "interpreter-followup/validation.json",
++      "sha256": "e8c26e6cd8f44e0efe4dd337ca3ea222a56efd0eda4cdcd1000078034cffae17"
++    },
++    {
++      "path": "interpreter-followup/runner-before.log",
++      "sha256": "9e4e49f09dd87eaf38593f93cc9db74dadc1100950090a665ed33b373e55c222"
++    },
++    {
++      "path": "interpreter-followup/runner-after.log",
++      "sha256": "e93ec3a61ab3bcd22d90cef6766e8a9f5628aa539262fca9c283c38a8eff460e"
++    },
++    {
++      "path": "interpreter-followup/inventory.log",
++      "sha256": "33c5929820fd97d8c37bef0317d1991f2d4b9b548492c1e2feaee4b23ed3ab1f"
++    },
++    {
++      "path": "ledger-audit-tests/checks.json",
++      "sha256": "d725c97b9ed48f4092ae90209389732fb21d0c783de0d5c17fe19518df6f8612"
++    },
++    {
++      "path": "ledger-audit-tests/named-tests.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "ledger-audit-tests/retrospective-suite.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "ledger-audit-tests/collection.log",
++      "sha256": "b9cbfa4b9eddb800dc9401b41e2fde8ec6fb1c667acab8cb10724d0849812599"
++    },
++    {
++      "path": "ledger-audit/validation.json",
++      "sha256": "4f87713cb004e479b4a2637368cf9eba1a4a3b013f7400d03b4e7c383194d91b"
++    },
++    {
++      "path": "ledger-audit/ledger-tests.log",
++      "sha256": "59c5b1e47bd0aad737fe781d9c99876f263214771c6c1349ce6d9e8fcf135d7d"
++    },
++    {
++      "path": "ledger-audit/runner-tests.log",
++      "sha256": "2090b3cb904438679be4851c7cb83b46e28b4262b3eb6dd63df609a9d6d4b177"
++    },
++    {
++      "path": "ledger-audit/inventory-tests.log",
++      "sha256": "a7a4da16604b151003196e81589efc75805395dde38f887f25f670524d95f85d"
++    }
++  ],
++  "external_references": [
++    {
++      "category": "historical_observations",
++      "reference": "dropbox:id:tDSHdCztYNUAAAAAADfgrw@65de8f715bb690369d613",
++      "authenticated_by_audit": false
++    },
++    {
++      "category": "historical_observations",
++      "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6229128915",
++      "authenticated_by_audit": false
++    },
++    {
++      "category": "historical_observations",
++      "reference": "https://github.com/stranske/Orchestrator/issues/575#issuecomment-6251544073",
++      "authenticated_by_audit": false
++    },
++    {
++      "category": "historical_observations",
++      "reference": "https://github.com/stranske/Orchestrator/issues/575#issuecomment-6344712055",
++      "authenticated_by_audit": false
++    },
++    {
++      "category": "mirror_synchronization",
++      "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6205949903",
++      "authenticated_by_audit": false
++    },
++    {
++      "category": "mirror_synchronization",
++      "reference": "https://github.com/stranske/Orchestrator/issues/575#issuecomment-6251544073",
++      "authenticated_by_audit": false
++    },
++    {
++      "category": "dispatch_receipts",
++      "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6168601695",
++      "authenticated_by_audit": false
++    },
++    {
++      "category": "dispatch_receipts",
++      "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6205949903",
++      "authenticated_by_audit": false
++    },
++    {
++      "category": "dispatch_receipts",
++      "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6217948095",
++      "authenticated_by_audit": false
++    },
++    {
++      "category": "dispatch_receipts",
++      "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6229128915",
++      "authenticated_by_audit": false
++    }
++  ],
++  "missing_evidence": [
++    "Current accepted source/deployed/mirror byte bindings",
++    "Immutable native source report matching 8a6649a27bb5ee05001cc580691a98aa26404f0f3a0c85d845ada9e6046a069c",
++    "Canonical publication bytes and native journal/qualification manifests",
++    "Identity-bound original requested 21 retry rows and outcomes",
++    "Raw authenticated October 18 acceptance proof (a dated scheduled observation was recovered)",
++    "Previously fixed next-20 manifest and at least 15 dated decisions",
++    "Current live writer ownership"
++  ]
++}
+diff --git a/docs/verification/issue-1096-recovery/ledger-audit/inventory-tests.log b/docs/verification/issue-1096-recovery/ledger-audit/inventory-tests.log
+new file mode 100644
+index 0000000..fa68b39
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/ledger-audit/inventory-tests.log
+@@ -0,0 +1,48 @@
++✔ report recovery preserves ordered rows, recursive paid history and conflicting counts (5.736178ms)
++✔ report recovery rejects missing input without initializing runtime state (0.92206ms)
++✔ report recovery refuses malformed and ambiguous retained identities (2.84197ms)
++✔ report recovery requires explicit attribution and a valid check time (0.759195ms)
++✔ report recovery aborts if the input changes during observation (1.193586ms)
++✔ report CLI never combines historical recovery with dispatch or current Brain selection (214.917679ms)
++✔ pre-dispatch inventory reconciles report and native locators without exposing payloads (12.235579ms)
++✔ all validated native rows still require authentication, independent truth and live writer proof (8.840437ms)
++✔ missing native evidence remains unavailable and never means zero attempts (1.187725ms)
++✔ an observed empty journal cannot establish writer ownership or authorize spending (9.12097ms)
++✔ an active journal writer does not make a read-only snapshot claim ownership (11.290656ms)
++✔ foreign and incomplete journals are refused without schema repair (5.001878ms)
++✔ report without native marker still cannot authorize generic retry (0.72424ms)
++✔ journal CLI stays read-only and requires explicit report attribution (85.58451ms)
++✔ inventory exports every synthetic dispute and every exclusion without writes (904.011624ms)
++✔ inventory preserves the fixed cutoff and reports a count discrepancy (9.342581ms)
++✔ inventory distinguishes missing evidence from a complete cohort (4.072645ms)
++✔ inventory distinguishes schema-less evidence from a complete cohort (0.846749ms)
++✔ inventory distinguishes empty evidence from a complete cohort (3.684144ms)
++✔ inventory distinguishes incomplete-schema evidence from a complete cohort (4.725072ms)
++✔ inventory CLI exports JSON, signals unavailable evidence and rejects replay options (219.308368ms)
++✔ matching 71 identities bind the supplied manifest bytes without claiming historical acceptance (124.377421ms)
++✔ equal inventory counts expose substituted identities, exclusions and absent requested runs (16.153696ms)
++✔ a requested run on another target cannot satisfy case identity (7.589303ms)
++✔ inventory accounts for outcomes without run records as unavailable evidence (48.323359ms)
++✔ an outcomes-only Brain is available with exclusions, rather than an observed empty store (4.502699ms)
++✔ manifest retains every requested identity when Brain is empty (3.019432ms)
++✔ manifest retains every requested identity when Brain is unavailable (2.86848ms)
++✔ manifest count discrepancy prevents an exact match even when all supplied identities match (5.488726ms)
++✔ manifest CLI preserves input bytes, rejects malformed identities and signals unavailable Brain (503.18758ms)
++✔ version 2 reconciles all 71 dispute identities without claiming historical provenance (123.086166ms)
++✔ version 2 exposes substituted verdicts NON_PASS/FAIL despite matching run and count (42.164839ms)
++✔ version 2 exposes substituted verdicts FAIL_HOLLOW/PASS despite matching run and count (48.148495ms)
++✔ version 2 exposes substituted verdicts PASS/FAIL despite matching run and count (50.592292ms)
++✔ version 2 retains different disputes on one run and rejects duplicate dispute identities (6.838673ms)
++✔ version 2 preserves full identities for excluded, missing and unavailable cases (43.26148ms)
++✔ version 2 rejects malformed verdicts before publishing any inventory (498.255534ms)
++✔ version 2 distinguishes unavailable verdict evidence from contradictory verdicts (54.460946ms)
++✔ version 2 retains an observed target mismatch when verdict evidence is unavailable (4.984631ms)
++✔ missing stored targets remain eligible disputes with explicit unavailable identity evidence (857.638996ms)
++ℹ tests 40
++ℹ suites 0
++ℹ pass 40
++ℹ fail 0
++ℹ cancelled 0
++ℹ skipped 0
++ℹ todo 0
++ℹ duration_ms 3962.155424
+diff --git a/docs/verification/issue-1096-recovery/ledger-audit/ledger-tests.log b/docs/verification/issue-1096-recovery/ledger-audit/ledger-tests.log
+new file mode 100644
+index 0000000..12447dd
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/ledger-audit/ledger-tests.log
+@@ -0,0 +1,30 @@
++✔ published recovery ledger is attributable without establishing operational acceptance (9.331657ms)
++✔ rejects modified evidence instead of trusting the recorded result: named-tests.log (9.182329ms)
++✔ rejects modified evidence instead of trusting the recorded result: interpreter-followup/runner-after.log (11.487497ms)
++✔ rejects modified evidence instead of trusting the recorded result: pre-dispatch-observation.json (6.834392ms)
++✔ rejects missing evidence even when its parent receipt says it passed (6.017388ms)
++✔ rejects a missing checksum on a referenced log: null (8.918016ms)
++✔ rejects a missing checksum on a referenced log: undefined (7.214149ms)
++✔ audits JUnit bytes and refuses an absent JUnit checksum (10.224802ms)
++✔ refuses evidence outside the ledger directory: relative (4.850062ms)
++✔ refuses evidence outside the ledger directory: absolute (5.063721ms)
++✔ refuses evidence outside the ledger directory: symlink (4.549391ms)
++✔ does not equate a historical backup with the canonical report (7.18233ms)
++✔ rejects a retained row count substituted for the saved population (7.143097ms)
++✔ rejects merged historical/current categories (7.282266ms)
++✔ rejects missing dated limitations (6.464021ms)
++✔ rejects missing disclosure (6.316446ms)
++✔ rejects missing October 18 disclosure (7.441143ms)
++✔ rejects advice grade substitution (6.741248ms)
++✔ rejects unproved acceptance (6.374785ms)
++✔ rejects replacement cohort count (6.250413ms)
++✔ rejects mirror identity substitution (6.51165ms)
++✔ rejects historical dispatch substitution (6.190371ms)
++ℹ tests 22
++ℹ suites 0
++ℹ pass 22
++ℹ fail 0
++ℹ cancelled 0
++ℹ skipped 0
++ℹ todo 0
++ℹ duration_ms 166.293871
+diff --git a/docs/verification/issue-1096-recovery/ledger-audit/runner-tests.log b/docs/verification/issue-1096-recovery/ledger-audit/runner-tests.log
+new file mode 100644
+index 0000000..f365e23
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/ledger-audit/runner-tests.log
+@@ -0,0 +1,34 @@
++✔ records exact commands, source hashes, complete JUnit and logs for both checks (338.560091ms)
++✔ full-suite success requires the complete collected identities: {"omitExtra":true} (327.260086ms)
++✔ full-suite success requires the complete collected identities: {"duplicateExtra":true} (337.706842ms)
++✔ full-suite success requires the complete collected identities: {"collectionFailure":true} (329.298624ms)
++✔ full-suite success requires the complete collected identities: {"collectionEmpty":true} (323.338816ms)
++✔ full-suite success requires the complete collected identities: {"collectionDuplicate":true} (327.673545ms)
++✔ missing pytest preserves two failures and cannot complete acceptance (161.351728ms)
++✔ preserves JUnit reader failures: {"parserFailure":true} (218.609855ms)
++✔ preserves JUnit reader failures: {"parserInvalidJson":true} (220.472189ms)
++✔ preserves JUnit reader failures: {"malformed":true} (360.850715ms)
++✔ refuses a successful claim for incomplete evidence: {"noXml":true} (157.085726ms)
++✔ refuses a successful claim for incomplete evidence: {"malformed":true} (358.878077ms)
++✔ refuses a successful claim for incomplete evidence: {"empty":true} (325.213116ms)
++✔ refuses a successful claim for incomplete evidence: {"incomplete":true} (332.152733ms)
++✔ refuses a successful claim for incomplete evidence: {"duplicate":true} (333.570556ms)
++✔ refuses a successful claim for incomplete evidence: {"skipped":true} (334.35564ms)
++✔ refuses a successful claim for incomplete evidence: {"foreign":true} (332.75241ms)
++✔ refuses a successful claim for incomplete evidence: {"exit":1} (335.801318ms)
++✔ source changes during execution invalidate otherwise passing checks (318.834799ms)
++✔ timeout preserves both failed checks without retrying either command (1587.965404ms)
++✔ refuses revision mismatch, modified tracked inputs and untracked inputs before execution (39.601335ms)
++✔ refuses uncommitted test execution input: conftest.py (26.581864ms)
++✔ refuses uncommitted test execution input: pytest.ini (26.600626ms)
++✔ refuses uncommitted test execution input: setup.cfg (27.212259ms)
++✔ refuses uncommitted test execution input: scripts/run_adjudicator_acceptance.js (26.853483ms)
++✔ requires explicit interpreter/revision/bounds and never overwrites a receipt (178.795685ms)
++ℹ tests 26
++ℹ suites 0
++ℹ pass 26
++ℹ fail 0
++ℹ cancelled 0
++ℹ skipped 0
++ℹ todo 0
++ℹ duration_ms 7698.085245
+diff --git a/docs/verification/issue-1096-recovery/ledger-audit/validation.json b/docs/verification/issue-1096-recovery/ledger-audit/validation.json
+new file mode 100644
+index 0000000..834f0c1
+--- /dev/null
++++ b/docs/verification/issue-1096-recovery/ledger-audit/validation.json
+@@ -0,0 +1,49 @@
++{
++  "checked_at": "2026-11-03T19:57:12.856565+00:00",
++  "evaluated_revision": "ff02e2e756f61828862b206c1a3795b1b3182b17",
++  "source_parent": "d84ae822cb6181d53e9a993712807dfc49fd41a5",
++  "checks": [
++    {
++      "name": "ledger-tests",
++      "command": [
++        "node",
++        "tests/test_adjudicator_evidence_ledger.js"
++      ],
++      "exit_code": 0,
++      "passed": 22,
++      "failed": 0,
++      "log": "ledger-tests.log",
++      "log_sha256": "59c5b1e47bd0aad737fe781d9c99876f263214771c6c1349ce6d9e8fcf135d7d"
++    },
++    {
++      "name": "runner-tests",
++      "command": [
++        "node",
++        "tests/test_adjudicator_acceptance_runner.js"
++      ],
++      "exit_code": 0,
++      "passed": 26,
++      "failed": 0,
++      "log": "runner-tests.log",
++      "log_sha256": "2090b3cb904438679be4851c7cb83b46e28b4262b3eb6dd63df609a9d6d4b177"
++    },
++    {
++      "name": "inventory-tests",
++      "command": [
++        "node",
++        "tests/test_adjudicator_inventory.js"
++      ],
++      "exit_code": 0,
++      "passed": 40,
++      "failed": 0,
++      "log": "inventory-tests.log",
++      "log_sha256": "a7a4da16604b151003196e81589efc75805395dde38f887f25f670524d95f85d"
++    }
++  ],
++  "source_sha256": {
++    "scripts/audit_adjudicator_evidence_ledger.js": "9a0a755667e952bf3fc0ad1f62e103f4c0644f136e6481f7e0359e3df834724b",
++    "tests/test_adjudicator_evidence_ledger.js": "718192d920cc90562f823a9847883b8ed622430e406d9a194591ad88ae0da046"
++  },
++  "operational_acceptance_verified": false,
++  "python_files_changed": false
++}
+-- 
+2.56.0
+

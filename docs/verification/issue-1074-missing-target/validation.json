@@ -1,0 +1,42 @@
+{
+  "parent_revision": "0ef8f90dba837951d321d71abf14b0770b9f1676",
+  "source_sha256": {
+    "scripts/export_adjudicator_inventory.js": "585651fb427d3178baa1aa1157a5ca3ab152bfa50be30ba9dcfc501ea4d24ea7",
+    "tests/test_adjudicator_inventory.js": "fd343cfc815fe5f0a05237ecce10daf31eb1a638e01bd14884b03de705edf817"
+  },
+  "regression": "missing stored targets remain eligible disputes with explicit unavailable identity evidence",
+  "original_source_failures": 1,
+  "inventory_suite": {
+    "command": "node tests/test_adjudicator_inventory.js",
+    "passed": 26,
+    "failed": 0
+  },
+  "control": {
+    "description": "Remove only the missing-target reconciliation branch in an isolated copy",
+    "mutated_source_sha256": "d6e5573b37227c3d3ed51dc43f6ab65ae0b5b98f6fbff6257661341909385ca3",
+    "mutation_exit": 1,
+    "byte_identical_restoration_exit": 0,
+    "workspace_source_unchanged": true
+  },
+  "related_checks": {
+    "synthetic_batch": 1,
+    "synthetic_closer": 9,
+    "historical_receipts": 9,
+    "reader_and_gate": 8,
+    "evidence_unittests": 11,
+    "module_selftest_checks": 23
+  },
+  "full_cli_baseline": {
+    "command": "node tests/test_adjudicator_retro_cli.js",
+    "passed": 51,
+    "failed": 16
+  },
+  "fresh_named_pytest_run": false,
+  "operational_acceptance_complete": false,
+  "log_sha256": {
+    "baseline-red.log.gz": "e3ba1bf999b9993f29e92fcb248d43ab564e0edc85539d4e114533b94a00ea89",
+    "inventory-green.log.gz": "bb3073cad2d58db824b14286051084884783613259232da85c557621e3a314bb",
+    "control-red.log.gz": "f48c65224ce428570c922dd681fde1566616b9cdd8a4d958ba24b46f29dabbd6",
+    "restored-green.log.gz": "0bf6534a2749a6ca7baf055388183902f8a471b3a956cd526f5483e5f8cb40bb"
+  }
+}

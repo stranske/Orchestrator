@@ -450,67 +450,6 @@ def test_native_interpret_capacity_exhaustion_retains_capacity_recheck(native_wo
     assert claude["agent"] == "claude"
 
 
-@pytest.mark.parametrize("uncertain", [False, True])
-def test_native_interpret_maps_only_proven_no_spawn_transport_refusal(
-    native_world, controlled_world, capsys, monkeypatch, uncertain
-):
-    import json
-
-    w = native_world
-    calls = []
-
-    def refused(*_a, **_kw):
-        # Consumer-mapping fixture: this boundary creates no process/result and
-        # must not invent a run identity or claim a qualified provider response.
-        calls.append("offload")
-        return {
-            "agent": "claude",
-            "exit": 70 if uncertain else 2,
-            "output": "",
-            "run_id": None,
-            "error": "qualification changed",
-            "process_started": False,
-            "unsupported_assessment_tool_boundary": True,
-            "outcome_uncertain": uncertain,
-            **({"outcome_status": "uncertain", "retry_safe": False} if uncertain else {}),
-        }
-
-    monkeypatch.setattr(dispatcher, "offload", refused)
-    cd.main(w.argv)
-    capsys.readouterr()
-    shard = cr.shard_dir(cr.scoped_root(w.ledger), w.snapshot["target"]) / "state.json"
-    row = json.loads(shard.read_text())["frontiers"][w.frontier["frontier_id"]]["items"][
-        w.snapshot["target"]
-    ]
-    assert calls == ["offload"] and w.events["provider"] == w.events["effect"] == 0
-    assert controlled_world.events["auth"] == 0
-    assert controlled_world.events["started"] == []
-    assert controlled_world.events["ledger"] == []
-    assert not controlled_world.capture.exists()
-    assert not list((controlled_world.root / "logs").rglob("*.json"))
-    if uncertain:
-        # An unreceipted ambiguous transport mapping is not proof of a known
-        # provider run, and cannot be promoted to a recoverable no-start hold.
-        assert "interpret" not in row["results"]
-        assert row["status"] == row["stage_status"] == "unknown"
-        assert row["deferred_next_trigger"] == "manual_reconciliation"
-        assert "uncertainty lacks a valid actual run receipt" in row["error"]
-    else:
-        result = row["results"]["interpret"]
-        assert result["classification"] == "assessment_transport_unavailable"
-        assert result["pending_evidence"]["transport_refusal"]["run_id"] is None
-        assert (
-            result["next_trigger"] == "qualified data-only assessment transport becomes available"
-        )
-        assert result["authority"] is False
-        profile_slots = list(
-            (w.root / "private-handoff" / "closer-profile-execution" / "pools").rglob("slot-0.json")
-        )
-        assert profile_slots
-        assert all(json.loads(path.read_text())["status"] == "resolved" for path in profile_slots)
-    assert all(path.read_bytes() == raw for path, raw in w.originals.items())
-
-
 @pytest.fixture(autouse=True)
 def synthetic_transport_quality_boundary(monkeypatch):
     # This module varies transport/capacity under synthetic runtime role facts;

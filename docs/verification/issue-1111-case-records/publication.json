@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-11-04T00:10:15.565Z",
+  "pr_readback": {
+    "number": 1112,
+    "url": "https://github.com/stranske/Orchestrator/pull/1112",
+    "state": "open",
+    "isDraft": false,
+    "head": "ee0ffdd489f3268c128bc4e1f8c4969d574381cc",
+    "branch": "codex/issue-1111"
+  },
+  "task_reconciliation": {
+    "reviewed_commit": "ee0ffdd489f3268c128bc4e1f8c4969d574381cc",
+    "completed_checkboxes": 0,
+    "total_checkboxes": 26,
+    "reason": "The previous commit improves inventory filtering and synthetic checks but does not recover the original 71 identities or permitted inventory. Every task and acceptance checkbox remains incomplete."
+  },
+  "attempts": [
+    {
+      "action": "Update PR #1112 body with reconciliation and replace premature Closes #1111 line",
+      "isError": true,
+      "error": "MCP tool call requires approval, but approval policy is never"
+    },
+    {
+      "action": "Publish blocker comment on PR #1112",
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "MCP tool call requires approval, but approval policy is never"
+          }
+        ],
+        "isError": true
+      }
+    },
+    {
+      "action": "Add needs-human to issue #1111",
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "MCP tool call requires approval, but approval policy is never"
+          }
+        ],
+        "isError": true
+      }
+    }
+  ],
+  "remote_mutations_completed": false,
+  "completion_metadata_reconciled": false
+}

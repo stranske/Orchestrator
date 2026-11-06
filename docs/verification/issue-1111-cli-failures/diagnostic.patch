@@ -1,0 +1,61 @@
+--- a/tests/test_adjudicator_retro_cli.js
++++ b/tests/test_adjudicator_retro_cli.js
+@@ -8,7 +8,7 @@
+ const { createHash } = require('node:crypto');
+ const { test } = require('node:test');
+ 
+-const repo = path.resolve(__dirname, '..');
++const repo = '/home/runner/work/Orchestrator/Orchestrator';
+ const modules = fs.existsSync(path.join(repo, 'src')) ? path.join(repo, 'src') : repo;
+ const python = process.env.PYTHON || 'python3';
+ 
+@@ -837,7 +837,10 @@
+     assert.ok(call.args[1].includes('gate-run'));
+     assert.equal(call.kwargs.isolate, true, 'retrospective transport must isolate execution');
+     assert.equal(call.kwargs.mode, 'full');
+-    assert.equal(call.kwargs.timeout, 180);
++    // The shared retrospective/role budget is 600 seconds. Check the persisted
++    // receipt too: the report must describe the budget actually sent to transport.
++    assert.equal(call.kwargs.timeout, 600);
++    assert.equal(result.second.rows[index].dispatch_timeout_s, call.kwargs.timeout);
+     assert.equal(call.kwargs.cwd, path.dirname(path.join(
+       w.root, 'state/capability-program/adjudicator-retro.json',
+     )));
+@@ -1412,6 +1415,7 @@
+     const result = w.run(['-c', paginatedGateEvidence, scenario]);
+     const row = result.report.rows[0];
+     assert.equal(result.report.rows.length, 1);
++    console.error(JSON.stringify({scenario, requests: result.requests.length, row}, null, 2));
+     assert.equal(result.requests.length, reads);
+     assert.ok(result.requests.every((request) => request.n === row.target.split('#')[1]));
+     assert.deepEqual(w.report(), result.report);
+@@ -1801,7 +1805,9 @@
+         before = snapshot()
+         report = switch_review.review(now=1800000000, env={"ORCH_VALUE_CHAIN_MONITOR": "0"})
+         rendered = switch_review.format_report(report)
+-        assert snapshot() == before, "weekly review changed saved state"
++        after = snapshot()
++        changed = sorted(k for k in set(before) | set(after) if before.get(k) != after.get(k))
++        assert after == before, f"weekly review changed saved state: {changed}"
+         assert all(mock.call_count == 0 for mock in forbidden), "weekly review replayed evidence"
+         results.append({"fixture": name, "line": report["adjudicator_shadow"],
+                         "rendered": rendered, "raise_count": report["raise_count"]})
+@@ -2014,7 +2020,9 @@
+ print(json.dumps(True))
+ `]);
+   for (const [cost, source, expected] of [
+-    [0, 'ccusage', 0],
++    // Whole-run accounting requires positive dollars; a zero-dollar ccusage
++    // row is incomplete telemetry and must remain explicitly unmeasured.
++    [0, 'ccusage', null],
+     [2, 'ccusage', 2],
+     [7, 'ledger', null],
+     [null, null, null],
+@@ -2307,6 +2315,7 @@
+   assert.deepEqual(summary, {
+     cases: 0, adjudicated: 0, proposed_decisions: 0, metadata_only_cases: 0,
+     graded: 0, agree: 0, disagree: 0,
++    advice_graded: 0, advice_agree: 0, advice_disagree: 0, retry_pending: 0,
+     agreement_rate: null, merge_rule_agreement_rate: null,
+     cost_usd: null, cost_measured_cases: 0, cost_per_case: null,
+     cost_attempted_cases: 0, cost_imputed_cases: 0, cost_unmeasured_cases: 0,

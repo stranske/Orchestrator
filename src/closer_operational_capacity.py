@@ -33,6 +33,20 @@ class CapacityError(ValueError):
     pass
 
 
+class _AdmittedCapacityReport(dict):
+    """A report whose path, bytes, and signed native admission are rechecked on use."""
+
+    _admitted_path: str
+    _admitted_sha256: str
+
+
+def _admitted_report(report: dict, *, path: Path, sha256: str) -> dict:
+    value = _AdmittedCapacityReport(report)
+    value._admitted_path = str(path)
+    value._admitted_sha256 = sha256
+    return value
+
+
 def _sha(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
 
@@ -64,12 +78,42 @@ def _read(path: Path) -> tuple[dict, str | None]:
     return value, _sha(raw)
 
 
-def _operational_inputs_match(inputs) -> bool:
+def _scoped_input_paths(profile_ids) -> tuple[Path, ...] | None:
+    """Return the host inputs that can affect this exact profile scope.
+
+    A scoped report is not a fleet-wide snapshot.  Requiring a write to an
+    unrelated provider's usage poll to remain byte-identical makes a valid
+    selected pool disappear between admission and dispatch.  Keep the input
+    fence closed over every selected agent (and therefore every selected
+    profile/pool), while leaving unselected operational observations outside
+    the report's freshness contract.
+    """
+    if not isinstance(profile_ids, list) or not profile_ids:
+        return None
+    selected = set()
+    for profile_id in profile_ids:
+        profile = execution_profiles.get_profile(profile_id)
+        if (
+            not isinstance(profile, dict)
+            or profile.get("agent") not in AGENTS
+            or profile.get("lifecycle_status") != "active"
+        ):
+            return None
+        selected.add(profile["agent"])
     polls = Path.home() / ".codex/orchestrator/usage-poll"
     sheds = Path.home() / ".codex/handoff/capacity-shed"
-    expected = [polls / (agent + "-usage.json") for agent in ("codex", "claude")]
-    expected += [sheds / agent for agent in AGENTS]
-    if not isinstance(inputs, dict) or set(inputs) != {str(path) for path in expected}:
+    paths = [sheds / agent for agent in sorted(selected)]
+    paths.extend(polls / f"{agent}-usage.json" for agent in sorted(selected & {"codex", "claude"}))
+    return tuple(paths)
+
+
+def _operational_inputs_match(inputs, profile_ids) -> bool:
+    expected = _scoped_input_paths(profile_ids)
+    if (
+        expected is None
+        or not isinstance(inputs, dict)
+        or set(inputs) != {str(path) for path in expected}
+    ):
         return False
     try:
         for path in expected:
@@ -81,7 +125,7 @@ def _operational_inputs_match(inputs) -> bool:
         return False
 
 
-def evaluate(config: dict, *, now: float | None = None) -> dict:
+def _evaluate(config: dict, *, now: float | None = None, admitted_profile_ids=None) -> dict:
     now = time.time() if now is None else now
     deadline = config.get("original_deadline")
     if config.get("schema") != SCHEMA or not _number(deadline) or not now < deadline <= now + 900:
@@ -89,7 +133,7 @@ def evaluate(config: dict, *, now: float | None = None) -> dict:
     owner = config.get("owner")
     if not isinstance(owner, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,100}", owner):
         raise CapacityError("explicit publication owner required")
-    requested = config.get("profile_ids")
+    requested = config.get("profile_ids") if admitted_profile_ids is None else admitted_profile_ids
     control_plane_only = config.get("control_plane_only", False)
     if type(control_plane_only) is not bool:
         raise CapacityError("control-plane qualification must be explicit")
@@ -104,6 +148,7 @@ def evaluate(config: dict, *, now: float | None = None) -> dict:
         row = execution_profiles.get_profile(key)
         if not row or row.get("agent") not in AGENTS or row.get("lifecycle_status") != "active":
             raise CapacityError("unknown or inactive scoped profile")
+    selected_agents = {execution_profiles.get_profile(key)["agent"] for key in requested}
     trials = config.get("bounded_trial_agents", [])
     if not isinstance(trials, list) or set(trials) - set(AGENTS) or (control_plane_only and trials):
         raise CapacityError("unsupported bounded trial policy")
@@ -124,7 +169,10 @@ def evaluate(config: dict, *, now: float | None = None) -> dict:
         raise CapacityError("producer is outside pinned Runtime closure")
     agents: dict[str, Any] = {}
     inputs: dict[str, str | None] = {}
-    for agent in (() if control_plane_only else AGENTS):
+    observed_agents = (
+        () if control_plane_only else (selected_agents if admitted_profile_ids else AGENTS)
+    )
+    for agent in observed_agents:
         marker_path = shed_dir / agent
         if marker_path.is_symlink():
             raise CapacityError("shed marker symlink refused")
@@ -133,7 +181,8 @@ def evaluate(config: dict, *, now: float | None = None) -> dict:
         after = _raw(marker_path)
         if before != after:
             raise CapacityError("shed marker changed during decision")
-        inputs[str(marker_path)] = _sha(before) if before is not None else None
+        if agent in selected_agents:
+            inputs[str(marker_path)] = _sha(before) if before is not None else None
         model = capacity.AGENTS[agent].get("model")
         policy_trial = model in {"metered", "flat"} or (
             model == "ccusage" and capacity.AGENTS[agent].get("block_token_limit") is None
@@ -145,7 +194,8 @@ def evaluate(config: dict, *, now: float | None = None) -> dict:
         if agent in {"codex", "claude"}:
             path = poll_dir / f"{agent}-usage.json"
             raw, input_hash = _read(path)
-            inputs[str(path)] = input_hash
+            if agent in selected_agents:
+                inputs[str(path)] = input_hash
             observation = pacing_usage.polled_usage(agent, now, data=raw)
             poll = observation["poll"]
             used = observation.get("used_fraction")
@@ -244,7 +294,13 @@ def evaluate(config: dict, *, now: float | None = None) -> dict:
     )
 
 
-def validate_report(report: dict, *, now: float) -> bool:
+def evaluate(config: dict, *, now: float | None = None) -> dict:
+    """Produce a complete current report for strict generic consumers."""
+    return _evaluate(config, now=now)
+
+
+def _report_snapshot_valid(report: dict, *, now: float) -> bool:
+    """Validate the immutable report snapshot apart from host inputs that may refresh."""
     if not isinstance(report, dict):
         return False
     deadline = report.get("original_deadline")
@@ -270,6 +326,13 @@ def validate_report(report: dict, *, now: float) -> bool:
         and len(set(report["profile_ids"])) == len(report["profile_ids"])
         and set(report["profile_ids"]) == set(report.get("profiles", {}))
         and all(execution_profiles.get_profile(key) for key in report["profile_ids"])
+    )
+
+
+def validate_report(report: dict, *, now: float) -> bool:
+    """Require byte-identical current inputs for generic report consumers."""
+    return bool(
+        _report_snapshot_valid(report, now=now)
         and (
             (
                 report.get("control_plane_only") is True
@@ -278,10 +341,74 @@ def validate_report(report: dict, *, now: float) -> bool:
             )
             or (
                 report.get("control_plane_only", False) is False
-                and _operational_inputs_match(report.get("input_sha256"))
+                and _operational_inputs_match(report.get("input_sha256"), report["profile_ids"])
             )
         )
     )
+
+
+def validate_admitted_report(
+    report: dict,
+    *,
+    now: float,
+    policy: dict,
+    runtime_manifest: str,
+    runtime_manifest_sha256: str,
+) -> bool:
+    """Recheck an admitted model scope against current bounded provider facts.
+
+    A signed admission keeps its original report bytes and scope.  A routine
+    poll refresh must not invalidate that snapshot solely by changing a hash,
+    but a newly observed hold, exhaustion, denial, or unusable metric remains
+    fail-closed before work may continue.
+    """
+    if (
+        not _report_snapshot_valid(report, now=now)
+        or report.get("control_plane_only", False) is not False
+        or not isinstance(policy, dict)
+        or report.get("owner") != policy.get("owner")
+        or report.get("profile_ids") != policy.get("profile_ids")
+        or report.get("runtime_manifest_sha256") != runtime_manifest_sha256
+    ):
+        return False
+    try:
+        original_states = [
+            report["profiles"][profile_id]["state"] for profile_id in report["profile_ids"]
+        ]
+        if not all(isinstance(state, str) for state in original_states):
+            return False
+        # An already quota-shed signed scope has no model admission to refresh.
+        # Keep its existing byte-for-byte host-input fence; it can never acquire
+        # a model merely because a later observation is more favorable.
+        if all(state not in {"ok", "warn"} for state in original_states):
+            return all(state == "shed" for state in original_states) and validate_report(
+                report, now=now
+            )
+        admitted_profile_ids = [
+            profile_id
+            for profile_id, state in zip(report["profile_ids"], original_states, strict=True)
+            if state in {"ok", "warn"}
+        ]
+        current = _evaluate(
+            {
+                "schema": SCHEMA,
+                "owner": policy["owner"],
+                "original_deadline": report["original_deadline"],
+                "profile_ids": admitted_profile_ids,
+                "bounded_trial_agents": policy["bounded_trial_agents"],
+                "runtime_manifest": runtime_manifest,
+                "runtime_manifest_sha256": runtime_manifest_sha256,
+            },
+            now=now,
+            admitted_profile_ids=admitted_profile_ids,
+        )
+        selected = {
+            execution_profiles.get_profile(profile_id)["agent"]
+            for profile_id in admitted_profile_ids
+        }
+        return all(current["agents"][agent]["state"] in {"ok", "warn"} for agent in selected)
+    except (CapacityError, KeyError, OSError, TypeError, ValueError):
+        return False
 
 
 def publish(config: dict, output: Path, *, expected_sha256: str | None) -> dict:
@@ -317,6 +444,31 @@ def publish(config: dict, output: Path, *, expected_sha256: str | None) -> dict:
             if os.path.exists(temp):
                 os.unlink(temp)
         return report
+
+
+def declared_profile_ids(report: dict) -> tuple[str, ...] | None:
+    """Return a current native report's closed scope, or ``None`` for global reports.
+
+    A malformed or stale object that merely claims this schema returns an empty
+    scope.  That preserves the ordinary global route while failing closed for a
+    claimed scoped route.
+    """
+    if not isinstance(report, dict) or report.get("schema") != SCHEMA:
+        return None
+    try:
+        if isinstance(report, _AdmittedCapacityReport):
+            try:
+                import closer_native_observer as native
+
+                if not native.revalidate_admitted_capacity_report(report):
+                    return ()
+            except (KeyError, TypeError, ValueError, OSError, OverflowError):
+                return ()
+        elif not validate_report(report, now=time.time()):
+            return ()
+    except (KeyError, TypeError, ValueError, OSError, OverflowError):
+        return ()
+    return tuple(report["profile_ids"])
 
 
 def selftest() -> None:

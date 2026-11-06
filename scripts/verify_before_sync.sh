@@ -254,6 +254,15 @@ storage_helper="$src/src/storage_lifecycle.py"
 [[ -f "$storage_helper" ]] || storage_helper="$src/storage_lifecycle.py"
 if [[ "${ORCH_STORAGE_ENTRY_PID:-}" != "$$" ]]; then
   [[ -f "$storage_helper" ]] || { fail "NOTHING VERIFIED: storage lifecycle helper missing from source"; exit 2; }
+  # Drain first: a staged reservation whose run was interrupted before its verify ended (owner,
+  # child group and release parent dead, no receipt, nothing open in its root) has no other way
+  # to be finished, and its charge would refuse this admission forever. Held rows print a reason;
+  # the sweep never fails the verify.
+  if [[ -d "$storage_state" ]]; then
+    release_report="$("$python_bin" "$storage_helper" release-interrupted --state-dir "$storage_state" --apply 2>&1)" \
+      || release_report="release-interrupted unavailable: ${release_report:0:300}"
+    say "== storage: interrupted reservations: $release_report"
+  fi
   storage_args=(run --state-dir "$storage_state" --source "$src" --runtime "$runtime_src"
     --state-source "$statedir_src" --temp-parent "${TMPDIR:-/tmp}" --max-dir-mb "$max_dir_mb"
     --profile "$expected_tree" --peak-bytes "${VERIFY_BEFORE_SYNC_PEAK_BYTES:-0}")
@@ -430,6 +439,11 @@ if [[ -n "${ORCH_STORAGE_RUN_ROOT:-}" ]]; then
 fi
 verify_args=()
 [[ -n "$floor_flag" ]] && verify_args+=("$floor_flag")
+if [[ -z "${VERIFY_BEFORE_SYNC_PYTEST_SHARD:-}" && -z "${VERIFY_BEFORE_SYNC_AGGREGATE:-}" ]]; then
+  # The storage supervisor retains staging on a failed local full verdict.  Keep only the
+  # redacted failure record there before verify.py's private JUnit directory disappears.
+  verify_args+=(--failure-evidence-out "$scratch/pytest-failure-evidence.json")
+fi
 if [[ -n "${VERIFY_BEFORE_SYNC_PYTEST_SHARD:-}" ]]; then
   verify_args+=(--pytest-shard "$VERIFY_BEFORE_SYNC_PYTEST_SHARD" --shard-output "${VERIFY_BEFORE_SYNC_SHARD_OUTPUT:?absolute evidence directory required}")
 fi
