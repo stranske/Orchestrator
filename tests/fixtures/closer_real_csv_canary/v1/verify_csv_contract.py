@@ -1,7 +1,10 @@
 """Explicit standard-library contract script for the Closer CSV canary fixture.
 
-Invoke this file directly. It is not a pytest module and defines no test items.
-``--chain-evidence`` reads the public issue, branch and PR chain and reports
+Invoke this file directly. It is not a pytest module: ``__test__ = False`` and
+it defines no ``test_*`` functions, so pytest does not collect it. Pass one
+``csv_export.py`` path to check that revision; the default is the sibling
+module. ``--chain-evidence`` reads the public issue, branch and PR chain and
+reports
 whether a trusted native verifier decision and closer publication proof are
 tied to the corrected head. A free-text verdict line is not that proof. A
 trusted corpus decision on the partial merge is reported and is not that proof
@@ -38,9 +41,11 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+__test__ = False
 
-def _load_export():
-    path = Path(__file__).resolve().parent / "csv_export.py"
+
+def _load_export(path=None):
+    path = Path(path) if path is not None else Path(__file__).resolve().parent / "csv_export.py"
     spec = importlib.util.spec_from_file_location("closer_csv_canary_export", path)
     if spec is None or spec.loader is None:
         raise AssertionError(f"cannot load {path}")
@@ -112,17 +117,27 @@ def _assert_json(module, rows):
 
 
 def _assert_unsupported(module, rows):
-    try:
-        module.export_rows(rows, "xml")
-    except ValueError:
-        return
-    raise AssertionError("unsupported format did not raise ValueError")
+    for fmt in ("xml", "CSV", "", "tsv"):
+        try:
+            module.export_rows(rows, fmt)
+        except ValueError:
+            continue
+        except Exception as exc:
+            raise AssertionError(
+                f"format {fmt!r} raised {type(exc).__name__}, expected ValueError"
+            ) from exc
+        raise AssertionError(f"format {fmt!r} did not raise ValueError")
 
 
-def run_contract():
-    module = _load_export()
+def run_contract(path=None):
+    module = _load_export(path)
     plain = [{"name": "alpha", "score": 1}, {"name": "beta", "score": 2}]
     _assert_json(module, plain)
+    _assert_json(
+        module,
+        [{"name": "ada", "score": 10, "extra": "kept"}, {"name": "café", "score": 2.5}],
+    )
+    assert module.export_rows([], "json") == "[]", "empty JSON input did not round-trip as []"
     _assert_unsupported(module, plain)
     empty = _csv_text(module, [])
     assert empty == "name,score\r\n", repr(empty)
@@ -132,6 +147,7 @@ def run_contract():
         {"name": 'say "hi"', "score": "2"},
         {"name": "line\nbreak", "score": "3"},
         {"name": "cr\rhere", "score": "4"},
+        {"name": "both\r\n", "score": 'quote, "and" comma'},
         {"name": 'mix, "q"\r\nend', "score": "5\r\n,x"},
         {"name": 'a,b "c"\n\r', "score": "together"},
     ]
@@ -2853,11 +2869,14 @@ def main(argv=None):
             return 1
     if args == ["--chain-evidence"]:
         return _report_chain_evidence()
-    if args:
+    export_path = None
+    if len(args) == 1 and not args[0].startswith("-"):
+        export_path = args[0]
+    elif args:
         print("unsupported arguments", file=sys.stderr)
         return 1
     try:
-        run_contract()
+        run_contract(export_path)
     except AssertionError:
         traceback.print_exc()
         print("contract assertion failed", file=sys.stderr)
