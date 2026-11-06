@@ -421,19 +421,7 @@ def validate_trial_manifest(manifest: dict[str, Any]) -> None:
     profile_ids = _manifest_profile_ids(manifest)
     instances = manifest.get("instances_per_profile", 1)
     expected_count = len(profile_ids) * instances
-    identity = {
-        "created_at": manifest.get("created_at"),
-        "packet_hash": manifest.get("packet_hash"),
-        "profile_ids": list(profile_ids),
-        "seed": manifest.get("seed"),
-        "source_hashes": {
-            key: source_before[key]["aggregate_sha256"] for key in ("orchestrator", "workflows")
-        },
-    }
-    if "selected_profile_ids" in manifest:
-        identity["instances_per_profile"] = instances
-    expected_trial_id = "model-profile-trial:" + _sha256(identity).split(":", 1)[1][:24]
-    if manifest.get("trial_id") != expected_trial_id:
+    if manifest.get("trial_id") != _expected_trial_id(manifest):
         raise ValueError("trial identity is not reproducible")
 
     requests = manifest.get("requests") or []
@@ -627,6 +615,38 @@ def _is_measured_program_summary(payload: dict[str, Any] | None) -> bool:
     return False
 
 
+def _expected_trial_id(manifest: dict[str, Any]) -> str:
+    """Trial id is the hash of the frozen packet, profiles, seed, and source seals."""
+    source_before = manifest["source_before"]
+    profile_ids = _manifest_profile_ids(manifest)
+    identity = {
+        "created_at": manifest.get("created_at"),
+        "packet_hash": manifest.get("packet_hash"),
+        "profile_ids": list(profile_ids),
+        "seed": manifest.get("seed"),
+        "source_hashes": {
+            key: source_before[key]["aggregate_sha256"] for key in ("orchestrator", "workflows")
+        },
+    }
+    if "selected_profile_ids" in manifest:
+        identity["instances_per_profile"] = manifest.get("instances_per_profile", 1)
+    return "model-profile-trial:" + _sha256(identity).split(":", 1)[1][:24]
+
+
+def _require_consistent_source_seal(manifest: dict[str, Any]) -> None:
+    """Each recorded aggregate must be the hash of its own entry list.
+
+    The live-tree comparison trusts that aggregate. Rewriting it to a mutated
+    tree's hash, leaving the old entries in place, and rebinding ``trial_id``
+    would otherwise look unchanged and let ``finalize --ingest`` proceed.
+    """
+    for name, recorded in manifest["source_before"].items():
+        entries = recorded.get("entries") if isinstance(recorded, dict) else None
+        sealed = recorded.get("aggregate_sha256") if isinstance(recorded, dict) else None
+        if not isinstance(entries, list) or sealed != _sha256(entries):
+            raise ValueError(f"trial source manifest aggregate does not match its entries:{name}")
+
+
 def _authoritative_identity_verified(attempts: list[dict[str, Any]]) -> bool:
     for attempt in attempts:
         evidence = attempt.get("identity_evidence")
@@ -770,13 +790,17 @@ def finalize_trial(
     validate_trial_manifest(manifest)
     attempts = _validate_results(manifest, results)
     timestamp = int(time.time()) if now is None else int(now)
+    # Both gates run before the feedback transaction. A refusal leaves no rows,
+    # and brain_ingest_enabled stays false on any envelope this call returns.
+    _require_consistent_source_seal(manifest)
     source_after = {
         key: source_manifest(Path(value["root"]))
         for key, value in manifest["source_before"].items()
     }
     source_unchanged = all(
-        source_after[key]["aggregate_sha256"] == manifest["source_before"][key]["aggregate_sha256"]
-        for key in source_after
+        source_after[key]["aggregate_sha256"] == recorded["aggregate_sha256"]
+        and source_after[key]["entries"] == recorded["entries"]
+        for key, recorded in manifest["source_before"].items()
     )
     if not source_unchanged:
         raise ValueError("source integrity changed during read-only trial")
@@ -1055,9 +1079,46 @@ def _selftest() -> None:
         assert report["learning_enabled"] is False, "report enabled learning"
         assert report["recorded_attempt_ids"] == [], "offline selftest recorded trial attempts"
 
+        forged = json.loads(_canonical(prepared))
+        (workflows_root / "worker.yml").write_text(
+            "worker: mutated-during-trial\n", encoding="utf-8"
+        )
+        live_workflows = source_manifest(workflows_root)
+        forged["source_before"]["workflows"]["aggregate_sha256"] = live_workflows[
+            "aggregate_sha256"
+        ]
+        old_trial_id = forged["trial_id"]
+        forged["trial_id"] = _expected_trial_id(forged)
+        for request in forged["requests"]:
+            request["run_id"] = forged["trial_id"] + request["run_id"][len(old_trial_id) :]
+        forged_results = json.loads(_canonical(results))
+        forged_results["trial_id"] = forged["trial_id"]
+        for attempt in forged_results["attempts"]:
+            attempt["run_id"] = forged["trial_id"] + attempt["run_id"][len(old_trial_id) :]
+        previous_db = feedback.DB_PATH
+        feedback.DB_PATH = root / "quarantine-selftest.db"
+        try:
+            try:
+                finalize_trial(
+                    forged,
+                    forged_results,
+                    record_feedback=True,
+                    ingest_brain=True,
+                    now=2_001,
+                )
+            except ValueError as exc:
+                assert "aggregate does not match its entries" in str(
+                    exc
+                ), f"forged source seal was not refused: {exc}"
+            else:
+                raise AssertionError("forged source seal was ingested")
+        finally:
+            feedback.DB_PATH = previous_db
+
     print(
         "model_profile_trial.py selftest: OK "
-        "(prepare/source proof, accept/reject validation, shadow report/no promotion)"
+        "(prepare/source proof, accept/reject validation, shadow report/no promotion, "
+        "forged source seal refuses ingest)"
     )
 
 

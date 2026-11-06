@@ -337,6 +337,77 @@ def test_finalize_writes_measured_quality_by_profile(
     assert summary["quality_by_profile"] == quality
 
 
+def _rebind_trial_id(manifest, results):
+    """Point manifest and results at the trial id implied by the current source seals."""
+    old_trial_id = manifest["trial_id"]
+    new_trial_id = model_profile_trial._expected_trial_id(manifest)
+    manifest["trial_id"] = new_trial_id
+    for request in manifest["requests"]:
+        request["run_id"] = new_trial_id + request["run_id"][len(old_trial_id) :]
+    results["trial_id"] = new_trial_id
+    for attempt in results["attempts"]:
+        attempt["run_id"] = new_trial_id + attempt["run_id"][len(old_trial_id) :]
+    for trace in results.get("auxiliary_traces") or []:
+        run_id = trace.get("run_id")
+        if isinstance(run_id, str) and run_id.startswith(old_trial_id):
+            trace["run_id"] = new_trial_id + run_id[len(old_trial_id) :]
+
+
+def test_finalize_refuses_ingest_when_source_seal_disagrees_with_entries(
+    tmp_path, monkeypatch, trial_roots, trial_manifest, trial_attempt_fixture
+):
+    """A mutated tree plus a rewritten aggregate must not flip brain ingest.
+
+    The aggregate is the only live comparison. Pointing it at the mutated tree
+    while the sealed entries still describe the old bytes, then rebinding
+    trial_id, used to look like an unchanged source and ingest anyway.
+    """
+    _use_temp_feedback(tmp_path, monkeypatch)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    honest = copy.deepcopy(trial_attempt_fixture)
+    _bind_authoritative_identity(tmp_path, honest)
+    state_path = tmp_path / "envelope.json"
+    state = model_profile_trial.finalize_trial(
+        trial_manifest,
+        honest,
+        state_path=state_path,
+        record_feedback=True,
+        ingest_brain=True,
+        now=2_000,
+    )
+    assert state["brain_ingest_enabled"] is True
+    assert state["source_integrity"]["unchanged"] is True
+    assert json.loads(state_path.read_text(encoding="utf-8"))["brain_ingest_enabled"] is True
+
+    workflows = trial_roots[1]
+    (workflows / "worker.yml").write_text("worker: mutated\n", encoding="utf-8")
+    live = model_profile_trial.source_manifest(workflows)
+    manifest = copy.deepcopy(trial_manifest)
+    recorded = manifest["source_before"]["workflows"]
+    assert recorded["entries"] != live["entries"]
+    recorded["aggregate_sha256"] = live["aggregate_sha256"]
+    forged = copy.deepcopy(honest)
+    _rebind_trial_id(manifest, forged)
+    forged_state = tmp_path / "forged-envelope.json"
+    with pytest.raises(ValueError, match="aggregate does not match its entries:workflows"):
+        model_profile_trial.finalize_trial(
+            manifest,
+            forged,
+            state_path=forged_state,
+            record_feedback=True,
+            ingest_brain=True,
+            now=2_001,
+        )
+    assert not forged_state.exists()
+    assert json.loads(state_path.read_text(encoding="utf-8"))["brain_ingest_enabled"] is True
+    with feedback._conn() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM profile_trial_ingests").fetchone()[0] == 1
+        assert (
+            conn.execute("SELECT trial_id FROM profile_trial_ingests").fetchone()[0]
+            == trial_manifest["trial_id"]
+        )
+
+
 def test_finalize_refuses_ingest_when_identity_artifact_hash_mismatches(
     tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture
 ):
