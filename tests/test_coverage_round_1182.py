@@ -933,8 +933,13 @@ def test_filter_backlog_skip_reasons():
 
 
 def test_release_assignment_errors_are_swallowed(monkeypatch):
-    monkeypatch.setattr(claims, "release", lambda *a, **k: (_ for _ in ()).throw(OSError("nope")))
+    calls = []
+    def boom(*args, **kwargs):
+        calls.append(args)
+        raise OSError("nope")
+    monkeypatch.setattr(claims, "release", boom)
     ec._release_assignments([{"target": "t", "agent": "codex"}])
+    assert len(calls) == 1
 
 
 def test_direct_evidence_prompts_and_attach():
