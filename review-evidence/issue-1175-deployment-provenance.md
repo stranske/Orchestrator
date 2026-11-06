@@ -614,3 +614,28 @@ No production checkbox is newly complete.
 The checkout's read-only Git index rejected staging. The changes are retained
 in `/tmp/orchestrator-1175-timestamps-commit-UVJPat`, with a handoff patch at
 `/tmp/orchestrator-1175-timestamps.patch`.
+
+## Published artifact timestamp contract regression (2026-11-06)
+
+Added three isolated CLI cases rejecting a published `generated_at` with no
+timezone, a non-UTC offset, or fractional seconds. Each uses a real bare remote
+and its own history, then verifies that neither the malformed first publication
+nor a later repaired artifact establishes provenance. Refusal preserves existing
+receipt bytes and modification time, leaves the remote tip unchanged, and keeps
+the temporary home and feedback database unused.
+
+Verification: all 73 publication CLI tests, 16 deployment unittests, and 5 report
+CLI tests passed. All three new cases fail against a disposable exporter copy
+that skips UTC/whole-second validation only for `generated_at`. JavaScript syntax
+and diff whitespace checks passed. No Python or protected files changed.
+
+No task checkbox is newly complete. The verified production publication audit
+and production database remain unavailable; observation must wait until both
+2026-11-08 and fourteen days after verified deployment. The named Anaconda
+interpreter is absent, and available Python lacks pytest. PR #1196 is open and
+ready for review. Posting the blocker comment and adding `needs-human` were
+rejected with `MCP tool call requires approval, but approval policy is never`.
+
+The checkout's read-only Git index rejected staging. The tested changes are
+retained in `/tmp/orchestrator-1175-generation-provenance-commit`, with a handoff
+patch at `/tmp/orchestrator-1175-generation-provenance.patch`.

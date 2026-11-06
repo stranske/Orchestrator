@@ -68,6 +68,16 @@ const invalidPublishedContracts = [
   ['non-string challenger', (doc) => { doc.exploration.challengers.review = []; }, /contract is malformed/],
   ['missing generation time', (doc) => { delete doc.generated_at; }, /generated_at/],
   ['malformed generation time', (doc) => { doc.generated_at = 'yesterday'; }, /generated_at/],
+  // Parseable clocks still need an explicit UTC instant with whole seconds.
+  // Validate the artifact's clock independently of the valid audit timestamp.
+  ...[
+    ['generation timezone missing', '2026-11-04T10:00:00'],
+    ['non-UTC generation offset', '2026-11-04T11:00:00+01:00'],
+    ['fractional generation second', '2026-11-04T10:00:00.000001Z'],
+  ].map(([name, timestamp]) => [
+    name, (doc) => { doc.generated_at = timestamp; },
+    /generated_at must be a UTC timestamp with whole seconds/,
+  ]),
 ];
 
 // Each case needs its own history: an earlier malformed marked artifact would
