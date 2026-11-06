@@ -208,6 +208,52 @@ class FleetDeliveryTests(unittest.TestCase):
             self.assertIsNone(rows[key]["value"])
             self.assertEqual(rows[key]["reason"], "gh invalid JSON response")
 
+        # Unmerged #12 is read only by flow. Its failed structured-link read must
+        # invalidate flow even when the body/branch independently names an issue,
+        # while preserving the complete merge-to-closure population.
+        self.data["prs"][2]["body"] = "Closes #3"
+        self.data["prs"][2]["head"]["ref"] = "codex/issue-3"
+        failures = {
+            "refused": (False, "", "unmeasured: HTTP 403 fixture read refused"),
+            "invalid_json": (True, "{broken", ""),
+            **{
+                name: (True, json.dumps(payload), "")
+                for name, payload in self.data["malformed_pr_details"].items()
+            },
+        }
+        for name, response in failures.items():
+            with self.subTest(flow_only_detail_failure=name):
+                self.calls.clear()
+
+                def fail_flow_detail(args, **kwargs):
+                    if args[1] == "graphql" and "number=12" in args:
+                        self.calls.append(args)
+                        return response
+                    return gh(args, **kwargs)
+
+                with patch.object(self, "gh", side_effect=fail_flow_detail):
+                    rows = self.measure()["rows"]
+                self.assertEqual(len(rows), 5)
+                self.assertIsNone(rows["released_flow"]["value"])
+                self.assertEqual(rows["released_flow"]["evidence_class"], "unmeasured")
+                self.assertRegex(
+                    rows["released_flow"]["reason"],
+                    "gh HTTP 403|gh invalid JSON|gh API|closingIssuesReferences",
+                )
+                self.assertIn("median 15 min (2 PR/issue pairs", rows["merge_to_close"]["value"])
+                for key in ("oldest_canary", "opener_cap"):
+                    self.assertIsNotNone(rows[key]["value"])
+                self.assertEqual(sum(args[1] == "graphql" for args in self.calls), 4)
+                self.assertFalse(any(args[1].endswith("/issues/3") for args in self.calls))
+
+        # A complete empty connection still permits the existing text attribution.
+        detail = self.data["pr_details"]["12"]["data"]["repository"]["pullRequest"]
+        detail["closingIssuesReferences"]["nodes"] = []
+        self.calls.clear()
+        rows = self.measure()["rows"]
+        self.assertIn("opened 2/day, merged 1.5/day", rows["released_flow"]["value"])
+        self.assertEqual(sum(args[1].endswith("/issues/3") for args in self.calls), 1)
+
     def test_failed_or_malformed_canary_repo_does_not_print_a_partial_oldest(self):
         self.failed = {"repos/stranske/trip-planner/pulls"}
         rows = self.measure()["rows"]

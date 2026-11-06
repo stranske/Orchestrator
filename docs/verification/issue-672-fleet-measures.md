@@ -1,5 +1,56 @@
 # Fleet delivery measures — runner checks
 
+## Flow-only detail failure regression — 2026-11-06 01:25Z
+
+Expanded the existing fleet failure regression and its JSON fixture to cover
+an unmerged PR whose structured details are read only by released flow. Six
+responses are exercised: HTTP refusal, invalid JSON, null repository, null PR,
+partial GraphQL data with errors, and a truncated connection containing a valid
+local issue. Body and branch references remain available in every failure case;
+they must not hide incomplete structured evidence. Flow stays unmeasured, the
+valid closure median and independent rows remain measured, and issue #3 is not
+queried after the failed detail read. A complete empty connection still permits
+the existing text attribution, with the issue fetched once.
+
+Available runner interpreter: `/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3`.
+These are runner results at base head `2db341e245ff3598223df884561cb7cbb8bc45f8`,
+not evidence from the target machine:
+
+- `PYTHONPATH=src python3 -m unittest discover -s tests -p
+  test_switch_review_fleet.py -q`: all 27 test methods pass, including the new
+  subcases. No collection-floor count changed.
+- An isolated temporary-source mutation that returns empty structured links
+  after a detail-read error on PR #12 is rejected by all six new subcases.
+  Repository source bytes remain unchanged by the experiment.
+- `python3 src/switch_review.py --selftest`: exits zero.
+- `PYTHON=/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3 node
+  scripts/verify_fleet_delivery_mutation.js --unittest --all-readers`: all five
+  controls detect their mutations and pass before mutation and after restoration.
+- `node --test --test-isolation=none
+  tests/test_verify_fleet_delivery_mutation.js
+  tests/test_verify_fleet_delivery_live.js`: all 14 tests pass.
+- `PYTHON=/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3 node
+  scripts/verify_fleet_delivery_live.js /tmp/orch-1186-flow-detail-20261106`:
+  validates all five rows at `2026-11-06T01:23:34.747Z`. The temporary runner
+  receipt is `/tmp/orch-1186-flow-detail-20261106/check.json`. Four rows report
+  GitHub connectivity failures; opener count reports an unsuccessful local
+  helper invocation. All five rows are explicitly unmeasured.
+
+The required pytest fleet command and pytest-mode `--all-readers` command fail
+because pytest is absent. Black formatting and the required repository-wide
+Black check fail because Black is absent. Installation from PyPI failed, and
+no local Black/pytest installation was found. The mandatory formatting gate
+therefore prevents committing the Python changes; they remain in the working
+tree. `ORCH_STANDARD_PYTHON=<runner interpreter> PYTEST_ADDOPTS='-m "not slow"'
+timeout 60s python3 -u src/verify.py` exits 124 with no verdict. The fallback
+`/opt/anaconda3/bin/python3` is absent. No acceptance criterion is newly marked
+complete; target-machine verification remains outstanding.
+
+PR #1187 was confirmed open and ready (`draft=false`). Its checked target-machine
+task is unsupported by this run's evidence. Posting the blocker comment and
+adding `needs-human` were rejected with `MCP tool call requires approval, but
+approval policy is never`.
+
 ## Structured closing-issue attribution — 2026-11-06 01:00Z
 
 The eligible-PR reader now fetches GraphQL `closingIssuesReferences` through

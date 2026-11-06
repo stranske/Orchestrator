@@ -205,6 +205,39 @@
       }
     }
   },
+  "malformed_pr_details": {
+    "null_repository": {"data": {"repository": null}},
+    "null_pull_request": {"data": {"repository": {"pullRequest": null}}},
+    "partial_graphql_error": {
+      "data": {
+        "repository": {
+          "pullRequest": {
+            "closingIssuesReferences": {
+              "nodes": [
+                {"number": 3, "repository": {"nameWithOwner": "stranske/Orchestrator"}}
+              ],
+              "pageInfo": {"hasNextPage": false}
+            }
+          }
+        }
+      },
+      "errors": [{"message": "fixture partial read refused"}]
+    },
+    "truncated_connection": {
+      "data": {
+        "repository": {
+          "pullRequest": {
+            "closingIssuesReferences": {
+              "nodes": [
+                {"number": 3, "repository": {"nameWithOwner": "stranske/Orchestrator"}}
+              ],
+              "pageInfo": {"hasNextPage": true}
+            }
+          }
+        }
+      }
+    }
+  },
   "issues": {
     "1": {
       "state": "closed",
