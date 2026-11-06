@@ -180,8 +180,8 @@ _PARTIAL_PR = "984"
 _CORRECTIVE_PR = "1168"
 _OWNED_DELIVERY_PR = "989"
 # Native readback taken 2026-11-06. PR 1168 is squash-merged and its head ref
-# stays 01e86ae7. PR 989 is open: REST merge_commit_sha is a test merge of that
-# head, while the published merge is absent. This table does not move either head.
+# stays 01e86ae7. PR 989 merged after that snapshot; both heads stay where
+# GitHub left them. This table does not move either head.
 _RECORDED_NATIVE_PR_STATE = {
     "1168": {
         "head_sha": "01e86ae7e4ef0e6a06193c916c8c780ca5cab052",
@@ -190,14 +190,13 @@ _RECORDED_NATIVE_PR_STATE = {
     },
     "989": {
         "head_sha": "85adde2614db7118d6e6d28dd11e5bc4c7611319",
-        "published_merge_sha": "",
-        "merged": False,
-        "rest_test_merge_sha": "771b5525cb6d370159cb292dda5611ee556c4449",
+        "published_merge_sha": "97647baf97085724af7cb8f684af2331f73fb612",
+        "merged": True,
     },
 }
 # The issue prose says PR 1168 merged. Its verifier excerpt still says unmerged
 # and names an older open test-merge SHA. The excerpt also names an older head
-# of the still-unmerged owned delivery PR.
+# of an earlier state of the owned delivery PR.
 _CONTRADICTORY_MERGE_REPORTS = {
     "1168": (
         {"source": "issue-1184-why", "merged": True},
@@ -1231,8 +1230,14 @@ def _branch_label_reason(record, records):
     visible through ``visible_name``. The live head ``cursor/issue-983`` cannot
     be renamed without the bootstrap recreating the unlabeled name, so the PR
     that points at it has to carry the ``test`` label or a ``test:`` title.
+    After merge the ref is often deleted; the same label proof is read from the
+    merged pull request whose head was this branch.
     """
     if not record.get("present"):
+        merged = record.get("merged_pr")
+        if isinstance(merged, dict) and merged.get("head_ref") == record.get("name"):
+            if _text_labeled_test(merged.get("title"), merged.get("labels") or []):
+                return "merged-pr:" + str(merged.get("number"))
         return ""
     if _branch_labeled_test(record.get("name") or ""):
         return "name"
@@ -1922,6 +1927,45 @@ def _pull_head(fetch, number):
     return sha
 
 
+def _merged_pr_for_deleted_branch(fetch, branch_name):
+    """When the ref is gone, recover test labeling from the merged PR that owned it."""
+    owner = _REPOSITORY.split("/", 1)[0]
+    head = owner + ":" + branch_name
+    status, raw = fetch(
+        "/repos/"
+        + _REPOSITORY
+        + "/pulls?state=all&head="
+        + urllib.parse.quote(head, safe="")
+        + "&per_page=30"
+    )
+    if status != 200:
+        return None
+    batch = _decode_json(status, raw, "pulls for head " + branch_name)
+    if not isinstance(batch, list):
+        raise _ObservationError("pulls for head were not a list")
+    candidates = []
+    for item in batch:
+        if not isinstance(item, dict):
+            continue
+        merged_at = item.get("merged_at")
+        if merged_at is None:
+            continue
+        ref = item.get("head") or {}
+        if ref.get("ref") != branch_name:
+            continue
+        candidates.append((merged_at, item))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda row: row[0], reverse=True)
+    pull = candidates[0][1]
+    return {
+        "number": str(pull.get("number")),
+        "title": pull.get("title") or "",
+        "labels": _label_names(pull),
+        "head_ref": (pull.get("head") or {}).get("ref"),
+    }
+
+
 def _branch_record(fetch, name):
     encoded = urllib.parse.quote(name, safe="")
     status, raw = fetch(f"/repos/{_REPOSITORY}/branches/{encoded}")
@@ -1932,6 +1976,7 @@ def _branch_record(fetch, name):
             "title": "",
             "labels": [],
             "present": False,
+            "merged_pr": _merged_pr_for_deleted_branch(fetch, name),
         }
     document = _decode_json(status, raw, f"branch {name}")
     visible = document.get("name") if isinstance(document.get("name"), str) else name
@@ -3538,7 +3583,7 @@ def _self_check():
     corrective_head = "01e86ae7e4ef0e6a06193c916c8c780ca5cab052"
     corrective_merge = "a30b34ada04a30d04360867e14097a8c5b6d731c"
     owned_live_head = "85adde2614db7118d6e6d28dd11e5bc4c7611319"
-    owned_test_merge = "771b5525cb6d370159cb292dda5611ee556c4449"
+    owned_merge = "97647baf97085724af7cb8f684af2331f73fb612"
     stale_test_merge = "01fffa725ecdda58189821059d1243ea1c003b12"
     prior_owned_head = "926a7a20087f8b2e47d08c4f4ba747944aa78b9b"
     if (
@@ -3553,11 +3598,12 @@ def _self_check():
     if (
         "native_pr_readback: pr=989 head="
         + owned_live_head
-        + " published_merge=none merged=no test_merge="
-        + owned_test_merge
+        + " published_merge="
+        + owned_merge
+        + " merged=yes"
         not in recorded_text
     ):
-        raise AssertionError("recorded owned delivery published merge was not none")
+        raise AssertionError("recorded owned delivery merge was not kept")
     if "contradictory_reports=merged+unmerged" not in recorded_text:
         raise AssertionError("merged and unmerged reports were not both retained")
     if "adopted=merged" not in recorded_text or "stale_unmerged_report=yes" not in recorded_text:
@@ -3573,16 +3619,16 @@ def _self_check():
         or "prior_head_not_current=yes" not in recorded_text
     ):
         raise AssertionError("older owned delivery head was treated as current")
-    if "rest_test_merge_is_published=no" not in recorded_text:
-        raise AssertionError("open REST merge_commit_sha was recorded as published")
+    if "rest_test_merge_is_published=no" in recorded_text:
+        raise AssertionError("merged delivery was reported with open test-merge prose")
     if recorded_text.count("head_unchanged=yes") != 2:
         raise AssertionError("reconciliation did not keep both heads unchanged")
     if recorded["prs"]["1168"]["head_sha"] != corrective_head:
         raise AssertionError("reconciliation replaced the corrective head")
     if recorded["prs"]["989"]["head_sha"] != owned_live_head:
         raise AssertionError("reconciliation replaced the owned delivery head")
-    if recorded["prs"]["989"]["published_merge_sha"]:
-        raise AssertionError("unmerged delivery gained a published merge")
+    if recorded["prs"]["989"]["published_merge_sha"] != owned_merge:
+        raise AssertionError("reconciliation replaced the recorded owned delivery merge")
     recorded_guard = _merge_guard_line(
         recorded["prs"]["1168"], corpus_bound=False, publication=False
     )
@@ -3654,15 +3700,15 @@ def _self_check():
         raise AssertionError("test-merge drift was not reported")
     drift_line = drifted[0]
     if (
-        "recorded_merged=no" not in drift_line
+        "recorded_merged=yes" not in drift_line
         or "live_merged=no" not in drift_line
-        or "recorded_published_merge=none" not in drift_line
+        or "recorded_published_merge=" + owned_merge not in drift_line
         or "live_published_merge=none" not in drift_line
-        or "recorded_test_merge=" + owned_test_merge not in drift_line
+        or "recorded_test_merge=none" not in drift_line
         or "live_test_merge=" + ("f" * 40) not in drift_line
         or "head_not_modified=yes" not in drift_line
     ):
-        raise AssertionError("drift omitted merged or test-merge values")
+        raise AssertionError("drift omitted merged published and live test-merge values")
     merged_flag_drift = _recorded_state_comparison(
         {
             "pr": "1168",
