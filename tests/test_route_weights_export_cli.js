@@ -665,6 +665,56 @@ raise SystemExit(export.main())
   }
   await refuseUnavailableRemote();
 
+  async function refuseDeletedExportBranch() {
+    const retained = fs.existsSync(receipt) ? fs.readFileSync(receipt) : null;
+    const modified = retained === null ? null : fs.statSync(receipt, { bigint: true }).mtimeNs;
+    await t.test(`refuses deleted export branch ${retained === null ? 'without' : 'with'} receipt`, async () => {
+      const remoteRef = `refs/remotes/origin/${branch}`;
+      assert.equal(await git(checkout, 'rev-parse', remoteRef), provenance.published_commit);
+      // Delete on the server so the verifier still has a stale origin ref and
+      // the valid artifact's objects. The fetch succeeds and must prune that ref.
+      await git(remote, 'update-ref', '-d', `refs/heads/${branch}`);
+      try {
+        assert.equal(await git(checkout, 'rev-parse', remoteRef), provenance.published_commit);
+        const refused = await record();
+        assert.equal(refused.status, 1, refused.stderr);
+        assert.equal(refused.stdout, '');
+        assert.match(refused.stderr, /deployment provenance refused:/);
+        assert.match(refused.stderr, /rev-list/);
+        assert.doesNotMatch(refused.stderr, /Traceback/);
+        const pruned = await run('git', ['-C', checkout, 'show-ref', '--verify', '--quiet', remoteRef], { env });
+        assert.equal(pruned.status, 1, pruned.stderr);
+        assert.equal(await git(checkout, 'cat-file', '-t', provenance.published_commit), 'commit');
+        if (retained === null) {
+          assert.equal(fs.existsSync(receipt), false);
+        } else {
+          assert.deepEqual(fs.readFileSync(receipt), retained);
+          assert.equal(fs.statSync(receipt, { bigint: true }).mtimeNs, modified);
+        }
+        assert.equal(fs.existsSync(path.join(state, `.${path.basename(receipt)}.tmp`)), false);
+      } finally {
+        await git(remote, 'update-ref', `refs/heads/${branch}`, provenance.published_commit);
+      }
+      const recovered = await record();
+      assert.equal(recovered.status, 0, recovered.stderr);
+      const recoveredReceipt = JSON.parse(recovered.stdout);
+      assert.equal(recoveredReceipt.published_commit, provenance.published_commit);
+      assert.equal(recoveredReceipt.deployed_at, provenance.deployed_at);
+      assert.equal(recoveredReceipt.deployed_epoch, Date.parse(provenance.deployed_at) / 1000);
+      assert.equal(recoveredReceipt.deployment_evidence, provenance.deployment_evidence);
+      if (retained === null) {
+        fs.unlinkSync(receipt);
+      } else {
+        assert.deepEqual(fs.readFileSync(receipt), retained);
+        assert.equal(fs.statSync(receipt, { bigint: true }).mtimeNs, modified);
+      }
+      assert.equal(await git(remote, 'rev-parse', branch), provenance.published_commit);
+      assert.equal(fs.existsSync(database), false);
+      assert.deepEqual(fs.readdirSync(home), []);
+    });
+  }
+  await refuseDeletedExportBranch();
+
   // A directory at the atomic-write path causes an actual filesystem failure,
   // including when running as root, without changing permissions or mocking I/O.
   const blockedWrite = path.join(state, `.${path.basename(receipt)}.tmp`);
@@ -695,6 +745,7 @@ raise SystemExit(export.main())
   await refuseHistoryReadFailures();
   await refuseBeforeGeneration();
   await refuseUnavailableRemote();
+  await refuseDeletedExportBranch();
   const repeated = await record();
   assert.equal(repeated.status, 0, repeated.stderr);
   assert.deepEqual(JSON.parse(repeated.stdout), recorded);

@@ -534,3 +534,30 @@ were rejected with `MCP tool call requires approval, but approval policy is neve
 The checkout's read-only Git index rejected staging. The tested changes are
 retained in `/tmp/orchestrator-1175-artifact-history-commit`, with a handoff patch
 at `/tmp/orchestrator-1175-artifact-history.patch`.
+
+## Deleted export branch refusal and recovery (2026-11-06)
+
+Reviewed commits `83c8e9c`, `20c80a0`, and `2eec353`: they add provenance
+regressions, not a verified production receipt. Both conditional helper/reporting
+tasks are satisfied because the extensions remain absent. Reconciliation of the
+duplicate PR-body checkboxes was rejected because the connector requires approval
+and this run's approval policy is `never`. The blocker comment and `needs-human`
+label were rejected for the same reason. No production checkbox is newly complete.
+
+Added two real CLI cases that delete the export branch on the bare remote while
+the verifier still holds its cached origin ref and valid commit objects. A
+successful fetch must prune that ref and refuse provenance, both without a receipt
+and with an existing receipt. Refusal preserves existing receipt bytes and
+modification time. Restoring the branch recovers the original commit, deployment
+instant, and audit evidence without republishing. All state remains temporary.
+
+Verification: 58 publication CLI tests, 16 deployment unittests, and 5 report CLI
+tests passed; JavaScript syntax and diff whitespace checks passed. No Python or
+protected files changed. The required Anaconda pytest command cannot start because
+`/opt/anaconda3/bin/python3` is absent. Production provenance and database access
+remain unavailable; observation must wait until both 2026-11-08 and fourteen days
+after verified deployment.
+
+The checkout's read-only Git index rejected staging. The tested changes are
+retained in `/tmp/orchestrator-1175-deleted-branch-commit`, with a handoff patch
+at `/tmp/orchestrator-1175-deleted-branch.patch`.
