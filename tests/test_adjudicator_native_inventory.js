@@ -1029,6 +1029,83 @@ test('native inventory rejects dispatch and retry before touching a live WAL jou
   }
 });
 
+for (const change of ['atomic_replacement', 'symlink_switch']) {
+  test(`native inventory refuses journal ${change} despite identical retained receipts`, (t) => {
+    const w = world(t);
+    const replacement = path.join(w.root, 'replacement.sqlite');
+    fs.copyFileSync(w.journal, replacement);
+    let selected = w.journal;
+    if (change === 'symlink_switch') {
+      // The main file alone contains no receipts: retain the committed WAL
+      // when preparing the second, independently addressable journal.
+      fs.copyFileSync(`${w.journal}-wal`, `${replacement}-wal`);
+      selected = path.join(w.root, 'selected.sqlite');
+      fs.symlinkSync(w.journal, selected);
+    }
+    const args = [...w.inventoryArgs];
+    args[args.indexOf('--native-journal') + 1] = selected;
+    const initialPath = fs.realpathSync(selected);
+    const initialInode = fs.statSync(selected).ino;
+    const before = w.snapshot();
+    const result = w.execute(['-c', `
+import sys
+from pathlib import Path
+import adjudicator_retro as retro
+
+selected, replacement = map(Path, sys.argv[1:3])
+change = sys.argv[3]
+observe = retro._inventory_code
+switched = False
+
+def observe_then_switch(root):
+    global switched
+    result = observe(root)
+    if not switched:
+        switched = True
+        if change == 'symlink_switch':
+            temporary = selected.with_name(selected.name + '.next')
+            temporary.symlink_to(replacement)
+            temporary.replace(selected)
+        else:
+            replacement.replace(selected)
+    return result
+
+# Both record reads still use SQLite's original open file. An equal receipt
+# list cannot establish that the selected path refers to that same journal.
+retro._inventory_code = observe_then_switch
+sys.argv = ['adjudicator_retro.py', *sys.argv[4:]]
+raise SystemExit(retro.main())
+`, selected, replacement, change, ...args.slice(1)]);
+    assert.equal(result.status, 2, result.stderr);
+    assert.match(result.stderr, /native journal location changed during inventory/);
+    assert.equal(result.stdout, '', 'a switched journal must not emit a partial inventory');
+    assert.notEqual(fs.statSync(selected).ino, initialInode);
+    assert.equal(fs.realpathSync(selected) === initialPath, change === 'atomic_replacement');
+    assert.deepEqual(w.snapshot(), before, 'reports and receipt bytes must remain unchanged');
+
+    // A stable observation of the replacement must still see all WAL receipts,
+    // including UNKNOWN attempts and the separately attributable foreign row.
+    const later = w.run(args);
+    assert.equal(later.native_journal.path, fs.realpathSync(selected));
+    assert.equal(later.original_report.sha256, w.sourceHash);
+    assert.deepEqual(later.original_report.case_ids, ['original-a']);
+    assert.deepEqual(later.original_paid_attempts.map((item) => item.backend_run_id),
+      ['original-paid', 'earlier-paid']);
+    const attempts = new Map(later.native_journal.attempts.map((item) => [item.attempt_id, item]));
+    assert.deepEqual(w.ids.map((id) => attempts.get(id).state),
+      ['reserved', 'in_flight', 'raw_persisted']);
+    assert.equal(attempts.get(w.ids[2]).matches_original_source, false);
+    assert.equal(attempts.get(w.ids[2]).raw_response_sha256, sha256(w.raw));
+    assert.equal(later.row_diagnostics[0].unresolved_native_attempts[0].outcome, 'UNKNOWN');
+    assert.equal(later.paid_identity_summary.union_unique, 4);
+    assert.equal(later.canonical_report.summary_authority, 'not_authenticated_by_inventory');
+    assert.equal(later.dispatch_authorized, false);
+    assert.match(later.historical_observations, /^unavailable/);
+    assert.equal(JSON.stringify(later).includes(w.raw), false);
+    assert.deepEqual(w.snapshot(), before);
+  });
+}
+
 for (const input of ['original', 'canonical']) {
   for (const change of ['atomic_replacement', 'symlink_switch']) {
     for (const boundary of ['code_observation', 'final_report_read']) {

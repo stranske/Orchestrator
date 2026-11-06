@@ -343,3 +343,30 @@ in this checkout failed; the change is preserved in an isolated local commit and
 `/tmp/orchestrator-1072-report-pins/change.bundle`. No push was made. Automatic
 approval review rejected the blocker comment and `needs-human` label because the
 GitHub writes require approval and this run's policy is `never`.
+
+## Native journal switches with identical receipts
+
+Checked on 2026-11-06 against checkout
+`2e73ae518dcaa1c863cf7cfa965dbe17b419f8fc`. Two new real-CLI tests replace
+the journal file or switch its selected symlink after the initial SQLite read.
+The open connection still sees the original receipts, but inventory refuses the
+changed location without emitting JSON. A later stable observation retains all
+three WAL receipts, recursive original paid history, foreign-source attribution
+and UNKNOWN attempts. Original/canonical reports and journal/WAL bytes stay
+unchanged. Removing only the journal location guard in a temporary source copy
+makes both regressions fail with an unexpected successful CLI exit.
+
+Validation: all 119 combined JavaScript inventory tests, 32 diagnostic unittests
+and seven replay/publication unittests pass. JavaScript syntax and
+`git diff --check` pass. No repository Python files changed. The required
+`pytest tests/test_adjudicator_retro.py -m "not slow"` command cannot start
+because pytest is absent; installation of pytest and Black failed.
+
+These are fixture observations. The configured production runtime, canonical
+report, outcomes database and default mirror remain absent. Authentic original
+report/journal locations and live reader bindings remain unavailable. No
+production inventory, dispatch, grading, historical proof or next-20 decision
+is claimed; no operational checkbox is completed. Staging in this checkout
+failed on the read-only Git metadata. The verified changes are preserved in an
+isolated local commit and `/tmp/orchestrator-1072-journal-pins/change.bundle`;
+no push was made.
