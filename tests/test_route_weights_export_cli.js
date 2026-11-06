@@ -390,6 +390,74 @@ print("publication_result=" + str(published))
   assert.notEqual(provenance.published_commit, initial);
   fs.writeFileSync(audit, JSON.stringify(provenance));
 
+  async function refuseHistoryReadFailures() {
+    const retained = fs.existsSync(receipt) ? fs.readFileSync(receipt) : null;
+    const modified = retained === null ? null : fs.statSync(receipt, { bigint: true }).mtimeNs;
+    // Fail only the recorder's tree/blob read, after a real fetch and history
+    // listing. A failed read must not be mistaken for an absent/invalid artifact.
+    const script = `
+import subprocess
+import sys
+import route_weights_export as export
+
+operation, encoding, audit, state = sys.argv[1:]
+original_run = subprocess.run
+
+def fail_history_read(command, **kwargs):
+    if command[:1] == ["git"] and command[3:4] == [operation]:
+        diagnostic = "fatal: fixture publication history read failed"
+        if encoding == "bytes":
+            diagnostic = diagnostic.encode() + b"\\xff"
+        result = subprocess.CompletedProcess(command, 128, stdout="", stderr=diagnostic)
+        if kwargs.get("check"):
+            result.check_returncode()
+        return result
+    return original_run(command, **kwargs)
+
+subprocess.run = fail_history_read
+sys.argv = ["export", "--record-challenger-deployment", audit, "--state-dir", state]
+raise SystemExit(export.main())
+`;
+    for (const operation of ['ls-tree', 'show']) {
+      for (const encoding of ['text', 'bytes']) {
+        await t.test(`refuses ${operation} ${encoding} failure ${retained === null ? 'without' : 'with'} receipt`, async () => {
+          const refused = await run(python, ['-c', script, operation, encoding, audit, state],
+            { cwd: root, env });
+          assert.equal(refused.status, 1, refused.stderr);
+          assert.equal(refused.stdout, '');
+          assert.match(refused.stderr, /deployment provenance refused:/);
+          assert.match(refused.stderr, /stderr: fatal: fixture publication history read failed/);
+          assert.doesNotMatch(refused.stderr, /Traceback|not the first verified/);
+          if (retained === null) {
+            assert.equal(fs.existsSync(receipt), false);
+          } else {
+            assert.deepEqual(fs.readFileSync(receipt), retained);
+            assert.equal(fs.statSync(receipt, { bigint: true }).mtimeNs, modified);
+          }
+          // Removing the fault must recover using the original audit, without
+          // publishing a new artifact or replacing its deployment instant.
+          const recovered = await record();
+          assert.equal(recovered.status, 0, recovered.stderr);
+          const recoveredReceipt = JSON.parse(recovered.stdout);
+          assert.equal(recoveredReceipt.published_commit, provenance.published_commit);
+          assert.equal(recoveredReceipt.deployed_at, provenance.deployed_at);
+          assert.equal(recoveredReceipt.deployed_epoch, Date.parse(provenance.deployed_at) / 1000);
+          assert.equal(recoveredReceipt.deployment_evidence, provenance.deployment_evidence);
+          if (retained === null) {
+            fs.unlinkSync(receipt);
+          } else {
+            assert.deepEqual(fs.readFileSync(receipt), retained);
+            assert.equal(fs.statSync(receipt, { bigint: true }).mtimeNs, modified);
+          }
+          assert.equal(await git(remote, 'rev-parse', branch), provenance.published_commit);
+          assert.equal(fs.existsSync(database), false);
+          assert.deepEqual(fs.readdirSync(home), []);
+        });
+      }
+    }
+  }
+  await refuseHistoryReadFailures();
+
   async function refuseBeforeGeneration() {
     const before = fs.existsSync(receipt) ? fs.readFileSync(receipt) : null;
     const modified = before === null ? null : fs.statSync(receipt, { bigint: true }).mtimeNs;
@@ -499,6 +567,7 @@ print("publication_result=" + str(published))
   assert.deepEqual(JSON.parse(fs.readFileSync(receipt, 'utf8')), recorded);
   const before = fs.readFileSync(receipt);
   const modified = fs.statSync(receipt, { bigint: true }).mtimeNs;
+  await refuseHistoryReadFailures();
   await refuseBeforeGeneration();
   await refuseUnavailableRemote();
   const repeated = await record();

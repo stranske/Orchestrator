@@ -445,3 +445,31 @@ Verification (focused, as requested):
 
 Additional file-touch validation: `tests/test_delivery_required_contexts.py` (1 passed) for
 `required-contexts.json` and `_gate_extra_pull_request_contexts()`.
+
+## Publication-history read failure regression (2026-11-06)
+
+Extended the real publication/recovery CLI test with eight cases covering failures
+of `git ls-tree` and `git show`, text and invalid-UTF-8 byte diagnostics, and both
+absent and retained deployment receipts. The fault occurs after the real fetch
+and history listing. Each case requires a refusal with the original Git error,
+preserves receipt bytes and modification time, and recovers from the original
+audit without republishing or changing the deployment instant. All repositories,
+home directories, databases, and state paths remain temporary. No Python source
+or protected files changed.
+
+Verification: `node tests/test_route_weights_export_cli.js` passed all 51 tests;
+the deployment unittest suite passed all 16 tests; the switch-review Node suite,
+JavaScript syntax check, and diff whitespace check also passed. Disposable copies
+that swallow either tree or blob read errors fail the new regression.
+
+No task checkbox is newly complete. This runner lacks the production database
+and authentic deployment audit, and the observation requires both 2026-11-08 and
+fourteen days after verified deployment. `/opt/anaconda3/bin/python3`, pytest,
+and Black are absent; installing the missing packages failed DNS. The named
+pytest acceptance check remains unverified in this run.
+
+The checkout's `.git` is read-only and rejected `git add`. The tested JavaScript
+change is retained as a commit in `/tmp/orchestrator-1175-history-read-commit`,
+with a handoff patch at `/tmp/orchestrator-1175-history-read.patch`. Posting the
+blocker comment and adding `needs-human` to PR #1196 were rejected with
+`MCP tool call requires approval, but approval policy is never`.
