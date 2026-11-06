@@ -1,12 +1,12 @@
 """A live recurring trial is six read-only Codex sessions, or it writes nothing.
 
 Transport acknowledgement requires four binding lines in the final message;
-recurring-work quality needs a ``work_evidence=`` line quoting the rubric from
-the frozen spec. Cost is token counts from the session. The provider model comes from a
-``response.completed`` OpenAI response object or from ``turn.completed``'s
-``server_model`` field. The CLI's ``turn_context``, and a generic ``model``
-on ``turn.completed``, do not publish. The prompt must not contain the
-completed ``work_evidence=`` answer.
+recurring-work quality needs a ``work_evidence=analysis:`` line with the bounded
+acceptance task from the frozen spec. Cost is token counts from the session. The
+provider model comes from a ``response.completed`` OpenAI response object or from
+``turn.completed``'s ``server_model`` field. The CLI's ``turn_context``, and a generic
+``model`` on ``turn.completed``, do not publish independent provider identity for
+Brain ingest. The prompt must not contain the completed ``work_evidence=`` answer.
 """
 
 from __future__ import annotations
@@ -64,14 +64,18 @@ def _required_lines(manifest: dict, request: dict) -> list[str]:
     ]
 
 
-def _final_message_ack_and_work(manifest: dict, request: dict, *, include_work: bool) -> str:
-    """Four acknowledgement lines, optional blank line and work_evidence (rubric quote)."""
+def _analysis_answer(spec: str) -> str:
+    return trial._acceptance_analysis_target(spec)
+
+
+def _final_message_ack_and_analysis(manifest: dict, request: dict, *, include_work: bool) -> str:
+    """Four acknowledgement lines, optional analysis line ``work_evidence=analysis:``."""
     lines = _required_lines(manifest, request)
     body = "\n".join(lines)
     if not include_work:
         return body + "\n"
-    rubric = trial._recurring_work_rubric_line(manifest["frozen_packet"]["frozen_spec"])
-    return body + "\n\n" + f"work_evidence={rubric}\n"
+    answer = _analysis_answer(manifest["frozen_packet"]["frozen_spec"])
+    return body + "\n\n" + f"work_evidence=analysis: {answer}\n"
 
 
 SANITIZED_REAL_STREAM = """{"type":"response.completed","response":{"object":"response","id":"resp_fixture001","model":"gpt-6-2025-astra","usage":{"input_tokens":42,"output_tokens":7}}}
@@ -87,8 +91,8 @@ def test_sanitized_real_stream_fixture_yields_one_openai_response():
     assert got["usage"] == {"input_tokens": 42, "output_tokens": 7}
 
 
-def test_prompt_names_the_rubric_without_embedding_the_answer(tmp_path):
-    """Quality is a quote from the spec. The instruction must not hand over that line."""
+def test_prompt_names_the_analysis_task_without_embedding_the_answer(tmp_path):
+    """Quality is bounded analysis from the spec. The instruction must not hand over that text."""
     state, experiments = _seal(tmp_path)
     orchestrator, workflows = _sources(tmp_path)
     manifest = trial.build_current_recurring_trial(
@@ -101,12 +105,12 @@ def test_prompt_names_the_rubric_without_embedding_the_answer(tmp_path):
         experiments_root=experiments,
     )
     prompt = trial.recurring_trial_prompt(manifest, manifest["requests"][0])
-    rubric = trial._recurring_work_rubric_line(SPEC)
+    expected = _analysis_answer(SPEC)
     head, marker, tail = prompt.partition("Frozen specification:\n")
     assert marker == "Frozen specification:\n"
-    assert rubric in tail
-    assert f"work_evidence={rubric}" not in head
-    assert "work_evidence=" in head
+    assert expected in tail
+    assert f"work_evidence=analysis: {expected}" not in head
+    assert "work_evidence=analysis:" in head
     assert "workspace-write" not in prompt
 
 
@@ -130,6 +134,75 @@ def test_echo_only_ack_lines_score_zero_recurring_work_quality(tmp_path):
         "\n".join(_required_lines(manifest, request)) + "\n",
     )
     assert ack is True
+    assert quality == 0.0
+
+
+def test_heading_copy_scores_zero_recurring_work_quality(tmp_path):
+    """Copying the full acceptance heading line is not the analysis task."""
+    state, experiments = _seal(tmp_path)
+    orchestrator, workflows = _sources(tmp_path)
+    manifest = trial.build_current_recurring_trial(
+        orchestrator,
+        workflows,
+        seed=14,
+        now=1000,
+        capacity_state="ok",
+        state_dir=state,
+        experiments_root=experiments,
+    )
+    request = manifest["requests"][0]
+    rubric = trial._recurring_work_rubric_line(SPEC)
+    _ack, quality = trial._acknowledgement_score(
+        manifest,
+        request,
+        "\n".join(_required_lines(manifest, request)) + f"\n\nwork_evidence=analysis: {rubric}\n",
+    )
+    assert quality == 0.0
+
+
+def test_binding_echo_in_analysis_scores_zero(tmp_path):
+    """Identifier echoes from the acknowledgement block cannot substitute for analysis."""
+    state, experiments = _seal(tmp_path)
+    orchestrator, workflows = _sources(tmp_path)
+    manifest = trial.build_current_recurring_trial(
+        orchestrator,
+        workflows,
+        seed=14,
+        now=1000,
+        capacity_state="ok",
+        state_dir=state,
+        experiments_root=experiments,
+    )
+    request = manifest["requests"][0]
+    garbage = "packet_hash=x spec_sha256=y profile_id=z run_id=w"
+    _ack, quality = trial._acknowledgement_score(
+        manifest,
+        request,
+        "\n".join(_required_lines(manifest, request)) + f"\n\nwork_evidence=analysis: {garbage}\n",
+    )
+    assert quality == 0.0
+
+
+def test_legacy_rubric_quote_scores_zero(tmp_path):
+    """The old quote-only ``work_evidence=`` line without ``analysis:`` scores 0."""
+    state, experiments = _seal(tmp_path)
+    orchestrator, workflows = _sources(tmp_path)
+    manifest = trial.build_current_recurring_trial(
+        orchestrator,
+        workflows,
+        seed=14,
+        now=1000,
+        capacity_state="ok",
+        state_dir=state,
+        experiments_root=experiments,
+    )
+    request = manifest["requests"][0]
+    rubric = trial._recurring_work_rubric_line(SPEC)
+    _ack, quality = trial._acknowledgement_score(
+        manifest,
+        request,
+        "\n".join(_required_lines(manifest, request)) + f"\n\nwork_evidence={rubric}\n",
+    )
     assert quality == 0.0
 
 
@@ -186,14 +259,16 @@ def test_run_current_records_measured_quality_cost_and_response_identity(tmp_pat
         assert "Frozen specification:" in prompt
         assert SPEC in prompt
         assert "workspace-write" not in prompt
-        assert "work_evidence=" in prompt
+        assert "work_evidence=analysis:" in prompt
         include_work = request["profile_id"] == full_profile
         session, final_text = _session(
             request,
             model=request["requested_model"],
             tokens_in=10 * int(request["launch_ordinal"]),
             tokens_out=int(request["launch_ordinal"]),
-            final_text=_final_message_ack_and_work(manifest, request, include_work=include_work),
+            final_text=_final_message_ack_and_analysis(
+                manifest, request, include_work=include_work
+            ),
         )
         return session, final_text, "codex-cli 0.153.2"
 
@@ -235,6 +310,7 @@ def test_run_current_records_measured_quality_cost_and_response_identity(tmp_pat
     assert body["provider_resolved_model"] in {
         row["requested_model"] for row in manifest["requests"]
     }
+    assert body.get("independent_provider_identity") is True
     assert "turn_context" not in artifact.read_text(encoding="utf-8")
 
 
@@ -281,7 +357,7 @@ def test_cli_usage_without_a_provider_model_does_not_publish(tmp_path, monkeypat
                 ),
             ]
         )
-        final_text = _final_message_ack_and_work(manifest, request, include_work=True)
+        final_text = _final_message_ack_and_analysis(manifest, request, include_work=True)
         return session + "\n", final_text, "codex-cli 0.166.0"
 
     with pytest.raises(ValueError, match="provider_resolved_identity_unavailable"):
@@ -302,8 +378,8 @@ def test_cli_usage_without_a_provider_model_does_not_publish(tmp_path, monkeypat
     assert list((tmp_path / "artifacts").glob("identity-*.json")) == []
 
 
-def test_server_model_publishes_quality_cost_and_provider_identity(tmp_path, monkeypatch):
-    """A provider server_model is identity. The configured model is not copied in."""
+def test_server_model_publishes_quality_cost_not_verified_for_ingest(tmp_path, monkeypatch):
+    """server_model supports measurement but is not independent provider provenance for ingest."""
     state, experiments = _seal(tmp_path)
     orchestrator, workflows = _sources(tmp_path)
     monkeypatch.setenv("ORCH_STATE_DIR", str(state))
@@ -321,8 +397,8 @@ def test_server_model_publishes_quality_cost_and_provider_identity(tmp_path, mon
 
     def execute(request, prompt):
         head, _, _tail = prompt.partition("Frozen specification:\n")
-        rubric = trial._recurring_work_rubric_line(SPEC)
-        assert f"work_evidence={rubric}" not in head
+        expected = _analysis_answer(SPEC)
+        assert f"work_evidence=analysis: {expected}" not in head
         include_work = request["profile_id"] == full_profile
         session = json.dumps(
             {
@@ -334,7 +410,9 @@ def test_server_model_publishes_quality_cost_and_provider_identity(tmp_path, mon
                 "server_model": request["requested_model"],
             }
         )
-        final_text = _final_message_ack_and_work(manifest, request, include_work=include_work)
+        final_text = _final_message_ack_and_analysis(
+            manifest, request, include_work=include_work
+        )
         return session + "\n", final_text, "codex-cli 0.166.0"
 
     published = trial.run_current_recurring_trial(
@@ -351,8 +429,8 @@ def test_server_model_publishes_quality_cost_and_provider_identity(tmp_path, mon
     )
     summary = json.loads((state / "capability-program" / "profile-trial.json").read_text())
     assert published["attempt_count"] == 6
-    assert published["brain_ingest_enabled"] is True
-    assert summary["identity_verified"] is True
+    assert published["brain_ingest_enabled"] is False
+    assert summary["identity_verified"] is False
     assert (summary["profile_count"], summary["instance_count"]) == (2, 6)
     assert summary["quality_by_profile"][full_profile] == 1.0
     assert summary["quality_by_profile"][trial.CURRENT_TRIAL_PROFILE_IDS[1]] == 0.0
@@ -369,6 +447,7 @@ def test_server_model_publishes_quality_cost_and_provider_identity(tmp_path, mon
     assert artifact["object"] == "turn.completed"
     assert artifact["server_model"] == artifact["provider_resolved_model"]
     assert "response_id" not in artifact
+    assert artifact.get("independent_provider_identity") is False
 
 
 def test_server_model_disagrees_with_the_response_object(tmp_path):
@@ -411,7 +490,7 @@ def test_server_model_disagrees_with_the_response_object(tmp_path):
             manifest,
             request,
             session,
-            _final_message_ack_and_work(manifest, request, include_work=True),
+            _final_message_ack_and_analysis(manifest, request, include_work=True),
         )
 
 
@@ -463,7 +542,7 @@ def test_missing_usage_does_not_publish(tmp_path, monkeypatch):
     )
 
     def execute(request, _prompt):
-        final_text = _final_message_ack_and_work(manifest, request, include_work=True)
+        final_text = _final_message_ack_and_analysis(manifest, request, include_work=True)
         response = {
             "type": "response.completed",
             "response": {

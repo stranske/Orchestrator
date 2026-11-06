@@ -17,9 +17,9 @@ trial of the sealed strategy spec. It does not execute workers, and it refuses
 when any instance has no token count. ``run-current`` is the live read-only
 execution of that plan: six ``codex exec --sandbox read-only`` arms on the
 frozen spec. Transport acknowledgement requires four binding lines in the final
-message; recurring-work quality is scored separately from a read-only rubric
-on the frozen specification text. The prompt names the line to quote and does
-not include the completed ``work_evidence=`` answer. Cost is token counts from
+message; recurring-work quality scores a bounded ``work_evidence=analysis:`` line
+against the frozen specification's acceptance task. The prompt does not include
+the completed analysis answer. Cost is token counts from
 the session stream. Provider identity is taken from a ``response.completed``
 OpenAI response object, or from ``turn.completed``'s ``server_model`` field
 when the CLI copied it from provider response metadata. ``--model``, argv,
@@ -167,7 +167,12 @@ IDENTITY_EVIDENCE_VERSION = 1
 IDENTITY_AUTHORITIES = {
     "workflows-read-only-trial-artifact/v1",
     "openai-response-metadata/v1",
+    # Local session JSON bound to measured bytes; not independent provider proof (CLAUDE.md:473-481).
+    "codex-session-turn-metadata/v1",
 }
+IDENTITY_AUTHORITY_INDEPENDENT = "openai-response-metadata/v1"
+IDENTITY_AUTHORITY_SESSION_ONLY = "codex-session-turn-metadata/v1"
+WORKFLOWS_TRIAL_IDENTITY_AUTHORITY = "workflows-read-only-trial-artifact/v1"
 IDENTITY_EVIDENCE_FIELDS = {
     "schema",
     "version",
@@ -847,10 +852,24 @@ def _require_consistent_source_seal(manifest: dict[str, Any]) -> None:
             raise ValueError(f"trial source manifest aggregate does not match its entries:{name}")
 
 
+def _artifact_independent_provider_identity(artifact: dict[str, Any]) -> bool:
+    """True only when the artifact records an OpenAI ``response`` id from stream metadata."""
+    if artifact.get("independent_provider_identity") is not True:
+        return False
+    if artifact.get("object") != "response":
+        return False
+    rid = artifact.get("response_id")
+    return type(rid) is str and rid.startswith("resp_")
+
+
 def _authoritative_identity_verified(attempts: list[dict[str, Any]]) -> bool:
+    """Authoritative for ingest: Workflows artifact, or OpenAI ``response`` id in the bound JSON."""
     for attempt in attempts:
         evidence = attempt.get("identity_evidence")
         if not isinstance(evidence, dict):
+            return False
+        authority = evidence.get("authority")
+        if authority not in IDENTITY_AUTHORITIES or authority == IDENTITY_AUTHORITY_SESSION_ONLY:
             return False
         ref = str(evidence.get("artifact_ref") or attempt.get("artifact_ref") or "").strip()
         if not ref:
@@ -873,11 +892,16 @@ def _authoritative_identity_verified(attempts: list[dict[str, Any]]) -> bool:
             return False
         if not isinstance(artifact, dict):
             return False
-        # A digest alone binds bytes, not worker identity. Require the recorded
-        # identity content to agree with every provider-resolved attempt field.
         for field in ("profile_id", "provider_resolved_provider", "provider_resolved_model"):
             if not attempt.get(field) or artifact.get(field) != attempt[field]:
                 return False
+        if authority == WORKFLOWS_TRIAL_IDENTITY_AUTHORITY:
+            continue
+        if authority == IDENTITY_AUTHORITY_INDEPENDENT:
+            if not _artifact_independent_provider_identity(artifact):
+                return False
+            continue
+        return False
     return True
 
 
@@ -1010,10 +1034,15 @@ def recurring_trial_prompt(manifest: dict[str, Any], request: dict[str, Any]) ->
         instruction.rstrip()
         + "\nDo not edit, create, commit, or push files.\n"
         + "First, return exactly these four lines (transport acknowledgement), then a blank line, "
-        "then one line of recurring-work evidence.\n"
-        + "The evidence line must be `work_evidence=` followed by one line copied verbatim "
-        'from the frozen specification below: the line that begins with "Acceptance criteria:" '
-        "if there is one; otherwise the first non-empty line of the specification.\n"
+        + "then one line of recurring-work analysis.\n"
+        + "That line must be exactly `work_evidence=analysis: <text>` where <text> is the "
+        + "acceptance task only: if the frozen specification contains a line starting with "
+        + '"Acceptance criteria:", <text> is the remainder of that line after the colon '
+        + "(trimmed, at most 200 characters); otherwise <text> is the first non-empty line "
+        + "of the specification (trimmed, at most 200 characters).\n"
+        + "Do not copy the leading \"Acceptance criteria:\" words into <text>. Do not paste "
+        + "the four acknowledgement field names or values, spec headings alone, or any line "
+        + "that is only identifiers from the acknowledgement block.\n"
         + "Do not add any other text.\n"
         + "\n".join(lines)
         + "\n\nFrozen specification:\n"
@@ -1022,7 +1051,7 @@ def recurring_trial_prompt(manifest: dict[str, Any], request: dict[str, Any]) ->
 
 
 def _recurring_work_rubric_line(spec: str) -> str:
-    """One spec line that read-only work quality must quote verbatim."""
+    """One spec line that read-only work quality used to quote verbatim (legacy helper)."""
     for line in spec.splitlines():
         stripped = line.strip()
         if stripped.startswith("Acceptance criteria:"):
@@ -1034,8 +1063,22 @@ def _recurring_work_rubric_line(spec: str) -> str:
     raise ValueError("frozen specification has no line for the work-quality rubric")
 
 
+def _acceptance_analysis_target(spec: str) -> str:
+    """The bounded criterion text the worker must echo under ``analysis:`` (no heading words)."""
+    for line in spec.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("Acceptance criteria:"):
+            rest = stripped[len("Acceptance criteria:") :].strip()
+            return rest[:200]
+    for line in spec.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped[:200]
+    raise ValueError("frozen specification has no line for the acceptance analysis")
+
+
 def _work_quality_score(manifest: dict[str, Any], final_text: str) -> float:
-    """1.0 when the final message proves the rubric line; identifier echo alone scores 0."""
+    """1.0 when ``work_evidence=analysis:`` carries the frozen spec's acceptance task; quotes or echoes score 0."""
     packet = manifest.get("frozen_packet")
     if not isinstance(packet, dict):
         return 0.0
@@ -1043,27 +1086,49 @@ def _work_quality_score(manifest: dict[str, Any], final_text: str) -> float:
     if not isinstance(spec, str) or not spec.strip():
         return 0.0
     try:
-        rubric = _recurring_work_rubric_line(spec)
+        expected = _acceptance_analysis_target(spec)
     except ValueError:
         return 0.0
+    rubric_line = None
+    try:
+        rubric_line = _recurring_work_rubric_line(spec)
+    except ValueError:
+        rubric_line = None
     text = final_text or ""
-    prefix = "work_evidence="
+    prefix = "work_evidence=analysis:"
+    binding_markers = (
+        "packet_hash=",
+        "spec_sha256=",
+        "profile_id=",
+        "run_id=",
+    )
+    quoted = ""
     for raw in text.splitlines():
         line = raw.strip()
         if line.startswith(prefix):
             quoted = line[len(prefix) :].strip()
-            return 1.0 if quoted == rubric else 0.0
-    return 0.0
+            break
+        if line.startswith("work_evidence="):
+            return 0.0
+    else:
+        return 0.0
+    # Copying the full heading line (or only the heading words) is not analysis.
+    if rubric_line is not None and quoted.strip() == rubric_line.strip():
+        return 0.0
+    if quoted.lstrip().lower().startswith("acceptance criteria:"):
+        return 0.0
+    if any(marker in quoted for marker in binding_markers):
+        return 0.0
+    return 1.0 if quoted == expected else 0.0
 
 
 def _acknowledgement_score(
     manifest: dict[str, Any], request: dict[str, Any], final_text: str
 ) -> tuple[bool, float]:
-    """Transport acknowledgement (four lines) and recurring-work quality (rubric), separately.
+    """Transport acknowledgement (four lines) and recurring-work quality (analysis line), separately.
 
-    All four binding lines must appear for acknowledgement. Work quality does not
-    use identifier-echo density: it is 1.0 only when ``work_evidence=`` carries the
-    rubric line verbatim.
+    All four binding lines must appear for acknowledgement. Work quality is 1.0 only when
+    ``work_evidence=analysis:`` carries the bounded acceptance task from the frozen spec.
     """
     packet = manifest["frozen_packet"]
     required = (
@@ -1256,26 +1321,30 @@ def measure_codex_session(
 
 
 def _identity_artifact(directory: Path, request: dict[str, Any], measured: dict[str, Any]) -> dict:
+    independent = measured.get("identity_source") == "openai-response"
     payload: dict[str, Any] = {
         "profile_id": request["profile_id"],
         "provider_resolved_model": measured["model"],
         "provider_resolved_provider": measured["provider"],
+        "independent_provider_identity": independent,
     }
     if measured.get("response_id"):
         payload["object"] = "response"
         payload["response_id"] = measured["response_id"]
+        evidence_authority = IDENTITY_AUTHORITY_INDEPENDENT
     else:
         # server_model is the provider id on turn.completed. It is not an
         # OpenAI response id, so the artifact must not invent a resp_ value.
         payload["object"] = "turn.completed"
         payload["server_model"] = measured["model"]
+        evidence_authority = IDENTITY_AUTHORITY_SESSION_ONLY
     path = directory / f"identity-{int(request['launch_ordinal'])}.json"
     _atomic_json(path, payload)
     digest = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
     return {
         "schema": IDENTITY_EVIDENCE_SCHEMA,
         "version": IDENTITY_EVIDENCE_VERSION,
-        "authority": "openai-response-metadata/v1",
+        "authority": evidence_authority,
         "artifact_ref": str(path),
         "artifact_sha256": digest,
     }
@@ -1308,8 +1377,11 @@ def results_from_codex_sessions(
     artifact_dir.mkdir(parents=True, exist_ok=True)
     attempts = []
     qualities: dict[str, list[float]] = {}
+    all_independent = True
     for request in requests:
         measured = measured_by_run[request["run_id"]]
+        if measured.get("identity_source") != "openai-response":
+            all_independent = False
         qualities.setdefault(request["profile_id"], []).append(float(measured["quality"]))
         attempts.append(
             {
@@ -1338,7 +1410,7 @@ def results_from_codex_sessions(
         "trial_id": manifest["trial_id"],
         "packet_hash": manifest["packet_hash"],
         "acknowledged": True,
-        "identity_verified": True,
+        "identity_verified": bool(all_independent),
         "attempts": attempts,
         "quality_by_profile": {
             profile_id: sum(scores) / len(scores) for profile_id, scores in qualities.items()
@@ -1542,11 +1614,13 @@ def publish_measured_recurring_trial(
             value = attempt.get(field)
             if type(value) is not int or value < 0:
                 raise ValueError(f"measured recurring trial {field} must be a nonnegative integer")
+    ingest_brain = results.get("identity_verified") is True
     return finalize_trial(
         manifest,
         results,
         state_path=state_path,
-        ingest_brain=True,
+        record_feedback=True,
+        ingest_brain=ingest_brain,
         now=now,
     )
 

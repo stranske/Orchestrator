@@ -45,15 +45,20 @@ class ProfileTrialInstancesTest(unittest.TestCase):
         attempts = []
         for request in self.manifest["requests"]:
             artifact = self.root / f"identity-{request['launch_ordinal']}.json"
-            identity = {
+            artifact_payload = {
                 "profile_id": request["profile_id"],
                 "provider_resolved_provider": request["provider"],
                 "provider_resolved_model": request["requested_model"],
+                "object": "response",
+                "response_id": f"resp_offline_{request['launch_ordinal']}",
+                "independent_provider_identity": True,
             }
-            artifact.write_text(json.dumps(identity))
+            artifact.write_text(json.dumps(artifact_payload))
             attempts.append(
                 {
-                    **identity,
+                    "profile_id": request["profile_id"],
+                    "provider_resolved_provider": request["provider"],
+                    "provider_resolved_model": request["requested_model"],
                     "run_id": request["run_id"],
                     "operation_role": "worker",
                     "requested_model": request["requested_model"],

@@ -1021,23 +1021,27 @@ def _validate_transport_results(
             if field not in id_art:
                 continue
             bound = id_art[field]
+            measured = _usage_count(attempt, field)
             if bound is None:
+                if measured is not None:
+                    raise ValueError(
+                        f"transport {field} disagrees with identity artifact:{request['profile_id']}"
+                    )
                 continue
             if type(bound) is not int or bound < 0:
                 raise ValueError(
                     f"transport identity artifact {field} is not a nonnegative integer:"
                     f"{request['profile_id']}"
                 )
-            measured = _usage_count(attempt, field)
             if measured != bound:
                 raise ValueError(
                     f"transport {field} disagrees with identity artifact:{request['profile_id']}"
                 )
         tokens_in = _usage_count(attempt, "tokens_in")
         tokens_out = _usage_count(attempt, "tokens_out")
-        if "tokens_in" in id_art and id_art["tokens_in"] is not None:
+        if "tokens_in" in id_art:
             tokens_in = id_art["tokens_in"]
-        if "tokens_out" in id_art and id_art["tokens_out"] is not None:
+        if "tokens_out" in id_art:
             tokens_out = id_art["tokens_out"]
         sanitized_attempt = {
             "run_id": attempt["run_id"],
