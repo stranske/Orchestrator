@@ -1,0 +1,45 @@
+## ci-base
+
+reconcile the collection floor (main only)	UNKNOWN STEP	2026-10-18T20:25:00.2938382Z   pytest:     5216 passed, 0 failed, 27/31 max skipped (5243 collected; floor 5219 — 24 BEHIND)
+reconcile the collection floor (main only)	UNKNOWN STEP	2026-10-18T20:25:00.2939251Z   selftests:  100 of 107 modules ran, 7/7 max skipped
+combined coverage (pytest + selftests, the honest number)	UNKNOWN STEP	2026-10-18T20:25:08.0156503Z   pytest:     5216 passed, 0 failed, 27/31 max skipped (5243 collected; floor 5219 — 24 BEHIND)
+combined coverage (pytest + selftests, the honest number)	UNKNOWN STEP	2026-10-18T20:25:08.0157163Z   selftests:  100 of 107 modules ran, 7/7 max skipped
+combined coverage (pytest + selftests, the honest number)	UNKNOWN STEP	2026-10-18T20:25:08.0296480Z coverage: combined 113 instrumented process(es)
+combined coverage (pytest + selftests, the honest number)	UNKNOWN STEP	2026-10-18T20:25:08.0373101Z TOTAL                                  74010  10053  86.4%
+combined coverage (pytest + selftests, the honest number)	UNKNOWN STEP	2026-10-18T20:25:08.0373861Z coverage json: /home/runner/work/Orchestrator/Orchestrator/coverage.json
+verify.py (real pytest counts + selftests + capability gates)	UNKNOWN STEP	2026-10-18T20:24:06.3945579Z   pytest:     5216 passed, 0 failed, 27/31 max skipped (5243 collected; floor 5219 — 24 BEHIND)
+verify.py (real pytest counts + selftests + capability gates)	UNKNOWN STEP	2026-10-18T20:24:06.3945939Z   selftests:  100 of 107 modules ran, 7/7 max skipped
+verify.py in the flat exec-mirror shape (the tree a sync ships)	UNKNOWN STEP	2026-10-18T20:25:03.4135991Z   pytest:     5195 passed, 0 failed, 48/52 max [bare_mirror_skipped_max] skipped (5243 collected; floor 5219 — 24 BEHIND)
+verify.py in the flat exec-mirror shape (the tree a sync ships)	UNKNOWN STEP	2026-10-18T20:25:03.4136618Z   selftests:  100 of 107 modules ran, 7/7 max [bare_mirror_selftest_skipped_max] skipped
+## ci-pr
+
+verify.py (real pytest counts + selftests + capability gates)	UNKNOWN STEP	2026-10-18T20:20:34.4171979Z HEAD is now at 661ccd6 Merge 7624cadfc1b864af5920a9a1a29c9ac9982241d3 into 77ba39c604227489974cc87a52c944658981df82
+verify.py (real pytest counts + selftests + capability gates)	UNKNOWN STEP	2026-10-18T20:26:53.1069397Z   pytest:     5225 passed, 0 failed, 27/31 max skipped (5252 collected; floor 5219 — 33 BEHIND)
+verify.py (real pytest counts + selftests + capability gates)	UNKNOWN STEP	2026-10-18T20:26:53.1070042Z   selftests:  100 of 107 modules ran, 7/7 max skipped
+combined coverage (pytest + selftests, the honest number)	UNKNOWN STEP	2026-10-18T20:20:33.8150578Z HEAD is now at 661ccd6 Merge 7624cadfc1b864af5920a9a1a29c9ac9982241d3 into 77ba39c604227489974cc87a52c944658981df82
+combined coverage (pytest + selftests, the honest number)	UNKNOWN STEP	2026-10-18T20:27:29.3537307Z   pytest:     5225 passed, 0 failed, 27/31 max skipped (5252 collected; floor 5219 — 33 BEHIND)
+combined coverage (pytest + selftests, the honest number)	UNKNOWN STEP	2026-10-18T20:27:29.3538115Z   selftests:  100 of 107 modules ran, 7/7 max skipped
+combined coverage (pytest + selftests, the honest number)	UNKNOWN STEP	2026-10-18T20:27:29.3634871Z coverage: combined 113 instrumented process(es)
+combined coverage (pytest + selftests, the honest number)	UNKNOWN STEP	2026-10-18T20:27:29.3693593Z TOTAL                                  74010   9969  86.5%
+combined coverage (pytest + selftests, the honest number)	UNKNOWN STEP	2026-10-18T20:27:29.3693993Z coverage json: /home/runner/work/Orchestrator/Orchestrator/coverage.json
+verify.py in the flat exec-mirror shape (the tree a sync ships)	UNKNOWN STEP	2026-10-18T20:20:34.7788529Z HEAD is now at 661ccd6 Merge 7624cadfc1b864af5920a9a1a29c9ac9982241d3 into 77ba39c604227489974cc87a52c944658981df82
+verify.py in the flat exec-mirror shape (the tree a sync ships)	UNKNOWN STEP	2026-10-18T20:29:07.3593626Z   pytest:     5204 passed, 0 failed, 48/52 max [bare_mirror_skipped_max] skipped (5252 collected; floor 5219 — 33 BEHIND)
+verify.py in the flat exec-mirror shape (the tree a sync ships)	UNKNOWN STEP	2026-10-18T20:29:07.3594124Z   selftests:  100 of 107 modules ran, 7/7 max [bare_mirror_selftest_skipped_max] skipped
+## gate-pr
+
+detect changed files	UNKNOWN STEP	2026-10-18T20:20:33.1683040Z HEAD is now at 7624cad test: cover verifier and repo knowledge CLI routes
+issue consistency	UNKNOWN STEP	2026-10-18T20:20:48.4146505Z HEAD is now at 7624cad test: cover verifier and repo knowledge CLI routes
+ledger validation	UNKNOWN STEP	2026-10-18T20:20:54.7791911Z HEAD is now at 7624cad test: cover verifier and repo knowledge CLI routes
+test-quality	UNKNOWN STEP	2026-10-18T20:20:52.0824521Z HEAD is now at 7624cad test: cover verifier and repo knowledge CLI routes
+github scripts tests	UNKNOWN STEP	2026-10-18T20:20:51.5593662Z HEAD is now at 7624cad test: cover verifier and repo knowledge CLI routes
+docs guard	UNKNOWN STEP	2026-10-18T20:20:53.9400362Z HEAD is now at 7624cad test: cover verifier and repo knowledge CLI routes
+python ci / lint-format	UNKNOWN STEP	2026-10-18T20:21:06.2346989Z HEAD is now at 661ccd6 Merge 7624cadfc1b864af5920a9a1a29c9ac9982241d3 into 77ba39c604227489974cc87a52c944658981df82
+python ci / typecheck-mypy	UNKNOWN STEP	2026-10-18T20:20:59.7283600Z HEAD is now at 661ccd6 Merge 7624cadfc1b864af5920a9a1a29c9ac9982241d3 into 77ba39c604227489974cc87a52c944658981df82
+python ci / lint-ruff	UNKNOWN STEP	2026-10-18T20:21:02.2982475Z HEAD is now at 661ccd6 Merge 7624cadfc1b864af5920a9a1a29c9ac9982241d3 into 77ba39c604227489974cc87a52c944658981df82
+python ci / python 3.12	UNKNOWN STEP	2026-10-18T20:21:07.3641050Z HEAD is now at 661ccd6 Merge 7624cadfc1b864af5920a9a1a29c9ac9982241d3 into 77ba39c604227489974cc87a52c944658981df82
+python ci / python 3.12	UNKNOWN STEP	2026-10-18T20:25:14.2474510Z TOTAL                                  74010  28505  61.5%
+python ci / python 3.12	UNKNOWN STEP	2026-10-18T20:25:14.2962556Z =========== 5211 passed, 41 skipped, 4 warnings in 236.22s (0:03:56) ===========
+python ci / python 3.13	UNKNOWN STEP	2026-10-18T20:21:10.1614697Z HEAD is now at 661ccd6 Merge 7624cadfc1b864af5920a9a1a29c9ac9982241d3 into 77ba39c604227489974cc87a52c944658981df82
+python ci / python 3.13	UNKNOWN STEP	2026-10-18T20:26:38.7626460Z TOTAL                                  74010  28506  61.5%
+python ci / python 3.13	UNKNOWN STEP	2026-10-18T20:26:38.7627365Z ========= 5211 passed, 41 skipped, 9408 warnings in 314.04s (0:05:14) ==========
+summary	UNKNOWN STEP	2026-10-18T20:27:10.1949312Z HEAD is now at 7624cad test: cover verifier and repo knowledge CLI routes
