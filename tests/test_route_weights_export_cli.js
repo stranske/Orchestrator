@@ -378,19 +378,38 @@ async function verifyMergedPublication(t, objectFormat) {
   // Later malformed artifacts cannot invalidate or reset an earlier verified
   // deployment. Stop validating history at the first valid filter publication.
   let publishedTip = merged;
-  for (const stage of ['malformed challengers', 'malformed generation time', 'filter repaired']) {
+  for (const stage of [
+    'malformed challengers', 'malformed generation time', 'filter repaired',
+    'backdated publication',
+  ]) {
     const laterDocument = structuredClone(document);
     if (stage === 'malformed challengers') {
       laterDocument.exploration.challengers.review = 'gemini';
     } else if (stage === 'malformed generation time') {
       laterDocument.generated_at = 'invalid';
+    } else if (stage === 'backdated publication') {
+      laterDocument.generated_at = '2026-11-03T10:00:00Z';
     }
     fs.writeFileSync(artifact, JSON.stringify(laterDocument));
     await git(checkout, 'add', '.');
-    await git(checkout, 'commit', '-m', `${stage} fixture`);
+    // Publication order comes from branch history, not artifact or Git clocks.
+    const commitEnv = stage === 'backdated publication' ? {
+      ...env, GIT_AUTHOR_DATE: laterDocument.generated_at,
+      GIT_COMMITTER_DATE: laterDocument.generated_at,
+    } : env;
+    const committed = await run('git', ['-C', checkout, 'commit', '-m', `${stage} fixture`],
+      { env: commitEnv });
+    assert.equal(committed.status, 0, committed.stderr);
     await git(checkout, 'push', 'origin', branch);
     publishedTip = await git(remote, 'rev-parse', branch);
     assert.notEqual(publishedTip, merged);
+    if (stage === 'backdated publication') {
+      const clocks = await git(remote, 'show', '-s', '--format=%at %ct', publishedTip);
+      const earlierEpoch = Date.parse(laterDocument.generated_at) / 1000;
+      assert.equal(clocks, `${earlierEpoch} ${earlierEpoch}`);
+      assert.ok(earlierEpoch < Date.parse(recorded.generated_at) / 1000);
+      assert.ok(earlierEpoch < Date.parse(recorded.deployed_at) / 1000);
+    }
     for (const existing of [true, false]) {
       await t.test(`retains first deployment after ${stage} with receipt ${existing}`, async () => {
         if (!existing) fs.unlinkSync(receipt);

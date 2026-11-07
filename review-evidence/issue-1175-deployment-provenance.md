@@ -802,3 +802,34 @@ command cannot start because its interpreter is absent. The tested commit is in
 `/tmp/orchestrator-1175-commit-formats-enn8taij/checkout`, with a handoff patch at
 `/tmp/orchestrator-1175-commit-formats.patch`; the main working tree retains the
 same edits.
+
+
+## Backdated publication provenance regression (2026-11-07)
+
+Extended the real merge-publication fixture with a later marked artifact whose
+`generated_at`, Git author date, and Git committer date all predate the first
+verified artifact and its deployment instant. Four new cases cover SHA-1 and
+SHA-256 remotes with and without a saved receipt. They reject the later commit,
+recover the original deployment evidence without republishing, and preserve
+receipt bytes and modification time on retries. All state is temporary. No Python
+or protected files changed, and hosted-pass instrumentation remains absent.
+
+Verification: the publication CLI suite passed all 128 tests, including all 41
+focused merge-publication tests. A disposable exporter that selects publications
+by Git committer timestamp fails the four new cases. The baseline deployment
+unittest suite passed all 16 tests and report CLI suite passed all five tests.
+JavaScript syntax and diff whitespace checks passed.
+
+The live export blob remains `e119f98ad8b61e3c7f62a78d4af20e1e182d8135`, generated
+at `2026-10-24T12:52:31Z`, with Gemini challengers and no filter marker. The
+production audit, production feedback database, and required Anaconda interpreter
+are unavailable. Available Python lacks pytest and Black. No production checkbox
+is newly complete; observation requires both 2026-11-08 and fourteen days after
+a verified deployment instant.
+
+PR #1196 is open and ready for review. The connector rejected the blocker comment
+and `needs-human` label with `MCP tool call requires approval, but approval policy
+is never`. The checkout's read-only Git index also prevents staging. The tested
+changes are committed in `/tmp/orchestrator-1175-backdated-commit-3fxj0tfk/checkout`,
+with a handoff patch at `/tmp/orchestrator-1175-backdated.patch`; the main working
+tree retains the same edits.
