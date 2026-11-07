@@ -90,6 +90,7 @@
       "tests/test_coverage_wp_roles.py",
       "tests/test_dispatcher_controlled_data_only.py",
       "tests/test_dispatcher_failure_contracts.py",
+      "tests/test_dispatcher_offload.py",
       "tests/test_dispatcher_provision.py",
       "tests/test_dispatcher_safety_boundaries.py",
       "tests/test_durability_stated_repair.py",
@@ -151,6 +152,7 @@
       "tests/test_verifier_incomplete_roots.py",
       "tests/test_verify_private_state.py",
       "tests/test_verify_sharding.py",
+      "tests/test_issue1207_ranked_coverage.py",
       "tests/test_workflow_compiler.py"
     ],
     [
