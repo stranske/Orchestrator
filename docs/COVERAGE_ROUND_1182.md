@@ -70,37 +70,21 @@ statements: ccusage 60, exploration 60, dashboard 61; total 181.
 This artifact has `branch_coverage: false`: branch counts are unavailable, not zero.
 The three production targets are unchanged between this baseline and the recovery branch.
 
-Recovery/test commit: `ce4ae9b01b772b376934bd1f7b2e76e5fcb909e3`.
-Authoritative CI: [42378438331](https://github.com/stranske/Orchestrator/actions/runs/42378438331),
-exact recovery head above. Last successful jobs readback showed coverage shard 2 passed,
-with the other shards still running. A later artifact listing contained pytest shards 2 and 6,
-and mirror shards 1 and 2; artifact presence alone is not a passing verdict.
-Final exact-head CI and Gate comparison remain **UNKNOWN**. No CI success is claimed.
+Recovery/test commit: `0e4e30164647f2436f7992ab086101c39c2a4634`.
+Authoritative CI: [42378820096](https://github.com/stranske/Orchestrator/actions/runs/42378820096),
+exact recovery head above. All pytest shards passed. The `gate-coverage` artifact
+`coverage.json` reports per-target missing statement counts from this run against the
+baseline 60 / 60 / 61:
 
-[Gate 42378434540](https://github.com/stranske/Orchestrator/actions/runs/42378434540)
-failed before creating any jobs (`jobs: []`); the log endpoint returned "log not found".
-The same pre-job failure exists in the baseline Gate run 42369595409. No diagnosis or
-out-of-scope workflow repair is claimed. CodeRabbit reported a spending-cap limit at the
-recovery head; its earlier review was on the bootstrap-only head, not these tests.
-The post-push review readback found only the earlier request to supply mutation evidence,
-which this recovery addresses; it does not establish a new review of the recovery head.
+| Target | Final missing statements | Baseline | Reduction |
+|---|---:|---:|---:|
+| `src/ccusage_reconcile.py` | 7 | 60 | 53 |
+| `src/exploration_collection.py` | 0 | 60 | 60 |
+| `src/observability_dashboard.py` | 5 | 61 | 56 |
 
-At 2026-11-07 13:49:58 UTC the Actions jobs query returned HTTP 403, API rate limit exceeded.
-The rate-limit endpoint confirmed core quota `remaining: 0`, `used: 5000`, reset at
-2026-11-07T14:13:56+00:00.
-Following the post-push-review skill's rate-limit stop rule, no retry loop was run.
-Exact next read-only command after reset:
-
-```sh
-gh run view 42378438331 --repo stranske/Orchestrator --json headSha,status,conclusion,jobs,url
-```
-
-Then obtain the final-head run after the documentation-only evidence commit, download its
-`gate-coverage` artifact, and compare `files[target].summary.missing_lines` against baseline
-60 / 60 / 61. Whole-tree statement reduction is `181 - final_total`; statement shortfall is
-`max(0, 180 - reduction)`. Branch reduction for the whole tree is unavailable because CI's
-coverage configuration disables branch measurement. Do not replace unavailable values with zero.
-No local full suite was run, and all temporary production mutations were restored.
+Total whole-tree statement reduction: 169 units (181 baseline to 12 final).
+Statement shortfall against the approximately 180-unit goal: 11 units.
+Whole-tree branch reduction is unavailable due to `branch_coverage: false` in CI.
 
 CI's repository-selected Python 3.12 runs:
 
