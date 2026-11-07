@@ -1,0 +1,186 @@
+[
+  {
+    "node": "tests/test_coverage_round_1026.py::test_audits_dir_override_and_fallback",
+    "production": "src/capability_admission.py::_audits_dir",
+    "mutation": "return pathlib.Path(\"/wrong-audits\")",
+    "broken_rc": 1,
+    "restored_rc": 0,
+    "sha256": "45fd3778c525bac167ac5e6058a05bb1159fba247855e817aaf9695c856fe3b1"
+  },
+  {
+    "node": "tests/test_coverage_round_1026.py::test_python_symbol_walk_and_syntax_failures",
+    "production": "src/capability_admission.py::_python_symbol_defined",
+    "mutation": "return False",
+    "broken_rc": 1,
+    "restored_rc": 0,
+    "sha256": "45fd3778c525bac167ac5e6058a05bb1159fba247855e817aaf9695c856fe3b1"
+  },
+  {
+    "node": "tests/test_coverage_round_1026.py::test_acted_on_context_records_monitor_exceptions",
+    "production": "src/capability_admission.py::acted_on_context",
+    "mutation": "return {\"acted_on\": {}, \"acted_on_reason\": \"\"}",
+    "broken_rc": 1,
+    "restored_rc": 0,
+    "sha256": "45fd3778c525bac167ac5e6058a05bb1159fba247855e817aaf9695c856fe3b1"
+  },
+  {
+    "node": "tests/test_coverage_round_1026.py::test_known_controls_and_findability_tolerate_io_failures",
+    "production": "src/capability_admission.py::known_controls",
+    "mutation": "return {\"ORCH_INVENTED\"}",
+    "broken_rc": 1,
+    "restored_rc": 0,
+    "sha256": "45fd3778c525bac167ac5e6058a05bb1159fba247855e817aaf9695c856fe3b1"
+  },
+  {
+    "node": "tests/test_coverage_round_1026.py::test_admit_and_preflight_surface_errored_checks",
+    "production": "src/capability_admission.py::admit",
+    "mutation": "return {\"checks\": {\"caller_exists\": {\"ok\": True}}}",
+    "broken_rc": 1,
+    "restored_rc": 0,
+    "sha256": "45fd3778c525bac167ac5e6058a05bb1159fba247855e817aaf9695c856fe3b1"
+  },
+  {
+    "node": "tests/test_coverage_round_1026.py::test_decision_records_and_unreadable_commitment_files",
+    "production": "src/capability_admission.py::_decision_recorded_after",
+    "mutation": "return False",
+    "broken_rc": 1,
+    "restored_rc": 0,
+    "sha256": "45fd3778c525bac167ac5e6058a05bb1159fba247855e817aaf9695c856fe3b1"
+  },
+  {
+    "node": "tests/test_coverage_round_1026.py::test_consumer_class_grace_acting_and_not_acting",
+    "production": "src/capability_admission.py::consumer_class",
+    "mutation": "return (\"wrong\", False, \"\")",
+    "broken_rc": 1,
+    "restored_rc": 0,
+    "sha256": "45fd3778c525bac167ac5e6058a05bb1159fba247855e817aaf9695c856fe3b1"
+  },
+  {
+    "node": "tests/test_coverage_round_1026.py::test_format_report_clean_and_drained_branches",
+    "production": "src/capability_admission.py::format_report",
+    "mutation": "return \"\"",
+    "broken_rc": 1,
+    "restored_rc": 0,
+    "sha256": "45fd3778c525bac167ac5e6058a05bb1159fba247855e817aaf9695c856fe3b1"
+  },
+  {
+    "node": "tests/test_coverage_round_1026.py::test_admission_main_cli_paths",
+    "production": "src/capability_admission.py::main",
+    "mutation": "return 1",
+    "broken_rc": 1,
+    "restored_rc": 0,
+    "sha256": "45fd3778c525bac167ac5e6058a05bb1159fba247855e817aaf9695c856fe3b1"
+  },
+  {
+    "node": "tests/test_coverage_round_1026.py::test_env_prereq_harness_glue_and_detectors",
+    "production": "src/env_prereq.py::require",
+    "mutation": "return None",
+    "broken_rc": 1,
+    "restored_rc": 0,
+    "sha256": "976775f3cda425667069e85f16e22693d283b486565c2a92f68da302ceeeb7bc"
+  },
+  {
+    "node": "tests/test_coverage_round_1026.py::test_env_prereq_recorded_verdicts_and_replay",
+    "production": "src/env_prereq.py::run_or_replay",
+    "mutation": "return None",
+    "broken_rc": 1,
+    "restored_rc": 0,
+    "sha256": "976775f3cda425667069e85f16e22693d283b486565c2a92f68da302ceeeb7bc"
+  },
+  {
+    "node": "tests/test_coverage_round_1026.py::test_env_prereq_seat_and_cli_detectors",
+    "production": "src/env_prereq.py::seat_has_no_free_signal",
+    "mutation": "return None",
+    "broken_rc": 1,
+    "restored_rc": 0,
+    "sha256": "976775f3cda425667069e85f16e22693d283b486565c2a92f68da302ceeeb7bc"
+  },
+  {
+    "node": "tests/test_coverage_round_1026.py::test_env_prereq_main_reports_shape",
+    "production": "src/env_prereq.py::main",
+    "mutation": "return 1",
+    "broken_rc": 1,
+    "restored_rc": 0,
+    "sha256": "976775f3cda425667069e85f16e22693d283b486565c2a92f68da302ceeeb7bc"
+  },
+  {
+    "node": "tests/test_coverage_round_1026.py::test_ledger_helpers_cover_fail_closed_edges",
+    "production": "src/ledger_reconcile.py::_usage_from_obj",
+    "mutation": "return (99, 99)",
+    "broken_rc": 1,
+    "restored_rc": 0,
+    "sha256": "25fb0a06b22893306982bea4f913d10a794ebb4973a5a5fb87d510cfc39c859b"
+  },
+  {
+    "node": "tests/test_coverage_round_1026.py::test_scrub_and_classify_fail_open",
+    "production": "src/ledger_reconcile.py::_scrub_run_segment",
+    "mutation": "return 0",
+    "broken_rc": 1,
+    "restored_rc": 0,
+    "sha256": "25fb0a06b22893306982bea4f913d10a794ebb4973a5a5fb87d510cfc39c859b"
+  },
+  {
+    "node": "tests/test_coverage_round_1026.py::test_record_completion_and_reconcile_dry_paths",
+    "production": "src/ledger_reconcile.py::record_completion",
+    "mutation": "return None",
+    "broken_rc": 1,
+    "restored_rc": 0,
+    "sha256": "25fb0a06b22893306982bea4f913d10a794ebb4973a5a5fb87d510cfc39c859b"
+  },
+  {
+    "node": "tests/test_coverage_round_1026.py::test_ledger_main_cli_dispatch",
+    "production": "src/ledger_reconcile.py::main",
+    "mutation": "return 1",
+    "broken_rc": 1,
+    "restored_rc": 0,
+    "sha256": "25fb0a06b22893306982bea4f913d10a794ebb4973a5a5fb87d510cfc39c859b"
+  },
+  {
+    "node": "tests/test_coverage_round_877.py::test_admission_defensive_branches_and_report_rendering",
+    "production": "src/capability_admission.py::waiver_problems",
+    "mutation": "return []",
+    "broken_rc": 1,
+    "restored_rc": 0,
+    "sha256": "45fd3778c525bac167ac5e6058a05bb1159fba247855e817aaf9695c856fe3b1"
+  },
+  {
+    "node": "tests/test_coverage_round_877.py::test_ledger_helper_fallbacks_are_fail_closed",
+    "production": "src/ledger_reconcile.py::_read_ledger",
+    "mutation": "return ([{}], [])",
+    "broken_rc": 1,
+    "restored_rc": 0,
+    "sha256": "25fb0a06b22893306982bea4f913d10a794ebb4973a5a5fb87d510cfc39c859b"
+  },
+  {
+    "node": "tests/test_coverage_round_877.py::test_consumer_resolution_confines_paths_and_classifies_evidence",
+    "production": "src/capability_admission.py::consumer_resolution",
+    "mutation": "return {\"resolved\": [], \"unresolved\": []}",
+    "broken_rc": 1,
+    "restored_rc": 0,
+    "sha256": "45fd3778c525bac167ac5e6058a05bb1159fba247855e817aaf9695c856fe3b1"
+  },
+  {
+    "node": "tests/test_coverage_round_877.py::test_preflight_and_commitments_report_obligations_and_missing_records",
+    "production": "src/capability_admission.py::commitments",
+    "mutation": "return {\"clean\": True}",
+    "broken_rc": 1,
+    "restored_rc": 0,
+    "sha256": "45fd3778c525bac167ac5e6058a05bb1159fba247855e817aaf9695c856fe3b1"
+  },
+  {
+    "node": "tests/test_coverage_round_877.py::test_env_prerequisites_name_the_specific_missing_state",
+    "production": "src/env_prereq.py::ledger_rows_absent",
+    "mutation": "return \"wrong reason\"",
+    "broken_rc": 1,
+    "restored_rc": 0,
+    "sha256": "976775f3cda425667069e85f16e22693d283b486565c2a92f68da302ceeeb7bc"
+  },
+  {
+    "node": "tests/test_coverage_round_877.py::test_ledger_evidence_readers_ignore_other_runs_and_malformed_records",
+    "production": "src/ledger_reconcile.py::_read_ledger",
+    "mutation": "return ([], [])",
+    "broken_rc": 1,
+    "restored_rc": 0,
+    "sha256": "25fb0a06b22893306982bea4f913d10a794ebb4973a5a5fb87d510cfc39c859b"
+  }
+]
