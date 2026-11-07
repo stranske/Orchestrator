@@ -363,3 +363,68 @@ Documentation validation: `git diff --check` exited 0 with no output. A focused
 No functional tests or full test suite were run for this Markdown-only update.
 The seven-minute post-push review remains a separate delivery readback; it must
 not be represented as completed by the pre-push check snapshot above.
+
+## Closer continuation verification — 2026-11-07 (inspected head `ab88159ac78b9ab95ed2b4de349460dd0aba458e`)
+
+### PR #1221 readback and diff audit
+
+Executed:
+
+```bash
+gh pr view 1221 --repo stranske/Orchestrator --json state,mergedAt,headRefName,headRefOid,files
+gh pr diff 1221 --repo stranske/Orchestrator
+```
+
+- **State**: `OPEN`, `isDraft: false`, `mergedAt: null`, `mergeStateStatus: "CLEAN"`
+- **Branch / Head OID**: `codex/issue-1217` at `ab88159ac78b9ab95ed2b4de349460dd0aba458e`
+- **Changed files**: `agents/codex-1217.md` only (`+365/-0`, `ADDED`)
+- **Bootstrap marker**: `<!-- bootstrap for codex on issue #1217 run:42333375996-1 -->` preserved on line 1.
+- **Omitted implementation check**: None. Zero workflow, script, configuration, or source changes exist in PR #1221 or were omitted from `gh pr diff 1221`.
+
+### Baseline run `40269428960` and job `121402729292` verification
+
+Executed:
+
+```bash
+gh run view 40269428960 --repo stranske/Orchestrator --json url,headSha,conclusion,jobs
+```
+
+- **Baseline run URL**: https://github.com/stranske/Orchestrator/actions/runs/40269428960 (`headSha: 0f923500d64e6e5808d8542d511fe79597dc12ef`, `conclusion: success`)
+- **Python 3.12 job (`121402729292`)**: https://github.com/stranske/Orchestrator/actions/runs/40269428960/job/121402729292 — `2026-10-26T04:50:00Z` to `2026-10-26T05:18:24Z` (**1704s / 28m24s**). Step 19 `Pytest (unit tests with coverage)` ran `04:50:19Z` to `05:18:15Z` (**1676s / 27m56s**, 98.36% of job duration); all 44 reported step durations match the table above (`Restore CI artifact cache`: 5s; `Check for undeclared test dependencies`: 3s; `Checkout repository`: 2s; all remaining steps 0–1s at 1s timestamp resolution).
+- **Sibling Python 3.13 job (`121402729241`)**: https://github.com/stranske/Orchestrator/actions/runs/40269428960/job/121402729241 — `04:49:59Z` to `05:08:54Z` (**1135s / 18m55s**); Step 19 `Pytest (unit tests with coverage)` ran `04:50:21Z` to `05:08:44Z` (**1103s / 18m23s**).
+- **Unavailable baseline data (explicit)**:
+  1. Baseline Python `3.14` duration (not in the `0f923500d64e6e5808d8542d511fe79597dc12ef` matrix `["3.12", "3.13"]`).
+  2. Per-test `pytest --durations` breakdown, test collection/execution counts, runner hardware/CPU contention, and cache-hit internals (not exposed by `gh run view --json`).
+  3. Pre-change daily trailing-seven-day Gate p50 series for `stranske/Orchestrator`.
+
+### Trace of `.github/workflows/pr-00-gate.yml` and repository invariants
+
+- **Caller trace**: `.github/workflows/pr-00-gate.yml` (`python-ci`, lines 346–387) invokes `stranske/Workflows/.github/workflows/reusable-10-ci-python.yml@main` over a 6-shard matrix built from `config/test-shards.json` (lines 261–307). On current `main`, it already specifies `primary-python-version: '3.14'`, `python-versions: '["3.13", "3.14"]'`, `pytest-workers: '4'`, shard-1-only static checks (`matrix.run_static`), and `coverage: false` (with combined whole-tree coverage read from `ci.yml`'s `verify.py` aggregate at lines 794–940).
+- **Why no consumer-local Python 3.12 optimization was implemented here**:
+  1. Python 3.12 is no longer invoked by `.github/workflows/pr-00-gate.yml` on `main`.
+  2. Re-introducing Python 3.12 in consumer workflows violates enforced repository invariants: `tests/test_ci_python_standard.py` (forbids `3.12` pins in `.github/workflows/*.yml`), `tests/test_python_floor.py` (enforces the Python `3.13` floor), and `tests/test_delivery_required_contexts.py` (requires the exact 6-shard x `("3.13", "3.14")` check surface matching `.github/config/required-contexts.json` and `.github/scripts/gate_summary.py`).
+  3. Reusable Python CI workflow internals live in `stranske/Workflows` (`AGENTS.md` cross-repo source-of-truth policy).
+  4. Per the closer judge's chain-rule instruction, because PR #1221 contains zero substantive implementation, the substantive optimization scope is parked in the backlog rather than initiated anew in a closer continuation.
+- **Focused consumer-invariant validation command (reference only; no workflow change made in PR #1221)**:
+  `PYTHONPATH=src pytest -o addopts="" tests/test_ci_gate_config.py tests/test_ci_python_standard.py tests/test_python_floor.py tests/test_delivery_required_contexts.py -q`
+
+### Current-head Gate run `42351004881`, startup-failure root cause, and comparison limitations
+
+Executed:
+
+```bash
+gh run view 42351004881 --repo stranske/Orchestrator --json url,headSha,conclusion,jobs
+```
+
+- **Current-head Gate run URL**: https://github.com/stranske/Orchestrator/actions/runs/42351004881 (`headSha: ab88159ac78b9ab95ed2b4de349460dd0aba458e`, `conclusion: failure`, `jobs: []`, CLI diagnostic: `This run likely failed because of a workflow file issue`).
+- **Cross-branch verification & root cause (superseding lines 310–311)**: `gh run list --repo stranske/Orchestrator --workflow pr-00-gate.yml --limit 10` confirms all 10 most recent Gate runs across branches (`42351004881`, `42346745533`, `42346651934`, `42334599479`, `42330307652`, `42328824801`, `42328823397`, `42324920925`, `42324637985`, `42322727274`) fail identically with `jobs: []` at workflow evaluation time. Inspection of `.github/workflows/pr-00-gate.yml:473-478` identifies the cause: `jobs.orchestrator-node-tests.if` invokes `hashFiles('tests/test_route_weights_export_cli.js') != '' && hashFiles('tests/test_switch_review_exploration.js') != ''` in a **job-level** `if:` expression, where GitHub Actions expression evaluation does not expose `hashFiles()` (which is valid only in step-level contexts after checkout, cf. lines 523 and 574). Because a 0-job workflow-file parse failure emits zero `CheckRun`s (`check-suites/114744891886/check-runs` is empty), PR #1221's `statusCheckRollup` reports `CI` run `42351008310` (all 6 `pytest + coverage` shards, all 6 `flat exec-mirror` shards, and both `verify.py aggregate` jobs `SUCCESS`) and `Health 45 Agents Guard / guard` (`SUCCESS`) with `mergeStateStatus: "CLEAN"`, even though `Gate` itself failed before job creation. Repairing unrelated `main` Gate workflow syntax is outside `#1217`'s parked scope and triggers `agent-high-privilege` environment gating (`pr-00-gate.yml:314-319`).
+- **Before/after Python 3.12 comparison & limitations**:
+  - Before (`40269428960` / job `121402729292` at `0f923500d64e6e5808d8542d511fe79597dc12ef`): **1704s (28m24s)** job / **1676s (27m56s)** pytest step (unsharded, inline coverage).
+  - After (PR #1221): **unavailable** — PR #1221 is documentation-only (`agents/codex-1217.md`), `main` no longer schedules Python 3.12, and `pr-00-gate.yml` currently aborts at workflow parse time (`jobs: []`). No speedup is claimed or demonstrated.
+  - Any future comparison across epochs is bounded by matrix/runtime replacement (`3.12`/`3.13` unsharded vs `3.13`/`3.14` 6-way sharded x 4 workers), offloaded coverage aggregation, test-suite growth, GitHub-hosted runner variance and queue times, and mutable `@main` reusable workflow revisions.
+
+### Health 85 command and seven-day recovery series status
+
+- **Health 85 command**: `python -m scripts.ci_time_budget` (invoked by `stranske/Workflows` `.github/workflows/health-85-ci-time-budget.yml` as `python -m scripts.ci_time_budget | tee ci-time-budget.txt`, writing `docs/reports/ci-budget.json` on `stranske/Workflows@ci-time-budget` from `/repos/{repo}/actions/workflows/pr-00-gate.yml/runs` and reconciling/closing budget issues; not executed here because it mutates fleet issue state).
+- **Seven consecutive daily trailing-seven-day Gate p50 <= 10 min observations**: **undone / not attached** (0 verified daily observations attached; no missing days fabricated; neither `#1217` nor `#969` closed). A single coding-agent continuation cannot synthesize seven consecutive calendar days of post-change telemetry, and current `pr-00-gate.yml` runs fail with `jobs: []`.
+- **Disposition**: Substantive optimization, post-change Gate verification at an optimization head, Python 3.12 before/after reduction, and seven-day Health 85 Gate p50 <= 10 min recovery remain **undone and parked in the backlog** per the closer judge's chain-rule instruction.
