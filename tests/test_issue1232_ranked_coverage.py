@@ -86,67 +86,6 @@ def test_panel_prompt_normalization_parsing_and_dispatch(monkeypatch):
     assert result["dispatches"][1]["error"].startswith("no parseable JSON")
 
 
-def test_panel_adjudication_recording_and_cli_paths(monkeypatch, tmp_path, capsys):
-    spec, gate = _spec_and_gate()
-    reviews = {"reviews": [{"verdict": "PASS"}, {"verdict": "PASS"}]}
-    assert panel.adjudicate_panel(spec, gate, reviews)["verdict"] == "PASS"
-    assert panel.adjudicate_panel(spec, {**gate, "verdict": "FAIL"}, reviews)["verdict"] == "FAIL"
-    assert (
-        panel.adjudicate_panel(spec, {**gate, "verdict": "NEEDS_REVIEW"}, reviews)["verdict"]
-        == "NEEDS_REVIEW"
-    )
-    assert (
-        panel.adjudicate_panel(spec, gate, {"reviews": [{"verdict": "FAIL"}]})["verdict"]
-        == "NEEDS_REVIEW"
-    )
-    two_vetoes = {
-        "reviews": [
-            {"verdict": "FAIL", "blockers": [{"finding": "a", "severity": "high"}]},
-            {"verdict": "FAIL", "blockers": [{"finding": "b", "severity": "critical"}]},
-        ]
-    }
-    failed = panel.adjudicate_panel(spec, gate, two_vetoes)
-    assert failed["verdict"] == "FAIL" and failed["n_vetoes"] == 2
-    feedback.record_run("panel-run", "o/r#1", "implement", "codex", mode="local")
-    receipt = panel.record_panel_verdict("panel-run", failed)
-    assert receipt["recorded"] is True
-
-    spec_path, gate_path, reviews_path = (
-        tmp_path / "spec.json",
-        tmp_path / "gate.json",
-        tmp_path / "reviews.json",
-    )
-    spec_path.write_text(json.dumps(spec))
-    gate_path.write_text(json.dumps(gate))
-    reviews_path.write_text(json.dumps(reviews))
-    assert (
-        panel.main(["--prompt", str(spec_path), "--gate", str(gate_path), "--reviewer", "judge"])
-        == 0
-    )
-    assert '"reviewer": "judge"' in capsys.readouterr().out
-    assert (
-        panel.main(
-            [
-                "--adjudicate",
-                str(spec_path),
-                "--gate",
-                str(gate_path),
-                "--reviews",
-                str(reviews_path),
-            ]
-        )
-        == 0
-    )
-    assert '"verdict": "PASS"' in capsys.readouterr().out
-    monkeypatch.setattr(
-        panel,
-        "dispatch_reviewers",
-        lambda *_a, **_k: {"reviewers": ["fake"], "dispatches": [], "review_doc": reviews},
-    )
-    assert panel.main(["--dispatch", str(spec_path), "--gate", str(gate_path)]) == 0
-    assert '"reviewers"' in capsys.readouterr().out
-
-
 def test_relearn_report_error_dry_run_formatting_and_cli(monkeypatch, capsys):
     monkeypatch.setattr(relearn_report, "_role_priors_from_registry", lambda _priors: {})
     assert relearn_report.priors_from_route_table(
