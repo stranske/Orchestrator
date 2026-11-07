@@ -44,6 +44,7 @@
       "tests/test_adjudicator_native_publication.py",
       "tests/test_issue1169_ranked_coverage.py",
       "tests/test_issue1189_ranked_coverage.py",
+      "tests/test_issue1229_ranked_coverage.py",
       "tests/test_issue1215_ranked_coverage.py",
       "tests/test_adjudicator_packet_binding.py",
       "tests/test_adjudicator_retro.py",
