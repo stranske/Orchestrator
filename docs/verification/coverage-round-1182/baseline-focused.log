@@ -1,0 +1,6 @@
+.                                                                        [100%]
+================================ tests coverage ================================
+_______________ coverage: platform darwin, python 3.12.2-final-0 _______________
+
+Coverage JSON written to file /tmp/1182-baseline.json
+1 passed, 22 deselected in 1.94s
