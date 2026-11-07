@@ -932,7 +932,12 @@ function inventory({ db, observedAt, days = 90, expectedCount = 71, manifest }) 
         : 'This window snapshot is not bound to the original requested case manifest; count equality alone cannot verify the cohort.',
     }],
   };
+  let checkDatabaseLocation;
   const finish = () => {
+    // The cohort snapshot must remain attributable to the selected Brain,
+    // including when a query fails. SQLite can keep reading an open inode
+    // after the selected file is replaced or its symlink is retargeted.
+    if (checkDatabaseLocation) checkDatabaseLocation();
     // SQLite selection and unavailable results both retain this manifest's
     // identity. Recheck its bytes and location before attributing either result
     // to it, just as retained-report recovery does. Equal replacement bytes
@@ -945,11 +950,13 @@ function inventory({ db, observedAt, days = 90, expectedCount = 71, manifest }) 
       }
       checkManifestLocation();
     }
+    if (checkDatabaseLocation) checkDatabaseLocation();
     return reconcile(report, requestedManifest);
   };
   let connection;
   let rows;
   try {
+    checkDatabaseLocation = pinFileLocation(report.database, 'Brain database');
     connection = new DatabaseSync(report.database, { readOnly: true });
     // Use the same identity boundary for SQL reads and manifest reconciliation.
     // SQLite trim() alone does not strip tabs or Unicode whitespace.
@@ -986,10 +993,11 @@ function inventory({ db, observedAt, days = 90, expectedCount = 71, manifest }) 
     `).all(cutoff);
   } catch (error) {
     report.evidence_gaps.push({ kind: 'brain_unavailable', detail: error.message });
-    return finish();
   } finally {
     if (connection) connection.close();
   }
+  // Final identity checks must also follow connection cleanup on failure.
+  if (rows === undefined) return finish();
   const cases = [];
   const exclusions = [];
   let orphanedOutcomes = 0;

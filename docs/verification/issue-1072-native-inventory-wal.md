@@ -517,3 +517,36 @@ live-shadow decision is claimed, and no operational task is marked complete.
 Staging fails on the read-only `.git/index.lock` location. The change is preserved
 in an isolated local commit and `/tmp/orchestrator-1072-manifest/change.bundle`;
 the checkout branch and remote are unchanged.
+# Brain database location during cohort inventory
+
+Checked on 2026-11-07 against checkout
+`778e26866873ab8e514730bb2f283bf8dc7e8486` plus this change. The Brain cohort
+reader now pins the selected database's resolved path, device and inode before
+opening SQLite. It checks that location after connection cleanup and around the
+final manifest read. Replacing the database with identical bytes, retargeting its
+symlink or removing it aborts the observation, including when the query failed.
+Stable missing or schema-less inputs still produce unavailable evidence without
+creating or repairing a database.
+
+All seven new regressions fail against the original exporter and pass after the
+fix. They cover successful and failed queries, observations without a manifest,
+changes during the final manifest read, and CLI refusal without partial JSON.
+Stable later reads preserve source bytes and retain the unverified cohort boundary.
+
+Validation: all 163 tests across the retained-report, native inventory and fixed
+live-cohort JavaScript suites pass, along with 32 diagnostic and seven
+replay/publication unittests. The pre-change inventory baseline passes 134 tests.
+JavaScript syntax and `git diff --check` pass. No Python files changed. The
+required `python3 -m pytest tests/test_adjudicator_retro.py -m 'not slow' -q`
+command cannot start because pytest is absent.
+
+These are fixture results. The configured production runtime, canonical report,
+outcomes database and default mirror are absent. Authentic original report and
+journal paths and live deployment/mirror bindings remain unavailable. No
+production pin, dispatch, grading, historical proof or next-20 decision is claimed;
+no operational checkbox is completed. GitHub access fails, so PR readiness cannot
+be rechecked and a remote blocker comment/label cannot be delivered. Staging fails
+on the read-only `.git/index.lock` location. The verified change is preserved in a
+separate local Git repository and
+`/tmp/orchestrator-1072-brain-location/change.bundle`; the checkout branch and
+remote are unchanged.

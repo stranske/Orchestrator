@@ -2005,6 +2005,98 @@ function manifestFile(root, cases, schemaVersion = 1) {
   return file;
 }
 
+for (const change of ['atomic replacement', 'symlink retarget', 'removal']) {
+  for (const mutateAt of ['SQLite close', 'final manifest read']) {
+    test(`Brain inventory rejects database ${change} during ${mutateAt}`, (t) => {
+      for (const available of [true, false]) {
+        const { root, db } = world(t, available);
+        if (available) seed(db, [['original', now, 'NON_PASS', 'PASS']]);
+        const bytes = fs.readFileSync(db);
+        const replacement = `${db}.replacement`;
+        fs.writeFileSync(replacement, bytes);
+        if (change === 'symlink retarget') {
+          fs.renameSync(db, `${db}.original`);
+          fs.symlinkSync(`${db}.original`, db);
+        }
+        const manifest = mutateAt === 'final manifest read'
+          ? manifestFile(root, [{ run_id: 'original', target: 'owner/repo#1' }]) : undefined;
+        const manifestBytes = manifest ? fs.readFileSync(manifest) : null;
+        let mutations = 0;
+        const mutate = () => {
+          mutations += 1;
+          if (change === 'atomic replacement') fs.renameSync(replacement, db);
+          else if (change === 'symlink retarget') {
+            fs.unlinkSync(db);
+            fs.symlinkSync(replacement, db);
+          } else fs.unlinkSync(db);
+        };
+        const close = DatabaseSync.prototype.close;
+        const read = fs.readFileSync;
+        let reads = 0;
+        DatabaseSync.prototype.close = function observed(...args) {
+          const result = close.apply(this, args);
+          if (mutateAt === 'SQLite close') mutate();
+          return result;
+        };
+        fs.readFileSync = function observed(file, ...args) {
+          const data = read(file, ...args);
+          if (file === manifest && ++reads === 2) mutate();
+          return data;
+        };
+        try {
+          assert.throws(() => inventory({ db, observedAt: now, expectedCount: 1, manifest }),
+            /Brain database location changed during inventory/);
+        } finally {
+          DatabaseSync.prototype.close = close;
+          fs.readFileSync = read;
+        }
+        assert.equal(mutations, 1, 'change follows the SQLite snapshot, including failed queries');
+        if (change === 'removal') fs.writeFileSync(db, bytes);
+        const files = fs.readdirSync(root);
+        const later = inventory({ db, observedAt: now, expectedCount: 1, manifest });
+        assert.equal(later.status, available ? 'available' : 'unavailable');
+        assert.equal(later.included_count, available ? 1 : null);
+        if (available) assert.equal(later.cases[0].run_id, 'original');
+        if (manifest) {
+          assert.equal(later.manifest_reconciliation.cases[0].status,
+            available ? 'included' : 'unavailable');
+          assert.deepEqual(fs.readFileSync(manifest), manifestBytes);
+        }
+        assert.equal(later.requested_cohort_verified, false);
+        assert.deepEqual(fs.readFileSync(db), bytes);
+        assert.deepEqual(fs.readdirSync(root), files, 'inventory never repairs SQLite evidence');
+      }
+    });
+  }
+}
+
+test('Brain inventory CLI emits no JSON if its database is replaced during the final manifest read', (t) => {
+  const { root, db } = world(t);
+  seed(db, [['original', now, 'NON_PASS', 'PASS']]);
+  const before = fs.readFileSync(db);
+  fs.writeFileSync(`${db}.replacement`, before);
+  const manifest = manifestFile(root, [{ run_id: 'original', target: 'owner/repo#1' }]);
+  const preload = path.join(root, 'replace-brain.cjs');
+  fs.writeFileSync(preload, `
+const fs = require('node:fs');
+const db = process.argv[process.argv.indexOf('--db') + 1];
+const manifest = process.argv[process.argv.indexOf('--manifest') + 1];
+const read = fs.readFileSync;
+let reads = 0;
+fs.readFileSync = function(file, ...args) {
+  const bytes = read(file, ...args);
+  if (file === manifest && ++reads === 2) fs.renameSync(db + '.replacement', db);
+  return bytes;
+};
+`);
+  const result = execute(root, process.execPath, ['--require', preload, script,
+    '--db', db, '--observed-at', String(now), '--manifest', manifest]);
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(result.stdout, '', 'a replaced source cannot publish a cohort inventory');
+  assert.match(result.stderr, /Brain database location changed during inventory/);
+  assert.deepEqual(fs.readFileSync(db), before);
+});
+
 for (const available of [true, false]) {
   test(`Brain inventory pins manifest bytes and location with Brain ${available ? 'available' : 'unavailable'}`, (t) => {
     const { root, db } = world(t);
