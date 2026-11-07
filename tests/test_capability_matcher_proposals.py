@@ -90,7 +90,9 @@ def test_format_report_renders_should_have_bullets_and_all_row_states(
     rep = cmp.evaluate(path=ledger, task_counts={"codemod": 5, "review": 9})
     rendered = cmp.format_report(rep)
 
-    assert "8 work-routed · 11 infrastructure" in rendered
+    work = sum(1 for p in cmp.PROPOSALS.values() if p["kind"] == cmp.WORK_ROUTED)
+    infra = sum(1 for p in cmp.PROPOSALS.values() if p["kind"] == cmp.INFRASTRUCTURE)
+    assert f"{work} work-routed · {infra} infrastructure" in rendered
     assert (
         "## SHOULD HAVE BEEN USED: 1 (5 runs of matching work ran while the capability never did)"
         in rendered

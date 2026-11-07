@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 import re
 import socket
 import subprocess
@@ -76,6 +77,8 @@ def isolated_improvement_runtime(
     if request.node.name != "test_accessor_reports_a_named_absence_to_a_caller":
         monkeypatch.setattr(subprocess, "run", forbidden)
         monkeypatch.setattr(subprocess, "Popen", forbidden)
+    monkeypatch.setattr(os, "system", forbidden)
+    monkeypatch.setattr(os, "popen", forbidden)
     monkeypatch.setattr(socket, "socket", forbidden)
     monkeypatch.setattr(socket, "create_connection", forbidden)
     yield runtime
@@ -341,6 +344,7 @@ def main() -> int:
         if not name.startswith("test_") or not callable(fn):
             continue
         if inspect.signature(fn).parameters:
+            print(f"  skip {name} — needs pytest fixtures")
             continue
         try:
             fn()

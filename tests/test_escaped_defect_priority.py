@@ -13,6 +13,7 @@ ordering rules as pure functions, where a break is attributable to one invariant
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import socket
@@ -443,8 +444,9 @@ def test_brain_signal_status_handles_missing_feedback_import_and_corrupt_schema(
     }
 
     schemaless = tmp_path / "schemaless.db"
-    with sqlite3.connect(str(schemaless)) as conn:
+    with contextlib.closing(sqlite3.connect(str(schemaless))) as conn:
         conn.execute("CREATE TABLE unrelated (id INTEGER PRIMARY KEY)")
+        conn.commit()
     broken_query = edp.brain_signal_status(schemaless)
     assert broken_query["source"] == "git"
     assert broken_query["brain"] == "unknown"

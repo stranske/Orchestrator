@@ -74,8 +74,10 @@ def test_normalize_arm_enforces_single_parallel_and_pair_agent_arity() -> None:
     assert pair["members"][1]["review_of_member_id"] == pair["members"][0]["member_id"]
 
 
+@pytest.mark.parametrize("invalid_cost", [float("nan"), -1.0, "invalid"])
 def test_strategy_arm_costs_withholds_total_when_any_attempt_is_unmeasured(
     isolated_runtime: Path,
+    invalid_cost: float | str,
 ) -> None:
     spec = isolated_runtime / "spec.md"
     spec.write_text("frozen experiment spec\n", encoding="utf-8")
@@ -135,6 +137,20 @@ def test_strategy_arm_costs_withholds_total_when_any_attempt_is_unmeasured(
     )[parallel_arm["arm_id"]]
     assert complete["cost_usd"] == 1.5
     assert complete["unmeasured_attempt_run_ids"] == []
+
+    invalid = se.strategy_arm_costs(
+        plan,
+        [
+            {
+                "run_id": rid,
+                "cost_usd": invalid_cost if rid == attempt_ids[0] else 0.5,
+                "source": complete_source,
+            }
+            for rid in attempt_ids
+        ],
+    )[parallel_arm["arm_id"]]
+    assert invalid["cost_usd"] is None
+    assert attempt_ids[0] in invalid["unmeasured_attempt_run_ids"]
 
 
 def test_main_guards_active_prepare_and_formats_readonly_plan(
