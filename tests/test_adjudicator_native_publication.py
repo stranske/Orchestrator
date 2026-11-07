@@ -3,6 +3,7 @@
 import hashlib
 import json
 import sqlite3
+import sys
 from pathlib import Path
 
 import pytest
@@ -256,6 +257,190 @@ def test_real_native_publication_authenticates_case_and_preserves_history(
     ]
     # The ordinary reader's threshold is deliberately the canonical summary.
     assert (published["summary"]["graded"] >= 1) is True
+
+
+def test_native_cli_admits_once_then_publishes_without_unused_output(
+    qualified_input, tmp_path, monkeypatch, capsys
+):
+    repo, row, qualification, _ = qualified_input
+    row.update(decision="needs_more_evidence", run_id="original-run")
+    row["retry_attempts"] = [{"backend_run_id": "original-paid"}]
+    original = tmp_path / "original.json"
+    original.write_text(json.dumps({"rows": [row], "summary": {"graded": 0}, "population": 299}))
+    source = original.read_bytes()
+    canonical = tmp_path / "canonical.json"
+    canonical.write_bytes(source)
+    qual = tmp_path / "qualification.json"
+    qual.write_text(json.dumps(qualification))
+    journal = tmp_path / "native.sqlite"
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            [
+                {
+                    "case_id": "one",
+                    "input_report": original.name,
+                    "repository": str(repo),
+                    "qualification": qual.name,
+                }
+            ]
+        )
+    )
+    calls = []
+
+    def offload(*_args, **kwargs):
+        calls.append("native-paid")
+        receipt = {"exit": 0, "run_id": "native-paid", "output": json.dumps(proposal())}
+        kwargs["attempt_started_callback"]({"run_id": "native-paid"})
+        kwargs["attempt_receipt_callback"](receipt)
+        return {**receipt, "attempt_receipt_callback_called": True}
+
+    monkeypatch.setattr(roles.dispatcher, "offload", offload)
+    monkeypatch.setattr(roles, "route_role", lambda *_a, **_k: {"agent": "gemini"})
+    monkeypatch.setattr(roles.feedback, "record_role_run", lambda **_k: None)
+    monkeypatch.setattr(
+        retro.feedback, "role_cost_report", lambda *_a, **_k: {"status": "unmeasured"}
+    )
+    common = [
+        "retro",
+        "--report",
+        str(original),
+        "--native-journal",
+        str(journal),
+        "--expected-source-hash",
+        hashlib.sha256(source).hexdigest(),
+    ]
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        common
+        + [
+            "--native-admit",
+            "one",
+            "--case-input",
+            str(original),
+            "--repository",
+            str(repo),
+            "--qualification",
+            str(qual),
+            "--output",
+            str(tmp_path / "projection.json"),
+            "--dispatch",
+        ],
+    )
+    assert retro.main() == 0
+    capsys.readouterr()
+    assert calls == ["native-paid"]
+    # Later truth is a separate outcomes record; the provider decision cannot create it.
+    outcomes = tmp_path / "outcomes.sqlite"
+    with sqlite3.connect(outcomes) as conn:
+        conn.execute(
+            "CREATE TABLE outcomes (run_id TEXT, durability TEXT, durability_checked_ts INT)"
+        )
+    monkeypatch.setattr(retro.feedback, "DB_PATH", outcomes)
+    for expected_graded in (0, 1):
+        before_journal = journal.read_bytes()
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            common
+            + [
+                "--native-publish",
+                str(canonical),
+                "--cohort-manifest",
+                str(manifest),
+                "--expected-canonical-hash",
+                hashlib.sha256(canonical.read_bytes()).hexdigest(),
+            ],
+        )
+        assert retro.main() == 0
+        assert json.loads(capsys.readouterr().out)["graded"] == expected_graded
+        published = json.loads(canonical.read_text())
+        assert published["summary"]["graded"] == expected_graded
+        assert published["rows"][0]["decision"] == "needs_more_evidence"
+        assert published["rows"][0]["retry_attempts"] == row["retry_attempts"]
+        assert published["native_publication"]["paid_backend_ids"] == [
+            "native-paid",
+            "original-paid",
+        ]
+        assert original.read_bytes() == source
+        assert journal.read_bytes() == before_journal
+        assert calls == ["native-paid"]
+        if expected_graded == 0:
+            with sqlite3.connect(outcomes) as conn:
+                conn.execute(
+                    "INSERT INTO outcomes VALUES (?, ?, ?)",
+                    ("original-run", "durable", retro.feedback.DURABILITY_DETECTION_SINCE),
+                )
+
+
+@pytest.mark.parametrize(
+    ("flags", "message"),
+    [
+        (["--native-cohort", "--native-publish", "canonical.json"], "choose exactly one"),
+        (
+            [
+                "--native-publish",
+                "canonical.json",
+                "--report",
+                "original.json",
+                "--cohort-manifest",
+                "manifest.json",
+                "--native-journal",
+                "native.sqlite",
+                "--expected-source-hash",
+                "source",
+            ],
+            "--expected-canonical-hash",
+        ),
+        (
+            [
+                "--native-cohort",
+                "--report",
+                "original.json",
+                "--cohort-manifest",
+                "manifest.json",
+                "--native-journal",
+                "native.sqlite",
+                "--expected-source-hash",
+                "source",
+            ],
+            "--output",
+        ),
+    ],
+)
+def test_native_publication_cli_requires_unambiguous_mode_inputs(
+    flags, message, monkeypatch, capsys
+):
+    monkeypatch.setattr(sys, "argv", ["retro", *flags])
+    with pytest.raises(SystemExit) as exc:
+        retro.main()
+    assert exc.value.code == 2
+    assert message in capsys.readouterr().err
+
+
+def test_legacy_dispatch_retry_cli_explains_native_handoff_without_mutation(
+    tmp_path, monkeypatch, capsys
+):
+    canonical = tmp_path / "canonical.json"
+    canonical.write_text(json.dumps({"native_publication": {}, "rows": []}))
+    before = canonical.read_bytes()
+    monkeypatch.setattr(retro, "report_path", lambda: canonical)
+
+    def forbidden(*_a, **_k):
+        pytest.fail("generic retry crossed the native publication boundary")
+
+    for name in ("disputes", "_refresh_saved_verdicts", "fetch_evidence", "_persist_report"):
+        monkeypatch.setattr(retro, name, forbidden)
+    monkeypatch.setattr(roles, "run_adjudicator_agent", forbidden)
+    monkeypatch.setattr(sys, "argv", ["retro", "--dispatch", "--retry", "--limit", "21"])
+    with pytest.raises(SystemExit) as exc:
+        retro.main()
+    assert exc.value.code == 2
+    error = capsys.readouterr().err
+    assert "refuses to overwrite native canonical publication" in error
+    assert "--native-admit" in error and "--native-publish" in error
+    assert canonical.read_bytes() == before
 
 
 def test_real_cumulative_publication_retains_a_then_b_and_reader_threshold(

@@ -1,0 +1,36 @@
+{
+  "base_revision": "beed63a719758355442673362276faa60ef813de",
+  "evidence_class": "private_local_regression_only",
+  "baseline": {
+    "tests": 7,
+    "errors": 4,
+    "failed_subtests": 6,
+    "exit_code": 1
+  },
+  "fixed": {
+    "tests": 7,
+    "exit_code": 0
+  },
+  "existing_diagnostics": {
+    "tests": 18,
+    "exit_code": 0
+  },
+  "module_selftest": {
+    "checks": 23,
+    "exit_code": 0
+  },
+  "files": {
+    "src/adjudicator_retro.py": "26537ee98ee7b1cfe2c7b187030ddce3e1d192dac4a1c9a5f5fc5b225dc2d13b",
+    "tests/test_adjudicator_replay_revision.py": "2e56692f2cb353fbcffae9bb93e999ec138dae7b0886bfb609750f657c0e39a4",
+    "config/test-shards.json": "f5df52b8f10ef6651379513b6a429c9ecd6b95e0f018cf76f2eeef5860ebdbf9",
+    "docs/verification/issue-1072-replay-revision/baseline-red.log.gz": "be25ca8977033db9fbd15d92fd1ba554d592078460a48fa4bd3e3d8334827d40",
+    "docs/verification/issue-1072-replay-revision/fixed-green.log.gz": "a7a49d300f15a8530a36790f559e955c76614af4610cc331338f6a0c4b4c7151"
+  },
+  "pytest": "unavailable; no module named pytest",
+  "black": "unavailable; command not found; installation failed",
+  "commit": "not attempted: required Black gate cannot pass",
+  "production_inventory": "unavailable; configured runtime inputs absent",
+  "production_dispatches": 0,
+  "operational_checkboxes_completed": 0,
+  "github_label_and_comment": "rejected: approval required, policy never"
+}

@@ -345,6 +345,317 @@ def _validate_original_report(rows: list[dict]) -> None:
             raise ValueError("saved report case ID does not match immutable identity")
 
 
+def _inventory_code(root: Path | None) -> dict:
+    """Observe an explicitly selected code location without assuming a live reader uses it."""
+    if root is None:
+        return {"status": "unavailable", "reason": "no runtime code location supplied"}
+    root = Path(root).absolute()
+    resolved = root.resolve(strict=True)
+    code = resolved / "src/adjudicator_retro.py"
+    if not code.is_file():
+        code = resolved / "adjudicator_retro.py"
+    # HEAD and a dirty flag cannot identify changing local dependencies. Flat
+    # mirrors may have no Git metadata at all; pin their neighboring modules too.
+    module_hashes = {
+        module.name: hashlib.sha256(module.read_bytes()).hexdigest()
+        for module in sorted(code.parent.glob("*.py"))
+        if module.is_file()
+    }
+    result: dict[str, Any] = {
+        "status": "observed",
+        "path": str(root),
+        "resolved_path": str(resolved),
+        "adjudicator_sha256": hashlib.sha256(code.read_bytes()).hexdigest(),
+        "runtime_module_sha256": module_hashes,
+        "git_revision": None,
+        "tracked_files_clean": None,
+        "live_reader_binding": "unverified",
+    }
+    # A flat mirror inside another checkout must not inherit that checkout's HEAD.
+    if (resolved / ".git").exists():
+        # Inherited Git locations override -C, including in hooks and worktrees.
+        # Use the collector's isolated local reader for both identity and status.
+        result["git_revision"] = _local_git(resolved, "rev-parse", "HEAD").decode().strip()
+        result["tracked_files_clean"] = not _local_git(
+            resolved, "--no-optional-locks", "status", "--porcelain", "--untracked-files=no"
+        ).strip()
+    if root.resolve(strict=True) != resolved:
+        raise ValueError("runtime code location changed during inventory")
+    return result
+
+
+def inventory_native_state(
+    *,
+    original_report: Path,
+    canonical_path: Path,
+    journal_path: Path,
+    deployed_root: Path | None = None,
+    mirror_root: Path | None = None,
+) -> dict:
+    """Read pre-dispatch identities; serialized receipts grant no retry or grade authority.
+
+    The journal is opened read-only without initialization. UNKNOWN reservations,
+    foreign-source attempts, repeated original paid identities and all recursive
+    histories remain visible. No Brain read, capability issuance, provider call,
+    publication, or report normalization is performed.
+    """
+
+    def file_identity(path):
+        resolved = path.resolve()
+        try:
+            stat = resolved.stat()
+        except FileNotFoundError:
+            return resolved, None, None
+        return resolved, stat.st_dev, stat.st_ino
+
+    observed_source = file_identity(original_report)
+    observed_canonical = file_identity(canonical_path)
+    source = observed_source[0].read_bytes()
+    canonical = observed_canonical[0].read_bytes()
+
+    def check_report_locations():
+        if (
+            file_identity(original_report) != observed_source
+            or file_identity(canonical_path) != observed_canonical
+        ):
+            raise ValueError("native report location changed during inventory")
+
+    check_report_locations()
+    source_hash = hashlib.sha256(source).hexdigest()
+    saved = json.loads(source)
+    current = json.loads(canonical)
+    if not isinstance(saved, dict) or not isinstance(saved.get("rows"), list):
+        raise ValueError("saved report must contain a rows list")
+    if "native_publication" in saved:
+        raise ValueError("inventory requires the immutable original, not a native publication")
+    _validate_original_report(saved["rows"])
+    if not isinstance(current, dict) or not isinstance(current.get("rows"), list):
+        raise ValueError("canonical report must contain a rows list")
+    marker = current.get("native_publication")
+    if canonical != source:
+        if not isinstance(marker, dict) or marker.get("source_report_sha256") != source_hash:
+            raise ValueError("canonical report has foreign native publication lineage")
+        historical = []
+        for row in current["rows"]:
+            if not isinstance(row, dict):
+                raise ValueError("canonical report rows must be objects")
+            original_row = dict(row)
+            original_row.pop("native_projection", None)
+            historical.append(original_row)
+        if historical != saved["rows"] or current.get("population") != saved.get("population"):
+            raise ValueError("canonical report changed immutable original cohort")
+
+    case_ids = [row["case_id"] for row in saved["rows"]]
+    original_paid = [
+        {"case_id": row["case_id"], "backend_run_id": attempt["backend_run_id"]}
+        for row in saved["rows"]
+        for attempt in _attempt_rows([row])
+        if attempt.get("backend_run_id")
+    ]
+
+    # A connection keeps reading the old inode after an atomic replacement.
+    # Pin the selected file as well as comparing records on that connection.
+    observed_journal = file_identity(journal_path)
+    # Do not instantiate NativeAttemptJournal: its constructor creates/repairs files.
+    with sqlite3.connect(observed_journal[0].as_uri() + "?mode=ro", uri=True) as conn:
+        conn.row_factory = sqlite3.Row
+        if conn.execute("PRAGMA application_id").fetchone()[0] != NATIVE_JOURNAL_APPLICATION_ID:
+            raise ValueError("inventory requires an existing native journal")
+
+        def records():
+            return [
+                dict(row)
+                for row in conn.execute("SELECT * FROM native_attempts ORDER BY attempt_id")
+            ]
+
+        before = records()
+        attempts = []
+        for record in before:
+            item = {
+                key: record[key]
+                for key in (
+                    "attempt_id",
+                    "case_id",
+                    "material_revision",
+                    "case_digest",
+                    "state",
+                    "backend_run_id",
+                    "created_at",
+                    "updated_at",
+                    "report_sha256",
+                )
+            }
+            item["matches_original_source"] = record["report_sha256"] == source_hash
+            item["in_original_cohort"] = record["case_id"] in case_ids
+            for field in ("raw_response", "validated_json"):
+                value = record[field]
+                item[field + "_sha256"] = (
+                    hashlib.sha256(value.encode()).hexdigest() if value is not None else None
+                )
+            item["receipt_authority"] = "not_authenticated_by_inventory"
+            attempts.append(item)
+        deployed = _inventory_code(deployed_root)
+        mirror = _inventory_code(mirror_root)
+        # Code locations belong to the same observation as the reports and
+        # journal. A deployment or mirror switch must not leave stale pins.
+        for root, observed in ((deployed_root, deployed), (mirror_root, mirror)):
+            try:
+                rechecked = _inventory_code(root)
+            except (OSError, subprocess.SubprocessError) as exc:
+                raise ValueError("runtime code location changed during inventory") from exc
+            if rechecked != observed:
+                raise ValueError("runtime code location changed during inventory")
+        # Identical bytes do not prove the selected reports still belong to
+        # this observation. Pin both locations across the final content read.
+        check_report_locations()
+        if (
+            original_report.read_bytes() != source
+            or canonical_path.read_bytes() != canonical
+            or records() != before
+        ):
+            raise ValueError("native inventory inputs changed during observation")
+        check_report_locations()
+        if file_identity(journal_path) != observed_journal:
+            raise ValueError("native journal location changed during inventory")
+
+    original_ids = [item["backend_run_id"] for item in original_paid]
+    native_ids = [item["backend_run_id"] for item in attempts if item["backend_run_id"]]
+    return {
+        "schema_version": 1,
+        "checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "evidence_class": "current_local_inventory_only",
+        "historical_observations": "unavailable; not established by this inventory",
+        "deployed_code": deployed,
+        "mirror_code": mirror,
+        "original_report": {
+            "path": str(observed_source[0]),
+            "sha256": source_hash,
+            "population": saved.get("population"),
+            "case_ids": case_ids,
+        },
+        "canonical_report": {
+            "path": str(observed_canonical[0]),
+            "sha256": hashlib.sha256(canonical).hexdigest(),
+            "native_publication_present": marker is not None,
+            "retained_summary": current.get("summary"),
+            "summary_authority": "not_authenticated_by_inventory",
+        },
+        "original_paid_attempts": original_paid,
+        "row_diagnostics": diagnose_original_rows(saved["rows"], attempts),
+        "native_journal": {"path": str(observed_journal[0]), "attempts": attempts},
+        "paid_identity_summary": {
+            "original_records": len(original_ids),
+            "original_unique": len(set(original_ids)),
+            "native_records": len(native_ids),
+            "native_unique": len(set(native_ids)),
+            "union_unique": len(set(original_ids) | set(native_ids)),
+            "overlapping_backend_ids": sorted(set(original_ids) & set(native_ids)),
+        },
+        "dispatch_authorized": False,
+    }
+
+
+def diagnose_original_rows(rows: list[dict], attempts: list[dict]) -> list[dict]:
+    """Locate retained breaks without promoting saved proposals or journal states.
+
+    A missing saved packet is not proof that fresh collection would fail, and a
+    missing saved truth label is not a current outcome-database observation.
+    Native receipt authentication and independent truth refresh still belong to
+    the existing collector/refresh path. No diagnosis authorizes another spend.
+    """
+    diagnostics = []
+    for index, row in enumerate(rows):
+        packet = row.get("packet")
+        ground = packet.get("ground_truth_evidence") if isinstance(packet, dict) else None
+        evidence_gap = _packet_evidence_gap(ground) if isinstance(ground, dict) else None
+        proposal = row.get("proposal")
+        decision = row.get("decision")
+        error_ref = None
+        attempt_break = "saved_attempt_error"
+        if row.get("errors"):
+            error_ref = f"rows[{index}].errors"
+            if isinstance(row["errors"], list):
+                error_ref += "[0]"
+                # The producer discards rejected proposals. Preserve the known
+                # historical rejection without parsing or exposing raw output.
+                # Earlier backend errors still take precedence in this list.
+                if row["errors"][0] == (
+                    "recommended_next_step must not contain mutating execution instructions"
+                ):
+                    attempt_break = "saved_proposal_validator_failure"
+        elif row.get("error"):
+            error_ref = f"rows[{index}].error"
+        if not isinstance(ground, dict):
+            first_break = "saved_packet_unavailable"
+        elif evidence_gap is not None:
+            first_break = "saved_substantive_evidence_missing"
+        elif error_ref is not None:
+            first_break = attempt_break
+        elif proposal is not None and roles.ROLE_REGISTRY["adjudicator"].validate(proposal):
+            first_break = "saved_proposal_validator_failure"
+        elif isinstance(proposal, dict) and proposal.get("decision") != decision:
+            first_break = "saved_decision_proposal_mismatch"
+        elif decision == "needs_more_evidence":
+            first_break = "saved_adjudicator_abstention"
+        elif decision not in ("uphold_blocker", "reject_blocker"):
+            first_break = "saved_binary_decision_unavailable"
+        elif row.get("later_truth") not in ("PASS", "FAIL"):
+            first_break = "saved_independent_later_truth_unavailable"
+        else:
+            first_break = "fresh_native_authentication_required"
+
+        # Reservations block spend by case identity even across source reports.
+        # Retain every unresolved locator; never select a newer completed row to
+        # conceal an earlier provider invocation with an UNKNOWN outcome.
+        case_attempts = [item for item in attempts if item["case_id"] == row["case_id"]]
+        unresolved = [
+            item
+            for item in case_attempts
+            if item["state"] in {"reserved", "in_flight", "raw_persisted"}
+        ]
+        matching = [item for item in case_attempts if item["matches_original_source"]]
+        if unresolved:
+            native_break = "unresolved_native_attempt"
+        elif matching:
+            native_break = "fresh_native_receipt_authentication_required"
+        elif case_attempts:
+            native_break = "foreign_source_native_attempt_requires_review"
+        else:
+            native_break = "fresh_native_collection_required"
+        diagnostics.append(
+            {
+                "case_id": row["case_id"],
+                "target": row.get("target"),
+                "source_row": f"rows[{index}]",
+                "evidence_scope": "retained_original_only; not fresh collection or truth",
+                "retained_decision": decision,
+                "retained_later_truth": row.get("later_truth"),
+                "retained_first_break": first_break,
+                "retained_evidence_gap": (
+                    {
+                        "ref": f"rows[{index}].packet.ground_truth_evidence.{evidence_gap[0]}",
+                        "reason": evidence_gap[1],
+                    }
+                    if evidence_gap is not None
+                    else None
+                ),
+                "retained_error_ref": error_ref,
+                "native_first_break": native_break,
+                "unresolved_native_attempts": [
+                    {
+                        "attempt_id": item["attempt_id"],
+                        "state": item["state"],
+                        "matches_original_source": item["matches_original_source"],
+                        "outcome": "UNKNOWN",
+                    }
+                    for item in unresolved
+                ],
+                "dispatch_authorized": False,
+            }
+        )
+    return diagnostics
+
+
 def admit_collected_retry(
     *,
     original_report: Path,
@@ -984,31 +1295,32 @@ def disputes(*, db: Path | None = None, now: int | None = None, days: int = 90) 
         ]
 
 
-def _packet_metadata_only(ground_truth: dict) -> bool:
+def _packet_evidence_gap(ground_truth: dict) -> tuple[str, str] | None:
+    """Locate the first evidence-floor failure without returning evidence contents."""
     patch = ground_truth.get("diff_patch")
-    patch_text = patch.get("text") if isinstance(patch, dict) else ""
-    has_patch = (
-        isinstance(patch, dict)
-        and isinstance(patch_text, str)
-        and bool(patch_text.strip())
-        and isinstance(patch.get("revision"), str)
-        and bool(patch["revision"].strip())
-        and not patch.get("truncated", False)
-    )
+    if not isinstance(patch, dict):
+        return "diff_patch", "missing_or_invalid_object"
+    for field in ("text", "revision"):
+        value = patch.get(field)
+        if not isinstance(value, str) or not value.strip():
+            return f"diff_patch.{field}", "missing_or_blank_string"
+    if patch.get("truncated", False):
+        return "diff_patch.truncated", "truncated_patch"
     criteria = ground_truth.get("acceptance_criteria")
-    has_criteria = (
-        isinstance(criteria, list)
-        and bool(criteria)
-        and all(
-            isinstance(item, dict)
-            and isinstance(item.get("text"), str)
-            and bool(item["text"].strip())
-            and isinstance(item.get("revision"), str)
-            and bool(item["revision"].strip())
-            for item in criteria
-        )
-    )
-    return not (has_patch and has_criteria)
+    if not isinstance(criteria, list) or not criteria:
+        return "acceptance_criteria", "missing_or_empty_list"
+    for index, item in enumerate(criteria):
+        if not isinstance(item, dict):
+            return f"acceptance_criteria[{index}]", "missing_or_invalid_object"
+        for field in ("text", "revision"):
+            value = item.get(field)
+            if not isinstance(value, str) or not value.strip():
+                return f"acceptance_criteria[{index}].{field}", "missing_or_blank_string"
+    return None
+
+
+def _packet_metadata_only(ground_truth: dict) -> bool:
+    return _packet_evidence_gap(ground_truth) is not None
 
 
 def _row_metadata_only(row: dict) -> bool:
@@ -2343,7 +2655,9 @@ def run(
     previous = json.loads(path.read_text()) if path.exists() else {}
     if isinstance(previous, dict) and "native_publication" in previous:
         raise ValueError(
-            "generic retrospective run refuses to overwrite native canonical publication"
+            "generic retrospective run refuses to overwrite native canonical publication; "
+            "use --native-admit for eligible original abstentions, then --native-publish "
+            "to refresh canonical grading from authenticated receipts"
         )
     saved = {r["case_id"]: r for r in previous.get("rows", [])}
     # Exhaust the lazy traversal before recovery or paid dispatch can mutate state.
@@ -2884,6 +3198,12 @@ def _selftest() -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--selftest", action="store_true")
+    parser.add_argument(
+        "--inventory", action="store_true", help="read native identities without dispatch or writes"
+    )
+    parser.add_argument("--canonical-report", type=Path)
+    parser.add_argument("--deployed-root", type=Path)
+    parser.add_argument("--mirror-root", type=Path)
     parser.add_argument("--native-cohort", action="store_true")
     parser.add_argument("--native-publish", type=Path, metavar="CANONICAL_REPORT")
     parser.add_argument("--cohort-manifest", type=Path)
@@ -2947,6 +3267,52 @@ def main() -> int:
     args = parser.parse_args()
     if args.timeout < 1:
         parser.error("--timeout must be at least 1 second")
+    if args.inventory:
+        if any(
+            (
+                args.selftest,
+                args.native_admit,
+                args.native_refresh,
+                args.native_cohort,
+                args.native_publish,
+                args.dispatch,
+                args.retry,
+                args.collect_case,
+                args.prepare_collected_case,
+                args.judge_collected_case,
+                args.output,
+                args.case_input,
+                args.qualification,
+                args.cohort_manifest,
+                args.expected_source_hash,
+                args.expected_canonical_hash,
+                args.repository,
+            )
+        ):
+            parser.error("--inventory is read-only and cannot combine with another mode or output")
+        if not all((args.report, args.canonical_report, args.native_journal)):
+            parser.error("--inventory requires --report --canonical-report --native-journal")
+        try:
+            result = inventory_native_state(
+                original_report=args.report,
+                canonical_path=args.canonical_report,
+                journal_path=args.native_journal,
+                deployed_root=args.deployed_root,
+                mirror_root=args.mirror_root,
+            )
+        except (
+            OSError,
+            ValueError,
+            KeyError,
+            TypeError,
+            sqlite3.Error,
+            subprocess.SubprocessError,
+        ) as exc:
+            parser.error(str(exc))
+        print(json.dumps(result, indent=2))
+        return 0
+    if any((args.canonical_report, args.deployed_root, args.mirror_root)):
+        parser.error("--canonical-report, --deployed-root and --mirror-root require --inventory")
     if args.selftest and any(
         (args.native_admit, args.native_refresh, args.native_cohort, args.native_publish)
     ):
@@ -2955,6 +3321,8 @@ def main() -> int:
         _selftest()
         return 0
     if args.native_cohort or args.native_publish:
+        if args.native_cohort and args.native_publish:
+            parser.error("choose exactly one of --native-cohort and --native-publish")
         native_mode = "--native-cohort" if args.native_cohort else "--native-publish"
         if any(
             (
@@ -2971,20 +3339,19 @@ def main() -> int:
             )
         ):
             parser.error(f"{native_mode} cannot dispatch or combine with another mode")
-        if not all(
-            (
-                args.report,
-                args.output,
-                args.native_journal,
-                args.expected_source_hash,
-                args.cohort_manifest,
-                (not args.native_publish or args.expected_canonical_hash),
-            )
-        ):
-            parser.error(
-                f"{native_mode} requires --report --output --native-journal "
-                "--expected-source-hash --cohort-manifest"
-            )
+        required = {
+            "--report": args.report,
+            "--native-journal": args.native_journal,
+            "--expected-source-hash": args.expected_source_hash,
+            "--cohort-manifest": args.cohort_manifest,
+        }
+        if args.native_publish:
+            required["--expected-canonical-hash"] = args.expected_canonical_hash
+        else:
+            required["--output"] = args.output
+        missing = [flag for flag, value in required.items() if not value]
+        if missing:
+            parser.error(f"{native_mode} requires " + " ".join(missing))
         try:
             manifest = json.loads(args.cohort_manifest.read_text())
             if not isinstance(manifest, list) or len(manifest) > 1000:
@@ -3027,10 +3394,15 @@ def main() -> int:
                     runner = adjudicator_replay.REVIEWED_RUNNERS.get(runner_path)
                     if runner is None:
                         raise ValueError("cohort replay runner is not registered")
+                    # Replay and qualification must inspect the same evaluated
+                    # commit; a squash merge can differ from the saved PR head.
+                    evaluated_sha = _case_evaluated_sha(matches[0])
+                    if evaluated_sha is None:
+                        raise ValueError("cohort replay requires an exact evaluated commit")
                     replay_receipt = adjudicator_replay.collect_replay(
                         location("repository"),
                         key,
-                        qualification["snapshot"]["headRefOid"],
+                        evaluated_sha,
                         runner_path,
                         runner.sha256,
                         runner.tests,
@@ -3296,7 +3668,12 @@ def main() -> int:
             )
         )
         return 0
-    result = run(dispatch=args.dispatch, limit=args.limit, retry=args.retry, timeout=args.timeout)
+    try:
+        result = run(
+            dispatch=args.dispatch, limit=args.limit, retry=args.retry, timeout=args.timeout
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
     print(json.dumps(result["summary"], indent=2))
     return 0
 

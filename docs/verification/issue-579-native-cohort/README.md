@@ -1,5 +1,52 @@
 # Original-cohort native candidate
 
+Before any dispatch, read the immutable source, current canonical report and
+existing native journal with the non-mutating inventory mode:
+
+```sh
+python src/adjudicator_retro.py --inventory \
+  --report /absolute/original-report.json \
+  --canonical-report /absolute/capability-program/adjudicator-retro.json \
+  --native-journal /absolute/native-attempts.sqlite \
+  --deployed-root /absolute/deployed-checkout \
+  --mirror-root /absolute/published-mirror
+```
+
+The JSON on stdout pins report hashes, ordered original case IDs, recursive paid
+attempt identities, and every journal attempt, including other source reports
+and unresolved reservations. Raw response and parsed-result bytes are represented
+only by hashes. It refuses a missing/foreign journal without creating or repairing
+it, rejects changed canonical lineage, and aborts if report or journal inputs
+change during observation. It cannot dispatch, publish, refresh truth or repair
+role records; `--dispatch`, `--retry` and other modes are refused.
+
+Code observations retain the selected path, resolved mirror generation, script
+hash, and checkout HEAD/dirty status when that location owns Git metadata. They
+do not prove that a scheduler or running reader selected those paths. Omitted
+code locations and historical observations are explicitly unavailable. Retained
+canonical summary numbers and journal validation states are inventory facts,
+not authenticated grading or retry authorization. Native publication still
+requires fresh collector capabilities and journal authentication below.
+
+The code locations are reobserved before the final report/journal comparison.
+A changed script hash, checkout revision, tracked clean/dirty status, or resolved
+mirror generation aborts inventory, including disappearance of a selected location.
+This detects changes to the recorded code observations; it does not establish
+live-reader binding or inventory every dependency in a dirty checkout.
+
+The inventory also prints `row_diagnostics` in original cohort order. Each entry
+names the first retained break: unavailable packet, missing substantive evidence,
+recorded attempt error, current proposal-validator failure, inconsistent saved
+decision, abstention, missing binary decision, or unavailable retained later truth.
+`source_row` locates that evidence in the immutable original. Even a complete
+saved proposal and truth label still require fresh native authentication.
+These diagnoses describe retained inputs, not a fresh collection or outcome read.
+Native blockers are separate: every unresolved reservation/invocation/raw receipt
+has its attempt ID, state and UNKNOWN outcome, including foreign-source records
+that block the same case identity. A terminal foreign-source attempt requires
+review; a journal state called validated still requires receipt authentication.
+No saved projection supplies a grade or authorizes retry spending.
+
 Issue #579's merged #622 rail authenticates one original case at a time. A
 single-case projection does not establish acceptance over the original cohort.
 `refresh_native_cohort` joins all validated journal cases for the frozen original
@@ -43,15 +90,6 @@ is private evidence, not a public attachment. Original cost fields still describ
 the original attempts; native raw usage/error receipts remain separately visible
 in `native_attempts`. No missing cost is treated as zero.
 
-Validation on the candidate: 251 focused adjudicator/offload tests and 23
-subtests pass; 15 new cohort cases cover multiple authenticated originals,
-UNKNOWN later truth, preserved history, serialized-authority refusal, manifest
-omissions, stale source hashes, duplicate paid identities, late contract/read
-failures, changing inputs, exclusive output, and read-only journal admission.
-Four independent guard-removal controls assertion-fail their intended tests;
-byte-identical restoration passes all 15 cohort tests. Full hosted CI and the
-seven-minute exact-head review floor remain delivery gates.
-
 This bounded producer does not establish actual native graded >=29, original
 cost coverage, canonical-primary publication, live shadow performance, or source
 #579 completion. The original 58-case report and paid history remain unchanged.
@@ -86,3 +124,57 @@ report paths; an alternate lock cannot be supplied to evade serialization. The
 cohort CLI optionally accepts a `replay_runner` registry key per manifest entry.
 It executes that fixed producer freshly and passes its opaque receipt into
 qualification; manifest JSON cannot import a replay receipt or change its binding.
+
+## Retry handoff for a native canonical report
+
+The requested `--dispatch --retry --limit 21` command belongs to the generic
+retrospective writer. Once the canonical report carries `native_publication`,
+that command must stop before evidence reads, role-record repair or dispatch.
+Its CLI error directs the operator to native admission and publication. Do not
+remove the marker, replay a copy through the generic writer, or replace the
+original report with the canonical publication.
+
+After collecting the authentic inventory above, handle each eligible original
+abstention through the existing single-case admission command:
+
+```sh
+python src/adjudicator_retro.py --native-admit ORIGINAL_CASE_ID \
+  --report /absolute/immutable-original-report.json \
+  --expected-source-hash PINNED_ORIGINAL_SHA256 \
+  --case-input /absolute/enriched-original-case.json \
+  --repository /absolute/evaluated-git-checkout \
+  --qualification /absolute/qualification.json \
+  --native-journal /absolute/native-attempts.sqlite \
+  --output /absolute/new-case-projection.json \
+  --dispatch
+```
+
+Omit `--dispatch` for preparation only. The enriched input preserves the original
+identity, finding and evaluated-revision anchors; collection reissues an opaque
+case from local Git objects. The journal preserves prior paid attempts and
+refuses repeat spend for a consumed revision, a binary decision or an unresolved
+started invocation. A missing raw response remains UNKNOWN. The requested limit
+of 21 is an upper bound on selected eligible original retries, not permission
+to redispatch 21 rows. Native admission does not use generic `--retry` or
+`--limit`; record each actual outcome or its first broken step separately.
+
+Build the manifest from **all** validated journal cases for the immutable source,
+including prior admissions. Refresh canonical grading without another dispatch:
+
+```sh
+python src/adjudicator_retro.py \
+  --native-publish /absolute/capability-program/adjudicator-retro.json \
+  --report /absolute/immutable-original-report.json \
+  --expected-source-hash PINNED_ORIGINAL_SHA256 \
+  --expected-canonical-hash PINNED_CURRENT_CANONICAL_SHA256 \
+  --native-journal /absolute/native-attempts.sqlite \
+  --cohort-manifest /absolute/manifest.json
+```
+
+Publication needs no `--output`; `--native-cohort` still requires a fresh output
+path for its separate candidate. Choose exactly one mode. Use the current
+canonical hash for each publication and re-inventory after a compare-and-swap
+failure. The publisher reauthenticates receipts and freshly collected cases,
+preserves original decisions and history, and reads independent later truth.
+An authenticated decision without later truth remains ungraded. Neither this
+procedure nor fixture validation supplies missing production or October 18 proof.

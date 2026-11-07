@@ -1242,6 +1242,57 @@ test('report reconciliation refuses malformed or changing manifests without repl
   assert.equal(reportInventory(options).manifest_reconciliation, null);
 });
 
+for (const input of ['report', 'manifest']) {
+  for (const change of ['atomic replacement', 'symlink retarget', 'removal']) {
+    test(`report inventory rejects ${input} ${change} even with identical bytes`, (t) => {
+      const { root, options } = retainedReport(t);
+      const manifest = manifestFile(root, [{ run_id: 'original', target: 'owner/repo#1' }]);
+      const selected = input === 'report' ? options.report : manifest;
+      const original = `${selected}.original`;
+      const replacement = `${selected}.replacement`;
+      const bytes = fs.readFileSync(selected);
+      fs.writeFileSync(replacement, bytes);
+      if (change === 'symlink retarget') {
+        fs.renameSync(selected, original);
+        fs.symlinkSync(original, selected);
+      }
+      const read = fs.readFileSync;
+      let observations = 0;
+      fs.readFileSync = function observed(file, ...args) {
+        // Change the selected file during the final content read. The bytes
+        // alone still match, so both sides of that read need location checks.
+        if (file === selected && ++observations === 2) {
+          if (change === 'symlink retarget') {
+            fs.unlinkSync(selected);
+            fs.symlinkSync(replacement, selected);
+          } else if (change === 'atomic replacement') {
+            fs.renameSync(replacement, selected);
+          } else {
+            const retained = read(file, ...args);
+            fs.unlinkSync(selected);
+            return retained;
+          }
+        }
+        return read(file, ...args);
+      };
+      try {
+        assert.throws(() => reportInventory({ ...options, manifest }),
+          new RegExp(`${input} location changed during inventory`));
+      } finally {
+        fs.readFileSync = read;
+      }
+      assert.equal(observations, 2);
+      if (change === 'removal') fs.writeFileSync(selected, bytes);
+      const later = reportInventory({ ...options, manifest });
+      assert.equal(later.report_sha256, createHash('sha256')
+        .update(fs.readFileSync(options.report)).digest('hex'));
+      assert.equal(later.paid_identity_summary.records, 4);
+      assert.equal(later.dispatch_authorized, false);
+      assert.deepEqual(fs.readFileSync(selected), bytes);
+    });
+  }
+}
+
 test('report CLI never combines historical recovery with dispatch or current Brain selection', (t) => {
   const { root, options } = retainedReport(t);
   const args = [script, '--report', options.report, '--observed-at', String(now),
@@ -1280,6 +1331,198 @@ function nativeJournal(t) {
     now - 1, now, raw, validation);
   connection.close();
   return { ...fixture, journal, options: { ...fixture.options, journal } };
+}
+
+test('raw receipt hashes bind exact text through report recovery locators without exposing it', (t) => {
+  const { root, saved, journal, options } = nativeJournal(t);
+  const identity = { run_id: 'original', target: 'owner/repo#1' };
+  saved.rows = [{ ...identity, case_id: 'case-a', backend_run_id: 'primary',
+    decision: 'needs_more_evidence', later_truth: 'UNKNOWN',
+    retry_attempts: [{ backend_run_id: 'earlier-paid' }] }];
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const manifest = manifestFile(root, [identity]);
+  const hashes = [];
+  for (const raw of [null, '', 'private café\r\n', 'private café\n', 'private cafe\u0301\n']) {
+    const writer = new DatabaseSync(journal);
+    writer.prepare("UPDATE native_attempts SET raw_response=? WHERE attempt_id='d'").run(raw);
+    writer.close();
+    const inputs = [options.report, journal, manifest];
+    const before = inputs.map((file) => fs.readFileSync(file));
+    const observed = reportInventory({ ...options, manifest });
+    const expected = raw === null ? null : createHash('sha256').update(raw).digest('hex');
+    hashes.push(expected);
+    const attempts = observed.pre_dispatch.native_journal.attempts;
+    const receipt = attempts.find((row) => row.attempt_id === 'd');
+    assert.equal(receipt.raw_response_sha256, expected);
+    assert.equal(receipt.raw_receipt_present, raw !== null);
+    for (const id of ['a', 'b', 'c']) {
+      assert.equal(attempts.find((row) => row.attempt_id === id).raw_response_sha256, null);
+    }
+    const locator = observed.retained_attempt_observations[0].native_receipt_locator;
+    assert.equal(locator.attempts[0].raw_response_sha256, expected);
+    assert.equal(locator.authenticated, false);
+    assert.equal(observed.manifest_reconciliation.cases[0].native_case_recovery
+      .unresolved_attempts.find((row) => row.attempt_id === 'd').raw_response_sha256, expected);
+    assert.deepEqual(observed.paid_attempts.map((row) => row.backend_run_id),
+      ['primary', 'earlier-paid']);
+    assert.equal(observed.cases[0].retained_later_truth, 'UNKNOWN');
+    assert.equal(observed.dispatch_authorized, false);
+    assert.equal(Object.hasOwn(observed, 'graded'), false);
+    assert.ok(!JSON.stringify(observed).includes('private'));
+    assert.deepEqual(inputs.map((file) => fs.readFileSync(file)), before);
+  }
+  assert.equal(new Set(hashes).size, hashes.length, 'missing, empty and distinct text stay distinct');
+});
+
+for (const change of ['backend identity', 'raw receipt', 'validation bytes', 'new reservation']) {
+  test(`report inventory rejects committed ${change} during its final report read`, (t) => {
+    const { journal, options } = nativeJournal(t);
+    const writer = new DatabaseSync(journal);
+    t.after(() => writer.close());
+    writer.exec('PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0');
+    const mainBytes = fs.readFileSync(journal);
+    const reportBytes = fs.readFileSync(options.report);
+    const inode = fs.statSync(journal, { bigint: true }).ino;
+    const read = fs.readFileSync;
+    let observations = 0;
+    let committedWal;
+    fs.readFileSync = function observed(file, ...args) {
+      const data = read(file, ...args);
+      if (file === options.report && ++observations === 2) {
+        if (change === 'backend identity') {
+          writer.exec("UPDATE native_attempts SET state='in_flight',backend_run_id='new-paid' WHERE attempt_id='a'");
+        } else if (change === 'raw receipt') {
+          writer.exec("UPDATE native_attempts SET raw_response='private replaced receipt' WHERE attempt_id='d'");
+        } else if (change === 'validation bytes') {
+          // JSON meaning is unchanged; exact retained receipt bytes differ.
+          writer.exec("UPDATE native_attempts SET validated_json=validated_json || ' ' WHERE attempt_id='e'");
+        } else {
+          writer.exec("INSERT INTO native_attempts SELECT 'g',case_id,'new-revision',case_digest,'reserved',NULL,report_sha256,created_at,updated_at,NULL,NULL FROM native_attempts WHERE attempt_id='a'");
+        }
+        committedWal = read(`${journal}-wal`);
+      }
+      return data;
+    };
+    try {
+      assert.throws(() => reportInventory(options), /native journal receipts changed during inventory/);
+    } finally {
+      fs.readFileSync = read;
+    }
+    assert.equal(observations, 2, 'commit follows the initial receipt read');
+    assert.equal(fs.statSync(journal, { bigint: true }).ino, inode);
+    assert.deepEqual(fs.readFileSync(journal), mainBytes, 'commit is WAL-resident');
+    assert.deepEqual(fs.readFileSync(`${journal}-wal`), committedWal);
+    const later = reportInventory(options);
+    const attempts = later.pre_dispatch.native_journal.attempts;
+    if (change === 'backend identity') {
+      assert.equal(attempts.find((row) => row.attempt_id === 'a').backend_run_id, 'new-paid');
+      assert.ok(later.pre_dispatch.paid_identity_reconciliation.journal_only.includes('new-paid'));
+    } else if (change === 'raw receipt') {
+      assert.ok(attempts.find((row) => row.attempt_id === 'd').raw_receipt_present);
+    } else if (change === 'validation bytes') {
+      const text = writer.prepare("SELECT validated_json FROM native_attempts WHERE attempt_id='e'").get().validated_json;
+      assert.equal(attempts.find((row) => row.attempt_id === 'e')
+        .validation_observation.stored_text_sha256,
+      createHash('sha256').update(text).digest('hex'));
+    } else {
+      assert.equal(attempts.find((row) => row.attempt_id === 'g').state, 'reserved');
+    }
+    assert.equal(later.paid_identity_summary.records, 4);
+    assert.equal(later.receipt_authority, 'not_authenticated_by_inventory');
+    assert.equal(later.dispatch_authorized, false);
+    assert.ok(!JSON.stringify(later).includes('private'));
+    assert.deepEqual(fs.readFileSync(options.report), reportBytes);
+    assert.deepEqual(fs.readFileSync(journal), mainBytes);
+    assert.deepEqual(fs.readFileSync(`${journal}-wal`), committedWal);
+  });
+}
+
+test('report inventory ignores uncommitted receipt changes and no-op commits', (t) => {
+  const { journal, options } = nativeJournal(t);
+  const writer = new DatabaseSync(journal);
+  t.after(() => writer.close());
+  writer.exec('PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0');
+  const expected = reportInventory(options);
+  for (const committed of [false, true]) {
+    const read = fs.readFileSync;
+    let observations = 0;
+    fs.readFileSync = function observed(file, ...args) {
+      const data = read(file, ...args);
+      if (file === options.report && ++observations === 2) {
+        writer.exec('BEGIN');
+        writer.exec("UPDATE native_attempts SET backend_run_id='private uncommitted' WHERE attempt_id='a'");
+        if (committed) {
+          writer.exec("UPDATE native_attempts SET backend_run_id=NULL WHERE attempt_id='a'");
+          writer.exec('COMMIT');
+        }
+      }
+      return data;
+    };
+    try {
+      assert.deepEqual(reportInventory(options), expected);
+    } finally {
+      fs.readFileSync = read;
+      if (!committed) writer.exec('ROLLBACK');
+    }
+    assert.equal(observations, 2);
+  }
+});
+
+for (const change of ['atomic replacement', 'symlink retarget', 'removal']) {
+  test(`report inventory rejects journal ${change} after reading native receipts`, (t) => {
+    const { journal, options } = nativeJournal(t);
+    const retained = `${journal}.retained`;
+    const replacement = `${journal}.replacement`;
+    const bytes = fs.readFileSync(journal);
+    fs.writeFileSync(replacement, bytes);
+    if (change === 'symlink retarget') {
+      fs.renameSync(journal, retained);
+      fs.symlinkSync(retained, journal);
+    }
+    const initialInode = fs.statSync(journal, { bigint: true }).ino;
+    const reportBytes = fs.readFileSync(options.report);
+    const read = fs.readFileSync;
+    let observations = 0;
+    fs.readFileSync = function observed(file, ...args) {
+      const data = read(file, ...args);
+      // The journal connection has closed by the final report read. Returning
+      // its old receipt locators would misattribute them to the selected path.
+      if (file === options.report && ++observations === 2) {
+        if (change === 'symlink retarget') {
+          fs.unlinkSync(journal);
+          fs.symlinkSync(replacement, journal);
+        } else if (change === 'atomic replacement') {
+          fs.renameSync(replacement, journal);
+        } else {
+          fs.unlinkSync(journal);
+        }
+      }
+      return data;
+    };
+    try {
+      assert.throws(() => reportInventory(options), /native journal location changed during inventory/);
+    } finally {
+      fs.readFileSync = read;
+    }
+    assert.equal(observations, 2, 'the switch occurred after the native receipt observation');
+    if (change === 'removal') fs.renameSync(replacement, journal);
+    assert.notEqual(fs.statSync(journal, { bigint: true }).ino, initialInode);
+    assert.deepEqual(fs.readFileSync(journal), bytes, 'the replacement has identical receipt bytes');
+    assert.deepEqual(fs.readFileSync(options.report), reportBytes);
+
+    const later = reportInventory(options);
+    assert.equal(later.pre_dispatch.native_journal.status, 'available');
+    assert.deepEqual(later.pre_dispatch.native_journal.attempts.map((row) => row.attempt_id),
+      ['a', 'b', 'c', 'd', 'e', 'f']);
+    assert.deepEqual(later.pre_dispatch.paid_identity_reconciliation.unresolved_without_backend_id,
+      ['b']);
+    assert.equal(later.paid_identity_summary.records, 4);
+    assert.equal(later.paid_identity_summary.unique, 3);
+    assert.equal(later.receipt_authority, 'not_authenticated_by_inventory');
+    assert.equal(later.dispatch_authorized, false);
+    assert.ok(!JSON.stringify(later).includes('private'));
+    assert.deepEqual(fs.readFileSync(journal), bytes);
+  });
 }
 
 test('native receipt locators bind both case and backend identity for each retained attempt', (t) => {

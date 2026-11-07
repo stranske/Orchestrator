@@ -306,13 +306,17 @@ function nativeValidationObservation(text, location, record) {
 // Observe native receipt locators in one read-only SQLite snapshot. This does
 // not instantiate NativeAttemptJournal, parse provider output, authenticate a
 // decision, acquire the publication lock, or establish live writer ownership.
-function journalInventory(journal) {
+function journalInventory(journal, locationChecks) {
   const base = { status: 'unavailable', path: journal ? path.resolve(journal) : null,
     attempts: null, receipt_authority: 'not_authenticated_by_inventory' };
   if (journal === undefined) return { ...base, reason: 'native_journal_not_supplied' };
   if (typeof journal !== 'string' || !journal.trim()) throw new Error('journal path is required');
   let connection;
   try {
+    // Keep the selected journal attributable through the final report reads,
+    // even after SQLite closes its snapshot. Equal replacement bytes cannot
+    // establish that the receipt locators still belong to this location.
+    locationChecks.push(pinFileLocation(journal, 'native journal'));
     connection = new DatabaseSync(journal, { readOnly: true });
     connection.exec('BEGIN');
     if (connection.prepare('PRAGMA application_id').get().application_id !== 1313097550) {
@@ -324,12 +328,33 @@ function journalInventory(journal) {
       ['raw_persisted', 'resume_native_validation_without_redispatch'],
       ['validated', 'reauthenticate_with_native_projection_before_grading'],
     ]);
-    const attempts = connection.prepare(
-      'SELECT attempt_id,case_id,material_revision,case_digest,state,backend_run_id,' +
+    const receiptQuery = 'SELECT attempt_id,case_id,material_revision,case_digest,state,backend_run_id,' +
       'report_sha256,created_at,updated_at,' +
       '(raw_response IS NOT NULL) AS raw_receipt_present,' +
       '(validated_json IS NOT NULL) AS validation_present,validated_json,raw_response FROM native_attempts ' +
-      'ORDER BY created_at,attempt_id').all().map((item, index) => {
+      'ORDER BY created_at,attempt_id';
+    const records = connection.prepare(receiptQuery).all();
+    const receiptDigest = (rows) => createHash('sha256').update(JSON.stringify(rows)).digest('hex');
+    const observedDigest = receiptDigest(records);
+    // Reopen for each final check: the initial transaction cannot see later
+    // WAL commits, and inode equality cannot pin receipt content. Compare full
+    // records, including private raw/validation bytes, without emitting them.
+    locationChecks.push(() => {
+      let fresh;
+      try {
+        fresh = new DatabaseSync(journal, { readOnly: true });
+        fresh.exec('BEGIN');
+        if (fresh.prepare('PRAGMA application_id').get().application_id !== 1313097550 ||
+            receiptDigest(fresh.prepare(receiptQuery).all()) !== observedDigest) {
+          throw new Error('changed receipts');
+        }
+      } catch {
+        throw new Error('native journal receipts changed during inventory');
+      } finally {
+        if (fresh) fresh.close();
+      }
+    });
+    const attempts = records.map((item, index) => {
       const { validated_json, raw_response, ...locator } = item;
       const validation = nativeValidationObservation(validated_json,
         `pre_dispatch.native_journal.attempts[${index}].validated_json`, item);
@@ -352,7 +377,13 @@ function journalInventory(journal) {
           ? 'recover_fresh_collected_evidence_before_any_retry'
           : 'inspect_native_validation_result_before_any_retry';
       }
+      // Bind the retained text without parsing or normalizing provider output.
+      // Presence alone cannot distinguish receipts across dated observations;
+      // an empty receipt has a hash, while absent/non-text values have none.
+      const rawHash = typeof raw_response === 'string'
+        ? createHash('sha256').update(raw_response).digest('hex') : null;
       return { ...locator, raw_receipt_present: Boolean(item.raw_receipt_present),
+        raw_response_sha256: rawHash,
         validation_present: Boolean(item.validation_present), validation_observation: validation,
         receipt_evidence_gaps: gaps, recovery_step: recoveryStep };
     });
@@ -365,8 +396,8 @@ function journalInventory(journal) {
   }
 }
 
-function preDispatchInventory(saved, paid, journal) {
-  const native = journalInventory(journal);
+function preDispatchInventory(saved, paid, journal, locationChecks) {
+  const native = journalInventory(journal, locationChecks);
   const identities = new Set(paid.map((item) => item.backend_run_id));
   const journalIdentities = new Set((native.attempts || [])
     .map((item) => item.backend_run_id).filter(Boolean));
@@ -450,10 +481,33 @@ function reconcileNativeLocators(observations, journal) {
     observation.native_receipt_locator = { status, authenticated: false,
       next_evidence_step: nextStep,
       attempts: candidates.map(({ attempt_id, case_id, material_revision, state,
-        raw_receipt_present, validation_present, validation_observation, receipt_evidence_gaps }) =>
-        ({ attempt_id, case_id, material_revision, state, raw_receipt_present, validation_present,
+        raw_receipt_present, raw_response_sha256, validation_present,
+        validation_observation, receipt_evidence_gaps }) =>
+        ({ attempt_id, case_id, material_revision, state, raw_receipt_present, raw_response_sha256,
+          validation_present,
           validation_observation, receipt_evidence_gaps })) };
   }
+}
+
+// Equal bytes cannot detect a replaced file or a retargeted symlink. Keep the
+// selected inventory file bound to one location across all content reads.
+function pinFileLocation(file, label) {
+  if (typeof file !== 'string' || !file.trim()) throw new Error(`${label} path is required`);
+  const resolved = fs.realpathSync(file);
+  const { dev, ino } = fs.statSync(resolved, { bigint: true });
+  return () => {
+    let current;
+    let stat;
+    try {
+      current = fs.realpathSync(file);
+      stat = fs.statSync(current, { bigint: true });
+    } catch {
+      throw new Error(`${label} location changed during inventory`);
+    }
+    if (current !== resolved || stat.dev !== dev || stat.ino !== ino) {
+      throw new Error(`${label} location changed during inventory`);
+    }
+  };
 }
 
 function reportInventory({ report, observedAt, evidenceClass, evidenceReference, journal, manifest }) {
@@ -465,8 +519,14 @@ function reportInventory({ report, observedAt, evidenceClass, evidenceReference,
   if (typeof evidenceReference !== 'string' || !evidenceReference.trim()) {
     throw new Error('evidenceReference is required');
   }
+  const locationChecks = [pinFileLocation(report, 'report')];
+  if (manifest !== undefined) locationChecks.push(pinFileLocation(manifest, 'manifest'));
+  const checkLocations = () => {
+    for (const check of locationChecks) check();
+  };
   const requestedManifest = manifest === undefined ? null : readManifest(manifest);
   const bytes = fs.readFileSync(report);
+  checkLocations();
   const saved = JSON.parse(bytes);
   if (!saved || !Array.isArray(saved.rows)) throw new Error('report requires a rows array');
   const seen = new Set();
@@ -530,10 +590,11 @@ function reportInventory({ report, observedAt, evidenceClass, evidenceReference,
     occurrences.push(item.location);
     identities.set(item.backend_run_id, occurrences);
   }
-  const preDispatch = preDispatchInventory(saved, paid, journal);
+  const preDispatch = preDispatchInventory(saved, paid, journal, locationChecks);
   reconcileNativeLocators(observations, preDispatch.native_journal);
   const reconciliation = requestedManifest
     ? reconcileRetainedRows(cases, requestedManifest, observations, preDispatch.native_journal) : null;
+  checkLocations();
   if (!fs.readFileSync(report).equals(bytes)) {
     throw new Error('report changed during inventory');
   }
@@ -541,6 +602,7 @@ function reportInventory({ report, observedAt, evidenceClass, evidenceReference,
       requestedManifest.sha256) {
     throw new Error('manifest changed during inventory');
   }
+  checkLocations();
   return {
     schema_version: 1,
     scope: 'retained_report_only', evidence_class: evidenceClass,
@@ -636,11 +698,11 @@ function nativeCaseRecovery(caseId, journal) {
         attempt.validation_observation.retained_result === 'retained_binary_decision' &&
         !attempt.receipt_evidence_gaps.length)) return [];
     const { attempt_id, material_revision, state, backend_run_id,
-      raw_receipt_present, validation_present, validation_observation,
+      raw_receipt_present, raw_response_sha256, validation_present, validation_observation,
       receipt_evidence_gaps, recovery_step } = attempt;
     return [{ location: `pre_dispatch.native_journal.attempts[${index}]`,
       attempt_id, material_revision, state, backend_run_id,
-      raw_receipt_present, validation_present, validation_observation,
+      raw_receipt_present, raw_response_sha256, validation_present, validation_observation,
       receipt_evidence_gaps, next_evidence_step: recovery_step }];
   });
   return { scope, status: 'observed', unresolved_attempts: unresolved,
