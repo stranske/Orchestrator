@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import capabilities
+import capability_activation_audit
 import env_prereq
 
 
@@ -12,6 +13,9 @@ def test_env_prereq_selftest_runs_with_an_isolated_runtime(monkeypatch, tmp_path
     """Exercise the module's real detector contract without consulting local state or spawning git."""
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(env_prereq.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(capability_activation_audit, "STATE_DIR", tmp_path)
     monkeypatch.setattr(capabilities, "REG", tmp_path / "capabilities.json")
     monkeypatch.setattr(
         env_prereq.subprocess,
