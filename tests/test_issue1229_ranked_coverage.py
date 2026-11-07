@@ -74,6 +74,7 @@ _REAL_POPEN = subprocess.Popen
 def bounded_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Allow only local fixture git operations, at most 20 launches, 5s each."""
     calls = []
+    denied = []
     allowed = {"init", "config", "add", "commit", "branch", "update-ref", "rev-parse", "merge-base"}
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     env.update(
@@ -86,15 +87,19 @@ def bounded_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     )
 
     def popen(cmd, **kwargs):
-        assert not kwargs.get("shell")
-        assert cmd[0] == "git"
-        args = list(cmd[1:])
-        while args and args[0] == "-c":
-            assert args[1] in {"user.email=t@t", "user.name=t"}
-            args = args[2:]
-        assert args[0] in allowed
-        assert Path(kwargs["cwd"]).resolve().is_relative_to(tmp_path.resolve())
-        assert len(calls) < 20
+        try:
+            assert not kwargs.get("shell")
+            assert cmd[0] == "git"
+            args = list(cmd[1:])
+            while args and args[0] == "-c":
+                assert args[1] in {"user.email=t@t", "user.name=t"}
+                args = args[2:]
+            assert args[0] in allowed
+            assert Path(kwargs["cwd"]).resolve().is_relative_to(tmp_path.resolve())
+            assert len(calls) < 20
+        except AssertionError:
+            denied.append(cmd)
+            raise
         calls.append(cmd)
         kwargs["env"] = env
         return _REAL_POPEN(cmd, **kwargs)
@@ -105,7 +110,8 @@ def bounded_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(subprocess, "Popen", popen)
     monkeypatch.setattr(subprocess, "run", run)
-    return calls
+    yield calls
+    assert denied == []
 
 
 # =============================================================================
@@ -250,7 +256,9 @@ class TestObjectiveAnchorLatestExpIds:
         for i in range(3):
             (exp_dir / f"exp{i}").mkdir(parents=True)
             (exp_dir / f"exp{i}" / "meta.json").write_text('{"repo": "test/repo"}')
-            time.sleep(0.01)
+            stamp = 1_000_000 + i * 10
+            os.utime((exp_dir / f"exp{i}"), (stamp, stamp))
+            os.utime((exp_dir / f"exp{i}" / "meta.json"), (stamp, stamp))
         monkeypatch.setattr(objective_anchor, "EXP_DIR", exp_dir)
         result = objective_anchor._latest_exp_ids(2)
         assert len(result) == 2
