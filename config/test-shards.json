@@ -94,6 +94,7 @@
       "tests/test_coverage_round_881.py",
       "tests/test_coverage_wp_roles.py",
       "tests/test_dispatcher_controlled_data_only.py",
+      "tests/test_dispatcher_coverage_1182.py",
       "tests/test_dispatcher_failure_contracts.py",
       "tests/test_dispatcher_offload.py",
       "tests/test_dispatcher_provision.py",
