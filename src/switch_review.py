@@ -937,12 +937,11 @@ def _unresolved_review_threads(repo: str, number: int, *, gh_fn) -> tuple[int | 
         payload = json.loads(out or "{}")
     except json.JSONDecodeError:
         return None, "unmeasured: reviewThreads GraphQL JSON parse failed"
-    threads = (
-        ((payload.get("data") or {}).get("repository") or {})
-        .get("pullRequest", {})
-        .get("reviewThreads", {})
-        .get("nodes")
-    )
+    data = payload.get("data") if isinstance(payload, dict) else None
+    repo_node = data.get("repository") if isinstance(data, dict) else None
+    pr_node = repo_node.get("pullRequest") if isinstance(repo_node, dict) else None
+    review_threads = pr_node.get("reviewThreads") if isinstance(pr_node, dict) else None
+    threads = review_threads.get("nodes") if isinstance(review_threads, dict) else None
     if not isinstance(threads, list):
         return None, "unmeasured: reviewThreads nodes missing"
     unresolved = sum(1 for row in threads if not (row or {}).get("isResolved"))
