@@ -901,6 +901,7 @@ function inventory({ db, observedAt, days = 90, expectedCount = 71, manifest }) 
   integer(expectedCount, 'expectedCount', 0);
   const cutoff = observedAt - days * 86400;
   integer(cutoff, 'cutoff', 0);
+  const checkManifestLocation = manifest === undefined ? null : pinFileLocation(manifest, 'manifest');
   const requestedManifest = manifest === undefined ? null : readManifest(manifest);
   const report = {
     schema_version: 1,
@@ -930,6 +931,21 @@ function inventory({ db, observedAt, days = 90, expectedCount = 71, manifest }) 
         ? 'Supplied-manifest reconciliation does not establish that the manifest identifies the original requested cohort.'
         : 'This window snapshot is not bound to the original requested case manifest; count equality alone cannot verify the cohort.',
     }],
+  };
+  const finish = () => {
+    // SQLite selection and unavailable results both retain this manifest's
+    // identity. Recheck its bytes and location before attributing either result
+    // to it, just as retained-report recovery does. Equal replacement bytes
+    // cannot establish that the selected manifest still belongs to this read.
+    if (requestedManifest) {
+      checkManifestLocation();
+      if (createHash('sha256').update(fs.readFileSync(manifest)).digest('hex') !==
+          requestedManifest.sha256) {
+        throw new Error('manifest changed during inventory');
+      }
+      checkManifestLocation();
+    }
+    return reconcile(report, requestedManifest);
   };
   let connection;
   let rows;
@@ -970,7 +986,7 @@ function inventory({ db, observedAt, days = 90, expectedCount = 71, manifest }) 
     `).all(cutoff);
   } catch (error) {
     report.evidence_gaps.push({ kind: 'brain_unavailable', detail: error.message });
-    return reconcile(report, requestedManifest);
+    return finish();
   } finally {
     if (connection) connection.close();
   }
@@ -1023,7 +1039,7 @@ function inventory({ db, observedAt, days = 90, expectedCount = 71, manifest }) 
       detail: `Observed ${cases.length} eligible disputes; requested ${expectedCount}. The identities explaining the difference remain unverified.`,
     });
   }
-  return reconcile(report, requestedManifest);
+  return finish();
 }
 
 function main() {

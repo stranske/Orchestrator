@@ -2005,6 +2005,101 @@ function manifestFile(root, cases, schemaVersion = 1) {
   return file;
 }
 
+for (const available of [true, false]) {
+  test(`Brain inventory pins manifest bytes and location with Brain ${available ? 'available' : 'unavailable'}`, (t) => {
+    const { root, db } = world(t);
+    seed(db, [['original', now, 'NON_PASS', 'PASS']]);
+    const before = fs.readFileSync(db);
+    const selectedDb = available ? db : path.join(root, 'absent', 'brain.db');
+    const identity = { run_id: 'original', target: 'owner/repo#1',
+      verifier_verdict: 'NON_PASS', adjudicated_verdict: 'PASS' };
+    for (const [version, mutateAt] of [[1, 1], [2, 1], [1, 2], [2, 2]]) {
+      for (const change of ['content', 'atomic replacement', 'symlink retarget', 'removal']) {
+        const manifest = manifestFile(root, [identity], version);
+        const bytes = fs.readFileSync(manifest);
+        const replacement = `${manifest}.replacement`;
+        fs.writeFileSync(replacement, bytes);
+        if (change === 'symlink retarget') {
+          fs.renameSync(manifest, `${manifest}.original`);
+          fs.symlinkSync(`${manifest}.original`, manifest);
+        }
+        const read = fs.readFileSync;
+        let reads = 0;
+        fs.readFileSync = function observed(file, ...args) {
+          const mutate = file === manifest && ++reads === mutateAt;
+          if (mutate && change === 'content' && mutateAt === 2) {
+            fs.writeFileSync(file, `${bytes}\n`);
+          }
+          const data = read(file, ...args);
+          if (mutate && !(change === 'content' && mutateAt === 2)) {
+            // Change identity after a read, including the final content check.
+            // Replacing or retargeting equal bytes must invalidate its pin.
+            if (change === 'content') fs.writeFileSync(file, `${data}\n`);
+            else if (change === 'atomic replacement') fs.renameSync(replacement, file);
+            else if (change === 'symlink retarget') {
+              fs.unlinkSync(file);
+              fs.symlinkSync(replacement, file);
+            } else fs.unlinkSync(file);
+          }
+          return data;
+        };
+        try {
+          assert.throws(() => inventory({ db: selectedDb, observedAt: now, manifest }),
+            /manifest (?:location )?changed during inventory/, `${version}: ${mutateAt}: ${change}`);
+        } finally {
+          fs.readFileSync = read;
+        }
+        assert.ok(reads >= mutateAt);
+        fs.rmSync(manifest, { force: true });
+        fs.writeFileSync(manifest, bytes);
+        const files = fs.readdirSync(root);
+        const later = inventory({ db: selectedDb, observedAt: now, manifest });
+        assert.equal(later.status, available ? 'available' : 'unavailable');
+        assert.equal(later.manifest_reconciliation.manifest_sha256,
+          createHash('sha256').update(bytes).digest('hex'));
+        assert.equal(later.manifest_reconciliation.cases[0].status,
+          available ? 'included' : 'unavailable');
+        assert.equal(later.requested_cohort_verified, false);
+        assert.deepEqual(fs.readFileSync(db), before);
+        assert.deepEqual(fs.readFileSync(manifest), bytes);
+        assert.deepEqual(fs.readdirSync(root), files);
+        assert.equal(fs.existsSync(path.join(root, 'absent')), false);
+      }
+    }
+  });
+}
+
+test('Brain inventory CLI emits no JSON if the manifest is replaced during its final read', (t) => {
+  const { root, db } = world(t);
+  seed(db, [['original', now, 'NON_PASS', 'PASS']]);
+  const manifest = manifestFile(root, [{ run_id: 'original', target: 'owner/repo#1' }]);
+  const bytes = fs.readFileSync(manifest);
+  const before = fs.readFileSync(db);
+  const preload = path.join(root, 'replace-manifest.cjs');
+  fs.writeFileSync(preload, `
+const fs = require('node:fs');
+const selected = process.argv[process.argv.indexOf('--manifest') + 1];
+const read = fs.readFileSync;
+let reads = 0;
+fs.readFileSync = function(file, ...args) {
+  const bytes = read(file, ...args);
+  if (file === selected && ++reads === 2) fs.renameSync(selected + '.replacement', selected);
+  return bytes;
+};
+`);
+  for (const selectedDb of [db, path.join(root, 'absent', 'brain.db')]) {
+    fs.writeFileSync(`${manifest}.replacement`, bytes);
+    const result = execute(root, process.execPath, ['--require', preload, script,
+      '--db', selectedDb, '--observed-at', String(now), '--manifest', manifest]);
+    assert.equal(result.status, 1, result.stderr);
+    assert.equal(result.stdout, '', 'a mixed observation cannot emit even unavailable JSON');
+    assert.match(result.stderr, /manifest location changed during inventory/);
+    assert.deepEqual(fs.readFileSync(db), before);
+    assert.deepEqual(fs.readFileSync(manifest), bytes);
+    assert.equal(fs.existsSync(path.join(root, 'absent')), false);
+  }
+});
+
 test('matching 71 identities bind the supplied manifest bytes without claiming historical acceptance', (t) => {
   const { root, db } = world(t);
   const cases = Array.from({ length: 71 }, (_, i) => ({

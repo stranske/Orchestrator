@@ -491,3 +491,29 @@ are preserved using an isolated local Git repository and
 `/tmp/orchestrator-1072-provider-metadata/change.bundle`; nothing is pushed.
 The GitHub tools rejected the blocker comment and `needs-human` label because
 they require approval while this run's policy is `never`.
+
+## Manifest identity during Brain-window inventory
+
+Checked on 2026-11-07 against checkout
+`91287091546640f900559611f83a19fd87a03a64` plus this change. Brain-window
+inventory now rechecks supplied-manifest bytes and file location before returning
+either an observed population or a Brain-unavailable result. Previously it could
+retain a manifest hash after that selected file changed, disappeared, was replaced
+with identical bytes, or had its symlink retargeted. Retained-report inventory
+already enforced this boundary; its behavior is unchanged.
+
+Three new regressions cover manifest versions 1 and 2, changes during the initial
+and final reads, stable later observations and CLI refusal without partial JSON.
+All three fail against the original exporter. The combined retained-report,
+native-inventory and live-cohort JavaScript suites pass 156 tests (baseline: 153).
+Diagnostic and replay/publication unittests pass 32 and seven cases respectively;
+JavaScript syntax and `git diff --check` pass. No Python files changed. The full
+retrospective command with `-m 'not slow'` cannot start because pytest is absent.
+
+These are fixture results. The configured runtime, canonical report and independent
+outcomes database are absent; authentic original/journal locations and deployed/
+mirror live bindings remain unavailable. No dispatch, grade, historical proof or
+live-shadow decision is claimed, and no operational task is marked complete.
+Staging fails on the read-only `.git/index.lock` location. The change is preserved
+in an isolated local commit and `/tmp/orchestrator-1072-manifest/change.bundle`;
+the checkout branch and remote are unchanged.
