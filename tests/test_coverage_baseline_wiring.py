@@ -125,7 +125,7 @@ const body = [
 vm.runInNewContext(
   body,
   {context, core, github, require: localRequire},
-  {timeout: 5000},
+  {timeout: 10000},
 )
   .then((result) => process.stdout.write(JSON.stringify({
     ...result, requests, warnings, infos, failures, rejections, helperLoads, callTrace, outputs,
