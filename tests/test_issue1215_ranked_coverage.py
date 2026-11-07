@@ -649,12 +649,28 @@ def test_switch_review_unresolved_review_threads_null_graphql_and_checks() -> No
     for null_envelope in (
         "null",
         "[]",
+        json.dumps({"data": None}),
+        json.dumps({"data": {"repository": None}}),
         json.dumps({"data": {"repository": {"pullRequest": None}}}),
         json.dumps({"data": {"repository": {"pullRequest": {"reviewThreads": None}}}}),
+        json.dumps({"data": {"repository": {"pullRequest": {"reviewThreads": {"nodes": None}}}}}),
     ):
         assert switch_review._unresolved_review_threads(
             "stranske/Repo", 12, gh_fn=lambda *_a, payload=null_envelope, **_k: (True, payload, "")
         ) == (None, "unmeasured: reviewThreads nodes missing")
+
+    nodes_with_null = json.dumps(
+        {
+            "data": {
+                "repository": {
+                    "pullRequest": {"reviewThreads": {"nodes": [None, {"isResolved": True}]}}
+                }
+            }
+        }
+    )
+    assert switch_review._unresolved_review_threads(
+        "stranske/Repo", 12, gh_fn=lambda *_a, **_k: (True, nodes_with_null, "")
+    ) == (1, "")
 
 
 def test_switch_review_promote_canaries_continuation_and_fleet_gates(
@@ -1088,20 +1104,19 @@ def test_switch_review_questions_phrases_and_summary_lines(
     trial_path.write_text("[]", encoding="utf-8")
     assert switch_review.profile_trial_summary_line() is None
 
-    monkeypatch.setattr(
-        json,
-        "loads",
-        lambda _s: {
-            "profile_count": 1,
-            "instance_count": 1,
-            "cost_tokens_by_profile": {1: {"tokens_in": 5, "tokens_out": 7}},
-            "quality_by_profile": {},
-        },
-    )
     trial_path.write_text("{}", encoding="utf-8")
-    assert switch_review.profile_trial_summary_line() is None
-    monkeypatch.undo()
-    monkeypatch.setattr(feedback, "record_owner_question", fail_question)
+    with monkeypatch.context() as scoped_mp:
+        scoped_mp.setattr(
+            json,
+            "loads",
+            lambda _s: {
+                "profile_count": 1,
+                "instance_count": 1,
+                "cost_tokens_by_profile": {1: {"tokens_in": 5, "tokens_out": 7}},
+                "quality_by_profile": {},
+            },
+        )
+        assert switch_review.profile_trial_summary_line() is None
 
     import experiment_producer
 
