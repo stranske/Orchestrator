@@ -1,6 +1,6 @@
 # Coverage round 1182: executed mutations
 
-Check date: 2026-11-07. Recovery source: `515371bd806b1b297704b3fef796274a216e6bde`.
+Check date: 2026-11-10. Recovery source: `515371bd806b1b297704b3fef796274a216e6bde`.
 Historical mutation claims are not carried forward as evidence. The two executions below are new, actual break-and-restore runs.
 
 
@@ -37,17 +37,17 @@ tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp
 >       assert "load err" in out["errors"]
 E       AssertionError: assert 'load err' in []
 
-tests/test_ccusage_reconcile.py:217: AssertionError
+tests/test_ccusage_reconcile.py:214: AssertionError
 =========================== short test summary info ============================
 FAILED tests/test_ccusage_reconcile.py::test_ccusage_reconcile_uses_loaded_sessions
-1 failed in 0.52s
+1 failed in 0.43s
 ```
 
 Restored output (exit 0):
 
 ```text
 .                                                                        [100%]
-1 passed in 0.47s
+1 passed in 0.41s
 ```
 
 
@@ -56,8 +56,8 @@ Restored output (exit 0):
 Production path: `src/exploration_collection.py`. Mutation:
 
 ```diff
--        blocked_reasons.append("acquisition planner does not currently mark this mode eligible")
-+        blocked_reasons.append("mutated: acquisition allowed")
+-    if not window.get("eligible"):
++    if False:  # temporary mutation: suppress the ineligible-window result
 ```
 
 Command (both runs):
@@ -89,10 +89,10 @@ monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1062d8c20>
 E       assert False
 E        +  where False = any(<generator object test_build_window_acquisition_blocked.<locals>.<genexpr> at 0x106380790>)
 
-tests/test_exploration_collection.py:476: AssertionError
+tests/test_exploration_collection.py:473: AssertionError
 =========================== short test summary info ============================
 FAILED tests/test_exploration_collection.py::test_build_window_acquisition_blocked
-1 failed in 0.66s
+1 failed in 0.53s
 ```
 
 Restored output (exit 0):
