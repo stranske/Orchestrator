@@ -31,7 +31,10 @@
     "tests/test_capability_opportunity.py",
     "tests/test_judge_reliability.py",
     "tests/test_langsmith_direct.py",
-    "tests/test_strategy_experiment.py"
+    "tests/test_strategy_experiment.py",
+    "tests/test_ccusage_reconcile.py",
+    "tests/test_exploration_collection.py",
+    "tests/test_observability_dashboard.py"
   ],
   "shards": [
     [
@@ -154,7 +157,8 @@
       "tests/test_verify_private_state.py",
       "tests/test_verify_sharding.py",
       "tests/test_issue1207_ranked_coverage.py",
-      "tests/test_workflow_compiler.py"
+      "tests/test_workflow_compiler.py",
+      "tests/test_ccusage_reconcile.py"
     ],
     [
       "tests/test_adjudicator_criterion_texts.py",
@@ -262,7 +266,8 @@
       "tests/test_storage_interrupted_release.py",
       "tests/test_testgen_off_flash_renewal_target.py",
       "tests/test_issue1150_ranked_coverage.py",
-      "tests/test_capability_opportunity.py"
+      "tests/test_capability_opportunity.py",
+      "tests/test_exploration_collection.py"
     ],
     [
       "tests/test_activation_audit_label_index.py",
@@ -371,7 +376,8 @@
       "tests/test_venv_fixture_portability.py",
       "tests/test_verifier_retry_lineage.py",
       "tests/test_worktree_git_guard.py",
-      "tests/test_judge_reliability.py"
+      "tests/test_judge_reliability.py",
+      "tests/test_observability_dashboard.py"
     ],
     [
       "tests/test_adjudicator_retry_history.py",
