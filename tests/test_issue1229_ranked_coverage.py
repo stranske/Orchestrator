@@ -1,21 +1,16 @@
-"""Bounded behavioral coverage for issue #1229.
+"""Behavioral checks for issue #1229's ranked coverage targets.
 
-This PR covers the next ranked coverage gaps toward 90%:
-1. src/objective_anchor.py -- 92 uncovered statements+branches
-2. src/langsmith_fetch.py -- 79 uncovered statements+branches
-3. src/outcomes.py -- 76 uncovered statements+branches
-4. src/switch_review.py -- 8 uncovered statements+branches
-
-Goal: Cover about 180 units total in this PR.
-
-These tests are hermetic: they stub every subprocess/Popen/agent spawn and
-every gh or network call and assert nothing was started, and never write
-outside the temp dir.
+Runtime paths and feedback connections are per-test temporary state. Network
+and process creation are denied by default. Two git integration tests opt into
+local-only git in tmp_path, with five-second command timeouts and a launch cap.
+Measured coverage and per-test mutation evidence are recorded on PR #1230.
 """
 
 from __future__ import annotations
 
 import json
+import contextlib
+import sqlite3
 import os
 import socket
 import subprocess
@@ -34,15 +29,83 @@ import provision
 
 
 @pytest.fixture(autouse=True)
-def forbid_real_network(monkeypatch: pytest.MonkeyPatch):
-    """Forbid real network and subprocess calls; tests must mock them explicitly."""
+def isolated_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Deny external I/O and put runtime, temp files and DBs under tmp_path."""
+    for key in ("ORCH_STATE_DIR", "ORCH_LOCAL_RUNTIME"):
+        monkeypatch.setenv(key, str(tmp_path))
+    monkeypatch.setenv("ORCH_FEEDBACK_DB", str(tmp_path / "feedback.db"))
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "feedback.db")
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setattr(objective_anchor, "EXP_DIR", tmp_path / "exps")
+    monkeypatch.setattr(provision, "REPOS_DIR", tmp_path / "repos")
+    connections = []
+    real_conn = feedback._conn
+
+    def temporary_conn(**kwargs):
+        assert Path(feedback.DB_PATH).resolve().is_relative_to(tmp_path.resolve())
+        conn = real_conn(**kwargs)
+        connections.append(conn)
+        return conn
+
+    monkeypatch.setattr(feedback, "_conn", temporary_conn)
+    forbidden_calls = []
+
     def forbidden(*args, **kwargs):
-        raise AssertionError(
-            f"test must not make real network calls: {args} {kwargs}"
-        )
+        forbidden_calls.append((args, kwargs))
+        raise AssertionError(f"unexpected network/process launch: {args} {kwargs}")
 
     monkeypatch.setattr(socket, "socket", forbidden)
     monkeypatch.setattr(socket, "create_connection", forbidden)
+    monkeypatch.setattr(subprocess, "run", forbidden)
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    monkeypatch.setattr(os, "system", forbidden)
+    yield
+    for conn in connections:
+        conn.close()
+    assert forbidden_calls == []
+
+
+# Save the real entry points before the autouse fixture denies process creation.
+_REAL_RUN = subprocess.run
+_REAL_POPEN = subprocess.Popen
+
+
+@pytest.fixture
+def bounded_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Allow only local fixture git operations, at most 20 launches, 5s each."""
+    calls = []
+    allowed = {"init", "config", "add", "commit", "branch", "update-ref", "rev-parse", "merge-base"}
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env.update(
+        HOME=str(tmp_path),
+        XDG_CONFIG_HOME=str(tmp_path),
+        GIT_CONFIG_NOSYSTEM="1",
+        GIT_CONFIG_GLOBAL=os.devnull,
+        GIT_TERMINAL_PROMPT="0",
+        GIT_ALLOW_PROTOCOL="",
+    )
+
+    def popen(cmd, **kwargs):
+        assert not kwargs.get("shell")
+        assert cmd[0] == "git"
+        args = list(cmd[1:])
+        while args and args[0] == "-c":
+            assert args[1] in {"user.email=t@t", "user.name=t"}
+            args = args[2:]
+        assert args[0] in allowed
+        assert Path(kwargs["cwd"]).resolve().is_relative_to(tmp_path.resolve())
+        assert len(calls) < 20
+        calls.append(cmd)
+        kwargs["env"] = env
+        return _REAL_POPEN(cmd, **kwargs)
+
+    def run(cmd, **kwargs):
+        kwargs["timeout"] = 5
+        return _REAL_RUN(cmd, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    monkeypatch.setattr(subprocess, "run", run)
+    return calls
 
 
 # =============================================================================
@@ -56,51 +119,46 @@ class TestObjectiveAnchorExistingAnchorRefs:
     def test_empty_table(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         """Cover lines 202-206: exception path returns empty set."""
         db_path = tmp_path / "feedback.db"
-        monkeypatch.setattr(feedback, "DB_PATH", str(db_path))
+        monkeypatch.setattr(feedback, "DB_PATH", db_path)
+        # Bypass _conn's schema creation to exercise the missing-table exception.
+        monkeypatch.setattr(feedback, "_conn", lambda: contextlib.closing(sqlite3.connect(db_path)))
         result = objective_anchor._existing_anchor_refs()
         assert result == set()
 
     def test_with_rows(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         """Cover lines 202-207: reads rows from DB."""
         import sqlite3
+
         db_path = tmp_path / "feedback.db"
         # Create and populate the DB
-        with sqlite3.connect(str(db_path)) as conn:
-            conn.execute(
-                "CREATE TABLE human_calibration (id INTEGER PRIMARY KEY, ref TEXT)"
-            )
+        with contextlib.closing(sqlite3.connect(str(db_path))) as conn:
+            conn.execute("CREATE TABLE human_calibration (id INTEGER PRIMARY KEY, ref TEXT)")
             conn.execute(
                 "INSERT INTO human_calibration (ref) VALUES ('exp1:agent1'), ('exp2:agent2')"
             )
             conn.commit()
-        
+
         # Mock the _conn function to use our test DB
         def mock_conn(*, timeout=5.0):
-            c = sqlite3.connect(str(db_path), timeout=timeout)
-            return c
-        
+            return contextlib.closing(sqlite3.connect(str(db_path), timeout=timeout))
+
         monkeypatch.setattr(feedback, "_conn", mock_conn)
         result = objective_anchor._existing_anchor_refs()
-        assert "exp1:agent1" in result
-        assert "exp2:agent2" in result
+        assert result == {"exp1:agent1", "exp2:agent2"}
 
     def test_with_null_rows(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         """Cover line 207: filter out null/empty refs."""
         import sqlite3
+
         db_path = tmp_path / "feedback.db"
-        with sqlite3.connect(str(db_path)) as conn:
-            conn.execute(
-                "CREATE TABLE human_calibration (id INTEGER PRIMARY KEY, ref TEXT)"
-            )
-            conn.execute(
-                "INSERT INTO human_calibration (ref) VALUES (NULL), ('exp1:agent1'), ('')"
-            )
+        with contextlib.closing(sqlite3.connect(str(db_path))) as conn:
+            conn.execute("CREATE TABLE human_calibration (id INTEGER PRIMARY KEY, ref TEXT)")
+            conn.execute("INSERT INTO human_calibration (ref) VALUES (NULL), ('exp1:agent1'), ('')")
             conn.commit()
-        
+
         def mock_conn(*, timeout=5.0):
-            c = sqlite3.connect(str(db_path), timeout=timeout)
-            return c
-        
+            return contextlib.closing(sqlite3.connect(str(db_path), timeout=timeout))
+
         monkeypatch.setattr(feedback, "_conn", mock_conn)
         result = objective_anchor._existing_anchor_refs()
         assert result == {"exp1:agent1"}
@@ -126,16 +184,26 @@ class TestObjectiveAnchorArmBase:
         repo_path = repos_dir / "test__repo"
         repo_path.mkdir(parents=True)
         monkeypatch.setattr(provision, "REPOS_DIR", repos_dir)
+        calls = []
+
+        def missing_branch(cmd, cwd):
+            calls.append((cmd, cwd))
+            return subprocess.CompletedProcess(cmd, 1, "", "missing branch")
+
+        monkeypatch.setattr(objective_anchor, "_run", missing_branch)
         result = objective_anchor._arm_base("test/repo", "main", "EXP1", "missing")
         assert result is None
+        assert calls == [
+            (["git", "rev-parse", "--verify", "--quiet", "exp/EXP1-missing"], repo_path)
+        ]
 
-    def test_branch_exists(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_branch_exists(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bounded_git):
         """Cover lines 181-198: branch exists, merge-base succeeds."""
         repos_dir = tmp_path / "repos"
         repo_path = repos_dir / "test__repo"
         repo_path.mkdir(parents=True)
         monkeypatch.setattr(provision, "REPOS_DIR", repos_dir)
-        
+
         # Initialize a git repo
         subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo_path, check=True)
         subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=repo_path, check=True)
@@ -143,14 +211,23 @@ class TestObjectiveAnchorArmBase:
         (repo_path / "file.txt").write_text("content")
         subprocess.run(["git", "add", "."], cwd=repo_path, check=True)
         subprocess.run(["git", "commit", "-qm", "initial"], cwd=repo_path, check=True)
-        
+
         # Create exp branch
         subprocess.run(["git", "branch", "exp/EXP1-agent1"], cwd=repo_path, check=True)
-        subprocess.run(["git", "update-ref", "refs/remotes/origin/main", "HEAD"], cwd=repo_path, check=True)
-        
+        subprocess.run(
+            ["git", "update-ref", "refs/remotes/origin/main", "HEAD"], cwd=repo_path, check=True
+        )
+
+        expected_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_path,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
         result = objective_anchor._arm_base("test/repo", "main", "EXP1", "agent1")
-        assert result is not None
-        assert len(result) == 40  # SHA length
+        assert result == expected_sha
+        assert len(bounded_git) == 10
 
 
 class TestObjectiveAnchorLatestExpIds:
@@ -193,7 +270,7 @@ class TestObjectiveAnchorMain:
             objective_anchor.main([])
         assert exc_info.value.code == 2
 
-    def test_selftest(self, capsys):
+    def test_selftest(self, capsys, bounded_git):
         """Cover lines 438-439: --selftest path."""
         result = objective_anchor.main(["--selftest"])
         assert result == 0
@@ -209,8 +286,9 @@ class TestObjectiveAnchorMain:
         )
         monkeypatch.setattr(objective_anchor, "EXP_DIR", exp_dir)
         monkeypatch.setattr(
-            objective_anchor, "anchor_experiment",
-            lambda exp_id, **kwargs: {"exp_id": exp_id, "anchored": [], "skipped": []}
+            objective_anchor,
+            "anchor_experiment",
+            lambda exp_id, **kwargs: {"exp_id": exp_id, "anchored": [], "skipped": []},
         )
         result = objective_anchor.main(["--exp-id", "EXP1", "--json"])
         assert result == 0
@@ -229,9 +307,12 @@ class TestObjectiveAnchorMain:
         called = []
         monkeypatch.setattr(objective_anchor, "EXP_DIR", exp_dir)
         monkeypatch.setattr(
-            objective_anchor, "anchor_experiment",
-            lambda exp_id, **kwargs: (called.append(kwargs.get('apply', True)),
-                                     {"exp_id": exp_id, "anchored": [], "skipped": []})[1]
+            objective_anchor,
+            "anchor_experiment",
+            lambda exp_id, **kwargs: (
+                called.append(kwargs.get("apply", True)),
+                {"exp_id": exp_id, "anchored": [], "skipped": []},
+            )[1],
         )
         result = objective_anchor.main(["--exp-id", "EXP1", "--dry-run"])
         assert result == 0
@@ -249,9 +330,12 @@ class TestObjectiveAnchorMain:
         call_ids = []
         monkeypatch.setattr(objective_anchor, "EXP_DIR", exp_dir)
         monkeypatch.setattr(
-            objective_anchor, "anchor_experiment",
-            lambda exp_id, **kwargs: (call_ids.append(exp_id),
-                                     {"exp_id": exp_id, "anchored": [], "skipped": []})[1]
+            objective_anchor,
+            "anchor_experiment",
+            lambda exp_id, **kwargs: (
+                call_ids.append(exp_id),
+                {"exp_id": exp_id, "anchored": [], "skipped": []},
+            )[1],
         )
         result = objective_anchor.main(["--latest", "2"])
         assert result == 0
@@ -266,12 +350,13 @@ class TestObjectiveAnchorMain:
         )
         monkeypatch.setattr(objective_anchor, "EXP_DIR", exp_dir)
         monkeypatch.setattr(
-            objective_anchor, "anchor_experiment",
+            objective_anchor,
+            "anchor_experiment",
             lambda exp_id, **kwargs: {
                 "exp_id": exp_id,
                 "anchored": [{"agent": "t", "score": 8.0, "label": "g"}],
-                "skipped": [{"agent": "t2", "reason": "b"}]
-            }
+                "skipped": [{"agent": "t2", "reason": "b"}],
+            },
         )
         result = objective_anchor.main(["--exp-id", "EXP1"])
         assert result == 0
@@ -306,7 +391,12 @@ class TestObjectiveAnchorScoreFromSignals:
 
     def test_no_probe_not_decisive(self):
         """Cover lines 64-66, 68: no probe or probe=None is not decisive."""
-        assert objective_anchor.score_from_signals({"applies": True, "compile_ok": True, "probe": None}) is None
+        assert (
+            objective_anchor.score_from_signals(
+                {"applies": True, "compile_ok": True, "probe": None}
+            )
+            is None
+        )
         assert objective_anchor.score_from_signals({"applies": True, "probe": None}) is None
 
     def test_tests_fail(self):
@@ -430,33 +520,32 @@ class TestOutcomesIsLocalDelegate:
         result = outcomes.is_local_delegate("local", "owner/repo#123")
         assert result is True
 
-    def test_legacy_mode_with_hash(self):
-        """Cover line 237: legacy mode with # in target."""
-        # Check what LEGACY_LOCAL_MODES contains
-        result = outcomes.is_local_delegate("some_mode", "owner/repo#123")
-        # This will be True if some_mode is in LEGACY_LOCAL_MODES
-        # We can't easily test this without knowing LEGACY_LOCAL_MODES, but we can test the basic logic
-        assert isinstance(result, bool)
+    @pytest.mark.parametrize("mode", outcomes.LEGACY_LOCAL_MODES)
+    @pytest.mark.parametrize(
+        "target, expected", [("owner/repo#123", True), ("owner/repo", False), (None, False)]
+    )
+    def test_legacy_mode_with_hash(self, mode, target, expected):
+        """Every actual legacy mode requires a numbered target."""
+        assert outcomes.is_local_delegate(mode, target) is expected
 
-    def test_non_local_mode(self):
-        """Cover line 237: non-local mode without #."""
-        result = outcomes.is_local_delegate("remote", "owner/repo")
-        # This depends on LEGACY_LOCAL_MODES, but should be False for most cases
-        assert isinstance(result, bool)
+    @pytest.mark.parametrize("target", ["owner/repo#123", "owner/repo", None])
+    def test_non_local_mode(self, target):
+        """Remote mode never counts as a local delegation."""
+        assert outcomes.is_local_delegate("remote", target) is False
 
 
 class TestOutcomesNeedsDelegationGuard:
-    """Cover needs_delegation_guard() function (lines 240-248)."""
+    """Only the remote-delegation source needs the guard."""
 
-    def test_remote_source(self):
-        """Cover lines 240-248: remote source needs guard."""
-        result = outcomes.needs_delegation_guard("github")
-        assert isinstance(result, bool)
+    @pytest.mark.parametrize(
+        "source, expected",
+        [(outcomes.DELEGATION_SOURCE, True), ("github", False), ("local", False)],
+    )
+    def test_remote_source(self, source, expected):
+        assert outcomes.needs_delegation_guard(source) is expected
 
     def test_none_source(self):
-        """Cover lines 240-248: None source."""
-        result = outcomes.needs_delegation_guard(None)
-        assert isinstance(result, bool)
+        assert outcomes.needs_delegation_guard(None) is False
 
 
 class TestOutcomesPrState:
