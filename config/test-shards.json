@@ -19,6 +19,7 @@
     "tests/test_issue1189_ranked_coverage.py",
     "tests/test_issue1154_tick_boundaries.py",
     "tests/test_issue1154_ranked_coverage.py",
+    "tests/test_issue1227_env_prereq_coverage.py",
     "tests/test_profile_trial_recurring_spec.py",
     "tests/test_profile_trial_run.py",
     "tests/test_python_floor.py",
@@ -153,6 +154,7 @@
       "tests/test_verify_private_state.py",
       "tests/test_verify_sharding.py",
       "tests/test_issue1207_ranked_coverage.py",
+      "tests/test_issue1227_env_prereq_coverage.py",
       "tests/test_workflow_compiler.py"
     ],
     [
