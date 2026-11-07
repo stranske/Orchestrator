@@ -731,3 +731,39 @@ and `needs-human` label with `MCP tool call requires approval, but approval poli
 is never`. The checkout's read-only Git index rejected staging. The changes are
 retained in `/tmp/orchestrator-1175-historical-contract-commit`, with a handoff
 patch at `/tmp/orchestrator-1175-historical-contract.patch`.
+
+
+## Later malformed publication regression (2026-11-07)
+
+Reviewed commits `17a54f2` through `b6e8fe5` before continuing. They add isolated
+provenance regressions but retain no verified production deployment receipt. Both
+production tasks remain unchecked. Hosted-pass helpers and reporting remain
+absent. The unchecked conditional instrumentation acceptance item in Full Issue
+Text should match its checked Automated Status Summary counterpart; attempting
+that PR-body reconciliation was rejected with `MCP tool call requires approval,
+but approval policy is never`. The blocker comment and `needs-human` label were
+rejected for the same reason. PR #1196 remains open and ready for review.
+
+Added six real publication-history CLI cases. A later marked artifact with a
+Gemini challenger or invalid generation timestamp, followed by a repair, must
+not invalidate or reset the first valid publication. With and without saved state,
+the CLI refuses the later commit, recovers the original audit and timestamp,
+preserves receipt bytes and modification time on retries, and does not republish,
+create a feedback database, or use the live home directory. All state is temporary.
+Removing the verifier's stop at the first marked publication in a disposable
+source copy makes the new malformed-challenger cases fail.
+
+The live export blob remains `e119f98ad8b61e3c7f62a78d4af20e1e182d8135`, with
+`generated_at = 2026-10-24T12:52:31Z`, Gemini challengers, and no filter marker.
+This cannot establish production deployment. The authentic publication audit and
+production feedback database are unavailable. Observation must occur on or after
+both 2026-11-08 and fourteen days after a verified deployment instant. No new
+production task is marked complete. The named Anaconda interpreter, pytest, and
+Black are unavailable; this round changes JavaScript tests and this evidence note
+only. The checkout's read-only Git index prevents a main-checkout commit.
+
+Verification: the baseline publication CLI suite passed 98 tests and the updated
+suite passed all 104 tests. Deployment unittests passed all 16 tests, report CLI
+tests passed all 5 tests, and JavaScript syntax and diff whitespace checks passed.
+The tested changes are committed in `/tmp/orchestrator-1175-later-contract-commit-r5bs0z2z` with a handoff patch at
+`/tmp/orchestrator-1175-later-contract.patch`; the main working tree retains the same edits.

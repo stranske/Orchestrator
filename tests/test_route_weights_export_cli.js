@@ -353,7 +353,60 @@ test('deployment CLI records the export merge rather than an unpublished or side
   assert.deepEqual(JSON.parse(recovered.stdout), recorded);
   assert.deepEqual(fs.readFileSync(receipt), retained);
   assert.equal(fs.statSync(receipt, { bigint: true }).mtimeNs, modified);
-  assert.equal(await git(remote, 'rev-parse', branch), merged);
+
+  // Later malformed artifacts cannot invalidate or reset an earlier verified
+  // deployment. Stop validating history at the first valid filter publication.
+  let publishedTip = merged;
+  for (const stage of ['malformed challengers', 'malformed generation time', 'filter repaired']) {
+    const laterDocument = structuredClone(document);
+    if (stage === 'malformed challengers') {
+      laterDocument.exploration.challengers.review = 'gemini';
+    } else if (stage === 'malformed generation time') {
+      laterDocument.generated_at = 'invalid';
+    }
+    fs.writeFileSync(artifact, JSON.stringify(laterDocument));
+    await git(checkout, 'add', '.');
+    await git(checkout, 'commit', '-m', `${stage} fixture`);
+    await git(checkout, 'push', 'origin', branch);
+    publishedTip = await git(remote, 'rev-parse', branch);
+    assert.notEqual(publishedTip, merged);
+    for (const existing of [true, false]) {
+      await t.test(`retains first deployment after ${stage} with receipt ${existing}`, async () => {
+        if (!existing) fs.unlinkSync(receipt);
+        const savedModified = existing ? fs.statSync(receipt, { bigint: true }).mtimeNs : null;
+        const refused = await record(publishedTip);
+        assert.equal(refused.status, 1, refused.stderr);
+        assert.equal(refused.stdout, '');
+        assert.match(refused.stderr, /not the first verified challenger-filter publication/);
+        assert.doesNotMatch(refused.stderr, /Traceback/);
+        if (existing) {
+          assert.deepEqual(fs.readFileSync(receipt), retained);
+          assert.equal(fs.statSync(receipt, { bigint: true }).mtimeNs, savedModified);
+        } else {
+          assert.equal(fs.existsSync(receipt), false);
+        }
+        const original = await record(merged);
+        assert.equal(original.status, 0, original.stderr);
+        assert.deepEqual(JSON.parse(original.stdout), recorded);
+        assert.deepEqual(fs.readFileSync(receipt), retained);
+        if (existing) {
+          assert.equal(fs.statSync(receipt, { bigint: true }).mtimeNs, savedModified);
+        }
+        const recoveredModified = fs.statSync(receipt, { bigint: true }).mtimeNs;
+        const repeated = await record(merged);
+        assert.equal(repeated.status, 0, repeated.stderr);
+        assert.deepEqual(JSON.parse(repeated.stdout), recorded);
+        assert.deepEqual(fs.readFileSync(receipt), retained);
+        assert.equal(fs.statSync(receipt, { bigint: true }).mtimeNs, recoveredModified);
+        assert.equal(await git(remote, 'rev-parse', branch), publishedTip,
+          'recording an earlier deployment must not repair a later publication');
+        assert.equal(fs.existsSync(path.join(state, `.${path.basename(receipt)}.tmp`)), false);
+        assert.equal(fs.existsSync(database), false);
+        assert.deepEqual(fs.readdirSync(home), []);
+      });
+    }
+  }
+  assert.equal(await git(remote, 'rev-parse', branch), publishedTip);
   assert.equal(fs.existsSync(database), false);
   assert.deepEqual(fs.readdirSync(home), []);
 });
