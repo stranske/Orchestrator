@@ -304,6 +304,17 @@ def test_identity_artifact_tokens_must_agree_with_attempt(tmp_path):
     assert saved["tokens_in"] == 2
     assert saved["tokens_out"] == 1
 
+    results = _transport_results(tmp_path, manifest, envelope)
+    attempt = results["attempts"][0]
+    art_path = Path(attempt["artifact_ref"])
+    art = json.loads(art_path.read_text(encoding="utf-8"))
+    art["tokens_in"] = None
+    art["tokens_out"] = attempt["tokens_out"]
+    art_path.write_text(json.dumps(art, sort_keys=True) + "\n", encoding="utf-8")
+    attempt["artifact_sha256"] = "sha256:" + hashlib.sha256(art_path.read_bytes()).hexdigest()
+    with pytest.raises(ValueError, match="tokens_in disagrees"):
+        bridge.ingest_transport_results(manifest, envelope, results)
+
 
 def test_missing_transport_usage_stays_unmeasured_and_zero_stays_zero(tmp_path):
     manifest = _manifest(tmp_path)

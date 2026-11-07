@@ -384,6 +384,9 @@ def _bind_authoritative_identity(tmp_path, trial_attempt_fixture):
                     "acknowledged": True,
                     "provider_resolved_provider": attempt["provider_resolved_provider"],
                     "provider_resolved_model": attempt["provider_resolved_model"],
+                    "object": "response",
+                    "response_id": f"resp_{attempt['run_id'].split(':')[-1]}",
+                    "independent_provider_identity": True,
                 }
             ),
             encoding="utf-8",

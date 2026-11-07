@@ -154,16 +154,21 @@ def _measured_results(root: Path, manifest: dict) -> dict:
     attempts = []
     for request in manifest["requests"]:
         artifact = root / f"identity-{request['launch_ordinal']}.json"
-        identity = {
+        artifact_payload = {
             "profile_id": request["profile_id"],
             "provider_resolved_provider": request["provider"],
             "provider_resolved_model": request["requested_model"],
+            "object": "response",
+            "response_id": f"resp_offline_{request['launch_ordinal']}",
+            "independent_provider_identity": True,
         }
-        artifact.write_text(json.dumps(identity), encoding="utf-8")
+        artifact.write_text(json.dumps(artifact_payload), encoding="utf-8")
         digest = "sha256:" + hashlib.sha256(artifact.read_bytes()).hexdigest()
         attempts.append(
             {
-                **identity,
+                "profile_id": request["profile_id"],
+                "provider_resolved_provider": request["provider"],
+                "provider_resolved_model": request["requested_model"],
                 "run_id": request["run_id"],
                 "operation_role": "worker",
                 "requested_model": request["requested_model"],
@@ -198,6 +203,31 @@ def _measured_results(root: Path, manifest: dict) -> dict:
             "codex-6-astra-high": 0.75,
         },
     }
+
+
+def test_publish_measured_recurring_records_without_brain_when_identity_unverified(
+    tmp_path, monkeypatch
+):
+    """Subscription-only measurement must not claim ingest when ``identity_verified`` is false."""
+    state, experiments = _seal(tmp_path)
+    orchestrator, workflows = _sources(tmp_path)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(state))
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "quarantine-feedback.db")
+    manifest = trial.build_current_recurring_trial(
+        orchestrator,
+        workflows,
+        seed=14,
+        now=1000,
+        capacity_state="ok",
+        state_dir=state,
+        experiments_root=experiments,
+    )
+    results = _measured_results(tmp_path, manifest)
+    results["identity_verified"] = False
+    published = trial.publish_measured_recurring_trial(manifest, results, now=2000)
+    assert published["brain_ingest_enabled"] is False
+    with feedback._conn() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM profile_trial_ingests").fetchone()[0] == 0
 
 
 def test_measured_recurring_trial_records_spec_quality_cost_and_identity(tmp_path, monkeypatch):
