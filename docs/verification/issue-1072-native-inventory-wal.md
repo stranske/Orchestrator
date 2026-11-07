@@ -458,3 +458,36 @@ unavailable. No production pin, dispatch, grading, historical proof or next-20
 decision is claimed, and no operational checkbox is completed. Staging fails on
 the read-only Git metadata; the change is preserved in an isolated local commit
 and `/tmp/orchestrator-1072-raw-hashes/change.bundle`, without a push.
+
+## Provider metadata committed during retained-report inventory
+
+Checked on 2026-11-07 against checkout
+`d249d505a72de1ec3a1fee76b821e47aef69f325` plus this change. The retained-report
+inventory now compares every stored native-attempt field during its final
+consistency checks. Its public locator query omitted `backend_usage` and
+`backend_error`, allowing concurrent updates to that evidence to go undetected.
+The full-record comparison remains private; output locators are unchanged.
+
+Two regressions use the real native journal schema and WAL-resident receipts.
+Both fail against the old exporter and pass with the fix. Uncommitted metadata
+changes remain invisible; committed changes abort the mixed observation. A stable
+later read retains paid identities and UNKNOWN recovery locators without
+exposing provider metadata or changing report, database or committed WAL bytes.
+
+Validation: all 153 tests across the retained-report, native inventory and fixed
+live-cohort JavaScript suites pass, along with 32 diagnostic and seven
+replay/publication unittest cases. The pre-change JavaScript baseline passes
+151 tests. JavaScript syntax and `git diff --check` pass.
+
+The configured runtime, canonical retrospective report, live report and independent
+outcomes database remain absent. Authentic original report/journal locations and
+deployed/mirror live bindings were not supplied. No production pin, dispatch,
+grading, historical proof or next-20 decision is claimed; no task is marked complete.
+The required retrospective pytest command with `-m 'not slow'` cannot start because
+pytest is absent. No Python files changed.
+
+Checkout staging fails because `.git/index.lock` is read-only. The source changes
+are preserved using an isolated local Git repository and
+`/tmp/orchestrator-1072-provider-metadata/change.bundle`; nothing is pushed.
+The GitHub tools rejected the blocker comment and `needs-human` label because
+they require approval while this run's policy is `never`.

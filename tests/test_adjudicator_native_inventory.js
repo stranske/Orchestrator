@@ -143,6 +143,71 @@ print(json.dumps(ids))
   assert.deepEqual(w.snapshot(), before);
 });
 
+for (const field of ['backend_usage', 'backend_error']) {
+  test(`retained inventory detects committed ${field} changes without publishing provider metadata`, (t) => {
+    const w = world(t, [{ case_id: 'original-a', target: 'owner/repo#1',
+      decision: 'needs_more_evidence', backend_run_id: 'original-paid',
+      retry_attempts: [{ retry_attempts: [{ backend_run_id: 'earlier-paid' }] }] }]);
+    const options = { report: w.original, journal: w.journal, observedAt: 2000000000,
+      evidenceClass: 'current_snapshot', evidenceReference: 'isolated-native-metadata-fixture' };
+    const initial = reportInventory(options);
+    const before = w.snapshot();
+    const mainInode = fs.statSync(w.journal, { bigint: true }).ino;
+    const value = field === 'backend_usage'
+      ? JSON.stringify({ cost_usd: 0.75, detail: 'private provider usage' })
+      : 'private provider error';
+    const update = w.connection.prepare(`UPDATE native_attempts SET ${field}=? WHERE attempt_id=?`);
+    const stored = () => w.connection.prepare(
+      `SELECT ${field} AS value FROM native_attempts WHERE attempt_id=?`).get(w.ids[2]).value;
+    const original = stored();
+    for (const committed of [false, true]) {
+      const read = fs.readFileSync;
+      let reportReads = 0;
+      let committedSnapshot;
+      fs.readFileSync = function observe(file, ...args) {
+        const bytes = read(file, ...args);
+        if (file === w.original && ++reportReads === 2) {
+          w.connection.exec('BEGIN IMMEDIATE');
+          update.run(value, w.ids[2]);
+          if (committed) {
+            w.connection.exec('COMMIT');
+            committedSnapshot = before.map(([file]) => [file, sha256(read(file))]);
+          }
+        }
+        return bytes;
+      };
+      try {
+        if (committed) {
+          assert.throws(() => reportInventory(options), /native journal receipts changed during inventory/);
+        } else {
+          assert.deepEqual(reportInventory(options), initial, 'uncommitted metadata is invisible');
+        }
+      } finally {
+        fs.readFileSync = read;
+        if (w.connection.isTransaction) w.connection.exec('ROLLBACK');
+      }
+      assert.equal(reportReads, 2, 'metadata changes after the initial receipt read');
+      assert.equal(fs.statSync(w.journal, { bigint: true }).ino, mainInode);
+      if (committed) {
+        assert.equal(stored(), value);
+        assert.deepEqual(committedSnapshot.slice(0, 3), before.slice(0, 3), 'commit stays in WAL');
+        assert.notEqual(committedSnapshot[3][1], before[3][1]);
+        // Stable private metadata still participates in consistency checks,
+        // without changing the published receipt locators or paid accounting.
+        const later = reportInventory(options);
+        assert.deepEqual(later, initial);
+        assert.equal(later.dispatch_authorized, false);
+        assert.equal(later.receipt_authority, 'not_authenticated_by_inventory');
+        assert.ok(!JSON.stringify(later).includes('private'));
+        assert.deepEqual(w.snapshot(), committedSnapshot);
+      } else {
+        assert.equal(stored(), original);
+        assert.deepEqual(w.snapshot(), before);
+      }
+    }
+  });
+}
+
 test('native inventory reads committed WAL receipts without checkpointing or granting authority', (t) => {
   const w = world(t);
   // Copying just the database would lose every receipt in this observation.

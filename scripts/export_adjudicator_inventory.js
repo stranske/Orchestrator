@@ -335,7 +335,11 @@ function journalInventory(journal, locationChecks) {
       'ORDER BY created_at,attempt_id';
     const records = connection.prepare(receiptQuery).all();
     const receiptDigest = (rows) => createHash('sha256').update(JSON.stringify(rows)).digest('hex');
-    const observedDigest = receiptDigest(records);
+    // The public locator query omits private provider usage/error metadata.
+    // Pin every stored field so updates to paid-attempt evidence cannot hide
+    // behind an unchanged locator. These rows never enter the emitted report.
+    const snapshotQuery = 'SELECT * FROM native_attempts ORDER BY attempt_id';
+    const observedDigest = receiptDigest(connection.prepare(snapshotQuery).all());
     // Reopen for each final check: the initial transaction cannot see later
     // WAL commits, and inode equality cannot pin receipt content. Compare full
     // records, including private raw/validation bytes, without emitting them.
@@ -345,7 +349,7 @@ function journalInventory(journal, locationChecks) {
         fresh = new DatabaseSync(journal, { readOnly: true });
         fresh.exec('BEGIN');
         if (fresh.prepare('PRAGMA application_id').get().application_id !== 1313097550 ||
-            receiptDigest(fresh.prepare(receiptQuery).all()) !== observedDigest) {
+            receiptDigest(fresh.prepare(snapshotQuery).all()) !== observedDigest) {
           throw new Error('changed receipts');
         }
       } catch {
