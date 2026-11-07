@@ -8,6 +8,7 @@ const { spawnSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
 const { DatabaseSync } = require('node:sqlite');
 const { test } = require('node:test');
+const { reportInventory } = require('../scripts/export_adjudicator_inventory');
 
 const repo = path.resolve(__dirname, '..');
 const modules = fs.existsSync(path.join(repo, 'src')) ? path.join(repo, 'src') : repo;
@@ -100,6 +101,47 @@ print(json.dumps([item['attempt_id'] for item in (reserved, started, raw)]))
   return { root, journal, original, canonical, raw, ids, connection, sourceHash,
     execute, run, inventoryArgs, snapshot };
 }
+
+test('retained inventory raw hashes match native producer receipts and the Python inventory', (t) => {
+  const w = world(t, [{ case_id: 'original-a', target: 'owner/repo#1',
+    decision: 'needs_more_evidence', backend_run_id: 'original-paid',
+    retry_attempts: [{ retry_attempts: [{ backend_run_id: 'earlier-paid' }] }] }]);
+  const texts = ['', 'private café\r\n', 'private cafe\u0301\n'];
+  const ids = w.run(['-c', `
+import json, sys
+from pathlib import Path
+from adjudicator_retro import NativeAttemptJournal
+journal = NativeAttemptJournal(Path(sys.argv[1]))
+ids = []
+for index, text in enumerate(json.loads(sys.argv[3])):
+    record = journal.reserve('receipt-case-' + str(index), 'receipt-' + str(index), 'digest', sys.argv[2])
+    assert record['reserved']
+    journal.persist_raw(record['attempt_id'], {'run_id': 'receipt-paid-' + str(index), 'output': text})
+    ids.append(record['attempt_id'])
+print(json.dumps(ids))
+`, w.journal, w.sourceHash, JSON.stringify(texts)]);
+  const before = w.snapshot();
+  const native = w.run(w.inventoryArgs);
+  const retained = reportInventory({ report: w.original, journal: w.journal,
+    observedAt: 2000000000, evidenceClass: 'current_snapshot',
+    evidenceReference: 'isolated-native-producer-fixture' });
+  const attempts = retained.pre_dispatch.native_journal.attempts;
+  for (const record of native.native_journal.attempts) {
+    assert.equal(attempts.find((row) => row.attempt_id === record.attempt_id).raw_response_sha256,
+      record.raw_response_sha256, 'both inventory paths must identify the same retained bytes');
+  }
+  ids.forEach((id, index) => {
+    assert.equal(attempts.find((row) => row.attempt_id === id).raw_response_sha256, sha256(texts[index]));
+  });
+  assert.deepEqual(retained.paid_attempts.map((row) => row.backend_run_id),
+    ['original-paid', 'earlier-paid']);
+  assert.equal(retained.pre_dispatch.paid_identity_reconciliation.union_unique, 7);
+  assert.equal(native.row_diagnostics[0].unresolved_native_attempts[0].outcome, 'UNKNOWN');
+  assert.equal(retained.receipt_authority, 'not_authenticated_by_inventory');
+  assert.equal(retained.dispatch_authorized, false);
+  assert.ok(!JSON.stringify(retained).includes('private'));
+  assert.deepEqual(w.snapshot(), before);
+});
 
 test('native inventory reads committed WAL receipts without checkpointing or granting authority', (t) => {
   const w = world(t);

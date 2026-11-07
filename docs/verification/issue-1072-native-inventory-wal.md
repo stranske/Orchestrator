@@ -431,3 +431,30 @@ The change is preserved in an isolated local commit and
 `/tmp/orchestrator-1072-receipt-race/change.bundle`; no push was made.
 Automatic approval review rejected the `needs-human` label and blocker comment
 because the GitHub writes require approval and this run's policy is `never`.
+
+## Exact raw receipt identities in retained-report inventory
+
+Checked on 2026-11-07 against checkout
+`dda8d5ff4118caf7d7f0aa06a9079e9b87ae3e38` plus this change. The retained-report
+inventory now emits `raw_response_sha256` on journal attempts, matched receipt
+locators and unresolved case recovery locators. It hashes exact stored text;
+empty text and absent receipts remain distinct. No raw provider text is emitted.
+Two new regressions fail without the change and pass afterward. One checks
+Unicode and newline distinctions, recursive paid history and retained UNKNOWNs;
+the other compares real native-producer WAL receipts with the Python inventory.
+Both verify that inventory leaves the supplied evidence unchanged.
+
+Validation: all 151 tests across the retained-report, native inventory and fixed
+live-cohort JavaScript suites pass, along with 32 diagnostic and seven
+replay/publication unittest cases. The pre-change JavaScript baseline passes
+149 tests. JavaScript syntax and `git diff --check` pass. No Python files changed.
+The required retrospective pytest command with `-m "not slow"` cannot start
+because pytest is absent; installation into a temporary directory also failed.
+
+These remain fixture results. The configured production runtime, canonical
+report, independent outcomes database and default mirror are absent. Authentic
+original report/journal locations and deployed/mirror live bindings remain
+unavailable. No production pin, dispatch, grading, historical proof or next-20
+decision is claimed, and no operational checkbox is completed. Staging fails on
+the read-only Git metadata; the change is preserved in an isolated local commit
+and `/tmp/orchestrator-1072-raw-hashes/change.bundle`, without a push.

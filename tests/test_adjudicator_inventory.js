@@ -1333,6 +1333,47 @@ function nativeJournal(t) {
   return { ...fixture, journal, options: { ...fixture.options, journal } };
 }
 
+test('raw receipt hashes bind exact text through report recovery locators without exposing it', (t) => {
+  const { root, saved, journal, options } = nativeJournal(t);
+  const identity = { run_id: 'original', target: 'owner/repo#1' };
+  saved.rows = [{ ...identity, case_id: 'case-a', backend_run_id: 'primary',
+    decision: 'needs_more_evidence', later_truth: 'UNKNOWN',
+    retry_attempts: [{ backend_run_id: 'earlier-paid' }] }];
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const manifest = manifestFile(root, [identity]);
+  const hashes = [];
+  for (const raw of [null, '', 'private café\r\n', 'private café\n', 'private cafe\u0301\n']) {
+    const writer = new DatabaseSync(journal);
+    writer.prepare("UPDATE native_attempts SET raw_response=? WHERE attempt_id='d'").run(raw);
+    writer.close();
+    const inputs = [options.report, journal, manifest];
+    const before = inputs.map((file) => fs.readFileSync(file));
+    const observed = reportInventory({ ...options, manifest });
+    const expected = raw === null ? null : createHash('sha256').update(raw).digest('hex');
+    hashes.push(expected);
+    const attempts = observed.pre_dispatch.native_journal.attempts;
+    const receipt = attempts.find((row) => row.attempt_id === 'd');
+    assert.equal(receipt.raw_response_sha256, expected);
+    assert.equal(receipt.raw_receipt_present, raw !== null);
+    for (const id of ['a', 'b', 'c']) {
+      assert.equal(attempts.find((row) => row.attempt_id === id).raw_response_sha256, null);
+    }
+    const locator = observed.retained_attempt_observations[0].native_receipt_locator;
+    assert.equal(locator.attempts[0].raw_response_sha256, expected);
+    assert.equal(locator.authenticated, false);
+    assert.equal(observed.manifest_reconciliation.cases[0].native_case_recovery
+      .unresolved_attempts.find((row) => row.attempt_id === 'd').raw_response_sha256, expected);
+    assert.deepEqual(observed.paid_attempts.map((row) => row.backend_run_id),
+      ['primary', 'earlier-paid']);
+    assert.equal(observed.cases[0].retained_later_truth, 'UNKNOWN');
+    assert.equal(observed.dispatch_authorized, false);
+    assert.equal(Object.hasOwn(observed, 'graded'), false);
+    assert.ok(!JSON.stringify(observed).includes('private'));
+    assert.deepEqual(inputs.map((file) => fs.readFileSync(file)), before);
+  }
+  assert.equal(new Set(hashes).size, hashes.length, 'missing, empty and distinct text stay distinct');
+});
+
 for (const change of ['backend identity', 'raw receipt', 'validation bytes', 'new reservation']) {
   test(`report inventory rejects committed ${change} during its final report read`, (t) => {
     const { journal, options } = nativeJournal(t);

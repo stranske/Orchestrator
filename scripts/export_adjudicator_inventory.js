@@ -377,7 +377,13 @@ function journalInventory(journal, locationChecks) {
           ? 'recover_fresh_collected_evidence_before_any_retry'
           : 'inspect_native_validation_result_before_any_retry';
       }
+      // Bind the retained text without parsing or normalizing provider output.
+      // Presence alone cannot distinguish receipts across dated observations;
+      // an empty receipt has a hash, while absent/non-text values have none.
+      const rawHash = typeof raw_response === 'string'
+        ? createHash('sha256').update(raw_response).digest('hex') : null;
       return { ...locator, raw_receipt_present: Boolean(item.raw_receipt_present),
+        raw_response_sha256: rawHash,
         validation_present: Boolean(item.validation_present), validation_observation: validation,
         receipt_evidence_gaps: gaps, recovery_step: recoveryStep };
     });
@@ -475,8 +481,10 @@ function reconcileNativeLocators(observations, journal) {
     observation.native_receipt_locator = { status, authenticated: false,
       next_evidence_step: nextStep,
       attempts: candidates.map(({ attempt_id, case_id, material_revision, state,
-        raw_receipt_present, validation_present, validation_observation, receipt_evidence_gaps }) =>
-        ({ attempt_id, case_id, material_revision, state, raw_receipt_present, validation_present,
+        raw_receipt_present, raw_response_sha256, validation_present,
+        validation_observation, receipt_evidence_gaps }) =>
+        ({ attempt_id, case_id, material_revision, state, raw_receipt_present, raw_response_sha256,
+          validation_present,
           validation_observation, receipt_evidence_gaps })) };
   }
 }
@@ -690,11 +698,11 @@ function nativeCaseRecovery(caseId, journal) {
         attempt.validation_observation.retained_result === 'retained_binary_decision' &&
         !attempt.receipt_evidence_gaps.length)) return [];
     const { attempt_id, material_revision, state, backend_run_id,
-      raw_receipt_present, validation_present, validation_observation,
+      raw_receipt_present, raw_response_sha256, validation_present, validation_observation,
       receipt_evidence_gaps, recovery_step } = attempt;
     return [{ location: `pre_dispatch.native_journal.attempts[${index}]`,
       attempt_id, material_revision, state, backend_run_id,
-      raw_receipt_present, validation_present, validation_observation,
+      raw_receipt_present, raw_response_sha256, validation_present, validation_observation,
       receipt_evidence_gaps, next_evidence_step: recovery_step }];
   });
   return { scope, status: 'observed', unresolved_attempts: unresolved,
