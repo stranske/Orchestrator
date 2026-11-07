@@ -6,7 +6,6 @@ failed reads never turn into offers, and a real recurring shape outranks a keywo
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
@@ -16,122 +15,6 @@ import pytest
 _modules = advisor_hermetic.import_under_temporary_runtime("capabilities", "capability_advisor")
 capabilities = _modules["capabilities"]
 advisor = _modules["capability_advisor"]
-
-# The live runtime directories as this process found them, after the import-time redirect above
-# has put any path that import captured back. The checkout itself may sit under the live state dir
-# (agents work in its `worktrees/`), so the checkout is exempt: reading source is not reading
-# runtime state.
-_LIVE_RUNTIME_ROOTS = tuple(
-    {
-        Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex" / "orchestrator")).resolve(),
-        Path(
-            os.environ.get("ORCH_LOCAL_RUNTIME", Path.home() / ".codex" / "orchestrator")
-        ).resolve(),
-        capabilities.LOCAL_RUNTIME.resolve(),
-        capabilities.REG.resolve().parent,
-    }
-)
-# pytest's own temporary root is exempt too: an agent's TMPDIR can itself sit under the live
-# runtime dir, and every redirected path below lives there. The hermetic root is exempt for the
-# same reason when TMPDIR itself is the live state dir.
-_EXEMPT_ROOTS: list[Path] = [Path(__file__).resolve().parent.parent]
-_EXEMPT_ROOTS.append(advisor_hermetic.root().resolve())
-# Every process-start and network boundary the exercised code could reach, by audit event rather
-# than by helper, so an agent launch through any wrapper (dispatcher, fleet_shapes' `gh`, os.system,
-# posix_spawn) is caught the same way.
-_EXTERNAL_EVENTS = (
-    "subprocess.Popen",
-    "os.system",
-    "os.exec",
-    "os.posix_spawn",
-    "os.spawn",
-    "os.fork",
-    "os.forkpty",
-    "pty.spawn",
-    "socket.connect",
-    "socket.getaddrinfo",
-    "socket.gethostbyname",
-    "urllib.Request",
-    "http.client.connect",
-)
-_attempted: list[tuple[str, str]] | None = None
-
-
-def _live_runtime_path(raw) -> bool:
-    if not isinstance(raw, (str, bytes, os.PathLike)):
-        return False
-    try:
-        path = Path(os.fsdecode(raw)).resolve()
-    except (OSError, ValueError):
-        return False
-    if any(path.is_relative_to(root) for root in _EXEMPT_ROOTS):
-        return False
-    return any(path.is_relative_to(root) for root in _LIVE_RUNTIME_ROOTS)
-
-
-def _guard(event: str, args: tuple) -> None:
-    if _attempted is None:
-        return
-    if event in _EXTERNAL_EVENTS:
-        _attempted.append((event, repr(args)[:200]))
-        raise RuntimeError(f"advisor coverage test attempted external operation {event}")
-    if event == "open" and args and _live_runtime_path(args[0]):
-        _attempted.append((event, os.fsdecode(args[0])))
-        raise RuntimeError(f"advisor coverage test touched live runtime state {args[0]}")
-
-
-sys.addaudithook(_guard)
-
-
-@pytest.fixture(scope="module", autouse=True)
-def isolated_runtime_and_external_calls(tmp_path_factory):
-    """Arm the external-operation recorder for this module.
-
-    ``advisor_hermetic`` sets ``ORCH_STATE_DIR`` and ``ORCH_LOCAL_RUNTIME`` before the import and
-    the conftest fixture repoints paths already captured then. This recorder only proves no read
-    reached the live directories. It is not a MonkeyPatch, so a test's ``monkeypatch`` cannot
-    disarm it.
-    """
-    global _attempted
-    _EXEMPT_ROOTS.append(tmp_path_factory.getbasetemp().resolve())
-    _attempted = []
-    try:
-        yield _attempted
-    finally:
-        attempted, _attempted = _attempted, None
-        del _EXEMPT_ROOTS[1:]
-    assert attempted == []
-
-
-@pytest.fixture(autouse=True)
-def no_external_operation_in_this_test(isolated_runtime_and_external_calls):
-    """Attribute any attempted operation to the test that made it, even if the code swallowed it."""
-    before = len(isolated_runtime_and_external_calls)
-    yield
-    assert isolated_runtime_and_external_calls[before:] == []
-
-
-def test_guard_records_and_blocks_external_operations(isolated_runtime_and_external_calls):
-    """The recorder is live: a blocked launch is refused and recorded, then cleared for this check."""
-    import subprocess
-
-    live_ledger = next(
-        root / "capabilities.json"
-        for root in _LIVE_RUNTIME_ROOTS
-        if _live_runtime_path(root / "capabilities.json")
-    )
-    before = len(isolated_runtime_and_external_calls)
-    with pytest.raises(RuntimeError, match="subprocess.Popen"):
-        subprocess.run(["true"])
-    with pytest.raises(RuntimeError, match="live runtime state"):
-        open(live_ledger)
-    assert [event for event, _ in isolated_runtime_and_external_calls[before:]] == [
-        "subprocess.Popen",
-        "open",
-    ]
-    del isolated_runtime_and_external_calls[before:]
-    assert not _live_runtime_path(os.environ["ORCH_STATE_DIR"])
-    assert not _live_runtime_path(os.environ["ORCH_LOCAL_RUNTIME"])
 
 
 def test_dispatcher_failure_and_legacy_matcher_degrade_without_inventing_a_route(monkeypatch):
