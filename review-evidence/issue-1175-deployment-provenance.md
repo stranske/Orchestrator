@@ -699,3 +699,35 @@ connector rejected both the blocker comment and `needs-human` label with
 The checkout's read-only Git index rejected staging. The tested changes are
 retained in `/tmp/orchestrator-1175-filter-marker-commit`, with a handoff patch at
 `/tmp/orchestrator-1175-filter-marker.patch`.
+
+## Historical challenger contract regression (2026-11-07)
+
+Extended the real publication-history CLI fixture with codex, cursor, claude,
+and null challengers. Four new cases verify the first publication after current
+router lanes disappear or become reserved, backup-only, or hosted-unavailable,
+both with and without a retained receipt. Validation preserves the historical
+v1 contract, commit, deployment instant, audit evidence, receipt bytes, and
+modification time. A later publication remains invalid as the first deployment;
+retrying the original audit recovers without republishing. All state is temporary.
+
+The focused regression passes all five tests, including its four new cases.
+Two disposable exporter mutations fail the new cases: using current router
+membership and subtracting current hosted exclusions from the historical contract.
+The baseline publication CLI suite passed 94 tests, the deployment unittest suite
+passed 16, and the report CLI suite passed 5. The updated publication CLI suite
+passed all 98 tests; JavaScript syntax and diff whitespace checks also passed.
+No Python or protected files changed.
+
+The live export artifact (blob `e119f98ad8b61e3c7f62a78d4af20e1e182d8135`)
+still has `generated_at = 2026-10-24T12:52:31Z`, no filter marker, and Gemini
+challengers. No production task is newly complete. The authentic deployment
+audit and production feedback database remain unavailable; observation requires
+both 2026-11-08 and fourteen days after verified deployment. The named Anaconda
+pytest command cannot start because its interpreter is absent. Available Python
+lacks pytest and Black; installation failed because PyPI DNS could not resolve.
+
+PR #1196 is open and ready for review. The connector rejected the blocker comment
+and `needs-human` label with `MCP tool call requires approval, but approval policy
+is never`. The checkout's read-only Git index rejected staging. The changes are
+retained in `/tmp/orchestrator-1175-historical-contract-commit`, with a handoff
+patch at `/tmp/orchestrator-1175-historical-contract.patch`.

@@ -402,9 +402,10 @@ test('deployment CLI refuses truncated history and recovers the first publicatio
     generated_at: '2026-11-04T10:00:00Z',
     exploration: {
       challenger_filter: 'hosted-runnable-alternatives/v1',
-      challengers: Object.fromEntries(
-        ['implement', 'review', 'testgen', 'mechanical', 'codemod', 'cross_repo']
-          .map((task) => [task, 'codex'])),
+      challengers: {
+        implement: 'codex', review: 'cursor', testgen: 'claude',
+        mechanical: null, codemod: 'cursor', cross_repo: 'codex',
+      },
     },
   };
   async function publishFixture(generatedAt) {
@@ -479,6 +480,64 @@ test('deployment CLI refuses truncated history and recovers the first publicatio
   assert.deepEqual(fs.readFileSync(receipt), retained);
   assert.equal(fs.statSync(receipt, { bigint: true }).mtimeNs, modified);
   assert.equal(await git(remote, 'rev-parse', branch), later, 'recovery must not republish');
+  // Historical v1 publications retain their contract when today's router loses
+  // a lane or changes its reserve, backup, and hosted availability policy.
+  for (const policy of ['removed lanes', 'excluded lanes']) {
+    for (const existing of [false, true]) {
+      await t.test(`verifies historical contract with ${policy} and receipt ${existing}`, async () => {
+        const driftState = path.join(root, `drift-${policy.replaceAll(' ', '-')}-${existing}`);
+        const driftReceipt = path.join(driftState, path.basename(receipt));
+        fs.mkdirSync(driftState);
+        if (existing) fs.writeFileSync(driftReceipt, retained);
+        const originalModified = existing
+          ? fs.statSync(driftReceipt, { bigint: true }).mtimeNs : null;
+        const script = `
+import sys
+import route_weights_export as export
+
+policy, audit, state = sys.argv[1:]
+if policy == "removed lanes":
+    export.router.KEEPALIVE_AGENTS = set()
+else:
+    lanes = {"codex", "cursor", "claude"}
+    export.router.RESERVE_AGENTS = lanes
+    export.router.BACKUP_AGENTS = lanes
+    export.HOSTED_UNRUNNABLE_AGENTS = lanes
+sys.argv = ["export", "--record-challenger-deployment", audit, "--state-dir", state]
+raise SystemExit(export.main())
+`;
+        const recordWithDrift = (commit) => {
+          fs.writeFileSync(audit, JSON.stringify({ ...provenance, published_commit: commit }));
+          return run(process.env.PYTHON || 'python3', ['-c', script, policy, audit, driftState],
+            { cwd: root, env });
+        };
+        const accepted = await recordWithDrift(first);
+        assert.equal(accepted.status, 0, accepted.stderr);
+        assert.deepEqual(JSON.parse(accepted.stdout), JSON.parse(retained));
+        assert.deepEqual(fs.readFileSync(driftReceipt), retained);
+        if (existing) {
+          assert.equal(fs.statSync(driftReceipt, { bigint: true }).mtimeNs, originalModified);
+        }
+        const savedModified = fs.statSync(driftReceipt, { bigint: true }).mtimeNs;
+        const refused = await recordWithDrift(later);
+        assert.equal(refused.status, 1, refused.stderr);
+        assert.equal(refused.stdout, '');
+        assert.match(refused.stderr, /not the first verified challenger-filter publication/);
+        assert.doesNotMatch(refused.stderr, /Traceback/);
+        assert.deepEqual(fs.readFileSync(driftReceipt), retained);
+        assert.equal(fs.statSync(driftReceipt, { bigint: true }).mtimeNs, savedModified);
+        const retried = await recordWithDrift(first);
+        assert.equal(retried.status, 0, retried.stderr);
+        assert.deepEqual(JSON.parse(retried.stdout), JSON.parse(retained));
+        assert.deepEqual(fs.readFileSync(driftReceipt), retained);
+        assert.equal(fs.statSync(driftReceipt, { bigint: true }).mtimeNs, savedModified);
+        assert.equal(fs.existsSync(path.join(driftState, `.${path.basename(receipt)}.tmp`)), false);
+        assert.deepEqual(fs.readFileSync(receipt), retained);
+        assert.equal(fs.statSync(receipt, { bigint: true }).mtimeNs, modified);
+        assert.equal(await git(remote, 'rev-parse', branch), later, 'verification cannot republish');
+      });
+    }
+  }
   assert.equal(fs.existsSync(database), false);
   assert.deepEqual(fs.readdirSync(home), []);
 });
