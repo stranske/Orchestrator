@@ -82,7 +82,7 @@ This command measures Gate p50 durations across registered consumer repos (inclu
 ## Post-Change Validation
 
 ### Required
-A Gate run at the optimization head (current branch: codex/issue-1217, head: 64bc42a8c4ad688c5ea9590d11561972a672a5d6) must be executed and verified.
+A Gate run at the optimization head (current branch: codex/issue-1217, head: bfb10f7f304aed7137e909fded844f646c286ea6) must be executed and verified.
 
 **Command to check**:
 ```bash
@@ -93,6 +93,10 @@ gh run view <post-change-run-id> --repo stranske/Orchestrator --json url,headSha
 - conclusion: success
 - All required checks preserved
 - Python CI jobs for versions 3.13 and 3.14 (no 3.12)
+
+**Issue**: The Gate workflow (pr-00-gate.yml) is currently failing on all runs (including main branch runs) with "workflow file issue" errors. Run 42346651934 (triggered by this push) failed with no jobs executed. This is a pre-existing issue in the repository, not caused by this change.
+
+**Status**: BLOCKED - Cannot obtain post-change measurements until Gate workflow is fixed.
 
 ### Unavailable Baseline Data
 
@@ -120,17 +124,21 @@ The following baseline data is explicitly recorded as unavailable:
 
 **Source**: https://github.com/stranske/Workflows/blob/ci-time-budget/docs/reports/ci-budget.json
 
-**Status**: Awaiting post-change measurements. This section will be populated after:
-1. A successful Gate run at the optimization head is verified
-2. The Health 85 workflow (stranske/Workflows#4284) processes the new data
-3. Seven consecutive daily observations with p50 <= 10 minutes are collected
+**Status**: BLOCKED - Cannot collect observations while Gate workflow is failing.
 
-**Format**:
+The Health 85 workflow measures Gate p50 durations across registered consumer repos, but:
+1. The Gate workflow (pr-00-gate.yml) in stranske/Orchestrator is currently failing on all runs
+2. No successful Gate runs are available to measure
+3. The Health 85 report (stranske/Workflows@ci-time-budget:docs/reports/ci-budget.json) shows the Gate p50 for stranske/Workflows, not stranske/Orchestrator
+
+**Required Format** (cannot be populated at this time):
 ```
 Date       | p50 (min) | Status | Note
 -----------|-----------|--------|------
 YYYY-MM-DD | X.X       | <=10 ✓ | Trailing-7-day measurement
 ```
+
+**Note**: This requires seven consecutive calendar dates with p50 <= 10 minutes. Issue #969 documents that the first over-target measurement was on 2026-10-26T11:48:48+00:00.
 
 ## Required Checks Preservation
 
