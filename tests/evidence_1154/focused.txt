@@ -1,0 +1,4 @@
+........................................................................ [ 94%]
+....                                                                     [100%]
+tracked test inputs: armed -- watching 4 file(s) that `git archive HEAD tests` leaves out
+76 passed in 0.68s
