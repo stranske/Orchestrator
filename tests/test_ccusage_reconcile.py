@@ -9,9 +9,9 @@ import subprocess
 import tempfile
 from datetime import datetime, timezone
 
+import advisor_hermetic
 import pytest
 
-import advisor_hermetic
 import ccusage_reconcile as ccusage
 import feedback
 

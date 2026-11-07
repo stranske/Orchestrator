@@ -9,9 +9,9 @@ import socket
 import subprocess
 import tempfile
 
+import advisor_hermetic
 import pytest
 
-import advisor_hermetic
 import claims
 import exploration_collection as ec
 import exploration_evidence_plan as eep

@@ -8,9 +8,9 @@ import socket
 import subprocess
 import tempfile
 
+import advisor_hermetic
 import pytest
 
-import advisor_hermetic
 import feedback
 import observability_dashboard as dashboard
 
