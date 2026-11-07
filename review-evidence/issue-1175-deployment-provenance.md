@@ -767,3 +767,38 @@ suite passed all 104 tests. Deployment unittests passed all 16 tests, report CLI
 tests passed all 5 tests, and JavaScript syntax and diff whitespace checks passed.
 The tested changes are committed in `/tmp/orchestrator-1175-later-contract-commit-r5bs0z2z` with a handoff patch at
 `/tmp/orchestrator-1175-later-contract.patch`; the main working tree retains the same edits.
+
+## Exact publication identity across Git hash formats (2026-11-07)
+
+Reviewed commits `82f7e58` through `894c7ab` and the live PR #1196 body. They
+retain no verified production deployment receipt, so both production tasks remain
+unchecked. Hosted-pass helpers and reporting remain absent. The conditional
+instrumentation acceptance item in Full Issue Text should match its checked
+Automated Status Summary counterpart. The connector rejected that reconciliation,
+the blocker comment, and the `needs-human` label because approval policy is
+`never`. PR #1196 was verified open and ready for review.
+
+The merge-publication CLI fixture now runs against real SHA-1 and SHA-256 bare
+remotes, verifying the exact first published merge, historical artifact contract,
+deployment instant, and receipt recovery. New cases reject resolvable abbreviated
+IDs, including a SHA-256 prefix with the length of a full SHA-1. Refusals preserve
+receipt bytes, modification time, remote history, and the absence of temporary
+receipt writes. All state remains temporary; no Python or protected files changed.
+The focused command passes all 37 tests. A disposable exporter mutation that
+expands the supplied commit through `git rev-parse` fails the new 40-character
+prefix case, confirming that the test detects a changed provenance identity.
+
+The live export blob remains `e119f98ad8b61e3c7f62a78d4af20e1e182d8135`, generated
+at `2026-10-24T12:52:31Z`, with Gemini challengers and no filter marker. This does
+not establish deployment. The authentic publication audit, production database,
+and required Anaconda interpreter remain unavailable. Observation must wait until
+both 2026-11-08 and fourteen days after verified deployment. No production task
+is newly complete. The checkout's read-only Git index prevents staging here.
+
+Verification: `node tests/test_route_weights_export_cli.js` passed all 124 tests;
+the deployment unittest suite passed all 16 tests; report CLI tests passed all 5.
+JavaScript syntax and diff whitespace checks passed. The named Anaconda pytest
+command cannot start because its interpreter is absent. The tested commit is in
+`/tmp/orchestrator-1175-commit-formats-enn8taij/checkout`, with a handoff patch at
+`/tmp/orchestrator-1175-commit-formats.patch`; the main working tree retains the
+same edits.

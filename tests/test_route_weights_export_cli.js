@@ -200,7 +200,7 @@ for (const [name, corrupt, diagnostic] of invalidPublishedContracts) {
   });
 }
 
-test('deployment CLI records the export merge rather than an unpublished or side-branch commit', async (t) => {
+async function verifyMergedPublication(t, objectFormat) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'route-deployment-merge-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const home = path.join(root, 'home');
@@ -245,7 +245,7 @@ test('deployment CLI records the export merge rather than an unpublished or side
           .map((task) => [task, null])),
     },
   };
-  await git(root, 'init', '--bare', '--initial-branch=main', remote);
+  await git(root, 'init', '--bare', `--object-format=${objectFormat}`, '--initial-branch=main', remote);
   await git(root, 'clone', remote, checkout);
   fs.mkdirSync(path.dirname(artifact), { recursive: true });
   const unmarked = structuredClone(document);
@@ -319,6 +319,8 @@ test('deployment CLI records the export merge rather than an unpublished or side
   await git(checkout, 'merge', '--no-ff', 'filter-candidate', '-m', 'export filter fixture');
   const merged = await git(checkout, 'rev-parse', 'HEAD');
   assert.notEqual(merged, candidate);
+  assert.equal(await git(checkout, 'rev-parse', '--show-object-format'), objectFormat);
+  assert.equal(merged.length, objectFormat === 'sha256' ? 64 : 40);
   await refuse(merged);
   await git(checkout, 'push', 'origin', branch);
   assert.equal(await git(remote, 'rev-parse', `${branch}^2`), candidate);
@@ -337,6 +339,25 @@ test('deployment CLI records the export merge rather than an unpublished or side
   assert.deepEqual(JSON.parse(fs.readFileSync(receipt, 'utf8')), recorded);
   const retained = fs.readFileSync(receipt);
   const modified = fs.statSync(receipt, { bigint: true }).mtimeNs;
+  // A SHA-256 prefix can itself look like a full SHA-1. Git may resolve it,
+  // but provenance must preserve the exact published commit, without expansion.
+  for (const length of objectFormat === 'sha256' ? [7, 40] : [7]) {
+    await t.test(`refuses ${length}-character publication prefix in ${objectFormat}`, async () => {
+      const prefix = merged.slice(0, length);
+      assert.equal(await git(checkout, 'rev-parse', `${prefix}^{commit}`), merged);
+      const refused = await record(prefix);
+      assert.equal(refused.status, 1, refused.stderr);
+      assert.equal(refused.stdout, '');
+      assert.match(refused.stderr, length === 7
+        ? /published_commit must be a full Git commit SHA/
+        : /not the first verified challenger-filter publication/);
+      assert.doesNotMatch(refused.stderr, /Traceback/);
+      assert.deepEqual(fs.readFileSync(receipt), retained);
+      assert.equal(fs.statSync(receipt, { bigint: true }).mtimeNs, modified);
+      assert.equal(await git(remote, 'rev-parse', branch), merged);
+      assert.equal(fs.existsSync(path.join(state, `.${path.basename(receipt)}.tmp`)), false);
+    });
+  }
   for (const [name, commit] of unverified) {
     await t.test(`retains verified publication when claiming earlier ${name}`, async () => {
       const result = await record(commit);
@@ -409,7 +430,12 @@ test('deployment CLI records the export merge rather than an unpublished or side
   assert.equal(await git(remote, 'rev-parse', branch), publishedTip);
   assert.equal(fs.existsSync(database), false);
   assert.deepEqual(fs.readdirSync(home), []);
-});
+}
+
+for (const objectFormat of ['sha1', 'sha256']) {
+  test(`deployment CLI records the export merge rather than an unpublished or side-branch commit (${objectFormat})`,
+    (t) => verifyMergedPublication(t, objectFormat));
+}
 
 test('deployment CLI refuses truncated history and recovers the first publication after unshallowing', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'route-deployment-shallow-'));
