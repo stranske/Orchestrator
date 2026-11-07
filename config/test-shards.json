@@ -26,7 +26,12 @@
     "tests/test_storage_interrupted_release.py",
     "tests/test_switch_review_fleet.py",
     "tests/test_testgen_off_flash_renewal_target.py",
-    "tests/test_verify_failure_evidence.py"
+    "tests/test_verify_failure_evidence.py",
+    "tests/test_capability_matcher_proposals.py",
+    "tests/test_capability_opportunity.py",
+    "tests/test_judge_reliability.py",
+    "tests/test_langsmith_direct.py",
+    "tests/test_strategy_experiment.py"
   ],
   "shards": [
     [
@@ -89,6 +94,7 @@
       "tests/test_coverage_round_881.py",
       "tests/test_coverage_wp_roles.py",
       "tests/test_dispatcher_controlled_data_only.py",
+      "tests/test_dispatcher_coverage_1182.py",
       "tests/test_dispatcher_failure_contracts.py",
       "tests/test_dispatcher_offload.py",
       "tests/test_dispatcher_provision.py",
@@ -255,7 +261,8 @@
       "tests/test_gemini_flash_routing.py",
       "tests/test_storage_interrupted_release.py",
       "tests/test_testgen_off_flash_renewal_target.py",
-      "tests/test_issue1150_ranked_coverage.py"
+      "tests/test_issue1150_ranked_coverage.py",
+      "tests/test_capability_opportunity.py"
     ],
     [
       "tests/test_activation_audit_label_index.py",
@@ -363,7 +370,8 @@
       "tests/test_usage_poll_shell.py",
       "tests/test_venv_fixture_portability.py",
       "tests/test_verifier_retry_lineage.py",
-      "tests/test_worktree_git_guard.py"
+      "tests/test_worktree_git_guard.py",
+      "tests/test_judge_reliability.py"
     ],
     [
       "tests/test_adjudicator_retry_history.py",
@@ -469,7 +477,8 @@
       "tests/test_ux_review_coverage.py",
       "tests/test_verifier_native_bot_origin.py",
       "tests/test_verify_pytest_workers.py",
-      "tests/test_wrapper_steps_name_their_python.py"
+      "tests/test_wrapper_steps_name_their_python.py",
+      "tests/test_capability_matcher_proposals.py"
     ],
     [
       "tests/test_activation_audit_live_rows.py",
@@ -575,7 +584,8 @@
       "tests/test_verify_before_sync.py",
       "tests/test_verify_failure_evidence.py",
       "tests/test_verify_parallel_selftests.py",
-      "tests/test_vibe_isolated_types_proof.py"
+      "tests/test_vibe_isolated_types_proof.py",
+      "tests/test_langsmith_direct.py"
     ],
     [
       "tests/test_activation_audit_source_memo.py",
@@ -681,7 +691,8 @@
       "tests/test_storage_lifecycle.py",
       "tests/test_switch_states_tick_view.py",
       "tests/test_synthesis_promotion_coverage.py",
-      "tests/test_tick_evidence_projection.py"
+      "tests/test_tick_evidence_projection.py",
+      "tests/test_strategy_experiment.py"
     ]
   ]
 }
