@@ -101,7 +101,7 @@ def test_a_clean_idle_holder_is_reclaimed(layout, lane, capsys, monkeypatch):
 
 
 @pytest.mark.parametrize("lane", ["closer", "opener"])
-def test_b_dirty_holder_is_refused(layout, lane):
+def test_b_dirty_holder_is_refused(layout, lane, monkeypatch):
     canon, _ = layout
     branch = "pr-head" if lane == "closer" else OPENER_BRANCH
     if lane == "opener":
@@ -110,6 +110,10 @@ def test_b_dirty_holder_is_refused(layout, lane):
     dirty = holder / "nested" / "keep.txt"
     dirty.parent.mkdir()
     dirty.write_text("uncommitted work")
+    (holder / ".gitignore").write_text("ignored.txt\n")
+    (holder / "ignored.txt").write_text("ignored work must remain")
+    (holder / "staged.txt").write_text("staged work must remain")
+    git(holder, "add", "staged.txt")
     with pytest.raises(RuntimeError) as caught:
         provision.provision(TARGET, lane)
     assert str(holder) in str(caught.value)
@@ -118,10 +122,39 @@ def test_b_dirty_holder_is_refused(layout, lane):
     assert len(events()) == 1
     assert events()[0]["outcome"] == "failed"
     assert events()[0]["cause"] == "branch-held"
+    if lane == "closer":
+        original_head = git(holder, "rev-parse", "HEAD")
+        original_status = git(holder, "status", "--porcelain")
+        index = Path(git(holder, "rev-parse", "--git-path", "index"))
+        index_bytes = index.read_bytes()
+        monkeypatch.setenv("ORCH_PRESERVE_IDLE_DIRTY_HOLDER", "1")
+
+        def blind(_holder):
+            raise provision.ProbeBlindError("cannot establish idle holder")
+
+        monkeypatch.setattr(provision, "_live_holder_pids", blind)
+        with pytest.raises(provision.ProbeBlindError):
+            provision.provision(TARGET, lane)
+        assert git(holder, "branch", "--show-current") == branch
+        monkeypatch.setattr(provision, "_live_holder_pids", lambda _holder: set())
+        wt = provision.provision(TARGET, lane)
+        assert dirty.read_text() == "uncommitted work"
+        assert (holder / "ignored.txt").read_text() == "ignored work must remain"
+        assert (holder / "staged.txt").read_text() == "staged work must remain"
+        assert index.read_bytes() == index_bytes
+        assert git(holder, "rev-parse", "HEAD") == original_head
+        assert git(holder, "status", "--porcelain") == original_status
+        preserved = events()[-1]["preserved_branch"]
+        assert git(holder, "branch", "--show-current") == preserved
+        assert git(wt, "branch", "--show-current") == branch
+        assert git(wt, "status", "--porcelain") == ""
+        assert events()[-1]["cause"] == "dirty-holder-preserved"
 
 
-def test_c_live_holder_is_refused_naming_pid(layout):
+def test_c_live_holder_is_refused_naming_pid(layout, monkeypatch):
     holder = hold(layout)
+    (holder / "dirty.txt").write_text("preserve this live work")
+    monkeypatch.setenv("ORCH_PRESERVE_IDLE_DIRTY_HOLDER", "1")
     proc = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(300)", str(holder)],
         cwd=layout[0].parent,
