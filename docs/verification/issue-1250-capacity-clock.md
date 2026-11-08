@@ -165,3 +165,33 @@ creating `.git/index.lock`. The tested JavaScript and this record are committed
 in an isolated checkout at `/tmp/issue-1250-commit`; an applyable commit patch is
 exported to `/tmp/issue-1250-capacity-clock.patch`. The shared workspace retains
 the same reviewed changes for the automation's normal collection step.
+
+## Logical deadline boundary follow-up (2026-11-08)
+
+The executable Node regression now also checks admission exactly at and after
+the logical deadline, with wall time still behind it. Both cases must return
+`admission_deadline_expired`, empty targets, and no authority before sampling
+capacity, calling preparation or action, or creating state or its runlock. These
+checks complement the successful logical-clock capacity fixture: injecting a
+clock must preserve actual deadline expiry as well as prevent wall-time flakes.
+
+The existing Node command above now reports **6 tests, 6 passed, 0 failed**.
+In `/tmp/issue-1250-expiry-check`, changing only the production admission
+comparison from `deadline <= observed_at` to `deadline < observed_at` made the
+`logical-at-deadline` test fail: a runlock was incorrectly created. Restoring
+the production file returned all six tests to passing. Its restored SHA-256
+matches the workspace source:
+`1c30ed3a370932674faf0344fb1c02be42f125a2ae2e986e8623acebda82ba9d`.
+No production mutation remains in either checkout.
+
+The original named pytest case and the targeted pipeline pytest/coverage command
+still fail to start with `No module named pytest`. Black is also absent, and
+installing pytest, pytest-cov and Black into `/tmp` found no distributions.
+No Python files were changed in the final diff. Aggregate/combined coverage and
+both live sync checks remain unverified; their task checkboxes must stay open.
+
+Staging in the workspace fails with `Read-only file system` for
+`.git/index.lock`. The JavaScript test and this record are committed in the
+isolated checkout at `/tmp/issue-1250-expiry-check`; the commit patch is
+`/tmp/issue-1250-expiry-check.patch`. The workspace contains the same changes for
+the automation collection step.

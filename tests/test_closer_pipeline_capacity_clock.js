@@ -24,6 +24,7 @@ logical_now = [1_800_000_000.0]
 wall_now = [logical_now[0] - 60]
 capacity = {"io": 0, "low": 0, "exception": 0}
 actions = []
+admission_calls = []
 
 def logical_clock():
     return logical_now[0]
@@ -32,6 +33,7 @@ def wall_clock():
     return wall_now[0]
 
 def prepare(target, context):
+    admission_calls.append("prepare")
     return {
         "revision": "rev-1",
         "identity": target,
@@ -43,6 +45,10 @@ def act(target, context):
     actions.append(target)
     return {"status": "completed", "target_complete": True}
 
+def sample_capacity():
+    admission_calls.append("capacity")
+    return dict(capacity)
+
 with tempfile.TemporaryDirectory(prefix="capacity-clock-") as directory:
     state = Path(directory) / "state.json"
 
@@ -50,7 +56,12 @@ with tempfile.TemporaryDirectory(prefix="capacity-clock-") as directory:
         deadline_clock = wall_clock if mode in {"wall-deadline", "wall-both"} else logical_clock
         admission_clock = wall_clock if mode in {"wall-admission", "wall-both"} else logical_clock
         deadline = deadline_clock() + 0.06
-        wall_now[0] = logical_now[0] + 60
+        if mode in {"logical-at-deadline", "logical-past-deadline"}:
+            # Wall time still permits admission; the injected clock must govern
+            # expiry as well as the capacity fixture's successful admission.
+            logical_now[0] = deadline + (1 if mode == "logical-past-deadline" else 0)
+        else:
+            wall_now[0] = logical_now[0] + 60
         return run_pipeline(
             state,
             ["a"],
@@ -58,12 +69,22 @@ with tempfile.TemporaryDirectory(prefix="capacity-clock-") as directory:
             interpret=lambda target, context: {"substantive_needs": []},
             exception=lambda target, context: {"reviewed": True},
             act=act,
-            capacity_fn=lambda: dict(capacity),
+            capacity_fn=sample_capacity,
             deadline=deadline,
             now=admission_clock,
         )
 
     first = run()
+    if mode in {"logical-at-deadline", "logical-past-deadline"}:
+        print(json.dumps({
+            "receipt": first,
+            "admission_calls": admission_calls,
+            "actions": actions,
+            "state_exists": state.exists(),
+            "lock_exists": state.with_name(state.name + ".runlock").exists(),
+            "wall_now": wall_now[0],
+        }))
+        sys.exit(0)
     # Emit admission diagnostics before the original lookup so negative controls
     # must reproduce this KeyError, rather than any unrelated subprocess failure.
     if "a" not in first["targets"]:
@@ -120,6 +141,24 @@ function requireCapacityRecovery(result) {
 test('capacity defers and resumes with a logical clock across admission delay', () => {
   requireCapacityRecovery(runScenario('logical'));
 });
+
+for (const mode of ['logical-at-deadline', 'logical-past-deadline']) {
+  test(`${mode} refuses admission before callbacks or state creation`, () => {
+    const result = runScenario(mode);
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const observed = JSON.parse(result.stdout);
+    assert.equal(observed.receipt.reason, 'admission_deadline_expired');
+    assert.equal(observed.receipt.authority, false);
+    assert.deepEqual(observed.receipt.targets, {});
+    assert.ok(observed.wall_now < observed.receipt.deadline);
+    assert.ok(observed.receipt.now >= observed.receipt.deadline);
+    assert.deepEqual(observed.admission_calls, []);
+    assert.deepEqual(observed.actions, []);
+    assert.equal(observed.state_exists, false);
+    assert.equal(observed.lock_exists, false);
+  });
+}
 
 for (const mode of ['wall-deadline', 'wall-admission', 'wall-both']) {
   test(`${mode} reproduces the original missing-target failure and restoring clocks passes`, () => {
