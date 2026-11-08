@@ -33,7 +33,9 @@
     "tests/test_langsmith_direct.py",
     "tests/test_strategy_experiment.py",
     "tests/test_issue1232_ranked_coverage.py",
-    "tests/test_gate_dispatch_recovery.py"
+    "tests/test_gate_dispatch_recovery.py",
+    "tests/test_local_loop.py",
+    "tests/test_router_choose_mode.py"
   ],
   "shards": [
     [
@@ -484,7 +486,8 @@
       "tests/test_verifier_native_bot_origin.py",
       "tests/test_verify_pytest_workers.py",
       "tests/test_wrapper_steps_name_their_python.py",
-      "tests/test_capability_matcher_proposals.py"
+      "tests/test_capability_matcher_proposals.py",
+      "tests/test_local_loop.py"
     ],
     [
       "tests/test_activation_audit_live_rows.py",
@@ -591,7 +594,8 @@
       "tests/test_verify_failure_evidence.py",
       "tests/test_verify_parallel_selftests.py",
       "tests/test_vibe_isolated_types_proof.py",
-      "tests/test_langsmith_direct.py"
+      "tests/test_langsmith_direct.py",
+      "tests/test_router_choose_mode.py"
     ],
     [
       "tests/test_activation_audit_source_memo.py",
