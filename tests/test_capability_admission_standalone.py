@@ -84,6 +84,38 @@ def test_findability_context_fails_closed_when_advisor_raises(monkeypatch):
     assert context["consult_reach"]["unreadable"].startswith("RuntimeError: no")
 
 
+def test_external_caller_admission_uses_audit_proof_then_fresh_probe(monkeypatch):
+    """External callers must be admitted only from a verified proof, never a declaration."""
+    import capability_activation_audit as audit
+
+    cap = {"capability_id": "capability:external", "external_caller": {"kind": "controller"}}
+
+    # A current audit row is the authoritative result and avoids probing an external controller.
+    monkeypatch.setattr(audit, "external_caller", lambda _: pytest.fail("unexpected fresh probe"))
+    cached = {"exists": True, "detail": "seen"}
+    assert admission.req_caller_exists(
+        cap, {"audit_rows": {cap["capability_id"]: {"external_caller": cached}}}
+    ) == (True, "seen")
+
+    # With no cached proof, the fresh audit result decides the verdict.
+    monkeypatch.setattr(
+        audit,
+        "external_caller",
+        lambda _: {"exists": False, "detail": "controller heartbeat stale"},
+    )
+    assert admission.req_caller_exists(cap, {"audit_rows": {}}) == (
+        False,
+        "controller heartbeat stale",
+    )
+
+    # A malformed/missing probe result must fail closed with the operator-facing diagnosis.
+    monkeypatch.setattr(audit, "external_caller", lambda _: None)
+    assert admission.req_caller_exists(cap, {"audit_rows": {}}) == (
+        False,
+        "external caller not verified",
+    )
+
+
 def test_admit_and_preflight_report_requirement_exceptions_without_passing(monkeypatch):
     def broken_requirement(capability, context):
         raise RuntimeError("deliberate predicate failure")
