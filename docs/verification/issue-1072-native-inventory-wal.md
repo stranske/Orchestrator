@@ -582,3 +582,34 @@ local commit and `/tmp/orchestrator-1072-final-journal-location/change.bundle`;
 the checkout branch and remote are unchanged. Automatic approval review rejected
 the blocker comment and `needs-human` label because GitHub writes require approval
 while this run's policy is `never`; neither was published.
+
+## Journal appearing after an unavailable observation
+
+Checked on 2026-11-08 against checkout
+`8c9c53c78db933336533efb72603859d6acc27c4` plus this change. Retained-report
+inventory now rechecks an explicitly supplied journal location even when it was
+initially missing. A journal appearing during the final report read aborts the
+observation instead of leaving paid receipts hidden behind stale unavailability.
+Stable missing inputs still remain unavailable without creating a database.
+
+All four new regressions fail against the unmodified exporter and pass after
+the fix. They cover missing files, missing parent directories, dangling symlink
+targets and CLI refusal without partial JSON. Stable later observations preserve
+paid identities, unresolved receipt recovery steps and input bytes without
+authenticating receipts or authorizing dispatch. The retained-report, native
+inventory and live-cohort JavaScript suites pass all 173 tests (baseline: 169).
+Diagnostic and replay/publication unittests pass 32 and seven tests respectively;
+JavaScript syntax and `git diff --check` pass. No Python files changed. The
+required retrospective pytest command with `-m 'not slow'` cannot start because
+pytest is absent.
+
+These are fixture results. The configured canonical report and runtime directory
+are absent, and authentic original/journal locations and live deployment/mirror
+bindings remain unavailable. No dispatch, canonical grading, historical proof,
+live decision or operational task completion is claimed. PR #1081 was observed
+open with `draft=false`.
+
+Staging fails on the read-only `.git/index.lock` location. The focused change is
+preserved in an isolated local commit and
+`/tmp/orchestrator-1072-journal-arrival/change.bundle`; the checkout branch and
+remote are unchanged.

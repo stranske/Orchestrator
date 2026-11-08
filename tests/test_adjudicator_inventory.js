@@ -1724,6 +1724,87 @@ test('missing native evidence remains unavailable and never means zero attempts'
   assert.equal(fs.existsSync(path.join(root, 'absent')), false);
 });
 
+for (const missing of ['file', 'parent', 'symlink target']) {
+  test(`report inventory rejects a journal appearing after a missing ${missing} observation`, (t) => {
+    const { root, journal, options } = nativeJournal(t);
+    const retained = `${journal}.retained`;
+    const journalBytes = fs.readFileSync(journal);
+    const reportBytes = fs.readFileSync(options.report);
+    fs.renameSync(journal, retained);
+    let selected = journal;
+    if (missing === 'parent') selected = path.join(root, 'absent', 'native.sqlite3');
+    if (missing === 'symlink target') fs.symlinkSync(selected, path.join(root, 'selected.sqlite3'));
+    const inputs = { ...options, journal: missing === 'symlink target'
+      ? path.join(root, 'selected.sqlite3') : selected };
+    const read = fs.readFileSync;
+    let reportReads = 0;
+    fs.readFileSync = function observe(file, ...args) {
+      const bytes = read(file, ...args);
+      if (file === options.report && ++reportReads === 2) {
+        if (missing === 'parent') fs.mkdirSync(path.dirname(selected));
+        fs.renameSync(retained, selected);
+      }
+      return bytes;
+    };
+    try {
+      assert.throws(() => reportInventory(inputs), /native journal location changed during inventory/);
+    } finally {
+      fs.readFileSync = read;
+    }
+    assert.equal(reportReads, 2, 'the journal appears after its initial unavailable observation');
+    assert.deepEqual(fs.readFileSync(selected), journalBytes);
+    assert.deepEqual(fs.readFileSync(options.report), reportBytes);
+
+    // A stable later observation must retain the paid identities and UNKNOWN
+    // recovery boundary, without granting dispatch or grade authority.
+    const later = reportInventory(inputs);
+    assert.equal(later.pre_dispatch.native_journal.status, 'available');
+    assert.deepEqual(later.pre_dispatch.native_journal.attempts.map((row) => row.attempt_id),
+      ['a', 'b', 'c', 'd', 'e', 'f']);
+    assert.deepEqual(later.pre_dispatch.paid_identity_reconciliation.unresolved_without_backend_id, ['b']);
+    assert.deepEqual(later.paid_attempts.map((row) => row.backend_run_id),
+      ['primary', 'prior', 'oldest', 'prior']);
+    assert.equal(later.receipt_authority, 'not_authenticated_by_inventory');
+    assert.equal(later.dispatch_authorized, false);
+    assert.ok(!JSON.stringify(later).includes('private'));
+    assert.deepEqual(fs.readFileSync(selected), journalBytes);
+    assert.deepEqual(fs.readFileSync(options.report), reportBytes);
+  });
+}
+
+test('report CLI emits no partial inventory when a missing journal appears', (t) => {
+  const { root, journal, options } = nativeJournal(t);
+  const retained = `${journal}.retained`;
+  const journalBytes = fs.readFileSync(journal);
+  const reportBytes = fs.readFileSync(options.report);
+  fs.renameSync(journal, retained);
+  const hook = path.join(root, 'journal-arrival.cjs');
+  fs.writeFileSync(hook, `
+const fs = require('node:fs');
+const [report, retained, journal] = ${JSON.stringify([options.report, retained, journal])};
+const read = fs.readFileSync;
+let reportReads = 0;
+fs.readFileSync = function observe(file, ...args) {
+  const bytes = read(file, ...args);
+  if (file === report && ++reportReads === 2) fs.renameSync(retained, journal);
+  return bytes;
+};
+`);
+  const result = execute(root, process.execPath, ['--require', hook, script,
+    '--report', options.report, '--journal', journal, '--observed-at', String(now),
+    '--evidence-class', options.evidenceClass, '--evidence-reference', options.evidenceReference]);
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(result.stdout, '', 'unavailable evidence must not escape as a partial inventory');
+  assert.match(result.stderr, /native journal location changed during inventory/);
+  assert.ok(!result.stderr.includes('private'));
+  assert.deepEqual(fs.readFileSync(journal), journalBytes);
+  assert.deepEqual(fs.readFileSync(options.report), reportBytes);
+  const later = reportInventory(options);
+  assert.equal(later.pre_dispatch.native_journal.attempts.length, 6);
+  assert.equal(later.dispatch_authorized, false);
+  assert.deepEqual(fs.readFileSync(journal), journalBytes);
+});
+
 test('an observed empty journal cannot establish writer ownership or authorize spending', (t) => {
   const { journal, options } = nativeJournal(t);
   const connection = new DatabaseSync(journal);

@@ -316,7 +316,7 @@ function journalInventory(journal, locationChecks) {
     // Keep the selected journal attributable through the final report reads,
     // even after SQLite closes its snapshot. Equal replacement bytes cannot
     // establish that the receipt locators still belong to this location.
-    const checkJournalLocation = pinFileLocation(journal, 'native journal');
+    const checkJournalLocation = pinFileLocation(journal, 'native journal', { allowMissing: true });
     locationChecks.push(checkJournalLocation);
     connection = new DatabaseSync(journal, { readOnly: true });
     connection.exec('BEGIN');
@@ -500,9 +500,25 @@ function reconcileNativeLocators(observations, journal) {
 
 // Equal bytes cannot detect a replaced file or a retargeted symlink. Keep the
 // selected inventory file bound to one location across all content reads.
-function pinFileLocation(file, label) {
+function pinFileLocation(file, label, { allowMissing = false } = {}) {
   if (typeof file !== 'string' || !file.trim()) throw new Error(`${label} path is required`);
-  const resolved = fs.realpathSync(file);
+  let resolved;
+  try {
+    resolved = fs.realpathSync(file);
+  } catch (error) {
+    if (!allowMissing || error.code !== 'ENOENT') throw error;
+    // An unavailable journal is still an observation. A producer can create
+    // the selected file (or a dangling link's target) during the report read;
+    // do not return stale unavailability while paid receipts now exist there.
+    return () => {
+      try {
+        fs.realpathSync(file);
+      } catch (currentError) {
+        if (currentError.code === 'ENOENT') return;
+      }
+      throw new Error(`${label} location changed during inventory`);
+    };
+  }
   const { dev, ino } = fs.statSync(resolved, { bigint: true });
   return () => {
     let current;
