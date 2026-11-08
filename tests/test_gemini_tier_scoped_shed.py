@@ -152,3 +152,42 @@ def test_trial_argon_arm_routes_normally_while_argon_is_capped(tmp_path, monkeyp
 
 def test_no_scoped_shed_prints_that_none_is_active(shed_dir):
     assert capacity.tier_ceiling_exports(environ={}) == ["echo '  tier ceilings: none active'"]
+
+
+def test_marker_text_cannot_execute_when_the_tick_evals_the_exports(shed_dir, tmp_path):
+    import subprocess
+
+    pwned = tmp_path / "pwned"
+    (shed_dir / "gemini").write_text(
+        json.dumps(
+            {
+                "category": "quota",
+                "created_at": 1,
+                "expires_at": int(time.time()) + 600,
+                "tier_scope": "full",
+                "model": f"x'; touch {pwned}; echo '$(touch {pwned})`touch {pwned}`",
+            }
+        )
+    )
+    (shed_dir / "bad;name").write_text(
+        json.dumps(
+            {
+                "category": "quota",
+                "created_at": 1,
+                "expires_at": int(time.time()) + 600,
+                "tier_scope": "full",
+            }
+        )
+    )
+    lines = capacity.tier_ceiling_exports(environ={})
+    assert not any(
+        "bad;name" in line for line in lines
+    ), "an agent name that is not a variable is skipped"
+    out = subprocess.run(
+        ["bash", "-c", 'eval "$1"; echo "cap=$ORCH_GEMINI_MAX_TIER"', "_", "\n".join(lines)],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    assert not pwned.exists(), "marker text executed"
+    assert "cap=mid" in out and "capped at mid" in out

@@ -53,6 +53,8 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -578,23 +580,29 @@ def tier_ceilings(*, now: float | None = None, shed_dir: Path | None = None) -> 
 def tier_ceiling_exports(environ=None, **kwargs) -> list[str]:
     """Shell lines for the tick: `export ORCH_<AGENT>_MAX_TIER=<ceiling>` plus one report line each.
 
-    An explicit owner ceiling already in the environment is never overridden.
+    The tick `eval`s these, so every marker-derived word is shell-quoted and an agent name that
+    cannot form a variable name is skipped. An explicit owner ceiling is never overridden.
     """
     environ = os.environ if environ is None else environ
     lines = []
     for agent, row in tier_ceilings(**kwargs).items():
+        if not re.fullmatch(r"[A-Za-z0-9_]+", agent):
+            continue
         name = f"ORCH_{agent.upper()}_MAX_TIER"
         until = utc_stamp(row["until"]) if row.get("until") else "?"
+        model = row.get("model")
         if environ.get(name, "").strip():
-            lines.append(
-                f"echo '  tier ceiling: {agent} keeps explicit {name}; {row.get('model')} exhausted until {until}'"
+            message = (
+                f"  tier ceiling: {agent} keeps explicit {name}; {model} exhausted until {until}"
             )
+            lines.append("echo " + shlex.quote(message))
             continue
-        lines.append(f"export {name}={row['ceiling']}")
-        lines.append(
-            f"echo '  tier ceiling: {agent} capped at {row['ceiling']} ({row.get('model')} exhausted until {until})'"
+        lines.append(f"export {name}={shlex.quote(row['ceiling'])}")
+        message = (
+            f"  tier ceiling: {agent} capped at {row['ceiling']} ({model} exhausted until {until})"
         )
-    return lines or ["echo '  tier ceilings: none active'"]
+        lines.append("echo " + shlex.quote(message))
+    return lines or ["echo " + shlex.quote("  tier ceilings: none active")]
 
 
 _BUILD_PACING_USAGE: ContextVar[dict | None] = ContextVar("build_pacing_usage", default=None)
