@@ -1,0 +1,147 @@
+version: 1
+issue: 1250
+base: main
+branch: codex/issue-1250
+tasks:
+  - id: task-01
+    title: 'Fix the source of `KeyError: ''a''` in `tests/test_closer_pipeline.py::test_capacity_is_read_fresh_and_zero_defers`,
+      reported by `Pre-existing failure: verify.py aggregate + combined coverage fails
+      on`.'
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes:
+      - '2026-11-08T17:08:09Z failure (run 42503358077): status=failure'
+  - id: task-02
+    title: 'Reproduce the KeyError: ''a'' locally by running tests/test_closer_pipeline.py::test_capacity_is_read_fresh_and_zero_defers
+      (verify: tests pass)'
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-03
+    title: 'record the failing traceback (verify: confirm completion in repo)'
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-04
+    title: 'the code path that looks up key ''a''. (verify: confirm completion in
+      repo)'
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-05
+    title: 'Fix the code or test fixture that raises KeyError: ''a'' so that test_capacity_is_read_fresh_and_zero_defers
+      passes. (verify: confirm completion in repo)'
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-06
+    title: Verify that the verify.py aggregate
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-07
+    title: 'combined coverage step passes locally after the fix, with no other test
+      regressions. (verify: confirm completion in repo)'
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-08
+    title: Add or extend a regression test for the reported failure using the source's
+      test runner (`pytest` or `node --test`).
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-09
+    title: The named check passes on regenerated sync PR stranske/Orchestrator#1247,
+      verified with `gh run view <run-id>`, and the repository's test command passes
+      locally.
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-10
+    title: Reintroducing the reported behavior makes the regression test fail; reverting
+      restores a passing result.
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-11
+    title: The next sync-core round classifies stranske/Orchestrator#1247 without
+      this finding.
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-12
+    title: 'Fix the failure named in the title (`Pre-existing failure: verify.py aggregate
+      + combined coverage fails on`) at its source; the failing check''s log is linked
+      under Evidence and the sync PR is stranske/Orchestrator#1247.'
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-13
+    title: Add or extend a test that reproduces the failure and passes after the fix
+      (`pytest` or `node --test`, whichever the source uses).
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-14
+    title: The named check passes on regenerated sync PR stranske/Orchestrator#1247,
+      verified with `gh run view <run-id>`. (The agent cannot retry or re-run CI pipelines.
+      It also cannot modify `.github/workflows/maint-68-sync-consumer-repos.yml`,
+      which regenerates the sync PR. Regeneration and verification on the remote PR
+      depend on an external workflow. | Limit the agent's scope to the source fix,
+      the regression test, and a passing local test run. A human or the sync workflow
+      handles regeneration and the remote `gh run view` check.)
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-15
+    title: The next sync-core round classifies stranske/Orchestrator#1247 without
+      this finding. (This depends on a future external sync-core run that the agent
+      cannot trigger, observe, or retry. | Mark it as a post-merge human verification
+      step, not an agent deliverable.)
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-16
+    title: Reintroducing the reported behavior makes the regression test fail; reverting
+      restores a passing result. (This is a deliberate-break-and-revert procedure.
+      It is feasible locally but awkward for an agent to carry out as a committed
+      change, and it must not leave the break in the final diff. | Ask the agent to
+      document in the PR description the local break-and-revert it ran, or to show
+      the test failing against the pre-fix code via a stash or checkout. Do not commit
+      the break.)
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
