@@ -440,6 +440,20 @@ def _live_holder_pids(holder: Path) -> set[str]:
 
 def _preserve_dirty_holder(holder: Path, branch: str, event: dict) -> None:
     """Free an idle branch in place; retain every tracked, untracked and ignored byte."""
+    import claims
+
+    repo, _ = parse_target(event["target"])
+    prefix = repo_slug(repo) + "__"
+    number = (
+        re.match(r"(\d+)__", holder.name[len(prefix) :]) if holder.name.startswith(prefix) else None
+    )
+    holder_target = f"{repo}#{number[1]}" if number else event["target"]
+    claim_path = claims._claims_dir() / claims._slug(holder_target)
+    if claim_path.exists() and (claims._read_meta(claim_path) or {}).get("pid") != os.getpid():
+        raise RuntimeError(
+            f"native holder claim for {holder_target} remains; blocking 1, drainable 1: "
+            "its original owner must reconcile and relay terminal custody"
+        )
     try:
         live = _live_holder_pids(holder)
     except ProbeBlindError:
@@ -515,7 +529,10 @@ def _reclaim_branch_holder(canon: Path, branch: str, wt: Path, event: dict) -> N
         if status.returncode != 0:
             raise RuntimeError(f"cannot inspect holder {holder}: {status.stderr.strip()}")
         if status.stdout.strip():
-            if os.environ.get("ORCH_PRESERVE_IDLE_DIRTY_HOLDER") == "1":
+            if (
+                event.get("lane") == "closer"
+                and os.environ.get("ORCH_PRESERVE_IDLE_DIRTY_HOLDER") == "1"
+            ):
                 _preserve_dirty_holder(holder, branch, event)
                 continue
             raise RuntimeError(

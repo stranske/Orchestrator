@@ -103,6 +103,8 @@ def test_a_clean_idle_holder_is_reclaimed(layout, lane, capsys, monkeypatch):
 @pytest.mark.parametrize("lane", ["closer", "opener"])
 def test_b_dirty_holder_is_refused(layout, lane, monkeypatch):
     canon, _ = layout
+    monkeypatch.delenv("ORCH_PRESERVE_IDLE_DIRTY_HOLDER", raising=False)
+    monkeypatch.setenv("HANDOFF_DIR", str(canon.parent / "private-handoff"))
     branch = "pr-head" if lane == "closer" else OPENER_BRANCH
     if lane == "opener":
         git(canon, "branch", branch)
@@ -128,6 +130,13 @@ def test_b_dirty_holder_is_refused(layout, lane, monkeypatch):
         index = Path(git(holder, "rev-parse", "--git-path", "index"))
         index_bytes = index.read_bytes()
         monkeypatch.setenv("ORCH_PRESERVE_IDLE_DIRTY_HOLDER", "1")
+        import claims
+
+        assert claims.claim(TARGET, "original-owner", pid=99999999)
+        with pytest.raises(RuntimeError, match="native holder claim"):
+            provision.provision(TARGET, lane)
+        assert dirty.read_text() == "uncommitted work"
+        assert claims.release(TARGET, "original-owner")
 
         def blind(_holder):
             raise provision.ProbeBlindError("cannot establish idle holder")
