@@ -401,10 +401,11 @@ def test_followed_pick_is_graded_through_linked_run(followed_pick):
 
 
 @pytest.mark.parametrize("journal_mode", ["DELETE", "WAL"])
-def test_summary_line_reads_while_brain_write_locked(followed_pick, journal_mode):
-    # Even a pending legacy backfill must not turn the report into a writer.
+@pytest.mark.parametrize("assignment", [None, "assigned"])
+def test_summary_line_reads_while_brain_write_locked(followed_pick, journal_mode, assignment):
+    # Cover current rows as well as rows awaiting the legacy assignment backfill.
     with closing(feedback._conn()) as conn, conn:
-        conn.execute("UPDATE runs SET assignment=NULL WHERE run_id='keepalive-run'")
+        conn.execute("UPDATE runs SET assignment=? WHERE run_id='keepalive-run'", (assignment,))
     with closing(sqlite3.connect(feedback.DB_PATH)) as writer:
         actual_mode = writer.execute(f"PRAGMA journal_mode={journal_mode}").fetchone()[0]
         assert actual_mode.upper() == journal_mode
@@ -417,6 +418,10 @@ def test_summary_line_reads_while_brain_write_locked(followed_pick, journal_mode
             assert "triage top-1 merged+durable 100.0% (1 judged)" in text
         finally:
             writer.rollback()
+        # Reporting must leave even pending migrations untouched.
+        assert writer.execute(
+            "SELECT assignment FROM runs WHERE run_id='keepalive-run'"
+        ).fetchone() == (assignment,)
 
 
 def test_each_followed_consumption_uses_its_own_run(followed_pick):
