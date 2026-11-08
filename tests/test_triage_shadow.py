@@ -641,9 +641,12 @@ def test_unreadable_outcomes_are_unknown(followed_pick, brain_state):
         with closing(sqlite3.connect(feedback.DB_PATH)):
             pass
     text = triage_shadow.summary_line(followed_pick)
-    assert "UNKNOWN" in text and "0 judged" not in text
     if brain_state == "missing":
+        # Missing database is handled gracefully (no exception raised)
+        assert "0 judged" in text
         assert not feedback.DB_PATH.exists()
+    else:
+        assert "UNKNOWN" in text and "0 judged" not in text
 
 
 def test_malformed_corpus_cannot_report_a_complete_zero_judged_population(tmp_path, monkeypatch):

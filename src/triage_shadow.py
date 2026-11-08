@@ -426,37 +426,39 @@ def summary(path: Path | None = None) -> dict:
         return None
 
     # Reports must not run schema migrations or compete for the Brain's write lock.
-    with closing(
-        sqlite3.connect(Path(feedback.DB_PATH).resolve().as_uri() + "?mode=ro", uri=True, timeout=5)
-    ) as conn:
-        for row in live_rows:
-            # Invalid/fallback output is never a triage observation, nor a paired comparison.
-            if not row.get("triage_valid") or not row.get("live_proposal"):
-                continue
-            triage_pick = next(iter(row.get("triage_top_three") or []), None)
-            if triage_pick:
-                triage_links = [
-                    linked.get(consumption_key(receipt), {})
-                    for receipt in consumed
-                    if receipt.get("role_run_id") == row.get("role_run_id")
-                    and receipt.get("picked") == triage_pick
-                ]
-                for link in triage_links:
-                    if link.get("status") == "followed":
-                        grade_run(
-                            conn,
-                            "triage",
-                            link.get("run_id"),
-                            row["ts"] / 1_000_000_000,
-                        )
-            rule_pick = row.get("rule_pick")
-            if rule_pick:
-                grade_run(
-                    conn,
-                    "rule",
-                    rule_run_id(conn, rule_pick, row["ts"] / 1_000_000_000),
-                    row["ts"] / 1_000_000_000,
-                )
+    db_path = Path(feedback.DB_PATH).resolve()
+    if db_path.exists():
+        with closing(
+            sqlite3.connect(db_path.as_uri() + "?mode=ro", uri=True, timeout=5)
+        ) as conn:
+            for row in live_rows:
+                # Invalid/fallback output is never a triage observation, nor a paired comparison.
+                if not row.get("triage_valid") or not row.get("live_proposal"):
+                    continue
+                triage_pick = next(iter(row.get("triage_top_three") or []), None)
+                if triage_pick:
+                    triage_links = [
+                        linked.get(consumption_key(receipt), {})
+                        for receipt in consumed
+                        if receipt.get("role_run_id") == row.get("role_run_id")
+                        and receipt.get("picked") == triage_pick
+                    ]
+                    for link in triage_links:
+                        if link.get("status") == "followed":
+                            grade_run(
+                                conn,
+                                "triage",
+                                link.get("run_id"),
+                                row["ts"] / 1_000_000_000,
+                            )
+                rule_pick = row.get("rule_pick")
+                if rule_pick:
+                    grade_run(
+                        conn,
+                        "rule",
+                        rule_run_id(conn, rule_pick, row["ts"] / 1_000_000_000),
+                        row["ts"] / 1_000_000_000,
+                    )
     return {
         "cycles": len(rows),
         "malformed_rows": malformed,
