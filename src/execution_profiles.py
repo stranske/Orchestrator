@@ -17,6 +17,8 @@ import time
 from collections.abc import Mapping
 from typing import Any
 
+import model_table
+
 PROFILE_SCHEMA_VERSION = 1
 PROFILE_POLICY_VERSION = "execution-profile-policy-v2"
 MIN_RESOLVED_COVERAGE = float(os.environ.get("ORCH_PROFILE_MIN_RESOLVED_COVERAGE", "0.8"))
@@ -485,27 +487,22 @@ CLOSER_CANDIDATE_MODELS = (
     _closer_candidate("muse", "Muse Wonder", "muse-wonder-1.0"),
 )
 
-# Production defaults are task-specific. Astra High remains an explicit escalation;
-# immutable trial profiles stay addressable without being chosen for routine work.
+# Production defaults are task-specific and come from the shared model table
+# (model_table.TABLE_JSON, a copy of stranske/Workflows .github/agents/model-table.json):
+# task type -> kind of work -> (model, reasoning level) -> the one active profile carrying that
+# pair. Astra High remains an explicit escalation (`hardest`); immutable trial profiles stay
+# addressable without being chosen for routine work.
 CODEX_TASK_PROFILES = {
-    "implement": "codex-6.1-sol-high",
-    "epic": "codex-6-astra-medium",
-    "cross_repo": "codex-6-astra-medium",
-    "runtime_ac": "codex-6-astra-medium",
-    "mechanical": "codex-5.6-terra-medium",
-    "testgen": "codex-5.6-terra-medium",
-    "codemod": "codex-5.6-terra-medium",
-    "polish": "codex-5.6-terra-medium",
-    "review": "codex-5.6-terra-medium",
-    "closer": "codex-6.1-sol-medium",
-    "coordinator": "codex-6.1-sol-medium",
+    task_type: model_table.codex_profile_for(kind, PROFILE_REGISTRY, PROFILE_RETIREMENTS)
+    for task_type, kind in model_table.TASK_WORK_KINDS.items()
 }
 CODEX_OFFLOAD_PROFILES = {
-    "cheap": "codex-6-luna-low",
-    "mid": "codex-5.6-terra-medium",
-    "full": "codex-6.1-sol-high",
-    "assess": "codex-6.1-sol-medium",
+    mode: model_table.codex_profile_for(kind, PROFILE_REGISTRY, PROFILE_RETIREMENTS)
+    for mode, kind in model_table.MODE_WORK_KINDS.items()
 }
+CODEX_DEFAULT_TASK_PROFILE = model_table.codex_profile_for(
+    model_table.DEFAULT_TASK_WORK_KIND, PROFILE_REGISTRY, PROFILE_RETIREMENTS
+)
 
 
 def resolve_production_profile_id(profile_id: str) -> str:
@@ -528,7 +525,7 @@ def default_codex_profile(task_type: str, mode: str | None = None) -> str:
     if task_type == "offload":
         profile_id = CODEX_OFFLOAD_PROFILES.get(mode or "mid", CODEX_OFFLOAD_PROFILES["mid"])
     else:
-        profile_id = CODEX_TASK_PROFILES.get(task_type, "codex-6.1-sol-medium")
+        profile_id = CODEX_TASK_PROFILES.get(task_type, CODEX_DEFAULT_TASK_PROFILE)
     return resolve_production_profile_id(profile_id)
 
 
