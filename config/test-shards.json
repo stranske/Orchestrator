@@ -34,10 +34,12 @@
     "tests/test_capability_opportunity.py",
     "tests/test_judge_reliability.py",
     "tests/test_langsmith_direct.py",
-    "tests/test_strategy_experiment.py"
+    "tests/test_strategy_experiment.py",
+    "tests/test_issue1232_ranked_coverage.py"
   ],
   "shards": [
     [
+      "tests/test_issue1232_ranked_coverage.py",
       "tests/test_adjudicator_collected_input.py",
       "tests/test_adjudicator_diagnostics.py",
       "tests/test_adjudicator_inventory.py",
