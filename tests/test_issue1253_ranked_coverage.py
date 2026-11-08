@@ -289,6 +289,20 @@ class RankedCoverageTests(unittest.TestCase):
         self.assertEqual(json.loads(path.read_text()), {"previous": True})
         self.assertEqual(list(self.root.iterdir()), [path])
 
+    def test_miner_sync_failure_never_publishes_uncommitted_state(self):
+        path = self.write_json("state.json", {"previous": True})
+        previous = path.read_bytes()
+        with (
+            patch.object(miner.os, "fsync", side_effect=OSError("sync failed")) as sync,
+            patch.object(miner.os, "replace") as publish,
+        ):
+            with self.assertRaisesRegex(OSError, "sync failed"):
+                miner._write_json_atomic(path, {"replacement": True})
+        sync.assert_called_once()
+        publish.assert_not_called()
+        self.assertEqual(path.read_bytes(), previous)
+        self.assertEqual(list(self.root.iterdir()), [path])
+
     def test_miner_load_state_rejects_unknown_schema_or_version_without_replacing_evidence(self):
         instance = miner.PatternMiner()
         candidate = self.candidate()
