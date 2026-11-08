@@ -398,3 +398,40 @@ def test_unknown_branch_prefix_gets_a_runnable_agent():
     node["headRefName"] = "claude-code/issue-7"
     st = ll.Tick(FakeGH([]), apply=False).new_state(node, "o/r#3", {"number": 7}, "o/r")
     assert st["agent"] == "claude" and st["rounds"][0]["log"].endswith(".claude.log")
+
+
+def test_repository_exclusion_is_in_both_remote_queries(monkeypatch):
+    queries = []
+
+    def gh(args, **kwargs):
+        queries.append(next(a[2:] for a in args if a.startswith("q=")))
+        return json.dumps({"data": {"search": {"nodes": [], "pageInfo": {"hasNextPage": False}}}})
+
+    monkeypatch.setattr(ll, "_gh", gh)
+    assert ll.GitHub().looped_prs() == []
+    assert ll.GitHub().merged_prs() == []
+    assert len(queries) == 2
+    assert all("-repo:stranske/collab-admin" in q for q in queries)
+
+
+def test_excluded_inventory_never_enters_disposition_or_counts():
+    pr = pr_node()
+    pr["repository"]["nameWithOwner"] = "STRANSKE/Collab-Admin"
+    gh = FakeGH([pr])
+    tick, _, _ = make_tick(gh)
+    assert tick.step(pr) == {}
+    assert "prs 0" in tick.run()
+    assert tick.items == []
+    assert tick.counts == {}
+    assert gh.calls == []
+
+
+def test_excluded_cache_cannot_claim_custody_or_appear_in_status(monkeypatch):
+    target = "stranske/Collab-Admin#1"
+    ll.STATE_DIR.mkdir()
+    # An unreadable/malformed cached entry must be skipped by its filename.
+    ll.state_path(target).mkdir()
+    assert ll.owns(target) is None
+    gh = FakeGH([])
+    monkeypatch.setattr(gh, "merged_prs", lambda: [], raising=False)
+    assert ll.status(gh)["looped"] == 0
