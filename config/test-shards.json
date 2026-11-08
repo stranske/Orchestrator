@@ -37,11 +37,15 @@
     "tests/test_strategy_experiment.py",
     "tests/test_issue1232_ranked_coverage.py",
     "tests/test_gate_dispatch_recovery.py",
+    "tests/test_issue1235_ranked_coverage.py",
+    "tests/test_issue1235_supervisor_recovery.py",
     "tests/test_local_loop.py",
     "tests/test_router_choose_mode.py"
   ],
   "shards": [
     [
+      "tests/test_issue1235_ranked_coverage.py",
+      "tests/test_issue1235_supervisor_recovery.py",
       "tests/test_issue1232_ranked_coverage.py",
       "tests/test_adjudicator_collected_input.py",
       "tests/test_adjudicator_diagnostics.py",
