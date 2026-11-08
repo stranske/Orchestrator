@@ -975,7 +975,6 @@ jobs:
               original = event.get("pull_request")
               if original and (
                   original.get("number") != resolved.get("number")
-                  or original.get("head", {}).get("sha") != resolved.get("head", {}).get("sha")
                   or original.get("head", {}).get("repo", {}).get("full_name")
                   != resolved.get("head", {}).get("repo", {}).get("full_name")
               ):
