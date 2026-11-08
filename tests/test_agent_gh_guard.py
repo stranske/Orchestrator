@@ -264,3 +264,79 @@ def test_owner_zlogout_runs_once_for_login_shell_and_preserves_status(world):
         ran = _agent(world, f"exec {shlex.quote(ZSH)} {flags} 'gh pr view 1'")
         assert ran.returncode == 0
         assert not logout.exists(), "only interactive login shells source the owner's logout file"
+
+
+# THE SHARED-JOB RULE (owner decision 2026-11-08). Dispatched agents ran these seven production
+# dispatches between 2026-11-04 and 2026-11-08 (read from the Codex session logs, abbreviated to the
+# arguments the guard decides on). The 13:34Z Maint 68 stalled the sync candidate lane ~2.7 hours.
+MEASURED_PRODUCTION_DISPATCHES = (
+    "workflow run maint-71-merge-sync-prs.yml --repo stranske/Workflows --ref main "
+    "-f repos=stranske/Travel-Plan-Permission -f active_sync_hash=candidate",
+    "workflow run maint-68-sync-consumer-repos.yml --repo stranske/Workflows --ref main "
+    "-f phase=canary -f repos=stranske/Portable-Alpha-Extension-Model -f delivery_scope=full",
+    "workflow run maint-52-sync-dev-versions.yml --repo stranske/Workflows --ref main "
+    "-f repos=stranske/trip-planner -f dry_run=false",
+    "workflow run maint-68-sync-consumer-repos.yml --repo stranske/Workflows --ref main "
+    "-f repos=stranske/Portable-Alpha-Extension-Model -f phase=canary -f delivery_scope=source-delta",
+    "workflow run maint-71-merge-sync-prs.yml --repo stranske/Workflows --ref main "
+    "-f repos=stranske/Portable-Alpha-Extension-Model -f active_sync_hash=candidate",
+    "workflow run maint-71-merge-sync-prs.yml --repo stranske/Workflows -f repos=stranske/Orchestrator "
+    "-f auto_merge=false -f active_sync_hash=a478e45c16b6",
+    "workflow run maint-71-merge-sync-prs.yml --repo stranske/Workflows -f repos=stranske/Orchestrator "
+    "-f auto_merge=false -f cleanup_branches=false -f dry_run=false",
+)
+# The same agents' own-branch CI in the same window, plus reads: these must keep reaching gh.
+MEASURED_OWN_BRANCH_CI = (
+    "workflow run pr-00-gate.yml --ref orch/issue-4170 -f pr_number=4396",
+    "workflow run selftest-ci.yml --repo stranske/Workflows --ref codex/issue-4550",
+    "workflow run ci.yml --repo stranske/Orchestrator --ref closer-r1/issue-1242",
+    "workflow run health-42-actionlint.yml --repo stranske/Workflows --ref codex/issue-3978",
+    "run rerun 42501725219 --repo stranske/Orchestrator --failed",
+    "run list --workflow maint-68-sync-consumer-repos.yml --repo stranske/Workflows --limit 3",
+    "workflow view maint-71-merge-sync-prs.yml --repo stranske/Workflows",
+    "api repos/stranske/Workflows/actions/workflows/maint-68-sync-consumer-repos.yml/runs",
+)
+
+
+@pytest.mark.parametrize("args", MEASURED_PRODUCTION_DISPATCHES)
+def test_the_measured_production_dispatches_are_refused(world, args):
+    ran = _agent(world, f"exec gh {args}")
+    assert ran.returncode == dispatcher.GH_GUARD_EXIT, (args, ran.stderr)
+    assert "orchestrator gh guard" in ran.stderr and "final message" in ran.stderr, ran.stderr
+    assert _logged(world) == "", "the real gh ran"
+
+
+@pytest.mark.parametrize("args", MEASURED_OWN_BRANCH_CI)
+def test_own_branch_ci_and_reads_still_reach_the_real_gh(world, args):
+    ran = _agent(world, f"exec gh {args}")
+    assert ran.returncode == 0, (args, ran.stderr)
+    assert _logged(world) == f"REAL-GH {args}\n"
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+def test_a_production_dispatch_is_refused_in_every_shell(world, shell):
+    ran = _agent(world, _in(shell, MEASURED_PRODUCTION_DISPATCHES[3]))
+    assert ran.returncode == dispatcher.GH_GUARD_EXIT, (ran.returncode, ran.stderr)
+    assert _logged(world) == ""
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        "workflow run ci.yml",  # no --ref: gh runs it on the default branch
+        "workflow run ci.yml --ref=main",
+        "workflow run ci.yml -r master",
+        "workflow run ci.yml --ref refs/heads/main",
+        "workflow run 'Maint 71 Merge Sync PRs' --ref codex/issue-1",  # by display name, own branch
+        "workflow run .github/workflows/maint-68-sync-consumer-repos.yml --ref codex/issue-1",
+        "--repo stranske/Workflows workflow run maint-82-sync-dependency-campaign.yml --ref x",
+        "workflow enable maint-82-sync-dependency-campaign.yml --repo stranske/Workflows",
+        "workflow disable ci.yml",
+        "api -X POST repos/stranske/Workflows/actions/workflows/ci.yml/dispatches -f ref=x",
+        "api --method POST repos/stranske/Workflows/dispatches -f event_type=sync",
+    ],
+)
+def test_every_production_dispatch_form_is_refused(world, args):
+    ran = _agent(world, f"exec bash -lc {shlex.quote('gh ' + args)}")
+    assert ran.returncode == dispatcher.GH_GUARD_EXIT, (args, ran.stderr)
+    assert _logged(world) == ""

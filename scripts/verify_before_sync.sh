@@ -5,6 +5,9 @@
 # session's work, so on any one tree only the latest run counts. CI already runs the same suite on
 # every PR head and on main. What only THIS machine can check is the populated capability ledger,
 # the installed agent CLIs and the flat mirror shape, so this is the one local run a sync needs.
+# SUPERSEDED AS THE DEFAULT (owner, 2026-11-08): a sync now deploys the commit CI verified, with a
+# load check and rollback; this script runs only under `orch-mirror-sync.sh --full-local-verify`
+# and in CI's exec-mirror job. docs/MIRROR_SYNC_PATCH.md, "The verdict is CI's".
 # The sync wrapper used to take it AFTER copying into the live mirror: a red verdict arrived after
 # launchd could already run the code, and a sync landing during a mirror run left that run reading
 # a half-old, half-new tree.
