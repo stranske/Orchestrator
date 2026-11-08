@@ -36,6 +36,7 @@
     "tests/test_gate_dispatch_recovery.py",
     "tests/test_issue1235_ranked_coverage.py",
     "tests/test_issue1235_supervisor_recovery.py",
+    "tests/test_issue_1257_pr_identity_check.py",
     "tests/test_local_loop.py",
     "tests/test_router_choose_mode.py",
     "tests/test_model_table.py"
@@ -570,6 +571,7 @@
       "tests/test_issue802_lane_c_round5.py",
       "tests/test_issue828_round2_coverage.py",
       "tests/test_issue853_ranked_coverage.py",
+      "tests/test_issue_1257_pr_identity_check.py",
       "tests/test_issue_size_quality.py",
       "tests/test_keepalive_replacement_rows.py",
       "tests/test_keepalive_spec_retry.py",
