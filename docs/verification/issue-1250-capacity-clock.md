@@ -71,3 +71,42 @@ formatting gate; no new task checkboxes are complete. The existing PR checkbox
 claiming successful aggregate verification is not supported by these results.
 Posting the blocker comment and adding `needs-human` were again rejected because
 the GitHub tools require approval and the approval policy is `never`.
+
+## Clock-source regression follow-up (2026-11-08)
+
+The existing case now retains the original 60-millisecond budget and starts wall
+time 60 seconds behind the injected logical clock. The wrapper advances wall
+time to 60 seconds ahead before production admission. This detects either half
+of the helper reverting independently: a wall-time deadline is already expired
+on the logical clock, and a wall-time admission check sees the logical deadline
+as expired. The previous equal-clock starting point did not detect a helper
+that computed only the deadline from wall time. Resumption advances the logical
+clock by 30 seconds and repeats the wall-clock crossing against the same state.
+No collected cases or collection floors changed.
+
+A standard-library harness called the real `run_pipeline` with these clock
+values, the existing callback shape, and the original budget. Results:
+
+```text
+wall deadline=False, wall admission=False: PASS deferral, fresh-capacity resumption, exactly one action, both stop validations
+wall deadline=True, wall admission=False: reproduced KeyError: 'a'
+wall deadline=False, wall admission=True: reproduced KeyError: 'a'
+wall deadline=True, wall admission=True: reproduced KeyError: 'a'
+```
+
+These are direct production-code checks, not execution of the pytest case or
+the requested pytest break-and-revert acceptance procedure. AST parsing and
+`git diff --check` pass. The targeted command
+`python3 -m pytest tests/test_closer_pipeline.py --cov=closer_pipeline --cov-report=term-missing -m 'not slow'`
+fails with `No module named pytest`. Both required Black commands fail with
+`black: command not found` (exit 127). No cached pytest, Black, or coverage
+installation was found; installation into `/tmp/issue-1250-tools` from both
+the configured index and official PyPI found no available distributions.
+
+The required formatting gate still blocks committing Python changes. No task
+checkboxes were marked complete, and aggregate/combined coverage and the live
+sync acceptance checks remain unverified.
+
+Posting the updated blocker comment and adding `needs-human` to PR #1251 were
+both rejected again: `MCP tool call requires approval, but approval policy is
+never`. Neither remote mutation succeeded.

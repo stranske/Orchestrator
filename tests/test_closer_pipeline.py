@@ -1555,14 +1555,15 @@ def test_completion_drives_next_stage_without_waiting_for_slow_peer(tmp_path):
 
 def test_capacity_is_read_fresh_and_zero_defers(tmp_path, monkeypatch):
     path = tmp_path / "state.json"
-    logical_now = 1_800_000_000.0
-    wall_now = [logical_now]
+    logical_now = [1_800_000_000.0]
+    wall_now = [logical_now[0] - 60]
     original_run_pipeline = run_pipeline
 
     def delayed_pipeline(*args, **kwargs):
-        # Model a scheduling pause after run() computes the deadline, without
-        # sleeping. This exceeds both the old 60 ms budget and the helper default.
-        wall_now[0] += 5
+        # Cross the logical deadline after run() computes it, without sleeping.
+        # Either computing the deadline or checking admission with wall time
+        # must fail; using the injected clock for both must preserve the target.
+        wall_now[0] = logical_now[0] + 60
         return original_run_pipeline(*args, **kwargs)
 
     monkeypatch.setattr(time, "time", lambda: wall_now[0])
@@ -1578,7 +1579,8 @@ def test_capacity_is_read_fresh_and_zero_defers(tmp_path, monkeypatch):
         cb,
         capacity=capacity,
         # Capacity admission must not depend on starting within 60 ms of wall time.
-        now=lambda: logical_now,
+        seconds=0.06,
+        now=lambda: logical_now[0],
     )
     assert not calls
     row = receipt["targets"]["a"]
@@ -1591,15 +1593,17 @@ def test_capacity_is_read_fresh_and_zero_defers(tmp_path, monkeypatch):
         "limit": 0,
         "available": 0,
         "required": 1,
-        "sampled_at": logical_now,
+        "sampled_at": logical_now[0],
     }
-    assert validate_stop(path, ["a"], now=lambda: logical_now)["valid"]
+    assert validate_stop(path, ["a"], now=lambda: logical_now[0])["valid"]
 
+    logical_now[0] += 30
+    wall_now[0] = logical_now[0] - 60
     capacity.update(io=1, low=1, exception=1)
-    resumed = run(path, ["a"], cb, capacity=capacity, now=lambda: logical_now)
+    resumed = run(path, ["a"], cb, capacity=capacity, seconds=0.06, now=lambda: logical_now[0])
     assert calls == ["a"]
     assert resumed["targets"]["a"]["status"] == "completed"
-    assert validate_stop(path, ["a"], now=lambda: logical_now)["valid"]
+    assert validate_stop(path, ["a"], now=lambda: logical_now[0])["valid"]
 
 
 def test_zero_low_capacity_yields_without_waiting_for_long_deadline(tmp_path):
