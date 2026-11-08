@@ -34,8 +34,36 @@ def test_symbol_resolution_accepts_module_assignments_and_rejects_nested_nonclas
 def test_known_controls_skips_unreadable_candidate_files(monkeypatch, tmp_path):
     monkeypatch.setattr(admission.paths, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(admission.paths, "MODULE_DIR", tmp_path)
-    (tmp_path / "router.py").write_text("flag = 'ORCH_ROUTE_ENABLED'", encoding="utf-8")
-    assert admission.known_controls() == {"ORCH_ROUTE_ENABLED"}
+    
+    # Create an unreadable candidate file that raises OSError
+    unreadable_candidate = tmp_path / "dispatcher.py"
+    unreadable_candidate.write_text("ORCH_UNREADABLE_FLAG=1", encoding="utf-8")
+    
+    # Create a readable candidate file with a control
+    readable_candidate = tmp_path / "router.py"
+    readable_candidate.write_text("ORCH_ROUTE_ENABLED=1", encoding="utf-8")
+    
+    # Track read attempts
+    read_attempts = []
+    original = Path.read_text
+    
+    def read_text(self, *args, **kwargs):
+        read_attempts.append(str(self))
+        if self == unreadable_candidate:
+            raise OSError("candidate file unreadable")
+        return original(self, *args, **kwargs)
+    
+    monkeypatch.setattr(Path, "read_text", read_text)
+    
+    result = admission.known_controls()
+    
+    # Assert the unreadable file was attempted
+    assert str(unreadable_candidate) in read_attempts, "Unreadable candidate was not attempted"
+    
+    # Assert the readable candidate still contributes its control
+    assert "ORCH_ROUTE_ENABLED" in result
+    # The unreadable candidate's control should NOT be in the result
+    assert "ORCH_UNREADABLE_FLAG" not in result
 
 
 def test_findability_context_fails_closed_when_advisor_raises(monkeypatch):
@@ -72,22 +100,43 @@ def test_admit_and_preflight_report_requirement_exceptions_without_passing(monke
 def test_commitments_continues_past_an_unreadable_source_file(monkeypatch, tmp_path):
     audits = tmp_path / "audits"
     audits.mkdir()
-    unreadable = tmp_path / "unreadable.py"
+    # Create files in a controlled order: a_file comes before b_file alphabetically
+    unreadable = tmp_path / "a_unreadable.py"
     unreadable.write_text("ORCH_DEMO_UNTIL=2020-01-01", encoding="utf-8")
+    # Create a readable file with an overdue deadline that will be detected
+    readable_overdue = tmp_path / "b_overdue.py"
+    readable_overdue.write_text("ORCH_TEST_UNTIL=2020-01-01", encoding="utf-8")
     monkeypatch.setattr(admission, "AUDITS", audits)
+    
+    # Mock _today to ensure 2020-01-01 is in the past
+    monkeypatch.setattr(admission, "_today", lambda: "2026-11-08")
+    
+    read_attempts = []
     original = Path.read_text
 
     def read_text(self, *args, **kwargs):
+        read_attempts.append(str(self))
         if self == unreadable:
             raise OSError("fixture unreadable")
         return original(self, *args, **kwargs)
 
     monkeypatch.setattr(Path, "read_text", read_text)
-    assert admission.commitments(root=tmp_path) == {
-        "dangling_citations": [],
-        "overdue_without_record": [],
-        "clean": True,
-    }
+    
+    result = admission.commitments(root=tmp_path)
+    
+    # Assert the unreadable file was attempted
+    assert str(unreadable) in read_attempts, "Unreadable file was not attempted"
+    
+    # Assert the readable overdue file was processed and reported
+    assert len(result["overdue_without_record"]) == 1
+    overdue = result["overdue_without_record"][0]
+    assert overdue["file"] == "b_overdue.py"
+    assert overdue["var"] == "ORCH_TEST_UNTIL"
+    assert overdue["date"] == "2020-01-01"
+    assert not result["clean"]
+    
+    # Assert scan order: a_unreadable.py is processed first, then b_overdue.py
+    assert read_attempts.index(str(unreadable)) < read_attempts.index(str(readable_overdue))
 
 
 def test_main_handles_file_preflight_and_clean_commitments(monkeypatch, tmp_path, capsys):
