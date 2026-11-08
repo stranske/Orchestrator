@@ -53,6 +53,20 @@ HANDOFF = Path(os.environ.get("HANDOFF_DIR", Path.home() / ".codex" / "handoff")
 DISPATCH_LOG_DIR = HANDOFF / "dispatch-logs"
 REST_RESET = Path(os.environ.get("LANE_REST_RESET", str(LOCAL_RUNTIME / "github-rest-reset.json")))
 OWNER = os.environ.get("LOCAL_LOOP_OWNER", "stranske")
+EXCLUDED_REPOS = frozenset({"stranske/collab-admin"})
+
+
+def included_repo(repo: str) -> bool:
+    return repo.casefold() not in EXCLUDED_REPOS
+
+
+def included_target(target: str) -> bool:
+    return included_repo(target.split("#", 1)[0])
+
+
+def search_scope() -> str:
+    return " ".join(f"-repo:{repo}" for repo in sorted(EXCLUDED_REPOS))
+
 
 ROUND_CAP = 12  # hosted keepalive's default max_iterations (GoalsAndPlumbing §3)
 STALL_ROUNDS = 2  # unproductive rounds in a row before rotating the agent
@@ -108,20 +122,22 @@ class GitHub:
     """The loop's GitHub surface (tests replace it)."""
 
     def looped_prs(self) -> list[dict]:
-        q = f"is:pr is:open label:{LABEL} user:{OWNER}"
+        q = f"is:pr is:open label:{LABEL} user:{OWNER} {search_scope()}"
         out, after = [], None
         while True:
             args = ["api", "graphql", "-f", f"query={SEARCH}", "-f", f"q={q}"]
             if after:
                 args += ["-f", f"after={after}"]
             data = json.loads(_gh(args, rest=False))["data"]["search"]
-            out += [n for n in data["nodes"] if n]
+            out += [
+                n for n in data["nodes"] if n and included_repo(n["repository"]["nameWithOwner"])
+            ]
             if not data["pageInfo"]["hasNextPage"]:
                 return out
             after = data["pageInfo"]["endCursor"]
 
     def merged_prs(self) -> list[dict]:
-        q = f"is:pr is:merged label:{LABEL} user:{OWNER}"
+        q = f"is:pr is:merged label:{LABEL} user:{OWNER} {search_scope()}"
         query = (
             "query($q:String!){search(query:$q,type:ISSUE,first:100){nodes{... on PullRequest{"
             "number mergedAt repository{nameWithOwner}}}}}"
@@ -129,7 +145,11 @@ class GitHub:
         data = json.loads(
             _gh(["api", "graphql", "-f", f"query={query}", "-f", f"q={q}"], rest=False)
         )
-        return [n for n in data["data"]["search"]["nodes"] if n]
+        return [
+            n
+            for n in data["data"]["search"]["nodes"]
+            if n and included_repo(n["repository"]["nameWithOwner"])
+        ]
 
     def job_log(self, repo: str, job_id: str) -> str:
         return _gh(["api", f"repos/{repo}/actions/jobs/{job_id}/logs"], rest=True, timeout=60)
@@ -255,6 +275,8 @@ def state_path(target: str) -> Path:
 
 
 def load_state(target: str) -> dict | None:
+    if not included_target(target):
+        return None
     try:
         return json.loads(state_path(target).read_text())
     except (OSError, ValueError):
@@ -552,6 +574,8 @@ class Tick:
 
     def step(self, pr: dict) -> dict:
         repo = pr["repository"]["nameWithOwner"]
+        if not included_repo(repo):
+            return {}
         target = f"{repo}#{pr['number']}"
         issues = [i for i in (pr.get("closingIssuesReferences") or {}).get("nodes") or [] if i]
         # the task of record: the source issue, or the PR itself when it closes none (PRs are issues)
@@ -819,7 +843,7 @@ class Tick:
 
     # ---- the whole tick
     def run(self) -> str:
-        prs = self.gh.looped_prs()
+        prs = [p for p in self.gh.looped_prs() if included_repo(p["repository"]["nameWithOwner"])]
         for pr in prs:  # drafts too: agents often open one, and CI still reports on it
             if pr.get("state") == "OPEN":
                 self.step(pr)
@@ -837,11 +861,21 @@ def status(gh: Any) -> dict:
     """Pass numbers: (a) looped PRs with >= 2 CI-feedback rounds that merged."""
     rows = []
     for p in sorted(STATE_DIR.glob("*.json")):
+        if any(
+            p.name.casefold().startswith(state_path(f"{repo}#").stem) for repo in EXCLUDED_REPOS
+        ):
+            continue
         try:
-            rows.append(json.loads(p.read_text()))
+            st = json.loads(p.read_text())
+            if included_target(st.get("target", "")):
+                rows.append(st)
         except (OSError, ValueError):
             continue
-    merged = {f"{m['repository']['nameWithOwner']}#{m['number']}" for m in gh.merged_prs()}
+    merged = {
+        f"{m['repository']['nameWithOwner']}#{m['number']}"
+        for m in gh.merged_prs()
+        if included_repo(m["repository"]["nameWithOwner"])
+    }
     out = []
     for st in rows:
         fb = sum(1 for r in st.get("rounds", [])[1:] if r.get("started"))

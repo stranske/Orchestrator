@@ -40,7 +40,8 @@
     "tests/test_issue1235_ranked_coverage.py",
     "tests/test_issue1235_supervisor_recovery.py",
     "tests/test_local_loop.py",
-    "tests/test_router_choose_mode.py"
+    "tests/test_router_choose_mode.py",
+    "tests/test_model_table.py"
   ],
   "shards": [
     [
@@ -712,7 +713,8 @@
       "tests/test_switch_states_tick_view.py",
       "tests/test_synthesis_promotion_coverage.py",
       "tests/test_tick_evidence_projection.py",
-      "tests/test_strategy_experiment.py"
+      "tests/test_strategy_experiment.py",
+      "tests/test_model_table.py"
     ]
   ]
 }

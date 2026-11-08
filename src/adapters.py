@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import execution_profiles
+import model_table
 import worktree_git
 
 HOME = Path.home()
@@ -83,26 +84,19 @@ def _env_int(name: str, default: int) -> int:
 # vibe is a single-model lane, so it has no tier map -- but the model IS known. Kept as a named
 # constant so `test_vibe_model_matches_local_config` can check it against the CLI's own config and
 # fail if either drifts. Empty MODEL_TIERS below means "no tiers to pin", never "model unknown".
-VIBE_MODEL = "mistral-medium-3.5"
+VIBE_MODEL = model_table.single_model("vibe")
 # muse: the model the CLI STARTED on for the owner's Power plan (`run_model_configured`, source=startup,
 # 2026-10-15). Named, request-side identity only; never provenance (see `model_identity`).
-MUSE_MODEL = "muse-wonder-1.0"
+MUSE_MODEL = model_table.single_model("muse")
 
+# DERIVED from the shared model table (model_table.TABLE_JSON; source of truth is
+# stranske/Workflows .github/agents/model-table.json, which hosted runners read at run time).
+# Edit the table, never this map. codex/claude/gemini pin a model per tier; the other seats run one
+# model each (VIBE_MODEL, MUSE_MODEL, CURSOR_COMPOSER_MODEL, AIDER_MODEL) and keep an empty map,
+# which means "no tiers to pin", never "model unknown".
 MODEL_TIERS: dict[str, dict[str, str]] = {
-    "codex": {"cheap": "gpt-6-luna", "mid": "gpt-5.6-terra", "full": "gpt-6.1-sol"},
-    "claude": {"cheap": "claude-haiku-4-5", "mid": "claude-sonnet-5-5", "full": "claude-opus-5-5"},
-    "gemini": {
-        "cheap": "gemini-3.8-flash-low",
-        "mid": "gemini-3.8-flash-high",
-        "full": "gemini-4-argon-high",
-    },
-    "cursor": {},
-    "vibe": {},
-    "aider": {},
-    # muse: no tier ladder to pin. The CLI STARTED on muse-wonder-1.0 for the owner's Power plan
-    # (observed 2026-10-15; Meta's docs say muse-spark-1.2, so the account differs from the docs).
-    # The offload profile carries that model and build_command passes it. Empty means "no tiers".
-    "muse": {},
+    agent: model_table.tier_models(agent)
+    for agent in ("codex", "claude", "gemini", "cursor", "vibe", "aider", "muse")
 }
 MODEL_TIER_NAMES = ("cheap", "mid", "full")  # ordered cheap -> expensive; the ceiling relies on it
 
@@ -113,9 +107,12 @@ AGENT_TIER_CEILING: dict[str, str] = {}
 CURSOR_FRONTIER_DEFAULT = None  # require explicit 'frontier:<model>'; bare 'frontier' is unsafe
 # Owner policy: cursor runs Composer and only Composer. Pinned by id because omitting --model
 # selects `auto`, which is NOT Composer — it routes across every frontier model cursor advertises.
-CURSOR_COMPOSER_MODEL = (
-    os.environ.get("ORCH_CURSOR_COMPOSER_MODEL", "composer-2.5").strip() or "composer-2.5"
-)
+CURSOR_COMPOSER_MODEL = os.environ.get(
+    "ORCH_CURSOR_COMPOSER_MODEL", ""
+).strip() or model_table.single_model("cursor")
+# aider's pin is a floating alias that self-upgrades ('mistral/codestral-latest'); it comes from
+# the shared table like every other seat's model.
+AIDER_MODEL = model_table.single_model("aider")
 
 # Agents whose CLI can enumerate its own models. Used to validate a pin before dispatch and to
 # auto-resolve a replacement after a vendor rename. Agents absent here are never "unresolvable":
@@ -2176,6 +2173,11 @@ def build_command(
             tiered = _tier_model("codex", mode)
             if tiered:
                 cmd += ["--model", tiered]
+        if reasoning_effort is None and selected_profile is None and not requested_model:
+            # A tier-only run (no execution profile) still passes the shared table's level for
+            # that tier, so local Codex never falls back to whatever ~/.codex/config.toml says.
+            # The level follows the tier actually run (after any seat ceiling), never the asked one.
+            reasoning_effort = model_table.tier_effort("codex", effective_tier("codex", mode or ""))
         if reasoning_effort:
             cmd += ["-c", f'model_reasoning_effort="{reasoning_effort}"']
         if out_file:
@@ -2313,7 +2315,7 @@ def build_command(
         return [
             str(AIDER_BIN),
             "--model",
-            "mistral/codestral-latest",
+            AIDER_MODEL,
             "--message",
             prompt,
             "--yes-always",
