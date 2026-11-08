@@ -319,7 +319,13 @@ post-merge observation and adds no merge authority or delivery-outcome verdict.
 
 Codex model and reasoning selection is also a deterministic rail: `execution_profiles` maps
 the task and lane to an immutable profile, `router` records the selected profile, and
-`dispatcher` passes its model and effort to `adapters`. An explicit `--profile-id` on a
+`dispatcher` passes its model and effort to `adapters`. Which model and reasoning level each
+kind of work gets comes from ONE table shared with the hosted GitHub Actions runners
+(`model_table`, a byte-identical copy of stranske/Workflows `.github/agents/model-table.json`,
+2026-11-08): `adapters.MODEL_TIERS`, the single-model seats and the Codex task/offload profile
+choices are derived from it, and a tier-only Codex run passes that tier's level. It is data
+inside this rail, not a new stage or role, so the loop diagram is unchanged; the router's
+selection step and its `mode` tokens are untouched. An explicit `--profile-id` on a
 bounded offload or delegation chooses that exact profile; it does not create a new role or
 change the feedback loop. Operator `ORCH_CODEX_MODEL_*` pins and `ORCH_CODEX_MAX_TIER` ceilings
 continue through the tier adapter for automatic routes; the explicit profile stays exact.
