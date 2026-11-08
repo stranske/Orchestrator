@@ -206,3 +206,25 @@ open with `draft=false` at `00e4fd9988e6e27407d8dd27cb56cbc48dcd1240`.
 The full local command
 `PYTEST_ADDOPTS='-m "not slow"' timeout 45s python3 -u src/verify.py --floor-may-lag`
 exited 124 without a verdict. Full repository verification remains unconfirmed.
+
+## Expired-seal recovery regression
+
+The linked summary log was re-read: **Enforce Gate success** rejects a staging
+delivery, not either quoted exception. The requested `gh run view` still cannot
+connect to api.github.com. PR #1247 is merged at
+`c0c5cb6aa8bf79aa855a54258c0ed423011cebeb`; the fixture traceback is still missing.
+
+The new `an expired exact-head seal stays blocked until its lease is renewed`
+regression verifies that all twelve successful Python receipts and successful
+Node/test-quality jobs cannot clear an expired seal. Renewing that same head's
+lease restores success. Removing only the expiry check in a disposable renderer
+copy fails the test; restoring the renderer passes. All 51 scripts tests pass
+with none skipped using
+`node --test --test-isolation=none .github/scripts/__tests__/*.test.js`.
+
+The full local command with `-m "not slow"` and a 45-second timeout again exits
+124 without a verdict. `git diff --check` passes. No Python or workflow files were
+changed. `git add` fails because `.git/index.lock` is read-only. The connector
+rejects both the blocker comment and `needs-human` label because approval is
+required and the approval policy is `never`. The source-fix, full-verification,
+and future sync-core acceptance tasks remain incomplete.

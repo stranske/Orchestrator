@@ -116,6 +116,33 @@ test('valid exact-head seal clears the delivery hold', (t) => {
   assert.doesNotMatch(result.summary, /Generated delivery hold/);
 });
 
+test('an expired exact-head seal stays blocked until its lease is renewed', (t) => {
+  const activeChecks = {
+    DOC_ONLY: 'false',
+    RUN_CORE: 'true',
+    REASON: '',
+    PYTHON_REQUIRED: 'true',
+    PYTHON_RESULT: 'success',
+    TEST_QUALITY_RESULT: 'success',
+    ORCHESTRATOR_NODE_TESTS_RESULT: 'success',
+  };
+  // A sealed lifecycle value alone cannot recover the linked staging failure:
+  // the exact-head seal must still be current when the summary is rendered.
+  const expired = summarize(t,
+    deliveryRecord({ lease_expires_at: '2000-01-01T00:00:00Z' }),
+    activeChecks, pythonReceipts);
+  assert.match(expired.outputs, /^state=failure$/m);
+  assert.match(expired.outputs,
+    /^description=Generated delivery is not sealed: delivery lease expired\.$/m);
+  assert.match(expired.summary, /Generated delivery hold/);
+
+  const renewed = summarize(t, deliveryRecord(), activeChecks, pythonReceipts);
+  assert.match(renewed.outputs, /^state=success$/m);
+  assert.match(renewed.outputs, /^description=All Gate checks succeeded\.$/m);
+  assert.match(renewed.summary, /all 6 shards reported for Python 3\.13 and 3\.14/);
+  assert.doesNotMatch(renewed.summary, /Generated delivery hold|fast-pass/);
+});
+
 test('delivery record controls the summary when sync metadata has a different lifecycle state', (t) => {
   // Regenerated PR #1247 retained staging sync metadata after its delivery record
   // was sealed. Check that envelope with active checks, plus the inverse case:
