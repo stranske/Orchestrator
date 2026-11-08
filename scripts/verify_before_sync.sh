@@ -402,7 +402,10 @@ done
 # verify.py. Two literal lists could drift, and the load would then seed a ledger verify.py never
 # reads.
 in_state_copy() {
-  ORCH_LOCAL_RUNTIME="$runtime_copy" ORCH_STATE_DIR="$statedir_copy" \
+  # Only the outer publisher owns this attestation destination. Validation children
+  # may exercise nested publishers, whose fixture verdicts must stay in their sandbox.
+  env -u ORCH_VERIFIED_RECEIPT_OUT \
+    ORCH_LOCAL_RUNTIME="$runtime_copy" ORCH_STATE_DIR="$statedir_copy" \
     ORCH_CAPABILITIES_PATH="$ledger_copy" ORCH_FEEDBACK_DB="$brain_copy" \
     ORCH_FEATURES_PATH="$registry_copy/features.json" \
     ORCH_REPO_KNOWLEDGE_PATH="$registry_copy/repo_knowledge.json" \
