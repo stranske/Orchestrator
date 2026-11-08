@@ -96,6 +96,20 @@ def test_panel_json_scan_recovers_after_malformed_brackets():
     }
 
 
+def test_panel_json_scan_respects_limit_when_review_straddles_boundary(monkeypatch):
+    monkeypatch.setattr(panel, "JSON_SCAN_LIMIT", 128)
+    review = '{"verdict":"PASS"}'
+    prefix = "Reviewer notes: [invalid] "
+    padding = "x" * (panel.JSON_SCAN_LIMIT - len(prefix) - len(review))
+    output = prefix + padding + review
+    assert len(output) == panel.JSON_SCAN_LIMIT
+    assert panel.parse_review_output(output, "a") == {"reviewer": "a", "verdict": "PASS"}
+
+    # Moving the closing brace outside the scan must not accept a truncated review.
+    with pytest.raises(ValueError, match="no parseable JSON.*in first 128 chars"):
+        panel.parse_review_output(prefix + padding + "x" + review, "a")
+
+
 @pytest.mark.parametrize(
     "gate_verdict,review_verdicts,reason",
     [
