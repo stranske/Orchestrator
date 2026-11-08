@@ -30,7 +30,9 @@ def isolate_unrelated_credential_scan(monkeypatch):
     def no_host_opener(args, **kwargs):
         if any("opener-cap-health.py" in str(arg) for arg in args):
             unexpected.append(["opener-cap-health.py"])
-            return SimpleNamespace(returncode=1, stdout="", stderr="unit fixture forbids host probe")
+            return SimpleNamespace(
+                returncode=1, stdout="", stderr="unit fixture forbids host probe"
+            )
         return original_run(args, **kwargs)
 
     monkeypatch.setattr(switch_review.subprocess, "run", no_host_opener)
