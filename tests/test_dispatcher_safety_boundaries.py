@@ -401,6 +401,19 @@ def test_main_offload_preserves_transport_arguments_and_failure_status(
         assert captured.out.strip() == "reviewed"
 
 
+def test_main_delegate_passes_the_routing_rationale(tmp_path, monkeypatch):
+    """The mode reason (router.choose_mode) reaches delegate, which records it on the run row."""
+    seen = {}
+    prompt = tmp_path / "prompt.txt"
+    prompt.write_text("loop round")
+    monkeypatch.setattr(dispatcher, "delegate", lambda *a, **k: seen.update(k) or {"pid": 1})
+    monkeypatch.delenv("ORCH_ROLE_SHADOW", raising=False)
+    argv = ["delegate", "--agent", "codex", "--target", "o/r#3", "--lane", "closer"]
+    argv += ["--prompt-file", str(prompt), "--rationale", "local-loop round 2/12: CI FAILURE"]
+    assert dispatcher.main(argv) == 0
+    assert seen["rationale"] == "local-loop round 2/12: CI FAILURE"
+
+
 @pytest.mark.parametrize("error", [None, "claimed elsewhere"])
 def test_main_delegate_preserves_profile_lineage_and_exit_status(tmp_path, monkeypatch, error):
     seen = {}
