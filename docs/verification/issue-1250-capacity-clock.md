@@ -49,3 +49,25 @@ repository's shard/aggregate verification with combined coverage, in an
 environment with the test tools installed. Run the required Black formatting
 and repository check before committing. Regeneration of sync PR #1247 and the
 next sync-core classification remain external post-merge checks.
+
+## Regression follow-up (2026-11-08)
+
+The existing pytest case now patches wall time and wraps the pipeline call to
+advance that clock by five seconds after the helper computes its deadline.
+This models the admission delay without sleeping and adds no collected cases.
+Both the capacity deferral and fresh-capacity resumption retain the independent
+logical clock, so restoring wall-clock admission would fail deterministically.
+
+A separate standard-library check against the production pipeline reproduced
+`admission_deadline_expired`, empty targets, and the original `KeyError: 'a'`
+under that simulated delay. Restoring the logical clock passed the zero-capacity
+evidence assertions, successful resumption with one action, and both stop
+validations. This check is not execution of the pytest case or the aggregate.
+
+Pytest and Black remain unavailable. Installation into a temporary virtual
+environment found no available distributions, and both required Black commands
+exit 127. The regression change remains uncommitted under the mandatory
+formatting gate; no new task checkboxes are complete. The existing PR checkbox
+claiming successful aggregate verification is not supported by these results.
+Posting the blocker comment and adding `needs-human` were again rejected because
+the GitHub tools require approval and the approval policy is `never`.

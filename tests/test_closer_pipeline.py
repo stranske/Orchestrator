@@ -1553,9 +1553,20 @@ def test_completion_drives_next_stage_without_waiting_for_slow_peer(tmp_path):
     assert receipt["targets"]["fast"]["status"] == "completed"
 
 
-def test_capacity_is_read_fresh_and_zero_defers(tmp_path):
+def test_capacity_is_read_fresh_and_zero_defers(tmp_path, monkeypatch):
     path = tmp_path / "state.json"
     logical_now = 1_800_000_000.0
+    wall_now = [logical_now]
+    original_run_pipeline = run_pipeline
+
+    def delayed_pipeline(*args, **kwargs):
+        # Model a scheduling pause after run() computes the deadline, without
+        # sleeping. This exceeds both the old 60 ms budget and the helper default.
+        wall_now[0] += 5
+        return original_run_pipeline(*args, **kwargs)
+
+    monkeypatch.setattr(time, "time", lambda: wall_now[0])
+    monkeypatch.setitem(globals(), "run_pipeline", delayed_pipeline)
     capacity = {"io": 0, "low": 0, "exception": 0}
     calls = []
     cb = callbacks(
