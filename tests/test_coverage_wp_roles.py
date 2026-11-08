@@ -948,6 +948,9 @@ def _selector_event(role, reason, target, run_id, *, accepted, disagreement):
 def _stub_selector_world(monkeypatch, agent="codex"):
     picks = Spy(result={"agent": agent, "mode": "full"})
     monkeypatch.setattr(roles, "route_role", picks)
+    # The live Flash-vs-Argon trial file (#1037) pins triage to gemini on even hours until
+    # 2026-11-15; these tests assert normal routing, so they must not read the machine's clock.
+    monkeypatch.setattr(roles, "triage_trial_mode", lambda **_: None)
     events = Spy(result={})
     monkeypatch.setattr(feedback, "record_role_selector_event", events)
     return picks, events
