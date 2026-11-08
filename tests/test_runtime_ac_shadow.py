@@ -472,7 +472,8 @@ def test_no_audit_is_unmeasured_not_zero_false_fail():
     assert "false-FAIL audit unmeasured" in line
 
 
-def test_shadow_summary_reads_while_brain_write_locked(private_brain):
+@pytest.mark.parametrize("journal_mode", ["DELETE", "WAL"])
+def test_shadow_summary_reads_while_brain_write_locked(private_brain, journal_mode):
     feedback.record_run("closer", "owner/repo#2", "implement", "codex")
     feedback.record_outcome("closer", merged=True, durability="durable")
     feedback.record_runtime_ac_gate_event(
@@ -488,9 +489,12 @@ def test_shadow_summary_reads_while_brain_write_locked(private_brain):
     with closing(feedback._conn()) as conn, conn:
         conn.execute("UPDATE runs SET assignment=NULL WHERE run_id='closer'")
     with closing(sqlite3.connect(feedback.DB_PATH)) as writer:
+        actual_mode = writer.execute(f"PRAGMA journal_mode={journal_mode}").fetchone()[0]
+        assert actual_mode.upper() == journal_mode
         writer.execute("BEGIN IMMEDIATE")
         try:
             writer.execute("UPDATE outcomes SET merged=0 WHERE run_id='closer'")
+            writer.execute("DELETE FROM completion_events WHERE producer='runtime_ac_gate'")
             summary = gate.shadow_summary(now=int(time.time()))
             line = gate.format_shadow_summary(summary)
             assert "PRs 1, specs authored 1, executed 1, would-FAIL 1" in line

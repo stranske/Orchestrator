@@ -392,11 +392,14 @@ def test_followed_pick_is_graded_through_linked_run(followed_pick):
     assert result["no_delivery"] == 0
 
 
-def test_summary_line_reads_while_brain_write_locked(followed_pick):
+@pytest.mark.parametrize("journal_mode", ["DELETE", "WAL"])
+def test_summary_line_reads_while_brain_write_locked(followed_pick, journal_mode):
     # Even a pending legacy backfill must not turn the report into a writer.
     with closing(feedback._conn()) as conn, conn:
         conn.execute("UPDATE runs SET assignment=NULL WHERE run_id='keepalive-run'")
     with closing(sqlite3.connect(feedback.DB_PATH)) as writer:
+        actual_mode = writer.execute(f"PRAGMA journal_mode={journal_mode}").fetchone()[0]
+        assert actual_mode.upper() == journal_mode
         writer.execute("BEGIN IMMEDIATE")
         try:
             writer.execute("UPDATE outcomes SET durability='pending' WHERE run_id='keepalive-run'")
