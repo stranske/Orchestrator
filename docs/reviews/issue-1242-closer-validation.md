@@ -121,9 +121,12 @@ this validation must not edit it or weaken the check.
 
 Reproduction is hosted to obey the prohibition on local full verification:
 `gh run rerun 42501725219 --repo stranske/Orchestrator --failed` (dispatch exit 0).
-Attempt 2 repeats the actual historical failing command against its original
-shard evidence. Its terminal result and the repair PR's required checks are
-recorded in the PR body once complete. No local `verify.py` invocation occurred.
+Attempt 2 repeated the actual historical failing command against its original
+shard evidence and terminated at 2026-11-08T17:54:26Z with exit 1: the same
+`15073 collected; floor 15072 — 1 BEHIND`, `15040 passed, 0 failed` and sole
+`floor is BEHIND reality` problem. This reproduces the reported failure without
+changing code. The repair PR's terminal CI results are recorded in its body. No
+local `verify.py` invocation occurred.
 
 ## Combined coverage and selection
 
@@ -142,7 +145,8 @@ There was no existing CI measurement at the exact parent (it is an automated
 floor-only commit). The earlier measured commit `88432f40` differs from that
 parent only in `.verify-floor.json`. Its combined artifact from
 [42496421701](https://github.com/stranske/Orchestrator/actions/runs/42496421701)
-and the merge artifact both report the same counts below. To avoid substituting
+and the merge artifact report the same counts as the exact-parent artifact below.
+To avoid substituting
 this equivalent-source baseline for exact-parent evidence, the provisioned
 remote branch was first published at the exact parent and the existing CI was
 dispatched with `gh workflow run ci.yml --repo stranske/Orchestrator --ref
@@ -155,7 +159,7 @@ current main plus this document. A direct SHA dispatch first returned HTTP 422
 Artifact retrieval commands (exit 0):
 
 ```sh
-gh run download 42496421701 --repo stranske/Orchestrator -n gate-coverage -D /tmp/issue1242-before
+gh run download 42507097838 --repo stranske/Orchestrator -n gate-coverage -D /tmp/issue1242-parent
 gh run download 42501725219 --repo stranske/Orchestrator -n gate-coverage -D /tmp/issue1242-merged
 ```
 
@@ -163,10 +167,29 @@ For each `coverage.json`, read `files[path].summary.missing_lines` and
 `missing_branches` when present. Both artifacts have
 `meta.branch_coverage=false`, matching `[tool.coverage.run] branch=false`.
 There are **no measured branches**, not proof of zero uncovered branches.
-The exact-parent artifact and comparison are recorded in the PR body after its
-hosted run. Do not change coverage configuration to manufacture a branch figure.
+The exact-parent aggregate succeeded and published artifact `13627578532`.
+Its measured counts and missing lines exactly match the #1246 artifact. The
+comparison command below exited 0; no local tests or selftests were run by it.
+Do not change coverage configuration to manufacture a branch figure.
 
-| Rank | Target | Earlier equivalent-source missing statements | #1246 missing statements | Reduction |
+```sh
+/opt/anaconda3/bin/python3 - <<'PY'
+import json
+from pathlib import Path
+for revision in ("parent", "merged"):
+    data = json.loads(Path(f"/tmp/issue1242-{revision}/coverage.json").read_text())
+    row = data["files"]["src/capability_admission.py"]
+    print(revision, row["summary"]["missing_lines"],
+          row["summary"]["num_statements"], data["meta"]["branch_coverage"])
+PY
+```
+
+```text
+parent 26 599 False
+merged 26 599 False
+```
+
+| Rank | Target | Exact parent missing statements | #1246 missing statements | Reduction |
 | --- | --- | ---: | ---: | ---: |
 | 1 | capability_admission.py | 26 | 26 | 0 |
 | 2 | capability_activation_audit.py | 4 | 4 | 0 |
@@ -205,8 +228,8 @@ validating #1246. Each future test needs isolated state and its own mutation pro
 | Rank | Target and evidence | Disposition |
 | --- | --- | --- |
 | 1 | capability_admission.py: 26 gaps; audit fallback 86, symbol miss 518, decision/record lookup 997-1013, report 1196, selftest state paths 1388-1489, CLI 1664-1666 | Retain the external-proof regression. Defer filesystem/decision lookup and CLI cases to focused temp-directory tests; populated-ledger/waiver selftest paths need synthetic ledger fixtures. Do not force selftest exception handlers for metric gain. |
-| 2 | capability_activation_audit.py: 2432-2433, 2436, 2448; five defects/churn 11 | Defer home-anchored real-fleet selftest checks and the override-failure assertion. Hosted CI lacks the populated fleet capability; do not make the test depend on the operator's home state or execute the failure assertion as padding. |
-| 3 | periodic_report.py: 2998, 3119; four defects/churn 11 | Both are selftest `raise AssertionError` sentinels for accepted invalid input or invalid mining coverage. Keep them defensive; no production feature is missing coverage here. Do not deliberately fail a correct selftest to cover its sentinel. |
+| 2 | capability_activation_audit.py: 2432-2433, 2436, 2448; five defects/churn 11 | Defer home-anchored real-fleet selftest checks to a synthetic populated-fleet fixture; hosted CI lacks that capability. Line 2448 restores a preexisting fleet-root override and needs an isolated nonempty-environment case. Do not depend on the operator's home state. |
+| 3 | periodic_report.py: 2998, 3119; four defects/churn 11 | Keep the expected invalid-input rejection sentinel at 2998 defensive. Defer the valid `attempts_unresolved` mining-coverage assertion at 3119 to synthetic attempts with unresolved worker models; its absent scenario is a meaningful future coverage case. |
 | 4 | tick.py: 897, 1289, 1293; four defects/churn 9 | Defer nonempty prior environment restoration cases to isolated selftest-wrapper coverage; these restore dispatch lane, exploration rate and handoff overrides. No tick scheduling or dispatch behavior change. |
 | 5 | repo_knowledge.py: 1994-1995, 2490; four defects/churn 8 | Defer nonempty base-branch-override iteration to synthetic configuration fixtures; retain the expected-GitHub-failure assertion at 2490 as defensive rather than covering it by making error handling wrong. |
 | 6 | adversarial.py: 1529, 1724, 1794; four defects/churn 7 | Defer preexisting ORCH_STATE_DIR restoration variants in the three selftest cleanup blocks; exercise only with temporary state, not live review dispatch. |
