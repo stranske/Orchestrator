@@ -82,6 +82,25 @@ function deliveryRecord(overrides = {}) {
   };
 }
 
+function pythonReceipts(artifactsRoot, lastShardOutcome = 'success') {
+  for (const runtime of ['3.13', '3.14']) {
+    for (let shard = 1; shard <= 6; shard++) {
+      const receiptDir = path.join(artifactsRoot, 'downloads',
+        `gate-shard-${shard}-coverage-${runtime}-1`);
+      fs.mkdirSync(receiptDir, { recursive: true });
+      fs.writeFileSync(path.join(receiptDir, 'summary.json'), JSON.stringify({
+        python_version: runtime,
+        checks: {
+          lint: { outcome: 'success' },
+          type_check: { outcome: 'success' },
+          tests: { outcome: runtime === '3.14' && shard === 6 ? lastShardOutcome : 'success' },
+          coverage_minimum: { outcome: 'success' },
+        },
+      }));
+    }
+  }
+}
+
 test('staging delivery reproduces the linked summary failure before any fast pass', (t) => {
   const result = summarize(t, deliveryRecord({ delivery_state: 'staging', sealed_head_sha: '' }));
   assert.match(result.outputs, /^state=failure$/m);
@@ -196,35 +215,49 @@ test('exact-head sealing clears the staging hold with all required Python receip
     TEST_QUALITY_RESULT: 'success',
     ORCHESTRATOR_NODE_TESTS_RESULT: 'success',
   };
-  const prepareArtifacts = (artifactsRoot) => {
-    for (const runtime of ['3.13', '3.14']) {
-      for (let shard = 1; shard <= 6; shard++) {
-        const receiptDir = path.join(artifactsRoot, 'downloads',
-          `gate-shard-${shard}-coverage-${runtime}-1`);
-        fs.mkdirSync(receiptDir, { recursive: true });
-        fs.writeFileSync(path.join(receiptDir, 'summary.json'), JSON.stringify({
-          python_version: runtime,
-          checks: {
-            lint: { outcome: 'success' },
-            type_check: { outcome: 'success' },
-            tests: { outcome: 'success' },
-            coverage_minimum: { outcome: 'success' },
-          },
-        }));
-      }
-    }
-  };
   const held = summarize(t,
     deliveryRecord({ delivery_state: 'staging', sealed_head_sha: '' }),
-    activeChecks, prepareArtifacts);
+    activeChecks, pythonReceipts);
   assert.match(held.outputs, /^state=failure$/m);
   assert.match(held.outputs,
     /^description=Generated delivery is not sealed: delivery state is staging\.$/m);
 
-  const sealed = summarize(t, deliveryRecord(), activeChecks, prepareArtifacts);
+  const sealed = summarize(t, deliveryRecord(), activeChecks, pythonReceipts);
   assert.match(sealed.outputs, /^state=success$/m);
   assert.match(sealed.outputs, /^description=All Gate checks succeeded\.$/m);
   assert.match(sealed.summary, /all 6 shards reported for Python 3\.13 and 3\.14/);
   assert.equal((sealed.summary.match(/\| 3\.(?:13|14) shard \d\/6 \|/g) || []).length, 12);
   assert.doesNotMatch(sealed.summary, /Generated delivery hold|fast-pass|artifacts: .*missing/);
+});
+
+test('sealing exposes a failed or cancelled Python leg instead of clearing its verdict', (t) => {
+  for (const [outcome, state, description] of [
+    ['failure', 'failure', 'Python CI result: failure.'],
+    ['cancelled', 'pending', 'Python CI cancelled; waiting for rerun.'],
+  ]) {
+    const activeChecks = {
+      DOC_ONLY: 'false',
+      RUN_CORE: 'true',
+      REASON: '',
+      PYTHON_REQUIRED: 'true',
+      PYTHON_RESULT: outcome,
+      TEST_QUALITY_RESULT: 'success',
+      ORCHESTRATOR_NODE_TESTS_RESULT: 'success',
+    };
+    const prepareArtifacts = (root) => pythonReceipts(root, outcome);
+    const held = summarize(t,
+      deliveryRecord({ delivery_state: 'staging', sealed_head_sha: '' }),
+      activeChecks, prepareArtifacts);
+    assert.match(held.outputs, /^state=failure$/m);
+    assert.match(held.outputs,
+      /^description=Generated delivery is not sealed: delivery state is staging\.$/m);
+
+    const sealed = summarize(t, deliveryRecord(), activeChecks, prepareArtifacts);
+    assert.match(sealed.outputs, new RegExp(`^state=${state}$`, 'm'), outcome);
+    assert.ok(sealed.outputs.split('\n').includes(`description=${description}`), outcome);
+    assert.match(sealed.summary, /all 6 shards reported for Python 3\.13 and 3\.14/);
+    assert.match(sealed.summary, new RegExp(`\\| 3\\.14 shard 6/6 \\|.* ${outcome} \\|`));
+    assert.doesNotMatch(sealed.summary, /Generated delivery hold|fast-pass/);
+    assert.match(sealed.outputs, /^cosmetic_failure=false$/m);
+  }
 });

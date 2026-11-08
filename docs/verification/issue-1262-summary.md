@@ -175,3 +175,34 @@ Python files were edited. The commit attempt failed creating `.git/index.lock`
 on the read-only filesystem. Requests to post the blocker comment and apply
 `needs-human` to PR #1263 were rejected because they require approval and this
 run's approval policy is `never`; neither external change was made.
+
+## Required Python verdicts after sealing
+
+The linked summary log was inspected again through the GitHub connector; its
+executed failure is still the staging hold. `gh run view 42500846882 --repo
+stranske/Orchestrator --log-failed` cannot connect to api.github.com. PR #1247
+has since merged with the previously verified sealed head
+`c0c5cb6aa8bf79aa855a54258c0ed423011cebeb`. No disappearing-file traceback or
+source defect was established, so the source-fix task remains incomplete.
+
+The new regression `sealing exposes a failed or cancelled Python leg instead of
+clearing its verdict` exercises both lifecycle states with all twelve receipts
+present and a failed or cancelled final Python shard. Staging retains its hold;
+sealing exposes the Python failure or pending-rerun verdict without marking the
+test failure cosmetic. The successful-receipts control shares the same fixture
+writer. All ten focused tests and all fifty scripts tests pass, with none skipped,
+using `node --test --test-isolation=none`. A disposable renderer that replaces
+the aggregate Python verdict with success fails the new test; repository source
+was never mutated. This validates verdict preservation rather than reproducing
+the unobserved fixture failure.
+
+`git diff --check` passes. No Python or workflow files changed. Pytest and Black
+are still unavailable. `git add` fails creating `.git/index.lock` on the
+read-only filesystem, preventing the requested commit. Requests to post the
+blocker comment and add `needs-human` to #1263 were rejected because they require
+approval and this run's approval policy is `never`. PR #1263 was re-read and is
+open with `draft=false` at `00e4fd9988e6e27407d8dd27cb56cbc48dcd1240`.
+
+The full local command
+`PYTEST_ADDOPTS='-m "not slow"' timeout 45s python3 -u src/verify.py --floor-may-lag`
+exited 124 without a verdict. Full repository verification remains unconfirmed.
