@@ -428,9 +428,7 @@ def summary(path: Path | None = None) -> dict:
     # Reports must not run schema migrations or compete for the Brain's write lock.
     db_path = Path(feedback.DB_PATH).resolve()
     if db_path.exists():
-        with closing(
-            sqlite3.connect(db_path.as_uri() + "?mode=ro", uri=True, timeout=5)
-        ) as conn:
+        with closing(sqlite3.connect(db_path.as_uri() + "?mode=ro", uri=True, timeout=5)) as conn:
             for row in live_rows:
                 # Invalid/fallback output is never a triage observation, nor a paired comparison.
                 if not row.get("triage_valid") or not row.get("live_proposal"):
