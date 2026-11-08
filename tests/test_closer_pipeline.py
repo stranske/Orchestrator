@@ -1599,6 +1599,21 @@ def test_capacity_is_read_fresh_and_zero_defers(tmp_path, monkeypatch):
 
     logical_now[0] += 30
     wall_now[0] = logical_now[0] - 60
+    retried = run(path, ["a"], cb, capacity=capacity, seconds=0.06, now=lambda: logical_now[0])
+    retry_row = retried["targets"]["a"]
+    assert not calls
+    assert retry_row["status"] == "deferred"
+    assert retry_row["deferred_reason"] == "worker_capacity"
+    assert retry_row["deferred_next_trigger"] == "capacity_recheck"
+    assert retry_row["resource_evidence"]["capacity"] == {
+        **row["resource_evidence"]["capacity"],
+        "sampled_at": logical_now[0],
+    }
+    assert row["resource_evidence"]["capacity"]["sampled_at"] == logical_now[0] - 30
+    assert validate_stop(path, ["a"], now=lambda: logical_now[0])["valid"]
+
+    logical_now[0] += 30
+    wall_now[0] = logical_now[0] - 60
     capacity.update(io=1, low=1, exception=1)
     resumed = run(path, ["a"], cb, capacity=capacity, seconds=0.06, now=lambda: logical_now[0])
     assert calls == ["a"]

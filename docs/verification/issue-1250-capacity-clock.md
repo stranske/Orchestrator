@@ -1,5 +1,89 @@
 # Issue #1250: capacity fixture admission deadline
 
+## Latest local pytest verification (2026-11-08)
+
+Pytest is now available for this run through pinned official upstream sources
+staged only in `/tmp/issue1250-tools`. No repository dependency files changed.
+The earlier missing-tool reports below describe previous attempts.
+
+The original pytest case now also retries while capacity remains zero. It
+requires a fresh sample at logical time `1800000030`, a retained target `a`,
+`worker_capacity` / `capacity_recheck` deferral, no action, and valid stop
+evidence. It then restores capacity and requires exactly one completed action.
+No collected cases, collection floors, or shard definitions changed.
+
+Verified commands (`PYTHONPATH=/tmp/issue1250-tools`):
+
+```text
+python3 -m pytest tests/test_closer_pipeline.py::test_capacity_is_read_fresh_and_zero_defers -m 'not slow' -q
+1 passed
+
+python3 -m pytest -p pytest_cov.plugin tests/test_closer_pipeline.py --cov=closer_pipeline --cov-report=term-missing -m 'not slow' -q
+252 passed
+src/closer_pipeline.py    2268    818    63.9%
+
+python3 -m pytest --collect-only -q -m 'not slow'
+15073 tests collected
+
+node --test --test-isolation=none --test-reporter=tap tests/test_closer_pipeline_capacity_clock.js
+6 passed
+```
+
+In the isolated checkout `/tmp/issue1250-review`, the actual named pytest case
+failed with `KeyError: 'a'` when either the helper's deadline, admission clock,
+or both reverted to wall time. Restoring the fixture passed after each of the
+three mutations. The traceback identifies the failing lookup:
+
+```text
+tests/test_closer_pipeline.py:1586: in test_capacity_is_read_fresh_and_zero_defers
+    row = receipt["targets"]["a"]
+E   KeyError: 'a'
+```
+
+A separate temporary production mutation froze the capacity sample timestamp
+at `1800000000`. The extended pytest case failed against the retry's expected
+`1800000030`; restoring production passed. No mutation remains in either
+checkout.
+
+The broader command `python3 -m pytest tests/ -m 'not slow' -x -q` stopped
+with **685 passed, 6 skipped, 1 failed**. Its first failure is unrelated to the
+capacity fixture:
+`tests/test_agent_gh_guard.py::test_an_inherited_bash_env_still_runs_under_the_guard`
+expected inherited `BASH_ENV` output `ran` but received empty stdout. This
+failure is outside issue #1250's scope; no guard code was changed.
+
+- [x] Execute the original named pytest case and complete pipeline pytest module.
+- [x] Reproduce the missing-target failure against the actual pytest fixture and
+  verify that restoring the fixture passes.
+- [ ] Verify the repository aggregate and combined coverage without regressions.
+- [ ] Verify regenerated sync PR #1247 and the next sync-core classification.
+
+The targeted coverage measurement is not the aggregate/combined coverage gate.
+The PR's existing checked aggregate-verification box remains unsupported.
+An attempt to uncheck that box through the GitHub connector was rejected:
+`MCP tool call requires approval, but approval policy is never`. The remote PR
+body was not changed.
+
+The required formatting gate passed with the CI-pinned Black **26.10.1**:
+`black --line-length 100 tests/test_closer_pipeline.py` left the file unchanged,
+and `black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .`
+reported **1014 files would be left unchanged**, exit 0. An executor-shutdown
+hang in this sandbox required checking every discovered file first through
+Black's unmodified synchronous single-file API, then running the exact CLI
+command against that populated cache. Formatting rules and exclusions were
+unchanged.
+
+Workspace staging remains blocked by the read-only `.git/index.lock` path.
+The tested changes are committed in `/tmp/issue1250-review`, with an applyable
+patch at `/tmp/issue1250-pytest-validation.patch`; the workspace retains the
+same changes for automation collection.
+
+The final remote read shows PR #1251 merged at `2026-11-08T18:59:16Z` with
+head `bf2fd9f058e9212f03d41266ae420c885e0f8a5e`, before this follow-up commit.
+This round did not merge or otherwise mutate the PR. The additional pytest
+assertions and this verification update remain local and are available in the
+exported patch; they are not part of that merged head.
+
 The original `test_capacity_is_read_fresh_and_zero_defers` calls the test helper
 `run(..., seconds=0.06)` using wall time. A scheduling pause before
 `closer_pipeline._run_pipeline_impl` checks admission can exhaust that budget.
