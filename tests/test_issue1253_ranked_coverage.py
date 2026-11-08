@@ -339,6 +339,92 @@ class RankedCoverageTests(unittest.TestCase):
             self.assertEqual(miner._read_envelopes(Path("-")), rows)
         self.assertEqual(list(self.root.iterdir()), [])
 
+    def test_miner_empty_cadence_expires_persisted_candidate_and_retains_tombstone(self):
+        instance = miner.PatternMiner()
+        candidate = self.candidate()
+        instance.candidates = [candidate]
+        state = self.root / "state.json"
+        instance.save_state(state, updated_at=100)
+        events = self.write_json("events.json", [])
+        status = self.root / "status.json"
+        inventory = self.root / "inventory.json"
+
+        for now in (200, 201):
+            with self.subTest(now=now), redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(
+                    miner.main(
+                        [
+                            "run",
+                            "--events",
+                            str(events),
+                            "--state",
+                            str(state),
+                            "--status-out",
+                            str(status),
+                            "--inventory-out",
+                            str(inventory),
+                            "--now",
+                            str(now),
+                        ]
+                    ),
+                    0,
+                )
+                summary = json.loads(status.read_text())
+                self.assertEqual(json.loads(output.getvalue()), summary)
+                self.assertNotIn("candidates", summary)
+                self.assertTrue(summary["state_loaded"])
+                self.assertEqual(summary["expired_candidate_count"], 1)
+                self.assertEqual(summary["emitted_candidate_count"], 0)
+                if now == 200:
+                    self.assertIn("retain_tombstone", summary["next_actions"])
+                stored = json.loads(state.read_text())
+                catalog = json.loads(inventory.read_text())
+                self.assertEqual(catalog["candidates"], stored["candidates"])
+                self.assertEqual(catalog["tombstones"], stored["tombstones"])
+                self.assertEqual(stored["updated_at"], now)
+                self.assertEqual(stored["candidates"][0]["lifecycle"]["state"], "retired")
+                self.assertEqual(len(stored["tombstones"]), 1)
+                self.assertEqual(stored["tombstones"][0]["retired_at"], 200)
+                self.assertEqual(stored["tombstones"][0]["fingerprint"], candidate.fingerprint)
+
+    def test_miner_status_and_inventory_cli_write_matching_candidate_views(self):
+        instance = miner.PatternMiner()
+        candidate = self.candidate()
+        instance.candidates = [candidate]
+        state = self.root / "state.json"
+        instance.save_state(state, updated_at=100)
+        events = self.write_json("events.json", [])
+
+        for command in ("status", "inventory"):
+            with self.subTest(command=command), redirect_stdout(io.StringIO()) as output:
+                report = self.root / f"{command}.json"
+                self.assertEqual(
+                    miner.main(
+                        [
+                            command,
+                            "--events",
+                            str(events),
+                            "--state",
+                            str(state),
+                            "--write",
+                            str(report),
+                            "--now",
+                            "150",
+                        ]
+                    ),
+                    0,
+                )
+                payload = json.loads(output.getvalue())
+                self.assertEqual(json.loads(report.read_text()), payload)
+                self.assertEqual(payload["emitted_candidate_count"], 1)
+                self.assertEqual(payload["expired_candidate_count"], 0)
+                if command == "inventory":
+                    self.assertEqual(len(payload["candidates"]), 1)
+                    self.assertEqual(ir.CapabilityIR.from_dict(payload["candidates"][0]), candidate)
+                else:
+                    self.assertNotIn("candidates", payload)
+                self.assertEqual(json.loads(state.read_text())["updated_at"], 150)
+
     def test_miner_json_input_requires_a_list_instead_of_silently_mining_object_keys(self):
         for payload in ({"event_id": "one"}, None, "event", 42):
             with self.subTest(payload=payload):
