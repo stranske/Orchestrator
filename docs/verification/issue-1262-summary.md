@@ -137,3 +137,41 @@ cannot be committed here. Automatic approval review again rejected the blocker
 comment and `needs-human` label because the approval policy is `never`.
 PR #1263 was re-read and is open with `draft=false` at
 `03459b0abc75edd9ab6a313ecf74b26ab172a494`.
+
+## Regenerated delivery verification
+
+The regenerated sync PR now has head
+`c0c5cb6aa8bf79aa855a54258c0ed423011cebeb`. Its delivery record is sealed to
+that head, although the separate `workflows-consumer-sync:v1` metadata still
+reports `lifecycle_state: staging`.
+
+- [x] Verify the regenerated delivery's live summary result: Gate run
+  [42518196137, attempt 2](https://github.com/stranske/Orchestrator/actions/runs/42518196137)
+  completed successfully. Its
+  [summary job 128848669696](https://github.com/stranske/Orchestrator/actions/runs/42518196137/job/128848669696)
+  succeeded at 2026-11-08T20:16:03Z, and the exact-head `Gate / gate` commit
+  status is `success`. These results were read through the GitHub connector;
+  `gh run view` remains unavailable because it cannot connect to api.github.com.
+- [x] Exercise the observed mixed-metadata envelope with active Node checks:
+  a sealed delivery record succeeds despite staging sync metadata, and sealed
+  sync metadata cannot clear a staging delivery hold.
+- [x] Check the new regression's sensitivity: a disposable renderer modified
+  to prefer the sync metadata's lifecycle state fails the new test. The unchanged
+  repository renderer passes all nine focused tests, and the scripts suite passes
+  all 49 tests with none skipped using
+  `node --test --test-isolation=none .github/scripts/__tests__/*.test.js`.
+
+The original linked run's failure remains a correct staging hold, rather than
+either exception quoted in the issue. No renderer fix is justified by that
+evidence, and no production source or workflow was changed. The new mutation
+checks metadata precedence; it does not reproduce the unobserved disappearing-file
+failure or establish the deliberate-break acceptance criterion for that failure.
+Full local verification and the next sync-core classification remain unverified.
+
+The full local command
+`PYTEST_ADDOPTS='-m "not slow"' timeout 45s python3 -u src/verify.py --floor-may-lag`
+exited 124 without a verdict. Pytest and Black are still unavailable, and no
+Python files were edited. The commit attempt failed creating `.git/index.lock`
+on the read-only filesystem. Requests to post the blocker comment and apply
+`needs-human` to PR #1263 were rejected because they require approval and this
+run's approval policy is `never`; neither external change was made.

@@ -14,7 +14,7 @@ const renderer = path.resolve(__dirname, '..', 'gate_summary.py');
 const head = '7ba7006dc3243a7bf0221d709e4de5562c89f042';
 const repository = 'stranske/Orchestrator';
 
-function summarize(t, record, extraEnv = {}, prepareArtifacts = () => {}) {
+function summarize(t, record, extraEnv = {}, prepareArtifacts = () => {}, syncState = null) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-delivery-1262-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const eventPath = path.join(root, 'event.json');
@@ -22,11 +22,17 @@ function summarize(t, record, extraEnv = {}, prepareArtifacts = () => {}) {
   const summaryPath = path.join(root, 'summary.md');
   const artifactsRoot = path.join(root, 'artifacts');
   prepareArtifacts(artifactsRoot);
+  const syncMetadata = syncState === null ? ''
+    : `<!-- workflows-consumer-sync:v1 ${JSON.stringify({
+      schema: 'workflows-consumer-sync-pr/v1',
+      consumer_repo: repository,
+      lifecycle_state: syncState,
+    })} -->\n`;
   fs.writeFileSync(eventPath, JSON.stringify({
     pull_request: {
       head: { ref: 'sync/workflows-delivery', sha: head, repo: { full_name: repository } },
       base: { repo: { full_name: repository } },
-      body: `<!-- sync-pr-delivery-record:v1 ${JSON.stringify(record)} -->`,
+      body: `${syncMetadata}<!-- sync-pr-delivery-record:v1 ${JSON.stringify(record)} -->`,
     },
   }));
   // Fix every renderer input explicitly; the outer CI job may supply its own.
@@ -89,6 +95,34 @@ test('valid exact-head seal clears the delivery hold', (t) => {
   const result = summarize(t, deliveryRecord());
   assert.match(result.outputs, /^state=success$/m);
   assert.doesNotMatch(result.summary, /Generated delivery hold/);
+});
+
+test('delivery record controls the summary when sync metadata has a different lifecycle state', (t) => {
+  // Regenerated PR #1247 retained staging sync metadata after its delivery record
+  // was sealed. Check that envelope with active checks, plus the inverse case:
+  // sync metadata claiming sealed must never clear a staging delivery hold.
+  const activeChecks = {
+    DOC_ONLY: 'false',
+    RUN_CORE: 'true',
+    REASON: '',
+    ORCHESTRATOR_NODE_TESTS_RESULT: 'success',
+  };
+  for (const [syncState, deliveryState, expectedState] of [
+    ['staging', 'sealed', 'success'],
+    ['sealed', 'staging', 'failure'],
+  ]) {
+    const result = summarize(t, deliveryRecord({ delivery_state: deliveryState }),
+      activeChecks, undefined, syncState);
+    assert.match(result.outputs, new RegExp(`^state=${expectedState}$`, 'm'));
+    if (expectedState === 'success') {
+      assert.match(result.outputs, /^description=All Gate checks succeeded\.$/m);
+      assert.doesNotMatch(result.summary, /Generated delivery hold|fast-pass/);
+    } else {
+      assert.match(result.outputs,
+        /^description=Generated delivery is not sealed: delivery state is staging\.$/m);
+      assert.match(result.summary, /Generated delivery hold/);
+    }
+  }
 });
 
 test('seal for a different head preserves the delivery hold', (t) => {
