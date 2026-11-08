@@ -1,12 +1,107 @@
 """Standalone gate fallback supplies only its explicitly supported disposable fixtures."""
 
 import functools
+import sys
 from pathlib import Path
 
 import pytest
 import test_capability_admission as gate
 
 import capability_admission as admission
+
+
+@pytest.fixture(autouse=True)
+def isolated_runtime(monkeypatch, tmp_path):
+    """These unit tests must never discover or write the operator's runtime state."""
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path / "runtime"))
+
+
+def test_audits_dir_honors_an_explicit_override(monkeypatch, tmp_path):
+    override = tmp_path / "audits"
+    monkeypatch.setenv("ORCH_AUDITS_DIR", str(override))
+    assert admission._audits_dir() == override
+
+
+def test_symbol_resolution_accepts_module_assignments_and_rejects_nested_nonclasses():
+    assert admission._python_symbol_defined("FLAG = object()\n", "FLAG")
+    assert admission._python_symbol_defined("FLAG: object = object()\n", "FLAG")
+    assert not admission._python_symbol_defined(
+        "def outer():\n    def inner(): pass\n", "outer.inner"
+    )
+
+
+def test_known_controls_skips_unreadable_candidate_files(monkeypatch, tmp_path):
+    monkeypatch.setattr(admission.paths, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(admission.paths, "MODULE_DIR", tmp_path)
+    (tmp_path / "router.py").write_text("flag = 'ORCH_ROUTE_ENABLED'", encoding="utf-8")
+    assert admission.known_controls() == {"ORCH_ROUTE_ENABLED"}
+
+
+def test_findability_context_fails_closed_when_advisor_raises(monkeypatch):
+    import capability_advisor
+
+    monkeypatch.setattr(
+        capability_advisor,
+        "consulting_surfaces",
+        lambda **_: (_ for _ in ()).throw(RuntimeError("no")),
+    )
+    context = admission._findability_context(["capability:x"])
+    assert context["bound_surfaces"] == {}
+    assert context["reached_surfaces"] == set()
+    assert context["consult_reach"]["unreadable"].startswith("RuntimeError: no")
+
+
+def test_admit_and_preflight_report_requirement_exceptions_without_passing(monkeypatch):
+    def broken_requirement(capability, context):
+        raise RuntimeError("deliberate predicate failure")
+
+    monkeypatch.setattr(admission, "REQUIREMENTS", (("broken", broken_requirement),))
+    monkeypatch.setattr(admission, "_findability_context", lambda *args, **kwargs: {})
+    row = admission.capabilities._blank_capability("capability:broken")
+    admitted = admission.admit(
+        "capability:broken", ledger={"capability:broken": row}, ctx={"isolated": True}
+    )
+    proposed = admission.preflight({"capability_id": "capability:proposed"})
+    assert admitted["missing"] == ["broken"]
+    assert proposed["declarable_missing"] == ["broken"]
+    assert "check errored: deliberate predicate failure" in admitted["checks"]["broken"]["detail"]
+    assert "check errored: deliberate predicate failure" in proposed["checks"]["broken"]["detail"]
+
+
+def test_commitments_continues_past_an_unreadable_source_file(monkeypatch, tmp_path):
+    audits = tmp_path / "audits"
+    audits.mkdir()
+    unreadable = tmp_path / "unreadable.py"
+    unreadable.write_text("ORCH_DEMO_UNTIL=2020-01-01", encoding="utf-8")
+    monkeypatch.setattr(admission, "AUDITS", audits)
+    original = Path.read_text
+
+    def read_text(self, *args, **kwargs):
+        if self == unreadable:
+            raise OSError("fixture unreadable")
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+    assert admission.commitments(root=tmp_path) == {
+        "dangling_citations": [],
+        "overdue_without_record": [],
+        "clean": True,
+    }
+
+
+def test_main_handles_file_preflight_and_clean_commitments(monkeypatch, tmp_path, capsys):
+    proposal = tmp_path / "proposal.json"
+    proposal.write_text('{"capability_id": "capability:from-file"}', encoding="utf-8")
+    monkeypatch.setattr(admission, "preflight", lambda spec: {"seen": spec["capability_id"]})
+    monkeypatch.setattr(sys, "argv", ["capability_admission.py", "--preflight", f"@{proposal}"])
+    assert admission.main() == 0
+    assert '"seen": "capability:from-file"' in capsys.readouterr().out
+    monkeypatch.setattr(admission, "commitments", lambda: {"clean": True})
+    monkeypatch.setattr(sys, "argv", ["capability_admission.py", "--commitments", "--json"])
+    assert admission.main() == 0
+    assert '"clean": true' in capsys.readouterr().out
+
 
 FIXTURE_CHECKS = (
     "test_an_act_outside_the_trailing_window_is_not_acting_now",
