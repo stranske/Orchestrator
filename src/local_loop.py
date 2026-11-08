@@ -154,6 +154,9 @@ class GitHub:
             if "Label does not exist" not in str(exc) and "404" not in str(exc):
                 raise
 
+    def ready(self, repo: str, number: int) -> None:
+        _gh(["pr", "ready", str(number), "-R", repo], rest=False)
+
     def comment(self, repo: str, number: int, body: str) -> None:
         _gh(
             ["api", "-X", "POST", f"repos/{repo}/issues/{number}/comments", "--input", "-"],
@@ -787,6 +790,8 @@ class Tick:
             "closer-core merges it from here."
         )
         if self.apply:
+            if pr.get("isDraft"):  # closer-core never merges a draft: done work is ready for review
+                self.gh.ready(repo, pr["number"])
             self.gh.comment(repo, pr["number"], msg)
         return {"action": "done", "reason": f"{rounds} rounds"}
 
@@ -812,11 +817,9 @@ class Tick:
     # ---- the whole tick
     def run(self) -> str:
         prs = self.gh.looped_prs()
-        for pr in prs:
-            if pr.get("state") == "OPEN" and not pr.get("isDraft"):
+        for pr in prs:  # drafts too: agents often open one, and CI still reports on it
+            if pr.get("state") == "OPEN":
                 self.step(pr)
-            else:
-                self.bump("draft")
         cap = self._cap or {}
         waiting = self.counts.get("wait-capacity", 0)
         return (

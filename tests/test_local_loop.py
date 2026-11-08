@@ -93,6 +93,9 @@ class FakeGH:
     def remove_label(self, repo, n, label):
         self.calls.append(("remove", n, label))
 
+    def ready(self, repo, n):
+        self.calls.append(("ready", n))
+
     def comment(self, repo, n, body):
         self.calls.append(("comment", n, body))
 
@@ -281,3 +284,12 @@ def test_owns_expires_when_the_loop_stops_ticking():
     tick.run()
     assert ll.owns("o/r#3", now=1000.0 + 60)
     assert ll.owns("o/r#3", now=1000.0 + ll.FRESH + 1) is None
+
+
+def test_a_done_draft_is_marked_ready_for_the_closer():
+    node = pr_node(state="SUCCESS", failing=())
+    node["isDraft"] = True
+    gh = FakeGH([node])
+    tick, _, _ = make_tick(gh, log="LOOP-TASKS-DONE: T1, T2")
+    tick.run()
+    assert tick.items[0]["action"] == "done" and ("ready", 3) in gh.calls
