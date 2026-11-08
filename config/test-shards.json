@@ -33,10 +33,12 @@
     "tests/test_langsmith_direct.py",
     "tests/test_strategy_experiment.py",
     "tests/test_issue1232_ranked_coverage.py",
-    "tests/test_gate_dispatch_recovery.py"
+    "tests/test_gate_dispatch_recovery.py",
+    "tests/test_issue1235_ranked_coverage.py"
   ],
   "shards": [
     [
+      "tests/test_issue1235_ranked_coverage.py",
       "tests/test_issue1232_ranked_coverage.py",
       "tests/test_adjudicator_collected_input.py",
       "tests/test_adjudicator_native_publication.py",
