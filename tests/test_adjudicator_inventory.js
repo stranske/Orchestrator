@@ -1698,6 +1698,65 @@ test('pre-dispatch inventory reconciles report and native locators without expos
   assert.ok(reportInventory(options).evidence_gaps.includes('native_journal_receipts_not_authenticated'));
 });
 
+test('blank native provider IDs remain missing paid identities with UNKNOWN recovery obligations', (t) => {
+  const { root, saved, journal, options } = nativeJournal(t);
+  saved.rows[0].later_truth = 'UNKNOWN';
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const connection = new DatabaseSync(journal);
+  t.after(() => connection.close());
+  const update = connection.prepare('UPDATE native_attempts SET backend_run_id=?');
+  for (const backend of [null, '', ' \t\r\n', '\u00a0\u2003', Buffer.from('invalid-id-type')]) {
+    update.run(backend);
+    const before = [options.report, journal].map((file) => fs.readFileSync(file));
+    const result = reportInventory(options);
+    assert.deepEqual(result.pre_dispatch.paid_identity_reconciliation, {
+      report_unique: 3, journal_unique: 0, union_unique: 3,
+      report_only: ['primary', 'prior', 'oldest'], journal_only: [],
+      unresolved_without_backend_id: ['b', 'c'],
+    });
+    const attempts = result.pre_dispatch.native_journal.attempts;
+    assert.deepEqual(attempts.map((item) => item.attempt_id), ['a', 'b', 'c', 'd', 'e', 'f']);
+    for (const item of attempts.filter((item) => item.state === 'in_flight')) {
+      assert.equal(item.recovery_step, 'UNKNOWN_recover_provider_receipt_before_any_retry');
+    }
+    assert.equal(attempts[3].raw_receipt_present, true);
+    assert.equal(attempts[4].validation_present, true);
+    assert.equal(result.cases[0].retained_later_truth, 'UNKNOWN');
+    assert.deepEqual(result.paid_attempts.map((item) => item.backend_run_id),
+      ['primary', 'prior', 'oldest', 'prior']);
+    assert.equal(result.receipt_authority, 'not_authenticated_by_inventory');
+    assert.equal(result.dispatch_authorized, false);
+    assert.ok(result.pre_dispatch.stop_reasons.includes('unresolved_native_attempts_require_recovery'));
+    assert.ok(!JSON.stringify(result).includes('private'));
+    const cli = execute(root, process.execPath, [script, '--report', options.report,
+      '--journal', journal, '--observed-at', String(now),
+      '--evidence-class', options.evidenceClass, '--evidence-reference', options.evidenceReference]);
+    assert.equal(cli.status, 0, cli.stderr);
+    assert.deepEqual(JSON.parse(cli.stdout).pre_dispatch.paid_identity_reconciliation,
+      result.pre_dispatch.paid_identity_reconciliation);
+    assert.deepEqual([options.report, journal].map((file) => fs.readFileSync(file)), before);
+  }
+});
+
+test('paid identity accounting preserves exact nonblank IDs instead of trimming or merging them', (t) => {
+  const { journal, options } = nativeJournal(t);
+  const connection = new DatabaseSync(journal);
+  connection.prepare("UPDATE native_attempts SET backend_run_id=? WHERE attempt_id='b'")
+    .run(' primary ');
+  connection.close();
+  const before = [options.report, journal].map((file) => fs.readFileSync(file));
+  const result = reportInventory(options);
+  assert.deepEqual(result.pre_dispatch.paid_identity_reconciliation, {
+    report_unique: 3, journal_unique: 4, union_unique: 6,
+    report_only: ['prior', 'oldest'],
+    journal_only: [' primary ', 'started-provider', 'native-provider'],
+    unresolved_without_backend_id: [],
+  });
+  assert.equal(result.pre_dispatch.native_journal.attempts[1].backend_run_id, ' primary ');
+  assert.equal(result.dispatch_authorized, false);
+  assert.deepEqual([options.report, journal].map((file) => fs.readFileSync(file)), before);
+});
+
 test('all validated native rows still require authentication, independent truth and live writer proof', (t) => {
   const { journal, options } = nativeJournal(t);
   const connection = new DatabaseSync(journal);

@@ -416,8 +416,12 @@ function journalInventory(journal, locationChecks) {
 function preDispatchInventory(saved, paid, journal, locationChecks) {
   const native = journalInventory(journal, locationChecks);
   const identities = new Set(paid.map((item) => item.backend_run_id));
+  // Keep malformed native locators visible, but do not count blank or non-text
+  // values as paid identities or let them hide a started UNKNOWN invocation.
+  // Test presence without normalizing the exact provider identity.
+  const hasBackendId = (value) => typeof value === 'string' && Boolean(value.trim());
   const journalIdentities = new Set((native.attempts || [])
-    .map((item) => item.backend_run_id).filter(Boolean));
+    .map((item) => item.backend_run_id).filter(hasBackendId));
   return {
     requested_generic_command: '--dispatch --retry --limit 21',
     generic_retry_route: Object.hasOwn(saved, 'native_publication')
@@ -435,7 +439,7 @@ function preDispatchInventory(saved, paid, journal, locationChecks) {
         ? [...journalIdentities].filter((item) => !identities.has(item)) : null,
       // A started attempt without an id is still a possible paid invocation.
       unresolved_without_backend_id: native.status === 'available'
-        ? native.attempts.filter((item) => item.state === 'in_flight' && !item.backend_run_id)
+        ? native.attempts.filter((item) => item.state === 'in_flight' && !hasBackendId(item.backend_run_id))
           .map((item) => item.attempt_id) : null,
     },
     live_writer_ownership: 'unverified',
