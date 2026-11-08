@@ -92,14 +92,17 @@ def test_tier_only_codex_run_passes_the_table_level() -> None:
     assert not any("model_reasoning_effort" in part for part in assess)
 
 
-def test_profile_run_keeps_its_immutable_level() -> None:
+def test_profile_run_keeps_its_immutable_level(monkeypatch) -> None:
+    # Only the argv is checked, so the exact-profile binary lookup is stubbed: the test must run
+    # on hosts without the Codex app bundle (CI), not skip there.
+    monkeypatch.setattr(adapters, "profile_codex_binary", lambda: "codex")
     profile = execution_profiles.CODEX_TASK_PROFILES["review"]
     effort = execution_profiles.get_profile(profile)["reasoning_effort"]
-    try:
-        cmd = adapters.build_command("codex", "x", mode="full", profile=profile, transport="local")
-    except RuntimeError:
-        pytest.skip("no Codex profile binary on this host")
+    cmd = adapters.build_command("codex", "x", mode="full", profile=profile, transport="local")
     assert cmd.count(f'model_reasoning_effort="{effort}"') == 1
+    assert (
+        cmd[cmd.index("--model") + 1] == execution_profiles.get_profile(profile)["requested_model"]
+    )
 
 
 def test_missing_profile_for_a_table_pair_refuses() -> None:
