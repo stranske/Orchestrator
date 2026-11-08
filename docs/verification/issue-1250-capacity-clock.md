@@ -195,3 +195,49 @@ Staging in the workspace fails with `Read-only file system` for
 isolated checkout at `/tmp/issue-1250-expiry-check`; the commit patch is
 `/tmp/issue-1250-expiry-check.patch`. The workspace contains the same changes for
 the automation collection step.
+
+## Repeated capacity deferral regression (2026-11-08)
+
+The existing Node scenario now retries once while capacity remains zero, before
+making workers available. Each invocation crosses the logical deadline with wall
+time. The retry must retain target `a`, defer for `worker_capacity` with trigger
+`capacity_recheck`, record a new capacity sample at logical time `1800000030`,
+execute no action, and pass `validate_stop`. The original receipt must retain its
+sample at `1800000000`. The subsequent capacity recovery completes exactly one
+action and passes stop validation.
+
+Validation:
+
+```text
+node --test --test-isolation=none --test-reporter=tap tests/test_closer_pipeline_capacity_clock.js
+# tests 6
+# pass 6
+# fail 0
+```
+
+In `/tmp/issue-1250-fresh-capacity`, a temporary production mutation replaced the
+zero-capacity receipt's sample timestamp with the first round's timestamp.
+The prior six Node tests all passed against that mutation. The extended suite
+failed, showing actual `sampled_at: 1800000000` versus expected
+`sampled_at: 1800000030`. Restoring production code returned all six cases to
+passing. The restored Python source matches the workspace byte for byte. The
+mutation logs are `/tmp/issue-1250-fresh-capacity/stale-capacity-red.log` and
+`/tmp/issue-1250-fresh-capacity/fresh-capacity-green.log`.
+
+The targeted command
+`python3 -m pytest tests/test_closer_pipeline.py --cov=closer_pipeline --cov-report=term-missing -m 'not slow'`
+still fails with `No module named pytest`. Installing pytest, pytest-cov and
+Black into `/tmp/issue-1250-test-tools` found no distributions. Aggregate and
+combined coverage remain unverified. PR #1247 still has its original head
+`7ba7006dc3243a7bf0221d709e4de5562c89f042`; regeneration and the next sync-core
+classification remain external checks. No outstanding validation checkbox was
+marked complete.
+
+Only the JavaScript regression and this record changed. The workspace's Git
+directory remains read-only. The commit is prepared in
+`/tmp/issue-1250-fresh-capacity`, with its patch exported to
+`/tmp/issue-1250-fresh-capacity.patch` for application outside the sandbox.
+
+Posting the blocker comment and adding `needs-human` to PR #1251 were rejected
+because the GitHub tools require approval and the approval policy is `never`.
+Neither remote mutation succeeded.

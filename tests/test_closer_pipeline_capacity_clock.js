@@ -94,12 +94,22 @@ with tempfile.TemporaryDirectory(prefix="capacity-clock-") as directory:
     first_actions = list(actions)
     logical_now[0] += 30
     wall_now[0] = logical_now[0] - 60
+    # A retry can still find no capacity. It must resample rather than retain
+    # the first round's evidence or lose the target after the wall-clock jump.
+    retried = run()
+    retry_stop = validate_stop(state, ["a"], now=logical_clock)
+    retry_actions = list(actions)
+    logical_now[0] += 30
+    wall_now[0] = logical_now[0] - 60
     capacity.update(io=1, low=1, exception=1)
     resumed = run()
     print(json.dumps({
         "deferred": deferred,
         "first_stop": first_stop["valid"],
         "first_actions": first_actions,
+        "retried": retried["targets"]["a"],
+        "retry_stop": retry_stop["valid"],
+        "retry_actions": retry_actions,
         "resumed_status": resumed["targets"]["a"]["status"],
         "actions": actions,
         "resumed_stop": validate_stop(state, ["a"], now=logical_clock)["valid"],
@@ -133,12 +143,21 @@ function requireCapacityRecovery(result) {
     sampled_at: 1800000000,
   });
   assert.equal(observed.first_stop, true);
+  assert.equal(observed.retried.status, 'deferred');
+  assert.equal(observed.retried.deferred_reason, 'worker_capacity');
+  assert.equal(observed.retried.deferred_next_trigger, 'capacity_recheck');
+  assert.deepEqual(observed.retried.resource_evidence.capacity, {
+    lane: 'io', active: 0, limit: 0, available: 0, required: 1,
+    sampled_at: 1800000030,
+  });
+  assert.equal(observed.retry_stop, true);
+  assert.deepEqual(observed.retry_actions, []);
   assert.equal(observed.resumed_status, 'completed');
   assert.deepEqual(observed.actions, ['a']);
   assert.equal(observed.resumed_stop, true);
 }
 
-test('capacity defers and resumes with a logical clock across admission delay', () => {
+test('capacity retries resample zero capacity before recovery across admission delays', () => {
   requireCapacityRecovery(runScenario('logical'));
 });
 
