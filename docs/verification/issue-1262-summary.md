@@ -69,3 +69,41 @@ were also rejected because they require approval and this run's approval policy
 is `never`. The diagnosis and handoff are recorded here instead.
 PR #1263 was re-read before handoff and remains open with `draft=false` at
 `a641ac80855787a9c0302a5972c2d83e23c4d9b9`.
+
+## Keepalive follow-up verification
+
+The linked summary job and run jobs were read again through the GitHub connector.
+Step 30 still identifies the staging delivery hold as the failure. The requested
+`gh run view 42500846882 --repo stranske/Orchestrator --log-failed` was also
+retried and could not connect to api.github.com.
+
+Three additional renderer regressions now exercise active checks, extending the
+earlier docs-only controls:
+
+- [x] Reproduce the staging hold with required Python jobs skipped and the seal
+  job failed, matching the linked run; the hold takes precedence over missing
+  Python artifacts or a pending rerun.
+- [x] Verify that an exact-head seal still requires Python shard receipts when
+  Python checks are required.
+- [x] Verify that an exact-head seal preserves success, failure, and cancelled
+  Node-job verdicts for changes without Python.
+
+The focused command
+`node --test --test-isolation=none .github/scripts/__tests__/gate_delivery_seal.test.js`
+passes all seven tests. `git diff --check` also passes. No Python or workflow
+files were edited. The full scripts test command
+`node --test --test-isolation=none .github/scripts/__tests__/*.test.js`
+passes all 47 tests with none skipped. The source-fix and live acceptance tasks remain incomplete:
+these tests verify the existing rejection and its interaction with active checks,
+and do not repair the external delivery lifecycle or reproduce the unobserved
+disappearing-file failure.
+
+The commit attempt failed at `git add` because `.git/index.lock` cannot be created
+on the read-only filesystem. `python3 -m pytest --version` and `black --version`
+again confirm that the Python verification tools are unavailable. Full Python
+verification remains unconfirmed.
+
+The connector rejected both the PR blocker comment and the `needs-human` label
+because they require approval and this run's approval policy is `never`.
+PR #1263 remains open with `draft=false` at
+`a5b94ec1636129368a23a948f27e7e04bf395ebb`.

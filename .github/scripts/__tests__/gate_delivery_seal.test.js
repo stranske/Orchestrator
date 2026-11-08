@@ -100,3 +100,52 @@ test('failed seal job overrides a valid event seal', (t) => {
   assert.match(result.outputs, /^state=failure$/m);
   assert.match(result.summary, /Generated delivery hold/);
 });
+
+test('staging hold takes precedence over skipped Python jobs in the linked run', (t) => {
+  const result = summarize(t,
+    deliveryRecord({ delivery_state: 'staging', sealed_head_sha: '' }), {
+      DOC_ONLY: 'false',
+      RUN_CORE: 'true',
+      REASON: '',
+      PYTHON_REQUIRED: 'true',
+      PYTHON_RESULT: 'skipped',
+      DOCS_GUARD_RESULT: 'skipped',
+      DELIVERY_SEAL_RESULT: 'failure',
+    });
+  assert.match(result.outputs, /^state=failure$/m);
+  assert.match(result.outputs,
+    /^description=Generated delivery is not sealed: delivery state is staging\.$/m);
+  assert.doesNotMatch(result.outputs, /waiting for rerun|Python CI artifacts missing/);
+});
+
+test('sealing a delivery still requires Python shard receipts for active checks', (t) => {
+  const result = summarize(t, deliveryRecord(), {
+    DOC_ONLY: 'false',
+    RUN_CORE: 'true',
+    REASON: '',
+    PYTHON_REQUIRED: 'true',
+    PYTHON_RESULT: 'success',
+  });
+  assert.match(result.outputs, /^state=failure$/m);
+  assert.match(result.outputs, /^description=Python CI artifacts missing:/m);
+  assert.match(result.summary, /Python shard artifacts: .*missing/);
+  assert.doesNotMatch(result.summary, /Generated delivery hold/);
+});
+
+test('sealed delivery preserves the Node job verdict for changes without Python', (t) => {
+  for (const [jobResult, state, description] of [
+    ['success', 'success', 'All Gate checks succeeded.'],
+    ['failure', 'failure', 'Orchestrator node tests result: failure.'],
+    ['cancelled', 'pending', 'Orchestrator node tests cancelled; waiting for rerun.'],
+  ]) {
+    const result = summarize(t, deliveryRecord(), {
+      DOC_ONLY: 'false',
+      RUN_CORE: 'true',
+      REASON: '',
+      ORCHESTRATOR_NODE_TESTS_RESULT: jobResult,
+    });
+    assert.match(result.outputs, new RegExp(`^state=${state}$`, 'm'), jobResult);
+    assert.ok(result.outputs.split('\n').includes(`description=${description}`), jobResult);
+    assert.doesNotMatch(result.summary, /Generated delivery hold/);
+  }
+});
