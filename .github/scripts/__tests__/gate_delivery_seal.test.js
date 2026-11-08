@@ -14,7 +14,8 @@ const renderer = path.resolve(__dirname, '..', 'gate_summary.py');
 const head = '7ba7006dc3243a7bf0221d709e4de5562c89f042';
 const repository = 'stranske/Orchestrator';
 
-function summarize(t, record, extraEnv = {}, prepareArtifacts = () => {}, syncState = null) {
+function summarize(t, record, extraEnv = {}, prepareArtifacts = () => {}, syncState = null,
+  branch = 'sync/workflows-delivery') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-delivery-1262-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const eventPath = path.join(root, 'event.json');
@@ -30,7 +31,7 @@ function summarize(t, record, extraEnv = {}, prepareArtifacts = () => {}, syncSt
     })} -->\n`;
   fs.writeFileSync(eventPath, JSON.stringify({
     pull_request: {
-      head: { ref: 'sync/workflows-delivery', sha: head, repo: { full_name: repository } },
+      head: { ref: branch, sha: head, repo: { full_name: repository } },
       base: { repo: { full_name: repository } },
       body: `${syncMetadata}<!-- sync-pr-delivery-record:v1 ${JSON.stringify(record)} -->`,
     },
@@ -114,6 +115,36 @@ test('valid exact-head seal clears the delivery hold', (t) => {
   const result = summarize(t, deliveryRecord());
   assert.match(result.outputs, /^state=success$/m);
   assert.doesNotMatch(result.summary, /Generated delivery hold/);
+});
+
+test('bounded review settlement keeps both stable branches held until sealing', (t) => {
+  const activeChecks = {
+    DOC_ONLY: 'false',
+    RUN_CORE: 'true',
+    REASON: '',
+    ORCHESTRATOR_NODE_TESTS_RESULT: 'success',
+    TEST_QUALITY_RESULT: 'success',
+  };
+  for (const branch of ['sync/workflows-candidate', 'sync/workflows-delivery']) {
+    for (const deliveryState of ['staging', 'reviewing', 'sealed']) {
+      // Keep the exact head, valid lease, and successful jobs fixed: completing
+      // review settlement must be what clears the hold reproduced in #1262.
+      const result = summarize(t, deliveryRecord({ delivery_state: deliveryState }),
+        activeChecks, undefined, null, branch);
+      const context = `${branch}: ${deliveryState}`;
+      if (deliveryState === 'sealed') {
+        assert.match(result.outputs, /^state=success$/m, context);
+        assert.match(result.outputs, /^description=All Gate checks succeeded\.$/m, context);
+        assert.doesNotMatch(result.summary, /Generated delivery hold|fast-pass/, context);
+      } else {
+        assert.match(result.outputs, /^state=failure$/m, context);
+        assert.ok(result.outputs.split('\n').includes(
+          `description=Generated delivery is not sealed: delivery state is ${deliveryState}.`),
+        context);
+        assert.match(result.summary, /Maint 71 must complete bounded review settlement/, context);
+      }
+    }
+  }
 });
 
 test('an expired exact-head seal stays blocked until its lease is renewed', (t) => {

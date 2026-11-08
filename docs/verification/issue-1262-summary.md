@@ -228,3 +228,29 @@ changed. `git add` fails because `.git/index.lock` is read-only. The connector
 rejects both the blocker comment and `needs-human` label because approval is
 required and the approval policy is `never`. The source-fix, full-verification,
 and future sync-core acceptance tasks remain incomplete.
+
+## Bounded review settlement regression
+
+The linked job's log and step metadata were rechecked: step 15, **Summarize
+results**, succeeds; step 30, **Enforce Gate success**, rejects the staging
+delivery. Neither quoted exception executed. The requested `gh run view` still
+cannot connect to api.github.com, so the log was read through the connector.
+
+The added regression follows `staging` → `reviewing` → `sealed` on both
+`sync/workflows-candidate` and `sync/workflows-delivery`, holding the exact head,
+valid lease, and successful active jobs fixed. Both incomplete lifecycle states
+retain their specific hold description; sealing clears it. All 52 script tests
+pass with no skips using
+`node --test --test-isolation=none .github/scripts/__tests__/*.test.js`.
+A disposable renderer that accepts `reviewing` fails the new test with
+`sync/workflows-candidate: reviewing`; restoring it passes. This verifies the
+review-settlement boundary, not a source fix or the unobserved fixture failure.
+
+`git diff --check` passes. No Python or workflow files changed. The full local
+command `PYTEST_ADDOPTS='-m "not slow"' timeout 45s python3 -u src/verify.py
+--floor-may-lag` exits 124 without a verdict; pytest remains unavailable.
+The commit attempt fails because `git add` cannot create `.git/index.lock` on
+the read-only filesystem. The connector rejects the blocker comment and
+`needs-human` label because approval is required and this run's approval policy
+is `never`; neither was posted. PR #1263 remains open with `draft=false` at
+`c8d3e805e141d07ff862668f57eaf93b4d057740`.
