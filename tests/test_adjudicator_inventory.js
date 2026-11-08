@@ -1665,6 +1665,108 @@ test('reused native backend identities remain ambiguous even when one candidate 
   assert.equal(locator.authenticated, false);
 });
 
+for (const duplicateCase of ['case-a', 'case-b']) {
+  test(`unreferenced reused provider IDs retain recovery for validated receipts on ${duplicateCase}`, (t) => {
+    const { root, saved, journal, options } = nativeJournal(t);
+    const identities = saved.rows.map((row, index) => ({ run_id: `original-${index}`,
+      target: row.target }));
+    saved.rows.forEach((row, index) => {
+      Object.assign(row, identities[index], { later_truth: 'UNKNOWN' });
+    });
+    fs.writeFileSync(options.report, JSON.stringify(saved));
+    const manifest = manifestFile(root, identities);
+    const connection = new DatabaseSync(journal);
+    connection.exec("DELETE FROM native_attempts WHERE attempt_id != 'e'");
+    connection.prepare(`INSERT INTO native_attempts
+      SELECT 'duplicate', ?, 'different-revision', case_digest, state, backend_run_id,
+        report_sha256, created_at, updated_at, raw_response, validated_json
+      FROM native_attempts WHERE attempt_id='e'`).run(duplicateCase);
+    connection.close();
+    const inputs = [options.report, journal, manifest];
+    const before = inputs.map((file) => fs.readFileSync(file));
+    const result = reportInventory({ ...options, manifest });
+    const attempts = result.pre_dispatch.native_journal.attempts;
+    assert.equal(attempts.length, 2);
+    for (const attempt of attempts) {
+      assert.deepEqual(attempt.receipt_evidence_gaps, ['backend_identity_reused']);
+      assert.equal(attempt.recovery_step, 'resolve_native_receipt_identity_before_any_retry');
+      assert.equal(attempt.validation_observation.retained_result, 'retained_binary_decision');
+    }
+    const accounting = result.pre_dispatch.paid_identity_reconciliation;
+    assert.equal(accounting.journal_unique, 1, 'do not manufacture a second paid identity');
+    assert.deepEqual(accounting.journal_only, ['native-provider']);
+    assert.equal(accounting.union_unique, 4);
+    assert.ok(result.pre_dispatch.stop_reasons.includes('native_receipt_evidence_missing'));
+    const requested = result.manifest_reconciliation.cases;
+    for (let index = 0; index < requested.length; index += 1) {
+      const recovery = requested[index].native_case_recovery;
+      assert.deepEqual(recovery.unresolved_attempts.map((row) => row.attempt_id),
+        attempts.filter((row) => row.case_id === saved.rows[index].case_id)
+          .map((row) => row.attempt_id));
+    }
+    assert.deepEqual(result.cases.map((row) => row.retained_later_truth), ['UNKNOWN', 'UNKNOWN']);
+    assert.deepEqual(result.paid_attempts.map((row) => row.backend_run_id),
+      ['primary', 'prior', 'oldest', 'prior']);
+    assert.ok(result.retained_attempt_observations.every((row) =>
+      row.native_receipt_locator.status === 'native_attempt_not_found'));
+    assert.equal(result.receipt_authority, 'not_authenticated_by_inventory');
+    assert.equal(result.dispatch_authorized, false);
+    assert.ok(!JSON.stringify(result).includes('private'));
+    const cli = execute(root, process.execPath, [script, '--report', options.report,
+      '--journal', journal, '--manifest', manifest, '--observed-at', String(now),
+      '--evidence-class', options.evidenceClass, '--evidence-reference', options.evidenceReference]);
+    assert.equal(cli.status, 0, cli.stderr);
+    assert.deepEqual(JSON.parse(cli.stdout), result);
+    assert.deepEqual(inputs.map((file) => fs.readFileSync(file)), before);
+
+    // A genuinely different exact ID clears the collision. Do not trim IDs
+    // and manufacture ambiguity between distinct provider invocation strings.
+    const writer = new DatabaseSync(journal);
+    const validation = JSON.parse(writer.prepare(
+      "SELECT validated_json FROM native_attempts WHERE attempt_id='duplicate'").get().validated_json);
+    validation.backend_run_id = 'native-provider ';
+    writer.prepare("UPDATE native_attempts SET backend_run_id=?,validated_json=? WHERE attempt_id='duplicate'")
+      .run(validation.backend_run_id, JSON.stringify(validation));
+    writer.close();
+    const distinctBytes = inputs.map((file) => fs.readFileSync(file));
+    const distinct = reportInventory({ ...options, manifest });
+    assert.equal(distinct.pre_dispatch.paid_identity_reconciliation.journal_unique, 2);
+    assert.equal(distinct.pre_dispatch.paid_identity_reconciliation.union_unique, 5);
+    assert.ok(distinct.pre_dispatch.native_journal.attempts.every((row) =>
+      row.receipt_evidence_gaps.length === 0));
+    assert.ok(distinct.manifest_reconciliation.cases.every((row) =>
+      row.native_case_recovery.unresolved_attempts.length === 0));
+    assert.equal(distinct.receipt_authority, 'not_authenticated_by_inventory');
+    assert.equal(distinct.dispatch_authorized, false);
+    assert.deepEqual(inputs.map((file) => fs.readFileSync(file)), distinctBytes);
+  });
+}
+
+test('reused provider identities preserve reservation and in-flight UNKNOWN recovery', (t) => {
+  const { journal, options } = nativeJournal(t);
+  const connection = new DatabaseSync(journal);
+  connection.exec("UPDATE native_attempts SET backend_run_id='native-provider' WHERE attempt_id != 'f'");
+  connection.close();
+  const before = [options.report, journal].map((file) => fs.readFileSync(file));
+  const result = reportInventory(options);
+  const attempts = result.pre_dispatch.native_journal.attempts;
+  assert.deepEqual(attempts.slice(0, 5).map((row) => row.receipt_evidence_gaps),
+    Array.from({ length: 5 }, () => ['backend_identity_reused']));
+  assert.deepEqual(attempts.map((row) => row.recovery_step), [
+    'producer_must_prove_invocation_never_started',
+    'UNKNOWN_recover_provider_receipt_before_any_retry',
+    'UNKNOWN_recover_provider_receipt_before_any_retry',
+    'resolve_native_receipt_identity_before_any_retry',
+    'resolve_native_receipt_identity_before_any_retry',
+    'unrecognized_state_requires_native_review',
+  ]);
+  assert.equal(result.pre_dispatch.paid_identity_reconciliation.journal_unique, 1);
+  assert.equal(result.pre_dispatch.paid_identity_reconciliation.union_unique, 4);
+  assert.equal(result.receipt_authority, 'not_authenticated_by_inventory');
+  assert.equal(result.dispatch_authorized, false);
+  assert.deepEqual([options.report, journal].map((file) => fs.readFileSync(file)), before);
+});
+
 test('pre-dispatch inventory reconciles report and native locators without exposing payloads', (t) => {
   const { root, journal, options } = nativeJournal(t);
   const before = fs.readFileSync(journal);

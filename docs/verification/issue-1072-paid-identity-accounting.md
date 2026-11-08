@@ -28,3 +28,39 @@ Normal staging fails because Git metadata is read-only. The focused change is
 preserved with isolated Git metadata and a transferable bundle at
 `/tmp/orchestrator-1072-paid-identities/change.bundle`; the checkout branch and
 remote are unchanged.
+
+## Reused native invocation identities
+
+Checked on 2026-11-08 against checkout
+`306d232f443cb4d518a11e8dbdda21ee6d17776f` plus this change.
+
+The exporter now flags every native receipt sharing a nonblank provider run ID,
+including IDs absent from saved report attempts. Previously, two validated
+binary receipts with that ID could disappear from requested case recovery.
+They now retain an explicit identity-resolution obligation. Unique paid counts
+still count the shared ID once; exact distinct IDs remain distinct. Reservation
+and in-flight UNKNOWN recovery steps remain intact.
+
+Two API/CLI regressions fail against the previous exporter and pass after the
+fix. They cover separate material revisions within one case and across cases,
+without changing report/journal bytes or exposing provider payloads. A third
+regression verifies reservation, in-flight and raw-receipt recovery. The combined
+retained-report, native inventory and live-cohort suites pass 186 tests; the
+final retained-report suite passes all 133 tests after adding the third case
+(187 distinct tests across the suites). Diagnostic and replay/publication
+unittests pass 32 and seven tests. JavaScript syntax and whitespace checks pass.
+No Python files changed.
+
+The configured canonical report and runtime directory remain absent. Authentic
+original/journal locations and live deployment/mirror bindings were not supplied.
+No dispatch, production grade, historical proof, live decision or completed
+operational checkbox is claimed. The required retrospective pytest command with
+`-m 'not slow'` cannot start because pytest is unavailable. PR #1081 was observed
+open with `draft=false`.
+
+Normal staging fails because `.git/index.lock` cannot be created on the read-only
+Git mount. The focused change is preserved with isolated Git metadata and a
+transferable bundle at `/tmp/orchestrator-1072-reused-identities/change.bundle`;
+the checkout branch and remote are unchanged.
+Automatic approval review rejected the blocker comment and `needs-human` label
+because GitHub writes require approval while this run's policy is `never`.

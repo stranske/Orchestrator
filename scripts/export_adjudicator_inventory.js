@@ -373,6 +373,15 @@ function journalInventory(journal, locationChecks) {
       ['validated', 'reauthenticate_with_native_projection_before_grading'],
     ]);
     const { records } = observed;
+    // An invocation identity must locate one native attempt, even when no
+    // retained report row references it. Keep all colliding receipts visible;
+    // a validated result cannot resolve an ambiguous invocation by itself.
+    const backendCounts = new Map();
+    for (const { backend_run_id: backend } of records) {
+      if (typeof backend === 'string' && backend.trim()) {
+        backendCounts.set(backend, (backendCounts.get(backend) || 0) + 1);
+      }
+    }
     const attempts = records.map((item, index) => {
       const { validated_json, raw_response, ...locator } = item;
       const validation = nativeValidationObservation(validated_json,
@@ -395,6 +404,14 @@ function journalInventory(journal, locationChecks) {
         recoveryStep = validation.retained_result === 'retained_abstention'
           ? 'recover_fresh_collected_evidence_before_any_retry'
           : 'inspect_native_validation_result_before_any_retry';
+      }
+      if (backendCounts.get(item.backend_run_id) > 1) {
+        gaps.push('backend_identity_reused');
+        // Preserve reservation/in-flight UNKNOWN recovery obligations. A
+        // completed response still needs its invocation identity disentangled.
+        if (['raw_persisted', 'validated'].includes(item.state)) {
+          recoveryStep = 'resolve_native_receipt_identity_before_any_retry';
+        }
       }
       // Bind the retained text without parsing or normalizing provider output.
       // Presence alone cannot distinguish receipts across dated observations;
