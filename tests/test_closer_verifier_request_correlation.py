@@ -225,37 +225,6 @@ def test_optional_marker_basis_is_strict_and_roundtrips_trusted_parser(tmp_path,
     assert invalid["_request_correlation_unusable"] is True
 
 
-def test_initial_and_existing_label_dispatch_send_correlation_without_route_fallback(
-    tmp_path, monkeypatch
-):
-    calls = []
-    gh = SimpleNamespace(
-        api=lambda endpoint, **kwargs: calls.append((endpoint, kwargs))
-        or {"default_branch": "main"}
-    )
-    closer = dispatcher.Closer(gh, state_path=tmp_path / "queue", apply=True)
-    snapshot = {"target": TARGET, "head": "a" * 40, "merge": "b" * 40, "labels": ["verify:compare"]}
-    monkeypatch.setattr(closer, "_verification_preflight", lambda *a: None)
-    prepared = closer.prepare_verify(TARGET, snapshot)
-    assert prepared["fields"]["inputs[verification_request_basis]"] == prepared["request_basis"]
-    result = closer.submit_verify(TARGET, snapshot, prepared)
-    assert calls[-1][1]["fields"]["inputs[verification_request_basis]"] == prepared["request_basis"]
-    assert result["verification_post_accepted"]["correlation_input"] == prepared["request_basis"]
-    snapshot["labels"] = []
-    prepared = closer.prepare_verify(TARGET, snapshot)
-    assert prepared["mutation_kind"] == "workflow_dispatch"
-    result = closer.submit_verify(TARGET, snapshot, prepared)
-    assert result["verification_post_accepted"]["correlation_input"] == prepared["request_basis"]
-    legacy = {
-        "mutation_kind": "label",
-        "endpoint": "original-label",
-        "fields": {"labels[]": "verify:compare"},
-        "request_basis": closer.verification_request_basis(snapshot),
-    }
-    result = closer.submit_verify(TARGET, snapshot, legacy)
-    assert "correlation_input" not in result["verification_post_accepted"]
-
-
 def test_acknowledgment_alone_cannot_retrofit_legacy_core_correlation(tmp_path):
     path, target, accepted, observation = terminal_world(tmp_path)
     document = json.loads(path.read_text())

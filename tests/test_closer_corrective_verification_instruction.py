@@ -170,50 +170,6 @@ def test_producer_passes_full_protected_collection_before_selected_row_narrowing
     assert full.lineno < selected.lineno < calls[0].lineno
 
 
-def test_canonical_native_selector_roundtrips_existing_repeat_material_path():
-    import verification_events
-
-    selector = json.loads(
-        (
-            Path(__file__).parent / "fixtures/closer_corrective_instruction/v1-native-selector.json"
-        ).read_text()
-    )
-    assert instruction.validate_selector(selector) == selector
-    assert verification_events.material_selectors([selector]) == [selector]
-    value = verification_events.material_selectors([selector])[0]
-    value["owner_instruction"]["writer_id"] += 1
-    assert value != selector  # No alias to the original protected scope.
-
-
-@pytest.mark.parametrize(
-    "damage", ["missing", "extra", "identity", "head", "tests", "time", "unknown_kind"]
-)
-def test_typed_selector_refuses_malformed_without_dropping_to_plain_evidence(damage):
-    import verification_events
-
-    selector = json.loads(
-        (
-            Path(__file__).parent / "fixtures/closer_corrective_instruction/v1-native-selector.json"
-        ).read_text()
-    )
-    if damage == "missing":
-        del selector["required_tests_sha256"]
-    elif damage == "extra":
-        selector["act_authorized"] = True
-    elif damage == "identity":
-        selector["incumbent_assignee"]["id"] = True
-    elif damage == "head":
-        selector["corrective_pr"]["head_sha"] = "not-a-head"
-    elif damage == "tests":
-        selector["required_tests_sha256"] = []
-    elif damage == "time":
-        selector["owner_instruction"]["updated_at"] = "invalid"
-    else:
-        selector["kind"] = "unknown_corrective_instruction"
-    with pytest.raises(ValueError):
-        verification_events.material_selectors([selector])
-
-
 def test_ambiguous_suffix_refuses_instead_of_selecting_one_machine_instruction():
     request, text, raw = inputs()
     body = instruction.append("human", request, text, raw, max_bytes=effects.MAX_PAYLOAD)

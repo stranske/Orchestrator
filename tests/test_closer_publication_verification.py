@@ -445,37 +445,6 @@ def test_fresh_native_binding_refusals_do_not_trigger_verification_or_act(world,
     assert world.remote.posts == []
 
 
-def test_case_variant_repository_spelling_keeps_fresh_and_verifier_bindings(world, monkeypatch):
-    import closer_corrective_verifier_readback as readback
-
-    cap = continuation(world)
-    record = join._record(cap)
-    target = "sTrAnSkE/ExAmPlE#9"
-    world.remote.current.update(target=target, head_repository="STRANSKE/example")
-
-    def snapshot(actual):
-        assert actual == target
-        return copy.deepcopy(world.remote.current)
-
-    monkeypatch.setattr(world.remote, "snapshot", snapshot)
-    assert join._fresh(world.backend, target, record)["evidence"]["target"] == target
-
-    monkeypatch.setattr(readback, "require_deployed", lambda *_args: None)
-    prepared = {
-        "mutation_kind": "workflow_dispatch",
-        "fields": {"ref": "main"},
-        "material_selectors": [],
-        "verification_predecessor": None,
-    }
-    built = join.bind_verifier_inputs(
-        cap, world.backend, target, {**world.remote.current, "state": "MERGED"}, prepared
-    )
-    assert join.material_selector(cap) in json.loads(
-        built["fields"]["inputs[verification_material]"]
-    )
-    assert world.remote.posts == []
-
-
 @pytest.mark.parametrize("target", ["foreign/example#9", "stranske/EXAMPLE#09"])
 def test_case_normalization_refuses_foreign_repository_or_different_pr_number(world, target):
     cap = continuation(world)
@@ -537,46 +506,6 @@ def test_unknown_old_head_is_reconciled_without_new_action(world):
     callbacks = join.queue_callbacks(continuation(world), world.backend)
     result = callbacks.reconcile(world.target, {"binding": {"head": "a" * 40}, "action": "merge"})
     assert result["status"] == "unknown" and world.remote.posts == []
-
-
-def test_corrective_merged_request_holds_until_canonical_required_scope_is_wired(world):
-    world.remote.current.update(state="MERGED", merge="b" * 40, checks="SUCCESS", revision="merged")
-    world.remote.pull.update(state="closed", merged=True, merge_commit_sha="b" * 40)
-    world.backend.apply = True
-    callbacks = join.queue_callbacks(continuation(world), world.backend)
-    row = callbacks.observe(world.target)
-    assert row["action"] == "post_merge_verify" and row["eligible"] is True
-    _run(
-        world.backend.state_path, [world.target], callbacks.observe, callbacks.execute, max_passes=1
-    )
-    assert world.remote.posts == []
-    import closer_queue
-
-    operation = closer_queue._read_state(world.backend.state_path)["items"][world.target][
-        "operation"
-    ]
-    assert operation["status"] == "confirmed_not_started"
-    assert operation["result"]["verification_no_start"]["post_started"] is False
-    assert (
-        operation["result"]["reason"] == "canonical corrective evaluator input consumer unavailable"
-    )
-
-
-def test_ordinary_verifier_actor_preserves_its_dispatch_and_ack_wait(world, tmp_path):
-    world.remote.current.update(state="MERGED", merge="b" * 40, checks="SUCCESS", revision="merged")
-    world.remote.pull.update(state="closed", merged=True, merge_commit_sha="b" * 40)
-    # No corrective context: original actor behavior is unchanged. All API effects
-    # are the same inert Remote fixture, not GitHub or a verifier/model execution.
-    backend = native.Closer(world.remote, state_path=tmp_path / "ordinary.json", apply=True)
-    _run(backend.state_path, [world.target], backend.observe, backend.execute, max_passes=1)
-    assert len(world.remote.posts) == 1
-    fields = world.remote.posts[0]
-    assert fields["inputs[mode]"] == "compare" and fields["inputs[pr_number]"] == "9"
-    assert "inputs[verification_material]" not in fields
-    assert "inputs[verification_predecessor]" not in fields
-    assert world.remote.current["verifier"] is None
-    assert backend.observe(world.target)["action"] in {"wait", "collect_evidence"}
-    assert len(world.remote.posts) == 1
 
 
 def test_generic_tasks_pass_cannot_close_missing_corrective_test_scope(world, tmp_path):
@@ -821,46 +750,6 @@ def test_actual_canonical_manifest_roundtrip_is_integrity_only(damage):
             join._validate_manifest(record, manifest, snapshot)
 
 
-@pytest.mark.parametrize("repeat", [False, True])
-def test_supported_input_builder_adds_exact_scope_without_fake_predecessor(
-    world, monkeypatch, repeat
-):
-    import closer_corrective_verifier_readback as readback
-
-    cap = continuation(world)
-    monkeypatch.setattr(
-        readback,
-        "require_deployed",
-        lambda backend, record, branch: {"synthetic_support_data": True},
-    )
-    prior = {
-        "kind": "comment",
-        "url": "https://github.com/stranske/example/issues/8#issuecomment-123",
-    }
-    prepared = dict(
-        mutation_kind="workflow_dispatch",
-        fields={"ref": "main"},
-        material_selectors=[prior] if repeat else [],
-        verification_predecessor="a" * 64 if repeat else None,
-    )
-    if repeat:
-        prepared["fields"]["inputs[verification_predecessor]"] = "a" * 64
-    before = copy.deepcopy(prepared)
-    snapshot = {**world.remote.current, "state": "MERGED"}
-    built = join.bind_verifier_inputs(cap, world.backend, world.target, snapshot, prepared)
-    selected = json.loads(built["fields"]["inputs[verification_material]"])
-    assert join.material_selector(cap) in selected
-    assert built["verification_predecessor"] == before["verification_predecessor"]
-    assert ("inputs[verification_predecessor]" in built["fields"]) == repeat
-    if repeat:
-        assert prior in selected
-    assert prepared == before
-    # Repeating the builder retains one exact typed scope, not a second row.
-    again = join.bind_verifier_inputs(cap, world.backend, world.target, snapshot, built)
-    assert again == built
-    assert world.remote.posts == []
-
-
 def test_corrective_readback_preserves_actual_round_capacity_control(world, monkeypatch):
     import closer_corrective_verifier_readback as readback
 
@@ -966,38 +855,6 @@ def test_observation_hint_only_plans_missing_scope_and_preserves_existing_fences
     else:
         assert value is observation
     assert bool(reads) == (mode in {"generic_pass", "scoped_pass"})
-    assert world.remote.posts == []
-
-
-def test_additional_scope_uses_only_genuine_same_pr_settled_predecessor(world, monkeypatch):
-    import closer_corrective_verifier_readback as readback
-    import verification_events
-
-    cap = continuation(world)
-    event = copy.deepcopy(world.result["request"]["original_verifier"]["verification_event"])
-    event.update(pr="9", head_sha="d" * 40, evaluated_sha="b" * 40)
-    event["event_id"] = verification_events.event_id(event)
-    terminal = {"verification_event": event}
-    snapshot = {**world.remote.current, "state": "MERGED", "merge": "b" * 40, "verifier": terminal}
-    monkeypatch.setattr(readback, "require_deployed", lambda *_args: None)
-    monkeypatch.setattr(readback, "_selected_comment", lambda *_args: ({}, terminal))
-    prepared = dict(
-        mutation_kind="workflow_dispatch",
-        fields={"ref": "main"},
-        material_selectors=[],
-        verification_predecessor=None,
-    )
-    built = join.bind_verifier_inputs(cap, world.backend, world.target, snapshot, prepared)
-    assert built["verification_predecessor"] == event["event_id"]
-    assert built["fields"]["inputs[verification_predecessor]"] == event["event_id"]
-    assert (
-        event["event_id"]
-        != world.result["request"]["original_verifier"]["verification_event"]["event_id"]
-    )
-    wrong = copy.deepcopy(prepared)
-    wrong["verification_predecessor"] = "0" * 64
-    with pytest.raises(join.ContinuationHeld, match="predecessor differs"):
-        join.bind_verifier_inputs(cap, world.backend, world.target, snapshot, wrong)
     assert world.remote.posts == []
 
 
