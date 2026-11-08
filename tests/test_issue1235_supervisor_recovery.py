@@ -8,12 +8,14 @@ import socket
 import subprocess
 import tempfile
 import unittest
-from contextlib import ExitStack
+from contextlib import ExitStack, nullcontext
 from pathlib import Path
 from unittest.mock import Mock, patch
 
 import dispatcher
 import keepalive_supervisor as supervisor
+import provision
+import runtime_ac_gate
 
 
 class SupervisorRecoveryTests(unittest.TestCase):
@@ -95,6 +97,55 @@ class SupervisorRecoveryTests(unittest.TestCase):
         self.gh.assert_called_once_with(["api", "repos/o/r/issues/7"])
         self.lineage.assert_not_called()
         self.record.assert_not_called()
+
+    def test_invalid_operation_phase_refuses_replay(self):
+        self.path.write_text(json.dumps({**self.operation, "phase": "unknown"}))
+        before = self.path.read_bytes()
+        with self.assertRaisesRegex(ValueError, "invalid closure operation phase"):
+            self.close_issue()
+        self.assertEqual(self.path.read_bytes(), before)
+        self.gh.assert_called_once_with(["api", "repos/o/r/issues/7"])
+        self.lineage.assert_not_called()
+        self.record.assert_not_called()
+
+    def assert_checkout_refused(self, returncode, actual_sha):
+        checkout = self.root / "checkout"
+        worktree = self.stack.enter_context(
+            patch.object(
+                provision, "temporary_exact_head_worktree", return_value=nullcontext(checkout)
+            )
+        )
+        probe = self.stack.enter_context(
+            patch.object(
+                subprocess,
+                "run",
+                return_value=subprocess.CompletedProcess([], returncode, actual_sha + "\n"),
+            )
+        )
+        recheck = self.stack.enter_context(patch.object(runtime_ac_gate, "recheck_merged"))
+        issue = {
+            "target": self.issue_target,
+            "body": "## Acceptance Criteria\n- `pytest tests/test_contract.py` passes.",
+        }
+        with self.assertRaisesRegex(RuntimeError, "acceptance checkout does not match merge commit"):
+            supervisor._closure_gate("o/r#21", issue, self.sha)
+        worktree.assert_called_once_with("o/r#21", self.sha)
+        probe.assert_called_once_with(
+            ["git", "-C", str(checkout), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        recheck.assert_not_called()
+        self.gh.assert_not_called()
+        self.record.assert_not_called()
+
+    def test_acceptance_gate_refuses_mismatched_checkout(self):
+        self.assert_checkout_refused(returncode=0, actual_sha="b" * 40)
+
+    def test_acceptance_gate_refuses_failed_git_probe(self):
+        self.assert_checkout_refused(returncode=1, actual_sha=self.sha)
 
     def test_confirmed_receipt_retries_without_reclosing_issue(self):
         self.path.write_text(json.dumps(self.operation))
