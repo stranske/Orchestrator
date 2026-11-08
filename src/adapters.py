@@ -2177,7 +2177,7 @@ def build_command(
             # A tier-only run (no execution profile) still passes the shared table's level for
             # that tier, so local Codex never falls back to whatever ~/.codex/config.toml says.
             # The level follows the tier actually run (after any seat ceiling), never the asked one.
-            reasoning_effort = model_table.tier_effort("codex", effective_tier("codex", mode))
+            reasoning_effort = model_table.tier_effort("codex", effective_tier("codex", mode or ""))
         if reasoning_effort:
             cmd += ["-c", f'model_reasoning_effort="{reasoning_effort}"']
         if out_file:
