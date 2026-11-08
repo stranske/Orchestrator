@@ -111,7 +111,9 @@ class SupervisorRecoveryTests(unittest.TestCase):
     def assert_checkout_refused(self, returncode, actual_sha):
         checkout = self.root / "checkout"
         worktree = self.stack.enter_context(
-            patch.object(provision, "temporary_exact_head_worktree", return_value=nullcontext(checkout))
+            patch.object(
+                provision, "temporary_exact_head_worktree", return_value=nullcontext(checkout)
+            )
         )
         probe = self.stack.enter_context(
             patch.object(
