@@ -1115,6 +1115,134 @@ def select_remote_agent(
     return pick
 
 
+# ---- Mode choice: LOCAL FIRST, offload to hosted keepalive under load (owner decision 2026-11-08) ----
+# Measured 2026-11-08 on 905 local delegations (14 days, joined to feedback outcomes): merge rate by the
+# number of OTHER local agents already running at start was 71% (0), 74% (1), 68% (2), 57% (3), 65% (4+).
+# The 4th concurrent agent is the knee, so at most LOCAL_AGENT_CAP run locally; beyond it the work goes to
+# a hosted runner, whose performance does not depend on this machine. Load average stays as a backstop at
+# the same 2 x cores closer-core used (its 108 machine-load defers recorded loads 20..273; macOS counts
+# Dropbox I/O wait in load, so load alone is noisy and live claims are the direct measure).
+LOCAL_AGENT_CAP = 3
+LOCAL_LOAD_PER_CORE = 2
+
+
+def local_capacity(
+    *, running: int | None = None, load1: float | None = None, cores: int | None = None
+) -> dict:
+    """Can one more local coding agent start without slowing the ones already running?
+
+    `running` = live local delegate claims (claims.active_claims: an agent's claim is released by its
+    wrapper when it exits and a dead holder's claim is reaped), the SAME quantity that drains the gate,
+    so the line always says how much is drainable. Unknown inputs never close the gate (fail toward
+    motion). Returns {ok, running, cap, drainable, load1, load_limit, reason}."""
+    if running is None:
+        try:
+            running = len(claims.active_claims())
+        except Exception as exc:  # unreadable claims: unknown, not full -- but say the cap is off
+            print(
+                f"router.local_capacity: claims unreadable ({type(exc).__name__}); "
+                "local agent cap not enforced this call",
+                file=sys.stderr,
+            )
+            running = None
+    if load1 is None:
+        try:
+            load1 = os.getloadavg()[0]
+        except OSError:
+            load1 = None
+    cores = cores or os.cpu_count() or 4
+    limit = LOCAL_LOAD_PER_CORE * cores
+    full = running is not None and running >= LOCAL_AGENT_CAP
+    hot = load1 is not None and load1 >= limit
+    agents = f"local agents {'?' if running is None else running}/{LOCAL_AGENT_CAP}"
+    load_txt = f"load {'?' if load1 is None else f'{load1:.1f}'}/{limit}"
+    parts = []
+    if full:
+        parts.append(f"{agents} (drainable {running}: each releases its slot on exit)")
+    if hot:
+        parts.append(f"{load_txt} (2 x {cores} cores)")
+    return {
+        "ok": not (full or hot),
+        "running": running,
+        "cap": LOCAL_AGENT_CAP,
+        "drainable": running or 0,
+        "load1": load1,
+        "load_limit": limit,
+        "reason": "; ".join(parts) or f"{agents}, {load_txt}",
+    }
+
+
+def choose_mode(
+    task_type: str,
+    cap: dict,
+    *,
+    tried=(),
+    learned: dict | None = None,
+    needs_local: str = "",
+    local: dict | None = None,
+) -> dict:
+    """Where the next start runs: {agent, mode: 'local'|'remote'|None, reason, local}.
+
+    Local first while `local_capacity` is ok (the local keepalive loop, local_loop.py, gives it the same
+    CI-feedback rounds hosted keepalive has). Offload to hosted keepalive when local capacity is out, the
+    machine is loaded, or no agent can run locally. `needs_local` (a reason, e.g. a workflow-file edit a
+    hosted token cannot push) keeps the work local and waits for a slot instead. The reason is recorded
+    on every start so durability can be compared by mode and by why."""
+    tried = set(tried)
+    local = local or local_capacity()
+    route_agents = {e["agent"] for spec in _ROUTE_TABLE_TYPED.values() for e in spec["agents"]}
+    # backup seats (paygo aider, explicit-only muse) are never auto-selected, local or hosted
+    untried = route_agents - tried - BACKUP_AGENTS
+    if not local["ok"] and needs_local:
+        return {
+            "agent": None,
+            "mode": None,
+            "reason": f"needs local ({needs_local}) but {local['reason']}; waits for a local slot",
+            "local": local,
+        }
+    if local["ok"]:
+        pick = select_agent(task_type, cap, learned=learned, only=untried) if untried else None
+        if pick and pick.get("agent") and pick["agent"] not in tried:
+            why = f"needs local ({needs_local})" if needs_local else "local first"
+            return {
+                "agent": pick["agent"],
+                "mode": "local",
+                "reason": f"{why}: {local['reason']}",
+                "local": local,
+            }
+        if needs_local:
+            return {
+                "agent": None,
+                "mode": None,
+                "reason": f"needs local ({needs_local}) but no untried local agent has capacity",
+                "local": local,
+            }
+        local_miss = "no untried local agent has capacity"
+    else:
+        local_miss = local["reason"]
+    remote = select_remote_agent(task_type, cap, learned=learned)
+    if not remote or not remote.get("agent") or remote["agent"] in tried:
+        others = KEEPALIVE_AGENTS - tried - BACKUP_AGENTS
+        remote = (
+            select_agent(task_type, cap, learned=learned, only=others, profile_transport="remote")
+            if others
+            else None
+        )
+    if remote and remote.get("agent") and remote["agent"] not in tried:
+        return {
+            "agent": remote["agent"],
+            "mode": "remote",
+            "reason": f"offload to hosted: {local_miss}",
+            "local": local,
+        }
+    return {
+        "agent": None,
+        "mode": None,
+        "reason": f"no capacity: local ({local_miss}); hosted (no untried keepalive agent)",
+        "local": local,
+    }
+
+
 def _pressure(cap: dict) -> bool:
     """A scarce coding seat is constrained -> review work yields this tick."""
     return any(_state(cap, a) in ("warn", "shed") for a in SCARCE_AGENTS)
