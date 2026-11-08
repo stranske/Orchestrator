@@ -1554,19 +1554,41 @@ def test_completion_drives_next_stage_without_waiting_for_slow_peer(tmp_path):
 
 
 def test_capacity_is_read_fresh_and_zero_defers(tmp_path):
+    path = tmp_path / "state.json"
+    logical_now = 1_800_000_000.0
+    capacity = {"io": 0, "low": 0, "exception": 0}
     calls = []
     cb = callbacks(
         act=lambda t, c: calls.append(t) or {"status": "completed", "target_complete": True}
     )
     receipt = run(
-        tmp_path / "state.json",
+        path,
         ["a"],
         cb,
-        capacity={"io": 0, "low": 0, "exception": 0},
-        seconds=0.06,
+        capacity=capacity,
+        # Capacity admission must not depend on starting within 60 ms of wall time.
+        now=lambda: logical_now,
     )
     assert not calls
-    assert receipt["targets"]["a"]["status"] == "deferred"
+    row = receipt["targets"]["a"]
+    assert row["status"] == "deferred"
+    assert row["deferred_reason"] == "worker_capacity"
+    assert row["deferred_next_trigger"] == "capacity_recheck"
+    assert row["resource_evidence"]["capacity"] == {
+        "lane": "io",
+        "active": 0,
+        "limit": 0,
+        "available": 0,
+        "required": 1,
+        "sampled_at": logical_now,
+    }
+    assert validate_stop(path, ["a"], now=lambda: logical_now)["valid"]
+
+    capacity.update(io=1, low=1, exception=1)
+    resumed = run(path, ["a"], cb, capacity=capacity, now=lambda: logical_now)
+    assert calls == ["a"]
+    assert resumed["targets"]["a"]["status"] == "completed"
+    assert validate_stop(path, ["a"], now=lambda: logical_now)["valid"]
 
 
 def test_zero_low_capacity_yields_without_waiting_for_long_deadline(tmp_path):
