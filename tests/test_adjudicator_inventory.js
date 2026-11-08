@@ -1525,6 +1525,84 @@ for (const change of ['atomic replacement', 'symlink retarget', 'removal']) {
   });
 }
 
+for (const change of ['atomic replacement', 'symlink retarget', 'removal']) {
+  for (const boundary of ['receipt read', 'connection cleanup']) {
+    test(`report inventory rejects journal ${change} during final ${boundary}`, (t) => {
+      const { journal, options } = nativeJournal(t);
+      const retained = `${journal}.retained`;
+      const replacement = `${journal}.replacement`;
+      const bytes = fs.readFileSync(journal);
+      const reportBytes = fs.readFileSync(options.report);
+      fs.writeFileSync(replacement, bytes);
+      if (change === 'symlink retarget') {
+        fs.renameSync(journal, retained);
+        fs.symlinkSync(retained, journal);
+      }
+      const initialInode = fs.statSync(journal, { bigint: true }).ino;
+      const read = fs.readFileSync;
+      const prepare = DatabaseSync.prototype.prepare;
+      const close = DatabaseSync.prototype.close;
+      let reportReads = 0;
+      let finalReader;
+      let switched = false;
+      const switchJournal = () => {
+        switched = true;
+        if (change === 'symlink retarget') {
+          fs.unlinkSync(journal);
+          fs.symlinkSync(replacement, journal);
+        } else if (change === 'atomic replacement') {
+          fs.renameSync(replacement, journal);
+        } else {
+          fs.unlinkSync(journal);
+        }
+      };
+      fs.readFileSync = function observe(file, ...args) {
+        if (file === options.report) reportReads += 1;
+        return read(file, ...args);
+      };
+      DatabaseSync.prototype.prepare = function observe(sql, ...args) {
+        const statement = prepare.call(this, sql, ...args);
+        if (reportReads === 2 && sql === 'SELECT * FROM native_attempts ORDER BY attempt_id') {
+          finalReader = this;
+          return { all: (...bindings) => {
+            const rows = statement.all(...bindings);
+            if (boundary === 'receipt read') switchJournal();
+            return rows;
+          } };
+        }
+        return statement;
+      };
+      DatabaseSync.prototype.close = function observe(...args) {
+        const result = close.apply(this, args);
+        if (this === finalReader && boundary === 'connection cleanup') switchJournal();
+        return result;
+      };
+      try {
+        assert.throws(() => reportInventory(options), /native journal location changed during inventory/);
+      } finally {
+        fs.readFileSync = read;
+        DatabaseSync.prototype.prepare = prepare;
+        DatabaseSync.prototype.close = close;
+      }
+      assert.equal(switched, true, 'switch occurs inside the final receipt consistency check');
+      assert.equal(reportReads, 2);
+      if (change === 'removal') fs.renameSync(replacement, journal);
+      assert.notEqual(fs.statSync(journal, { bigint: true }).ino, initialInode);
+      assert.deepEqual(fs.readFileSync(journal), bytes);
+      assert.deepEqual(fs.readFileSync(options.report), reportBytes);
+      const later = reportInventory(options);
+      assert.equal(later.pre_dispatch.native_journal.status, 'available');
+      assert.deepEqual(later.pre_dispatch.native_journal.attempts.map((row) => row.attempt_id),
+        ['a', 'b', 'c', 'd', 'e', 'f']);
+      assert.deepEqual(later.pre_dispatch.paid_identity_reconciliation.unresolved_without_backend_id, ['b']);
+      assert.equal(later.receipt_authority, 'not_authenticated_by_inventory');
+      assert.equal(later.dispatch_authorized, false);
+      assert.ok(!JSON.stringify(later).includes('private'));
+      assert.deepEqual(fs.readFileSync(journal), bytes);
+    });
+  }
+}
+
 test('native receipt locators bind both case and backend identity for each retained attempt', (t) => {
   const { root, saved, journal, options } = nativeJournal(t);
   saved.rows[0].retry_attempts = [{ backend_run_id: 'native-provider' }];

@@ -316,7 +316,8 @@ function journalInventory(journal, locationChecks) {
     // Keep the selected journal attributable through the final report reads,
     // even after SQLite closes its snapshot. Equal replacement bytes cannot
     // establish that the receipt locators still belong to this location.
-    locationChecks.push(pinFileLocation(journal, 'native journal'));
+    const checkJournalLocation = pinFileLocation(journal, 'native journal');
+    locationChecks.push(checkJournalLocation);
     connection = new DatabaseSync(journal, { readOnly: true });
     connection.exec('BEGIN');
     if (connection.prepare('PRAGMA application_id').get().application_id !== 1313097550) {
@@ -344,6 +345,7 @@ function journalInventory(journal, locationChecks) {
     // WAL commits, and inode equality cannot pin receipt content. Compare full
     // records, including private raw/validation bytes, without emitting them.
     locationChecks.push(() => {
+      checkJournalLocation();
       let fresh;
       try {
         fresh = new DatabaseSync(journal, { readOnly: true });
@@ -357,6 +359,9 @@ function journalInventory(journal, locationChecks) {
       } finally {
         if (fresh) fresh.close();
       }
+      // The open reader can retain the old inode through a replacement or
+      // removal. Check after cleanup as well, including on the final pass.
+      checkJournalLocation();
     });
     const attempts = records.map((item, index) => {
       const { validated_json, raw_response, ...locator } = item;

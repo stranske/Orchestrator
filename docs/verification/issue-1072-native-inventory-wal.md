@@ -550,3 +550,35 @@ on the read-only `.git/index.lock` location. The verified change is preserved in
 separate local Git repository and
 `/tmp/orchestrator-1072-brain-location/change.bundle`; the checkout branch and
 remote are unchanged.
+
+## Journal location across the final receipt read
+
+Checked on 2026-11-08 against checkout
+`a84403fb117d48b219fb2bd1ed36c95bfcd781ac` plus this change. Retained-report
+inventory now checks the journal's selected location after each receipt reader
+closes. Previously, replacement, symlink retargeting or removal during the final
+receipt query or connection cleanup could leave stale locators in the output,
+even though the returned receipt records still matched the original snapshot.
+
+All six new regressions fail before the fix and pass afterward. A stable later
+observation preserves receipt locators, paid identities and UNKNOWN recovery
+steps without exposing private payloads or changing input bytes. The pre-change
+inventory/live-cohort baseline passes 163 tests; the updated three JavaScript
+suites pass all 169 tests with `node --test --test-isolation=none --test-reporter=tap`
+against `tests/test_adjudicator_inventory.js`, `tests/test_adjudicator_native_inventory.js`
+and `tests/test_adjudicator_live_cohort.js`. Diagnostic and replay/publication
+unittests pass 32 and seven tests. JavaScript syntax and whitespace checks pass.
+No Python files changed; the required retrospective pytest command with
+`-m 'not slow'` cannot start because pytest is absent.
+
+These are fixture results. The configured retrospective report, live report,
+runtime directory and independent outcomes database are absent. Authentic
+original/journal locations and live deployment/mirror bindings remain unavailable.
+No dispatch, canonical refresh, historical proof, live decision or operational
+task completion is claimed. PR #1081 was checked open with `draft=false`.
+
+Shared Git metadata is read-only. The focused change is preserved in an isolated
+local commit and `/tmp/orchestrator-1072-final-journal-location/change.bundle`;
+the checkout branch and remote are unchanged. Automatic approval review rejected
+the blocker comment and `needs-human` label because GitHub writes require approval
+while this run's policy is `never`; neither was published.
