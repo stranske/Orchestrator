@@ -2745,11 +2745,11 @@ def _controlled_data_only_entry(function):
 
     @functools.wraps(function)
     def invoke(*args, **kwargs):
-        import closer_correction_maintenance
+        import offload_guard
 
         try:
-            closer_correction_maintenance.assert_offload_allowed()
-        except closer_correction_maintenance.MaintenanceUnknown:
+            offload_guard.assert_offload_allowed()
+        except offload_guard.MaintenanceUnknown:
             return {
                 "agent": kwargs.get("agent", args[0] if args else None),
                 "exit": 2,
