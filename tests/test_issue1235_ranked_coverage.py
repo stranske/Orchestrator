@@ -87,6 +87,53 @@ def test_panel_selects_review_and_rejects_invalid_documents():
         panel.parse_review_output("x" * panel.JSON_SCAN_LIMIT + '{"verdict":"PASS"}', "a")
 
 
+def test_panel_json_scan_recovers_after_malformed_brackets():
+    output = 'Reviewer notes: [not JSON] {broken} finally {"verdict":"PASS","rationale":"checked"}'
+    assert panel.parse_review_output(output, "a") == {
+        "reviewer": "a",
+        "verdict": "PASS",
+        "rationale": "checked",
+    }
+
+
+@pytest.mark.parametrize(
+    "gate_verdict,review_verdicts,reason",
+    [
+        (
+            "NEEDS_REVIEW",
+            ["PASS", "PASS"],
+            "automated runtime AC gate still needs review",
+        ),
+        (
+            "PASS",
+            ["FAIL", "NEEDS_REVIEW"],
+            "fail review present, but pass threshold was not met",
+        ),
+        (
+            "PASS",
+            ["NEEDS_REVIEW", "NEEDS_REVIEW"],
+            "panel did not reach a pass threshold",
+        ),
+    ],
+)
+def test_panel_keeps_inconclusive_evidence_pending(gate_verdict, review_verdicts, reason):
+    reviews = [
+        {"reviewer": f"judge-{index}", "verdict": verdict}
+        for index, verdict in enumerate(review_verdicts)
+    ]
+    result = panel.adjudicate_panel(runtime_ac._valid_spec(), {"verdict": gate_verdict}, reviews)
+    assert result["verdict"] == "NEEDS_REVIEW"
+    assert result["verifier_verdict"] == "NEEDS_REVIEW_RUNTIME_AC"
+    assert result["reason"] == reason
+    assert result["gate_verdict"] == gate_verdict
+    assert result["n_reviews"] == 2
+    assert result["n_vetoes"] == 0
+    assert [review["verdict"] for review in result["reviews"]] == review_verdicts
+    assert result["counts"] == {
+        verdict: review_verdicts.count(verdict) for verdict in panel.VALID_PANEL_VERDICTS
+    }
+
+
 def test_panel_dispatch_fails_closed_on_invalid_adapter_results(tmp_path):
     spec, gate, _ = panel_files(tmp_path)
     offload = Mock(side_effect=[None, {"exit": 3, "stderr_tail": "offline"}, {"exit": 4}])
