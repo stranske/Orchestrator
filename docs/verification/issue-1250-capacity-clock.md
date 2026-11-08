@@ -110,3 +110,58 @@ sync acceptance checks remain unverified.
 Posting the updated blocker comment and adding `needs-human` to PR #1251 were
 both rejected again: `MCP tool call requires approval, but approval policy is
 never`. Neither remote mutation succeeded.
+
+## Executable Node regression (2026-11-08)
+
+`tests/test_closer_pipeline_capacity_clock.js` now exercises the production
+`run_pipeline` and `validate_stop` APIs through `node --test` and the bundled
+Python interpreter. It needs no third-party Python packages. Each subprocess
+owns a temporary state directory and has a 15-second hang guard. The test keeps
+the original 60-millisecond budget and models the pre-admission scheduling pause
+with separate logical and wall clocks, without sleeping.
+
+Validation command (process isolation is disabled so this sandbox reports each
+individual Node test):
+
+```text
+node --test --test-isolation=none --test-reporter=tap tests/test_closer_pipeline_capacity_clock.js
+# tests 4
+# pass 4
+# fail 0
+```
+
+The positive case verifies zero-capacity deferral, the exact IO capacity sample,
+no premature action, a fresh-capacity retry against the same state, exactly one
+completed action, and both stop validations. Three negative controls independently
+restore wall-clock deadline calculation, wall-clock admission, or both. Each must
+exit 1 with `admission_deadline_expired`, empty targets, and this traceback:
+
+```text
+Traceback (most recent call last):
+  File "<string>", line 59, in <module>
+    deferred = first["targets"]["a"]
+               ~~~~~~~~~~~~~~~~^^^^^
+KeyError: 'a'
+```
+
+Each negative control then restores the logical-clock fixture and requires all
+positive assertions to pass again. No broken source is left in the checkout.
+
+- [x] Add and execute a regression test using the permitted `node --test` runner.
+- [ ] Run the original named pytest case and the complete pipeline pytest module.
+- [ ] Verify the repository aggregate and combined coverage.
+- [ ] Verify regenerated sync PR #1247 and the next sync-core classification.
+
+The last three checks remain unverified. The targeted pytest command still fails
+with `No module named pytest`; the required Black check exits 127 because Black
+is missing. Installing pytest, pytest-cov, and Black into `/tmp` failed against
+both the configured package index and official PyPI; a direct PyPI request confirms
+DNS resolution is unavailable. This round changes a JavaScript test and this
+verification record, with no `.py` edits. The successful Node regression does not
+substantiate the existing PR checkbox claiming aggregate verification passed.
+
+The workspace's `.git` directory is mounted read-only: staging fails while
+creating `.git/index.lock`. The tested JavaScript and this record are committed
+in an isolated checkout at `/tmp/issue-1250-commit`; an applyable commit patch is
+exported to `/tmp/issue-1250-capacity-clock.patch`. The shared workspace retains
+the same reviewed changes for the automation's normal collection step.
