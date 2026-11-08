@@ -34,7 +34,8 @@ class RankedCoverageTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="issue1253-")
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
+        self.root = Path(temporary.name).resolve()
+        self.use_patch(patch.object(tempfile, "tempdir", str(self.root)))
         self.use_patch(
             patch.dict(
                 os.environ,
@@ -72,6 +73,66 @@ class RankedCoverageTests(unittest.TestCase):
         ):
             self.use_patch(patch.object(module, name, self.denied))
         self.heartbeat = self.use_patch(patch.object(capabilities, "production_heartbeat"))
+        self.write_violations = []
+        self.addCleanup(self.assertEqual, self.write_violations, [])
+        # Explicit runtime overrides do not protect an accidentally hardcoded writer.
+        # Guard the file-opening APIs too, including tempfile's low-level os.open.
+        for module in (builtins, io):
+            original = module.open
+
+            def guarded_open(file, mode="r", *args, _open=original, **kwargs):
+                if any(flag in mode for flag in "wax+"):
+                    self.assert_runtime_write(file)
+                return _open(file, mode, *args, **kwargs)
+
+            self.use_patch(patch.object(module, "open", guarded_open))
+        original_os_open = os.open
+        self.runtime_descriptors = {}
+
+        def guarded_os_open(file, flags, *args, **kwargs):
+            writing = flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND)
+            if writing:
+                self.assertIsNone(kwargs.get("dir_fd"), "unexpected relative runtime write")
+                self.assert_runtime_write(file)
+            descriptor = original_os_open(file, flags, *args, **kwargs)
+            if writing:
+                stat = os.fstat(descriptor)
+                self.runtime_descriptors[descriptor] = (stat.st_dev, stat.st_ino)
+            return descriptor
+
+        self.use_patch(patch.object(os, "open", guarded_os_open))
+        original_mkdir = os.mkdir
+
+        def guarded_mkdir(path, *args, **kwargs):
+            self.assertIsNone(kwargs.get("dir_fd"), "unexpected relative runtime write")
+            self.assert_runtime_write(path)
+            return original_mkdir(path, *args, **kwargs)
+
+        self.use_patch(patch.object(os, "mkdir", guarded_mkdir))
+        for name in ("rename", "replace"):
+            original = getattr(os, name)
+
+            def guarded_move(source, destination, *args, _move=original, **kwargs):
+                self.assertIsNone(kwargs.get("src_dir_fd"), "unexpected relative runtime write")
+                self.assertIsNone(kwargs.get("dst_dir_fd"), "unexpected relative runtime write")
+                self.assert_runtime_write(source)
+                self.assert_runtime_write(destination)
+                return _move(source, destination, *args, **kwargs)
+
+            self.use_patch(patch.object(os, name, guarded_move))
+
+    def assert_runtime_write(self, file):
+        if isinstance(file, int):
+            stat = os.fstat(file)
+            self.assertEqual(
+                self.runtime_descriptors.get(file),
+                (stat.st_dev, stat.st_ino),
+                "unexpected writable file descriptor",
+            )
+            return
+        if not Path(file).resolve().is_relative_to(self.root):
+            self.write_violations.append(str(file))
+            self.fail(f"write outside temporary runtime: {file}")
 
     def use_patch(self, patcher):
         value = patcher.start()
