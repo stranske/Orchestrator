@@ -1333,6 +1333,82 @@ function nativeJournal(t) {
   return { ...fixture, journal, options: { ...fixture.options, journal } };
 }
 
+for (const [state, column] of [
+  ['raw_persisted', 'raw_response'],
+  ['validated', 'raw_response'],
+  ['validated', 'validated_json'],
+]) {
+  test(`binary ${column} remains a recovery gap in a ${state} receipt`, (t) => {
+    const { root, saved, journal, options } = nativeJournal(t);
+    const identity = { run_id: 'original', target: 'owner/repo#1' };
+    const id = state === 'validated' ? 'e' : 'd';
+    const backend = state === 'validated' ? 'native-provider' : 'primary';
+    saved.rows = [{ ...identity, case_id: 'case-a', backend_run_id: backend,
+      decision: 'reject_blocker', later_truth: 'UNKNOWN',
+      retry_attempts: [{ backend_run_id: 'earlier-paid' }] }];
+    fs.writeFileSync(options.report, JSON.stringify(saved));
+    const manifest = manifestFile(root, [identity]);
+    const writer = new DatabaseSync(journal);
+    t.after(() => writer.close());
+    const original = writer.prepare(`SELECT ${column} AS value FROM native_attempts WHERE attempt_id=?`)
+      .get(id).value;
+    // Include valid UTF-8 and valid JSON bytes: check storage type before
+    // interpreting provider content as the native producer's text receipt.
+    for (const bytes of [Buffer.from(original), Buffer.alloc(0), Buffer.from([0xff, 0xfe])]) {
+      writer.prepare(`UPDATE native_attempts SET ${column}=? WHERE attempt_id=?`).run(bytes, id);
+      const inputs = [options.report, journal, manifest];
+      const before = inputs.map((file) => fs.readFileSync(file));
+      const result = reportInventory({ ...options, manifest });
+      const attempt = result.pre_dispatch.native_journal.attempts.find((row) => row.attempt_id === id);
+      const gap = column === 'raw_response' ? 'raw_response_invalid_type'
+        : 'validation_result_invalid_storage_type';
+      assert.equal(attempt.raw_receipt_present, true);
+      assert.ok(attempt.receipt_evidence_gaps.includes(gap));
+      assert.equal(attempt.recovery_step, 'recover_missing_native_receipt_evidence_without_redispatch');
+      if (column === 'raw_response') {
+        assert.equal(attempt.raw_response_sha256, null);
+      } else {
+        assert.equal(attempt.validation_present, true);
+        assert.equal(attempt.validation_observation.status, 'invalid_storage_type');
+        assert.equal(attempt.validation_observation.stored_text_sha256, null);
+        assert.equal(attempt.validation_observation.retained_result, null);
+      }
+      const locator = result.retained_attempt_observations[0].native_receipt_locator;
+      assert.equal(locator.authenticated, false);
+      assert.ok(locator.attempts[0].receipt_evidence_gaps.includes(gap));
+      assert.equal(locator.next_evidence_step, attempt.recovery_step);
+      const recovery = result.manifest_reconciliation.cases[0].native_case_recovery
+        .unresolved_attempts.find((row) => row.attempt_id === id);
+      assert.ok(recovery, 'a validated binary claim cannot hide malformed stored receipt evidence');
+      assert.deepEqual(recovery.receipt_evidence_gaps, attempt.receipt_evidence_gaps);
+      assert.equal(recovery.next_evidence_step, attempt.recovery_step);
+      assert.deepEqual(result.paid_attempts.map((row) => row.backend_run_id), [backend, 'earlier-paid']);
+      assert.deepEqual(result.pre_dispatch.paid_identity_reconciliation.unresolved_without_backend_id, ['b']);
+      assert.ok(result.pre_dispatch.stop_reasons.includes('native_receipt_evidence_missing'));
+      assert.equal(result.cases[0].retained_decision, 'reject_blocker');
+      assert.equal(result.cases[0].retained_later_truth, 'UNKNOWN');
+      assert.equal(result.dispatch_authorized, false);
+      assert.equal(Object.hasOwn(result, 'graded'), false);
+      assert.ok(!JSON.stringify(result).includes('private'));
+      const cli = execute(root, process.execPath, [script, '--report', options.report,
+        '--journal', journal, '--manifest', manifest, '--observed-at', String(now),
+        '--evidence-class', options.evidenceClass, '--evidence-reference', options.evidenceReference]);
+      assert.equal(cli.status, 0, cli.stderr);
+      assert.deepEqual(JSON.parse(cli.stdout), result);
+      assert.deepEqual(inputs.map((file) => fs.readFileSync(file)), before);
+    }
+    // A later text observation is usable for native authentication, while the
+    // inventory still grants no grade or dispatch authority.
+    writer.prepare(`UPDATE native_attempts SET ${column}=? WHERE attempt_id=?`).run(original, id);
+    const later = reportInventory({ ...options, manifest });
+    const restored = later.pre_dispatch.native_journal.attempts.find((row) => row.attempt_id === id);
+    assert.deepEqual(restored.receipt_evidence_gaps, []);
+    assert.equal(restored.recovery_step, state === 'validated'
+      ? 'reauthenticate_with_native_projection_before_grading' : 'resume_native_validation_without_redispatch');
+    assert.equal(later.dispatch_authorized, false);
+  });
+}
+
 test('raw receipt hashes bind exact text through report recovery locators without exposing it', (t) => {
   const { root, saved, journal, options } = nativeJournal(t);
   const identity = { run_id: 'original', target: 'owner/repo#1' };

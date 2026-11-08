@@ -274,6 +274,9 @@ function nativeValidationObservation(text, location, record) {
     ? createHash('sha256').update(text).digest('hex') : null,
   retained_result: null, first_broken_step: null, receipt_binding_gaps: [] };
   if (text === null || text === undefined) return { ...base, status: 'not_recorded' };
+  // SQLite TEXT affinity still permits BLOBs. Check storage before JSON.parse
+  // coerces non-text values and hides the type error behind parsing diagnostics.
+  if (typeof text !== 'string') return { ...base, status: 'invalid_storage_type' };
   let result;
   try { result = JSON.parse(text); } catch { return { ...base, status: 'invalid_json' }; }
   if (!result || typeof result !== 'object' || Array.isArray(result)) {
@@ -389,6 +392,7 @@ function journalInventory(journal, locationChecks) {
       const gaps = [];
       if (['raw_persisted', 'validated'].includes(item.state)) {
         if (!item.raw_receipt_present) gaps.push('raw_response_missing');
+        else if (typeof raw_response !== 'string') gaps.push('raw_response_invalid_type');
         if (typeof item.backend_run_id !== 'string' || !item.backend_run_id.trim()) {
           gaps.push('backend_identity_missing');
         }
