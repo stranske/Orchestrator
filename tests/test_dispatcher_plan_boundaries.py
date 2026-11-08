@@ -26,6 +26,8 @@ class DispatchPlanBoundaries(unittest.TestCase):
                 },
             )
         )
+        # Planning-boundary fixtures own no real native storage context.
+        self.enterContext(patch("storage_lifecycle.owned_agent_tmpdir", return_value=None))
         self.external = Mock(side_effect=AssertionError("unexpected external effect"))
         for module, names in (
             (subprocess, ("run", "Popen")),
