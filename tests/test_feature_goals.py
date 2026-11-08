@@ -767,3 +767,119 @@ def test_pacing_measure_survives_the_freshness_check(monkeypatch):
     goal = replace(GOAL, measure="feature_goals.py:pacing_usage")
     result = fg.measure(goal, NOW)
     assert result.value == 0.0 and result.as_of == NOW
+
+
+def test_closer_completion_reads_registered_observation_and_exact_remote_pin(tmp_path, monkeypatch):
+    """Current native proof, its exact pin and original frozen source all matter."""
+    import closer_csv_completion as c
+
+    read = c.read_completion
+    monkeypatch.setattr(c, "read_completion", lambda: read(root=tmp_path))
+    assert fg.closer_campaign_completion(NOW).value is None
+    head, merge = "a" * 40, "b" * 40
+    branch = "test/csv"
+    state = {"key": c.KEY, "pr_repair": {"pid": 12, "agents": ["codex"], "log": "/native/log"}}
+    records = [
+        {
+            "type": "item.completed",
+            "item": {
+                "type": "command_execution",
+                "exit_code": 0,
+                "command": "git push origin HEAD:" + branch,
+                "aggregated_output": f"{head[:8]} HEAD -> {branch}\n" + head,
+            },
+        },
+        {"type": "turn.completed"},
+        {"released": True, "target": f"{c.REPO}#{c.PR}"},
+    ]
+    raw = (
+        "=== dispatch codex/mid -> stranske/Orchestrator#989 [implement] ===\n"
+        + "\n".join(json.dumps(r) for r in records)
+    ).encode()
+    origin = json.dumps(state).encode()
+    evidence = tmp_path / "completions/evidence"
+    evidence.mkdir(parents=True)
+    worker_path = evidence / c.digest(raw)
+    worker_path.write_bytes(raw)
+    (evidence / c.digest(origin)).write_bytes(origin)
+    transcript = {
+        "target": f"{c.REPO}#{c.PR}",
+        "confirmed_run": True,
+        "gate": {"verdict": "PASS"},
+        "check_results": [
+            {
+                "id": "CSV-CONTRACT",
+                "type": "command",
+                "status": "PASS",
+                "returncode": 0,
+                "command": "python3 -I " + c.FIXTURE,
+                "stdout_tail": "contract ok\n",
+            }
+        ],
+    }
+    record = {
+        "schema": c.SCHEMA,
+        "target": c.KEY,
+        "head": head,
+        "merge": merge,
+        "publication_url": "https://github.com/stranske/Orchestrator/pull/989#issuecomment-12",
+        "worker_sha256": c.digest(raw),
+        "origin_sha256": c.digest(origin),
+        "verification_engine": "runtime_ac_gate.recheck_merged",
+        "verified_merge": merge,
+        "verification": {"result": "PASS", "transcript": json.dumps(transcript)},
+        "completed_at": NOW - 1,
+    }
+    receipt = c._path(tmp_path)
+    receipt.write_text(json.dumps(record))
+    pr = {
+        "state": "MERGED",
+        "updatedAt": "version-1",
+        "headRefOid": head,
+        "headRefName": branch,
+        "mergeCommit": {"oid": merge},
+        "comments": {
+            "pageInfo": {"hasNextPage": False},
+            "nodes": [
+                {
+                    "author": {"login": "stranske"},
+                    "url": record["publication_url"],
+                    "body": f"<!-- closer-core/v1 action=merge target=stranske/Orchestrator#989 head={head} round=20261106T121509Z -->",
+                }
+            ],
+        },
+    }
+    calls = []
+
+    def gh(args):
+        calls.append(args)
+        return json.dumps({"data": {"repository": {"pullRequest": pr}}})
+
+    monkeypatch.setattr(c, "_gh", gh)
+    measured = fg.closer_campaign_completion(NOW)
+    assert measured.value == 1 and measured.as_of == NOW - 1
+    assert "comments(first:100)" in calls[-1][3]
+    assert fg.closer_campaign_completion(NOW).value == 1
+    assert "comments(first:100)" not in calls[-1][3]
+    pr["headRefOid"] = "c" * 40
+    assert fg.closer_campaign_completion(NOW).value is None
+    pr["headRefOid"] = head
+    pr["updatedAt"] = "version-2"
+    pr["comments"]["nodes"][0]["author"]["login"] = "untrusted"
+    assert fg.closer_campaign_completion(NOW).value is None
+    pr["updatedAt"] = "version-3"
+    pr["comments"]["nodes"][0]["author"]["login"] = "stranske"
+    worker_path.write_bytes(b"altered")
+    assert fg.closer_campaign_completion(NOW).value is None
+    worker_path.write_bytes(raw)
+    record["verification"]["result"] = "UNRUNNABLE"
+    receipt.write_text(json.dumps(record))
+    assert fg.closer_campaign_completion(NOW).value is None
+    record["verification"]["result"] = "PASS"
+    record["completed_at"] = NOW + 1
+    receipt.write_text(json.dumps(record))
+    assert fg.closer_campaign_completion(NOW).value is None
+    record["completed_at"] = NOW - 15 * fg.DAY
+    receipt.write_text(json.dumps(record))
+    assert fg.closer_campaign_completion(NOW).value == 0
+    assert worker_path.read_bytes() == raw

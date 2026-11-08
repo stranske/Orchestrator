@@ -2868,6 +2868,24 @@ def main(argv=None):
             print("chain-evidence self-check failed", file=sys.stderr)
             return 1
     if args == ["--chain-evidence"]:
+        # Owner, 2026-11-08: current closer-core evidence replaces the retired
+        # desktop publication contract. Keep the historical reader explicit.
+        root = Path(__file__).resolve().parents[4]
+        source = root / "src" / "closer_csv_completion.py"
+        if not source.is_file():
+            source = root / "closer_csv_completion.py"
+        spec = importlib.util.spec_from_file_location("native_closer_csv_completion", source)
+        if spec is None or spec.loader is None:
+            raise _ObservationError("current closer-core completion reader unavailable")
+        module = importlib.util.module_from_spec(spec)
+        original_path = list(sys.path)
+        try:
+            sys.path.insert(0, str(source.parent))
+            spec.loader.exec_module(module)
+            return module.main(["--report"])
+        finally:
+            sys.path[:] = original_path
+    if args == ["--legacy-chain-evidence"]:
         return _report_chain_evidence()
     export_path = None
     if len(args) == 1 and not args[0].startswith("-"):
