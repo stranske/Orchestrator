@@ -14,6 +14,7 @@ import unittest
 import urllib.request
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
+from itertools import permutations
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -301,11 +302,15 @@ class RankedCoverageTests(unittest.TestCase):
                 ("unrelated", ()),
             )
         ]
-        groups = miner.PatternMiner._dedupe_groups(episodes)
-        self.assertEqual(
-            {frozenset(item.episode_id for item in group) for group in groups},
-            {frozenset({"first", "sibling", "parent", "last"}), frozenset({"unrelated"})},
-        )
+        # A cadence snapshot has no guaranteed arrival order: parents can appear
+        # before or after successors, including siblings and transitive chains.
+        for ordered in permutations(episodes):
+            with self.subTest(order=tuple(item.episode_id for item in ordered)):
+                groups = miner.PatternMiner._dedupe_groups(list(ordered))
+                self.assertEqual(
+                    {frozenset(item.episode_id for item in group) for group in groups},
+                    {frozenset({"first", "sibling", "parent", "last"}), frozenset({"unrelated"})},
+                )
 
     def test_miner_only_revives_retired_candidates_with_newer_evidence(self):
         episode = miner.normalize_episode(self.completion_events())
