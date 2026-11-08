@@ -390,7 +390,12 @@ def test_actual_controller_closure_is_capturable_without_running_a_publisher(tmp
         source_snapshot_receipt=receipt,
         source_capture_tool=tool,
     )
-    assert closure.validate(descriptor)["modules"].keys() == set(closure.MODULES)
+    expected = set(closure.MODULES) | {
+        name for name in closure.OPTIONAL_MODULES if (source / name).exists()
+    }
+    assert closure.validate(descriptor)["modules"].keys() == expected
+    for name in expected - set(closure.MODULES):
+        assert (output / name).read_bytes() == (source / name).read_bytes()
     origins = {}
     original = closure._Loader.exec_module
 
