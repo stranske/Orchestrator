@@ -18,11 +18,12 @@ const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
 function world(t, rows = [{ case_id: 'original-a', decision: 'needs_more_evidence',
   backend_run_id: 'original-paid',
-  retry_attempts: [{ retry_attempts: [{ backend_run_id: 'earlier-paid' }] }] }]) {
+  retry_attempts: [{ retry_attempts: [{ backend_run_id: 'earlier-paid' }] }] }],
+  journalName = 'native #1?.sqlite') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'native-inventory-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   // URI metacharacters must remain part of the selected journal's filename.
-  const journal = path.join(root, 'native #1?.sqlite');
+  const journal = path.join(root, journalName);
   const original = path.join(root, 'original.json');
   const canonical = path.join(root, 'canonical.json');
   const raw = 'private provider response';
@@ -245,6 +246,104 @@ test('native inventory reads committed WAL receipts without checkpointing or gra
     assert.equal(fs.existsSync(path.join(w.root, name)), false);
   }
 });
+
+test('requested generic retry stops at the native canonical before any evidence or paid work', (t) => {
+  const w = world(t);
+  const state = path.join(w.root, 'selected-state');
+  const selected = path.join(state, 'capability-program', 'adjudicator-retro.json');
+  fs.mkdirSync(path.dirname(selected), { recursive: true });
+  fs.symlinkSync(w.canonical, selected);
+  const before = w.snapshot();
+  const flags = ['--dispatch', '--retry', '--limit', '21'];
+  const environment = { ORCH_STATE_DIR: state };
+  // Exercise the actual entry point as well as a guarded run that proves the
+  // refusal precedes independent truth reads, history repair and dispatch.
+  const results = [w.execute([script, ...flags], environment), w.execute(['-c', `
+import sys
+import adjudicator_retro as retro
+
+def forbidden(*args, **kwargs):
+    raise AssertionError('retry crossed the canonical publication boundary')
+
+for name in ('disputes', '_refresh_saved_verdicts', 'fetch_evidence',
+             '_persist_report', 'native_later_truth', 'measured_cost'):
+    setattr(retro, name, forbidden)
+retro.roles.run_adjudicator_agent = forbidden
+retro.roles.dispatcher.offload = forbidden
+retro.feedback._conn = forbidden
+retro.feedback.record_role_run = forbidden
+retro.NativeAttemptJournal.__init__ = forbidden
+sys.argv = ['adjudicator_retro.py', *sys.argv[1:]]
+raise SystemExit(retro.main())
+`, ...flags], environment)];
+  for (const result of results) {
+    assert.equal(result.status, 2, result.stderr);
+    assert.match(result.stderr, /generic retrospective run refuses to overwrite native canonical publication/);
+    assert.match(result.stderr, /--native-admit/);
+    assert.match(result.stderr, /--native-publish/);
+    assert.doesNotMatch(result.stderr, /crossed the canonical publication boundary/);
+    assert.equal(result.stdout, '', 'a refused retry cannot claim a refreshed summary');
+  }
+  assert.equal(fs.realpathSync(selected), fs.realpathSync(w.canonical));
+  assert.equal(fs.existsSync(path.join(state, '.orchestrator-mirror.publish.lock')), false);
+  assert.deepEqual(w.snapshot(), before);
+  const inventory = w.run(w.inventoryArgs);
+  assert.deepEqual(inventory.original_paid_attempts.map((row) => row.backend_run_id),
+    ['original-paid', 'earlier-paid']);
+  assert.equal(inventory.row_diagnostics[0].unresolved_native_attempts[0].outcome, 'UNKNOWN');
+  assert.equal(inventory.canonical_report.summary_authority, 'not_authenticated_by_inventory');
+  assert.equal(inventory.dispatch_authorized, false);
+  assert.deepEqual(w.snapshot(), before);
+  for (const name of ['absent-runtime', 'absent-brain.sqlite']) {
+    assert.equal(fs.existsSync(path.join(w.root, name)), false);
+  }
+});
+
+for (const stale of ['source', 'canonical']) {
+  test(`native publication CLI rejects a stale ${stale} pin before refresh or dispatch`, (t) => {
+    const w = world(t, undefined, 'native.sqlite');
+    // No enrolled cases are needed to test admission. Stale pins must fail
+    // before projection can read independent outcomes or write a candidate.
+    const manifest = path.join(w.root, 'cohort.json');
+    fs.writeFileSync(manifest, '[]');
+    const before = w.snapshot();
+    const sourceHash = stale === 'source' ? '0'.repeat(64) : w.sourceHash;
+    const canonicalHash = stale === 'canonical' ? '0'.repeat(64)
+      : sha256(fs.readFileSync(w.canonical));
+    const result = w.execute(['-c', `
+import sys
+import adjudicator_retro as retro
+
+def forbidden(*args, **kwargs):
+    raise AssertionError('stale pin crossed the native publication boundary')
+
+retro.refresh_native_cohort = forbidden
+retro.native_later_truth = forbidden
+retro.roles.run_adjudicator_agent = forbidden
+retro.roles.dispatcher.offload = forbidden
+retro.feedback._conn = forbidden
+retro.feedback.record_role_run = forbidden
+retro.NativeAttemptJournal.__init__ = forbidden
+retro.NativeAttemptJournal.reserve = forbidden
+sys.argv = ['adjudicator_retro.py', *sys.argv[1:]]
+raise SystemExit(retro.main())
+`, '--native-publish', w.canonical, '--report', w.original,
+    '--native-journal', w.journal, '--cohort-manifest', manifest,
+    '--expected-source-hash', sourceHash, '--expected-canonical-hash', canonicalHash]);
+    assert.equal(result.status, 2, result.stderr);
+    assert.match(result.stderr, stale === 'source'
+      ? /original report changed before native publication/
+      : /canonical report changed before native publication/);
+    assert.doesNotMatch(result.stderr, /crossed the native publication boundary/);
+    assert.equal(result.stdout, '', 'a stale publication must not emit a success receipt');
+    assert.deepEqual(w.snapshot(), before);
+    assert.equal(fs.readFileSync(manifest, 'utf8'), '[]');
+    assert.equal(fs.existsSync(path.join(w.root, '.orchestrator-mirror.publish.lock')), false);
+    for (const name of ['absent-state', 'absent-runtime', 'absent-brain.sqlite']) {
+      assert.equal(fs.existsSync(path.join(w.root, name)), false);
+    }
+  });
+}
 
 function git(root, ...args) {
   // Fixture setup must use its own repositories even inside a CI Git hook.
