@@ -536,9 +536,11 @@ def shed_marker(
         return {**found, "why": "not JSON"}
     if not isinstance(payload, dict):
         return {**found, "why": "JSON that is not an object"}
-    for key in ("incident_id", "category"):
+    for key in ("incident_id", "category", "model"):
         if payload.get(key) not in (None, ""):
             found[key] = str(payload[key])
+    # Only a recognised scope narrows a shed; anything else stays a whole-seat shed.
+    found["tier_scope"] = payload.get("tier_scope") if payload.get("tier_scope") == "full" else None
     found["reset_at"] = _finite_number(payload.get("reset_at"))
     found["created_at"] = _finite_number(payload.get("created_at"))
     expires_at = _finite_number(payload.get("expires_at"))
@@ -548,6 +550,51 @@ def shed_marker(
         return {**found, "why": f"expires_at {payload['expires_at']!r} is not a finite number"}
     now = time.time() if now is None else now
     return {**found, "expires_at": expires_at, "state": "active" if expires_at > now else "expired"}
+
+
+TIER_BELOW = {"full": "mid"}
+
+
+def tier_ceilings(*, now: float | None = None, shed_dir: Path | None = None) -> dict[str, dict]:
+    """{agent: {ceiling, model, until}} for every active tier-scoped shed marker."""
+    base = SHED_DIR if shed_dir is None else shed_dir
+    out: dict[str, dict] = {}
+    if not base.is_dir():
+        return out
+    for path in sorted(base.iterdir()):
+        if not path.is_file() or path.name.startswith("."):
+            continue
+        marker = shed_marker(path.name, now=now, shed_dir=base)
+        scope = marker.get("tier_scope") if marker else None
+        if marker and marker["state"] == "active" and scope in TIER_BELOW:
+            out[path.name] = {
+                "ceiling": TIER_BELOW[scope],
+                "model": marker.get("model"),
+                "until": marker.get("expires_at"),
+            }
+    return out
+
+
+def tier_ceiling_exports(environ=None, **kwargs) -> list[str]:
+    """Shell lines for the tick: `export ORCH_<AGENT>_MAX_TIER=<ceiling>` plus one report line each.
+
+    An explicit owner ceiling already in the environment is never overridden.
+    """
+    environ = os.environ if environ is None else environ
+    lines = []
+    for agent, row in tier_ceilings(**kwargs).items():
+        name = f"ORCH_{agent.upper()}_MAX_TIER"
+        until = utc_stamp(row["until"]) if row.get("until") else "?"
+        if environ.get(name, "").strip():
+            lines.append(
+                f"echo '  tier ceiling: {agent} keeps explicit {name}; {row.get('model')} exhausted until {until}'"
+            )
+            continue
+        lines.append(f"export {name}={row['ceiling']}")
+        lines.append(
+            f"echo '  tier ceiling: {agent} capped at {row['ceiling']} ({row.get('model')} exhausted until {until})'"
+        )
+    return lines or ["echo '  tier ceilings: none active'"]
 
 
 _BUILD_PACING_USAGE: ContextVar[dict | None] = ContextVar("build_pacing_usage", default=None)
@@ -562,6 +609,10 @@ def _shed(agent: str) -> bool:
     """
     marker = shed_marker(agent)
     if marker is None:
+        return False
+    if marker["state"] == "active" and marker.get("tier_scope"):
+        # Only the seat's top tier is exhausted: the seat stays routable and `tier_ceilings`
+        # caps it below that tier until the marker expires (then the branch below removes it).
         return False
     if marker["state"] != "expired":
         # A confirmed banked reset clears only a dated provider quota incident.
@@ -1467,6 +1518,9 @@ def _selftest_body(blk):
 def main(argv):
     if "--selftest" in argv:
         _selftest()
+        return 0
+    if argv and argv[0] == "tier-ceiling-exports":
+        print("\n".join(tier_ceiling_exports()))
         return 0
     if argv and argv[0] == "calibrate-codex":
         import pacing_usage
