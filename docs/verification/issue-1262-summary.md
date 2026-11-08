@@ -107,3 +107,33 @@ The connector rejected both the PR blocker comment and the `needs-human` label
 because they require approval and this run's approval policy is `never`.
 PR #1263 remains open with `draft=false` at
 `a5b94ec1636129368a23a948f27e7e04bf395ebb`.
+
+## Active Python recovery control
+
+The linked job log was re-read through the connector. Its executed error remains
+`Generated delivery is not sealed: delivery state is staging.` at
+2026-11-08T16:42:43Z. The quoted identity RuntimeError appears in printed source,
+not an executed traceback. The requested `gh run view` command still cannot
+connect to api.github.com. No source defect justifying removal of the hold was
+identified; the source-fix and live acceptance tasks remain incomplete.
+
+The new `exact-head sealing clears the staging hold with all required Python
+receipts` regression supplies twelve successful shard receipts across Python
+3.13 and 3.14 with active Python, Node, and test-quality jobs. Identical job
+results remain blocked for a staging record and succeed for a valid exact-head
+seal. It asserts that all twelve receipt rows were loaded. Disposable renderer
+copies that ignore the seal or retain the hold after sealing each make this new
+test fail with an assertion error. These mutations prove test sensitivity;
+they do not reproduce either exception quoted in the issue or repair the live
+delivery lifecycle.
+
+All 48 scripts tests pass with no skips using
+`node --test --test-isolation=none .github/scripts/__tests__/*.test.js`.
+The full verification command with `-m "not slow"` was attempted under a
+45-second timeout and exited 124 without a verdict. Pytest and Black remain
+unavailable; no Python files were changed. `git add` still fails because
+`.git/index.lock` cannot be created on the read-only filesystem, so the changes
+cannot be committed here. Automatic approval review again rejected the blocker
+comment and `needs-human` label because the approval policy is `never`.
+PR #1263 was re-read and is open with `draft=false` at
+`03459b0abc75edd9ab6a313ecf74b26ab172a494`.

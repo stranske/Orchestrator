@@ -14,12 +14,14 @@ const renderer = path.resolve(__dirname, '..', 'gate_summary.py');
 const head = '7ba7006dc3243a7bf0221d709e4de5562c89f042';
 const repository = 'stranske/Orchestrator';
 
-function summarize(t, record, extraEnv = {}) {
+function summarize(t, record, extraEnv = {}, prepareArtifacts = () => {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-delivery-1262-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const eventPath = path.join(root, 'event.json');
   const outputPath = path.join(root, 'outputs');
   const summaryPath = path.join(root, 'summary.md');
+  const artifactsRoot = path.join(root, 'artifacts');
+  prepareArtifacts(artifactsRoot);
   fs.writeFileSync(eventPath, JSON.stringify({
     pull_request: {
       head: { ref: 'sync/workflows-delivery', sha: head, repo: { full_name: repository } },
@@ -37,7 +39,7 @@ function summarize(t, record, extraEnv = {}) {
       GITHUB_EVENT_PATH: eventPath,
       GITHUB_OUTPUT: outputPath,
       GITHUB_STEP_SUMMARY: summaryPath,
-      GATE_ARTIFACTS_ROOT: path.join(root, 'artifacts'),
+      GATE_ARTIFACTS_ROOT: artifactsRoot,
       DOC_ONLY: 'true',
       RUN_CORE: 'false',
       REASON: 'docs_only',
@@ -148,4 +150,47 @@ test('sealed delivery preserves the Node job verdict for changes without Python'
     assert.ok(result.outputs.split('\n').includes(`description=${description}`), jobResult);
     assert.doesNotMatch(result.summary, /Generated delivery hold/);
   }
+});
+
+test('exact-head sealing clears the staging hold with all required Python receipts', (t) => {
+  const activeChecks = {
+    DOC_ONLY: 'false',
+    RUN_CORE: 'true',
+    REASON: '',
+    PYTHON_REQUIRED: 'true',
+    PYTHON_RESULT: 'success',
+    TEST_QUALITY_RESULT: 'success',
+    ORCHESTRATOR_NODE_TESTS_RESULT: 'success',
+  };
+  const prepareArtifacts = (artifactsRoot) => {
+    for (const runtime of ['3.13', '3.14']) {
+      for (let shard = 1; shard <= 6; shard++) {
+        const receiptDir = path.join(artifactsRoot, 'downloads',
+          `gate-shard-${shard}-coverage-${runtime}-1`);
+        fs.mkdirSync(receiptDir, { recursive: true });
+        fs.writeFileSync(path.join(receiptDir, 'summary.json'), JSON.stringify({
+          python_version: runtime,
+          checks: {
+            lint: { outcome: 'success' },
+            type_check: { outcome: 'success' },
+            tests: { outcome: 'success' },
+            coverage_minimum: { outcome: 'success' },
+          },
+        }));
+      }
+    }
+  };
+  const held = summarize(t,
+    deliveryRecord({ delivery_state: 'staging', sealed_head_sha: '' }),
+    activeChecks, prepareArtifacts);
+  assert.match(held.outputs, /^state=failure$/m);
+  assert.match(held.outputs,
+    /^description=Generated delivery is not sealed: delivery state is staging\.$/m);
+
+  const sealed = summarize(t, deliveryRecord(), activeChecks, prepareArtifacts);
+  assert.match(sealed.outputs, /^state=success$/m);
+  assert.match(sealed.outputs, /^description=All Gate checks succeeded\.$/m);
+  assert.match(sealed.summary, /all 6 shards reported for Python 3\.13 and 3\.14/);
+  assert.equal((sealed.summary.match(/\| 3\.(?:13|14) shard \d\/6 \|/g) || []).length, 12);
+  assert.doesNotMatch(sealed.summary, /Generated delivery hold|fast-pass|artifacts: .*missing/);
 });
