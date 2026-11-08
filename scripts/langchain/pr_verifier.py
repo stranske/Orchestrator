@@ -20,7 +20,7 @@ import os
 import re
 import sys
 from time import monotonic
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache, partial
 from pathlib import Path
@@ -28,6 +28,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 from scripts import api_client
+from scripts.langchain.response_content import (
+    text_from_response_content as _text_from_response_content,
+)
 from scripts.langchain._llm_client import get_llm_client, get_llm_clients
 from scripts.langchain.structured_output import (
     build_repair_callback,
@@ -44,6 +47,8 @@ from scripts.langchain.verifier_config import (
 from tools.llm_registry import (
     NativeCapacityFacts,
     NativeCapacityUnavailable,
+    _load_object,
+    _slot_path,
     native_capacity_facts_for,
     normalize_provider,
 )
@@ -312,6 +317,9 @@ class EvaluationResult(BaseModel):
     deferred_concerns: list[DeferredChunkConcern] = Field(default_factory=list)
     resolved_chunk_concerns: list[ResolvedChunkConcern] = Field(default_factory=list)
     chunk_reviews: list[dict[str, Any]] = Field(default_factory=list)
+    # Set only on a declared capacity-backup judge's result: which production judge it stood in
+    # for, and the budget-exhaustion error that judge returned.
+    capacity_backup_for: str | None = None
 
 
 class EvaluationPayload(BaseModel):
@@ -7241,6 +7249,9 @@ def _legacy_capacity_route(client: object) -> bool:
     """
     if _legacy_github_chat(client):
         return True
+    if isinstance(client, CapacityBackupClient):
+        # Same standing as a registered standard route without native count facts; expanded never.
+        return os.environ.get("VERIFIER_EVIDENCE_PROFILE") != "expanded"
     if os.environ.get("VERIFIER_EVIDENCE_PROFILE") == "expanded":
         return False
     try:
@@ -8085,51 +8096,6 @@ def _fallback_evaluation(
     )
 
 
-def _text_from_response_content(content: object) -> str | None:
-    """Return provider text, or None when the payload carries no text blocks."""
-    if isinstance(content, str):
-        return content if content and not content.isspace() else None
-    if isinstance(content, Mapping):
-        block_type = content.get("type")
-        for key in ("text", "content"):
-            text = content.get(key)
-            if (
-                isinstance(text, str)
-                and text
-                and not text.isspace()
-                and block_type in (None, "text", "output_text")
-            ):
-                return text
-        return None
-    if isinstance(content, list):
-        text_blocks: list[str] = []
-        for block in content:
-            if isinstance(block, str):
-                text = block
-            elif isinstance(block, Mapping):
-                if block.get("type") not in (None, "text", "output_text"):
-                    text = None
-                else:
-                    text = block.get("text")
-                    if not isinstance(text, str):
-                        text = block.get("content")
-            else:
-                if getattr(block, "type", None) not in (None, "text", "output_text"):
-                    text = None
-                else:
-                    text = getattr(block, "text", None)
-                    if not isinstance(text, str):
-                        text = getattr(block, "content", None)
-            if isinstance(text, str):
-                text_blocks.append(text)
-        if any(block and not block.isspace() for block in text_blocks):
-            # Concatenate without a separator: a provider may split one JSON
-            # document across blocks, and an inserted newline inside a string
-            # literal would make the reassembled payload invalid JSON.
-            return "".join(text_blocks)
-    return None
-
-
 def _coerce_response_content(content: object) -> str:
     """Return text from provider response blocks without losing a safe fallback."""
     text = _text_from_response_content(content)
@@ -8726,6 +8692,125 @@ def _evaluate_pr_multiple_semantic(
     return SemanticComparisonResults(values, envelope)
 
 
+# Owner decision 2026-10-30: when one production judge's provider budget is exhausted, slot 3's
+# declared capacity backup (config/llm_slots.json `capacity_backup`) stands in for that judge. PASS
+# still needs the surviving production judge's PASS; both exhausted means no backup and no PASS.
+# Standard compare only: the expanded and semantic paths keep their exact-identity contract.
+CAPACITY_EXHAUSTED = re.compile(
+    r"reached your specified API usage limits|insufficient_quota|exceeded your current quota"
+    r"|credit balance is too low|spending cap|spend limit",
+    re.IGNORECASE,
+)
+SIMULATE_CAPACITY_EXHAUSTED_ENV = "VERIFIER_SIMULATE_CAPACITY_EXHAUSTED"
+
+
+def capacity_exhausted(result: EvaluationResult) -> bool:
+    """A judge that ran out of budget AND recorded nothing substantive.
+
+    A chunked review can find a defect in an early chunk and exhaust its budget on a later one; that
+    result keeps its findings, so it is never replaced (a backup PASS must not erase a FAIL).
+    """
+    if not (result.error and CAPACITY_EXHAUSTED.search(result.error)):
+        return False
+    reviews = [result.model_dump(mode="json")] + [
+        record.get("result") or {} for record in result.chunk_reviews
+    ]
+    return not any(
+        review.get("used_llm") and review.get("verdict") in ("FAIL", "CONCERNS")
+        for review in reviews
+    )
+
+
+class CapacityBackupClient:
+    """The declared slot-3 judge on an OpenAI-compatible chat-completions API (invoke only)."""
+
+    def __init__(self, *, model: str, base_url: str, key_env: str, timeout: int = 420) -> None:
+        self.model, self.base_url, self.key_env, self.timeout = (
+            model,
+            base_url.rstrip("/"),
+            key_env,
+            timeout,
+        )
+
+    def invoke(self, prompt: str, config: Any = None, **_: Any) -> Any:  # noqa: ARG002
+        import urllib.error
+        import urllib.request
+        from types import SimpleNamespace
+
+        key = os.environ.get(self.key_env, "")
+        if not key:
+            raise RuntimeError(f"{self.key_env} is not set")
+        # The URL comes from the checked-in slot config, never from PR content; https only.
+        if not self.base_url.startswith("https://"):
+            raise RuntimeError("capacity backup base_url must be https")
+        request = urllib.request.Request(
+            f"{self.base_url}/chat/completions",
+            data=json.dumps(
+                {"model": self.model, "messages": [{"role": "user", "content": prompt}]}
+            ).encode("utf-8"),
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        # Unredirected, so a redirect to another host never carries the key.
+        request.add_unredirected_header("Authorization", f"Bearer {key}")
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as handle:  # nosemgrep
+                data = json.loads(handle.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            exc.close()  # it holds the response body; an unclosed one leaks a file handle
+            raise RuntimeError(f"capacity backup HTTP {exc.code}") from None
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+            raise RuntimeError(f"capacity backup unavailable: {type(exc).__name__}") from None
+        try:
+            return SimpleNamespace(content=str(data["choices"][0]["message"]["content"] or ""))
+        except (KeyError, IndexError, TypeError):
+            raise RuntimeError("capacity backup returned an unexpected body") from None
+
+
+def capacity_backup() -> tuple[CapacityBackupClient, str, str] | None:
+    """The configured backup judge, or None when it is off, unkeyed or the path is strict."""
+    if os.environ.get("VERIFIER_EVIDENCE_PROFILE") == "expanded" or _semantic_mode():
+        return None
+    # The backup shares the primary clients' execution allowlist. `_load_object`
+    # reads only the effective LANGCHAIN_SLOT_CONFIG path and returns None when
+    # that explicit file is empty or unavailable, so the bundled file is never
+    # a fallback.
+    payload = _load_object(_slot_path(), label="slot config")
+    block = None if payload is None else payload.get("capacity_backup")
+    if not isinstance(block, dict) or block.get("enabled") is not True:
+        return None
+    try:
+        provider, model = str(block["provider"]), str(block["model"])
+        client = CapacityBackupClient(
+            model=model, base_url=str(block["base_url"]), key_env=str(block["key_env"])
+        )
+    except KeyError:
+        return None
+    if not os.environ.get(client.key_env):
+        return None
+    return client, provider, model
+
+
+def _with_capacity_backup(
+    runner: ComparisonRunner, results: list[EvaluationResult], change_type: str | None
+) -> list[EvaluationResult]:
+    exhausted = [index for index, result in enumerate(results) if capacity_exhausted(result)]
+    if len(exhausted) != 1 or len(results) != 2:
+        return results
+    backup = capacity_backup()
+    if backup is None:
+        return results
+    client, provider, model = backup
+    index = exhausted[0]
+    failed = results[index]
+    result = runner.run_single(client, provider, model)
+    result.change_type = change_type
+    result.capacity_backup_for = (
+        f"{failed.provider_used}/{failed.model}: {_compact_text(failed.error or '', 200)}"
+    )
+    return [*results[:index], result, *results[index + 1 :]]
+
+
 def evaluate_pr_multiple(
     context: str, diff: str | None = None, model1: str | None = None, model2: str | None = None
 ) -> list[EvaluationResult]:
@@ -8739,11 +8824,22 @@ def evaluate_pr_multiple(
         result.change_type = change_type
         return [_apply_coverage_floor(result, runner.coverage)]
     results: list[EvaluationResult] = []
+    # Canary only: a dispatch input names one provider whose budget is treated as exhausted, so the
+    # backup path can be exercised without a real outage. No model call is made for that judge.
+    simulated = os.environ.get(SIMULATE_CAPACITY_EXHAUSTED_ENV, "").strip()
     for client, provider, model in runner.clients:
-        result = runner.run_single(client, provider, model)
+        if simulated and simulated == provider:
+            result = _fallback_evaluation(
+                "LLM invocation failed: simulated for the capacity-backup canary: "
+                "You have reached your specified API usage limits.",
+                provider=provider,
+                model=model,
+            )
+        else:
+            result = runner.run_single(client, provider, model)
         result.change_type = change_type
         results.append(result)
-    return results
+    return _with_capacity_backup(runner, results, change_type)
 
 
 def expanded_comparison_verdict(
