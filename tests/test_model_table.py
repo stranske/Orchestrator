@@ -92,6 +92,27 @@ def test_tier_only_codex_run_passes_the_table_level() -> None:
     assert not any("model_reasoning_effort" in part for part in assess)
 
 
+def test_clamped_tier_run_passes_the_clamped_tier_level(monkeypatch) -> None:
+    # A seat ceiling lowers the model; the level must follow it, or the run gets a (model, level)
+    # pair the table never defines and the ceiling no longer bounds cost.
+    monkeypatch.setenv("ORCH_CODEX_MAX_TIER", "mid")
+    cmd = adapters.build_command("codex", "x", mode="full")
+    assert cmd[cmd.index("--model") + 1] == model_table.model_for("codex", "routine")
+    effort = model_table.effort_for("codex", "routine")
+    assert cmd.count(f'model_reasoning_effort="{effort}"') == 1, cmd
+
+
+def test_unknown_task_type_uses_the_table_default_profile() -> None:
+    profile_id = execution_profiles.default_codex_profile("no-such-task")
+    assert profile_id == execution_profiles.resolve_production_profile_id(
+        execution_profiles.CODEX_DEFAULT_TASK_PROFILE
+    )
+    profile = execution_profiles.get_profile(profile_id)
+    kind = model_table.DEFAULT_TASK_WORK_KIND
+    assert profile["requested_model"] == model_table.model_for("codex", kind)
+    assert profile["reasoning_effort"] == model_table.effort_for("codex", kind)
+
+
 def test_profile_run_keeps_its_immutable_level(monkeypatch) -> None:
     # Only the argv is checked, so the exact-profile binary lookup is stubbed: the test must run
     # on hosts without the Codex app bundle (CI), not skip there.
