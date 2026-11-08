@@ -32,6 +32,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'Current same-repository PR to evaluate after delivery sealing'
+        required: false
+        type: string
 
 concurrency:
   group: pr-${{ github.event.pull_request.number || github.ref_name }}-gate
@@ -50,7 +55,7 @@ jobs:
       - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         id: resolve
         env:
-          PR_NUMBER: ''
+          PR_NUMBER: ${{ inputs.pr_number || '' }}
         with:
           script: |
             let pr = context.payload.pull_request || null;
@@ -472,9 +477,7 @@ jobs:
       - environment-gate
     if: >-
       ${{
-        needs.detect.outputs.doc_only != 'true' &&
-        hashFiles('tests/test_route_weights_export_cli.js') != '' &&
-        hashFiles('tests/test_switch_review_exploration.js') != ''
+        needs.detect.outputs.doc_only != 'true'
       }}
     runs-on: ubuntu-latest
     steps:
