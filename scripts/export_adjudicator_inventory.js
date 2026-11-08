@@ -303,32 +303,16 @@ function nativeValidationObservation(text, location, record) {
     first_broken_step: observed.first_broken_step, receipt_binding_gaps: bindingGaps };
 }
 
-// Observe native receipt locators in one read-only SQLite snapshot. This does
-// not instantiate NativeAttemptJournal, parse provider output, authenticate a
-// decision, acquire the publication lock, or establish live writer ownership.
-function journalInventory(journal, locationChecks) {
-  const base = { status: 'unavailable', path: journal ? path.resolve(journal) : null,
-    attempts: null, receipt_authority: 'not_authenticated_by_inventory' };
-  if (journal === undefined) return { ...base, reason: 'native_journal_not_supplied' };
-  if (typeof journal !== 'string' || !journal.trim()) throw new Error('journal path is required');
+// Availability and full receipt contents belong to the same SQLite snapshot.
+// Digest all stored fields; publish only sanitized receipt locators below.
+function readJournalSnapshot(journal) {
   let connection;
   try {
-    // Keep the selected journal attributable through the final report reads,
-    // even after SQLite closes its snapshot. Equal replacement bytes cannot
-    // establish that the receipt locators still belong to this location.
-    const checkJournalLocation = pinFileLocation(journal, 'native journal', { allowMissing: true });
-    locationChecks.push(checkJournalLocation);
     connection = new DatabaseSync(journal, { readOnly: true });
     connection.exec('BEGIN');
     if (connection.prepare('PRAGMA application_id').get().application_id !== 1313097550) {
-      return { ...base, reason: 'non_native_journal' };
+      return { status: 'unavailable', reason: 'non_native_journal' };
     }
-    const steps = new Map([
-      ['reserved', 'producer_must_prove_invocation_never_started'],
-      ['in_flight', 'UNKNOWN_recover_provider_receipt_before_any_retry'],
-      ['raw_persisted', 'resume_native_validation_without_redispatch'],
-      ['validated', 'reauthenticate_with_native_projection_before_grading'],
-    ]);
     const receiptQuery = 'SELECT attempt_id,case_id,material_revision,case_digest,state,backend_run_id,' +
       'report_sha256,created_at,updated_at,' +
       '(raw_response IS NOT NULL) AS raw_receipt_present,' +
@@ -340,29 +324,55 @@ function journalInventory(journal, locationChecks) {
     // Pin every stored field so updates to paid-attempt evidence cannot hide
     // behind an unchanged locator. These rows never enter the emitted report.
     const snapshotQuery = 'SELECT * FROM native_attempts ORDER BY attempt_id';
-    const observedDigest = receiptDigest(connection.prepare(snapshotQuery).all());
+    const digest = receiptDigest(connection.prepare(snapshotQuery).all());
+    return { status: 'available', records, digest };
+  } catch {
+    // SQLite messages and raw payloads can contain private provider material.
+    return { status: 'unavailable', reason: 'native_journal_unreadable_or_schema_unavailable' };
+  } finally {
+    if (connection) connection.close();
+  }
+}
+
+// Observe native receipt locators in one read-only SQLite snapshot. This does
+// not instantiate NativeAttemptJournal, parse provider output, authenticate a
+// decision, acquire the publication lock, or establish live writer ownership.
+function journalInventory(journal, locationChecks) {
+  const base = { status: 'unavailable', path: journal ? path.resolve(journal) : null,
+    attempts: null, receipt_authority: 'not_authenticated_by_inventory' };
+  if (journal === undefined) return { ...base, reason: 'native_journal_not_supplied' };
+  if (typeof journal !== 'string' || !journal.trim()) throw new Error('journal path is required');
+  try {
+    // Keep the selected journal attributable through the final report reads,
+    // even after SQLite closes its snapshot. Equal replacement bytes cannot
+    // establish that the receipt locators still belong to this location.
+    const checkJournalLocation = pinFileLocation(journal, 'native journal', { allowMissing: true });
+    locationChecks.push(checkJournalLocation);
+    const observed = readJournalSnapshot(journal);
     // Reopen for each final check: the initial transaction cannot see later
     // WAL commits, and inode equality cannot pin receipt content. Compare full
     // records, including private raw/validation bytes, without emitting them.
+    // A producer may also finish initialization in an initially unavailable
+    // file without replacing its inode; never hide newly readable receipts.
     locationChecks.push(() => {
       checkJournalLocation();
-      let fresh;
-      try {
-        fresh = new DatabaseSync(journal, { readOnly: true });
-        fresh.exec('BEGIN');
-        if (fresh.prepare('PRAGMA application_id').get().application_id !== 1313097550 ||
-            receiptDigest(fresh.prepare(snapshotQuery).all()) !== observedDigest) {
-          throw new Error('changed receipts');
-        }
-      } catch {
+      const fresh = readJournalSnapshot(journal);
+      if (fresh.status !== observed.status || fresh.reason !== observed.reason ||
+          fresh.digest !== observed.digest) {
         throw new Error('native journal receipts changed during inventory');
-      } finally {
-        if (fresh) fresh.close();
       }
       // The open reader can retain the old inode through a replacement or
       // removal. Check after cleanup as well, including on the final pass.
       checkJournalLocation();
     });
+    if (observed.status === 'unavailable') return { ...base, reason: observed.reason };
+    const steps = new Map([
+      ['reserved', 'producer_must_prove_invocation_never_started'],
+      ['in_flight', 'UNKNOWN_recover_provider_receipt_before_any_retry'],
+      ['raw_persisted', 'resume_native_validation_without_redispatch'],
+      ['validated', 'reauthenticate_with_native_projection_before_grading'],
+    ]);
+    const { records } = observed;
     const attempts = records.map((item, index) => {
       const { validated_json, raw_response, ...locator } = item;
       const validation = nativeValidationObservation(validated_json,
@@ -400,8 +410,6 @@ function journalInventory(journal, locationChecks) {
   } catch {
     // SQLite messages and raw payloads can contain private provider material.
     return { ...base, reason: 'native_journal_unreadable_or_schema_unavailable' };
-  } finally {
-    if (connection) connection.close();
   }
 }
 

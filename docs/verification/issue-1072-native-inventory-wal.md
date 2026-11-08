@@ -613,3 +613,37 @@ Staging fails on the read-only `.git/index.lock` location. The focused change is
 preserved in an isolated local commit and
 `/tmp/orchestrator-1072-journal-arrival/change.bundle`; the checkout branch and
 remote are unchanged.
+
+## Journal initialization in an existing file
+
+Checked on 2026-11-08 against checkout
+`1191a652b368ecc06489394735a654d33d4f9e89` plus this change. Retained-report
+inventory now rechecks journal availability as well as full receipt contents
+using fresh read-only SQLite snapshots. A producer can finish initialization
+without replacing the selected inode; newly readable receipts must not remain
+hidden behind an earlier unavailable result.
+
+Six new regressions fail before the fix and pass afterward. API and CLI cases
+cover a non-native application marker, missing schema and unreadable bytes
+becoming readable during the final report read. Stable unavailable observations
+remain unavailable without repair. Stable later observations preserve paid
+identities and UNKNOWN recovery boundaries without publishing private payloads,
+authenticating receipts or authorizing dispatch.
+
+Validation: the retained-report, native inventory and live-cohort JavaScript
+suites pass all 179 tests (baseline: 173); diagnostic and replay/publication
+unittests pass 32 and seven tests. JavaScript syntax and `git diff --check` pass.
+No Python files changed. The required retrospective pytest command with
+`-m 'not slow'` cannot start because pytest is absent.
+
+The configured canonical report, independent outcomes database, runtime and
+default mirror are absent. Authentic original/journal locations and live
+deployment/mirror bindings remain unavailable. No production pin, dispatch,
+canonical grading, historical proof, live decision or operational task completion
+is claimed. PR #1081 was observed open with `draft=false`.
+
+Staging fails on the read-only `.git/index.lock` location. The focused change is
+preserved in an isolated local commit and
+`/tmp/orchestrator-1072-journal-initialization/change.bundle`; the checkout branch
+and remote are unchanged. Automatic approval review rejected the `needs-human`
+label because GitHub writes require approval and this run's policy is `never`.

@@ -1854,6 +1854,108 @@ test('foreign and incomplete journals are refused without schema repair', (t) =>
   }
 });
 
+for (const initial of ['non_native', 'missing_schema', 'unreadable']) {
+  for (const mode of ['API', 'CLI']) {
+    test(`report ${mode} rejects ${initial} journal becoming readable in place`, (t) => {
+      const { root, journal, options } = nativeJournal(t);
+      const retained = `${journal}.retained`;
+      fs.copyFileSync(journal, retained);
+      const reportBytes = fs.readFileSync(options.report);
+      const inode = fs.statSync(journal, { bigint: true }).ino;
+      const restoreSql = initial === 'non_native' ? 'PRAGMA application_id=1313097550'
+        : 'ALTER TABLE pending_attempts RENAME TO native_attempts';
+      if (initial === 'unreadable') {
+        fs.writeFileSync(journal, 'private incomplete database bytes');
+      } else {
+        const writer = new DatabaseSync(journal);
+        writer.exec(initial === 'non_native' ? 'PRAGMA application_id=0'
+          : 'ALTER TABLE native_attempts RENAME TO pending_attempts');
+        writer.close();
+      }
+      const unavailableBytes = fs.readFileSync(journal);
+      const unavailable = reportInventory(options).pre_dispatch;
+      assert.equal(unavailable.native_journal.status, 'unavailable');
+      assert.equal(unavailable.native_journal.reason, initial === 'non_native'
+        ? 'non_native_journal' : 'native_journal_unreadable_or_schema_unavailable');
+      assert.equal(unavailable.native_journal.attempts, null);
+      assert.equal(unavailable.paid_identity_reconciliation.union_unique, null);
+      assert.deepEqual(fs.readFileSync(journal), unavailableBytes, 'no schema repair by inventory');
+
+      if (mode === 'API') {
+        const read = fs.readFileSync;
+        let reportReads = 0;
+        fs.readFileSync = function observe(file, ...args) {
+          const bytes = read(file, ...args);
+          if (file === options.report && ++reportReads === 2) {
+            if (initial === 'unreadable') {
+              fs.writeFileSync(journal, read(retained));
+            } else {
+              const writer = new DatabaseSync(journal);
+              writer.exec(restoreSql);
+              writer.close();
+            }
+          }
+          return bytes;
+        };
+        try {
+          assert.throws(() => reportInventory(options), /native journal .*changed during inventory/);
+        } finally {
+          fs.readFileSync = read;
+        }
+        assert.equal(reportReads, 2, 'restore follows the initial unavailable observation');
+      } else {
+        const hook = path.join(root, 'journal-initialization.cjs');
+        fs.writeFileSync(hook, `
+const fs = require('node:fs');
+const { DatabaseSync } = require('node:sqlite');
+const [report, journal, retained, initial, restoreSql] = ${JSON.stringify([
+  options.report, journal, retained, initial, restoreSql,
+])};
+const read = fs.readFileSync;
+let reportReads = 0;
+fs.readFileSync = function observe(file, ...args) {
+  const bytes = read(file, ...args);
+  if (file === report && ++reportReads === 2) {
+    if (initial === 'unreadable') fs.writeFileSync(journal, read(retained));
+    else {
+      const writer = new DatabaseSync(journal);
+      writer.exec(restoreSql);
+      writer.close();
+    }
+  }
+  return bytes;
+};
+`);
+        const result = execute(root, process.execPath, ['--require', hook, script,
+          '--report', options.report, '--journal', journal, '--observed-at', String(now),
+          '--evidence-class', options.evidenceClass, '--evidence-reference', options.evidenceReference]);
+        assert.equal(result.status, 1, result.stderr);
+        assert.equal(result.stdout, '', 'stale unavailability must not emit partial JSON');
+        assert.match(result.stderr, /native journal .*changed during inventory/);
+        assert.ok(!result.stderr.includes('private'));
+      }
+      assert.equal(fs.statSync(journal, { bigint: true }).ino, inode,
+        'initialization must retain the selected file identity');
+      assert.deepEqual(fs.readFileSync(options.report), reportBytes);
+
+      const committedBytes = fs.readFileSync(journal);
+      const later = reportInventory(options);
+      assert.equal(later.pre_dispatch.native_journal.status, 'available');
+      assert.deepEqual(later.pre_dispatch.native_journal.attempts.map((row) => row.attempt_id),
+        ['a', 'b', 'c', 'd', 'e', 'f']);
+      assert.deepEqual(later.pre_dispatch.paid_identity_reconciliation.unresolved_without_backend_id, ['b']);
+      assert.deepEqual(later.paid_attempts.map((row) => row.backend_run_id),
+        ['primary', 'prior', 'oldest', 'prior']);
+      assert.equal(later.pre_dispatch.paid_identity_reconciliation.union_unique, 5);
+      assert.equal(later.receipt_authority, 'not_authenticated_by_inventory');
+      assert.equal(later.dispatch_authorized, false);
+      assert.ok(!JSON.stringify(later).includes('private'));
+      assert.deepEqual(fs.readFileSync(journal), committedBytes);
+      assert.deepEqual(fs.readFileSync(options.report), reportBytes);
+    });
+  }
+}
+
 test('report without native marker still cannot authorize generic retry', (t) => {
   const { saved, options } = retainedReport(t);
   delete saved.native_publication;
