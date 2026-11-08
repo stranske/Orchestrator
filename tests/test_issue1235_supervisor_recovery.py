@@ -127,7 +127,9 @@ class SupervisorRecoveryTests(unittest.TestCase):
             "target": self.issue_target,
             "body": "## Acceptance Criteria\n- `pytest tests/test_contract.py` passes.",
         }
-        with self.assertRaisesRegex(RuntimeError, "acceptance checkout does not match merge commit"):
+        with self.assertRaisesRegex(
+            RuntimeError, "acceptance checkout does not match merge commit"
+        ):
             supervisor._closure_gate("o/r#21", issue, self.sha)
         worktree.assert_called_once_with("o/r#21", self.sha)
         probe.assert_called_once_with(
@@ -146,6 +148,30 @@ class SupervisorRecoveryTests(unittest.TestCase):
 
     def test_acceptance_gate_refuses_failed_git_probe(self):
         self.assert_checkout_refused(returncode=1, actual_sha=self.sha)
+
+    def assert_readonly_replay(self, phase, reason):
+        self.path.write_text(json.dumps({**self.operation, "phase": phase}))
+        before = self.path.read_bytes()
+        self.assertEqual(
+            self.close_issue(),
+            {
+                "target": self.issue_target,
+                "pr": "o/r#21",
+                "merge_sha": self.sha,
+                "closed": False,
+                "reason": reason,
+            },
+        )
+        self.assertEqual(self.path.read_bytes(), before)
+        self.gh.assert_called_once_with(["api", "repos/o/r/issues/7"])
+        self.lineage.assert_not_called()
+        self.record.assert_not_called()
+
+    def test_prepared_receipt_refuses_replay(self):
+        self.assert_readonly_replay("prepared", "ambiguous closure pending")
+
+    def test_settled_receipt_does_not_repeat_record(self):
+        self.assert_readonly_replay("settled", "closure already settled")
 
     def test_confirmed_receipt_retries_without_reclosing_issue(self):
         self.path.write_text(json.dumps(self.operation))

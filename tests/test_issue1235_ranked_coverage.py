@@ -420,6 +420,26 @@ def test_langsmith_parses_bridge_refs_and_rejects_invalid_measurements():
     assert pull._record_ref({}) == (None, None)
 
 
+@pytest.mark.parametrize(
+    "value",
+    [float("nan"), float("inf"), float("-inf"), "nan", "inf", "-inf"],
+    ids=[
+        "numeric-nan",
+        "numeric-inf",
+        "numeric-negative-inf",
+        "string-nan",
+        "string-inf",
+        "string-negative-inf",
+    ],
+)
+def test_langsmith_rejects_nonfinite_measurements_without_crashing(value):
+    for field in ("tokens_in", "tokens_out", "total_tokens", "cost_usd", "latency_ms", "latency_s"):
+        measurements, present = pull._measurements({field: value})
+        assert measurements == {"tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0, "latency_s": 0.0}
+        assert present is False
+    assert pull._coerce_nonnegative_number(value) is None
+
+
 def test_langsmith_run_indexes_preserve_ambiguity_and_fallback_refs():
     feedback.record_run("one", "o/r#1", "implement", "vibe")
     feedback.record_run("two", "o/r#1", "implement", "vibe")
