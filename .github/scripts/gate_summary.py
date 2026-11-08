@@ -371,9 +371,7 @@ def _append_job_table(
     lines.append(f"| docs-guard | {_friendly(docs_guard_result)} |")
     lines.append(f"| docker-smoke | {_friendly(docker_result)} |")
     lines.append(f"| test-quality | {_friendly(test_quality_result)} |")
-    lines.append(
-        f"| orchestrator-node-tests | {_friendly(orchestrator_node_tests_result)} |"
-    )
+    lines.append(f"| orchestrator-node-tests | {_friendly(orchestrator_node_tests_result)} |")
 
 
 def _active_lines(
@@ -504,9 +502,7 @@ def summarize(context: SummaryContext) -> SummaryResult:
     python_result = _normalize(context.python_result or "success")
     docker_result_norm = _normalize(context.docker_result or "skipped")
     test_quality_result = _normalize(context.test_quality_result or "skipped")
-    orchestrator_node_tests_result = _normalize(
-        context.orchestrator_node_tests_result or "skipped"
-    )
+    orchestrator_node_tests_result = _normalize(context.orchestrator_node_tests_result or "skipped")
     cosmetic_failure = False
     failure_checks: tuple[str, ...] = ()
     format_failure = False
@@ -561,9 +557,7 @@ def summarize(context: SummaryContext) -> SummaryResult:
             description = "Orchestrator node tests cancelled; waiting for rerun."
         elif orchestrator_node_tests_result not in ("success", "skipped"):
             state = "failure"
-            description = (
-                f"Orchestrator node tests result: {orchestrator_node_tests_result}."
-            )
+            description = f"Orchestrator node tests result: {orchestrator_node_tests_result}."
 
     adjusted_lines = []
     for line in lines:
@@ -603,9 +597,7 @@ def build_context() -> SummaryContext:
     docs_guard_result = os.environ.get("DOCS_GUARD_RESULT") or "success"
     docker_result = os.environ.get("DOCKER_RESULT") or "skipped"
     test_quality_result = os.environ.get("TEST_QUALITY_RESULT") or "skipped"
-    orchestrator_node_tests_result = (
-        os.environ.get("ORCHESTRATOR_NODE_TESTS_RESULT") or "skipped"
-    )
+    orchestrator_node_tests_result = os.environ.get("ORCHESTRATOR_NODE_TESTS_RESULT") or "skipped"
     docker_changed = _normalize(os.environ.get("DOCKER_CHANGED"), "false") == "true"
     python_required = _normalize(os.environ.get("PYTHON_REQUIRED"), "true") == "true"
     combined_coverage_status = _normalize(
