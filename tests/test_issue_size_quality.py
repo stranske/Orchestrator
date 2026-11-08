@@ -1,6 +1,7 @@
 import copy
 import json
 import sqlite3
+from types import SimpleNamespace
 
 import pytest
 
@@ -13,6 +14,30 @@ def isolate_unrelated_credential_scan(monkeypatch):
     monkeypatch.setattr(
         switch_review, "credential_exposure", lambda **kwargs: {"status": "disabled"}
     )
+    monkeypatch.setattr(
+        switch_review, "fleet_delivery_measures", lambda **kwargs: {"status": "disabled"}
+    )
+    unexpected = []
+
+    def no_live_github(args, **kwargs):
+        if "stranske/collab-admin" not in " ".join(args).lower():
+            unexpected.append(args[:3])
+        return False, "", "unit fixture forbids live GitHub"
+
+    monkeypatch.setattr(switch_review, "_gh_call", no_live_github)
+    original_run = switch_review.subprocess.run
+
+    def no_host_opener(args, **kwargs):
+        if any("opener-cap-health.py" in str(arg) for arg in args):
+            unexpected.append(["opener-cap-health.py"])
+            return SimpleNamespace(
+                returncode=1, stdout="", stderr="unit fixture forbids host probe"
+            )
+        return original_run(args, **kwargs)
+
+    monkeypatch.setattr(switch_review.subprocess, "run", no_host_opener)
+    yield
+    assert not unexpected, f"unrelated live GitHub collector invoked: {unexpected}"
 
 
 NOW = 1800000000
