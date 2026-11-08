@@ -19,8 +19,21 @@ def test_local_capacity_reports_blocking_and_drainable_together():
     assert drained["ok"] and drained["reason"].startswith("local agents 0/3")
 
 
-def test_unknown_inputs_never_close_the_gate():
-    assert router.local_capacity(running=None, load1=None, cores=10)["ok"]
+def test_unknown_inputs_never_close_the_gate(monkeypatch, capsys):
+    def boom(*a, **k):
+        raise OSError("unreadable")
+
+    monkeypatch.setattr(router.claims, "active_claims", boom)
+    monkeypatch.setattr(router.os, "getloadavg", boom)
+    got = router.local_capacity(cores=10)
+    assert got["ok"] and got["running"] is None and got["load1"] is None
+    assert "local agent cap not enforced" in capsys.readouterr().err
+
+
+def test_backup_seats_are_never_auto_selected(monkeypatch):
+    calls = fake_select(monkeypatch)
+    router.choose_mode("implement", {}, local=OK)
+    assert all(not (only or set()) & router.BACKUP_AGENTS for _, only in calls)
 
 
 def fake_select(monkeypatch, local_pick="codex", remote_pick="cursor"):

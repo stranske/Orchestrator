@@ -43,6 +43,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 LABEL = "agents:local-loop"
+KNOWN_AGENTS = {"codex", "claude", "cursor", "gemini", "muse", "vibe", "aider"}
+BRANCH_AGENT = {"claude-code": "claude"}  # branch prefixes that name an agent differently
 HOSTED_LABELS = ("agents:keepalive", "autofix")
 MARKER = "<!-- local-loop/v1 -->"
 LOCAL_RUNTIME = Path(os.environ.get("ORCH_LOCAL_RUNTIME", Path.home() / ".codex" / "orchestrator"))
@@ -513,25 +515,19 @@ class Tick:
     # ---- one PR
     def new_state(self, pr: dict, target: str, issue: dict | None, repo: str) -> dict:
         labels = {n["name"] for n in pr["labels"]["nodes"]}
-        agent = next(
-            (
-                lab.split(":", 1)[1]
-                for lab in sorted(labels)
-                if lab.startswith("agent:")
-                and lab not in {"agent:auto", "agent:retry", "agent:rate-limited"}
-            ),
-            None,
-        )
+        named = [lab.split(":", 1)[1] for lab in sorted(labels) if lab.startswith("agent:")]
+        agent = next((a for a in named if a in KNOWN_AGENTS), None)
         if (
             agent is None
         ):  # the branch says who wrote it (codex/issue-12, claude-code/issue-12, ...)
-            m = re.match(r"^([a-z]+)", pr.get("headRefName") or "")
-            agent = m[1] if m else "codex"
-        issue_t = f"{repo}#{issue['number']}" if issue else None
-        log = str(
-            DISPATCH_LOG_DIR
-            / f"{(issue_t or target).replace('/', '__').replace('#', '_')}.{agent}.log"
-        )
+            m = re.match(r"^([a-z-]+)/", pr.get("headRefName") or "")
+            prefix = BRANCH_AGENT.get(m[1], m[1]) if m else ""
+            agent = prefix if prefix in KNOWN_AGENTS else None
+        known = agent is not None
+        agent = agent or "codex"  # an orch/ or unknown branch: a runnable agent continues it
+        issue_t = f"{repo}#{issue['number']}" if issue and not issue.get("pr_body") else None
+        safe = (issue_t or target).replace("/", "__").replace("#", "_")
+        log = str(DISPATCH_LOG_DIR / f"{safe}.{agent}.log") if known else None
         return {
             "target": target,
             "issue": issue_t,
@@ -545,7 +541,7 @@ class Tick:
             "rounds": [
                 {
                     "n": 1,
-                    "agent": agent,
+                    "agent": agent if known else None,
                     "cause": "start",
                     "head_before": None,
                     "log": log,
@@ -558,7 +554,12 @@ class Tick:
         repo = pr["repository"]["nameWithOwner"]
         target = f"{repo}#{pr['number']}"
         issues = [i for i in (pr.get("closingIssuesReferences") or {}).get("nodes") or [] if i]
-        issue = issues[0] if issues else None
+        # the task of record: the source issue, or the PR itself when it closes none (PRs are issues)
+        issue = (
+            issues[0]
+            if issues
+            else {"number": pr["number"], "body": pr.get("body") or "", "pr_body": True}
+        )
         st = load_state(target) or self.new_state(pr, target, issue, repo)
         st["updated"] = self.now()
         item = {"target": target, "round": len(st["rounds"]), "agent": st["agent"]}
@@ -572,7 +573,7 @@ class Tick:
         self.items.append(item)
         return item
 
-    def decide(self, st: dict, pr: dict, issue: dict | None, repo: str) -> dict:
+    def decide(self, st: dict, pr: dict, issue: dict, repo: str) -> dict:
         target = st["target"]
         labels = {n["name"] for n in pr["labels"]["nodes"]}
         if st.get("status") != "active":
@@ -581,6 +582,7 @@ class Tick:
         if hosted and self.apply:  # one owner: a stray hosted label (e.g. a sweep race) comes off
             for lab in hosted:
                 self.gh.remove_label(repo, pr["number"], lab)
+                labels.discard(lab)
         if self.running([t for t in (target, st.get("issue")) if t]):
             return {"action": "agent-running"}
         ci = rollup(pr)
@@ -608,12 +610,12 @@ class Tick:
                 "action": "wait-ci",
                 "reason": f"CI {ci['state'] or 'not started'} on {str(ci['head'])[:8]}",
             }
-        body = (issue or {}).get("body") or pr.get("body") or ""
+        body = issue.get("body") or ""
         failures: list[dict] = []
         acceptance = None
         if ci["state"] == "SUCCESS":
             acceptance = self.evidence(st, target, body, ci["head"])
-            if acceptance["result"] == "PASS" and issue:
+            if acceptance["result"] == "PASS":
                 ids = {
                     i["id"] for i in checklist(body) if i["id"].startswith("A") and not i["done"]
                 }
@@ -641,13 +643,11 @@ class Tick:
             )
         return self.next_round(st, pr, issue, repo, labels, cause, failures, acceptance)
 
-    def close_round(
-        self, st: dict, last: dict, pr: dict, issue: dict | None, repo: str, ci: dict
-    ) -> None:
+    def close_round(self, st: dict, last: dict, pr: dict, issue: dict, repo: str, ci: dict) -> None:
         """The last round's agent has exited and CI reported on what it left: measure it once."""
         pushed = last.get("head_before") != ci["head"]
         ticked: list[str] = []
-        if ci["state"] == "SUCCESS" and issue:  # a claim counts only against a green head
+        if pushed and ci["state"] == "SUCCESS":  # a claim counts only for a round that pushed green
             claims = claimed_ids(self.log_reader(last.get("log")))
             open_ids = {i["id"] for i in checklist(issue.get("body") or "") if not i["done"]}
             if claims & open_ids:
@@ -682,7 +682,8 @@ class Tick:
         if ev.get("head") == head:
             return ev
         ev = {"head": head, **self.acceptance(target, st.get("issue"), body, head)}
-        st["evidence"] = ev
+        if "gate error" not in str(ev.get("detail")):  # a transient gate error is retried next tick
+            st["evidence"] = ev
         return ev
 
     def failures(self, st: dict, repo: str, ci: dict) -> list[dict]:
@@ -780,7 +781,6 @@ class Tick:
         return {"action": "round", "round": n, "reason": cause[:200]}
 
     def done(self, st: dict, pr: dict, repo: str, acceptance: dict) -> dict:
-        st["status"] = "done"
         rounds = len(st["rounds"])
         feedback_rounds = rounds - 1
         msg = (
@@ -793,17 +793,20 @@ class Tick:
             if pr.get("isDraft"):  # closer-core never merges a draft: done work is ready for review
                 self.gh.ready(repo, pr["number"])
             self.gh.comment(repo, pr["number"], msg)
+        st["status"] = "done"  # only after the writes: a failed write is retried next tick
         return {"action": "done", "reason": f"{rounds} rounds"}
 
     def handoff(self, st: dict, pr: dict, repo: str, labels: set[str], reason: str) -> dict:
-        """Hosted keepalive takes the PR: one owner, so agents:local-loop comes off first."""
+        """Hosted keepalive takes the PR: one owner. Hosted labels go on first, then agents:local-loop
+        comes off, so a failed write leaves an owner (the next tick retries), never an unowned PR.
+        """
         agent = self.hosted_agent("implement", st["agent"])
         if self.apply:
-            self.gh.remove_label(repo, pr["number"], LABEL)
             want = list(HOSTED_LABELS)
             if agent and not any(lab.startswith("agent:") for lab in labels):
                 want.append(f"agent:{agent}")
             self.gh.add_labels(repo, pr["number"], [lab for lab in want if lab not in labels])
+            self.gh.remove_label(repo, pr["number"], LABEL)
             self.gh.comment(
                 repo,
                 pr["number"],

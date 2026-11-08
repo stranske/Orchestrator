@@ -1138,7 +1138,12 @@ def local_capacity(
     if running is None:
         try:
             running = len(claims.active_claims())
-        except Exception:  # unreadable claims: unknown, not full
+        except Exception as exc:  # unreadable claims: unknown, not full -- but say the cap is off
+            print(
+                f"router.local_capacity: claims unreadable ({type(exc).__name__}); "
+                "local agent cap not enforced this call",
+                file=sys.stderr,
+            )
             running = None
     if load1 is None:
         try:
@@ -1186,7 +1191,8 @@ def choose_mode(
     tried = set(tried)
     local = local or local_capacity()
     route_agents = {e["agent"] for spec in _ROUTE_TABLE_TYPED.values() for e in spec["agents"]}
-    untried = route_agents - tried
+    # backup seats (paygo aider, explicit-only muse) are never auto-selected, local or hosted
+    untried = route_agents - tried - BACKUP_AGENTS
     if not local["ok"] and needs_local:
         return {
             "agent": None,
@@ -1216,7 +1222,7 @@ def choose_mode(
         local_miss = local["reason"]
     remote = select_remote_agent(task_type, cap, learned=learned)
     if not remote or not remote.get("agent") or remote["agent"] in tried:
-        others = KEEPALIVE_AGENTS - tried
+        others = KEEPALIVE_AGENTS - tried - BACKUP_AGENTS
         remote = (
             select_agent(task_type, cap, learned=learned, only=others, profile_transport="remote")
             if others

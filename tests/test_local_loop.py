@@ -184,10 +184,13 @@ def test_ci_failure_starts_a_round_with_the_failing_lines_and_progress():
     )
     st = json.loads(ll.state_path("o/r#3").read_text())
     assert len(st["rounds"]) == 2 and st["rounds"][1]["head_before"] == "h1"
-    # same head and CI on the next tick while the agent works: no second round, no second log read
-    tick2, launches2, _ = make_tick(gh, running=True)
+    # the agent exits without pushing: same head and red CI -> the next round reuses the cached logs
+    tick2, launches2, _ = make_tick(gh, now=2000.0)
     tick2.run()
-    assert not launches2 and len([c for c in gh.calls if c[0] == "log"]) == 2
+    assert tick2.items[0]["action"] == "round" and len(launches2) == 1
+    assert (
+        len([c for c in gh.calls if c[0] == "log"]) == 2
+    )  # no second read of the same failing head
 
 
 def test_green_with_acceptance_pass_and_claims_ticks_boxes_and_is_done():
@@ -293,3 +296,105 @@ def test_a_done_draft_is_marked_ready_for_the_closer():
     tick, _, _ = make_tick(gh, log="LOOP-TASKS-DONE: T1, T2")
     tick.run()
     assert tick.items[0]["action"] == "done" and ("ready", 3) in gh.calls
+
+
+def test_no_check_on_the_head_hands_off_after_the_wait():
+    gh = FakeGH([pr_node(state=None)])
+    tick, _, clock = make_tick(gh)
+    tick.run()
+    assert tick.items[0]["action"] == "wait-ci"
+    tick2, _, _ = make_tick(gh, now=clock["t"] + ll.NO_CI_WAIT + 1)
+    tick2.run()
+    assert (
+        tick2.items[0]["action"] == "handed-off" and "no check reported" in tick2.items[0]["reason"]
+    )
+
+
+def test_repeated_start_errors_hand_off():
+    gh = FakeGH([pr_node()])
+    for i in range(ll.START_ERRORS):
+        tick, _, _ = make_tick(gh, now=1000.0 + i)
+        tick.launch = lambda *a: {"error": "provision failed"}
+        tick.run()
+    assert (
+        tick.items[0]["action"] == "handed-off" and "round starts failed" in tick.items[0]["reason"]
+    )
+
+
+def test_hand_off_adds_the_hosted_owner_before_removing_the_local_one(monkeypatch):
+    monkeypatch.setattr(ll, "ROUND_CAP", 1)
+    gh = FakeGH([pr_node(labels=("agent:codex", ll.LABEL, "agents:keepalive"))])
+    tick, _, _ = make_tick(gh)
+    tick.run()
+    assert tick.items[0]["action"] == "handed-off"
+    writes = [c for c in gh.calls if c[0] in {"add", "remove"}]
+    assert writes[0] == ("remove", 3, "agents:keepalive")  # the stray label, stripped first
+    add = next(i for i, c in enumerate(writes) if c[0] == "add")
+    assert "agents:keepalive" in writes[add][2]  # re-added: the stale snapshot no longer hides it
+    assert writes.index(("remove", 3, ll.LABEL)) > add
+
+
+def test_a_failed_ready_write_is_retried_not_marked_done():
+    node = pr_node(state="SUCCESS", failing=())
+    node["isDraft"] = True
+    gh = FakeGH([node])
+
+    def broken(repo, n):
+        raise RuntimeError("gh pr ready: transient")
+
+    gh.ready = broken
+    tick, _, _ = make_tick(gh, log="LOOP-TASKS-DONE: T1, T2")
+    tick.run()
+    assert tick.items[0]["action"] == "error"
+    assert json.loads(ll.state_path("o/r#3").read_text())["status"] == "active"
+
+
+def test_pr_without_a_closing_issue_uses_its_own_task_list():
+    node = pr_node(state="SUCCESS", failing=())
+    node["closingIssuesReferences"] = {"nodes": []}
+    node["body"] = ISSUE_BODY
+    gh = FakeGH([node])
+    tick, _, _ = make_tick(gh, log="LOOP-TASKS-DONE: T1, T2")
+    tick.run()
+    assert tick.items[0]["action"] == "done"
+    assert any(c[0] == "body" and c[1] == 3 for c in gh.calls)  # ticked on the PR itself
+
+
+def test_a_claim_without_a_push_ticks_nothing():
+    gh = FakeGH([pr_node(state="SUCCESS", failing=())])
+    tick, launches, clock = make_tick(
+        gh, acceptance=lambda *a: {"result": "UNRUNNABLE", "detail": "no gate commands"}
+    )
+    tick.run()  # round 1 (the start) pushed but claimed nothing -> round 2
+    assert tick.items[0]["action"] == "round"
+    tick2, _, _ = make_tick(
+        gh,
+        now=clock["t"] + 600,
+        log="LOOP-TASKS-DONE: T1, T2, A1",
+        acceptance=lambda *a: {"result": "UNRUNNABLE", "detail": "no gate commands"},
+    )
+    tick2.run()  # round 2 pushed nothing: its claim is not evidence
+    assert not [c for c in gh.calls if c[0] == "body"] and tick2.items[0]["action"] == "round"
+
+
+def test_a_gate_error_is_not_cached_for_the_head():
+    gh = FakeGH([pr_node(state="SUCCESS", failing=())])
+    seen = []
+
+    def gate(*a):
+        seen.append(a)
+        return {"result": "UNRUNNABLE", "detail": "gate error: fetch failed"}
+
+    tick, _, _ = make_tick(gh, running=False, acceptance=gate)
+    tick.run()
+    assert "evidence" not in json.loads(ll.state_path("o/r#3").read_text())
+
+
+def test_unknown_branch_prefix_gets_a_runnable_agent():
+    node = pr_node(labels=(ll.LABEL,))
+    node["headRefName"] = "orch/issue-7"
+    st = ll.Tick(FakeGH([]), apply=False).new_state(node, "o/r#3", {"number": 7}, "o/r")
+    assert st["agent"] == "codex" and st["rounds"][0]["log"] is None
+    node["headRefName"] = "claude-code/issue-7"
+    st = ll.Tick(FakeGH([]), apply=False).new_state(node, "o/r#3", {"number": 7}, "o/r")
+    assert st["agent"] == "claude" and st["rounds"][0]["log"].endswith(".claude.log")
