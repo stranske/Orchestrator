@@ -289,6 +289,65 @@ class RankedCoverageTests(unittest.TestCase):
         self.assertEqual(json.loads(path.read_text()), {"previous": True})
         self.assertEqual(list(self.root.iterdir()), [path])
 
+    def test_miner_load_state_rejects_unknown_schema_or_version_without_replacing_evidence(self):
+        instance = miner.PatternMiner()
+        candidate = self.candidate()
+        instance.candidates = [candidate]
+        for schema, version in (
+            ("unsupported", miner.STATE_VERSION),
+            (miner.STATE_SCHEMA, miner.STATE_VERSION + 1),
+        ):
+            with self.subTest(schema=schema, version=version):
+                path = self.write_json("state.json", {"schema": schema, "version": version})
+                with self.assertRaisesRegex(ValueError, "unsupported pattern miner state schema"):
+                    instance.load_state(path)
+                self.assertEqual(instance.candidates, [candidate])
+                self.assertFalse(instance.state_loaded)
+
+    def test_miner_missing_state_resets_loaded_flag_without_creating_artifacts(self):
+        instance = miner.PatternMiner()
+        instance.state_loaded = True
+        self.assertFalse(instance.load_state(self.root / "missing.json"))
+        self.assertFalse(instance.state_loaded)
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_miner_persistence_restores_evidence_tombstones_and_last_status(self):
+        instance = miner.PatternMiner()
+        candidate = self.candidate()
+        tombstone = ir.CandidateTombstone(
+            candidate.fingerprint, candidate.capability_id, "expired", 100
+        )
+        instance.candidates = [candidate]
+        instance.tombstones = [tombstone]
+        instance._status = {"candidate_count": 1, "next_actions": ["observe"]}
+        path = self.root / "state.json"
+        instance.save_state(path, updated_at=123)
+
+        restored = miner.PatternMiner()
+        self.assertTrue(restored.load_state(path))
+        self.assertTrue(restored.state_loaded)
+        self.assertEqual(restored.candidates, [candidate])
+        self.assertEqual(restored.tombstones, [tombstone])
+        self.assertEqual(restored.result().status, instance.result().status)
+        self.assertEqual(restored.state_dict(updated_at=123), instance.state_dict(updated_at=123))
+        self.assertEqual(json.loads(path.read_text())["updated_at"], 123)
+
+    def test_miner_stdin_reads_jsonl_in_order_and_ignores_blank_lines(self):
+        rows = [{"event_id": "first"}, {"event_id": "second"}]
+        stream = "\n  \n" + json.dumps(rows[0]) + "\n\n" + json.dumps(rows[1]) + "\n"
+        with patch("sys.stdin", io.StringIO(stream)):
+            self.assertEqual(miner._read_envelopes(Path("-")), rows)
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_miner_json_input_requires_a_list_instead_of_silently_mining_object_keys(self):
+        for payload in ({"event_id": "one"}, None, "event", 42):
+            with self.subTest(payload=payload):
+                path = self.write_json("events.json", payload)
+                with self.assertRaisesRegex(ValueError, "must be a JSON list or JSONL records"):
+                    miner._read_envelopes(path)
+        path = self.write_json("events.json", [{"event_id": "one"}])
+        self.assertEqual(miner._read_envelopes(path), [{"event_id": "one"}])
+
     def test_miner_tick_line_cli_names_actionable_failures(self):
         status = self.write_json(
             "status.json",
