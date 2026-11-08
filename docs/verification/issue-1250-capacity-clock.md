@@ -123,6 +123,16 @@ The existing sync-core target receipt at
 `~/.codex/orchestrator/sync-core/targets/stranske_orchestrator_1247.json`
 records round `20261108T191552Z`, disposition `pre-existing`, terminal
 `handed-off`, on the original head. It is not a post-regeneration classification.
+The subsequent live round `20261108T192823Z` still observed the same original
+head and classified it `shipment-caused`, owner `stranske/Workflows`. Its row
+reports `verify.py aggregate + combined coverage: classifier says shipment-caused`
+and an existing-owner handoff [Workflows #4555](https://github.com/stranske/Workflows/issues/4555).
+That recorded classifier claim is not proof of a new shipment defect: the
+candidate has not incorporated the passing integrated revision. It does not
+satisfy the requested clean classification after regeneration. The raw row also
+retains `delivery_not_sealed` and an unclassified shard failure; this repair does
+not expand into those findings.
+
 No source owner, regeneration configuration, pins, review floor, or merge guard
 was changed. Blocking/drainable pair: **#1247 regeneration and subsequent
 classification unobserved / existing sync workflow owner can regenerate it;
