@@ -1,5 +1,7 @@
 import hashlib
 import json
+import sqlite3
+from contextlib import closing
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -390,6 +392,22 @@ def test_followed_pick_is_graded_through_linked_run(followed_pick):
     assert result["no_delivery"] == 0
 
 
+def test_summary_line_reads_while_brain_write_locked(followed_pick):
+    # Even a pending legacy backfill must not turn the report into a writer.
+    with closing(feedback._conn()) as conn, conn:
+        conn.execute("UPDATE runs SET assignment=NULL WHERE run_id='keepalive-run'")
+    with closing(sqlite3.connect(feedback.DB_PATH)) as writer:
+        writer.execute("BEGIN IMMEDIATE")
+        try:
+            writer.execute("UPDATE outcomes SET durability='pending' WHERE run_id='keepalive-run'")
+            text = triage_shadow.summary_line(followed_pick)
+            assert text.startswith("triage shadow: cycles 1, valid 1"), text
+            assert "UNKNOWN" not in text
+            assert "triage top-1 merged+durable 100.0% (1 judged)" in text
+        finally:
+            writer.rollback()
+
+
 def test_each_followed_consumption_uses_its_own_run(followed_pick):
     receipt = triage_shadow._read_rows(triage_shadow.consumed_path())[0]
     triage_shadow._append(
@@ -577,7 +595,9 @@ def test_malformed_live_evidence_never_reaches_sqlite(tmp_path, monkeypatch, fie
     row[field] = value
     path = tmp_path / "rows.jsonl"
     path.write_text(json.dumps(row) + "\n")
-    monkeypatch.setattr(feedback, "_conn", lambda: pytest.fail("malformed evidence opened Brain"))
+    monkeypatch.setattr(
+        sqlite3, "connect", lambda *a, **kw: pytest.fail("malformed evidence opened Brain")
+    )
     assert "UNKNOWN" in triage_shadow.summary_line(path)
 
 
@@ -606,40 +626,32 @@ def test_backfill_preserves_existing_verifier_concerns(brain):
 
 
 def test_empty_corpus_does_not_open_the_brain(tmp_path, monkeypatch):
-    monkeypatch.setattr(feedback, "_conn", lambda: pytest.fail("empty summary opened Brain"))
+    monkeypatch.setattr(
+        sqlite3, "connect", lambda *a, **kw: pytest.fail("empty summary opened Brain")
+    )
     assert "n/a (0 judged)" in triage_shadow.summary_line(tmp_path / "absent.jsonl")
 
 
-def test_unreadable_outcomes_are_unknown(tmp_path, monkeypatch):
-    import sqlite3
-
-    path = tmp_path / "shadow.jsonl"
-    path.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "triage_valid": True,
-                "live_proposal": True,
-                "triage_top_three": ["stranske/Orchestrator#1"],
-                "rule_pick": "stranske/Orchestrator#1",
-                "ts": 100_000_000_000,
-            }
-        )
-        + "\n"
-    )
-
-    def unavailable():
-        raise sqlite3.OperationalError("unreadable fixture")
-
-    monkeypatch.setattr(feedback, "_conn", unavailable)
-    text = triage_shadow.summary_line(path)
+@pytest.mark.parametrize("brain_state", ["missing", "corrupt", "missing_tables"])
+def test_unreadable_outcomes_are_unknown(followed_pick, brain_state):
+    feedback.DB_PATH.unlink()
+    if brain_state == "corrupt":
+        feedback.DB_PATH.write_bytes(b"not a SQLite database")
+    elif brain_state == "missing_tables":
+        with closing(sqlite3.connect(feedback.DB_PATH)):
+            pass
+    text = triage_shadow.summary_line(followed_pick)
     assert "UNKNOWN" in text and "0 judged" not in text
+    if brain_state == "missing":
+        assert not feedback.DB_PATH.exists()
 
 
 def test_malformed_corpus_cannot_report_a_complete_zero_judged_population(tmp_path, monkeypatch):
     path = tmp_path / "malformed.jsonl"
     path.write_text("not json\n")
-    monkeypatch.setattr(feedback, "_conn", lambda: pytest.fail("malformed corpus opened Brain"))
+    monkeypatch.setattr(
+        sqlite3, "connect", lambda *a, **kw: pytest.fail("malformed corpus opened Brain")
+    )
     text = triage_shadow.summary_line(path)
     assert "UNKNOWN" in text and "malformed corpus rows 1" in text
     assert "0 judged" not in text

@@ -3,10 +3,11 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import sqlite3
 import subprocess
 import sys
 import time
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 
 import pytest
@@ -469,6 +470,50 @@ def test_weekly_line_carries_prs_specs_executed_and_would_fail(private_brain):
 def test_no_audit_is_unmeasured_not_zero_false_fail():
     line = gate.format_shadow_summary(gate.shadow_summary(now=0, events=[]))
     assert "false-FAIL audit unmeasured" in line
+
+
+def test_shadow_summary_reads_while_brain_write_locked(private_brain):
+    feedback.record_run("closer", "owner/repo#2", "implement", "codex")
+    feedback.record_outcome("closer", merged=True, durability="durable")
+    feedback.record_runtime_ac_gate_event(
+        target="owner/repo#2",
+        gate_status="executed",
+        required=True,
+        dry_run=False,
+        shadow_only=True,
+        spec_authored=True,
+        verifier_verdict="FAIL",
+        closer_run_id="closer",
+    )
+    with closing(feedback._conn()) as conn, conn:
+        conn.execute("UPDATE runs SET assignment=NULL WHERE run_id='closer'")
+    with closing(sqlite3.connect(feedback.DB_PATH)) as writer:
+        writer.execute("BEGIN IMMEDIATE")
+        try:
+            writer.execute("UPDATE outcomes SET merged=0 WHERE run_id='closer'")
+            summary = gate.shadow_summary(now=int(time.time()))
+            line = gate.format_shadow_summary(summary)
+            assert "PRs 1, specs authored 1, executed 1, would-FAIL 1" in line
+            assert "merged with unmet ACs 1" in line
+            assert "error" not in summary
+        finally:
+            writer.rollback()
+
+
+@pytest.mark.parametrize("brain_state", ["missing", "corrupt", "missing_tables"])
+def test_shadow_summary_reports_real_brain_read_failures(tmp_path, monkeypatch, brain_state):
+    path = tmp_path / "brain.db"
+    monkeypatch.setattr(feedback, "DB_PATH", path)
+    if brain_state == "corrupt":
+        path.write_bytes(b"not a SQLite database")
+    elif brain_state == "missing_tables":
+        with closing(sqlite3.connect(path)):
+            pass
+    summary = gate.shadow_summary(now=int(time.time()))
+    assert "error" in summary
+    assert gate.format_shadow_summary(summary).startswith("runtime-AC shadow: unmeasured")
+    if brain_state == "missing":
+        assert not path.exists()
 
 
 def test_unsafe_prose_is_manual():
