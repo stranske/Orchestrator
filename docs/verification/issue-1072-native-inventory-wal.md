@@ -647,3 +647,34 @@ preserved in an isolated local commit and
 `/tmp/orchestrator-1072-journal-initialization/change.bundle`; the checkout branch
 and remote are unchanged. Automatic approval review rejected the `needs-human`
 label because GitHub writes require approval and this run's policy is `never`.
+
+## Deployment and mirror changes during inventory
+
+Checked on 2026-11-08 against checkout
+`906e58b374c9df5f0409034d1f82b5e4a6964032` plus this change. Three CLI
+regressions now exercise a deployment HEAD advance, a local validator edit and
+a mirror generation switch after both initial code observations. The real
+inventory aborts without JSON. A subsequent stable observation identifies the
+new revision, module hash or resolved generation, while preserving original
+cohort, canonical identity, recursive paid history, foreign receipts and UNKNOWNs.
+The mirror control uses identical module bytes in distinct generations.
+
+All three regressions fail when the final code-pin comparison is removed in a
+temporary source copy. The retained-report, native inventory and live-cohort
+JavaScript suites pass all 182 tests (baseline: 179). Diagnostic and
+replay/publication unittests pass 32 and seven tests respectively. JavaScript
+syntax and whitespace checks pass. No repository Python files changed. The
+required retrospective pytest command with `-m 'not slow'` cannot start because
+pytest is absent.
+
+These are fixture results. The configured canonical report, runtime, outcomes
+database and default mirror remain absent; authentic original/journal locations
+and live deployment/mirror bindings remain unavailable. No production inventory,
+dispatch, grading, historical proof, live decision or operational checkbox
+completion is claimed. PR #1081 was observed open with `draft=false`.
+
+Staging fails on the read-only `.git/index.lock` location. The change is preserved
+using isolated Git metadata and `/tmp/orchestrator-1072-code-pins/change.bundle`;
+the checkout branch and remote are unchanged. Automatic approval review rejected
+the `needs-human` label because GitHub writes require approval while this run's
+policy is `never`.

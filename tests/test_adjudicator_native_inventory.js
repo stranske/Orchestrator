@@ -364,6 +364,99 @@ test('inventory CLI pins a dirty mirror worktree despite inherited deployment Gi
   assert.deepEqual(w.snapshot(), before);
 });
 
+for (const change of ['deployment_revision', 'deployment_module', 'mirror_generation']) {
+  test(`inventory CLI refuses ${change} changes during the deployment/mirror observation`, (t) => {
+    const w = world(t);
+    const deployed = deployment(w);
+    const generation = path.join(w.root, 'generation-a');
+    const replacement = path.join(w.root, 'generation-b');
+    for (const directory of [generation, replacement]) {
+      fs.mkdirSync(directory);
+      fs.writeFileSync(path.join(directory, 'adjudicator_retro.py'), '# mirrored retrospective\n');
+      fs.writeFileSync(path.join(directory, 'roles.py'), '# mirrored validator\n');
+    }
+    const mirror = path.join(w.root, 'published-mirror');
+    fs.symlinkSync(generation, mirror, 'dir');
+    const args = [...w.inventoryArgs, '--deployed-root', deployed.root, '--mirror-root', mirror];
+    const initial = w.run(args);
+    const before = w.snapshot();
+    const result = w.execute(['-c', `
+import os, subprocess, sys
+from pathlib import Path
+import adjudicator_retro as retro
+
+deployed, mirror, replacement = map(Path, sys.argv[1:4])
+change = sys.argv[4]
+observe = retro._inventory_code
+observations = 0
+
+def observe_then_change(root):
+    global observations
+    result = observe(root)
+    observations += 1
+    # Both initial pins have been captured. Change one before the final
+    # comparison, leaving reports and committed WAL receipts untouched.
+    if observations == 2:
+        if change == 'deployment_revision':
+            environment = {key: value for key, value in os.environ.items()
+                           if not key.startswith('GIT_')}
+            subprocess.run(['git', '-C', str(deployed),
+                            '-c', 'user.name=Inventory Test',
+                            '-c', 'user.email=inventory@example.invalid',
+                            'commit', '--allow-empty', '-qm', 'Deployment advanced'],
+                           check=True, env=environment)
+        elif change == 'deployment_module':
+            (deployed / 'src/roles.py').write_text('# changed deployment validator\\n')
+        else:
+            temporary = mirror.with_name(mirror.name + '.next')
+            temporary.symlink_to(replacement, target_is_directory=True)
+            temporary.replace(mirror)
+    return result
+
+retro._inventory_code = observe_then_change
+sys.argv = ['adjudicator_retro.py', *sys.argv[5:]]
+raise SystemExit(retro.main())
+`, deployed.root, mirror, replacement, change, ...args.slice(1)]);
+    assert.equal(result.status, 2, result.stderr);
+    assert.match(result.stderr, /runtime code location changed during inventory/);
+    assert.equal(result.stdout, '', 'changing code pins must not emit a partial inventory');
+    assert.deepEqual(w.snapshot(), before);
+
+    // A subsequent stable observation identifies the change while retaining
+    // the independent original, native and foreign paid-attempt evidence.
+    const later = w.run(args);
+    if (change === 'deployment_revision') {
+      assert.notEqual(later.deployed_code.git_revision, initial.deployed_code.git_revision);
+      assert.equal(later.deployed_code.tracked_files_clean, true);
+      assert.deepEqual(later.deployed_code.runtime_module_sha256,
+        initial.deployed_code.runtime_module_sha256);
+    } else if (change === 'deployment_module') {
+      assert.equal(later.deployed_code.git_revision, initial.deployed_code.git_revision);
+      assert.equal(later.deployed_code.tracked_files_clean, false);
+      assert.notEqual(later.deployed_code.runtime_module_sha256['roles.py'],
+        initial.deployed_code.runtime_module_sha256['roles.py']);
+    } else {
+      assert.equal(later.mirror_code.resolved_path, replacement);
+      assert.notEqual(later.mirror_code.resolved_path, initial.mirror_code.resolved_path);
+      assert.deepEqual(later.mirror_code.runtime_module_sha256,
+        initial.mirror_code.runtime_module_sha256, 'identical code does not identify a generation');
+    }
+    assert.deepEqual(later.original_report, initial.original_report);
+    assert.deepEqual(later.canonical_report, initial.canonical_report);
+    assert.deepEqual(later.original_paid_attempts, initial.original_paid_attempts);
+    assert.deepEqual(later.native_journal, initial.native_journal);
+    assert.deepEqual(later.paid_identity_summary, initial.paid_identity_summary);
+    assert.equal(later.row_diagnostics[0].unresolved_native_attempts[0].outcome, 'UNKNOWN');
+    assert.equal(later.deployed_code.live_reader_binding, 'unverified');
+    assert.equal(later.mirror_code.live_reader_binding, 'unverified');
+    assert.equal(later.canonical_report.summary_authority, 'not_authenticated_by_inventory');
+    assert.match(later.historical_observations, /^unavailable/);
+    assert.equal(later.dispatch_authorized, false);
+    assert.ok(!JSON.stringify(later).includes(w.raw));
+    assert.deepEqual(w.snapshot(), before);
+  });
+}
+
 test('native inventory separates uncommitted provider changes from a later committed observation', (t) => {
   const w = world(t);
   const before = w.snapshot();
