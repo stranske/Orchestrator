@@ -303,6 +303,20 @@ class RankedCoverageTests(unittest.TestCase):
         self.assertEqual(path.read_bytes(), previous)
         self.assertEqual(list(self.root.iterdir()), [path])
 
+    def test_miner_serialization_failure_preserves_previous_state_and_removes_partial_write(self):
+        path = self.write_json("state.json", {"previous": True})
+        previous = path.read_bytes()
+        with (
+            patch.object(miner.os, "fsync") as sync,
+            patch.object(miner.os, "replace") as publish,
+        ):
+            with self.assertRaisesRegex(TypeError, "not JSON serializable"):
+                miner._write_json_atomic(path, {"first": "serializable", "last": object()})
+        sync.assert_not_called()
+        publish.assert_not_called()
+        self.assertEqual(path.read_bytes(), previous)
+        self.assertEqual(list(self.root.iterdir()), [path])
+
     def test_miner_load_state_rejects_unknown_schema_or_version_without_replacing_evidence(self):
         instance = miner.PatternMiner()
         candidate = self.candidate()
@@ -817,6 +831,28 @@ class RankedCoverageTests(unittest.TestCase):
         self.assertIn(
             f"orchestrate.sh = {self.root / 'orchestrate.sh'} (exists: True)", output.getvalue()
         )
+
+    def test_paths_flat_selftest_validates_checkout_root(self):
+        mirror = self.root / "mirror"
+        mirror.mkdir()
+        with (
+            patch.object(paths, "__file__", str(mirror / "paths.py")),
+            patch.object(paths, "_MODULE_ALIAS", mirror),
+            patch.object(paths, "MODULE_DIR", mirror),
+            patch.object(paths, "REPO_ROOT", mirror),
+            patch.object(paths, "FLEET_ROOT", self.root),
+            patch.object(tempfile, "tempdir", str(self.root)),
+            redirect_stdout(io.StringIO()) as output,
+        ):
+            self.assertEqual(paths.main(["--selftest"]), 0)
+            self.assertIn("paths.py selftest: OK", output.getvalue())
+            self.assertIn("MODULE_DIR='mirror' REPO_ROOT='mirror'", output.getvalue())
+            with patch.object(paths, "REPO_ROOT", self.root):
+                with self.assertRaises(AssertionError) as caught:
+                    paths.main(["--selftest"])
+            self.assertEqual(caught.exception.args, ((self.root, mirror),))
+        self.assertEqual(list(self.root.iterdir()), [mirror])
+        self.assertEqual(list(mirror.iterdir()), [])
 
 
 if __name__ == "__main__":
