@@ -391,6 +391,14 @@ def test_followed_pick_is_graded_through_linked_run(followed_pick):
     assert result["merged_durable"] == 1
     assert result["no_delivery"] == 0
 
+    # A readable Brain without outcomes is unmeasured, unlike a failed Brain read.
+    with closing(sqlite3.connect(feedback.DB_PATH)) as conn, conn:
+        conn.execute("DELETE FROM outcomes")
+    text = triage_shadow.summary_line(followed_pick)
+    assert text.startswith("triage shadow: cycles 1, valid 1"), text
+    assert "UNKNOWN" not in text
+    assert "triage top-1 merged+durable n/a (0 judged)" in text
+
 
 @pytest.mark.parametrize("journal_mode", ["DELETE", "WAL"])
 def test_summary_line_reads_while_brain_write_locked(followed_pick, journal_mode):
@@ -644,12 +652,9 @@ def test_unreadable_outcomes_are_unknown(followed_pick, brain_state):
         with closing(sqlite3.connect(feedback.DB_PATH)):
             pass
     text = triage_shadow.summary_line(followed_pick)
+    assert "UNKNOWN" in text and "0 judged" not in text
     if brain_state == "missing":
-        # Missing database is handled gracefully (no exception raised)
-        assert "0 judged" in text
         assert not feedback.DB_PATH.exists()
-    else:
-        assert "UNKNOWN" in text and "0 judged" not in text
 
 
 def test_malformed_corpus_cannot_report_a_complete_zero_judged_population(tmp_path, monkeypatch):
@@ -983,6 +988,9 @@ def test_consume_refuses_with_a_named_reason_and_leaves_order_unchanged(consumab
 
 
 def test_ranking_publication_is_live_only_and_covers_remaining_rule_order(brain):
+    # The stubbed live role below does not persist its run as a real role would.
+    with closing(feedback._conn()):
+        pass
     recs = proposal()
     for rec in recs["recommendations"]:
         if rec["target"] != "stranske/Orchestrator#3":
