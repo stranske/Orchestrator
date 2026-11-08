@@ -1446,6 +1446,8 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
         "wrapped": wrapped,
         "worktree_missing": worktree_missing,
         "feedback_mode": assignment.get("feedback_mode"),
+        # Why this start runs where it runs (router.choose_mode reason); recorded on the run row.
+        "rationale": assignment.get("rationale"),
         "review_loop": bool(assignment.get("review_loop")),
         "review_round": assignment.get("review_round", 1),
         "review_run_id": assignment.get("review_run_id"),
@@ -1688,6 +1690,7 @@ def _spawn(d: dict) -> int:
     run_kwargs = {
         "mode": d.get("feedback_mode") or d.get("mode"),
         "reasoning_level": d.get("mode"),
+        "rationale": d.get("rationale"),
         "model": d.get("model"),
         "routing_metadata": d.get("routing_metadata"),
         "influenced_by_role_run_ids": d.get("influenced_by_role_run_ids"),
@@ -2131,6 +2134,7 @@ def delegate(
     review_round: int = 1,
     review_run_id: str | None = None,
     continue_pr: int | None = None,
+    rationale: str | None = None,
 ) -> dict:
     """One ad-hoc delegation for the assessing orchestrator seat: claim + provision + spawn
     ONE cheap agent with the orchestrator's OWN crafted prompt (detached, PATH+auth+release
@@ -2211,6 +2215,7 @@ def delegate(
         "review_loop": review_loop,
         "review_round": review_round,
         "review_run_id": review_run_id,
+        "rationale": rationale,
     }
     if codex_override_effort:
         a["reasoning_effort"] = codex_override_effort
@@ -2255,6 +2260,7 @@ def delegate(
                 agent,
                 mode="local",
                 reasoning_level=mode,
+                rationale=rationale,
                 model=d.get("model"),
                 routing_metadata=d.get("routing_metadata"),
                 influenced_by_role_run_ids=d.get("influenced_by_role_run_ids"),
@@ -7004,6 +7010,9 @@ def main(argv: list[str]) -> int:
         p.add_argument("--task-type", default="implement")
         p.add_argument("--continue-pr", type=int, help="continue this confirmed linked open PR")
         p.add_argument(
+            "--rationale", help="why this start runs locally (router.choose_mode reason)"
+        )
+        p.add_argument(
             "--review-loop",
             action="store_true",
             help="require independent exact-head review after terminal writer release",
@@ -7036,6 +7045,7 @@ def main(argv: list[str]) -> int:
             continue_pr=ns.continue_pr,
             influenced_by_role_run_ids=ns.influenced_by_role_run_id,
             **review_kwargs,
+            **({"rationale": ns.rationale} if ns.rationale else {}),
             **({"branch_prefix": ns.branch_prefix} if ns.branch_prefix is not None else {}),
         )
         print(json.dumps(out, default=str))

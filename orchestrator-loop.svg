@@ -65,7 +65,7 @@
 <rect class="stage" x="56" y="196" width="584" height="52" rx="8"/>
 <text class="th" x="68" y="227">Decide</text>
 <rect class="rail" x="112" y="210" width="132" height="24" rx="4"/><text class="ct" x="178" y="226" text-anchor="middle">capability advisor</text>
-<rect class="rail" x="250" y="210" width="142" height="24" rx="4"/><text class="ct" x="321" y="226" text-anchor="middle">select agent (router)</text>
+<rect class="rail" x="250" y="210" width="142" height="24" rx="4"/><text class="ct" x="321" y="226" text-anchor="middle">agent + mode (router)</text><title>router.choose_mode: local first while fewer than 3 local agents run and load is below 2 x cores; otherwise offload to hosted keepalive; every start records mode and reason</title>
 <rect class="role" x="402" y="210" width="52" height="24" rx="4"/><text class="ct" x="428" y="226" text-anchor="middle">triage</text><title>Opener ranking data: default-OFF ORCH_TRIAGE_CONSUME, 20 valid live cycles, 7200s freshness; deterministic router unchanged; no worker dispatch</title>
 <rect class="role" x="464" y="210" width="76" height="24" rx="4"/><text class="ct" x="502" y="226" text-anchor="middle">decomposer</text>
 
@@ -139,7 +139,8 @@
      conclusions were drawn from this loop alone, which this diagram cannot support. -->
 <rect class="bg" x="56" y="536" width="584" height="112" rx="8" stroke-dasharray="5 3"/>
 <text class="th" x="68" y="556">outside this tree · system-of-record: the Workflows repo</text>
-<text class="ts" x="68" y="576">approved-issue queue → opener lane (issues + ready PRs) → KEEPALIVE (Actions) → closer lane</text>
+<text class="ts" x="68" y="576">approved queue → opener → KEEPALIVE (Actions) or local_loop (local CI rounds) → closer</text>
+<desc id="local-loop-contract">Local-first routing and the local keepalive loop (2026-11-08): router.choose_mode picks the agent AND the mode, local while fewer than LOCAL_AGENT_CAP (3) live local claims and load below 2 x cores, otherwise hosted keepalive; the reason is recorded on every start. A local start's PR carries agents:local-loop and never agents:keepalive; the controller pass runs local_loop.py tick, one GraphQL search per tick, which re-runs the agent on CI results with failing lines, injects tasks and progress, runs acceptance commands on green heads, ticks source-issue boxes from evidence, rotates agents after two unproductive rounds, and leaves only by done (closer-core merges) or a hand-off to hosted keepalive.</desc>
 <text class="ts" x="68" y="596">Interfaces: capacity advice · review fallback · lane verdict to fleet-PR edges ·</text>
 <text class="ts" x="68" y="612">tick keepalive ingest; dispatch and heartbeat shadow unless ORCH_DISPATCH_LANE=1.</text>
 <text class="ts" x="68" y="634">closer-core: rounds → value chain; issue_closure → Brain outcomes</text>
