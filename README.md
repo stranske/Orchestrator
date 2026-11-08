@@ -76,8 +76,10 @@ LIVENESS:  the LAST block of a completed --active tick runs ~/.codex/bin/hc-ping
   in TWO shapes: the checkout, and (the `exec-mirror` job, since 2026-10-04) the flat tree a sync
   ships, built by `scripts/build_exec_mirror.sh`, the one copy contract the owner's copier also
   calls, and judged by `scripts/verify_before_sync.sh` itself. A defect that exists only in the flat
-  mirror therefore fails on its PR, not at the owner's sync. This machine's
-  verdict on a merged tree is one run per sync, taken before the live mirror changes by
+  mirror therefore fails on its PR, not at the owner's sync. Since 2026-11-08 a sync deploys only
+  a commit whose CI run is green, after a seconds-long check that the flat copy loads, and rolls
+  back if the live path does not (CLAUDE.md §1; `docs/MIRROR_SYNC_PATCH.md`, "The verdict is
+  CI's"). The whole-suite local run is now `orch-mirror-sync.sh --full-local-verify`: a run taken before the live mirror changes by
   `scripts/verify_before_sync.sh` in a scratch mirror; the wrapper then installs that exact verified
   snapshot instead of re-reading the mutable checkout (CLAUDE.md §1). That verdict judges the ledger
   the tree will run on: the tree's own first writing load runs on the scratch copy first, so a row

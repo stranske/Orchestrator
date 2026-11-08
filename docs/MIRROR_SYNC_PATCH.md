@@ -327,6 +327,9 @@ The guard was also run against the incident's own file. A repository rebuilt fro
 
 ## The wrapper takes its verdict BEFORE the live copy (2026-10-02)
 
+> **Superseded as the default on 2026-11-08** by "The verdict is CI's" at the end of this document.
+> What follows is now the `--full-local-verify` path.
+
 This patch is for `~/.codex/bin/orch-mirror-sync.sh`, the guarded wrapper you run to sync, not for
 the copy script above. The wrapper used to copy into the live mirror and THEN run `verify.py` there.
 That ordering has two defects:
@@ -1218,3 +1221,68 @@ negative/positive reentry controls. Raw baseline, deliberate-break, restored-GRE
 JUnit, TAP and source hashes are retained under `docs/verification/issue-528-options/`.
 These are isolated source witnesses; installed mirror publication and provider
 acceptance remain separate delivery steps.
+
+## The verdict is CI's (2026-11-08)
+
+**The owner's decision.** A sync deploys what CI already verified. It no longer runs the whole suite
+again on this machine before every deploy.
+
+**Why.** `verify_before_sync.sh` ran all ~15,000 tests again on the laptop for every sync, after CI
+had run them on the same commit in both tree shapes. The local run grew from 20 minutes (Nov 3) to
+78 minutes serially (Nov 8), and to 21-28 minutes with 4 workers. On 2026-11-08 four attempts
+deployed nothing:
+
+- one failure was a test that depended on the clock;
+- four were local contention flakes (`BlockingIOError`, `database is locked`, an admission deadline);
+- the last was `test_closer_publisher_closure`, which reads the LIVE controller under
+  `~/.codex/automations/`. It skips in CI. It failed here minutes after another agent edited that file.
+
+None of the failures came from the code being shipped. A deploy gate that needs every part of the
+system to be perfect, and that reads files other agents change, breaks on any unrelated change.
+
+**What `~/.codex/bin/orch-mirror-sync.sh` does now (default):**
+
+1. **CI verdict.** The checkout must be clean and on `origin/main`, with a completed, successful
+   `ci.yml` run on its exact HEAD (`gh run list --workflow ci.yml --commit SHA`). Otherwise it stops
+   with exit 4 and names the latest main commit with green CI.
+2. **Copy.** It builds the flat copy with the copy script, into a scratch directory with a scratch
+   HOME. If the checkout moved during the copy, it refuses.
+3. **Smoke.** `~/.codex/bin/orch-mirror-smoke.py` checks that the copy loads:
+   - every top-level module imports from the mirror directory;
+   - `orchestrate.sh` passes `bash -n`.
+
+   It takes about 10 s. Failures are RELATIVE: only a module that loads in the incumbent and fails
+   in the candidate blocks. A module that is already broken live cannot latch every future deploy.
+4. **Install.** The installer publishes a new generation (`--expected-digest`,
+   `--expected-generation`).
+5. **Health and rollback.** It runs the smoke again on the live path. If that fails, the mirror
+   symlink is swapped back to the previous generation in one atomic rename, and the script exits 5.
+   Re-installing an old generation through the installer does not work: a generation carries
+   forward docs that its manifest does not list.
+6. **Drift, FYI only.** Tests that read live machine state (now
+   `tests/test_closer_publisher_closure.py`) run detached from the new mirror. They log to
+   `~/.codex/orchestrator/mirror-drift/` and never block.
+
+Every attempt appends one JSON line to `~/.codex/orchestrator/mirror-sync-history.jsonl`, with
+`outcome`, `stopped_at` and `seconds`.
+
+**What it no longer checks, and when to take the old run.** CI's ledger is bootstrapped, and some
+of its tests and selftest sections skip (see CLAUDE.md, "which verify runs are needed"). For a
+change to the capability ledger, lifecycle, admission or binding code, or for an unmerged or
+uncommitted tree, run `orch-mirror-sync.sh --full-local-verify`. That is the 2026-10-02 path above,
+unchanged. `--allow-unmerged` implies it.
+
+**Measured.**
+
+- Sandbox run of f141cf33: deployed in 52 s.
+- Deliberate break (`raise ImportError` appended to `router.py`): 24 new import failures, refused.
+- Rollback: a broken generation was swapped live, then swapped back. The smoke on the restored tree
+  showed 0 failures.
+- First live deploy, f141cf33: 113 s (history line 1).
+
+**Pass condition:** each of the next 5 syncs takes 10 minutes or less, and 0 of them stop for a file
+outside the repository. Read it from the history file. Stop rule: 2026-11-15.
+
+**Files.** The wrapper and the smoke checker live outside this repository, in `~/.codex/bin/`, as the
+copy script does. The previous wrapper is backed up at
+`Audits/closer-lane-2026-11/rebuild/local-loop/backups/orch-mirror-sync.sh.before-ci-verdict`.
