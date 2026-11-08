@@ -7,11 +7,12 @@ tasks:
     title: 'Fix the source of `KeyError: ''a''` in `tests/test_closer_pipeline.py::test_capacity_is_read_fresh_and_zero_defers`,
       reported by `Pre-existing failure: verify.py aggregate + combined coverage fails
       on`.'
-    status: doing
-    started_at: '2026-11-08T17:07:59Z'
+    status: todo
+    started_at: null
     finished_at: null
     commit: ''
-    notes: []
+    notes:
+      - '2026-11-08T17:08:09Z failure (run 42503358077): status=failure'
   - id: task-02
     title: 'Reproduce the KeyError: ''a'' locally by running tests/test_closer_pipeline.py::test_capacity_is_read_fresh_and_zero_defers
       (verify: tests pass)'
