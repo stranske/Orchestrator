@@ -60,9 +60,7 @@ def test_sandbox_explicit_readonly_permission_refuses_widening(tmp_path, sandbox
 
 def test_sandbox_explicit_selection_preserves_outer_seat_boundary(tmp_path, monkeypatch):
     monkeypatch.setattr(adapters, "codex_bypass_inner_sandbox", lambda: True)
-    cmd = adapters.build_command(
-        "codex", "brief", cwd=tmp_path, sandbox_mode="read-only"
-    )
+    cmd = adapters.build_command("codex", "brief", cwd=tmp_path, sandbox_mode="read-only")
     assert cmd[cmd.index("--sandbox") + 1] == "read-only"
     assert "--dangerously-bypass-approvals-and-sandbox" not in cmd
 
@@ -185,10 +183,21 @@ def test_sandbox_switch_review_names_seven_days_and_unverified_windows(tmp_path)
 
 
 def test_sandbox_switch_review_json_cli_accepts_iso_window(tmp_path, capsys):
-    assert switch_review.main([
-        "--assess-sandbox-fallback", "--since", "2026-11-06T00:00:00Z",
-        "--now", "1793923201", "--ledger", str(tmp_path / "missing.ndjson"), "--json",
-    ]) == 0
+    assert (
+        switch_review.main(
+            [
+                "--assess-sandbox-fallback",
+                "--since",
+                "2026-11-06T00:00:00Z",
+                "--now",
+                "1793923201",
+                "--ledger",
+                str(tmp_path / "missing.ndjson"),
+                "--json",
+            ]
+        )
+        == 0
+    )
     report = json.loads(capsys.readouterr().out)
     assert report["window_start"] == 1793923200
     assert report["window_end"] == 1794528000

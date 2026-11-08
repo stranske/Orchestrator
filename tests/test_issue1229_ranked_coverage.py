@@ -8,23 +8,21 @@ Measured coverage and per-test mutation evidence are recorded on PR #1230.
 
 from __future__ import annotations
 
-import json
 import contextlib
-import sqlite3
+import json
 import os
 import socket
+import sqlite3
 import subprocess
-import sys
 import tempfile
-import time
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
 
 import pytest
 
 import feedback
+import langsmith_fetch
 import objective_anchor
+import outcomes
 import provision
 
 
@@ -457,8 +455,6 @@ class TestObjectiveAnchorChangedFiles:
 # langsmith_fetch.py coverage
 # =============================================================================
 
-import langsmith_fetch
-
 
 class TestLangsmithFetchEnvInt:
     """Cover _env_int() function (lines 64-72).
@@ -513,8 +509,6 @@ class TestLangsmithFetchRepoSlug:
 # =============================================================================
 # outcomes.py coverage
 # =============================================================================
-
-import outcomes
 
 
 class TestOutcomesIsLocalDelegate:

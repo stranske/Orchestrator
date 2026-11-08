@@ -1388,7 +1388,9 @@ def main() -> int:
                 state_dir=args.state_dir or Path.home() / ".codex" / "orchestrator",
             )
         except subprocess.TimeoutExpired as exc:
-            print(f"deployment provenance refused: git subprocess timed out ({exc})", file=sys.stderr)
+            print(
+                f"deployment provenance refused: git subprocess timed out ({exc})", file=sys.stderr
+            )
             return 1
         except (OSError, ValueError, subprocess.SubprocessError) as exc:
             message = f"deployment provenance refused: {exc}"

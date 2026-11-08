@@ -35,7 +35,8 @@
     "tests/test_judge_reliability.py",
     "tests/test_langsmith_direct.py",
     "tests/test_strategy_experiment.py",
-    "tests/test_issue1232_ranked_coverage.py"
+    "tests/test_issue1232_ranked_coverage.py",
+    "tests/test_gate_dispatch_recovery.py"
   ],
   "shards": [
     [
@@ -163,7 +164,8 @@
       "tests/test_verify_private_state.py",
       "tests/test_verify_sharding.py",
       "tests/test_issue1207_ranked_coverage.py",
-      "tests/test_workflow_compiler.py"
+      "tests/test_workflow_compiler.py",
+      "tests/test_gate_dispatch_recovery.py"
     ],
     [
       "tests/test_adjudicator_criterion_texts.py",
