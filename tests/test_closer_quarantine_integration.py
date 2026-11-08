@@ -97,14 +97,15 @@ def callbacks(events, *, aliases=(), during_prepare=None, during_interpret=None)
     return {"prepare": prepare, "interpret": interpret, "act": act, "exception": exception}
 
 
-def run(path, targets, cb, key_callback):
+def run(path, targets, cb, key_callback, *, now=time.time):
     return pipeline.run_pipeline(
         path,
         targets,
         **cb,
         resource_keys=key_callback,
         coordinator_mode="resource_scoped",
-        deadline=time.time() + 15,
+        deadline=now() + 15,
+        now=now,
         max_io_workers=2,
         max_low_workers=1,
         max_exception_workers=1,
@@ -127,6 +128,9 @@ def test_historical_queued_exceptions_and_ads_fence_aliases_but_disjoint_work_pr
     originals = {source: source.read_bytes() for source in [raw, path, ad]}
     blocked = "owner/candidate#10"
     events = Counter()
+    # This witness tests quarantine and disjoint progress, not host scheduling latency.
+    # Deadline-expiry witnesses elsewhere retain their real/advancing clocks.
+    fixture_now = time.time()
 
     def keys(target, context):
         prepared = context.get("prepare") or {}
@@ -142,7 +146,9 @@ def test_historical_queued_exceptions_and_ads_fence_aliases_but_disjoint_work_pr
             value["aliases"] = [overlap] if target == blocked else []
             return value
 
-        receipt = run(path, [blocked, healthy], {**cb, "prepare": prepare}, keys)
+        receipt = run(
+            path, [blocked, healthy], {**cb, "prepare": prepare}, keys, now=lambda: fixture_now
+        )
         assert receipt["targets"][healthy]["status"] == "completed", receipt["targets"][healthy]
         assert events[(healthy, "interpret")] == 1
         assert events[(healthy, "simulated-effect")] == 1
