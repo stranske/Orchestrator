@@ -989,10 +989,11 @@ def test_an_act_outside_the_trailing_window_is_not_acting_now(monkeypatch, tmp_p
 def test_declared_consumers_resolve_in_the_tree():
     """A reviewed binding names defined rails; an absent consumer stays explicit debt."""
     failures = {}
-    # Inspect both sources: merging tables first could hide a broken gate behind an overlay.
+    # Inspect every source: merging tables first could hide a broken declaration behind an overlay.
     for source, declarations in (
         ("KNOWN_GATES", capabilities.KNOWN_GATES),
         ("KNOWN_DECLARATIONS", capabilities.KNOWN_DECLARATIONS),
+        ("KNOWN_EXISTING_DECLARATIONS", capabilities.KNOWN_EXISTING_DECLARATIONS),
     ):
         for cid, declaration in declarations.items():
             if (
@@ -1020,24 +1021,31 @@ def test_declared_consumer_check_cannot_hide_a_broken_gate_behind_an_overlay():
     """Neither an overlay nor a missing-consumer flag may hide an invalid declaration."""
     cid = "route-weights-export"
     valid = {"downstream_consumer": "route_weights_export.py:publish_document"}
-    for broken in ("the export publisher", "route_weights_export.py:no_such_consumer"):
-        with (
-            patch.dict(capabilities.KNOWN_GATES, {cid: {"downstream_consumer": broken}}),
-            patch.dict(capabilities.KNOWN_DECLARATIONS, {cid: valid}),
-        ):
-            try:
-                test_declared_consumers_resolve_in_the_tree()
-            except AssertionError as exc:
-                assert f"KNOWN_GATES:{cid}" in str(exc), str(exc)
-            else:
-                raise AssertionError(f"the consumer check accepted a broken gate: {broken}")
+    sources = (
+        ("KNOWN_GATES", capabilities.KNOWN_GATES),
+        ("KNOWN_DECLARATIONS", capabilities.KNOWN_DECLARATIONS),
+        ("KNOWN_EXISTING_DECLARATIONS", capabilities.KNOWN_EXISTING_DECLARATIONS),
+    )
+    for source, declarations in sources:
+        for broken in ("the export publisher", "route_weights_export.py:no_such_consumer"):
+            with (
+                patch.dict(capabilities.KNOWN_GATES, {cid: valid}),
+                patch.dict(capabilities.KNOWN_DECLARATIONS, {cid: valid}),
+                patch.dict(capabilities.KNOWN_EXISTING_DECLARATIONS, {cid: valid}),
+                patch.dict(declarations, {cid: {"downstream_consumer": broken}}),
+            ):
+                try:
+                    test_declared_consumers_resolve_in_the_tree()
+                except AssertionError as exc:
+                    assert f"{source}:{cid}" in str(exc), str(exc)
+                else:
+                    raise AssertionError(
+                        f"the consumer check accepted a broken declaration: {source}:{cid}: {broken}"
+                    )
 
     cid = "docs-drift-fix-agent"
     reviewed = dict(capabilities.KNOWN_DECLARATIONS[cid])
-    for source, declarations in (
-        ("KNOWN_GATES", capabilities.KNOWN_GATES),
-        ("KNOWN_DECLARATIONS", capabilities.KNOWN_DECLARATIONS),
-    ):
+    for source, declarations in sources:
         incomplete = [
             {key: value for key, value in reviewed.items() if key != "downstream_consumer"},
             *({**reviewed, "downstream_consumer": value} for value in (None, "", "  ")),
