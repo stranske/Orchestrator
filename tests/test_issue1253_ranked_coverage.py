@@ -304,7 +304,8 @@ class RankedCoverageTests(unittest.TestCase):
                     {"missing_joined_attempt_id": 1} if rejected else {},
                 )
                 self.assertEqual(
-                    status["excluded_producers"], {"keepalive": 1} if excluded_count else {}
+                    status["excluded_producers"],
+                    {"keepalive": 1} if excluded_count else {},
                 )
                 self.assertEqual(
                     result.rejections,
