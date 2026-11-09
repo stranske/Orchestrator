@@ -35,6 +35,7 @@ class RankedCoverageTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix="issue1253-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
+        self.use_patch(patch.object(tempfile, "tempdir", str(self.root)))
         self.use_patch(
             patch.dict(
                 os.environ,
@@ -275,6 +276,29 @@ class RankedCoverageTests(unittest.TestCase):
         self.assertEqual((episodes, count), ([], 8))
         self.assertEqual(instance.rejections[0].reasons, ("duplicate_phase:trigger",))
 
+    def test_miner_assembly_names_each_missing_phase_without_normalizing(self):
+        for phase in miner.PHASES:
+            with self.subTest(phase=phase):
+                events = self.completion_events()
+                del events[phase]
+                instance = miner.PatternMiner()
+                with (
+                    patch.object(
+                        miner, "adapt_completion_event_envelope", side_effect=events.values()
+                    ),
+                    patch.object(miner, "normalize_episode", self.denied),
+                ):
+                    episodes, count = instance._assemble([{}] * len(events))
+                self.assertEqual((episodes, count), ([], 6))
+                self.assertEqual(
+                    instance.rejections,
+                    [
+                        miner.Rejection(
+                            "run:one:attempt:one", "episode", (f"missing_phase:{phase}",)
+                        )
+                    ],
+                )
+
     def test_miner_assembly_checks_timestamp_order_at_every_phase_boundary(self):
         for left, right in zip(miner.PHASES, miner.PHASES[1:]):
             for delta in (-1, 0, 1):
@@ -488,6 +512,15 @@ class RankedCoverageTests(unittest.TestCase):
                 miner._write_json_atomic(path, {"replacement": True})
         move.assert_called_once()
         self.assertEqual(json.loads(path.read_text()), {"previous": True})
+        self.assertEqual(list(self.root.iterdir()), [path])
+
+    def test_miner_serialization_failure_removes_partial_write_and_preserves_state(self):
+        path = self.write_json("state.json", {"previous": True})
+        previous = path.read_bytes()
+        with patch.object(miner.os, "replace", self.denied):
+            with self.assertRaisesRegex(TypeError, "not JSON serializable"):
+                miner._write_json_atomic(path, {"invalid": object()})
+        self.assertEqual(path.read_bytes(), previous)
         self.assertEqual(list(self.root.iterdir()), [path])
 
     def test_miner_tick_line_cli_names_actionable_failures(self):
