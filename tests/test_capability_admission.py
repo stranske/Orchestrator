@@ -1003,12 +1003,14 @@ def test_declared_consumers_resolve_in_the_tree():
                 continue
             resolution = admission.consumer_resolution(declaration)
             if declaration.get("consumer_missing") is True:
-                assert str(
-                    declaration.get("downstream_consumer") or ""
-                ).strip(), f"{source}:{cid}: retain the absent consumer declaration"
-                assert str(
-                    declaration.get("notes") or ""
-                ).strip(), f"{source}:{cid}: explain the absent consumer"
+                consumer = declaration.get("downstream_consumer")
+                notes = declaration.get("notes")
+                assert (
+                    isinstance(consumer, str) and consumer.strip()
+                ), f"{source}:{cid}: retain the absent consumer declaration"
+                assert (
+                    isinstance(notes, str) and notes.strip()
+                ), f"{source}:{cid}: explain the absent consumer"
                 cls, ok, detail = admission.consumer_class(declaration, {})
                 assert cls == "consumer_missing" and not ok, (source, cid, detail)
                 continue
@@ -1061,8 +1063,14 @@ def test_declared_consumer_check_cannot_hide_a_broken_gate_behind_an_overlay():
     for source, declarations in sources:
         incomplete = [
             {key: value for key, value in reviewed.items() if key != "downstream_consumer"},
-            *({**reviewed, "downstream_consumer": value} for value in (None, "", "  ")),
-            *({**reviewed, "notes": value} for value in (None, "", "  ")),
+            *(
+                {**reviewed, "downstream_consumer": value}
+                for value in (None, "", "  ", True, 1, ["external repair"], {"rail": "absent"})
+            ),
+            *(
+                {**reviewed, "notes": value}
+                for value in (None, "", "  ", True, 1, ["no rail"], {"reason": "absent"})
+            ),
         ]
         for declaration in incomplete:
             with patch.dict(declarations, {cid: declaration}):
