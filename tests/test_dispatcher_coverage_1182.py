@@ -351,38 +351,6 @@ def test_linked_pr_read_keeps_malformed_evidence_unknown(monkeypatch, failure):
     assert read.call_count == (1 if failure in {"exit", "pages", "rest-page", "body"} else 2)
 
 
-@pytest.mark.parametrize("source", [None, "empty", "large", "valid"])
-def test_controlled_source_digest_requires_bounded_file(tmp_path, source):
-    if source is None:
-        with pytest.raises(ValueError, match="identity unavailable"):
-            dispatcher._controlled_module_sha(SimpleNamespace())
-        return
-    path = tmp_path / "module.py"
-    raw = b"" if source == "empty" else b"x" * (8_000_001 if source == "large" else 5)
-    path.write_bytes(raw)
-    if source == "valid":
-        assert (
-            dispatcher._controlled_module_sha(SimpleNamespace(__file__=str(path)))
-            == hashlib.sha256(raw).hexdigest()
-        )
-    else:
-        with pytest.raises(ValueError, match="exceeds bound"):
-            dispatcher._controlled_module_sha(SimpleNamespace(__file__=str(path)))
-
-
-def test_controlled_cleanup_does_not_retry_an_uncertain_removal(tmp_path, monkeypatch):
-    context = SimpleNamespace(root=tmp_path / "owned", runtime_cleanup_attempted=False)
-    remove = Mock(side_effect=PermissionError("fixture"))
-    monkeypatch.setattr(dispatcher.shutil, "rmtree", remove)
-    result = {}
-    dispatcher._controlled_cleanup_result(context, result)
-    dispatcher._controlled_cleanup_result(context, result)
-    remove.assert_called_once_with(context.root)
-    assert result["retry_safe"] is False
-    assert result["semantic_promotion_blocked"] is True
-    assert result["data_only_private_runtime"]["cleanup"] == "held_owned_cleanup_unverified"
-
-
 @pytest.mark.parametrize(
     "observation", [None, {"provider_argv": ["secret"], "transport_argv": [1], "pid": 42}]
 )

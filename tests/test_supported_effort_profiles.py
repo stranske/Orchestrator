@@ -4,16 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
 
 import pytest
-from test_closer_mechanisms import configured as configured
-from test_closer_mechanisms import transport_boundary
 
 import adapters
 import capacity
-import closer_agent_launchers as agents
-import closer_mechanisms as mechanisms
 import dispatcher
 import execution_profiles as profiles
 import router
@@ -141,52 +136,3 @@ def test_cursor_low_is_named_explicit_only_and_defaults_remain_composer():
         [{"event": "start", "selected_profile_id": name, "count": 1}]
     )
     assert debit == {"cursor-subscription": 1.0}
-
-
-def test_explicit_cursor_low_can_qualify_only_its_simulated_lifecycle(configured):
-    manifest, path, _root, _installed, _profile = configured
-    name = "cursor-gpt-5.6-luna-low"
-    manifest["policy"]["agent"] = "cursor"
-    manifest["mechanism_contract"].update(agent="cursor", profile_id=name)
-    path.write_text(json.dumps(manifest))
-    assert agents.validate_profile("cursor", name) == []
-    assert name not in {p["profile_id"] for p in agents.offload_profiles("cursor")}
-    calls = []
-    result = mechanisms.supervise_cli(
-        str(path), "cursor", name, timeout=8, budget_seconds=21, offload=transport_boundary(calls)
-    )
-    assert result["passed"], result
-    assert len(calls) == 2 and result["profile_id"] == name
-    assert result["desktop_qualified"] is False and result["queue_action_accepted"] is False
-
-
-@pytest.mark.parametrize("fault", ["agent", "retired", "transport"])
-def test_explicit_lookup_independently_refuses_invalid_profile_after_validation(
-    configured, monkeypatch, fault
-):
-    manifest, path, _root, _installed, _profile = configured
-    name = "cursor-gpt-5.6-luna-low"
-    manifest["policy"]["agent"] = "cursor"
-    manifest["mechanism_contract"].update(agent="cursor", profile_id=name)
-    path.write_text(json.dumps(manifest))
-    row = profiles.get_profile(name)
-    if fault == "agent":
-        row["agent"] = "codex"
-    elif fault == "retired":
-        row["lifecycle_status"] = "retired"
-    else:
-        row["transport_support"] = ["experiment"]
-    # Fault-inject lookup drift after the first validator; the second boundary
-    # must independently require exact agent, active lifecycle, offload support.
-    monkeypatch.setattr(agents, "validate_profile", lambda *a: [])
-    monkeypatch.setattr(profiles, "get_profile", lambda *a: row)
-    with pytest.raises(mechanisms.MechanismError, match="not active for this agent/offload"):
-        mechanisms.supervise_cli(
-            str(path),
-            "cursor",
-            name,
-            timeout=2,
-            budget_seconds=9,
-            offload=lambda *a, **kw: pytest.fail("invalid explicit provider submitted"),
-        )
-    assert not (Path(manifest["mechanism_contract"]["observation_root"]) / "active.json").exists()

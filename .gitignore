@@ -240,3 +240,7 @@ node_modules/
 !/.github/scripts/node_modules/**
 
 # END WORKFLOWS STATUS FILES
+
+# GitNexus code-map cache (a symlink the weekly design review creates). Committed so `gitnexus analyze`
+# finds it and stops appending an uncommitted line, which made the mirror sync refuse the clone as dirty.
+.gitnexus

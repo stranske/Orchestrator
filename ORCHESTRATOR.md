@@ -103,7 +103,7 @@ cursor-agent live outside the default PATH):
   but its gh keeps the config the dispatcher's gh reads (`GH_CONFIG_DIR`, `dispatcher.gh_config_dir`), so
   `gh` uses the same credential source when its credential store is accessible. Relative config
   paths are anchored to the dispatcher's cwd, and the prelude exports only that path. Gemini/AGY print mode passes an explicit requested model
-  (`ORCH_GEMINI_MODEL`, default `gemini-2.5-pro`) because Antigravity 1.0.10 can otherwise exit 0 with no
+  (`ORCH_GEMINI_MODEL`, default the shared model table's `full` tier, `gemini-4-argon-high`) because Antigravity 1.0.10 can otherwise exit 0 with no
   stdout and only log "neither PlanModel nor RequestedModel specified". Gemini offloads also fail closed
   when stdout is only a progress/deferred-status update (for example, "waiting for pytest; I will inspect
   later" or "waiting for task-85 to finish"); the CLI exits nonzero, records the error in the dispatch
@@ -627,7 +627,7 @@ The older high-effort trial IDs remain available explicitly.
 **Gemini / Antigravity — read before routing to it (this is the economics, your job):** it's a *reasoning* seat (≈ second tier; not for the hardest problems), but it is **compute-metered** (cost scales with complexity/history length) and runs on a **prepaid-compute model**: a 5-hour refresh window plus a broader weekly soft budget. `capacity.py` has no provider usage API, so it estimates units from the local ledger, exposes `steady` / `reserve` / `drain` policy metadata, and treats an observed 429/rate-limit shed flag as authoritative. Therefore:
 - **Never give it small/mechanical/polish work** — free seats (composer/vibe) do those.
 - **Give it substantial, self-contained reasoning tasks** that justify a unit, keeping context tight.
-- `ORCH_GEMINI_MODEL` controls the requested AGY model; the default is `gemini-2.5-pro`.
+- `ORCH_GEMINI_MODEL` controls the requested AGY model; the default is the shared model table's `full` tier (`src/model_table.py`, currently `gemini-4-argon-high`).
 - **Under the drain policy**, it is promoted for good-fit `implement`, `testgen`, `epic`, `cross_repo`, `runtime_ac`, and reasoning `review` work so prepaid window headroom is not wasted.
 - **Under the reserve policy**, it is demoted behind normal `ok` seats but remains available before late/pay-go fallback lanes when the task is a good fit.
 - Soft caps are `warn`, not hard unavailability. When Gemini is `warn` for `window-soft-cap`,

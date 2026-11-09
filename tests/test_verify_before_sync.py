@@ -89,9 +89,13 @@ seen = {
     "verify_path": env.get("PATH", ""),
     "saw_rows": str(brain.execute("select count(*) from t").fetchone()[0]),
     "verify_args": " ".join(sys.argv[1:]),
+    "verify_receipt_out": env.get("ORCH_VERIFIED_RECEIPT_OUT", ""),
 }
 with open(env["FAKE_RECORD"], "a") as fh:
     fh.writelines(f"{k}={v}\n" for k, v in seen.items())
+# A nested validation child must never attest the outer publisher.
+if env.get("ORCH_VERIFIED_RECEIPT_OUT"):
+    pathlib.Path(env["ORCH_VERIFIED_RECEIPT_OUT"]).write_text("child fixture verdict\n")
 # What the `ledger validate` gate does: a writing load. It must land in the copy.
 ledger.write_text('{"written": "by verify.py"}')
 brain.execute("insert into t values (2)")
@@ -137,6 +141,7 @@ env = os.environ
 ledger = pathlib.Path(env["ORCH_CAPABILITIES_PATH"])
 with open(env["FAKE_RECORD"], "a") as fh:
     fh.write(f"seed_args={' '.join(sys.argv[1:])}\nseed_cwd={os.getcwd()}\n")
+    fh.write("seed_receipt_out=" + env.get("ORCH_VERIFIED_RECEIPT_OUT", "") + "\n")
     fh.write(f"seed_ledger={ledger}\nseed_brain={env.get('ORCH_FEEDBACK_DB', '')}\n")
 write = env.get("FAKE_SEED_WRITE")
 if write:
@@ -375,7 +380,10 @@ def test_verify_py_reads_and_writes_only_a_copy_of_the_live_state(world):
     there: the live ledger and the live Brain are byte- and row-identical afterwards."""
     ledger = world["state"] / "capabilities.json"
     before = ledger.read_bytes()
-    result, record = _run(world)
+    outer_receipt = world["tmp"] / "outer-publisher.sha256"
+    result, record = _run(world, ORCH_VERIFIED_RECEIPT_OUT=str(outer_receipt))
+    assert not outer_receipt.exists(), "validation child wrote an outer publication verdict"
+    assert record["verify_receipt_out"] == record["seed_receipt_out"] == ""
     assert result.returncode == 0, result.stdout + result.stderr
     assert ledger.read_bytes() == before, ledger.read_text()
     brain = sqlite3.connect(world["state"] / "feedback" / "orchestrator.db")
