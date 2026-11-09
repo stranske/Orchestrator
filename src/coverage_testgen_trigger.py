@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 from dataclasses import dataclass, field
@@ -193,10 +194,18 @@ def coverage_from_report(path: str | Path) -> tuple[float | None, str]:
     totals = payload.get("totals")
     if not isinstance(totals, dict) or "percent_covered" not in totals:
         return None, f"coverage report {report} carries no totals.percent_covered"
+    raw = totals["percent_covered"]
+    # Reject booleans before conversion: bool is a subclass of int in Python
+    if isinstance(raw, bool):
+        return None, f"coverage report {report} has a non-numeric percent_covered (boolean {raw} is not a number)"
     try:
-        return float(totals["percent_covered"]), "ok"
+        percent_covered = float(raw)
     except (TypeError, ValueError) as exc:
         return None, f"coverage report {report} has a non-numeric percent_covered ({exc})"
+    # Reject non-finite values: NaN, inf, -inf
+    if not (math.isfinite(percent_covered)):
+        return None, f"coverage report {report} has a non-finite percent_covered ({raw!r} is not a finite number)"
+    return percent_covered, "ok"
 
 
 def enabled() -> bool:

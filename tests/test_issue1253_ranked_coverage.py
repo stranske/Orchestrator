@@ -16,7 +16,6 @@ from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
 from itertools import permutations
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import backlog
@@ -607,9 +606,9 @@ class RankedCoverageTests(unittest.TestCase):
 
     def test_backlog_strict_gh_distinguishes_failure_from_empty_list(self):
         results = [
-            (SimpleNamespace(returncode=1, stderr="", stdout=""), "gh failed"),
-            (SimpleNamespace(returncode=0, stderr="", stdout="{}"), "gh returned no list"),
-            (SimpleNamespace(returncode=0, stderr="", stdout=""), "gh returned no list"),
+            (subprocess.CompletedProcess(["gh", "issue", "list"], 1, "", ""), "gh failed"),
+            (subprocess.CompletedProcess(["gh", "issue", "list"], 0, "{}", ""), "gh returned no list"),
+            (subprocess.CompletedProcess(["gh", "issue", "list"], 0, "", ""), "gh returned no list"),
         ]
         for result, message in results:
             with self.subTest(message=message, stdout=result.stdout):
@@ -619,15 +618,15 @@ class RankedCoverageTests(unittest.TestCase):
                 run.assert_called_once_with(
                     ["gh", "issue", "list"], capture_output=True, text=True, timeout=60
                 )
-        result = SimpleNamespace(returncode=0, stdout="[]")
+        result = subprocess.CompletedProcess(["gh", "issue", "list"], 0, "[]", "")
         with patch.object(subprocess, "run", return_value=result):
             self.assertEqual(backlog._gh_strict(["issue", "list"]), [])
 
     def test_backlog_legacy_gh_read_failures_return_empty_list(self):
         for fetch, kind in ((backlog.live_fetch_issues, "issue"), (backlog.live_fetch_prs, "pr")):
             for result in (
-                SimpleNamespace(returncode=1),
-                SimpleNamespace(returncode=0, stdout="not JSON"),
+                subprocess.CompletedProcess(["gh", kind, "list", "-R", "owner/repo"], 1, "", ""),
+                subprocess.CompletedProcess(["gh", kind, "list", "-R", "owner/repo"], 0, "not JSON", ""),
             ):
                 with self.subTest(kind=kind, result=result):
                     with patch.object(subprocess, "run", return_value=result) as run:
@@ -717,6 +716,8 @@ class RankedCoverageTests(unittest.TestCase):
             (ir.CapabilityIR.from_dict, raw),
             (ir.CandidateTombstone.from_dict, tombstone),
         ):
+            # Valid objects should round-trip through to_dict/from_dict
+            self.assertEqual(restore(valid).to_dict(), valid)
             for changes in ({"schema": "foreign"}, {"version": -1}):
                 with self.subTest(restore=restore, changes=changes):
                     with self.assertRaisesRegex(ValueError, "unsupported persisted capability"):
@@ -766,6 +767,32 @@ class RankedCoverageTests(unittest.TestCase):
                 percent, status = trigger.coverage_from_report(report)
                 self.assertIsNone(percent)
                 self.assertIn("non-numeric percent_covered", status)
+
+    def test_trigger_rejects_boolean_and_non_finite_measured_coverage(self):
+        import math
+        # Boolean values should be rejected (bool is subclass of int in Python)
+        for value in (True, False):
+            with self.subTest(value=value, kind="boolean"):
+                report = self.write_json("coverage.json", {"totals": {"percent_covered": value}})
+                percent, status = trigger.coverage_from_report(report)
+                self.assertIsNone(percent)
+                self.assertIn("non-numeric percent_covered", status)
+                self.assertIn("boolean", status)
+        # Non-finite numeric values should be rejected
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=value, kind="non_finite"):
+                report = self.write_json("coverage.json", {"totals": {"percent_covered": value}})
+                percent, status = trigger.coverage_from_report(report)
+                self.assertIsNone(percent)
+                self.assertIn("non-finite percent_covered", status)
+        # Valid finite numeric strings should be accepted
+        for value in ("75.5", "80", "90.0", 75.5, 80, 90.0):
+            with self.subTest(value=value, kind="valid_finite"):
+                report = self.write_json("coverage.json", {"totals": {"percent_covered": value}})
+                percent, status = trigger.coverage_from_report(report)
+                self.assertIsNotNone(percent)
+                self.assertEqual(status, "ok")
+                self.assertIsInstance(percent, float)
 
     def test_trigger_cli_survives_report_disappearing_before_ranking(self):
         self.use_patch(patch.dict(os.environ, {trigger.KILL_SWITCH: "1"}))
