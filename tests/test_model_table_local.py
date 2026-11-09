@@ -10,7 +10,6 @@ import io
 from pathlib import Path
 
 import pytest
-
 import test_model_table as shared_tests
 
 import model_table
