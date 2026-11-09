@@ -126,10 +126,27 @@ def test_profile_model_and_effort_preserved(box):
     assert "--safe-mode" not in ordinary
 
 
-def test_timeout_retains_unknown_once_and_cleans_prompt(controlled_box):
+def test_timeout_retains_unknown_once_and_cleans_prompt(controlled_box, monkeypatch):
     world = controlled_box
     world.configure("timeout")
-    out = controlled_run(world, timeout=0.2)
+    real_time = dispatcher.time
+    elapsed = [0.0]
+
+    class Clock:
+        def __getattr__(self, name):
+            return getattr(real_time, name)
+
+        def monotonic(self):
+            return real_time.monotonic() + elapsed[0]
+
+    started = world.args["process_started_callback"]
+
+    def expire_after_observation(observation):
+        started(observation)
+        elapsed[0] = 5.0
+
+    monkeypatch.setattr(dispatcher, "time", Clock())
+    out = controlled_run(world, timeout=5, process_started_callback=expire_after_observation)
     assert len(world.events["started"]) == 1
     assert out["outcome_uncertain"] and out["retry_safe"] is False
     assert out["run_id"] and out["exit"] == 124 and out["attempts"] == 1

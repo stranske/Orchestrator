@@ -23,14 +23,15 @@ def test_copy_matches_workflows_source() -> None:
         with urllib.request.urlopen(model_table.WORKFLOWS_SOURCE, timeout=30) as response:
             source_text = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
-        # A non-200 response has no table body to compare.  In particular, concurrent matrix
-        # jobs can receive a transient GitHub rate-limit or gateway response; that is an
-        # unavailable source, not evidence that the checked-in copy drifted.
+        # A transient rate-limit or server response has no table body to compare.
+        # Unexpected HTTP failures still fail; successful bodies must match exactly.
         if exc.code == 404:
             pytest.skip(
                 "CANNOT COMPARE: Workflows main has no model table yet (paired PR not merged)"
             )
-        pytest.skip(f"CANNOT COMPARE: Workflows source returned HTTP {exc.code}")
+        if exc.code in {429, 500, 502, 503, 504}:
+            pytest.skip(f"CANNOT COMPARE: Workflows source returned HTTP {exc.code}; not a pass")
+        raise
     except (urllib.error.URLError, TimeoutError) as exc:
         pytest.skip(f"CANNOT COMPARE: Workflows source unreachable ({exc}); not a pass")
     assert model_table.TABLE_JSON == source_text, (
