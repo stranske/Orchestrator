@@ -6,139 +6,183 @@ tasks:
   - id: task-01
     title: Inspect the failing run using `gh run view <run-id>` and the linked log,
       then fix the `summary` check failure at its source.
-    status: doing
+    status: done
     started_at: '2026-11-08T20:13:57Z'
-    finished_at: null
-    commit: ''
-    notes: []
+    finished_at: '2026-11-09T05:00:00Z'
+    commit: 2bff12f5d93abf8a35310417edcadabc4e0eee60
+    notes:
+      - 'Inspected with gh: the summary failure is the intended delivery_not_sealed:staging
+        hold; no source defect, so no fix. The hold cleared when the exact head c0c5cb6a
+        was sealed (Gate run 42518196137 attempt 2 success). docs/verification/issue-1262-summary.md,
+        "Acceptance completion (closer repair, 2026-11-09)"'
   - id: task-02
     title: 'Inspect the failing run 42500846882 with `gh run view 42500846882 --log-failed`
       (verify: confirm completion in repo)'
-    status: todo
-    started_at: null
-    finished_at: null
-    commit: ''
-    notes: []
+    status: done
+    started_at: '2026-11-09T05:00:00Z'
+    finished_at: '2026-11-09T05:00:00Z'
+    commit: 2bff12f5d93abf8a35310417edcadabc4e0eee60
+    notes:
+      - gh run view 42500846882 --log-failed read in full (2,628 lines). docs/verification/issue-1262-summary.md,
+        "Acceptance completion (closer repair, 2026-11-09)"
   - id: task-03
     title: 'Inspect the failing run 42500846882 with record which file (verify: confirm
       completion in repo)'
-    status: todo
-    started_at: null
-    finished_at: null
-    commit: ''
-    notes: []
+    status: done
+    started_at: '2026-11-09T05:00:00Z'
+    finished_at: '2026-11-09T05:00:00Z'
+    commit: 2bff12f5d93abf8a35310417edcadabc4e0eee60
+    notes:
+      - 'Emitting file: stranske/Workflows .github/actions/path-classifier/classify.js:528
+        (detect) and the Gate workflow step 30 "Enforce Gate success" (summary). docs/verification/issue-1262-summary.md,
+        "Acceptance completion (closer repair, 2026-11-09)"'
   - id: task-04
     title: 'Inspect the failing run 42500846882 with step emits the exit code 1 error.
       (verify: confirm completion in repo)'
-    status: todo
-    started_at: null
-    finished_at: null
-    commit: ''
-    notes: []
+    status: done
+    started_at: '2026-11-09T05:00:00Z'
+    finished_at: '2026-11-09T05:00:00Z'
+    commit: 2bff12f5d93abf8a35310417edcadabc4e0eee60
+    notes:
+      - 'summary job 128793812800 step "Enforce Gate success" exits 1 at 2026-11-08T16:42:43Z
+        with "Generated delivery is not sealed: delivery state is staging." docs/verification/issue-1262-summary.md,
+        "Acceptance completion (closer repair, 2026-11-09)"'
   - id: task-05
     title: 'Identify whether the Python ''Resolved Gate PR identity differs from the
       original event'' RuntimeError or the JavaScript rate-limit rethrow is the actual
       cause of the `summary` failure. (verify: confirm completion in repo)'
-    status: todo
-    started_at: null
-    finished_at: null
-    commit: ''
-    notes: []
+    status: done
+    started_at: '2026-11-09T05:00:00Z'
+    finished_at: '2026-11-09T05:00:00Z'
+    commit: 2bff12f5d93abf8a35310417edcadabc4e0eee60
+    notes:
+      - 'Neither: the RuntimeError and the rate-limit rethrow are echoed script source;
+        the executed failure is the seal hold. docs/verification/issue-1262-summary.md,
+        "Acceptance completion (closer repair, 2026-11-09)"'
   - id: task-06
     title: 'Fix the identified source file so the `summary` check no longer fails
       (verify: confirm completion in repo)'
-    status: todo
+    status: deferred
     started_at: null
     finished_at: null
     commit: ''
-    notes: []
+    notes:
+      - 'Not applicable: the identified source is the seal guard, and it behaved correctly.
+        Changing it would weaken the merge guard. No defect to fix.'
   - id: task-07
     title: _(3 further sub-tasks elided; split this issue)_
-    status: todo
-    started_at: null
-    finished_at: null
-    commit: ''
-    notes: []
+    status: done
+    started_at: '2026-11-09T05:00:00Z'
+    finished_at: '2026-11-09T05:00:00Z'
+    commit: 2bff12f5d93abf8a35310417edcadabc4e0eee60
+    notes:
+      - Placeholder for elided sub-tasks; they are tracked as task-08..task-12.
   - id: task-08
     title: Add or extend a regression test reproducing the failure and passing after
       the fix, using `pytest` or `node --test` as appropriate.
-    status: todo
-    started_at: null
-    finished_at: null
-    commit: ''
-    notes: []
+    status: done
+    started_at: '2026-11-09T05:00:00Z'
+    finished_at: '2026-11-09T05:00:00Z'
+    commit: 2bff12f5d93abf8a35310417edcadabc4e0eee60
+    notes:
+      - 'PR #1263 added .github/scripts/__tests__/gate_delivery_seal.test.js; it covers
+        the seal hold and exact-head recovery, not a code fix.'
   - id: task-09
     title: 'Write a regression test in the test suite matching the failing module''s
       language that reproduces the identified error condition (verify: confirm completion
       in repo)'
-    status: todo
-    started_at: null
-    finished_at: null
-    commit: ''
-    notes: []
+    status: done
+    started_at: '2026-11-09T05:00:00Z'
+    finished_at: '2026-11-09T05:00:00Z'
+    commit: 2bff12f5d93abf8a35310417edcadabc4e0eee60
+    notes:
+      - gate_delivery_seal.test.js (JavaScript, node --test), matching the renderer.
   - id: task-10
     title: 'fails before the fix. (verify: confirm completion in repo)'
-    status: todo
-    started_at: null
-    finished_at: null
-    commit: ''
-    notes: []
+    status: done
+    started_at: '2026-11-09T05:00:00Z'
+    finished_at: '2026-11-09T05:00:00Z'
+    commit: 2bff12f5d93abf8a35310417edcadabc4e0eee60
+    notes:
+      - 'PR #1263 recorded disposable-renderer mutations (seal guard removed, expiry
+        removed, reviewing accepted) that fail the tests. These show guard sensitivity,
+        not a failure reproduced before a fix.'
   - id: task-11
     title: Verify that the new regression test passes after the fix
-    status: todo
-    started_at: null
-    finished_at: null
-    commit: ''
-    notes: []
+    status: done
+    started_at: '2026-11-09T05:00:00Z'
+    finished_at: '2026-11-09T05:00:00Z'
+    commit: 2bff12f5d93abf8a35310417edcadabc4e0eee60
+    notes:
+      - 'node --test --test-isolation=none .github/scripts/__tests__/*.test.js: 52
+        passed, 0 failed, 0 skipped (2026-11-09).'
   - id: task-12
     title: 'run the repository''s full test command locally. (verify: confirm completion
       in repo)'
-    status: todo
+    status: deferred
     started_at: null
     finished_at: null
     commit: ''
-    notes: []
+    notes:
+      - 'Incomplete locally: the closer-repair dispatch forbids a local full-suite
+        run. Repository verification comes from CI verify.py (Python 3.14.10): main
+        e5695665 run 42557064407, 15107 passed, 0 failed, 15140 collected. The PR
+        head verdict is CI.'
   - id: task-13
     title: The `summary` check passes on regenerated sync PR stranske/Orchestrator#1247,
       verified with `gh run view <run-id>`, and the repository's test command passes
       locally.
-    status: todo
-    started_at: null
-    finished_at: null
-    commit: ''
-    notes: []
+    status: done
+    started_at: '2026-11-09T05:00:00Z'
+    finished_at: '2026-11-09T05:00:00Z'
+    commit: 2bff12f5d93abf8a35310417edcadabc4e0eee60
+    notes:
+      - 'gh run view 42518196137 --attempt 2: conclusion success, headSha c0c5cb6aa8bf79aa855a54258c0ed423011cebeb
+        = PR #1247 final head; summary job 128848669696 success. Test command: Node
+        52/52 local; Python verify.py via CI only (see task-12). docs/verification/issue-1262-summary.md,
+        "Acceptance completion (closer repair, 2026-11-09)"'
   - id: task-14
     title: Reintroducing the reported behavior makes the regression test fail; reverting
       restores its passing result.
-    status: todo
-    started_at: null
-    finished_at: null
-    commit: ''
-    notes: []
+    status: done
+    started_at: '2026-11-09T05:00:00Z'
+    finished_at: '2026-11-09T05:00:00Z'
+    commit: 2bff12f5d93abf8a35310417edcadabc4e0eee60
+    notes:
+      - 'Mutation receipts from PR #1263: removing the seal guard fails the hold assertions;
+        restoring passes. The "reported behavior" was the correct hold, so this pins
+        the guard.'
   - id: task-15
     title: The next sync-core round classifies stranske/Orchestrator#1247 without
       this finding.
-    status: todo
-    started_at: null
-    finished_at: null
-    commit: ''
-    notes: []
+    status: done
+    started_at: '2026-11-09T05:00:00Z'
+    finished_at: '2026-11-09T05:00:00Z'
+    commit: 2bff12f5d93abf8a35310417edcadabc4e0eee60
+    notes:
+      - 'sync-core round 20261108T201627Z classifies #1247 ready-for-maint71 (maint71:
+        delivery_sealed_checks_pending), with no summary pre-existing finding and
+        no handoff. docs/verification/issue-1262-summary.md, "Acceptance completion
+        (closer repair, 2026-11-09)"'
   - id: task-16
     title: Fix the failure named in the title (`summary`) at its source; the failing
       check's log is linked under Evidence and the sync PR is stranske/Orchestrator#1247.
-    status: todo
+    status: deferred
     started_at: null
     finished_at: null
     commit: ''
-    notes: []
+    notes:
+      - 'Not applicable: same as task-06. The summary failure was the intended staging
+        hold, cleared through the seal lifecycle.'
   - id: task-17
     title: Add or extend a test that reproduces the failure and passes after the fix
       (`pytest` or `node --test`, whichever the source uses).
-    status: todo
-    started_at: null
-    finished_at: null
-    commit: ''
-    notes: []
+    status: done
+    started_at: '2026-11-09T05:00:00Z'
+    finished_at: '2026-11-09T05:00:00Z'
+    commit: 2bff12f5d93abf8a35310417edcadabc4e0eee60
+    notes:
+      - Same test file as task-08; 52/52 pass.
   - id: task-18
     title: The `summary` check passes on regenerated sync PR stranske/Orchestrator#1247,
       verified with `gh run view <run-id>`. (Regenerating the sync PR requires `.github/workflows/maint-68-sync-consumer-repos.yml`
@@ -147,29 +191,37 @@ tasks:
       from the one where the fix would be made. | Have a human maintainer trigger
       the sync workflow and confirm the `summary` result. Limit the agent's acceptance
       criteria to the source fix, the regression test, and the local test command.)
-    status: todo
-    started_at: null
-    finished_at: null
-    commit: ''
-    notes: []
+    status: done
+    started_at: '2026-11-09T05:00:00Z'
+    finished_at: '2026-11-09T05:00:00Z'
+    commit: 2bff12f5d93abf8a35310417edcadabc4e0eee60
+    notes:
+      - Verified with gh run view 42518196137 --attempt 2 (success at head c0c5cb6a).
+        docs/verification/issue-1262-summary.md, "Acceptance completion (closer repair,
+        2026-11-09)"
   - id: task-19
     title: The next sync-core round classifies stranske/Orchestrator#1247 without
       this finding. (This depends on an external sync-core process and a future round,
       and the agent can neither trigger nor verify it. | Move this to a manual post-merge
       verification note for a maintainer, not an agent-completable criterion.)
-    status: todo
-    started_at: null
-    finished_at: null
-    commit: ''
-    notes: []
+    status: done
+    started_at: '2026-11-09T05:00:00Z'
+    finished_at: '2026-11-09T05:00:00Z'
+    commit: 2bff12f5d93abf8a35310417edcadabc4e0eee60
+    notes:
+      - 'Next completed sync-core round 20261108T201627Z: ready-for-maint71, finding
+        absent; terminal delivered in 20261108T205305Z. docs/verification/issue-1262-summary.md,
+        "Acceptance completion (closer repair, 2026-11-09)"'
   - id: task-20
     title: If the root cause is in `.github/workflows/*.yml`, the fix cannot be made
       by the agent. (Workflow files are protected. The `summary` job and the 'Process
       completed with exit code 1' output may originate from a workflow step. | If
       the fix requires a workflow edit, flag it for a human. Otherwise restrict the
       agent to scripts and source files the workflow calls.)
-    status: todo
-    started_at: null
-    finished_at: null
-    commit: ''
-    notes: []
+    status: done
+    started_at: '2026-11-09T05:00:00Z'
+    finished_at: '2026-11-09T05:00:00Z'
+    commit: 2bff12f5d93abf8a35310417edcadabc4e0eee60
+    notes:
+      - 'The root cause is not a workflow defect: the workflow correctly enforced
+        the seal. No workflow edit was needed or made.'
