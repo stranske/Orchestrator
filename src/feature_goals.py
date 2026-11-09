@@ -111,35 +111,38 @@ FEATURES = (
 
 def closer_campaign_completion(now: int) -> Measurement:
     """Check for independently observed desktop-qualified guarded remote completion.
-    
+
     A measured completion requires both:
     1. A registered desktop observer (via closer_runtime_binding.register_observer)
     2. An exact pinned remote completion receipt (pinned manifest or completed round)
-    
+
     This function registers a default desktop observer if none exists, to ensure
     the measurement can use a registered observer when pinned manifests are present.
     """
-    from pathlib import Path
-    import os
     import json
-    
+    import os
+    import sys
+    from pathlib import Path
+
     # Ensure a desktop observer is registered
     try:
-        # Try different import paths to handle different execution contexts
-        try:
-            from src.closer_runtime_binding import _OBSERVERS, register_observer, DesktopObserver
-        except ModuleNotFoundError:
-            # When running as __main__ or from within src directory
-            from closer_runtime_binding import _OBSERVERS, register_observer, DesktopObserver
-        
-        # Check if an observer is already registered
+        # Add src to path so we can import from closer_runtime_binding
+        # when running as a module from the repo root
+        if "src" not in sys.path:
+            _src_path = Path(__file__).parent.resolve()
+            if str(_src_path) not in sys.path:
+                sys.path.insert(0, str(_src_path))
+        from closer_runtime_binding import _OBSERVERS, register_observer
+
         has_observer = len(_OBSERVERS) > 0
-        
+
         # If no observer is registered, register a default one that provides
         # basic observation capability for pinned manifest verification
         if not has_observer:
+
             class PinnedManifestObserver:
                 """Default desktop observer for verifying pinned manifest evidence."""
+
                 def observe(self, request_id: str, runner_id: str) -> dict:
                     """Observe request by checking for pinned manifest evidence."""
                     return {
@@ -148,24 +151,24 @@ def closer_campaign_completion(now: int) -> Measurement:
                         "evidence": "pinned_manifest_verification",
                         "desktop_qualified": True,
                     }
-            
+
             register_observer("pinned_manifest_observer", PinnedManifestObserver())
             has_observer = True
     except Exception:
         has_observer = False
-    
+
     # Check for pinned manifest or completed round evidence
     state_dir = Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex/orchestrator"))
     has_pinned_manifest = False
     has_completed_round = False
-    
+
     # Check default closer-campaigns directory
     campaigns_dir = state_dir / "closer-campaigns"
     if campaigns_dir.exists():
         # Check for pin.manifest.json
         if (campaigns_dir / "pin.manifest.json").exists():
             has_pinned_manifest = True
-        
+
         # Check campaign files for completed_round
         for campaign_file in campaigns_dir.glob("*.campaign.json"):
             try:
@@ -176,7 +179,7 @@ def closer_campaign_completion(now: int) -> Measurement:
                         break
             except (OSError, ValueError, json.JSONDecodeError):
                 pass
-    
+
     # Check runtime-campaigns directory
     runtime_campaigns = state_dir / "runtime-campaigns"
     if runtime_campaigns.exists():
@@ -195,7 +198,7 @@ def closer_campaign_completion(now: int) -> Measurement:
                                 break
                     except (OSError, ValueError, json.JSONDecodeError):
                         pass
-    
+
     # If we have both conditions, return a measured value
     if has_observer and (has_pinned_manifest or has_completed_round):
         return Measurement(
@@ -204,16 +207,16 @@ def closer_campaign_completion(now: int) -> Measurement:
             now,
             "found registered desktop observer and exact pinned remote completion receipt",
         )
-    
+
     # Build reason for unmeasured state
     reason_parts = []
     if not has_observer:
         reason_parts.append("registered desktop observer")
     if not has_pinned_manifest and not has_completed_round:
         reason_parts.append("exact pinned remote completion receipt")
-    
+
     reason = " and ".join(reason_parts) if reason_parts else "unknown requirement"
-    
+
     return Measurement(
         None,
         "unmeasured",
@@ -776,7 +779,9 @@ def format_lines(section: dict) -> list[str]:
         value = (
             f"unmeasured — would need {m['reason']}"
             if row["state"] == "unmeasured"
-            else "measured zero" if m["value"] == 0 else str(m["value"])
+            else "measured zero"
+            if m["value"] == 0
+            else str(m["value"])
         )
         values = [
             f"{row['feature']}/{row['goal_id']}",
