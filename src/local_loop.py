@@ -144,19 +144,25 @@ class GitHub:
         return self._ended_prs("is:closed is:unmerged")
 
     def _ended_prs(self, qualifier: str) -> list[dict]:
+        """Every page (as looped_prs): a PR past the first 100 must not fall through to "open"."""
         q = f"is:pr {qualifier} label:{LABEL} user:{OWNER} {search_scope()}"
         query = (
-            "query($q:String!){search(query:$q,type:ISSUE,first:100){nodes{... on PullRequest{"
+            "query($q:String!,$after:String){search(query:$q,type:ISSUE,first:100,after:$after){"
+            "pageInfo{hasNextPage endCursor} nodes{... on PullRequest{"
             "number mergedAt repository{nameWithOwner}}}}}"
         )
-        data = json.loads(
-            _gh(["api", "graphql", "-f", f"query={query}", "-f", f"q={q}"], rest=False)
-        )
-        return [
-            n
-            for n in data["data"]["search"]["nodes"]
-            if n and included_repo(n["repository"]["nameWithOwner"])
-        ]
+        out, after = [], None
+        while True:
+            args = ["api", "graphql", "-f", f"query={query}", "-f", f"q={q}"]
+            if after:
+                args += ["-f", f"after={after}"]
+            data = json.loads(_gh(args, rest=False))["data"]["search"]
+            out += [
+                n for n in data["nodes"] if n and included_repo(n["repository"]["nameWithOwner"])
+            ]
+            if not data["pageInfo"]["hasNextPage"]:
+                return out
+            after = data["pageInfo"]["endCursor"]
 
     def job_log(self, repo: str, job_id: str) -> str:
         return _gh(["api", f"repos/{repo}/actions/jobs/{job_id}/logs"], rest=True, timeout=60)
@@ -926,14 +932,28 @@ def status(gh: Any) -> dict:
 
 def record_heartbeat(tick_: Any) -> bool | None:
     """One `invocation` event per applied tick in the capability ledger, so the external controller's
-    calls are proven where the activation audit looks (as closer-core's rounds are). None: the row has no
-    declared lineage yet, or the ledger is unavailable; a heartbeat never breaks a tick."""
+    calls are proven where the activation audit looks (as closer-core's rounds are). A row without lineage
+    gets it here through the existing adoption (`capabilities.adopt_module_version`: sets lineage only
+    while unset, from this module's source hash). Prerequisite: the row itself, which the tick's first
+    writing load (`capabilities.py --json validate`) seeds. None, with the reason on stderr, while that is
+    missing or the ledger is unavailable; a heartbeat never breaks a tick."""
     try:
         import capabilities  # noqa: PLC0415
 
-        declared = capabilities.load_declared(capabilities.REG).get("local-loop") or {}
-        if not declared.get("capability_version_id"):
+        declared = capabilities.load_declared(capabilities.REG).get("local-loop")
+        if not declared:
+            print("local-loop heartbeat skipped: no capability row yet", file=sys.stderr)
             return None
+        if not declared.get("capability_version_id"):
+            adopted = capabilities.adopt_module_version(
+                "local-loop", root=Path(__file__).resolve().parent
+            )
+            if not adopted.get("capability_version_id"):
+                print(
+                    f"local-loop heartbeat skipped: no lineage ({adopted.get('reason')})",
+                    file=sys.stderr,
+                )
+                return None
         stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
         return capabilities.heartbeat(
             "local-loop",

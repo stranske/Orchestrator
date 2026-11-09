@@ -467,16 +467,53 @@ def test_an_applied_tick_records_one_invocation_heartbeat_once_declared(tmp_path
     ledger = tmp_path / "capabilities.json"
     monkeypatch.setattr(capabilities, "REG", ledger)
     tick_ = type("T", (), {"items": [{}, {}], "counts": {"round": 1}})()
-    assert ll.record_heartbeat(tick_) is None  # no declared lineage: nothing written
-    calls = []
+    assert ll.record_heartbeat(tick_) is None  # no row yet: nothing written
+    adoptions = []
     monkeypatch.setattr(
-        capabilities, "load_declared", lambda path: {"local-loop": {"capability_version_id": "v1"}}
+        capabilities, "load_declared", lambda path: {"local-loop": {"status": "wired"}}
     )
+    monkeypatch.setattr(
+        capabilities,
+        "adopt_module_version",
+        lambda cid, **kw: adoptions.append(cid) or {"adopted": False, "reason": "no source"},
+    )
+    assert ll.record_heartbeat(tick_) is None  # lineage refused: said on stderr, nothing written
+    assert adoptions == ["local-loop"]
+    monkeypatch.setattr(
+        capabilities,
+        "adopt_module_version",
+        lambda cid, **kw: {"adopted": True, "capability_version_id": "v1"},
+    )
+    calls = []
     monkeypatch.setattr(capabilities, "heartbeat", lambda *a, **kw: calls.append((a, kw)) or True)
-    assert ll.record_heartbeat(tick_) is True
+    assert ll.record_heartbeat(tick_) is True  # lineage adopted, then the heartbeat
     ((args, kw),) = calls
-    assert args == ("local-loop", "invocation") and kw["metadata"] == {
-        "prs": 2,
-        "counts": {"round": 1},
-    }
+    assert args == ("local-loop", "invocation")
+    assert kw["metadata"] == {"prs": 2, "counts": {"round": 1}}
     assert kw["idempotency_key"].startswith("local-loop:")
+
+
+def test_ended_prs_reads_every_page(monkeypatch):
+    pages = iter(
+        [
+            {
+                "nodes": [
+                    {"number": n, "repository": {"nameWithOwner": "o/r"}} for n in range(100)
+                ],
+                "pageInfo": {"hasNextPage": True, "endCursor": "c1"},
+            },
+            {
+                "nodes": [{"number": 100, "repository": {"nameWithOwner": "o/r"}}],
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+            },
+        ]
+    )
+    afters = []
+
+    def gh(args, **kwargs):
+        afters.append(next((a for a in args if a.startswith("after=")), None))
+        return json.dumps({"data": {"search": next(pages)}})
+
+    monkeypatch.setattr(ll, "_gh", gh)
+    assert len(ll.GitHub().merged_prs()) == 101
+    assert afters == [None, "after=c1"]

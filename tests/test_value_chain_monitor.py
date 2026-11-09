@@ -925,7 +925,13 @@ def test_local_loop_row_reads_github_situations_its_own_rounds_and_brain_outcome
     ):
         (state / f"o__r__{n}.json").write_text(
             json.dumps(
-                {"target": f"o/r#{n}", "status": status, "rounds": [{}, {}], "updated": updated}
+                {
+                    "target": f"o/r#{n}",
+                    "status": status,
+                    "rounds": [{}, {}],
+                    "created": updated,
+                    "updated": updated,
+                }
             )
         )
     for n, agent, durability, merged in ((1, "codex", "durable", 1), (2, "vibe", "abandoned", 0)):
@@ -960,6 +966,12 @@ def test_local_loop_row_reads_github_situations_its_own_rounds_and_brain_outcome
         "local-loop: demand 5; invocation 3; usable 2; acted_on 2; outcome 2; success 1"
         in "\n".join(monitor.format_lines(section))
     )
+    # a hand-off removes the label: the PR it handed off stays a situation, so demand >= invocation
+    handed = monitor.collect_inputs(
+        now=stamp + 1, gh_fn=_local_loop_search(1, 2), repos=[], db=feedback.DB_PATH
+    )
+    assert monitor.situation_count("local-loop", handed) == 3  # o/r#1, o/r#2 labelled; o/r#3 ran
+    assert monitor.recurrence_fixture() is True
     # the loop never ticked anything: situations still exist, so the row breaks before invocation (the
     # monitor's first step for a row with neither offers nor invocations is `not_offered`), never no_situation
     for f in state.glob("*.json"):

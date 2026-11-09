@@ -1137,7 +1137,6 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
     # keeping audit at five rails as independent value-chain monitoring joins it.
     "rail-exercise:brain": {
         "closer-core": "EXERCISE the external closer's read-only value-chain adapter over a fixture: measured demand stays distinct from invocations and missing evidence stays unmeasured. Never invokes the external controller.",
-        "local-loop": "EXERCISE the local keepalive loop's read-only value-chain adapter over a fixture: labelled PRs from GitHub stay distinct from the loop's own rounds, a finished PR closed unmerged is not an outcome, and an unread population stays unmeasured. Never runs a tick.",
         "feedback-store": "EXERCISE the learning store's spine on a COPY of the feedback db: "
         "integrity_check plus a referential recount (every outcome has its run; outcome counts "
         "match the ledger's outcome events); break case: a copy with an orphaned outcome must fail "
@@ -1184,6 +1183,10 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
         "stall-watcher": "EXERCISE watch.py --json on a fixture claim: a dead pid with a stale log "
         "and clean worktree classifies exited/stalled with the matching hint, a live pid with a "
         "fresh log classifies running. Never kills, releases or dispatches",
+        "local-loop": "EXERCISE the local keepalive loop's read-only value-chain adapter over a "
+        "fixture: labelled PRs from GitHub stay distinct from the loop's own rounds, a handed-off "
+        "PR stays a situation, a finished PR closed unmerged is an outcome and never a success, and "
+        "an unread population stays unmeasured. Never runs a tick",
     },
     "rail-exercise:gates": {
         "capability-admission-gate": "EXERCISE capability_admission.py --preflight: a deliberately "

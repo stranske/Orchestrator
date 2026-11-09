@@ -502,7 +502,8 @@ def _local_loop_rounds(since: int, state_dir: Path | None = None) -> dict[str, l
             target = st.get("target")
             if not isinstance(target, str) or not local_loop.included_target(target):
                 continue
-            if not st.get("rounds") or float(st.get("updated") or st.get("created") or 0) < since:
+            # the window is the PR's arrival (state created), as demand's is the PR's creation
+            if not st.get("rounds") or float(st.get("created") or 0) < since:
                 continue
             invoked.add(target)
             if st.get("status") == "done":
@@ -536,8 +537,13 @@ def _local_loop_outcomes(db: Path, targets: list[str]) -> dict[str, int] | None:
 
 
 def _local_loop_situations(inputs: dict[str, Any]) -> int | None:
+    """Labelled PRs from GitHub, plus PRs the loop ran in the same window: a hand-off to hosted keepalive
+    removes `agents:local-loop`, and the PR it handed off was still a situation. Invocation is therefore
+    never above demand, and a loop whose only PR was handed off never reads no_situation."""
     prs = inputs.get("local_loop_prs")
-    return None if prs is None else len(prs)
+    if prs is None:
+        return None
+    return len(set(prs) | set((inputs.get("local_loop") or {}).get("invoked") or ()))
 
 
 # Callables can be replaced/extended without changing reporting or adding telemetry.
@@ -1182,6 +1188,20 @@ def format_lines(section: dict) -> list[str]:
 def recurrence_fixture() -> bool:
     assert situation_count("closer-core", {"closer_core": {"demand": 3}}) == 3
     assert situation_count("closer-core", {}) is None
+    # local-loop: GitHub's labelled PRs, plus a handed-off PR the loop ran (label removed); unread is None
+    loop = {"invoked": ["o/r#1", "o/r#3"], "done": ["o/r#1"]}
+    assert (
+        situation_count("local-loop", {"local_loop_prs": ["o/r#1", "o/r#2"], "local_loop": loop})
+        == 3
+    )
+    assert situation_count("local-loop", {"local_loop_prs": [], "local_loop": None}) == 0
+    assert situation_count("local-loop", {"local_loop": loop}) is None
+    closed_unmerged = {"run_id": "keepalive:o/r#1:vibe", "adjudicated_verdict": "PASS"}
+    closed_unmerged.update(
+        verifier_verdict=None, durability="abandoned", merged=0, failure_class=None
+    )
+    counted = _classified_outcomes([closed_unmerged])
+    assert (counted["acted_on"], counted["outcome"], counted["outcome_success"]) == (1, 1, 0)
     assert (
         situation_count(
             "generic-probe",
