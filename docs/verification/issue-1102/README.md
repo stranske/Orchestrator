@@ -100,7 +100,7 @@ The statements still missing at head, and why #650's tests did not execute them:
 - `src/capability_advisor.py:3954` — Line 3954 of the front-door cases. This statement is inside _selftest_front_door, after the ledger-row gate. CI's bootstrapped ledger has no offload, codemod-campaign, or testgen-lane row, so ledger_rows_absent returns first. PR #650 does not seed those rows.
 - `src/capability_advisor.py:3955` — Line 3955 of the front-door cases. This statement is inside _selftest_front_door, after the ledger-row gate. CI's bootstrapped ledger has no offload, codemod-campaign, or testgen-lane row, so ledger_rows_absent returns first. PR #650 does not seed those rows.
 - `src/capability_advisor.py:3957` — Line 3957 of the front-door cases. This statement is inside _selftest_front_door, after the ledger-row gate. CI's bootstrapped ledger has no offload, codemod-campaign, or testgen-lane row, so ledger_rows_absent returns first. PR #650 does not seed those rows.
-- `src/capability_advisor.py:3958` — Line 3958 of the front-door cases. This statement is inside _selftest_front_door, after the ledger-row gate. CI's bootstrapped ledger has no offload, codemod-campaign, or testgen-lane row, so ledger_rows_absent returns first. PR #650 does not seed those rows.
+- `src/capability_advisor.py:3959` — Line 3958 of the front-door cases. This statement is inside _selftest_front_door, after the ledger-row gate. CI's bootstrapped ledger has no offload, codemod-campaign, or testgen-lane row, so ledger_rows_absent returns first. PR #650 does not seed those rows.
 - `src/capability_advisor.py:3959` — Line 3959 of the front-door cases. This statement is inside _selftest_front_door, after the ledger-row gate. CI's bootstrapped ledger has no offload, codemod-campaign, or testgen-lane row, so ledger_rows_absent returns first. PR #650 does not seed those rows.
 - `src/capability_advisor.py:3960` — Line 3960 of the front-door cases. This statement is inside _selftest_front_door, after the ledger-row gate. CI's bootstrapped ledger has no offload, codemod-campaign, or testgen-lane row, so ledger_rows_absent returns first. PR #650 does not seed those rows.
 - `src/capability_advisor.py:4208` — restore SURFACE_BINDINGS['t-contra']. This is the else that writes a pre-existing SURFACE_BINDINGS entry back. PR #650 does not pre-seed that key, so the selftest takes the pop branch.
@@ -154,14 +154,14 @@ Reached by this successor, named by the behavior in the head report (some lines 
 Remaining head statements that this successor does not execute. Each limit is the current line.
 `test_selftest_only_paths_stay_recorded_as_limits` pins the token on that line.
 
-- `src/capability_advisor.py:3860` — else restores a pre-seeded t-howto entry; the selftest pops the key when it was absent, and production never pre-seeds that key
-- `src/capability_advisor.py:3958` — else restores a pre-seeded t-concept entry; same pop-versus-restore split as t-howto
-- `src/capability_advisor.py:4253` — else restores a pre-seeded t-contra entry inside _selftest_contraindications
-- `src/capability_advisor.py:4590` — else restores a pre-seeded t-empty entry inside _selftest_bindings
-- `src/capability_advisor.py:4651` — else restores a pre-seeded t-surface entry inside _selftest_bindings
-- `src/capability_advisor.py:5160` — else restores a pre-seeded t-precond entry inside _selftest_preconditions
-- `src/capability_advisor.py:3993` — _selftest_front_door returns at the ledger-row gate unless offload, codemod-campaign, and testgen-lane are already registered; those rows are machine-local, and a stand-in ledger would not satisfy the real matcher assertions
-- `src/capability_advisor.py:5296` — the loop body is the tail of _selftest_findability, after that function has checked every consult-site caller; a copied assert would not execute these lines, and running the selftest section is the module selftest rather than a focused path test
+- `src/capability_advisor.py:3861` — else restores a pre-seeded t-howto entry; the selftest pops the key when it was absent, and production never pre-seeds that key
+- `src/capability_advisor.py:3959` — else restores a pre-seeded t-concept entry; same pop-versus-restore split as t-howto
+- `src/capability_advisor.py:4254` — else restores a pre-seeded t-contra entry inside _selftest_contraindications
+- `src/capability_advisor.py:4591` — else restores a pre-seeded t-empty entry inside _selftest_bindings
+- `src/capability_advisor.py:4652` — else restores a pre-seeded t-surface entry inside _selftest_bindings
+- `src/capability_advisor.py:5161` — else restores a pre-seeded t-precond entry inside _selftest_preconditions
+- `src/capability_advisor.py:3994` — _selftest_front_door returns at the ledger-row gate unless offload, codemod-campaign, and testgen-lane are already registered; those rows are machine-local, and a stand-in ledger would not satisfy the real matcher assertions
+- `src/capability_advisor.py:5297` — the loop body is the tail of _selftest_findability, after that function has checked every consult-site caller; a copied assert would not execute these lines, and running the selftest section is the module selftest rather than a focused path test
 
 ## Deliberate breaks for the successor path tests
 

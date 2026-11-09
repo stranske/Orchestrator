@@ -849,6 +849,7 @@ def _check_real_brain_issue_closure_writes_supply_outcomes(tmp_path, monkeypatch
     monkeypatch.setattr(monitor, "_dispute_count", lambda *a: 0)
     monkeypatch.setattr(monitor, "_stall_sweep_targets", lambda *a: [])
     monkeypatch.setattr(monitor, "_relay_decisions", lambda *a: {})
+    monkeypatch.setattr(monitor, "_local_loop_prs", lambda *a: [])  # no GitHub here (gh_fn=None)
     inputs = monitor.collect_inputs(now=stamp + 1, gh_fn=None, repos=[], db=feedback.DB_PATH)
     assert inputs["errors"] == []
     section = monitor.report(now=stamp + 1, path=ledger, env={}, inputs=inputs)
@@ -882,3 +883,108 @@ def _closer_core_fixture(tmp_path, monkeypatch):
     case = tmp_path / "brain"
     case.mkdir()
     _check_real_brain_issue_closure_writes_supply_outcomes(case, monkeypatch)
+
+
+def _local_loop_search(*prs):
+    def gh(args):
+        query = args[-1]
+        assert "label:agents:local-loop" in query and "-repo:stranske/collab-admin" in query
+        nodes = [{"number": n, "repository": {"nameWithOwner": "o/r"}} for n in prs]
+        page = {"nodes": nodes, "pageInfo": {"hasNextPage": False, "endCursor": None}}
+        return True, json.dumps({"data": {"search": page}}), ""
+
+    return gh
+
+
+def test_local_loop_row_reads_github_situations_its_own_rounds_and_brain_outcomes(
+    tmp_path, monkeypatch
+):
+    """2026-11-09: the local keepalive loop had no monitor row; only pass queries with stop rules watched it.
+    Situations come from GitHub (labelled PRs), not from the loop, so a silent loop reads not_invoked; a PR
+    the loop called done that was closed unmerged (stranske/Orchestrator#1260) is an outcome, never a success.
+    """
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    monkeypatch.delenv("ORCH_LOCAL_LOOP_STATE", raising=False)
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    monkeypatch.setattr(feedback, "_capability_daily_heartbeat", lambda *a, **kw: None)
+    ledger = tmp_path / "capabilities.json"
+    monkeypatch.setattr(capabilities, "REG", ledger)
+    capabilities.register(
+        "local-loop",
+        {**capabilities.KNOWN_DECLARATIONS["local-loop"], "target_kind": "module"},
+        ledger,
+    )
+    stamp = int(monitor.time.time())
+    state = tmp_path / "local-loop"
+    state.mkdir()
+    for n, status, updated in (
+        (1, "done", stamp),
+        (2, "done", stamp),
+        (3, "active", stamp),
+        (4, "done", stamp - monitor.WINDOW_DAYS * 86400 - 10),
+    ):
+        (state / f"o__r__{n}.json").write_text(
+            json.dumps(
+                {"target": f"o/r#{n}", "status": status, "rounds": [{}, {}], "updated": updated}
+            )
+        )
+    for n, agent, durability, merged in ((1, "codex", "durable", 1), (2, "vibe", "abandoned", 0)):
+        run_id = f"keepalive:o/r#{n}:{agent}"
+        feedback.record_run(run_id, f"o/r#{n}", "keepalive", agent, source="keepalive", ts=stamp)
+        feedback.record_outcome(
+            run_id, adjudicated_verdict="PASS", durability=durability, merged=merged
+        )
+    monkeypatch.setattr(monitor, "fleet_issues", lambda *a, **kw: [])
+    monkeypatch.setattr(monitor, "_dispute_count", lambda *a: 0)
+    monkeypatch.setattr(monitor, "_stall_sweep_targets", lambda *a: [])
+    monkeypatch.setattr(monitor, "_relay_decisions", lambda *a: {})
+    monkeypatch.setattr(monitor, "_closer_core_rounds", lambda *a: {"demand": 0})
+    monkeypatch.setattr(monitor, "_closer_core_outcomes", lambda *a: {})
+    inputs = monitor.collect_inputs(
+        now=stamp + 1, gh_fn=_local_loop_search(1, 2, 3, 4, 5), repos=[], db=feedback.DB_PATH
+    )
+    assert inputs["errors"] == []
+    section = monitor.report(now=stamp + 1, path=ledger, env={}, inputs=inputs)
+    row = next(r for r in section["rows"] if r["capability"] == "local-loop")
+    steps = (
+        "situation_count",
+        "invocation_count",
+        "usable",
+        "acted_on",
+        "outcome",
+        "outcome_success",
+    )
+    assert [row[k] for k in steps] == [5, 3, 2, 2, 2, 1]
+    assert row["first_break"] == "works"
+    assert (
+        "local-loop: demand 5; invocation 3; usable 2; acted_on 2; outcome 2; success 1"
+        in "\n".join(monitor.format_lines(section))
+    )
+    # the loop never ticked anything: situations still exist, so the row breaks before invocation (the
+    # monitor's first step for a row with neither offers nor invocations is `not_offered`), never no_situation
+    for f in state.glob("*.json"):
+        f.unlink()
+    quiet = monitor.collect_inputs(
+        now=stamp + 1, gh_fn=_local_loop_search(1, 2), repos=[], db=feedback.DB_PATH
+    )
+    row = next(
+        r
+        for r in monitor.report(now=stamp + 1, path=ledger, env={}, inputs=quiet)["rows"]
+        if r["capability"] == "local-loop"
+    )
+    assert (row["situation_count"], row["invocation_count"], row["first_break"]) == (
+        2,
+        0,
+        "not_offered",
+    )
+    # an unread population is unmeasured, never zero
+    failed = monitor.collect_inputs(
+        now=stamp + 1, gh_fn=lambda args: (False, "", "rate limited"), repos=[], db=feedback.DB_PATH
+    )
+    assert "local-loop PR population unavailable (GitHub search failed)" in failed["errors"]
+    row = next(
+        r
+        for r in monitor.report(now=stamp + 1, path=ledger, env={}, inputs=failed)["rows"]
+        if r["capability"] == "local-loop"
+    )
+    assert (row["situation_count"], row["first_break"]) == (None, None)

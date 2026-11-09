@@ -726,45 +726,45 @@ def test_cli_without_a_task_exits_with_the_three_ways_in(capsys):
 # consult-site scan and its machine-local ledger gate. The locations below are the limit.
 SELFTEST_PATH_LIMITS = (
     (
-        3860,
+        3861,
         'SURFACE_BINDINGS["t-howto"] = real_surface',
         "else restores a pre-seeded t-howto entry; the selftest pops the key when it was absent, "
         "and production never pre-seeds that key",
     ),
     (
-        3958,
+        3959,
         'SURFACE_BINDINGS["t-concept"] = real_surface',
         "else restores a pre-seeded t-concept entry; same pop-versus-restore split as t-howto",
     ),
     (
-        4253,
+        4254,
         'SURFACE_BINDINGS["t-contra"] = real_binding',
         "else restores a pre-seeded t-contra entry inside _selftest_contraindications",
     ),
     (
-        4590,
+        4591,
         'SURFACE_BINDINGS["t-empty"] = real_empty',
         "else restores a pre-seeded t-empty entry inside _selftest_bindings",
     ),
     (
-        4651,
+        4652,
         'SURFACE_BINDINGS["t-surface"] = real',
         "else restores a pre-seeded t-surface entry inside _selftest_bindings",
     ),
     (
-        5160,
+        5161,
         'SURFACE_BINDINGS["t-precond"] = real',
         "else restores a pre-seeded t-precond entry inside _selftest_preconditions",
     ),
     (
-        3993,
+        3994,
         "for text, expected in cases:",
         "_selftest_front_door returns at the ledger-row gate unless offload, codemod-campaign, "
         "and testgen-lane are already registered; those rows are machine-local, and a stand-in "
         "ledger would not satisfy the real matcher assertions",
     ),
     (
-        5296,
+        5297,
         "for surface, why in KNOWN_UNCONSULTED.items():",
         "the loop body is the tail of _selftest_findability, after that function has checked "
         "every consult-site caller; a copied assert would not execute these lines, and running "

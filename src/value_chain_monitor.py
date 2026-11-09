@@ -421,26 +421,129 @@ def _closer_core_outcomes(db: Path, since: int, now: int) -> dict[str, int] | No
                     (since, now),
                 )
             ]
-        classified = [(capability_effectiveness._classify(row), row) for row in rows]
-        classes = Counter(kind for kind, _ in classified)
-        return {
-            "acted_on": len(rows),
-            **{field: classes[kind] for kind, field in CLASS_FIELDS.items()},
-            "outcome_success": sum(
-                kind == "terminal"
-                and row["adjudicated_verdict"] == "PASS"
-                and row["durability"] == "durable"
-                and row["verifier_verdict"] not in feedback.VERIFIER_FAILURES
-                for kind, row in classified
-            ),
-        }
+        return _classified_outcomes(rows)
     except (OSError, sqlite3.Error):
         return None
+
+
+def _classified_outcomes(rows: list[dict[str, Any]]) -> dict[str, int]:
+    """acted_on, its outcome classes and the durable successes of Brain outcome rows, by the one classifier."""
+    classified = [(capability_effectiveness._classify(row), row) for row in rows]
+    classes = Counter(kind for kind, _ in classified)
+    return {
+        "acted_on": len(rows),
+        **{field: classes[kind] for kind, field in CLASS_FIELDS.items()},
+        "outcome_success": sum(
+            kind == "terminal"
+            and row["adjudicated_verdict"] == "PASS"
+            and row["durability"] == "durable"
+            and row["verifier_verdict"] not in feedback.VERIFIER_FAILURES
+            for kind, row in classified
+        ),
+    }
+
+
+def _local_loop_prs(gh_fn: Callable, since: int) -> list[str] | None:
+    """The local loop's situation population, read from GitHub and not from the loop: every PR labelled
+    `agents:local-loop` (a local start, opener-core) created in the window, whatever became of it. A PR the
+    loop never ticked still counts here, so a silent loop reads `not_invoked`, never `no_situation`. None on
+    any failed, errored or partial page."""
+    import local_loop  # noqa: PLC0415
+
+    day = datetime.fromtimestamp(since, timezone.utc).strftime("%Y-%m-%d")
+    q = f"is:pr label:{local_loop.LABEL} user:{local_loop.OWNER} created:>={day} {local_loop.search_scope()}"
+    out: list[str] = []
+    cursor = None
+    seen: set[str] = set()
+    while True:
+        after = ",after:" + json.dumps(cursor) if cursor else ""
+        query = (
+            "query {search(type:ISSUE,first:100,query:"
+            + json.dumps(q.strip())
+            + after
+            + "){pageInfo{hasNextPage endCursor}nodes{... on PullRequest{number repository{nameWithOwner}}}}}"
+        )
+        ok, raw, _err = gh_fn(["api", "graphql", "-f", "query=" + query])
+        if not ok:
+            return None
+        try:
+            data = json.loads(raw)
+            if data.get("errors"):
+                return None
+            connection = data["data"]["search"]
+            out += [
+                f"{n['repository']['nameWithOwner']}#{n['number']}"
+                for n in connection["nodes"]
+                if n and local_loop.included_repo(n["repository"]["nameWithOwner"])
+            ]
+            if not connection["pageInfo"]["hasNextPage"]:
+                return out
+            cursor = connection["pageInfo"]["endCursor"]
+            if not cursor or cursor in seen:
+                return None
+            seen.add(cursor)
+        except (KeyError, TypeError, ValueError):
+            return None
+
+
+def _local_loop_rounds(since: int, state_dir: Path | None = None) -> dict[str, list[str]] | None:
+    """The loop's own state (`local_loop.STATE_DIR`, resolved as closer-core's journal is): PRs it ran at least one round on, updated in the window
+    (invoked), and those it finished (`status` done: green, its tasks verified on that head: usable).
+    """
+    import local_loop  # noqa: PLC0415
+
+    try:
+        invoked, done = set(), set()
+        root = state_dir or Path(
+            os.environ.get("ORCH_LOCAL_LOOP_STATE", str(_state_dir() / "local-loop"))
+        )
+        for path in sorted(root.glob("*.json")):
+            st = json.loads(path.read_text())
+            target = st.get("target")
+            if not isinstance(target, str) or not local_loop.included_target(target):
+                continue
+            if not st.get("rounds") or float(st.get("updated") or st.get("created") or 0) < since:
+                continue
+            invoked.add(target)
+            if st.get("status") == "done":
+                done.add(target)
+        return {"invoked": sorted(invoked), "done": sorted(done)}
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+
+
+def _local_loop_outcomes(db: Path, targets: list[str]) -> dict[str, int] | None:
+    """What became of the PRs the loop finished, from the Brain: each loop round is a
+    `keepalive:<repo>#<n>:<agent>` run and the durability sweep grades its PR. One row per PR (its latest
+    run), classified as closer-core's outcomes are. A finished PR with no run yet is not acted on.
+    """
+    try:
+        with sqlite3.connect(db.resolve().as_uri() + "?mode=ro", uri=True) as con:
+            con.row_factory = sqlite3.Row
+            rows = []
+            for target in targets:
+                row = con.execute(
+                    "SELECT r.run_id, o.adjudicated_verdict, o.verifier_verdict, o.durability, "
+                    "o.merged, o.failure_class FROM runs r LEFT JOIN outcomes o ON o.run_id=r.run_id "
+                    "WHERE r.run_id GLOB ? ORDER BY r.ts DESC LIMIT 1",
+                    (f"keepalive:{target}:*",),
+                ).fetchone()
+                if row is not None:
+                    rows.append(dict(row))
+        return _classified_outcomes(rows)
+    except (OSError, sqlite3.Error):
+        return None
+
+
+def _local_loop_situations(inputs: dict[str, Any]) -> int | None:
+    prs = inputs.get("local_loop_prs")
+    return None if prs is None else len(prs)
 
 
 # Callables can be replaced/extended without changing reporting or adding telemetry.
 SITUATION_QUERIES: dict[str, Callable[[dict[str, Any]], int | None]] = {
     "closer-core": _closer_core_situations,
+    "local-loop": _local_loop_situations,
     "role-prompt": _prompt_batches,
     "role-decomposer": _large_issues,
     "role-triage": _open_issues,
@@ -842,6 +945,19 @@ def collect_inputs(
     inputs["closer_core_outcomes"] = _closer_core_outcomes(db, now - WINDOW_DAYS * 86400, now)
     if inputs["closer_core_outcomes"] is None:
         inputs["errors"].append("closer-core Brain outcomes unavailable")
+    inputs["local_loop_prs"] = _local_loop_prs(gh_fn, now - WINDOW_DAYS * 86400)
+    if inputs["local_loop_prs"] is None:
+        inputs["errors"].append("local-loop PR population unavailable (GitHub search failed)")
+    inputs["local_loop"] = _local_loop_rounds(now - WINDOW_DAYS * 86400)
+    if inputs["local_loop"] is None:
+        inputs["errors"].append("local-loop state unread")
+    inputs["local_loop_outcomes"] = (
+        None
+        if inputs["local_loop"] is None
+        else _local_loop_outcomes(db, inputs["local_loop"]["done"])
+    )
+    if inputs["local_loop_outcomes"] is None:
+        inputs["errors"].append("local-loop Brain outcomes unavailable")
     inputs["relay_decisions"] = _relay_decisions(
         relay_log
         or Path(
@@ -948,6 +1064,17 @@ def report(
                 }
             )
             counts["success_scope"] = "durable issue closures (PASS)"
+        if cid == "local-loop":
+            loop = inputs.get("local_loop")
+            counts["invocation_count"] = None if loop is None else len(loop["invoked"])
+            counts["usable"] = None if loop is None else len(loop["done"])
+            counts.update(
+                inputs.get("local_loop_outcomes")
+                or {
+                    field: None for field in ("acted_on", *CLASS_FIELDS.values(), "outcome_success")
+                }
+            )
+            counts["success_scope"] = "loop-finished PRs merged and judged durable (PASS)"
         if cid == feedback.RELAY_PACING_CAPABILITY:
             usable = _relay_usable(inputs, now - WINDOW_DAYS * 86400, now)
             counts["usable"] = None if usable is None else counts["usable"] + usable
