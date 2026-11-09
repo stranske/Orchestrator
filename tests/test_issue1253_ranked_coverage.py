@@ -309,9 +309,11 @@ class RankedCoverageTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     result.rejections,
-                    (miner.Rejection("event:invalid", "envelope", malformed.reasons),)
-                    if rejected
-                    else (),
+                    (
+                        (miner.Rejection("event:invalid", "envelope", malformed.reasons),)
+                        if rejected
+                        else ()
+                    ),
                 )
                 self.assertEqual(status["complete_episode_count"], 1 if complete == incoming else 0)
 
