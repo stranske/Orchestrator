@@ -114,17 +114,12 @@ REVIEWED_PRODUCERS = {
     "scripts/verify_before_sync.sh": "042ef69a438f1ae12ed87ee1e633a18e96d3fe8f02575bfbc999d9f5edb5b80c",
     "scripts/install_verified_snapshot.py": "978f7a66668f9dde869bd9b0f9803a9e3a54aa4c97d10adf759626f84ca66b3c",
     "scripts/incumbent_copy_guard.sh": "88a6cff25827fbf019c7827822483a7eaa8a092ef7fc03ccc32b96fa9423a0b7",
-    "tests/test_closer_native_observer.py": "0c23c583f6c781b444d33528061e66d74faad67a63fc326a6dcf26d6de933ad4",
-    "tests/test_closer_native_collector.py": "a392951df7d9d66aa0b852662b7b8b1573229f8696e5ba4388983855a88815c5",
     "tests/mirror_generation_imports_witness.py": "58aff9902b4ef7ed30b39a893dd59363f6dcd9803fd849bcb2124bcde411e6fc",
     "tests/test_mirror_generation_imports.sh": "3d7ce7d2463d6ccc6d6000618fedd052f13c3fb86dcaf5e99bbf230a72a393b3",
     "tests/test_mirror_product_witnesses.py": "224edde6214d2207f76f0ef996aabb3df1e8e6aaa4f891aee5f0fbc9a77329e6",
     "tests/conftest.py": "8878537123d9ae5336c376ad0dbd83d0582cdbeabc8a3e1130b879ce91365b86",
-    "tests/test_closer_runtime_distribution.py": "ac7bc41878542728c0b020641fa38ddf69cdb6089a26644fa4dff6ac8c06a088",
     "tests/test_build_exec_mirror.py": "48a48be1de6bfff9bcd79c49c3f6693781ea686effea290b454546586dc7c00b",
     "tests/test_exec_mirror_shape.py": "d56f78032832b792162099374766243348b40baa01b8150029697db932bb6e95",
-    "src/closer_campaign.py": "57a605c9dcba8a407ae3346ca0996e2b7e26dcb8ab07b67dfde8255770d58191",
-    "src/closer_distribution_package.py": "a1118593333d700c3acf1f78319dc1ec684e4bec823e741fce66471257a645ee",
 }
 
 

@@ -73,29 +73,12 @@ def _capture(frame: FrameType) -> CodingDelivery | None:
         or actual.get("callback") is not state.get("process_started_callback")
     ):
         return None
-    route = state.get("coding_route")
-    if route is not None:
-        import closer_coding_route_v2
-
-        try:
-            route = closer_coding_route_v2.capture(frame)
-        except (ValueError, RuntimeError, OSError):
-            return None
-        transport = list(route.transport_argv)
-        environment = route.environment
-        import closer_codex_owned_stdio as owned_stdio
-
-        is_bootstrap = type(route) is owned_stdio.BootstrapRoute
-        channel = owned_stdio.CHANNEL if is_bootstrap else closer_coding_route_v2.CHANNEL
-        if actual.get("stdin") != (subprocess.PIPE if is_bootstrap else subprocess.DEVNULL):
-            return None
-    else:
-        if actual.get("env") is not None:
-            return None
-        transport = ["bash", "-lc", state.get("wrapped")]
-        environment, channel = None, "codex-final-argv/v1"
-        if actual.get("stdin") != subprocess.DEVNULL:
-            return None
+    if actual.get("env") is not None:
+        return None
+    transport = ["bash", "-lc", state.get("wrapped")]
+    environment, channel = None, "codex-final-argv/v1"
+    if actual.get("stdin") != subprocess.DEVNULL:
+        return None
     profile = state.get("profile")
     if profile != execution_profiles.get_profile(SELECTED_PROFILE):
         return None
