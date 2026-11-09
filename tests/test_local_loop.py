@@ -410,7 +410,8 @@ def test_repository_exclusion_is_in_both_remote_queries(monkeypatch):
     monkeypatch.setattr(ll, "_gh", gh)
     assert ll.GitHub().looped_prs() == []
     assert ll.GitHub().merged_prs() == []
-    assert len(queries) == 2
+    assert ll.GitHub().closed_unmerged_prs() == []
+    assert len(queries) == 3
     assert all("-repo:stranske/collab-admin" in q for q in queries)
 
 
@@ -434,4 +435,85 @@ def test_excluded_cache_cannot_claim_custody_or_appear_in_status(monkeypatch):
     assert ll.owns(target) is None
     gh = FakeGH([])
     monkeypatch.setattr(gh, "merged_prs", lambda: [], raising=False)
+    monkeypatch.setattr(gh, "closed_unmerged_prs", lambda: [], raising=False)
     assert ll.status(gh)["looped"] == 0
+
+
+def test_status_says_what_became_of_each_pr_not_only_what_the_loop_last_did(monkeypatch):
+    """stranske/Orchestrator#1260 (2026-11-08): the loop called it done, the owner closed it unmerged, and
+    status kept listing it as done. Each row now carries its GitHub outcome."""
+    ll.STATE_DIR.mkdir()
+    for target, status in (("o/r#1", "done"), ("o/r#2", "done"), ("o/r#3", "active")):
+        ll.state_path(target).write_text(
+            json.dumps({"target": target, "status": status, "rounds": [{}]})
+        )
+    gh = FakeGH([])
+    node = lambda n: {"number": n, "repository": {"nameWithOwner": "o/r"}}  # noqa: E731
+    monkeypatch.setattr(gh, "merged_prs", lambda: [node(1)], raising=False)
+    monkeypatch.setattr(gh, "closed_unmerged_prs", lambda: [node(2)], raising=False)
+    res = ll.status(gh)
+    assert {r["target"]: r["outcome"] for r in res["prs"]} == {
+        "o/r#1": "merged",
+        "o/r#2": "closed unmerged",
+        "o/r#3": "open",
+    }
+    assert (res["merged"], res["closed_unmerged"]) == (1, 1)
+    assert res["pass_a_line"].endswith("looped 3, merged 1, closed unmerged 1")
+
+
+def test_an_applied_tick_records_one_invocation_heartbeat_once_declared(tmp_path, monkeypatch):
+    import capabilities
+
+    ledger = tmp_path / "capabilities.json"
+    monkeypatch.setattr(capabilities, "REG", ledger)
+    tick_ = type("T", (), {"items": [{}, {}], "counts": {"round": 1}})()
+    assert ll.record_heartbeat(tick_) is None  # no row yet: nothing written
+    adoptions = []
+    monkeypatch.setattr(
+        capabilities, "load_declared", lambda path: {"local-loop": {"status": "wired"}}
+    )
+    monkeypatch.setattr(
+        capabilities,
+        "adopt_module_version",
+        lambda cid, **kw: adoptions.append(cid) or {"adopted": False, "reason": "no source"},
+    )
+    assert ll.record_heartbeat(tick_) is None  # lineage refused: said on stderr, nothing written
+    assert adoptions == ["local-loop"]
+    monkeypatch.setattr(
+        capabilities,
+        "adopt_module_version",
+        lambda cid, **kw: {"adopted": True, "capability_version_id": "v1"},
+    )
+    calls = []
+    monkeypatch.setattr(capabilities, "heartbeat", lambda *a, **kw: calls.append((a, kw)) or True)
+    assert ll.record_heartbeat(tick_) is True  # lineage adopted, then the heartbeat
+    ((args, kw),) = calls
+    assert args == ("local-loop", "invocation")
+    assert kw["metadata"] == {"prs": 2, "counts": {"round": 1}}
+    assert kw["idempotency_key"].startswith("local-loop:")
+
+
+def test_ended_prs_reads_every_page(monkeypatch):
+    pages = iter(
+        [
+            {
+                "nodes": [
+                    {"number": n, "repository": {"nameWithOwner": "o/r"}} for n in range(100)
+                ],
+                "pageInfo": {"hasNextPage": True, "endCursor": "c1"},
+            },
+            {
+                "nodes": [{"number": 100, "repository": {"nameWithOwner": "o/r"}}],
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+            },
+        ]
+    )
+    afters = []
+
+    def gh(args, **kwargs):
+        afters.append(next((a for a in args if a.startswith("after=")), None))
+        return json.dumps({"data": {"search": next(pages)}})
+
+    monkeypatch.setattr(ll, "_gh", gh)
+    assert len(ll.GitHub().merged_prs()) == 101
+    assert afters == [None, "after=c1"]
