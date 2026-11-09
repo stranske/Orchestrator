@@ -1196,10 +1196,14 @@ def recurrence_fixture() -> bool:
     )
     assert situation_count("local-loop", {"local_loop_prs": [], "local_loop": None}) == 0
     assert situation_count("local-loop", {"local_loop": loop}) is None
-    closed_unmerged = {"run_id": "keepalive:o/r#1:vibe", "adjudicated_verdict": "PASS"}
-    closed_unmerged.update(
-        verifier_verdict=None, durability="abandoned", merged=0, failure_class=None
-    )
+    closed_unmerged: dict[str, Any] = {
+        "run_id": "keepalive:o/r#1:vibe",
+        "adjudicated_verdict": "PASS",
+        "verifier_verdict": None,
+        "durability": "abandoned",
+        "merged": 0,
+        "failure_class": None,
+    }
     counted = _classified_outcomes([closed_unmerged])
     assert (counted["acted_on"], counted["outcome"], counted["outcome_success"]) == (1, 1, 0)
     assert (
