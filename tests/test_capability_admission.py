@@ -1062,6 +1062,9 @@ def test_missing_consumer_declaration_survives_reconciliation_without_acceptance
     assert row["outcome_links"] == []
     cls, ok, detail = admission.consumer_class(row, {})
     assert cls == "consumer_missing" and not ok, detail
+    unreviewed = {key: value for key, value in row.items() if key != "consumer_missing"}
+    cls, ok, detail = admission.consumer_class(unreviewed, {})
+    assert cls == "prose" and not ok, detail
     assert row["event_history"][0] == {"type": "invocation", "timestamp": 1}
     assert not capabilities._reconcile_known_declarations(ledger, 3)
 
@@ -1084,6 +1087,16 @@ def test_missing_consumer_declaration_survives_reconciliation_without_acceptance
         consumers = admission.consumer_report(dated_ledger, ctx, [verdict])
         assert consumers["by_class"]["consumer_missing"] == [cid], consumers
         assert consumers["by_class"]["prose"] == [], consumers
+        assert consumers["drainable"] == [cid] and not consumers["drained"], consumers
+        assert consumers["blocking"] == ([cid] if enforced else []), consumers
+        assert consumers["deferred"] == ([] if enforced else [cid]), consumers
+        assert consumers["by_class"]["acting"] == [], consumers
+        unreviewed_dated = {key: value for key, value in dated.items() if key != "consumer_missing"}
+        unreviewed_ledger = {cid: unreviewed_dated}
+        unreviewed_verdict = admission.admit(cid, ctx=ctx, ledger=unreviewed_ledger)
+        consumers = admission.consumer_report(unreviewed_ledger, ctx, [unreviewed_verdict])
+        assert consumers["by_class"]["prose"] == [cid], consumers
+        assert consumers["by_class"]["consumer_missing"] == [], consumers
         assert consumers["drainable"] == [cid] and not consumers["drained"], consumers
         assert consumers["blocking"] == ([cid] if enforced else []), consumers
         assert consumers["deferred"] == ([] if enforced else [cid]), consumers
