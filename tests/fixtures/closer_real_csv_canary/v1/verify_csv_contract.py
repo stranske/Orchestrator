@@ -2874,15 +2874,18 @@ def main(argv=None):
         source = root / "src" / "closer_csv_completion.py"
         if not source.is_file():
             source = root / "closer_csv_completion.py"
-        spec = importlib.util.spec_from_file_location("native_closer_csv_completion", source)
-        if spec is None or spec.loader is None:
-            raise _ObservationError("current closer-core completion reader unavailable")
-        module = importlib.util.module_from_spec(spec)
         original_path = list(sys.path)
         try:
+            spec = importlib.util.spec_from_file_location("native_closer_csv_completion", source)
+            if spec is None or spec.loader is None:
+                raise _ObservationError("current closer-core completion reader unavailable")
+            module = importlib.util.module_from_spec(spec)
             sys.path.insert(0, str(source.parent))
             spec.loader.exec_module(module)
             return module.main(["--report"])
+        except (_ObservationError, ImportError, OSError) as exc:
+            print(f"chain-evidence observation failed: {exc}", file=sys.stderr)
+            return 1
         finally:
             sys.path[:] = original_path
     if args == ["--legacy-chain-evidence"]:

@@ -898,6 +898,47 @@ def test_closer_completion_reads_registered_observation_and_exact_remote_pin(tmp
     # Every malformed receipt layer remains unmeasured for the public reader.
     import contextlib
     import copy
+    import importlib.util
+    import io
+    import sys
+    from pathlib import Path
+
+    for malformed in (None, [], {}):
+        bad_pr = copy.deepcopy(pr)
+        bad_pr["comments"]["nodes"][0]["body"] = malformed
+        with pytest.raises(ValueError, match="acknowledgment missing"):
+            c._publication(bad_pr)
+        bad_transcript = copy.deepcopy(transcript)
+        bad_transcript["check_results"][0]["command"] = malformed
+        bad = {
+            **record,
+            "verification": {"result": "PASS", "transcript": json.dumps(bad_transcript)},
+        }
+        receipt.write_text(json.dumps(bad))
+        with pytest.raises(ValueError, match="verification is incomplete"):
+            read(root=tmp_path)
+    receipt.write_text(json.dumps(record))
+
+    fixture_path = Path(__file__).parent / c.FIXTURE.removeprefix("tests/")
+    spec = importlib.util.spec_from_file_location("csv_loader_regression", fixture_path)
+    fixture = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fixture)
+    fake_root = tmp_path / "missing-reader"
+    fake_root.mkdir()
+    with monkeypatch.context() as scope:
+        scope.setattr(fixture, "__file__", str(fake_root / c.FIXTURE))
+        for missing in (True, False):
+            if not missing:
+                (fake_root / "closer_csv_completion.py").write_text(
+                    'raise ImportError("reader import unavailable")\n'
+                )
+            original_path = list(sys.path)
+            errors = io.StringIO()
+            with contextlib.redirect_stderr(errors):
+                assert fixture.main(["--chain-evidence"]) == 1
+            assert "chain-evidence observation failed:" in errors.getvalue()
+            assert "Traceback" not in errors.getvalue()
+            assert sys.path == original_path
 
     for malformed in ([], None, "receipt"):
         receipt.write_text(json.dumps(malformed))

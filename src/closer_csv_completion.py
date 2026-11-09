@@ -115,6 +115,7 @@ def _publication(pr):
         c
         for c in nodes
         if (c.get("author") or {}).get("login") == "stranske"
+        and isinstance(c.get("body"), str)
         and marker.fullmatch(c["body"].strip())
     ]
     if len(matches) != 1:
@@ -222,6 +223,7 @@ def read_completion(*, root=STATE, gh=None):
             and c.get("type") == "command"
             and c.get("returncode") == 0
             and c.get("stdout_tail") == "contract ok\n"
+            and isinstance(c.get("command"), str)
             and c.get("command", "").endswith(f" -I {FIXTURE}")
             for c in checks
         )

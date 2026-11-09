@@ -205,6 +205,7 @@ def test_actual_receiver_refuses_wrong_runtime(tmp_path, monkeypatch, capsys, fa
                 "status": ("status", "COMPLETED"),
             }[fault]
             db.execute(f"UPDATE automation_runs SET {column}=?", (value,))
+    monkeypatch.setattr(escalation.time, "time", lambda: now + 1)
     with pytest.raises(ValueError):
         run_preflight(policy, capsys)
     assert next(iter(c.read()["hold_escalations"].values()))["status"] == "delivered"
