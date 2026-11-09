@@ -896,8 +896,8 @@ def test_closer_completion_reads_registered_observation_and_exact_remote_pin(tmp
     assert worker_path.read_bytes() == raw
 
     # Every malformed receipt layer remains unmeasured for the public reader.
-    import copy
     import contextlib
+    import copy
 
     for malformed in ([], None, "receipt"):
         receipt.write_text(json.dumps(malformed))
