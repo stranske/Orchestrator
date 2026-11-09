@@ -2159,6 +2159,77 @@ test('pre-dispatch inventory reconciles report and native locators without expos
   assert.ok(reportInventory(options).evidence_gaps.includes('native_journal_receipts_not_authenticated'));
 });
 
+test('native snapshot digest pins WAL receipt metadata without publishing private fields', (t) => {
+  const { root, journal, options } = nativeJournal(t);
+  const writer = new DatabaseSync(journal);
+  t.after(() => writer.close());
+  writer.exec('PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;');
+  writer.exec('ALTER TABLE native_attempts ADD COLUMN usage_json TEXT');
+  const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
+  const expectedDigest = () => digest(JSON.stringify(writer.prepare(
+    'SELECT * FROM native_attempts ORDER BY attempt_id').all()));
+  const observe = () => {
+    const before = [options.report, journal, `${journal}-wal`].map((file) => fs.readFileSync(file));
+    const result = reportInventory(options);
+    assert.equal(result.pre_dispatch.native_journal.snapshot_sha256, expectedDigest());
+    assert.deepEqual([options.report, journal, `${journal}-wal`]
+      .map((file) => fs.readFileSync(file)), before);
+    assert.equal(result.receipt_authority, 'not_authenticated_by_inventory');
+    assert.equal(result.dispatch_authorized, false);
+    assert.ok(!JSON.stringify(result).includes('private'));
+    return result;
+  };
+  const initial = observe();
+  assert.deepEqual(observe(), initial, 'unchanged snapshots retain the same digest');
+  const mainHash = digest(fs.readFileSync(journal));
+  const walHash = digest(fs.readFileSync(`${journal}-wal`));
+  writer.prepare('UPDATE native_attempts SET usage_json=? WHERE attempt_id=?')
+    .run(JSON.stringify({ detail: 'private usage metadata', units: 7 }), 'e');
+  assert.equal(digest(fs.readFileSync(journal)), mainHash, 'committed metadata remains in WAL');
+  assert.notEqual(digest(fs.readFileSync(`${journal}-wal`)), walHash);
+  const changed = observe();
+  assert.notEqual(changed.pre_dispatch.native_journal.snapshot_sha256,
+    initial.pre_dispatch.native_journal.snapshot_sha256);
+  const withoutDigest = (result) => {
+    const copy = structuredClone(result);
+    delete copy.pre_dispatch.native_journal.snapshot_sha256;
+    return copy;
+  };
+  assert.deepEqual(withoutDigest(changed), withoutDigest(initial),
+    'private metadata changes must be attributable even when all public locators match');
+  writer.exec('BEGIN');
+  writer.prepare('UPDATE native_attempts SET usage_json=? WHERE attempt_id=?')
+    .run('private uncommitted metadata', 'e');
+  // The independent reader must hash committed receipts, not this transaction.
+  assert.deepEqual(reportInventory(options), changed);
+  writer.exec('ROLLBACK');
+  const cli = execute(root, process.execPath, [script, '--report', options.report,
+    '--journal', journal, '--observed-at', String(now),
+    '--evidence-class', options.evidenceClass, '--evidence-reference', options.evidenceReference]);
+  assert.equal(cli.status, 0, cli.stderr);
+  assert.deepEqual(JSON.parse(cli.stdout), changed);
+});
+
+test('native snapshot digest distinguishes an empty journal from unavailable evidence', (t) => {
+  const { root, journal, options } = nativeJournal(t);
+  const writer = new DatabaseSync(journal);
+  writer.exec('DELETE FROM native_attempts');
+  writer.close();
+  const empty = reportInventory(options).pre_dispatch.native_journal;
+  assert.equal(empty.status, 'available');
+  assert.deepEqual(empty.attempts, []);
+  assert.equal(empty.snapshot_sha256, createHash('sha256').update('[]').digest('hex'));
+  const foreign = path.join(root, 'foreign.sqlite');
+  const connection = new DatabaseSync(foreign);
+  connection.close();
+  for (const selected of [undefined, path.join(root, 'missing.sqlite'), foreign]) {
+    const unavailable = reportInventory({ ...options, journal: selected }).pre_dispatch.native_journal;
+    assert.equal(unavailable.status, 'unavailable');
+    assert.equal(unavailable.attempts, null);
+    assert.equal(unavailable.snapshot_sha256, null);
+  }
+});
+
 test('blank native provider IDs remain missing paid identities with UNKNOWN recovery obligations', (t) => {
   const { root, saved, journal, options } = nativeJournal(t);
   saved.rows[0].later_truth = 'UNKNOWN';

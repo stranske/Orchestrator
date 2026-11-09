@@ -342,7 +342,7 @@ function readJournalSnapshot(journal) {
 // decision, acquire the publication lock, or establish live writer ownership.
 function journalInventory(journal, locationChecks) {
   const base = { status: 'unavailable', path: journal ? path.resolve(journal) : null,
-    attempts: null, receipt_authority: 'not_authenticated_by_inventory' };
+    attempts: null, snapshot_sha256: null, receipt_authority: 'not_authenticated_by_inventory' };
   if (journal === undefined) return { ...base, reason: 'native_journal_not_supplied' };
   if (typeof journal !== 'string' || !journal.trim()) throw new Error('journal path is required');
   try {
@@ -427,7 +427,10 @@ function journalInventory(journal, locationChecks) {
         validation_present: Boolean(item.validation_present), validation_observation: validation,
         receipt_evidence_gaps: gaps, recovery_step: recoveryStep };
     });
-    return { ...base, status: 'available', attempts };
+    // Bind the committed logical snapshot, including private metadata omitted
+    // from public locators. A main-file hash would miss WAL-resident receipts.
+    // This digest identifies retained bytes; it authenticates no outcome.
+    return { ...base, status: 'available', attempts, snapshot_sha256: observed.digest };
   } catch {
     // SQLite messages and raw payloads can contain private provider material.
     return { ...base, reason: 'native_journal_unreadable_or_schema_unavailable' };

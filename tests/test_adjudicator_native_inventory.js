@@ -216,10 +216,16 @@ for (const field of ['backend_usage', 'backend_error']) {
         assert.equal(stored(), value);
         assert.deepEqual(committedSnapshot.slice(0, 3), before.slice(0, 3), 'commit stays in WAL');
         assert.notEqual(committedSnapshot[3][1], before[3][1]);
-        // Stable private metadata still participates in consistency checks,
-        // without changing the published receipt locators or paid accounting.
+        // The new snapshot digest attributes private metadata changes while
+        // published receipt locators and paid accounting remain unchanged.
         const later = reportInventory(options);
-        assert.deepEqual(later, initial);
+        const hash = later.pre_dispatch.native_journal.snapshot_sha256;
+        assert.notEqual(hash, initial.pre_dispatch.native_journal.snapshot_sha256);
+        assert.equal(hash, sha256(JSON.stringify(w.connection.prepare(
+          'SELECT * FROM native_attempts ORDER BY attempt_id').all())));
+        const expected = structuredClone(initial);
+        expected.pre_dispatch.native_journal.snapshot_sha256 = hash;
+        assert.deepEqual(later, expected);
         assert.equal(later.dispatch_authorized, false);
         assert.equal(later.receipt_authority, 'not_authenticated_by_inventory');
         assert.ok(!JSON.stringify(later).includes('private'));
