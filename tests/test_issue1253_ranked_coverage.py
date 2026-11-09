@@ -304,6 +304,55 @@ class RankedCoverageTests(unittest.TestCase):
         self.assertEqual(result.status["next_actions"], ["observe_until_ttl_or_compiler_intake"])
         self.assertEqual(restored.sweep(now=201).candidates, loaded)
 
+    def test_miner_loaded_snapshot_adds_and_refreshes_candidates_without_losing_retirements(self):
+        instance = miner.PatternMiner(min_positive_subjects=1, candidate_ttl_days=1)
+        retired = replace(self.candidate(), lifecycle=ir.Lifecycle(state="retired", expires_at=100))
+        tombstone = ir.CandidateTombstone(retired.fingerprint, retired.capability_id, "expired", 100)
+        instance.candidates = [retired]
+        instance.tombstones = [tombstone]
+        state = self.root / "miner-state.json"
+        instance.save_state(state, updated_at=200)
+
+        events = list(self.completion_events().values())
+        fingerprint = None
+        for offset in (0, 50):
+            with self.subTest(offset=offset):
+                restored = miner.PatternMiner(min_positive_subjects=1, candidate_ttl_days=1)
+                self.assertTrue(restored.load_state(state))
+                incoming = [replace(event, occurred_at=event.occurred_at + offset) for event in events]
+                with patch.object(miner, "adapt_completion_event_envelope", side_effect=incoming):
+                    result = restored.mine(
+                        [{}] * len(incoming), now=200 + offset, preserve_existing=True
+                    )
+                active = [item for item in result.candidates if item.lifecycle.state == "clustered"]
+                self.assertEqual(len(active), 1)
+                candidate = active[0]
+                if fingerprint is None:
+                    fingerprint = candidate.fingerprint
+                self.assertEqual(candidate.fingerprint, fingerprint)
+                self.assertEqual(candidate.telemetry["last_evidence_at"], incoming[-1].occurred_at)
+                self.assertEqual(candidate.lifecycle.expires_at, incoming[-1].occurred_at + 86400)
+                self.assertEqual(candidate.source_occurrences[0].occurred_at, incoming[-1].occurred_at)
+                self.assertEqual(len(result.candidates), 2)
+                self.assertIn(retired, result.candidates)
+                expected_tombstones = [tombstone] + [
+                    ir.CandidateTombstone(
+                        alias,
+                        None,
+                        "deduplicated_alias",
+                        200 + offset,
+                        successor=candidate.capability_id,
+                    )
+                    for alias in candidate.aliases
+                ]
+                self.assertEqual(
+                    result.tombstones,
+                    tuple(sorted(expected_tombstones, key=lambda item: item.fingerprint)),
+                )
+                self.assertEqual(result.status["emitted_candidate_count"], 1)
+                self.assertEqual(result.status["expired_candidate_count"], 1)
+                restored.save_state(state, updated_at=200 + offset)
+
     def test_miner_persisted_retirement_requires_new_evidence_to_revive(self):
         events = list(self.completion_events().values())
         instance = miner.PatternMiner(min_positive_subjects=1, candidate_ttl_days=1)
