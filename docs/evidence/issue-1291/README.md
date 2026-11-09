@@ -1,5 +1,61 @@
 # Issue #1291 repair evidence
 
+## Round 3 live readback — 2026-11-09
+
+Outcome 1: PASS for the measured-toolchain gate on input branch head
+`feda5700fc304a420708f7fda1d88721d9955fc9`. Before any change this round,
+`/opt/anaconda3/bin/python3 -m pytest -q tests/test_ci_gate_config.py`
+passed all 15 tests in 0.39 seconds. The existing regression exercises every
+one of the nine tools, including bumped-pin rejection, missing-entry rejection
+with the diagnostic, and complete matching acceptance after fixture restoration.
+Stop rule: three failed repair attempts or 45 minutes. No repair attempt was
+needed: the reported jobs do not currently demonstrate a code failure.
+
+`gh run view 42581101602 --json conclusion,headSha,jobs` reports the named
+Resolve Context and Record autofix dispatch completion jobs **cancelled** on
+that exact head, rather than failed. `gh run view 42581101602 --log-failed`
+exits zero without failed logs. Health 45 run `42581101070` is successful;
+the later status context points to successful run `42581103989`. PR #1293
+is open, ready for review, and has no failing check contexts at this readback.
+No shared workflow modification is justified by these results.
+
+Source CI run [42580639059](https://github.com/stranske/Orchestrator/actions/runs/42580639059)
+has head SHA `feda5700fc304a420708f7fda1d88721d9955fc9` and concludes success.
+Both checkout and flat-copy aggregates succeed. The flat aggregate job
+`129043240470`, read with
+`gh run view 42580639059 --job 129043240470 --log`, runs the existing
+`bash scripts/verify_before_sync.sh "$GITHUB_WORKSPACE"` invocation with
+`VERIFY_BEFORE_SYNC_AGGREGATE=.../mirror-evidence` and payload integrity checks.
+Its checkout is the PR merge revision `8d8f2d9`, not the branch revision itself.
+It reports BARE EXEC MIRROR, 15,068 collected, 15,014 passed, zero failed,
+52 named test skips, and the terminal `verify-before-sync: VERIFIED` result.
+The seven named selftest skips and two named gate skips remain visible in the
+native log; this is not a claim that every capability gate ran.
+
+Local committed-input shipping was independently checked with:
+
+```bash
+bash scripts/build_exec_mirror.sh "$PWD" /private/tmp/1293-round3-flat
+cmp docs/CI_LINT_BASELINE.md /private/tmp/1293-round3-flat/docs/CI_LINT_BASELINE.md
+cmp .github/workflows/autofix-versions.env /private/tmp/1293-round3-flat/.github/workflows/autofix-versions.env
+cd /private/tmp/1293-round3-flat
+/opt/anaconda3/bin/python3 -m pytest -q tests/test_ci_gate_config.py
+```
+
+Builder and both comparisons exit zero; the flat gate file passes all 15 tests
+in 0.33 seconds. These checks use unchanged branch pins. The proposed #1289
+payload has the separate strict measurement and shipping receipts below.
+No dependency pins, measurement markers, thresholds, or implementation change
+in this round. No full test suite was run locally.
+
+Delivery remains pending: #1289 is open and ready at unchanged head
+`a27084d488d77fcfe7c9644ab97c8f5426bf5cfc`. Its four failed shard/aggregate
+jobs still refer to historical run `42567594229`; that run is not new delivery
+evidence. No subsequent sync-core classification is recorded. T7/A5/A6 remain
+pending until source delivery and native regeneration. This evidence-only
+commit also requires its own fresh CI readback; the successful source aggregate
+above does not establish aggregate acceptance for a future commit or #1289.
+
 Check date: 2026-11-09. Input source: Orchestrator
 `d2fdd91b4b09f2a9a8572e14cb5270c3c83628d0`; proposed pin bytes read from
 PR #1289 head `a27084d488d77fcfe7c9644ab97c8f5426bf5cfc` through the GitHub
