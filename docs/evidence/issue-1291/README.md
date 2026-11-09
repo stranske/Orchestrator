@@ -221,3 +221,61 @@ The required source commit was attempted after the checks above. `git add`
 failed with `Unable to create .../.git/index.lock: Read-only file system`, so
 `git commit` did not run. The JavaScript regression and this follow-up evidence
 remain uncommitted; this run cannot claim the round's commit requirement met.
+
+## Hosted follow-up: baseline integrity through publication
+
+Checked 2026-11-09 against source
+`49f6d4e175923a3736dfca67dbccf3a0e91feb5e`. The first unchecked task, T7,
+still depends on source delivery and regeneration: #1289 remains open, ready,
+at `a27084d488d77fcfe7c9644ab97c8f5426bf5cfc`, with no new sync-core
+classification in its comments. T6/A4 also remain incomplete.
+
+Extended the existing `tests/test_ci_toolchain_mirror.js` regression to exercise
+the shipped installer and digest implementation. Uncommitted baseline edits
+leave the mirror digest unchanged; committing and rebuilding changes it.
+Changing the shipped baseline after capturing that digest rejects publication
+with `retained snapshot digest ... != verified payload ...` and preserves the
+destination. Restoring the baseline restores the digest and permits publication
+of both baseline and pins byte-for-byte. The scratch installation explicitly
+uses `--unverified`: this tests integrity, without claiming an aggregate verdict.
+No workflow or pin file was edited, and no collected test was added.
+
+The focused Node command passes in 1.03 seconds:
+`node --test --test-isolation=none tests/test_ci_toolchain_mirror.js`.
+`node --check tests/test_ci_toolchain_mirror.js` and `git diff --check` pass.
+`python3 -m pytest -q tests/test_ci_gate_config.py -m 'not slow'` still exits
+before collection with `No module named pytest`; no Python source was changed.
+
+Read the actual source CI run
+[`42575806594`](https://github.com/stranske/Orchestrator/actions/runs/42575806594),
+whose artifacts identify input head `db4c1d3e45988d4db8985212f77f42eee6788273`:
+
+| Previously failed job | Current source-run result |
+| --- | --- |
+| pytest + coverage shard 1/6 | success, job 129023369879 |
+| flat exec-mirror shard 1/6 | cancelled, job 129023369891; upload failed |
+| verify.py aggregate + combined coverage | success, job 129026417491 |
+| verify.py aggregate in the flat exec-mirror shape | failure, job 129026456227 |
+
+The flat aggregate log names the first broken step:
+`aggregate FAILED: missing or unreadable summary for shard 1/6`, because
+`mirror-evidence/shard-1.json` is absent. The artifact list independently has
+mirror shards 2-6 and no shard 1. This is not evidence of a new measured-toolchain
+failure and does not authorize manufacturing the missing shard result.
+
+The newer source CI run
+[`42576841952`](https://github.com/stranske/Orchestrator/actions/runs/42576841952)
+is still running for input head `49f6d4e175923a3736dfca67dbccf3a0e91feb5e`.
+Neither source run establishes regenerated-#1289 acceptance. PR #1293 was
+re-read as open with `draft=false`; no completion checkbox is changed here.
+
+The combined mirror command was also executed, without skipping any existing
+test: `node --test --test-isolation=none tests/test_exec_mirror_contract_witness.js tests/test_ci_toolchain_mirror.js`.
+It reports six passes and the previously documented failure at
+`tests/test_exec_mirror_contract_witness.js:153`: the installer omits an empty
+`tools` directory. That unrelated failure is unchanged.
+
+After validation, `git add tests/test_ci_toolchain_mirror.js docs/evidence/issue-1291/README.md`
+failed with `Unable to create .../.git/index.lock: Read-only file system`.
+The commit could not proceed. This follow-up's test and evidence edits remain
+in the working tree; the round's mandatory source-commit requirement is unmet.
