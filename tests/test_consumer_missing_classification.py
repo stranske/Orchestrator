@@ -130,7 +130,9 @@ def test_consumer_report_reconciles_source_inventory_without_writing_the_ledger(
         if "downstream_consumer" in declaration
     }
     expected = sorted(
-        cid for cid, declaration in declarations.items() if declaration.get("consumer_missing") is True
+        cid
+        for cid, declaration in declarations.items()
+        if declaration.get("consumer_missing") is True
     )
     assert "docs-drift-fix-agent" in expected
     ledger = {cid: capabilities._blank_capability(cid) for cid in declarations}
