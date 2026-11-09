@@ -296,8 +296,12 @@ def test_baseline_doc_records_every_disabled_check_with_both_quantities():
         assert field in doc.lower(), f"{BASELINE_DOC.name} never states `{field}`"
 
 
-def _has_measured_baseline(doc, pins):
-    """Match one complete toolchain, never a mixture of measurements."""
+def _baseline_mismatch(doc, pins):
+    """Match one complete toolchain, never a mixture of measurements.
+
+    Returns None on a match, else the diagnostic. The diagnostic names the differing pins against
+    the closest complete measurement first: CI truncates a long assertion line, and a message that
+    led with the whole pin dict hid which pins needed re-measuring (#1291)."""
     required = {
         "ruff",
         "black",
@@ -309,14 +313,31 @@ def _has_measured_baseline(doc, pins):
         "pytest-xdist",
         "coverage",
     }
+    closest = None
     for marker in re.findall(r"<!--\s*measured-with:\s*(.*?)\s*-->", doc):
         measured = dict(pair.split("=", 1) for pair in marker.split())
-        if required <= measured.keys() and all(
-            pins.get(f"{tool.upper().replace('-', '_')}_VERSION") == version
-            for tool, version in measured.items()
-        ):
-            return True
-    return False
+        if not required <= measured.keys():
+            continue
+        differing = [
+            f"{key} pinned {pins.get(key, 'missing')}, measured {version}"
+            for tool, version in sorted(measured.items())
+            if pins.get(key := f"{tool.upper().replace('-', '_')}_VERSION") != version
+        ]
+        if not differing:
+            return None
+        if closest is None or len(differing) < len(closest):
+            closest = differing
+    unmeasured = "; ".join(closest) if closest else "no complete nine-tool measurement exists"
+    return (
+        f"{BASELINE_DOC.name} has no complete measured toolchain matching {PINS.name}. "
+        f"Unmeasured pins against the closest measurement: {unmeasured}. "
+        "Re-run scripts/ci_lint_baseline.py with these exact pins and retain its measurements. "
+        f"All pins: {pins}"
+    )
+
+
+def _has_measured_baseline(doc, pins):
+    return _baseline_mismatch(doc, pins) is None
 
 
 def test_baseline_was_measured_with_the_pinned_versions():
@@ -324,26 +345,53 @@ def test_baseline_was_measured_with_the_pinned_versions():
     require_checkout()
     doc = BASELINE_DOC.read_text(encoding="utf-8")
     pins = read_pins()
-    assert _has_measured_baseline(doc, pins), (
-        f"{BASELINE_DOC.name} has no complete measured toolchain matching {PINS.name}: {pins}. "
-        "Re-run scripts/ci_lint_baseline.py with these exact pins and retain its measurements."
-    )
+    mismatch = _baseline_mismatch(doc, pins)
+    assert mismatch is None, mismatch
+
+
+_NINE_TOOLS = (
+    "ruff",
+    "black",
+    "mypy",
+    "pytest",
+    "isort",
+    "docformatter",
+    "pytest-cov",
+    "pytest-xdist",
+    "coverage",
+)
+
+
+def test_baseline_diagnostic_names_the_bumped_and_the_missing_pin():
+    """A bumped pin and an absent pin are each named, with both versions, ahead of the pin dump."""
+    pins = {f"{tool.upper().replace('-', '_')}_VERSION": "2.0.0" for tool in _NINE_TOOLS}
+    doc = "<!-- measured-with: " + " ".join(f"{t}=2.0.0" for t in _NINE_TOOLS) + " -->"
+    assert _baseline_mismatch(doc, pins) is None
+
+    bumped = {
+        **pins,
+        "RUFF_VERSION": "2.0.1"
+    }
+    message = _baseline_mismatch(doc, bumped)
+    assert message is not None
+    assert "Unmeasured pins against the closest measurement: RUFF_VERSION pinned 2.0.1, " in message
+    assert message.index("RUFF_VERSION pinned 2.0.1") < message.index("All pins:")
+
+    missing = {k: v for k, v in pins.items() if k != "COVERAGE_VERSION"}
+    message = _baseline_mismatch(doc, missing)
+    assert message is not None
+    assert "COVERAGE_VERSION pinned missing, measured 2.0.0" in message
+
+    incomplete = doc.replace(" coverage=2.0.0", "")
+    message = _baseline_mismatch(incomplete, pins)
+    assert message is not None
+    assert "no complete nine-tool measurement exists" in message
 
 
 @pytest.mark.parametrize("defect", ["unknown-version", "hybrid", "incomplete"])
 def test_baseline_requires_one_complete_matching_toolchain(defect, tmp_path, monkeypatch):
     """Exercise the named gate and its diagnostic through real fixture files."""
-    tools = (
-        "ruff",
-        "black",
-        "mypy",
-        "pytest",
-        "isort",
-        "docformatter",
-        "pytest-cov",
-        "pytest-xdist",
-        "coverage",
-    )
+    tools = _NINE_TOOLS
     pins = {f"{tool.upper().replace('-', '_')}_VERSION": "2.0.0" for tool in tools}
     complete = " ".join(f"{tool}=2.0.0" for tool in tools)
     pin_file = tmp_path / "autofix-versions.env"
@@ -376,8 +424,7 @@ def test_baseline_requires_one_complete_matching_toolchain(defect, tmp_path, mon
             test_baseline_was_measured_with_the_pinned_versions()
         assert str(failure.value).startswith(
             "CI_LINT_BASELINE.md has no complete measured toolchain matching "
-            f"autofix-versions.env: {read_pins()}. "
-            "Re-run scripts/ci_lint_baseline.py with these exact pins and retain its measurements."
+            "autofix-versions.env. Unmeasured pins against the closest measurement:"
         )
 
         write_pins(pins)
