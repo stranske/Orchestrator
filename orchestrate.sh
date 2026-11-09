@@ -405,6 +405,10 @@ unset _orch_exp_trial _orch_exp_end _orch_exp_verdict _orch_exp_default
 # orchestrator-owned artifacts (capacity.json/backlog.json); the legacy lanes never read them, so
 # this is safe in either mode.
 python3 "$ORCH/capacity.py"        >/dev/null 2>&1 || echo "  warn: capacity.py failed (continuing)"
+# A provider quota on one tier (gemini's Argon `full`) caps that seat below it for this tick
+# instead of shedding the whole seat; every process the tick starts inherits the ceiling.
+tier_exports="$(python3 "$ORCH/capacity.py" tier-ceiling-exports 2>/dev/null)" && eval "$tier_exports" \
+  || echo "  warn: tier ceilings unavailable (continuing; scoped sheds then cap nothing)"
 # Compare the existing shadow role with opener ordering even while dispatch is off.
 # This reads GitHub and writes observations only; never labels or delegates a worker.
 if [[ "$mode" == "active" && "${ORCH_TRIAGE_SHADOW:-1}" == "1" ]] && ! _gh_deferred; then
