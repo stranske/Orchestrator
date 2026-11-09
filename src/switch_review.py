@@ -403,17 +403,27 @@ def _gh_call(args: list[str], *, timeout_s: int = GH_TIMEOUT_S) -> tuple[bool, s
     """Run one `gh` invocation. Returns (ok, stdout, error_reason_for_unmeasured)."""
     if _GH_CALL_RUNNER is not None:
         return _GH_CALL_RUNNER(args, timeout_s=timeout_s)
-    cmd = ["gh", *args]
+    import sys
+
+    import github_api_observer
+
+    caller = sys._getframe(1)
     try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout_s,
-            check=False,
+        proc = github_api_observer.run_gh(
+            args,
+            timeout_s=timeout_s,
+            callsite={
+                "file": Path(caller.f_code.co_filename).name,
+                "function": caller.f_code.co_name,
+                "line": caller.f_lineno,
+            },
         )
     except subprocess.TimeoutExpired:
-        return False, "", f"unmeasured: gh timed out after {timeout_s}s ({' '.join(args[:4])})"
+        return (
+            False,
+            "",
+            f"unmeasured: gh timed out after {timeout_s}s ({github_api_observer.operation_name(args)})",
+        )
     except (OSError, subprocess.SubprocessError) as exc:
         return False, "", f"unmeasured: gh unavailable ({exc})"
     if proc.returncode != 0:
