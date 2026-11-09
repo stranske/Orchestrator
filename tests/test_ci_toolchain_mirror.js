@@ -58,7 +58,8 @@ test('flat mirror ships committed baseline and pins together across a baseline r
 
   // Copy immutable real inputs; never edit the checkout's protected pin file.
   const archive = run('git', ['-C', repo, 'archive', 'HEAD', baseline, pins, installer,
-    'scripts/check_checks_reported.py', 'src', 'config/test-shards.json']);
+    'scripts/check_checks_reported.py', 'scripts/build_exec_mirror.sh',
+    'scripts/verify_before_sync.sh', 'src', 'config/test-shards.json']);
   run('tar', ['-x', '-C', source], { input: archive });
   for (const [filename, content] of [
     ['src/base.py', 'BASE = 1\n'],
@@ -119,6 +120,40 @@ test('flat mirror ships committed baseline and pins together across a baseline r
   checkPayload();
   assert.equal(digest(), repairedDigest,
     'a failed aggregate must preserve the measured baseline and complete payload seal');
+
+  // Exercise the CI entrypoint as well: an aggregate rejected by verify.py
+  // must never publish a verified snapshot or its digest receipt.
+  const snapshot = path.join(root, 'verified snapshot');
+  const receipt = path.join(root, 'verified digest.txt');
+  const wrapped = spawnSync('bash', [path.join(source, 'scripts/verify_before_sync.sh'),
+    '--snapshot-out', snapshot, '--digest-out', receipt, source], {
+    cwd: source,
+    env: { ...env, CI: 'true', PYTHON: python,
+      ORCH_SYNC_SCRIPT: path.join(source, 'scripts/build_exec_mirror.sh'),
+      VERIFY_BEFORE_SYNC_TREE: 'BARE EXEC MIRROR',
+      VERIFY_BEFORE_SYNC_FLOOR_MAY_LAG: '1',
+      VERIFY_BEFORE_SYNC_AGGREGATE: evidence,
+      TMPDIR: root },
+    encoding: 'utf8', timeout: 30000, maxBuffer: 32 * 1024 * 1024,
+  });
+  const wrappedOutput = [wrapped.error?.message, wrapped.stdout, wrapped.stderr]
+    .filter(Boolean).join('\n');
+  // The storage supervisor can return its documented refusal code after the
+  // verifier fails when this runner cannot inspect open files at retirement.
+  // It must still reach the real aggregate and retain its failed verdict.
+  assert.ok(wrapped.status === 1 || wrapped.status === 78, wrappedOutput);
+  if (wrapped.status === 78) {
+    assert.match(wrapped.stderr, /storage admission\/retirement refused:/);
+  }
+  assert.ok(wrapped.stdout.includes(
+    `aggregate FAILED: missing or unreadable summary for shard 1/${plan.shards.length}: `),
+  wrappedOutput);
+  assert.match(wrapped.stdout, /NOT VERIFIED \(verify\.py exit 1\)/);
+  assert.doesNotMatch(wrapped.stdout, /== verify-before-sync: VERIFIED\b/);
+  assert.equal(fs.existsSync(snapshot), false, 'failed aggregate published a snapshot');
+  assert.equal(fs.existsSync(receipt), false, 'failed aggregate published a digest receipt');
+  checkPayload();
+  assert.equal(digest(), repairedDigest);
 
   // The aggregate wrapper uses this same digest before and after verification.
   // A baseline changed after sealing must fail publication before any write.

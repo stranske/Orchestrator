@@ -336,3 +336,56 @@ Attempting to post this blocker on #1293 and add `needs-human` was also rejected
 both connector mutations returned `MCP tool call requires approval, but approval
 policy is never`. Neither the comment nor the label was added; this local
 evidence remains the handoff record.
+
+## Hosted follow-up: aggregate wrapper refuses snapshot publication
+
+Checked 2026-11-09 against source
+`2c15591040c72c59308d0985ab47f2269bffd85d`. The first unchecked task, T7,
+still awaits source delivery and sync regeneration: #1289 remains open and
+ready at `a27084d488d77fcfe7c9644ab97c8f5426bf5cfc`, with no subsequent
+sync-core classification in its comments. T6/A4 remain pending despite the
+automated task summary's checked T6 box.
+
+Extended the existing Node regression for T6 to execute the committed
+`scripts/verify_before_sync.sh` with the real builder, Python modules and shard
+plan. The invocation uses the CI aggregate settings, disposable runtime/state
+paths and an empty evidence directory, and requests both a snapshot and a
+digest receipt. It must reach the real missing-shard diagnostic, retain
+`NOT VERIFIED (verify.py exit 1)`, and publish neither output. The original
+mirror's baseline, pins and complete payload digest remain unchanged. The
+storage supervisor remains active; its documented refusal exit 78 is accepted
+only alongside its refusal diagnostic and the actual failed aggregate verdict.
+This runner refuses open-file inspection at retirement, after verification.
+No successful aggregate or manufactured shard result is claimed.
+
+Validation:
+
+```
+node --test --test-isolation=none tests/test_ci_toolchain_mirror.js
+node --check tests/test_ci_toolchain_mirror.js
+git diff --check
+node --test --test-isolation=none tests/test_exec_mirror_contract_witness.js tests/test_ci_toolchain_mirror.js
+```
+
+The focused regression passes in 4.96 seconds; syntax and whitespace checks
+pass. The combined command reports six passes, zero skips and the previously
+documented failure at `tests/test_exec_mirror_contract_witness.js:153`:
+`tools changed bytes or mode during installation`. No Python source changed.
+`python3 -m pytest --version` reports `No module named pytest`, so no Python
+rerun or baseline measurement is claimed.
+
+At 07:28 UTC, source CI run
+[`42578361817`](https://github.com/stranske/Orchestrator/actions/runs/42578361817)
+has all six checkout shards and flat shards 2-6 successful; flat shard 1 and
+checkout aggregate are still running. The flat aggregate has not started.
+`gh run view 42578361817 --repo stranske/Orchestrator --log-failed` cannot
+connect to `api.github.com` in this runner; these job results were read through
+the GitHub connector. Neither source CI nor this negative regression establishes
+regenerated-#1289 acceptance. No task completion checkbox is changed.
+
+After validation, `git add tests/test_ci_toolchain_mirror.js` fails with
+`Unable to create .../.git/index.lock: Read-only file system`, preventing the
+mandatory source commit. Posting a blocker comment and adding `needs-human`
+to #1293 both return `MCP tool call requires approval, but approval policy is
+never`. Neither mutation occurred. The tested source/test change and this
+evidence remain uncommitted and require a writable Git index for delivery.
