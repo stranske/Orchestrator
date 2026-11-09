@@ -14,6 +14,7 @@ import unittest
 import urllib.request
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -667,6 +668,29 @@ class RankedCoverageTests(unittest.TestCase):
         self.assertIn(
             f"orchestrate.sh = {self.root / 'orchestrate.sh'} (exists: True)", output.getvalue()
         )
+
+    def test_paths_flat_selftest_validates_checkout_root(self):
+        flat = self.root / "mirror"
+        flat.mkdir()
+        temporary_directory = partial(tempfile.TemporaryDirectory, dir=self.root)
+        with (
+            patch.object(paths, "__file__", str(flat / "paths.py")),
+            patch.object(paths, "_MODULE_ALIAS", flat),
+            patch.object(paths, "MODULE_DIR", flat),
+            patch.object(paths, "REPO_ROOT", flat),
+            patch.object(paths, "FLEET_ROOT", self.root),
+            patch.object(tempfile, "TemporaryDirectory", temporary_directory),
+            redirect_stdout(io.StringIO()) as output,
+        ):
+            self.assertEqual(paths.main(["--selftest"]), 0)
+            self.assertIn("paths.py selftest: OK", output.getvalue())
+            self.assertIn("MODULE_DIR='mirror' REPO_ROOT='mirror'", output.getvalue())
+            with patch.object(paths, "REPO_ROOT", flat.parent):
+                with self.assertRaises(AssertionError) as caught:
+                    paths.main(["--selftest"])
+            self.assertEqual(caught.exception.args, ((flat.parent, flat),))
+        self.assertEqual(list(self.root.iterdir()), [flat])
+        self.assertEqual(list(flat.iterdir()), [])
 
 
 if __name__ == "__main__":
