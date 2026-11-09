@@ -307,7 +307,9 @@ class RankedCoverageTests(unittest.TestCase):
     def test_miner_loaded_snapshot_adds_and_refreshes_candidates_without_losing_retirements(self):
         instance = miner.PatternMiner(min_positive_subjects=1, candidate_ttl_days=1)
         retired = replace(self.candidate(), lifecycle=ir.Lifecycle(state="retired", expires_at=100))
-        tombstone = ir.CandidateTombstone(retired.fingerprint, retired.capability_id, "expired", 100)
+        tombstone = ir.CandidateTombstone(
+            retired.fingerprint, retired.capability_id, "expired", 100
+        )
         instance.candidates = [retired]
         instance.tombstones = [tombstone]
         state = self.root / "miner-state.json"
@@ -319,7 +321,9 @@ class RankedCoverageTests(unittest.TestCase):
             with self.subTest(offset=offset):
                 restored = miner.PatternMiner(min_positive_subjects=1, candidate_ttl_days=1)
                 self.assertTrue(restored.load_state(state))
-                incoming = [replace(event, occurred_at=event.occurred_at + offset) for event in events]
+                incoming = [
+                    replace(event, occurred_at=event.occurred_at + offset) for event in events
+                ]
                 with patch.object(miner, "adapt_completion_event_envelope", side_effect=incoming):
                     result = restored.mine(
                         [{}] * len(incoming), now=200 + offset, preserve_existing=True
@@ -332,7 +336,9 @@ class RankedCoverageTests(unittest.TestCase):
                 self.assertEqual(candidate.fingerprint, fingerprint)
                 self.assertEqual(candidate.telemetry["last_evidence_at"], incoming[-1].occurred_at)
                 self.assertEqual(candidate.lifecycle.expires_at, incoming[-1].occurred_at + 86400)
-                self.assertEqual(candidate.source_occurrences[0].occurred_at, incoming[-1].occurred_at)
+                self.assertEqual(
+                    candidate.source_occurrences[0].occurred_at, incoming[-1].occurred_at
+                )
                 self.assertEqual(len(result.candidates), 2)
                 self.assertIn(retired, result.candidates)
                 expected_tombstones = [tombstone] + [
