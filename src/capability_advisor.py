@@ -1189,6 +1189,10 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
         "an unread population stays unmeasured. Never runs a tick",
     },
     "rail-exercise:gates": {
+        "sync-core": "EXERCISE the sync core's read-only value-chain adapter over a fixture "
+        "journal: not-a-sync-pr is no situation, a PR merged with no sync-core action is never its "
+        "outcome, and an unread journal stays unmeasured while an empty one reads zero. Never "
+        "invokes the external controller",
         "capability-admission-gate": "EXERCISE capability_admission.py --preflight: a deliberately "
         "incomplete spec names each missing part, a complete spec passes, and the report matches "
         "the suite's verdict. Read-only; never edits the ledger",
@@ -1240,6 +1244,10 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
         "nothing",
     },
     "rail-exercise:readiness": {
+        "opener-core": "EXERCISE the opener core's read-only value-chain adapter over fixture "
+        "journals: considered issues stay distinct from started ones, an issue counts as acted on "
+        "only once closer-core's rounds carry it, and an unread journal stays unmeasured while an "
+        "empty one reads zero. Never invokes the external controller",
         "issue-readiness": "EXERCISE classify_issue on fixture issue bodies with pre-committed "
         "verdicts (auto_ready / not_opener_work) plus a recount of issue-readiness.json against "
         "live labels (every auto_ready issue carries status:ready); break case: a body with no "
