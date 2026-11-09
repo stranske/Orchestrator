@@ -269,6 +269,22 @@ Checked 2026-11-05. Every broken run exited 1. Every restored rerun exited 0.
   `external-operation attempts: 0 unexpected`. This evidence-only update
   changes no test or implementation bytes. CI results for the pushed head are
   read from PR #1152, not inferred from these local results.
+- Pushed head `a62ed2cf020801e142770d943c0675f6fabc676b` also passed the guard
+  command (`8 passed in 1.57s`) and advisor suite (`95 passed, 5 subtests passed
+  in 22.19s`), both with zero unexpected attempts. CI run 42554638315 passed all
+  six pytest shards, all six flat exec-mirror shards, and both aggregates:
+  checkout `15108 passed, 0 failed`; flat mirror `15087 passed, 0 failed`.
+- Gate run 42554638697 subsequently exposed F401/F811 in the existing guard
+  self-check module: its unused module import shared the fixture parameter name.
+  Second focused repair removes only `import advisor_external_guard`; the
+  existing explicit symbol imports still load that module. No fixture,
+  assertion, patch target, audit event, or guard implementation changes.
+  Required commands after this removal printed `8 passed in 0.31s` and
+  `95 passed, 5 subtests passed in 6.46s`, both with
+  `external-operation attempts: 0 unexpected`.
+- Final pushed-head verification and CI readback are recorded separately in
+  `~/.codex/orchestrator/measurement/pr-1152/` to avoid changing the tested commit
+  just to insert its own hash. Earlier green CI is not evidence for a later head.
 
 Checked 2026-11-05. PR #1082's guard is the audit hook in the merged closer repair: it records an attempt, then raises, and the per-test fixture fails if the record is still there after the test. Python cannot remove an audit hook, so that proposal cannot show the process callables restored. `tests/advisor_external_guard.py` keeps the record-before-raise behavior and the alias coverage of the hook. The hook returns immediately while no guard is on the stack. `subprocess.Popen`, `subprocess.run`, the other subprocess helpers, `os.system`, and the socket and `urlopen` entry points are patched on a private `MonkeyPatch`. Closing the guard restores those callables and then fails if an unexpected attempt remains, including an attempt whose `ExternalOperation` the caller caught. Attempts inside `expected()` are self-checks. `urllib.Request` is not adopted: CPython emits it when a `Request` object is constructed, before any connection. `test_advisor_hermetic.py` is outside the suite because it starts a real interpreter.
 

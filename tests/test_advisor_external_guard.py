@@ -16,7 +16,6 @@ import urllib.request
 
 import pytest
 
-import advisor_external_guard
 from advisor_external_guard import (
     AUDIT_EVENTS,
     PATCH_TARGETS,
