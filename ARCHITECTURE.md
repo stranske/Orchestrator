@@ -230,6 +230,8 @@ offload to GitHub when local load would hurt performance. Two rails, no role:
   `ensure-keepalive-labels.sh` skips `agents:local-loop`; closer-core waits on a PR the loop owns while
   `local_loop.owns()` is true (active and ticked within 2 h), so a stopped loop never latches the PR.
   `local_loop.py status` prints pass number (a): looped PRs merged with >= 2 CI-feedback rounds.
+  Each status row also says what became of the PR (merged, closed unmerged, open), and the loop is a
+  value-chain monitor row (`local-loop`), so it stays watched after the pass queries' stop rules.
 
 ## The one rule: selection stays deterministic; judgment becomes agent-roles
 
@@ -1256,6 +1258,8 @@ caller (`docs/MIRROR_SYNC_PATCH.md`). (No stage, component or surface moved; the
 unchanged.)
 
 `closer-core` is declared wired: switch review reads its latest round's fleet-plus-scope demand, windowed nonempty rounds and usable target dispositions, and its versioned `issue_closure` Brain outcomes; the external controller hook owns invocation and rollback.
+
+`local-loop` is declared wired the same way (2026-11-09): its situations are the PRs labelled `agents:local-loop` created in the window, read from GitHub and not from the loop, so a silent loop reads a break before invocation and never `no_situation`; invocation and usable come from its state files (PRs it ran a round on, PRs it finished); acted on, outcome and success are the Brain's `keepalive:<repo>#<n>:<agent>` runs for the finished PRs, classified by the one outcome classifier, so a finished PR closed unmerged is an outcome and never a success. One `invocation` heartbeat per applied tick; the external controller hook owns invocation and rollback.
 
 **And a binding is only half of layer 1: `CONSULT_SITES` is the other half, and nothing declared it
 until 2026-08-23.** `SURFACE_BINDINGS` says which capabilities a surface should be offered; nothing
