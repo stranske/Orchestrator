@@ -261,6 +261,14 @@ Checked 2026-11-05. Every broken run exited 1. Every restored rerun exited 0.
   found the agent's default TMPDIR beneath `~/.codex/orchestrator`. Reruns use
   `TMPDIR=/private/tmp` so the temporary ledger is outside the live runtime;
   no test assertion or guard is weakened.
+- Exact tested implementation head:
+  `2bf229eacd267e8ae63cee372314f60856d0d769` (clean worktree).
+  Both commands above were rerun with `TMPDIR=/private/tmp` on this commit:
+  guard self-checks printed `8 passed in 1.82s`; the documented advisor suite
+  printed `95 passed, 5 subtests passed in 21.86s`. Each printed
+  `external-operation attempts: 0 unexpected`. This evidence-only update
+  changes no test or implementation bytes. CI results for the pushed head are
+  read from PR #1152, not inferred from these local results.
 
 Checked 2026-11-05. PR #1082's guard is the audit hook in the merged closer repair: it records an attempt, then raises, and the per-test fixture fails if the record is still there after the test. Python cannot remove an audit hook, so that proposal cannot show the process callables restored. `tests/advisor_external_guard.py` keeps the record-before-raise behavior and the alias coverage of the hook. The hook returns immediately while no guard is on the stack. `subprocess.Popen`, `subprocess.run`, the other subprocess helpers, `os.system`, and the socket and `urlopen` entry points are patched on a private `MonkeyPatch`. Closing the guard restores those callables and then fails if an unexpected attempt remains, including an attempt whose `ExternalOperation` the caller caught. Attempts inside `expected()` are self-checks. `urllib.Request` is not adopted: CPython emits it when a `Request` object is constructed, before any connection. `test_advisor_hermetic.py` is outside the suite because it starts a real interpreter.
 
