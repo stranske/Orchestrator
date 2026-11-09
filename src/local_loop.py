@@ -137,19 +137,32 @@ class GitHub:
             after = data["pageInfo"]["endCursor"]
 
     def merged_prs(self) -> list[dict]:
-        q = f"is:pr is:merged label:{LABEL} user:{OWNER} {search_scope()}"
+        return self._ended_prs("is:merged")
+
+    def closed_unmerged_prs(self) -> list[dict]:
+        """PRs closed without a merge: a loop "done" that was not accepted (stranske/Orchestrator#1260)."""
+        return self._ended_prs("is:closed is:unmerged")
+
+    def _ended_prs(self, qualifier: str) -> list[dict]:
+        """Every page (as looped_prs): a PR past the first 100 must not fall through to "open"."""
+        q = f"is:pr {qualifier} label:{LABEL} user:{OWNER} {search_scope()}"
         query = (
-            "query($q:String!){search(query:$q,type:ISSUE,first:100){nodes{... on PullRequest{"
+            "query($q:String!,$after:String){search(query:$q,type:ISSUE,first:100,after:$after){"
+            "pageInfo{hasNextPage endCursor} nodes{... on PullRequest{"
             "number mergedAt repository{nameWithOwner}}}}}"
         )
-        data = json.loads(
-            _gh(["api", "graphql", "-f", f"query={query}", "-f", f"q={q}"], rest=False)
-        )
-        return [
-            n
-            for n in data["data"]["search"]["nodes"]
-            if n and included_repo(n["repository"]["nameWithOwner"])
-        ]
+        out, after = [], None
+        while True:
+            args = ["api", "graphql", "-f", f"query={query}", "-f", f"q={q}"]
+            if after:
+                args += ["-f", f"after={after}"]
+            data = json.loads(_gh(args, rest=False))["data"]["search"]
+            out += [
+                n for n in data["nodes"] if n and included_repo(n["repository"]["nameWithOwner"])
+            ]
+            if not data["pageInfo"]["hasNextPage"]:
+                return out
+            after = data["pageInfo"]["endCursor"]
 
     def job_log(self, repo: str, job_id: str) -> str:
         return _gh(["api", f"repos/{repo}/actions/jobs/{job_id}/logs"], rest=True, timeout=60)
@@ -871,11 +884,16 @@ def status(gh: Any) -> dict:
                 rows.append(st)
         except (OSError, ValueError):
             continue
-    merged = {
-        f"{m['repository']['nameWithOwner']}#{m['number']}"
-        for m in gh.merged_prs()
-        if included_repo(m["repository"]["nameWithOwner"])
-    }
+
+    def ended(prs: list[dict]) -> set[str]:
+        return {
+            f"{m['repository']['nameWithOwner']}#{m['number']}"
+            for m in prs
+            if included_repo(m["repository"]["nameWithOwner"])
+        }
+
+    merged = ended(gh.merged_prs())
+    closed = ended(gh.closed_unmerged_prs())
     out = []
     for st in rows:
         fb = sum(1 for r in st.get("rounds", [])[1:] if r.get("started"))
@@ -887,6 +905,13 @@ def status(gh: Any) -> dict:
                 "feedback_rounds": fb,
                 "agents": st.get("tried"),
                 "merged": st["target"] in merged,
+                # what became of the PR, beside what the loop last said: a loop "done" that was closed
+                # unmerged is not delivered work, and status must not read like it was
+                "outcome": (
+                    "merged"
+                    if st["target"] in merged
+                    else "closed unmerged" if st["target"] in closed else "open"
+                ),
                 "last": st.get("last"),
             }
         )
@@ -895,12 +920,50 @@ def status(gh: Any) -> dict:
         "prs": out,
         "looped": len(out),
         "merged": sum(r["merged"] for r in out),
+        "closed_unmerged": sum(r["outcome"] == "closed unmerged" for r in out),
         "pass_a": len(passing),
         "pass_a_line": (
             f"pass (a): looped PRs merged with >= 2 CI-feedback rounds = {len(passing)} "
-            f"({'PASS' if passing else 'not yet'}); looped {len(out)}, merged {sum(r['merged'] for r in out)}"
+            f"({'PASS' if passing else 'not yet'}); looped {len(out)}, merged {sum(r['merged'] for r in out)}, "
+            f"closed unmerged {sum(r['outcome'] == 'closed unmerged' for r in out)}"
         ),
     }
+
+
+def record_heartbeat(tick_: Any) -> bool | None:
+    """One `invocation` event per applied tick in the capability ledger, so the external controller's
+    calls are proven where the activation audit looks (as closer-core's rounds are). A row without lineage
+    gets it here through the existing adoption (`capabilities.adopt_module_version`: sets lineage only
+    while unset, from this module's source hash). Prerequisite: the row itself, which the tick's first
+    writing load (`capabilities.py --json validate`) seeds. None, with the reason on stderr, while that is
+    missing or the ledger is unavailable; a heartbeat never breaks a tick."""
+    try:
+        import capabilities  # noqa: PLC0415
+
+        declared = capabilities.load_declared(capabilities.REG).get("local-loop")
+        if not declared:
+            print("local-loop heartbeat skipped: no capability row yet", file=sys.stderr)
+            return None
+        if not declared.get("capability_version_id"):
+            adopted = capabilities.adopt_module_version(
+                "local-loop", root=Path(__file__).resolve().parent
+            )
+            if not adopted.get("capability_version_id"):
+                print(
+                    f"local-loop heartbeat skipped: no lineage ({adopted.get('reason')})",
+                    file=sys.stderr,
+                )
+                return None
+        stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+        return capabilities.heartbeat(
+            "local-loop",
+            "invocation",
+            ref=f"tick:{stamp}",
+            metadata={"prs": len(tick_.items), "counts": dict(tick_.counts)},
+            idempotency_key=f"local-loop:{stamp}",
+        )
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -925,6 +988,7 @@ def main(argv: list[str] | None = None) -> int:
         tick_ = Tick(GitHub(), apply=args.apply)
         line = tick_.run()
     if args.apply:
+        record_heartbeat(tick_)
         with (STATE_DIR / "ticks.jsonl").open("a") as fh:
             fh.write(
                 json.dumps(
