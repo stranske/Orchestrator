@@ -774,7 +774,9 @@ def test_closer_completion_reads_registered_observation_and_exact_remote_pin(tmp
     import closer_csv_completion as c
 
     read = c.read_completion
-    monkeypatch.setattr(c, "read_completion", lambda: read(root=tmp_path))
+    monkeypatch.setattr(
+        c, "read_completion", lambda **kwargs: read(root=kwargs.pop("root", tmp_path), **kwargs)
+    )
     assert fg.closer_campaign_completion(NOW).value is None
     head, merge = "a" * 40, "b" * 40
     branch = "test/csv"
@@ -786,7 +788,16 @@ def test_closer_completion_reads_registered_observation_and_exact_remote_pin(tmp
                 "type": "command_execution",
                 "exit_code": 0,
                 "command": "git push origin HEAD:" + branch,
-                "aggregated_output": f"{head[:8]} HEAD -> {branch}\n" + head,
+                "aggregated_output": f"{head[:8]} HEAD -> {branch}\n",
+            },
+        },
+        {
+            "type": "item.completed",
+            "item": {
+                "type": "command_execution",
+                "exit_code": 0,
+                "command": "git rev-parse HEAD",
+                "aggregated_output": head,
             },
         },
         {"type": "turn.completed"},
@@ -883,3 +894,97 @@ def test_closer_completion_reads_registered_observation_and_exact_remote_pin(tmp
     receipt.write_text(json.dumps(record))
     assert fg.closer_campaign_completion(NOW).value == 0
     assert worker_path.read_bytes() == raw
+
+    # Every malformed receipt layer remains unmeasured for the public reader.
+    import copy
+    import contextlib
+
+    for malformed in ([], None, "receipt"):
+        receipt.write_text(json.dumps(malformed))
+        assert fg.closer_campaign_completion(NOW).value is None
+    record["completed_at"] = NOW - 1
+    for malformed in (None, "verification", []):
+        bad = {**record, "verification": malformed}
+        receipt.write_text(json.dumps(bad))
+        assert fg.closer_campaign_completion(NOW).value is None
+    for malformed in ([], {**transcript, "gate": None}, {**transcript, "check_results": [None]}):
+        bad = {**record, "verification": {"result": "PASS", "transcript": json.dumps(malformed)}}
+        receipt.write_text(json.dumps(bad))
+        assert fg.closer_campaign_completion(NOW).value is None
+    receipt.write_text(json.dumps(record))
+    for malformed in ([], {**state, "pr_repair": "origin"}):
+        with pytest.raises(ValueError):
+            c.worker_proof(raw, malformed, head, branch)
+    for length in (4, 7, 9, 40):
+        varied = copy.deepcopy(records)
+        varied[0]["item"]["aggregated_output"] = f"{head[:length]} HEAD -> {branch}\n"
+        varied_raw = (
+            raw.split(b"\n", 1)[0] + b"\n" + b"\n".join(json.dumps(row).encode() for row in varied)
+        )
+        assert c.worker_proof(varied_raw, state, head, branch)["pid"] == 12
+    for varied in ([records[0], *records[2:]], [records[1], records[0], *records[2:]]):
+        varied = copy.deepcopy(varied)
+        next(
+            row for row in varied if row.get("item", {}).get("command", "").startswith("git push")
+        )["item"]["aggregated_output"] += head
+        varied_raw = (
+            raw.split(b"\n", 1)[0] + b"\n" + b"\n".join(json.dumps(row).encode() for row in varied)
+        )
+        with pytest.raises(ValueError, match="publish and read back"):
+            c.worker_proof(varied_raw, state, head, branch)
+    malformed_item = (
+        raw.split(b"\n", 1)[0]
+        + b'\n{"type":"item.completed","item":null}\n'
+        + raw.split(b"\n", 1)[1]
+    )
+    with pytest.raises(ValueError):
+        c.worker_proof(malformed_item, state, head, branch)
+    with pytest.raises(ValueError):
+        c.remote(lambda args: "[]")
+    # Corrupt cached observations trigger a genuine full publication read.
+    receipt.with_suffix(".observation.json").write_text("{")
+    assert read(root=tmp_path)["head"] == head
+    assert "comments(first:100)" in calls[-1][3]
+
+    # Writer failures retain no acceptance proof; success is reread independently.
+    import provision
+    import runtime_ac_gate
+
+    source = tmp_path / "native-source"
+    target = source / "targets/stranske_orchestrator_988_989.json"
+    target.parent.mkdir(parents=True)
+    target.write_text(json.dumps(state))
+    output = tmp_path / "written"
+    marker = pr["comments"]["nodes"][0]
+    monkeypatch.setattr(c, "remote", lambda *args, **kwargs: (pr, marker))
+    with pytest.raises(ValueError, match="outside the native dispatch"):
+        c.record_completion(state_root=source, output_root=output)
+    monkeypatch.setattr(c.Path, "home", lambda: tmp_path)
+    log = tmp_path / ".codex/handoff/dispatch-logs/worker.log"
+    log.parent.mkdir(parents=True)
+    log.write_bytes(raw)
+    state["pr_repair"]["log"] = str(log)
+    target.write_text(json.dumps(state))
+    monkeypatch.setattr(
+        provision, "temporary_exact_head_worktree", lambda *args: contextlib.nullcontext(tmp_path)
+    )
+    monkeypatch.setattr(
+        runtime_ac_gate, "recheck_merged", lambda *args, **kwargs: {"result": "UNRUNNABLE"}
+    )
+    with pytest.raises(ValueError, match="runtime acceptance stopped"):
+        c.record_completion(state_root=source, output_root=output)
+    assert not c._path(output).exists()
+    assert not (output / "completions/evidence").exists()
+    monkeypatch.setattr(
+        runtime_ac_gate,
+        "recheck_merged",
+        lambda *args, **kwargs: {"result": "PASS", "transcript": json.dumps(transcript)},
+    )
+    written = c.record_completion(state_root=source, output_root=output)
+    assert written["head"] == head and c._path(output).is_file()
+    monkeypatch.setattr(
+        runtime_ac_gate,
+        "recheck_merged",
+        lambda *args, **kwargs: pytest.fail("unchanged acceptance reran"),
+    )
+    assert c.record_completion(state_root=source, output_root=output) == written

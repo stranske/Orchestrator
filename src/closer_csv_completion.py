@@ -30,6 +30,12 @@ def digest(raw):
     return hashlib.sha256(raw).hexdigest()
 
 
+def _object(value):
+    if not isinstance(value, dict):
+        raise ValueError("native evidence object is malformed")
+    return value
+
+
 def _bytes(path, limit=16 * 1024 * 1024):
     with Path(path).open("rb") as stream:
         raw = stream.read(limit + 1)
@@ -53,10 +59,10 @@ def remote(gh=None, *, cache_path=None):
     fields = "state headRefOid headRefName updatedAt mergedAt mergeCommit { oid }"
 
     def fetch(query):
-        response = json.loads(gh(["api", "graphql", "-f", "query=" + query]))
+        response = _object(json.loads(gh(["api", "graphql", "-f", "query=" + query])))
         if response.get("errors"):
             raise ValueError("native delivery remote read is incomplete")
-        pr = response["data"]["repository"]["pullRequest"]
+        pr = _object(_object(response["data"])["repository"])["pullRequest"]
         if not isinstance(pr, dict):
             raise ValueError("native delivery remote state is unavailable")
         return pr
@@ -84,12 +90,13 @@ def remote(gh=None, *, cache_path=None):
 
 
 def _publication(pr):
-    if pr["comments"]["pageInfo"]["hasNextPage"]:
+    comments = _object(pr["comments"])
+    if _object(comments["pageInfo"])["hasNextPage"]:
         raise ValueError("native delivery comments exceed bounded read")
     if (
         pr["state"] != "MERGED"
         or not re.fullmatch(r"[0-9a-f]{40}", pr["headRefOid"])
-        or not re.fullmatch(r"[0-9a-f]{40}", pr["mergeCommit"]["oid"])
+        or not re.fullmatch(r"[0-9a-f]{40}", _object(pr["mergeCommit"])["oid"])
     ):
         raise ValueError("native delivery is not an exact pinned merge")
     marker = re.compile(
@@ -97,9 +104,16 @@ def _publication(pr):
         + re.escape(pr["headRefOid"])
         + r" round=([0-9]{8}T[0-9]{6}Z) -->$"
     )
+    nodes = comments["nodes"]
+    if not isinstance(nodes, list):
+        raise ValueError("native publication comments are malformed")
+    for comment in nodes:
+        _object(comment)
+        if comment.get("author") is not None:
+            _object(comment["author"])
     matches = [
         c
-        for c in pr["comments"]["nodes"]
+        for c in nodes
         if (c.get("author") or {}).get("login") == "stranske"
         and marker.fullmatch(c["body"].strip())
     ]
@@ -117,9 +131,9 @@ def worker_proof(raw, state, head, branch):
     exact-head read in that same terminal run proves publication of that head;
     demanding that it started on its newly created head would be impossible.
     """
-    if state.get("key") != KEY:
+    if _object(state).get("key") != KEY:
         raise ValueError("worker origin belongs to another native target")
-    origin = state.get("pr_repair") or {}
+    origin = _object(state.get("pr_repair"))
     if not origin.get("pid") or not origin.get("agents") or not origin.get("log"):
         raise ValueError("native corrective worker origin is incomplete")
     lines = raw.decode().splitlines()
@@ -137,17 +151,27 @@ def worker_proof(raw, state, head, branch):
         r["item"]
         for r in records
         if r.get("type") == "item.completed"
-        and r.get("item", {}).get("type") == "command_execution"
+        and _object(r.get("item")).get("type") == "command_execution"
         and r["item"].get("exit_code") == 0
     ]
-    pushed = any(
-        "git push" in c.get("command", "")
-        and re.search(r"\b" + re.escape(head[:8]) + r"\b", c.get("aggregated_output", ""))
-        and f"HEAD -> {branch}" in c.get("aggregated_output", "")
-        for c in commands
+    pushes = [
+        index
+        for index, command in enumerate(commands)
+        if "git push" in command.get("command", "")
+        and any(
+            head.startswith(match.group(1))
+            for match in re.finditer(
+                r"\b([0-9a-f]{4,40})\s+HEAD -> " + re.escape(branch) + r"(?:\s|$)",
+                command.get("aggregated_output", ""),
+            )
+        )
+    ]
+    observed = bool(pushes) and any(
+        "git push" not in command.get("command", "")
+        and head in command.get("aggregated_output", "")
+        for command in commands[pushes[0] + 1 :]
     )
-    observed = any(head in c.get("aggregated_output", "") for c in commands)
-    if not pushed or not observed:
+    if not observed:
         raise ValueError("native worker did not publish and read back the pinned delivery head")
     return {"pid": origin["pid"], "agents": origin["agents"], "origin_log": origin["log"]}
 
@@ -158,7 +182,7 @@ def _path(root):
 
 def read_completion(*, root=STATE, gh=None):
     path = _path(root)
-    record = json.loads(_bytes(path))
+    record = _object(json.loads(_bytes(path)))
     if record.get("schema") != SCHEMA or record.get("target") != KEY:
         raise ValueError("native completion receipt identity differs")
     pr, marker = remote(gh, cache_path=path.with_suffix(".observation.json"))
@@ -179,15 +203,19 @@ def read_completion(*, root=STATE, gh=None):
     if digest(raw) != record["worker_sha256"] or digest(state_raw) != record["origin_sha256"]:
         raise ValueError("frozen native source evidence changed")
     worker_proof(raw, json.loads(state_raw), record["head"], pr["headRefName"])
-    verification = record["verification"]
-    transcript = json.loads(verification.get("transcript", "{}"))
+    verification = _object(record["verification"])
+    transcript = _object(json.loads(verification.get("transcript", "{}")))
+    gate = _object(transcript.get("gate"))
+    checks = transcript.get("check_results")
+    if not isinstance(checks, list) or any(not isinstance(check, dict) for check in checks):
+        raise ValueError("native postmerge checks are malformed")
     if (
         verification.get("result") != "PASS"
         or record.get("verification_engine") != "runtime_ac_gate.recheck_merged"
         or record.get("verified_merge") != record["merge"]
         or transcript.get("target") != f"{REPO}#{PR}"
         or transcript.get("confirmed_run") is not True
-        or transcript.get("gate", {}).get("verdict") != "PASS"
+        or gate.get("verdict") != "PASS"
         or not any(
             c.get("id") == "CSV-CONTRACT"
             and c.get("status") == "PASS"
@@ -195,7 +223,7 @@ def read_completion(*, root=STATE, gh=None):
             and c.get("returncode") == 0
             and c.get("stdout_tail") == "contract ok\n"
             and c.get("command", "").endswith(f" -I {FIXTURE}")
-            for c in transcript.get("check_results", [])
+            for c in checks
         )
     ):
         raise ValueError("native postmerge verification is incomplete")
@@ -223,8 +251,8 @@ def record_completion(*, state_root=STATE, output_root=STATE, gh=None):
         return read_completion(root=output_root, gh=gh)
     pr, marker = remote(gh)
     state_raw = _bytes(Path(state_root) / "targets/stranske_orchestrator_988_989.json")
-    state = json.loads(state_raw)
-    log = Path(state["pr_repair"]["log"])
+    state = _object(json.loads(state_raw))
+    log = Path(_object(state["pr_repair"])["log"])
     if log.resolve().parent != (Path.home() / ".codex/handoff/dispatch-logs").resolve():
         raise ValueError("worker log is outside the native dispatch source")
     raw = _bytes(log)
