@@ -1,5 +1,31 @@
 # Gate python-ci baseline — what is checked, what is deferred, and what would clear it
 
+## Measured dependency sync PR #1289 toolchain — 2026-11-09
+
+<!-- measured-with: black=26.10.1 ruff=0.17.4 isort=9.0.2 docformatter=1.7.8 mypy=2.4.1 pytest=9.2.0 pytest-cov=7.1.0 pytest-xdist=3.8.0 coverage=7.17.2 -->
+
+Generated sync PR #1289 at `a27084d488d77fcfe7c9644ab97c8f5426bf5cfc` proposes
+Ruff 0.17.4, mypy 2.4.1, pytest 9.2.0 and Coverage 7.17.2. That exact nine-pin
+`autofix-versions.env` was applied on top of source
+`cb2eabe6528941f1008cebe4f1a46bfcec607c13`, the bundle was installed in an
+isolated Python 3.12.2 virtual environment, and the collector ran in strict
+mode with all nine installed versions equal to the pins:
+
+| Check | Blocking | Drainable |
+| --- | ---: | ---: |
+| Ruff | 0 findings | 0 |
+| Black | 0 files (1014 unchanged) | 0 |
+| mypy | 0 errors (229 source files) | 0 |
+| Coverage startup | 0 errors | 0 |
+
+[Strict report](evidence/dev-tool-1289-proposed-pins/report.json),
+[actual commands and output](evidence/dev-tool-1289-proposed-pins/commands.json),
+and [source and tool provenance](evidence/dev-tool-1289-proposed-pins/provenance.json)
+retain the measurement; the provenance pin hash is that of #1289's file. The
+startup probe does not establish full-suite or combined-coverage acceptance;
+those remain required native CI checks. The current pins' measurement below
+stays, so main and the sync PR each match one complete toolchain.
+
 ## Measured dependency closeout toolchain — 2026-10-22
 
 <!-- measured-with: black=26.10.1 ruff=0.17.2 isort=9.0.2 docformatter=1.7.8 mypy=2.4.0 pytest=9.1.1 pytest-cov=7.1.0 pytest-xdist=3.8.0 coverage=7.17.0 -->
