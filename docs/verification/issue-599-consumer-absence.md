@@ -294,3 +294,30 @@ and generation are unavailable. Automatic approval review rejected the PR-body
 update, blocker comment, and `needs-human` label because approval is required
 while policy is `never`. The remote checklist remains unchanged; the proposed
 body is saved at `/tmp/pr-1275-reviewed-absence-body.md`.
+
+### Keepalive admission failure reasons (2026-11-09)
+
+Reviewed commits `4d1ea3de`, `35d16bd4`, `fefc0a95`, and `cdfe006b` before
+continuing. The absence-declaration task is already implemented: the sole
+source-table finding is `KNOWN_DECLARATIONS:docs-drift-fix-agent`, with its
+retained declaration, explicit missing flag, and explanation. The proposed PR
+body marks that task complete and leaves post-sync acceptance open.
+
+Admission failure details now include the same reviewed explanation as the
+consumer report. Both outputs fall back to the retained declaration when notes
+are empty or whitespace. The extended existing regression failed before repair
+on the missing reason, then passed. Fifteen focused test functions passed by
+direct Python invocation, including the named declaration gate and the report
+loader regression (using a temporary directory). Three other focused tests
+require pytest fixtures and were not run. Python syntax and `git diff --check`
+passed; this is not a pytest or Black result.
+
+Both required Black commands failed with `black: command not found`; pytest
+failed with `No module named pytest`. Installing the tools failed with no
+matching distribution. The mandatory formatting gate therefore prevents a
+commit. The default ledger does not exist here, so live post-sync acceptance
+cannot be verified. Automatic approval review rejected the PR-body update,
+blocker comment, and `needs-human` label because writes require approval under
+policy `never`. The remote checklist is unchanged; the reconciled body is saved
+at `/tmp/pr-1275-absence-reconciled-body.md`. PR #1275 was verified open and ready
+for review (`draft: false`) at head `cdfe006b`.

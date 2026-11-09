@@ -599,6 +599,11 @@ def acted_on_context(ledger: dict, *, now: int | None = None) -> dict:
     return _ACTED_ON_CACHE[key]
 
 
+def _consumer_absence_reason(cap: dict) -> str:
+    """Use the reviewed note, falling back to the retained declaration if it is blank."""
+    return str(cap.get("notes") or "").strip() or str(cap.get("downstream_consumer") or "").strip()
+
+
 def consumer_class(cap: dict, ctx: dict) -> tuple[str, bool, str]:
     """(class, ok, detail) for the tenth part; `req_consumer_acts` and `consumer_report` share it."""
     if not _has(cap, "downstream_consumer"):
@@ -606,10 +611,12 @@ def consumer_class(cap: dict, ctx: dict) -> tuple[str, bool, str]:
     # Reviewed absence remains a finding, even if the declaration also names a real symbol.
     # It must neither masquerade as accidental prose nor acquire acting/admission credit.
     if cap.get("consumer_missing") is True:
+        reason = _consumer_absence_reason(cap)
         return (
             "consumer_missing",
             False,
-            "no local acting consumer (consumer_missing): reviewed absence",
+            "no local acting consumer (consumer_missing): reviewed absence"
+            + (f": {reason}" if reason else ""),
         )
     res = consumer_resolution(cap, module_dir=ctx.get("module_dir"), repo_root=ctx.get("repo_root"))
     if not res["tokens"]:
@@ -710,10 +717,7 @@ def consumer_report(ledger: dict, ctx: dict, rows: list[dict]) -> dict:
         "by_class": classes,
         # Carry the reviewed finding into JSON/text so M4/M8 can cite its actual reason.
         "reviewed_absences": {
-            cid: str(
-                ledger[cid].get("notes") or ledger[cid].get("downstream_consumer") or ""
-            ).strip()
-            for cid in classes["consumer_missing"]
+            cid: _consumer_absence_reason(ledger[cid]) for cid in classes["consumer_missing"]
         },
         # `enforced`, as `findability_report` reads it: a waived row keeps the requirement in its
         # `blocking` list but cannot fail the suite, so it is not reported as blocking here.

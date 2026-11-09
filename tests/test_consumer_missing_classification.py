@@ -58,6 +58,9 @@ def test_consumer_report_counts_reviewed_absence_without_granting_acceptance():
         for cid in ledger
     ]
     consumers = admission.consumer_report(ledger, {}, rows)
+    cls, ok, detail = admission.consumer_class(ledger["absent"], {})
+    assert cls == "consumer_missing" and not ok
+    assert detail.endswith(reason), detail
     assert consumers["by_class"]["prose"] == []
     assert consumers["by_class"]["consumer_missing"] == ["absent"]
     assert consumers["reviewed_absences"] == {"absent": reason}
@@ -87,10 +90,15 @@ def test_consumer_report_counts_reviewed_absence_without_granting_acceptance():
     # Older report snapshots still render, and rows without notes retain their declaration.
     consumers.pop("reviewed_absences")
     assert "REVIEWED ABSENT absent\n" in admission.format_report(report)
+    for notes in (None, "", "  \n  "):
+        ledger["absent"]["notes"] = notes
+        assert admission.consumer_report(ledger, {}, rows)["reviewed_absences"] == {
+            "absent": "external repair issues"
+        }
+        cls, ok, detail = admission.consumer_class(ledger["absent"], {})
+        assert cls == "consumer_missing" and not ok
+        assert detail.endswith("external repair issues"), detail
     ledger["absent"].pop("notes")
-    assert admission.consumer_report(ledger, {}, rows)["reviewed_absences"] == {
-        "absent": "external repair issues"
-    }
 
     # The text inventory must follow the reviewed findings, rather than all missing symbols,
     # and disappear once a consumer declaration replaces that reviewed absence.
