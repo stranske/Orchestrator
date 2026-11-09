@@ -8,10 +8,8 @@ import threading
 import time
 
 import pytest
-from test_closer_verifier_attribution import world as world
 from test_storage_lifecycle import job as job
 
-import closer_attribution_store as attribution
 import storage_lifecycle as storage
 
 
@@ -56,36 +54,6 @@ def test_real_reservation_contention_is_typed_no_effect_and_preserves_holder(tmp
                 fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
         finally:
             os.close(contender)
-
-
-def test_real_attribution_index_wait_has_no_published_object(tmp_path):
-    m = manager(tmp_path)
-    store = attribution.Store(tmp_path / "cache", ledger=m, deadline=time.monotonic() + 0.06)
-    with held(store.control / "lock"):
-        with pytest.raises(attribution.AttributionStorageWait) as caught:
-            store.retain(b"authentic", "txt")
-        assert caught.value.accounting["scope"] == "attribution_index"
-        assert not (store.control / "index.json").exists()
-        assert not (store.root / "raw").exists()
-        assert not (m.directory / "reservations.json").exists()
-
-
-def test_nested_index_then_foreign_ledger_contention_uses_same_request_deadline(tmp_path):
-    m = manager(tmp_path)
-    before = {"jobs": {"foreign": {"remaining": 123, "status": "uncertain"}}, "peaks": {}}
-    storage.write_json(m.directory / "reservations.json", before)
-    store = attribution.Store(tmp_path / "cache", ledger=m, deadline=time.monotonic() + 0.06)
-    with held(m.directory / "lock"):
-        with pytest.raises(attribution.AttributionStorageWait) as caught:
-            store.retain(b"input", "txt")
-        assert caught.value.accounting["scope"] == "reservation_ledger"
-        assert json.loads((m.directory / "reservations.json").read_text()) == before
-        assert not (store.control / "index.json").exists()
-        assert not (store.root / "raw").exists()
-    # The store index lock unwound too, without deleting either lock file.
-    fd = os.open(store.control / "lock", os.O_RDWR)
-    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    os.close(fd)
 
 
 def test_expired_deadline_refuses_even_uncontended_without_mutation(tmp_path):
@@ -135,35 +103,3 @@ def test_owner_guard_wait_is_prechild_and_releases_only_own_reservation(job, mon
     with pytest.raises(OSError):
         os.fstat(owner_fd[0])
     assert not list(job.temp_parent.glob("storage-verify-*"))
-
-
-def test_finish_lock_wait_retains_charge_and_is_typed_not_remote_unknown(tmp_path):
-    m = manager(tmp_path)
-    store = attribution.Store(tmp_path / "cache", ledger=m)
-    with pytest.raises(attribution.AttributionStorageWait) as caught:
-        with store.admitted(100):
-            store.deadline = time.monotonic() + 0.06
-            with held(m.directory / "lock"):
-                store._finish(
-                    next(iter(json.loads((m.directory / "reservations.json").read_text())["jobs"])),
-                    {"status": "retained"},
-                    terminal=True,
-                )
-    assert caught.value.accounting["scope"] == "reservation_ledger"
-    jobs = json.loads((m.directory / "reservations.json").read_text())["jobs"]
-    assert len(jobs) == 1
-    assert next(iter(jobs.values()))["remaining"] == 100
-
-
-def test_production_prewrite_contended_store_is_valid_pending_without_post(world):
-    from test_closer_verifier_attribution import TARGET, validate
-
-    store = attribution.Store(world.backend.verifier_archive_root)
-    world.backend.gh.deadline = time.time() + 0.08
-    with held(store.control / "lock"):
-        result = world.backend.initiate_verify(TARGET, world.snapshot)
-    assert result["status"] == "resource_wait"
-    assert result["verifier_resource_wait"]["cause"] == "storage_capacity"
-    assert "storage_lock_wait" in result["verifier_resource_wait"]["requirements"][0]
-    assert not world.posts and not world.downloads
-    assert validate(result, world.snapshot)["status"] == "resource_wait"

@@ -1851,6 +1851,34 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
             "The caller is declared explicitly; recent runtime invocation events prove heartbeat."
         ),
     },
+    "local-loop": {
+        "status": "wired",
+        "entrypoint": "local_loop.py:main tick --apply",
+        "external_caller": {
+            "path": str(
+                Path.home() / ".codex/automations/reviewed-repo-automation-controller/controller.py"
+            ),
+            "function": "start_local_loop",
+        },
+        "external_heartbeat_max_age_seconds": 86400,
+        "matcher": {"kind": "tick_phase", "equals": "local-loop"},
+        "trigger_cadence": "Luna controller start_local_loop(), once per 15-minute pass",
+        "output_artifact": "~/.codex/orchestrator/local-loop/<repo>__<n>.json and ticks.jsonl",
+        "downstream_consumer": "closer-core merges the PR the loop finished; value_chain_monitor.py:report via switch_review.py",
+        "learning_sink": "feedback.py keepalive:<repo>#<n>:<agent> runs and their durability outcomes",
+        "kill_switch": "touch ~/.codex/handoff/local-loop-off (dry run: no GitHub writes, no agents)",
+        "rollback": {"restore": "remove start_local_loop() from the external controller pass"},
+        "findability_category": "exercise_bound",
+        "findability_rationale": "The external controller invokes the loop every pass; rail-exercise:brain offers its read-only value-chain fixture.",
+        "notes": (
+            "dedup: accounting for the existing loop (stranske/Orchestrator#1237, owner decision "
+            "2026-11-08), not a new mechanism. Situations: PRs labelled agents:local-loop created in "
+            "the window, from GitHub. Invocation and usable: the loop's own state files. Acted on, "
+            "outcome and success: the Brain's keepalive runs for the PRs it finished, by the one "
+            "outcome classifier. Before this row the loop was visible only to named pass queries "
+            "with stop rules (Nov 12, Nov 30); after them nothing would have noticed it go quiet."
+        ),
+    },
     "testgen-lane": {
         "downstream_consumer": "testgen_gate.py:main consumes candidate tests for the acceptance gate",
         "notes": (

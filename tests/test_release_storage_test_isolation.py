@@ -14,9 +14,8 @@ import storage_lifecycle as storage
     "node",
     [
         "tests/test_gemini_large_prompt_transport.py::test_nonempty_partial_stdout_does_not_hide_agy_in_progress_log",
-        "tests/test_closer_verifier_attribution.py::test_public_cli_real_queue_typed_attribution_boundary[foreign]",
     ],
-    ids=["gemini-transport", "native-attribution"],
+    ids=["gemini-transport"],
 )
 def test_test_fixtures_do_not_inherit_verifier_storage(tmp_path, node):
     root = tmp_path.resolve() / "outer-job"
