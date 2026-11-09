@@ -1,0 +1,13 @@
+{
+  "measured_at": "2026-11-09T06:49:49.511698+00:00",
+  "source_commit": "d2fdd91b4b09f2a9a8572e14cb5270c3c83628d0",
+  "proposed_pr_head": "a27084d488d77fcfe7c9644ab97c8f5426bf5cfc",
+  "python": "3.12.2 | packaged by conda-forge | (main, Feb 16 2024, 20:54:21) [Clang 16.0.6 ]",
+  "executable": "/private/tmp/1291-toolchain/bin/python",
+  "command": "PATH=/private/tmp/1291-toolchain/bin:$PATH /private/tmp/1291-toolchain/bin/python scripts/ci_lint_baseline.py --json",
+  "invocation": "collect(strict=True), with subprocess output capture only",
+  "hashes": {
+    "scripts/ci_lint_baseline.py": "2b06e57331a505296b32ca89bfdaba065e58f313edefb68f6640419339e6c401",
+    ".github/workflows/autofix-versions.env": "882667ad2038184a68c33832bf4bdf7d0af2b274ca4a188477f6934cf98eb22b"
+  }
+}
