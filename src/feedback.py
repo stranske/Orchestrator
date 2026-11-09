@@ -36,7 +36,7 @@ import time
 from bisect import bisect_left, bisect_right
 from collections import Counter
 from collections.abc import Callable
-from contextlib import nullcontext
+from contextlib import closing, nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -1065,10 +1065,11 @@ def _migrate_schema(c: sqlite3.Connection) -> None:
         if "source" not in switch_cols:
             _widen_agent_switches(c)
         _rebase_agent_switches(c)
-    c.execute(
-        "UPDATE runs SET assignment = CASE WHEN source='keepalive' THEN 'assigned' "
-        "ELSE 'experimental' END WHERE assignment IS NULL"
-    )
+    if c.execute("SELECT 1 FROM runs WHERE assignment IS NULL LIMIT 1").fetchone():
+        c.execute(
+            "UPDATE runs SET assignment = CASE WHEN source='keepalive' THEN 'assigned' "
+            "ELSE 'experimental' END WHERE assignment IS NULL"
+        )
 
 
 def _widen_agent_switches(c: sqlite3.Connection) -> None:
@@ -2300,7 +2301,9 @@ def record_runtime_ac_gate_event(**kwargs) -> dict:
 
 def runtime_ac_gate_events(*, cutoff_ts: int = 0, limit: int = 1000) -> list[dict]:
     """Read structured gate events with the latest joined closer outcome."""
-    with _conn() as c:
+    with closing(
+        sqlite3.connect(Path(DB_PATH).resolve().as_uri() + "?mode=ro", uri=True, timeout=5)
+    ) as c:
         c.row_factory = sqlite3.Row
         rows = c.execute(
             "SELECT event_id,run_id,status,validation_status,payload_json,created_ts,updated_ts "
