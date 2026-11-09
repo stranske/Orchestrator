@@ -280,6 +280,71 @@ class RankedCoverageTests(unittest.TestCase):
                     timestamp if expected == "clustered" else 100,
                 )
 
+    def test_miner_empty_snapshot_keeps_loaded_candidate_and_next_action(self):
+        events = list(self.completion_events().values())
+        instance = miner.PatternMiner(min_positive_subjects=1, candidate_ttl_days=1)
+        with patch.object(miner, "adapt_completion_event_envelope", side_effect=events):
+            original = instance.mine([{}] * len(events), now=200)
+        state = self.root / "miner-state.json"
+        instance.save_state(state, updated_at=200)
+
+        restored = miner.PatternMiner(min_positive_subjects=1, candidate_ttl_days=1)
+        self.assertTrue(restored.load_state(state))
+        loaded = restored.result().candidates
+        result = restored.mine([], now=201, preserve_existing=True)
+
+        self.assertEqual(result.candidates, loaded)
+        self.assertEqual(
+            ir.canonical_json(result.candidates[0].to_dict()),
+            ir.canonical_json(original.candidates[0].to_dict()),
+        )
+        self.assertEqual(result.tombstones, original.tombstones)
+        self.assertEqual(result.status["raw_event_count"], 0)
+        self.assertEqual(result.status["emitted_candidate_count"], 1)
+        self.assertEqual(result.status["next_actions"], ["observe_until_ttl_or_compiler_intake"])
+        self.assertEqual(restored.sweep(now=201).candidates, loaded)
+
+    def test_miner_persisted_retirement_requires_new_evidence_to_revive(self):
+        events = list(self.completion_events().values())
+        instance = miner.PatternMiner(min_positive_subjects=1, candidate_ttl_days=1)
+        with patch.object(miner, "adapt_completion_event_envelope", side_effect=events):
+            original = instance.mine([{}] * len(events), now=200).candidates[0]
+        expiry = original.lifecycle.expires_at
+        retired = instance.sweep(now=expiry).candidates[0]
+        state = self.root / "miner-state.json"
+        instance.save_state(state, updated_at=expiry)
+
+        restored = miner.PatternMiner(min_positive_subjects=1, candidate_ttl_days=1)
+        self.assertTrue(restored.load_state(state))
+        old_tombstones = restored.result().tombstones
+        with patch.object(miner, "adapt_completion_event_envelope", side_effect=events):
+            replayed = restored.mine([{}] * len(events), now=expiry, preserve_existing=True)
+        self.assertEqual(
+            ir.canonical_json(replayed.candidates[0].to_dict()),
+            ir.canonical_json(retired.to_dict()),
+        )
+        self.assertEqual(replayed.status["emitted_candidate_count"], 0)
+
+        newer = [replace(event, occurred_at=event.occurred_at + expiry) for event in events]
+        with patch.object(miner, "adapt_completion_event_envelope", side_effect=newer):
+            revived = restored.mine([{}] * len(newer), now=expiry + 200, preserve_existing=True)
+        candidate = revived.candidates[0]
+        self.assertEqual(candidate.capability_id, original.capability_id)
+        self.assertEqual(candidate.lifecycle.state, "clustered")
+        self.assertEqual(candidate.telemetry["last_evidence_at"], newer[-1].occurred_at)
+        self.assertEqual(candidate.lifecycle.expires_at, newer[-1].occurred_at + 86400)
+        self.assertEqual(revived.status["emitted_candidate_count"], 1)
+        self.assertEqual(revived.status["expired_candidate_count"], 0)
+        self.assertEqual(len(revived.tombstones), len(old_tombstones))
+        self.assertEqual(
+            {item.fingerprint for item in revived.tombstones},
+            {item.fingerprint for item in old_tombstones},
+        )
+        expiry_tombstone = next(
+            item for item in old_tombstones if item.capability_id == original.capability_id
+        )
+        self.assertIn(expiry_tombstone, revived.tombstones)
+
     def test_miner_atomic_replace_failure_preserves_previous_state(self):
         path = self.write_json("state.json", {"previous": True})
         with patch.object(miner.os, "replace", side_effect=OSError("disk unavailable")) as move:
