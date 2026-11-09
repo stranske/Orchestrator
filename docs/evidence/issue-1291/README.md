@@ -1,5 +1,90 @@
 # Issue #1291 repair evidence
 
+## Round 4: align the Gate plan with main — 2026-11-09
+
+Outcome 1 = PASS: the complete measured-toolchain gate file passes 15 tests
+in 0.36 seconds on input `c602648218786b0e4774cea1e508d0a89d5add2c`.
+Exact command: `/opt/anaconda3/bin/python3 -m pytest -q tests/test_ci_gate_config.py`.
+Stop rule recorded before inspection: three repair attempts or 45 minutes.
+The outcome required for this repair is zero missing module paths in the six
+Gate shards, followed by a passing focused gate/sharding check. The path check
+below and focused test command complete in under two minutes.
+
+The real failing input is Gate run `42583033895`, job `129049052815`, read with
+`gh run view 42583033895 --job 129049052815 --log`. The worker checkout is
+merge revision `521f84243af4d834a41d6271919d6272307f7631`, merging this PR head
+into main `5604b37d0098cd2cb3e03c8cc1bc99b2afb58ca1`. Its four workers exit
+with status 4 and collect zero tests. The Gate plans at the PR head, whereas
+workers execute the merge checkout. Comparing each module from
+`git show c6026482:config/test-shards.json` against `git ls-tree -r --name-only
+521f842` finds 36/38/45/38/44/40 missing paths across the six shards. Main's
+already merged retirement removed these modules and updated its shard plan.
+The first named missing input is `tests/test_closer_campaign_demand_integration.py`.
+
+Repair: merge current `origin/main` (`30752f56`) into the existing PR branch,
+producing `c71de898`. No additional implementation or pin edit is needed.
+Main's retirement changes are integration history, not newly authored deletions.
+The focused diagnostic command
+`/opt/anaconda3/bin/python3 -m pytest -q tests/test_closer_campaign_demand_integration.py`
+now prints `ERROR: file or directory not found` and `no tests ran in 0.08s`.
+This reproduces the stale input's usage error without running any full shard.
+Checking all paths in the updated `config/test-shards.json` with
+`Path(module).is_file()` reports zero missing paths in all six shards (419
+modules). The old plan still fails the same check, making the before/after
+comparison explicit.
+
+Validation on the integrated source:
+
+```bash
+/opt/anaconda3/bin/python3 -m pytest -q tests/test_ci_gate_config.py tests/test_verify_sharding.py
+bash scripts/build_exec_mirror.sh "$PWD" /private/tmp/1293-round4-flat
+cmp docs/CI_LINT_BASELINE.md /private/tmp/1293-round4-flat/docs/CI_LINT_BASELINE.md
+cmp .github/workflows/autofix-versions.env /private/tmp/1293-round4-flat/.github/workflows/autofix-versions.env
+/opt/anaconda3/bin/python3 -m pytest -q /private/tmp/1293-round4-flat/tests/test_ci_gate_config.py
+```
+
+The combined focused command passes 37 tests in 21.05 seconds; builder and both
+comparisons exit zero; the flat gate passes 15 tests in 0.25 seconds. Existing
+regressions reject bumped pins and missing tool entries with the named diagnostic,
+then accept their restored complete fixtures. No full test suite ran locally.
+The strict nine-pin measurement receipts already retained below remain historical
+measurements of their explicitly recorded source revisions, not measurements of
+the integrated retirement tree.
+
+Source CI run `42583033523` at the original head independently passed checkout
+aggregate job `129047435145` and flat aggregate job `129047835576`. The latter
+verified the same merge revision `521f842`: 8,331 collected, 8,281 passed, zero
+failed, 48 named test skips, seven selftest skips and two gate skips. It prints
+`verify-before-sync: VERIFIED` with payload integrity checks. This is source CI
+evidence, not a regenerated #1289 verdict or a verdict for the future push.
+
+A local replay downloaded that run's six native `mirror-shard-*` artifacts,
+flattened their files into `/private/tmp/1293-round4-evidence`, then invoked:
+
+```bash
+PYTHON=/opt/anaconda3/bin/python3 \
+ORCH_STATE_DIR=/private/tmp/1293-round4-state \
+ORCH_LOCAL_RUNTIME=/private/tmp/1293-round4-runtime \
+ORCH_SYNC_SCRIPT="$PWD/scripts/build_exec_mirror.sh" \
+VERIFY_BEFORE_SYNC_TREE='BARE EXEC MIRROR' \
+VERIFY_BEFORE_SYNC_FLOOR_MAY_LAG=1 \
+VERIFY_BEFORE_SYNC_AGGREGATE=/private/tmp/1293-round4-evidence \
+bash scripts/verify_before_sync.sh "$PWD"
+```
+
+Outcome 3 = BLOCKED: exit 78, `release parent snapshot unavailable`, then
+`cannot stage an uncertain or terminal reservation`. The builder completed, but
+the storage supervisor refused the verifier launch. Blocking/drainable pair:
+local aggregate blocked by supervisor state; native CI remains drainable and has
+already executed the aggregate. No reservation release, security change or
+storage-policy repair was attempted. Local aggregate acceptance stays pending.
+
+PR #1289 remains open and ready at
+`a27084d488d77fcfe7c9644ab97c8f5426bf5cfc`. Source delivery/regeneration and the
+next sync-core classification have not occurred. T7/A5/A6 remain pending.
+Post-push CI and review must be read on the new exact head; neither the focused
+checks nor historical aggregate receipts establish their outcome.
+
 ## Round 3 live readback — 2026-11-09
 
 Outcome 1: PASS for the measured-toolchain gate on input branch head
