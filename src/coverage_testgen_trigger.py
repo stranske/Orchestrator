@@ -197,14 +197,20 @@ def coverage_from_report(path: str | Path) -> tuple[float | None, str]:
     raw = totals["percent_covered"]
     # Reject booleans before conversion: bool is a subclass of int in Python
     if isinstance(raw, bool):
-        return None, f"coverage report {report} has a non-numeric percent_covered (boolean {raw} is not a number)"
+        return None, (
+            f"coverage report {report} has a non-numeric percent_covered "
+            f"(boolean {raw} is not a number)"
+        )
     try:
         percent_covered = float(raw)
     except (TypeError, ValueError) as exc:
         return None, f"coverage report {report} has a non-numeric percent_covered ({exc})"
-    # Reject non-finite values: NaN, inf, -inf
-    if not (math.isfinite(percent_covered)):
-        return None, f"coverage report {report} has a non-finite percent_covered ({raw!r} is not a finite number)"
+    # Reject non-finite values: NaN, inf, -inf.
+    if not math.isfinite(percent_covered):
+        return None, (
+            f"coverage report {report} has a non-finite percent_covered "
+            f"({raw!r} is not a finite number)"
+        )
     return percent_covered, "ok"
 
 
