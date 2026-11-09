@@ -276,6 +276,44 @@ class RankedCoverageTests(unittest.TestCase):
         self.assertEqual((episodes, count), ([], 8))
         self.assertEqual(instance.rejections[0].reasons, ("duplicate_phase:trigger",))
 
+    def test_miner_health_counts_exclusions_and_rejections_only_in_current_snapshot(self):
+        instance = miner.PatternMiner(min_positive_subjects=1)
+        excluded = miner.OutOfScopeError("event:delivery", ["no_research_subject:keepalive"])
+        malformed = miner.EnvelopeError("event:invalid", ["missing_joined_attempt_id"])
+        complete = list(self.completion_events().values())
+        for incoming, health, accepted, rejected, excluded_count in (
+            ([excluded, malformed], "rejecting", 0, 1, 1),
+            ([excluded], "all_out_of_scope", 0, 0, 1),
+            (complete, "mining", 7, 0, 0),
+            ([], "no_input", 0, 0, 0),
+        ):
+            with self.subTest(health=health):
+                with patch.object(
+                    miner, "adapt_completion_event_envelope", side_effect=incoming
+                ) as adapt:
+                    result = instance.mine([{}] * len(incoming), now=200)
+                self.assertEqual(adapt.call_count, len(incoming))
+                status = result.status
+                self.assertEqual(status["raw_event_count"], len(incoming))
+                self.assertEqual(status["accepted_event_count"], accepted)
+                self.assertEqual(status["rejected_event_count"], rejected)
+                self.assertEqual(status["excluded_event_count"], excluded_count)
+                self.assertEqual(status["mining_health"]["state"], health)
+                self.assertEqual(
+                    status["rejected_event_reasons"],
+                    {"missing_joined_attempt_id": 1} if rejected else {},
+                )
+                self.assertEqual(
+                    status["excluded_producers"], {"keepalive": 1} if excluded_count else {}
+                )
+                self.assertEqual(
+                    result.rejections,
+                    (miner.Rejection("event:invalid", "envelope", malformed.reasons),)
+                    if rejected
+                    else (),
+                )
+                self.assertEqual(status["complete_episode_count"], 1 if complete == incoming else 0)
+
     def test_miner_assembly_names_each_missing_phase_without_normalizing(self):
         for phase in miner.PHASES:
             with self.subTest(phase=phase):
