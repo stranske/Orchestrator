@@ -45,6 +45,7 @@ def world(tmp_path, monkeypatch):
         refs[phase] = {"path": str(path), "sha256": escalation.sha(path.read_bytes())}
     dbpath = tmp_path / "app.db"
     now = time.time()
+    monkeypatch.setattr(escalation.time, "time", lambda: now)
     with sqlite3.connect(dbpath) as db:
         db.execute(
             "CREATE TABLE automation_runs(thread_id TEXT,automation_id TEXT,status TEXT,source_cwd TEXT,created_at INTEGER,updated_at INTEGER)"
@@ -204,6 +205,7 @@ def test_actual_receiver_refuses_wrong_runtime(tmp_path, monkeypatch, capsys, fa
                 "status": ("status", "COMPLETED"),
             }[fault]
             db.execute(f"UPDATE automation_runs SET {column}=?", (value,))
+    monkeypatch.setattr(escalation.time, "time", lambda: now + 1)
     with pytest.raises(ValueError):
         run_preflight(policy, capsys)
     assert next(iter(c.read()["hold_escalations"].values()))["status"] == "delivered"
