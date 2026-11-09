@@ -355,12 +355,18 @@ jobs:
   # convergence.
   #
   # TWO CONSEQUENCES, both of which the wrong reason hid:
-  #   * the reconcile commit is never verified by ci.yml. Harmless as written -- it changes only
-  #     the two integers this run just measured -- but it does mean main carries a commit CI never
-  #     saw, so keep this job's write narrow enough that that is obviously safe.
-  #   * IF ANYONE SWAPS THIS FOR A PAT OR AN APP TOKEN to get CI on the commit, the loop becomes
-  #     REAL and this job needs an explicit guard. That is the change to be careful about, and the
-  #     old comment would have told you it was already handled.
+  #   * the reconcile commit was never verified by ci.yml, and that LATCHED THE DEPLOY. The mirror
+  #     deploy (orch-mirror-sync.sh) requires a green ci.yml run on main's exact HEAD; every PR
+  #     that adds tests fails its own merge commit on the floor, and its reconcile commit had no run
+  #     at all, so main could not deploy until an unrelated later merge went green (2026-11-09:
+  #     #1269 at af0bedc, reconcile 3815ef1, held). Since then the reconcile job DISPATCHES ci.yml
+  #     on main after its push: a workflow_dispatch is the one GITHUB_TOKEN event that does start a
+  #     run, so the reconcile commit gets its own verdict and is deployable on its own.
+  #   * NO LOOP, by an explicit guard rather than by luck: the dispatched run's event is
+  #     `workflow_dispatch`, and this job runs only on `push` (the `if:` below), so the run that
+  #     verifies the reconcile commit never reconciles again. Do not widen that `if:` to include
+  #     workflow_dispatch. Swapping the token for a PAT or app token would make the PUSH itself
+  #     re-trigger ci.yml; the same `if:` guard holds, but then the dispatch step is redundant.
   reconcile-floor:
     name: reconcile the collection floor (main only)
     # Never on a pull_request: a PR's floor is the author's claim about their own delta, and
@@ -372,6 +378,7 @@ jobs:
       VERIFY_PYTEST_WORKERS: "4"
     permissions:
       contents: write
+      actions: write  # only to dispatch ci.yml on the reconcile commit (see above)
     steps:
       - uses: actions/checkout@v7
         # Credentials ARE persisted here, unlike the verify job — this is the one step that needs
@@ -410,6 +417,7 @@ jobs:
           python3 src/verify.py --reconcile-floor
 
       - name: Commit the reconciled floor
+        id: commit
         run: |
           set -euo pipefail
           # ONLY this path. If the reconcile run somehow touched anything else, that is a bug and
@@ -434,3 +442,13 @@ jobs:
           than asked of each author. Raising it can only make the gate stricter -- a collection
           DROP still blocks the write and fails the run."
           git push
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Verify the reconcile commit (dispatch ci.yml on main)
+        # A GITHUB_TOKEN push starts no workflow, so without this the reconcile commit has no CI
+        # verdict and the CI-gated mirror deploy cannot take main's HEAD. Fails the job if the
+        # dispatch is refused: a drain that quietly stops draining is the defect being fixed.
+        if: steps.commit.outputs.pushed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref main
