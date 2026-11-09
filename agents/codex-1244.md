@@ -1,46 +1,46 @@
 <!-- bootstrap for codex on issue #1244 run:42499436138-1 -->
 
-The requested read-only Brain connections, guarded assignment backfill, and named
-write-lock regression test are already implemented. This round extends
-`test_summary_line_reads_while_brain_write_locked` to cover both `NULL` and
-already-assigned rows under DELETE and WAL journaling, and verifies reporting
-does not change the assignment.
+The existing implementation remains intact: triage and runtime-AC reports use
+explicitly closed read-only SQLite connections, assignment backfill only writes
+when NULL assignments exist, and the regression covers committed snapshots,
+assignment preservation, write contention, and genuine read failures.
 
-Validation: the four triage cases and two runtime-AC write-lock cases passed when
-their unchanged function bodies were copied into a temporary standard-library
-harness with isolated Brain paths. Temporarily restoring `feedback._conn()` in
-the triage reader caused the named test's cycles assertion to fail with
-`UNKNOWN — outcome evidence unreadable (OperationalError)`. Restoring the
-read-only connection made all six cases pass again. `git diff --check` passes.
+Native validation on 2026-11-08 used `/opt/anaconda3/bin/python3`; this checkout
+has no selected `.venv`, `venv`, or `.python-version`.
 
-The runner lacks pytest and Black; installation failed because PyPI DNS is
-unavailable. The required pytest invocation and Black formatting/check commands
-could not run, so this change remains uncommitted and task checkboxes were not
-updated. Rerun those checks before committing. GitHub API access also failed,
-preventing a PR comment, label update, or readiness verification.
+- `python -m pytest -q tests/test_triage_shadow.py::test_summary_line_reads_while_brain_write_locked`
+  printed `8 passed in 0.60s` with the actual repository fixtures.
+- Deliberate break: replaced only the read-only connection context in
+  `src/triage_shadow.py::summary` (called by `summary_line`) with
+  `with feedback._conn() as conn:`. The same pytest command printed
+  `8 failed in 46.92s`; all eight failures were the cycles assertion at
+  `tests/test_triage_shadow.py:425`, reporting
+  `UNKNOWN — outcome evidence unreadable (OperationalError)`.
+- A `finally` block restored the original source bytes. The evidence wrapper's
+  subsequent assertion used the wrong assertion-text spelling and failed; an
+  independent read of the captured pytest output verified all eight expected
+  failures. The restored named pytest command printed `8 passed in 0.51s`.
+- `python -m pytest -q tests/test_triage_shadow.py tests/test_runtime_ac_shadow.py tests/test_feedback_registry_queries.py`
+  printed `183 passed in 82.17s (0:01:22)`.
+- `python -m black --check --line-length 100 src/triage_shadow.py src/feedback.py tests/test_triage_shadow.py tests/test_runtime_ac_shadow.py tests/test_feedback_registry_queries.py`
+  printed `5 files would be left unchanged`.
+- `python -m black --check --line-length 100 .` printed
+  `1014 files would be left unchanged`.
+- An initial focused Black invocation named nonexistent
+  `src/runtime_ac_shadow.py` and exited 2; the corrected invocation above checks
+  all five Python files changed by this PR. No dependency pins changed.
 
-Follow-up verification and reconciliation:
+Reconciliation before this evidence update: the working tree was clean and
+local HEAD and PR #1245 both matched
+`b30ce2262ff0846575fb60ec296b3a179f65dcb6` on `codex/issue-1244`.
+`git worktree list --porcelain` and the preserved-holder search found no second
+holder for this branch. Existing source and tests were already committed;
+prior claims that they remained uncommitted are stale.
 
-- Both report readers still use explicitly closed `mode=ro` connections, and
-  `_migrate_schema` still guards assignment backfill with a NULL-row query.
-- The named triage regression now also covers absent committed outcomes while
-  the writer inserts an uncommitted pending outcome. It must report `n/a (0
-  judged)`, keeping readable-but-empty evidence distinct from `UNKNOWN`.
-- A temporary standard-library harness imported the actual test modules using
-  identity fixture/parameter decorators and called their unchanged test bodies.
-  All eight triage cases, two runtime-AC cases, and the assignment migration test
-  passed. This is not a pytest run and does not exercise pytest's suite fixtures.
-- Temporarily restoring `feedback._conn()` made the named triage assertion fail
-  with `UNKNOWN — outcome evidence unreadable (OperationalError)`. The read-only
-  source was restored in a `finally` block, and the harness passed again.
-- Every task and acceptance checkbox, including duplicates, has implementation
-  and behavioral evidence to be checked. The PR-body update was blocked because
-  the GitHub tool requires approval and this run's approval policy is `never`.
-- Pytest and Black remain unavailable across the installed Python interpreters;
-  installing them failed because PyPI DNS resolution is unavailable. The requested
-  pytest, Black format, and repository-wide Black check commands could not run.
-  The Python test change is deliberately uncommitted until the mandatory Black
-  gate can pass. PR #1245 was verified open and ready for review (`draft=false`).
-- The requested blocker comment and `needs-human` label were also blocked by the
-  same GitHub approval requirement. A reconciled PR body is staged as a temporary
-  file at `/tmp/pr-1245-reconciled.md`; no remote metadata changed.
+PR #1245 was OPEN and ready (`isDraft=false`), with no review threads across
+the complete GraphQL result. Existing Gate run 42535385729 failed in Python
+3.13/3.14 shard 2/6: xdist reported zero items and pytest exit 5 (workers exit 4),
+not a failure in the affected tests. The exact-head merge snapshot refused
+`PR is not cleanly mergeable` while Gate was red. Delivery remains pending a
+fresh post-push check/review/floor read and the authorized merge guard; this
+validation evidence does not claim a merge or a green Gate.
