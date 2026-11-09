@@ -419,7 +419,11 @@ def _gh_call(args: list[str], *, timeout_s: int = GH_TIMEOUT_S) -> tuple[bool, s
             },
         )
     except subprocess.TimeoutExpired:
-        return False, "", f"unmeasured: gh timed out after {timeout_s}s ({' '.join(args[:2])})"
+        return (
+            False,
+            "",
+            f"unmeasured: gh timed out after {timeout_s}s ({github_api_observer.operation_name(args)})",
+        )
     except (OSError, subprocess.SubprocessError) as exc:
         return False, "", f"unmeasured: gh unavailable ({exc})"
     if proc.returncode != 0:

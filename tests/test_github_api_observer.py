@@ -52,6 +52,19 @@ def test_shared_reader_observes_requests_without_replaying_or_leaking(tmp_path, 
     query = json.loads((tmp_path / "query.jsonl").read_text())
     assert query["graphql_cost"] == 7 and query["resource"] == "graphql"
 
+    with monkeypatch.context() as patch:
+        patch.setenv("LANE_API_EVENTS", str(tmp_path / "private-query.jsonl"))
+        patch.setattr(observer.subprocess, "run", completed)
+        assert switch_review._gh_call(["api", "/rate_limit?credential=" + secret])[0]
+    private_query = (tmp_path / "private-query.jsonl").read_text()
+    assert secret not in private_query and "credential=" not in private_query
+    assert (
+        observer.operation_name(
+            ["api", "https://user:password@api.github.com/rate_limit?credential=" + secret]
+        )
+        == "api https://api.github.com/rate_limit"
+    )
+
     # A recording failure cannot turn a confirmed operation into a retry.
     with monkeypatch.context() as patch:
         patch.setenv("LANE_API_EVENTS", str(tmp_path))
@@ -71,6 +84,11 @@ def test_shared_reader_observes_requests_without_replaying_or_leaking(tmp_path, 
         ok, output, reason = switch_review._gh_call(["api", "graphql", "-f", "query=" + secret])
         assert not ok and output == "" and "timed out" in reason
         assert secret not in reason
+        assert secret not in timeout.stderr
+        timeout = subprocess.TimeoutExpired("gh", 1, output=b"partial", stderr=trace.encode())
+        ok, output, reason = switch_review._gh_call(["api", "/rate_limit?credential=" + secret])
+        assert not ok and output == "" and "timed out" in reason
+        assert secret not in reason and "credential=" not in reason
     assert secret not in timeout.stderr
     timed_rows = [
         json.loads(line) for line in (tmp_path / "timeout.jsonl").read_text().splitlines()

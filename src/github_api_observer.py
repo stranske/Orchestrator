@@ -24,6 +24,14 @@ def _lane():
     )
 
 
+def operation_name(args):
+    words = []
+    for argument in args[:2]:
+        word = argument.split("?", 1)[0].split("#", 1)[0]
+        words.append(re.sub(r"(?<=://)[^/]*@", "", word))
+    return re.sub(r"gh[hopsu]_[A-Za-z0-9_]+", "REDACTED", " ".join(words))
+
+
 def observe_github(result, args, callsite):
     """Retain response metadata only; an observation failure never retries a write."""
     rows, current = [], None
@@ -83,7 +91,7 @@ def observe_github(result, args, callsite):
                             **row,
                             "lane": _lane(),
                             "component": "shared-gh-reader",
-                            "operation": " ".join(args[1:3]),
+                            "operation": operation_name(args[1:]),
                             "call_id": call_id,
                             "exit_code": result.returncode,
                             "observed_at": datetime.now().astimezone().isoformat(),
