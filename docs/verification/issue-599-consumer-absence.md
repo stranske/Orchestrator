@@ -227,3 +227,33 @@ confirm `prose 0` with DRAINABLE equal to the `consumer_missing` count. Until
 then the acceptance target is unmet.
 
 2026-11-09: Gate run https://github.com/stranske/Orchestrator/actions/runs/42590538518 (head 0dc9a8a1bd7e0259c7533a9bd45753729c3b0413) passed — every Python CI shard collected tests on Python 3.13 and 3.14.
+
+### Keepalive reconciliation and report regression (2026-11-09)
+
+Reviewed commits `f53e55c0`, `e8e9d86e` and `6d4089af`. The absence declaration
+task is implemented: `docs-drift-fix-agent` retains its declaration, explicit
+`consumer_missing: true`, and explanation in `KNOWN_DECLARATIONS`. It is the
+sole reviewed absence in the source tables. The source issue's delegated
+2026-11-06 clarification remains the counter target; post-sync acceptance is
+still pending because this runner has no owner's deployed ledger or generation.
+
+Added `test_consumer_report_reconciles_source_inventory_without_writing_the_ledger`
+to the existing, registered consumer test module. It puts stale consumer text
+and missing flags on every source-declared consumer in a temporary ledger,
+runs the real report loader and formatter, and verifies that prose, unresolved
+and undeclared sets are empty, DRAINABLE is exactly the source's reviewed-absence
+inventory, those absences fail the consumer requirement, and ledger bytes stay
+unchanged. Heartbeat writes and unrelated commitment scanning are isolated.
+
+Direct Python invocation passed 15 existing/new test functions. Bypassing
+declaration reconciliation deliberately failed the new regression. Python syntax
+and `git diff --check` passed. These are not pytest or Black passes: both tools
+are absent, package installation failed because pypi.org could not resolve, and
+both required Black invocations returned `command not found`.
+
+Delivery is blocked in this sandbox: `.git` is mounted read-only, preventing
+the required commit. Automatic approval review rejected the PR-body update,
+blocker comment and `needs-human` label under approval policy `never`. The
+proposed reconciled PR body is saved at `/tmp/pr-1275-reconciled-body.md`; the
+remote checklist was not changed. PR #1275 was re-read as open and ready for
+review (`draft: false`), with head `6d4089afde3336b0f94afaa88d467f9c6f6e153a`.

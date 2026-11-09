@@ -1,5 +1,6 @@
 """Reviewed absence is visible debt and never consumer acceptance (source #599)."""
 
+import json
 from unittest.mock import patch
 
 import capabilities
@@ -115,3 +116,55 @@ def test_declaration_without_consumer_ownership_does_not_clear_reviewed_absence(
     with patch.dict(capabilities.KNOWN_EXISTING_DECLARATIONS, {cid: {"notes": "updated note"}}):
         assert capabilities._reconcile_known_declarations({cid: cap}, 2)
         assert cap["consumer_missing"] is True
+
+
+def test_consumer_report_reconciles_source_inventory_without_writing_the_ledger(tmp_path):
+    """A report over stale rows must retain exactly the source's reviewed absences."""
+    declarations = {
+        cid: declaration
+        for cid, declaration in {
+            **capabilities.KNOWN_GATES,
+            **capabilities.KNOWN_DECLARATIONS,
+            **capabilities.KNOWN_EXISTING_DECLARATIONS,
+        }.items()
+        if "downstream_consumer" in declaration
+    }
+    expected = sorted(
+        cid for cid, declaration in declarations.items() if declaration.get("consumer_missing") is True
+    )
+    assert "docs-drift-fix-agent" in expected
+    ledger = {cid: capabilities._blank_capability(cid) for cid in declarations}
+    for cap in ledger.values():
+        # Exercise replacement of stale text and stale missing flags through the report's loader.
+        cap.update(status="active", downstream_consumer="old consumer prose", consumer_missing=True)
+        cap["event_history"] = [{"type": "migrated", "timestamp": 1}]
+    path = tmp_path / "capabilities.json"
+    path.write_text(
+        json.dumps({"schema_version": capabilities.SCHEMA_VERSION, "capabilities": ledger})
+    )
+    before = path.read_bytes()
+    with (
+        patch.object(admission, "_capability_heartbeat"),
+        patch.object(
+            admission,
+            "commitments",
+            return_value={"clean": True, "dangling_citations": [], "overdue_without_record": []},
+        ),
+    ):
+        report = admission.report(path=path, ctx={"audit_rows": {}, "fixtures": set()})
+    consumers = report["consumers"]
+    assert consumers["total"] == len(declarations)
+    assert consumers["by_class"]["prose"] == []
+    assert consumers["by_class"]["unresolved"] == []
+    assert consumers["by_class"]["undeclared"] == []
+    assert consumers["by_class"]["consumer_missing"] == expected
+    assert consumers["drainable"] == expected
+    assert not consumers["drained"]
+    verdicts = {row["capability_id"]: row for row in report["rows"]}
+    assert all(not verdicts[cid]["checks"]["consumer_acts"]["ok"] for cid in expected)
+    rendered = admission.format_report(report)
+    assert f"prose 0, missing {len(expected)}, undeclared 0 — DRAINABLE {len(expected)}" in rendered
+    assert [line.strip() for line in rendered.splitlines() if "REVIEWED ABSENT" in line] == [
+        f"REVIEWED ABSENT {cid}" for cid in expected
+    ]
+    assert path.read_bytes() == before
