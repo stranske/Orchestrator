@@ -254,3 +254,66 @@ the read-only filesystem. The connector rejects the blocker comment and
 `needs-human` label because approval is required and this run's approval policy
 is `never`; neither was posted. PR #1263 remains open with `draft=false` at
 `c8d3e805e141d07ff862668f57eaf93b4d057740`.
+
+## Acceptance completion (closer repair, 2026-11-09)
+
+`gh` reached api.github.com in this run, so the receipts below come from `gh`
+rather than the connector. No source, test or workflow file changed; the seal
+guard and the original writer ownership are untouched.
+
+- [x] **Regenerated summary run, bound to the verified head.**
+  `gh run view 42518196137 --attempt 2 --repo stranske/Orchestrator` reports
+  `sync/workflows-delivery Gate stranske/Orchestrator#1247`, attempt 2,
+  `status: completed`, `conclusion: success`, `headSha:
+  c0c5cb6aa8bf79aa855a54258c0ed423011cebeb`. Its `summary` job 128848669696
+  succeeded at 2026-11-08T20:16:03Z, and the `Gate / gate` commit status on that
+  sha is `success` (2026-11-08T20:15:59Z, after attempt 1's `failure` at
+  20:05:50Z). `gh pr view 1247` shows the same `headRefOid`
+  `c0c5cb6aa8bf79aa855a54258c0ed423011cebeb`, merged at 2026-11-08T20:49:16Z as
+  `27266f8165064f88256ee2a97f99762db51f129a`. One annotation in that summary job,
+  `Collected 0 Gate workflow runs for head db10a8e2…`, names a different sha; it
+  is a notice, not an error, and does not change the bound head above.
+- [x] **Next completed sync-core classification of #1247.** In
+  `$ORCH_STATE_DIR/sync-core/rounds.jsonl`, round `20261108T195953Z`
+  (2026-11-08T20:04:04Z) is the one that filed this finding: disposition
+  `pre-existing`, handoff `#1262 (filed)`. The next completed round,
+  `20261108T201627Z` (2026-11-08T20:16:41Z), classifies
+  `stranske/Orchestrator#1247` as `ready-for-maint71`, owner `maint-71`, no
+  handoffs, with the single reason
+  `maint71: delivery_sealed_checks_pending; next=rerun-after-generated-delivery-seal-gate`.
+  The `summary` pre-existing finding is absent. Later rounds `20261108T202925Z`
+  and `20261108T204423Z` stay `ready-for-maint71`; `20261108T205305Z` records
+  terminal `delivered` (`merged 2026-11-08T20:49:16Z; 2 files, 0 mismatches`).
+- [x] **Fixture-failure ambiguity resolved: the linked run demonstrated only the
+  delivery hold.** `gh run view 42500846882 --repo stranske/Orchestrator
+  --log-failed` (2,628 lines, head `7ba7006dc3243a7bf0221d709e4de5562c89f042`,
+  attempt 1) lists three failed jobs: `detect changed files`, `generated delivery
+  seal` and `summary`. Each executed error is
+  `delivery_not_sealed:staging`; the `summary` job exits 1 at
+  2026-11-08T16:42:43Z with `Gate reported failure: Generated delivery is not
+  sealed: delivery state is staging.` A search of the full failed log for
+  `FileNotFound`, `ENOENT`, `fixture`, `copyfile`, `copytree`, `vanish` and
+  `disappear` finds one line, `fs.copyFileSync("package.json",
+  "package.json.bak")`, which is echoed script source, not an error. The quoted
+  `RuntimeError` and rate-limit rethrow are echoed source too. No
+  disappearing-file traceback exists in the linked run, so no fixture fix is made.
+- [x] **Repository verification.** The repository-selected Python environment is
+  the one `ci.yml` pins (`python-version: '3.14'`, resolved to 3.14.10). On
+  main `e5695665bcef7d1962af3e9868f005bc5363c68a`, CI run 42557064407 job
+  `verify.py aggregate + combined coverage` (128967019155) succeeded:
+  `pytest: 15107 passed, 0 failed, 31/31 max (15140 collected; floor 15140)`,
+  `ledger validate ok`, selftests 117 of 124 modules with 7/7 max skipped; the
+  flat exec-mirror aggregate job also succeeded. This PR's own `verify.py`
+  verdict is CI's run on its head. The local
+  `PYTEST_ADDOPTS='-m "not slow"' … src/verify.py --floor-may-lag` was not run:
+  the dispatch rules for this repair forbid a local full-suite run, and the
+  repository's CLAUDE.md names CI's `verify.py` on the PR head as the verdict.
+  The focused command
+  `node --test --test-isolation=none .github/scripts/__tests__/*.test.js` passed
+  52 of 52 locally, with none skipped or failed.
+
+Still incomplete, recorded rather than claimed: no local full `verify.py` run
+exists for this issue, and there is no code fix because no defect was found. The
+"Fix the identified source file" tasks are deferred as not applicable, because
+the failing step was the intended seal guard and the hold cleared through the
+existing seal lifecycle.
