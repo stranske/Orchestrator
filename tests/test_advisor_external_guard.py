@@ -15,7 +15,6 @@ import subprocess
 import urllib.request
 
 import pytest
-
 from advisor_external_guard import (
     AUDIT_EVENTS,
     PATCH_TARGETS,
