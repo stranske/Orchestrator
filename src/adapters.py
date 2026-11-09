@@ -939,7 +939,27 @@ def tier_ceiling(agent: str) -> str | None:
     value = os.environ.get(f"ORCH_{agent.upper()}_MAX_TIER", "").strip().lower()
     if not value:
         value = AGENT_TIER_CEILING.get(agent, "")
+    if not value:
+        value = _shed_tier_ceiling(agent) or ""
     return value if value in MODEL_TIER_NAMES else None
+
+
+def _shed_tier_ceiling(agent: str) -> str | None:
+    """The ceiling an active tier-scoped shed marker sets, read where every dispatch path reads it.
+
+    The tick exports `ORCH_<AGENT>_MAX_TIER` from these markers, but lane dispatches (closer and
+    opener into `dispatcher`) never run the tick. On 2026-11-09 a lane sent gemini/full to Argon
+    with the Argon quota spent; the 429 named no model, so it re-shed the whole seat until 11-14.
+    Same reading as the tick (`capacity.tier_ceilings`). Unreadable means uncapped: a wrong
+    dispatch only costs one more provider refusal, which records its own incident.
+    """
+    try:
+        import capacity
+
+        row = capacity.tier_ceilings().get(agent)
+    except Exception:
+        return None
+    return row["ceiling"] if row else None
 
 
 def effective_tier(agent: str, tier: str) -> str:
