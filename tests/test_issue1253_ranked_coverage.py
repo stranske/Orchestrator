@@ -509,6 +509,42 @@ class RankedCoverageTests(unittest.TestCase):
         )
         self.assertIn(expiry_tombstone, revived.tombstones)
 
+    def test_miner_snapshot_preserves_distinct_tombstone_identities(self):
+        episode = miner.normalize_episode(self.completion_events())
+        candidate = replace(self.candidate(), aliases=("sha256:alias",))
+        duplicate = ir.CandidateTombstone(
+            "sha256:alias", None, "deduplicated_alias", 100, successor=candidate.capability_id
+        )
+        distinct = (
+            replace(duplicate, fingerprint="sha256:other"),
+            replace(duplicate, reason="expired"),
+            replace(duplicate, capability_id="capability:retired"),
+            replace(duplicate, successor="capability:other"),
+        )
+        instance = miner.PatternMiner()
+        instance.candidates = [candidate]
+        instance.tombstones = [duplicate, *distinct]
+        with (
+            patch.object(instance, "_assemble", return_value=([episode], 7)),
+            patch.object(
+                instance, "_candidate", return_value=(candidate, {"next_action": "observe"})
+            ),
+        ):
+            result = instance.mine([], now=150, preserve_existing=True)
+
+        expected = {replace(duplicate, retired_at=150), *distinct}
+        self.assertEqual(len(result.tombstones), 5)
+        self.assertEqual(set(result.tombstones), expected)
+        self.assertEqual(result.candidates, (candidate,))
+
+        state = self.root / "miner-state.json"
+        instance.save_state(state, updated_at=150)
+        restored = miner.PatternMiner()
+        self.assertTrue(restored.load_state(state))
+        replayed = restored.mine([], now=151, preserve_existing=True)
+        self.assertEqual(len(replayed.tombstones), 5)
+        self.assertEqual(set(replayed.tombstones), expected)
+
     def test_miner_atomic_replace_failure_preserves_previous_state(self):
         path = self.write_json("state.json", {"previous": True})
         with patch.object(miner.os, "replace", side_effect=OSError("disk unavailable")) as move:
