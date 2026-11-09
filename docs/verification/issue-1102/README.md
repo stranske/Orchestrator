@@ -154,14 +154,14 @@ Reached by this successor, named by the behavior in the head report (some lines 
 Remaining head statements that this successor does not execute. Each limit is the current line.
 `test_selftest_only_paths_stay_recorded_as_limits` pins the token on that line.
 
-- `src/capability_advisor.py:3864` — else restores a pre-seeded t-howto entry; the selftest pops the key when it was absent, and production never pre-seeds that key
-- `src/capability_advisor.py:3962` — else restores a pre-seeded t-concept entry; same pop-versus-restore split as t-howto
-- `src/capability_advisor.py:4257` — else restores a pre-seeded t-contra entry inside _selftest_contraindications
-- `src/capability_advisor.py:4594` — else restores a pre-seeded t-empty entry inside _selftest_bindings
-- `src/capability_advisor.py:4655` — else restores a pre-seeded t-surface entry inside _selftest_bindings
-- `src/capability_advisor.py:5164` — else restores a pre-seeded t-precond entry inside _selftest_preconditions
-- `src/capability_advisor.py:3997` — _selftest_front_door returns at the ledger-row gate unless offload, codemod-campaign, and testgen-lane are already registered; those rows are machine-local, and a stand-in ledger would not satisfy the real matcher assertions
-- `src/capability_advisor.py:5300` — the loop body is the tail of _selftest_findability, after that function has checked every consult-site caller; a copied assert would not execute these lines, and running the selftest section is the module selftest rather than a focused path test
+- `src/capability_advisor.py:3872` — else restores a pre-seeded t-howto entry; the selftest pops the key when it was absent, and production never pre-seeds that key
+- `src/capability_advisor.py:3970` — else restores a pre-seeded t-concept entry; same pop-versus-restore split as t-howto
+- `src/capability_advisor.py:4265` — else restores a pre-seeded t-contra entry inside _selftest_contraindications
+- `src/capability_advisor.py:4602` — else restores a pre-seeded t-empty entry inside _selftest_bindings
+- `src/capability_advisor.py:4663` — else restores a pre-seeded t-surface entry inside _selftest_bindings
+- `src/capability_advisor.py:5172` — else restores a pre-seeded t-precond entry inside _selftest_preconditions
+- `src/capability_advisor.py:4005` — _selftest_front_door returns at the ledger-row gate unless offload, codemod-campaign, and testgen-lane are already registered; those rows are machine-local, and a stand-in ledger would not satisfy the real matcher assertions
+- `src/capability_advisor.py:5308` — the loop body is the tail of _selftest_findability, after that function has checked every consult-site caller; a copied assert would not execute these lines, and running the selftest section is the module selftest rather than a focused path test
 
 ## Deliberate breaks for the successor path tests
 

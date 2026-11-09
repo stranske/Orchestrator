@@ -882,6 +882,16 @@ PREDICATE_FIXTURES: tuple[dict[str, Any], ...] = (
         "source": "Local keepalive loop GitHub/state/Brain accounting uses the monitor's read-only fixture.",
     },
     {
+        "capability": "opener-core",
+        "check": _check_value_chain_monitor,
+        "source": "External opener-core round/closer-round/Brain accounting uses the monitor's read-only fixture.",
+    },
+    {
+        "capability": "sync-core",
+        "check": _check_value_chain_monitor,
+        "source": "External sync-core round accounting uses the monitor's read-only fixture.",
+    },
+    {
         "capability": "value-chain-monitor",
         "check": _check_value_chain_monitor,
         "source": "2026-10-04 concept audit: zero invocations cannot measure independent demand.",

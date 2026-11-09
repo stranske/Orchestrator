@@ -1187,6 +1187,14 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
         "fixture: labelled PRs from GitHub stay distinct from the loop's own rounds, a handed-off "
         "PR stays a situation, a finished PR closed unmerged is an outcome and never a success, and "
         "an unread population stays unmeasured. Never runs a tick",
+        "opener-core": "EXERCISE the opener core's read-only value-chain adapter over fixture "
+        "journals: considered issues stay distinct from started ones, an issue counts as acted on "
+        "only once closer-core's rounds carry it, and an unread journal stays unmeasured while an "
+        "empty one reads zero. Never invokes the external controller",
+        "sync-core": "EXERCISE the sync core's read-only value-chain adapter over a fixture "
+        "journal: not-a-sync-pr is no situation, a PR merged with no sync-core action is never its "
+        "outcome, and an unread journal stays unmeasured while an empty one reads zero. Never "
+        "invokes the external controller",
     },
     "rail-exercise:gates": {
         "capability-admission-gate": "EXERCISE capability_admission.py --preflight: a deliberately "

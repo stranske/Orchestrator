@@ -1879,6 +1879,65 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
             "with stop rules (Nov 12, Nov 30); after them nothing would have noticed it go quiet."
         ),
     },
+    "opener-core": {
+        "status": "wired",
+        "entrypoint": str(Path.home() / ".codex/opener-core/opener_core.py"),
+        "external_caller": {
+            "path": str(
+                Path.home() / ".codex/automations/reviewed-repo-automation-controller/controller.py"
+            ),
+            "function": "start_opener_core",
+        },
+        "external_heartbeat_max_age_seconds": 86400,
+        "matcher": {"kind": "tick_phase", "equals": "opener-core"},
+        "trigger_cadence": "Luna controller start_opener_core(), once per 15-minute pass",
+        "output_artifact": "~/.codex/orchestrator/opener-core/rounds.jsonl",
+        "downstream_consumer": "closer-core takes over the linked PR; value_chain_monitor.py:report via switch_review.py",
+        "learning_sink": "closer-core's issue_closure Brain outcomes for the issues it started",
+        "kill_switch": "remove ~/.codex/handoff/old-opener-suspended (the core then runs dry, no GitHub writes)",
+        "rollback": {"restore": "remove start_opener_core() from the external controller pass"},
+        "findability_category": "exercise_bound",
+        "findability_rationale": "The external controller invokes the core every pass; rail-exercise:brain offers its read-only value-chain fixture.",
+        "notes": (
+            "dedup: accounting for the existing opener lane core (owner decision 2026-11-04), not a "
+            "new mechanism; no monitor row read it before 2026-11-09. Situations: the issues its "
+            "rounds considered plus those it started. Invocation: issues started. Usable: started "
+            "issues with a linked PR. Acted on: those the closer-core rounds carried. Outcome and "
+            "success: closer-core's versioned issue_closure Brain rows for them (durable PASS). "
+            "Reads only the two round journals and the Brain. Heartbeat source: the core must "
+            "record one `invocation` per round as closer_core.record_heartbeat does; until it does, "
+            "admission reports the heartbeat missing."
+        ),
+    },
+    "sync-core": {
+        "status": "wired",
+        "entrypoint": str(Path.home() / ".codex/sync-core/sync_core.py"),
+        "external_caller": {
+            "path": str(
+                Path.home() / ".codex/automations/reviewed-repo-automation-controller/controller.py"
+            ),
+            "function": "start_sync_core",
+        },
+        "external_heartbeat_max_age_seconds": 86400,
+        "matcher": {"kind": "tick_phase", "equals": "sync-core"},
+        "trigger_cadence": "Luna controller start_sync_core(), once per discovery pass",
+        "output_artifact": "~/.codex/orchestrator/sync-core/rounds.jsonl",
+        "downstream_consumer": "Maint 71 merges ready sync PRs; owners take filed hand-offs; value_chain_monitor.py:report via switch_review.py",
+        "learning_sink": "its own round journal: delivered dispositions verify merged blobs on main",
+        "kill_switch": "remove ~/.codex/handoff/old-maintenance-suspended (the core then runs as a read-only shadow)",
+        "rollback": {"restore": "remove start_sync_core() from the external controller pass"},
+        "findability_category": "exercise_bound",
+        "findability_rationale": "The external controller invokes the core every pass; rail-exercise:brain offers its read-only value-chain fixture.",
+        "notes": (
+            "dedup: accounting for the existing sync lane core (owner decision 2026-11-02), not a "
+            "new mechanism; no monitor row read it before 2026-11-09. Situations: generated sync PRs "
+            "its rounds observed (not-a-sync-pr excluded). Acted on: a hand-off filed, a refresh "
+            "dispatched, or ready-for-maint71. Outcome: an acted-on PR merged; success: delivered, "
+            "its blobs verified on main. Reads only its round journal. Heartbeat source: the core "
+            "must record one `invocation` per round as closer_core.record_heartbeat does; until it "
+            "does, admission reports the heartbeat missing."
+        ),
+    },
     "testgen-lane": {
         "downstream_consumer": "testgen_gate.py:main consumes candidate tests for the acceptance gate",
         "notes": (

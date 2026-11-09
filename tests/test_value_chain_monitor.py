@@ -735,6 +735,13 @@ def _closer_round(stamp=CLOSER_NOW, actions=("complete",), fleet=12, errors=0):
     }
 
 
+def _core_journal_file(tmp_path, core, rows):
+    path = tmp_path / core / "rounds.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    return path
+
+
 def _closer_journal(tmp_path, rows):
     path = tmp_path / "closer-core/rounds.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -850,6 +857,8 @@ def _check_real_brain_issue_closure_writes_supply_outcomes(tmp_path, monkeypatch
     monkeypatch.setattr(monitor, "_stall_sweep_targets", lambda *a: [])
     monkeypatch.setattr(monitor, "_relay_decisions", lambda *a: {})
     monkeypatch.setattr(monitor, "_local_loop_prs", lambda *a: [])  # no GitHub here (gh_fn=None)
+    _core_journal_file(tmp_path, "opener-core", [])
+    _core_journal_file(tmp_path, "sync-core", [])
     inputs = monitor.collect_inputs(now=stamp + 1, gh_fn=None, repos=[], db=feedback.DB_PATH)
     assert inputs["errors"] == []
     section = monitor.report(now=stamp + 1, path=ledger, env={}, inputs=inputs)
@@ -946,6 +955,8 @@ def test_local_loop_row_reads_github_situations_its_own_rounds_and_brain_outcome
     monkeypatch.setattr(monitor, "_relay_decisions", lambda *a: {})
     monkeypatch.setattr(monitor, "_closer_core_rounds", lambda *a: {"demand": 0})
     monkeypatch.setattr(monitor, "_closer_core_outcomes", lambda *a: {})
+    for core in ("closer-core", "opener-core", "sync-core"):
+        _core_journal_file(tmp_path, core, [])
     inputs = monitor.collect_inputs(
         now=stamp + 1, gh_fn=_local_loop_search(1, 2, 3, 4, 5), repos=[], db=feedback.DB_PATH
     )
@@ -1000,3 +1011,244 @@ def test_local_loop_row_reads_github_situations_its_own_rounds_and_brain_outcome
         if r["capability"] == "local-loop"
     )
     assert (row["situation_count"], row["first_break"]) == (None, None)
+
+
+STEPS = ("situation_count", "invocation_count", "usable", "acted_on", "outcome", "outcome_success")
+
+
+def _round(stamp, items):
+    return {
+        "ts": datetime.fromtimestamp(stamp, timezone.utc).isoformat(),
+        "summary": "",
+        "items": items,
+    }
+
+
+def _row(section, cid):
+    return next(r for r in section["rows"] if r["capability"] == cid)
+
+
+def test_opener_core_row_reads_its_journal_the_closer_hand_off_and_brain_closures(
+    tmp_path, monkeypatch
+):
+    """2026-11-09: opener-core had no monitor row, so the value-chain gate could not grade it. Its
+    situations are the issues it considered plus those it started; an issue is acted on only once
+    closer-core's rounds carry it; outcome and success are closer-core's issue_closure Brain rows.
+    """
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    monkeypatch.setattr(feedback, "_capability_daily_heartbeat", lambda *a, **kw: None)
+    ledger = tmp_path / "capabilities.json"
+    monkeypatch.setattr(capabilities, "REG", ledger)
+    source = tmp_path / "closer_core.py"
+    source.write_text("# recorded external entrypoint\n")
+    declared = capabilities.KNOWN_DECLARATIONS["closer-core"]
+    identity = capabilities.compiled_version_identity(
+        "closer-core",
+        artifact={
+            "target_kind": "module",
+            "entrypoint": declared["entrypoint"],
+            "sources": [
+                {"path": source.name, "sha256": hashlib.sha256(source.read_bytes()).hexdigest()}
+            ],
+        },
+        lifecycle_policy={},
+    )
+    capabilities.register("closer-core", {**declared, **identity, "target_kind": "module"}, ledger)
+    capabilities.register(
+        "opener-core",
+        {**capabilities.KNOWN_DECLARATIONS["opener-core"], "target_kind": "module"},
+        ledger,
+    )
+    stamp = int(monitor.time.time())
+    old = stamp - monitor.WINDOW_DAYS * 86400 - 10
+    opener = _core_journal_file(
+        tmp_path,
+        "opener-core",
+        [
+            _round(old, [{"target": "o/r#9", "action": "start"}]),  # outside the window
+            _round(
+                stamp - 20,
+                [
+                    {"target": "o/r#1", "action": "start"},
+                    {"target": "o/r#2", "action": "skip", "reason": "held: agents:paused"},
+                    {"target": "o/r#3", "action": "start"},
+                    # linked in the core's cache, but never started in the window: not usable
+                    {"target": "o/r#4", "action": "already-pr_linked"},
+                    # started before the window's first round, still waiting: an invocation
+                    {"target": "o/r#5", "action": "starting", "phase": "watch"},
+                ],
+            ),
+            _round(
+                stamp - 10,
+                [
+                    {"target": "o/r#1", "action": "pr-linked", "phase": "watch"},
+                    {"target": "o/r#3", "action": "pr-linked", "phase": "watch"},
+                    {"target": "o/r#5", "action": "invite-pr-opened", "phase": "watch", "pr": 7},
+                    {"target": "o/r#6", "action": "format-unfixed"},
+                ],
+            ),
+        ],
+    )
+    _closer_journal(
+        tmp_path,
+        [
+            _round(stamp - 5, [{"target": "o/r#1", "action": "merge", "pr": 11}]),
+            _round(stamp - 4, [{"target": "o/r#3", "action": "wait-unmerged", "pr": 13}]),
+            _round(stamp - 3, [{"target": "o/r#8", "action": "complete", "pr": 18}]),
+        ],
+    )
+    for target in ("o/r#1", "o/r#8"):  # o/r#8 was never the opener's: not its outcome
+        run_id = f"closer-core:fixture-{target[-1]}"
+        feedback.record_run(
+            run_id,
+            target,
+            "issue_closure",
+            "orchestrator",
+            mode="deterministic",
+            source="orchestrator_local",
+            capability_ids=["closer-core"],
+            ts=stamp,
+        )
+        feedback.record_outcome(run_id, adjudicated_verdict="PASS", durability="durable")
+    _core_journal_file(tmp_path, "sync-core", [])
+    monkeypatch.setattr(monitor, "fleet_issues", lambda *a, **kw: [])
+    monkeypatch.setattr(monitor, "_dispute_count", lambda *a: 0)
+    monkeypatch.setattr(monitor, "_stall_sweep_targets", lambda *a: [])
+    monkeypatch.setattr(monitor, "_relay_decisions", lambda *a: {})
+    monkeypatch.setattr(monitor, "_local_loop_prs", lambda *a: [])
+    inputs = monitor.collect_inputs(now=stamp + 1, gh_fn=None, repos=[], db=feedback.DB_PATH)
+    assert inputs["errors"] == []
+    section = monitor.report(now=stamp + 1, path=ledger, env={}, inputs=inputs)
+    row = _row(section, "opener-core")
+    # demand {1..6}; started {1,3,5}; linked {1,3}; handed {1,3}; closed {1}, durable PASS {1}
+    assert [row[k] for k in STEPS] == [6, 3, 2, 2, 1, 1]
+    assert (row["outcome_open"], row["first_break"]) == (1, "works")
+    assert (
+        "opener-core: demand 6; invocation 3; usable 2; acted_on 2; outcome 1 (+1 open); success 1"
+        in "\n".join(monitor.format_lines(section))
+    )
+    # a readable journal with nothing in the window is a measured zero, never unmeasured
+    opener.write_text("")
+    empty = monitor.collect_inputs(now=stamp + 1, gh_fn=None, repos=[], db=feedback.DB_PATH)
+    row = _row(monitor.report(now=stamp + 1, path=ledger, env={}, inputs=empty), "opener-core")
+    assert (row["situation_count"], row["invocation_count"], row["acted_on"]) == (0, 0, 0)
+    assert row["first_break"] == "no_situation"
+    # an unread journal is unmeasured, never zero, and says so
+    opener.unlink()
+    gone = monitor.collect_inputs(now=stamp + 1, gh_fn=None, repos=[], db=feedback.DB_PATH)
+    assert "opener-core round journal unread" in gone["errors"]
+    section = monitor.report(now=stamp + 1, path=ledger, env={}, inputs=gone)
+    row = _row(section, "opener-core")
+    assert (row["situation_count"], row["invocation_count"], row["acted_on"]) == (None, None, None)
+    assert row["first_break"] is None
+    assert "opener-core: demand unmeasured; invocation None" in "\n".join(
+        monitor.format_lines(section)
+    )
+
+
+def test_opener_core_hand_off_is_unmeasured_while_the_closer_journal_is_unread(tmp_path):
+    stamp = NOW
+    path = _core_journal_file(
+        tmp_path,
+        "opener-core",
+        [
+            _round(stamp - 2, [{"target": "o/r#1", "action": "start"}]),
+            _round(stamp - 1, [{"target": "o/r#1", "action": "pr-linked", "phase": "watch"}]),
+        ],
+    )
+    assert monitor._opener_core_rounds(stamp, path) == {
+        "demand": ["o/r#1"],
+        "invoked": ["o/r#1"],
+        "usable": ["o/r#1"],
+    }
+    assert monitor._closer_core_targets(stamp, tmp_path / "missing.jsonl") is None
+    bad = tmp_path / "bad.jsonl"
+    bad.write_text("{unfinished")
+    assert monitor._opener_core_rounds(stamp, bad) is None
+    assert monitor._closer_core_targets(stamp, bad) is None
+
+
+def _sync_item(target, disposition, **extra):
+    return {"target": target, "disposition": disposition, "handoffs": [], "reasons": [], **extra}
+
+
+def test_sync_core_row_counts_sync_prs_and_only_acted_on_deliveries(tmp_path, monkeypatch):
+    """2026-11-09: sync-core had no monitor row. A PR that merged with no sync-core action is printed
+    beside the row and never counted as its outcome; `delivered` (blobs verified on main) is success,
+    `delivered-mismatch` an outcome only; an empty journal is zero and an unread one unmeasured."""
+    ledger = tmp_path / "capabilities.json"
+    monkeypatch.setattr(capabilities, "REG", ledger)
+    capabilities.register(
+        "sync-core",
+        {**capabilities.KNOWN_DECLARATIONS["sync-core"], "target_kind": "module"},
+        ledger,
+    )
+    handoff = [{"kind": "review-finding", "repo": "o/w", "result": "#9 (filed)"}]
+    path = _core_journal_file(
+        tmp_path,
+        "sync-core",
+        [
+            _round(NOW - monitor.WINDOW_DAYS * 86400 - 10, [_sync_item("o/r#9", "delivered")]),
+            _round(
+                NOW - 20,
+                [
+                    _sync_item("o/r#1", "ready-for-maint71"),
+                    _sync_item("o/r#2", "review-finding", handoffs=handoff, terminal="handed-off"),
+                    _sync_item("o/r#4", "not-a-sync-pr", terminal="not-a-sync-pr"),
+                    _sync_item("o/r#5", "error"),
+                    _sync_item("o/r#6", "waiting"),
+                    _sync_item("o/r#7", "ready-for-maint71"),
+                    _sync_item(
+                        "o/r#8",
+                        "pre-existing",
+                        reasons=["consumer repair complete; frozen refresh dispatched on base x"],
+                    ),
+                ],
+            ),
+            _round(
+                NOW - 10,
+                [
+                    _sync_item("o/r#1", "delivered", terminal="delivered"),
+                    _sync_item("o/r#3", "delivered", terminal="delivered"),  # never acted on
+                    _sync_item("o/r#7", "superseded", terminal="superseded"),
+                    _sync_item("o/r#8", "delivered-mismatch", terminal="delivered-mismatch"),
+                ],
+            ),
+        ],
+    )
+    sync = monitor._sync_core_rounds(NOW, path)
+    assert sync == {
+        "demand": 7,  # o/r#1,2,3,5,6,7,8; not-a-sync-pr and the out-of-window PR are no situation
+        "invocation_count": 7,
+        "usable": 5,  # error and waiting are nothing to act on
+        "acted_on": 4,  # o/r#1 ready, o/r#2 hand-off, o/r#7 ready, o/r#8 refresh
+        "outcome": 2,  # o/r#1 delivered, o/r#8 delivered-mismatch
+        "outcome_success": 1,
+        "outcome_no_merge": 1,
+        "outcome_open": 1,
+        "delivered_unacted": 1,
+    }
+    section = monitor.report(now=NOW, path=ledger, env={}, inputs={"sync_core": sync})
+    row = _row(section, "sync-core")
+    assert [row[k] for k in STEPS] == [7, 7, 5, 4, 2, 1]
+    assert row["first_break"] == "works"
+    assert (
+        "sync-core: demand 7; invocation 7; usable 5; acted_on 4; outcome 2 (+1 nomerge, +1 open); "
+        "success 1 (acted-on sync PRs merged with blobs verified on main; +1 merged with no "
+        "sync-core action, not counted); first_break works"
+        in "\n".join(monitor.format_lines(section))
+    )
+    path.write_text("")
+    empty = monitor._sync_core_rounds(NOW, path)
+    assert (empty["demand"], empty["acted_on"], empty["outcome"]) == (0, 0, 0)
+    row = _row(
+        monitor.report(now=NOW, path=ledger, env={}, inputs={"sync_core": empty}), "sync-core"
+    )
+    assert (row["situation_count"], row["first_break"]) == (0, "no_situation")
+    assert monitor._sync_core_rounds(NOW, tmp_path / "missing.jsonl") is None
+    row = _row(
+        monitor.report(now=NOW, path=ledger, env={}, inputs={"sync_core": None}), "sync-core"
+    )
+    assert [row[k] for k in STEPS] == [None] * 6
+    assert row["first_break"] is None
