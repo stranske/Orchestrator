@@ -368,10 +368,7 @@ def test_baseline_diagnostic_names_the_bumped_and_the_missing_pin():
     doc = "<!-- measured-with: " + " ".join(f"{t}=2.0.0" for t in _NINE_TOOLS) + " -->"
     assert _baseline_mismatch(doc, pins) is None
 
-    bumped = {
-        **pins,
-        "RUFF_VERSION": "2.0.1"
-    }
+    bumped = {**pins, "RUFF_VERSION": "2.0.1"}
     message = _baseline_mismatch(doc, bumped)
     assert message is not None
     assert "Unmeasured pins against the closest measurement: RUFF_VERSION pinned 2.0.1, " in message
