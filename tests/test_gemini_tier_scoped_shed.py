@@ -214,6 +214,9 @@ def test_lane_dispatch_without_the_tick_env_is_capped_by_the_marker(shed_dir):
     assert adapters.effective_tier("gemini", "full") == "mid"
     model = adapters.resolve_model("gemini", adapters.effective_tier("gemini", "full"))
     assert "argon" not in model.lower()
+    # What a lane dispatch actually sends: the command build_command produces for mode=full.
+    argv = " ".join(map(str, adapters.build_command("gemini", "x", mode="full")))
+    assert "argon" not in argv.lower() and "flash" in argv.lower()
 
 
 def test_whole_seat_or_absent_marker_sets_no_ceiling(shed_dir):

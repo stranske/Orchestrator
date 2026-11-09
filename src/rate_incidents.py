@@ -655,7 +655,7 @@ def recorded_run_model(agent: str, run_id: str | None) -> str | None:
     try:
         import feedback
 
-        uri = f"file:{feedback.DB_PATH}?mode=ro"
+        uri = Path(feedback.DB_PATH).resolve().as_uri() + "?mode=ro"
         with sqlite3.connect(uri, uri=True, timeout=2) as conn:
             row = conn.execute(
                 "SELECT model FROM runs WHERE run_id=? ORDER BY ts DESC LIMIT 1", (run_id,)
