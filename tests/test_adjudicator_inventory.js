@@ -1333,6 +1333,69 @@ function nativeJournal(t) {
   return { ...fixture, journal, options: { ...fixture.options, journal } };
 }
 
+for (const publication of ['original', 'native', 'invalid_native_marker', 'null_native_marker',
+  'missing_native_source']) {
+  test(`native receipt source attribution uses the ${publication} report lineage without authenticating it`, (t) => {
+    const { saved, journal, options } = nativeJournal(t);
+    const source = 'a'.repeat(64);
+    if (publication === 'original') delete saved.native_publication;
+    else saved.native_publication = { source_report_sha256:
+      publication === 'native' ? source : 'retained-unverified-claim' };
+    if (publication === 'null_native_marker') saved.native_publication = null;
+    if (publication === 'missing_native_source') saved.native_publication = {};
+    fs.writeFileSync(options.report, JSON.stringify(saved));
+    const reportHash = createHash('sha256').update(fs.readFileSync(options.report)).digest('hex');
+    const reference = publication === 'original' ? reportHash : source;
+    const writer = new DatabaseSync(journal);
+    writer.prepare('UPDATE native_attempts SET report_sha256=? WHERE attempt_id IN (?,?)')
+      .run(reference, 'd', 'e');
+    writer.prepare('UPDATE native_attempts SET report_sha256=? WHERE attempt_id=?')
+      .run('b'.repeat(64), 'a');
+    writer.exec("UPDATE native_attempts SET report_sha256=NULL WHERE attempt_id='b'");
+    writer.exec("UPDATE native_attempts SET report_sha256=' ' WHERE attempt_id='c'");
+    writer.exec("UPDATE native_attempts SET report_sha256=x'6161' WHERE attempt_id='f'");
+    writer.close();
+    const files = [options.report, journal];
+    const before = files.map((file) => fs.readFileSync(file));
+    const result = reportInventory(options);
+    const unavailableReference = !['original', 'native'].includes(publication);
+    const attribution = result.pre_dispatch.source_lineage;
+    assert.deepEqual(attribution, {
+      reference_kind: publication === 'original' ? 'observed_report_bytes'
+        : 'retained_native_publication_marker',
+      reference_sha256: unavailableReference ? null : reference,
+      original_source_authenticated: false,
+    });
+    const expected = unavailableReference
+      ? ['reference_unavailable', 'not_recorded', 'invalid', 'reference_unavailable',
+        'reference_unavailable', 'invalid']
+      : ['differs_from_reference', 'not_recorded', 'invalid', 'matches_reference',
+        'matches_reference', 'invalid'];
+    const native = result.pre_dispatch.native_journal;
+    assert.deepEqual(native.attempts.map((row) => row.source_binding.status), expected);
+    assert.deepEqual(native.attempts.map((row) => row.state),
+      ['reserved', 'in_flight', 'in_flight', 'raw_persisted', 'validated', 'unrecognized']);
+    for (const attempt of native.attempts) {
+      assert.equal(attempt.source_binding.authenticated, false);
+    }
+    assert.equal(result.retained_attempt_observations[0].native_receipt_locator
+      .attempts[0].source_binding.status, expected[3]);
+    assert.equal(result.pre_dispatch.paid_identity_reconciliation.union_unique, 5);
+    assert.deepEqual(result.pre_dispatch.paid_identity_reconciliation.unresolved_without_backend_id, ['b']);
+    assert.equal(result.dispatch_authorized, false);
+    assert.equal(result.receipt_authority, 'not_authenticated_by_inventory');
+    assert.ok(!JSON.stringify(result).includes('private'));
+    assert.deepEqual(files.map((file) => fs.readFileSync(file)), before);
+    const cli = execute(path.dirname(options.report), process.execPath, [script,
+      '--report', options.report, '--journal', journal,
+      '--observed-at', String(options.observedAt), '--evidence-class', options.evidenceClass,
+      '--evidence-reference', options.evidenceReference]);
+    assert.equal(cli.status, 0, cli.stderr);
+    assert.deepEqual(JSON.parse(cli.stdout), JSON.parse(JSON.stringify(result)));
+    assert.deepEqual(files.map((file) => fs.readFileSync(file)), before);
+  });
+}
+
 for (const [state, column] of [
   ['raw_persisted', 'raw_response'],
   ['validated', 'raw_response'],

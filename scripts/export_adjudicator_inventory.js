@@ -434,8 +434,27 @@ function journalInventory(journal, locationChecks) {
   }
 }
 
-function preDispatchInventory(saved, paid, journal, locationChecks) {
+function preDispatchInventory(saved, paid, journal, locationChecks, reportHash) {
   const native = journalInventory(journal, locationChecks);
+  // Compare receipt lineage with the selected report, retaining every foreign
+  // or incomplete locator. A canonical marker is only a saved source claim;
+  // even an exact hash match cannot authenticate the original or a receipt.
+  const isHash = (value) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+  const published = Object.hasOwn(saved, 'native_publication');
+  const sourceHash = published ? saved.native_publication?.source_report_sha256 : reportHash;
+  const sourceLineage = {
+    reference_kind: published ? 'retained_native_publication_marker' : 'observed_report_bytes',
+    reference_sha256: isHash(sourceHash) ? sourceHash : null,
+    original_source_authenticated: false,
+  };
+  for (const attempt of native.attempts || []) {
+    const hash = attempt.report_sha256;
+    const status = hash === null || hash === undefined ? 'not_recorded'
+      : !isHash(hash) ? 'invalid'
+        : !sourceLineage.reference_sha256 ? 'reference_unavailable'
+          : hash === sourceLineage.reference_sha256 ? 'matches_reference' : 'differs_from_reference';
+    attempt.source_binding = { status, authenticated: false };
+  }
   const identities = new Set(paid.map((item) => item.backend_run_id));
   // Keep malformed native locators visible, but do not count blank or non-text
   // values as paid identities or let them hide a started UNKNOWN invocation.
@@ -448,6 +467,7 @@ function preDispatchInventory(saved, paid, journal, locationChecks) {
     generic_retry_route: Object.hasOwn(saved, 'native_publication')
       ? 'refused_native_canonical_publication' : 'not_authorized_by_inventory',
     native_route: 'admit_collected_retry_then_publish_native_cohort',
+    source_lineage: sourceLineage,
     native_journal: native,
     paid_identity_reconciliation: {
       report_unique: identities.size,
@@ -524,10 +544,10 @@ function reconcileNativeLocators(observations, journal) {
       next_evidence_step: nextStep,
       attempts: candidates.map(({ attempt_id, case_id, material_revision, state,
         raw_receipt_present, raw_response_sha256, validation_present,
-        validation_observation, receipt_evidence_gaps }) =>
+        validation_observation, receipt_evidence_gaps, source_binding }) =>
         ({ attempt_id, case_id, material_revision, state, raw_receipt_present, raw_response_sha256,
           validation_present,
-          validation_observation, receipt_evidence_gaps })) };
+          validation_observation, receipt_evidence_gaps, source_binding })) };
   }
 }
 
@@ -648,7 +668,8 @@ function reportInventory({ report, observedAt, evidenceClass, evidenceReference,
     occurrences.push(item.location);
     identities.set(item.backend_run_id, occurrences);
   }
-  const preDispatch = preDispatchInventory(saved, paid, journal, locationChecks);
+  const preDispatch = preDispatchInventory(saved, paid, journal, locationChecks,
+    createHash('sha256').update(bytes).digest('hex'));
   reconcileNativeLocators(observations, preDispatch.native_journal);
   const reconciliation = requestedManifest
     ? reconcileRetainedRows(cases, requestedManifest, observations, preDispatch.native_journal) : null;
@@ -757,11 +778,11 @@ function nativeCaseRecovery(caseId, journal) {
         !attempt.receipt_evidence_gaps.length)) return [];
     const { attempt_id, material_revision, state, backend_run_id,
       raw_receipt_present, raw_response_sha256, validation_present, validation_observation,
-      receipt_evidence_gaps, recovery_step } = attempt;
+      receipt_evidence_gaps, recovery_step, source_binding } = attempt;
     return [{ location: `pre_dispatch.native_journal.attempts[${index}]`,
       attempt_id, material_revision, state, backend_run_id,
       raw_receipt_present, raw_response_sha256, validation_present, validation_observation,
-      receipt_evidence_gaps, next_evidence_step: recovery_step }];
+      receipt_evidence_gaps, source_binding, next_evidence_step: recovery_step }];
   });
   return { scope, status: 'observed', unresolved_attempts: unresolved,
     next_evidence_step: unresolved.length

@@ -121,16 +121,39 @@ for index, text in enumerate(json.loads(sys.argv[3])):
     ids.append(record['attempt_id'])
 print(json.dumps(ids))
 `, w.journal, w.sourceHash, JSON.stringify(texts)]);
+  // A well-formed foreign source hash remains attributable independently of
+  // the native producer's current-source receipts. Malformed hashes are
+  // covered separately by the retained-report API/CLI regressions.
+  w.connection.prepare('UPDATE native_attempts SET report_sha256=? WHERE attempt_id=?')
+    .run('b'.repeat(64), w.ids[2]);
   const before = w.snapshot();
   const native = w.run(w.inventoryArgs);
   const retained = reportInventory({ report: w.original, journal: w.journal,
     observedAt: 2000000000, evidenceClass: 'current_snapshot',
     evidenceReference: 'isolated-native-producer-fixture' });
   const attempts = retained.pre_dispatch.native_journal.attempts;
+  assert.deepEqual(retained.pre_dispatch.source_lineage, {
+    reference_kind: 'observed_report_bytes', reference_sha256: w.sourceHash,
+    original_source_authenticated: false,
+  });
   for (const record of native.native_journal.attempts) {
-    assert.equal(attempts.find((row) => row.attempt_id === record.attempt_id).raw_response_sha256,
-      record.raw_response_sha256, 'both inventory paths must identify the same retained bytes');
+    const observed = attempts.find((row) => row.attempt_id === record.attempt_id);
+    assert.equal(observed.raw_response_sha256, record.raw_response_sha256,
+      'both inventory paths must identify the same retained bytes');
+    assert.deepEqual(observed.source_binding, {
+      status: record.matches_original_source ? 'matches_reference' : 'differs_from_reference',
+      authenticated: false,
+    });
   }
+  const canonical = reportInventory({ report: w.canonical, journal: w.journal,
+    observedAt: 2000000000, evidenceClass: 'current_snapshot',
+    evidenceReference: 'isolated-native-publication-fixture' });
+  assert.deepEqual(canonical.pre_dispatch.source_lineage, {
+    ...retained.pre_dispatch.source_lineage, reference_kind: 'retained_native_publication_marker',
+  });
+  assert.deepEqual(canonical.pre_dispatch.native_journal, retained.pre_dispatch.native_journal);
+  assert.equal(canonical.receipt_authority, 'not_authenticated_by_inventory');
+  assert.equal(canonical.dispatch_authorized, false);
   ids.forEach((id, index) => {
     assert.equal(attempts.find((row) => row.attempt_id === id).raw_response_sha256, sha256(texts[index]));
   });
