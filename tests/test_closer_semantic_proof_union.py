@@ -115,8 +115,8 @@ def test_union_never_relaxes_foreign_or_typed_proof_guards(tmp_path, damage):
 
 
 def test_existing_host_strong_and_authority_sources_unchanged():
+    assert not source_unchanged("9379f225", "closer_disposition.py")
     for filename in (
-        "closer_disposition.py",
         "closer_execution_contracts.py",
         "closer_adjudication_policy.py",
     ):

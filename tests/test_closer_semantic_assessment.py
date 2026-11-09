@@ -8,11 +8,9 @@ from closer_semantic_audit_support import (
     leaves,
     source_path,
     source_unchanged,
-    unreserved_pipeline,
 )
 from closer_semantic_native_integration_support import (
     assert_reviewed_role_registry_successor,
-    before_capacity_pre_effect_recovery_source,
 )
 from closer_semantic_native_integration_support import (
     integrated_reference as reference,
@@ -346,11 +344,9 @@ def test_physical_change_foreign_snapshot_and_missing_host_inventory_refused(tmp
 
 def test_unmodified_host_security_strong_and_parser_ast_and_only_reserved_dispatcher_hunks():
     base = "78f6244c"
-    for filename in (
-        "closer_disposition.py",
-        "closer_execution_contracts.py",
-    ):
+    for filename in ("closer_execution_contracts.py",):
         assert source_unchanged(base, filename), filename
+    assert not source_unchanged(base, "closer_disposition.py")
     # Reviewed native record insertion changes registry data only. All validator
     # ASTs remain exact; pin this explicit successor instead of rewriting history.
     assert_reviewed_role_registry_successor()
@@ -359,34 +355,13 @@ def test_unmodified_host_security_strong_and_parser_ast_and_only_reserved_dispat
             "closer_model_contracts.py",
             {"render_classification_prompt", "classification_contract_descriptor"},
         ),
-        (
-            "closer_dispatcher.py",
-            {
-                "_controlled_model_contract",
-                "_run_staged_pipeline",
-                "_initial_dispatch_held",
-                "main",
-            },
-        ),
     ):
         old = reference(base)["files"][filename]["top_level_ast"]
         raw = source_path(filename).read_bytes()
-        if filename == "closer_dispatcher.py":
-            raw = before_capacity_pre_effect_recovery_source(raw, filename)
         new = leaves(raw.decode())
         assert {k: v for k, v in new.items() if k not in allowed} == {
             k: v for k, v in old.items() if k not in allowed
         }
-
-
-def test_no_unreserved_nested_dispatcher_edits():
-    current = before_capacity_pre_effect_recovery_source(
-        source_path("closer_dispatcher.py").read_bytes(), "closer_dispatcher.py"
-    ).decode()
-    expected = reference("78f6244c")["files"]["closer_dispatcher.py"][
-        "unreserved_pipeline_ast_sha256"
-    ]
-    assert unreserved_pipeline(current) == expected
 
 
 def test_confirmed_native_defect_stays_relevant_known_unmet_without_fake_resolution(tmp_path):

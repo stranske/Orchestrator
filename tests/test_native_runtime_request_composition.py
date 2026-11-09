@@ -5,6 +5,7 @@ an agent or provider. No campaign, RuntimeBinding, Core store, or queue admits v
 an accepted stub. The existing fixtures' model-only admission stub is restored.
 """
 
+import base64
 import hashlib
 import json
 import subprocess
@@ -31,6 +32,7 @@ import closer_dispatcher as dispatcher
 import closer_frontier_policy as policy
 import closer_native_observer as native
 import closer_pipeline as pipeline
+import closer_resources as resources
 import closer_runtime_binding as binding
 import execution_profiles
 
@@ -193,6 +195,38 @@ def runtime_request(capacity_host, public_merge_world, monkeypatch, tmp_path, re
         context["workspace_config"]["sha256"],
     ]
     return world, manifest, manifest_path, context, contents, core_requests
+
+
+@pytest.mark.parametrize("checkout", ["held", "absent"])
+def test_native_publication_runtime_core_scoped_queue_requests_without_models(
+    runtime_request, monkeypatch, capsys, checkout
+):
+    world, manifest, path, context, contents, core_requests = runtime_request
+    workspace = world.runtime_workspace
+    assert workspace.is_dir() == (checkout == "held")
+    assert dispatcher.Closer.campaign_admission is _REAL_CAMPAIGN_ADMISSION
+    assert native.validate_admission(manifest, context, for_effects=True) == context
+    with resources._workspace_locks(
+        resources.scoped_root(world.ledger),
+        ["worktree:" + str(workspace)],
+        deadline=time.time() + 3,
+        now=time.time,
+    ):
+        assert dispatcher.main(world.argv) == 78
+    result = json.loads(capsys.readouterr().out)
+    assert len(world.verifies) == 1 and not world.merges, result["targets"]
+    assert world.events["provider"] == 0
+    assert contents.writes > 0 and core_requests
+    assert any(item[0] is binding._CoreHTTPTransport for item in core_requests)
+    assert all(item[0] in {binding._CoreHTTPTransport, type(None)} for item in core_requests)
+    records = [json.loads(base64.b64decode(row["content"])) for row in contents.rows.values()]
+    assert any(row.get("action") == "verify_request" for row in records), records
+    completed = next(row for row in records if row.get("status") == "succeeded")
+    intent = completed["mutation_intent"]["native_binding"]
+    assert intent["action"] == "post_merge_verify"
+    assert intent["pr_target"] == "owner/repo#12"
+    assert intent["head"] == world.snapshot["head"] and intent["merge"] == world.snapshot["merge"]
+    assert all(p.read_bytes() == before for p, before in world.originals.items())
 
 
 def test_changed_runtime_bytes_hold_before_core_or_native_effect(runtime_request, capsys):

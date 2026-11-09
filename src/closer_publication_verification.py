@@ -25,6 +25,7 @@ import closer_correction_handoff as wire
 import closer_correction_native_effects as native_effects
 import closer_corrective_verification_instruction as instruction
 import closer_dispatcher as native
+import closer_disposition
 import closer_evidence
 import closer_queue as queue
 import verification_events
@@ -797,13 +798,13 @@ def bind_verifier_inputs(continuation, backend, target, snapshot, prepared):
         readback.require_deployed(backend, record, prepared.get("fields", {}).get("ref"))
         selector = material_selector(continuation)
         previous = (
-            verification_events.material_selectors(prepared["material_selectors"])
+            closer_disposition.material_selectors(prepared["material_selectors"])
             if prepared["material_selectors"]
             else []
         )
         typed = [row for row in previous if row.get("kind") == "corrective_instruction"]
         _need(not typed or typed == [selector], "repeat corrective scope changed")
-        selected = verification_events.material_selectors(previous + ([] if typed else [selector]))
+        selected = closer_disposition.material_selectors(previous + ([] if typed else [selector]))
     except (ValueError, KeyError, TypeError) as error:
         raise EvaluatorScopeHeld(
             "canonical corrective evaluator input consumer unavailable"

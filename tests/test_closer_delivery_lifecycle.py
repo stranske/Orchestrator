@@ -574,6 +574,24 @@ def test_explicit_pause_blocks_positive_evidence_without_provider_or_action(
     assert label in json.dumps(result)
 
 
+def test_generic_needs_human_label_preserves_objective_merge_and_verifier_successor(
+    tmp_path, monkeypatch
+):
+    delivery = OfflineDelivery(tmp_path, monkeypatch)
+    delivery.current["labels"] = ["needs-human"]
+    delivery.refresh()
+    result = delivery.run()
+    assert len(delivery.guard_calls) == 1, result
+    assert not delivery.provider_calls
+    assert delivery.current["state"] == "MERGED"
+    dispatches = delivery.verification_dispatches()
+    assert len(dispatches) == 1, result
+    assert dispatches[0][2]["inputs[verification_request_basis]"] == (
+        delivery.backend.verification_request_basis(delivery.current)
+    )
+    assert delivery.current["sources"][0]["state"] == "open"
+
+
 def test_confirmed_human_owner_blocker_still_prevents_positive_delivery(tmp_path, monkeypatch):
     delivery = OfflineDelivery(tmp_path, monkeypatch)
     delivery.current["labels"] = ["needs-human"]

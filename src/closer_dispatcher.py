@@ -43,6 +43,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Mapping
 
+import closer_disposition
 import closer_evidence
 import closer_model_contracts
 import gh_capacity
@@ -2756,7 +2757,7 @@ class Closer:
                 and isinstance(ordinary_nonpass, dict)
                 and ordinary_nonpass.get("head") == s.get("head")
             ):
-                if verification_events.request_matches(s, ordinary_nonpass):
+                if closer_disposition.request_matches(s, ordinary_nonpass):
                     if isinstance(self._accepted_verification_request(s), dict):
                         return (
                             "wait",
@@ -2890,7 +2891,7 @@ class Closer:
 
     def verification_request_basis(self, snapshot):
         lifecycle = snapshot.get("verifier_lifecycle") or snapshot.get("verifier") or {}
-        repeat = verification_events.request_matches(
+        repeat = closer_disposition.request_matches(
             snapshot, self.dispositions.get(snapshot["target"], {}).get("ordinary_nonpass") or {}
         )
         return digest(
@@ -4086,7 +4087,7 @@ class Closer:
                 "next_trigger": "new authenticated verifier attempt or request reconciliation",
             }
         disposition = self.dispositions.get(snapshot["target"], {}).get("ordinary_nonpass") or {}
-        repeat_request = verification_events.request_matches(snapshot, disposition)
+        repeat_request = closer_disposition.request_matches(snapshot, disposition)
         result = self._verification_preflight(target, snapshot)
         if result is not None:
             return result

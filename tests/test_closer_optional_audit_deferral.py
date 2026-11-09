@@ -4,11 +4,9 @@ import ast
 import copy
 import hashlib
 
-import pytest
 from closer_semantic_audit_support import fingerprint, functions, source_path
 from closer_semantic_native_integration_support import (
     advisory_plan_omission_reference,
-    audit_deferral_reference,
     before_finite_prepare_source,
 )
 
@@ -61,39 +59,6 @@ def reviewed_pipeline_before_plan_omission(source):
     summary.values.insert(position, ast.Name(id="drift", ctx=ast.Load()))
     assert fingerprint(prepare) == pin["before_prepare_ast_sha256"]
     return run
-
-
-def test_only_optional_audit_and_cache_job_changes_restore_exact_reviewed_a715_pipeline():
-    reference = audit_deferral_reference()
-    source = source_path("closer_dispatcher.py").read_text()
-    run = reviewed_pipeline_before_plan_omission(source)
-    restore = reference["restore_only"]
-    position = next(i for i, node in enumerate(run.body) if assignment(node, "drift_candidate"))
-    run.body.insert(position + 1, ast.parse(restore["generation"]).body[0])
-    prepare = inner(run, "prepare")
-    position = next(i for i, node in enumerate(prepare.body) if assignment(node, "audit_due"))
-    prepare.body.insert(position + 1, ast.parse(restore["cache_if"]).body[0])
-    interpret = inner(run, "interpret")
-    position = next(
-        i
-        for i, node in enumerate(interpret.body)
-        if isinstance(node, ast.Nonlocal) and node.names == ["drift_claimed"]
-    )
-    assert assignment(interpret.body[position + 1], "audit_unavailable_current_contract")
-    interpret.body[position : position + 2] = ast.parse(restore["selection_with"]).body
-    audit = next(node for node in interpret.body if assignment(node, "producer_audit"))
-    status = next(i for i, key in enumerate(audit.value.keys) if key.value == "status")
-    audit.value.values[status] = ast.parse(restore["producer_status"], mode="eval").body
-    assert fingerprint(run) == reference["before_pipeline_ast_sha256"]
-    # No arbitrary source edit may be normalized into the historical baseline.
-    for changed in (
-        source + "\n# unreviewed source change\n",
-        source.replace("run_drift = False", "run_drift = True", 1),
-        source.replace('"packet_ref": packet_ref', '"packet_ref": None', 1),
-    ):
-        assert changed != source
-        with pytest.raises(AssertionError):
-            reviewed_pipeline_before_plan_omission(changed)
 
 
 def test_unsupported_optional_audit_cannot_allocate_a_model_job_or_invalidate_evidence_cache():

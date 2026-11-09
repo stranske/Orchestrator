@@ -94,14 +94,14 @@ def test_audited_tests_do_not_invoke_historical_git_or_external_scratch_imports(
 
 @pytest.mark.parametrize("layout", ["checkout", "flat"])
 def test_source_byte_guard_preserves_checkout_and_flat_layout(tmp_path, monkeypatch, layout):
-    source = audit.source_path("closer_disposition.py").read_bytes()
+    source = audit.source_path("closer_execution_contracts.py").read_bytes()
     tests = tmp_path / "tests"
     tests.mkdir()
     destination = tmp_path / "src" if layout == "checkout" else tmp_path
     destination.mkdir(exist_ok=True)
-    path = destination / "closer_disposition.py"
+    path = destination / "closer_execution_contracts.py"
     path.write_bytes(source)
     monkeypatch.setattr(audit, "ROOT", tests)
-    assert audit.source_unchanged("9379f225", "closer_disposition.py")
+    assert audit.source_unchanged("9379f225", "closer_execution_contracts.py")
     path.write_bytes(source + b"\n# changed source binding\n")
-    assert not audit.source_unchanged("9379f225", "closer_disposition.py")
+    assert not audit.source_unchanged("9379f225", "closer_execution_contracts.py")

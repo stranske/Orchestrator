@@ -12,6 +12,7 @@ import pytest
 import closer_correction_handoff as wire
 import closer_correction_native_effects as effects
 import closer_corrective_verification_instruction as instruction
+import closer_disposition
 
 
 def inputs():
@@ -168,6 +169,48 @@ def test_producer_passes_full_protected_collection_before_selected_row_narrowing
         n for n in assignments if any(isinstance(t, ast.Name) and t.id == "raw" for t in n.targets)
     )
     assert full.lineno < selected.lineno < calls[0].lineno
+
+
+def test_canonical_native_selector_roundtrips_existing_repeat_material_path():
+
+    selector = json.loads(
+        (
+            Path(__file__).parent / "fixtures/closer_corrective_instruction/v1-native-selector.json"
+        ).read_text()
+    )
+    assert instruction.validate_selector(selector) == selector
+    assert closer_disposition.material_selectors([selector]) == [selector]
+    value = closer_disposition.material_selectors([selector])[0]
+    value["owner_instruction"]["writer_id"] += 1
+    assert value != selector  # No alias to the original protected scope.
+
+
+@pytest.mark.parametrize(
+    "damage", ["missing", "extra", "identity", "head", "tests", "time", "unknown_kind"]
+)
+def test_typed_selector_refuses_malformed_without_dropping_to_plain_evidence(damage):
+
+    selector = json.loads(
+        (
+            Path(__file__).parent / "fixtures/closer_corrective_instruction/v1-native-selector.json"
+        ).read_text()
+    )
+    if damage == "missing":
+        del selector["required_tests_sha256"]
+    elif damage == "extra":
+        selector["act_authorized"] = True
+    elif damage == "identity":
+        selector["incumbent_assignee"]["id"] = True
+    elif damage == "head":
+        selector["corrective_pr"]["head_sha"] = "not-a-head"
+    elif damage == "tests":
+        selector["required_tests_sha256"] = []
+    elif damage == "time":
+        selector["owner_instruction"]["updated_at"] = "invalid"
+    else:
+        selector["kind"] = "unknown_corrective_instruction"
+    with pytest.raises(ValueError):
+        closer_disposition.material_selectors([selector])
 
 
 def test_ambiguous_suffix_refuses_instead_of_selecting_one_machine_instruction():
