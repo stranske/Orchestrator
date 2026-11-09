@@ -331,7 +331,8 @@ def test_baseline_was_measured_with_the_pinned_versions():
 
 
 @pytest.mark.parametrize("defect", ["unknown-version", "hybrid", "incomplete"])
-def test_baseline_requires_one_complete_matching_toolchain(defect):
+def test_baseline_requires_one_complete_matching_toolchain(defect, tmp_path, monkeypatch):
+    """Exercise the named gate and its diagnostic through real fixture files."""
     tools = (
         "ruff",
         "black",
@@ -345,15 +346,43 @@ def test_baseline_requires_one_complete_matching_toolchain(defect):
     )
     pins = {f"{tool.upper().replace('-', '_')}_VERSION": "2.0.0" for tool in tools}
     complete = " ".join(f"{tool}=2.0.0" for tool in tools)
+    pin_file = tmp_path / "autofix-versions.env"
+    baseline_doc = tmp_path / "CI_LINT_BASELINE.md"
+    monkeypatch.setitem(globals(), "PINS", pin_file)
+    monkeypatch.setitem(globals(), "BASELINE_DOC", baseline_doc)
+
+    def write_pins(values):
+        pin_file.write_text(
+            "\n".join(f"{key}={value}" for key, value in values.items()) + "\n", encoding="utf-8"
+        )
+
     for tool in tools:
+        write_pins(pins)
+        baseline_doc.write_text(f"<!-- measured-with: {complete} -->", encoding="utf-8")
+        test_baseline_was_measured_with_the_pinned_versions()
+
         wrong = complete.replace(f"{tool}=2.0.0", f"{tool}=1.0.0")
         markers = {
-            "unknown-version": wrong,
+            "unknown-version": complete,
             "hybrid": wrong + " -->\n<!-- measured-with: " + f"{tool}=2.0.0",
             "incomplete": complete.replace(f"{tool}=2.0.0", ""),
         }
-        assert not _has_measured_baseline(f"<!-- measured-with: {markers[defect]} -->", pins)
-    assert _has_measured_baseline(f"<!-- measured-with: {complete} -->", pins)
+        if defect == "unknown-version":
+            bumped = dict(pins)
+            bumped[f"{tool.upper().replace('-', '_')}_VERSION"] = "3.0.0"
+            write_pins(bumped)
+        baseline_doc.write_text(f"<!-- measured-with: {markers[defect]} -->", encoding="utf-8")
+        with pytest.raises(AssertionError) as failure:
+            test_baseline_was_measured_with_the_pinned_versions()
+        assert str(failure.value).startswith(
+            "CI_LINT_BASELINE.md has no complete measured toolchain matching "
+            f"autofix-versions.env: {read_pins()}. "
+            "Re-run scripts/ci_lint_baseline.py with these exact pins and retain its measurements."
+        )
+
+        write_pins(pins)
+        baseline_doc.write_text(f"<!-- measured-with: {complete} -->", encoding="utf-8")
+        test_baseline_was_measured_with_the_pinned_versions()
 
 
 def test_mypy_config_silences_nothing_by_error_code():

@@ -40,6 +40,7 @@
     "tests/test_router_choose_mode.py",
     "tests/test_model_table.py",
     "tests/test_consumer_missing_classification.py",
+    "tests/test_model_table_local.py",
     "tests/test_github_api_observer.py"
   ],
   "shards": [
@@ -474,7 +475,8 @@
       "tests/test_synthesis_promotion_coverage.py",
       "tests/test_tick_evidence_projection.py",
       "tests/test_strategy_experiment.py",
-      "tests/test_model_table.py"
+      "tests/test_model_table.py",
+      "tests/test_model_table_local.py"
     ]
   ]
 }

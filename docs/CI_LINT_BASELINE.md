@@ -1,5 +1,28 @@
 # Gate python-ci baseline — what is checked, what is deferred, and what would clear it
 
+## Measured pending dev-tool PR #1289 toolchain — 2026-11-09
+
+<!-- measured-with: black=26.10.1 ruff=0.17.4 isort=9.0.2 docformatter=1.7.8 mypy=2.4.1 pytest=9.2.0 pytest-cov=7.1.0 pytest-xdist=3.8.0 coverage=7.17.2 -->
+
+The exact nine-pin payload from #1289 head
+`a27084d488d77fcfe7c9644ab97c8f5426bf5cfc` was installed in an isolated
+Python 3.12.2 environment and strictly measured against Orchestrator source
+`d2fdd91b4b09f2a9a8572e14cb5270c3c83628d0` using
+`scripts/ci_lint_baseline.py`'s `collect(strict=True)` entry point.
+Ruff reported zero findings, Black left 1,014 files unchanged, mypy reported
+no issues in 229 source files, and the coverage startup probe exited zero
+with 15,067 tests collected. Every check has blocking 0 and drainable 0;
+no enforcement counts or thresholds need changing.
+
+[Strict report](evidence/issue-1291/report.json),
+[full captured commands and output, gzip JSON](evidence/issue-1291/commands.json.gz),
+[source and tool provenance](evidence/issue-1291/provenance.json), and
+[repair evidence](evidence/issue-1291/README.md) retain the actual measurement.
+The coverage probe collects tests; it does not run the full suite or establish
+combined-coverage or flat-mirror aggregate acceptance. The current-pin measurement
+below remains valid; this additional complete bundle allows source delivery before
+the generated pin PR lands. No repository pins or gate thresholds were changed.
+
 ## Measured pending Maint 52 PR #1289 toolchain — 2026-11-09
 
 <!-- measured-with: black=26.10.1 ruff=0.17.4 isort=9.0.2 docformatter=1.7.8 mypy=2.4.1 pytest=9.2.0 pytest-cov=7.1.0 pytest-xdist=3.8.0 coverage=7.17.2 -->
