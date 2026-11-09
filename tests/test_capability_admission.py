@@ -995,10 +995,16 @@ def test_declared_consumers_resolve_in_the_tree():
         ("KNOWN_DECLARATIONS", capabilities.KNOWN_DECLARATIONS),
     ):
         for cid, declaration in declarations.items():
-            if "downstream_consumer" not in declaration:
+            if (
+                "downstream_consumer" not in declaration
+                and declaration.get("consumer_missing") is not True
+            ):
                 continue
             resolution = admission.consumer_resolution(declaration)
             if declaration.get("consumer_missing") is True:
+                assert str(
+                    declaration.get("downstream_consumer") or ""
+                ).strip(), f"{source}:{cid}: retain the absent consumer declaration"
                 assert str(
                     declaration.get("notes") or ""
                 ).strip(), f"{source}:{cid}: explain the absent consumer"
@@ -1011,7 +1017,7 @@ def test_declared_consumers_resolve_in_the_tree():
 
 
 def test_declared_consumer_check_cannot_hide_a_broken_gate_behind_an_overlay():
-    """A valid overlay must not mask prose or an unresolved symbol in the gate table."""
+    """Neither an overlay nor a missing-consumer flag may hide an invalid declaration."""
     cid = "route-weights-export"
     valid = {"downstream_consumer": "route_weights_export.py:publish_document"}
     for broken in ("the export publisher", "route_weights_export.py:no_such_consumer"):
@@ -1025,6 +1031,28 @@ def test_declared_consumer_check_cannot_hide_a_broken_gate_behind_an_overlay():
                 assert f"KNOWN_GATES:{cid}" in str(exc), str(exc)
             else:
                 raise AssertionError(f"the consumer check accepted a broken gate: {broken}")
+
+    cid = "docs-drift-fix-agent"
+    reviewed = dict(capabilities.KNOWN_DECLARATIONS[cid])
+    for source, declarations in (
+        ("KNOWN_GATES", capabilities.KNOWN_GATES),
+        ("KNOWN_DECLARATIONS", capabilities.KNOWN_DECLARATIONS),
+    ):
+        incomplete = [
+            {key: value for key, value in reviewed.items() if key != "downstream_consumer"},
+            *({**reviewed, "downstream_consumer": value} for value in (None, "", "  ")),
+            *({**reviewed, "notes": value} for value in (None, "", "  ")),
+        ]
+        for declaration in incomplete:
+            with patch.dict(declarations, {cid: declaration}):
+                try:
+                    test_declared_consumers_resolve_in_the_tree()
+                except AssertionError as exc:
+                    assert f"{source}:{cid}" in str(exc), str(exc)
+                else:
+                    raise AssertionError(
+                        f"the consumer check accepted incomplete reviewed absence: {source}:{cid}"
+                    )
 
 
 def test_feature_scan_declared_consumer_applies_the_scan_output():
