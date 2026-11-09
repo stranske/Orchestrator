@@ -1,5 +1,87 @@
 # Issue #1291 repair evidence
 
+## Round 5: current source and regenerated payload readback — 2026-11-09
+
+Outcome 1 = PASS on input `b46bca3c6a0feedda0f0ad3bf246aa219ded78b7`:
+`/opt/anaconda3/bin/python3 -m pytest -q tests/test_ci_gate_config.py`
+passes 15 tests in 0.28 seconds. This command and date were recorded before
+editing. Stop rule: two attempts per failing acceptance command or 45 minutes.
+No implementation failure required repair; this round changes evidence only.
+
+T1 is verified: the nine-entry comparison below covers BLACK, RUFF, ISORT,
+DOCFORMATTER, MYPY, PYTEST, PYTEST_COV, PYTEST_XDIST and COVERAGE. Current
+source pins match the complete October 22 measurement. The proposed bundle
+differs at Ruff, mypy, pytest and coverage, with zero missing entries; it now
+matches both complete November 9 measurement markers. The fresh #1289 head's
+pin bytes have the same SHA-256 recorded in `provenance.json`.
+
+T2 is verified: re-read authoritative Workflows Maint 68 (blob
+`080f01d98ad21a02a372bd851e9a4641b5851f50`), which consumes the sync manifest,
+and Maint 52, which explicitly copies `autofix-versions.env` into consumers.
+Maint 68 is absent from this consumer checkout. The detailed source ownership
+and builder/aggregate commands below remain applicable. The requested claim
+that Maint 68 regenerates this dev-tool PR is incorrect: Maint 52 owns it.
+No shared workflow or dependency pin was edited.
+
+T4 is verified from the retained actual strict measurement, rather than
+inventing another measurement of the retired source tree: `report.json` has
+all nine installed versions equal to the proposed pins, no setup problems,
+and four blocking/drainable pairs of 0/0. Re-reading `commands.json.gz`
+confirms every command exited zero, Black's 1,014 unchanged files, mypy's
+229 source files and 15,067 collected tests in 54.49 seconds. The current
+collector SHA-256 still equals the recorded collector digest. The baseline
+already contains this complete measured bundle; no counts need changing.
+These measurements describe the recorded source revision, not today's
+smaller retirement tree. Collection is not execution of the full suite.
+
+Outcome 2 = PASS (T6): executed the actual builder and byte comparisons:
+
+```bash
+bash scripts/build_exec_mirror.sh "$PWD" /private/tmp/1293-round5-flat
+cmp docs/CI_LINT_BASELINE.md /private/tmp/1293-round5-flat/docs/CI_LINT_BASELINE.md
+cmp .github/workflows/autofix-versions.env /private/tmp/1293-round5-flat/.github/workflows/autofix-versions.env
+/opt/anaconda3/bin/python3 -m pytest -q /private/tmp/1293-round5-flat/tests/test_ci_gate_config.py
+```
+
+All exit zero; flat gate passes 15 tests in 0.29 seconds. Native source CI
+run `42585237316` binds to `b46bca3c`; flat aggregate job `129054665793`,
+read with `gh run view 42585237316 --job 129054665793 --log`, runs the existing
+`verify_before_sync.sh` aggregate with payload integrity checks and prints
+`verify-before-sync: VERIFIED`. Its merge checkout is `ae454e1`, with 8,311
+passed, 48 test skips, seven selftest skips and two gate skips. This is the
+native aggregate verdict; the previous local supervisor refusal is not
+misrepresented as a local aggregate pass. No full suite ran locally.
+
+Outcome 3 = PASS for regenerated payload CI (A5): #1289 is open and ready at
+`6efd1db39f9ba919d0f0ff6f63e2c0056ca64172`. New CI run `42588005489` is
+successful on that exact head. `gh run view 42588005489 --log-failed` exits
+zero with no failed logs. All four previously failed jobs now succeed:
+
+| Previously failed job | New job | Result |
+| --- | --- | --- |
+| pytest + coverage shard 1/6 | 129062391265 | success |
+| flat exec-mirror shard 1/6 | 129062391418 | success |
+| verify.py aggregate + combined coverage | 129063070477 | success |
+| verify.py aggregate in the flat exec-mirror shape | 129063029469 | success |
+
+The new flat job log identifies `BARE EXEC MIRROR`, merge checkout `a6a3681`,
+8,311 passed, 48 test skips, seven selftest skips and two gate skips, ending
+`verify-before-sync: VERIFIED`. Historical run `42567594229` was used only
+to identify the four old failure names, never as delivery evidence.
+
+T7/A6 remain pending. The target-specific sync-core record for #1289 has
+head `6efd1db3`, round `20261109T084459Z`, disposition `waiting`, owner `ci`.
+No classification file naming this head was found; the original issue handoff
+still names `a27084d4`. Waiting on then-running CI is not a completed
+pin-conflict classification. The next controller-owned sync-core evaluation
+must read the now-successful CI and record its finding disposition. No manual
+round launch, ownership release, merge or fabricated classification occurred.
+Blocking/drainable pair: completed classification unavailable / native
+scheduled sync-core remains able to evaluate the successful head.
+
+The pushed evidence-only head needs its own CI and post-push review readback;
+the input-head CI above is explicitly not a verdict on a future commit.
+
 ## Round 4: align the Gate plan with main — 2026-11-09
 
 Outcome 1 = PASS: the complete measured-toolchain gate file passes 15 tests
