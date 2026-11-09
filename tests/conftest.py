@@ -69,6 +69,7 @@ def isolate_provision_events(tmp_path, monkeypatch):
     """Provision tests and their subprocesses must never append to the production ledger."""
     path = tmp_path / "provision-events.ndjson"
     monkeypatch.setenv("ORCH_PROVISION_EVENTS_PATH", str(path))
+    monkeypatch.setenv("LANE_API_EVENTS", str(tmp_path / "github-api-events.jsonl"))
     # This conftest is also copied into standalone guard-test repos with no src/.
     # Patch an already imported module; later imports read the temporary env path.
     loaded = sys.modules.get("provision")
