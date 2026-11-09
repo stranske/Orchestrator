@@ -708,6 +708,13 @@ def consumer_report(ledger: dict, ctx: dict, rows: list[dict]) -> dict:
     return {
         "total": len(rows),
         "by_class": classes,
+        # Carry the reviewed finding into JSON/text so M4/M8 can cite its actual reason.
+        "reviewed_absences": {
+            cid: str(
+                ledger[cid].get("notes") or ledger[cid].get("downstream_consumer") or ""
+            ).strip()
+            for cid in classes["consumer_missing"]
+        },
         # `enforced`, as `findability_report` reads it: a waived row keeps the requirement in its
         # `blocking` list but cannot fail the suite, so it is not reported as blocking here.
         "blocking": [
@@ -1270,7 +1277,9 @@ def format_report(rep: dict) -> str:
         for cid in cons["by_class"]["not_acting"]:
             out.append(f"                   NOT ACTING (trailing window) {cid}")
         for cid in cons["by_class"].get("consumer_missing", []):
-            out.append(f"                   REVIEWED ABSENT {cid}")
+            reason = cons.get("reviewed_absences", {}).get(cid)
+            suffix = f": {reason}" if reason else ""
+            out.append(f"                   REVIEWED ABSENT {cid}{suffix}")
     if rep["legacy_debt"]:
         out += ["", "  legacy debt (pay down opportunistically; never a human queue):"]
         counts: dict[str, int] = {}

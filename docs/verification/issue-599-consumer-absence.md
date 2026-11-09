@@ -257,3 +257,40 @@ blocker comment and `needs-human` label under approval policy `never`. The
 proposed reconciled PR body is saved at `/tmp/pr-1275-reconciled-body.md`; the
 remote checklist was not changed. PR #1275 was re-read as open and ready for
 review (`draft: false`), with head `6d4089afde3336b0f94afaa88d467f9c6f6e153a`.
+
+### Keepalive reviewed-absence explanations (2026-11-09)
+
+The report now includes a `reviewed_absences` mapping from capability ID to the
+source explanation, and prints that explanation beside each `REVIEWED ABSENT`
+row. Rows without notes fall back to their declaration; older report snapshots
+still render. The existing registered tests verify that source reconciliation
+preserves the explanations and that replacing the absent consumer removes its
+finding. Counts and admission behavior are unchanged.
+
+Fifteen relevant test functions passed by direct Python invocation, including
+the named declaration gate and report/reconciliation test. Three tests requiring
+pytest fixtures were not invoked. Omitting the explanation deliberately failed
+the reporting regression; restoring it passed. Python syntax and
+`git diff --check` passed. Pytest and both mandatory Black commands could not
+run because the tools are absent, and installation failed. These changes remain
+uncommitted under the mandatory Black gate.
+
+The sole reviewed absence across all three source tables is still
+`docs-drift-fix-agent`: external Workflows repair output has no local acting
+consumer or handover rail; invocation ingestion does not consume that output.
+The declaration, `consumer_missing: true`, and explanation remain in place.
+The proposed PR body lists this inventory and marks only the verified
+absence-declaration task complete. Post-sync acceptance remains open.
+
+The CLI exited 0 with `ORCH_LOCAL_RUNTIME=/tmp/issue599-absence-runtime`:
+
+```text
+CONSUMERS (10th): 0 of 0 declare a consumer this tree can find — acting (capability-level) 0, in grace 0, not invoked 0, exercise-bound 0, unmeasured 0
+not acting (trailing window) 0 (blocking 0, pre-cutoff debt 0); prose 0, missing 0, undeclared 0 — DRAINABLE 0 (reviewed absent 0, unresolved 0; reviewed absence remains finding debt)
+```
+
+This empty-runtime output is not live acceptance; the owner's deployed ledger
+and generation are unavailable. Automatic approval review rejected the PR-body
+update, blocker comment, and `needs-human` label because approval is required
+while policy is `never`. The remote checklist remains unchanged; the proposed
+body is saved at `/tmp/pr-1275-reviewed-absence-body.md`.

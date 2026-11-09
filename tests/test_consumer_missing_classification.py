@@ -44,8 +44,13 @@ def test_reviewed_absence_stays_missing_even_with_a_resolvable_token():
 
 
 def test_consumer_report_counts_reviewed_absence_without_granting_acceptance():
+    reason = "External repair output has no local consumer or handover rail."
     ledger = {
-        "absent": {"downstream_consumer": "external repair issues", "consumer_missing": True},
+        "absent": {
+            "downstream_consumer": "external repair issues",
+            "consumer_missing": True,
+            "notes": f"  {reason}  ",
+        },
         "broken": {"downstream_consumer": "missing_module.py:missing_consumer"},
     }
     rows = [
@@ -55,6 +60,7 @@ def test_consumer_report_counts_reviewed_absence_without_granting_acceptance():
     consumers = admission.consumer_report(ledger, {}, rows)
     assert consumers["by_class"]["prose"] == []
     assert consumers["by_class"]["consumer_missing"] == ["absent"]
+    assert consumers["reviewed_absences"] == {"absent": reason}
     assert consumers["by_class"]["unresolved"] == ["broken"]
     assert consumers["drainable"] == ["absent", "broken"]
     assert consumers["blocking"] == ["absent", "broken"]
@@ -75,13 +81,22 @@ def test_consumer_report_counts_reviewed_absence_without_granting_acceptance():
     assert "reviewed absent 1, unresolved 1" in rendered
     assert "DRAINABLE 2" in rendered
     assert [line.strip() for line in rendered.splitlines() if "REVIEWED ABSENT" in line] == [
-        "REVIEWED ABSENT absent"
+        f"REVIEWED ABSENT absent: {reason}"
     ]
+
+    # Older report snapshots still render, and rows without notes retain their declaration.
+    consumers.pop("reviewed_absences")
+    assert "REVIEWED ABSENT absent\n" in admission.format_report(report)
+    ledger["absent"].pop("notes")
+    assert admission.consumer_report(ledger, {}, rows)["reviewed_absences"] == {
+        "absent": "external repair issues"
+    }
 
     # The text inventory must follow the reviewed findings, rather than all missing symbols,
     # and disappear once a consumer declaration replaces that reviewed absence.
     ledger["absent"] = {"downstream_consumer": "merge_guard.py:evaluate_merge_gate"}
     report["consumers"] = admission.consumer_report(ledger, {}, rows)
+    assert report["consumers"]["reviewed_absences"] == {}
     rendered = admission.format_report(report)
     assert "prose 0, missing 1" in rendered
     assert "reviewed absent 0, unresolved 1" in rendered
@@ -187,6 +202,9 @@ def test_consumer_report_reconciles_source_inventory_without_writing_the_ledger(
     assert consumers["by_class"]["unresolved"] == []
     assert consumers["by_class"]["undeclared"] == []
     assert consumers["by_class"]["consumer_missing"] == expected
+    assert consumers["reviewed_absences"] == {
+        cid: declarations[cid]["notes"].strip() for cid in expected
+    }
     assert consumers["drainable"] == expected
     assert not consumers["drained"]
     verdicts = {row["capability_id"]: row for row in report["rows"]}
@@ -194,7 +212,7 @@ def test_consumer_report_reconciles_source_inventory_without_writing_the_ledger(
     rendered = admission.format_report(report)
     assert f"prose 0, missing {len(expected)}, undeclared 0 — DRAINABLE {len(expected)}" in rendered
     assert [line.strip() for line in rendered.splitlines() if "REVIEWED ABSENT" in line] == [
-        f"REVIEWED ABSENT {cid}" for cid in expected
+        f"REVIEWED ABSENT {cid}: {declarations[cid]['notes'].strip()}" for cid in expected
     ]
     assert path.read_bytes() == before
 
@@ -236,6 +254,9 @@ def test_consumer_report_reconciles_source_inventory_without_writing_the_ledger(
     consumers = repaired["consumers"]
     assert consumers["total"] == len(declarations)
     assert consumers["by_class"]["consumer_missing"] == remaining
+    assert consumers["reviewed_absences"] == {
+        name: declarations[name]["notes"].strip() for name in remaining
+    }
     assert consumers["drainable"] == remaining
     assert consumers["by_class"]["prose"] == []
     assert consumers["by_class"]["unresolved"] == []
