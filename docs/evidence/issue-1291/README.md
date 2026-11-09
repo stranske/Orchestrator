@@ -279,3 +279,60 @@ After validation, `git add tests/test_ci_toolchain_mirror.js docs/evidence/issue
 failed with `Unable to create .../.git/index.lock: Read-only file system`.
 The commit could not proceed. This follow-up's test and evidence edits remain
 in the working tree; the round's mandatory source-commit requirement is unmet.
+
+## Hosted follow-up: real aggregate rejection in the flat payload
+
+Checked 2026-11-09 against source
+`ec8053d7f7a04f42a6c273247aeedff1b3a54fc0`. T7 remains blocked on source
+delivery and regeneration: #1289 still has head
+`a27084d488d77fcfe7c9644ab97c8f5426bf5cfc`, and its comments contain no new
+sync-core classification. No workflow or protected pin file was changed.
+
+Continued T6's regression in the existing Node test. The fixture now ships the
+real committed Python modules and shard plan through the builder, then executes
+`python3 verify.py --floor-may-lag --aggregate <empty-evidence-directory>`
+inside that flat copy. It asserts exit 1 and the exact missing-shard diagnostic,
+including the shard count from the shipped plan and the missing file path.
+Both toolchain files must remain byte-identical to the fixture commit, and the
+entire payload digest must remain unchanged after rejection. Inherited runtime
+overrides are removed and all state paths point inside the disposable fixture.
+This tests the actual aggregate entrypoint without pytest substitutes or
+manufactured shard results. It does not establish a successful aggregate.
+
+Validation:
+
+- `node --test --test-isolation=none tests/test_ci_toolchain_mirror.js`: one
+  passing test, zero skips, in 2.76 seconds.
+- `node --check tests/test_ci_toolchain_mirror.js` and `git diff --check`: pass.
+- The combined mirror command documented above: six passes and the same
+  pre-existing empty-`tools` directory failure at
+  `tests/test_exec_mirror_contract_witness.js:153`. No test was skipped or disabled.
+- No Python source was edited; this interpreter still has no pytest, so no
+  Python suite or new baseline measurement is claimed.
+
+Source CI run
+[`42576841952`](https://github.com/stranske/Orchestrator/actions/runs/42576841952)
+has now completed. Its checkout aggregate failed (job `129028767571`), and its
+flat aggregate failed (job `129028776873`). The latter log explicitly reports
+`aggregate FAILED: missing or unreadable summary for shard 1/6` and
+`NOT VERIFIED (verify.py exit 1)`. Its artifacts contain only mirror shards
+2/3/4/6; shards 1 and 5 were cancelled. Checkout shard 1 was also cancelled.
+These results cannot establish T6/A4 or regenerated-head acceptance.
+
+The current source-head CI run
+[`42577582423`](https://github.com/stranske/Orchestrator/actions/runs/42577582423)
+is still in progress at readback, with checkout shards 2/4 and mirror shards 2/4
+successful and the remaining shards running. #1293 and #1289 both read as open,
+ready pull requests. T6/A4 and T7/A5/A6 remain pending; no checkbox is completed
+by this follow-up.
+
+After validation, the required commit was attempted with the two changed files.
+`git add` failed with `Unable to create .../.git/index.lock: Read-only file system`;
+the commit command therefore did not run. The source/test and evidence changes
+remain uncommitted. A writable Git index is required to satisfy the round's
+mandatory source-commit requirement.
+
+Attempting to post this blocker on #1293 and add `needs-human` was also rejected:
+both connector mutations returned `MCP tool call requires approval, but approval
+policy is never`. Neither the comment nor the label was added; this local
+evidence remains the handoff record.

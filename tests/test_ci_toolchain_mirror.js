@@ -23,11 +23,20 @@ test('flat mirror ships committed baseline and pins together across a baseline r
   const mirror = path.join(root, 'flat mirror');
   fs.mkdirSync(source);
   const env = Object.fromEntries(Object.entries(process.env)
-    .filter(([key]) => !key.startsWith('GIT_')));
+    .filter(([key]) => !key.startsWith('GIT_') && !key.startsWith('ORCH_')
+      && !key.startsWith('VERIFY_BEFORE_SYNC_') && key !== 'PYTHONPATH'));
   env.GIT_CEILING_DIRECTORIES = root;
+  Object.assign(env, {
+    ORCH_LOCAL_RUNTIME: path.join(root, 'runtime'),
+    ORCH_STATE_DIR: path.join(root, 'state'),
+    ORCH_CAPABILITIES_PATH: path.join(root, 'runtime', 'capabilities.json'),
+    ORCH_FEEDBACK_DB: path.join(root, 'runtime', 'feedback', 'orchestrator.db'),
+  });
 
   function run(command, args, options = {}) {
-    const result = spawnSync(command, args, { env, timeout: 30000, ...options });
+    const result = spawnSync(command, args, {
+      env, timeout: 30000, maxBuffer: 32 * 1024 * 1024, ...options,
+    });
     assert.equal(result.status, 0,
       [result.error?.message, result.stderr?.toString()].filter(Boolean).join('\n'));
     return result.stdout;
@@ -49,7 +58,7 @@ test('flat mirror ships committed baseline and pins together across a baseline r
 
   // Copy immutable real inputs; never edit the checkout's protected pin file.
   const archive = run('git', ['-C', repo, 'archive', 'HEAD', baseline, pins, installer,
-    'scripts/check_checks_reported.py', 'src/source_snapshot_digest.py']);
+    'scripts/check_checks_reported.py', 'src', 'config/test-shards.json']);
   run('tar', ['-x', '-C', source], { input: archive });
   for (const [filename, content] of [
     ['src/base.py', 'BASE = 1\n'],
@@ -90,6 +99,26 @@ test('flat mirror ships committed baseline and pins together across a baseline r
   const repairedDigest = digest();
   assert.notEqual(repairedDigest, originalDigest,
     'the payload seal must include the committed baseline repair');
+
+  // A matching payload is insufficient when a cancelled CI shard left no
+  // summary. Exercise the real aggregate entrypoint in the built flat shape,
+  // without manufacturing shard verdicts or running a replacement full suite.
+  const evidence = path.join(root, 'missing shard evidence');
+  fs.mkdirSync(evidence);
+  const aggregate = spawnSync(python, ['verify.py', '--floor-may-lag',
+    '--aggregate', evidence], { cwd: mirror, env, encoding: 'utf8', timeout: 30000 });
+  assert.equal(aggregate.status, 1,
+    [aggregate.error?.message, aggregate.stdout, aggregate.stderr].filter(Boolean).join('\n'));
+  const plan = JSON.parse(fs.readFileSync(path.join(mirror, 'config/test-shards.json'), 'utf8'));
+  assert.ok(plan.shards.length > 1);
+  assert.ok(aggregate.stdout.startsWith(
+    `aggregate FAILED: missing or unreadable summary for shard 1/${plan.shards.length}: `),
+  aggregate.stdout);
+  assert.ok(aggregate.stdout.includes(path.join(evidence, 'shard-1.json')));
+  assert.doesNotMatch(aggregate.stdout, /\bVERIFIED\b/);
+  checkPayload();
+  assert.equal(digest(), repairedDigest,
+    'a failed aggregate must preserve the measured baseline and complete payload seal');
 
   // The aggregate wrapper uses this same digest before and after verification.
   // A baseline changed after sealing must fail publication before any write.
