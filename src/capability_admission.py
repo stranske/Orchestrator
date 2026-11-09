@@ -51,6 +51,7 @@ import json
 import os
 import pathlib
 import re
+import sys
 import tempfile
 from typing import Any
 
@@ -1664,11 +1665,21 @@ def main() -> int:
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--commitments", action="store_true", help="only the dated-promise check")
     ap.add_argument(
+        "--check-consumer-declarations",
+        action="store_true",
+        help=(
+            "fail for an empty live catalogue or consumer declaration debt beyond reviewed "
+            "absences; does not check acting or grant admission"
+        ),
+    )
+    ap.add_argument(
         "--preflight",
         metavar="JSON",
         help="answer admission for a proposed capability spec (JSON string or @file)",
     )
     args = ap.parse_args()
+    if args.check_consumer_declarations and (args.selftest or args.preflight or args.commitments):
+        ap.error("--check-consumer-declarations requires the live-ledger report")
     if args.selftest:
         _selftest()
         return 0
@@ -1698,6 +1709,17 @@ def main() -> int:
         return 0 if com["clean"] else 1
     rep = report()
     print(json.dumps(rep, indent=2, sort_keys=True) if args.json else format_report(rep), end="")
+    if args.check_consumer_declarations:
+        consumers = rep["consumers"]
+        invalid = sorted(
+            cid
+            for cls in ("prose", "unresolved", "undeclared")
+            for cid in consumers["by_class"][cls]
+        )
+        if not consumers["total"] or invalid:
+            reason = ", ".join(invalid) if invalid else "no live capabilities in the ledger"
+            print(f"consumer declaration check failed: {reason}", file=sys.stderr)
+            return 1
     return 0
 
 

@@ -3,7 +3,7 @@
 import io
 import json
 import sys
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from unittest.mock import patch
 
 import capabilities
@@ -119,6 +119,101 @@ def test_unmarked_prose_and_undeclared_consumer_are_still_rejected():
     assert cls == "prose" and not ok
     cls, ok, _ = admission.consumer_class({"consumer_missing": True}, {})
     assert cls == "undeclared" and not ok
+
+
+def test_cli_consumer_declaration_check_requires_nonempty_live_ledger(tmp_path):
+    """The owner's sync check rejects empty/prose/broken data independently of acting."""
+    cid = "issue599-cli-consumer"
+    cap = capabilities._blank_capability(cid)
+    cap.update(status="active", downstream_consumer="merge_guard.py:evaluate_merge_gate")
+    cap["event_history"] = [
+        {"type": "migrated", "timestamp": 1},
+        {"type": "invocation", "timestamp": 1},
+    ]
+    absent = {
+        **cap,
+        "capability_id": "issue599-cli-absent",
+        "consumer_missing": True,
+        "downstream_consumer": "Reviewed absence of a local handover rail.",
+    }
+    historical = {**cap, "status": "retired", "downstream_consumer": "old prose"}
+    cases = [
+        ({}, 1, "no live capabilities in the ledger"),
+        ({cid: historical}, 1, "no live capabilities in the ledger"),
+        ({cid: cap}, 0, ""),
+        ({absent["capability_id"]: absent}, 0, ""),
+        ({cid: cap, absent["capability_id"]: absent}, 0, ""),
+        ({cid: cap, "retired": historical}, 0, ""),
+    ]
+    for consumer in ("old prose", "no_such_module.py:consume", ""):
+        cases.append(({cid: {**cap, "downstream_consumer": consumer}}, 1, cid))
+    path = tmp_path / "capabilities.json"
+    with (
+        patch.object(capabilities, "REG", path),
+        patch.object(
+            admission,
+            "_context",
+            return_value={
+                "audit_rows": {},
+                "fixtures": set(),
+                "acted_on": {cid: 0},
+                "now": admission.CONSUMER_ACTS_ENFORCED_FROM + 86400,
+            },
+        ),
+        patch.object(admission, "_capability_heartbeat"),
+        patch(
+            "capability_activation_audit.heartbeat_reachable", return_value={"status": "no_caller"}
+        ),
+        patch.object(
+            admission,
+            "commitments",
+            return_value={"clean": True, "dangling_citations": [], "overdue_without_record": []},
+        ),
+    ):
+        for ledger, expected_status, reason in cases:
+            path.write_text(
+                json.dumps({"schema_version": capabilities.SCHEMA_VERSION, "capabilities": ledger})
+            )
+            before = path.read_bytes()
+            for extra in ([], ["--json"]):
+                output, errors = io.StringIO(), io.StringIO()
+                argv = ["capability_admission.py", "--check-consumer-declarations", *extra]
+                with patch.object(sys, "argv", argv):
+                    with redirect_stdout(output), redirect_stderr(errors):
+                        assert admission.main() == expected_status, (ledger, extra)
+                assert errors.getvalue() == (
+                    f"consumer declaration check failed: {reason}\n" if reason else ""
+                )
+                if extra:
+                    report = json.loads(output.getvalue())
+                    assert report["consumers"]["total"] == sum(
+                        row["status"] not in capabilities.NOT_LIVE_STATES for row in ledger.values()
+                    )
+                    # Neither reviewed absence nor a real symbol grants acting/admission credit.
+                    assert all(not row["checks"]["consumer_acts"]["ok"] for row in report["rows"])
+                else:
+                    assert "CONSUMERS (10th):" in output.getvalue()
+                assert path.read_bytes() == before
+
+        # Ordinary diagnostic reports retain their exit status even with an empty ledger.
+        path.write_text(
+            json.dumps({"schema_version": capabilities.SCHEMA_VERSION, "capabilities": {}})
+        )
+        with patch.object(sys, "argv", ["capability_admission.py"]):
+            with redirect_stdout(io.StringIO()):
+                assert admission.main() == 0
+
+    for other_mode in (["--selftest"], ["--commitments"], ["--preflight", "{}"]):
+        argv = ["capability_admission.py", "--check-consumer-declarations", *other_mode]
+        errors = io.StringIO()
+        with patch.object(sys, "argv", argv), redirect_stderr(errors):
+            try:
+                admission.main()
+            except SystemExit as exc:
+                assert exc.code == 2
+            else:
+                raise AssertionError(f"non-report mode bypassed consumer check: {other_mode}")
+        assert "requires the live-ledger report" in errors.getvalue()
 
 
 def test_reconciliation_clears_reviewed_absence_when_consumer_is_replaced():
