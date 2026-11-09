@@ -249,3 +249,31 @@ Checked 2026-11-05. Every broken run exited 1. Every restored rerun exited 0.
 | `test_prebound_popen_records_via_the_audit_hook_before_starting` | require the pre-bound alias to record `via: patch` | exit 1, attempt dict diff (`audit` vs `patch`) | exit 0 |
 | `test_test_monkeypatch_undo_does_not_remove_the_guard` | require `undo()` to leave a different `Popen` | exit 1, `assert blocked is not blocked` | exit 0 |
 | `test_close_restores_patched_callables_and_disarms_the_audit_hook` | require `Popen` to stay patched after close | exit 1, `assert <class 'subprocess.Popen'> is not _REAL_POPEN` | exit 0 |
+
+## Implementation mutations
+
+These are deliberate implementation changes (not test changes) to verify the guard's
+self-checks catch the corresponding failures. Each mutation was applied only in
+`tests/advisor_external_guard.py`, then the file was restored to its original bytes.
+Run each mutation in a fresh process.
+
+| Implementation mutation | Test | Failing result | Restored result |
+| --- | --- | --- | --- |
+| Remove `self.record(label, "patch")` from `ExternalOperationGuard._blocker` | `test_swallowed_attempt_fails_through_the_record_while_expected_attempts_do_not` | exit 1, `AssertionError: + unexpected external-operation attempts: subprocess.run` and `assert [] == [True, False]` | exit 0 |
+| Skip `patch.undo()` in `ExternalOperationGuard.close` (replace with `pass`) | `test_close_restores_patched_callables_and_disarms_the_audit_hook` | exit 1, `AssertionError: guard left patched state in place: subprocess.Popen, subprocess.run, ...` | exit 0 |
+
+Commands:
+
+```bash
+# Mutation 1: Remove record-before-raise from _blocker
+sed -i 's/            self.record(label, "patch")//' tests/advisor_external_guard.py
+python3 -m pytest -q tests/test_advisor_external_guard.py::test_swallowed_attempt_fails_through_the_record_while_expected_attempts_do_not --tb=line
+# Fails with: AssertionError: + unexpected external-operation attempts: subprocess.run
+# Restore: git checkout tests/advisor_external_guard.py
+
+# Mutation 2: Skip patch.undo() in close
+sed -i 's/            patch.undo()/            pass  # patch.undo()/' tests/advisor_external_guard.py
+python3 -m pytest -q tests/test_advisor_external_guard.py::test_close_restores_patched_callables_and_disarms_the_audit_hook --tb=line
+# Fails with: AssertionError: guard left patched state in place: subprocess.Popen, ...
+# Restore: git checkout tests/advisor_external_guard.py
+```

@@ -30,6 +30,7 @@ from advisor_external_guard import (
 _REAL_POPEN = subprocess.Popen
 _REAL_RUN = subprocess.run
 _REAL_CONNECT = socket.socket.connect
+_REAL_SOCKET = socket.socket
 
 _CALLS = {
     "subprocess.Popen": lambda: subprocess.Popen(["/nonexistent-orch-guard"]),
@@ -148,9 +149,11 @@ def test_test_monkeypatch_undo_does_not_remove_the_guard(advisor_external_guard,
 def test_close_restores_patched_callables_and_disarms_the_audit_hook():
     """Closing restores the callables this guard replaced and stops the audit hook."""
     assert subprocess.Popen is _REAL_POPEN
+    assert socket.socket is _REAL_SOCKET
     assert socket.socket.connect is _REAL_CONNECT
     with ExternalOperationGuard() as guard:
         assert subprocess.Popen is not _REAL_POPEN
+        assert socket.socket is _REAL_SOCKET
         assert socket.socket.connect is not _REAL_CONNECT
         assert audit_is_armed()
         with guard.expected():
@@ -160,6 +163,7 @@ def test_close_restores_patched_callables_and_disarms_the_audit_hook():
                 socket.socket().connect(("127.0.0.1", 9))
         count = len(guard.attempts)
     assert subprocess.Popen is _REAL_POPEN
+    assert socket.socket is _REAL_SOCKET
     assert socket.socket.connect is _REAL_CONNECT
     assert not audit_is_armed()
     dispatch_audit("subprocess.Popen", ())
