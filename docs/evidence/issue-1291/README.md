@@ -153,3 +153,71 @@ review-floor readback, new CI/aggregate inspection, and subsequent delivery chec
 
 Verified locally: T1, T2, T3, T4, T5, A1, A2, A3. Live delivery and aggregate
 criteria are explicitly pending. This evidence update changes documentation only.
+
+## Hosted follow-up: committed toolchain payload regression
+
+Checked 2026-11-09 against source
+`db4c1d3e45988d4db8985212f77f42eee6788273`. Re-read the Workflows source through
+the GitHub connector before editing. Exact Git blob identities:
+
+| Workflows input | Git blob |
+| --- | --- |
+| `.github/workflows/maint-68-sync-consumer-repos.yml` | `080f01d98ad21a02a372bd851e9a4641b5851f50` |
+| `.github/workflows/maint-52-sync-dev-versions.yml` | `8e03fa90fcf59516739cd12160b297122caa9a19` |
+| `.github/sync-manifest.yml` | `8a6aa86bc4ad22c0a7f88c280feb86365fff287d` |
+| `docs/ci/WORKFLOWS.md` | `7578b2d4c55ff3099bf5054d7c6550c7213246e5` |
+
+- [x] T2: inspected the sync lanes and local construction/aggregate commands;
+  verified the authoritative source of both payload files.
+- [ ] T6/A4: six-shard aggregate acceptance remains pending. The automated PR
+  summary incorrectly marks T6 complete; the earlier flat-copy focused run
+  does not establish aggregate success.
+- [ ] T7/A5/A6: regenerated sync head and subsequent sync-core acceptance remain
+  pending. PR #1289 still reads as open, ready, at
+  `a27084d488d77fcfe7c9644ab97c8f5426bf5cfc`.
+
+Maint 68 is absent from this consumer checkout; its authoritative Workflows
+implementation consumes the sync manifest. That manifest excludes the consumer
+pin file from copy-sync, while Maint 52 explicitly copies the canonical pins
+into consumers. `docs/CI_LINT_BASELINE.md`, the collector, the mirror builder,
+and the new regression are Orchestrator-owned. No workflow changes are needed.
+
+`tests/test_ci_toolchain_mirror.js` now exercises the actual builder in a
+disposable git repository using the real committed baseline/pin bytes. It
+compares both mirror files byte-for-byte with the fixture's HEAD, verifies that
+an uncommitted baseline repair is not shipped, then commits that fixture repair
+and verifies that rebuilding refreshes the baseline while retaining the pins.
+The fixture's pin file is copied unchanged; no consumer pin file is edited.
+
+Validation:
+
+```
+node --test --test-isolation=none tests/test_ci_toolchain_mirror.js
+node --check tests/test_ci_toolchain_mirror.js
+git diff --check
+```
+
+All three commands exit zero; the new test passes in 0.25 seconds. The existing
+Node mirror suite was also run before and after the addition. The combined
+command `node --test --test-isolation=none tests/test_exec_mirror_contract_witness.js tests/test_ci_toolchain_mirror.js`
+reports six passing tests and one pre-existing failure in
+`scratch installer publishes every builder byte and mode and preserves runtime output`:
+`tools changed bytes or mode during installation` (expected empty directory,
+actual absent). That separate installer issue is not changed here.
+
+This hosted runner has no pytest or Black. Installing them into a temporary
+directory failed with `No matching distribution found for black`. No Python
+source was changed in this follow-up; the earlier measured Python results
+remain the evidence for T3-T5/A1-A3, rather than a claimed hosted rerun.
+
+Source CI run `42575806594` was still in progress at readback: flat shards 2-6
+and checkout shards 2/4/5/6 had succeeded; the remaining shards and aggregates
+were pending. These are source-branch results, not regenerated #1289 evidence.
+PR #1293 reads as open with `draft=false`. Updating its checklist through the
+connector was rejected with `MCP tool call requires approval, but approval policy
+is never`; the verified T2 completion and T6 correction are recorded here.
+
+The required source commit was attempted after the checks above. `git add`
+failed with `Unable to create .../.git/index.lock: Read-only file system`, so
+`git commit` did not run. The JavaScript regression and this follow-up evidence
+remain uncommitted; this run cannot claim the round's commit requirement met.
