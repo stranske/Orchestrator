@@ -46,6 +46,18 @@ def test_consumer_report_counts_reviewed_absence_without_granting_acceptance():
     assert "prose 0, missing 2" in rendered
     assert "reviewed absent 1, unresolved 1" in rendered
     assert "DRAINABLE 2" in rendered
+    assert [line.strip() for line in rendered.splitlines() if "REVIEWED ABSENT" in line] == [
+        "REVIEWED ABSENT absent"
+    ]
+
+    # The text inventory must follow the reviewed findings, rather than all missing symbols,
+    # and disappear once a consumer declaration replaces that reviewed absence.
+    ledger["absent"] = {"downstream_consumer": "merge_guard.py:evaluate_merge_gate"}
+    report["consumers"] = admission.consumer_report(ledger, {}, rows)
+    rendered = admission.format_report(report)
+    assert "prose 0, missing 1" in rendered
+    assert "reviewed absent 0, unresolved 1" in rendered
+    assert "REVIEWED ABSENT" not in rendered
 
 
 def test_unmarked_prose_and_undeclared_consumer_are_still_rejected():

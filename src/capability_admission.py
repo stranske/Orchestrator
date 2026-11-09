@@ -1269,6 +1269,8 @@ def format_report(rep: dict) -> str:
             )
         for cid in cons["by_class"]["not_acting"]:
             out.append(f"                   NOT ACTING (trailing window) {cid}")
+        for cid in cons["by_class"].get("consumer_missing", []):
+            out.append(f"                   REVIEWED ABSENT {cid}")
     if rep["legacy_debt"]:
         out += ["", "  legacy debt (pay down opportunistically; never a human queue):"]
         counts: dict[str, int] = {}
