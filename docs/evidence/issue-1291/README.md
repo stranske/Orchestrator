@@ -121,3 +121,35 @@ the full expected diagnostic prefix, including pins and repair instruction,
 while allowing pytest's appended explanation. The same deliberate-break/revert
 exercise was repeated on this retained implementation; the linked receipts are
 from that final implementation. The combined gate/model-table run passes 38 tests.
+
+## Flat-copy verification and remaining aggregate evidence
+
+Built a disposable checkout of the repaired branch, then overlaid the exact
+GitHub-read #1289 pin payload and committed that fixture locally (never pushed).
+The fixture commit was `06194a20`; its only extra change is the authenticated
+four-version payload. Commands executed:
+
+```
+bash scripts/build_exec_mirror.sh /private/tmp/1291-final-payload /private/tmp/1291-flat
+cmp /private/tmp/1291-final-payload/docs/CI_LINT_BASELINE.md /private/tmp/1291-flat/docs/CI_LINT_BASELINE.md
+cmp /private/tmp/1291-proposed-pins.env /private/tmp/1291-flat/.github/workflows/autofix-versions.env
+cd /private/tmp/1291-flat
+/opt/anaconda3/bin/python3 -m pytest -q tests/test_ci_gate_config.py tests/test_model_table.py
+```
+
+Builder exited zero and shipped 229 flat modules and 678 top-level test files.
+Both byte comparisons exited zero. The focused flat-copy command passed all
+38 tests in 0.55 seconds. This proves the baseline/pin payload and focused gate
+in the intended shape; it does **not** prove T6/A4's six-shard aggregate.
+
+New source CI run `42575686151` was queued/pending after push of `fa75d723`.
+No fresh six-shard aggregate artifacts were available at readback. The exact
+payload-integrity aggregate command in T2 remains to be executed with those
+fresh artifacts; old failed-head artifacts are not substituted or rewritten.
+No local full suite was run to manufacture aggregate evidence. T6/A4 remain
+pending alongside T7/A5/A6. No review or inline comments were present at the
+initial post-push read. The automation's next scheduled pass owns the seven-minute
+review-floor readback, new CI/aggregate inspection, and subsequent delivery checks.
+
+Verified locally: T1, T2, T3, T4, T5, A1, A2, A3. Live delivery and aggregate
+criteria are explicitly pending. This evidence update changes documentation only.
