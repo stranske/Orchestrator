@@ -93,7 +93,7 @@ accept a complete matching bundle, reject a bumped fixture pin and accept its
 revert. No additional collected test was added. A deliberate unhandled fixture
 Ruff bump at the acceptance call failed all three cases with `has no complete
 measured toolchain matching autofix-versions.env`:
-[deliberate break](deliberate-break.txt). Reverting the fixture restored
+[deliberate break](deliberate-break.txt.gz). Reverting the fixture restored
 [15 passing gate tests in 0.30 seconds](revert-pass.txt).
 
 The proposed-payload gate file also passed all 15 tests after the baseline
@@ -107,3 +107,17 @@ sync-core classification. They are pending; this repair branch cannot claim them
 from local tests or a historical run. The four additional reported round-2 jobs
 (Resolve Context 129013169661/129015952995 and Record autofix dispatch completion
 129013175310/129016130909) all read back as cancelled with no steps.
+
+## Keepalive integration
+
+Before push, fetch found completed hosted commit
+`6c8b06a7f50c0a092f27367b8ad5179b74d0d7b7`. Its fixture-file regression was
+retained instead of duplicating it. Its historical
+`docs/verification/issue-1291-pin-conflict.md` records that hosted runner's lack
+of tooling; the successful local measurement above supersedes that environment
+blocker. Running its tests exposed one exact diagnostic-comparison failure:
+pytest appends assertion introspection to the message. The comparison now checks
+the full expected diagnostic prefix, including pins and repair instruction,
+while allowing pytest's appended explanation. The same deliberate-break/revert
+exercise was repeated on this retained implementation; the linked receipts are
+from that final implementation. The combined gate/model-table run passes 38 tests.

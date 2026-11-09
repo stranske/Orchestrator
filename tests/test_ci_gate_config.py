@@ -374,7 +374,7 @@ def test_baseline_requires_one_complete_matching_toolchain(defect, tmp_path, mon
         baseline_doc.write_text(f"<!-- measured-with: {markers[defect]} -->", encoding="utf-8")
         with pytest.raises(AssertionError) as failure:
             test_baseline_was_measured_with_the_pinned_versions()
-        assert str(failure.value) == (
+        assert str(failure.value).startswith(
             "CI_LINT_BASELINE.md has no complete measured toolchain matching "
             f"autofix-versions.env: {read_pins()}. "
             "Re-run scripts/ci_lint_baseline.py with these exact pins and retain its measurements."
