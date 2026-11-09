@@ -14,6 +14,7 @@ import unittest
 import urllib.request
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -34,6 +35,7 @@ class RankedCoverageTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix="issue1253-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
+        self.use_patch(patch.object(tempfile, "tempdir", str(self.root)))
         self.use_patch(
             patch.dict(
                 os.environ,
@@ -200,6 +202,60 @@ class RankedCoverageTests(unittest.TestCase):
                 self.assertFalse(episode.positive)
                 self.assertEqual(episode.evidence_reason, reason)
 
+    def test_miner_requires_named_verification_for_positive_evidence(self):
+        events = self.completion_events()
+        verification = events["verification"]
+        events["verification"] = replace(
+            verification, payload={"verification": {"verifier_verdict": "pass"}}
+        )
+        episode = miner.normalize_episode(events)
+        self.assertFalse(episode.positive)
+        self.assertEqual(episode.evidence_reason, "unnamed_verification")
+
+        for key, name in (("acceptance_gate_ids", "gate:tests"), ("test_ids", "test:unit")):
+            with self.subTest(key=key):
+                events["verification"] = replace(
+                    verification,
+                    payload={"verification": {"verifier_verdict": "pass"}, key: [name]},
+                )
+                episode = miner.normalize_episode(events)
+                self.assertTrue(episode.positive)
+                self.assertEqual(episode.graph["verification"]["name"], name)
+
+    def test_miner_rejected_artifact_cannot_become_positive_evidence(self):
+        events = self.completion_events()
+        artifact = events["artifact"]
+        events["artifact"] = replace(artifact, status="rejected")
+        episode = miner.normalize_episode(events)
+        self.assertFalse(episode.positive)
+        self.assertEqual(episode.evidence_reason, "artifact_not_accepted")
+        self.assertEqual(episode.artifact_refs, ("patch:one",))
+
+        events["artifact"] = replace(artifact, status="accepted")
+        self.assertTrue(miner.normalize_episode(events).positive)
+
+    def test_miner_adjudicated_failure_overrides_passing_verifier(self):
+        events = self.completion_events()
+        verification = events["verification"]
+        for verdict, positive, reason in (
+            ("fail", False, "verification_not_passed"),
+            ("pass", True, "eligible_durable_positive"),
+        ):
+            with self.subTest(adjudicated_verdict=verdict):
+                events["verification"] = replace(
+                    verification,
+                    payload={
+                        "verification": {
+                            "name": "pytest",
+                            "verifier_verdict": "pass",
+                            "adjudicated_verdict": verdict,
+                        }
+                    },
+                )
+                episode = miner.normalize_episode(events)
+                self.assertEqual(episode.positive, positive)
+                self.assertEqual(episode.evidence_reason, reason)
+
     def test_miner_assembly_rejects_mixed_identity_within_one_attempt(self):
         events = list(self.completion_events().values())
         events[-1] = replace(
@@ -219,6 +275,97 @@ class RankedCoverageTests(unittest.TestCase):
             episodes, count = instance._assemble([{}] * len(events))
         self.assertEqual((episodes, count), ([], 8))
         self.assertEqual(instance.rejections[0].reasons, ("duplicate_phase:trigger",))
+
+    def test_miner_health_counts_exclusions_and_rejections_only_in_current_snapshot(self):
+        instance = miner.PatternMiner(min_positive_subjects=1)
+        excluded = miner.OutOfScopeError("event:delivery", ["no_research_subject:keepalive"])
+        malformed = miner.EnvelopeError("event:invalid", ["missing_joined_attempt_id"])
+        complete = list(self.completion_events().values())
+        for incoming, health, accepted, rejected, excluded_count in (
+            ([excluded, malformed], "rejecting", 0, 1, 1),
+            ([excluded], "all_out_of_scope", 0, 0, 1),
+            (complete, "mining", 7, 0, 0),
+            ([], "no_input", 0, 0, 0),
+        ):
+            with self.subTest(health=health):
+                with patch.object(
+                    miner, "adapt_completion_event_envelope", side_effect=incoming
+                ) as adapt:
+                    result = instance.mine([{}] * len(incoming), now=200)
+                self.assertEqual(adapt.call_count, len(incoming))
+                status = result.status
+                self.assertEqual(status["raw_event_count"], len(incoming))
+                self.assertEqual(status["accepted_event_count"], accepted)
+                self.assertEqual(status["rejected_event_count"], rejected)
+                self.assertEqual(status["excluded_event_count"], excluded_count)
+                self.assertEqual(status["mining_health"]["state"], health)
+                self.assertEqual(
+                    status["rejected_event_reasons"],
+                    {"missing_joined_attempt_id": 1} if rejected else {},
+                )
+                self.assertEqual(
+                    status["excluded_producers"],
+                    {"keepalive": 1} if excluded_count else {},
+                )
+                self.assertEqual(
+                    result.rejections,
+                    (
+                        (miner.Rejection("event:invalid", "envelope", malformed.reasons),)
+                        if rejected
+                        else ()
+                    ),
+                )
+                self.assertEqual(status["complete_episode_count"], 1 if complete == incoming else 0)
+
+    def test_miner_assembly_names_each_missing_phase_without_normalizing(self):
+        for phase in miner.PHASES:
+            with self.subTest(phase=phase):
+                events = self.completion_events()
+                del events[phase]
+                instance = miner.PatternMiner()
+                with (
+                    patch.object(
+                        miner, "adapt_completion_event_envelope", side_effect=events.values()
+                    ),
+                    patch.object(miner, "normalize_episode", self.denied),
+                ):
+                    episodes, count = instance._assemble([{}] * len(events))
+                self.assertEqual((episodes, count), ([], 6))
+                self.assertEqual(
+                    instance.rejections,
+                    [
+                        miner.Rejection(
+                            "run:one:attempt:one", "episode", (f"missing_phase:{phase}",)
+                        )
+                    ],
+                )
+
+    def test_miner_assembly_checks_timestamp_order_at_every_phase_boundary(self):
+        for left, right in zip(miner.PHASES, miner.PHASES[1:]):
+            for delta in (-1, 0, 1):
+                with self.subTest(left=left, right=right, delta=delta):
+                    events = self.completion_events()
+                    events[right] = replace(
+                        events[right], occurred_at=events[left].occurred_at + delta
+                    )
+                    instance = miner.PatternMiner()
+                    with patch.object(
+                        miner, "adapt_completion_event_envelope", side_effect=events.values()
+                    ):
+                        episodes, count = instance._assemble([{}] * len(events))
+                    self.assertEqual(count, 7)
+                    if delta < 0:
+                        self.assertEqual(episodes, [])
+                        self.assertEqual(len(instance.rejections), 1)
+                        self.assertEqual(instance.rejections[0].phase, "episode")
+                        self.assertEqual(
+                            instance.rejections[0].reasons,
+                            (f"non_monotonic_phase_order:{left}->{right}",),
+                        )
+                    else:
+                        self.assertEqual(instance.rejections, [])
+                        self.assertEqual(len(episodes), 1)
+                        self.assertTrue(episodes[0].positive)
 
     def test_miner_deduplication_joins_successors_in_both_arrival_orders(self):
         base = miner.normalize_episode(self.completion_events())
@@ -279,6 +426,166 @@ class RankedCoverageTests(unittest.TestCase):
                     timestamp if expected == "clustered" else 100,
                 )
 
+    def test_miner_empty_snapshot_keeps_loaded_candidate_and_next_action(self):
+        events = list(self.completion_events().values())
+        instance = miner.PatternMiner(min_positive_subjects=1, candidate_ttl_days=1)
+        with patch.object(miner, "adapt_completion_event_envelope", side_effect=events):
+            original = instance.mine([{}] * len(events), now=200)
+        state = self.root / "miner-state.json"
+        instance.save_state(state, updated_at=200)
+
+        restored = miner.PatternMiner(min_positive_subjects=1, candidate_ttl_days=1)
+        self.assertTrue(restored.load_state(state))
+        loaded = restored.result().candidates
+        result = restored.mine([], now=201, preserve_existing=True)
+
+        self.assertEqual(result.candidates, loaded)
+        self.assertEqual(
+            ir.canonical_json(result.candidates[0].to_dict()),
+            ir.canonical_json(original.candidates[0].to_dict()),
+        )
+        self.assertEqual(result.tombstones, original.tombstones)
+        self.assertEqual(result.status["raw_event_count"], 0)
+        self.assertEqual(result.status["emitted_candidate_count"], 1)
+        self.assertEqual(result.status["next_actions"], ["observe_until_ttl_or_compiler_intake"])
+        self.assertEqual(restored.sweep(now=201).candidates, loaded)
+
+    def test_miner_loaded_snapshot_adds_and_refreshes_candidates_without_losing_retirements(self):
+        instance = miner.PatternMiner(min_positive_subjects=1, candidate_ttl_days=1)
+        retired = replace(self.candidate(), lifecycle=ir.Lifecycle(state="retired", expires_at=100))
+        tombstone = ir.CandidateTombstone(
+            retired.fingerprint, retired.capability_id, "expired", 100
+        )
+        instance.candidates = [retired]
+        instance.tombstones = [tombstone]
+        state = self.root / "miner-state.json"
+        instance.save_state(state, updated_at=200)
+
+        events = list(self.completion_events().values())
+        fingerprint = None
+        for offset in (0, 50):
+            with self.subTest(offset=offset):
+                restored = miner.PatternMiner(min_positive_subjects=1, candidate_ttl_days=1)
+                self.assertTrue(restored.load_state(state))
+                incoming = [
+                    replace(event, occurred_at=event.occurred_at + offset) for event in events
+                ]
+                with patch.object(miner, "adapt_completion_event_envelope", side_effect=incoming):
+                    result = restored.mine(
+                        [{}] * len(incoming), now=200 + offset, preserve_existing=True
+                    )
+                active = [item for item in result.candidates if item.lifecycle.state == "clustered"]
+                self.assertEqual(len(active), 1)
+                candidate = active[0]
+                if fingerprint is None:
+                    fingerprint = candidate.fingerprint
+                self.assertEqual(candidate.fingerprint, fingerprint)
+                self.assertEqual(candidate.telemetry["last_evidence_at"], incoming[-1].occurred_at)
+                self.assertEqual(candidate.lifecycle.expires_at, incoming[-1].occurred_at + 86400)
+                self.assertEqual(
+                    candidate.source_occurrences[0].occurred_at, incoming[-1].occurred_at
+                )
+                self.assertEqual(len(result.candidates), 2)
+                self.assertIn(retired, result.candidates)
+                expected_tombstones = [tombstone] + [
+                    ir.CandidateTombstone(
+                        alias,
+                        None,
+                        "deduplicated_alias",
+                        200 + offset,
+                        successor=candidate.capability_id,
+                    )
+                    for alias in candidate.aliases
+                ]
+                self.assertEqual(
+                    result.tombstones,
+                    tuple(sorted(expected_tombstones, key=lambda item: item.fingerprint)),
+                )
+                self.assertEqual(result.status["emitted_candidate_count"], 1)
+                self.assertEqual(result.status["expired_candidate_count"], 1)
+                restored.save_state(state, updated_at=200 + offset)
+
+    def test_miner_persisted_retirement_requires_new_evidence_to_revive(self):
+        events = list(self.completion_events().values())
+        instance = miner.PatternMiner(min_positive_subjects=1, candidate_ttl_days=1)
+        with patch.object(miner, "adapt_completion_event_envelope", side_effect=events):
+            original = instance.mine([{}] * len(events), now=200).candidates[0]
+        expiry = original.lifecycle.expires_at
+        retired = instance.sweep(now=expiry).candidates[0]
+        state = self.root / "miner-state.json"
+        instance.save_state(state, updated_at=expiry)
+
+        restored = miner.PatternMiner(min_positive_subjects=1, candidate_ttl_days=1)
+        self.assertTrue(restored.load_state(state))
+        old_tombstones = restored.result().tombstones
+        with patch.object(miner, "adapt_completion_event_envelope", side_effect=events):
+            replayed = restored.mine([{}] * len(events), now=expiry, preserve_existing=True)
+        self.assertEqual(
+            ir.canonical_json(replayed.candidates[0].to_dict()),
+            ir.canonical_json(retired.to_dict()),
+        )
+        self.assertEqual(replayed.status["emitted_candidate_count"], 0)
+        self.assertEqual(
+            {item.fingerprint for item in replayed.tombstones},
+            {item.fingerprint for item in old_tombstones},
+        )
+
+        newer = [replace(event, occurred_at=event.occurred_at + expiry) for event in events]
+        with patch.object(miner, "adapt_completion_event_envelope", side_effect=newer):
+            revived = restored.mine([{}] * len(newer), now=expiry + 200, preserve_existing=True)
+        candidate = revived.candidates[0]
+        self.assertEqual(candidate.capability_id, original.capability_id)
+        self.assertEqual(candidate.lifecycle.state, "clustered")
+        self.assertEqual(candidate.telemetry["last_evidence_at"], newer[-1].occurred_at)
+        self.assertEqual(candidate.lifecycle.expires_at, newer[-1].occurred_at + 86400)
+        self.assertEqual(revived.status["emitted_candidate_count"], 1)
+        self.assertEqual(revived.status["expired_candidate_count"], 0)
+        self.assertEqual(len(revived.tombstones), len(old_tombstones))
+        self.assertEqual(
+            {item.fingerprint for item in revived.tombstones},
+            {item.fingerprint for item in old_tombstones},
+        )
+        expiry_tombstone = next(
+            item for item in old_tombstones if item.capability_id == original.capability_id
+        )
+        self.assertIn(expiry_tombstone, revived.tombstones)
+
+    def test_miner_snapshot_preserves_distinct_tombstone_identities(self):
+        episode = miner.normalize_episode(self.completion_events())
+        candidate = replace(self.candidate(), aliases=("sha256:alias",))
+        duplicate = ir.CandidateTombstone(
+            "sha256:alias", None, "deduplicated_alias", 100, successor=candidate.capability_id
+        )
+        distinct = (
+            replace(duplicate, fingerprint="sha256:other"),
+            replace(duplicate, reason="expired"),
+            replace(duplicate, capability_id="capability:retired"),
+            replace(duplicate, successor="capability:other"),
+        )
+        instance = miner.PatternMiner()
+        instance.candidates = [candidate]
+        instance.tombstones = [duplicate, *distinct]
+        with (
+            patch.object(instance, "_assemble", return_value=([episode], 7)),
+            patch.object(
+                instance, "_candidate", return_value=(candidate, {"next_action": "observe"})
+            ),
+        ):
+            result = instance.mine([], now=150, preserve_existing=True)
+
+        expected = {replace(duplicate, retired_at=150), *distinct}
+        self.assertEqual(len(result.tombstones), 5)
+        self.assertEqual(set(result.tombstones), expected)
+        self.assertEqual(result.candidates, (candidate,))
+
+        state = self.root / "miner-state.json"
+        instance.save_state(state, updated_at=150)
+        restored = miner.PatternMiner()
+        self.assertTrue(restored.load_state(state))
+        replayed = restored.mine([], now=151, preserve_existing=True)
+        self.assertEqual(len(replayed.tombstones), 5)
+        self.assertEqual(set(replayed.tombstones), expected)
+
     def test_miner_atomic_replace_failure_preserves_previous_state(self):
         path = self.write_json("state.json", {"previous": True})
         with patch.object(miner.os, "replace", side_effect=OSError("disk unavailable")) as move:
@@ -286,6 +593,15 @@ class RankedCoverageTests(unittest.TestCase):
                 miner._write_json_atomic(path, {"replacement": True})
         move.assert_called_once()
         self.assertEqual(json.loads(path.read_text()), {"previous": True})
+        self.assertEqual(list(self.root.iterdir()), [path])
+
+    def test_miner_serialization_failure_removes_partial_write_and_preserves_state(self):
+        path = self.write_json("state.json", {"previous": True})
+        previous = path.read_bytes()
+        with patch.object(miner.os, "replace", self.denied):
+            with self.assertRaisesRegex(TypeError, "not JSON serializable"):
+                miner._write_json_atomic(path, {"invalid": object()})
+        self.assertEqual(path.read_bytes(), previous)
         self.assertEqual(list(self.root.iterdir()), [path])
 
     def test_miner_tick_line_cli_names_actionable_failures(self):
@@ -405,6 +721,105 @@ class RankedCoverageTests(unittest.TestCase):
                     )
             with patch.object(subprocess, "run", side_effect=OSError("gh unavailable")):
                 self.assertEqual(fetch("owner/repo"), [])
+
+    def test_backlog_strict_issue_discovery_refuses_truncated_ownership(self):
+        """A full issue page cannot establish complete ownership for research."""
+        rows = [{"number": number} for number in range(1000)]
+        command = [
+            "gh",
+            "issue",
+            "list",
+            "-R",
+            "owner/repo",
+            "--state",
+            "open",
+            "-L",
+            "1000",
+            "--json",
+            "number,labels,title,body",
+        ]
+        with patch.object(subprocess, "run") as run:
+            for count in (0, 999, 1000, 1001):
+                with self.subTest(count=count):
+                    page = rows + [{"number": 1000}] if count == 1001 else rows[:count]
+                    run.return_value = subprocess.CompletedProcess(command, 0, json.dumps(page), "")
+                    if count >= 1000:
+                        with self.assertRaisesRegex(RuntimeError, "open issue discovery reached"):
+                            backlog.strict_fetch_issues("owner/repo")
+                    else:
+                        self.assertEqual(backlog.strict_fetch_issues("owner/repo"), page)
+                    run.assert_called_with(command, capture_output=True, text=True, timeout=60)
+            self.assertEqual(run.call_count, 4)
+
+    def test_backlog_strict_pr_discovery_refuses_truncated_ownership(self):
+        """A saturated PR page must not make an already claimed issue eligible."""
+        rows = [{"number": number} for number in range(200)]
+        command = [
+            "gh",
+            "pr",
+            "list",
+            "-R",
+            "owner/repo",
+            "--state",
+            "open",
+            "-L",
+            "200",
+            "--json",
+            "number,labels,title,body,closingIssuesReferences,headRefName,isDraft",
+        ]
+        with patch.object(subprocess, "run") as run:
+            for count in (0, 199, 200, 201):
+                with self.subTest(count=count):
+                    page = rows + [{"number": 200}] if count == 201 else rows[:count]
+                    run.return_value = subprocess.CompletedProcess(command, 0, json.dumps(page), "")
+                    if count >= 200:
+                        with self.assertRaisesRegex(RuntimeError, "open PR discovery reached"):
+                            backlog.strict_fetch_prs("owner/repo")
+                    else:
+                        self.assertEqual(backlog.strict_fetch_prs("owner/repo"), page)
+                    run.assert_called_with(command, capture_output=True, text=True, timeout=60)
+            self.assertEqual(run.call_count, 4)
+
+    def test_backlog_research_retains_healthy_repo_when_pr_ownership_is_truncated(self):
+        """An unreadable repo contributes no candidates and does not hide healthy work."""
+        issue = {"number": 1, "labels": ["priority:normal"], "title": "Investigate"}
+
+        def gh_result(command, **kwargs):
+            rows = [issue]
+            if command[1] == "pr":
+                rows = (
+                    [{"number": number} for number in range(200)] if command[4] == "o/full" else []
+                )
+            return subprocess.CompletedProcess(command, 0, json.dumps(rows), "")
+
+        with (
+            patch.object(subprocess, "run", side_effect=gh_result) as run,
+            redirect_stderr(io.StringIO()) as errors,
+        ):
+            feed = backlog.build_research_items(
+                ["o/full", "o/healthy"], backlog.strict_fetch_issues, backlog.strict_fetch_prs
+            )
+        self.assertEqual([item["target"] for item in feed["items"]], ["o/healthy#1"])
+        self.assertEqual(feed["repos_failed"], ["o/full"])
+        self.assertEqual(feed["repos_read"], 1)
+        self.assertEqual(feed["counts"], {"open_issues": 1, "eligible": 1})
+        self.assertEqual(
+            feed["repo_errors"],
+            {"o/full": "open PR discovery reached its limit; ownership is incomplete"},
+        )
+        self.assertIn("research feed: o/full unreadable:", errors.getvalue())
+        self.assertEqual(run.call_count, 4)
+
+    def test_backlog_selftest_cli_does_not_enter_live_discovery(self):
+        """The selftest flag takes precedence without fetching or publishing feeds."""
+        with (
+            patch.object(backlog, "_selftest") as selftest,
+            patch.object(backlog, "build_backlog", self.denied),
+            patch.object(backlog, "build_research_items", self.denied),
+        ):
+            self.assertEqual(backlog.main(["--selftest", "--live", "--research"]), 0)
+        selftest.assert_called_once_with()
+        self.assertEqual(list(self.root.iterdir()), [])
 
     def test_backlog_research_cli_atomically_publishes_feed(self):
         feed = {"counts": {"eligible": 1, "open_issues": 2}, "repos_read": 1, "repos_failed": []}
@@ -667,6 +1082,29 @@ class RankedCoverageTests(unittest.TestCase):
         self.assertIn(
             f"orchestrate.sh = {self.root / 'orchestrate.sh'} (exists: True)", output.getvalue()
         )
+
+    def test_paths_flat_selftest_validates_checkout_root(self):
+        flat = self.root / "mirror"
+        flat.mkdir()
+        temporary_directory = partial(tempfile.TemporaryDirectory, dir=self.root)
+        with (
+            patch.object(paths, "__file__", str(flat / "paths.py")),
+            patch.object(paths, "_MODULE_ALIAS", flat),
+            patch.object(paths, "MODULE_DIR", flat),
+            patch.object(paths, "REPO_ROOT", flat),
+            patch.object(paths, "FLEET_ROOT", self.root),
+            patch.object(tempfile, "TemporaryDirectory", temporary_directory),
+            redirect_stdout(io.StringIO()) as output,
+        ):
+            self.assertEqual(paths.main(["--selftest"]), 0)
+            self.assertIn("paths.py selftest: OK", output.getvalue())
+            self.assertIn("MODULE_DIR='mirror' REPO_ROOT='mirror'", output.getvalue())
+            with patch.object(paths, "REPO_ROOT", flat.parent):
+                with self.assertRaises(AssertionError) as caught:
+                    paths.main(["--selftest"])
+            self.assertEqual(caught.exception.args, ((flat.parent, flat),))
+        self.assertEqual(list(self.root.iterdir()), [flat])
+        self.assertEqual(list(flat.iterdir()), [])
 
 
 if __name__ == "__main__":
