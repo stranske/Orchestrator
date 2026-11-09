@@ -533,9 +533,15 @@ def recheck_merged(
 
         def tests_skipped(row):
             """A command whose test runner reports skipped or xfailed tests did not run its proof."""
-            if row.get("type") != "command":
+            if row.get("type") == "command":
+                source = row
+            elif row.get("type") == "deliberate_break":
+                # the break's green half runs the same named test on the merge; a skip there proves nothing
+                proof = _deliberate_break_proof(row)
+                source = (proof or {}).get("green") or {}
+            else:
                 return False
-            output = "\n".join(str(row.get(key) or "") for key in ("stdout_tail", "stderr_tail"))
+            output = "\n".join(str(source.get(key) or "") for key in ("stdout_tail", "stderr_tail"))
             return bool(SKIPPED_TESTS.search(output))
 
         def delivery_failed(row):

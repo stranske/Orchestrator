@@ -710,6 +710,33 @@ class PostMergeBreakTests(unittest.TestCase):
                 self.assertEqual(result["result"], "UNRUNNABLE")
                 self.assertEqual(result["reason"], "tests_skipped")
                 self.assertNotIn("tests_skipped", gate.RUNNER_SIDE_UNRUNNABLE)  # said on the issue
+
+        # a deliberate break's green half runs the same named test on the merge (CodeRabbit, #1304)
+        def break_row(green_tail):
+            return {
+                "type": "deliberate_break",
+                "status": "PASS",
+                "deliberate_break_result": runtime_ac.bounded_deliberate_break_result(
+                    {
+                        "verdict": "PASS",
+                        "error": None,
+                        "green": {"returncode": 0, "stdout_tail": green_tail, "stderr_tail": ""},
+                    }
+                ),
+            }
+
+        for green_tail, expected in (
+            ("1 skipped in 0.01s", "UNRUNNABLE"),
+            ("1 passed in 0.01s", "PASS"),
+        ):
+            with self.subTest(green_tail=green_tail):
+                run = {"gate": {"verdict": "PASS"}, "check_results": [break_row(green_tail)]}
+                with (
+                    patch.object(runtime_ac, "run_verification", return_value=run),
+                    patch.object(gate, "_worktree_interpreter", return_value=sys.executable),
+                ):
+                    result = gate.recheck_merged(spec, self.checkout, merge_ci_green=True)
+                self.assertEqual(result["result"], expected)
         for tail in (
             "3 passed in 0.40s",
             "3 passed, 2 deselected in 0.1s",
