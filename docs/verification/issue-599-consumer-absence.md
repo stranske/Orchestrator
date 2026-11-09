@@ -225,3 +225,5 @@ owning delivery lane merges and syncs, it must rerun the two commands above from
 `~/.codex/orchestrator-mirror`, record the deployed generation and commit, and
 confirm `prose 0` with DRAINABLE equal to the `consumer_missing` count. Until
 then the acceptance target is unmet.
+
+2026-11-09: Gate run https://github.com/stranske/Orchestrator/actions/runs/42590538518 (head 0dc9a8a1bd7e0259c7533a9bd45753729c3b0413) passed — every Python CI shard collected tests on Python 3.13 and 3.14.
