@@ -201,6 +201,60 @@ class RankedCoverageTests(unittest.TestCase):
                 self.assertFalse(episode.positive)
                 self.assertEqual(episode.evidence_reason, reason)
 
+    def test_miner_requires_named_verification_for_positive_evidence(self):
+        events = self.completion_events()
+        verification = events["verification"]
+        events["verification"] = replace(
+            verification, payload={"verification": {"verifier_verdict": "pass"}}
+        )
+        episode = miner.normalize_episode(events)
+        self.assertFalse(episode.positive)
+        self.assertEqual(episode.evidence_reason, "unnamed_verification")
+
+        for key, name in (("acceptance_gate_ids", "gate:tests"), ("test_ids", "test:unit")):
+            with self.subTest(key=key):
+                events["verification"] = replace(
+                    verification,
+                    payload={"verification": {"verifier_verdict": "pass"}, key: [name]},
+                )
+                episode = miner.normalize_episode(events)
+                self.assertTrue(episode.positive)
+                self.assertEqual(episode.graph["verification"]["name"], name)
+
+    def test_miner_rejected_artifact_cannot_become_positive_evidence(self):
+        events = self.completion_events()
+        artifact = events["artifact"]
+        events["artifact"] = replace(artifact, status="rejected")
+        episode = miner.normalize_episode(events)
+        self.assertFalse(episode.positive)
+        self.assertEqual(episode.evidence_reason, "artifact_not_accepted")
+        self.assertEqual(episode.artifact_refs, ("patch:one",))
+
+        events["artifact"] = replace(artifact, status="accepted")
+        self.assertTrue(miner.normalize_episode(events).positive)
+
+    def test_miner_adjudicated_failure_overrides_passing_verifier(self):
+        events = self.completion_events()
+        verification = events["verification"]
+        for verdict, positive, reason in (
+            ("fail", False, "verification_not_passed"),
+            ("pass", True, "eligible_durable_positive"),
+        ):
+            with self.subTest(adjudicated_verdict=verdict):
+                events["verification"] = replace(
+                    verification,
+                    payload={
+                        "verification": {
+                            "name": "pytest",
+                            "verifier_verdict": "pass",
+                            "adjudicated_verdict": verdict,
+                        }
+                    },
+                )
+                episode = miner.normalize_episode(events)
+                self.assertEqual(episode.positive, positive)
+                self.assertEqual(episode.evidence_reason, reason)
+
     def test_miner_assembly_rejects_mixed_identity_within_one_attempt(self):
         events = list(self.completion_events().values())
         events[-1] = replace(
