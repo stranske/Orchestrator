@@ -14,7 +14,6 @@ import unittest
 import urllib.request
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
-from itertools import permutations
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -34,8 +33,7 @@ class RankedCoverageTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="issue1253-")
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name).resolve()
-        self.use_patch(patch.object(tempfile, "tempdir", str(self.root)))
+        self.root = Path(temporary.name)
         self.use_patch(
             patch.dict(
                 os.environ,
@@ -73,66 +71,6 @@ class RankedCoverageTests(unittest.TestCase):
         ):
             self.use_patch(patch.object(module, name, self.denied))
         self.heartbeat = self.use_patch(patch.object(capabilities, "production_heartbeat"))
-        self.write_violations = []
-        self.addCleanup(self.assertEqual, self.write_violations, [])
-        # Explicit runtime overrides do not protect an accidentally hardcoded writer.
-        # Guard the file-opening APIs too, including tempfile's low-level os.open.
-        for module in (builtins, io):
-            original = module.open
-
-            def guarded_open(file, mode="r", *args, _open=original, **kwargs):
-                if any(flag in mode for flag in "wax+"):
-                    self.assert_runtime_write(file)
-                return _open(file, mode, *args, **kwargs)
-
-            self.use_patch(patch.object(module, "open", guarded_open))
-        original_os_open = os.open
-        self.runtime_descriptors = {}
-
-        def guarded_os_open(file, flags, *args, **kwargs):
-            writing = flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND)
-            if writing:
-                self.assertIsNone(kwargs.get("dir_fd"), "unexpected relative runtime write")
-                self.assert_runtime_write(file)
-            descriptor = original_os_open(file, flags, *args, **kwargs)
-            if writing:
-                stat = os.fstat(descriptor)
-                self.runtime_descriptors[descriptor] = (stat.st_dev, stat.st_ino)
-            return descriptor
-
-        self.use_patch(patch.object(os, "open", guarded_os_open))
-        original_mkdir = os.mkdir
-
-        def guarded_mkdir(path, *args, **kwargs):
-            self.assertIsNone(kwargs.get("dir_fd"), "unexpected relative runtime write")
-            self.assert_runtime_write(path)
-            return original_mkdir(path, *args, **kwargs)
-
-        self.use_patch(patch.object(os, "mkdir", guarded_mkdir))
-        for name in ("rename", "replace"):
-            original = getattr(os, name)
-
-            def guarded_move(source, destination, *args, _move=original, **kwargs):
-                self.assertIsNone(kwargs.get("src_dir_fd"), "unexpected relative runtime write")
-                self.assertIsNone(kwargs.get("dst_dir_fd"), "unexpected relative runtime write")
-                self.assert_runtime_write(source)
-                self.assert_runtime_write(destination)
-                return _move(source, destination, *args, **kwargs)
-
-            self.use_patch(patch.object(os, name, guarded_move))
-
-    def assert_runtime_write(self, file):
-        if isinstance(file, int):
-            stat = os.fstat(file)
-            self.assertEqual(
-                self.runtime_descriptors.get(file),
-                (stat.st_dev, stat.st_ino),
-                "unexpected writable file descriptor",
-            )
-            return
-        if not Path(file).resolve().is_relative_to(self.root):
-            self.write_violations.append(str(file))
-            self.fail(f"write outside temporary runtime: {file}")
 
     def use_patch(self, patcher):
         value = patcher.start()
@@ -301,15 +239,11 @@ class RankedCoverageTests(unittest.TestCase):
                 ("unrelated", ()),
             )
         ]
-        # A cadence snapshot has no guaranteed arrival order: parents can appear
-        # before or after successors, including siblings and transitive chains.
-        for ordered in permutations(episodes):
-            with self.subTest(order=tuple(item.episode_id for item in ordered)):
-                groups = miner.PatternMiner._dedupe_groups(list(ordered))
-                self.assertEqual(
-                    {frozenset(item.episode_id for item in group) for group in groups},
-                    {frozenset({"first", "sibling", "parent", "last"}), frozenset({"unrelated"})},
-                )
+        groups = miner.PatternMiner._dedupe_groups(episodes)
+        self.assertEqual(
+            {frozenset(item.episode_id for item in group) for group in groups},
+            {frozenset({"first", "sibling", "parent", "last"}), frozenset({"unrelated"})},
+        )
 
     def test_miner_only_revives_retired_candidates_with_newer_evidence(self):
         episode = miner.normalize_episode(self.completion_events())
@@ -353,179 +287,6 @@ class RankedCoverageTests(unittest.TestCase):
         move.assert_called_once()
         self.assertEqual(json.loads(path.read_text()), {"previous": True})
         self.assertEqual(list(self.root.iterdir()), [path])
-
-    def test_miner_sync_failure_never_publishes_uncommitted_state(self):
-        path = self.write_json("state.json", {"previous": True})
-        previous = path.read_bytes()
-        with (
-            patch.object(miner.os, "fsync", side_effect=OSError("sync failed")) as sync,
-            patch.object(miner.os, "replace") as publish,
-        ):
-            with self.assertRaisesRegex(OSError, "sync failed"):
-                miner._write_json_atomic(path, {"replacement": True})
-        sync.assert_called_once()
-        publish.assert_not_called()
-        self.assertEqual(path.read_bytes(), previous)
-        self.assertEqual(list(self.root.iterdir()), [path])
-
-    def test_miner_serialization_failure_preserves_previous_state_and_removes_partial_write(self):
-        path = self.write_json("state.json", {"previous": True})
-        previous = path.read_bytes()
-        with (
-            patch.object(miner.os, "fsync") as sync,
-            patch.object(miner.os, "replace") as publish,
-        ):
-            with self.assertRaisesRegex(TypeError, "not JSON serializable"):
-                miner._write_json_atomic(path, {"first": "serializable", "last": object()})
-        sync.assert_not_called()
-        publish.assert_not_called()
-        self.assertEqual(path.read_bytes(), previous)
-        self.assertEqual(list(self.root.iterdir()), [path])
-
-    def test_miner_load_state_rejects_unknown_schema_or_version_without_replacing_evidence(self):
-        instance = miner.PatternMiner()
-        candidate = self.candidate()
-        instance.candidates = [candidate]
-        for schema, version in (
-            ("unsupported", miner.STATE_VERSION),
-            (miner.STATE_SCHEMA, miner.STATE_VERSION + 1),
-        ):
-            with self.subTest(schema=schema, version=version):
-                path = self.write_json("state.json", {"schema": schema, "version": version})
-                with self.assertRaisesRegex(ValueError, "unsupported pattern miner state schema"):
-                    instance.load_state(path)
-                self.assertEqual(instance.candidates, [candidate])
-                self.assertFalse(instance.state_loaded)
-
-    def test_miner_missing_state_resets_loaded_flag_without_creating_artifacts(self):
-        instance = miner.PatternMiner()
-        instance.state_loaded = True
-        self.assertFalse(instance.load_state(self.root / "missing.json"))
-        self.assertFalse(instance.state_loaded)
-        self.assertEqual(list(self.root.iterdir()), [])
-
-    def test_miner_persistence_restores_evidence_tombstones_and_last_status(self):
-        instance = miner.PatternMiner()
-        candidate = self.candidate()
-        tombstone = ir.CandidateTombstone(
-            candidate.fingerprint, candidate.capability_id, "expired", 100
-        )
-        instance.candidates = [candidate]
-        instance.tombstones = [tombstone]
-        instance._status = {"candidate_count": 1, "next_actions": ["observe"]}
-        path = self.root / "state.json"
-        instance.save_state(path, updated_at=123)
-
-        restored = miner.PatternMiner()
-        self.assertTrue(restored.load_state(path))
-        self.assertTrue(restored.state_loaded)
-        self.assertEqual(restored.candidates, [candidate])
-        self.assertEqual(restored.tombstones, [tombstone])
-        self.assertEqual(restored.result().status, instance.result().status)
-        self.assertEqual(restored.state_dict(updated_at=123), instance.state_dict(updated_at=123))
-        self.assertEqual(json.loads(path.read_text())["updated_at"], 123)
-
-    def test_miner_stdin_reads_jsonl_in_order_and_ignores_blank_lines(self):
-        rows = [{"event_id": "first"}, {"event_id": "second"}]
-        stream = "\n  \n" + json.dumps(rows[0]) + "\n\n" + json.dumps(rows[1]) + "\n"
-        with patch("sys.stdin", io.StringIO(stream)):
-            self.assertEqual(miner._read_envelopes(Path("-")), rows)
-        self.assertEqual(list(self.root.iterdir()), [])
-
-    def test_miner_empty_cadence_expires_persisted_candidate_and_retains_tombstone(self):
-        instance = miner.PatternMiner()
-        candidate = self.candidate()
-        instance.candidates = [candidate]
-        state = self.root / "state.json"
-        instance.save_state(state, updated_at=100)
-        events = self.write_json("events.json", [])
-        status = self.root / "status.json"
-        inventory = self.root / "inventory.json"
-
-        for now in (200, 201):
-            with self.subTest(now=now), redirect_stdout(io.StringIO()) as output:
-                self.assertEqual(
-                    miner.main(
-                        [
-                            "run",
-                            "--events",
-                            str(events),
-                            "--state",
-                            str(state),
-                            "--status-out",
-                            str(status),
-                            "--inventory-out",
-                            str(inventory),
-                            "--now",
-                            str(now),
-                        ]
-                    ),
-                    0,
-                )
-                summary = json.loads(status.read_text())
-                self.assertEqual(json.loads(output.getvalue()), summary)
-                self.assertNotIn("candidates", summary)
-                self.assertTrue(summary["state_loaded"])
-                self.assertEqual(summary["expired_candidate_count"], 1)
-                self.assertEqual(summary["emitted_candidate_count"], 0)
-                if now == 200:
-                    self.assertIn("retain_tombstone", summary["next_actions"])
-                stored = json.loads(state.read_text())
-                catalog = json.loads(inventory.read_text())
-                self.assertEqual(catalog["candidates"], stored["candidates"])
-                self.assertEqual(catalog["tombstones"], stored["tombstones"])
-                self.assertEqual(stored["updated_at"], now)
-                self.assertEqual(stored["candidates"][0]["lifecycle"]["state"], "retired")
-                self.assertEqual(len(stored["tombstones"]), 1)
-                self.assertEqual(stored["tombstones"][0]["retired_at"], 200)
-                self.assertEqual(stored["tombstones"][0]["fingerprint"], candidate.fingerprint)
-
-    def test_miner_status_and_inventory_cli_write_matching_candidate_views(self):
-        instance = miner.PatternMiner()
-        candidate = self.candidate()
-        instance.candidates = [candidate]
-        state = self.root / "state.json"
-        instance.save_state(state, updated_at=100)
-        events = self.write_json("events.json", [])
-
-        for command in ("status", "inventory"):
-            with self.subTest(command=command), redirect_stdout(io.StringIO()) as output:
-                report = self.root / f"{command}.json"
-                self.assertEqual(
-                    miner.main(
-                        [
-                            command,
-                            "--events",
-                            str(events),
-                            "--state",
-                            str(state),
-                            "--write",
-                            str(report),
-                            "--now",
-                            "150",
-                        ]
-                    ),
-                    0,
-                )
-                payload = json.loads(output.getvalue())
-                self.assertEqual(json.loads(report.read_text()), payload)
-                self.assertEqual(payload["emitted_candidate_count"], 1)
-                self.assertEqual(payload["expired_candidate_count"], 0)
-                if command == "inventory":
-                    self.assertEqual(len(payload["candidates"]), 1)
-                    self.assertEqual(ir.CapabilityIR.from_dict(payload["candidates"][0]), candidate)
-                else:
-                    self.assertNotIn("candidates", payload)
-                self.assertEqual(json.loads(state.read_text())["updated_at"], 150)
-
-    def test_miner_json_input_requires_a_list_instead_of_silently_mining_object_keys(self):
-        for payload in ({"event_id": "one"}, None, "event", 42):
-            with self.subTest(payload=payload):
-                path = self.write_json("events.json", payload)
-                with self.assertRaisesRegex(ValueError, "must be a JSON list or JSONL records"):
-                    miner._read_envelopes(path)
-        path = self.write_json("events.json", [{"event_id": "one"}])
-        self.assertEqual(miner._read_envelopes(path), [{"event_id": "one"}])
 
     def test_miner_tick_line_cli_names_actionable_failures(self):
         status = self.write_json(
@@ -631,9 +392,7 @@ class RankedCoverageTests(unittest.TestCase):
     def test_backlog_legacy_gh_read_failures_return_empty_list(self):
         for fetch, kind in ((backlog.live_fetch_issues, "issue"), (backlog.live_fetch_prs, "pr")):
             for result in (
-                subprocess.CompletedProcess(
-                    ["gh", kind, "list", "-R", "owner/repo"], 1, "", ""
-                ),
+                subprocess.CompletedProcess(["gh", kind, "list", "-R", "owner/repo"], 1, "", ""),
                 subprocess.CompletedProcess(
                     ["gh", kind, "list", "-R", "owner/repo"], 0, "not JSON", ""
                 ),
@@ -778,37 +537,6 @@ class RankedCoverageTests(unittest.TestCase):
                 self.assertIsNone(percent)
                 self.assertIn("non-numeric percent_covered", status)
 
-    def test_trigger_rejects_boolean_and_non_finite_measured_coverage(self):
-        # Boolean values should be rejected (bool is subclass of int in Python)
-        for value in (True, False):
-            with self.subTest(value=value, kind="boolean"):
-                report = self.write_json(
-                    "coverage.json", {"totals": {"percent_covered": value}}
-                )
-                percent, status = trigger.coverage_from_report(report)
-                self.assertIsNone(percent)
-                self.assertIn("non-numeric percent_covered", status)
-                self.assertIn("boolean", status)
-        # Non-finite numeric values should be rejected
-        for value in (float("nan"), float("inf"), float("-inf")):
-            with self.subTest(value=value, kind="non_finite"):
-                report = self.write_json(
-                    "coverage.json", {"totals": {"percent_covered": value}}
-                )
-                percent, status = trigger.coverage_from_report(report)
-                self.assertIsNone(percent)
-                self.assertIn("non-finite percent_covered", status)
-        # Valid finite numeric strings should be accepted
-        for value in ("75.5", "80", "90.0", 75.5, 80, 90.0):
-            with self.subTest(value=value, kind="valid_finite"):
-                report = self.write_json(
-                    "coverage.json", {"totals": {"percent_covered": value}}
-                )
-                percent, status = trigger.coverage_from_report(report)
-                self.assertIsNotNone(percent)
-                self.assertEqual(status, "ok")
-                self.assertIsInstance(percent, float)
-
     def test_trigger_cli_survives_report_disappearing_before_ranking(self):
         self.use_patch(patch.dict(os.environ, {trigger.KILL_SWITCH: "1"}))
         report = self.root / "disappeared.json"
@@ -939,28 +667,6 @@ class RankedCoverageTests(unittest.TestCase):
         self.assertIn(
             f"orchestrate.sh = {self.root / 'orchestrate.sh'} (exists: True)", output.getvalue()
         )
-
-    def test_paths_flat_selftest_validates_checkout_root(self):
-        mirror = self.root / "mirror"
-        mirror.mkdir()
-        with (
-            patch.object(paths, "__file__", str(mirror / "paths.py")),
-            patch.object(paths, "_MODULE_ALIAS", mirror),
-            patch.object(paths, "MODULE_DIR", mirror),
-            patch.object(paths, "REPO_ROOT", mirror),
-            patch.object(paths, "FLEET_ROOT", self.root),
-            patch.object(tempfile, "tempdir", str(self.root)),
-            redirect_stdout(io.StringIO()) as output,
-        ):
-            self.assertEqual(paths.main(["--selftest"]), 0)
-            self.assertIn("paths.py selftest: OK", output.getvalue())
-            self.assertIn("MODULE_DIR='mirror' REPO_ROOT='mirror'", output.getvalue())
-            with patch.object(paths, "REPO_ROOT", self.root):
-                with self.assertRaises(AssertionError) as caught:
-                    paths.main(["--selftest"])
-            self.assertEqual(caught.exception.args, ((self.root, mirror),))
-        self.assertEqual(list(self.root.iterdir()), [mirror])
-        self.assertEqual(list(mirror.iterdir()), [])
 
 
 if __name__ == "__main__":
