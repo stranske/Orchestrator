@@ -484,6 +484,10 @@ class RankedCoverageTests(unittest.TestCase):
             ir.canonical_json(retired.to_dict()),
         )
         self.assertEqual(replayed.status["emitted_candidate_count"], 0)
+        self.assertEqual(
+            {item.fingerprint for item in replayed.tombstones},
+            {item.fingerprint for item in old_tombstones},
+        )
 
         newer = [replace(event, occurred_at=event.occurred_at + expiry) for event in events]
         with patch.object(miner, "adapt_completion_event_envelope", side_effect=newer):
