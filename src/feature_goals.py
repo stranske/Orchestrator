@@ -15,6 +15,7 @@ import math
 import os
 import re
 import sqlite3
+import sys
 import time
 from collections import defaultdict
 from collections.abc import Callable, Sequence
@@ -119,11 +120,6 @@ def closer_campaign_completion(now: int) -> Measurement:
     This function registers a default desktop observer if none exists, to ensure
     the measurement can use a registered observer when pinned manifests are present.
     """
-    import json
-    import os
-    import sys
-    from pathlib import Path
-
     # Ensure a desktop observer is registered
     try:
         # Add src to path so we can import from closer_runtime_binding
@@ -779,9 +775,7 @@ def format_lines(section: dict) -> list[str]:
         value = (
             f"unmeasured — would need {m['reason']}"
             if row["state"] == "unmeasured"
-            else "measured zero"
-            if m["value"] == 0
-            else str(m["value"])
+            else "measured zero" if m["value"] == 0 else str(m["value"])
         )
         values = [
             f"{row['feature']}/{row['goal_id']}",
