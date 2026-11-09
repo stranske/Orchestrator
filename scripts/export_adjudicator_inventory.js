@@ -1144,7 +1144,10 @@ function main() {
       process.stdout.write('Usage: node scripts/export_adjudicator_inventory.js --db BRAIN --observed-at UNIX_SECONDS [--days 90] [--expected-count 71] [--manifest JSON_FILE]\nManifest: {"schema_version":2,"cases":[{"run_id":"...","target":"owner/repo#N","verifier_verdict":"NON_PASS","adjudicated_verdict":"PASS"}]}.\nVersion 1 accepts run_id and target only; it cannot detect changed verdicts.\nOwner-excluded repositories retain identity-only exclusions; their outcomes are not read.\nJSON is written to stdout. No replay, dispatch or outcome writes.\n');
       return;
     }
-    if (values.report) {
+    // An explicitly supplied empty path still selects report recovery. Testing
+    // truthiness silently falls through to Brain inventory and can emit current
+    // cases for a request intended to inventory retained receipts instead.
+    if (Object.hasOwn(values, 'report')) {
       if (tokens.some((item) => ['db', 'days', 'expected-count'].includes(item.name))) {
         throw new Error('--report cannot combine with Brain window options');
       }
@@ -1157,7 +1160,8 @@ function main() {
       process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
       return;
     }
-    if (values.journal || values['evidence-class'] || values['evidence-reference']) {
+    if (['journal', 'evidence-class', 'evidence-reference'].some((key) =>
+      Object.hasOwn(values, key))) {
       throw new Error('--journal, --evidence-class and --evidence-reference require --report');
     }
     if (!values.db || !values['observed-at']) {

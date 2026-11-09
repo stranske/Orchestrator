@@ -1308,6 +1308,39 @@ test('report CLI never combines historical recovery with dispatch or current Bra
   }
 });
 
+for (const option of ['report', 'journal', 'evidence-class', 'evidence-reference']) {
+  test(`an empty --${option} cannot silently select a Brain inventory`, (t) => {
+    const { root, db } = world(t);
+    seed(db, [['current-dispute', now, 'NON_PASS', 'PASS']]);
+    const bytes = fs.readFileSync(db);
+    const args = [script, '--db', db, '--observed-at', String(now)];
+    // Confirm the alternative mode would succeed and emit current case data.
+    const control = execute(root, process.execPath, args);
+    assert.equal(control.status, 0, control.stderr);
+    assert.equal(JSON.parse(control.stdout).included_count, 1);
+    for (const spelling of [[`--${option}`, ''], [`--${option}=`]]) {
+      const refused = execute(root, process.execPath, [...args, ...spelling]);
+      assert.equal(refused.status, 1, refused.stderr);
+      assert.equal(refused.stdout, '', 'invalid attribution must not publish a different inventory');
+      assert.match(refused.stderr, option === 'report'
+        ? /--report cannot combine with Brain window options/ : /require --report/);
+      assert.deepEqual(fs.readFileSync(db), bytes);
+    }
+  });
+}
+
+test('an explicitly empty report path is validated in report mode', (t) => {
+  const { root, options } = retainedReport(t);
+  const before = fs.readFileSync(options.report);
+  const refused = execute(root, process.execPath, [script, '--report=',
+    '--observed-at', String(now), '--evidence-class', options.evidenceClass,
+    '--evidence-reference', options.evidenceReference]);
+  assert.equal(refused.status, 1);
+  assert.equal(refused.stdout, '');
+  assert.match(refused.stderr, /^report is required\n/);
+  assert.deepEqual(fs.readFileSync(options.report), before);
+});
+
 function nativeJournal(t) {
   const fixture = retainedReport(t);
   const journal = path.join(fixture.root, 'native.sqlite3');
