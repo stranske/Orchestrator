@@ -23,6 +23,28 @@ combined-coverage or flat-mirror aggregate acceptance. The current-pin measureme
 below remains valid; this additional complete bundle allows source delivery before
 the generated pin PR lands. No repository pins or gate thresholds were changed.
 
+## Measured pending Maint 52 PR #1289 toolchain — 2026-11-09
+
+<!-- measured-with: black=26.10.1 ruff=0.17.4 isort=9.0.2 docformatter=1.7.8 mypy=2.4.1 pytest=9.2.0 pytest-cov=7.1.0 pytest-xdist=3.8.0 coverage=7.17.2 -->
+
+The complete proposed nine-pin bundle from generated PR #1289 at
+`a27084d488d77fcfe7c9644ab97c8f5426bf5cfc` was actually installed in an
+isolated Python 3.14.3 environment and strictly measured against source
+`cb2eabe6528941f1008cebe4f1a46bfcec607c13` in 48.17 seconds. The original
+collector used the retained proposed pin bytes. Ruff and Black reported no
+findings, mypy checked 229 source files with no errors, and the Coverage startup
+probe collected 15,067 tests without startup or collection errors. Every
+blocking/drainable pair was 0/0, with no version or setup problems.
+
+[Strict report](evidence/dev-tool-1289-pending-pins/report.json),
+[losslessly compressed command output](evidence/dev-tool-1289-pending-pins/commands.json.gz),
+[source/tool provenance](evidence/dev-tool-1289-pending-pins/provenance.json), and
+[authenticated proposed pins](evidence/dev-tool-1289-pending-pins/proposed-pins.env)
+retain the actual measurement. This prepares the baseline for the pending
+native delivery. It changes no generated payload, repository pins, matcher or
+enforcement setting. The startup/collection probe does not establish full-suite
+or combined-coverage acceptance; native CI must still establish those outcomes.
+
 ## Measured dependency closeout toolchain — 2026-10-22
 
 <!-- measured-with: black=26.10.1 ruff=0.17.2 isort=9.0.2 docformatter=1.7.8 mypy=2.4.0 pytest=9.1.1 pytest-cov=7.1.0 pytest-xdist=3.8.0 coverage=7.17.0 -->
