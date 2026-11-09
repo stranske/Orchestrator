@@ -421,7 +421,7 @@ def test_switch_review_gh_call_subprocess_outcomes(monkeypatch: pytest.MonkeyPat
     assert switch_review._gh_call(["api", "user"]) == (
         False,
         "",
-        "unmeasured: HTTP 502 bad gateway",
+        "unmeasured: HTTP 502",
     )
 
     def raise_timeout(*_a, **_k):
