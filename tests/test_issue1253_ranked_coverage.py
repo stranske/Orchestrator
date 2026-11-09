@@ -722,6 +722,105 @@ class RankedCoverageTests(unittest.TestCase):
             with patch.object(subprocess, "run", side_effect=OSError("gh unavailable")):
                 self.assertEqual(fetch("owner/repo"), [])
 
+    def test_backlog_strict_issue_discovery_refuses_truncated_ownership(self):
+        """A full issue page cannot establish complete ownership for research."""
+        rows = [{"number": number} for number in range(1000)]
+        command = [
+            "gh",
+            "issue",
+            "list",
+            "-R",
+            "owner/repo",
+            "--state",
+            "open",
+            "-L",
+            "1000",
+            "--json",
+            "number,labels,title,body",
+        ]
+        with patch.object(subprocess, "run") as run:
+            for count in (0, 999, 1000, 1001):
+                with self.subTest(count=count):
+                    page = rows + [{"number": 1000}] if count == 1001 else rows[:count]
+                    run.return_value = subprocess.CompletedProcess(command, 0, json.dumps(page), "")
+                    if count >= 1000:
+                        with self.assertRaisesRegex(RuntimeError, "open issue discovery reached"):
+                            backlog.strict_fetch_issues("owner/repo")
+                    else:
+                        self.assertEqual(backlog.strict_fetch_issues("owner/repo"), page)
+                    run.assert_called_with(command, capture_output=True, text=True, timeout=60)
+            self.assertEqual(run.call_count, 4)
+
+    def test_backlog_strict_pr_discovery_refuses_truncated_ownership(self):
+        """A saturated PR page must not make an already claimed issue eligible."""
+        rows = [{"number": number} for number in range(200)]
+        command = [
+            "gh",
+            "pr",
+            "list",
+            "-R",
+            "owner/repo",
+            "--state",
+            "open",
+            "-L",
+            "200",
+            "--json",
+            "number,labels,title,body,closingIssuesReferences,headRefName,isDraft",
+        ]
+        with patch.object(subprocess, "run") as run:
+            for count in (0, 199, 200, 201):
+                with self.subTest(count=count):
+                    page = rows + [{"number": 200}] if count == 201 else rows[:count]
+                    run.return_value = subprocess.CompletedProcess(command, 0, json.dumps(page), "")
+                    if count >= 200:
+                        with self.assertRaisesRegex(RuntimeError, "open PR discovery reached"):
+                            backlog.strict_fetch_prs("owner/repo")
+                    else:
+                        self.assertEqual(backlog.strict_fetch_prs("owner/repo"), page)
+                    run.assert_called_with(command, capture_output=True, text=True, timeout=60)
+            self.assertEqual(run.call_count, 4)
+
+    def test_backlog_research_retains_healthy_repo_when_pr_ownership_is_truncated(self):
+        """An unreadable repo contributes no candidates and does not hide healthy work."""
+        issue = {"number": 1, "labels": ["priority:normal"], "title": "Investigate"}
+
+        def gh_result(command, **kwargs):
+            rows = [issue]
+            if command[1] == "pr":
+                rows = (
+                    [{"number": number} for number in range(200)] if command[4] == "o/full" else []
+                )
+            return subprocess.CompletedProcess(command, 0, json.dumps(rows), "")
+
+        with (
+            patch.object(subprocess, "run", side_effect=gh_result) as run,
+            redirect_stderr(io.StringIO()) as errors,
+        ):
+            feed = backlog.build_research_items(
+                ["o/full", "o/healthy"], backlog.strict_fetch_issues, backlog.strict_fetch_prs
+            )
+        self.assertEqual([item["target"] for item in feed["items"]], ["o/healthy#1"])
+        self.assertEqual(feed["repos_failed"], ["o/full"])
+        self.assertEqual(feed["repos_read"], 1)
+        self.assertEqual(feed["counts"], {"open_issues": 1, "eligible": 1})
+        self.assertEqual(
+            feed["repo_errors"],
+            {"o/full": "open PR discovery reached its limit; ownership is incomplete"},
+        )
+        self.assertIn("research feed: o/full unreadable:", errors.getvalue())
+        self.assertEqual(run.call_count, 4)
+
+    def test_backlog_selftest_cli_does_not_enter_live_discovery(self):
+        """The selftest flag takes precedence without fetching or publishing feeds."""
+        with (
+            patch.object(backlog, "_selftest") as selftest,
+            patch.object(backlog, "build_backlog", self.denied),
+            patch.object(backlog, "build_research_items", self.denied),
+        ):
+            self.assertEqual(backlog.main(["--selftest", "--live", "--research"]), 0)
+        selftest.assert_called_once_with()
+        self.assertEqual(list(self.root.iterdir()), [])
+
     def test_backlog_research_cli_atomically_publishes_feed(self):
         feed = {"counts": {"eligible": 1, "open_issues": 2}, "repos_read": 1, "repos_failed": []}
         with (
