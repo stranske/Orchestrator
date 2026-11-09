@@ -1343,6 +1343,11 @@ test('an explicitly empty report path is validated in report mode', (t) => {
 
 function nativeJournal(t) {
   const fixture = retainedReport(t);
+  // Complete receipt fixtures need an attributable source. Individual tests
+  // replace this hash or marker when exercising unavailable/foreign lineage.
+  const sourceHash = 'a'.repeat(64);
+  fixture.saved.native_publication.source_report_sha256 = sourceHash;
+  fs.writeFileSync(fixture.options.report, JSON.stringify(fixture.saved));
   const journal = path.join(fixture.root, 'native.sqlite3');
   const connection = new DatabaseSync(journal);
   connection.exec(`PRAGMA application_id=1313097550;
@@ -1360,7 +1365,7 @@ function nativeJournal(t) {
       JSON.stringify({ proposal: { decision: 'reject_blocker', rationale: 'private proposal' },
         backend_run_id: 'native-provider', raw_output: 'private raw response', errors: [] })],
     ['f', 'unrecognized', null, null, null],
-  ]) insert.run(id, 'case-a', `revision-${id}`, 'digest', state, backend, 'source-hash',
+  ]) insert.run(id, 'case-a', `revision-${id}`, 'digest', state, backend, sourceHash,
     now - 1, now, raw, validation);
   connection.close();
   return { ...fixture, journal, options: { ...fixture.options, journal } };
@@ -1504,6 +1509,112 @@ for (const publication of ['original', 'native']) {
     assert.equal(later.dispatch_authorized, false);
   });
 }
+
+for (const [scenario, hash, marker, status, code] of [
+  ['missing hash', null, 'a'.repeat(64), 'not_recorded', 'source_report_hash_missing'],
+  ['blank hash', ' ', 'a'.repeat(64), 'invalid', 'source_report_hash_invalid'],
+  ['malformed hash', 'untrusted-source', 'a'.repeat(64), 'invalid', 'source_report_hash_invalid'],
+  ['binary hash', Buffer.from('aa'), 'a'.repeat(64), 'invalid', 'source_report_hash_invalid'],
+  ['invalid reference', 'a'.repeat(64), 'untrusted-reference', 'reference_unavailable',
+    'source_report_reference_unavailable'],
+  ['missing reference', 'a'.repeat(64), undefined, 'reference_unavailable',
+    'source_report_reference_unavailable'],
+  ['null reference', 'a'.repeat(64), null, 'reference_unavailable',
+    'source_report_reference_unavailable'],
+]) {
+  test(`unbound source receipts retain native case recovery with ${scenario}`, (t) => {
+    const { root, saved, journal, options } = nativeJournal(t);
+    const identity = { run_id: 'original', target: 'owner/repo#1' };
+    saved.rows = [{ ...identity, case_id: 'case-a', backend_run_id: 'native-provider',
+      decision: 'reject_blocker', later_truth: 'UNKNOWN', packet: completePacket(),
+      retry_attempts: [{ backend_run_id: 'earlier-paid' }] }];
+    saved.native_publication = { source_report_sha256: marker };
+    fs.writeFileSync(options.report, JSON.stringify(saved));
+    const manifest = manifestFile(root, [identity]);
+    const writer = new DatabaseSync(journal);
+    writer.exec("DELETE FROM native_attempts WHERE attempt_id='f'");
+    writer.prepare('UPDATE native_attempts SET report_sha256=?').run(hash);
+    writer.close();
+    const inputs = [options.report, journal, manifest];
+    const before = inputs.map((file) => fs.readFileSync(file));
+    const result = reportInventory({ ...options, manifest });
+    const attempts = result.pre_dispatch.native_journal.attempts;
+    assert.deepEqual(attempts.map((row) => row.source_binding.status), Array(5).fill(status));
+    assert.deepEqual(attempts.map((row) => row.receipt_evidence_gaps),
+      Array.from({ length: 5 }, () => [code]));
+    assert.deepEqual(attempts.map((row) => row.recovery_step), [
+      'producer_must_prove_invocation_never_started',
+      'UNKNOWN_recover_provider_receipt_before_any_retry',
+      'UNKNOWN_recover_provider_receipt_before_any_retry',
+      'resolve_native_receipt_source_before_any_retry',
+      'resolve_native_receipt_source_before_any_retry',
+    ]);
+    const recovery = result.manifest_reconciliation.cases[0].native_case_recovery;
+    assert.deepEqual(recovery.unresolved_attempts.map((row) => row.attempt_id),
+      ['a', 'b', 'c', 'd', 'e'], 'a binary claim cannot hide an unbound source receipt');
+    const locator = result.retained_attempt_observations[0].native_receipt_locator;
+    assert.equal(locator.status, 'matched_locator');
+    assert.equal(locator.next_evidence_step, 'resolve_native_receipt_source_before_any_retry');
+    assert.deepEqual(locator.attempts[0].receipt_evidence_gaps, [code]);
+    assert.ok(result.pre_dispatch.stop_reasons.includes('native_receipt_evidence_missing'));
+    assert.equal(result.pre_dispatch.paid_identity_reconciliation.union_unique, 4);
+    assert.equal(result.cases[0].retained_decision, 'reject_blocker');
+    assert.equal(result.cases[0].retained_later_truth, 'UNKNOWN');
+    assert.deepEqual(result.paid_attempts.map((row) => row.backend_run_id),
+      ['native-provider', 'earlier-paid']);
+    assert.equal(result.dispatch_authorized, false);
+    assert.equal(result.receipt_authority, 'not_authenticated_by_inventory');
+    assert.ok(!JSON.stringify(result).includes('private'));
+    const cli = execute(root, process.execPath, [script, '--report', options.report,
+      '--journal', journal, '--manifest', manifest, '--observed-at', String(now),
+      '--evidence-class', options.evidenceClass, '--evidence-reference', options.evidenceReference]);
+    assert.equal(cli.status, 0, cli.stderr);
+    assert.deepEqual(JSON.parse(cli.stdout), JSON.parse(JSON.stringify(result)));
+    assert.deepEqual(inputs.map((file) => fs.readFileSync(file)), before);
+
+    // Repairing saved lineage clears only the source gap; authentication,
+    // independent truth and live ownership remain separate obligations.
+    saved.native_publication.source_report_sha256 = 'a'.repeat(64);
+    fs.writeFileSync(options.report, JSON.stringify(saved));
+    const laterWriter = new DatabaseSync(journal);
+    laterWriter.prepare("UPDATE native_attempts SET report_sha256=? WHERE attempt_id='e'")
+      .run('a'.repeat(64));
+    laterWriter.close();
+    const later = reportInventory({ ...options, manifest });
+    const binary = later.pre_dispatch.native_journal.attempts.find((row) => row.attempt_id === 'e');
+    assert.deepEqual(binary.receipt_evidence_gaps, []);
+    assert.deepEqual(binary.source_binding, { status: 'matches_reference', authenticated: false });
+    assert.ok(!later.manifest_reconciliation.cases[0].native_case_recovery.unresolved_attempts
+      .some((row) => row.attempt_id === 'e'));
+    assert.equal(later.dispatch_authorized, false);
+  });
+}
+
+test('missing source lineage preserves earlier receipt and invocation identity recovery', (t) => {
+  const { journal, options } = nativeJournal(t);
+  const writer = new DatabaseSync(journal);
+  writer.exec(`UPDATE native_attempts SET report_sha256=NULL;
+    UPDATE native_attempts SET raw_response=NULL WHERE attempt_id='d';
+    INSERT INTO native_attempts
+      SELECT 'duplicate',case_id,'different-revision',case_digest,state,backend_run_id,
+        report_sha256,created_at,updated_at,raw_response,validated_json
+      FROM native_attempts WHERE attempt_id='e';`);
+  writer.close();
+  const before = [options.report, journal].map((file) => fs.readFileSync(file));
+  const result = reportInventory(options);
+  const attempts = result.pre_dispatch.native_journal.attempts;
+  const missingRaw = attempts.find((row) => row.attempt_id === 'd');
+  assert.deepEqual(missingRaw.receipt_evidence_gaps, ['raw_response_missing', 'source_report_hash_missing']);
+  assert.equal(missingRaw.recovery_step, 'recover_missing_native_receipt_evidence_without_redispatch');
+  for (const attempt of attempts.filter((row) => ['e', 'duplicate'].includes(row.attempt_id))) {
+    assert.deepEqual(attempt.receipt_evidence_gaps, ['backend_identity_reused', 'source_report_hash_missing']);
+    assert.equal(attempt.recovery_step, 'resolve_native_receipt_identity_before_any_retry');
+  }
+  assert.equal(attempts.find((row) => row.attempt_id === 'f').recovery_step,
+    'unrecognized_state_requires_native_review');
+  assert.deepEqual([options.report, journal].map((file) => fs.readFileSync(file)), before);
+  assert.equal(result.dispatch_authorized, false);
+});
 
 for (const [state, column] of [
   ['raw_persisted', 'raw_response'],

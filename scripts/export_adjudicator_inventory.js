@@ -454,16 +454,22 @@ function preDispatchInventory(saved, paid, journal, locationChecks, reportHash) 
         : !sourceLineage.reference_sha256 ? 'reference_unavailable'
           : hash === sourceLineage.reference_sha256 ? 'matches_reference' : 'differs_from_reference';
     attempt.source_binding = { status, authenticated: false };
-    // A matching case/backend locator cannot repair contradictory source
-    // lineage. Retain completed foreign receipts in case recovery as well as
-    // the journal inventory. Preserve earlier missing-receipt/identity steps
+    // A matching case/backend locator cannot repair missing, invalid or
+    // contradictory source lineage. Retain these receipts in case recovery as
+    // well as the journal inventory. Preserve earlier receipt/identity steps
     // and reservation/in-flight UNKNOWN obligations before source resolution.
-    if (status === 'differs_from_reference') {
+    const sourceGap = {
+      not_recorded: 'source_report_hash_missing',
+      invalid: 'source_report_hash_invalid',
+      reference_unavailable: 'source_report_reference_unavailable',
+      differs_from_reference: 'source_report_hash_mismatch',
+    }[status];
+    if (sourceGap) {
       if (!attempt.receipt_evidence_gaps.length &&
           ['raw_persisted', 'validated'].includes(attempt.state)) {
         attempt.recovery_step = 'resolve_native_receipt_source_before_any_retry';
       }
-      attempt.receipt_evidence_gaps.push('source_report_hash_mismatch');
+      attempt.receipt_evidence_gaps.push(sourceGap);
     }
   }
   const identities = new Set(paid.map((item) => item.backend_run_id));

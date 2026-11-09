@@ -87,3 +87,39 @@ focused source/test change; the checkout branch and remote are unchanged.
 PR #1081 was observed open with `draft=false`. Automatic approval review rejected
 the blocker comment and `needs-human` label because GitHub writes require approval
 while this run's policy is `never`; neither was published.
+
+## Unbound source receipts remain in recovery
+
+Checked on 2026-11-09 against checkout
+`75bc12c85b681af344fde0b16e781cab36e9a265` plus this change.
+
+Missing or invalid native source hashes, and unavailable report source references,
+now retain explicit receipt evidence gaps and requested-case recovery obligations.
+Previously, a binary validation claim could hide these unresolved receipts.
+Earlier receipt/identity recovery steps, reservation obligations and in-flight
+UNKNOWN recovery keep their priority. A later matching hash clears only the
+source gap; native authentication and independent truth remain required.
+
+Eight new API/CLI regressions fail before the fix and pass afterward. They cover
+null, blank, malformed and BLOB source hashes, missing/null/invalid reference
+hashes, and earlier recovery steps. Complete native fixtures now use matching
+well-formed source hashes. Input bytes, saved decisions, recursive paid history
+and UNKNOWN truth are preserved. The three JavaScript inventory/live-cohort suites
+pass 213 tests (baseline: 205). Diagnostic and replay/publication unittests pass
+32 and seven tests. JavaScript syntax and `git diff --check` pass. No Python files
+changed. The required retrospective pytest command with `-m 'not slow'` cannot
+start because pytest is unavailable.
+
+These are fixture results. The configured runtime, canonical report and outcomes
+database are absent. Authentic original/journal locations and live deployment
+and mirror bindings remain unavailable. The first unchecked task stays incomplete;
+no production pin, dispatch, canonical grade, historical proof or live decision is
+claimed. PR #1081 was observed open with `draft=false`.
+
+Staging fails because `.git/index.lock` is read-only. The verified change is
+preserved with isolated Git metadata and a transferable bundle at
+`/tmp/orchestrator-1072-unbound-sources/change.bundle`; the checkout branch and
+remote remain unchanged.
+Automatic approval review rejected the blocker comment and `needs-human` label
+because GitHub writes require approval while this run's policy is `never`; neither
+was published.
