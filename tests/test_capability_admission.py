@@ -1003,6 +1003,9 @@ def test_declared_consumers_resolve_in_the_tree():
                 continue
             resolution = admission.consumer_resolution(declaration)
             if declaration.get("consumer_missing") is True:
+                assert str(
+                    declaration.get("notes") or ""
+                ).strip(), f"{source}:{cid}: explain the absent consumer"
                 consumer = declaration.get("downstream_consumer")
                 notes = declaration.get("notes")
                 assert (
