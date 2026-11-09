@@ -628,6 +628,25 @@ def _cooldown_seconds(category: str) -> int | None:
         return DEFAULT_COOLDOWN_S
 
 
+# Gemini's tiers draw two separate provider quotas: `full` runs the Argon family, cheap/mid run
+# Flash (adapters.MODEL_TIERS). An exhausted Argon quota must not stand Flash down with it: on
+# 2026-11-07 one Argon quota incident shed all of gemini for a week while Flash still answered.
+_INIT_MODEL = re.compile(r'"init"\s*:\s*\{[^{}]*?"model"\s*:\s*"([A-Za-z0-9._:-]+)"')
+
+
+def failed_model(agent: str, evidence: str) -> str | None:
+    """The model a failed gemini run asked for, from agy's own `init` event; None when absent."""
+    if agent != "gemini" or not evidence:
+        return None
+    found = _INIT_MODEL.findall(evidence)
+    return found[-1] if found else None
+
+
+def tier_scope_for(agent: str, model: str | None) -> str | None:
+    """`full` when only gemini's top tier (the Argon family) is exhausted; None sheds the whole seat."""
+    return "full" if agent == "gemini" and model and "argon" in model.lower() else None
+
+
 def ensure_shed(
     agent: str,
     *,
@@ -635,8 +654,14 @@ def ensure_shed(
     incident_id: str,
     expires_at: int | None = None,
     reset_at: int | None = None,
+    model: str | None = None,
+    tier_scope: str | None = None,
 ) -> bool:
-    """Write or extend one JSON marker without shortening an active shed."""
+    """Write or extend one JSON marker without shortening or narrowing an active shed.
+
+    A whole-seat marker (no `tier_scope`) is never narrowed to one tier while it is active; a
+    tier-scoped marker is widened to the whole seat when a whole-seat incident arrives.
+    """
     _ensure_paths()
     marker = SHED_DIR / agent
     lock_fd = _acquire_lock()
@@ -655,15 +680,24 @@ def ensure_shed(
                 or not math.isfinite(existing_expiry)
             ):
                 return True
-            if existing_expiry > time.time() and (
-                expires_at is None or expires_at <= existing_expiry
-            ):
-                return True
+            existing_scope = existing.get("tier_scope") if isinstance(existing, dict) else None
+            if existing_expiry > time.time():
+                if existing_scope is None and tier_scope is not None:
+                    return True  # an active whole-seat shed is never narrowed
+                widening = existing_scope is not None and tier_scope is None
+                if not widening and (expires_at is None or expires_at <= existing_expiry):
+                    return True
+                if widening and (expires_at is None or expires_at < existing_expiry):
+                    expires_at = int(existing_expiry)
         payload = {"created_at": int(time.time()), "category": category, "incident_id": incident_id}
         if expires_at is not None:
             payload["expires_at"] = expires_at
         if reset_at is not None:
             payload["reset_at"] = reset_at
+        if model is not None:
+            payload["model"] = model
+        if tier_scope is not None:
+            payload["tier_scope"] = tier_scope
         try:
             with tempfile.NamedTemporaryFile(
                 mode="w", encoding="utf-8", dir=SHED_DIR, prefix=f".{agent}.", delete=False
@@ -756,6 +790,7 @@ def record_incident(
     expires_at = timestamp + cooldown if cooldown is not None else None
     if reset_at is not None and expires_at is not None:
         expires_at = max(expires_at, reset_at)
+    model = failed_model(agent, evidence)
     shed_created = (
         ensure_shed(
             agent,
@@ -763,6 +798,10 @@ def record_incident(
             incident_id=incident_id,
             expires_at=expires_at,
             reset_at=reset_at,
+            model=model,
+            tier_scope=(
+                tier_scope_for(agent, model) if category in ("quota", "rate_limit") else None
+            ),
         )
         if shed
         else False

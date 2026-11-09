@@ -12,6 +12,7 @@
     "tests/test_advisor_hermetic.py",
     "tests/test_closer_correction_owner.py",
     "tests/test_gemini_flash_routing.py",
+    "tests/test_gemini_tier_scoped_shed.py",
     "tests/test_issue1102_advisor_coverage_evidence.py",
     "tests/test_issue1109_pr793_acceptance.py",
     "tests/test_issue1109_runtime_isolation.py",
@@ -275,7 +276,8 @@
       "tests/test_storage_interrupted_release.py",
       "tests/test_testgen_off_flash_renewal_target.py",
       "tests/test_issue1150_ranked_coverage.py",
-      "tests/test_capability_opportunity.py"
+      "tests/test_capability_opportunity.py",
+      "tests/test_gemini_tier_scoped_shed.py"
     ],
     [
       "tests/test_activation_audit_label_index.py",
