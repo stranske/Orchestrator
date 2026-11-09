@@ -11,15 +11,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from test_dispatcher_controlled_data_only import world as _controlled_world
 
 import adapters
 import dispatcher
 import execution_profiles
 import feedback
 import ledger_reconcile
-
-controlled_world = _controlled_world
 
 PROFILE = "claude-sonnet-5-5-low"
 REASON = "claude_transcript_probe_oserror:ENAMETOOLONG"
