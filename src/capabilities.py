@@ -2184,6 +2184,15 @@ def _reconcile_known_declarations(capabilities: dict[str, dict[str, Any]], now: 
         if cap is None:
             continue
         changed_fields = []
+        # Replacing a reviewed-absent consumer must also remove its old diagnostic. Only a
+        # declaration that owns the consumer may clear it; explicit True/False values still win.
+        if (
+            "downstream_consumer" in gate
+            and "consumer_missing" not in gate
+            and "consumer_missing" in cap
+        ):
+            cap.pop("consumer_missing")
+            changed_fields.append("consumer_missing")
         for field in declaration_fields:
             if field in gate and cap.get(field) != gate[field]:
                 cap[field] = json.loads(json.dumps(gate[field]))

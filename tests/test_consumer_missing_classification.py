@@ -1,5 +1,8 @@
 """Reviewed absence is visible debt and never consumer acceptance (source #599)."""
 
+from unittest.mock import patch
+
+import capabilities
 import capability_admission as admission
 
 
@@ -50,3 +53,53 @@ def test_unmarked_prose_and_undeclared_consumer_are_still_rejected():
     assert cls == "prose" and not ok
     cls, ok, _ = admission.consumer_class({"consumer_missing": True}, {})
     assert cls == "undeclared" and not ok
+
+
+def test_reconciliation_clears_reviewed_absence_when_consumer_is_replaced():
+    cid = "issue599-consumer-transition"
+    cap = capabilities._blank_capability(cid)
+    cap.update(status="active", downstream_consumer="external repair issues", consumer_missing=True)
+    cap["event_history"] = [{"type": "invocation", "timestamp": 1}]
+    ledger = {cid: cap}
+    with patch.dict(
+        capabilities.KNOWN_EXISTING_DECLARATIONS,
+        {cid: {"downstream_consumer": "merge_guard.py:evaluate_merge_gate"}},
+    ):
+        assert capabilities._reconcile_known_declarations(ledger, 2)
+        assert "consumer_missing" not in cap
+        assert admission.consumer_resolution(cap)["resolved"]
+        assert admission.consumer_class(cap, {})[0] != "consumer_missing"
+        assert cap["status"] == "active" and cap["outcome_links"] == []
+        assert cap["event_history"][0] == {"type": "invocation", "timestamp": 1}
+        assert cap["event_history"][-1]["changed_fields"] == [
+            "consumer_missing",
+            "downstream_consumer",
+        ]
+        assert not capabilities._reconcile_known_declarations(ledger, 3)
+
+
+def test_reconciliation_preserves_explicit_missing_consumer_values():
+    cid = "issue599-explicit-missing"
+    for explicit in (True, False):
+        cap = capabilities._blank_capability(cid)
+        cap.update(downstream_consumer="old prose", consumer_missing=not explicit)
+        with patch.dict(
+            capabilities.KNOWN_EXISTING_DECLARATIONS,
+            {
+                cid: {
+                    "downstream_consumer": "merge_guard.py:evaluate_merge_gate",
+                    "consumer_missing": explicit,
+                }
+            },
+        ):
+            assert capabilities._reconcile_known_declarations({cid: cap}, 2)
+            assert cap["consumer_missing"] is explicit
+
+
+def test_declaration_without_consumer_ownership_does_not_clear_reviewed_absence():
+    cid = "issue599-unowned-consumer"
+    cap = capabilities._blank_capability(cid)
+    cap.update(downstream_consumer="old prose", consumer_missing=True)
+    with patch.dict(capabilities.KNOWN_EXISTING_DECLARATIONS, {cid: {"notes": "updated note"}}):
+        assert capabilities._reconcile_known_declarations({cid: cap}, 2)
+        assert cap["consumer_missing"] is True

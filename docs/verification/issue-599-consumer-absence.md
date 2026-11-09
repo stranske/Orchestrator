@@ -73,3 +73,25 @@ already merged source declarations from PR 633. Neither historical branch is
 deleted or superseded by a closure in this round. Raw local transcripts and
 native ownership evidence are retained under
 `~/.codex/automations/pd-workloop-resume/runs/20261109T0010Z/`.
+
+## Same-branch review and CI recovery
+
+Post-push CI exposed an unassigned test module in
+`test_shard_lists_partition_every_collected_test_exactly_once`. Register the new
+module in shard 4, beside the admission tests, and list it as untimed; do not
+invent timing measurements or change verification floors.
+
+CodeRabbit thread `discussion_r4508465504` identified a real forward-transition
+gap: the old `consumer_missing` flag survived a declaration that replaces the
+consumer and omits the flag. Reconciliation now removes that stale diagnostic
+only when the declaration owns `downstream_consumer`; explicit True and False
+values remain authoritative. The ordinary reconciliation event records the
+field removal, and a second reconciliation is idempotent. Lifecycle and prior
+invocation/outcome evidence remain unchanged.
+
+The new transition test failed on `consumer_missing` still being present before
+the fix (one intended failure, one pass). After repair, the focused command above
+produced 17 passes, 16 deselections, in 16.74 seconds. The three added controls
+cover clearing a replaced consumer, explicit flag values, and declarations that
+do not own the consumer. The broader module selftest was bounded at 115 seconds
+and timed out without output; it is not counted as a pass.

@@ -38,7 +38,8 @@
     "tests/test_issue1235_supervisor_recovery.py",
     "tests/test_local_loop.py",
     "tests/test_router_choose_mode.py",
-    "tests/test_model_table.py"
+    "tests/test_model_table.py",
+    "tests/test_consumer_missing_classification.py"
   ],
   "shards": [
     [
@@ -492,7 +493,8 @@
       "tests/test_verify_pytest_workers.py",
       "tests/test_wrapper_steps_name_their_python.py",
       "tests/test_capability_matcher_proposals.py",
-      "tests/test_local_loop.py"
+      "tests/test_local_loop.py",
+      "tests/test_consumer_missing_classification.py"
     ],
     [
       "tests/test_activation_audit_live_rows.py",
