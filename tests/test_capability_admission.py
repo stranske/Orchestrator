@@ -1001,6 +1001,8 @@ def test_declared_consumers_resolve_in_the_tree():
                 assert str(
                     declaration.get("notes") or ""
                 ).strip(), f"{source}:{cid}: explain the absent consumer"
+                cls, ok, detail = admission.consumer_class(declaration, {})
+                assert cls == "consumer_missing" and not ok, (source, cid, detail)
                 continue
             if not resolution["tokens"] or resolution["unresolved"]:
                 failures[f"{source}:{cid}"] = resolution
@@ -1059,7 +1061,7 @@ def test_missing_consumer_declaration_survives_reconciliation_without_acceptance
     assert row["status"] == "active"
     assert row["outcome_links"] == []
     cls, ok, detail = admission.consumer_class(row, {})
-    assert cls == "prose" and not ok, detail
+    assert cls == "consumer_missing" and not ok, detail
     assert row["event_history"][0] == {"type": "invocation", "timestamp": 1}
     assert not capabilities._reconcile_known_declarations(ledger, 3)
 
@@ -1080,7 +1082,8 @@ def test_missing_consumer_declaration_survives_reconciliation_without_acceptance
         assert ("consumer_acts" in verdict["blocking"]) is enforced, verdict
         assert ("consumer_acts" in verdict["deferred"]) is not enforced, verdict
         consumers = admission.consumer_report(dated_ledger, ctx, [verdict])
-        assert consumers["by_class"]["prose"] == [cid], consumers
+        assert consumers["by_class"]["consumer_missing"] == [cid], consumers
+        assert consumers["by_class"]["prose"] == [], consumers
         assert consumers["drainable"] == [cid] and not consumers["drained"], consumers
         assert consumers["blocking"] == ([cid] if enforced else []), consumers
         assert consumers["deferred"] == ([] if enforced else [cid]), consumers
