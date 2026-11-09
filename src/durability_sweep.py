@@ -1416,7 +1416,7 @@ def _post_merge_rechecks(*, dry_run: bool, gh, now: int, spec_dir=None) -> dict:
                     summary["rechecked"] += 1
                 # FAIL is evidence about the delivery and is always commented. UNRUNNABLE is
                 # commented when its cause is in the SPEC or the delivery (`manual_only`,
-                # `hollow_break`, or no recorded reason), which the fleet can act on. A runner
+                # `hollow_break`, `tests_skipped`, or no recorded reason), which the fleet can act on. A runner
                 # that skipped commands by configuration, threw, or could not launch the test says
                 # nothing about the delivery, so it records the event and writes no comment: the
                 # first three rechecks (2026-10-16) posted 4 KB JSON transcripts to fleet issues
