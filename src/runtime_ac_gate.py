@@ -845,7 +845,9 @@ UNRUNNABLE_REASONS = (
 )
 # pytest's summary ("1 passed, 2 skipped", "1 xfailed"), its -rs lines ("SKIPPED [1] ..."), and unittest's
 # "OK (skipped=2)". Deliberately not "deselected": -k/-m selection is the command's own choice.
-SKIPPED_TESTS = re.compile(r"\b[1-9]\d* (?:skipped|xfailed)\b|^SKIPPED \[|\(skipped=[1-9]\d*\)", re.M)
+SKIPPED_TESTS = re.compile(
+    r"\b[1-9]\d* (?:skipped|xfailed)\b|^SKIPPED \[|\(skipped=[1-9]\d*\)", re.M
+)
 RUNNER_SIDE_UNRUNNABLE = frozenset(
     {"commands_disabled", "tool_error", "incomplete", "environment_mismatch"}
 )

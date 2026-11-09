@@ -710,7 +710,12 @@ class PostMergeBreakTests(unittest.TestCase):
                 self.assertEqual(result["result"], "UNRUNNABLE")
                 self.assertEqual(result["reason"], "tests_skipped")
                 self.assertNotIn("tests_skipped", gate.RUNNER_SIDE_UNRUNNABLE)  # said on the issue
-        for tail in ("3 passed in 0.40s", "3 passed, 2 deselected in 0.1s", "0 skipped", "Ran 3 tests\n\nOK"):
+        for tail in (
+            "3 passed in 0.40s",
+            "3 passed, 2 deselected in 0.1s",
+            "0 skipped",
+            "Ran 3 tests\n\nOK",
+        ):
             with self.subTest(tail=tail):
                 self.assertEqual(recheck(tail)["result"], "PASS")
 
