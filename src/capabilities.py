@@ -1897,7 +1897,7 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
         "kill_switch": "remove ~/.codex/handoff/old-opener-suspended (the core then runs dry, no GitHub writes)",
         "rollback": {"restore": "remove start_opener_core() from the external controller pass"},
         "findability_category": "exercise_bound",
-        "findability_rationale": "The external controller invokes the core every pass; rail-exercise:brain offers its read-only value-chain fixture.",
+        "findability_rationale": "The external controller invokes the core every pass; rail-exercise:readiness offers its read-only value-chain fixture.",
         "notes": (
             "dedup: accounting for the existing opener lane core (owner decision 2026-11-04), not a "
             "new mechanism; no monitor row read it before 2026-11-09. Situations: the issues its "
@@ -1927,7 +1927,7 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
         "kill_switch": "remove ~/.codex/handoff/old-maintenance-suspended (the core then runs as a read-only shadow)",
         "rollback": {"restore": "remove start_sync_core() from the external controller pass"},
         "findability_category": "exercise_bound",
-        "findability_rationale": "The external controller invokes the core every pass; rail-exercise:brain offers its read-only value-chain fixture.",
+        "findability_rationale": "The external controller invokes the core every pass; rail-exercise:gates offers its read-only value-chain fixture.",
         "notes": (
             "dedup: accounting for the existing sync lane core (owner decision 2026-11-02), not a "
             "new mechanism; no monitor row read it before 2026-11-09. Situations: generated sync PRs "
