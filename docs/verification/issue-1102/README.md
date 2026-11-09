@@ -221,6 +221,47 @@ Checked 2026-11-05. Every broken run exited 1. Every restored rerun exited 0.
 
 ## External-operation guard
 
+### PR #1152 continuation acceptance (recorded before code edits)
+
+- Check date: 2026-11-08 (America/Chicago).
+- Outcome: the exact pushed head passes CI pytest and flat exec-mirror shards,
+  and the advisor-suite command below prints
+  `external-operation attempts: 0 unexpected`.
+- Interpreter: `/opt/anaconda3/bin/python3` (Python 3.12.2); no repository-selected
+  virtual environment was found. Use this interpreter in place of `python3`
+  in the advisor-suite command below, and first run
+  `/opt/anaconda3/bin/python3 -m pytest -q tests/test_advisor_external_guard.py --tb=line`.
+- Stop rule: two focused repair attempts or 20 minutes for local repair;
+  two CI runs or 75 minutes total, whichever limit comes first.
+- Initial head: `686d67b4141e241cde0ac6d0eea05010625c03d0`.
+- CI run 42543896325 reports the same first failure in pytest and exec-mirror
+  shard 1: `test_shard_lists_partition_every_collected_test_exactly_once` finds
+  `tests/test_advisor_external_guard.py` unassigned in `config/test-shards.json`.
+- Worktree inventory: this clean worktree is the only holder of the PR branch;
+  no preserved holder for #1152 exists. The unrelated preserved #1129 ref was
+  left intact.
+- Complete integration diff reviewed, including coverage and selftest regressions:
+  process/network blockers now come from the autouse private guard; prebound
+  aliases remain covered by its audit hook. The separate live-runtime read hook
+  and per-test attempt check remain in the coverage module. Selftest binding
+  restoration and missing-ledger gates remain unchanged. No guard code or pins
+  were changed, and no rebase was needed; existing implementation mutation
+  evidence below is retained.
+- Review follow-up (outside this demonstrated shard failure): removal of the
+  combined external-operation self-check also removed its deliberate live-ledger
+  read assertion. The live-read protection remains, but that self-check coverage
+  should be restored separately.
+- Reproduction: focused shard-partition test printed `1 failed in 26.99s`, naming
+  only the new guard test module as unassigned. After assigning it once to shard
+  1 and listing it as untimed, the same test printed `1 passed in 34.70s`.
+- Initial guard check: `8 passed in 5.94s`,
+  `external-operation attempts: 0 unexpected`.
+- Initial advisor suite: `1 failed, 94 passed, 5 subtests passed in 49.29s`,
+  `external-operation attempts: 0 unexpected`. The failed temporary-root assertion
+  found the agent's default TMPDIR beneath `~/.codex/orchestrator`. Reruns use
+  `TMPDIR=/private/tmp` so the temporary ledger is outside the live runtime;
+  no test assertion or guard is weakened.
+
 Checked 2026-11-05. PR #1082's guard is the audit hook in the merged closer repair: it records an attempt, then raises, and the per-test fixture fails if the record is still there after the test. Python cannot remove an audit hook, so that proposal cannot show the process callables restored. `tests/advisor_external_guard.py` keeps the record-before-raise behavior and the alias coverage of the hook. The hook returns immediately while no guard is on the stack. `subprocess.Popen`, `subprocess.run`, the other subprocess helpers, `os.system`, and the socket and `urlopen` entry points are patched on a private `MonkeyPatch`. Closing the guard restores those callables and then fails if an unexpected attempt remains, including an attempt whose `ExternalOperation` the caller caught. Attempts inside `expected()` are self-checks. `urllib.Request` is not adopted: CPython emits it when a `Request` object is constructed, before any connection. `test_advisor_hermetic.py` is outside the suite because it starts a real interpreter.
 
 The suite fixture is `advisor_external_guard` in `tests/conftest.py`. The local process and socket patches in the advisor tests were removed so they cannot shadow it.
