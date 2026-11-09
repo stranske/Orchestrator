@@ -8,12 +8,39 @@ import capability_admission as admission
 
 
 def test_reviewed_absence_stays_missing_even_with_a_resolvable_token():
+    cid = "reviewed-absence"
+    now = admission.CONSUMER_ACTS_ENFORCED_FROM + 86400
+    contexts = (
+        ({}, {}, "unmeasured"),
+        ({}, {"acted_on": {cid: 1}}, "acting"),
+        ({}, {"acted_on": {cid: 0}}, "not_invoked"),
+        (
+            {"event_history": [{"type": "invocation", "timestamp": now}]},
+            {"acted_on": {cid: 0}, "now": now},
+            "grace",
+        ),
+        ({"findability_category": admission.EXERCISE_CATEGORY}, {}, "exercise_bound"),
+    )
     for consumer in ("the external repair issues", "merge_guard.py:evaluate_merge_gate"):
-        cap = {"downstream_consumer": consumer, "consumer_missing": True}
-        cls, ok, detail = admission.consumer_class(cap, {})
-        assert cls == "consumer_missing", detail
-        assert not ok, detail
-        assert not admission.req_consumer_acts(cap, {})[0]
+        for fields, ctx, accepted_class in contexts:
+            cap = {
+                "capability_id": cid,
+                "downstream_consumer": consumer,
+                "consumer_missing": True,
+                **fields,
+            }
+            cls, ok, detail = admission.consumer_class(cap, ctx)
+            assert cls == "consumer_missing", detail
+            assert not ok, detail
+            assert not admission.req_consumer_acts(cap, ctx)[0]
+
+            # Prove each context could grant credit if reviewed absence were ignored.
+            unmarked = {key: value for key, value in cap.items() if key != "consumer_missing"}
+            cls, ok, detail = admission.consumer_class(unmarked, ctx)
+            if admission.consumer_tokens(consumer):
+                assert cls == accepted_class and ok, detail
+            else:
+                assert cls == "prose" and not ok, detail
 
 
 def test_consumer_report_counts_reviewed_absence_without_granting_acceptance():
