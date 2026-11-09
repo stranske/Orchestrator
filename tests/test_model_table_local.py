@@ -11,8 +11,9 @@ from pathlib import Path
 
 import pytest
 
-import model_table
 import test_model_table as shared_tests
+
+import model_table
 
 
 @pytest.mark.parametrize("mismatch", ["content", "whitespace"])
