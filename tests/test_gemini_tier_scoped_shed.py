@@ -29,6 +29,7 @@ FLASH_FAILURE = ARGON_FAILURE.replace("gemini-4-argon-medium", "gemini-3.8-flash
 def shed_dir(tmp_path, monkeypatch):
     shed = tmp_path / "capacity-shed"
     shed.mkdir()
+    monkeypatch.setattr(rate_incidents, "HANDOFF", tmp_path)
     monkeypatch.setattr(rate_incidents, "SHED_DIR", shed)
     monkeypatch.setattr(capacity, "SHED_DIR", shed)
     monkeypatch.setattr(rate_incidents, "INCIDENT_FILE", tmp_path / "incidents.ndjson")
