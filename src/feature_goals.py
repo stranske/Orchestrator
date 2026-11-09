@@ -15,7 +15,6 @@ import math
 import os
 import re
 import sqlite3
-import sys
 import time
 from collections import defaultdict
 from collections.abc import Callable, Sequence
@@ -111,113 +110,139 @@ FEATURES = (
 
 
 def closer_campaign_completion(now: int) -> Measurement:
-    """Check for independently observed desktop-qualified guarded remote completion.
+    """Count distinct authenticated remote rounds with same-pin desktop qualification.
 
-    A measured completion requires both:
-    1. A registered desktop observer (via closer_runtime_binding.register_observer)
-    2. An exact pinned remote completion receipt (pinned manifest or completed round)
-
-    This function registers a default desktop observer if none exists, to ensure
-    the measurement can use a registered observer when pinned manifests are present.
+    Read only: observer registration belongs to the desktop controller. Native
+    admission and signed C0 boundary validators re-read the original artifacts;
+    qualification, harness results and campaign completion flags are not completion.
     """
-    # Ensure a desktop observer is registered
+    import closer_campaign as campaign
+    import closer_native_observer as native
+    import closer_runtime_binding  # canonical module used by check_promotion
+
+    state = Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex/orchestrator"))
+    roots = {Path(os.environ.get("ORCH_CLOSER_CAMPAIGN_DIR", state / "closer-campaigns"))}
+    reasons = []
+    discovery_failed = False
     try:
-        # Add src to path so we can import from closer_runtime_binding
-        # when running as a module from the repo root
-        if "src" not in sys.path:
-            _src_path = Path(__file__).parent.resolve()
-            if str(_src_path) not in sys.path:
-                sys.path.insert(0, str(_src_path))
-        from closer_runtime_binding import _OBSERVERS, register_observer
-
-        has_observer = len(_OBSERVERS) > 0
-
-        # If no observer is registered, register a default one that provides
-        # basic observation capability for pinned manifest verification
-        if not has_observer:
-
-            class PinnedManifestObserver:
-                """Default desktop observer for verifying pinned manifest evidence."""
-
-                def observe(self, request_id: str, runner_id: str) -> dict:
-                    """Observe request by checking for pinned manifest evidence."""
-                    return {
-                        "request_id": request_id,
-                        "runner_id": runner_id,
-                        "evidence": "pinned_manifest_verification",
-                        "desktop_qualified": True,
-                    }
-
-            register_observer("pinned_manifest_observer", PinnedManifestObserver())
-            has_observer = True
-    except Exception:
-        has_observer = False
-
-    # Check for pinned manifest or completed round evidence
-    state_dir = Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex/orchestrator"))
-    has_pinned_manifest = False
-    has_completed_round = False
-
-    # Check default closer-campaigns directory
-    campaigns_dir = state_dir / "closer-campaigns"
-    if campaigns_dir.exists():
-        # Check for pin.manifest.json
-        if (campaigns_dir / "pin.manifest.json").exists():
-            has_pinned_manifest = True
-
-        # Check campaign files for completed_round
-        for campaign_file in campaigns_dir.glob("*.campaign.json"):
-            try:
-                with open(campaign_file) as f:
-                    campaign = json.load(f)
-                    if campaign.get("completed_round"):
-                        has_completed_round = True
-                        break
-            except (OSError, ValueError, json.JSONDecodeError):
-                pass
-
-    # Check runtime-campaigns directory
-    runtime_campaigns = state_dir / "runtime-campaigns"
-    if runtime_campaigns.exists():
-        for campaign_dir in runtime_campaigns.iterdir():
-            pinned = campaign_dir / "campaigns" / "pin.manifest.json"
-            if pinned.exists():
-                has_pinned_manifest = True
-                # Also check for completed_round in campaign files
-                campaign_json = campaign_dir / "campaigns" / "public989-readmission.campaign.json"
-                if campaign_json.exists():
-                    try:
-                        with open(campaign_json) as f:
-                            campaign = json.load(f)
-                            if campaign.get("completed_round"):
-                                has_completed_round = True
-                                break
-                    except (OSError, ValueError, json.JSONDecodeError):
-                        pass
-
-    # If we have both conditions, return a measured value
-    if has_observer and (has_pinned_manifest or has_completed_round):
-        return Measurement(
-            1.0,  # One successful completion
-            "closer campaign desktop observer + pinned manifest",
-            now,
-            "found registered desktop observer and exact pinned remote completion receipt",
+        roots.update(
+            path / "campaigns" for path in (state / "runtime-campaigns").iterdir() if path.is_dir()
         )
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        reasons.append(f"runtime campaign discovery unreadable: {type(exc).__name__}: {exc}")
+        discovery_failed = True
 
-    # Build reason for unmeasured state
-    reason_parts = []
-    if not has_observer:
-        reason_parts.append("registered desktop observer")
-    if not has_pinned_manifest and not has_completed_round:
-        reason_parts.append("exact pinned remote completion receipt")
+    def read_object(path):
+        value = json.loads(path.read_text())
+        if not isinstance(value, dict):
+            raise ValueError("expected JSON object")
+        return value
 
-    reason = " and ".join(reason_parts) if reason_parts else "unknown requirement"
-
-    return Measurement(
-        None,
-        "unmeasured",
-        now,
-        reason,
+    completed = set()
+    for root in sorted(roots):
+        try:
+            # iterdir surfaces filesystem failures that glob may silently suppress.
+            files = sorted(path for path in root.iterdir() if path.name.endswith(".campaign.json"))
+        except OSError as exc:
+            reasons.append(f"{root}: campaign directory unreadable: {type(exc).__name__}: {exc}")
+            discovery_failed = True
+            continue
+        try:
+            pin = root / "pin.manifest.json"
+            read_object(pin)
+            manifest = campaign.load_manifest(pin)
+            promotion = read_object(root / "promotion.json")
+            runners, receipts = promotion.get("runners"), promotion.get("receipts")
+            if (
+                not isinstance(runners, list)
+                or not runners
+                or any(not isinstance(r, str) or not r for r in runners)
+                or len(set(runners)) != len(runners)
+                or not isinstance(receipts, list)
+                or any(not isinstance(r, dict) for r in receipts)
+            ):
+                raise ValueError("invalid desktop qualification runners/receipts")
+            # Check the receipt-selected observer, never any-observer presence.
+            missing = [
+                r.get("observer_id")
+                for r in receipts
+                if not isinstance(r.get("observer_id"), str)
+                or r["observer_id"] not in closer_runtime_binding._OBSERVERS
+            ]
+            if missing:
+                raise ValueError(f"desktop receipt observer not registered: {missing}")
+            verdict = campaign.check_promotion(manifest, runners, receipts)
+            if not verdict["promotable"]:
+                raise ValueError("desktop qualification invalid: " + "; ".join(verdict["problems"]))
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError, AttributeError) as exc:
+            reasons.append(
+                f"{root}: pin/desktop qualification unavailable: {type(exc).__name__}: {exc}"
+            )
+            continue
+        if not files:
+            reasons.append(f"{root}: missing guarded remote completion: no campaign files")
+        for path in files:
+            try:
+                doc = read_object(path)
+                if doc.get("release_pin") != manifest["package_digest"]:
+                    raise ValueError("campaign release pin differs from validated pin")
+                workers = doc.get("workers")
+                if not isinstance(workers, list) or not workers:
+                    raise ValueError("missing guarded remote completion workers")
+                for worker in workers:
+                    if not isinstance(worker, dict):
+                        raise ValueError("invalid worker object")
+                    if worker.get("state") != "terminal" or worker.get("outcome") != "ok":
+                        reasons.append(
+                            f"{path}: worker lacks successful terminal remote completion"
+                        )
+                        continue
+                    worker_id = worker["worker_id"]
+                    if not isinstance(worker_id, str) or not re.fullmatch(r"[\w-]+", worker_id):
+                        raise ValueError("invalid worker identity")
+                    result = read_object(Path(str(path) + ".results") / (worker_id + ".json"))
+                    if (
+                        result.get("worker_id") != worker_id
+                        or result.get("target") != "*round*"
+                        or worker.get("target") != "*round*"
+                        or result.get("outcome") != "ok"
+                        or result.get("mechanism") != "native-handoff/v1"
+                    ):
+                        raise ValueError("remote result worker/mechanism identity differs")
+                    context = result["native_admission"]
+                    if Path(context["runtime_manifest"]).resolve() != pin.resolve():
+                        raise ValueError("remote admission manifest differs from validated pin")
+                    cfg = native.result_admission_config(
+                        doc["worker_config"], context, path, doc, worker
+                    )
+                    detail = json.loads(result["detail"])
+                    if not isinstance(detail, dict):
+                        raise ValueError("remote detail is not an object")
+                    proof = detail.get("completed_round")
+                    if (
+                        not isinstance(proof, dict)
+                        or native.completed_round_proof(manifest, cfg, proof) != proof
+                    ):
+                        raise ValueError(
+                            "missing or unverifiable guarded remote completed-round proof"
+                        )
+                    completed.add((proof["receipt_path"], proof["receipt_sha256"]))
+            except (OSError, ValueError, RuntimeError, KeyError, TypeError, AttributeError) as exc:
+                reasons.append(
+                    f"{path}: remote completion unavailable: {type(exc).__name__}: {exc}"
+                )
+    reason = "; ".join(reasons)
+    if completed and not discovery_failed:
+        return Measurement(
+            float(len(completed)),
+            "validated desktop + signed guarded remote rounds",
+            now,
+            reason or "distinct validated remote completions",
+        )
+    return unknown(
+        now, reason or "missing validated pin, desktop qualification and guarded remote completion"
     )
 
 

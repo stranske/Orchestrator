@@ -7,6 +7,8 @@ from dataclasses import asdict, replace
 from datetime import datetime, timezone
 
 import pytest
+from test_closer_native_capacity import capacity_host as capacity_host
+from test_closer_native_observer import host as host
 
 import feature_goals as fg
 
@@ -767,3 +769,236 @@ def test_pacing_measure_survives_the_freshness_check(monkeypatch):
     goal = replace(GOAL, measure="feature_goals.py:pacing_usage")
     result = fg.measure(goal, NOW)
     assert result.value == 0.0 and result.as_of == NOW
+
+
+@pytest.fixture
+def campaign_goal(tmp_path, monkeypatch):
+    """Real manifest validator and desktop artifact reader; remote proof stays absent."""
+    import sys
+    from types import SimpleNamespace
+
+    import closer_campaign as cc
+    import closer_runtime_binding as rb
+
+    state = tmp_path / "state"
+    root = tmp_path / "external-campaigns"
+    root.mkdir()
+    monkeypatch.setenv("ORCH_STATE_DIR", str(state))
+    monkeypatch.setenv("ORCH_CLOSER_CAMPAIGN_DIR", str(root))
+    monkeypatch.setattr(rb, "_OBSERVERS", {})
+    module = tmp_path / "modules"
+    module.mkdir()
+    (module / "minimal.py").write_text("# sealed fixture\n")
+    versions = {"campaign": 1, "release": 1}
+    runtime = {"python": sys.executable}
+    command = ["fixture"]
+    manifest = {
+        "schema_version": cc.MANIFEST_SCHEMA,
+        "contract": cc.CONTRACT,
+        "candidate_sha": "a" * 40,
+        "module_dir": str(module),
+        "module_path": str(module / "closer_campaign.py"),
+        "modules": {"minimal.py": cc.sha256_file(module / "minimal.py")},
+        "runtime": runtime,
+        "runtime_digest": cc.sha256_json(runtime),
+        "command": command,
+        "command_digest": cc.sha256_json(command),
+        "state_versions": versions,
+        "state_digest": cc.sha256_json(versions),
+        "portable": None,
+    }
+    manifest["package_digest"] = cc.sha256_json(
+        [
+            manifest["candidate_sha"],
+            sorted(manifest["modules"].items()),
+            manifest["runtime_digest"],
+            manifest["state_digest"],
+            None,
+        ]
+    )
+    (root / "pin.manifest.json").write_text(json.dumps(manifest))
+    return SimpleNamespace(root=root, manifest=manifest, binding=rb)
+
+
+def install_goal_desktop(root, manifest, rb):
+    from types import SimpleNamespace
+
+    import closer_campaign as cc
+
+    artifact = root / "native-event.txt"
+    artifact.write_text("independently recorded desktop phase")
+    phases = {
+        p: {
+            "passed": True,
+            "native_event_id": "event-" + p,
+            "evidence": {"path": str(artifact), "sha256": cc.sha256_file(artifact)},
+        }
+        for p in cc.RUNNER_PHASES
+    }
+    request = rb.qualification_request(manifest, ["desktop-1"])
+    receipt = {
+        **request["binding"],
+        "kind": "desktop-runner",
+        "request_id": request["request_id"],
+        "runner_id": "desktop-1",
+        "observer_id": "controller",
+        "phases": phases,
+    }
+    observed = {
+        **request["binding"],
+        "enabled_runners": ["desktop-1"],
+        "runner_id": "desktop-1",
+        "source": "native-desktop-events",
+        "app_id": "app",
+        "run_id": "run",
+        "thread_id": "thread",
+        "producer_id": "producer",
+        "phases": phases,
+    }
+    rb.register_observer("controller", SimpleNamespace(observe=lambda *_: observed))
+    promotion = {"runners": ["desktop-1"], "receipts": [receipt]}
+    (root / "promotion.json").write_text(json.dumps(promotion))
+    return promotion
+
+
+def test_closer_goal_bare_pin_never_measures_or_registers(campaign_goal):
+    env = campaign_goal
+    before = dict(env.binding._OBSERVERS)
+    for _ in range(2):
+        result = fg.closer_campaign_completion(NOW)
+        assert result.value is None
+        assert "promotion.json" in result.reason
+    assert env.binding._OBSERVERS == before
+
+
+@pytest.mark.parametrize(
+    "damage,reason",
+    [
+        ("unrelated", "observer not registered"),
+        ("self-reported", "observer not registered"),
+        ("fake-observer", "observation unverifiable"),
+        ("digest", "differs from pin"),
+        ("harness", "lifecycle only"),
+        ("request", "request differs"),
+        ("artifact", "hash-bound artifact"),
+    ],
+)
+def test_closer_goal_rejects_invalid_desktop(campaign_goal, damage, reason):
+    from types import SimpleNamespace
+
+    env = campaign_goal
+    promotion = install_goal_desktop(env.root, env.manifest, env.binding)
+    receipt = promotion["receipts"][0]
+    if damage == "unrelated":
+        env.binding._OBSERVERS.clear()
+        env.binding.register_observer("other", SimpleNamespace(observe=lambda *_: {}))
+    elif damage == "self-reported":
+        env.binding._OBSERVERS.clear()
+        receipt["desktop_qualified"] = True
+    elif damage == "fake-observer":
+        env.binding._OBSERVERS["controller"] = SimpleNamespace(
+            observe=lambda *_: {"desktop_qualified": True}
+        )
+    elif damage == "digest":
+        receipt["package_digest"] = "f" * 64
+    elif damage == "harness":
+        receipt["kind"] = "harness-subprocess"
+    elif damage == "request":
+        receipt["request_id"] = "wrong"
+    else:
+        (env.root / "native-event.txt").write_text("tampered")
+    (env.root / "promotion.json").write_text(json.dumps(promotion))
+    result = fg.closer_campaign_completion(NOW)
+    assert result.value is None and reason in result.reason
+
+
+def test_closer_goal_qualification_is_not_remote_completion(campaign_goal):
+    env = campaign_goal
+    install_goal_desktop(env.root, env.manifest, env.binding)
+    assert "no campaign files" in fg.closer_campaign_completion(NOW).reason
+    (env.root / "arbitrary-name.campaign.json").write_text(
+        json.dumps(
+            {
+                "release_pin": env.manifest["package_digest"],
+                "completed_round": True,
+            }
+        )
+    )
+    result = fg.closer_campaign_completion(NOW)
+    assert result.value is None and "completion workers" in result.reason
+
+
+@pytest.mark.parametrize("filename", ["pin.manifest.json", "promotion.json", "odd.campaign.json"])
+@pytest.mark.parametrize("raw", ["[]", "null", '"string"', "broken json"])
+def test_closer_goal_malformed_state(campaign_goal, filename, raw):
+    env = campaign_goal
+    install_goal_desktop(env.root, env.manifest, env.binding)
+    (env.root / filename).write_text(raw)
+    result = fg.closer_campaign_completion(NOW)
+    assert result.value is None
+    assert "JSON" in result.reason
+
+
+def test_closer_goal_unreadable_directory_is_specific(campaign_goal, monkeypatch):
+    from pathlib import Path
+
+    original = Path.iterdir
+    root = campaign_goal.root
+
+    def denied(path):
+        if path == root:
+            raise PermissionError("fixture read denied")
+        return original(path)
+
+    monkeypatch.setattr(Path, "iterdir", denied)
+    result = fg.closer_campaign_completion(NOW)
+    assert result.value is None
+    assert "campaign directory unreadable: PermissionError" in result.reason
+
+
+# Reuse the existing signed native host and completed-round fixture. These exercise
+# real admission/signature/round validators; no query validator is mocked.
+
+
+@pytest.mark.parametrize(
+    "damage", [None, "receipt", "campaign", "pin", "mechanism", "missing-proof"]
+)
+def test_closer_goal_matching_signed_completion(capacity_host, monkeypatch, damage):
+    from test_closer_native_capacity import completed_standing_round
+
+    import closer_runtime_binding as rb
+
+    manifest, path, obj, *_ = capacity_host
+    cfg, context, proof, aggregate, result_path = completed_standing_round(capacity_host)
+    root = obj.path.parent
+    (root / "pin.manifest.json").symlink_to(path)
+    monkeypatch.setenv("ORCH_CLOSER_CAMPAIGN_DIR", str(root))
+    monkeypatch.setattr(rb, "_OBSERVERS", {})
+    install_goal_desktop(root, manifest, rb)
+    if damage == "receipt":
+        from pathlib import Path
+
+        Path(proof["receipt_path"]).write_text("{}")
+    elif damage == "campaign":
+        doc = json.loads(obj.path.read_text())
+        doc["campaign_id"] = "unrelated-campaign"
+        obj.path.write_text(json.dumps(doc))
+    elif damage == "pin":
+        doc = json.loads(obj.path.read_text())
+        doc["release_pin"] = "f" * 64
+        obj.path.write_text(json.dumps(doc))
+    elif damage == "mechanism":
+        result = json.loads(result_path.read_text())
+        result["mechanism"] = "cli-offload/v1"
+        result_path.write_text(json.dumps(result))
+    elif damage == "missing-proof":
+        result = json.loads(result_path.read_text())
+        result["detail"] = json.dumps({"desktop_qualified": True, "completed_round": True})
+        result_path.write_text(json.dumps(result))
+    before = dict(rb._OBSERVERS)
+    snapshot = {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    for _ in range(2):
+        measured = fg.closer_campaign_completion(NOW)
+        assert measured.value == (1.0 if damage is None else None), measured.reason
+    assert rb._OBSERVERS == before
+    assert snapshot == {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
