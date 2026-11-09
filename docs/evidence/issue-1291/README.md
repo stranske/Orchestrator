@@ -1,5 +1,64 @@
 # Issue #1291 repair evidence
 
+## Round 6: close mirror and live classification verification — 2026-11-09
+
+Outcome 1 = PASS for T6/A4 on input
+`1c1b0265927d2cccc7892f02e337786eb205dd5a`. Before edits, the required
+outcome was recorded as matching mirror payload bytes and a successful native
+aggregate; stop rule: two attempts per failing acceptance command or 25 minutes.
+No implementation change was needed. Executed:
+
+```bash
+bash scripts/build_exec_mirror.sh "$PWD" /private/tmp/1293-round6-flat
+cmp docs/CI_LINT_BASELINE.md /private/tmp/1293-round6-flat/docs/CI_LINT_BASELINE.md
+cmp .github/workflows/autofix-versions.env /private/tmp/1293-round6-flat/.github/workflows/autofix-versions.env
+/opt/anaconda3/bin/python3 -m pytest -q tests/test_ci_gate_config.py
+(cd /private/tmp/1293-round6-flat && /opt/anaconda3/bin/python3 -m pytest -q tests/test_ci_gate_config.py)
+```
+
+The builder and both comparisons exit zero. The separate source/flat runs pass
+15 tests each in 0.26/0.27 seconds. An initial attempt to collect both copies
+in one pytest process failed with an import-file mismatch; running each shape
+separately corrects the invocation without changing code.
+
+Native CI run `42588612601` is successful and binds to that exact input head.
+Job `129065418977` executes the existing aggregate via
+`bash scripts/verify_before_sync.sh "$GITHUB_WORKSPACE"`, with
+`ORCH_SYNC_SCRIPT=scripts/build_exec_mirror.sh`,
+`VERIFY_BEFORE_SYNC_TREE='BARE EXEC MIRROR'`,
+`VERIFY_BEFORE_SYNC_FLOOR_MAY_LAG=1` and
+`VERIFY_BEFORE_SYNC_AGGREGATE=$GITHUB_WORKSPACE/mirror-evidence`.
+Its payload-integrity step prints `verify-before-sync: VERIFIED` on merge
+checkout `6db8622`: 8,311 passed; 48 tests, seven selftests and two gates skipped
+for named missing prerequisites. See [source aggregate excerpt](round6/source-aggregate.log).
+This is hosted aggregate execution, not a claim of a new local aggregate run.
+The full suite was not executed locally.
+
+Outcome 2 = PASS for T7/A5/A6: regenerated #1289 head remains
+`6efd1db39f9ba919d0f0ff6f63e2c0056ca64172`. Re-read new run `42588005489`
+with `gh run view 42588005489 --log-failed`: exit zero, no failed logs.
+The four formerly failed jobs listed in round 5 all remain successful;
+[payload aggregate excerpt](round6/payload-aggregate.log) records the successful
+flat verdict. PR #1289 merged at `2026-11-09T09:10:35Z`, merge commit
+`365ab793b50bf186dacaeaed957c38d99786193b`.
+
+The next sync-core round `20261109T091555Z`, recorded at
+`2026-11-09T09:16:04Z`, classifies this target `delivered`, with reason
+`merged 2026-11-09T09:10:35Z; 1 files, 0 mismatches`, no error and no
+handoffs. Its target readback binds the exact regenerated head and says
+`verification_pending=false`. No pin-conflict finding remains in this
+classification. See [target-only round and head readback](round6/sync-core.json).
+This supersedes round 5's pending T7/A6 status. As established in round 5,
+Maint 52, rather than Maint 68, owns this dev-tool regeneration; T7 is verified
+against the actual owning workflow's delivered payload.
+
+Blocking/drainable pair: 0 / 0 for the requested pin-conflict verification.
+Cost this round: read-only GitHub/state inspection, one scratch mirror build,
+two passing focused test runs and one corrected test invocation; no pin edits,
+workflow dispatch, manual sync-core launch or merge. This commit changes only
+verification evidence. Its own hosted CI/post-push review remains a separate
+check; the input-head verdict is not represented as CI on a future commit.
+
 ## Round 5: current source and regenerated payload readback — 2026-11-09
 
 Outcome 1 = PASS on input `b46bca3c6a0feedda0f0ad3bf246aa219ded78b7`:
