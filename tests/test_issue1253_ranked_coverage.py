@@ -221,6 +221,33 @@ class RankedCoverageTests(unittest.TestCase):
         self.assertEqual((episodes, count), ([], 8))
         self.assertEqual(instance.rejections[0].reasons, ("duplicate_phase:trigger",))
 
+    def test_miner_assembly_checks_timestamp_order_at_every_phase_boundary(self):
+        for left, right in zip(miner.PHASES, miner.PHASES[1:]):
+            for delta in (-1, 0, 1):
+                with self.subTest(left=left, right=right, delta=delta):
+                    events = self.completion_events()
+                    events[right] = replace(
+                        events[right], occurred_at=events[left].occurred_at + delta
+                    )
+                    instance = miner.PatternMiner()
+                    with patch.object(
+                        miner, "adapt_completion_event_envelope", side_effect=events.values()
+                    ):
+                        episodes, count = instance._assemble([{}] * len(events))
+                    self.assertEqual(count, 7)
+                    if delta < 0:
+                        self.assertEqual(episodes, [])
+                        self.assertEqual(len(instance.rejections), 1)
+                        self.assertEqual(instance.rejections[0].phase, "episode")
+                        self.assertEqual(
+                            instance.rejections[0].reasons,
+                            (f"non_monotonic_phase_order:{left}->{right}",),
+                        )
+                    else:
+                        self.assertEqual(instance.rejections, [])
+                        self.assertEqual(len(episodes), 1)
+                        self.assertTrue(episodes[0].positive)
+
     def test_miner_deduplication_joins_successors_in_both_arrival_orders(self):
         base = miner.normalize_episode(self.completion_events())
         episodes = [
