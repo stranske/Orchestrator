@@ -95,3 +95,78 @@ produced 17 passes, 16 deselections, in 16.74 seconds. The three added controls
 cover clearing a replaced consumer, explicit flag values, and declarations that
 do not own the consumer. The broader module selftest was bounded at 115 seconds
 and timed out without output; it is not counted as a pass.
+
+## Continuation round: acceptance target and supported report (2026-11-08)
+
+Recorded before edits, 2026-11-08 22:50 America/Chicago (2026-11-09 04:50 UTC).
+Outcome: one supported `capability_admission.py` invocation, run against the
+populated runtime, prints the formatted CONSUMERS counters and the named
+`consumer_missing` rows in under 120 seconds. Stop rule: two attempts or 20
+minutes.
+
+### Acceptance target
+
+The issue body carries the clarification verbatim under "Owner clarification
+(2026-11-06)". It is marked "Decided under the owner's delegation during the
+needs-human catalog review". So it is a delegated decision recorded on the issue,
+not a statement Tim made himself. It reads: "The named test is the gate.
+Entries marked `consumer_missing: true` are allowed and are not prose. The pass
+number is `prose 0` on the live ledger, with `missing` equal to the count of
+`consumer_missing` rows (that count is DRAINABLE)."
+
+Resulting target: `prose 0`, `missing` == count of `consumer_missing` rows ==
+DRAINABLE, on the live ledger after sync. The original target (`prose 0,
+missing 0` by 2026-10-27) is superseded by that clarification and was not met.
+The counter semantics were not changed to print zero.
+
+### Supported invocation and real output (branch evidence)
+
+Source: branch `codex/issue-599-consumer-absence` at
+`c5533916d203de532239554f0e40e580ef295a98` (origin/main at the time:
+`2f00addbc3420ca67f50399d6585c19a09ec8220`). Ledger:
+`/Users/teacher/.codex/orchestrator/capabilities.json`, sha256
+`20a20c0dcbce48ee18f56fc1f0e3fc35321725f6ef414e1e2a720d7df077e8e0`. Python
+3.12.2 (`/opt/anaconda3/bin/python3`).
+
+The timeout recorded earlier did not reproduce. Attempt 1 of 2 completed in 18
+seconds with exit 0, so no new entry point was added:
+
+```bash
+ORCH_LOCAL_RUNTIME="$HOME/.codex/orchestrator" timeout 120 /opt/anaconda3/bin/python3 src/capability_admission.py
+```
+
+```text
+  CONSUMERS (10th): 49 of 50 declare a consumer this tree can find — acting (capability-level) 9, in grace 0, not invoked 0, exercise-bound 19, unmeasured 0
+                   not acting (trailing window) 21 (blocking 0, pre-cutoff debt 22); prose 0, missing 1, undeclared 0 — DRAINABLE 1 (reviewed absent 1, unresolved 0; reviewed absence remains finding debt)
+```
+
+The existing `--json` flag names the inventory (exit 0, 18 seconds):
+
+```bash
+ORCH_LOCAL_RUNTIME="$HOME/.codex/orchestrator" timeout 120 /opt/anaconda3/bin/python3 src/capability_admission.py --json
+```
+
+```text
+consumers.by_class.prose            []
+consumers.by_class.consumer_missing ["docs-drift-fix-agent"]
+consumers.drainable                 ["docs-drift-fix-agent"]
+```
+
+On the branch the clarified target holds: prose 0, missing 1, one
+`consumer_missing` row, DRAINABLE 1, and the DRAINABLE set is exactly the
+`consumer_missing` set. The same report lists one enforced failure
+(`local-loop`, admission parts). That failure is unrelated to this issue and was
+not changed.
+
+Focused tests on the same head:
+`/opt/anaconda3/bin/python3 -m pytest tests/test_consumer_missing_classification.py tests/test_capability_admission.py -k 'consumer or format_report' -q`
+printed `17 passed, 16 deselected in 3.28s`.
+
+### Post-sync delivery: PENDING
+
+The evidence above comes from the branch code reading the live ledger. The
+launchd mirror still runs main, so this is not post-sync acceptance. After the
+owning delivery lane merges and syncs, it must rerun the two commands above from
+`~/.codex/orchestrator-mirror`, record the deployed generation and commit, and
+confirm `prose 0` with DRAINABLE equal to the `consumer_missing` count. Until
+then the acceptance target is unmet.
