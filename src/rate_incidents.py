@@ -642,6 +642,30 @@ def failed_model(agent: str, evidence: str) -> str | None:
     return found[-1] if found else None
 
 
+def recorded_run_model(agent: str, run_id: str | None) -> str | None:
+    """The model the feedback DB recorded for a gemini run; None when unknown.
+
+    A quota refusal can arrive before agy prints its `init` event, so the evidence never names the
+    model (2026-11-09, Workflows#4515: `dispatch gemini/full`, refused at once). The run row was
+    written at dispatch and names what was asked for (`agy:gemini-4-argon-high`). If it is wrong,
+    the next refusal carries its own `init` model and widens the shed, never narrows it.
+    """
+    if agent != "gemini" or not run_id:
+        return None
+    try:
+        import feedback
+
+        uri = f"file:{feedback.DB_PATH}?mode=ro"
+        with sqlite3.connect(uri, uri=True, timeout=2) as conn:
+            row = conn.execute(
+                "SELECT model FROM runs WHERE run_id=? ORDER BY ts DESC LIMIT 1", (run_id,)
+            ).fetchone()
+    except Exception:
+        return None
+    model = str(row[0] or "") if row else ""
+    return model.split(":", 1)[-1] or None
+
+
 def tier_scope_for(agent: str, model: str | None) -> str | None:
     """`full` when only gemini's top tier (the Argon family) is exhausted; None sheds the whole seat."""
     return "full" if agent == "gemini" and model and "argon" in model.lower() else None
@@ -790,7 +814,7 @@ def record_incident(
     expires_at = timestamp + cooldown if cooldown is not None else None
     if reset_at is not None and expires_at is not None:
         expires_at = max(expires_at, reset_at)
-    model = failed_model(agent, evidence)
+    model = failed_model(agent, evidence) or recorded_run_model(agent, run_id)
     shed_created = (
         ensure_shed(
             agent,

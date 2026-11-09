@@ -191,3 +191,69 @@ def test_marker_text_cannot_execute_when_the_tick_evals_the_exports(shed_dir, tm
     ).stdout
     assert not pwned.exists(), "marker text executed"
     assert "cap=mid" in out and "capped at mid" in out
+
+
+LANE_REFUSAL = (
+    "error: Individual quota reached. Please upgrade your subscription to increase your limits. "
+    "Resets in 119h11m23s.\n"
+    'AGY_ERROR: {"short_error":"RESOURCE_EXHAUSTED (code 429): Individual quota reached."}'
+)
+
+
+def _scoped_marker(shed_dir, scope="full"):
+    payload = {"category": "quota", "created_at": time.time(), "expires_at": time.time() + 3600}
+    if scope:
+        payload |= {"tier_scope": scope, "model": "gemini-4-argon-high"}
+    (shed_dir / "gemini").write_text(json.dumps(payload))
+
+
+def test_lane_dispatch_without_the_tick_env_is_capped_by_the_marker(shed_dir):
+    """2026-11-09: closer/opener dispatches never ran the tick's export and went to Argon."""
+    _scoped_marker(shed_dir)
+    assert adapters.tier_ceiling("gemini") == "mid"
+    assert adapters.effective_tier("gemini", "full") == "mid"
+    model = adapters.resolve_model("gemini", adapters.effective_tier("gemini", "full"))
+    assert "argon" not in model.lower()
+
+
+def test_whole_seat_or_absent_marker_sets_no_ceiling(shed_dir):
+    assert adapters.tier_ceiling("gemini") is None
+    _scoped_marker(shed_dir, scope=None)
+    assert adapters.tier_ceiling("gemini") is None
+
+
+def test_explicit_owner_ceiling_still_wins_over_the_marker(shed_dir, monkeypatch):
+    _scoped_marker(shed_dir)
+    monkeypatch.setenv("ORCH_GEMINI_MAX_TIER", "cheap")
+    assert adapters.tier_ceiling("gemini") == "cheap"
+
+
+def _runs_db(tmp_path, monkeypatch, run_id, model):
+    import sqlite3
+
+    import feedback
+
+    db = tmp_path / "feedback.db"
+    with sqlite3.connect(db) as conn:
+        conn.execute("CREATE TABLE runs (run_id TEXT, ts REAL, model TEXT)")
+        conn.execute("INSERT INTO runs VALUES (?, ?, ?)", (run_id, time.time(), model))
+    monkeypatch.setattr(feedback, "DB_PATH", db)
+
+
+def test_refusal_without_init_event_is_scoped_from_the_recorded_run_model(
+    shed_dir, tmp_path, monkeypatch
+):
+    """Workflows#4515: the 429 came before agy's init event, so the evidence named no model."""
+    _runs_db(tmp_path, monkeypatch, "run-lane", "agy:gemini-4-argon-high")
+    _record(LANE_REFUSAL, "run-lane")
+    marker = _marker(shed_dir)
+    assert marker["tier_scope"] == "full" and marker["model"] == "gemini-4-argon-high"
+    assert capacity._shed("gemini") is False
+
+
+def test_refusal_without_init_event_on_a_flash_run_still_sheds_the_seat(
+    shed_dir, tmp_path, monkeypatch
+):
+    _runs_db(tmp_path, monkeypatch, "run-flash", "agy:gemini-3.8-flash-high")
+    _record(LANE_REFUSAL, "run-flash")
+    assert "tier_scope" not in _marker(shed_dir) or _marker(shed_dir)["tier_scope"] is None
