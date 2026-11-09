@@ -164,6 +164,61 @@ printed `17 passed, 16 deselected in 3.28s`.
 
 ### Post-sync delivery: PENDING
 
+Continuation checked 2026-11-09 07:48 UTC (2026-11-09 America/Chicago),
+against PR #1275 head `ae9e83875d8ac6837d19305e6f90757e8678d333`.
+The acceptance outcome remains a deployed report with prose, unresolved and
+undeclared sets empty, and DRAINABLE exactly equal to `consumer_missing`.
+The commands below remain the acceptance commands; the execution stop rule is
+two attempts or 20 minutes. No deployed acceptance attempt was made because
+the prerequisite CI gate is failing.
+
+Authority was re-read with
+`gh issue view 599 --repo stranske/Orchestrator --json body,comments`.
+The issue body records the 2026-11-06 clarification and explicitly attributes it
+to the owner's delegation during the needs-human catalog review. This confirms
+the recorded delegated target, not an independently observed delegation
+conversation: missing equals the reviewed-absence count, rather than zero.
+The comments retain the earlier park and subsequent restart; they do not supply
+a newer counter target. Authority: <https://github.com/stranske/Orchestrator/issues/599>.
+
+`git worktree list --porcelain` identifies this checkout as the sole registered
+holder of `codex/issue-599-consumer-absence`; no preserved ref naming #1275 or
+that branch was found. Existing holders and implementation were left intact.
+
+The required focused command was run unchanged:
+
+```bash
+/opt/anaconda3/bin/python3 -m pytest tests/test_consumer_missing_classification.py tests/test_capability_admission.py -k 'consumer or format_report' -q
+```
+
+```text
+.................                                                        [100%]
+17 passed, 16 deselected in 3.01s
+```
+
+First broken delivery step: Gate run `42574862530`, shard 2/6 on both Python
+3.13 and 3.14, failed before running tests. Inspection command:
+`gh run view 42574862530 --repo stranske/Orchestrator --log-failed`.
+Exact terminal outputs:
+
+```text
+4 workers [0 items]
+============================ no tests ran in 0.89s =============================
+Process completed with exit code 5.
+```
+
+The 0.89s output is Python 3.14; Python 3.13 printed `no tests ran in 0.79s`
+and the same exit code. Worker diagnostics report exitstatus 4; the underlying
+collection cause is unknown from these logs. The Gate summary reports
+`Gate reported failure:  Python CI result: failure.`
+Run: <https://github.com/stranske/Orchestrator/actions/runs/42574862530>.
+
+Blocking/drainable pair: failing CI blocks merge and therefore post-sync
+acceptance; issue authority, focused tests, and this evidence update remain
+drainable while that gate is closed. No merge, sync, pin edit, or CI bypass was
+performed. Deployed commit, generation, and post-sync counters remain UNKNOWN;
+the PENDING status cannot truthfully be replaced with deployed success evidence.
+
 The evidence above comes from the branch code reading the live ledger. The
 launchd mirror still runs main, so this is not post-sync acceptance. After the
 owning delivery lane merges and syncs, it must rerun the two commands above from
