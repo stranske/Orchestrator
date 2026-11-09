@@ -678,6 +678,42 @@ class PostMergeBreakTests(unittest.TestCase):
         self.assertEqual(len(bounded["green"]["stdout_tail"]), runtime_ac.TAIL_CHARS)
         self.assertEqual(len(bounded["green"]["stderr_tail"]), runtime_ac.TAIL_CHARS)
 
+    def test_a_skipped_acceptance_test_is_not_a_pass(self):
+        """2026-11-09: stranske/Workflows#4432 closed as delivered because its canary test skipped when
+        the pinned CLI was absent; exit 0 with "1 skipped" read as PASS."""
+        spec = runtime_ac.author_issue_spec(
+            "owner/repo#1", "## Acceptance Criteria\n- Inspect the delivered behavior.\n"
+        )
+
+        def recheck(tail):
+            run = {
+                "gate": {"verdict": "PASS"},
+                "check_results": [
+                    {"type": "command", "status": "PASS", "returncode": 0, "stdout_tail": tail}
+                ],
+            }
+            with (
+                patch.object(runtime_ac, "run_verification", return_value=run),
+                patch.object(gate, "_worktree_interpreter", return_value=sys.executable),
+            ):
+                return gate.recheck_merged(spec, self.checkout, merge_ci_green=True)
+
+        for tail in (
+            "tests/test_canary.py s\n1 skipped in 0.02s",
+            "3 passed, 1 skipped in 0.40s",
+            "SKIPPED [1] tests/test_canary.py:12: pinned CLI not installed\n2 passed in 0.1s",
+            "1 xfailed in 0.05s",
+            "Ran 3 tests in 0.001s\n\nOK (skipped=1)",
+        ):
+            with self.subTest(tail=tail):
+                result = recheck(tail)
+                self.assertEqual(result["result"], "UNRUNNABLE")
+                self.assertEqual(result["reason"], "tests_skipped")
+                self.assertNotIn("tests_skipped", gate.RUNNER_SIDE_UNRUNNABLE)  # said on the issue
+        for tail in ("3 passed in 0.40s", "3 passed, 2 deselected in 0.1s", "0 skipped", "Ran 3 tests\n\nOK"):
+            with self.subTest(tail=tail):
+                self.assertEqual(recheck(tail)["result"], "PASS")
+
     def test_spawned_interpreter_failure_is_not_a_delivery_fail(self):
         spec = runtime_ac.author_issue_spec(
             "owner/repo#1", "## Acceptance Criteria\n- Inspect the delivered behavior.\n"
