@@ -43,6 +43,7 @@
   ],
   "shards": [
     [
+      "tests/test_issue1253_ranked_coverage.py",
       "tests/test_issue1235_ranked_coverage.py",
       "tests/test_issue1235_supervisor_recovery.py",
       "tests/test_issue1232_ranked_coverage.py",
