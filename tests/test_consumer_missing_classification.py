@@ -1,6 +1,9 @@
 """Reviewed absence is visible debt and never consumer acceptance (source #599)."""
 
+import io
 import json
+import sys
+from contextlib import redirect_stdout
 from unittest.mock import patch
 
 import capabilities
@@ -190,6 +193,15 @@ def test_consumer_report_reconciles_source_inventory_without_writing_the_ledger(
         # Exercise replacement of stale text and stale missing flags through the report's loader.
         cap.update(status="active", downstream_consumer="old consumer prose", consumer_missing=True)
         cap["event_history"] = [{"type": "migrated", "timestamp": 1}]
+    # Terminal rows remain in the ledger after sync, but cannot inflate the live M1 count.
+    # Include both reviewed absence and unreviewed prose among that historical debt.
+    for status, reviewed in (("retired", True), ("superseded", False)):
+        cid = f"issue599-{status}"
+        cap = capabilities._blank_capability(cid)
+        cap.update(status=status, downstream_consumer="historical consumer prose")
+        if reviewed:
+            cap["consumer_missing"] = True
+        ledger[cid] = cap
     path = tmp_path / "capabilities.json"
     path.write_text(
         json.dumps({"schema_version": capabilities.SCHEMA_VERSION, "capabilities": ledger})
@@ -197,6 +209,9 @@ def test_consumer_report_reconciles_source_inventory_without_writing_the_ledger(
     before = path.read_bytes()
     with (
         patch.object(admission, "_capability_heartbeat"),
+        patch(
+            "capability_activation_audit.heartbeat_reachable", return_value={"status": "no_caller"}
+        ),
         patch.object(
             admission,
             "commitments",
@@ -222,7 +237,34 @@ def test_consumer_report_reconciles_source_inventory_without_writing_the_ledger(
     assert [line.strip() for line in rendered.splitlines() if "REVIEWED ABSENT" in line] == [
         f"REVIEWED ABSENT {cid}: {declarations[cid]['notes'].strip()}" for cid in expected
     ]
+    assert {row["capability_id"] for row in report["rows"]} == set(declarations)
+    assert "issue599-retired" not in rendered
+    assert "issue599-superseded" not in rendered
     assert path.read_bytes() == before
+
+    # Exercise the supported post-sync commands against the same populated ledger. Keep
+    # unrelated runtime probes isolated while retaining main's real loader and formatter.
+    with (
+        patch.object(capabilities, "REG", path),
+        patch.object(admission, "_context", return_value={"audit_rows": {}, "fixtures": set()}),
+        patch.object(admission, "_capability_heartbeat"),
+        patch(
+            "capability_activation_audit.heartbeat_reachable", return_value={"status": "no_caller"}
+        ),
+        patch.object(admission, "commitments", return_value=report["commitments"]),
+    ):
+        outputs = {}
+        for args in ((), ("--json",)):
+            output = io.StringIO()
+            with patch.object(sys, "argv", ["capability_admission.py", *args]):
+                with redirect_stdout(output):
+                    assert admission.main() == 0
+            outputs[args] = output.getvalue()
+        cli_report = json.loads(outputs[("--json",)])
+        assert cli_report["consumers"] == consumers
+        assert {row["capability_id"] for row in cli_report["rows"]} == set(declarations)
+        assert outputs[()] == admission.format_report(cli_report)
+        assert path.read_bytes() == before
 
     # Installing a real consumer drains declaration debt, but cannot stand in for measured acts.
     # Exercise that transition through the same loader and report used for the live-ledger count.
@@ -243,6 +285,9 @@ def test_consumer_report_reconciles_source_inventory_without_writing_the_ledger(
     with (
         patch.dict(capabilities.KNOWN_DECLARATIONS, {cid: replacement}),
         patch.object(admission, "_capability_heartbeat"),
+        patch(
+            "capability_activation_audit.heartbeat_reachable", return_value={"status": "no_caller"}
+        ),
         patch.object(
             admission,
             "commitments",
