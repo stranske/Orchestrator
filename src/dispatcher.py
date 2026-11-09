@@ -966,6 +966,39 @@ GH_GUARD_REFUSED = (
     "alias import",
 )
 GH_GUARD_EXIT = 77  # EX_NOPERM
+# THE SHARED-JOB RULE (owner decision 2026-11-08). A dispatched agent must not start the fleet's
+# production pipelines. Measured Nov 4-8: Orchestrator-dispatched agents ran 7 live dispatches of
+# Workflows' maint-52/68/71 jobs, mostly to collect "proof" for their own task; one (Maint 68 for a
+# single canary, 2026-11-08 13:34Z) stalled the sync candidate lane for ~2.7 hours. Those jobs are
+# started by their own schedules and by sync-core, which run them in order. The same agents ran 13
+# harmless CI runs on their OWN branches in the same window, so those stay allowed:
+#   refused: `workflow enable|disable`; `api .../dispatches` (workflow or repository dispatch);
+#            `workflow run` with no --ref (gh then uses the default branch), with --ref naming a
+#            default branch, or naming a maint-NN job on any ref (those act on production).
+#   allowed: `workflow run <ci job> --ref <own branch>`, `run rerun`, and every read.
+GH_GUARD_DEFAULT_REFS = ("main", "master", "refs/heads/main", "refs/heads/master")
+GH_GUARD_SHARED_JOB = (
+    "*[Mm]aint[-_[:blank:]][0-9]*"  # maint-68-sync-..., "Maint 71 ...", path forms
+)
+# gh options that take a value; the value is skipped so it is never read as the job name.
+GH_GUARD_VALUE_OPTIONS = (
+    "-R",
+    "--repo",
+    "-f",
+    "-F",
+    "--field",
+    "--raw-field",
+    "--json",
+    "-X",
+    "--method",
+    "-H",
+    "--header",
+    "--input",
+    "-q",
+    "--jq",
+    "-t",
+    "--template",
+)
 _ZSH_DOTFILES = (".zshenv", ".zprofile", ".zshrc", ".zlogin", ".zlogout")
 
 
@@ -995,7 +1028,68 @@ def _gh_guard_check(leave: str) -> str:
         "dispatched agent: it would change the owner's gh login or config for the whole machine.\" >&2\n"
         f"  unset __orch_gh_group __orch_gh_hit __orch_gh_arg; {leave} {GH_GUARD_EXIT}\n"
         "fi\n"
-        "unset __orch_gh_group __orch_gh_hit __orch_gh_arg\n"
+        "unset __orch_gh_group __orch_gh_hit __orch_gh_arg\n" + _gh_shared_job_check(leave)
+    )
+
+
+def _gh_shared_job_check(leave: str) -> str:
+    """The shared-job refusal, as POSIX shell for sh, bash and zsh. `leave` is exit or return.
+
+    Walks the arguments once: the first `workflow` or `api` word is the group, then for `workflow`
+    the subcommand and the job name, skipping option values; `--ref X`, `--ref=X`, `-r X` give the
+    ref. A false refusal costs the agent one line in its report; a missed one can stall the fleet.
+    """
+    values = "|".join(GH_GUARD_VALUE_OPTIONS)
+    refs = "|".join(f'"{r}"' for r in GH_GUARD_DEFAULT_REFS)
+    v = "__orch_gh_g __orch_gh_s __orch_gh_n __orch_gh_r __orch_gh_k __orch_gh_d __orch_gh_y __orch_gh_arg"
+    return (
+        "__orch_gh_g=; __orch_gh_s=; __orch_gh_n=; __orch_gh_r=; __orch_gh_k=; __orch_gh_d=; __orch_gh_y=\n"
+        'for __orch_gh_arg in "$@"; do\n'
+        '  case "$__orch_gh_k" in\n'
+        '    ref) __orch_gh_r="$__orch_gh_arg"; __orch_gh_k=; continue ;;\n'
+        "    skip) __orch_gh_k=; continue ;;\n"
+        "  esac\n"
+        '  case "$__orch_gh_arg" in\n'
+        "    --ref|-r) __orch_gh_k=ref; continue ;;\n"
+        '    --ref=*) __orch_gh_r="${__orch_gh_arg#--ref=}"; continue ;;\n'
+        f"    {values}) __orch_gh_k=skip; continue ;;\n"
+        "  esac\n"
+        '  case "$__orch_gh_arg" in */dispatches|*/dispatches[?]*) __orch_gh_d=1 ;; esac\n'
+        '  case "$__orch_gh_arg" in -*) continue ;; esac\n'
+        '  if [ -z "$__orch_gh_g" ]; then\n'
+        '    case "$__orch_gh_arg" in workflow|api) __orch_gh_g="$__orch_gh_arg" ;; esac\n'
+        '  elif [ "$__orch_gh_g" = workflow ] && [ -z "$__orch_gh_s" ]; then\n'
+        '    __orch_gh_s="$__orch_gh_arg"\n'
+        '  elif [ "$__orch_gh_g" = workflow ] && [ -z "$__orch_gh_n" ]; then\n'
+        '    __orch_gh_n="$__orch_gh_arg"\n'
+        "  fi\n"
+        "done\n"
+        'if [ "$__orch_gh_g" = api ] && [ -n "$__orch_gh_d" ]; then\n'
+        "  __orch_gh_y='a workflow or repository dispatch through the API'\n"
+        'elif [ "$__orch_gh_g" = workflow ]; then\n'
+        '  case "$__orch_gh_s" in\n'
+        '    enable|disable) __orch_gh_y="gh workflow $__orch_gh_s" ;;\n'
+        "    run)\n"
+        '      case "$__orch_gh_n" in\n'
+        f"        {GH_GUARD_SHARED_JOB}) __orch_gh_y=\"starting the shared job '$__orch_gh_n'\" ;;\n"
+        "      esac\n"
+        '      if [ -z "$__orch_gh_y" ]; then\n'
+        '        case "$__orch_gh_r" in\n'
+        "          '') __orch_gh_y='gh workflow run without --ref (it runs on the default branch)' ;;\n"
+        f'          {refs}) __orch_gh_y="gh workflow run on $__orch_gh_r" ;;\n'
+        "        esac\n"
+        "      fi ;;\n"
+        "  esac\n"
+        "fi\n"
+        'if [ -n "$__orch_gh_y" ]; then\n'
+        "  printf '%s\\n' \"orchestrator gh guard: $__orch_gh_y is refused inside a dispatched agent. \"\\\n"
+        '"Production jobs are started by their own schedules and by sync-core; read their existing "\\\n'
+        '"runs instead (gh run list / gh run view). CI on your own branch is allowed: "\\\n'
+        '"gh workflow run <ci workflow> --ref <your branch>, or gh run rerun. If a task truly needs "\\\n'
+        '"a production run, leave it undone and say so in your final message." >&2\n'
+        f"  unset {v}; {leave} {GH_GUARD_EXIT}\n"
+        "fi\n"
+        f"unset {v}\n"
     )
 
 
@@ -1446,6 +1540,8 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
         "wrapped": wrapped,
         "worktree_missing": worktree_missing,
         "feedback_mode": assignment.get("feedback_mode"),
+        # Why this start runs where it runs (router.choose_mode reason); recorded on the run row.
+        "rationale": assignment.get("rationale"),
         "review_loop": bool(assignment.get("review_loop")),
         "review_round": assignment.get("review_round", 1),
         "review_run_id": assignment.get("review_run_id"),
@@ -1688,6 +1784,7 @@ def _spawn(d: dict) -> int:
     run_kwargs = {
         "mode": d.get("feedback_mode") or d.get("mode"),
         "reasoning_level": d.get("mode"),
+        "rationale": d.get("rationale"),
         "model": d.get("model"),
         "routing_metadata": d.get("routing_metadata"),
         "influenced_by_role_run_ids": d.get("influenced_by_role_run_ids"),
@@ -2131,6 +2228,7 @@ def delegate(
     review_round: int = 1,
     review_run_id: str | None = None,
     continue_pr: int | None = None,
+    rationale: str | None = None,
 ) -> dict:
     """One ad-hoc delegation for the assessing orchestrator seat: claim + provision + spawn
     ONE cheap agent with the orchestrator's OWN crafted prompt (detached, PATH+auth+release
@@ -2211,6 +2309,7 @@ def delegate(
         "review_loop": review_loop,
         "review_round": review_round,
         "review_run_id": review_run_id,
+        "rationale": rationale,
     }
     if codex_override_effort:
         a["reasoning_effort"] = codex_override_effort
@@ -2255,6 +2354,7 @@ def delegate(
                 agent,
                 mode="local",
                 reasoning_level=mode,
+                rationale=rationale,
                 model=d.get("model"),
                 routing_metadata=d.get("routing_metadata"),
                 influenced_by_role_run_ids=d.get("influenced_by_role_run_ids"),
@@ -7004,6 +7104,9 @@ def main(argv: list[str]) -> int:
         p.add_argument("--task-type", default="implement")
         p.add_argument("--continue-pr", type=int, help="continue this confirmed linked open PR")
         p.add_argument(
+            "--rationale", help="why this start runs locally (router.choose_mode reason)"
+        )
+        p.add_argument(
             "--review-loop",
             action="store_true",
             help="require independent exact-head review after terminal writer release",
@@ -7036,6 +7139,7 @@ def main(argv: list[str]) -> int:
             continue_pr=ns.continue_pr,
             influenced_by_role_run_ids=ns.influenced_by_role_run_id,
             **review_kwargs,
+            **({"rationale": ns.rationale} if ns.rationale else {}),
             **({"branch_prefix": ns.branch_prefix} if ns.branch_prefix is not None else {}),
         )
         print(json.dumps(out, default=str))

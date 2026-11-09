@@ -151,8 +151,25 @@ def _set_aside_worktree(canon: Path, wt: Path, target: str, lane: str, event: di
     preserved = f"preserved/{worktree_name(target, lane)}-{stamp}"
     switched = _wt_git(wt, ["switch", "-c", preserved])
     if switched.returncode != 0:
-        raise RuntimeError(f"cannot preserve {wt}: {switched.stderr.strip()[:300]}")
-    if _wt_git(wt, ["status", "--porcelain"]).stdout.strip():
+        # An earlier agent can leave a cherry-pick, merge or rebase in progress, where git refuses to switch
+        # branches (2026-11-05, Orchestrator#1129). Keep the work WITHOUT switching: the preserved branch takes
+        # HEAD, and `git stash create` captures staged and unstaged changes as a commit on top of it without
+        # touching the worktree. Untracked files are not in that commit, so their presence still refuses.
+        untracked = _wt_git(wt, ["ls-files", "--others", "--exclude-standard"]).stdout.strip()
+        if untracked:
+            raise RuntimeError(
+                f"cannot preserve {wt}: {switched.stderr.strip()[:200]}; untracked files would be lost "
+                f"({untracked.splitlines()[0]}...) (blocking 1, drainable 0: inspect the worktree)"
+            )
+        if _wt_git(wt, ["branch", preserved, "HEAD"]).returncode != 0:
+            raise RuntimeError(f"cannot preserve {wt}: {switched.stderr.strip()[:300]}")
+        wip = _wt_git(
+            wt, ["stash", "create", f"provision: preserve work from {wt.name}"]
+        ).stdout.strip()
+        if wip and _wt_git(wt, ["branch", "-f", preserved, wip]).returncode != 0:
+            raise RuntimeError(f"cannot preserve uncommitted work in {wt} (stash {wip[:12]})")
+        event.update(preserved_without_switch=True)
+    elif _wt_git(wt, ["status", "--porcelain"]).stdout.strip():
         _wt_git(wt, ["add", "-A"])
         committed = _wt_git(
             wt,
@@ -421,6 +438,79 @@ def _live_holder_pids(holder: Path) -> set[str]:
     return pids
 
 
+def _preserve_dirty_holder(holder: Path, branch: str, event: dict) -> None:
+    """Free an idle branch in place; retain every tracked, untracked and ignored byte."""
+    import claims
+
+    repo, _ = parse_target(event["target"])
+    prefix = repo_slug(repo) + "__"
+    number = (
+        re.match(r"(\d+)__", holder.name[len(prefix) :]) if holder.name.startswith(prefix) else None
+    )
+    holder_target = f"{repo}#{number[1]}" if number else event["target"]
+    claim_path = claims._claims_dir() / claims._slug(holder_target)
+    if claim_path.exists() and (claims._read_meta(claim_path) or {}).get("pid") != os.getpid():
+        raise RuntimeError(
+            f"native holder claim for {holder_target} remains; blocking 1, drainable 1: "
+            "its original owner must reconcile and relay terminal custody"
+        )
+    try:
+        live = _live_holder_pids(holder)
+    except ProbeBlindError:
+        event.update(outcome="failed", cause="probe-blind")
+        raise
+    if live:
+        raise RuntimeError(
+            f"refusing to preserve dirty worktree {holder}: live pid {', '.join(sorted(live))} "
+            "(blocking 1, drainable 1: clears when that process exits)"
+        )
+    head = _wt_git(holder, ["rev-parse", "HEAD"])
+    status = _wt_git(
+        holder, ["--no-optional-locks", "status", "--porcelain", "--untracked-files=all"]
+    )
+    if head.returncode or status.returncode:
+        raise RuntimeError(f"cannot bind dirty holder state {holder}; preserve it")
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    holder_slug = re.sub(r"[^A-Za-z0-9_-]+", "_", holder.name).strip("_") or "holder"
+    preserved = f"preserved/{holder_slug}-{stamp}"
+    created = _wt_git(holder, ["branch", preserved, "HEAD"])
+    if created.returncode:
+        raise RuntimeError(f"cannot preserve holder ref {holder}: {created.stderr.strip()}")
+    rebound = _wt_git(
+        holder,
+        [
+            "symbolic-ref",
+            "-m",
+            "provision: preserve dirty holder in place",
+            "HEAD",
+            f"refs/heads/{preserved}",
+        ],
+    )
+    if rebound.returncode:
+        raise RuntimeError(f"cannot preserve holder in place {holder}: {rebound.stderr.strip()}")
+    after_head = _wt_git(holder, ["rev-parse", "HEAD"])
+    after_status = _wt_git(
+        holder, ["--no-optional-locks", "status", "--porcelain", "--untracked-files=all"]
+    )
+    if (
+        after_head.returncode
+        or after_status.returncode
+        or after_head.stdout != head.stdout
+        or after_status.stdout != status.stdout
+    ):
+        raise RuntimeError(
+            f"preserved holder state changed {holder}; inspect without reset or removal"
+        )
+    event.update(
+        cause="dirty-holder-preserved",
+        preserved_worktree=str(holder),
+        preserved_branch=preserved,
+        preserved_head=head.stdout.strip(),
+        original_branch=branch,
+    )
+    print(f"provision: preserved dirty holder {holder} in place on {preserved}")
+
+
 def _reclaim_branch_holder(canon: Path, branch: str, wt: Path, event: dict) -> None:
     """Remove only a clean, idle holder of this branch, never the requested checkout."""
     _run(["git", "-C", str(canon), "worktree", "prune", "--expire", "now"])
@@ -433,10 +523,18 @@ def _reclaim_branch_holder(canon: Path, branch: str, wt: Path, event: dict) -> N
         if holder.resolve() == wt.resolve():
             continue
         event.update(cause="branch-held", holder_path=str(holder))
-        status = _wt_git(holder, ["status", "--porcelain", "--untracked-files=all"])
+        status = _wt_git(
+            holder, ["--no-optional-locks", "status", "--porcelain", "--untracked-files=all"]
+        )
         if status.returncode != 0:
             raise RuntimeError(f"cannot inspect holder {holder}: {status.stderr.strip()}")
         if status.stdout.strip():
+            if (
+                event.get("lane") == "closer"
+                and os.environ.get("ORCH_PRESERVE_IDLE_DIRTY_HOLDER") == "1"
+            ):
+                _preserve_dirty_holder(holder, branch, event)
+                continue
             raise RuntimeError(
                 f"refusing to reclaim dirty worktree {holder}: {status.stdout.strip()}"
             )
@@ -593,7 +691,7 @@ def provision(target: str, lane: str, branch: str | None = None) -> Path:
             if branch is not None
             else _provision(target, lane, event)
         )
-        if event["outcome"] == "ok":
+        if event["outcome"] == "ok" and event["cause"] == "provision-error":
             event["cause"] = "new-worktree"
         return wt
     except BaseException as exc:

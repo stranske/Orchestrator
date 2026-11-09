@@ -13,17 +13,47 @@
     "tests/test_advisor_hermetic.py",
     "tests/test_closer_correction_owner.py",
     "tests/test_gemini_flash_routing.py",
+    "tests/test_gemini_tier_scoped_shed.py",
     "tests/test_issue1102_advisor_coverage_evidence.py",
+    "tests/test_issue1109_pr793_acceptance.py",
+    "tests/test_issue1109_runtime_isolation.py",
+    "tests/test_issue1150_ranked_coverage.py",
+    "tests/test_issue1189_ranked_coverage.py",
+    "tests/test_issue1154_tick_boundaries.py",
+    "tests/test_issue1154_ranked_coverage.py",
+    "tests/test_profile_trial_recurring_spec.py",
+    "tests/test_profile_trial_run.py",
     "tests/test_python_floor.py",
     "tests/test_storage_abort_reconciliation.py",
     "tests/test_storage_interrupted_release.py",
+    "tests/test_switch_review_fleet.py",
     "tests/test_testgen_off_flash_renewal_target.py",
-    "tests/test_verify_failure_evidence.py"
+    "tests/test_verify_failure_evidence.py",
+    "tests/test_capability_matcher_proposals.py",
+    "tests/test_capability_opportunity.py",
+    "tests/test_judge_reliability.py",
+    "tests/test_langsmith_direct.py",
+    "tests/test_strategy_experiment.py",
+    "tests/test_issue1232_ranked_coverage.py",
+    "tests/test_gate_dispatch_recovery.py",
+    "tests/test_issue1235_ranked_coverage.py",
+    "tests/test_issue1235_supervisor_recovery.py",
+    "tests/test_local_loop.py",
+    "tests/test_reconcile_floor_dispatches_ci.py",
+    "tests/test_router_choose_mode.py",
+    "tests/test_model_table.py"
   ],
   "shards": [
     [
+      "tests/test_issue1235_ranked_coverage.py",
+      "tests/test_issue1235_supervisor_recovery.py",
+      "tests/test_issue1232_ranked_coverage.py",
       "tests/test_adjudicator_collected_input.py",
       "tests/test_adjudicator_native_publication.py",
+      "tests/test_issue1169_ranked_coverage.py",
+      "tests/test_issue1189_ranked_coverage.py",
+      "tests/test_issue1229_ranked_coverage.py",
+      "tests/test_issue1215_ranked_coverage.py",
       "tests/test_adjudicator_packet_binding.py",
       "tests/test_adjudicator_retro.py",
       "tests/test_advisor_external_guard.py",
@@ -73,11 +103,16 @@
       "tests/test_issue1025_feedback_boundaries.py",
       "tests/test_issue1025_gate_delta.py",
       "tests/test_issue1025_remaining_gaps.py",
+      "tests/test_issue1154_tick_boundaries.py",
       "tests/test_coverage_round_1138.py",
+      "tests/test_coverage_round_1162.py",
+      "tests/test_coverage_round_1182.py",
       "tests/test_coverage_round_881.py",
       "tests/test_coverage_wp_roles.py",
       "tests/test_dispatcher_controlled_data_only.py",
+      "tests/test_dispatcher_coverage_1182.py",
       "tests/test_dispatcher_failure_contracts.py",
+      "tests/test_dispatcher_offload.py",
       "tests/test_dispatcher_provision.py",
       "tests/test_dispatcher_safety_boundaries.py",
       "tests/test_durability_stated_repair.py",
@@ -121,6 +156,7 @@
       "tests/test_reviewed_repo_publisher_exclusion_stage.py",
       "tests/test_role_prompt_batch.py",
       "tests/test_route_weights_export_comparative.py",
+      "tests/test_route_weights_export_deployment.py",
       "tests/test_run_issue843_acceptance.py",
       "tests/test_shed_names_its_drain.py",
       "tests/test_skill_compiler.py",
@@ -133,7 +169,9 @@
       "tests/test_verifier_incomplete_roots.py",
       "tests/test_verify_private_state.py",
       "tests/test_verify_sharding.py",
-      "tests/test_workflow_compiler.py"
+      "tests/test_issue1207_ranked_coverage.py",
+      "tests/test_workflow_compiler.py",
+      "tests/test_gate_dispatch_recovery.py"
     ],
     [
       "tests/test_adjudicator_criterion_texts.py",
@@ -196,10 +234,13 @@
       "tests/test_exp_abcd_selftest_private_brain.py",
       "tests/test_experiment_arm_identity.py",
       "tests/test_gate_commit_status_fork_tolerance.py",
+      "tests/test_issue1109_pr793_acceptance.py",
+      "tests/test_issue1154_ranked_coverage.py",
       "tests/test_issue807_capability_compiler_coverage.py",
       "tests/test_issue839_ranked_coverage.py",
       "tests/test_issue846_coverage.py",
       "tests/test_issue_quality.py",
+      "tests/test_issue1173_ranked_coverage.py",
       "tests/test_issue_readiness_coverage.py",
       "tests/test_lane_round_feedback.py",
       "tests/test_ledger_read_cache.py",
@@ -226,7 +267,6 @@
       "tests/test_tick_completion_ping.py",
       "tests/test_tick_summary.py",
       "tests/test_tracked_test_inputs.py",
-      "tests/test_transport_qualification_corpus.py",
       "tests/test_utc_epoch.py",
       "tests/test_ux_review_adversary.py",
       "tests/test_value_chain_monitor.py",
@@ -236,7 +276,10 @@
       "tests/test_worktree_git_refusal_record.py",
       "tests/test_gemini_flash_routing.py",
       "tests/test_storage_interrupted_release.py",
-      "tests/test_testgen_off_flash_renewal_target.py"
+      "tests/test_testgen_off_flash_renewal_target.py",
+      "tests/test_issue1150_ranked_coverage.py",
+      "tests/test_capability_opportunity.py",
+      "tests/test_gemini_tier_scoped_shed.py"
     ],
     [
       "tests/test_activation_audit_label_index.py",
@@ -301,6 +344,7 @@
       "tests/test_evidence_contract_compiler.py",
       "tests/test_gate_expiry_renewal.py",
       "tests/test_install_closer_dispatcher.py",
+      "tests/test_issue1109_runtime_isolation.py",
       "tests/test_issue558_review_boundaries.py",
       "tests/test_issue807_capability_compiler_round2.py",
       "tests/test_issue807_capability_compiler_round3.py",
@@ -318,7 +362,11 @@
       "tests/test_pacing_usage.py",
       "tests/test_partitioned_review.py",
       "tests/test_profile_trial_ingest.py",
+      "tests/test_profile_trial_recurring_spec.py",
+      "tests/test_profile_trial_run.py",
       "tests/test_profile_trial_summary.py",
+      "tests/test_issue1178_coverage.py",
+      "tests/test_issue1178_ranked_coverage.py",
       "tests/test_rail_exercise_layout.py",
       "tests/test_range_lane_rollout_coverage_gaps.py",
       "tests/test_redirect_chain_gate.py",
@@ -339,7 +387,8 @@
       "tests/test_usage_poll_shell.py",
       "tests/test_venv_fixture_portability.py",
       "tests/test_verifier_retry_lineage.py",
-      "tests/test_worktree_git_guard.py"
+      "tests/test_worktree_git_guard.py",
+      "tests/test_judge_reliability.py"
     ],
     [
       "tests/test_adjudicator_retry_history.py",
@@ -437,6 +486,7 @@
       "tests/test_strategy_result_recording.py",
       "tests/test_strategy_review_sequence.py",
       "tests/test_switch_review_bootstrap_drain.py",
+      "tests/test_switch_review_fleet.py",
       "tests/test_switch_review_mirror_drift.py",
       "tests/test_switch_review_strategy_line.py",
       "tests/test_transport_qualification.py",
@@ -444,7 +494,10 @@
       "tests/test_ux_review_coverage.py",
       "tests/test_verifier_native_bot_origin.py",
       "tests/test_verify_pytest_workers.py",
-      "tests/test_wrapper_steps_name_their_python.py"
+      "tests/test_wrapper_steps_name_their_python.py",
+      "tests/test_capability_matcher_proposals.py",
+      "tests/test_local_loop.py",
+      "tests/test_reconcile_floor_dispatches_ci.py"
     ],
     [
       "tests/test_activation_audit_live_rows.py",
@@ -550,7 +603,9 @@
       "tests/test_verify_before_sync.py",
       "tests/test_verify_failure_evidence.py",
       "tests/test_verify_parallel_selftests.py",
-      "tests/test_vibe_isolated_types_proof.py"
+      "tests/test_vibe_isolated_types_proof.py",
+      "tests/test_langsmith_direct.py",
+      "tests/test_router_choose_mode.py"
     ],
     [
       "tests/test_activation_audit_source_memo.py",
@@ -656,7 +711,9 @@
       "tests/test_storage_lifecycle.py",
       "tests/test_switch_states_tick_view.py",
       "tests/test_synthesis_promotion_coverage.py",
-      "tests/test_tick_evidence_projection.py"
+      "tests/test_tick_evidence_projection.py",
+      "tests/test_strategy_experiment.py",
+      "tests/test_model_table.py"
     ]
   ]
 }

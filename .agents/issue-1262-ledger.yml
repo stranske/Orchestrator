@@ -1,0 +1,175 @@
+version: 1
+issue: 1262
+base: main
+branch: codex/issue-1262
+tasks:
+  - id: task-01
+    title: Inspect the failing run using `gh run view <run-id>` and the linked log,
+      then fix the `summary` check failure at its source.
+    status: doing
+    started_at: '2026-11-08T20:13:57Z'
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-02
+    title: 'Inspect the failing run 42500846882 with `gh run view 42500846882 --log-failed`
+      (verify: confirm completion in repo)'
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-03
+    title: 'Inspect the failing run 42500846882 with record which file (verify: confirm
+      completion in repo)'
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-04
+    title: 'Inspect the failing run 42500846882 with step emits the exit code 1 error.
+      (verify: confirm completion in repo)'
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-05
+    title: 'Identify whether the Python ''Resolved Gate PR identity differs from the
+      original event'' RuntimeError or the JavaScript rate-limit rethrow is the actual
+      cause of the `summary` failure. (verify: confirm completion in repo)'
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-06
+    title: 'Fix the identified source file so the `summary` check no longer fails
+      (verify: confirm completion in repo)'
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-07
+    title: _(3 further sub-tasks elided; split this issue)_
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-08
+    title: Add or extend a regression test reproducing the failure and passing after
+      the fix, using `pytest` or `node --test` as appropriate.
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-09
+    title: 'Write a regression test in the test suite matching the failing module''s
+      language that reproduces the identified error condition (verify: confirm completion
+      in repo)'
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-10
+    title: 'fails before the fix. (verify: confirm completion in repo)'
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-11
+    title: Verify that the new regression test passes after the fix
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-12
+    title: 'run the repository''s full test command locally. (verify: confirm completion
+      in repo)'
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-13
+    title: The `summary` check passes on regenerated sync PR stranske/Orchestrator#1247,
+      verified with `gh run view <run-id>`, and the repository's test command passes
+      locally.
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-14
+    title: Reintroducing the reported behavior makes the regression test fail; reverting
+      restores its passing result.
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-15
+    title: The next sync-core round classifies stranske/Orchestrator#1247 without
+      this finding.
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-16
+    title: Fix the failure named in the title (`summary`) at its source; the failing
+      check's log is linked under Evidence and the sync PR is stranske/Orchestrator#1247.
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-17
+    title: Add or extend a test that reproduces the failure and passes after the fix
+      (`pytest` or `node --test`, whichever the source uses).
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-18
+    title: The `summary` check passes on regenerated sync PR stranske/Orchestrator#1247,
+      verified with `gh run view <run-id>`. (Regenerating the sync PR requires `.github/workflows/maint-68-sync-consumer-repos.yml`
+      to run. The agent cannot modify protected workflow files or retry or trigger
+      CI pipelines. The PR is also in a different repository (stranske/Orchestrator)
+      from the one where the fix would be made. | Have a human maintainer trigger
+      the sync workflow and confirm the `summary` result. Limit the agent's acceptance
+      criteria to the source fix, the regression test, and the local test command.)
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-19
+    title: The next sync-core round classifies stranske/Orchestrator#1247 without
+      this finding. (This depends on an external sync-core process and a future round,
+      and the agent can neither trigger nor verify it. | Move this to a manual post-merge
+      verification note for a maintainer, not an agent-completable criterion.)
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-20
+    title: If the root cause is in `.github/workflows/*.yml`, the fix cannot be made
+      by the agent. (Workflow files are protected. The `summary` job and the 'Process
+      completed with exit code 1' output may originate from a workflow step. | If
+      the fix requires a workflow edit, flag it for a human. Otherwise restrict the
+      agent to scripts and source files the workflow calls.)
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []

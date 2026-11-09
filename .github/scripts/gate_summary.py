@@ -25,6 +25,7 @@ class SummaryContext:
     python_required: bool = True
     docs_guard_result: str = "success"
     test_quality_result: str = "skipped"
+    orchestrator_node_tests_result: str = "skipped"
     delivery_seal_required: bool = False
     delivery_seal_valid: bool = True
     delivery_seal_reason: str = ""
@@ -359,6 +360,7 @@ def _append_job_table(
     docs_guard_result: str,
     docker_result: str,
     test_quality_result: str,
+    orchestrator_node_tests_result: str,
 ) -> None:
     lines.append("")
     lines.append("| Job | Result |")
@@ -369,6 +371,7 @@ def _append_job_table(
     lines.append(f"| docs-guard | {_friendly(docs_guard_result)} |")
     lines.append(f"| docker-smoke | {_friendly(docker_result)} |")
     lines.append(f"| test-quality | {_friendly(test_quality_result)} |")
+    lines.append(f"| orchestrator-node-tests | {_friendly(orchestrator_node_tests_result)} |")
 
 
 def _active_lines(
@@ -382,9 +385,17 @@ def _active_lines(
     docs_guard_result: str = "success",
     docker_result: str = "skipped",
     test_quality_result: str = "skipped",
+    orchestrator_node_tests_result: str = "skipped",
 ) -> list[str]:
     lines = ["### Gate status", *table]
-    _append_job_table(lines, job_results, docs_guard_result, docker_result, test_quality_result)
+    _append_job_table(
+        lines,
+        job_results,
+        docs_guard_result,
+        docker_result,
+        test_quality_result,
+        orchestrator_node_tests_result,
+    )
 
     lint_status, lint_detail = _aggregate(lint_entries)
     type_status, type_detail = _aggregate(type_entries)
@@ -466,6 +477,7 @@ def summarize(context: SummaryContext) -> SummaryResult:
         docs_guard_result,
         context.docker_result,
         context.test_quality_result,
+        context.orchestrator_node_tests_result,
     )
     if missing_shards:
         lines.append("- Python shard artifacts: ❌ missing " + ", ".join(missing_shards) + ".")
@@ -490,6 +502,7 @@ def summarize(context: SummaryContext) -> SummaryResult:
     python_result = _normalize(context.python_result or "success")
     docker_result_norm = _normalize(context.docker_result or "skipped")
     test_quality_result = _normalize(context.test_quality_result or "skipped")
+    orchestrator_node_tests_result = _normalize(context.orchestrator_node_tests_result or "skipped")
     cosmetic_failure = False
     failure_checks: tuple[str, ...] = ()
     format_failure = False
@@ -538,12 +551,24 @@ def summarize(context: SummaryContext) -> SummaryResult:
             state = "failure"
             description = f"Test-quality result: {test_quality_result}."
 
+    if state == "success":
+        if orchestrator_node_tests_result == "cancelled":
+            state = "pending"
+            description = "Orchestrator node tests cancelled; waiting for rerun."
+        elif orchestrator_node_tests_result not in ("success", "skipped"):
+            state = "failure"
+            description = f"Orchestrator node tests result: {orchestrator_node_tests_result}."
+
     adjusted_lines = []
     for line in lines:
         if line.startswith("| docker-smoke"):
             adjusted_lines.append(f"| docker-smoke | {_friendly(docker_result_norm)} |")
         elif line.startswith("| test-quality"):
             adjusted_lines.append(f"| test-quality | {_friendly(test_quality_result)} |")
+        elif line.startswith("| orchestrator-node-tests"):
+            adjusted_lines.append(
+                f"| orchestrator-node-tests | {_friendly(orchestrator_node_tests_result)} |"
+            )
         else:
             adjusted_lines.append(line)
 
@@ -572,6 +597,7 @@ def build_context() -> SummaryContext:
     docs_guard_result = os.environ.get("DOCS_GUARD_RESULT") or "success"
     docker_result = os.environ.get("DOCKER_RESULT") or "skipped"
     test_quality_result = os.environ.get("TEST_QUALITY_RESULT") or "skipped"
+    orchestrator_node_tests_result = os.environ.get("ORCHESTRATOR_NODE_TESTS_RESULT") or "skipped"
     docker_changed = _normalize(os.environ.get("DOCKER_CHANGED"), "false") == "true"
     python_required = _normalize(os.environ.get("PYTHON_REQUIRED"), "true") == "true"
     combined_coverage_status = _normalize(
@@ -600,6 +626,7 @@ def build_context() -> SummaryContext:
         docs_guard_result=docs_guard_result,
         docker_result=docker_result,
         test_quality_result=test_quality_result,
+        orchestrator_node_tests_result=orchestrator_node_tests_result,
         docker_changed=docker_changed,
         artifacts_root=artifacts_root,
         summary_path=summary_path,

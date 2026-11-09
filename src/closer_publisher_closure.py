@@ -29,6 +29,9 @@ MODULES = (
     "followthrough_observer.py",
     "maintenance_receiver.py",
 )
+# Older installed controllers remain valid. If this reviewed continuation is present,
+# copy and pin it; importing it without its captured bytes still fails _check_imports.
+OPTIONAL_MODULES = ("deployment_followthrough.py",)
 DYNAMIC_HELPER = (
     "delivery-continuity-5202c248a71d5b45a324d7e98b1865a43f1b20fe56b6903330ae153a314394e2.py"
 )
@@ -329,7 +332,7 @@ def validate(value: Any) -> dict[str, Any]:
     )
     if (
         not isinstance(modules, dict)
-        or set(modules) != set(MODULES)
+        or not (set(MODULES) <= set(modules) <= set((*MODULES, *OPTIONAL_MODULES)))
         or not isinstance(helpers, dict)
         or set(helpers) != {DYNAMIC_HELPER}
     ):
@@ -436,12 +439,20 @@ def capture(
     source_snapshot_receipt, source_capture_tool = Path(source_snapshot_receipt), Path(
         source_capture_tool
     )
+    module_names = (
+        *MODULES,
+        *(
+            name
+            for name in OPTIONAL_MODULES
+            if (source_root / name).exists() or (source_root / name).is_symlink()
+        ),
+    )
     if (
         out.exists()
         or out.parent.is_symlink()
         or not all(
             (source_root / x).is_file() and not (source_root / x).is_symlink()
-            for x in (*MODULES, DYNAMIC_HELPER)
+            for x in (*module_names, DYNAMIC_HELPER)
         )
     ):
         raise PublisherClosureError("capture source or output is unsafe")
@@ -457,7 +468,7 @@ def capture(
     out.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=out.parent, prefix=".publisher-capture-") as temp:
         staged, pins = Path(temp), {}
-        for name in (*MODULES, DYNAMIC_HELPER):
+        for name in (*module_names, DYNAMIC_HELPER):
             source, target = source_root / name, staged / name
             _write_durable_bytes(target, source.read_bytes(), stat.S_IMODE(source.stat().st_mode))
             pins[name] = _pin(target)
@@ -482,7 +493,7 @@ def capture(
             "controller_data_root": str(controller_data_root),
             "entry_module": "demand_router",
             "entry_function": "main",
-            "modules": {x: pins[x] for x in MODULES},
+            "modules": {x: pins[x] for x in module_names},
             "dynamic_helpers": {DYNAMIC_HELPER: pins[DYNAMIC_HELPER]},
             "external_bindings": external,
             "capture": {

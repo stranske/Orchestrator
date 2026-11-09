@@ -50,7 +50,9 @@ import base64
 import json
 import math
 import os
+import re
 import sqlite3
+import statistics
 import subprocess
 import sys
 import time
@@ -420,6 +422,417 @@ def _gh_call(args: list[str], *, timeout_s: int = GH_TIMEOUT_S) -> tuple[bool, s
     return True, proc.stdout or "", ""
 
 
+class _FleetReadError(Exception):
+    """A missing population is not a measured zero."""
+
+
+FLEET_DELIVERY_NAMES = {
+    "gate_cancellations": "Gate cancellation share (48 h, labeled versus synchronize)",
+    "merge_to_close": "Merge to issue closure (48 h)",
+    "oldest_canary": "Oldest open canary sync PR",
+    "opener_cap": "Opener-owned PR count against cap",
+    "released_flow": "Released-issue agent PRs per day (48 h)",
+}
+
+
+def _fleet_json(gh, args: list[str]):
+    ok, out, reason = gh(args)
+    if not ok:
+        detail = (reason or "read failed").removeprefix("unmeasured: ").removeprefix("gh ")
+        raise _FleetReadError(f"gh {detail}")
+    try:
+        payload = json.loads(out)
+    except ValueError as exc:
+        raise _FleetReadError("gh invalid JSON response") from exc
+    if isinstance(payload, dict) and payload.get("errors"):
+        raise _FleetReadError("gh API returned errors")
+    return payload
+
+
+def _fleet_stamp(value) -> int:
+    if not isinstance(value, str) or not value.endswith(("Z", "+00:00")):
+        raise _FleetReadError("would need a UTC GitHub timestamp")
+    stamp = _parse_iso_ts(value)
+    if stamp is None:
+        raise _FleetReadError("would need a valid GitHub timestamp")
+    return stamp
+
+
+def _fleet_measured(value: str, evidence: str) -> dict:
+    return {"value": value, "evidence_class": evidence, "reason": ""}
+
+
+def _fleet_gate_cancellations(gh, now: int) -> dict:
+    since = datetime.fromtimestamp(now - 48 * 3600, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    pages = _fleet_json(
+        gh,
+        [
+            "api",
+            f"repos/{WORKFLOWS_REPO}/actions/workflows/pr-00-gate.yml/runs"
+            f"?per_page=100&created=>={since}",
+            "--paginate",
+            "--slurp",
+        ],
+    )
+    runs = []
+    for page in pages:
+        runs.extend(page["workflow_runs"])
+    # The REST run schema gives `event=pull_request`, not github.event.action. A label
+    # timeline near a run is correlation, not its trigger; neither actor nor title proves it.
+    # Keep the read so an API failure is distinguished from this missing join.
+    raise _FleetReadError(
+        "would need run-ID-keyed github.event.action receipts (labeled/synchronize) "
+        f"joined to Gate conclusions over 48 h ({len(runs)} runs read)"
+    )
+
+
+def _fleet_recent_prs(gh, repo: str, now: int) -> list[dict]:
+    """Complete updated population; no search ceiling or fixed `pr list --limit`."""
+    rows: list[dict] = []
+    oldest_updated: int | None = None
+    seen: set[int] = set()
+    for page in range(1, 11):
+        batch = _fleet_json(
+            gh,
+            [
+                "api",
+                f"repos/{repo}/pulls?state=all&sort=updated&direction=desc"
+                f"&per_page=100&page={page}",
+            ],
+        )
+        if not isinstance(batch, list):
+            raise _FleetReadError("gh PR list is not an array")
+        for pr in batch:
+            updated = _fleet_stamp(pr["updated_at"])
+            if oldest_updated is not None and updated > oldest_updated:
+                raise _FleetReadError("would need consistent descending updated PR order")
+            oldest_updated = updated
+            number = pr.get("number")
+            if type(number) is not int or number <= 0:
+                raise _FleetReadError("would need complete GitHub PR numbers")
+            # PRs can move between pages while GitHub handles separate requests.
+            # Deduplicating hides that the same shift may also have omitted a PR.
+            if number in seen:
+                raise _FleetReadError("would need consistent non-overlapping PR pages")
+            seen.add(number)
+            if updated >= now - 48 * 3600:
+                rows.append(pr)
+        # Validate the whole page before trusting its cutoff. An old row followed
+        # by a recent one must not silently truncate either PR measurement.
+        if oldest_updated is not None and oldest_updated < now - 48 * 3600:
+            return rows
+        if len(batch) < 100:
+            return rows
+    raise _FleetReadError("would need complete updated PR pagination beyond 1000 rows per repo")
+
+
+def _fleet_labels(record: Mapping[str, object], subject: str) -> list[str]:
+    """Distinguish an explicitly empty label list from missing classification evidence."""
+    labels = record.get("labels")
+    if not isinstance(labels, list):
+        raise _FleetReadError(f"would need complete GitHub {subject} labels")
+
+    names: list[str] = []
+    for label in labels:
+        name = label.get("name") if isinstance(label, Mapping) else label
+        if not isinstance(name, str) or not name.strip():
+            raise _FleetReadError(f"would need complete GitHub {subject} labels")
+        names.append(name)
+    return names
+
+
+def _fleet_head_ref(record: Mapping[str, object], subject: str) -> str:
+    head = record.get("head")
+    branch = head.get("ref") if isinstance(head, Mapping) else None
+    if not isinstance(branch, str) or not branch.strip():
+        raise _FleetReadError(f"would need complete GitHub {subject} head branch")
+    return branch
+
+
+def _fleet_closing_issue_refs(gh, repo: str, number: int) -> set[str]:
+    """Read complete structured links, retaining only this repository's issues."""
+    owner, name = repo.split("/", 1)
+    query = (
+        "query($owner:String!,$name:String!,$number:Int!){"
+        "repository(owner:$owner,name:$name){pullRequest(number:$number){"
+        "closingIssuesReferences(first:100){nodes{number repository{nameWithOwner}}"
+        "pageInfo{hasNextPage}}}}}"
+    )
+    payload = _fleet_json(
+        gh,
+        [
+            "api",
+            "graphql",
+            "-f",
+            "query=" + query,
+            "-f",
+            "owner=" + owner,
+            "-f",
+            "name=" + name,
+            "-F",
+            f"number={number}",
+        ],
+    )
+    reason = f"would need complete GitHub closingIssuesReferences for {repo}#{number}"
+    try:
+        connection = payload["data"]["repository"]["pullRequest"]["closingIssuesReferences"]
+        nodes = connection["nodes"]
+        has_next = connection["pageInfo"]["hasNextPage"]
+    except (KeyError, TypeError) as exc:
+        raise _FleetReadError(reason) from exc
+    if not isinstance(nodes, list) or has_next is not False:
+        raise _FleetReadError(reason)
+    refs = set()
+    for node in nodes:
+        try:
+            issue_number = node["number"]
+            issue_repo = node["repository"]["nameWithOwner"]
+        except (KeyError, TypeError) as exc:
+            raise _FleetReadError(reason) from exc
+        if (
+            type(issue_number) is not int
+            or issue_number <= 0
+            or not isinstance(issue_repo, str)
+            or not re.fullmatch(r"[^/\s]+/[^/\s]+", issue_repo)
+        ):
+            raise _FleetReadError(reason)
+        if issue_repo.lower() == repo.lower():
+            refs.add(str(issue_number))
+    return refs
+
+
+def _fleet_pr_measures(gh, now: int, repos: list[str], *, flow: bool) -> dict:
+    from backlog import _has_agent_label, _pr_issue_refs
+
+    intervals = []
+    opened = merged = pending = preclosed = 0
+    issues = {}
+    for repo in repos:
+        for pr in _fleet_recent_prs(gh, repo, now):
+            if not _has_agent_label(_fleet_labels(pr, "PR")):
+                continue
+            # Only REST's explicit null establishes an unmerged PR. A malformed
+            # false value must not silently undercount flow or change the median.
+            merged_at = _fleet_stamp(pr["merged_at"]) if pr["merged_at"] is not None else None
+            created_at = _fleet_stamp(pr["created_at"])
+            recent_merge = merged_at is not None and now - 48 * 3600 <= merged_at <= now
+            recent_open = now - 48 * 3600 <= created_at <= now
+            if not (recent_merge or (flow and recent_open)):
+                continue
+            # The latency arm below subtracts the merge time. The preceding predicate makes a
+            # missing value unreachable when `flow` is false, but retain that fact explicitly for
+            # both readers and the type checker rather than relying on a boolean expression above.
+            if not flow and merged_at is None:
+                continue
+            # A null body is GitHub's explicit empty value. Missing or malformed
+            # bodies cannot establish that a PR has no source-issue references.
+            body = pr.get("body")
+            if "body" not in pr or (body is not None and not isinstance(body, str)):
+                raise _FleetReadError("would need complete GitHub PR body")
+            # REST list rows omit structured links. Fetch through the shared report
+            # cache, validate repository identity, and union with existing text rules.
+            closing_refs = _fleet_closing_issue_refs(gh, repo, pr["number"])
+            # Flow also retains backlog's body/branch source rule; supply only the
+            # validated same-repo links because backlog accepts bare issue numbers.
+            refs = (
+                {
+                    str(n)
+                    for n in _pr_issue_refs(
+                        repo,
+                        {
+                            **pr,
+                            "headRefName": _fleet_head_ref(pr, "PR"),
+                            "closingIssuesReferences": [{"number": int(n)} for n in closing_refs],
+                        },
+                    )
+                }
+                if flow
+                else closing_refs | set(re.findall(r"\bCloses\s+#([1-9]\d*)\b", body or "", re.I))
+            )
+            released = False
+            for number in sorted(refs, key=int):
+                key = (repo, number)
+                if key not in issues:
+                    issues[key] = _fleet_json(gh, ["api", f"repos/{repo}/issues/{number}"])
+                issue = issues[key]
+                if "pull_request" in issue:
+                    raise _FleetReadError("would need Closes references resolving to issues")
+                if flow:
+                    released |= "repo-review-approved" in _fleet_labels(issue, "issue")
+                    continue
+                if merged_at is None:
+                    continue
+                if issue["state"] == "open":
+                    pending += 1
+                elif issue["state"] == "closed":
+                    closed = _fleet_stamp(issue["closed_at"])
+                    if closed < merged_at:
+                        preclosed += 1
+                    elif closed <= now:
+                        intervals.append((closed - merged_at) / 60)
+                    else:
+                        raise _FleetReadError(
+                            "would need issue closure timestamps at or before now"
+                        )
+                else:
+                    raise _FleetReadError("would need issue state and closed_at")
+            if flow and released:
+                opened += recent_open
+                merged += recent_merge
+    join = "backlog source-issue references" if flow else "Closes issue joins"
+    evidence = (
+        f"GitHub REST/GraphQL; backlog agent-label rule; "
+        f"same-repo closingIssuesReferences and {join}"
+    )
+    if flow:
+        return _fleet_measured(
+            f"opened {opened / 2:g}/day, merged {merged / 2:g}/day "
+            f"({opened} opened, {merged} merged; current issue approval labels)",
+            evidence,
+        )
+    if not intervals:
+        raise _FleetReadError(
+            f"would need closed issues after agent PR merges in 48 h "
+            f"(0 observed pairs; {pending} still open; {preclosed} closed before merge)"
+        )
+    return _fleet_measured(
+        f"median {statistics.median(intervals):g} min ({len(intervals)} PR/issue pairs; "
+        f"{pending} still open; {preclosed} closed before merge)",
+        evidence,
+    )
+
+
+def _fleet_oldest_canary(gh, now: int) -> dict:
+    config = _fleet_json(
+        gh,
+        [
+            "api",
+            f"repos/{WORKFLOWS_REPO}/contents/config/consumer_sync_canaries.json",
+            "-H",
+            "Accept: application/vnd.github.raw+json",
+        ],
+    )
+    repos = list(dict.fromkeys(row["repo"] for row in config["canaries"]))
+    # Never substitute the fleet registry for the explicitly configured canary cohort.
+    repos = [repo for repo in repos if repo != "stranske/Collab-Admin"]
+    if len(repos) != 3:
+        raise _FleetReadError("would need the configured three non-excluded canary repositories")
+    candidates = []
+    for repo in repos:
+        pages = _fleet_json(
+            gh,
+            ["api", f"repos/{repo}/pulls?state=open&per_page=100", "--paginate", "--slurp"],
+        )
+        # A complete empty REST population is `[[]]`. Missing or malformed pages
+        # cannot establish absence, or an oldest PR from the remaining canaries.
+        if (
+            not isinstance(pages, list)
+            or not pages
+            or any(not isinstance(page, list) for page in pages)
+        ):
+            raise _FleetReadError(f"would need complete paginated canary PR arrays for {repo}")
+        seen: set[int] = set()
+        for page in pages:
+            for pr in page:
+                number = pr.get("number")
+                if type(number) is not int or number <= 0:
+                    raise _FleetReadError("would need complete GitHub canary PR numbers")
+                # A repeated PR can accompany an omitted PR when the open
+                # population shifts during pagination, including non-sync PRs.
+                if number in seen:
+                    raise _FleetReadError("would need consistent non-overlapping canary PR pages")
+                seen.add(number)
+                if _fleet_head_ref(pr, "canary PR").startswith("sync/workflows-"):
+                    # Draft PRs still have age and still represent undelivered work.
+                    created = _fleet_stamp(pr["created_at"])
+                    if created > now:
+                        raise _FleetReadError("would need canary creation timestamps before now")
+                    candidates.append((created, repo, number))
+    evidence = "GitHub REST; Workflows configured three-canary cohort"
+    if not candidates:
+        return _fleet_measured("none open (0 sync PRs across 3 canaries)", evidence)
+    created, repo, number = min(candidates)
+    return _fleet_measured(f"{(now - created) / 86400:.1f} days ({repo}#{number})", evidence)
+
+
+def _fleet_opener_cap(runner) -> dict:
+    helper = Path.home() / ".codex" / "bin" / "opener-cap-health.py"
+    try:
+        proc = runner(
+            [sys.executable, str(helper), "--json"],
+            capture_output=True,
+            text=True,
+            timeout=GH_TIMEOUT_S,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise _FleetReadError(f"would need {helper} --json ({type(exc).__name__})") from exc
+    if proc.returncode:
+        raise _FleetReadError(f"would need successful {helper} --json (exit {proc.returncode})")
+    try:
+        data = json.loads(proc.stdout)
+    except ValueError:
+        raise _FleetReadError(f"would need valid JSON from {helper} --json")
+    if not isinstance(data, dict):
+        raise _FleetReadError(f"would need a JSON object from {helper} --json")
+    fields = ("total_opener_owned", "human_held_exempt_count", "coverage_exempt_count")
+    if any(type(data.get(key)) is not int or data[key] < 0 for key in fields):
+        raise _FleetReadError("would need opener health ownership and both exempt counts")
+    # The cap is machine-local policy. No checked-in source establishes its key/value;
+    # preserve the observed counts, explicitly naming the missing half of the measure.
+    return _fleet_measured(
+        f"{data['total_opener_owned']} owned; human-held exempt {data['human_held_exempt_count']}; "
+        f"coverage exempt {data['coverage_exempt_count']}; "
+        "cap unmeasured — would need opener's configured cap",
+        "opener-cap-health.py --json (counts only)",
+    )
+
+
+def fleet_delivery_measures(*, now: int | None = None, gh_fn=None, opener_runner=None) -> dict:
+    """Five independent report-only rows. Missing facts never become invented numbers.
+
+    Agent ownership follows backlog's explicit agent-label rule. GitHub run action and
+    the machine-local opener cap have no authoritative reader in this tree; those gaps
+    are printed until their required evidence exists, even when the other reads succeed.
+    """
+    from backlog import SUPPORTED_REPOS
+
+    now = int(time.time()) if now is None else int(now)
+    source_gh = gh_fn or _gh_call
+    responses = {}
+
+    def gh(args):
+        # The two PR measures share one snapshot, including failed reads. This cache
+        # lasts only this report; no persisted result can masquerade as a live read.
+        key = tuple(args)
+        if key not in responses:
+            responses[key] = source_gh(args)
+        return responses[key]
+
+    repos = list(dict.fromkeys(r for r in SUPPORTED_REPOS if r != "stranske/Collab-Admin"))
+    readers = {
+        "gate_cancellations": lambda: _fleet_gate_cancellations(gh, now),
+        "merge_to_close": lambda: _fleet_pr_measures(gh, now, repos, flow=False),
+        "oldest_canary": lambda: _fleet_oldest_canary(gh, now),
+        "opener_cap": lambda: _fleet_opener_cap(opener_runner or subprocess.run),
+        "released_flow": lambda: _fleet_pr_measures(gh, now, repos, flow=True),
+    }
+    rows = {}
+    for key, reader in readers.items():
+        try:
+            row = reader()
+        except _FleetReadError as exc:
+            row = {"value": None, "evidence_class": "unmeasured", "reason": str(exc)}
+        except Exception as exc:  # noqa: BLE001 — isolate reader failures, retaining every row
+            row = {
+                "value": None,
+                "evidence_class": "unmeasured",
+                "reason": f"would need valid {key} response ({type(exc).__name__})",
+            }
+        rows[key] = {"name": FLEET_DELIVERY_NAMES[key], **row}
+    return {"as_of": now, "window_hours": 48, "rows": rows}
+
+
 def _parse_maint_68_registry_yaml(content: str) -> list[str]:
     repos: list[str] = []
     in_repos = False
@@ -524,12 +937,11 @@ def _unresolved_review_threads(repo: str, number: int, *, gh_fn) -> tuple[int | 
         payload = json.loads(out or "{}")
     except json.JSONDecodeError:
         return None, "unmeasured: reviewThreads GraphQL JSON parse failed"
-    threads = (
-        ((payload.get("data") or {}).get("repository") or {})
-        .get("pullRequest", {})
-        .get("reviewThreads", {})
-        .get("nodes")
-    )
+    data = payload.get("data") if isinstance(payload, dict) else None
+    repo_node = data.get("repository") if isinstance(data, dict) else None
+    pr_node = repo_node.get("pullRequest") if isinstance(repo_node, dict) else None
+    review_threads = pr_node.get("reviewThreads") if isinstance(pr_node, dict) else None
+    threads = review_threads.get("nodes") if isinstance(review_threads, dict) else None
     if not isinstance(threads, list):
         return None, "unmeasured: reviewThreads nodes missing"
     unresolved = sum(1 for row in threads if not (row or {}).get("isResolved"))
@@ -1843,6 +2255,17 @@ def review(
         "worktree_git_refusals": worktree_git_refusals(),
         "raise_count": len(due) + len(quiet),
     }
+    try:
+        rep["assess_sandbox_fallback"] = assess_sandbox_fallback_report(now=now)
+    except Exception as exc:  # noqa: BLE001 — a report still names an unreadable ledger
+        rep["assess_sandbox_fallback"] = {
+            "status": "unmeasured",
+            "reason": f"{type(exc).__name__}: {exc}",
+            "window_days": ASSESS_SANDBOX_WINDOW_DAYS,
+            "fallback_runs": None,
+            "network_caused_assess_incompletions": None,
+            "window_complete": False,
+        }
     # FYI only, never counted in `raise_count`, and outside the graded projection
     # (capability_propensity.TICK_FINDING_FIELDS["switch-review"]), so it mints no verdict.
     if credential_exposure_report is not None:
@@ -1985,7 +2408,11 @@ def not_counted_phrase(row: dict) -> str:
 
 
 def profile_trial_summary_line() -> str | None:
-    """One-line profile-trial status from the capability-program artifact, when present."""
+    """One-line profile-trial status from the capability-program artifact, when present.
+
+    Quality and cost use one profile order, so the slash-separated ``a/b`` segments name the
+    same profiles. Identity is Y only for a real boolean verification; any other value is N.
+    """
     path = (
         Path(os.environ.get("ORCH_STATE_DIR", str(Path.home() / ".codex" / "orchestrator")))
         / "capability-program"
@@ -2003,17 +2430,23 @@ def profile_trial_summary_line() -> str | None:
             return None
         if any(not isinstance(row, dict) for row in costs.values()):
             return None
+        if any(not isinstance(pid, str) for pid in (*costs, *quality)):
+            return None
     except (OSError, json.JSONDecodeError, TypeError, ValueError, OverflowError):
         return None
-    identity = "Y" if payload.get("identity_verified") else "N"
+    identity = "Y" if payload.get("identity_verified") is True else "N"
+    # One order for both segments. A profile present on only one side stays in that slot as n/a,
+    # so quality a/b and cost a/b cannot describe different profiles.
+    profile_ids = sorted(set(costs) | set(quality))
     cost_bits = (
         "/".join(
-            f"{costs[pid].get('tokens_in', 'n/a')}in+{costs[pid].get('tokens_out', 'n/a')}out"
-            for pid in sorted(costs)
+            f"{(costs.get(pid) or {}).get('tokens_in', 'n/a')}in+"
+            f"{(costs.get(pid) or {}).get('tokens_out', 'n/a')}out"
+            for pid in profile_ids
         )
         or "n/a"
     )
-    qual_bits = "/".join(str(quality.get(pid, "n/a")) for pid in sorted(quality)) or "n/a"
+    qual_bits = "/".join(str(quality.get(pid, "n/a")) for pid in profile_ids) or "n/a"
     return (
         f"profile trial: profiles {profiles}, instances {instances}, "
         f"identity verified {identity}, quality {qual_bits}, cost {cost_bits}"
@@ -2125,6 +2558,182 @@ def review_loop_share_line(rows) -> str:
     return f"  review loop first-pass MERGE-WHEN-GREEN: {accepted}/{len(first)} ({accepted / len(first):.0%})"
 
 
+# Explicit seven-day interval for the assess-sandbox fallback. Not a rolling default
+# hidden in a call site: the report names this many days, and a window that has not
+# elapsed stays unverified rather than printing a success zero.
+ASSESS_SANDBOX_WINDOW_DAYS = 7
+_ASSESS_NETWORK_FAILURE_PATTERNS = (
+    r"could not resolve host",
+    r"no such host",
+    r"name or service not known",
+    r"temporary failure in name resolution",
+    r"nodename nor servname",
+    r"lookup api\.github\.com",
+    r"connection refused",
+    r"connection reset",
+    r"network is unreachable",
+    r"no route to host",
+    r"failed to connect",
+    r"error connecting to api\.github\.com",
+    r"i/o timeout",
+    r"connection timed out",
+    r"curl: \(6\)",
+    r"curl: \(7\)",
+    r"curl: \(28\)",
+    r"dial tcp",
+    r"probe exceeded",
+)
+
+
+def _parse_window_start(value: str) -> int:
+    text = value.strip()
+    if re.fullmatch(r"\d+", text):
+        return int(text)
+    parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return int(parsed.timestamp())
+
+
+def _assess_text_is_network(text: str) -> bool:
+    return any(
+        re.search(pattern, text, re.IGNORECASE) for pattern in _ASSESS_NETWORK_FAILURE_PATTERNS
+    )
+
+
+def assess_sandbox_fallback_report(
+    *,
+    ledger_path: Path | str | None = None,
+    now: int | None = None,
+    since: int | None = None,
+) -> dict:
+    """Count fallback runs and network-caused assess incompletions over seven days.
+
+    A missing ledger is unmeasured, never zero. An assess failure whose log cannot
+    be read, and a window that has not elapsed, stay unverified: neither is a
+    success. `since` is the implementation-merge instant; without it the window
+    is the seven days ending at `now`, which has elapsed.
+    """
+    window_days = ASSESS_SANDBOX_WINDOW_DAYS
+    now_ts = int(time.time()) if now is None else int(now)
+    if since is None:
+        start = now_ts - window_days * 86400
+        end = now_ts
+        window_complete = True
+    else:
+        start = int(since)
+        end = start + window_days * 86400
+        window_complete = now_ts >= end
+    if ledger_path is None:
+        import adapters
+
+        path = adapters.LEDGER
+    else:
+        path = Path(ledger_path)
+    report = {
+        "window_days": window_days,
+        "window_start": start,
+        "window_end": end,
+        "now": now_ts,
+        "window_complete": window_complete,
+        "ledger": str(path),
+    }
+    if not path.is_file():
+        return {
+            **report,
+            "status": "unmeasured",
+            "reason": "capacity ledger absent",
+            "fallback_runs": None,
+            "network_caused_assess_incompletions": None,
+            "unclassifiable": None,
+            "malformed_rows": None,
+        }
+    fallback_ids: set[str] = set()
+    network = 0
+    unclassifiable = 0
+    malformed = 0
+    limit = min(now_ts, end)
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            malformed += 1
+            continue
+        if not isinstance(row, dict):
+            malformed += 1
+            continue
+        stamp = row.get("ts")
+        if type(stamp) is not int or not start <= stamp <= limit:
+            continue
+        if row.get("sandbox_fallback") is True and isinstance(row.get("run_id"), str):
+            fallback_ids.add(row["run_id"])
+        if row.get("event") != "complete" or row.get("mode") != "assess":
+            continue
+        error = str(row.get("error") or "")
+        exit_code = row.get("exit")
+        incomplete = "offload_incomplete" in error.lower() or exit_code not in (0, None)
+        if not incomplete:
+            continue
+        log_text = ""
+        log_readable = False
+        log_file = row.get("log_file")
+        if isinstance(log_file, str) and log_file:
+            try:
+                log_text = Path(log_file).read_text(encoding="utf-8", errors="replace")[:262144]
+                log_readable = True
+            except OSError:
+                log_readable = False
+        evidence = f"{error}\n{log_text}"
+        if _assess_text_is_network(evidence):
+            network += 1
+        elif log_readable:
+            continue
+        else:
+            unclassifiable += 1
+    reasons = []
+    if malformed:
+        reasons.append(f"{malformed} malformed ledger row(s)")
+    if unclassifiable:
+        reasons.append(f"{unclassifiable} assess incompletion(s) lack classifiable evidence")
+    if not window_complete:
+        reasons.append("seven-day window has not elapsed")
+    if reasons:
+        status = "unverified"
+        reason = "; ".join(reasons)
+    else:
+        status = "measured"
+        reason = ""
+    return {
+        **report,
+        "status": status,
+        "reason": reason,
+        "fallback_runs": len(fallback_ids),
+        "network_caused_assess_incompletions": network,
+        "unclassifiable": unclassifiable,
+        "malformed_rows": malformed,
+    }
+
+
+def format_assess_sandbox_fallback(section: dict) -> str:
+    """One line: the seven-day counts, and unverified/unmeasured when that is the truth."""
+    days = section.get("window_days", ASSESS_SANDBOX_WINDOW_DAYS)
+
+    def _num(key: str) -> str:
+        value = section.get(key)
+        return str(value) if type(value) is int else "unmeasured"
+
+    line = (
+        f"  assess sandbox fallback ({days}d): fallback_runs {_num('fallback_runs')}; "
+        f"network-caused assess incompletions {_num('network_caused_assess_incompletions')}"
+    )
+    status = section.get("status") or "unmeasured"
+    if status != "measured":
+        line += f"; {status}: {section.get('reason') or 'evidence incomplete'}"
+    return line
+
+
 def format_report(rep: dict) -> str:
     lines = [
         "# Switch review — held switches must be revisited, not forgotten",
@@ -2133,6 +2742,8 @@ def format_report(rep: dict) -> str:
         f"  due for a decision: {rep['raise_count']}",
         "",
     ]
+    if rep.get("assess_sandbox_fallback"):
+        lines += [format_assess_sandbox_fallback(rep["assess_sandbox_fallback"]), ""]
     lines += [comparative_routing_line(rep), ""]
     loop = rep.get("review_loop") or {}
     if loop.get("status") == "measured":
@@ -2262,6 +2873,17 @@ def format_report(rep: dict) -> str:
                 "between an agent's change and the dispatcher that dispatches agents.",
                 "",
             ]
+    delivery = rep.get("fleet_delivery_measures") or {}
+    if delivery:
+        checked = datetime.fromtimestamp(delivery["as_of"], timezone.utc).isoformat()
+        lines += ["## Fleet delivery measures", "", f"  As of {checked}"]
+        for row in delivery["rows"].values():
+            if row["value"] is None:
+                value = f"unmeasured — {row['reason']}"
+            else:
+                value = f"{row['value']} [{row['evidence_class']}]"
+            lines.append(f"  {row['name']}: {value}")
+        lines.append("")
     fleet = rep.get("fleet_gates") or {}
     if fleet:
         lines += ["## Fleet template-delivery gates (Maint 68 promote + sync canaries)", ""]
@@ -3131,9 +3753,27 @@ def main(argv: list[str]) -> int:
         ),
     )
     ap.add_argument("--selftest", action="store_true")
+    ap.add_argument(
+        "--assess-sandbox-fallback",
+        action="store_true",
+        help="print fallback runs and network-caused assess incompletions for the seven-day window",
+    )
+    ap.add_argument(
+        "--since",
+        help="window start as unix seconds or ISO-8601 (the implementation merge instant)",
+    )
+    ap.add_argument("--ledger", help="capacity-ledger.ndjson to read")
+    ap.add_argument("--now", type=int, help="unix seconds the window clock uses")
     args = ap.parse_args(argv)
     if args.selftest:
         _selftest()
+        return 0
+    if args.assess_sandbox_fallback:
+        since = _parse_window_start(args.since) if args.since else None
+        section = assess_sandbox_fallback_report(ledger_path=args.ledger, now=args.now, since=since)
+        print(
+            json.dumps(section, indent=2) if args.json else format_assess_sandbox_fallback(section)
+        )
         return 0
     if args.env == "process":
         env = dict(os.environ)
@@ -3193,6 +3833,9 @@ def main(argv: list[str]) -> int:
         credential_exposure_report=credential_exposure(),
         python_standard_report=python_standard_audit.snapshot(),
     )
+    # Like the interpreter audit, host-dependent fleet reads belong to the production
+    # CLI, not isolated callers of review(). Both JSON and text carry this same snapshot.
+    rep["fleet_delivery_measures"] = fleet_delivery_measures(now=rep.get("generated_at"))
     # The production weekly caller collects the curve, rather than leaving a CLI-only instrument.
     # Pure report/selftest readers keep their no-network and no-state-write contract.
     if (

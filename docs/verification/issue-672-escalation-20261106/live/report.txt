@@ -1,0 +1,186 @@
+# Switch review — held switches must be revisited, not forgotten
+
+  review window: 7d
+  due for a decision: 6
+
+comparative routing: classes_differing unmeasured (window 14d), λ claude unmeasured codex unmeasured, status inputs_unmeasured — unmeasured; /home/runner/.codex/handoff/capacity-ledger.ndjson: no event=pacing_snapshot rows in window (ts required); /home/runner/.codex/handoff/capacity-ledger.ndjson: pacing_snapshot input unavailable (No such file or directory); /tmp/issue-1186-escalation-20261106/live/runtime/feedback/orchestrator.db: posterior[claude] missing n_obs >= 20; /tmp/issue-1186-escalation-20261106/live/runtime/feedback/orchestrator.db: posterior[codex] missing n_obs >= 20
+
+  review loop first-pass MERGE-WHEN-GREEN: n/a (0 rounds)
+
+  strategy experiment: UNKNOWN — no completed scored evaluation
+
+  experiment producer: launched 0, evaluated 0, winner_prs 0, winner_merged 0, post_window_launches=0, cells_fresh 0/0, skipped 0 (none); no_named_test=0 (file-only=0, ci-only=0, none=0), derived_tests=0, derive_failed=0; trial_end not_started, verdict pending, days_left 21; winner merge grace 7d
+
+adjudicator shadow: cases UNKNOWN, agree UNKNOWN, disagree UNKNOWN, cost UNKNOWN
+
+adjudicator live: disputes UNKNOWN, advised UNKNOWN, uncertified UNKNOWN, graded UNKNOWN
+
+adversarial-review: high-stakes candidates unmeasured ([Errno 2] No such file or directory: '/tmp/issue-1186-escalation-20261106/live/state/fleet-shapes.json')
+
+triage shadow: cycles 0, valid 0, triage top-1 merged+durable n/a (0 judged) [0 no delivery], rule pick n/a (0 judged) [0 no delivery], malformed rows 0; consumed 0, followed 0, not followed 0, open 0; unresolved 0; top-1 agrees with the rule pick 0 of 0 valid cycles; pool followed 0 of 30
+
+## Capability value chain
+
+  evidence UNKNOWN: Brain evidence unavailable: unable to open database file
+  evidence UNKNOWN: closer-core round population unavailable
+  evidence UNKNOWN: closer-core Brain outcomes unavailable
+  evidence UNKNOWN: relay pacing population unavailable (decision log unread)
+  evidence UNKNOWN: stall population unavailable (redirect sweep log unread)
+  evidence UNKNOWN: dispute population unavailable
+  evidence UNKNOWN: fleet issue population incomplete or inaccessible
+
+## Feature goals
+
+feature goals: 6 features, 1 drifting
+Drift horizon: 14 days
+
+| Feature / goal | Goal | Measure | Last value | Drift |
+| --- | --- | --- | --- | --- |
+| experiments/G1 | multi-source feedback on sizable features | feature_goals.py:multi_source_feedback | measured zero [Brain evaluations_v2 + experiment metadata + GitHub REST issues; as_of 1793938735] | measured_zero for 14 days |
+| experiments/G2 | comparative-advantage routing | feature_goals.py:comparative_routing | unmeasured — would need #676 comparative report status inputs_unmeasured: /home/runner/.codex/handoff/capacity-ledger.ndjson: no event=pacing_snapshot rows in window (ts required); /home/runner/.codex/handoff/capacity-ledger.ndjson: pacing_snapshot input unavailable (No such file or directory); /tmp/issue-1186-escalation-20261106/live/runtime/feedback/orchestrator.db: pos [unmeasured; as_of 1793938735] | unmeasured for 0 days |
+| experiments/G3 | random retest | feature_goals.py:random_retest | unmeasured — would need experiment_producer state has no route cells (no active producer tick) [unmeasured; as_of 1793938735] | unmeasured for 0 days |
+| capacity-pacing/G1 | end-of-period usage within pacing target band | feature_goals.py:pacing_usage | unmeasured — would need #668 pacing usage_in_target_band: codex unmeasured (no fresh usage sample at a completed T1); claude unmeasured (no fresh usage sample at a completed T1) [unmeasured; as_of 1793938735] | unmeasured for 0 days |
+| capacity-pacing/G2 | zero quota incidents while another pool is ok | feature_goals.py:pacing_incidents | unmeasured — would need #668 pacing quota_incidents_while_other_ok: 2: unmeasured — would need completed-period snapshots and rate-limit ledger coverage; coverage=0/unknown ticks; longest poll gap=unknown/1800s allowance; observed incidents=0 [usage store + rate-limit ledger] [unmeasured; as_of 1793938735] | unmeasured for 0 days |
+| capacity-pacing/G3 | non-codex warn/shed dispatch share at least twice ok share | feature_goals.py:pacing_share | unmeasured — would need #668 pacing non_codex_share_at_least_double: 3: unmeasured — would need dispatches in both codex ok and warn/shed hours; coverage=0/unknown ticks; longest poll gap=unknown/1800s allowance; observed dispatches=0 [usage store + rate-limit ledger] [unmeasured; as_of 1793938735] | unmeasured for 0 days |
+| keepalive-acceptance/G1 | share of completions citing a passing named acceptance test | feature_goals.py:keepalive_acceptance | unmeasured — would need feature_goals.py:keepalive_acceptance: RuntimeError: unmeasured: error connecting to api.github.com check your internet connection or https://githubstatus.com [unmeasured; as_of 1793938735] | unmeasured for 0 days |
+| sync-promotion/G1 | days since last Maint 68 promote success | feature_goals.py:sync_promotion | unmeasured — would need Maint 68 promote success: unmeasured: error connecting to api.github.com check your internet connection or https://githubstatus.com [unmeasured; as_of 1793938735] | unmeasured for 0 days |
+| dedup-guard/G1 | duplicate open PRs per issue over 72 hours | feature_goals.py:duplicate_prs | unmeasured — would need feature_goals.py:duplicate_prs: RuntimeError: unmeasured: error connecting to api.github.com check your internet connection or https://githubstatus.com [unmeasured; as_of 1793938735] | unmeasured for 0 days |
+| closer-campaign/G1 | independently observed desktop-qualified guarded remote completion | feature_goals.py:closer_campaign_completion | unmeasured — would need would need registered desktop observer and exact pinned remote completion receipt [unmeasured; as_of 1793938735] | unmeasured for 0 days |
+
+## Issue task-count delivery quality
+
+  0: issues=0, joined=0; pass=unmeasured (n=0), durable=unmeasured (n=0), broke_later=unmeasured (n=0), verifier_non_pass=unmeasured (n=0)
+  1-4: issues=0, joined=0; pass=unmeasured (n=0), durable=unmeasured (n=0), broke_later=unmeasured (n=0), verifier_non_pass=unmeasured (n=0)
+  5-8: issues=0, joined=0; pass=unmeasured (n=0), durable=unmeasured (n=0), broke_later=unmeasured (n=0), verifier_non_pass=unmeasured (n=0)
+  9-15: issues=0, joined=0; pass=unmeasured (n=0), durable=unmeasured (n=0), broke_later=unmeasured (n=0), verifier_non_pass=unmeasured (n=0)
+  16+: issues=0, joined=0; pass=unmeasured (n=0), durable=unmeasured (n=0), broke_later=unmeasured (n=0), verifier_non_pass=unmeasured (n=0)
+  decision: collect_two_weeks; status: partial
+  UNKNOWN: unmeasured: error connecting to api.github.com check your internet connection or https://githubstatus.com
+  UNKNOWN: unmeasured: error connecting to api.github.com check your internet connection or https://githubstatus.com
+  UNKNOWN: unmeasured: error connecting to api.github.com check your internet connection or https://githubstatus.com
+  UNKNOWN: unmeasured: error connecting to api.github.com check your internet connection or https://githubstatus.com
+  UNKNOWN: unmeasured: error connecting to api.github.com check your internet connection or https://githubstatus.com
+  UNKNOWN: unmeasured: error connecting to api.github.com check your internet connection or https://githubstatus.com
+  UNKNOWN: unmeasured: error connecting to api.github.com check your internet connection or https://githubstatus.com
+  UNKNOWN: unmeasured: error connecting to api.github.com check your internet connection or https://githubstatus.com
+  UNKNOWN: unmeasured: error connecting to api.github.com check your internet connection or https://githubstatus.com
+  UNKNOWN: unmeasured: error connecting to api.github.com check your internet connection or https://githubstatus.com
+  UNKNOWN: unmeasured: error connecting to api.github.com check your internet connection or https://githubstatus.com
+  UNKNOWN: unmeasured: error connecting to api.github.com check your internet connection or https://githubstatus.com
+  UNKNOWN: unmeasured: error connecting to api.github.com check your internet connection or https://githubstatus.com
+  UNKNOWN: unmeasured: error connecting to api.github.com check your internet connection or https://githubstatus.com
+  UNKNOWN: unmeasured: error connecting to api.github.com check your internet connection or https://githubstatus.com
+  UNKNOWN: unmeasured: error connecting to api.github.com check your internet connection or https://githubstatus.com
+
+## Held OFF
+
+  ORCH_EXPLORATION_MODE  (thompson-hybrid-routing)
+      value: unset — neither this process nor orchestrate.sh's prologue sets it
+      held off; a machine-checkable precondition is recorded, so this is a decision waiting to be made
+      switch on when: REVIEWED 2026-08-22 — this is a DECISION, not a wait. The previous text said the blocker was the review rather than the data, which was right; the rev
+
+  ORCH_FRONTEND_VERIFY_START_BROWSER  (frontend-verifier)
+      value: '0' — set by orchestrate.sh's prologue (this process does not set it, or sets a value the prologue replaces)
+      held off; a machine-checkable precondition is recorded, so this is a decision waiting to be made
+      switch on when: operator policy, not evidence: this lets cron/launchd start a GUI Chrome for the CDP endpoint. Turn it on only if you want a browser process kept aliv
+
+  ORCH_RANGE_LANE_ROLLOUT  (range-lane-rollout)
+      value: '0' — set by orchestrate.sh's prologue (this process does not set it, or sets a value the prologue replaces)
+      held off; a machine-checkable precondition is recorded, so this is a decision waiting to be made
+      switch on when: the daily range-rollout PREVIEW reports >=1 eligible candidate with a provisionable worktree on >=3 consecutive days. The 2026-07-08 trial failed on T
+
+  ORCH_RUNTIME_AC_ALLOW_COMMANDS  (runtime-ac-checks)
+      value: unset — neither this process nor orchestrate.sh's prologue sets it
+      held off; a machine-checkable precondition is recorded, so this is a decision waiting to be made
+      switch on when: CORRECTED 2026-08-22 after running the code. The previous text said this gated BOTH the template-built deliberate-break command AND agent-authored `co
+
+  ORCH_STRATEGY_EXPERIMENT  (strategy-experiments)
+      value: unset — neither this process nor orchestrate.sh's prologue sets it
+      held off; a machine-checkable precondition is recorded, so this is a decision waiting to be made
+      switch on when: no demand yet: all 365 recorded experiments were single-agent-per-arm, so there is no strategy comparison waiting to run. Switch on when a multi-agent
+
+## ON but not triggering — the range-lane failure mode
+
+  ORCH_REDIRECT_APPLY_BOOTSTRAP  (redirect-apply-bootstrap)  idle=UNMEASURED (no ledger row for it on this machine)
+      value: '1' — set by orchestrate.sh's prologue (this process does not set it, or sets a value the prologue replaces)
+      ON but redirect-apply-bootstrap recorded no invocation outside consult trials in the last 7d — an enabled switch that dispatches nothing is indistinguishable from one left off
+      drain: Stage-2 deficits 10/3 (needs 10 more synced_role_outcomes and 3 more linked_disagreements), drainable UNKNOWN — no stage-2 plan at /tmp/issue-1186-escalation-20261106/live/state/keepalive-supervisor-stage2-plan.json; the next successful keepalive-stage2-plan run clears this
+
+## Firing regressions and overdue steps
+
+  UNKNOWN — [Errno 2] No such file or directory: '/tmp/issue-1186-escalation-20261106/live/state/capability-firing-monitor.json'
+
+## The deployed mirror does not carry what the checkout has
+
+  NOT MEASURED — no mirror at /home/runner/.codex/orchestrator-mirror — cannot compare, which is not the same as clean
+
+## Fleet delivery measures
+
+  As of 2026-11-06T04:18:55+00:00
+  Gate cancellation share (48 h, labeled versus synchronize): unmeasured — gh error connecting to api.github.com check your internet connection or https://githubstatus.com
+  Merge to issue closure (48 h): unmeasured — gh error connecting to api.github.com check your internet connection or https://githubstatus.com
+  Oldest open canary sync PR: unmeasured — gh error connecting to api.github.com check your internet connection or https://githubstatus.com
+  Opener-owned PR count against cap: unmeasured — would need successful /home/runner/.codex/bin/opener-cap-health.py --json (exit 2)
+  Released-issue agent PRs per day (48 h): unmeasured — gh error connecting to api.github.com check your internet connection or https://githubstatus.com
+
+## Fleet template-delivery gates (Maint 68 promote + sync canaries)
+
+  Maint 68 promote: unmeasured: error connecting to api.github.com check your internet connection or https://githubstatus.com
+  sync canaries: open=None drainable=None (repos checked=5)
+  Maint 82 continuation: unmeasured: error connecting to api.github.com check your internet connection or https://githubstatus.com
+
+## Exploration arms
+
+  exploration window: rate UNKNOWN (env unset), exploration switches since unmeasured UNKNOWN
+  exploration window: end unmeasured (extended: unmeasured, per-policy n epsilon-greedy unmeasured / thompson-hybrid unmeasured)
+  UNKNOWN — exploration window unmeasured: [Errno 2] No such file or directory: '/tmp/issue-1186-escalation-20261106/live/state/exploration-window.json'
+  UNKNOWN — published rate: unmeasured: error connecting to api.github.com check your internet connection or https://githubstatus.com
+  UNKNOWN — exploration switches: window start or decision instant unmeasured
+
+  window=120d; PASS denominator=graded G; durable denominator=completed durability sweeps D
+  epsilon-greedy: exploration decisions N=0 graded G=0 PASS=unmeasured durable=unmeasured D=0
+  thompson-hybrid: exploration decisions N=0 graded G=0 PASS=unmeasured durable=unmeasured D=0
+
+runtime-AC shadow: PRs 0, specs authored 0, executed 0, would-FAIL 0 (unmet ACs), merged with unmet ACs 0, false-FAIL audit unmeasured (0 audited PRs); execution unmeasured 0
+
+runtime-AC post-merge: rechecked 0, passed 0, failed 0, reopened 0, unrunnable 0, reopen auto (executed 0 of 10)
+
+## Gate expiry (FYI only; nothing here renews anything)
+
+  NOT MEASURED — unmeasured: no capability ledger at /tmp/issue-1186-escalation-20261106/live/runtime/capabilities.json
+
+Weekly pacing check: python3 src/capacity.py pacing-report
+Evidence class: usage store + rate-limit ledger (dispatch share: capacity-ledger dispatch starts)
+POLLER codex: last ok ts=None; age=unknown; ticks missed=unknown; allowance=3 ticks/1800s; valid=False
+POLLER STALE: codex age=unknowns — launchd com.stranske.usage-poll; allowance=3 ticks/1800s; drain: successful scheduled poll
+POLLER claude: last ok ts=None; age=unknown; ticks missed=unknown; allowance=3 ticks/1800s; valid=False
+POLLER STALE: claude age=unknowns — launchd com.stranske.usage-poll; allowance=3 ticks/1800s; drain: successful scheduled poll
+pool codex: u=unmeasured ũ=unmeasured ũ_eff=unmeasured span_h=unmeasured c=unmeasured C=unmeasured n_usable=unmeasured s=unmeasured ḃ_short=unmeasured ḃ_period=unmeasured ḃ_eff=unmeasured w_p_target=unmeasured state=unknown pacing=unknown routed_weight=unmeasured (tick ts=unmeasured, age=unmeasured) report_weight=unmeasured w_p_prev→w_p=unmeasured→unmeasured resets=unknown source=none T1=None reset_expiries=None ts=None stale=False; usage unmeasured; clears on fresh usage/period sample
+1 codex: unmeasured — would need a fresh usage sample at completed T1 [usage store + rate-limit ledger]
+pool claude: u=unmeasured ũ=unmeasured ũ_eff=unmeasured span_h=unmeasured c=unmeasured C=unmeasured n_usable=unmeasured s=unmeasured ḃ_short=unmeasured ḃ_period=unmeasured ḃ_eff=unmeasured w_p_target=unmeasured state=unknown pacing=unknown routed_weight=unmeasured (tick ts=unmeasured, age=unmeasured) report_weight=unmeasured w_p_prev→w_p=unmeasured→unmeasured resets=unknown source=none sample_age_s=unknown desktop_sample_age_s=unknown T1=None reset_expiries=None ts=None stale=False; usage unmeasured; clears on fresh usage/period sample
+1 claude: unmeasured — would need a fresh usage sample at completed T1 [usage store + rate-limit ledger]
+2: unmeasured — would need completed-period snapshots and rate-limit ledger coverage; coverage=0/unknown ticks; longest poll gap=unknown/1800s allowance; observed incidents=0 [usage store + rate-limit ledger]
+3: unmeasured — would need dispatches in both codex ok and warn/shed hours; coverage=0/unknown ticks; longest poll gap=unknown/1800s allowance; observed dispatches=0 [usage store + rate-limit ledger]
+
+Python standard: unmeasured — would need LaunchAgents directory /home/runner/Library/LaunchAgents
+
+## Capacity shed markers (FYI only; nothing here removes a marker)
+
+  no seat is shed: no marker in /home/runner/.codex/handoff/capacity-shed
+
+## Worktree git guard (FYI only; nothing here clears a refusal)
+
+  worktree-git refusals: 0 in 7d (no refusal ever recorded at /tmp/issue-1186-escalation-20261106/live/state/worktree-git-refusals.jsonl)
+  lane-worktree-gc pointer skips: NOT MEASURED — /home/runner/.codex/handoff/lane-worktree-gc.log (no GC log at this path)
+
+## Credentials in agent output (FYI only; nothing here edits or deletes a file)
+
+  mode: nothing to scan  (0.0s)
+  gh_cli_token (exact value): UNMEASURED — absent
+  other GitHub-minted tokens (checksum holds): 0 file(s), 0 distinct
+  fixture-shaped strings only (checksum fails): 0 file(s)
+  exposed: 0 file(s), 0 modified in the last 7d
+  dispatch-logs: absent, 0 exposed  (/home/runner/.codex/handoff/dispatch-logs)
+  agent-runtime: absent, 0 exposed  (/tmp/issue-1186-escalation-20261106/live/runtime/agent-runtime)
+  unmeasured: gh_cli_token: absent
+  clears: rotating the credential makes every copy dead; deleting or redacting the files is the owner's call, and nothing here does either. New output this tool writes is masked at the source (dispatcher.offload, the completion step's segment scrub); files under agent-runtime are the agent CLIs' own and only cleanup clears them

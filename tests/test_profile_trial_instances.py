@@ -307,6 +307,36 @@ class ProfileTrialInstancesTest(unittest.TestCase):
         bridge.validate_envelope(envelope, self.manifest)
         self.assertEqual(len({row["artifact_dir"] for row in envelope["requests"]}), 6)
         self.assertEqual(len({row["request_id"] for row in envelope["requests"]}), 6)
+        self.assertEqual(
+            {row["launch_ordinal"] for row in self.manifest["requests"]},
+            {1, 2, 3, 4, 5, 6},
+        )
+        by_profile = {}
+        for row in envelope["requests"]:
+            self.assertIn(row["launch_ordinal"], (1, 2, 3))
+            by_profile.setdefault(row["profile_id"], set()).add(row["launch_ordinal"])
+            self.assertEqual(
+                row["plan_launch_ordinal"],
+                next(
+                    item["launch_ordinal"]
+                    for item in self.manifest["requests"]
+                    if item["run_id"] == row["run_id"]
+                ),
+            )
+        self.assertEqual(by_profile, {pid: {1, 2, 3} for pid in self.profiles})
+        outside_runner = copy.deepcopy(envelope)
+        outside_runner["requests"][0]["launch_ordinal"] = 4
+        outside_runner["requests"][0].pop("request_hash")
+        outside_runner["requests"][0].pop("request_id")
+        outside_runner["requests"][0]["request_hash"] = bridge._hash(outside_runner["requests"][0])
+        digest = outside_runner["requests"][0]["request_hash"]
+        outside_runner["requests"][0]["request_id"] = (
+            "trial-request:" + digest.split(":", 1)[1][:24]
+        )
+        outside_runner.pop("envelope_hash")
+        outside_runner["envelope_hash"] = bridge._hash(outside_runner)
+        with self.assertRaisesRegex(ValueError, "runner launch ordinal drifted"):
+            bridge.validate_envelope(outside_runner, self.manifest)
         malformed = copy.deepcopy(envelope)
         malformed["requests"][-1] = malformed["requests"][0]
         malformed.pop("envelope_hash")
@@ -345,8 +375,9 @@ class ProfileTrialInstancesTest(unittest.TestCase):
         responses = {}
         archives = {}
         run_ids = []
-        for request in envelope["requests"]:
-            run_id = 1000 + request["launch_ordinal"]
+        for index, request in enumerate(envelope["requests"], start=1):
+            # Runner ordinals repeat across profiles, so they are not run ids.
+            run_id = 5000 + index
             run_ids.append(run_id)
             artifact_name = (
                 f"model-profile-trial-{request['profile_id']}-{run_id}-"
@@ -363,6 +394,9 @@ class ProfileTrialInstancesTest(unittest.TestCase):
                 "github_run_attempt": 1,
                 "artifact_name": artifact_name,
             }
+            if index == 1:
+                artifact["tokens_in"] = 11
+                artifact["tokens_out"] = 4
             buffer = io.BytesIO()
             with zipfile.ZipFile(buffer, "w") as archive:
                 archive.writestr("model-profile-trial-attempt.json", json.dumps(artifact))
@@ -405,6 +439,11 @@ class ProfileTrialInstancesTest(unittest.TestCase):
                 attempt["artifact_sha256"],
                 "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest(),
             )
+            if request == envelope["requests"][0]:
+                self.assertEqual((attempt["tokens_in"], attempt["tokens_out"]), (11, 4))
+            else:
+                self.assertNotIn("tokens_in", attempt)
+                self.assertNotIn("tokens_out", attempt)
 
 
 if __name__ == "__main__":

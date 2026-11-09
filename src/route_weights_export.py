@@ -38,6 +38,8 @@ CAPACITY_SCHEMA = "orchestrator.route-weights-capacity/v1"
 DEFAULT_MIN_OBSERVATIONS = comparative.MIN_OBS
 EXPORT_BRANCH = "exports/route-weights"
 EXPORT_PATH = Path("config/route-weights.json")
+CHALLENGER_FILTER = "hosted-runnable-alternatives/v1"
+CHALLENGER_DEPLOY_FILE = "route-weights-challenger-deployment.json"
 CAPACITY_TICK_FILE = "route-weights-capacity-ticks.json"
 CAPACITY_TICK_MAX_AGE = 2 * 3600
 # Semantic mismatch alert allowance; independent of local tick-latch validity.
@@ -50,6 +52,8 @@ EXPLORATION_WINDOW_END = "20261117"
 EXPLORATION_WINDOW_EXTENDED_END = "20261215"
 EXPLORATION_WINDOW_MIN_PER_POLICY = 30
 EXPLORATION_WINDOW_START = "2026-10-17"
+# Hosted repos lack GEMINI_API_KEY; Gemini remains available for local routing.
+HOSTED_UNRUNNABLE_AGENTS = {"gemini"}
 # This is intentionally smaller than ROUTE_TABLE.  It is the contract that the
 # Workflows keepalive policy may act on; adding a router task type here is an
 # explicit cross-repository consumer-contract change, not an accidental export.
@@ -61,6 +65,10 @@ CONSUMER_TASK_TYPES = (
     "codemod",
     "cross_repo",
 )
+# Immutable v1 challenger/task contract: publication-time semantics for the
+# hosted-runnable-alternatives/v1 filter. This contract is independent of
+# mutable router sets and preserves the hosted-unrunnable rejection.
+CHALLENGER_V1_RUNNABLE_AGENTS = frozenset({"codex", "claude", "cursor"})
 
 
 def _now() -> str:
@@ -554,12 +562,25 @@ def _exploration_block(
     # The public export balances arms by week, without consulting the local
     # supervised-window deficits (which could change the arm within a week).
     mode = exploration_collection.choose_mode({}, now=timestamp)
-    eligible = router.KEEPALIVE_AGENTS - router.RESERVE_AGENTS - router.BACKUP_AGENTS
-    capacity = {"agents": {agent: {"state": "ok"} for agent in eligible}}
+    # Hosted-unrunnable seats must never be published as challengers, but a
+    # threshold-qualified unrunnable winner still anchors scored[0] so every
+    # runnable non-winner stays in scored[1:] (subtracting them from `only`
+    # would promote a runnable seat into the winner slot and shrink the pool).
+    hosted_runnable = (
+        router.KEEPALIVE_AGENTS
+        - router.RESERVE_AGENTS
+        - router.BACKUP_AGENTS
+        - HOSTED_UNRUNNABLE_AGENTS
+    )
     challengers: dict[str, str | None] = {}
     for task_type in CONSUMER_TASK_TYPES:
         ranking = task_types[task_type]["ranking"]
         ranks = {row["agent"]: index for index, row in enumerate(ranking)}
+        winner = ranking[0]["agent"] if ranking else None
+        eligible = set(hosted_runnable)
+        if winner is not None:
+            eligible.add(winner)
+        capacity = {"agents": {agent: {"state": "ok"} for agent in eligible}}
         # Exploitation must agree with the consumer's thresholded ranking.
         # Low-observation rows still inform challenger selection, so exploration
         # can collect evidence from seats absent from the public ranking.
@@ -594,7 +615,9 @@ def _exploration_block(
         )
         # Never describe the exploitation winner as a challenger when the
         # router cannot find another eligible seat in the same policy tier.
-        challengers[task_type] = pick["agent"] if pick and pick["exploration"] else None
+        # Drop hosted-unrunnable picks even if select_agent returned one.
+        agent = pick["agent"] if pick and pick["exploration"] else None
+        challengers[task_type] = agent if agent in hosted_runnable else None
     try:
         float(os.environ["ORCH_EXPLORATION_RATE"])
         rate_source = "env"
@@ -606,6 +629,7 @@ def _exploration_block(
         "rate_source": rate_source,
         "week_start": week * WEEK_SECONDS,
         "challengers": challengers,
+        "challenger_filter": CHALLENGER_FILTER,
     }
 
 
@@ -832,6 +856,140 @@ def write_document(path: Path, document: dict[str, Any], *, refresh: bool = Fals
     return True
 
 
+def _provenance_epoch(value: Any, field: str) -> int:
+    """Require an explicit UTC instant; a missing clock is never today's deployment."""
+    if not isinstance(value, str) or "T" not in value:
+        raise ValueError(f"{field} must be an explicit UTC timestamp")
+    try:
+        instant = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"{field} must be an explicit UTC timestamp") from exc
+    if instant.utcoffset() != dt.timedelta(0) or instant.microsecond:
+        raise ValueError(f"{field} must be a UTC timestamp with whole seconds")
+    epoch = int(instant.timestamp())
+    if epoch <= 0:
+        raise ValueError(f"{field} must be after the Unix epoch")
+    return epoch
+
+
+def record_challenger_filter_deployment(
+    provenance: dict[str, Any], *, state_dir: Path
+) -> dict[str, Any]:
+    """Verify branch provenance and retain externally evidenced deployment time.
+
+    The caller must supply published_commit, deployed_at and deployment_evidence
+    from the successful publication's audit record. Git verifies branch membership
+    and the first explicitly marked filter artifact, not the time of the push.
+    Neither the artifact generation time nor a Git commit time proves deployment.
+    This command never publishes an artifact or substitutes its invocation time.
+    """
+    if not isinstance(provenance, dict):
+        raise ValueError("deployment provenance must be an object")
+    commit = provenance.get("published_commit")
+    if (
+        not isinstance(commit, str)
+        or len(commit) not in (40, 64)
+        or any(char not in "0123456789abcdef" for char in commit)
+    ):
+        raise ValueError("published_commit must be a full Git commit SHA")
+    deployed = _provenance_epoch(provenance.get("deployed_at"), "deployed_at")
+    evidence = provenance.get("deployment_evidence")
+    if not isinstance(evidence, str) or not evidence.strip():
+        raise ValueError(
+            "deployment_evidence must identify the successful publication audit record"
+        )
+    if deployed > _provenance_epoch(_now(), "verification time"):
+        raise ValueError("deployed_at is in the future")
+
+    canonical = provision.ensure_canonical("stranske/Orchestrator")
+    _fetch_export(canonical)
+
+    def git(*args: str) -> str:
+        return subprocess.run(
+            ["git", "-C", str(canonical), *args],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        ).stdout.strip()
+
+    if git("rev-parse", "--is-shallow-repository") != "false":
+        raise ValueError("complete export history is required to verify the first deployment")
+    remote_ref = f"origin/{EXPORT_BRANCH}"
+    commits = git("rev-list", "--first-parent", "--reverse", remote_ref, "--", str(EXPORT_PATH))
+    first = None
+    for candidate in commits.splitlines():
+        listed = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(canonical),
+                "ls-tree",
+                "-r",
+                "--name-only",
+                candidate,
+                "--",
+                str(EXPORT_PATH),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if listed.returncode != 0:
+            listed.check_returncode()
+        if not listed.stdout.strip():
+            # Path absent at this revision; unrelated failures still surface above.
+            continue
+        try:
+            artifact = git("show", f"{candidate}:{EXPORT_PATH}")
+            document = json.loads(artifact)
+        except json.JSONDecodeError:
+            # Malformed JSON artifact at this revision
+            continue
+        exploration = document.get("exploration") if isinstance(document, dict) else None
+        if (
+            not isinstance(exploration, dict)
+            or exploration.get("challenger_filter") != CHALLENGER_FILTER
+        ):
+            continue
+        challengers = exploration.get("challengers")
+        # Use the immutable v1 contract instead of mutable router sets.
+        # This preserves hosted-unrunnable rejection (gemini) and matches
+        # publication-time semantics for the hosted-runnable-alternatives/v1 filter.
+        if (
+            not isinstance(challengers, dict)
+            or set(challengers) != set(CONSUMER_TASK_TYPES)
+            or any(
+                agent is not None
+                and (not isinstance(agent, str) or agent not in CHALLENGER_V1_RUNNABLE_AGENTS)
+                for agent in challengers.values()
+            )
+        ):
+            raise ValueError("published exploration/challengers contract is malformed")
+        generated = _provenance_epoch(document.get("generated_at"), "generated_at")
+        first = candidate
+        break
+    if first is None or first != commit:
+        raise ValueError("published_commit is not the first verified challenger-filter publication")
+    if deployed < generated:
+        raise ValueError("deployed_at precedes the published artifact's generated_at")
+    receipt = {
+        "branch": EXPORT_BRANCH,
+        "challenger_filter": CHALLENGER_FILTER,
+        "published_commit": commit,
+        "generated_at": document["generated_at"],
+        "deployed_at": provenance["deployed_at"],
+        "deployed_epoch": deployed,
+        "deployment_evidence": evidence,
+    }
+    target = state_dir / CHALLENGER_DEPLOY_FILE
+    if target.exists() and json.loads(target.read_text(encoding="utf-8")) != receipt:
+        raise ValueError("refusing to replace the first recorded deployment provenance")
+    write_document(target, receipt)
+    return receipt
+
+
 def publish_document(
     document: dict[str, Any],
     *,
@@ -1026,6 +1184,9 @@ def _selftest() -> None:
         assert document["task_types"]["review"]["evidence_ok"] is False, document
         assert document["reserve"]["implement"][0]["agent"] == "claude", document
         assert "unknown" not in document["task_types"], document
+        assert not (
+            HOSTED_UNRUNNABLE_AGENTS & set(document["exploration"]["challengers"].values())
+        ), document["exploration"]["challengers"]
         import comparative
 
         assert document["comparative"]["schema"] == comparative.SCHEMA, document["comparative"]
@@ -1170,6 +1331,15 @@ def main() -> int:
         default=Path(os.environ["ORCH_STATE_DIR"]) if os.environ.get("ORCH_STATE_DIR") else None,
     )
     parser.add_argument("--feedback-db", type=Path)
+    parser.add_argument(
+        "--record-challenger-deployment",
+        type=Path,
+        metavar="PROVENANCE_JSON",
+        help=(
+            "verify and retain published_commit, deployed_at and deployment_evidence "
+            "from an audit record"
+        ),
+    )
     parser.add_argument("--as-of", type=int, help="UTC decision instant shared with this tick")
     parser.add_argument(
         "--preview-exploration-window",
@@ -1209,6 +1379,34 @@ def main() -> int:
     args = parser.parse_args()
     if args.selftest:
         _selftest()
+        return 0
+    if args.record_challenger_deployment:
+        try:
+            provenance = json.loads(args.record_challenger_deployment.read_text(encoding="utf-8"))
+            receipt = record_challenger_filter_deployment(
+                provenance,
+                state_dir=args.state_dir or Path.home() / ".codex" / "orchestrator",
+            )
+        except subprocess.TimeoutExpired as exc:
+            print(
+                f"deployment provenance refused: git subprocess timed out ({exc})", file=sys.stderr
+            )
+            return 1
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            message = f"deployment provenance refused: {exc}"
+            if isinstance(exc, subprocess.CalledProcessError) and exc.stderr:
+                stderr_text = (
+                    exc.stderr
+                    if isinstance(exc.stderr, str)
+                    else exc.stderr.decode("utf-8", errors="replace")
+                )
+                message += f"\nstderr: {stderr_text}"
+            elif isinstance(exc, subprocess.SubprocessError):
+                # For other subprocess errors, try to get stderr from the command
+                message += " (subprocess failure)"
+            print(message, file=sys.stderr)
+            return 1
+        print(json.dumps(receipt, sort_keys=True))
         return 0
     if args.publish_history:
         publish_history(state_dir=args.state_dir)
@@ -1271,6 +1469,7 @@ def main() -> int:
         print(f"route_weights_export: capability heartbeat failed: {exc}", file=sys.stderr)
     target = state_dir / "route-weights-export.json"
     changed = write_document(target, document)
+    print(f"hosted-unrunnable agents excluded: {', '.join(sorted(HOSTED_UNRUNNABLE_AGENTS))}")
     print(f"{'wrote' if changed else 'unchanged'} {target}")
     if args.publish:
         if os.environ.get("ORCH_ROUTE_WEIGHTS_PUBLISH") != "1":

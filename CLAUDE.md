@@ -212,10 +212,10 @@ Do not create a second event log, model registry, or capability inventory.
   every edit and confirm with `cmp`, because unsynced edits do nothing; (3) `$ORCH_STATE_DIR`
   (default `~/.codex/orchestrator`), the machine-local state, which is never committed.
   `cmp`-clean is not agreement: take the verdict in the MIRROR'S SHAPE, since a path resolved
-  relative to a module's own directory is right in one tree and wrong in the other. Take it BEFORE
-  the live mirror changes: `scripts/verify_before_sync.sh` verifies a scratch mirror built by the
-  copy script itself, and the wrapper installs that exact retained snapshot rather than re-reading
-  the mutable checkout (see "which verify runs are needed" below).
+  relative to a module's own directory is right in one tree and wrong in the other. That verdict is
+  CI's `exec-mirror` job, on every PR and on main. Since 2026-11-08 a sync deploys only a commit
+  with a green CI run, after a seconds-long check that the flat copy loads, and rolls back if the
+  live path does not (see "which verify runs are needed" below).
 - **The modules live in `src/`, the tests in `tests/`, and the CHECKOUT ROOT IS NOT THE MODULE
   DIRECTORY.** Those were the same directory until 2026-08-23, and every path in the tree was
   derived from that accident. Two questions with two answers now: sibling modules resolve from
@@ -290,8 +290,23 @@ Do not create a second event log, model registry, or capability inventory.
     lists under `SKIPPED`. CI's ledger is bootstrapped (16 rows against the ~48 live ones), and its
     run skips 26 tests, 7 selftest sections and parts of two gates, so a red there is invisible to
     it.
-  - **This machine's verdict on the merged tree is ONE run per sync, taken before the live mirror
-    changes.** `scripts/verify_before_sync.sh SRC` builds a throwaway mirror from the sync's own
+  - **A sync deploys what CI verified (owner, 2026-11-08); the full suite does NOT run again here.**
+    `~/.codex/bin/orch-mirror-sync.sh` requires a green `ci.yml` run on the exact clean HEAD,
+    builds the flat copy with the copy script, checks that it LOADS (`~/.codex/bin/orch-mirror-smoke.py`:
+    every module imports from the mirror directory and `orchestrate.sh` parses, relative to the
+    incumbent, about 10 s), installs it as a new generation, re-checks the live path, and swaps the
+    link back to the previous generation if that fails. Tests that read live machine state run
+    afterwards in the background, FYI only (`~/.codex/orchestrator/mirror-drift/`). Every attempt is
+    one line in `~/.codex/orchestrator/mirror-sync-history.jsonl`. Why: on 2026-11-08 the
+    whole-suite local run took 21-78 minutes and four attempts deployed nothing, failing on a
+    clock-dependent test, on local contention flakes, and on a test reading a live file another
+    agent had just edited; none of the failures came from the code being shipped. Do not put new
+    checks into the deploy path: a check on live state belongs in the drift report, and a check
+    on the code belongs in CI. `docs/MIRROR_SYNC_PATCH.md`, "The verdict is CI's".
+  - **The whole-suite local run is `orch-mirror-sync.sh --full-local-verify`**, needed for an
+    unmerged or uncommitted tree and worth taking for a change to the ledger, lifecycle, admission
+    or binding code (see "Run the full local `verify.py` only for what CI cannot check" above). It is the pre-2026-11-08 default,
+    described next. `scripts/verify_before_sync.sh SRC` builds a throwaway mirror from the sync's own
     source with the real copy script, isolated as `docs/MIRROR_SYNC_PATCH.md` prescribes. It
     verifies that mirror on a scratch COPY of the live state, because `verify.py`'s `ledger
     validate` gate is a writing load and must not write the live ledger before the copy. Before

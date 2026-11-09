@@ -1,0 +1,2423 @@
+{
+  "check_date": "2026-11-05",
+  "python": "/opt/anaconda3/bin/python3",
+  "inputs_sha256": {
+    "tests/test_issue1150_ranked_coverage.py": "a64d73492f2aadd35a955b05a62d06c8ce4413e99a05f86bcb0a2bd45457e7be",
+    "tests/mutation_runner_1150.py": "abe1e70b50d4cc867bdbdc1a5d55db2fdef8e2b462536ab4fc1281a38080209f",
+    "tests/mutation_cases_1150.json": "8e6cee23ba4a7b1738cc7b15caafd85b82fddae56dcbd6fd7907a6fba96d25b6"
+  },
+  "pairs": [
+    {
+      "id": "01",
+      "node_id": "tests/test_issue1150_ranked_coverage.py::test_capability_effect_rejects_fields_outside_the_contract",
+      "path": "src/completion_event_adapter.py",
+      "function": "validate_capability_effect_record",
+      "before": "    ):\n        raise ValueError(\"invalid_capability_effect_fields\")",
+      "after": "    ):\n        raise ValueError(\"mutated_contract_error\")",
+      "intended_assertion": "with pytest.raises(ValueError, match=\"invalid_capability_effect_fields\"):",
+      "behavior": "Contract-field rejection must retain its diagnostic.",
+      "assertion_line": 127,
+      "original_sha256": "521e07c71fa6bc554929f9b9a7ff7c1e13c923aeead22d45740d42def947d440",
+      "mutation_diff": "--- src/completion_event_adapter.py\n+++ src/completion_event_adapter.py\n@@ -311,7 +311,7 @@\n         <= present\n         <= CAPABILITY_EFFECT_FIELDS | CAPABILITY_EFFECT_OPTIONAL_FIELDS\n     ):\n-        raise ValueError(\"invalid_capability_effect_fields\")\n+        raise ValueError(\"mutated_contract_error\")\n     keys = CAPABILITY_EFFECT_FIELDS | (present & CAPABILITY_EFFECT_OPTIONAL_FIELDS)\n     record = {key: _string(raw.get(key)) for key in keys}\n     record = {\n",
+      "broken": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_capability_effect_rejects_fields_outside_the_contract",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-eca6j6x3/broken.xml"
+        ],
+        "returncode": 1,
+        "stdout": "F                                                                        [100%]\n=================================== FAILURES ===================================\n__________ test_capability_effect_rejects_fields_outside_the_contract __________\n\n    def test_capability_effect_rejects_fields_outside_the_contract():\n>       with pytest.raises(ValueError, match=\"invalid_capability_effect_fields\"):\nE       AssertionError: Regex pattern did not match.\nE         Expected regex: 'invalid_capability_effect_fields'\nE         Actual message: 'mutated_contract_error'\n\ntests/test_issue1150_ranked_coverage.py:127: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_issue1150_ranked_coverage.py::test_capability_effect_rejects_fields_outside_the_contract\n1 failed in 1.07s\n",
+        "stderr": "",
+        "seconds": 4.51,
+        "testcases": [
+          {
+            "name": "test_capability_effect_rejects_fields_outside_the_contract",
+            "failures": [
+              {
+                "message": "AssertionError: Regex pattern did not match.\n  Expected regex: 'invalid_capability_effect_fields'\n  Actual message: 'mutated_contract_error'",
+                "text": "def test_capability_effect_rejects_fields_outside_the_contract():\n>       with pytest.raises(ValueError, match=\"invalid_capability_effect_fields\"):\nE       AssertionError: Regex pattern did not match.\nE         Expected regex: 'invalid_capability_effect_fields'\nE         Actual message: 'mutated_contract_error'\n\ntests/test_issue1150_ranked_coverage.py:127: AssertionError"
+              }
+            ],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "source_restored": true,
+      "restored": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_capability_effect_rejects_fields_outside_the_contract",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-eca6j6x3/restored.xml"
+        ],
+        "returncode": 0,
+        "stdout": ".                                                                        [100%]\n1 passed in 0.95s\n",
+        "stderr": "",
+        "seconds": 3.578,
+        "testcases": [
+          {
+            "name": "test_capability_effect_rejects_fields_outside_the_contract",
+            "failures": [],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "pair_seconds": 8.093,
+      "passed": true
+    },
+    {
+      "id": "02",
+      "node_id": "tests/test_issue1150_ranked_coverage.py::test_adapter_rejects_missing_event_field_repo_mismatch_arm_and_attempt_join",
+      "path": "src/completion_event_adapter.py",
+      "function": "adapt_completion_event_envelope",
+      "before": "reasons.append(f\"missing_event_{field}\")",
+      "after": "reasons.append(f\"mutated_event_{field}\")",
+      "intended_assertion": "assert any(reason == \"missing_event_event_id\" for reason in _reject(missing))",
+      "behavior": "Missing event ID must be rejected with its named reason.",
+      "assertion_line": 136,
+      "original_sha256": "521e07c71fa6bc554929f9b9a7ff7c1e13c923aeead22d45740d42def947d440",
+      "mutation_diff": "--- src/completion_event_adapter.py\n+++ src/completion_event_adapter.py\n@@ -448,7 +448,7 @@\n         \"updated_ts\",\n     ):\n         if event_raw.get(field) in (None, \"\"):\n-            reasons.append(f\"missing_event_{field}\")\n+            reasons.append(f\"mutated_event_{field}\")\n     if event_raw.get(\"content_hash\") and not SHA256_RE.fullmatch(\n         _string(event_raw.get(\"content_hash\")).lower()\n     ):\n",
+      "broken": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_adapter_rejects_missing_event_field_repo_mismatch_arm_and_attempt_join",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-odhkevs3/broken.xml"
+        ],
+        "returncode": 1,
+        "stdout": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_ test_adapter_rejects_missing_event_field_repo_mismatch_arm_and_attempt_join __\n\n    def test_adapter_rejects_missing_event_field_repo_mismatch_arm_and_attempt_join():\n        missing = _envelope()\n        missing[\"event\"][\"event_id\"] = \"\"\n>       assert any(reason == \"missing_event_event_id\" for reason in _reject(missing))\nE       assert False\nE        +  where False = any(<generator object test_adapter_rejects_missing_event_field_repo_mismatch_arm_and_attempt_join.<locals>.<genexpr> at 0x1041041e0>)\n\ntests/test_issue1150_ranked_coverage.py:136: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_issue1150_ranked_coverage.py::test_adapter_rejects_missing_event_field_repo_mismatch_arm_and_attempt_join\n1 failed in 1.05s\n",
+        "stderr": "",
+        "seconds": 3.706,
+        "testcases": [
+          {
+            "name": "test_adapter_rejects_missing_event_field_repo_mismatch_arm_and_attempt_join",
+            "failures": [
+              {
+                "message": "assert False\n +  where False = any(<generator object test_adapter_rejects_missing_event_field_repo_mismatch_arm_and_attempt_join.<locals>.<genexpr> at 0x1041041e0>)",
+                "text": "def test_adapter_rejects_missing_event_field_repo_mismatch_arm_and_attempt_join():\n        missing = _envelope()\n        missing[\"event\"][\"event_id\"] = \"\"\n>       assert any(reason == \"missing_event_event_id\" for reason in _reject(missing))\nE       assert False\nE        +  where False = any(<generator object test_adapter_rejects_missing_event_field_repo_mismatch_arm_and_attempt_join.<locals>.<genexpr> at 0x1041041e0>)\n\ntests/test_issue1150_ranked_coverage.py:136: AssertionError"
+              }
+            ],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "source_restored": true,
+      "restored": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_adapter_rejects_missing_event_field_repo_mismatch_arm_and_attempt_join",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-odhkevs3/restored.xml"
+        ],
+        "returncode": 0,
+        "stdout": ".                                                                        [100%]\n1 passed in 0.97s\n",
+        "stderr": "",
+        "seconds": 3.644,
+        "testcases": [
+          {
+            "name": "test_adapter_rejects_missing_event_field_repo_mismatch_arm_and_attempt_join",
+            "failures": [],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "pair_seconds": 7.352,
+      "passed": true
+    },
+    {
+      "id": "03",
+      "node_id": "tests/test_issue1150_ranked_coverage.py::test_shape_readiness_reports_unreadable_ledger_and_cramped_weeks",
+      "path": "src/adversarial.py",
+      "function": "shape_shadow_readiness",
+      "before": "f\"weekly shape evidence unavailable: {exc}\"",
+      "after": "f\"mutated unavailable: {exc}\"",
+      "intended_assertion": "assert reason == \"weekly shape evidence unavailable: ledger unreadable\"",
+      "behavior": "Unreadable weekly ledger must report its cause.",
+      "assertion_line": 172,
+      "original_sha256": "9bb5a1d83e5651e6e2ad659e23156e8aa01e332b8b3170154b89ec53b1ffa740",
+      "mutation_diff": "--- src/adversarial.py\n+++ src/adversarial.py\n@@ -193,7 +193,7 @@\n             }\n         )\n     except (OSError, ValueError, TypeError, KeyError) as exc:\n-        return False, f\"weekly shape evidence unavailable: {exc}\"\n+        return False, f\"mutated unavailable: {exc}\"\n     if len(stamps) < SHAPE_SHADOW_REQUIRED_WEEKS:\n         return False, f\"weekly shape measurements {len(stamps)}/{SHAPE_SHADOW_REQUIRED_WEEKS}\"\n     if stamps[-1] - stamps[0] < (SHAPE_SHADOW_REQUIRED_WEEKS - 1) * SHAPE_SHADOW_WEEK_SECONDS:\n",
+      "broken": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_shape_readiness_reports_unreadable_ledger_and_cramped_weeks",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-v6yl4g2o/broken.xml"
+        ],
+        "returncode": 1,
+        "stdout": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_______ test_shape_readiness_reports_unreadable_ledger_and_cramped_weeks _______\n\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x105d2f9e0>\n\n    def test_shape_readiness_reports_unreadable_ledger_and_cramped_weeks(monkeypatch):\n        import capabilities\n    \n        def unreadable(*_args, **_kwargs):\n            raise OSError(\"ledger unreadable\")\n    \n        monkeypatch.setattr(capabilities, \"load_declared\", unreadable)\n        ready, reason = adversarial.shape_shadow_readiness(now=10)\n        assert ready is False\n>       assert reason == \"weekly shape evidence unavailable: ledger unreadable\"\nE       AssertionError: assert 'mutated unav...er unreadable' == 'weekly shape...er unreadable'\nE         \nE         - weekly shape evidence unavailable: ledger unreadable\nE         + mutated unavailable: ledger unreadable\n\ntests/test_issue1150_ranked_coverage.py:172: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_issue1150_ranked_coverage.py::test_shape_readiness_reports_unreadable_ledger_and_cramped_weeks\n1 failed in 1.00s\n",
+        "stderr": "",
+        "seconds": 3.655,
+        "testcases": [
+          {
+            "name": "test_shape_readiness_reports_unreadable_ledger_and_cramped_weeks",
+            "failures": [
+              {
+                "message": "AssertionError: assert 'mutated unav...er unreadable' == 'weekly shape...er unreadable'\n  \n  - weekly shape evidence unavailable: ledger unreadable\n  + mutated unavailable: ledger unreadable",
+                "text": "monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x105d2f9e0>\n\n    def test_shape_readiness_reports_unreadable_ledger_and_cramped_weeks(monkeypatch):\n        import capabilities\n    \n        def unreadable(*_args, **_kwargs):\n            raise OSError(\"ledger unreadable\")\n    \n        monkeypatch.setattr(capabilities, \"load_declared\", unreadable)\n        ready, reason = adversarial.shape_shadow_readiness(now=10)\n        assert ready is False\n>       assert reason == \"weekly shape evidence unavailable: ledger unreadable\"\nE       AssertionError: assert 'mutated unav...er unreadable' == 'weekly shape...er unreadable'\nE         \nE         - weekly shape evidence unavailable: ledger unreadable\nE         + mutated unavailable: ledger unreadable\n\ntests/test_issue1150_ranked_coverage.py:172: AssertionError"
+              }
+            ],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "source_restored": true,
+      "restored": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_shape_readiness_reports_unreadable_ledger_and_cramped_weeks",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-v6yl4g2o/restored.xml"
+        ],
+        "returncode": 0,
+        "stdout": ".                                                                        [100%]\n1 passed in 0.98s\n",
+        "stderr": "",
+        "seconds": 3.621,
+        "testcases": [
+          {
+            "name": "test_shape_readiness_reports_unreadable_ledger_and_cramped_weeks",
+            "failures": [],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "pair_seconds": 7.279,
+      "passed": true
+    },
+    {
+      "id": "04",
+      "node_id": "tests/test_issue1150_ranked_coverage.py::test_shape_measurement_refuses_counts_above_the_population",
+      "path": "src/adversarial.py",
+      "function": "record_shape_measurement",
+      "before": "    ):\n        return False",
+      "after": "    ):\n        return True",
+      "intended_assertion": "assert recorded is False",
+      "behavior": "Impossible population counts must not be recorded.",
+      "assertion_line": 196,
+      "original_sha256": "9bb5a1d83e5651e6e2ad659e23156e8aa01e332b8b3170154b89ec53b1ffa740",
+      "mutation_diff": "--- src/adversarial.py\n+++ src/adversarial.py\n@@ -215,7 +215,7 @@\n         or any(type(n) is not int or n < 0 for n in counts)\n         or any(section[k] > section[\"population\"] for k in (\"shape_candidates\", \"label_candidates\"))\n     ):\n-        return False\n+        return True\n     return capabilities.heartbeat(\n         \"adversarial-review\",\n         \"match\",\n",
+      "broken": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_shape_measurement_refuses_counts_above_the_population",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-h3tt__bl/broken.xml"
+        ],
+        "returncode": 1,
+        "stdout": "F                                                                        [100%]\n=================================== FAILURES ===================================\n__________ test_shape_measurement_refuses_counts_above_the_population __________\n\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1065336e0>\n\n    def test_shape_measurement_refuses_counts_above_the_population(monkeypatch):\n        monkeypatch.setenv(\"ORCH_CAPABILITY_HEARTBEATS\", \"1\")\n        recorded = adversarial.record_shape_measurement(\n            {\n                \"status\": \"ok\",\n                \"rule\": adversarial.shape_rule_id(),\n                \"shape_candidates\": 3,\n                \"label_candidates\": 0,\n                \"population\": 1,\n            },\n            now=50,\n        )\n>       assert recorded is False\nE       assert True is False\n\ntests/test_issue1150_ranked_coverage.py:196: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_issue1150_ranked_coverage.py::test_shape_measurement_refuses_counts_above_the_population\n1 failed in 1.00s\n",
+        "stderr": "",
+        "seconds": 3.667,
+        "testcases": [
+          {
+            "name": "test_shape_measurement_refuses_counts_above_the_population",
+            "failures": [
+              {
+                "message": "assert True is False",
+                "text": "monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1065336e0>\n\n    def test_shape_measurement_refuses_counts_above_the_population(monkeypatch):\n        monkeypatch.setenv(\"ORCH_CAPABILITY_HEARTBEATS\", \"1\")\n        recorded = adversarial.record_shape_measurement(\n            {\n                \"status\": \"ok\",\n                \"rule\": adversarial.shape_rule_id(),\n                \"shape_candidates\": 3,\n                \"label_candidates\": 0,\n                \"population\": 1,\n            },\n            now=50,\n        )\n>       assert recorded is False\nE       assert True is False\n\ntests/test_issue1150_ranked_coverage.py:196: AssertionError"
+              }
+            ],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "source_restored": true,
+      "restored": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_shape_measurement_refuses_counts_above_the_population",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-h3tt__bl/restored.xml"
+        ],
+        "returncode": 0,
+        "stdout": ".                                                                        [100%]\n1 passed in 0.97s\n",
+        "stderr": "",
+        "seconds": 3.63,
+        "testcases": [
+          {
+            "name": "test_shape_measurement_refuses_counts_above_the_population",
+            "failures": [],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "pair_seconds": 7.301,
+      "passed": true
+    },
+    {
+      "id": "05",
+      "node_id": "tests/test_issue1150_ranked_coverage.py::test_first_json_returns_none_for_empty_text_and_broken_objects",
+      "path": "src/adversarial.py",
+      "function": "_first_json",
+      "before": "if not text:\n        return None",
+      "after": "if not text:\n        return {}",
+      "intended_assertion": "assert adversarial._first_json(\"\") is None",
+      "behavior": "Empty text must not become a JSON object.",
+      "assertion_line": 200,
+      "original_sha256": "9bb5a1d83e5651e6e2ad659e23156e8aa01e332b8b3170154b89ec53b1ffa740",
+      "mutation_diff": "--- src/adversarial.py\n+++ src/adversarial.py\n@@ -311,7 +311,7 @@\n \n def _first_json(text: str) -> dict | None:\n     if not text:\n-        return None\n+        return {}\n     for s in (m.start() for m in re.finditer(r\"\\{\", text)):\n         depth = 0\n         for i in range(s, len(text)):\n",
+      "broken": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_first_json_returns_none_for_empty_text_and_broken_objects",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-y4hnnc21/broken.xml"
+        ],
+        "returncode": 1,
+        "stdout": "F                                                                        [100%]\n=================================== FAILURES ===================================\n________ test_first_json_returns_none_for_empty_text_and_broken_objects ________\n\n    def test_first_json_returns_none_for_empty_text_and_broken_objects():\n>       assert adversarial._first_json(\"\") is None\nE       AssertionError: assert {} is None\nE        +  where {} = <function _first_json at 0x1158ccf40>('')\nE        +    where <function _first_json at 0x1158ccf40> = adversarial._first_json\n\ntests/test_issue1150_ranked_coverage.py:200: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_issue1150_ranked_coverage.py::test_first_json_returns_none_for_empty_text_and_broken_objects\n1 failed in 1.01s\n",
+        "stderr": "",
+        "seconds": 3.686,
+        "testcases": [
+          {
+            "name": "test_first_json_returns_none_for_empty_text_and_broken_objects",
+            "failures": [
+              {
+                "message": "AssertionError: assert {} is None\n +  where {} = <function _first_json at 0x1158ccf40>('')\n +    where <function _first_json at 0x1158ccf40> = adversarial._first_json",
+                "text": "def test_first_json_returns_none_for_empty_text_and_broken_objects():\n>       assert adversarial._first_json(\"\") is None\nE       AssertionError: assert {} is None\nE        +  where {} = <function _first_json at 0x1158ccf40>('')\nE        +    where <function _first_json at 0x1158ccf40> = adversarial._first_json\n\ntests/test_issue1150_ranked_coverage.py:200: AssertionError"
+              }
+            ],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "source_restored": true,
+      "restored": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_first_json_returns_none_for_empty_text_and_broken_objects",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-y4hnnc21/restored.xml"
+        ],
+        "returncode": 0,
+        "stdout": ".                                                                        [100%]\n1 passed in 0.96s\n",
+        "stderr": "",
+        "seconds": 3.592,
+        "testcases": [
+          {
+            "name": "test_first_json_returns_none_for_empty_text_and_broken_objects",
+            "failures": [],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "pair_seconds": 7.281,
+      "passed": true
+    },
+    {
+      "id": "06",
+      "node_id": "tests/test_issue1150_ranked_coverage.py::test_recorded_verdict_is_unknown_when_the_brain_cannot_be_read",
+      "path": "src/adversarial.py",
+      "function": "recorded_verdict",
+      "before": "\"state\": \"unknown\"",
+      "after": "\"state\": \"none\"",
+      "intended_assertion": "assert verdict[\"state\"] == \"unknown\"",
+      "behavior": "Unreadable Brain must stay unknown.",
+      "assertion_line": 211,
+      "original_sha256": "9bb5a1d83e5651e6e2ad659e23156e8aa01e332b8b3170154b89ec53b1ffa740",
+      "mutation_diff": "--- src/adversarial.py\n+++ src/adversarial.py\n@@ -589,7 +589,7 @@\n                 \"ORDER BY updated_ts DESC, rowid DESC\"\n             ).fetchall()\n     except Exception as exc:\n-        return {\"state\": \"unknown\", \"key\": key, \"error\": str(exc)[:300]}\n+        return {\"state\": \"none\", \"key\": key, \"error\": str(exc)[:300]}\n     inconclusive = 0\n     for event_id, payload_json, recorded_ts in rows:\n         try:\n",
+      "broken": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_recorded_verdict_is_unknown_when_the_brain_cannot_be_read",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-rfil2r5l/broken.xml"
+        ],
+        "returncode": 1,
+        "stdout": "F                                                                        [100%]\n=================================== FAILURES ===================================\n________ test_recorded_verdict_is_unknown_when_the_brain_cannot_be_read ________\n\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x11294b620>\n\n    def test_recorded_verdict_is_unknown_when_the_brain_cannot_be_read(monkeypatch):\n        def broken_conn(*_args, **_kwargs):\n            raise sqlite3.OperationalError(\"brain locked\")\n    \n        monkeypatch.setattr(feedback, \"_conn\", broken_conn)\n        verdict = adversarial.recorded_verdict(TARGET, HEAD, [\"codex\"])\n>       assert verdict[\"state\"] == \"unknown\"\nE       AssertionError: assert 'none' == 'unknown'\nE         \nE         - unknown\nE         + none\n\ntests/test_issue1150_ranked_coverage.py:211: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_issue1150_ranked_coverage.py::test_recorded_verdict_is_unknown_when_the_brain_cannot_be_read\n1 failed in 1.00s\n",
+        "stderr": "",
+        "seconds": 3.698,
+        "testcases": [
+          {
+            "name": "test_recorded_verdict_is_unknown_when_the_brain_cannot_be_read",
+            "failures": [
+              {
+                "message": "AssertionError: assert 'none' == 'unknown'\n  \n  - unknown\n  + none",
+                "text": "monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x11294b620>\n\n    def test_recorded_verdict_is_unknown_when_the_brain_cannot_be_read(monkeypatch):\n        def broken_conn(*_args, **_kwargs):\n            raise sqlite3.OperationalError(\"brain locked\")\n    \n        monkeypatch.setattr(feedback, \"_conn\", broken_conn)\n        verdict = adversarial.recorded_verdict(TARGET, HEAD, [\"codex\"])\n>       assert verdict[\"state\"] == \"unknown\"\nE       AssertionError: assert 'none' == 'unknown'\nE         \nE         - unknown\nE         + none\n\ntests/test_issue1150_ranked_coverage.py:211: AssertionError"
+              }
+            ],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "source_restored": true,
+      "restored": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_recorded_verdict_is_unknown_when_the_brain_cannot_be_read",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-rfil2r5l/restored.xml"
+        ],
+        "returncode": 0,
+        "stdout": ".                                                                        [100%]\n1 passed in 0.99s\n",
+        "stderr": "",
+        "seconds": 3.961,
+        "testcases": [
+          {
+            "name": "test_recorded_verdict_is_unknown_when_the_brain_cannot_be_read",
+            "failures": [],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "pair_seconds": 7.661,
+      "passed": true
+    },
+    {
+      "id": "07",
+      "node_id": "tests/test_issue1150_ranked_coverage.py::test_recorded_verdict_skips_malformed_payloads_and_unreadable_artifacts",
+      "path": "src/adversarial.py",
+      "function": "recorded_verdict",
+      "before": "found[\"result\"] = _read_panel_artifact(key, expected)",
+      "after": "found[\"result\"] = {\"mutation\": True}",
+      "intended_assertion": "assert missing[\"result\"] is None",
+      "behavior": "Missing panel artifact must not become a result.",
+      "assertion_line": 271,
+      "original_sha256": "9bb5a1d83e5651e6e2ad659e23156e8aa01e332b8b3170154b89ec53b1ffa740",
+      "mutation_diff": "--- src/adversarial.py\n+++ src/adversarial.py\n@@ -619,7 +619,7 @@\n             ),\n             None,\n         )\n-        found[\"result\"] = _read_panel_artifact(key, expected)\n+        found[\"result\"] = {\"mutation\": True}\n         return found\n     return {\"state\": \"none\", \"key\": key, \"inconclusive_at_head\": inconclusive}\n \n",
+      "broken": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_recorded_verdict_skips_malformed_payloads_and_unreadable_artifacts",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-srae4yfd/broken.xml"
+        ],
+        "returncode": 1,
+        "stdout": "F                                                                        [100%]\n=================================== FAILURES ===================================\n___ test_recorded_verdict_skips_malformed_payloads_and_unreadable_artifacts ____\n\n    def test_recorded_verdict_skips_malformed_payloads_and_unreadable_artifacts():\n        key = adversarial.panel_key(TARGET, HEAD, [\"codex\"])\n        conn = feedback._conn()\n        try:\n            conn.execute(\n                \"INSERT INTO completion_events (\"\n                \"event_id, schema_version, run_id, event_type, phase, producer, status, \"\n                \"validation_status, payload_json, content_hash, created_ts, updated_ts\"\n                \") VALUES (?,?,?,?,?,?,?,?,?,?,?,?)\",\n                (\n                    \"bad\",\n                    1,\n                    \"run\",\n                    \"panel\",\n                    \"verification\",\n                    \"adversarial\",\n                    \"pass\",\n                    \"accepted\",\n                    \"{\",\n                    \"sha256:\" + \"e\" * 64,\n                    10,\n                    20,\n                ),\n            )\n            payload = {\n                \"adjudication_id\": key,\n                \"verification\": {\"adjudicated_verdict\": \"PASS\"},\n                \"artifact_refs\": [\n                    {\"kind\": \"panel_result\", \"content_hash\": feedback._completion_hash(\"{\")}\n                ],\n            }\n            conn.execute(\n                \"INSERT INTO completion_events (\"\n                \"event_id, schema_version, run_id, event_type, phase, producer, status, \"\n                \"validation_status, payload_json, content_hash, created_ts, updated_ts\"\n                \") VALUES (?,?,?,?,?,?,?,?,?,?,?,?)\",\n                (\n                    \"good\",\n                    1,\n                    \"run\",\n                    \"panel\",\n                    \"verification\",\n                    \"adversarial\",\n                    \"pass\",\n                    \"accepted\",\n                    json.dumps(payload),\n                    \"sha256:\" + \"f\" * 64,\n                    11,\n                    10,\n                ),\n            )\n            conn.commit()\n        finally:\n            conn.close()\n        missing = adversarial.recorded_verdict(TARGET, HEAD, [\"codex\"])\n        assert missing[\"state\"] == \"found\"\n>       assert missing[\"result\"] is None\nE       AssertionError: assert {'mutation': True} is None\n\ntests/test_issue1150_ranked_coverage.py:271: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_issue1150_ranked_coverage.py::test_recorded_verdict_skips_malformed_payloads_and_unreadable_artifacts\n1 failed in 1.02s\n",
+        "stderr": "",
+        "seconds": 3.71,
+        "testcases": [
+          {
+            "name": "test_recorded_verdict_skips_malformed_payloads_and_unreadable_artifacts",
+            "failures": [
+              {
+                "message": "AssertionError: assert {'mutation': True} is None",
+                "text": "def test_recorded_verdict_skips_malformed_payloads_and_unreadable_artifacts():\n        key = adversarial.panel_key(TARGET, HEAD, [\"codex\"])\n        conn = feedback._conn()\n        try:\n            conn.execute(\n                \"INSERT INTO completion_events (\"\n                \"event_id, schema_version, run_id, event_type, phase, producer, status, \"\n                \"validation_status, payload_json, content_hash, created_ts, updated_ts\"\n                \") VALUES (?,?,?,?,?,?,?,?,?,?,?,?)\",\n                (\n                    \"bad\",\n                    1,\n                    \"run\",\n                    \"panel\",\n                    \"verification\",\n                    \"adversarial\",\n                    \"pass\",\n                    \"accepted\",\n                    \"{\",\n                    \"sha256:\" + \"e\" * 64,\n                    10,\n                    20,\n                ),\n            )\n            payload = {\n                \"adjudication_id\": key,\n                \"verification\": {\"adjudicated_verdict\": \"PASS\"},\n                \"artifact_refs\": [\n                    {\"kind\": \"panel_result\", \"content_hash\": feedback._completion_hash(\"{\")}\n                ],\n            }\n            conn.execute(\n                \"INSERT INTO completion_events (\"\n                \"event_id, schema_version, run_id, event_type, phase, producer, status, \"\n                \"validation_status, payload_json, content_hash, created_ts, updated_ts\"\n                \") VALUES (?,?,?,?,?,?,?,?,?,?,?,?)\",\n                (\n                    \"good\",\n                    1,\n                    \"run\",\n                    \"panel\",\n                    \"verification\",\n                    \"adversarial\",\n                    \"pass\",\n                    \"accepted\",\n                    json.dumps(payload),\n                    \"sha256:\" + \"f\" * 64,\n                    11,\n                    10,\n                ),\n            )\n            conn.commit()\n        finally:\n            conn.close()\n        missing = adversarial.recorded_verdict(TARGET, HEAD, [\"codex\"])\n        assert missing[\"state\"] == \"found\"\n>       assert missing[\"result\"] is None\nE       AssertionError: assert {'mutation': True} is None\n\ntests/test_issue1150_ranked_coverage.py:271: AssertionError"
+              }
+            ],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "source_restored": true,
+      "restored": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_recorded_verdict_skips_malformed_payloads_and_unreadable_artifacts",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-srae4yfd/restored.xml"
+        ],
+        "returncode": 0,
+        "stdout": ".                                                                        [100%]\n1 passed in 0.98s\n",
+        "stderr": "",
+        "seconds": 3.623,
+        "testcases": [
+          {
+            "name": "test_recorded_verdict_skips_malformed_payloads_and_unreadable_artifacts",
+            "failures": [],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "pair_seconds": 7.336,
+      "passed": true
+    },
+    {
+      "id": "08",
+      "node_id": "tests/test_issue1150_ranked_coverage.py::test_panel_artifact_write_and_record_report_io_and_brain_failures",
+      "path": "src/adversarial.py",
+      "function": "_record_panel",
+      "before": "event = feedback.record_completion_event(",
+      "after": "event = (lambda *_a, **_k: {\"recorded\": False, \"error\": \"completion insert failed\"})(",
+      "intended_assertion": "assert recording_called",
+      "behavior": "A plausible completion-failure result must not bypass the actual recorder; kills only at the added reachability assertion.",
+      "assertion_line": 302,
+      "original_sha256": "9bb5a1d83e5651e6e2ad659e23156e8aa01e332b8b3170154b89ec53b1ffa740",
+      "mutation_diff": "--- src/adversarial.py\n+++ src/adversarial.py\n@@ -699,7 +699,7 @@\n             \"adversarial-panel:\" + hashlib.sha256(target.encode()).hexdigest()[:24]\n         )\n         result_hash = feedback._completion_hash(result)\n-        event = feedback.record_completion_event(\n+        event = (lambda *_a, **_k: {\"recorded\": False, \"error\": \"completion insert failed\"})(\n             run_id,\n             event_type=\"panel\",\n             phase=\"verification\",\n",
+      "broken": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_panel_artifact_write_and_record_report_io_and_brain_failures",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-7um1qqyq/broken.xml"
+        ],
+        "returncode": 1,
+        "stdout": "F                                                                        [100%]\n=================================== FAILURES ===================================\n______ test_panel_artifact_write_and_record_report_io_and_brain_failures _______\n\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x111946450>\n\n    def test_panel_artifact_write_and_record_report_io_and_brain_failures(monkeypatch):\n        original_replace = os.replace\n    \n        def replace_fails(*_args, **_kwargs):\n            raise OSError(\"disk full\")\n    \n        monkeypatch.setattr(adversarial.os, \"replace\", replace_fails)\n        written = adversarial._write_panel_artifact(\"sha256:\" + \"1\" * 64, {\"result\": {}})\n        assert written[\"error\"] == \"disk full\"\n        monkeypatch.setattr(adversarial.os, \"replace\", original_replace)\n    \n        recording_called = []\n    \n        def record_fails(*_args, **_kwargs):\n            recording_called.append(True)\n            raise RuntimeError(\"completion insert failed\")\n    \n        monkeypatch.setattr(feedback, \"record_completion_event\", record_fails)\n        recorded = adversarial._record_panel(TARGET, HEAD, [\"codex\"], \"panel-key\", {\"verdict\": \"PASS\"})\n        assert recorded[\"recorded\"] is False\n        assert \"completion insert failed\" in recorded[\"error\"]\n>       assert recording_called\nE       assert []\n\ntests/test_issue1150_ranked_coverage.py:302: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_issue1150_ranked_coverage.py::test_panel_artifact_write_and_record_report_io_and_brain_failures\n1 failed in 1.02s\n",
+        "stderr": "",
+        "seconds": 3.685,
+        "testcases": [
+          {
+            "name": "test_panel_artifact_write_and_record_report_io_and_brain_failures",
+            "failures": [
+              {
+                "message": "assert []",
+                "text": "monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x111946450>\n\n    def test_panel_artifact_write_and_record_report_io_and_brain_failures(monkeypatch):\n        original_replace = os.replace\n    \n        def replace_fails(*_args, **_kwargs):\n            raise OSError(\"disk full\")\n    \n        monkeypatch.setattr(adversarial.os, \"replace\", replace_fails)\n        written = adversarial._write_panel_artifact(\"sha256:\" + \"1\" * 64, {\"result\": {}})\n        assert written[\"error\"] == \"disk full\"\n        monkeypatch.setattr(adversarial.os, \"replace\", original_replace)\n    \n        recording_called = []\n    \n        def record_fails(*_args, **_kwargs):\n            recording_called.append(True)\n            raise RuntimeError(\"completion insert failed\")\n    \n        monkeypatch.setattr(feedback, \"record_completion_event\", record_fails)\n        recorded = adversarial._record_panel(TARGET, HEAD, [\"codex\"], \"panel-key\", {\"verdict\": \"PASS\"})\n        assert recorded[\"recorded\"] is False\n        assert \"completion insert failed\" in recorded[\"error\"]\n>       assert recording_called\nE       assert []\n\ntests/test_issue1150_ranked_coverage.py:302: AssertionError"
+              }
+            ],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "source_restored": true,
+      "restored": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_panel_artifact_write_and_record_report_io_and_brain_failures",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-7um1qqyq/restored.xml"
+        ],
+        "returncode": 0,
+        "stdout": ".                                                                        [100%]\n1 passed in 0.99s\n",
+        "stderr": "",
+        "seconds": 3.628,
+        "testcases": [
+          {
+            "name": "test_panel_artifact_write_and_record_report_io_and_brain_failures",
+            "failures": [],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "pair_seconds": 7.315,
+      "passed": true
+    },
+    {
+      "id": "09",
+      "node_id": "tests/test_issue1150_ranked_coverage.py::test_worktree_head_and_git_boundary_fail_closed",
+      "path": "src/adversarial.py",
+      "function": "_worktree_head",
+      "before": "git rev-parse HEAD failed",
+      "after": "git mutated HEAD failed",
+      "intended_assertion": "with pytest.raises(RuntimeError, match=\"rev-parse HEAD failed\"):",
+      "behavior": "Failed HEAD lookup must identify the failed git operation.",
+      "assertion_line": 310,
+      "original_sha256": "9bb5a1d83e5651e6e2ad659e23156e8aa01e332b8b3170154b89ec53b1ffa740",
+      "mutation_diff": "--- src/adversarial.py\n+++ src/adversarial.py\n@@ -734,7 +734,7 @@\n def _worktree_head(worktree: str) -> str:\n     out = _git(worktree, \"rev-parse\", \"HEAD\")\n     if out.returncode != 0:\n-        raise RuntimeError(f\"git rev-parse HEAD failed in {worktree}: {out.stderr.strip()[:200]}\")\n+        raise RuntimeError(f\"git mutated HEAD failed in {worktree}: {out.stderr.strip()[:200]}\")\n     return out.stdout.strip()\n \n \n",
+      "broken": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_worktree_head_and_git_boundary_fail_closed",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-2u5kco7p/broken.xml"
+        ],
+        "returncode": 1,
+        "stdout": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_______________ test_worktree_head_and_git_boundary_fail_closed ________________\n\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x105a4e7b0>\nisolated_runtime = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-1264/test_worktree_head_and_git_bou0')\n\n    def test_worktree_head_and_git_boundary_fail_closed(monkeypatch, isolated_runtime):\n        import adapters\n    \n        failed = _completed(1, stderr=\"fatal: not a git repository\")\n        monkeypatch.setattr(adversarial, \"_git\", lambda *_args: failed)\n>       with pytest.raises(RuntimeError, match=\"rev-parse HEAD failed\"):\nE       AssertionError: Regex pattern did not match.\nE         Expected regex: 'rev-parse HEAD failed'\nE         Actual message: 'git mutated HEAD failed in /Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-1264/test_worktree_head_and_git_bou0/wt: fatal: not a git repository'\n\ntests/test_issue1150_ranked_coverage.py:310: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_issue1150_ranked_coverage.py::test_worktree_head_and_git_boundary_fail_closed\n1 failed in 1.01s\n",
+        "stderr": "",
+        "seconds": 3.703,
+        "testcases": [
+          {
+            "name": "test_worktree_head_and_git_boundary_fail_closed",
+            "failures": [
+              {
+                "message": "AssertionError: Regex pattern did not match.\n  Expected regex: 'rev-parse HEAD failed'\n  Actual message: 'git mutated HEAD failed in /Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-1264/test_worktree_head_and_git_bou0/wt: fatal: not a git repository'",
+                "text": "monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x105a4e7b0>\nisolated_runtime = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-1264/test_worktree_head_and_git_bou0')\n\n    def test_worktree_head_and_git_boundary_fail_closed(monkeypatch, isolated_runtime):\n        import adapters\n    \n        failed = _completed(1, stderr=\"fatal: not a git repository\")\n        monkeypatch.setattr(adversarial, \"_git\", lambda *_args: failed)\n>       with pytest.raises(RuntimeError, match=\"rev-parse HEAD failed\"):\nE       AssertionError: Regex pattern did not match.\nE         Expected regex: 'rev-parse HEAD failed'\nE         Actual message: 'git mutated HEAD failed in /Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-1264/test_worktree_head_and_git_bou0/wt: fatal: not a git repository'\n\ntests/test_issue1150_ranked_coverage.py:310: AssertionError"
+              }
+            ],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "source_restored": true,
+      "restored": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_worktree_head_and_git_boundary_fail_closed",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-2u5kco7p/restored.xml"
+        ],
+        "returncode": 0,
+        "stdout": ".                                                                        [100%]\n1 passed in 0.96s\n",
+        "stderr": "",
+        "seconds": 3.615,
+        "testcases": [
+          {
+            "name": "test_worktree_head_and_git_boundary_fail_closed",
+            "failures": [],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "pair_seconds": 7.321,
+      "passed": true
+    },
+    {
+      "id": "10",
+      "node_id": "tests/test_issue1150_ranked_coverage.py::test_review_at_head_rejects_a_bad_checkout_and_a_failed_provision",
+      "path": "src/adversarial.py",
+      "function": "review_at_head",
+      "before": "\"detail\": \"invalid checkout head\"",
+      "after": "\"detail\": \"mutated checkout\"",
+      "intended_assertion": "assert invalid[\"detail\"] == \"invalid checkout head\"",
+      "behavior": "Malformed checkout head must have its specific refusal.",
+      "assertion_line": 328,
+      "original_sha256": "9bb5a1d83e5651e6e2ad659e23156e8aa01e332b8b3170154b89ec53b1ffa740",
+      "mutation_diff": "--- src/adversarial.py\n+++ src/adversarial.py\n@@ -966,7 +966,7 @@\n     )\n     evaluated_head = checkout_head or head\n     if not _HEAD_RE.fullmatch(evaluated_head):\n-        return {**base, \"status\": \"invalid\", \"detail\": \"invalid checkout head\"}\n+        return {**base, \"status\": \"invalid\", \"detail\": \"mutated checkout\"}\n     if (\n         lookup.get(\"state\") == \"found\"\n         and (auto or len(reviewers) == len(requested_reviewers))\n",
+      "broken": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_review_at_head_rejects_a_bad_checkout_and_a_failed_provision",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-2hzv6twn/broken.xml"
+        ],
+        "returncode": 1,
+        "stdout": "F                                                                        [100%]\n=================================== FAILURES ===================================\n______ test_review_at_head_rejects_a_bad_checkout_and_a_failed_provision _______\n\n    def test_review_at_head_rejects_a_bad_checkout_and_a_failed_provision():\n        invalid = adversarial.review_at_head(\n            TARGET, HEAD, checkout_head=\"not-a-sha\", reviewers=[\"codex\"], lookup_fn=_lookup_none\n        )\n        assert invalid[\"status\"] == \"invalid\"\n>       assert invalid[\"detail\"] == \"invalid checkout head\"\nE       AssertionError: assert 'mutated checkout' == 'invalid checkout head'\nE         \nE         - invalid checkout head\nE         + mutated checkout\n\ntests/test_issue1150_ranked_coverage.py:328: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_issue1150_ranked_coverage.py::test_review_at_head_rejects_a_bad_checkout_and_a_failed_provision\n1 failed in 1.00s\n",
+        "stderr": "",
+        "seconds": 3.667,
+        "testcases": [
+          {
+            "name": "test_review_at_head_rejects_a_bad_checkout_and_a_failed_provision",
+            "failures": [
+              {
+                "message": "AssertionError: assert 'mutated checkout' == 'invalid checkout head'\n  \n  - invalid checkout head\n  + mutated checkout",
+                "text": "def test_review_at_head_rejects_a_bad_checkout_and_a_failed_provision():\n        invalid = adversarial.review_at_head(\n            TARGET, HEAD, checkout_head=\"not-a-sha\", reviewers=[\"codex\"], lookup_fn=_lookup_none\n        )\n        assert invalid[\"status\"] == \"invalid\"\n>       assert invalid[\"detail\"] == \"invalid checkout head\"\nE       AssertionError: assert 'mutated checkout' == 'invalid checkout head'\nE         \nE         - invalid checkout head\nE         + mutated checkout\n\ntests/test_issue1150_ranked_coverage.py:328: AssertionError"
+              }
+            ],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "source_restored": true,
+      "restored": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_review_at_head_rejects_a_bad_checkout_and_a_failed_provision",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-2hzv6twn/restored.xml"
+        ],
+        "returncode": 0,
+        "stdout": ".                                                                        [100%]\n1 passed in 1.16s\n",
+        "stderr": "",
+        "seconds": 4.131,
+        "testcases": [
+          {
+            "name": "test_review_at_head_rejects_a_bad_checkout_and_a_failed_provision",
+            "failures": [],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "pair_seconds": 8.0,
+      "passed": true
+    },
+    {
+      "id": "11",
+      "node_id": "tests/test_issue1150_ranked_coverage.py::test_review_at_head_fails_the_seat_and_a_restore_that_leaves_the_tree_dirty",
+      "path": "src/adversarial.py",
+      "function": "review_at_head",
+      "before": "\"outcome\": \"restore_failed\"",
+      "after": "\"outcome\": \"changed_tree\"",
+      "intended_assertion": "assert restored[\"result\"][\"attempts\"][0][\"outcome\"] == \"restore_failed\"",
+      "behavior": "A still-dirty restored tree must be a restore failure.",
+      "assertion_line": 387,
+      "original_sha256": "9bb5a1d83e5651e6e2ad659e23156e8aa01e332b8b3170154b89ec53b1ffa740",
+      "mutation_diff": "--- src/adversarial.py\n+++ src/adversarial.py\n@@ -1053,7 +1053,7 @@\n                     raise RuntimeError(\"restore did not return a clean tree\")\n             except Exception as exc:\n                 attempts.append(\n-                    {\"agent\": \",\".join(seat), \"outcome\": \"restore_failed\", \"error\": str(exc)[:300]}\n+                    {\"agent\": \",\".join(seat), \"outcome\": \"changed_tree\", \"error\": str(exc)[:300]}\n                 )\n                 break\n             attempts.append(\n",
+      "broken": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_review_at_head_fails_the_seat_and_a_restore_that_leaves_the_tree_dirty",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-k1a0xjbw/broken.xml"
+        ],
+        "returncode": 1,
+        "stdout": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_ test_review_at_head_fails_the_seat_and_a_restore_that_leaves_the_tree_dirty __\n\nisolated_runtime = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-1268/test_review_at_head_fails_the_0')\n\n    def test_review_at_head_fails_the_seat_and_a_restore_that_leaves_the_tree_dirty(isolated_runtime):\n        worktree = str(isolated_runtime / \"tree\")\n    \n        def clean(_wt):\n            return {\"head\": HEAD, \"dirty\": \"\"}\n    \n        def boom(_wt, _seat, _context):\n            raise RuntimeError(\"reviewer crashed\")\n    \n        crashed = adversarial.review_at_head(\n            TARGET,\n            HEAD,\n            reviewers=[\"codex\"],\n            worktree=worktree,\n            lookup_fn=_lookup_none,\n            head_fn=lambda _wt: HEAD,\n            state_fn=clean,\n            review_fn=boom,\n        )\n        assert crashed[\"status\"] == \"failed\"\n        assert \"reviewer crashed\" in crashed[\"error\"]\n    \n        calls = {\"n\": 0}\n    \n        def dirty_after(_wt):\n            calls[\"n\"] += 1\n            if calls[\"n\"] == 1:\n                return {\"head\": HEAD, \"dirty\": \"\"}\n            return {\"head\": HEAD, \"dirty\": \"M src/a.py\"}\n    \n        restored = adversarial.review_at_head(\n            TARGET,\n            HEAD,\n            reviewers=[\"codex\"],\n            worktree=worktree,\n            lookup_fn=_lookup_none,\n            head_fn=lambda _wt: HEAD,\n            state_fn=dirty_after,\n            review_fn=lambda *_a: {\"verdict\": \"PASS\"},\n            restore_fn=lambda *_a: None,\n            record_fn=lambda *_a: {\"recorded\": True},\n        )\n        assert restored[\"status\"] == \"executed\"\n>       assert restored[\"result\"][\"attempts\"][0][\"outcome\"] == \"restore_failed\"\nE       AssertionError: assert 'changed_tree' == 'restore_failed'\nE         \nE         - restore_failed\nE         + changed_tree\n\ntests/test_issue1150_ranked_coverage.py:387: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_issue1150_ranked_coverage.py::test_review_at_head_fails_the_seat_and_a_restore_that_leaves_the_tree_dirty\n1 failed in 1.01s\n",
+        "stderr": "",
+        "seconds": 3.775,
+        "testcases": [
+          {
+            "name": "test_review_at_head_fails_the_seat_and_a_restore_that_leaves_the_tree_dirty",
+            "failures": [
+              {
+                "message": "AssertionError: assert 'changed_tree' == 'restore_failed'\n  \n  - restore_failed\n  + changed_tree",
+                "text": "isolated_runtime = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-1268/test_review_at_head_fails_the_0')\n\n    def test_review_at_head_fails_the_seat_and_a_restore_that_leaves_the_tree_dirty(isolated_runtime):\n        worktree = str(isolated_runtime / \"tree\")\n    \n        def clean(_wt):\n            return {\"head\": HEAD, \"dirty\": \"\"}\n    \n        def boom(_wt, _seat, _context):\n            raise RuntimeError(\"reviewer crashed\")\n    \n        crashed = adversarial.review_at_head(\n            TARGET,\n            HEAD,\n            reviewers=[\"codex\"],\n            worktree=worktree,\n            lookup_fn=_lookup_none,\n            head_fn=lambda _wt: HEAD,\n            state_fn=clean,\n            review_fn=boom,\n        )\n        assert crashed[\"status\"] == \"failed\"\n        assert \"reviewer crashed\" in crashed[\"error\"]\n    \n        calls = {\"n\": 0}\n    \n        def dirty_after(_wt):\n            calls[\"n\"] += 1\n            if calls[\"n\"] == 1:\n                return {\"head\": HEAD, \"dirty\": \"\"}\n            return {\"head\": HEAD, \"dirty\": \"M src/a.py\"}\n    \n        restored = adversarial.review_at_head(\n            TARGET,\n            HEAD,\n            reviewers=[\"codex\"],\n            worktree=worktree,\n            lookup_fn=_lookup_none,\n            head_fn=lambda _wt: HEAD,\n            state_fn=dirty_after,\n            review_fn=lambda *_a: {\"verdict\": \"PASS\"},\n            restore_fn=lambda *_a: None,\n            record_fn=lambda *_a: {\"recorded\": True},\n        )\n        assert restored[\"status\"] == \"executed\"\n>       assert restored[\"result\"][\"attempts\"][0][\"outcome\"] == \"restore_failed\"\nE       AssertionError: assert 'changed_tree' == 'restore_failed'\nE         \nE         - restore_failed\nE         + changed_tree\n\ntests/test_issue1150_ranked_coverage.py:387: AssertionError"
+              }
+            ],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "source_restored": true,
+      "restored": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_review_at_head_fails_the_seat_and_a_restore_that_leaves_the_tree_dirty",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-k1a0xjbw/restored.xml"
+        ],
+        "returncode": 0,
+        "stdout": ".                                                                        [100%]\n1 passed in 0.97s\n",
+        "stderr": "",
+        "seconds": 3.629,
+        "testcases": [
+          {
+            "name": "test_review_at_head_fails_the_seat_and_a_restore_that_leaves_the_tree_dirty",
+            "failures": [],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "pair_seconds": 7.407,
+      "passed": true
+    },
+    {
+      "id": "12",
+      "node_id": "tests/test_issue1150_ranked_coverage.py::test_followup_lock_invalid_state_bad_labels_and_source_closure",
+      "path": "src/adversarial.py",
+      "function": "file_followup",
+      "before": "\"reason\": \"follow-up locked; retry\"",
+      "after": "\"reason\": \"mutated lock\"",
+      "intended_assertion": "assert locked == {\"filed\": False, \"reason\": \"follow-up locked; retry\", \"key\": \"lock-key\"}",
+      "behavior": "Contended follow-up must return the retry result.",
+      "assertion_line": 401,
+      "original_sha256": "9bb5a1d83e5651e6e2ad659e23156e8aa01e332b8b3170154b89ec53b1ffa740",
+      "mutation_diff": "--- src/adversarial.py\n+++ src/adversarial.py\n@@ -1247,7 +1247,7 @@\n             try:\n                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)\n             except BlockingIOError:\n-                return {\"filed\": False, \"reason\": \"follow-up locked; retry\", \"key\": key}\n+                return {\"filed\": False, \"reason\": \"mutated lock\", \"key\": key}\n             return _file_followup_locked(target, head, outcome, key, record, run)\n     except Exception as exc:\n         return {\"filed\": False, \"error\": str(exc)[:300], \"key\": key}\n",
+      "broken": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_followup_lock_invalid_state_bad_labels_and_source_closure",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-hf3q7wf1/broken.xml"
+        ],
+        "returncode": 1,
+        "stdout": "F                                                                        [100%]\n=================================== FAILURES ===================================\n________ test_followup_lock_invalid_state_bad_labels_and_source_closure ________\n\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a436570>\nisolated_runtime = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-1270/test_followup_lock_invalid_sta0')\n\n    def test_followup_lock_invalid_state_bad_labels_and_source_closure(monkeypatch, isolated_runtime):\n        import fcntl\n    \n        def locked_out(*_args, **_kwargs):\n            raise BlockingIOError()\n    \n        monkeypatch.setattr(fcntl, \"flock\", locked_out)\n        locked = adversarial.file_followup(\n            TARGET, HEAD, {\"verdict\": \"BLOCKED\", \"key\": \"lock-key\", \"result\": {\"blockers\": []}}\n        )\n>       assert locked == {\"filed\": False, \"reason\": \"follow-up locked; retry\", \"key\": \"lock-key\"}\nE       AssertionError: assert {'filed': Fal...': 'lock-key'} == {'filed': Fal...': 'lock-key'}\nE         \nE         Omitting 2 identical items, use -vv to show\nE         Differing items:\nE         {'reason': 'mutated lock'} != {'reason': 'follow-up locked; retry'}\nE         Use -v to get more diff\n\ntests/test_issue1150_ranked_coverage.py:401: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_issue1150_ranked_coverage.py::test_followup_lock_invalid_state_bad_labels_and_source_closure\n1 failed in 1.01s\n",
+        "stderr": "",
+        "seconds": 3.682,
+        "testcases": [
+          {
+            "name": "test_followup_lock_invalid_state_bad_labels_and_source_closure",
+            "failures": [
+              {
+                "message": "AssertionError: assert {'filed': Fal...': 'lock-key'} == {'filed': Fal...': 'lock-key'}\n  \n  Omitting 2 identical items, use -vv to show\n  Differing items:\n  {'reason': 'mutated lock'} != {'reason': 'follow-up locked; retry'}\n  Use -v to get more diff",
+                "text": "monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a436570>\nisolated_runtime = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-1270/test_followup_lock_invalid_sta0')\n\n    def test_followup_lock_invalid_state_bad_labels_and_source_closure(monkeypatch, isolated_runtime):\n        import fcntl\n    \n        def locked_out(*_args, **_kwargs):\n            raise BlockingIOError()\n    \n        monkeypatch.setattr(fcntl, \"flock\", locked_out)\n        locked = adversarial.file_followup(\n            TARGET, HEAD, {\"verdict\": \"BLOCKED\", \"key\": \"lock-key\", \"result\": {\"blockers\": []}}\n        )\n>       assert locked == {\"filed\": False, \"reason\": \"follow-up locked; retry\", \"key\": \"lock-key\"}\nE       AssertionError: assert {'filed': Fal...': 'lock-key'} == {'filed': Fal...': 'lock-key'}\nE         \nE         Omitting 2 identical items, use -vv to show\nE         Differing items:\nE         {'reason': 'mutated lock'} != {'reason': 'follow-up locked; retry'}\nE         Use -v to get more diff\n\ntests/test_issue1150_ranked_coverage.py:401: AssertionError"
+              }
+            ],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "source_restored": true,
+      "restored": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_followup_lock_invalid_state_bad_labels_and_source_closure",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-hf3q7wf1/restored.xml"
+        ],
+        "returncode": 0,
+        "stdout": ".                                                                        [100%]\n1 passed in 0.99s\n",
+        "stderr": "",
+        "seconds": 3.671,
+        "testcases": [
+          {
+            "name": "test_followup_lock_invalid_state_bad_labels_and_source_closure",
+            "failures": [],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "pair_seconds": 7.355,
+      "passed": true
+    },
+    {
+      "id": "13",
+      "node_id": "tests/test_issue1150_ranked_coverage.py::test_spawn_post_merge_panel_fails_on_lookup_and_on_popen",
+      "path": "src/adversarial.py",
+      "function": "spawn_post_merge_panel",
+      "before": "merged commit lookup failed",
+      "after": "mutated commit lookup failed",
+      "intended_assertion": "\"merged commit lookup failed\"",
+      "behavior": "Post-merge lookup failure must keep its diagnostic.",
+      "assertion_line": 489,
+      "original_sha256": "9bb5a1d83e5651e6e2ad659e23156e8aa01e332b8b3170154b89ec53b1ffa740",
+      "mutation_diff": "--- src/adversarial.py\n+++ src/adversarial.py\n@@ -1398,7 +1398,7 @@\n                 timeout=60,\n             )\n             if merged.returncode != 0:\n-                raise RuntimeError(\"merged commit lookup failed\")\n+                raise RuntimeError(\"mutated commit lookup failed\")\n             metadata = json.loads(merged.stdout)\n             if metadata.get(\"state\") != \"MERGED\":\n                 raise RuntimeError(\"PR is not merged\")\n",
+      "broken": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_spawn_post_merge_panel_fails_on_lookup_and_on_popen",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-mhtr9twx/broken.xml"
+        ],
+        "returncode": 1,
+        "stdout": "F                                                                        [100%]\n=================================== FAILURES ===================================\n___________ test_spawn_post_merge_panel_fails_on_lookup_and_on_popen ___________\n\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10814acc0>\nisolated_runtime = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-1272/test_spawn_post_merge_panel_fa0')\n\n    def test_spawn_post_merge_panel_fails_on_lookup_and_on_popen(monkeypatch, isolated_runtime):\n        calls = {\"n\": 0}\n    \n        def gh_lookup(_cmd, **_kwargs):\n            calls[\"n\"] += 1\n            if calls[\"n\"] == 1:\n                return _completed(1, \"\")\n            if calls[\"n\"] == 2:\n                return _completed(0, json.dumps({\"state\": \"OPEN\"}))\n            return _completed(0, json.dumps({\"state\": \"MERGED\", \"mergeCommit\": {}}))\n    \n        monkeypatch.setattr(subprocess, \"run\", gh_lookup)\n>       assert (\n            \"merged commit lookup failed\"\n            in adversarial.spawn_post_merge_panel(TARGET, HEAD, \"ctx\", set())[\"error\"]\n        )\nE       AssertionError: assert 'merged commit lookup failed' in 'mutated commit lookup failed'\n\ntests/test_issue1150_ranked_coverage.py:489: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_issue1150_ranked_coverage.py::test_spawn_post_merge_panel_fails_on_lookup_and_on_popen\n1 failed in 1.01s\n",
+        "stderr": "",
+        "seconds": 3.664,
+        "testcases": [
+          {
+            "name": "test_spawn_post_merge_panel_fails_on_lookup_and_on_popen",
+            "failures": [
+              {
+                "message": "AssertionError: assert 'merged commit lookup failed' in 'mutated commit lookup failed'",
+                "text": "monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10814acc0>\nisolated_runtime = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-1272/test_spawn_post_merge_panel_fa0')\n\n    def test_spawn_post_merge_panel_fails_on_lookup_and_on_popen(monkeypatch, isolated_runtime):\n        calls = {\"n\": 0}\n    \n        def gh_lookup(_cmd, **_kwargs):\n            calls[\"n\"] += 1\n            if calls[\"n\"] == 1:\n                return _completed(1, \"\")\n            if calls[\"n\"] == 2:\n                return _completed(0, json.dumps({\"state\": \"OPEN\"}))\n            return _completed(0, json.dumps({\"state\": \"MERGED\", \"mergeCommit\": {}}))\n    \n        monkeypatch.setattr(subprocess, \"run\", gh_lookup)\n>       assert (\n            \"merged commit lookup failed\"\n            in adversarial.spawn_post_merge_panel(TARGET, HEAD, \"ctx\", set())[\"error\"]\n        )\nE       AssertionError: assert 'merged commit lookup failed' in 'mutated commit lookup failed'\n\ntests/test_issue1150_ranked_coverage.py:489: AssertionError"
+              }
+            ],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "source_restored": true,
+      "restored": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_spawn_post_merge_panel_fails_on_lookup_and_on_popen",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-mhtr9twx/restored.xml"
+        ],
+        "returncode": 0,
+        "stdout": ".                                                                        [100%]\n1 passed in 0.96s\n",
+        "stderr": "",
+        "seconds": 3.601,
+        "testcases": [
+          {
+            "name": "test_spawn_post_merge_panel_fails_on_lookup_and_on_popen",
+            "failures": [],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "pair_seconds": 7.267,
+      "passed": true
+    },
+    {
+      "id": "14",
+      "node_id": "tests/test_issue1150_ranked_coverage.py::test_capability_heartbeat_swallows_recorder_failures",
+      "path": "src/adversarial.py",
+      "function": "_capability_heartbeat",
+      "before": "\"adversarial-review\", event_type,",
+      "after": "\"adversarial-review\", \"mutated\",",
+      "intended_assertion": "assert called[\"event\"] == \"match\"",
+      "behavior": "Heartbeat must deliver the caller event despite recorder failure.",
+      "assertion_line": 523,
+      "original_sha256": "9bb5a1d83e5651e6e2ad659e23156e8aa01e332b8b3170154b89ec53b1ffa740",
+      "mutation_diff": "--- src/adversarial.py\n+++ src/adversarial.py\n@@ -1968,7 +1968,7 @@\n     try:\n         import capabilities\n \n-        capabilities.production_heartbeat(\"adversarial-review\", event_type, ref=\"adversarial.main\")\n+        capabilities.production_heartbeat(\"adversarial-review\", \"mutated\", ref=\"adversarial.main\")\n     except Exception:\n         pass\n \n",
+      "broken": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_capability_heartbeat_swallows_recorder_failures",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-wf1lray8/broken.xml"
+        ],
+        "returncode": 1,
+        "stdout": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_____________ test_capability_heartbeat_swallows_recorder_failures _____________\n\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10834a2a0>\n\n    def test_capability_heartbeat_swallows_recorder_failures(monkeypatch):\n        import capabilities\n    \n        called = {}\n    \n        def broken(*_args, **_kwargs):\n            called[\"event\"] = _args[1]\n            raise RuntimeError(\"heartbeat store down\")\n    \n        monkeypatch.setattr(capabilities, \"production_heartbeat\", broken)\n        adversarial._capability_heartbeat(\"match\")\n>       assert called[\"event\"] == \"match\"\nE       AssertionError: assert 'mutated' == 'match'\nE         \nE         - match\nE         + mutated\n\ntests/test_issue1150_ranked_coverage.py:523: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_issue1150_ranked_coverage.py::test_capability_heartbeat_swallows_recorder_failures\n1 failed in 1.02s\n",
+        "stderr": "",
+        "seconds": 3.756,
+        "testcases": [
+          {
+            "name": "test_capability_heartbeat_swallows_recorder_failures",
+            "failures": [
+              {
+                "message": "AssertionError: assert 'mutated' == 'match'\n  \n  - match\n  + mutated",
+                "text": "monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10834a2a0>\n\n    def test_capability_heartbeat_swallows_recorder_failures(monkeypatch):\n        import capabilities\n    \n        called = {}\n    \n        def broken(*_args, **_kwargs):\n            called[\"event\"] = _args[1]\n            raise RuntimeError(\"heartbeat store down\")\n    \n        monkeypatch.setattr(capabilities, \"production_heartbeat\", broken)\n        adversarial._capability_heartbeat(\"match\")\n>       assert called[\"event\"] == \"match\"\nE       AssertionError: assert 'mutated' == 'match'\nE         \nE         - match\nE         + mutated\n\ntests/test_issue1150_ranked_coverage.py:523: AssertionError"
+              }
+            ],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "source_restored": true,
+      "restored": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_capability_heartbeat_swallows_recorder_failures",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-wf1lray8/restored.xml"
+        ],
+        "returncode": 0,
+        "stdout": ".                                                                        [100%]\n1 passed in 1.00s\n",
+        "stderr": "",
+        "seconds": 4.0,
+        "testcases": [
+          {
+            "name": "test_capability_heartbeat_swallows_recorder_failures",
+            "failures": [],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "pair_seconds": 7.759,
+      "passed": true
+    },
+    {
+      "id": "15",
+      "node_id": "tests/test_issue1150_ranked_coverage.py::test_review_cli_followup_and_usage",
+      "path": "src/adversarial.py",
+      "function": "_review_cli",
+      "before": "return 0 if out.get(\"status\") in {\"reused\", \"executed\"} else 2",
+      "after": "return 1 if out.get(\"status\") in {\"reused\", \"executed\"} else 2",
+      "intended_assertion": "adversarial._review_cli(",
+      "behavior": "An executed review CLI must exit zero.",
+      "assertion_line": 533,
+      "original_sha256": "9bb5a1d83e5651e6e2ad659e23156e8aa01e332b8b3170154b89ec53b1ffa740",
+      "mutation_diff": "--- src/adversarial.py\n+++ src/adversarial.py\n@@ -2035,7 +2035,7 @@\n     if args.followup and out.get(\"status\") in {\"reused\", \"executed\"}:\n         out[\"followup\"] = file_followup(args.target, args.head, out)\n     print(json.dumps(out, indent=2, default=str))\n-    return 0 if out.get(\"status\") in {\"reused\", \"executed\"} else 2\n+    return 1 if out.get(\"status\") in {\"reused\", \"executed\"} else 2\n \n \n def main(argv):\n",
+      "broken": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_review_cli_followup_and_usage",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-vn9oe_30/broken.xml"
+        ],
+        "returncode": 1,
+        "stdout": "F                                                                        [100%]\n=================================== FAILURES ===================================\n______________________ test_review_cli_followup_and_usage ______________________\n\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x108143da0>\ncapsys = <_pytest.capture.CaptureFixture object at 0x1081d8ec0>\n\n    def test_review_cli_followup_and_usage(monkeypatch, capsys):\n        monkeypatch.setattr(\n            adversarial,\n            \"review_at_head\",\n            lambda *_a, **_k: {\"status\": \"executed\", \"verdict\": \"BLOCKED\"},\n        )\n        monkeypatch.setattr(adversarial, \"file_followup\", lambda *_a, **_k: {\"filed\": True, \"issue\": 4})\n>       assert (\n            adversarial._review_cli(\n                [\"--target\", TARGET, \"--head\", HEAD, \"--followup\", \"--reviewers\", \"codex\"]\n            )\n            == 0\n        )\nE       AssertionError: assert 1 == 0\nE        +  where 1 = <function _review_cli at 0x10a3fa5c0>(['--target', 'owner/repo#1', '--head', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', '--followup', '--reviewers', ...])\nE        +    where <function _review_cli at 0x10a3fa5c0> = adversarial._review_cli\n\ntests/test_issue1150_ranked_coverage.py:533: AssertionError\n----------------------------- Captured stdout call -----------------------------\n{\n  \"status\": \"executed\",\n  \"verdict\": \"BLOCKED\",\n  \"followup\": {\n    \"filed\": true,\n    \"issue\": 4\n  }\n}\n=========================== short test summary info ============================\nFAILED tests/test_issue1150_ranked_coverage.py::test_review_cli_followup_and_usage\n1 failed in 1.01s\n",
+        "stderr": "",
+        "seconds": 3.705,
+        "testcases": [
+          {
+            "name": "test_review_cli_followup_and_usage",
+            "failures": [
+              {
+                "message": "AssertionError: assert 1 == 0\n +  where 1 = <function _review_cli at 0x10a3fa5c0>(['--target', 'owner/repo#1', '--head', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', '--followup', '--reviewers', ...])\n +    where <function _review_cli at 0x10a3fa5c0> = adversarial._review_cli",
+                "text": "monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x108143da0>\ncapsys = <_pytest.capture.CaptureFixture object at 0x1081d8ec0>\n\n    def test_review_cli_followup_and_usage(monkeypatch, capsys):\n        monkeypatch.setattr(\n            adversarial,\n            \"review_at_head\",\n            lambda *_a, **_k: {\"status\": \"executed\", \"verdict\": \"BLOCKED\"},\n        )\n        monkeypatch.setattr(adversarial, \"file_followup\", lambda *_a, **_k: {\"filed\": True, \"issue\": 4})\n>       assert (\n            adversarial._review_cli(\n                [\"--target\", TARGET, \"--head\", HEAD, \"--followup\", \"--reviewers\", \"codex\"]\n            )\n            == 0\n        )\nE       AssertionError: assert 1 == 0\nE        +  where 1 = <function _review_cli at 0x10a3fa5c0>(['--target', 'owner/repo#1', '--head', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', '--followup', '--reviewers', ...])\nE        +    where <function _review_cli at 0x10a3fa5c0> = adversarial._review_cli\n\ntests/test_issue1150_ranked_coverage.py:533: AssertionError"
+              }
+            ],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "source_restored": true,
+      "restored": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_review_cli_followup_and_usage",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-vn9oe_30/restored.xml"
+        ],
+        "returncode": 0,
+        "stdout": ".                                                                        [100%]\n1 passed in 0.98s\n",
+        "stderr": "",
+        "seconds": 3.696,
+        "testcases": [
+          {
+            "name": "test_review_cli_followup_and_usage",
+            "failures": [],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "pair_seconds": 7.404,
+      "passed": true
+    },
+    {
+      "id": "16",
+      "node_id": "tests/test_issue1150_ranked_coverage.py::test_unsafe_command_and_unknown_check_evidence",
+      "path": "src/runtime_ac.py",
+      "function": "_unsafe_command_reason",
+      "before": "cannot be parsed safely:",
+      "after": "mutated parse:",
+      "intended_assertion": "assert reason.startswith(\"cannot be parsed safely:\")",
+      "behavior": "Unparseable shell text must explain its safety refusal.",
+      "assertion_line": 560,
+      "original_sha256": "e4b5b96a26de8b1b8b01d1f18e249df2649d98b7ba2f120f5c1acf1554e36c4f",
+      "mutation_diff": "--- src/runtime_ac.py\n+++ src/runtime_ac.py\n@@ -265,7 +265,7 @@\n     try:\n         tokens = shlex.split(command)\n     except ValueError as exc:\n-        return f\"cannot be parsed safely: {exc}\"\n+        return f\"mutated parse: {exc}\"\n     if not tokens:\n         return \"must not be empty\"\n \n",
+      "broken": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_unsafe_command_and_unknown_check_evidence",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-f3dafjev/broken.xml"
+        ],
+        "returncode": 1,
+        "stdout": "F                                                                        [100%]\n=================================== FAILURES ===================================\n________________ test_unsafe_command_and_unknown_check_evidence ________________\n\n    def test_unsafe_command_and_unknown_check_evidence():\n        reason = runtime_ac._unsafe_command_reason('pytest \"unterminated')\n        assert reason is not None\n>       assert reason.startswith(\"cannot be parsed safely:\")\nE       AssertionError: assert False\nE        +  where False = <built-in method startswith of str object at 0x107d2e7e0>('cannot be parsed safely:')\nE        +    where <built-in method startswith of str object at 0x107d2e7e0> = 'mutated parse: No closing quotation'.startswith\n\ntests/test_issue1150_ranked_coverage.py:560: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_issue1150_ranked_coverage.py::test_unsafe_command_and_unknown_check_evidence\n1 failed in 1.03s\n",
+        "stderr": "",
+        "seconds": 3.776,
+        "testcases": [
+          {
+            "name": "test_unsafe_command_and_unknown_check_evidence",
+            "failures": [
+              {
+                "message": "AssertionError: assert False\n +  where False = <built-in method startswith of str object at 0x107d2e7e0>('cannot be parsed safely:')\n +    where <built-in method startswith of str object at 0x107d2e7e0> = 'mutated parse: No closing quotation'.startswith",
+                "text": "def test_unsafe_command_and_unknown_check_evidence():\n        reason = runtime_ac._unsafe_command_reason('pytest \"unterminated')\n        assert reason is not None\n>       assert reason.startswith(\"cannot be parsed safely:\")\nE       AssertionError: assert False\nE        +  where False = <built-in method startswith of str object at 0x107d2e7e0>('cannot be parsed safely:')\nE        +    where <built-in method startswith of str object at 0x107d2e7e0> = 'mutated parse: No closing quotation'.startswith\n\ntests/test_issue1150_ranked_coverage.py:560: AssertionError"
+              }
+            ],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "source_restored": true,
+      "restored": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_unsafe_command_and_unknown_check_evidence",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-f3dafjev/restored.xml"
+        ],
+        "returncode": 0,
+        "stdout": ".                                                                        [100%]\n1 passed in 1.03s\n",
+        "stderr": "",
+        "seconds": 3.756,
+        "testcases": [
+          {
+            "name": "test_unsafe_command_and_unknown_check_evidence",
+            "failures": [],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "pair_seconds": 7.535,
+      "passed": true
+    },
+    {
+      "id": "17",
+      "node_id": "tests/test_issue1150_ranked_coverage.py::test_validate_spec_skips_non_objects_rejects_bad_checks_and_ratio",
+      "path": "src/runtime_ac.py",
+      "function": "validate_spec",
+      "before": "{path}.checks must be a list",
+      "after": "{path}.checks mutated",
+      "intended_assertion": "assert any(error.endswith(\"checks must be a list\") for error in errors)",
+      "behavior": "Non-list checks must have a named validation error.",
+      "assertion_line": 577,
+      "original_sha256": "e4b5b96a26de8b1b8b01d1f18e249df2649d98b7ba2f120f5c1acf1554e36c4f",
+      "mutation_diff": "--- src/runtime_ac.py\n+++ src/runtime_ac.py\n@@ -512,7 +512,7 @@\n         )\n         checks = criterion.get(\"checks\")\n         if not isinstance(checks, list):\n-            errors.append(f\"{path}.checks must be a list\")\n+            errors.append(f\"{path}.checks mutated\")\n             continue\n         if not checks:\n             errors.append(f\"{path}.checks must be a non-empty list\")\n",
+      "broken": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_validate_spec_skips_non_objects_rejects_bad_checks_and_ratio",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-vngapurw/broken.xml"
+        ],
+        "returncode": 1,
+        "stdout": "F                                                                        [100%]\n=================================== FAILURES ===================================\n______ test_validate_spec_skips_non_objects_rejects_bad_checks_and_ratio _______\n\n    def test_validate_spec_skips_non_objects_rejects_bad_checks_and_ratio():\n        spec = runtime_ac._valid_spec()\n        spec[\"acceptance_criteria\"].append(\"not-an-object\")\n        spec[\"acceptance_criteria\"].append(\n            {\n                \"id\": \"AC9\",\n                \"statement\": \"needs a check list\",\n                \"evidence_required\": [\"test_output\"],\n                \"checks\": \"nope\",\n            }\n        )\n        spec[\"verdict_policy\"][\"min_pass_ratio\"] = \"high\"\n        errors = runtime_ac.validate_spec(spec)\n>       assert any(error.endswith(\"checks must be a list\") for error in errors)\nE       assert False\nE        +  where False = any(<generator object test_validate_spec_skips_non_objects_rejects_bad_checks_and_ratio.<locals>.<genexpr> at 0x1062006c0>)\n\ntests/test_issue1150_ranked_coverage.py:577: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_issue1150_ranked_coverage.py::test_validate_spec_skips_non_objects_rejects_bad_checks_and_ratio\n1 failed in 1.11s\n",
+        "stderr": "",
+        "seconds": 3.955,
+        "testcases": [
+          {
+            "name": "test_validate_spec_skips_non_objects_rejects_bad_checks_and_ratio",
+            "failures": [
+              {
+                "message": "assert False\n +  where False = any(<generator object test_validate_spec_skips_non_objects_rejects_bad_checks_and_ratio.<locals>.<genexpr> at 0x1062006c0>)",
+                "text": "def test_validate_spec_skips_non_objects_rejects_bad_checks_and_ratio():\n        spec = runtime_ac._valid_spec()\n        spec[\"acceptance_criteria\"].append(\"not-an-object\")\n        spec[\"acceptance_criteria\"].append(\n            {\n                \"id\": \"AC9\",\n                \"statement\": \"needs a check list\",\n                \"evidence_required\": [\"test_output\"],\n                \"checks\": \"nope\",\n            }\n        )\n        spec[\"verdict_policy\"][\"min_pass_ratio\"] = \"high\"\n        errors = runtime_ac.validate_spec(spec)\n>       assert any(error.endswith(\"checks must be a list\") for error in errors)\nE       assert False\nE        +  where False = any(<generator object test_validate_spec_skips_non_objects_rejects_bad_checks_and_ratio.<locals>.<genexpr> at 0x1062006c0>)\n\ntests/test_issue1150_ranked_coverage.py:577: AssertionError"
+              }
+            ],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "source_restored": true,
+      "restored": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_validate_spec_skips_non_objects_rejects_bad_checks_and_ratio",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-vngapurw/restored.xml"
+        ],
+        "returncode": 0,
+        "stdout": ".                                                                        [100%]\n1 passed in 1.05s\n",
+        "stderr": "",
+        "seconds": 4.085,
+        "testcases": [
+          {
+            "name": "test_validate_spec_skips_non_objects_rejects_bad_checks_and_ratio",
+            "failures": [],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "pair_seconds": 8.043,
+      "passed": true
+    },
+    {
+      "id": "18",
+      "node_id": "tests/test_issue1150_ranked_coverage.py::test_dry_run_plan_copies_regex_pattern_and_warns_when_validation_is_bypassed",
+      "path": "src/runtime_ac.py",
+      "function": "build_dry_run_plan",
+      "before": "planned[\"pattern\"] = check[\"pattern\"]",
+      "after": "planned[\"pattern\"] = \"mutated\"",
+      "intended_assertion": "assert planned[\"pattern\"] == \"passed\"",
+      "behavior": "Dry-run plan must retain the regex pattern.",
+      "assertion_line": 593,
+      "original_sha256": "e4b5b96a26de8b1b8b01d1f18e249df2649d98b7ba2f120f5c1acf1554e36c4f",
+      "mutation_diff": "--- src/runtime_ac.py\n+++ src/runtime_ac.py\n@@ -742,7 +742,7 @@\n                 if \"contains\" in check:\n                     planned[\"contains\"] = check[\"contains\"]\n                 if \"pattern\" in check:\n-                    planned[\"pattern\"] = check[\"pattern\"]\n+                    planned[\"pattern\"] = \"mutated\"\n                 warnings.extend(\n                     _command_review_warnings(check[\"command\"], f\"{ac_id}.{check['id']}.command\")\n                 )\n",
+      "broken": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_dry_run_plan_copies_regex_pattern_and_warns_when_validation_is_bypassed",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-hjvxfywa/broken.xml"
+        ],
+        "returncode": 1,
+        "stdout": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_ test_dry_run_plan_copies_regex_pattern_and_warns_when_validation_is_bypassed _\n\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x107a4a0f0>\n\n    def test_dry_run_plan_copies_regex_pattern_and_warns_when_validation_is_bypassed(monkeypatch):\n        spec = runtime_ac._valid_spec()\n        command = next(\n            check\n            for criterion in spec[\"acceptance_criteria\"]\n            for check in criterion[\"checks\"]\n            if check[\"type\"] == \"command\"\n        )\n        command[\"expected\"] = \"regex\"\n        command[\"pattern\"] = \"passed\"\n        plan = runtime_ac.build_dry_run_plan(spec)\n        planned = next(item for item in plan[\"planned_checks\"] if item[\"id\"] == command[\"id\"])\n>       assert planned[\"pattern\"] == \"passed\"\nE       AssertionError: assert 'mutated' == 'passed'\nE         \nE         - passed\nE         + mutated\n\ntests/test_issue1150_ranked_coverage.py:593: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_issue1150_ranked_coverage.py::test_dry_run_plan_copies_regex_pattern_and_warns_when_validation_is_bypassed\n1 failed in 1.08s\n",
+        "stderr": "",
+        "seconds": 3.947,
+        "testcases": [
+          {
+            "name": "test_dry_run_plan_copies_regex_pattern_and_warns_when_validation_is_bypassed",
+            "failures": [
+              {
+                "message": "AssertionError: assert 'mutated' == 'passed'\n  \n  - passed\n  + mutated",
+                "text": "monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x107a4a0f0>\n\n    def test_dry_run_plan_copies_regex_pattern_and_warns_when_validation_is_bypassed(monkeypatch):\n        spec = runtime_ac._valid_spec()\n        command = next(\n            check\n            for criterion in spec[\"acceptance_criteria\"]\n            for check in criterion[\"checks\"]\n            if check[\"type\"] == \"command\"\n        )\n        command[\"expected\"] = \"regex\"\n        command[\"pattern\"] = \"passed\"\n        plan = runtime_ac.build_dry_run_plan(spec)\n        planned = next(item for item in plan[\"planned_checks\"] if item[\"id\"] == command[\"id\"])\n>       assert planned[\"pattern\"] == \"passed\"\nE       AssertionError: assert 'mutated' == 'passed'\nE         \nE         - passed\nE         + mutated\n\ntests/test_issue1150_ranked_coverage.py:593: AssertionError"
+              }
+            ],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "source_restored": true,
+      "restored": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_dry_run_plan_copies_regex_pattern_and_warns_when_validation_is_bypassed",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-hjvxfywa/restored.xml"
+        ],
+        "returncode": 0,
+        "stdout": ".                                                                        [100%]\n1 passed in 1.17s\n",
+        "stderr": "",
+        "seconds": 4.732,
+        "testcases": [
+          {
+            "name": "test_dry_run_plan_copies_regex_pattern_and_warns_when_validation_is_bypassed",
+            "failures": [],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "pair_seconds": 8.681,
+      "passed": true
+    },
+    {
+      "id": "19",
+      "node_id": "tests/test_issue1150_ranked_coverage.py::test_bounded_break_result_and_regex_command_reject_bad_payloads",
+      "path": "src/runtime_ac.py",
+      "function": "_completed_result",
+      "before": "\"status\": status,",
+      "after": "\"status\": \"PASS\",",
+      "intended_assertion": "assert result[\"status\"] == \"FAIL\"",
+      "behavior": "Nonzero regex command must fail.",
+      "assertion_line": 614,
+      "original_sha256": "e4b5b96a26de8b1b8b01d1f18e249df2649d98b7ba2f120f5c1acf1554e36c4f",
+      "mutation_diff": "--- src/runtime_ac.py\n+++ src/runtime_ac.py\n@@ -1197,7 +1197,7 @@\n     return {\n         \"id\": check[\"id\"],\n         \"type\": check.get(\"type\"),\n-        \"status\": status,\n+        \"status\": \"PASS\",\n         \"reason\": reason,\n         \"command\": check.get(\"command\"),\n         \"returncode\": completed.returncode,\n",
+      "broken": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_bounded_break_result_and_regex_command_reject_bad_payloads",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-ef3nfu7x/broken.xml"
+        ],
+        "returncode": 1,
+        "stdout": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_______ test_bounded_break_result_and_regex_command_reject_bad_payloads ________\n\n    def test_bounded_break_result_and_regex_command_reject_bad_payloads():\n        assert runtime_ac.bounded_deliberate_break_result({\"verdict\": \"PASS\", \"error\": 1}) is None\n        assert (\n            runtime_ac.bounded_deliberate_break_result(\n                {\"verdict\": \"PASS\", \"green\": {\"stdout_tail\": 1, \"stderr_tail\": \"\"}}\n            )\n            is None\n        )\n        result = runtime_ac._completed_result(\n            {\"id\": \"c\", \"type\": \"command\", \"expected\": \"regex\", \"pattern\": \"ok\", \"command\": \"true\"},\n            _completed(2, stdout=\"\"),\n            0.1,\n        )\n>       assert result[\"status\"] == \"FAIL\"\nE       AssertionError: assert 'PASS' == 'FAIL'\nE         \nE         - FAIL\nE         + PASS\n\ntests/test_issue1150_ranked_coverage.py:614: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_issue1150_ranked_coverage.py::test_bounded_break_result_and_regex_command_reject_bad_payloads\n1 failed in 1.12s\n",
+        "stderr": "",
+        "seconds": 4.224,
+        "testcases": [
+          {
+            "name": "test_bounded_break_result_and_regex_command_reject_bad_payloads",
+            "failures": [
+              {
+                "message": "AssertionError: assert 'PASS' == 'FAIL'\n  \n  - FAIL\n  + PASS",
+                "text": "def test_bounded_break_result_and_regex_command_reject_bad_payloads():\n        assert runtime_ac.bounded_deliberate_break_result({\"verdict\": \"PASS\", \"error\": 1}) is None\n        assert (\n            runtime_ac.bounded_deliberate_break_result(\n                {\"verdict\": \"PASS\", \"green\": {\"stdout_tail\": 1, \"stderr_tail\": \"\"}}\n            )\n            is None\n        )\n        result = runtime_ac._completed_result(\n            {\"id\": \"c\", \"type\": \"command\", \"expected\": \"regex\", \"pattern\": \"ok\", \"command\": \"true\"},\n            _completed(2, stdout=\"\"),\n            0.1,\n        )\n>       assert result[\"status\"] == \"FAIL\"\nE       AssertionError: assert 'PASS' == 'FAIL'\nE         \nE         - FAIL\nE         + PASS\n\ntests/test_issue1150_ranked_coverage.py:614: AssertionError"
+              }
+            ],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "source_restored": true,
+      "restored": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_bounded_break_result_and_regex_command_reject_bad_payloads",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-ef3nfu7x/restored.xml"
+        ],
+        "returncode": 0,
+        "stdout": ".                                                                        [100%]\n1 passed in 1.08s\n",
+        "stderr": "",
+        "seconds": 4.024,
+        "testcases": [
+          {
+            "name": "test_bounded_break_result_and_regex_command_reject_bad_payloads",
+            "failures": [],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "pair_seconds": 8.251,
+      "passed": true
+    },
+    {
+      "id": "20",
+      "node_id": "tests/test_issue1150_ranked_coverage.py::test_run_verification_errors_when_a_command_check_has_no_command",
+      "path": "src/runtime_ac.py",
+      "function": "run_verification",
+      "before": "\"reason\": \"no command to run\"",
+      "after": "\"reason\": \"mutated empty command\"",
+      "intended_assertion": "assert matched[\"reason\"] == \"no command to run\"",
+      "behavior": "Blank command must return its specific error reason.",
+      "assertion_line": 638,
+      "original_sha256": "e4b5b96a26de8b1b8b01d1f18e249df2649d98b7ba2f120f5c1acf1554e36c4f",
+      "mutation_diff": "--- src/runtime_ac.py\n+++ src/runtime_ac.py\n@@ -1383,7 +1383,7 @@\n                     \"id\": check[\"id\"],\n                     \"type\": check_type,\n                     \"status\": \"ERROR\",\n-                    \"reason\": \"no command to run\",\n+                    \"reason\": \"mutated empty command\",\n                 }\n             )\n             continue\n",
+      "broken": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_run_verification_errors_when_a_command_check_has_no_command",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-xvgm9mps/broken.xml"
+        ],
+        "returncode": 1,
+        "stdout": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_______ test_run_verification_errors_when_a_command_check_has_no_command _______\n\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10714ddf0>\nisolated_runtime = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-1286/test_run_verification_errors_w0')\n\n    def test_run_verification_errors_when_a_command_check_has_no_command(monkeypatch, isolated_runtime):\n        monkeypatch.setattr(runtime_ac, \"validate_spec\", lambda _spec: [])\n        spec = runtime_ac._valid_spec()\n        spec[\"runtime_context\"][\"worktree\"] = str(isolated_runtime)\n        command = next(\n            check\n            for criterion in spec[\"acceptance_criteria\"]\n            for check in criterion[\"checks\"]\n            if check[\"type\"] == \"command\"\n        )\n        command[\"command\"] = \"   \"\n        report = runtime_ac.run_verification(\n            spec,\n            confirm_run=True,\n            allow_command_checks=True,\n            check_ids=[command[\"id\"]],\n        )\n        matched = next(item for item in report[\"check_results\"] if item[\"id\"] == command[\"id\"])\n        assert matched[\"status\"] == \"ERROR\"\n>       assert matched[\"reason\"] == \"no command to run\"\nE       AssertionError: assert 'mutated empty command' == 'no command to run'\nE         \nE         - no command to run\nE         + mutated empty command\n\ntests/test_issue1150_ranked_coverage.py:638: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_issue1150_ranked_coverage.py::test_run_verification_errors_when_a_command_check_has_no_command\n1 failed in 1.10s\n",
+        "stderr": "",
+        "seconds": 4.316,
+        "testcases": [
+          {
+            "name": "test_run_verification_errors_when_a_command_check_has_no_command",
+            "failures": [
+              {
+                "message": "AssertionError: assert 'mutated empty command' == 'no command to run'\n  \n  - no command to run\n  + mutated empty command",
+                "text": "monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10714ddf0>\nisolated_runtime = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-1286/test_run_verification_errors_w0')\n\n    def test_run_verification_errors_when_a_command_check_has_no_command(monkeypatch, isolated_runtime):\n        monkeypatch.setattr(runtime_ac, \"validate_spec\", lambda _spec: [])\n        spec = runtime_ac._valid_spec()\n        spec[\"runtime_context\"][\"worktree\"] = str(isolated_runtime)\n        command = next(\n            check\n            for criterion in spec[\"acceptance_criteria\"]\n            for check in criterion[\"checks\"]\n            if check[\"type\"] == \"command\"\n        )\n        command[\"command\"] = \"   \"\n        report = runtime_ac.run_verification(\n            spec,\n            confirm_run=True,\n            allow_command_checks=True,\n            check_ids=[command[\"id\"]],\n        )\n        matched = next(item for item in report[\"check_results\"] if item[\"id\"] == command[\"id\"])\n        assert matched[\"status\"] == \"ERROR\"\n>       assert matched[\"reason\"] == \"no command to run\"\nE       AssertionError: assert 'mutated empty command' == 'no command to run'\nE         \nE         - no command to run\nE         + mutated empty command\n\ntests/test_issue1150_ranked_coverage.py:638: AssertionError"
+              }
+            ],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "source_restored": true,
+      "restored": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_run_verification_errors_when_a_command_check_has_no_command",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-xvgm9mps/restored.xml"
+        ],
+        "returncode": 0,
+        "stdout": ".                                                                        [100%]\n1 passed in 1.03s\n",
+        "stderr": "",
+        "seconds": 4.161,
+        "testcases": [
+          {
+            "name": "test_run_verification_errors_when_a_command_check_has_no_command",
+            "failures": [],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "pair_seconds": 8.48,
+      "passed": true
+    },
+    {
+      "id": "21",
+      "node_id": "tests/test_issue1150_ranked_coverage.py::test_author_issue_spec_rejects_a_target_that_cannot_become_a_slug",
+      "path": "src/runtime_ac.py",
+      "function": "author_issue_spec",
+      "before": "invalid authored spec:",
+      "after": "mutated authored spec:",
+      "intended_assertion": "with pytest.raises(ValueError, match=\"invalid authored spec\"):",
+      "behavior": "Unsuitable authored target must retain validation diagnostic.",
+      "assertion_line": 642,
+      "original_sha256": "e4b5b96a26de8b1b8b01d1f18e249df2649d98b7ba2f120f5c1acf1554e36c4f",
+      "mutation_diff": "--- src/runtime_ac.py\n+++ src/runtime_ac.py\n@@ -1606,7 +1606,7 @@\n         spec[\"runtime_context\"][\"worktree\"] = worktree\n     errors = validate_spec(spec)\n     if errors:\n-        raise ValueError(\"invalid authored spec: \" + \"; \".join(errors))\n+        raise ValueError(\"mutated authored spec: \" + \"; \".join(errors))\n     return spec\n \n \n",
+      "broken": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_author_issue_spec_rejects_a_target_that_cannot_become_a_slug",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-hav4e0nc/broken.xml"
+        ],
+        "returncode": 1,
+        "stdout": "F                                                                        [100%]\n=================================== FAILURES ===================================\n______ test_author_issue_spec_rejects_a_target_that_cannot_become_a_slug _______\n\n    def test_author_issue_spec_rejects_a_target_that_cannot_become_a_slug():\n>       with pytest.raises(ValueError, match=\"invalid authored spec\"):\nE       AssertionError: Regex pattern did not match.\nE         Expected regex: 'invalid authored spec'\nE         Actual message: 'mutated authored spec: verification.id must be a non-empty string'\n\ntests/test_issue1150_ranked_coverage.py:642: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_issue1150_ranked_coverage.py::test_author_issue_spec_rejects_a_target_that_cannot_become_a_slug\n1 failed in 1.10s\n",
+        "stderr": "",
+        "seconds": 4.111,
+        "testcases": [
+          {
+            "name": "test_author_issue_spec_rejects_a_target_that_cannot_become_a_slug",
+            "failures": [
+              {
+                "message": "AssertionError: Regex pattern did not match.\n  Expected regex: 'invalid authored spec'\n  Actual message: 'mutated authored spec: verification.id must be a non-empty string'",
+                "text": "def test_author_issue_spec_rejects_a_target_that_cannot_become_a_slug():\n>       with pytest.raises(ValueError, match=\"invalid authored spec\"):\nE       AssertionError: Regex pattern did not match.\nE         Expected regex: 'invalid authored spec'\nE         Actual message: 'mutated authored spec: verification.id must be a non-empty string'\n\ntests/test_issue1150_ranked_coverage.py:642: AssertionError"
+              }
+            ],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "source_restored": true,
+      "restored": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_author_issue_spec_rejects_a_target_that_cannot_become_a_slug",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-hav4e0nc/restored.xml"
+        ],
+        "returncode": 0,
+        "stdout": ".                                                                        [100%]\n1 passed in 1.05s\n",
+        "stderr": "",
+        "seconds": 4.107,
+        "testcases": [
+          {
+            "name": "test_author_issue_spec_rejects_a_target_that_cannot_become_a_slug",
+            "failures": [],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "pair_seconds": 8.22,
+      "passed": true
+    },
+    {
+      "id": "22",
+      "node_id": "tests/test_issue1150_ranked_coverage.py::test_runtime_ac_cli_validate_plan_run_results_and_goal",
+      "path": "src/runtime_ac.py",
+      "function": "main",
+      "before": "Could not read or parse runtime AC JSON:",
+      "after": "mutated read:",
+      "intended_assertion": "assert \"Could not read or parse\" in capsys.readouterr().err",
+      "behavior": "Validate CLI must report missing JSON on stderr.",
+      "assertion_line": 649,
+      "original_sha256": "e4b5b96a26de8b1b8b01d1f18e249df2649d98b7ba2f120f5c1acf1554e36c4f",
+      "mutation_diff": "--- src/runtime_ac.py\n+++ src/runtime_ac.py\n@@ -2062,7 +2062,7 @@\n         try:\n             spec = parse_spec_json(Path(args.validate).read_text(encoding=\"utf-8\"))\n         except Exception as exc:\n-            print(f\"Could not read or parse runtime AC JSON: {exc}\", file=sys.stderr)\n+            print(f\"mutated read: {exc}\", file=sys.stderr)\n             return 2\n         errors = validate_spec(spec)\n         if args.json:\n",
+      "broken": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_runtime_ac_cli_validate_plan_run_results_and_goal",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-ijy5jhcx/broken.xml"
+        ],
+        "returncode": 1,
+        "stdout": "F                                                                        [100%]\n=================================== FAILURES ===================================\n____________ test_runtime_ac_cli_validate_plan_run_results_and_goal ____________\n\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x107ef2b40>\nisolated_runtime = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-1290/test_runtime_ac_cli_validate_p0')\ncapsys = <_pytest.capture.CaptureFixture object at 0x107f83ec0>\n\n    def test_runtime_ac_cli_validate_plan_run_results_and_goal(monkeypatch, isolated_runtime, capsys):\n        missing = isolated_runtime / \"missing.json\"\n        assert runtime_ac.main([\"--validate\", str(missing)]) == 2\n>       assert \"Could not read or parse\" in capsys.readouterr().err\nE       assert 'Could not read or parse' in \"mutated read: [Errno 2] No such file or directory: '/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-1290/test_runtime_ac_cli_validate_p0/missing.json'\\n\"\nE        +  where \"mutated read: [Errno 2] No such file or directory: '/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-1290/test_runtime_ac_cli_validate_p0/missing.json'\\n\" = CaptureResult(out='', err=\"mutated read: [Errno 2] No such file or directory: '/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-1290/test_runtime_ac_cli_validate_p0/missing.json'\\n\").err\nE        +    where CaptureResult(out='', err=\"mutated read: [Errno 2] No such file or directory: '/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-1290/test_runtime_ac_cli_validate_p0/missing.json'\\n\") = readouterr()\nE        +      where readouterr = <_pytest.capture.CaptureFixture object at 0x107f83ec0>.readouterr\n\ntests/test_issue1150_ranked_coverage.py:649: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_issue1150_ranked_coverage.py::test_runtime_ac_cli_validate_plan_run_results_and_goal\n1 failed in 1.16s\n",
+        "stderr": "",
+        "seconds": 5.603,
+        "testcases": [
+          {
+            "name": "test_runtime_ac_cli_validate_plan_run_results_and_goal",
+            "failures": [
+              {
+                "message": "assert 'Could not read or parse' in \"mutated read: [Errno 2] No such file or directory: '/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-1290/test_runtime_ac_cli_validate_p0/missing.json'\\n\"\n +  where \"mutated read: [Errno 2] No such file or directory: '/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-1290/test_runtime_ac_cli_validate_p0/missing.json'\\n\" = CaptureResult(out='', err=\"mutated read: [Errno 2] No such file or directory: '/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-1290/test_runtime_ac_cli_validate_p0/missing.json'\\n\").err\n +    where CaptureResult(out='', err=\"mutated read: [Errno 2] No such file or directory: '/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-1290/test_runtime_ac_cli_validate_p0/missing.json'\\n\") = readouterr()\n +      where readouterr = <_pytest.capture.CaptureFixture object at 0x107f83ec0>.readouterr",
+                "text": "monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x107ef2b40>\nisolated_runtime = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-1290/test_runtime_ac_cli_validate_p0')\ncapsys = <_pytest.capture.CaptureFixture object at 0x107f83ec0>\n\n    def test_runtime_ac_cli_validate_plan_run_results_and_goal(monkeypatch, isolated_runtime, capsys):\n        missing = isolated_runtime / \"missing.json\"\n        assert runtime_ac.main([\"--validate\", str(missing)]) == 2\n>       assert \"Could not read or parse\" in capsys.readouterr().err\nE       assert 'Could not read or parse' in \"mutated read: [Errno 2] No such file or directory: '/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-1290/test_runtime_ac_cli_validate_p0/missing.json'\\n\"\nE        +  where \"mutated read: [Errno 2] No such file or directory: '/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-1290/test_runtime_ac_cli_validate_p0/missing.json'\\n\" = CaptureResult(out='', err=\"mutated read: [Errno 2] No such file or directory: '/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-1290/test_runtime_ac_cli_validate_p0/missing.json'\\n\").err\nE        +    where CaptureResult(out='', err=\"mutated read: [Errno 2] No such file or directory: '/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-1290/test_runtime_ac_cli_validate_p0/missing.json'\\n\") = readouterr()\nE        +      where readouterr = <_pytest.capture.CaptureFixture object at 0x107f83ec0>.readouterr\n\ntests/test_issue1150_ranked_coverage.py:649: AssertionError"
+              }
+            ],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "source_restored": true,
+      "restored": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_runtime_ac_cli_validate_plan_run_results_and_goal",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-ijy5jhcx/restored.xml"
+        ],
+        "returncode": 0,
+        "stdout": ".                                                                        [100%]\n1 passed in 1.54s\n",
+        "stderr": "",
+        "seconds": 4.933,
+        "testcases": [
+          {
+            "name": "test_runtime_ac_cli_validate_plan_run_results_and_goal",
+            "failures": [],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "pair_seconds": 10.54,
+      "passed": true
+    },
+    {
+      "id": "23",
+      "node_id": "tests/test_issue1150_ranked_coverage.py::test_pr_number_run_json_and_linked_issue_filters",
+      "path": "src/keepalive_evidence.py",
+      "function": "_pr_number",
+      "before": "return None",
+      "after": "return 0",
+      "intended_assertion": "assert keepalive_evidence._pr_number({\"target\": \"owner/repo\", \"run_id\": \"keepalive\"}) is None",
+      "behavior": "An unnumbered target must not manufacture PR zero.",
+      "assertion_line": 719,
+      "original_sha256": "1836e6d45d114c5482c18c640269934a186aab59f052214b5ebea58b0b4093dc",
+      "mutation_diff": "--- src/keepalive_evidence.py\n+++ src/keepalive_evidence.py\n@@ -71,7 +71,7 @@\n         match = re.search(r\"#(\\d+)\", str(value or \"\"))\n         if match:\n             return int(match.group(1))\n-    return None\n+    return 0\n \n \n def _row_work_type(row: dict) -> str:\n",
+      "broken": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_pr_number_run_json_and_linked_issue_filters",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-9qwzcsdt/broken.xml"
+        ],
+        "returncode": 1,
+        "stdout": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_______________ test_pr_number_run_json_and_linked_issue_filters _______________\n\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x104d421e0>\n\n    def test_pr_number_run_json_and_linked_issue_filters(monkeypatch):\n>       assert keepalive_evidence._pr_number({\"target\": \"owner/repo\", \"run_id\": \"keepalive\"}) is None\nE       AssertionError: assert 0 is None\nE        +  where 0 = <function _pr_number at 0x1101037e0>({'target': 'owner/repo', 'run_id': 'keepalive'})\nE        +    where <function _pr_number at 0x1101037e0> = keepalive_evidence._pr_number\n\ntests/test_issue1150_ranked_coverage.py:719: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_issue1150_ranked_coverage.py::test_pr_number_run_json_and_linked_issue_filters\n1 failed in 1.24s\n",
+        "stderr": "",
+        "seconds": 4.755,
+        "testcases": [
+          {
+            "name": "test_pr_number_run_json_and_linked_issue_filters",
+            "failures": [
+              {
+                "message": "AssertionError: assert 0 is None\n +  where 0 = <function _pr_number at 0x1101037e0>({'target': 'owner/repo', 'run_id': 'keepalive'})\n +    where <function _pr_number at 0x1101037e0> = keepalive_evidence._pr_number",
+                "text": "monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x104d421e0>\n\n    def test_pr_number_run_json_and_linked_issue_filters(monkeypatch):\n>       assert keepalive_evidence._pr_number({\"target\": \"owner/repo\", \"run_id\": \"keepalive\"}) is None\nE       AssertionError: assert 0 is None\nE        +  where 0 = <function _pr_number at 0x1101037e0>({'target': 'owner/repo', 'run_id': 'keepalive'})\nE        +    where <function _pr_number at 0x1101037e0> = keepalive_evidence._pr_number\n\ntests/test_issue1150_ranked_coverage.py:719: AssertionError"
+              }
+            ],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "source_restored": true,
+      "restored": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_pr_number_run_json_and_linked_issue_filters",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-9qwzcsdt/restored.xml"
+        ],
+        "returncode": 0,
+        "stdout": ".                                                                        [100%]\n1 passed in 1.14s\n",
+        "stderr": "",
+        "seconds": 4.55,
+        "testcases": [
+          {
+            "name": "test_pr_number_run_json_and_linked_issue_filters",
+            "failures": [],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "pair_seconds": 9.308,
+      "passed": true
+    },
+    {
+      "id": "24",
+      "node_id": "tests/test_issue1150_ranked_coverage.py::test_dedupe_skips_blank_open_issues_and_repeated_search_hits",
+      "path": "src/keepalive_evidence.py",
+      "function": "_dedupe_candidate",
+      "before": "candidate[\"possible_duplicate\"] = False",
+      "after": "candidate[\"possible_duplicate\"] = True",
+      "intended_assertion": "assert candidate[\"possible_duplicate\"] is False",
+      "behavior": "Blank and unrelated duplicate hits must leave candidate clear.",
+      "assertion_line": 765,
+      "original_sha256": "1836e6d45d114c5482c18c640269934a186aab59f052214b5ebea58b0b4093dc",
+      "mutation_diff": "--- src/keepalive_evidence.py\n+++ src/keepalive_evidence.py\n@@ -245,7 +245,7 @@\n                 candidate[\"possible_duplicate\"] = True\n                 candidate[\"dup_issue\"] = issue_number\n                 return\n-    candidate[\"possible_duplicate\"] = False\n+    candidate[\"possible_duplicate\"] = True\n     candidate[\"dup_issue\"] = None\n \n \n",
+      "broken": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_dedupe_skips_blank_open_issues_and_repeated_search_hits",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-gqh2w6la/broken.xml"
+        ],
+        "returncode": 1,
+        "stdout": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_________ test_dedupe_skips_blank_open_issues_and_repeated_search_hits _________\n\n    def test_dedupe_skips_blank_open_issues_and_repeated_search_hits():\n        candidate = {\n            \"seed\": \"delivery regressed badly\",\n            \"evidence\": {\"pr\": 4, \"title\": \"Fix delivery regression now\"},\n        }\n        seen: list[int] = []\n    \n        def search(_repo, _query):\n            return [{\"number\": 9, \"title\": \"unrelated\", \"state\": \"OPEN\"}, {\"number\": 9, \"title\": \"dup\"}]\n    \n        keepalive_evidence._dedupe_candidate(\n            candidate,\n            \"owner/repo\",\n            linked_issues_fn=lambda *_a: [\n                {\"state\": \"OPEN\"},\n                {\"state\": \"OPEN\", \"number\": \"nope\"},\n                {\"state\": \"CLOSED\", \"number\": 3},\n            ],\n            issue_search_fn=search,\n        )\n>       assert candidate[\"possible_duplicate\"] is False\nE       assert True is False\n\ntests/test_issue1150_ranked_coverage.py:765: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_issue1150_ranked_coverage.py::test_dedupe_skips_blank_open_issues_and_repeated_search_hits\n1 failed in 1.23s\n",
+        "stderr": "",
+        "seconds": 4.689,
+        "testcases": [
+          {
+            "name": "test_dedupe_skips_blank_open_issues_and_repeated_search_hits",
+            "failures": [
+              {
+                "message": "assert True is False",
+                "text": "def test_dedupe_skips_blank_open_issues_and_repeated_search_hits():\n        candidate = {\n            \"seed\": \"delivery regressed badly\",\n            \"evidence\": {\"pr\": 4, \"title\": \"Fix delivery regression now\"},\n        }\n        seen: list[int] = []\n    \n        def search(_repo, _query):\n            return [{\"number\": 9, \"title\": \"unrelated\", \"state\": \"OPEN\"}, {\"number\": 9, \"title\": \"dup\"}]\n    \n        keepalive_evidence._dedupe_candidate(\n            candidate,\n            \"owner/repo\",\n            linked_issues_fn=lambda *_a: [\n                {\"state\": \"OPEN\"},\n                {\"state\": \"OPEN\", \"number\": \"nope\"},\n                {\"state\": \"CLOSED\", \"number\": 3},\n            ],\n            issue_search_fn=search,\n        )\n>       assert candidate[\"possible_duplicate\"] is False\nE       assert True is False\n\ntests/test_issue1150_ranked_coverage.py:765: AssertionError"
+              }
+            ],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "source_restored": true,
+      "restored": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_dedupe_skips_blank_open_issues_and_repeated_search_hits",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-gqh2w6la/restored.xml"
+        ],
+        "returncode": 0,
+        "stdout": ".                                                                        [100%]\n1 passed in 1.13s\n",
+        "stderr": "",
+        "seconds": 4.459,
+        "testcases": [
+          {
+            "name": "test_dedupe_skips_blank_open_issues_and_repeated_search_hits",
+            "failures": [],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "pair_seconds": 9.152,
+      "passed": true
+    },
+    {
+      "id": "25",
+      "node_id": "tests/test_issue1150_ranked_coverage.py::test_gotcha_section_ends_at_the_next_top_level_item_and_tooling_seed",
+      "path": "src/keepalive_evidence.py",
+      "function": "_process_signal_seed",
+      "before": "tooling or CI workflow changes are unstable",
+      "after": "mutated tooling signal",
+      "intended_assertion": "assert \"tooling or CI workflow changes are unstable\" in seed",
+      "behavior": "Tooling churn must retain its actionable signal text.",
+      "assertion_line": 774,
+      "original_sha256": "1836e6d45d114c5482c18c640269934a186aab59f052214b5ebea58b0b4093dc",
+      "mutation_diff": "--- src/keepalive_evidence.py\n+++ src/keepalive_evidence.py\n@@ -321,7 +321,7 @@\n             \"sync automation may be stale or noisy; inspect template, mirror, and drift handling.\"\n         )\n     elif work_type == \"tooling\":\n-        tail = \"tooling or CI workflow changes are unstable; tighten validation before rollout.\"\n+        tail = \"mutated tooling signal; tighten validation before rollout.\"\n     else:\n         tail = \"docs workflow is churning; check ownership, templates, and review expectations.\"\n     noun = \"PR\" if count == 1 else \"PRs\"\n",
+      "broken": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_gotcha_section_ends_at_the_next_top_level_item_and_tooling_seed",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-z9v11c9u/broken.xml"
+        ],
+        "returncode": 1,
+        "stdout": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_____ test_gotcha_section_ends_at_the_next_top_level_item_and_tooling_seed _____\n\n    def test_gotcha_section_ends_at_the_next_top_level_item_and_tooling_seed():\n        text = \"- Known gotchas:\\n  - never ship this broken path\\n- Next section\\n\"\n        assert keepalive_evidence._gotcha_lines(text) == [\"never ship this broken path\"]\n        seed = keepalive_evidence._process_signal_seed(\"owner/repo\", \"tooling\", 2, 30)\n>       assert \"tooling or CI workflow changes are unstable\" in seed\nE       AssertionError: assert 'tooling or CI workflow changes are unstable' in '2 tooling PRs reverted or abandoned in 30d on owner/repo -- mutated tooling signal; tighten validation before rollout.'\n\ntests/test_issue1150_ranked_coverage.py:774: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_issue1150_ranked_coverage.py::test_gotcha_section_ends_at_the_next_top_level_item_and_tooling_seed\n1 failed in 1.27s\n",
+        "stderr": "",
+        "seconds": 4.853,
+        "testcases": [
+          {
+            "name": "test_gotcha_section_ends_at_the_next_top_level_item_and_tooling_seed",
+            "failures": [
+              {
+                "message": "AssertionError: assert 'tooling or CI workflow changes are unstable' in '2 tooling PRs reverted or abandoned in 30d on owner/repo -- mutated tooling signal; tighten validation before rollout.'",
+                "text": "def test_gotcha_section_ends_at_the_next_top_level_item_and_tooling_seed():\n        text = \"- Known gotchas:\\n  - never ship this broken path\\n- Next section\\n\"\n        assert keepalive_evidence._gotcha_lines(text) == [\"never ship this broken path\"]\n        seed = keepalive_evidence._process_signal_seed(\"owner/repo\", \"tooling\", 2, 30)\n>       assert \"tooling or CI workflow changes are unstable\" in seed\nE       AssertionError: assert 'tooling or CI workflow changes are unstable' in '2 tooling PRs reverted or abandoned in 30d on owner/repo -- mutated tooling signal; tighten validation before rollout.'\n\ntests/test_issue1150_ranked_coverage.py:774: AssertionError"
+              }
+            ],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "source_restored": true,
+      "restored": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_gotcha_section_ends_at_the_next_top_level_item_and_tooling_seed",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-z9v11c9u/restored.xml"
+        ],
+        "returncode": 0,
+        "stdout": ".                                                                        [100%]\n1 passed in 1.11s\n",
+        "stderr": "",
+        "seconds": 4.333,
+        "testcases": [
+          {
+            "name": "test_gotcha_section_ends_at_the_next_top_level_item_and_tooling_seed",
+            "failures": [],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "pair_seconds": 9.189,
+      "passed": true
+    },
+    {
+      "id": "26",
+      "node_id": "tests/test_issue1150_ranked_coverage.py::test_human_summary_lists_candidates_and_the_empty_case",
+      "path": "src/keepalive_evidence.py",
+      "function": "_human_summary",
+      "before": " possible duplicate #",
+      "after": " mutated duplicate #",
+      "intended_assertion": "assert \"possible duplicate #3\" in populated",
+      "behavior": "Human summary must identify a possible duplicate.",
+      "assertion_line": 795,
+      "original_sha256": "1836e6d45d114c5482c18c640269934a186aab59f052214b5ebea58b0b4093dc",
+      "mutation_diff": "--- src/keepalive_evidence.py\n+++ src/keepalive_evidence.py\n@@ -483,7 +483,7 @@\n     lines.append(\"Issue candidates:\")\n     for candidate in result[\"candidates\"]:\n         dup = (\n-            f\" possible duplicate #{candidate['dup_issue']}\"\n+            f\" mutated duplicate #{candidate['dup_issue']}\"\n             if candidate.get(\"possible_duplicate\")\n             else \"\"\n         )\n",
+      "broken": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_human_summary_lists_candidates_and_the_empty_case",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-l9dq3a3o/broken.xml"
+        ],
+        "returncode": 1,
+        "stdout": "F                                                                        [100%]\n=================================== FAILURES ===================================\n____________ test_human_summary_lists_candidates_and_the_empty_case ____________\n\n    def test_human_summary_lists_candidates_and_the_empty_case():\n        populated = keepalive_evidence._human_summary(\n            {\n                \"repo\": \"owner/repo\",\n                \"lookback_days\": 7,\n                \"candidates\": [\n                    {\n                        \"severity\": \"HIGH\",\n                        \"type\": \"regression\",\n                        \"seed\": \"delivery broke\",\n                        \"possible_duplicate\": True,\n                        \"dup_issue\": 3,\n                    }\n                ],\n                \"process_signals\": [{\"severity\": \"MED\", \"work_type\": \"tooling\", \"seed\": \"ci churn\"}],\n                \"signals\": {\"durable_rate\": 0.5},\n            }\n        )\n>       assert \"possible duplicate #3\" in populated\nE       AssertionError: assert 'possible duplicate #3' in 'owner/repo (7d): 1 issue candidate(s), 1 process signal(s), durable_rate=0.5\\nIssue candidates:\\n- HIGH regression: delivery broke mutated duplicate #3\\nProcess signals:\\n- MED tooling: ci churn'\n\ntests/test_issue1150_ranked_coverage.py:795: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_issue1150_ranked_coverage.py::test_human_summary_lists_candidates_and_the_empty_case\n1 failed in 1.10s\n",
+        "stderr": "",
+        "seconds": 4.318,
+        "testcases": [
+          {
+            "name": "test_human_summary_lists_candidates_and_the_empty_case",
+            "failures": [
+              {
+                "message": "AssertionError: assert 'possible duplicate #3' in 'owner/repo (7d): 1 issue candidate(s), 1 process signal(s), durable_rate=0.5\\nIssue candidates:\\n- HIGH regression: delivery broke mutated duplicate #3\\nProcess signals:\\n- MED tooling: ci churn'",
+                "text": "def test_human_summary_lists_candidates_and_the_empty_case():\n        populated = keepalive_evidence._human_summary(\n            {\n                \"repo\": \"owner/repo\",\n                \"lookback_days\": 7,\n                \"candidates\": [\n                    {\n                        \"severity\": \"HIGH\",\n                        \"type\": \"regression\",\n                        \"seed\": \"delivery broke\",\n                        \"possible_duplicate\": True,\n                        \"dup_issue\": 3,\n                    }\n                ],\n                \"process_signals\": [{\"severity\": \"MED\", \"work_type\": \"tooling\", \"seed\": \"ci churn\"}],\n                \"signals\": {\"durable_rate\": 0.5},\n            }\n        )\n>       assert \"possible duplicate #3\" in populated\nE       AssertionError: assert 'possible duplicate #3' in 'owner/repo (7d): 1 issue candidate(s), 1 process signal(s), durable_rate=0.5\\nIssue candidates:\\n- HIGH regression: delivery broke mutated duplicate #3\\nProcess signals:\\n- MED tooling: ci churn'\n\ntests/test_issue1150_ranked_coverage.py:795: AssertionError"
+              }
+            ],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "source_restored": true,
+      "restored": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_human_summary_lists_candidates_and_the_empty_case",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-l9dq3a3o/restored.xml"
+        ],
+        "returncode": 0,
+        "stdout": ".                                                                        [100%]\n1 passed in 1.10s\n",
+        "stderr": "",
+        "seconds": 4.461,
+        "testcases": [
+          {
+            "name": "test_human_summary_lists_candidates_and_the_empty_case",
+            "failures": [],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "pair_seconds": 8.782,
+      "passed": true
+    },
+    {
+      "id": "27",
+      "node_id": "tests/test_issue1150_ranked_coverage.py::test_retirement_helpers_and_cli_are_inert_without_a_declared_hold",
+      "path": "src/cadence_registry.py",
+      "function": "re_enable_when",
+      "before": "return None",
+      "after": "return \"mutated hold\"",
+      "intended_assertion": "assert cadence_registry.re_enable_when({\"key\": \"plain\"}) is None",
+      "behavior": "Unheld cadence must not acquire a re-enable condition.",
+      "assertion_line": 814,
+      "original_sha256": "05d15bb23dd7b48205653b876bad660cb3c603d6eaa3216288dbb42e6270a73d",
+      "mutation_diff": "--- src/cadence_registry.py\n+++ src/cadence_registry.py\n@@ -536,7 +536,7 @@\n     \"\"\"The flags that bring a retired step back, as an operator would set them.\"\"\"\n     held = retirement(row)\n     if held is None:\n-        return None\n+        return \"mutated hold\"\n     return \" or \".join(f\"{name}={value}\" for name, value in held[\"re_enable_env\"].items())\n \n \n",
+      "broken": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_retirement_helpers_and_cli_are_inert_without_a_declared_hold",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-82a77nzt/broken.xml"
+        ],
+        "returncode": 1,
+        "stdout": "F                                                                        [100%]\n=================================== FAILURES ===================================\n______ test_retirement_helpers_and_cli_are_inert_without_a_declared_hold _______\n\nisolated_runtime = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-1300/test_retirement_helpers_and_cl0')\ncapsys = <_pytest.capture.CaptureFixture object at 0x10ba183b0>\n\n    def test_retirement_helpers_and_cli_are_inert_without_a_declared_hold(isolated_runtime, capsys):\n>       assert cadence_registry.re_enable_when({\"key\": \"plain\"}) is None\nE       AssertionError: assert 'mutated hold' is None\nE        +  where 'mutated hold' = <function re_enable_when at 0x10e926d40>({'key': 'plain'})\nE        +    where <function re_enable_when at 0x10e926d40> = cadence_registry.re_enable_when\n\ntests/test_issue1150_ranked_coverage.py:814: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_issue1150_ranked_coverage.py::test_retirement_helpers_and_cli_are_inert_without_a_declared_hold\n1 failed in 1.11s\n",
+        "stderr": "",
+        "seconds": 4.4,
+        "testcases": [
+          {
+            "name": "test_retirement_helpers_and_cli_are_inert_without_a_declared_hold",
+            "failures": [
+              {
+                "message": "AssertionError: assert 'mutated hold' is None\n +  where 'mutated hold' = <function re_enable_when at 0x10e926d40>({'key': 'plain'})\n +    where <function re_enable_when at 0x10e926d40> = cadence_registry.re_enable_when",
+                "text": "isolated_runtime = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-1300/test_retirement_helpers_and_cl0')\ncapsys = <_pytest.capture.CaptureFixture object at 0x10ba183b0>\n\n    def test_retirement_helpers_and_cli_are_inert_without_a_declared_hold(isolated_runtime, capsys):\n>       assert cadence_registry.re_enable_when({\"key\": \"plain\"}) is None\nE       AssertionError: assert 'mutated hold' is None\nE        +  where 'mutated hold' = <function re_enable_when at 0x10e926d40>({'key': 'plain'})\nE        +    where <function re_enable_when at 0x10e926d40> = cadence_registry.re_enable_when\n\ntests/test_issue1150_ranked_coverage.py:814: AssertionError"
+              }
+            ],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "source_restored": true,
+      "restored": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_retirement_helpers_and_cli_are_inert_without_a_declared_hold",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-82a77nzt/restored.xml"
+        ],
+        "returncode": 0,
+        "stdout": ".                                                                        [100%]\n1 passed in 1.12s\n",
+        "stderr": "",
+        "seconds": 4.397,
+        "testcases": [
+          {
+            "name": "test_retirement_helpers_and_cli_are_inert_without_a_declared_hold",
+            "failures": [],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "pair_seconds": 8.801,
+      "passed": true
+    },
+    {
+      "id": "28",
+      "node_id": "tests/test_issue1150_ranked_coverage.py::test_unevaluated_ids_and_round_identity_fail_closed_without_tables",
+      "path": "src/research_subjects.py",
+      "function": "unevaluated_experiment_ids",
+      "before": "return set()",
+      "after": "return {\"mutated\"}",
+      "intended_assertion": "assert research_subjects.unevaluated_experiment_ids(Broken()) == set()",
+      "behavior": "Missing runs table must not fabricate pending experiments.",
+      "assertion_line": 831,
+      "original_sha256": "a2d39a8e5bd0c8309ffbbe30f5eb0a0d8f7fb8186af6131d716bc1f5eb5e5404",
+      "mutation_diff": "--- src/research_subjects.py\n+++ src/research_subjects.py\n@@ -233,7 +233,7 @@\n             if row[1] is None or float(row[1]) >= cutoff\n         }\n     except (sqlite3.Error, TypeError, ValueError):\n-        return set()\n+        return {\"mutated\"}\n \n \n DOMAIN_PREFIX = \"domain/\"\n",
+      "broken": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_unevaluated_ids_and_round_identity_fail_closed_without_tables",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-3sfue8ul/broken.xml"
+        ],
+        "returncode": 1,
+        "stdout": "F                                                                        [100%]\n=================================== FAILURES ===================================\n______ test_unevaluated_ids_and_round_identity_fail_closed_without_tables ______\n\n    def test_unevaluated_ids_and_round_identity_fail_closed_without_tables():\n        class Broken:\n            def execute(self, *_args, **_kwargs):\n                raise sqlite3.OperationalError(\"no runs table\")\n    \n>       assert research_subjects.unevaluated_experiment_ids(Broken()) == set()\nE       AssertionError: assert {'mutated'} == set()\nE         \nE         Extra items in the left set:\nE         'mutated'\nE         Use -v to get more diff\n\ntests/test_issue1150_ranked_coverage.py:831: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_issue1150_ranked_coverage.py::test_unevaluated_ids_and_round_identity_fail_closed_without_tables\n1 failed in 1.24s\n",
+        "stderr": "",
+        "seconds": 4.609,
+        "testcases": [
+          {
+            "name": "test_unevaluated_ids_and_round_identity_fail_closed_without_tables",
+            "failures": [
+              {
+                "message": "AssertionError: assert {'mutated'} == set()\n  \n  Extra items in the left set:\n  'mutated'\n  Use -v to get more diff",
+                "text": "def test_unevaluated_ids_and_round_identity_fail_closed_without_tables():\n        class Broken:\n            def execute(self, *_args, **_kwargs):\n                raise sqlite3.OperationalError(\"no runs table\")\n    \n>       assert research_subjects.unevaluated_experiment_ids(Broken()) == set()\nE       AssertionError: assert {'mutated'} == set()\nE         \nE         Extra items in the left set:\nE         'mutated'\nE         Use -v to get more diff\n\ntests/test_issue1150_ranked_coverage.py:831: AssertionError"
+              }
+            ],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "source_restored": true,
+      "restored": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_unevaluated_ids_and_round_identity_fail_closed_without_tables",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-3sfue8ul/restored.xml"
+        ],
+        "returncode": 0,
+        "stdout": ".                                                                        [100%]\n1 passed in 1.40s\n",
+        "stderr": "",
+        "seconds": 4.912,
+        "testcases": [
+          {
+            "name": "test_unevaluated_ids_and_round_identity_fail_closed_without_tables",
+            "failures": [],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "pair_seconds": 9.525,
+      "passed": true
+    },
+    {
+      "id": "29",
+      "node_id": "tests/test_issue1150_ranked_coverage.py::test_round_arms_ignore_corrupt_json_and_findings_require_a_real_arm",
+      "path": "src/research_subjects.py",
+      "function": "round_arm_evidence",
+      "before": "registered = []",
+      "after": "registered = [\"mutated\"]",
+      "intended_assertion": "assert evidence[\"registered\"] == []",
+      "behavior": "Corrupt arm JSON must not fabricate registered arms.",
+      "assertion_line": 845,
+      "original_sha256": "a2d39a8e5bd0c8309ffbbe30f5eb0a0d8f7fb8186af6131d716bc1f5eb5e5404",
+      "mutation_diff": "--- src/research_subjects.py\n+++ src/research_subjects.py\n@@ -417,7 +417,7 @@\n                         }\n                     )\n                 except (TypeError, ValueError):\n-                    registered = []\n+                    registered = [\"mutated\"]\n         attempted: list[str] = []\n         if _table_exists(db, \"runs\"):\n             attempted = sorted(\n",
+      "broken": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_round_arms_ignore_corrupt_json_and_findings_require_a_real_arm",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-8qf8i93l/broken.xml"
+        ],
+        "returncode": 1,
+        "stdout": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_____ test_round_arms_ignore_corrupt_json_and_findings_require_a_real_arm ______\n\n    def test_round_arms_ignore_corrupt_json_and_findings_require_a_real_arm():\n        conn = feedback._conn()\n        rid, identity = research_subjects.record_research_round(\n            \"owner/repo\", \"audit\", \"2026-11-05\", \"scope\", [\"codex\"], conn=conn\n        )\n        conn.execute(\"UPDATE research_subjects SET arms_json=?\", (\"{\",))\n        conn.commit()\n        evidence = research_subjects.round_arm_evidence(rid, conn=conn)\n>       assert evidence[\"registered\"] == []\nE       AssertionError: assert ['mutated'] == []\nE         \nE         Left contains one more item: 'mutated'\nE         Use -v to get more diff\n\ntests/test_issue1150_ranked_coverage.py:845: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_issue1150_ranked_coverage.py::test_round_arms_ignore_corrupt_json_and_findings_require_a_real_arm\n1 failed in 1.19s\n",
+        "stderr": "",
+        "seconds": 4.466,
+        "testcases": [
+          {
+            "name": "test_round_arms_ignore_corrupt_json_and_findings_require_a_real_arm",
+            "failures": [
+              {
+                "message": "AssertionError: assert ['mutated'] == []\n  \n  Left contains one more item: 'mutated'\n  Use -v to get more diff",
+                "text": "def test_round_arms_ignore_corrupt_json_and_findings_require_a_real_arm():\n        conn = feedback._conn()\n        rid, identity = research_subjects.record_research_round(\n            \"owner/repo\", \"audit\", \"2026-11-05\", \"scope\", [\"codex\"], conn=conn\n        )\n        conn.execute(\"UPDATE research_subjects SET arms_json=?\", (\"{\",))\n        conn.commit()\n        evidence = research_subjects.round_arm_evidence(rid, conn=conn)\n>       assert evidence[\"registered\"] == []\nE       AssertionError: assert ['mutated'] == []\nE         \nE         Left contains one more item: 'mutated'\nE         Use -v to get more diff\n\ntests/test_issue1150_ranked_coverage.py:845: AssertionError"
+              }
+            ],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "source_restored": true,
+      "restored": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_round_arms_ignore_corrupt_json_and_findings_require_a_real_arm",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-8qf8i93l/restored.xml"
+        ],
+        "returncode": 0,
+        "stdout": ".                                                                        [100%]\n1 passed in 1.11s\n",
+        "stderr": "",
+        "seconds": 4.31,
+        "testcases": [
+          {
+            "name": "test_round_arms_ignore_corrupt_json_and_findings_require_a_real_arm",
+            "failures": [],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "pair_seconds": 8.778,
+      "passed": true
+    },
+    {
+      "id": "30",
+      "node_id": "tests/test_issue1150_ranked_coverage.py::test_implementation_binding_skips_corrupt_events_and_names_an_unscored_run",
+      "path": "src/research_subjects.py",
+      "function": "resolve_round_durability",
+      "before": "unresolved_reasons[\"bound_run_has_no_outcome\"] += 1",
+      "after": "unresolved_reasons[\"bound_run_has_no_outcome\"] += 0",
+      "intended_assertion": "assert report[\"unresolved_by_reason\"][\"bound_run_has_no_outcome\"] == 1",
+      "behavior": "An explicitly bound unscored run must be counted unresolved.",
+      "assertion_line": 898,
+      "original_sha256": "a2d39a8e5bd0c8309ffbbe30f5eb0a0d8f7fb8186af6131d716bc1f5eb5e5404",
+      "mutation_diff": "--- src/research_subjects.py\n+++ src/research_subjects.py\n@@ -729,7 +729,7 @@\n                 if not candidates:\n                     # The delivering run is named but has not been scored yet. Pending, not absent.\n                     unresolved += 1\n-                    unresolved_reasons[\"bound_run_has_no_outcome\"] += 1\n+                    unresolved_reasons[\"bound_run_has_no_outcome\"] += 0\n                     continue\n             else:\n                 candidates = db.execute(\n",
+      "broken": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_implementation_binding_skips_corrupt_events_and_names_an_unscored_run",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-796_w7fl/broken.xml"
+        ],
+        "returncode": 1,
+        "stdout": "F                                                                        [100%]\n=================================== FAILURES ===================================\n__ test_implementation_binding_skips_corrupt_events_and_names_an_unscored_run __\n\n    def test_implementation_binding_skips_corrupt_events_and_names_an_unscored_run():\n        conn = feedback._conn()\n        rid, identity = research_subjects.record_research_round(\n            \"owner/findings\", \"audit\", \"2026-11-05\", \"scope\", [\"codex\"], conn=conn\n        )\n        conn.execute(\n            \"INSERT INTO research_subject_events VALUES (?,?,?,?,?,?,?,?,?,?)\",\n            (\"bad-filed\", 1, None, None, None, None, \"finding_filed\", \"x\", rid, \"{\"),\n        )\n        feedback.record_run(\"bare-run\", \"owner/findings#4\", \"implement\", \"codex\", conn=conn)\n        research_subjects.record_finding_issue(\n            rid, \"owner/findings#4\", arm=\"codex\", identity=identity, conn=conn\n        )\n        conn.execute(\n            \"INSERT INTO research_subject_events VALUES (?,?,?,?,?,?,?,?,?,?)\",\n            (\"bad-impl\", 2, None, None, None, None, \"finding_implemented\", \"x\", rid, \"{\"),\n        )\n        research_subjects.record_finding_implementation(rid, \"owner/findings#4\", \"bare-run\", conn=conn)\n        report = research_subjects.resolve_round_durability(rid, conn=conn)\n>       assert report[\"unresolved_by_reason\"][\"bound_run_has_no_outcome\"] == 1\nE       assert 0 == 1\n\ntests/test_issue1150_ranked_coverage.py:898: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_issue1150_ranked_coverage.py::test_implementation_binding_skips_corrupt_events_and_names_an_unscored_run\n1 failed in 1.14s\n",
+        "stderr": "",
+        "seconds": 4.282,
+        "testcases": [
+          {
+            "name": "test_implementation_binding_skips_corrupt_events_and_names_an_unscored_run",
+            "failures": [
+              {
+                "message": "assert 0 == 1",
+                "text": "def test_implementation_binding_skips_corrupt_events_and_names_an_unscored_run():\n        conn = feedback._conn()\n        rid, identity = research_subjects.record_research_round(\n            \"owner/findings\", \"audit\", \"2026-11-05\", \"scope\", [\"codex\"], conn=conn\n        )\n        conn.execute(\n            \"INSERT INTO research_subject_events VALUES (?,?,?,?,?,?,?,?,?,?)\",\n            (\"bad-filed\", 1, None, None, None, None, \"finding_filed\", \"x\", rid, \"{\"),\n        )\n        feedback.record_run(\"bare-run\", \"owner/findings#4\", \"implement\", \"codex\", conn=conn)\n        research_subjects.record_finding_issue(\n            rid, \"owner/findings#4\", arm=\"codex\", identity=identity, conn=conn\n        )\n        conn.execute(\n            \"INSERT INTO research_subject_events VALUES (?,?,?,?,?,?,?,?,?,?)\",\n            (\"bad-impl\", 2, None, None, None, None, \"finding_implemented\", \"x\", rid, \"{\"),\n        )\n        research_subjects.record_finding_implementation(rid, \"owner/findings#4\", \"bare-run\", conn=conn)\n        report = research_subjects.resolve_round_durability(rid, conn=conn)\n>       assert report[\"unresolved_by_reason\"][\"bound_run_has_no_outcome\"] == 1\nE       assert 0 == 1\n\ntests/test_issue1150_ranked_coverage.py:898: AssertionError"
+              }
+            ],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "source_restored": true,
+      "restored": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_implementation_binding_skips_corrupt_events_and_names_an_unscored_run",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-796_w7fl/restored.xml"
+        ],
+        "returncode": 0,
+        "stdout": ".                                                                        [100%]\n1 passed in 1.10s\n",
+        "stderr": "",
+        "seconds": 4.199,
+        "testcases": [
+          {
+            "name": "test_implementation_binding_skips_corrupt_events_and_names_an_unscored_run",
+            "failures": [],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "pair_seconds": 8.484,
+      "passed": true
+    },
+    {
+      "id": "31",
+      "node_id": "tests/test_issue1150_ranked_coverage.py::test_durability_edge_failure_is_counted_not_fatal",
+      "path": "src/research_subjects.py",
+      "function": "resolve_round_durability",
+      "before": "edges_written = 0",
+      "after": "edges_written = 1",
+      "intended_assertion": "assert report[\"edges_written\"] == 0",
+      "behavior": "Refused edge writes must not count as successful writes.",
+      "assertion_line": 930,
+      "original_sha256": "a2d39a8e5bd0c8309ffbbe30f5eb0a0d8f7fb8186af6131d716bc1f5eb5e5404",
+      "mutation_diff": "--- src/research_subjects.py\n+++ src/research_subjects.py\n@@ -706,7 +706,7 @@\n         per_arm: dict[str, dict[str, int]] = {}\n         unresolved = 0\n         unresolved_reasons: Counter = Counter()\n-        edges_written = 0\n+        edges_written = 1\n         for meta in filed:\n             arm = str(meta.get(\"arm\") or \"\").lower()\n             target = meta[\"issue_target\"]\n",
+      "broken": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_durability_edge_failure_is_counted_not_fatal",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-el12atr0/broken.xml"
+        ],
+        "returncode": 1,
+        "stdout": "F                                                                        [100%]\n=================================== FAILURES ===================================\n______________ test_durability_edge_failure_is_counted_not_fatal _______________\n\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a132000>\n\n    def test_durability_edge_failure_is_counted_not_fatal(monkeypatch):\n        conn = feedback._conn()\n        rid, identity = research_subjects.record_research_round(\n            \"owner/edges\", \"audit\", \"2026-11-05\", \"scope\", [\"codex\"], conn=conn\n        )\n        feedback.record_run(\"impl\", \"owner/edges#5\", \"implement\", \"claude\", conn=conn)\n        feedback.record_run(\n            \"arm-run\", \"owner/edges\", \"implement\", \"codex\", experiment_id=rid, conn=conn\n        )\n        conn.execute(\n            \"INSERT INTO outcomes (run_id, verifier_verdict, durability) VALUES (?,?,?)\",\n            (\"impl\", \"PASS\", \"durable\"),\n        )\n        research_subjects.record_finding_issue(\n            rid,\n            \"owner/edges#5\",\n            arm=\"codex\",\n            identity=identity,\n            implementation_run_id=\"impl\",\n            conn=conn,\n        )\n    \n        def refuse(**_kwargs):\n            raise RuntimeError(\"edge store refused\")\n    \n        monkeypatch.setattr(feedback, \"record_influence_edge\", refuse)\n        report = research_subjects.resolve_round_durability(rid, conn=conn, apply_edges=True)\n        assert report[\"per_arm_durability\"] == {\"codex\": {\"durable\": 1}}\n>       assert report[\"edges_written\"] == 0\nE       assert 1 == 0\n\ntests/test_issue1150_ranked_coverage.py:930: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_issue1150_ranked_coverage.py::test_durability_edge_failure_is_counted_not_fatal\n1 failed in 1.15s\n",
+        "stderr": "",
+        "seconds": 4.394,
+        "testcases": [
+          {
+            "name": "test_durability_edge_failure_is_counted_not_fatal",
+            "failures": [
+              {
+                "message": "assert 1 == 0",
+                "text": "monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a132000>\n\n    def test_durability_edge_failure_is_counted_not_fatal(monkeypatch):\n        conn = feedback._conn()\n        rid, identity = research_subjects.record_research_round(\n            \"owner/edges\", \"audit\", \"2026-11-05\", \"scope\", [\"codex\"], conn=conn\n        )\n        feedback.record_run(\"impl\", \"owner/edges#5\", \"implement\", \"claude\", conn=conn)\n        feedback.record_run(\n            \"arm-run\", \"owner/edges\", \"implement\", \"codex\", experiment_id=rid, conn=conn\n        )\n        conn.execute(\n            \"INSERT INTO outcomes (run_id, verifier_verdict, durability) VALUES (?,?,?)\",\n            (\"impl\", \"PASS\", \"durable\"),\n        )\n        research_subjects.record_finding_issue(\n            rid,\n            \"owner/edges#5\",\n            arm=\"codex\",\n            identity=identity,\n            implementation_run_id=\"impl\",\n            conn=conn,\n        )\n    \n        def refuse(**_kwargs):\n            raise RuntimeError(\"edge store refused\")\n    \n        monkeypatch.setattr(feedback, \"record_influence_edge\", refuse)\n        report = research_subjects.resolve_round_durability(rid, conn=conn, apply_edges=True)\n        assert report[\"per_arm_durability\"] == {\"codex\": {\"durable\": 1}}\n>       assert report[\"edges_written\"] == 0\nE       assert 1 == 0\n\ntests/test_issue1150_ranked_coverage.py:930: AssertionError"
+              }
+            ],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "source_restored": true,
+      "restored": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_durability_edge_failure_is_counted_not_fatal",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-el12atr0/restored.xml"
+        ],
+        "returncode": 0,
+        "stdout": ".                                                                        [100%]\n1 passed in 1.13s\n",
+        "stderr": "",
+        "seconds": 4.598,
+        "testcases": [
+          {
+            "name": "test_durability_edge_failure_is_counted_not_fatal",
+            "failures": [],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "pair_seconds": 8.996,
+      "passed": true
+    },
+    {
+      "id": "32",
+      "node_id": "tests/test_issue1150_ranked_coverage.py::test_subject_admission_cooldown_cap_and_lifecycle_edges",
+      "path": "src/research_subjects.py",
+      "function": "assess_candidate",
+      "before": "\"reason\": \"subject_backlog_cap\"",
+      "after": "\"reason\": \"mutated cap\"",
+      "intended_assertion": "assert capped[\"reason\"] == \"subject_backlog_cap\"",
+      "behavior": "Subject backlog refusal must identify the active cap.",
+      "assertion_line": 956,
+      "original_sha256": "a2d39a8e5bd0c8309ffbbe30f5eb0a0d8f7fb8186af6131d716bc1f5eb5e5404",
+      "mutation_diff": "--- src/research_subjects.py\n+++ src/research_subjects.py\n@@ -966,7 +966,7 @@\n             return {\n                 **identity,\n                 \"eligible\": False,\n-                \"reason\": \"subject_backlog_cap\",\n+                \"reason\": \"mutated cap\",\n                 \"subject_open_backlog\": family_open,\n                 \"per_subject_cap\": max(1, int(per_subject_cap)),\n                 \"unevaluated_backlog\": backlog_count,\n",
+      "broken": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_subject_admission_cooldown_cap_and_lifecycle_edges",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-d19qyh2r/broken.xml"
+        ],
+        "returncode": 1,
+        "stdout": "F                                                                        [100%]\n=================================== FAILURES ===================================\n___________ test_subject_admission_cooldown_cap_and_lifecycle_edges ____________\n\n    def test_subject_admission_cooldown_cap_and_lifecycle_edges():\n        identity = research_subjects.subject_identity(\n            \"owner/repo#8\", \"implement\", \"same spec\", \"abc123\", [\"codex\"]\n        )\n        other = research_subjects.subject_identity(\n            \"owner/repo#8\", \"implement\", \"same spec\", \"abc123\", [\"claude\"]\n        )\n        research_subjects.record_subject(\n            other, lifecycle=\"active\", exp_id=\"exp-open\", cooldown_hours=0, now=2_000_000\n        )\n        research_subjects.record_subject(\n            identity, lifecycle=\"evaluated\", exp_id=\"exp-done\", cooldown_hours=0, now=2_000_000\n        )\n        capped = research_subjects.assess_candidate(\n            target=\"owner/repo#8\",\n            task_type=\"implement\",\n            spec=\"same spec\",\n            base_sha=\"abc123\",\n            arms=[\"codex\"],\n            now=2_000_000,\n            per_subject_cap=1,\n        )\n>       assert capped[\"reason\"] == \"subject_backlog_cap\"\nE       AssertionError: assert 'mutated cap' == 'subject_backlog_cap'\nE         \nE         - subject_backlog_cap\nE         + mutated cap\n\ntests/test_issue1150_ranked_coverage.py:956: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_issue1150_ranked_coverage.py::test_subject_admission_cooldown_cap_and_lifecycle_edges\n1 failed in 1.16s\n",
+        "stderr": "",
+        "seconds": 4.365,
+        "testcases": [
+          {
+            "name": "test_subject_admission_cooldown_cap_and_lifecycle_edges",
+            "failures": [
+              {
+                "message": "AssertionError: assert 'mutated cap' == 'subject_backlog_cap'\n  \n  - subject_backlog_cap\n  + mutated cap",
+                "text": "def test_subject_admission_cooldown_cap_and_lifecycle_edges():\n        identity = research_subjects.subject_identity(\n            \"owner/repo#8\", \"implement\", \"same spec\", \"abc123\", [\"codex\"]\n        )\n        other = research_subjects.subject_identity(\n            \"owner/repo#8\", \"implement\", \"same spec\", \"abc123\", [\"claude\"]\n        )\n        research_subjects.record_subject(\n            other, lifecycle=\"active\", exp_id=\"exp-open\", cooldown_hours=0, now=2_000_000\n        )\n        research_subjects.record_subject(\n            identity, lifecycle=\"evaluated\", exp_id=\"exp-done\", cooldown_hours=0, now=2_000_000\n        )\n        capped = research_subjects.assess_candidate(\n            target=\"owner/repo#8\",\n            task_type=\"implement\",\n            spec=\"same spec\",\n            base_sha=\"abc123\",\n            arms=[\"codex\"],\n            now=2_000_000,\n            per_subject_cap=1,\n        )\n>       assert capped[\"reason\"] == \"subject_backlog_cap\"\nE       AssertionError: assert 'mutated cap' == 'subject_backlog_cap'\nE         \nE         - subject_backlog_cap\nE         + mutated cap\n\ntests/test_issue1150_ranked_coverage.py:956: AssertionError"
+              }
+            ],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "source_restored": true,
+      "restored": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_subject_admission_cooldown_cap_and_lifecycle_edges",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-d19qyh2r/restored.xml"
+        ],
+        "returncode": 0,
+        "stdout": ".                                                                        [100%]\n1 passed in 1.17s\n",
+        "stderr": "",
+        "seconds": 4.289,
+        "testcases": [
+          {
+            "name": "test_subject_admission_cooldown_cap_and_lifecycle_edges",
+            "failures": [],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "pair_seconds": 8.656,
+      "passed": true
+    },
+    {
+      "id": "33",
+      "node_id": "tests/test_issue1150_ranked_coverage.py::test_weights_and_summary_close_an_empty_brain",
+      "path": "src/research_subjects.py",
+      "function": "effective_evidence_weights",
+      "before": "return {}",
+      "after": "return {\"mutated\": 1.0}",
+      "intended_assertion": "assert research_subjects.effective_evidence_weights() == {}",
+      "behavior": "An empty Brain must have no evidence weights.",
+      "assertion_line": 989,
+      "original_sha256": "a2d39a8e5bd0c8309ffbbe30f5eb0a0d8f7fb8186af6131d716bc1f5eb5e5404",
+      "mutation_diff": "--- src/research_subjects.py\n+++ src/research_subjects.py\n@@ -1206,7 +1206,7 @@\n     if not _table_exists(db, \"research_subjects\"):\n         if close:\n             db.close()\n-        return {}\n+        return {\"mutated\": 1.0}\n     query = (\n         \"SELECT r.run_id,r.agent,x.subject_family_id FROM runs r \"\n         \"JOIN research_subject_experiments x ON x.exp_id=r.experiment_id \"\n",
+      "broken": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_weights_and_summary_close_an_empty_brain",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-g3_xiurd/broken.xml"
+        ],
+        "returncode": 1,
+        "stdout": "F                                                                        [100%]\n=================================== FAILURES ===================================\n________________ test_weights_and_summary_close_an_empty_brain _________________\n\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x11194f0b0>\n\n    def test_weights_and_summary_close_an_empty_brain(monkeypatch):\n        def empty_conn(*_args, **_kwargs):\n            return sqlite3.connect(\":memory:\")\n    \n        monkeypatch.setattr(feedback, \"_conn\", empty_conn)\n>       assert research_subjects.effective_evidence_weights() == {}\nE       AssertionError: assert {'mutated': 1.0} == {}\nE         \nE         Left contains 1 more item:\nE         {'mutated': 1.0}\nE         Use -v to get more diff\n\ntests/test_issue1150_ranked_coverage.py:989: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_issue1150_ranked_coverage.py::test_weights_and_summary_close_an_empty_brain\n1 failed in 1.13s\n",
+        "stderr": "",
+        "seconds": 4.542,
+        "testcases": [
+          {
+            "name": "test_weights_and_summary_close_an_empty_brain",
+            "failures": [
+              {
+                "message": "AssertionError: assert {'mutated': 1.0} == {}\n  \n  Left contains 1 more item:\n  {'mutated': 1.0}\n  Use -v to get more diff",
+                "text": "monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x11194f0b0>\n\n    def test_weights_and_summary_close_an_empty_brain(monkeypatch):\n        def empty_conn(*_args, **_kwargs):\n            return sqlite3.connect(\":memory:\")\n    \n        monkeypatch.setattr(feedback, \"_conn\", empty_conn)\n>       assert research_subjects.effective_evidence_weights() == {}\nE       AssertionError: assert {'mutated': 1.0} == {}\nE         \nE         Left contains 1 more item:\nE         {'mutated': 1.0}\nE         Use -v to get more diff\n\ntests/test_issue1150_ranked_coverage.py:989: AssertionError"
+              }
+            ],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "source_restored": true,
+      "restored": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_weights_and_summary_close_an_empty_brain",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-g3_xiurd/restored.xml"
+        ],
+        "returncode": 0,
+        "stdout": ".                                                                        [100%]\n1 passed in 1.08s\n",
+        "stderr": "",
+        "seconds": 4.381,
+        "testcases": [
+          {
+            "name": "test_weights_and_summary_close_an_empty_brain",
+            "failures": [],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "pair_seconds": 8.925,
+      "passed": true
+    },
+    {
+      "id": "34",
+      "node_id": "tests/test_issue1150_ranked_coverage.py::test_weights_close_after_reading_a_real_brain",
+      "path": "src/research_subjects.py",
+      "function": "effective_evidence_weights",
+      "before": "return weights",
+      "after": "return {\"mutated\": 1.0}",
+      "intended_assertion": "assert research_subjects.effective_evidence_weights() == {}",
+      "behavior": "An initialized Brain without linked runs must have no weights.",
+      "assertion_line": 999,
+      "original_sha256": "a2d39a8e5bd0c8309ffbbe30f5eb0a0d8f7fb8186af6131d716bc1f5eb5e5404",
+      "mutation_diff": "--- src/research_subjects.py\n+++ src/research_subjects.py\n@@ -1224,7 +1224,7 @@\n     weights = reciprocal_evidence_weights(by_agent_subject)\n     if close:\n         db.close()\n-    return weights\n+    return {\"mutated\": 1.0}\n \n \n def summary(\n",
+      "broken": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_weights_close_after_reading_a_real_brain",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-qy02x99d/broken.xml"
+        ],
+        "returncode": 1,
+        "stdout": "F                                                                        [100%]\n=================================== FAILURES ===================================\n________________ test_weights_close_after_reading_a_real_brain _________________\n\n    def test_weights_close_after_reading_a_real_brain():\n        conn = feedback._conn()\n        research_subjects.ensure_schema(conn)\n        conn.close()\n>       assert research_subjects.effective_evidence_weights() == {}\nE       AssertionError: assert {'mutated': 1.0} == {}\nE         \nE         Left contains 1 more item:\nE         {'mutated': 1.0}\nE         Use -v to get more diff\n\ntests/test_issue1150_ranked_coverage.py:999: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_issue1150_ranked_coverage.py::test_weights_close_after_reading_a_real_brain\n1 failed in 1.15s\n",
+        "stderr": "",
+        "seconds": 4.297,
+        "testcases": [
+          {
+            "name": "test_weights_close_after_reading_a_real_brain",
+            "failures": [
+              {
+                "message": "AssertionError: assert {'mutated': 1.0} == {}\n  \n  Left contains 1 more item:\n  {'mutated': 1.0}\n  Use -v to get more diff",
+                "text": "def test_weights_close_after_reading_a_real_brain():\n        conn = feedback._conn()\n        research_subjects.ensure_schema(conn)\n        conn.close()\n>       assert research_subjects.effective_evidence_weights() == {}\nE       AssertionError: assert {'mutated': 1.0} == {}\nE         \nE         Left contains 1 more item:\nE         {'mutated': 1.0}\nE         Use -v to get more diff\n\ntests/test_issue1150_ranked_coverage.py:999: AssertionError"
+              }
+            ],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "source_restored": true,
+      "restored": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_weights_close_after_reading_a_real_brain",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-qy02x99d/restored.xml"
+        ],
+        "returncode": 0,
+        "stdout": ".                                                                        [100%]\n1 passed in 1.09s\n",
+        "stderr": "",
+        "seconds": 4.259,
+        "testcases": [
+          {
+            "name": "test_weights_close_after_reading_a_real_brain",
+            "failures": [],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "pair_seconds": 8.559,
+      "passed": true
+    },
+    {
+      "id": "35",
+      "node_id": "tests/test_issue1150_ranked_coverage.py::test_rounds_report_counts_failures_and_summary_survives_a_broken_report",
+      "path": "src/research_subjects.py",
+      "function": "rounds_report",
+      "before": "failed += 1",
+      "after": "failed += 0",
+      "intended_assertion": "assert report[\"fail\"] == 1",
+      "behavior": "Scored failed offloads must increment the fail total.",
+      "assertion_line": 1015,
+      "original_sha256": "a2d39a8e5bd0c8309ffbbe30f5eb0a0d8f7fb8186af6131d716bc1f5eb5e5404",
+      "mutation_diff": "--- src/research_subjects.py\n+++ src/research_subjects.py\n@@ -1684,7 +1684,7 @@\n                     passed += 1\n                     cell[\"pass\"] += 1\n                 elif str(verdict or \"\").upper() == \"FAIL\":\n-                    failed += 1\n+                    failed += 0\n                     cell[\"fail\"] += 1\n         return {\n             \"window_days\": int(window_days),\n",
+      "broken": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_rounds_report_counts_failures_and_summary_survives_a_broken_report",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-uswdqpzn/broken.xml"
+        ],
+        "returncode": 1,
+        "stdout": "F                                                                        [100%]\n=================================== FAILURES ===================================\n___ test_rounds_report_counts_failures_and_summary_survives_a_broken_report ____\n\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1076c6660>\n\n    def test_rounds_report_counts_failures_and_summary_survives_a_broken_report(monkeypatch):\n        now = 1_800_000_000\n        feedback.record_run(\n            \"off-fail\",\n            \"owner/repo#1\",\n            \"implement\",\n            \"codex\",\n            mode=\"offload\",\n            experiment_id=\"owner/repo:audit:2026-11-05\",\n            ts=now,\n        )\n        feedback.record_outcome(\"off-fail\", adjudicated_verdict=\"FAIL\", failure_class=\"\")\n        report = research_subjects.rounds_report(30, now=now)\n>       assert report[\"fail\"] == 1\nE       assert 0 == 1\n\ntests/test_issue1150_ranked_coverage.py:1015: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_issue1150_ranked_coverage.py::test_rounds_report_counts_failures_and_summary_survives_a_broken_report\n1 failed in 1.23s\n",
+        "stderr": "",
+        "seconds": 4.568,
+        "testcases": [
+          {
+            "name": "test_rounds_report_counts_failures_and_summary_survives_a_broken_report",
+            "failures": [
+              {
+                "message": "assert 0 == 1",
+                "text": "monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1076c6660>\n\n    def test_rounds_report_counts_failures_and_summary_survives_a_broken_report(monkeypatch):\n        now = 1_800_000_000\n        feedback.record_run(\n            \"off-fail\",\n            \"owner/repo#1\",\n            \"implement\",\n            \"codex\",\n            mode=\"offload\",\n            experiment_id=\"owner/repo:audit:2026-11-05\",\n            ts=now,\n        )\n        feedback.record_outcome(\"off-fail\", adjudicated_verdict=\"FAIL\", failure_class=\"\")\n        report = research_subjects.rounds_report(30, now=now)\n>       assert report[\"fail\"] == 1\nE       assert 0 == 1\n\ntests/test_issue1150_ranked_coverage.py:1015: AssertionError"
+              }
+            ],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "source_restored": true,
+      "restored": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_rounds_report_counts_failures_and_summary_survives_a_broken_report",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-uswdqpzn/restored.xml"
+        ],
+        "returncode": 0,
+        "stdout": ".                                                                        [100%]\n1 passed in 1.11s\n",
+        "stderr": "",
+        "seconds": 4.277,
+        "testcases": [
+          {
+            "name": "test_rounds_report_counts_failures_and_summary_survives_a_broken_report",
+            "failures": [],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "pair_seconds": 8.848,
+      "passed": true
+    },
+    {
+      "id": "36",
+      "node_id": "tests/test_issue1150_ranked_coverage.py::test_research_cli_records_findings_and_reports_refusals",
+      "path": "src/research_subjects.py",
+      "function": "main",
+      "before": "{\"recorded\": False, \"reason\": f\"no registered round {args.round_id}\"}",
+      "after": "{\"recorded\": True, \"reason\": f\"no registered round {args.round_id}\"}",
+      "intended_assertion": "assert json.loads(capsys.readouterr().out)[\"recorded\"] is False",
+      "behavior": "Finding CLI must not claim a missing round was recorded.",
+      "assertion_line": 1041,
+      "original_sha256": "a2d39a8e5bd0c8309ffbbe30f5eb0a0d8f7fb8186af6131d716bc1f5eb5e5404",
+      "mutation_diff": "--- src/research_subjects.py\n+++ src/research_subjects.py\n@@ -1813,7 +1813,7 @@\n                 # mistake and a fact that quietly never existed.\n                 print(\n                     json.dumps(\n-                        {\"recorded\": False, \"reason\": f\"no registered round {args.round_id}\"}\n+                        {\"recorded\": True, \"reason\": f\"no registered round {args.round_id}\"}\n                     )\n                 )\n                 return 1\n",
+      "broken": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_research_cli_records_findings_and_reports_refusals",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-t_edu_kf/broken.xml"
+        ],
+        "returncode": 1,
+        "stdout": "F                                                                        [100%]\n=================================== FAILURES ===================================\n___________ test_research_cli_records_findings_and_reports_refusals ____________\n\ncapsys = <_pytest.capture.CaptureFixture object at 0x113fd3fe0>\n\n    def test_research_cli_records_findings_and_reports_refusals(capsys):\n        assert (\n            research_subjects.main(\n                [\n                    \"finding-filed\",\n                    \"--round-id\",\n                    \"missing:audit:2026-01-01\",\n                    \"--issue\",\n                    \"owner/repo#3\",\n                    \"--arm\",\n                    \"codex\",\n                ]\n            )\n            == 1\n        )\n>       assert json.loads(capsys.readouterr().out)[\"recorded\"] is False\nE       assert True is False\n\ntests/test_issue1150_ranked_coverage.py:1041: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_issue1150_ranked_coverage.py::test_research_cli_records_findings_and_reports_refusals\n1 failed in 1.13s\n",
+        "stderr": "",
+        "seconds": 4.232,
+        "testcases": [
+          {
+            "name": "test_research_cli_records_findings_and_reports_refusals",
+            "failures": [
+              {
+                "message": "assert True is False",
+                "text": "capsys = <_pytest.capture.CaptureFixture object at 0x113fd3fe0>\n\n    def test_research_cli_records_findings_and_reports_refusals(capsys):\n        assert (\n            research_subjects.main(\n                [\n                    \"finding-filed\",\n                    \"--round-id\",\n                    \"missing:audit:2026-01-01\",\n                    \"--issue\",\n                    \"owner/repo#3\",\n                    \"--arm\",\n                    \"codex\",\n                ]\n            )\n            == 1\n        )\n>       assert json.loads(capsys.readouterr().out)[\"recorded\"] is False\nE       assert True is False\n\ntests/test_issue1150_ranked_coverage.py:1041: AssertionError"
+              }
+            ],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "source_restored": true,
+      "restored": {
+        "command": [
+          "/opt/anaconda3/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_issue1150_ranked_coverage.py::test_research_cli_records_findings_and_reports_refusals",
+          "--tb=long",
+          "--junitxml=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1150-t_edu_kf/restored.xml"
+        ],
+        "returncode": 0,
+        "stdout": ".                                                                        [100%]\n1 passed in 1.16s\n",
+        "stderr": "",
+        "seconds": 4.31,
+        "testcases": [
+          {
+            "name": "test_research_cli_records_findings_and_reports_refusals",
+            "failures": [],
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "pair_seconds": 8.545,
+      "passed": true
+    }
+  ]
+}

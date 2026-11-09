@@ -1,0 +1,10 @@
+{
+  "pytest.stdout.log": "",
+  "pytest.stderr.log": "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3: No module named pytest\n",
+  "mutation.stdout.log": "",
+  "mutation.stderr.log": "Fleet mutation verification blocked or failed: /opt/hostedtoolcache/Python/3.14.10/x64/bin/python3: No module named pytest\n\n\n1 !== 0\n\n",
+  "verify.stdout.log": "",
+  "verify.stderr.log": "",
+  "live.stdout.log": "Five fleet rows verified at 2026-11-06T04:02:08.635Z; evidence: /tmp/issue-1186-timeout-receipts-20261106/live\n",
+  "live.stderr.log": ""
+}
