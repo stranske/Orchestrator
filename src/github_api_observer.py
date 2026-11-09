@@ -114,8 +114,7 @@ def observe_github(result, args, callsite):
         )
     # Debug may contain private bodies and headers. Only ordinary CLI errors return.
     stderr = result.stderr or ""
-    if re.search(r"(?m)^(?:[<>] |\* Request )", stderr):
-        stderr = "\n".join(re.findall(r"(?m)^(?:gh:|GraphQL:|HTTP \d+).*", stderr))
+    stderr = "\n".join(re.findall(r"(?m)^(?:gh:|GraphQL:|HTTP \d+).*", stderr))
     result.stderr = re.sub(r"gh[hopsu]_[A-Za-z0-9_]+", "REDACTED", stderr)
     if result.returncode and not result.stderr:
         result.stderr = f"gh failed (exit {result.returncode}); see observed HTTP metadata"

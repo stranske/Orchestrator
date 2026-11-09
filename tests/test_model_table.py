@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import urllib.error
 import urllib.request
 
@@ -38,6 +39,37 @@ def test_copy_matches_workflows_source() -> None:
         "model_table.TABLE_JSON differs from stranske/Workflows main .github/agents/model-table.json; "
         "run `python3 src/model_table.py --sync <Workflows>/.github/agents/model-table.json`"
     )
+
+
+def test_copy_comparison_distinguishes_unavailable_from_real_failure(monkeypatch) -> None:
+    for code in (404, 429, 500, 502, 503, 504):
+
+        def unavailable(*args, **kwargs):
+            raise urllib.error.HTTPError(
+                model_table.WORKFLOWS_SOURCE, code, "controlled", None, None
+            )
+
+        monkeypatch.setattr(urllib.request, "urlopen", unavailable)
+        with pytest.raises(pytest.skip.Exception, match="CANNOT COMPARE"):
+            test_copy_matches_workflows_source()
+    for code in (401, 403, 418):
+
+        def unexpected(*args, **kwargs):
+            raise urllib.error.HTTPError(
+                model_table.WORKFLOWS_SOURCE, code, "controlled", None, None
+            )
+
+        monkeypatch.setattr(urllib.request, "urlopen", unexpected)
+        with pytest.raises(urllib.error.HTTPError) as error:
+            test_copy_matches_workflows_source()
+        assert error.value.code == code
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **kw: io.BytesIO(b"different body"))
+    with pytest.raises(AssertionError, match="TABLE_JSON differs"):
+        test_copy_matches_workflows_source()
+    monkeypatch.setattr(
+        urllib.request, "urlopen", lambda *a, **kw: io.BytesIO(model_table.TABLE_JSON.encode())
+    )
+    test_copy_matches_workflows_source()
 
 
 def test_sync_round_trips_byte_for_byte(tmp_path, monkeypatch) -> None:

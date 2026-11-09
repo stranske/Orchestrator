@@ -1,13 +1,16 @@
 """Actual transport metadata must not change a command's known disposition."""
 
 import json
+import os
 import subprocess
+from pathlib import Path
 
 import github_api_observer as observer
 import switch_review
 
 
 def test_shared_reader_observes_requests_without_replaying_or_leaking(tmp_path, monkeypatch):
+    assert Path(os.environ["LANE_API_EVENTS"]).parent == tmp_path
     events = tmp_path / "events.jsonl"
     monkeypatch.setenv("LANE_API_EVENTS", str(events))
     monkeypatch.delenv("ORCH_API_LANE", raising=False)
@@ -64,6 +67,23 @@ def test_shared_reader_observes_requests_without_replaying_or_leaking(tmp_path, 
         )
         == "api https://api.github.com/rate_limit"
     )
+
+    # Even a truncated trace without header markers must never escape as an error reason.
+    with monkeypatch.context() as patch:
+        patch.setenv("LANE_API_EVENTS", str(tmp_path / "ordinary-error.jsonl"))
+        patch.setenv("ORCH_API_LANE", "closer")
+        patch.setattr(
+            observer.subprocess,
+            "run",
+            lambda args, **kwargs: subprocess.CompletedProcess(
+                args, 1, "", "private response body\nBearer privatecredential\ngh: HTTP 403\n"
+            ),
+        )
+        ok, output, reason = switch_review._gh_call(["api", "rate_limit"])
+        assert not ok and output == "" and "HTTP 403" in reason
+        assert "private" not in reason and "Bearer" not in reason
+    ordinary = json.loads((tmp_path / "ordinary-error.jsonl").read_text())
+    assert ordinary["lane"] == "closer" and ordinary["coverage"] == "unknown"
 
     # A recording failure cannot turn a confirmed operation into a retry.
     with monkeypatch.context() as patch:
