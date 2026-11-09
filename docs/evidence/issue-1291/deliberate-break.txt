@@ -1,0 +1,184 @@
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+___ test_baseline_requires_one_complete_matching_toolchain[unknown-version] ____
+
+defect = 'unknown-version'
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2076/test_baseline_requires_one_com0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1140ff2f0>
+
+    @pytest.mark.parametrize("defect", ["unknown-version", "hybrid", "incomplete"])
+    def test_baseline_requires_one_complete_matching_toolchain(defect, tmp_path, monkeypatch):
+        tools = (
+            "ruff",
+            "black",
+            "mypy",
+            "pytest",
+            "isort",
+            "docformatter",
+            "pytest-cov",
+            "pytest-xdist",
+            "coverage",
+        )
+        pins = {f"{tool.upper().replace('-', '_')}_VERSION": "2.0.0" for tool in tools}
+        complete = " ".join(f"{tool}=2.0.0" for tool in tools)
+        # Exercise the public gate as well as its matcher, including the repair diagnostic.
+        fixture_doc = tmp_path / "CI_LINT_BASELINE.md"
+        monkeypatch.setitem(globals(), "BASELINE_DOC", fixture_doc)
+        monkeypatch.setitem(globals(), "read_pins", lambda: pins)
+        diagnostic = "has no complete measured toolchain matching autofix-versions.env"
+        for tool in tools:
+            wrong = complete.replace(f"{tool}=2.0.0", f"{tool}=1.0.0")
+            markers = {
+                "unknown-version": wrong,
+                "hybrid": wrong + " -->\n<!-- measured-with: " + f"{tool}=2.0.0",
+                "incomplete": complete.replace(f"{tool}=2.0.0", ""),
+            }
+            fixture_doc.write_text(f"<!-- measured-with: {markers[defect]} -->", encoding="utf-8")
+            assert not _has_measured_baseline(fixture_doc.read_text(encoding="utf-8"), pins)
+            with pytest.raises(AssertionError, match=diagnostic):
+                test_baseline_was_measured_with_the_pinned_versions()
+        fixture_doc.write_text(f"<!-- measured-with: {complete} -->", encoding="utf-8")
+        assert _has_measured_baseline(fixture_doc.read_text(encoding="utf-8"), pins)
+        pins["RUFF_VERSION"] = "2.0.1"  # deliberate fixture break
+>       test_baseline_was_measured_with_the_pinned_versions()
+
+tests/test_ci_gate_config.py:367: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+    def test_baseline_was_measured_with_the_pinned_versions():
+        """The counts are version-specific, so a pin bump without a re-measure must go red."""
+        require_checkout()
+        doc = BASELINE_DOC.read_text(encoding="utf-8")
+        pins = read_pins()
+>       assert _has_measured_baseline(doc, pins), (
+            f"{BASELINE_DOC.name} has no complete measured toolchain matching {PINS.name}: {pins}. "
+            "Re-run scripts/ci_lint_baseline.py with these exact pins and retain its measurements."
+        )
+E       AssertionError: CI_LINT_BASELINE.md has no complete measured toolchain matching autofix-versions.env: {'RUFF_VERSION': '2.0.1', 'BLACK_VERSION': '2.0.0', 'MYPY_VERSION': '2.0.0', 'PYTEST_VERSION': '2.0.0', 'ISORT_VERSION': '2.0.0', 'DOCFORMATTER_VERSION': '2.0.0', 'PYTEST_COV_VERSION': '2.0.0', 'PYTEST_XDIST_VERSION': '2.0.0', 'COVERAGE_VERSION': '2.0.0'}. Re-run scripts/ci_lint_baseline.py with these exact pins and retain its measurements.
+E       assert False
+E        +  where False = _has_measured_baseline('<!-- measured-with: ruff=2.0.0 black=2.0.0 mypy=2.0.0 pytest=2.0.0 isort=2.0.0 docformatter=2.0.0 pytest-cov=2.0.0 pytest-xdist=2.0.0 coverage=2.0.0 -->', {'RUFF_VERSION': '2.0.1', 'BLACK_VERSION': '2.0.0', 'MYPY_VERSION': '2.0.0', 'PYTEST_VERSION': '2.0.0', ...})
+
+tests/test_ci_gate_config.py:327: AssertionError
+________ test_baseline_requires_one_complete_matching_toolchain[hybrid] ________
+
+defect = 'hybrid'
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2076/test_baseline_requires_one_com1')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1141be240>
+
+    @pytest.mark.parametrize("defect", ["unknown-version", "hybrid", "incomplete"])
+    def test_baseline_requires_one_complete_matching_toolchain(defect, tmp_path, monkeypatch):
+        tools = (
+            "ruff",
+            "black",
+            "mypy",
+            "pytest",
+            "isort",
+            "docformatter",
+            "pytest-cov",
+            "pytest-xdist",
+            "coverage",
+        )
+        pins = {f"{tool.upper().replace('-', '_')}_VERSION": "2.0.0" for tool in tools}
+        complete = " ".join(f"{tool}=2.0.0" for tool in tools)
+        # Exercise the public gate as well as its matcher, including the repair diagnostic.
+        fixture_doc = tmp_path / "CI_LINT_BASELINE.md"
+        monkeypatch.setitem(globals(), "BASELINE_DOC", fixture_doc)
+        monkeypatch.setitem(globals(), "read_pins", lambda: pins)
+        diagnostic = "has no complete measured toolchain matching autofix-versions.env"
+        for tool in tools:
+            wrong = complete.replace(f"{tool}=2.0.0", f"{tool}=1.0.0")
+            markers = {
+                "unknown-version": wrong,
+                "hybrid": wrong + " -->\n<!-- measured-with: " + f"{tool}=2.0.0",
+                "incomplete": complete.replace(f"{tool}=2.0.0", ""),
+            }
+            fixture_doc.write_text(f"<!-- measured-with: {markers[defect]} -->", encoding="utf-8")
+            assert not _has_measured_baseline(fixture_doc.read_text(encoding="utf-8"), pins)
+            with pytest.raises(AssertionError, match=diagnostic):
+                test_baseline_was_measured_with_the_pinned_versions()
+        fixture_doc.write_text(f"<!-- measured-with: {complete} -->", encoding="utf-8")
+        assert _has_measured_baseline(fixture_doc.read_text(encoding="utf-8"), pins)
+        pins["RUFF_VERSION"] = "2.0.1"  # deliberate fixture break
+>       test_baseline_was_measured_with_the_pinned_versions()
+
+tests/test_ci_gate_config.py:367: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+    def test_baseline_was_measured_with_the_pinned_versions():
+        """The counts are version-specific, so a pin bump without a re-measure must go red."""
+        require_checkout()
+        doc = BASELINE_DOC.read_text(encoding="utf-8")
+        pins = read_pins()
+>       assert _has_measured_baseline(doc, pins), (
+            f"{BASELINE_DOC.name} has no complete measured toolchain matching {PINS.name}: {pins}. "
+            "Re-run scripts/ci_lint_baseline.py with these exact pins and retain its measurements."
+        )
+E       AssertionError: CI_LINT_BASELINE.md has no complete measured toolchain matching autofix-versions.env: {'RUFF_VERSION': '2.0.1', 'BLACK_VERSION': '2.0.0', 'MYPY_VERSION': '2.0.0', 'PYTEST_VERSION': '2.0.0', 'ISORT_VERSION': '2.0.0', 'DOCFORMATTER_VERSION': '2.0.0', 'PYTEST_COV_VERSION': '2.0.0', 'PYTEST_XDIST_VERSION': '2.0.0', 'COVERAGE_VERSION': '2.0.0'}. Re-run scripts/ci_lint_baseline.py with these exact pins and retain its measurements.
+E       assert False
+E        +  where False = _has_measured_baseline('<!-- measured-with: ruff=2.0.0 black=2.0.0 mypy=2.0.0 pytest=2.0.0 isort=2.0.0 docformatter=2.0.0 pytest-cov=2.0.0 pytest-xdist=2.0.0 coverage=2.0.0 -->', {'RUFF_VERSION': '2.0.1', 'BLACK_VERSION': '2.0.0', 'MYPY_VERSION': '2.0.0', 'PYTEST_VERSION': '2.0.0', ...})
+
+tests/test_ci_gate_config.py:327: AssertionError
+______ test_baseline_requires_one_complete_matching_toolchain[incomplete] ______
+
+defect = 'incomplete'
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2076/test_baseline_requires_one_com2')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1141bed80>
+
+    @pytest.mark.parametrize("defect", ["unknown-version", "hybrid", "incomplete"])
+    def test_baseline_requires_one_complete_matching_toolchain(defect, tmp_path, monkeypatch):
+        tools = (
+            "ruff",
+            "black",
+            "mypy",
+            "pytest",
+            "isort",
+            "docformatter",
+            "pytest-cov",
+            "pytest-xdist",
+            "coverage",
+        )
+        pins = {f"{tool.upper().replace('-', '_')}_VERSION": "2.0.0" for tool in tools}
+        complete = " ".join(f"{tool}=2.0.0" for tool in tools)
+        # Exercise the public gate as well as its matcher, including the repair diagnostic.
+        fixture_doc = tmp_path / "CI_LINT_BASELINE.md"
+        monkeypatch.setitem(globals(), "BASELINE_DOC", fixture_doc)
+        monkeypatch.setitem(globals(), "read_pins", lambda: pins)
+        diagnostic = "has no complete measured toolchain matching autofix-versions.env"
+        for tool in tools:
+            wrong = complete.replace(f"{tool}=2.0.0", f"{tool}=1.0.0")
+            markers = {
+                "unknown-version": wrong,
+                "hybrid": wrong + " -->\n<!-- measured-with: " + f"{tool}=2.0.0",
+                "incomplete": complete.replace(f"{tool}=2.0.0", ""),
+            }
+            fixture_doc.write_text(f"<!-- measured-with: {markers[defect]} -->", encoding="utf-8")
+            assert not _has_measured_baseline(fixture_doc.read_text(encoding="utf-8"), pins)
+            with pytest.raises(AssertionError, match=diagnostic):
+                test_baseline_was_measured_with_the_pinned_versions()
+        fixture_doc.write_text(f"<!-- measured-with: {complete} -->", encoding="utf-8")
+        assert _has_measured_baseline(fixture_doc.read_text(encoding="utf-8"), pins)
+        pins["RUFF_VERSION"] = "2.0.1"  # deliberate fixture break
+>       test_baseline_was_measured_with_the_pinned_versions()
+
+tests/test_ci_gate_config.py:367: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+    def test_baseline_was_measured_with_the_pinned_versions():
+        """The counts are version-specific, so a pin bump without a re-measure must go red."""
+        require_checkout()
+        doc = BASELINE_DOC.read_text(encoding="utf-8")
+        pins = read_pins()
+>       assert _has_measured_baseline(doc, pins), (
+            f"{BASELINE_DOC.name} has no complete measured toolchain matching {PINS.name}: {pins}. "
+            "Re-run scripts/ci_lint_baseline.py with these exact pins and retain its measurements."
+        )
+E       AssertionError: CI_LINT_BASELINE.md has no complete measured toolchain matching autofix-versions.env: {'RUFF_VERSION': '2.0.1', 'BLACK_VERSION': '2.0.0', 'MYPY_VERSION': '2.0.0', 'PYTEST_VERSION': '2.0.0', 'ISORT_VERSION': '2.0.0', 'DOCFORMATTER_VERSION': '2.0.0', 'PYTEST_COV_VERSION': '2.0.0', 'PYTEST_XDIST_VERSION': '2.0.0', 'COVERAGE_VERSION': '2.0.0'}. Re-run scripts/ci_lint_baseline.py with these exact pins and retain its measurements.
+E       assert False
+E        +  where False = _has_measured_baseline('<!-- measured-with: ruff=2.0.0 black=2.0.0 mypy=2.0.0 pytest=2.0.0 isort=2.0.0 docformatter=2.0.0 pytest-cov=2.0.0 pytest-xdist=2.0.0 coverage=2.0.0 -->', {'RUFF_VERSION': '2.0.1', 'BLACK_VERSION': '2.0.0', 'MYPY_VERSION': '2.0.0', 'PYTEST_VERSION': '2.0.0', ...})
+
+tests/test_ci_gate_config.py:327: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_ci_gate_config.py::test_baseline_requires_one_complete_matching_toolchain[unknown-version]
+FAILED tests/test_ci_gate_config.py::test_baseline_requires_one_complete_matching_toolchain[hybrid]
+FAILED tests/test_ci_gate_config.py::test_baseline_requires_one_complete_matching_toolchain[incomplete]
+3 failed in 0.32s
