@@ -197,3 +197,58 @@ def test_consumer_report_reconciles_source_inventory_without_writing_the_ledger(
         f"REVIEWED ABSENT {cid}" for cid in expected
     ]
     assert path.read_bytes() == before
+
+    # Installing a real consumer drains declaration debt, but cannot stand in for measured acts.
+    # Exercise that transition through the same loader and report used for the live-ledger count.
+    cid = "docs-drift-fix-agent"
+    ledger[cid]["event_history"].append({"type": "invocation", "timestamp": 1})
+    path.write_text(
+        json.dumps({"schema_version": capabilities.SCHEMA_VERSION, "capabilities": ledger})
+    )
+    before = path.read_bytes()
+    replacement = {
+        **capabilities.KNOWN_DECLARATIONS[cid],
+        "downstream_consumer": "merge_guard.py:evaluate_merge_gate",
+        "notes": "Test a replacement consumer without declaring that it has acted.",
+    }
+    replacement.pop("consumer_missing")
+    # A selectable capability needs measured acts; exercise-bound rails use their own proof.
+    replacement.pop("findability_category")
+    with (
+        patch.dict(capabilities.KNOWN_DECLARATIONS, {cid: replacement}),
+        patch.object(admission, "_capability_heartbeat"),
+        patch.object(
+            admission,
+            "commitments",
+            return_value={"clean": True, "dangling_citations": [], "overdue_without_record": []},
+        ),
+    ):
+        repaired = admission.report(
+            path=path,
+            ctx={
+                "audit_rows": {},
+                "fixtures": set(),
+                "acted_on": {cid: 0},
+                "now": admission.CONSUMER_ACTS_ENFORCED_FROM + 86400,
+            },
+        )
+    remaining = [name for name in expected if name != cid]
+    consumers = repaired["consumers"]
+    assert consumers["total"] == len(declarations)
+    assert consumers["by_class"]["consumer_missing"] == remaining
+    assert consumers["drainable"] == remaining
+    assert consumers["by_class"]["prose"] == []
+    assert consumers["by_class"]["unresolved"] == []
+    assert consumers["by_class"]["undeclared"] == []
+    assert consumers["by_class"]["not_acting"] == [cid]
+    assert cid not in consumers["by_class"]["acting"]
+    assert not consumers["drained"]
+    verdict = next(row for row in repaired["rows"] if row["capability_id"] == cid)
+    assert not verdict["checks"]["consumer_acts"]["ok"]
+    rendered = admission.format_report(repaired)
+    assert (
+        f"prose 0, missing {len(remaining)}, undeclared 0 — DRAINABLE {len(remaining)}" in rendered
+    )
+    assert f"REVIEWED ABSENT {cid}" not in rendered
+    assert f"NOT ACTING (trailing window) {cid}" in rendered
+    assert path.read_bytes() == before
