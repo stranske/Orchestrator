@@ -49,3 +49,41 @@ branch and remote are unchanged.
 GitHub rejected the blocker comment and `needs-human` label because connector
 writes require approval while this run's approval policy is `never`; neither
 was published.
+
+## Foreign source receipts remain in recovery
+
+Checked on 2026-11-09 against checkout
+`f7d8e8f2234c499589f5d1b88eb23841c286bf68` plus this change.
+
+A native receipt with a valid but contradictory source hash now retains a
+`source_report_hash_mismatch` evidence gap. Previously, a validated binary
+receipt could disappear from requested-case recovery despite that contradiction.
+Completed receipts require source resolution before retry; earlier missing
+receipt/identity steps and reservation/in-flight UNKNOWN recovery remain intact.
+Matching hashes still require native authentication and independent later truth.
+
+Two new API/CLI regressions cover original reports and retained native publication
+markers. Both fail before the fix and pass afterward. They preserve recursive
+paid history, original decisions, UNKNOWNs and input bytes without exposing
+provider payloads. A later matching source hash clears the contradiction without
+granting authentication or dispatch authority. All 205 tests pass across the
+retained-report, native inventory and live-cohort JavaScript suites (baseline:
+203), using `node --test --test-isolation=none --test-reporter=tap
+tests/test_adjudicator_inventory.js tests/test_adjudicator_native_inventory.js
+tests/test_adjudicator_live_cohort.js`. Diagnostic and replay/publication unittests
+pass 32 and seven tests respectively. JavaScript syntax and `git diff --check`
+pass; no Python files changed.
+
+These are isolated fixture checks. The configured canonical report, outcomes
+database and runtime directory are absent. Authentic original/journal locations
+and deployment/mirror bindings were not supplied. The first unchecked task
+remains incomplete; no production pin, dispatch, publication, historical proof
+or live decision is claimed. The retrospective pytest command with
+`-m 'not slow'` cannot start because pytest is unavailable.
+
+Staging fails because `.git/index.lock` is read-only. A separate Git metadata
+directory and `/tmp/orchestrator-1072-source-recovery/change.bundle` preserve the
+focused source/test change; the checkout branch and remote are unchanged.
+PR #1081 was observed open with `draft=false`. Automatic approval review rejected
+the blocker comment and `needs-human` label because GitHub writes require approval
+while this run's policy is `never`; neither was published.

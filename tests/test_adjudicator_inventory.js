@@ -1429,6 +1429,82 @@ for (const publication of ['original', 'native', 'invalid_native_marker', 'null_
   });
 }
 
+for (const publication of ['original', 'native']) {
+  test(`foreign native source receipts retain case recovery against the ${publication} report`, (t) => {
+    const { root, saved, journal, options } = nativeJournal(t);
+    const identity = { run_id: 'original', target: 'owner/repo#1' };
+    saved.rows = [{ ...identity, case_id: 'case-a', backend_run_id: 'native-provider',
+      decision: 'reject_blocker', later_truth: 'UNKNOWN', packet: completePacket(),
+      retry_attempts: [{ backend_run_id: 'earlier-paid' }] }];
+    if (publication === 'original') delete saved.native_publication;
+    else saved.native_publication = { source_report_sha256: 'a'.repeat(64) };
+    fs.writeFileSync(options.report, JSON.stringify(saved));
+    const sourceHash = publication === 'original'
+      ? createHash('sha256').update(fs.readFileSync(options.report)).digest('hex')
+      : saved.native_publication.source_report_sha256;
+    const manifest = manifestFile(root, [identity]);
+    const writer = new DatabaseSync(journal);
+    writer.exec("DELETE FROM native_attempts WHERE attempt_id='f'");
+    writer.prepare('UPDATE native_attempts SET report_sha256=?').run('b'.repeat(64));
+    writer.close();
+    const inputs = [options.report, journal, manifest];
+    const before = inputs.map((file) => fs.readFileSync(file));
+    const result = reportInventory({ ...options, manifest });
+    const attempts = result.pre_dispatch.native_journal.attempts;
+    assert.deepEqual(attempts.map((row) => row.source_binding.status),
+      Array(5).fill('differs_from_reference'));
+    assert.deepEqual(attempts.map((row) => row.receipt_evidence_gaps),
+      Array.from({ length: 5 }, () => ['source_report_hash_mismatch']));
+    assert.deepEqual(attempts.map((row) => row.recovery_step), [
+      'producer_must_prove_invocation_never_started',
+      'UNKNOWN_recover_provider_receipt_before_any_retry',
+      'UNKNOWN_recover_provider_receipt_before_any_retry',
+      'resolve_native_receipt_source_before_any_retry',
+      'resolve_native_receipt_source_before_any_retry',
+    ]);
+    const recovery = result.manifest_reconciliation.cases[0].native_case_recovery;
+    assert.deepEqual(recovery.unresolved_attempts.map((row) => row.attempt_id),
+      ['a', 'b', 'c', 'd', 'e'], 'a binary claim cannot hide a foreign source receipt');
+    const locator = result.retained_attempt_observations[0].native_receipt_locator;
+    assert.equal(locator.status, 'matched_locator', 'case/backend match is still only a locator');
+    assert.equal(locator.next_evidence_step, 'resolve_native_receipt_source_before_any_retry');
+    assert.deepEqual(locator.attempts[0].receipt_evidence_gaps, ['source_report_hash_mismatch']);
+    assert.ok(result.pre_dispatch.stop_reasons.includes('native_receipt_evidence_missing'));
+    assert.deepEqual(result.pre_dispatch.paid_identity_reconciliation, {
+      report_unique: 2, journal_unique: 3, union_unique: 4,
+      report_only: ['earlier-paid'], journal_only: ['started-provider', 'primary'],
+      unresolved_without_backend_id: ['b'],
+    });
+    assert.equal(result.cases[0].retained_decision, 'reject_blocker');
+    assert.equal(result.cases[0].retained_later_truth, 'UNKNOWN');
+    assert.equal(result.dispatch_authorized, false);
+    assert.equal(result.receipt_authority, 'not_authenticated_by_inventory');
+    assert.ok(!JSON.stringify(result).includes('private'));
+    const cli = execute(root, process.execPath, [script, '--report', options.report,
+      '--journal', journal, '--manifest', manifest, '--observed-at', String(now),
+      '--evidence-class', options.evidenceClass, '--evidence-reference', options.evidenceReference]);
+    assert.equal(cli.status, 0, cli.stderr);
+    assert.deepEqual(JSON.parse(cli.stdout), result);
+    assert.deepEqual(inputs.map((file) => fs.readFileSync(file)), before);
+
+    // A later matching hash clears this contradiction, but cannot authenticate
+    // the saved source marker, receipt, independent truth or dispatch authority.
+    const laterWriter = new DatabaseSync(journal);
+    laterWriter.prepare("UPDATE native_attempts SET report_sha256=? WHERE attempt_id='e'")
+      .run(sourceHash);
+    laterWriter.close();
+    const later = reportInventory({ ...options, manifest });
+    const binary = later.pre_dispatch.native_journal.attempts.find((row) => row.attempt_id === 'e');
+    assert.deepEqual(binary.receipt_evidence_gaps, []);
+    assert.equal(binary.source_binding.status, 'matches_reference');
+    assert.equal(binary.source_binding.authenticated, false);
+    assert.equal(binary.recovery_step, 'reauthenticate_with_native_projection_before_grading');
+    assert.deepEqual(later.manifest_reconciliation.cases[0].native_case_recovery
+      .unresolved_attempts.map((row) => row.attempt_id), ['a', 'b', 'c', 'd']);
+    assert.equal(later.dispatch_authorized, false);
+  });
+}
+
 for (const [state, column] of [
   ['raw_persisted', 'raw_response'],
   ['validated', 'raw_response'],
