@@ -700,6 +700,9 @@ def provision(target: str, lane: str, branch: str | None = None) -> Path:
         return wt
     except BaseException as exc:
         event["outcome"] = "failed"
+        event["error"] = str(exc)[:1000]
+        if branch is not None:
+            event["requested_branch"] = branch
         if not isinstance(exc, Exception):
             event["cause"] = "interrupted"
         raise
