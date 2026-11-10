@@ -766,3 +766,96 @@ def test_live_capacity_uses_post_collection_clock_without_trusting_future_data(
     assert document["generated_at"] == "2027-01-15T08:00:00Z"
     assert document["comparative"]["status"] == expected
     assert measured_at == [NOW + 31]
+
+
+def test_route_flag_flip_republishes(tmp_path, monkeypatch):
+    """Verify that route_enabled flip triggers republishing on the same day."""
+    db = tmp_path / "brain.db"
+    export._fixture_db(db)
+    
+    # Create a simple fixture with optimal status
+    with sqlite3.connect(db) as conn:
+        conn.execute("DELETE FROM route_weights")
+        for task, qualities in (("implement", (0.9, 0.6)), ("review", (0.8, 0.7))):
+            for agent, quality in zip(("codex", "cursor"), qualities):
+                conn.execute(
+                    "INSERT INTO route_weights VALUES (2,0,?,?,0,?,20,0.5,0,0,'',0,0)",
+                    (task, agent, quality),
+                )
+        conn.execute("CREATE TABLE IF NOT EXISTS runs (run_id TEXT, ts INTEGER, agent TEXT, task_type TEXT, source TEXT)")
+        conn.execute("CREATE TABLE IF NOT EXISTS costs (run_id TEXT, tokens_in INTEGER, tokens_out INTEGER, cost_usd REAL, source TEXT)")
+        
+    # Snapshot with measured pacing
+    snapshot = {
+        "generated_at": NOW,
+        "pools": {
+            "codex-subscription": {
+                "agent": "codex",
+                "pacing": {
+                    "state": "ok",
+                    "used_fraction": 0.5,
+                    "effective_reserve": 0.1,
+                    "burn_rate_per_day": 10.0,
+                    "period_end": NOW + 86400 * 10,
+                    "observed_at": NOW - 3600,
+                },
+            },
+            "cursor-subscription": {
+                "agent": "cursor",
+                "pacing": {
+                    "state": "ok",
+                    "used_fraction": 0.3,
+                    "effective_reserve": 0.1,
+                    "burn_rate_per_day": 5.0,
+                    "period_end": NOW + 86400 * 10,
+                    "observed_at": NOW - 3600,
+                },
+            },
+        },
+    }
+    
+    # Mock the route_decision to control route_enabled
+    original_route_decision = comparative.route_decision
+    
+    # First call: route_enabled=False
+    def mock_route_decision_false(result, incidents_rows=None, now=None):
+        return {
+            "route_enabled": False,
+            "route_reason": "before go-live",
+            "incidents_recent": None,
+            "incidents_prior": None,
+        }
+    
+    # Second call: route_enabled=True
+    def mock_route_decision_true(result, incidents_rows=None, now=None):
+        return {
+            "route_enabled": True,
+            "route_reason": "enabled; incidents 0→0",
+            "incidents_recent": 0,
+            "incidents_prior": 0,
+        }
+    
+    monkeypatch.setattr(comparative, "route_decision", mock_route_decision_false)
+    
+    # Build first document (route_enabled=False)
+    doc1 = export.build_document(db, now=NOW, capacity_snapshot=snapshot)
+    assert doc1["comparative"]["route_enabled"] is False
+    
+    # Update semantic for compare - should include route_enabled
+    semantic1 = export._semantic_for_compare(doc1)
+    assert semantic1.get("comparative", {}).get("route_enabled") is False
+    
+    # Build second document with route_enabled=True
+    monkeypatch.setattr(comparative, "route_decision", mock_route_decision_true)
+    doc2 = export.build_document(db, now=NOW, capacity_snapshot=snapshot)
+    assert doc2["comparative"]["route_enabled"] is True
+    
+    # Update semantic for compare - should include route_enabled
+    semantic2 = export._semantic_for_compare(doc2)
+    assert semantic2.get("comparative", {}).get("route_enabled") is True
+    
+    # The two semantics should differ (triggering republishing)
+    assert semantic1 != semantic2
+    
+    # Restore original
+    monkeypatch.setattr(comparative, "route_decision", original_route_decision)
