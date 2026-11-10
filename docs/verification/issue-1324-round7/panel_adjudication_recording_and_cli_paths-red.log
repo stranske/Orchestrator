@@ -1,0 +1,72 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_______________ test_panel_adjudication_recording_and_cli_paths ________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10c72ba10>
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2270/test_panel_adjudication_record0')
+capsys = <_pytest.capture.CaptureFixture object at 0x10b895b80>
+
+    def test_panel_adjudication_recording_and_cli_paths(monkeypatch, tmp_path, capsys):
+        spec = runtime_ac._valid_spec()
+        gate = runtime_ac.evaluate_results(spec, {"check_results": panel._all_check_results(spec)})
+    
+        recorded_calls = []
+    
+        def mock_record_outcome(run_id, verifier_verdict, notes):
+            recorded_calls.append(("record_outcome", run_id, verifier_verdict, notes))
+            return {}
+    
+        def mock_record_evidence_gap(run_id, reviewer, gap):
+            recorded_calls.append(("record_evidence_gap", run_id, reviewer, gap))
+            return {}
+    
+        def mock_record_evidence_type_citations(names):
+            recorded_calls.append(("record_evidence_type_citations", names))
+            return names
+    
+        monkeypatch.setattr(feedback, "record_outcome", mock_record_outcome)
+        monkeypatch.setattr(feedback, "record_evidence_gap", mock_record_evidence_gap)
+        monkeypatch.setattr(
+            feedback, "record_evidence_type_citations", mock_record_evidence_type_citations
+        )
+    
+        reviews_pass = {
+            "reviews": [
+                {
+                    "reviewer": "vibe",
+                    "verdict": "PASS",
+                    "confidence": 0.8,
+                    "ac_assessments": [
+                        {"ac_id": "AC1", "status": "PASS", "reason": "evidence present"}
+                    ],
+                },
+                {
+                    "reviewer": "gemini",
+                    "verdict": "PASS",
+                    "confidence": 0.9,
+                    "ac_assessments": [
+                        {"ac_id": "AC2", "status": "PASS", "reason": "evidence present"}
+                    ],
+                },
+            ]
+        }
+    
+        panel_result = panel.adjudicate_panel(spec, gate, reviews_pass)
+        assert panel_result["verdict"] == "PASS"
+        assert panel_result["verifier_verdict"] == "PASS_RUNTIME_AC"
+    
+        run_id = "test-run-1232-adjudication"
+        record_result = panel.record_panel_verdict(run_id, panel_result)
+        assert record_result["run_id"] == run_id
+        assert record_result["verifier_verdict"] == "PASS_RUNTIME_AC"
+>       assert record_result["recorded"] is True
+E       assert False is True
+
+tests/test_issue1232_ranked_coverage.py:308: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_issue1232_ranked_coverage.py::test_panel_adjudication_recording_and_cli_paths
+1 failed in 0.31s
+/opt/anaconda3/lib/python3.12/site-packages/pytest_asyncio/plugin.py:300: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the "fixture" caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to "function" scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))

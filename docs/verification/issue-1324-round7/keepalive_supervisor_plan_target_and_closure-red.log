@@ -1,0 +1,44 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______________ test_keepalive_supervisor_plan_target_and_closure _______________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x113d5ecc0>
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2280/test_keepalive_supervisor_plan0')
+
+    def test_keepalive_supervisor_plan_target_and_closure(monkeypatch, tmp_path):
+        signals = {
+            "target": "stranske/Orchestrator#1234",
+            "pr_state": "open",
+            "labels": [supervisor.KEEPALIVE_LABEL, "needs-human"],
+            "title": "Test issue",
+            "body": "Test body",
+        }
+    
+        monkeypatch.setattr(supervisor.keepalive_shadow, "gather_signals", lambda target: signals)
+        monkeypatch.setattr(
+            supervisor.keepalive_shadow, "shadow_decide", lambda _signals: {"shadow_action": "wait"}
+        )
+        monkeypatch.setattr(supervisor, "build_redirect_report", lambda *_args: {"report": "safe"})
+    
+        plan = supervisor.plan_for_signals(signals, report_json_path=tmp_path / "report.json")
+        assert "next_step" in plan
+        assert "proposal_command" in plan
+    
+        plan_target_result = supervisor.plan_target(
+            signals["target"],
+            report_dir=tmp_path,
+        )
+>       assert plan_target_result["next_step"] == "operator_inspect"
+E       AssertionError: assert 'broken' == 'operator_inspect'
+E         
+E         - operator_inspect
+E         + broken
+
+tests/test_issue1232_ranked_coverage.py:514: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure
+1 failed in 0.33s
+/opt/anaconda3/lib/python3.12/site-packages/pytest_asyncio/plugin.py:300: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the "fixture" caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to "function" scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))

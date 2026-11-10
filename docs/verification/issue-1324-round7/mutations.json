@@ -1,0 +1,82 @@
+[
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_panel_adjudication_recording_and_cli_paths",
+    "module": "runtime_ac_panel.py",
+    "mutation": [
+      "\"recorded\": True",
+      "\"recorded\": False"
+    ],
+    "red": 1,
+    "restored": 0
+  },
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_runtime_ac_panel_coerce_reviews_and_edge_cases",
+    "module": "runtime_ac_panel.py",
+    "mutation": [
+      "            return reviews\n",
+      "            return []\n"
+    ],
+    "red": 1,
+    "restored": 0
+  },
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_runtime_ac_panel_substantiated_veto_and_normalize",
+    "module": "runtime_ac_panel.py",
+    "mutation": [
+      "if blocker[\"severity\"] in VETO_SEVERITIES:",
+      "if False:"
+    ],
+    "red": 1,
+    "restored": 0
+  },
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_relearn_report_build_report_and_ordering",
+    "module": "relearn_report.py",
+    "mutation": [
+      "-(r[\"score\"] if r.get(\"score\") is not None else -1.0)",
+      "(r[\"score\"] if r.get(\"score\") is not None else -1.0)"
+    ],
+    "red": 1,
+    "restored": 0
+  },
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_relearn_report_priors_and_blend",
+    "module": "relearn_report.py",
+    "mutation": [
+      "0.70 - 0.05 * rank",
+      "0.71 - 0.05 * rank"
+    ],
+    "red": 1,
+    "restored": 0
+  },
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure",
+    "module": "keepalive_supervisor.py",
+    "mutation": [
+      "next_step = \"operator_inspect\"",
+      "next_step = \"broken\""
+    ],
+    "red": 1,
+    "restored": 0
+  },
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_repo_num_and_eligibility",
+    "module": "keepalive_supervisor.py",
+    "mutation": [
+      "return repo, number",
+      "return number, repo"
+    ],
+    "red": 1,
+    "restored": 0
+  },
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_proposal_backend",
+    "module": "keepalive_supervisor.py",
+    "mutation": [
+      "proposal_command.extend([\"--backend\", proposal_backend])",
+      "proposal_command.extend([\"--backend\", \"wrong\"])"
+    ],
+    "red": 1,
+    "restored": 0
+  }
+]

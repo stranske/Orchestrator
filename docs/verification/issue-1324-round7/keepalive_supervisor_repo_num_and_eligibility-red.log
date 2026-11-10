@@ -1,0 +1,22 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______________ test_keepalive_supervisor_repo_num_and_eligibility ______________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x110ab8f20>
+
+    def test_keepalive_supervisor_repo_num_and_eligibility(monkeypatch):
+        repo, num = supervisor._repo_num("stranske/Orchestrator#1334")
+>       assert repo == "stranske/Orchestrator"
+E       AssertionError: assert '1334' == 'stranske/Orchestrator'
+E         
+E         - stranske/Orchestrator
+E         + 1334
+
+tests/test_issue1232_ranked_coverage.py:627: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_repo_num_and_eligibility
+1 failed in 0.33s
+/opt/anaconda3/lib/python3.12/site-packages/pytest_asyncio/plugin.py:300: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the "fixture" caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to "function" scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))

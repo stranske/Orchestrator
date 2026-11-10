@@ -20,6 +20,13 @@ def isolated_runtime(monkeypatch, tmp_path):
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path / "runtime"))
     monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    monkeypatch.setattr(sys, "argv", list(sys.argv))
+
+    def unexpected_process(*args, **kwargs):
+        pytest.fail(f"unexpected process start: {args!r}")
+
+    monkeypatch.setattr(supervisor.subprocess, "run", unexpected_process)
+    monkeypatch.setattr(supervisor.subprocess, "Popen", unexpected_process)
 
 
 def _spec_and_gate():
@@ -655,3 +662,20 @@ def test_keepalive_supervisor_repo_num_and_eligibility(monkeypatch):
     eligible_no_label = supervisor.eligibility(signals_no_label)
     assert eligible_no_label["eligible"] is False
     assert "missing_agents_keepalive_label" in eligible_no_label["blockers"]
+
+
+def test_keepalive_supervisor_proposal_backend(monkeypatch, tmp_path):
+    signals = {
+        "target": "stranske/Orchestrator#1334",
+        "pr_state": "open",
+        "labels": [supervisor.KEEPALIVE_LABEL, "needs-human"],
+    }
+    monkeypatch.setattr(
+        supervisor.keepalive_shadow, "shadow_decide", lambda _s: {"shadow_action": "wait"}
+    )
+    monkeypatch.setattr(supervisor, "build_redirect_report", lambda *_a: {"report": "safe"})
+    plan = supervisor.plan_for_signals(
+        signals, report_json_path=tmp_path / "report.json", proposal_backend="codex"
+    )
+    assert plan["proposal_command"][-3:] == ["--backend", "codex", "--dispatch"]
+    assert plan["stage2_record_command"] == plan["proposal_command"] + ["--record-corpus", "--json"]
