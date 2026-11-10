@@ -300,7 +300,9 @@ def test_missing_holder_directory_is_pruned(layout):
 
 
 @pytest.mark.parametrize("unique", [False, True])
-def test_diverged_opener_only_resets_when_all_commits_are_on_remotes(layout, unique):
+def test_diverged_opener_resumes_unpublished_work_and_only_resets_remote_backed_work(
+    layout, unique
+):
     canon, _ = layout
     git(canon, "switch", "-c", OPENER_BRANCH)
     git(canon, "commit", "--allow-empty", "-m", "old work")
@@ -311,11 +313,20 @@ def test_diverged_opener_only_resets_when_all_commits_are_on_remotes(layout, uni
     git(canon, "commit", "--allow-empty", "-m", "new base")
     git(canon, "push", "origin", "main")
     if unique:
-        with pytest.raises(RuntimeError, match="commits absent from every remote ref"):
-            provision.provision(TARGET, "opener")
+        wt = provision.provision(TARGET, "opener")
         assert git(canon, "rev-parse", OPENER_BRANCH) == tip
-        assert events()[0]["outcome"] == "failed"
-        assert events()[0]["cause"] == "branch-exists"
+        assert git(wt, "rev-parse", "HEAD") == tip
+        assert events()[0]["outcome"] == "reused"
+        assert events()[0]["cause"] == "branch-resume"
+        assert tip in events()[0]["unpublished_commits"]
+        # Unrelated/custom branch ownership remains ambiguous and cannot be
+        # reset or adopted under a standard issue's dispatch authority.
+        git(canon, "branch", "custom-work", tip)
+        with pytest.raises(RuntimeError, match="commits absent from every remote ref"):
+            provision.provision("example/repo#719", "opener", branch="custom-work")
+        assert git(canon, "rev-parse", "custom-work") == tip
+        assert events()[-1]["cause"] == "branch-exists"
+        assert events()[-1]["requested_branch"] == "custom-work"
     else:
         wt = provision.provision(TARGET, "opener")
         assert git(wt, "rev-parse", "HEAD") == git(canon, "rev-parse", "origin/main")
