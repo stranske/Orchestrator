@@ -347,14 +347,16 @@ def gh(method: str, path: str, payload: dict | None = None):
 
 def reconcile_ready(report: dict, state_dir: Path) -> dict:
     """Idempotent comment readback precedes reviving the existing native opener."""
-    if not report["evidence_ready"]:
-        return {"action": "retain_incomplete", "network_calls": 0}
     number = report["issue"]
-    payload_hash = digest(document(report))
     ack = state_dir / f"ack-{number}.json"
     previous = load(ack, {})
     if previous.get("state") == "acknowledged":
         return previous
+    # A later incomplete collection cannot strand a previous uncertain remote
+    # publication. Reconcile its frozen packet before considering new readiness.
+    if not report["evidence_ready"] and not previous.get("evidence_sha256"):
+        return {"action": "retain_incomplete", "network_calls": 0}
+    payload_hash = digest(document(report))
     if previous.get("evidence_sha256"):
         # Resume the frozen publication, even if another local collection has
         # changed counts/paths while the previous remote outcome was unknown.

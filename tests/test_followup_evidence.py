@@ -183,7 +183,7 @@ def test_unknown_publication_resumes_frozen_packet_once_before_native_handoff(
         evidence.reconcile_ready(original, tmp_path)
     pending = evidence.load(tmp_path / "ack-1098.json")
     assert pending["state"] == "pending"
-    changed = {**original, "new_collection": "different report"}
+    changed = {**original, "evidence_ready": False, "new_collection": "different report"}
     result = evidence.reconcile_ready(changed, tmp_path)
     assert result["state"] == "acknowledged"
     assert result["evidence_sha256"] == evidence.digest(evidence.document(original))
