@@ -331,8 +331,7 @@ def _baseline_mismatch(doc, pins):
     return (
         f"{BASELINE_DOC.name} has no complete measured toolchain matching {PINS.name}. "
         f"Unmeasured pins against the closest measurement: {unmeasured}. "
-        "Re-run scripts/ci_lint_baseline.py with these exact pins and retain its measurements. "
-        f"All pins: {pins}"
+        "Re-run scripts/ci_lint_baseline.py with these exact pins and retain its measurements."
     )
 
 
@@ -372,7 +371,7 @@ def test_baseline_diagnostic_names_the_bumped_and_the_missing_pin():
     message = _baseline_mismatch(doc, bumped)
     assert message is not None
     assert "RUFF_VERSION pinned 2.0.1, measured 2.0.0" in message
-    assert message.index("RUFF_VERSION pinned 2.0.1, measured 2.0.0") < message.index("All pins:")
+    assert "All pins:" not in message
 
     missing = {k: v for k, v in pins.items() if k != "COVERAGE_VERSION"}
     message = _baseline_mismatch(doc, missing)
@@ -403,7 +402,7 @@ def test_baseline_diagnostic_selects_closest_complete_measurement(closest_first)
     )
     # The trailing pin dump names every pin; the diagnostic ahead of it must not report the
     # distant marker's black mismatch.
-    assert "BLACK_VERSION" not in message.split("All pins:")[0]
+    assert "BLACK_VERSION" not in message
 
 
 @pytest.mark.parametrize("defect", ["unknown-version", "hybrid", "incomplete"])
