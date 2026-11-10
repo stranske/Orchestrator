@@ -144,3 +144,8 @@ assertions exercising the fixture's actual captured paths. Those changes were
 preserved by rebasing; the focused commands and both mutations were then rerun.
 The measurements and aggregate run above identify their original tested head;
 production target files are unchanged by the concurrent test-only commit.
+
+Post-rebase exact test-tree results: `23 passed in 3.36s`; chunks `7 passed in
+0.56s`, `10 passed in 1.96s`, `5 passed in 0.85s`. The retained focused/chunk
+logs and final focused JSON were refreshed after preserving the concurrent changes.
+Both named mutations were also re-executed and their retained logs refreshed.

@@ -4,7 +4,7 @@ F                                                                        [100%]
 =================================== FAILURES ===================================
 ____________________ test_build_window_acquisition_blocked _____________________
 
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1084fc5f0>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x108153d10>
 
     def test_build_window_acquisition_blocked(monkeypatch):
         monkeypatch.setattr(
@@ -46,10 +46,10 @@ monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1084fc5f0>
 >               assert blocked["eligible"] is False
 E               assert True is False
 
-tests/test_exploration_collection.py:504: AssertionError
+tests/test_exploration_collection.py:507: AssertionError
 =========================== short test summary info ============================
 FAILED tests/test_exploration_collection.py::test_build_window_acquisition_blocked
-1 failed in 0.51s
+1 failed in 0.30s
 /opt/anaconda3/lib/python3.12/site-packages/pytest_asyncio/plugin.py:300: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
 The event loop scope for asynchronous fixtures will default to the "fixture" caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to "function" scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
 

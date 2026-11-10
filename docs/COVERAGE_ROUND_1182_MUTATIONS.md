@@ -1,6 +1,6 @@
 # Coverage round 1182: executed mutations
 
-Checked 2026-11-10 against test/source tree `e7f8daef8b9f12f2f5d5bb1900746253e4224381`.
+Checked 2026-11-10 after rebasing onto test/source tree `ec4c41c5eeb8b991f49e0fbf952e1133cc586a04`.
 Both named tests were executed through pytest, including their autouse temporary-runtime
 and external-I/O guards. Production files were restored byte-for-byte in a `finally`
 block before the restored test ran. No production mutation is committed.
@@ -24,8 +24,8 @@ F                                                                        [100%]
 =================================== FAILURES ===================================
 _________________ test_ccusage_reconcile_uses_loaded_sessions __________________
 
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x111d23bc0>
-tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2202/test_ccusage_reconcile_uses_lo0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a665040>
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2212/test_ccusage_reconcile_uses_lo0')
 
     def test_ccusage_reconcile_uses_loaded_sessions(monkeypatch, tmp_path):
         calls = []
@@ -41,10 +41,10 @@ tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp
 >       assert "load err" in out["errors"]
 E       AssertionError: assert 'load err' in []
 
-tests/test_ccusage_reconcile.py:223: AssertionError
+tests/test_ccusage_reconcile.py:226: AssertionError
 =========================== short test summary info ============================
 FAILED tests/test_ccusage_reconcile.py::test_ccusage_reconcile_uses_loaded_sessions
-1 failed in 0.57s
+1 failed in 0.28s
 ```
 
 ### Restored output
@@ -53,7 +53,7 @@ FAILED tests/test_ccusage_reconcile.py::test_ccusage_reconcile_uses_loaded_sessi
 command: /opt/anaconda3/bin/python3 -m pytest tests/test_ccusage_reconcile.py::test_ccusage_reconcile_uses_loaded_sessions -q --no-cov
 exit: 0
 .                                                                        [100%]
-1 passed in 1.51s
+1 passed in 0.23s
 ```
 
 ## test_build_window_acquisition_blocked
@@ -78,7 +78,7 @@ F                                                                        [100%]
 =================================== FAILURES ===================================
 ____________________ test_build_window_acquisition_blocked _____________________
 
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1084fc5f0>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x108153d10>
 
     def test_build_window_acquisition_blocked(monkeypatch):
         monkeypatch.setattr(
@@ -120,10 +120,10 @@ monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1084fc5f0>
 >               assert blocked["eligible"] is False
 E               assert True is False
 
-tests/test_exploration_collection.py:504: AssertionError
+tests/test_exploration_collection.py:507: AssertionError
 =========================== short test summary info ============================
 FAILED tests/test_exploration_collection.py::test_build_window_acquisition_blocked
-1 failed in 0.51s
+1 failed in 0.30s
 ```
 
 ### Restored output
@@ -132,7 +132,7 @@ FAILED tests/test_exploration_collection.py::test_build_window_acquisition_block
 command: /opt/anaconda3/bin/python3 -m pytest tests/test_exploration_collection.py::test_build_window_acquisition_blocked -q --no-cov
 exit: 0
 .                                                                        [100%]
-1 passed in 0.40s
+1 passed in 0.26s
 ```
 
 ## Evidence limits
