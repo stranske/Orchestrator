@@ -395,6 +395,24 @@ def test_baseline_diagnostic_names_the_bumped_and_the_missing_pin():
         assert key not in message
 
 
+def test_baseline_diagnostic_reports_simultaneous_bumped_and_missing_pins():
+    """Keep every differing comparison while omitting pins that still match."""
+    pins = {f"{tool.upper().replace('-', '_')}_VERSION": "2.0.0" for tool in _NINE_TOOLS}
+    doc = "<!-- measured-with: " + " ".join(f"{t}=2.0.0" for t in _NINE_TOOLS) + " -->"
+    pins["RUFF_VERSION"] = "2.0.1"
+    del pins["COVERAGE_VERSION"]
+
+    message = _baseline_mismatch(doc, pins)
+
+    assert message is not None
+    assert "RUFF_VERSION pinned 2.0.1, measured 2.0.0" in message
+    assert "COVERAGE_VERSION pinned missing, measured 2.0.0" in message
+    assert "All pins:" not in message
+    assert message.endswith("retain its measurements.")
+    for key in pins.keys() - {"RUFF_VERSION"}:
+        assert key not in message
+
+
 @pytest.mark.parametrize("closest_first", [True, False])
 def test_baseline_diagnostic_selects_closest_complete_measurement(closest_first):
     """With no exact match, the diagnostic reports the complete marker with fewest mismatches."""
