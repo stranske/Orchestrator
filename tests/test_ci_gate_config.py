@@ -331,8 +331,7 @@ def _baseline_mismatch(doc, pins):
     return (
         f"{BASELINE_DOC.name} has no complete measured toolchain matching {PINS.name}. "
         f"Unmeasured pins against the closest measurement: {unmeasured}. "
-        "Re-run scripts/ci_lint_baseline.py with these exact pins and retain its measurements. "
-        f"All pins: {pins}"
+        "Re-run scripts/ci_lint_baseline.py with these exact pins and retain its measurements."
     )
 
 
@@ -363,7 +362,7 @@ _NINE_TOOLS = (
 
 
 def test_baseline_diagnostic_names_the_bumped_and_the_missing_pin():
-    """A bumped pin and an absent pin are each named, with both versions, ahead of the pin dump."""
+    """Name bumped and absent pins with both versions, without dumping the full pin dictionary."""
     pins = {f"{tool.upper().replace('-', '_')}_VERSION": "2.0.0" for tool in _NINE_TOOLS}
     doc = "<!-- measured-with: " + " ".join(f"{t}=2.0.0" for t in _NINE_TOOLS) + " -->"
     assert _baseline_mismatch(doc, pins) is None
@@ -372,17 +371,70 @@ def test_baseline_diagnostic_names_the_bumped_and_the_missing_pin():
     message = _baseline_mismatch(doc, bumped)
     assert message is not None
     assert "RUFF_VERSION pinned 2.0.1, measured 2.0.0" in message
-    assert message.index("RUFF_VERSION pinned 2.0.1, measured 2.0.0") < message.index("All pins:")
+    assert "All pins:" not in message
+    assert message.endswith("retain its measurements.")
+    for key in pins.keys() - {"RUFF_VERSION"}:
+        assert key not in message
 
     missing = {k: v for k, v in pins.items() if k != "COVERAGE_VERSION"}
     message = _baseline_mismatch(doc, missing)
     assert message is not None
     assert "COVERAGE_VERSION pinned missing, measured 2.0.0" in message
+    assert "All pins:" not in message
+    assert message.endswith("retain its measurements.")
+    for key in missing:
+        assert key not in message
 
     incomplete = doc.replace(" coverage=2.0.0", "")
     message = _baseline_mismatch(incomplete, pins)
     assert message is not None
     assert "no complete nine-tool measurement exists" in message
+    assert "All pins:" not in message
+    assert message.endswith("retain its measurements.")
+    for key in pins:
+        assert key not in message
+
+
+def test_baseline_diagnostic_reports_simultaneous_bumped_and_missing_pins():
+    """Keep every differing comparison while omitting pins that still match."""
+    pins = {f"{tool.upper().replace('-', '_')}_VERSION": "2.0.0" for tool in _NINE_TOOLS}
+    doc = "<!-- measured-with: " + " ".join(f"{t}=2.0.0" for t in _NINE_TOOLS) + " -->"
+    pins["RUFF_VERSION"] = "2.0.1"
+    del pins["COVERAGE_VERSION"]
+
+    message = _baseline_mismatch(doc, pins)
+
+    assert message is not None
+    assert "RUFF_VERSION pinned 2.0.1, measured 2.0.0" in message
+    assert "COVERAGE_VERSION pinned missing, measured 2.0.0" in message
+    assert "All pins:" not in message
+    assert message.endswith("retain its measurements.")
+    for key in pins.keys() - {"RUFF_VERSION"}:
+        assert key not in message
+
+
+@pytest.mark.parametrize("complete_measurement", [True, False])
+def test_baseline_diagnostic_omits_unmeasured_extra_pins(complete_measurement):
+    """Unrelated pin names and values stay out of both mismatch and missing-baseline messages."""
+    pins = {f"{tool.upper().replace('-', '_')}_VERSION": "2.0.0" for tool in _NINE_TOOLS}
+    pins["UNRELATED_VERSION"] = "987.654.321"
+    doc = "<!-- measured-with: " + " ".join(f"{t}=2.0.0" for t in _NINE_TOOLS) + " -->"
+    assert _baseline_mismatch(doc, pins) is None
+    pins["RUFF_VERSION"] = "2.0.1"
+    if not complete_measurement:
+        doc = ""
+
+    message = _baseline_mismatch(doc, pins)
+
+    assert message is not None
+    assert "UNRELATED_VERSION" not in message
+    assert "987.654.321" not in message
+    assert "All pins:" not in message
+    assert message.endswith("retain its measurements.")
+    if complete_measurement:
+        assert "RUFF_VERSION pinned 2.0.1, measured 2.0.0" in message
+    else:
+        assert "no complete nine-tool measurement exists" in message
 
 
 @pytest.mark.parametrize("closest_first", [True, False])
@@ -401,9 +453,7 @@ def test_baseline_diagnostic_selects_closest_complete_measurement(closest_first)
         "Unmeasured pins against the closest measurement: "
         "RUFF_VERSION pinned 2.0.0, measured 1.0.0." in message
     )
-    # The trailing pin dump names every pin; the diagnostic ahead of it must not report the
-    # distant marker's black mismatch.
-    assert "BLACK_VERSION" not in message.split("All pins:")[0]
+    assert "BLACK_VERSION" not in message
 
 
 @pytest.mark.parametrize("defect", ["unknown-version", "hybrid", "incomplete"])
