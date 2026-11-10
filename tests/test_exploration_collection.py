@@ -26,6 +26,7 @@ def isolated_runtime(tmp_path, monkeypatch):
     with advisor_hermetic.activated(monkeypatch):
         monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "state"))
         monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path / "runtime"))
+        monkeypatch.setenv("HANDOFF_DIR", str(tmp_path / "handoff"))
         monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "runtime" / "feedback.db")
         # HANDOFF is captured outside ORCH_LOCAL_RUNTIME at import time.
         monkeypatch.setattr(adapters, "HANDOFF", tmp_path / "handoff")
@@ -73,6 +74,8 @@ def isolated_runtime(tmp_path, monkeypatch):
 
         monkeypatch.setattr(subprocess, "run", guarded_subprocess_run)
         monkeypatch.setattr(subprocess, "Popen", forbid_external)
+        monkeypatch.setattr(socket.socket, "connect", forbid_external)
+        monkeypatch.setattr(socket.socket, "connect_ex", forbid_external)
         monkeypatch.setattr(socket, "socket", forbid_external)
         monkeypatch.setattr(socket, "create_connection", forbid_external)
 

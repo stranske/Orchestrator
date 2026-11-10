@@ -212,3 +212,57 @@ is marked complete; focused pytest, Black, and CI for the new assertions remain 
 The blocker-comment and `needs-human` label requests were both rejected by the GitHub
 connector with `MCP tool call requires approval, but approval policy is never`.
 Neither remote change was applied. The fetched PR state is open with `draft: false`.
+
+## 2026-11-10 ledger-isolation continuation
+
+Fetched the original blob `cdef7b82e389c72983fe65cef32cb992033c809a` again
+and compared its test ASTs with the four current test files. All 23 original tests
+are present exactly once (1 preserved, 7 ccusage, 10 exploration, 5 dashboard).
+Twenty bodies are unchanged; the three strengthened tests are named in the
+preceding continuation. No deferred test is missing, so duplicating them would
+not advance the recovery task.
+
+The reconciliation write-path test now uses the fixture's ledger binding rather
+than overriding it. It asserts the temporary handoff and ledger paths, checks the
+start/complete consumption rows, and verifies reconciliation leaves those rows
+unchanged while persisting the expected costs. All three recovered fixtures now
+set `HANDOFF_DIR` as well as the captured adapter paths and forbid `connect` and
+`connect_ex` on sockets created before fixture setup.
+
+GitHub reports successful [Gate 42828479148](https://github.com/stranske/Orchestrator/actions/runs/42828479148)
+and [CI 42828478565](https://github.com/stranske/Orchestrator/actions/runs/42828478565)
+for exact head `e7f8daef8b9f12f2f5d5bb1900746253e4224381`. These validate the
+previously committed chunks, including the strengthened acquisition test; they
+do not validate this continuation's uncommitted isolation changes.
+
+Local focused pytest and separate targeted branch-coverage commands for each of
+`ccusage_reconcile`, `exploration_collection`, and `observability_dashboard`, all
+with `-m 'not slow'`, exited 1 with `No module named pytest`. Installing pytest,
+pytest-cov, and Black failed because `pypi.org` could not resolve. No usable local
+copies were found. Formatting exited 1 with `No module named black`; the required
+`black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .`
+exited 127 with `black: command not found`. Per the mandatory formatting gate,
+the Python edits remain uncommitted.
+
+The required verification was rerun:
+
+```sh
+PYTEST_ADDOPTS='-m "not slow"' ORCH_STATE_DIR=/tmp/orch-1182-ledger-verify/state ORCH_LOCAL_RUNTIME=/tmp/orch-1182-ledger-verify/runtime HANDOFF_DIR=/tmp/orch-1182-ledger-verify/handoff python3 src/verify.py --coverage
+```
+
+It exited 1 with missing instrumented-child coverage and
+`coverage: NO DATA — no instrumented child wrote a data file (did any test run?)`.
+The historical whole-tree reduction remains 169 statements, with an 11-unit
+shortfall; whole-tree branches remain unavailable. No new counts are claimed.
+
+A separate standard-library smoke command, `python3 /tmp/orch_1182_ledger_smoke.py`,
+exited 0 with `Ledger smoke passed: isolated ledger, dry-run and applied costs,
+unchanged consumption rows`. It exercised production reconciliation with temporary
+runtime roots and blocked subprocess/network calls. This is not a named pytest
+pass and does not complete a task or acceptance checkbox. The remaining blockers
+are focused pytest, Black, and CI for these new isolation changes.
+
+Syntax parsing and `git diff --check` passed. The GitHub connector rejected both
+the blocker comment and `needs-human` label with `MCP tool call requires approval,
+but approval policy is never`; neither mutation was applied. Final PR #1323 state
+was checked: open, `draft: false`.

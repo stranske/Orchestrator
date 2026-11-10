@@ -22,6 +22,7 @@ def isolated_runtime(tmp_path, monkeypatch):
     with advisor_hermetic.activated(monkeypatch):
         monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "state"))
         monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path / "runtime"))
+        monkeypatch.setenv("HANDOFF_DIR", str(tmp_path / "handoff"))
         monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "runtime" / "feedback.db")
         # HANDOFF is captured outside ORCH_LOCAL_RUNTIME at import time.
         monkeypatch.setattr(ccusage.adapters, "HANDOFF", tmp_path / "handoff")
@@ -69,6 +70,8 @@ def isolated_runtime(tmp_path, monkeypatch):
 
         monkeypatch.setattr(subprocess, "run", guarded_subprocess_run)
         monkeypatch.setattr(subprocess, "Popen", forbid_external)
+        monkeypatch.setattr(socket.socket, "connect", forbid_external)
+        monkeypatch.setattr(socket.socket, "connect_ex", forbid_external)
         monkeypatch.setattr(socket, "socket", forbid_external)
         monkeypatch.setattr(socket, "create_connection", forbid_external)
 
@@ -253,12 +256,20 @@ def test_ccusage_measurement_and_match_helpers():
     )
 
 
-def test_ccusage_reconcile_write_path(tmp_path, monkeypatch):
-    monkeypatch.setattr(ccusage.adapters, "LEDGER", tmp_path / "ledger.ndjson")
+def test_ccusage_reconcile_write_path(tmp_path):
+    # Exercise the fixture's captured-path isolation instead of replacing it again.
+    assert ccusage.adapters.HANDOFF == tmp_path / "handoff"
+    assert ccusage.adapters.LEDGER == ccusage.adapters.HANDOFF / "ledger.ndjson"
+    assert not ccusage.adapters.LEDGER.exists()
     base = 1_700_000_000
     feedback.record_run("run-a", "o/r#1", "implement", "codex", ts=base)
     ccusage.adapters.record_ledger("codex", event="start", run_id="run-a", ts=base)
     ccusage.adapters.record_ledger("codex", event="complete", run_id="run-a", ts=base + 60)
+    ledger_before = ccusage.adapters.LEDGER.read_text()
+    assert [json.loads(line)["event"] for line in ledger_before.splitlines()] == [
+        "start",
+        "complete",
+    ]
     sessions = [
         {
             "agent": "codex",
@@ -288,6 +299,7 @@ def test_ccusage_reconcile_write_path(tmp_path, monkeypatch):
             "SELECT run_id, tokens_in, tokens_out, cost_usd, source FROM costs"
         ).fetchone()
     assert tuple(row) == ("run-a", 2, 1, 0.1, "ccusage")
+    assert ccusage.adapters.LEDGER.read_text() == ledger_before
     ccusage._print_summary(live, as_json=True)
 
 
