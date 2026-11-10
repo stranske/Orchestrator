@@ -514,12 +514,16 @@ def _preserve_dirty_holder(holder: Path, branch: str, event: dict) -> None:
 def _reclaim_branch_holder(canon: Path, branch: str, wt: Path, event: dict) -> None:
     """Remove only a clean, idle holder of this branch, never the requested checkout."""
     _run(["git", "-C", str(canon), "worktree", "prune", "--expire", "now"])
-    listed = _run(["git", "-C", str(canon), "worktree", "list", "--porcelain", "-z"])
-    for record in listed.stdout.split("\0\0"):
-        fields = record.split("\0")
-        if f"branch refs/heads/{branch}" not in fields:
+    listed = _run(["git", "-C", str(canon), "worktree", "list", "--porcelain"])
+    for record in listed.stdout.strip().split("\n\n"):
+        fields = {}
+        for line in record.split("\n"):
+            parts = line.split(None, 1)
+            if len(parts) == 2:
+                fields[parts[0]] = parts[1]
+        if fields.get("branch") != f"refs/heads/{branch}":
             continue
-        holder = Path(next(field[9:] for field in fields if field.startswith("worktree ")))
+        holder = Path(fields["worktree"])
         if holder.resolve() == wt.resolve():
             continue
         event.update(cause="branch-held", holder_path=str(holder))
