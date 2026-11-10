@@ -1837,6 +1837,10 @@ In fractions/hour, `s = max(0, C − u) / max((T1 − t)/1h, 1)` and
 `w = min(1, span_h / BURN_WINDOW_HOURS)` and
 `ḃ_eff = w·ḃ_short + (1−w)·ḃ_period`; undefined short burn uses the period average.
 The target is `clamp(s / ḃ_eff, 0, 1)`, or 1 when effective burn is nonpositive.
+For `u < 0.5`, the target is at least 0.5 unless `span_h >= 6` and the measured
+projection `ũ > 1`. This floor applies to the target on every tick, so repeated
+short-history ticks cannot compound the movement cap into starvation. A prior
+below 0.5 still recovers by at most 0.25 per tick.
 Ticks compute this even at zero weight and limit changes to 0.25; actual exhaustion/latched
 quota failures force zero immediately. A source-only change keeps the prior weight within
 the same pool and period. Reports print budget, usable resets, all hourly rates, target,
