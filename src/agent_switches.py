@@ -135,10 +135,18 @@ STATE_READ_MEASURED = ("marker", "no_marker")
 # consults the route weights and returns delegationSource 'static'. Anything else — a reason from a
 # policy version older than the suffix — is `unknown`, because guessing would inflate either count.
 DELEGATION_SOURCE_RE = re.compile(
-    r"delegation_source:\s*(route_weights_exploration|route_weights|static)\b"
+    r"delegation_source:\s*(route_weights_exploration|route_weights_comparative|route_weights|static)\b"
 )
 UNAVAILABLE_REASON_RE = re.compile(r"^[\w.-]+-unavailable$")
-DELEGATION_SOURCES = ("route_weights_exploration", "route_weights", "static", "unknown")
+# route_weights_comparative: Workflows#4615, the hosted router following comparative_rank once
+# Orchestrator#1316 publishes comparative.route_enabled.
+DELEGATION_SOURCES = (
+    "route_weights_exploration",
+    "route_weights_comparative",
+    "route_weights",
+    "static",
+    "unknown",
+)
 REASON_KEPT_CHARS = 300
 
 
@@ -789,6 +797,7 @@ def aggregate(
             "policy_switches": sum(by_source.values()),
             "policy_route_weights": by_source["route_weights"],
             "policy_route_weights_exploration": by_source["route_weights_exploration"],
+            "policy_route_weights_comparative": by_source["route_weights_comparative"],
             "policy_static": by_source["static"],
             "policy_source_unknown": by_source["unknown"],
             "policy_entries_malformed": policy_malformed,
@@ -959,6 +968,7 @@ def summary_for_report(state_dir: Path | None = None) -> dict[str, Any]:
                 "bad": v.get("bad"),
                 "route_weights": v.get("route_weights", 0),
                 "route_weights_exploration": v.get("route_weights_exploration", 0),
+                "route_weights_comparative": v.get("route_weights_comparative", 0),
             }
             for k, v in (payload.get("policy_transitions") or {}).items()
         },
@@ -993,6 +1003,7 @@ def policy_phrase(summary: dict[str, Any]) -> str:
         f"policy switches {c.get('policy_switches')} on {c.get('policy_switched_prs')} PRs, "
         f"{c.get('policy_route_weights')} via route_weights "
         f"({c.get('policy_route_weights_exploration', 'unmeasured')} exploration, "
+        f"{c.get('policy_route_weights_comparative', 'unmeasured')} comparative, "
         f"{c.get('policy_static')} static, "
         f"{c.get('policy_source_unknown')} unknown), from the keepalive state of "
         f"{c.get('state_read')} PRs ({c.get('state_unread')} unread"
@@ -1022,6 +1033,7 @@ def render_report_lines(summary: dict[str, Any]) -> list[str]:
         lines.append(
             f"  policy {key}: {cell.get('n')} ({cell.get('route_weights')} via route_weights, "
             f"{cell.get('route_weights_exploration', 'unmeasured')} exploration, "
+            f"{cell.get('route_weights_comparative', 'unmeasured')} comparative, "
             f"merged {cell.get('merged')}, bad {cell.get('bad')})"
         )
     return lines

@@ -7,6 +7,8 @@ def test_exploration_source_is_recognised():
     for reason, expected in [
         ("delegation_source: route_weights_exploration", "route_weights_exploration"),
         ("delegation_source: route_weights", "route_weights"),
+        ("delegation_source: route_weights_comparative", "route_weights_comparative"),
+        ("delegation_source: route_weights_comparative_x", "unknown"),
         ("delegation_source: static (x)", "static"),
         ("garbage", "unknown"),
         ("delegation_source: route_weights_exploration_extra", "unknown"),
@@ -43,15 +45,19 @@ def test_policy_source_counts_sum_equals_policy_switches(tmp_path):
             for key in (
                 "policy_route_weights",
                 "policy_route_weights_exploration",
+                "policy_route_weights_comparative",
                 "policy_static",
                 "policy_source_unknown",
             )
         )
         == counts["policy_switches"]
-        == 4
+        == 5
     )
     assert counts["policy_route_weights_exploration"] == 1
+    assert counts["policy_route_weights_comparative"] == 1
     (tmp_path / "agent-switches.json").write_text(json.dumps(payload))
     summary = agent_switches.summary_for_report(tmp_path)
     assert summary["policy_transitions"]["codex->claude"]["route_weights_exploration"] == 1
     assert "1 exploration" in agent_switches.policy_phrase(summary)
+    assert "1 comparative" in agent_switches.policy_phrase(summary)
+    assert summary["policy_transitions"]["codex->claude"]["route_weights_comparative"] == 1
