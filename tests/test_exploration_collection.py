@@ -12,6 +12,7 @@ import tempfile
 import advisor_hermetic
 import pytest
 
+import adapters
 import claims
 import exploration_collection as ec
 import exploration_evidence_plan as eep
@@ -26,6 +27,9 @@ def isolated_runtime(tmp_path, monkeypatch):
         monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "state"))
         monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path / "runtime"))
         monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "runtime" / "feedback.db")
+        # HANDOFF is captured outside ORCH_LOCAL_RUNTIME at import time.
+        monkeypatch.setattr(adapters, "HANDOFF", tmp_path / "handoff")
+        monkeypatch.setattr(adapters, "LEDGER", tmp_path / "handoff" / "ledger.ndjson")
         (tmp_path / "runtime").mkdir(parents=True, exist_ok=True)
 
         attempted_external = []

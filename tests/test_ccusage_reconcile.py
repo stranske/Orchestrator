@@ -23,6 +23,9 @@ def isolated_runtime(tmp_path, monkeypatch):
         monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "state"))
         monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path / "runtime"))
         monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "runtime" / "feedback.db")
+        # HANDOFF is captured outside ORCH_LOCAL_RUNTIME at import time.
+        monkeypatch.setattr(ccusage.adapters, "HANDOFF", tmp_path / "handoff")
+        monkeypatch.setattr(ccusage.adapters, "LEDGER", tmp_path / "handoff" / "ledger.ndjson")
         (tmp_path / "runtime").mkdir(parents=True, exist_ok=True)
 
         attempted_external = []
@@ -207,11 +210,22 @@ def test_ccusage_load_sessions_and_cli(monkeypatch, tmp_path, capsys):
 
 
 def test_ccusage_reconcile_uses_loaded_sessions(monkeypatch, tmp_path):
-    monkeypatch.setattr(ccusage, "_load_ccusage_sessions", lambda **kw: ([], ["load err"]))
+    calls = []
+
+    def load_sessions(**kwargs):
+        calls.append(kwargs)
+        return [{"agent": "vibe", "period": "loaded-session"}], ["load err"]
+
+    monkeypatch.setattr(ccusage, "_load_ccusage_sessions", load_sessions)
     monkeypatch.setattr(ccusage.adapters, "LEDGER", tmp_path / "ledger.ndjson")
     (tmp_path / "ledger.ndjson").write_text("")
-    out = ccusage.reconcile(dry_run=True)
+    out = ccusage.reconcile(dry_run=True, since_days=3, strict=True)
     assert "load err" in out["errors"]
+    assert calls == [{"since_days": 3}]
+    assert out["sessions_read"] == 1
+    assert out["skipped"] == {"unsupported_agent": 1}
+    assert out["strict_failed"] is True
+    assert out["written_cost_rows"] == 0
 
 
 def test_ccusage_measurement_and_match_helpers():
@@ -263,10 +277,17 @@ def test_ccusage_reconcile_write_path(tmp_path, monkeypatch):
         ccusage.adapters.LEDGER, sessions=sessions, dry_run=True, slack_seconds=0
     )
     assert dry["prepared"] == 1
+    with feedback._conn() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM costs").fetchone()[0] == 0
     live = ccusage.reconcile(
         ccusage.adapters.LEDGER, sessions=sessions, dry_run=False, slack_seconds=0
     )
     assert live["written_cost_rows"] == 1
+    with feedback._conn() as conn:
+        row = conn.execute(
+            "SELECT run_id, tokens_in, tokens_out, cost_usd, source FROM costs"
+        ).fetchone()
+    assert tuple(row) == ("run-a", 2, 1, 0.1, "ccusage")
     ccusage._print_summary(live, as_json=True)
 
 

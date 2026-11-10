@@ -92,9 +92,62 @@ CI's repository-selected Python 3.12 runs:
 python3 src/verify.py --aggregate shard-evidence --coverage --floor-may-lag
 ```
 
-Bare `/opt/anaconda3/bin/python3 src/verify.py --coverage` runs the whole local suite,
-which the continuation explicitly forbids. Local aggregate mode also runs all selftests and
-gates. Consequently full verification is assigned to CI, not silently run locally.
-The approximately 180-unit whole-tree goal and its shortfall remain UNKNOWN until final artifacts.
+Bare `python3 src/verify.py --coverage` runs the whole local suite, selftests, and gates.
+The historical CI artifacts above establish a 169-statement reduction and an 11-unit
+shortfall. They do not establish whole-tree branch reduction. See the continuation
+below for the current local invocation and its missing-dependency failure.
 
 Stop rule: two attempts per failing verification step or 75 minutes total. No unrelated repairs.
+
+## 2026-11-10 continuation: isolation checks and verification blocker
+
+An AST comparison against the original file fetched at
+`515371bd806b1b297704b3fef796274a216e6bde` confirmed that all 23 original test
+functions were already present with identical bodies before this continuation.
+The existing three recovered chunks contain the 22 deferred tests.
+Gate [42825030539](https://github.com/stranske/Orchestrator/actions/runs/42825030539)
+and CI [42825029936](https://github.com/stranske/Orchestrator/actions/runs/42825029936)
+both succeeded on `c0b6736875c3dc41556fe082b9e61939fc97d052`.
+Those results precede the uncommitted changes below.
+
+The recovered fixtures now explicitly place `adapters.HANDOFF` and `adapters.LEDGER`
+under each test's `tmp_path`. `HANDOFF` otherwise defaults to a directory outside
+`ORCH_LOCAL_RUNTIME`, so the existing runtime-root remapping did not isolate it.
+The loaded-session test additionally checks a nonempty loader result, the forwarded
+lookback, strict failure, and zero writes. The write-path test now reads the temporary
+database to verify that a dry run writes nothing and an applied run persists the expected cost.
+
+This runner has Python 3.12.16 but no pytest, pytest-cov, coverage, or Black.
+Installing them from the package index failed because DNS/network access is unavailable;
+the local package cache contains none of them. Actual command results:
+
+```text
+/tmp/orch-1182-venv/bin/python -m pytest tests/test_coverage_round_1182.py tests/test_ccusage_reconcile.py tests/test_exploration_collection.py tests/test_observability_dashboard.py -q --no-cov -m 'not slow'
+/tmp/orch-1182-venv/bin/python: No module named pytest
+```
+
+```sh
+PYTEST_ADDOPTS='-m "not slow"' ORCH_STATE_DIR=/tmp/orch-1182-verify/state ORCH_LOCAL_RUNTIME=/tmp/orch-1182-verify/runtime HANDOFF_DIR=/tmp/orch-1182-verify/handoff /tmp/orch-1182-venv/bin/python src/verify.py --coverage
+```
+
+The verify command exited 1, collected zero tests, reported `No module named coverage`
+for instrumented children, and ended with:
+
+```text
+coverage: NO DATA — no instrumented child wrote a data file (did any test run?)
+```
+
+Formatting and the required repository-wide Black check also exited 1 with
+`No module named black`. No commit was made because the pre-commit formatting gate
+could not pass. Direct Python smoke checks passed the new loaded-session assertions,
+the dry-run/persisted-cost assertions, and temporary handoff/ledger writes; these do
+not establish a focused pytest pass or a new coverage measurement. Syntax parsing and
+`git diff --check` passed. No task checkbox is completed by this continuation.
+Attempts to post the blocker comment and add `needs-human` to PR #1323 were both
+rejected by the GitHub tools: `MCP tool call requires approval, but approval policy
+is never`. Neither remote change was applied. The PR remains open with `draft: false`.
+
+The earlier measured whole-tree statement reduction remains 169 units with an
+11-unit shortfall.
+Whole-tree branch reduction remains unavailable because the historical Gate artifact
+did not instrument branches. No new per-target coverage counts are claimed here.
