@@ -1,0 +1,11 @@
+{
+  "source_head": "cb2eabe6528941f1008cebe4f1a46bfcec607c13",
+  "proposed_pr": 1289,
+  "proposed_head": "a27084d488d77fcfe7c9644ab97c8f5426bf5cfc",
+  "python": "/Users/teacher/.codex/automations/lane-remaining-20261108/baseline-test-env/bin/python",
+  "python_version": "3.14.3 (main, Feb 12 2026, 00:29:58) [Clang 21.1.4 ]",
+  "date": "2026-11-09",
+  "elapsed_seconds": 48.16828483399877,
+  "collector_sha256": "2b06e57331a505296b32ca89bfdaba065e58f313edefb68f6640419339e6c401",
+  "pins_sha256": "882667ad2038184a68c33832bf4bdf7d0af2b274ca4a188477f6934cf98eb22b"
+}

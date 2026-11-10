@@ -416,6 +416,11 @@ def _backfilled_targets(corpus_path: Path) -> set[str]:
             row = json.loads(line)
         except json.JSONDecodeError:
             continue
+        # A line that parses but is not an object (a list, null, a scalar) is corrupt
+        # evidence, same as invalid JSON. Calling .get on it aborts the whole scan, so a
+        # later valid backfill row is never seen and the re-run is no longer idempotent.
+        if not isinstance(row, dict):
+            continue
         if row.get("source") == "backfill" and row.get("target"):
             seen.add(row["target"])
     return seen

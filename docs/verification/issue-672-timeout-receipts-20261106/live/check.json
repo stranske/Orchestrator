@@ -1,0 +1,59 @@
+{
+  "checked_at": "2026-11-06T04:02:08.635Z",
+  "command": [
+    "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+    "/home/runner/work/Orchestrator/Orchestrator/src/switch_review.py",
+    "--json",
+    "--text-out",
+    "/tmp/issue-1186-timeout-receipts-20261106/live/report.txt"
+  ],
+  "python_runtime": {
+    "executable": "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+    "version": [
+      3,
+      14,
+      10
+    ],
+    "platform": "linux",
+    "architecture": "x86_64"
+  },
+  "source_sha256": {
+    "src/switch_review.py": "b3a2e032a2b1cddb93072d11cb3f772debe89ce60f36d3a8b89c94bf18dfd681",
+    "tests/test_switch_review_fleet.py": "344e01c0ef2d8b486550b822850a6115db055da6ad6923ab5c7e9327b38b71a1",
+    "tests/fixtures/switch_review_fleet.json": "2860b77a3d447ea152a2622e7bd10c2c1c8b287d7e39cef4dbbb0ed0fbe0783c",
+    "scripts/verify_fleet_delivery_live.js": "8724144a36110f3f5b7bbca0f6ecdf7aa2a4183d0f7f7851bc2ff3e1f60929b1"
+  },
+  "as_of": 1793937727,
+  "rows": {
+    "gate_cancellations": {
+      "name": "Gate cancellation share (48 h, labeled versus synchronize)",
+      "value": null,
+      "evidence_class": "unmeasured",
+      "reason": "gh error connecting to api.github.com check your internet connection or https://githubstatus.com"
+    },
+    "merge_to_close": {
+      "name": "Merge to issue closure (48 h)",
+      "value": null,
+      "evidence_class": "unmeasured",
+      "reason": "gh error connecting to api.github.com check your internet connection or https://githubstatus.com"
+    },
+    "oldest_canary": {
+      "name": "Oldest open canary sync PR",
+      "value": null,
+      "evidence_class": "unmeasured",
+      "reason": "gh error connecting to api.github.com check your internet connection or https://githubstatus.com"
+    },
+    "opener_cap": {
+      "name": "Opener-owned PR count against cap",
+      "value": null,
+      "evidence_class": "unmeasured",
+      "reason": "would need successful /home/runner/.codex/bin/opener-cap-health.py --json (exit 2)"
+    },
+    "released_flow": {
+      "name": "Released-issue agent PRs per day (48 h)",
+      "value": null,
+      "evidence_class": "unmeasured",
+      "reason": "gh error connecting to api.github.com check your internet connection or https://githubstatus.com"
+    }
+  }
+}

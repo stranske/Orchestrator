@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import socket
 import subprocess
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -145,6 +147,56 @@ def test_catalog_and_model_fallbacks_fail_closed_without_a_probe(monkeypatch, tm
             assert "bad" not in adapters._ADVERTISED_MEMO
 
 
+def test_catalog_probe_and_auth_health_keep_observed_evidence(monkeypatch, tmp_path):
+    """A successful probe retains its label mapping; auth failures remain output-driven."""
+    transcript = "\n".join(
+        [
+            '{"type":"system","subtype":"init","session_id":"s","model":"Observed"}',
+            '{"type":"result","result":"complete"}',
+        ]
+    )
+    assert adapters.observed_model_from_stream(transcript) == {
+        "model_label": "Observed",
+        "session_id": "s",
+        "result_text": "complete",
+    }
+
+    env_file = tmp_path / "probe.env"
+    env_file.write_text("export TOKEN=present\n")
+    cache = tmp_path / "cache" / "models.json"
+    monkeypatch.setenv("ORCH_MODEL_PROBE", "1")
+    monkeypatch.setitem(adapters.MODEL_PROBE_ENV_FILES, "test", env_file)
+    monkeypatch.setitem(adapters.MODEL_CATALOG_PROBES, "test", ["catalog"])
+    monkeypatch.setattr(adapters, "_catalog_cache_path", lambda _agent: cache)
+    monkeypatch.setattr(adapters.time, "time", lambda: 100)
+    monkeypatch.setattr(
+        adapters.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0], 0, "model-id\tReadable Model\n", ""
+        ),
+    )
+    assert adapters.advertised_catalog("test", refresh=True) == {
+        "models": ["model-id"],
+        "pairs": {"readable model": "model-id"},
+    }
+    assert json.loads(cache.read_text())["pairs"] == {"readable model": "model-id"}
+
+    monkeypatch.setitem(
+        sys.modules,
+        "agent_auth_check",
+        types.SimpleNamespace(_credential_file_state=lambda _agent: {"key_present": None}),
+    )
+    assert adapters.auth_health("muse")["checked"] is False
+    monkeypatch.setitem(adapters.AUTH_PROBES, "test", {"cmd": ["auth"], "strength": "validates"})
+    monkeypatch.setattr(
+        adapters.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, "Not logged in", ""),
+    )
+    assert adapters.auth_health("test", refresh=True)["authenticated"] is False
+
+
 def test_agy_log_for_appends_suffix_when_with_suffix_refuses(monkeypatch):
     original = Path.with_suffix
 
@@ -175,7 +227,10 @@ def test_agy_path_label_and_stream_parsers_are_defensive():
     assert adapters.agy_log_for("/tmp/run.log") == Path("/tmp/run.agy.log")
     assert adapters.agy_log_for("/tmp/run.agy.log") == Path("/tmp/run.agy.log")
     assert adapters.model_label_from_agy_log('label="first"\nlabel="last"') is None
-    log = 'Propagating selected model override to backend: label="first"\nPropagating selected model override to backend: label="last"'
+    log = (
+        'Propagating selected model override to backend: label="first"\n'
+        'Propagating selected model override to backend: label="last"'
+    )
     assert adapters.model_label_from_agy_log(log) == "last"
     stream = "\n".join(
         [

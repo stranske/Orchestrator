@@ -101,8 +101,10 @@ def test_a_clean_idle_holder_is_reclaimed(layout, lane, capsys, monkeypatch):
 
 
 @pytest.mark.parametrize("lane", ["closer", "opener"])
-def test_b_dirty_holder_is_refused(layout, lane):
+def test_b_dirty_holder_is_refused(layout, lane, monkeypatch):
     canon, _ = layout
+    monkeypatch.delenv("ORCH_PRESERVE_IDLE_DIRTY_HOLDER", raising=False)
+    monkeypatch.setenv("HANDOFF_DIR", str(canon.parent / "private-handoff"))
     branch = "pr-head" if lane == "closer" else OPENER_BRANCH
     if lane == "opener":
         git(canon, "branch", branch)
@@ -110,6 +112,10 @@ def test_b_dirty_holder_is_refused(layout, lane):
     dirty = holder / "nested" / "keep.txt"
     dirty.parent.mkdir()
     dirty.write_text("uncommitted work")
+    (holder / ".gitignore").write_text("ignored.txt\n")
+    (holder / "ignored.txt").write_text("ignored work must remain")
+    (holder / "staged.txt").write_text("staged work must remain")
+    git(holder, "add", "staged.txt")
     with pytest.raises(RuntimeError) as caught:
         provision.provision(TARGET, lane)
     assert str(holder) in str(caught.value)
@@ -118,10 +124,46 @@ def test_b_dirty_holder_is_refused(layout, lane):
     assert len(events()) == 1
     assert events()[0]["outcome"] == "failed"
     assert events()[0]["cause"] == "branch-held"
+    if lane == "closer":
+        original_head = git(holder, "rev-parse", "HEAD")
+        original_status = git(holder, "status", "--porcelain")
+        index = Path(git(holder, "rev-parse", "--git-path", "index"))
+        index_bytes = index.read_bytes()
+        monkeypatch.setenv("ORCH_PRESERVE_IDLE_DIRTY_HOLDER", "1")
+        import claims
+
+        assert claims.claim(TARGET, "original-owner", pid=99999999)
+        with pytest.raises(RuntimeError, match="native holder claim"):
+            provision.provision(TARGET, lane)
+        assert dirty.read_text() == "uncommitted work"
+        assert claims.release(TARGET, "original-owner")
+
+        def blind(_holder):
+            raise provision.ProbeBlindError("cannot establish idle holder")
+
+        monkeypatch.setattr(provision, "_live_holder_pids", blind)
+        with pytest.raises(provision.ProbeBlindError):
+            provision.provision(TARGET, lane)
+        assert git(holder, "branch", "--show-current") == branch
+        monkeypatch.setattr(provision, "_live_holder_pids", lambda _holder: set())
+        wt = provision.provision(TARGET, lane)
+        assert dirty.read_text() == "uncommitted work"
+        assert (holder / "ignored.txt").read_text() == "ignored work must remain"
+        assert (holder / "staged.txt").read_text() == "staged work must remain"
+        assert index.read_bytes() == index_bytes
+        assert git(holder, "rev-parse", "HEAD") == original_head
+        assert git(holder, "status", "--porcelain") == original_status
+        preserved = events()[-1]["preserved_branch"]
+        assert git(holder, "branch", "--show-current") == preserved
+        assert git(wt, "branch", "--show-current") == branch
+        assert git(wt, "status", "--porcelain") == ""
+        assert events()[-1]["cause"] == "dirty-holder-preserved"
 
 
-def test_c_live_holder_is_refused_naming_pid(layout):
+def test_c_live_holder_is_refused_naming_pid(layout, monkeypatch):
     holder = hold(layout)
+    (holder / "dirty.txt").write_text("preserve this live work")
+    monkeypatch.setenv("ORCH_PRESERVE_IDLE_DIRTY_HOLDER", "1")
     proc = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(300)", str(holder)],
         cwd=layout[0].parent,
@@ -639,3 +681,32 @@ def test_pgrep_includes_ancestors_on_macos(monkeypatch):
     assert prov._pgrep_base() == ["pgrep", "-a"]
     monkeypatch.setattr(prov.sys, "platform", "linux")
     assert prov._pgrep_base() == ["pgrep"]
+
+
+def test_worktree_stuck_mid_cherry_pick_is_preserved_without_switching(layout, monkeypatch):
+    """2026-11-05 Orchestrator#1129: an agent left a cherry-pick in progress; git refused to switch."""
+    canon, _ = layout
+    monkeypatch.setattr(provision, "_live_holder_pids", lambda wt: set())
+    wt = provision.provision(TARGET, "closer")
+    ident = ["-c", "user.name=a", "-c", "user.email=a@b"]
+    (wt / "f.txt").write_text("base\n")
+    git(wt, "add", "f.txt")
+    git(wt, *ident, "commit", "-m", "base f")
+    git(wt, "switch", "-c", "side")
+    (wt / "f.txt").write_text("side\n")
+    git(wt, *ident, "commit", "-am", "side f")
+    side = git(wt, "rev-parse", "HEAD")
+    git(wt, "switch", "pr-head")
+    (wt / "f.txt").write_text("ours\n")
+    git(wt, *ident, "commit", "-am", "ours f")
+    subprocess.run(["git", "-C", str(wt), *ident, "cherry-pick", side], capture_output=True)
+    (wt / "f.txt").write_text("resolved\n")
+    git(wt, "add", "f.txt")  # resolution staged, cherry-pick unfinished
+    head = git(wt, "rev-parse", "HEAD")
+    assert provision.provision(TARGET, "closer") == wt  # no refusal
+    event = events()[-1]
+    assert event["preserved_without_switch"] is True
+    kept = event["preserved_branch"]
+    assert git(canon, "rev-parse", f"{kept}^") == head  # the stash commit sits on the agent's HEAD
+    assert git(canon, "show", f"{kept}:f.txt") == "resolved"
+    assert git(wt, "rev-parse", "HEAD") == git(canon, "rev-parse", "origin/pr-head")

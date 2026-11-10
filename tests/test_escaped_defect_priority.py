@@ -13,11 +13,59 @@ ordering rules as pure functions, where a break is attributable to one invariant
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
+import socket
+import sqlite3
 import subprocess
+import sys
 from pathlib import Path
 
+import pytest
+
+import capabilities
 import escaped_defect_priority as edp
+
+
+@pytest.fixture(autouse=True)
+def isolated_priority_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    state = tmp_path / "_state"
+    runtime = tmp_path / "_runtime"
+    state.mkdir()
+    runtime.mkdir()
+    monkeypatch.setenv("ORCH_STATE_DIR", str(state))
+    monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(runtime))
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    monkeypatch.setattr(capabilities, "production_heartbeat", lambda *a, **k: None)
+
+    loaded_fb = sys.modules.get("feedback")
+    if loaded_fb is not None:
+        monkeypatch.setattr(loaded_fb, "DB_PATH", runtime / "feedback.db")
+
+    real_popen = subprocess.Popen
+    attempted: list[tuple] = []
+
+    def guarded_popen(cmd, *args, **kwargs):
+        argv = list(cmd) if isinstance(cmd, (list, tuple)) else [str(cmd)]
+        if not argv or os.path.basename(str(argv[0])) != "git":
+            attempted.append((argv, kwargs))
+            raise AssertionError(f"only local git subprocesses are permitted: {argv}")
+        if any(tok in {"fetch", "push", "pull", "clone", "ls-remote"} for tok in argv[1:]):
+            attempted.append((argv, kwargs))
+            raise AssertionError(f"network git subprocess forbidden: {argv}")
+        return real_popen(cmd, *args, **kwargs)
+
+    def forbidden(*args, **kwargs):
+        attempted.append((args, kwargs))
+        raise AssertionError("escaped_defect_priority tests must not open sockets")
+
+    monkeypatch.setattr(subprocess, "Popen", guarded_popen)
+    monkeypatch.setattr(socket, "socket", forbidden)
+    monkeypatch.setattr(socket, "create_connection", forbidden)
+    yield
+    assert attempted == [], f"unexpected external calls: {attempted}"
 
 
 def _repo(tmp_path: Path, commits: list[tuple[str, dict[str, str]]]) -> Path:
@@ -345,3 +393,89 @@ def test_both_test_file_conventions_are_excluded(tmp_path):
         ],
     )
     assert [r["path"] for r in edp.rank(repo, {})] == ["mod.py"]
+
+
+def test_revert_commit_scores_higher_tier1_weight_than_fix_commit(tmp_path: Path) -> None:
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    repo = _repo(
+        repo_dir,
+        [
+            ("feat: initial", {"reverted.py": "x = 1\n", "fixed.py": "y = 1\n"}),
+            ('Revert "feat: broken change"', {"reverted.py": "x = 0\n"}),
+            ("fix: off by one", {"fixed.py": "y = 2\n"}),
+        ],
+    )
+    weights = dict(edp.fix_commits(repo))
+    assert weights == {"reverted.py": edp.REVERT_WEIGHT, "fixed.py": edp.FIX_WEIGHT}
+
+    ranked = edp.rank(repo, {})
+    assert [row["path"] for row in ranked] == ["reverted.py", "fixed.py"]
+    assert ranked[0]["tier1_escaped_defects"] == edp.REVERT_WEIGHT
+    assert "revert commit touched this file" in ranked[0]["evidence"]
+
+
+def test_capability_heartbeat_swallows_ledger_failure_without_blocking_rank(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("simulated heartbeat failure")
+
+    monkeypatch.setattr(capabilities, "production_heartbeat", boom)
+    edp._capability_heartbeat()
+
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    repo = _repo(repo_dir, [("fix: bug", {"m.py": "x = 1\n"})])
+    rows, status = edp.rank_status(repo, {})
+    assert [row["path"] for row in rows] == ["m.py"]
+    assert status["status"] == "ok"
+
+
+def test_brain_signal_status_handles_missing_feedback_import_and_corrupt_schema(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(sys.modules, "feedback", None)
+    missing_import = edp.brain_signal_status()
+    assert missing_import == {
+        "source": "git",
+        "brain": "unknown",
+        "reason": "feedback store not readable here",
+    }
+
+    schemaless = tmp_path / "schemaless.db"
+    with contextlib.closing(sqlite3.connect(str(schemaless))) as conn:
+        conn.execute("CREATE TABLE unrelated (id INTEGER PRIMARY KEY)")
+        conn.commit()
+    broken_query = edp.brain_signal_status(schemaless)
+    assert broken_query["source"] == "git"
+    assert broken_query["brain"] == "unknown"
+    assert broken_query["reason"].startswith("query failed:")
+
+
+def test_main_reports_valid_coverage_json_with_and_without_missing_statements(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    repo = _repo(repo_dir, [("fix: bug", {"m.py": "x = 1\n"})])
+
+    cov_with_missing = tmp_path / "cov_missing.json"
+    cov_with_missing.write_text(
+        json.dumps({"files": {"m.py": {"summary": {"missing_lines": 7}}}}),
+        encoding="utf-8",
+    )
+    assert edp.main(["--repo", str(repo), "--coverage-json", str(cov_with_missing), "--json"]) == 0
+    with_missing_payload = json.loads(capsys.readouterr().out)
+    assert with_missing_payload["tier3_coverage"] == "1 file(s) with missing statements"
+    assert with_missing_payload["ranked"][0]["tier3_uncovered_statements"] == 7
+
+    cov_all_clean = tmp_path / "cov_clean.json"
+    cov_all_clean.write_text(
+        json.dumps({"files": {"m.py": {"summary": {"missing_lines": 0}}}}),
+        encoding="utf-8",
+    )
+    assert edp.main(["--repo", str(repo), "--coverage-json", str(cov_all_clean), "--json"]) == 0
+    clean_payload = json.loads(capsys.readouterr().out)
+    assert "UNAVAILABLE" in clean_payload["tier3_coverage"]
+    assert "names no in-repo file with missing statements" in clean_payload["tier3_coverage"]

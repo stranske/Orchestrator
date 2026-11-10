@@ -767,3 +767,288 @@ def test_pacing_measure_survives_the_freshness_check(monkeypatch):
     goal = replace(GOAL, measure="feature_goals.py:pacing_usage")
     result = fg.measure(goal, NOW)
     assert result.value == 0.0 and result.as_of == NOW
+
+
+def test_closer_completion_reads_registered_observation_and_exact_remote_pin(tmp_path, monkeypatch):
+    """Current native proof, its exact pin and original frozen source all matter."""
+    import closer_csv_completion as c
+
+    read = c.read_completion
+    monkeypatch.setattr(
+        c, "read_completion", lambda **kwargs: read(root=kwargs.pop("root", tmp_path), **kwargs)
+    )
+    assert fg.closer_campaign_completion(NOW).value is None
+    head, merge = "a" * 40, "b" * 40
+    branch = "test/csv"
+    state = {"key": c.KEY, "pr_repair": {"pid": 12, "agents": ["codex"], "log": "/native/log"}}
+    records = [
+        {
+            "type": "item.completed",
+            "item": {
+                "type": "command_execution",
+                "exit_code": 0,
+                "command": "git push origin HEAD:" + branch,
+                "aggregated_output": f"{head[:8]} HEAD -> {branch}\n",
+            },
+        },
+        {
+            "type": "item.completed",
+            "item": {
+                "type": "command_execution",
+                "exit_code": 0,
+                "command": "git rev-parse HEAD",
+                "aggregated_output": head,
+            },
+        },
+        {"type": "turn.completed"},
+        {"released": True, "target": f"{c.REPO}#{c.PR}"},
+    ]
+    raw = (
+        "=== dispatch codex/mid -> stranske/Orchestrator#989 [implement] ===\n"
+        + "\n".join(json.dumps(r) for r in records)
+    ).encode()
+    origin = json.dumps(state).encode()
+    evidence = tmp_path / "completions/evidence"
+    evidence.mkdir(parents=True)
+    worker_path = evidence / c.digest(raw)
+    worker_path.write_bytes(raw)
+    (evidence / c.digest(origin)).write_bytes(origin)
+    transcript = {
+        "target": f"{c.REPO}#{c.PR}",
+        "confirmed_run": True,
+        "gate": {"verdict": "PASS"},
+        "check_results": [
+            {
+                "id": "CSV-CONTRACT",
+                "type": "command",
+                "status": "PASS",
+                "returncode": 0,
+                "command": "python3 -I " + c.FIXTURE,
+                "stdout_tail": "contract ok\n",
+            }
+        ],
+    }
+    record = {
+        "schema": c.SCHEMA,
+        "target": c.KEY,
+        "head": head,
+        "merge": merge,
+        "publication_url": "https://github.com/stranske/Orchestrator/pull/989#issuecomment-12",
+        "worker_sha256": c.digest(raw),
+        "origin_sha256": c.digest(origin),
+        "verification_engine": "runtime_ac_gate.recheck_merged",
+        "verified_merge": merge,
+        "verification": {"result": "PASS", "transcript": json.dumps(transcript)},
+        "completed_at": NOW - 1,
+    }
+    receipt = c._path(tmp_path)
+    receipt.write_text(json.dumps(record))
+    pr = {
+        "state": "MERGED",
+        "updatedAt": "version-1",
+        "headRefOid": head,
+        "headRefName": branch,
+        "mergeCommit": {"oid": merge},
+        "comments": {
+            "pageInfo": {"hasNextPage": False},
+            "nodes": [
+                {
+                    "author": {"login": "stranske"},
+                    "url": record["publication_url"],
+                    "body": f"<!-- closer-core/v1 action=merge target=stranske/Orchestrator#989 head={head} round=20261106T121509Z -->",
+                }
+            ],
+        },
+    }
+    calls = []
+
+    def gh(args):
+        calls.append(args)
+        return json.dumps({"data": {"repository": {"pullRequest": pr}}})
+
+    monkeypatch.setattr(c, "_gh", gh)
+    c.record_completion(output_root=tmp_path)
+    captured_calls = len(calls)
+    measured = fg.closer_campaign_completion(NOW)
+    assert measured.value == 1 and measured.as_of == NOW - 1
+    assert fg.closer_campaign_completion(NOW).value == 1
+    assert len(calls) == captured_calls, "measurement must reuse the native publication snapshot"
+    pr["headRefOid"] = "c" * 40
+    with pytest.raises(ValueError):
+        c.record_completion(output_root=tmp_path)
+    assert fg.closer_campaign_completion(NOW).value is None
+    pr["headRefOid"] = head
+    pr["updatedAt"] = "version-2"
+    pr["comments"]["nodes"][0]["author"]["login"] = "untrusted"
+    with pytest.raises(ValueError):
+        c.record_completion(output_root=tmp_path)
+    assert fg.closer_campaign_completion(NOW).value is None
+    pr["updatedAt"] = "version-3"
+    pr["comments"]["nodes"][0]["author"]["login"] = "stranske"
+    c.record_completion(output_root=tmp_path)
+    worker_path.write_bytes(b"altered")
+    assert fg.closer_campaign_completion(NOW).value is None
+    worker_path.write_bytes(raw)
+    record["verification"]["result"] = "UNRUNNABLE"
+    receipt.write_text(json.dumps(record))
+    assert fg.closer_campaign_completion(NOW).value is None
+    record["verification"]["result"] = "PASS"
+    record["completed_at"] = NOW + 1
+    receipt.write_text(json.dumps(record))
+    c.record_completion(output_root=tmp_path)
+    assert fg.closer_campaign_completion(NOW).value is None
+    record["completed_at"] = NOW - 15 * fg.DAY
+    receipt.write_text(json.dumps(record))
+    c.record_completion(output_root=tmp_path)
+    assert fg.closer_campaign_completion(NOW).value == 0
+    assert worker_path.read_bytes() == raw
+
+    # Every malformed receipt layer remains unmeasured for the public reader.
+    import contextlib
+    import copy
+    import importlib.util
+    import io
+    import sys
+    from pathlib import Path
+
+    for malformed in (None, [], {}):
+        bad_pr = copy.deepcopy(pr)
+        bad_pr["comments"]["nodes"][0]["body"] = malformed
+        with pytest.raises(ValueError, match="acknowledgment missing"):
+            c._publication(bad_pr)
+        bad_transcript = copy.deepcopy(transcript)
+        bad_transcript["check_results"][0]["command"] = malformed
+        bad = {
+            **record,
+            "verification": {"result": "PASS", "transcript": json.dumps(bad_transcript)},
+        }
+        receipt.write_text(json.dumps(bad))
+        with pytest.raises(ValueError, match="verification is incomplete"):
+            c.record_completion(output_root=tmp_path)
+    receipt.write_text(json.dumps(record))
+
+    fixture_path = Path(__file__).parent / c.FIXTURE.removeprefix("tests/")
+    spec = importlib.util.spec_from_file_location("csv_loader_regression", fixture_path)
+    fixture = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fixture)
+    fake_root = tmp_path / "missing-reader"
+    fake_root.mkdir()
+    with monkeypatch.context() as scope:
+        scope.setattr(fixture, "__file__", str(fake_root / c.FIXTURE))
+        for missing in (True, False):
+            if not missing:
+                (fake_root / "closer_csv_completion.py").write_text(
+                    'raise ImportError("reader import unavailable")\n'
+                )
+            original_path = list(sys.path)
+            errors = io.StringIO()
+            with contextlib.redirect_stderr(errors):
+                assert fixture.main(["--chain-evidence"]) == 1
+            assert "chain-evidence observation failed:" in errors.getvalue()
+            assert "Traceback" not in errors.getvalue()
+            assert sys.path == original_path
+
+    for malformed in ([], None, "receipt"):
+        receipt.write_text(json.dumps(malformed))
+        assert fg.closer_campaign_completion(NOW).value is None
+    record["completed_at"] = NOW - 1
+    for malformed in (None, "verification", []):
+        bad = {**record, "verification": malformed}
+        receipt.write_text(json.dumps(bad))
+        assert fg.closer_campaign_completion(NOW).value is None
+    for malformed in ([], {**transcript, "gate": None}, {**transcript, "check_results": [None]}):
+        bad = {**record, "verification": {"result": "PASS", "transcript": json.dumps(malformed)}}
+        receipt.write_text(json.dumps(bad))
+        assert fg.closer_campaign_completion(NOW).value is None
+    receipt.write_text(json.dumps(record))
+    for malformed in ([], {**state, "pr_repair": "origin"}):
+        with pytest.raises(ValueError):
+            c.worker_proof(raw, malformed, head, branch)
+    for length in (4, 7, 9, 40):
+        varied = copy.deepcopy(records)
+        varied[0]["item"]["aggregated_output"] = f"{head[:length]} HEAD -> {branch}\n"
+        varied_raw = (
+            raw.split(b"\n", 1)[0] + b"\n" + b"\n".join(json.dumps(row).encode() for row in varied)
+        )
+        assert c.worker_proof(varied_raw, state, head, branch)["pid"] == 12
+    for varied in ([records[0], *records[2:]], [records[1], records[0], *records[2:]]):
+        varied = copy.deepcopy(varied)
+        next(
+            row for row in varied if row.get("item", {}).get("command", "").startswith("git push")
+        )["item"]["aggregated_output"] += head
+        varied_raw = (
+            raw.split(b"\n", 1)[0] + b"\n" + b"\n".join(json.dumps(row).encode() for row in varied)
+        )
+        with pytest.raises(ValueError, match="publish and read back"):
+            c.worker_proof(varied_raw, state, head, branch)
+    malformed_item = (
+        raw.split(b"\n", 1)[0]
+        + b'\n{"type":"item.completed","item":null}\n'
+        + raw.split(b"\n", 1)[1]
+    )
+    with pytest.raises(ValueError):
+        c.worker_proof(malformed_item, state, head, branch)
+    with pytest.raises(ValueError):
+        c.remote(lambda args: "[]")
+    # A measuring query cannot repair or mint publication authority. Only the
+    # existing native evidence entry can refresh a missing/corrupt snapshot.
+    publication = receipt.with_suffix(".publication.json")
+    for broken in ("{", '{"state":"refreshing"}'):
+        publication.write_text(broken)
+        count = len(calls)
+        assert fg.closer_campaign_completion(NOW).value is None
+        assert len(calls) == count
+        original_receipt = receipt.read_bytes()
+        c.record_completion(output_root=tmp_path)
+        assert receipt.read_bytes() == original_receipt
+    snapshot = json.loads(publication.read_text())
+    snapshot["publication"]["headRefOid"] = "e" * 40
+    publication.write_text(json.dumps(snapshot))
+    with pytest.raises(ValueError, match="snapshot digest"):
+        read(root=tmp_path)
+    c.record_completion(output_root=tmp_path)
+    assert read(root=tmp_path)["head"] == head
+    assert "comments(first:100)" in calls[-1][3]
+
+    # Writer failures retain no acceptance proof; success is reread independently.
+    import provision
+    import runtime_ac_gate
+
+    source = tmp_path / "native-source"
+    target = source / "targets/stranske_orchestrator_988_989.json"
+    target.parent.mkdir(parents=True)
+    target.write_text(json.dumps(state))
+    output = tmp_path / "written"
+    marker = pr["comments"]["nodes"][0]
+    monkeypatch.setattr(c, "remote", lambda *args, **kwargs: (pr, marker))
+    with pytest.raises(ValueError, match="outside the native dispatch"):
+        c.record_completion(state_root=source, output_root=output)
+    monkeypatch.setattr(c.Path, "home", lambda: tmp_path)
+    log = tmp_path / ".codex/handoff/dispatch-logs/worker.log"
+    log.parent.mkdir(parents=True)
+    log.write_bytes(raw)
+    state["pr_repair"]["log"] = str(log)
+    target.write_text(json.dumps(state))
+    monkeypatch.setattr(
+        provision, "temporary_exact_head_worktree", lambda *args: contextlib.nullcontext(tmp_path)
+    )
+    monkeypatch.setattr(
+        runtime_ac_gate, "recheck_merged", lambda *args, **kwargs: {"result": "UNRUNNABLE"}
+    )
+    with pytest.raises(ValueError, match="runtime acceptance stopped"):
+        c.record_completion(state_root=source, output_root=output)
+    assert not c._path(output).exists()
+    assert not (output / "completions/evidence").exists()
+    monkeypatch.setattr(
+        runtime_ac_gate,
+        "recheck_merged",
+        lambda *args, **kwargs: {"result": "PASS", "transcript": json.dumps(transcript)},
+    )
+    written = c.record_completion(state_root=source, output_root=output)
+    assert written["head"] == head and c._path(output).is_file()
+    monkeypatch.setattr(
+        runtime_ac_gate,
+        "recheck_merged",
+        lambda *args, **kwargs: pytest.fail("unchanged acceptance reran"),
+    )
+    assert c.record_completion(state_root=source, output_root=output) == written

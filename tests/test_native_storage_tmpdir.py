@@ -8,8 +8,6 @@ from pathlib import Path
 
 import pytest
 import test_storage_lifecycle as lifecycle_fixtures
-from test_closer_reasoning_boundary import controlled_world as controlled_world
-from test_closer_reasoning_boundary import native_world as native_world
 
 import adapters
 import dispatcher
@@ -259,11 +257,21 @@ def supervisor_job(tmp_path):
 def test_actual_supervisor_retires_native_tmp_on_success_and_failure(
     supervisor_job, tmp_path, monkeypatch, exit_code
 ):
-
     args = supervisor_job
     args.command[-1] = str(exit_code)
     observed = tmp_path / "native-temp-path.txt"
+    ready = tmp_path / "supervisor-ready"
+    real_bind = storage.Reservations.bind
+
+    def bind(manager, job, **metadata):
+        real_bind(manager, job, **metadata)
+        if "stage_source_binding_sha256" in metadata:
+            ready.touch()
+
+    monkeypatch.setattr(storage.Reservations, "bind", bind)
     shared = tmp_path / "shared-agent-runtime"
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path))
     monkeypatch.setenv("PYTHONPATH", str(Path(dispatcher.__file__).parent))
     monkeypatch.setenv("ORCH_MODEL_PROBE", "0")
     monkeypatch.setenv("ORCH_GEMINI_MODEL_PROBE", "0")
@@ -276,6 +284,13 @@ def test_actual_supervisor_retires_native_tmp_on_success_and_failure(
         "pathlib.Path(os.environ['NATIVE_TEMP_OBSERVATION']).write_text(str(root))"
     )
     child = (
+        "import pathlib,time\n"
+        f"ready = pathlib.Path({str(ready)!r})\n"
+        "deadline = time.monotonic() + 10\n"
+        "while not ready.exists():\n"
+        "    if time.monotonic() >= deadline:\n"
+        "        raise TimeoutError('supervisor setup did not complete')\n"
+        "    time.sleep(0.01)\n"
         "import shlex,subprocess,sys;from dispatcher import _agent_runtime_prelude;"
         "subprocess.run(['bash','-c',_agent_runtime_prelude('claude')+"
         + "shlex.join([sys.executable,'-c',"
@@ -285,7 +300,7 @@ def test_actual_supervisor_retires_native_tmp_on_success_and_failure(
     script = Path(args.command[1])
     script.write_text(
         script.read_text().replace(
-            'exit "$1"\n', shlex.join([sys.executable, "-c", child]) + '\nexit "$1"\n'
+            'exit "$1"\n', shlex.join([sys.executable, "-c", child]) + ' || exit "$?"\nexit "$1"\n'
         )
     )
     assert storage.run_job(args, free=lambda _: storage.GIB, probe=lambda _: None) == exit_code

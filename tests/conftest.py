@@ -65,10 +65,25 @@ TESTS_DIR = Path(__file__).parent
 
 
 @pytest.fixture(autouse=True)
+def isolate_capacity_shed_markers(tmp_path, monkeypatch):
+    """The host's live shed markers never reach a test.
+
+    `adapters.tier_ceiling` reads them on every dispatch path, so an active tier-scoped gemini
+    marker on the developer's machine would turn every `full` resolution in the suite into Flash.
+    """
+    try:
+        import capacity
+    except ModuleNotFoundError:
+        return  # standalone guard-test repos copy this conftest without src/
+    monkeypatch.setattr(capacity, "SHED_DIR", tmp_path / "capacity-shed-isolated")
+
+
+@pytest.fixture(autouse=True)
 def isolate_provision_events(tmp_path, monkeypatch):
     """Provision tests and their subprocesses must never append to the production ledger."""
     path = tmp_path / "provision-events.ndjson"
     monkeypatch.setenv("ORCH_PROVISION_EVENTS_PATH", str(path))
+    monkeypatch.setenv("LANE_API_EVENTS", str(tmp_path / "github-api-events.jsonl"))
     # This conftest is also copied into standalone guard-test repos with no src/.
     # Patch an already imported module; later imports read the temporary env path.
     loaded = sys.modules.get("provision")

@@ -1,0 +1,293 @@
+version: 1
+issue: 1291
+base: main
+branch: codex/issue-1291
+tasks:
+  - id: task-01
+    title: Inspect `autofix-versions.env`, `CI_LINT_BASELINE.md`, and `tests/test_ci_gate_config.py::test_baseline_was_measured_with_the_pinned_versions`;
+      record every mismatched or missing pinned-tool entry, including BLACK, RUFF,
+      ISORT, DOCFORMATTER, MYPY, and all remaining pins.
+    status: doing
+    started_at: '2026-11-09T06:22:04Z'
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-02
+    title: Inspect `.github/workflows/maint-68-sync-consumer-repos.yml` and the repository
+      commands that construct the flat exec-mirror and invoke `verify.py`; identify
+      the authoritative source of both baseline and pin files before editing.
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-03
+    title: Reproduce the named assertion using the repository-selected interpreter
+      with `-m pytest -q tests/test_ci_gate_config.py::test_baseline_was_measured_with_the_pinned_versions`,
+      using the proposed sync payload when the source checkout alone does not contain
+      the reported pins.
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-04
+    title: Run the baseline measurement command documented by `CI_LINT_BASELINE.md`
+      or its generating module with the complete intended `autofix-versions.env` toolchain;
+      update the authoritative baseline data and measured-toolchain record from actual
+      output, including any changed counts required by the existing gate.
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-05
+    title: Extend `tests/test_ci_gate_config.py` to verify rejection of a bumped pin
+      without a matching measurement, rejection of a missing toolchain entry with
+      the expected diagnostic, and acceptance of a complete matching measured toolchain;
+      reuse existing coverage where it already proves these cases.
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-06
+    title: Use the repository's flat exec-mirror construction command to verify that
+      the copies of `CI_LINT_BASELINE.md` and `autofix-versions.env` match the intended
+      source payload, then execute the existing `verify.py` aggregate invocation for
+      that shape.
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-07
+    title: After source delivery, let `.github/workflows/maint-68-sync-consumer-repos.yml`
+      regenerate stranske/Orchestrator#1289; inspect its new head and CI with `gh
+      run view <new-run-id> --log-failed`, and read the next sync-core classification.
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-08
+    title: 'Before implementation, record the check date, real input revision/payload,
+      exact reproduction command, and outcome: the named measured-toolchain gate passes
+      with measurements produced using every intended pin. The focused acceptance
+      command completes in under two minutes; if it does not, first provide a focused
+      reproduction that does.'
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-09
+    title: The repository-selected interpreter running `-m pytest -q tests/test_ci_gate_config.py`
+      exits zero, and the baseline measurement command and its actual tool versions/output
+      are recorded with the repair evidence.
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-10
+    title: Deliberately bumping one fixture pin without a corresponding measured entry
+      makes the regression test fail with the expected diagnostic; reverting that
+      deliberate break restores a passing result.
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-11
+    title: The flat exec-mirror contains the intended baseline and pin files, and
+      the existing aggregate command used by `verify.py aggregate in the flat exec-mirror
+      shape` exits zero with payload integrity checks enabled.
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-12
+    title: On the regenerated stranske/Orchestrator#1289 head, `verify.py aggregate
+      in the flat exec-mirror shape` passes; inspect the other three previously failed
+      jobs and record their current results. Use a new run, not historical run `42567594229`,
+      as delivery evidence.
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-13
+    title: The next sync-core round evaluating the regenerated head reports no instance
+      of this pin-conflict finding; record the round and head, or explicitly leave
+      live acceptance pending until that round occurs.
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-14
+    title: Fix the source mismatch between the measured toolchain in `CI_LINT_BASELINE.md`
+      and the pins in `autofix-versions.env`.
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-15
+    title: 'Compare the pins in autofix-versions.env (BLACK, RUFF, ISORT, DOCFORMATTER,
+      MYPY (verify: formatter passes)'
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-16
+    title: 'the rest) against the measured toolchain block in CI_LINT_BASELINE.md
+      (verify: lint passes)'
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-17
+    title: 'list every mismatched or missing entry. (verify: confirm completion in
+      repo)'
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-18
+    title: 'Update the measured toolchain section of CI_LINT_BASELINE.md so it records
+      a complete set of versions matching every pin in autofix-versions.env. (verify:
+      lint passes)'
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-19
+    title: Verify that the flat exec-mirror copy of the baseline
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-20
+    title: env files used by verify.py is consistent with the updated source files.
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-21
+    title: Add or extend regression coverage in `tests/test_ci_gate_config.py` to
+      reproduce the failure and pass after the fix.
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-22
+    title: 'Add a test in tests/test_ci_gate_config.py that feeds a pin set with a
+      bumped version (verify: tests pass)'
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-23
+    title: 'Add a test in tests/test_ci_gate_config.py that feeds a pin set with no
+      matching baseline entry (verify: tests pass)'
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-24
+    title: 'Add a test in tests/test_ci_gate_config.py that feeds a pin set with and
+      asserts that the baseline check fails with the expected message. (verify: tests
+      pass)'
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-25
+    title: 'Add a test in tests/test_ci_gate_config.py that asserts the baseline check
+      passes when every pin in autofix-versions.env has a matching measured toolchain
+      entry in CI_LINT_BASELINE.md. (verify: tests pass)'
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-26
+    title: The named gate passes on regenerated stranske/Orchestrator#1289, verified
+      with `gh run view <run-id>`, and the repository's test command passes locally.
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-27
+    title: Reintroducing the reported behavior makes the regression test fail; reverting
+      restores a passing result.
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-28
+    title: The next sync-core round classifies stranske/Orchestrator#1289 without
+      this finding.
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-29
+    title: Fix the failure named in the title (`Dev-tool pin update breaks verify.py
+      aggregate in the flat exec-mirror`) at its source; the failing check's log is
+      linked under Evidence and the sync PR is stranske/Orchestrator#1289.
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-30
+    title: Add or extend a test that reproduces the failure and passes after the fix
+      (`pytest` or `node --test`, whichever the source uses).
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-31
+    title: Let `.github/workflows/maint-68-sync-consumer-repos.yml` regenerate the
+      sync PR (Implementation Notes), together with the criterion to verify on regenerated
+      stranske/Orchestrator#1289. (The agent cannot modify .github/workflows/*.yml,
+      cannot retry CI pipelines, and cannot trigger or re-run the sync workflow. Regenerating
+      the sync PR and checking its CI run depend on external automation. | Keep this
+      as a human or automation step outside the agent's scope. Limit the agent to
+      source edits and local test runs, and have a maintainer trigger the sync and
+      confirm with `gh run view <run-id>`.)
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-32
+    title: Fix at the source if the root cause is in the workflow or the pins' origin
+      repository. (The root cause may be in the upstream source repo (stranske/Orchestrator
+      or the sync-core template) or in a protected workflow file, and the agent may
+      not have access to either. | Confirm which repository owns CI_LINT_BASELINE.md
+      and autofix-versions.env. If the fix needs a workflow file change, escalate
+      it to a human.)
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []

@@ -100,21 +100,39 @@ FEATURES = (
     Goal(
         "closer-campaign",
         "G1",
-        "independently observed desktop-qualified guarded remote completion",
+        "independently verified native closer-core canary completion",
         "feature_goals.py:closer_campaign_completion",
         "increase",
         True,
-        "owner, 2026-10-19",
+        "owner, 2026-10-19; current closer-core evidence authorized 2026-11-08",
     ),
 )
 
 
 def closer_campaign_completion(now: int) -> Measurement:
+    """Count a registered native canary only after independent pinned verification.
+
+    Owner scope update, 2026-11-08: current closer-core replaces the retired
+    desktop observer contract. This is a canary completion signal, not fleet
+    throughput. The reader never launches workers or creates missing proof.
+    Publication is the durable authenticated observation retained by the native
+    evidence entry; unchanged measurement performs no remote freshness polling.
+    """
+    import closer_csv_completion
+
+    try:
+        record = closer_csv_completion.read_completion()
+        stamp = record["completed_at"]
+        if type(stamp) is not int or not 0 < stamp <= now:
+            raise ValueError("native completion timestamp is invalid")
+    except (OSError, ValueError, TypeError, KeyError, RuntimeError) as exc:
+        return unknown(now, f"native closer-core completion unavailable: {str(exc)[:240]}")
+    value = float(stamp >= now - GOAL_SILENCE_DAYS * DAY)
     return Measurement(
-        None,
-        "unmeasured",
-        now,
-        "would need registered desktop observer and exact pinned remote completion receipt",
+        value,
+        "native worker + guarded publication + pinned runtime acceptance",
+        stamp,
+        reason=f"registered CSV canary: {record['publication_url']}",
     )
 
 

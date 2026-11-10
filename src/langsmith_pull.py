@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import shutil
 import sys
@@ -109,7 +110,7 @@ def _coerce_nonnegative_number(value: Any) -> float | None:
         number = float(value)
     except (TypeError, ValueError):
         return None
-    if number < 0:
+    if not math.isfinite(number) or number < 0:
         return None
     return number
 

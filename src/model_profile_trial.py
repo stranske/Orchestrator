@@ -5,9 +5,28 @@ The trial is instrumentation, not a benchmark: one frozen packet, one shared
 Codex capacity snapshot, randomized launch order, and exact registered profiles. It
 never executes a worker itself. ``prepare`` emits launch requests for a guarded
 transport bridge; ``finalize`` validates returned telemetry and proves source
-integrity. An explicit layout supports repeated instances of selected profiles;
+integrity. ``prepare-current`` binds the current strategy experiment's frozen
+spec into a two-profile, three-instance plan when that spec is sealed, and
+refuses when it is absent. It does not execute workers or write the program
+summary. A measured finalize of that plan records the experiment id, work
+shape, and spec hash beside quality, cost, and provider-resolved identity.
+An explicit layout supports repeated instances of selected profiles;
 verified evidence can be ingested atomically into a quarantine feedback database.
-``--selftest`` exercises prepare, validation, and reporting fully offline.
+``publish-current`` records one already measured two-profile, three-instance
+trial of the sealed strategy spec. It does not execute workers, and it refuses
+when any instance has no token count. ``run-current`` is the live read-only
+execution of that plan: six ``codex exec --sandbox read-only`` arms on the
+frozen spec. Transport acknowledgement requires four binding lines in the final
+message; recurring-work quality is scored separately from a read-only rubric
+on the frozen specification text. The prompt names the line to quote and does
+not include the completed ``work_evidence=`` answer. Cost is token counts from
+the session stream. Provider identity is taken from a ``response.completed``
+OpenAI response object, or from ``turn.completed``'s ``server_model`` field
+when the CLI copied it from provider response metadata. ``--model``, argv,
+``turn_context``, and a generic ``model`` field on ``turn.completed`` are not
+that witness. Current subscription sessions omit both, and ``run-current``
+then refuses and writes nothing. ``--selftest`` exercises
+prepare, validation, and reporting fully offline.
 """
 
 from __future__ import annotations
@@ -19,9 +38,12 @@ import math
 import os
 import random
 import re
+import shutil
+import subprocess
+import sys
 import tempfile
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +70,15 @@ LEGACY_PROFILE_IDS = (
     "codex-5.6-terra-high",
     "codex-5.6-luna-high",
 )
+# The task's comparison is two Codex profiles, three instances each. Astra is the full tier
+# and Terra the mid tier; both share the one Codex subscription pool. Luna stays on the
+# three-arm set above and is not part of this layout.
+CURRENT_TRIAL_PROFILE_IDS = (
+    "codex-6-astra-high",
+    "codex-5.6-terra-high",
+)
+CURRENT_TRIAL_INSTANCES = 3
+_EXPERIMENT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
 def _manifest_profile_ids(manifest: dict[str, Any]) -> tuple[str, ...]:
@@ -345,25 +376,29 @@ def build_trial_manifest(
     requests = []
     for launch_ordinal, (profile_id, instance) in enumerate(order, start=1):
         profile = execution_profiles.get_profile(profile_id)
-        requests.append(
-            {
-                "run_id": f"{trial_id}:{profile_id}"
-                + (f":instance:{instance}" if instances_per_profile > 1 else ""),
-                "launch_ordinal": launch_ordinal,
-                "profile_id": profile_id,
-                "provider": profile["provider"],
-                "requested_model": profile["requested_model"],
-                "reasoning_effort": "high",
-                "permission_mode": "read-only",
-                "sandbox": "read-only",
-                "tools": [],
-                "prompt_version": profile["prompt_version"],
-                "packet_hash": packet_hash,
-                "assignment": "instrumentation",
-                "learning_enabled": False,
-                "capacity_pool_ids": ["codex-subscription"],
-            }
-        )
+        request = {
+            "run_id": f"{trial_id}:{profile_id}"
+            + (f":instance:{instance}" if instances_per_profile > 1 else ""),
+            "launch_ordinal": launch_ordinal,
+            "profile_id": profile_id,
+            "provider": profile["provider"],
+            "requested_model": profile["requested_model"],
+            "reasoning_effort": "high",
+            "permission_mode": "read-only",
+            "sandbox": "read-only",
+            "tools": [],
+            "prompt_version": profile["prompt_version"],
+            "packet_hash": packet_hash,
+            "assignment": "instrumentation",
+            "learning_enabled": False,
+            "capacity_pool_ids": ["codex-subscription"],
+        }
+        # The pinned runner accepts only ordinals 1..3. Repeated instances keep
+        # that per-profile index beside the global launch position, which runs
+        # past 3 once two profiles are each repeated.
+        if instances_per_profile > 1:
+            request["instance_ordinal"] = instance
+        requests.append(request)
     manifest = {
         "schema": TRIAL_SCHEMA,
         "version": SCHEMA_VERSION,
@@ -389,6 +424,152 @@ def build_trial_manifest(
         manifest["selected_profile_ids"] = list(selected)
         manifest["instances_per_profile"] = instances_per_profile
     return manifest
+
+
+class RecurringWorkUnavailable(ValueError):
+    """The current strategy experiment has no sealed frozen spec to reuse."""
+
+
+def _experiments_root(experiments_root: Path | None) -> Path:
+    if experiments_root is not None:
+        return experiments_root
+    override = os.environ.get("ORCH_EXP_DIR")
+    if override:
+        return Path(override)
+    import exp_abcd
+
+    return exp_abcd.EXP_DIR
+
+
+def resolve_strategy_frozen_packet(
+    *,
+    state_dir: Path | None = None,
+    experiments_root: Path | None = None,
+) -> dict[str, Any]:
+    """Load the current strategy experiment's frozen spec as a trial packet.
+
+    The spec is available only when the capability-program receipt names one
+    experiment, that experiment's ``strategy.json`` points at its own ``spec.md``,
+    and the text is not a recovered missing-spec stub. A recorded ``spec_sha256``
+    must match the file. There is no fallback packet: a generic instrumentation
+    packet is a different work shape.
+    """
+    import spec_provenance
+    import strategy_experiment
+
+    receipt_path = strategy_experiment.strategy_result_path(state_dir)
+    try:
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise RecurringWorkUnavailable(
+            f"strategy experiment receipt is absent: {receipt_path}"
+        ) from exc
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RecurringWorkUnavailable(
+            f"strategy experiment receipt is unreadable: {receipt_path}"
+        ) from exc
+    if not isinstance(receipt, dict):
+        raise RecurringWorkUnavailable("strategy experiment receipt is not an object")
+    exp_id = receipt.get("exp_id")
+    if not isinstance(exp_id, str) or not _EXPERIMENT_ID_RE.fullmatch(exp_id):
+        raise RecurringWorkUnavailable("strategy experiment receipt has no experiment id")
+    experiment = _experiments_root(experiments_root) / exp_id
+    spec_path = (experiment / "spec.md").resolve()
+    metadata_path = experiment / "strategy.json"
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise RecurringWorkUnavailable(
+            f"strategy experiment metadata is absent: {metadata_path}"
+        ) from exc
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RecurringWorkUnavailable(
+            f"strategy experiment metadata is unreadable: {metadata_path}"
+        ) from exc
+    if not isinstance(metadata, dict) or not isinstance(metadata.get("spec_file"), str):
+        raise RecurringWorkUnavailable("strategy experiment metadata has no spec_file")
+    recorded = Path(metadata["spec_file"]).expanduser()
+    recorded_path = recorded if recorded.is_absolute() else experiment / recorded
+    try:
+        if recorded_path.resolve() != spec_path or not spec_path.is_file():
+            raise RecurringWorkUnavailable(
+                "strategy experiment spec_file is not the frozen spec.md"
+            )
+        spec_text = spec_path.read_text(encoding="utf-8")
+    except RecurringWorkUnavailable:
+        raise
+    except (OSError, UnicodeError) as exc:
+        raise RecurringWorkUnavailable(
+            f"strategy experiment frozen spec is unreadable: {spec_path}"
+        ) from exc
+    meta: dict[str, Any] = {}
+    meta_path = experiment / "meta.json"
+    if meta_path.exists():
+        try:
+            loaded = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RecurringWorkUnavailable(
+                f"strategy experiment meta.json is unreadable: {meta_path}"
+            ) from exc
+        if not isinstance(loaded, dict):
+            raise RecurringWorkUnavailable("strategy experiment meta.json is not an object")
+        meta = loaded
+        sealed = meta.get("spec_sha256")
+        if sealed is not None:
+            actual = hashlib.sha256(spec_text.encode("utf-8")).hexdigest()
+            if not isinstance(sealed, str) or sealed != actual:
+                raise RecurringWorkUnavailable(
+                    "strategy experiment spec_sha256 does not match spec.md"
+                )
+    if not spec_text.strip() or spec_provenance.is_missing_spec(meta, spec_text):
+        raise RecurringWorkUnavailable("strategy experiment frozen spec is a missing-spec stub")
+    return {
+        "schema": "orchestrator.model-profile-trial-packet",
+        "version": 1,
+        "purpose": "compare two Codex profiles on one frozen recurring-work spec",
+        "work_shape": "strategy-experiment-frozen-spec",
+        "exp_id": exp_id,
+        "spec_sha256": "sha256:" + hashlib.sha256(spec_text.encode("utf-8")).hexdigest(),
+        "instruction": (
+            "Read this frozen recurring-work specification without changing files. "
+            "Return only the bounded identity fields requested by the Workflows "
+            "worker telemetry contract."
+        ),
+        "frozen_spec": spec_text,
+        "expected_output": {
+            "acknowledged": True,
+            "packet_hash": "supplied-by-manifest",
+        },
+    }
+
+
+def build_current_recurring_trial(
+    orchestrator_root: Path,
+    workflows_root: Path,
+    *,
+    seed: int = 56014,
+    now: int | None = None,
+    capacity_state: str = "unknown",
+    state_dir: Path | None = None,
+    experiments_root: Path | None = None,
+) -> dict[str, Any]:
+    """Plan two Codex profiles × three instances on the current frozen spec.
+
+    This builds the launch plan only. Workers stay on the guarded transport,
+    and the capability-program summary is written by ``finalize`` from measured
+    attempts, never from this plan.
+    """
+    packet = resolve_strategy_frozen_packet(state_dir=state_dir, experiments_root=experiments_root)
+    return build_trial_manifest(
+        orchestrator_root,
+        workflows_root,
+        seed=seed,
+        now=now,
+        capacity_state=capacity_state,
+        packet=packet,
+        profile_ids=CURRENT_TRIAL_PROFILE_IDS,
+        instances_per_profile=CURRENT_TRIAL_INSTANCES,
+    )
 
 
 def validate_trial_manifest(manifest: dict[str, Any]) -> None:
@@ -421,19 +602,7 @@ def validate_trial_manifest(manifest: dict[str, Any]) -> None:
     profile_ids = _manifest_profile_ids(manifest)
     instances = manifest.get("instances_per_profile", 1)
     expected_count = len(profile_ids) * instances
-    identity = {
-        "created_at": manifest.get("created_at"),
-        "packet_hash": manifest.get("packet_hash"),
-        "profile_ids": list(profile_ids),
-        "seed": manifest.get("seed"),
-        "source_hashes": {
-            key: source_before[key]["aggregate_sha256"] for key in ("orchestrator", "workflows")
-        },
-    }
-    if "selected_profile_ids" in manifest:
-        identity["instances_per_profile"] = instances
-    expected_trial_id = "model-profile-trial:" + _sha256(identity).split(":", 1)[1][:24]
-    if manifest.get("trial_id") != expected_trial_id:
+    if manifest.get("trial_id") != _expected_trial_id(manifest):
         raise ValueError("trial identity is not reproducible")
 
     requests = manifest.get("requests") or []
@@ -453,6 +622,25 @@ def validate_trial_manifest(manifest: dict[str, Any]) -> None:
         range(1, expected_count + 1)
     ):
         raise ValueError("trial launch ordinals must cover the selected profile set")
+    if instances > 1:
+        for profile_id in profile_ids:
+            ordinals = [
+                item.get("instance_ordinal")
+                for item in requests
+                if item.get("profile_id") == profile_id
+            ]
+            if any(type(value) is not int for value in ordinals) or sorted(ordinals) != list(
+                range(1, instances + 1)
+            ):
+                raise ValueError("trial instance ordinals must cover 1..N within each profile")
+            for item in requests:
+                if item.get("profile_id") != profile_id:
+                    continue
+                expected_run = (
+                    f"{manifest['trial_id']}:{profile_id}:instance:{item['instance_ordinal']}"
+                )
+                if item.get("run_id") != expected_run:
+                    raise ValueError("trial instance ordinal does not match its run identity")
     expected_run_ids = {
         f"{manifest['trial_id']}:{pid}" + (f":instance:{i}" if instances > 1 else "")
         for pid in profile_ids
@@ -627,6 +815,38 @@ def _is_measured_program_summary(payload: dict[str, Any] | None) -> bool:
     return False
 
 
+def _expected_trial_id(manifest: dict[str, Any]) -> str:
+    """Trial id is the hash of the frozen packet, profiles, seed, and source seals."""
+    source_before = manifest["source_before"]
+    profile_ids = _manifest_profile_ids(manifest)
+    identity = {
+        "created_at": manifest.get("created_at"),
+        "packet_hash": manifest.get("packet_hash"),
+        "profile_ids": list(profile_ids),
+        "seed": manifest.get("seed"),
+        "source_hashes": {
+            key: source_before[key]["aggregate_sha256"] for key in ("orchestrator", "workflows")
+        },
+    }
+    if "selected_profile_ids" in manifest:
+        identity["instances_per_profile"] = manifest.get("instances_per_profile", 1)
+    return "model-profile-trial:" + _sha256(identity).split(":", 1)[1][:24]
+
+
+def _require_consistent_source_seal(manifest: dict[str, Any]) -> None:
+    """Each recorded aggregate must be the hash of its own entry list.
+
+    The live-tree comparison trusts that aggregate. Rewriting it to a mutated
+    tree's hash, leaving the old entries in place, and rebinding ``trial_id``
+    would otherwise look unchanged and let ``finalize --ingest`` proceed.
+    """
+    for name, recorded in manifest["source_before"].items():
+        entries = recorded.get("entries") if isinstance(recorded, dict) else None
+        sealed = recorded.get("aggregate_sha256") if isinstance(recorded, dict) else None
+        if not isinstance(entries, list) or sealed != _sha256(entries):
+            raise ValueError(f"trial source manifest aggregate does not match its entries:{name}")
+
+
 def _authoritative_identity_verified(attempts: list[dict[str, Any]]) -> bool:
     for attempt in attempts:
         evidence = attempt.get("identity_evidence")
@@ -754,7 +974,581 @@ def _write_capability_program_trial_summary(
         "aggregate_tokens_in": tokens_in,
         "aggregate_tokens_out": tokens_out,
     }
+    # The plan refuses to invent this file. Once measured attempts publish it, the
+    # frozen spec that selected the work shape has to be on the file: quality and
+    # cost without the experiment id are not identifiable as that recurring trial.
+    packet = manifest.get("frozen_packet")
+    if isinstance(packet, dict):
+        for field in ("work_shape", "exp_id", "spec_sha256"):
+            value = packet.get(field)
+            if isinstance(value, str) and value:
+                payload[field] = value
     _atomic_json(out_dir / "profile-trial.json", payload)
+
+
+def recurring_trial_prompt(manifest: dict[str, Any], request: dict[str, Any]) -> str:
+    """The frozen spec, transport acknowledgement lines, and a bounded read-only work task."""
+    packet = manifest.get("frozen_packet")
+    if not isinstance(packet, dict):
+        raise ValueError("recurring trial prompt requires the frozen packet")
+    spec = packet.get("frozen_spec")
+    spec_sha = packet.get("spec_sha256")
+    if not isinstance(spec, str) or not spec.strip():
+        raise ValueError("recurring trial prompt requires the frozen spec text")
+    if not isinstance(spec_sha, str) or not spec_sha.startswith("sha256:"):
+        raise ValueError("recurring trial prompt requires the frozen spec hash")
+    lines = (
+        f"packet_hash={manifest['packet_hash']}",
+        f"spec_sha256={spec_sha}",
+        f"profile_id={request['profile_id']}",
+        f"run_id={request['run_id']}",
+    )
+    instruction = packet.get("instruction")
+    if not isinstance(instruction, str) or not instruction.strip():
+        instruction = "Read this frozen recurring-work specification without changing files."
+    return (
+        instruction.rstrip()
+        + "\nDo not edit, create, commit, or push files.\n"
+        + "First, return exactly these four lines (transport acknowledgement), then a blank line, "
+        "then one line of recurring-work evidence.\n"
+        + "The evidence line must be `work_evidence=` followed by one line copied verbatim "
+        'from the frozen specification below: the line that begins with "Acceptance criteria:" '
+        "if there is one; otherwise the first non-empty line of the specification.\n"
+        + "Do not add any other text.\n"
+        + "\n".join(lines)
+        + "\n\nFrozen specification:\n"
+        + spec
+    )
+
+
+def _recurring_work_rubric_line(spec: str) -> str:
+    """One spec line that read-only work quality must quote verbatim."""
+    for line in spec.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("Acceptance criteria:"):
+            return stripped
+    for line in spec.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    raise ValueError("frozen specification has no line for the work-quality rubric")
+
+
+def _work_quality_score(manifest: dict[str, Any], final_text: str) -> float:
+    """1.0 when the final message proves the rubric line; identifier echo alone scores 0."""
+    packet = manifest.get("frozen_packet")
+    if not isinstance(packet, dict):
+        return 0.0
+    spec = packet.get("frozen_spec")
+    if not isinstance(spec, str) or not spec.strip():
+        return 0.0
+    try:
+        rubric = _recurring_work_rubric_line(spec)
+    except ValueError:
+        return 0.0
+    text = final_text or ""
+    prefix = "work_evidence="
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith(prefix):
+            quoted = line[len(prefix) :].strip()
+            return 1.0 if quoted == rubric else 0.0
+    return 0.0
+
+
+def _acknowledgement_score(
+    manifest: dict[str, Any], request: dict[str, Any], final_text: str
+) -> tuple[bool, float]:
+    """Transport acknowledgement (four lines) and recurring-work quality (rubric), separately.
+
+    All four binding lines must appear for acknowledgement. Work quality does not
+    use identifier-echo density: it is 1.0 only when ``work_evidence=`` carries the
+    rubric line verbatim.
+    """
+    packet = manifest["frozen_packet"]
+    required = (
+        f"packet_hash={manifest['packet_hash']}",
+        f"spec_sha256={packet['spec_sha256']}",
+        f"profile_id={request['profile_id']}",
+        f"run_id={request['run_id']}",
+    )
+    text = final_text or ""
+    acknowledged = all(line in text for line in required)
+    return acknowledged, _work_quality_score(manifest, text)
+
+
+def _jsonl_objects(session_text: str) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    for line_number, raw in enumerate(session_text.splitlines(), start=1):
+        if not raw.strip():
+            continue
+        try:
+            value = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"codex session is not JSONL at line {line_number}") from exc
+        if isinstance(value, dict):
+            events.append(value)
+    return events
+
+
+def _optional_provider_response(events: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """One OpenAI response object, or none when the stream has no such event."""
+    found: list[dict[str, Any]] = []
+    for event in events:
+        if event.get("type") != "response.completed":
+            continue
+        response = event.get("response")
+        if not isinstance(response, dict) or response.get("object") != "response":
+            raise ValueError("codex response metadata is not an OpenAI response object")
+        model = response.get("model")
+        response_id = response.get("id")
+        if type(model) is not str or not model.strip():
+            raise ValueError("codex response metadata has no model")
+        if type(response_id) is not str or not response_id.startswith("resp_"):
+            raise ValueError("codex response metadata has no OpenAI response id")
+        usage = response.get("usage")
+        found.append(
+            {
+                "model": model,
+                "id": response_id,
+                "usage": usage if isinstance(usage, dict) else None,
+            }
+        )
+    if not found:
+        return None
+    if len(found) != 1:
+        raise ValueError("codex session has multiple provider responses")
+    return found[0]
+
+
+def _one_provider_response(events: list[dict[str, Any]]) -> dict[str, Any]:
+    """The OpenAI response object, never the CLI's configured model.
+
+    ``turn_context`` is what the CLI was asked to run. Subscription sessions
+    have no separate provider identity unless the stream carries one response
+    object (``object`` of ``response`` and an id beginning with ``resp_``).
+    """
+    found = _optional_provider_response(events)
+    if found is None:
+        raise ValueError("provider_resolved_identity_unavailable")
+    return found
+
+
+def _completed_server_model(events: list[dict[str, Any]]) -> str | None:
+    """Provider model copied onto ``turn.completed`` as ``server_model``.
+
+    A generic ``model`` field on that event is the CLI's configured name and is
+    ignored. ``null`` means the provider omitted the id. Two non-null values
+    are a conflict even when they match.
+    """
+    found: list[str] = []
+    for event in events:
+        if event.get("type") != "turn.completed" or "server_model" not in event:
+            continue
+        value = event.get("server_model")
+        if value is None:
+            continue
+        if type(value) is not str or not value.strip():
+            raise ValueError("codex server_model is not a provider model id")
+        found.append(value)
+    if not found:
+        return None
+    if len(found) != 1:
+        raise ValueError("codex session has multiple provider models")
+    return found[0]
+
+
+def _provider_witness(events: list[dict[str, Any]]) -> dict[str, Any]:
+    """The served model, from response metadata or ``server_model``, not argv."""
+    response = _optional_provider_response(events)
+    server_model = _completed_server_model(events)
+    if response is not None and server_model is not None and response["model"] != server_model:
+        raise ValueError("codex response model disagrees with server_model")
+    if response is not None:
+        return {
+            "model": response["model"],
+            "id": response["id"],
+            "usage": response["usage"],
+            "source": "openai-response",
+        }
+    if server_model is not None:
+        return {"model": server_model, "id": None, "usage": None, "source": "server_model"}
+    raise ValueError("provider_resolved_identity_unavailable")
+
+
+def _one_cli_model(events: list[dict[str, Any]]) -> str | None:
+    models: set[str] = set()
+    for event in events:
+        if event.get("type") != "turn_context":
+            continue
+        payload = event.get("payload")
+        model = payload.get("model") if isinstance(payload, dict) else None
+        if type(model) is str and model.strip():
+            models.add(model)
+    if len(models) > 1:
+        raise ValueError("codex session reports multiple CLI models")
+    return next(iter(models), None)
+
+
+def _nonnegative_pair(usage: dict[str, Any] | None, label: str) -> tuple[int, int] | None:
+    if usage is None:
+        return None
+    tokens_in = usage.get("input_tokens")
+    tokens_out = usage.get("output_tokens")
+    if tokens_in is None and tokens_out is None:
+        return None
+    if type(tokens_in) is not int or type(tokens_out) is not int or tokens_in < 0 or tokens_out < 0:
+        raise ValueError(f"{label} must be a nonnegative integer")
+    return tokens_in, tokens_out
+
+
+def _measured_usage(
+    response_usage: dict[str, Any] | None, events: list[dict[str, Any]]
+) -> tuple[int, int]:
+    from_response = _nonnegative_pair(response_usage, "codex response usage")
+    turn_pairs: list[tuple[int, int]] = []
+    for event in events:
+        if event.get("type") != "turn.completed" or not isinstance(event.get("usage"), dict):
+            continue
+        pair = _nonnegative_pair(event["usage"], "codex turn usage")
+        if pair is not None:
+            turn_pairs.append(pair)
+    if len(turn_pairs) > 1:
+        raise ValueError("codex session has multiple turn usage records")
+    from_turn = turn_pairs[0] if turn_pairs else None
+    if from_response is not None and from_turn is not None and from_response != from_turn:
+        raise ValueError("codex response usage disagrees with turn usage")
+    measured = from_response if from_response is not None else from_turn
+    if measured is None:
+        raise ValueError("measured recurring trial tokens_in must be a nonnegative integer")
+    return measured
+
+
+def measure_codex_session(
+    manifest: dict[str, Any],
+    request: dict[str, Any],
+    session_text: str,
+    final_text: str,
+) -> dict[str, Any]:
+    """Measure one read-only arm. The recorded model is the provider witness."""
+    events = _jsonl_objects(session_text)
+    metadata = _provider_witness(events)
+    cli_model = _one_cli_model(events)
+    if cli_model is not None and cli_model != metadata["model"]:
+        raise ValueError("codex CLI model disagrees with the provider response")
+    if request.get("provider") != "openai":
+        raise ValueError("provider response metadata is not an OpenAI response")
+    if metadata["model"] != request.get("requested_model"):
+        raise ValueError("provider served a different model than the profile requested")
+    acknowledged, quality = _acknowledgement_score(manifest, request, final_text)
+    if not acknowledged:
+        raise ValueError("codex arm did not acknowledge the frozen packet")
+    tokens_in, tokens_out = _measured_usage(metadata.get("usage"), events)
+    return {
+        "model": metadata["model"],
+        "response_id": metadata["id"],
+        "identity_source": metadata["source"],
+        "tokens_in": tokens_in,
+        "tokens_out": tokens_out,
+        "quality": quality,
+        "provider": "openai",
+    }
+
+
+def _identity_artifact(directory: Path, request: dict[str, Any], measured: dict[str, Any]) -> dict:
+    payload: dict[str, Any] = {
+        "profile_id": request["profile_id"],
+        "provider_resolved_model": measured["model"],
+        "provider_resolved_provider": measured["provider"],
+    }
+    if measured.get("response_id"):
+        payload["object"] = "response"
+        payload["response_id"] = measured["response_id"]
+    else:
+        # server_model is the provider id on turn.completed. It is not an
+        # OpenAI response id, so the artifact must not invent a resp_ value.
+        payload["object"] = "turn.completed"
+        payload["server_model"] = measured["model"]
+    path = directory / f"identity-{int(request['launch_ordinal'])}.json"
+    _atomic_json(path, payload)
+    digest = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+    return {
+        "schema": IDENTITY_EVIDENCE_SCHEMA,
+        "version": IDENTITY_EVIDENCE_VERSION,
+        "authority": "openai-response-metadata/v1",
+        "artifact_ref": str(path),
+        "artifact_sha256": digest,
+    }
+
+
+def results_from_codex_sessions(
+    manifest: dict[str, Any],
+    sessions: list[dict[str, Any]],
+    *,
+    artifact_dir: Path,
+    cli_version: str,
+    runner_version: str,
+) -> dict[str, Any]:
+    """Build trial results from six session transcripts. Writes nothing on refusal."""
+    by_run = {row.get("run_id"): row for row in sessions}
+    requests = list(manifest.get("requests") or [])
+    if set(by_run) != {row["run_id"] for row in requests} or len(sessions) != len(requests):
+        raise ValueError("measured recurring trial requires six attempts")
+    measured_by_run: dict[str, dict[str, Any]] = {}
+    for request in requests:
+        session = by_run[request["run_id"]]
+        if not isinstance(session, dict):
+            raise ValueError("measured recurring trial attempt is not an object")
+        measured_by_run[request["run_id"]] = measure_codex_session(
+            manifest,
+            request,
+            str(session.get("session_text") or ""),
+            str(session.get("final_text") or ""),
+        )
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    attempts = []
+    qualities: dict[str, list[float]] = {}
+    for request in requests:
+        measured = measured_by_run[request["run_id"]]
+        qualities.setdefault(request["profile_id"], []).append(float(measured["quality"]))
+        attempts.append(
+            {
+                "run_id": request["run_id"],
+                "profile_id": request["profile_id"],
+                "operation_role": "worker",
+                "requested_model": request["requested_model"],
+                "selected_model": measured["model"],
+                "reported_model": measured["model"],
+                "provider_resolved_provider": measured["provider"],
+                "provider_resolved_model": measured["model"],
+                "fallback_reason": None,
+                "runner_version": runner_version,
+                "cli_version": cli_version,
+                "status": "success",
+                "tokens_in": measured["tokens_in"],
+                "tokens_out": measured["tokens_out"],
+                "packet_hash": manifest["packet_hash"],
+                "acknowledged": True,
+                "identity_evidence": _identity_artifact(artifact_dir, request, measured),
+            }
+        )
+    return {
+        "schema": RESULT_SCHEMA,
+        "version": SCHEMA_VERSION,
+        "trial_id": manifest["trial_id"],
+        "packet_hash": manifest["packet_hash"],
+        "acknowledged": True,
+        "identity_verified": True,
+        "attempts": attempts,
+        "quality_by_profile": {
+            profile_id: sum(scores) / len(scores) for profile_id, scores in qualities.items()
+        },
+    }
+
+
+def codex_read_only_argv(
+    binary: Path, request: dict[str, Any], prompt: str, output_path: Path
+) -> list[str]:
+    """Argv for one arm. The prompt is an argument; identity is not read from it."""
+    if len(prompt) > 200_000:
+        raise ValueError("frozen spec is too large to pass to the read-only runner")
+    return [
+        str(binary),
+        "exec",
+        "--json",
+        "--ignore-user-config",
+        "--strict-config",
+        "--skip-git-repo-check",
+        "--sandbox",
+        "read-only",
+        "--model",
+        str(request["requested_model"]),
+        "-c",
+        'model_reasoning_effort="high"',
+        "--output-last-message",
+        str(output_path),
+        prompt,
+    ]
+
+
+def execute_codex_read_only(
+    binary: Path, request: dict[str, Any], prompt: str, workdir: Path
+) -> tuple[str, str, str]:
+    """Run one sandboxed arm. Returns the JSONL stream, final message, and CLI version.
+
+    Provider identity and usage are interpreted only from ``stdout`` (JSONL). The
+    ``--model`` argv names the profile contract; it is not treated as provider
+    resolution. ``turn.completed.server_model`` is also accepted when the CLI
+    copied it from provider response metadata. A session whose JSONL has usage
+    and only ``turn_context`` or a generic ``model`` field still refuses with
+    ``provider_resolved_identity_unavailable``, which is what current
+    subscription ``codex exec --json`` streams do.
+    """
+    if not binary.is_file() or not os.access(binary, os.X_OK):
+        raise ValueError(f"codex read-only runner is absent: {binary}")
+    workdir.mkdir(parents=True, exist_ok=True)
+    final_path = workdir / "final.txt"
+    version = subprocess.run(
+        [str(binary), "--version"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    cli_version = " ".join((version.stdout or "").split())
+    if version.returncode != 0 or not cli_version:
+        raise ValueError("codex read-only runner did not report a version")
+    argv = codex_read_only_argv(binary, request, prompt, final_path)
+    if "--sandbox" not in argv or argv[argv.index("--sandbox") + 1] != "read-only":
+        raise ValueError("codex arm refused: sandbox is not read-only")
+    completed = subprocess.run(
+        argv,
+        cwd=workdir,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    if completed.returncode != 0:
+        raise ValueError("codex read-only arm failed")
+    if not final_path.is_file():
+        raise ValueError("codex read-only arm wrote no final message")
+    return completed.stdout, final_path.read_text(encoding="utf-8"), cli_version
+
+
+def run_current_recurring_trial(
+    orchestrator_root: Path,
+    workflows_root: Path,
+    *,
+    seed: int = 56014,
+    now: int | None = None,
+    capacity_state: str = "unknown",
+    state_dir: Path | None = None,
+    experiments_root: Path | None = None,
+    state_path: Path | None = None,
+    artifact_dir: Path | None = None,
+    codex_bin: Path | None = None,
+    execute: Callable[[dict[str, Any], str], tuple[str, str, str]] | None = None,
+) -> dict[str, Any]:
+    """Run two Codex profiles × three read-only instances on the sealed spec.
+
+    ``execute`` replaces the process spawn in tests. It returns the session
+    JSONL, the final message, and the CLI version. It does not supply quality,
+    token counts, or a model; those are read from the session.
+    """
+    manifest = build_current_recurring_trial(
+        orchestrator_root,
+        workflows_root,
+        seed=seed,
+        now=now,
+        capacity_state=capacity_state,
+        state_dir=state_dir,
+        experiments_root=experiments_root,
+    )
+    validate_trial_manifest(manifest)
+    roots = [Path(row["root"]) for row in manifest["source_before"].values()]
+    if artifact_dir is None:
+        state_root = Path(
+            os.environ.get("ORCH_STATE_DIR", str(Path.home() / ".codex" / "orchestrator"))
+        )
+        artifact_dir = (
+            state_root
+            / "capability-program"
+            / "profile-trial-attempts"
+            / manifest["trial_id"].replace(":", "-")
+        )
+    ensure_artifact_outside_sources(artifact_dir, roots)
+    if state_path is not None:
+        ensure_artifact_outside_sources(state_path, roots)
+    sessions = []
+    cli_versions: list[str] = []
+    for request in sorted(manifest["requests"], key=lambda row: int(row["launch_ordinal"])):
+        prompt = recurring_trial_prompt(manifest, request)
+        if execute is None:
+            binary = codex_bin or (Path(shutil.which("codex") or "codex"))
+            workdir = artifact_dir / f"work-{int(request['launch_ordinal'])}"
+            session_text, final_text, cli_version = execute_codex_read_only(
+                binary, request, prompt, workdir
+            )
+        else:
+            session_text, final_text, cli_version = execute(request, prompt)
+        if not str(cli_version or "").strip():
+            raise ValueError("codex read-only runner did not report a version")
+        cli_versions.append(str(cli_version))
+        sessions.append(
+            {
+                "run_id": request["run_id"],
+                "session_text": session_text,
+                "final_text": final_text,
+            }
+        )
+    if len(set(cli_versions)) != 1:
+        raise ValueError("codex arms did not report one CLI version")
+    results = results_from_codex_sessions(
+        manifest,
+        sessions,
+        artifact_dir=artifact_dir,
+        cli_version=cli_versions[0],
+        runner_version="codex-exec-read-only",
+    )
+    return publish_measured_recurring_trial(manifest, results, state_path=state_path, now=now)
+
+
+def publish_measured_recurring_trial(
+    manifest: dict[str, Any],
+    results: dict[str, Any],
+    *,
+    state_path: Path | None = None,
+    now: int | None = None,
+) -> dict[str, Any]:
+    """Record one measured two-profile, three-instance trial of the sealed spec.
+
+    This does not execute a worker. The attempts must already carry provider-resolved
+    identity and a nonnegative token count in both directions. A missing count is
+    refused before any feedback row or program summary is written, so an unmeasured
+    arm cannot be stored as zero.
+    """
+    packet = manifest.get("frozen_packet")
+    if (
+        not isinstance(packet, dict)
+        or packet.get("work_shape") != "strategy-experiment-frozen-spec"
+    ):
+        raise ValueError("measured recurring trial requires the strategy experiment frozen spec")
+    if list(manifest.get("selected_profile_ids") or []) != list(CURRENT_TRIAL_PROFILE_IDS):
+        raise ValueError("measured recurring trial requires the two current Codex profiles")
+    if manifest.get("instances_per_profile") != CURRENT_TRIAL_INSTANCES:
+        raise ValueError("measured recurring trial requires three instances per profile")
+    fp = manifest["frozen_packet"]
+    if not isinstance(fp, dict):
+        raise ValueError("measured recurring trial requires a frozen packet")
+    frozen_spec = fp.get("frozen_spec")
+    if not isinstance(frozen_spec, str) or not frozen_spec.strip():
+        raise ValueError("measured recurring trial requires a nonempty frozen_spec")
+    exp_id = fp.get("exp_id")
+    if not isinstance(exp_id, str) or not _EXPERIMENT_ID_RE.fullmatch(exp_id):
+        raise ValueError("measured recurring trial requires a valid strategy exp_id")
+    spec_sha = fp.get("spec_sha256")
+    expected_sha = "sha256:" + hashlib.sha256(frozen_spec.encode("utf-8")).hexdigest()
+    if spec_sha != expected_sha:
+        raise ValueError("measured recurring trial spec_sha256 does not seal frozen_spec")
+    attempts = results.get("attempts")
+    expected = len(CURRENT_TRIAL_PROFILE_IDS) * CURRENT_TRIAL_INSTANCES
+    if not isinstance(attempts, list) or len(attempts) != expected:
+        raise ValueError("measured recurring trial requires six attempts")
+    for attempt in attempts:
+        if not isinstance(attempt, dict):
+            raise ValueError("measured recurring trial attempt is not an object")
+        for field in ("tokens_in", "tokens_out"):
+            value = attempt.get(field)
+            if type(value) is not int or value < 0:
+                raise ValueError(f"measured recurring trial {field} must be a nonnegative integer")
+    return finalize_trial(
+        manifest,
+        results,
+        state_path=state_path,
+        ingest_brain=True,
+        now=now,
+    )
 
 
 def finalize_trial(
@@ -770,13 +1564,17 @@ def finalize_trial(
     validate_trial_manifest(manifest)
     attempts = _validate_results(manifest, results)
     timestamp = int(time.time()) if now is None else int(now)
+    # Both gates run before the feedback transaction. A refusal leaves no rows,
+    # and brain_ingest_enabled stays false on any envelope this call returns.
+    _require_consistent_source_seal(manifest)
     source_after = {
         key: source_manifest(Path(value["root"]))
         for key, value in manifest["source_before"].items()
     }
     source_unchanged = all(
-        source_after[key]["aggregate_sha256"] == manifest["source_before"][key]["aggregate_sha256"]
-        for key in source_after
+        source_after[key]["aggregate_sha256"] == recorded["aggregate_sha256"]
+        and source_after[key]["entries"] == recorded["entries"]
+        for key, recorded in manifest["source_before"].items()
     )
     if not source_unchanged:
         raise ValueError("source integrity changed during read-only trial")
@@ -1055,9 +1853,201 @@ def _selftest() -> None:
         assert report["learning_enabled"] is False, "report enabled learning"
         assert report["recorded_attempt_ids"] == [], "offline selftest recorded trial attempts"
 
+        forged = json.loads(_canonical(prepared))
+        (workflows_root / "worker.yml").write_text(
+            "worker: mutated-during-trial\n", encoding="utf-8"
+        )
+        live_workflows = source_manifest(workflows_root)
+        forged["source_before"]["workflows"]["aggregate_sha256"] = live_workflows[
+            "aggregate_sha256"
+        ]
+        old_trial_id = forged["trial_id"]
+        forged["trial_id"] = _expected_trial_id(forged)
+        for request in forged["requests"]:
+            request["run_id"] = forged["trial_id"] + request["run_id"][len(old_trial_id) :]
+        forged_results = json.loads(_canonical(results))
+        forged_results["trial_id"] = forged["trial_id"]
+        for attempt in forged_results["attempts"]:
+            attempt["run_id"] = forged["trial_id"] + attempt["run_id"][len(old_trial_id) :]
+        previous_db = feedback.DB_PATH
+        feedback.DB_PATH = root / "quarantine-selftest.db"
+        try:
+            try:
+                finalize_trial(
+                    forged,
+                    forged_results,
+                    record_feedback=True,
+                    ingest_brain=True,
+                    now=2_001,
+                )
+            except ValueError as exc:
+                assert "aggregate does not match its entries" in str(
+                    exc
+                ), f"forged source seal was not refused: {exc}"
+            else:
+                raise AssertionError("forged source seal was ingested")
+        finally:
+            feedback.DB_PATH = previous_db
+
+        state_dir = root / "recurring-state"
+        experiments = root / "experiments"
+        try:
+            resolve_strategy_frozen_packet(state_dir=state_dir, experiments_root=experiments)
+        except RecurringWorkUnavailable as exc:
+            assert "strategy experiment receipt is absent" in str(exc), exc
+        else:
+            raise AssertionError("a missing strategy experiment spec was accepted")
+        spec_text = "Acceptance criteria: the frozen recurring-work body.\n"
+        exp_id = "strategy434-20261006"
+        experiment = experiments / exp_id
+        experiment.mkdir(parents=True)
+        (experiment / "spec.md").write_text(spec_text, encoding="utf-8")
+        (experiment / "strategy.json").write_text(
+            json.dumps({"exp_id": exp_id, "spec_file": str(experiment / "spec.md")}),
+            encoding="utf-8",
+        )
+        (experiment / "meta.json").write_text(
+            json.dumps({"spec_sha256": hashlib.sha256(spec_text.encode("utf-8")).hexdigest()}),
+            encoding="utf-8",
+        )
+        receipt_path = state_dir / "capability-program" / "strategy-experiment.json"
+        receipt_path.parent.mkdir(parents=True)
+        receipt_path.write_text(json.dumps({"exp_id": exp_id, "status": "completed"}))
+        recurring = build_current_recurring_trial(
+            orchestrator_root,
+            workflows_root,
+            seed=14,
+            now=1_000,
+            capacity_state=capacity.OK,
+            state_dir=state_dir,
+            experiments_root=experiments,
+        )
+        validate_trial_manifest(recurring)
+        assert recurring["frozen_packet"]["frozen_spec"] == spec_text
+        assert recurring["frozen_packet"]["exp_id"] == exp_id
+        assert recurring["selected_profile_ids"] == list(CURRENT_TRIAL_PROFILE_IDS)
+        assert recurring["instances_per_profile"] == CURRENT_TRIAL_INSTANCES
+        assert len(recurring["requests"]) == 6
+        for profile_id in CURRENT_TRIAL_PROFILE_IDS:
+            ordinals = sorted(
+                row["instance_ordinal"]
+                for row in recurring["requests"]
+                if row["profile_id"] == profile_id
+            )
+            assert ordinals == [1, 2, 3], ordinals
+        assert not (state_dir / "capability-program" / "profile-trial.json").exists()
+        saved_state = os.environ.get("ORCH_STATE_DIR")
+        os.environ["ORCH_STATE_DIR"] = str(state_dir)
+        try:
+            _write_capability_program_trial_summary(
+                recurring,
+                [
+                    {
+                        "profile_id": profile_id,
+                        "provider_resolved_provider": "openai",
+                        "provider_resolved_model": execution_profiles.get_profile(profile_id)[
+                            "requested_model"
+                        ],
+                        "tokens_in": 3,
+                        "tokens_out": 1,
+                    }
+                    for profile_id in CURRENT_TRIAL_PROFILE_IDS
+                    for _ in range(CURRENT_TRIAL_INSTANCES)
+                ],
+                identity_verified=True,
+                brain_ingest_enabled=False,
+                quality_by_profile={profile_id: 1.0 for profile_id in CURRENT_TRIAL_PROFILE_IDS},
+                timestamp=1_001,
+            )
+            published = json.loads(
+                (state_dir / "capability-program" / "profile-trial.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+        finally:
+            if saved_state is None:
+                os.environ.pop("ORCH_STATE_DIR", None)
+            else:
+                os.environ["ORCH_STATE_DIR"] = saved_state
+        assert published["exp_id"] == exp_id, published
+        assert published["work_shape"] == "strategy-experiment-frozen-spec", published
+        assert published["spec_sha256"] == recurring["frozen_packet"]["spec_sha256"], published
+        assert (published["profile_count"], published["instance_count"]) == (2, 6), published
+        assert set(published["provider_resolved_identity_by_profile"]) == set(
+            CURRENT_TRIAL_PROFILE_IDS
+        )
+        stub = "[SPEC_PROVENANCE: MISSING_SPEC_STUB]\n"
+        (experiment / "spec.md").write_text(stub, encoding="utf-8")
+        (experiment / "meta.json").write_text(
+            json.dumps({"spec_sha256": hashlib.sha256(stub.encode("utf-8")).hexdigest()}),
+            encoding="utf-8",
+        )
+        try:
+            resolve_strategy_frozen_packet(state_dir=state_dir, experiments_root=experiments)
+        except RecurringWorkUnavailable as exc:
+            assert "missing-spec stub" in str(exc), exc
+        else:
+            raise AssertionError("a stub strategy spec was accepted")
+
+        # DELIBERATE BREAK: treating the CLI's turn_context model, or a generic
+        # model field on turn.completed, as provider identity would make these
+        # assertions fail. Revert by reading that field inside _provider_witness.
+        try:
+            _provider_witness([{"type": "turn_context", "payload": {"model": "gpt-6-astra"}}])
+        except ValueError as exc:
+            assert "provider_resolved_identity_unavailable" in str(exc), exc
+        else:
+            raise AssertionError("CLI turn_context was accepted as provider identity")
+        try:
+            _provider_witness(
+                [
+                    {
+                        "type": "turn.completed",
+                        "usage": {"input_tokens": 1, "output_tokens": 1},
+                        "model": "gpt-6-astra",
+                    }
+                ]
+            )
+        except ValueError as exc:
+            assert "provider_resolved_identity_unavailable" in str(exc), exc
+        else:
+            raise AssertionError("turn.completed model was accepted as provider identity")
+        witnessed = _provider_witness(
+            [
+                {
+                    "type": "turn.completed",
+                    "usage": {"input_tokens": 3, "output_tokens": 1},
+                    "server_model": "gpt-6-astra",
+                }
+            ]
+        )
+        assert witnessed == {
+            "model": "gpt-6-astra",
+            "id": None,
+            "usage": None,
+            "source": "server_model",
+        }, witnessed
+        parsed = _one_provider_response(
+            [
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "object": "response",
+                        "id": "resp_selftest",
+                        "model": "gpt-6-astra",
+                    },
+                }
+            ]
+        )
+        assert parsed["model"] == "gpt-6-astra", parsed
+        assert parsed["id"] == "resp_selftest", parsed
+
     print(
         "model_profile_trial.py selftest: OK "
-        "(prepare/source proof, accept/reject validation, shadow report/no promotion)"
+        "(prepare/source proof, accept/reject validation, shadow report/no promotion, "
+        "forged source seal refuses ingest, frozen spec binds the two-by-three plan "
+        "and its published summary, CLI turn_context and turn.completed model are "
+        "not provider identity, server_model is)"
     )
 
 
@@ -1095,6 +2085,16 @@ def main(argv: list[str] | None = None) -> int:
     prepare.add_argument(
         "--capacity-state", choices=("ok", "warn", "shed", "unknown"), default="unknown"
     )
+    current = sub.add_parser("prepare-current")
+    current.add_argument("--orchestrator-root", type=Path, required=True)
+    current.add_argument("--workflows-root", type=Path, required=True)
+    current.add_argument("--output", type=Path, required=True)
+    current.add_argument("--seed", type=int, default=56014)
+    current.add_argument(
+        "--capacity-state", choices=("ok", "warn", "shed", "unknown"), default="unknown"
+    )
+    current.add_argument("--state-dir", type=Path)
+    current.add_argument("--experiments-root", type=Path)
     finalize = sub.add_parser("finalize")
     finalize.add_argument("--manifest", type=Path, required=True)
     finalize.add_argument("--results", type=Path, required=True)
@@ -1105,6 +2105,22 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="atomically record verified trial rows in the quarantine Brain",
     )
+    publish = sub.add_parser("publish-current")
+    publish.add_argument("--manifest", type=Path, required=True)
+    publish.add_argument("--results", type=Path, required=True)
+    publish.add_argument("--state", type=Path, required=True)
+    run_current = sub.add_parser("run-current")
+    run_current.add_argument("--orchestrator-root", type=Path, required=True)
+    run_current.add_argument("--workflows-root", type=Path, required=True)
+    run_current.add_argument("--state", type=Path, required=True)
+    run_current.add_argument("--seed", type=int, default=56014)
+    run_current.add_argument(
+        "--capacity-state", choices=("ok", "warn", "shed", "unknown"), default="unknown"
+    )
+    run_current.add_argument("--state-dir", type=Path)
+    run_current.add_argument("--experiments-root", type=Path)
+    run_current.add_argument("--artifact-dir", type=Path)
+    run_current.add_argument("--codex-bin", type=Path)
     report = sub.add_parser("report")
     report.add_argument("--state", type=Path, default=DEFAULT_STATE_PATH)
     args = parser.parse_args(argv)
@@ -1113,7 +2129,10 @@ def main(argv: list[str] | None = None) -> int:
         _selftest()
         return 0
     if args.command is None:
-        parser.error("one of --selftest, prepare, finalize, or report is required")
+        parser.error(
+            "one of --selftest, prepare, prepare-current, run-current, publish-current, "
+            "finalize, or report is required"
+        )
 
     _capability_heartbeat()
     if args.command == "prepare":
@@ -1128,6 +2147,67 @@ def main(argv: list[str] | None = None) -> int:
             packet=json.loads(args.packet.read_text(encoding="utf-8")) if args.packet else None,
         )
         _atomic_json(args.output, payload)
+    elif args.command == "prepare-current":
+        ensure_artifact_outside_sources(args.output, (args.orchestrator_root, args.workflows_root))
+        try:
+            payload = build_current_recurring_trial(
+                args.orchestrator_root,
+                args.workflows_root,
+                seed=args.seed,
+                capacity_state=args.capacity_state,
+                state_dir=args.state_dir,
+                experiments_root=args.experiments_root,
+            )
+        except RecurringWorkUnavailable as exc:
+            print(f"model_profile_trial.py: {exc}", file=sys.stderr)
+            return 2
+        _atomic_json(args.output, payload)
+    elif args.command == "publish-current":
+        try:
+            manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
+            loaded_results = json.loads(args.results.read_text(encoding="utf-8"))
+            if not isinstance(manifest, dict) or not isinstance(loaded_results, dict):
+                raise ValueError("measured recurring trial inputs must be objects")
+            source_before = manifest.get("source_before")
+            if not isinstance(source_before, dict):
+                raise ValueError("measured recurring trial manifest has no source seal")
+            ensure_artifact_outside_sources(
+                args.state,
+                [
+                    Path(row["root"])
+                    for row in source_before.values()
+                    if isinstance(row, dict) and row.get("root")
+                ],
+            )
+            payload = publish_measured_recurring_trial(
+                manifest, loaded_results, state_path=args.state
+            )
+        except (OSError, UnicodeError, json.JSONDecodeError, ValueError, KeyError) as exc:
+            print(f"model_profile_trial.py: {exc}", file=sys.stderr)
+            return 2
+    elif args.command == "run-current":
+        try:
+            payload = run_current_recurring_trial(
+                args.orchestrator_root,
+                args.workflows_root,
+                seed=args.seed,
+                capacity_state=args.capacity_state,
+                state_dir=args.state_dir,
+                experiments_root=args.experiments_root,
+                state_path=args.state,
+                artifact_dir=args.artifact_dir,
+                codex_bin=args.codex_bin,
+            )
+        except (
+            RecurringWorkUnavailable,
+            OSError,
+            UnicodeError,
+            ValueError,
+            KeyError,
+            subprocess.TimeoutExpired,
+        ) as exc:
+            print(f"model_profile_trial.py: {exc}", file=sys.stderr)
+            return 2
     elif args.command == "finalize":
         if not args.confirm_instrumentation:
             parser.error("finalize requires --confirm-instrumentation")

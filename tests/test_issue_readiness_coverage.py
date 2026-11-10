@@ -175,3 +175,33 @@ def test_input_census_task_labels_and_cli_refusals(tmp_path, monkeypatch, capsys
     monkeypatch.setattr(readiness, "fetch_failures", lambda: ["stranske/One: offline"])
     assert readiness.main(["--json"]) == 0
     assert json.loads(capsys.readouterr().out)["unreadable_repos"] == ["stranske/One: offline"]
+
+
+def test_task_label_cli_reports_candidates_without_writing(tmp_path, capsys):
+    source = tmp_path / "issues.json"
+    source.write_text(
+        json.dumps(
+            [
+                {
+                    "number": 9,
+                    "title": "Legacy removal",
+                    "labels": [],
+                    "repository": {"name": "fixture"},
+                }
+            ]
+        )
+    )
+
+    assert readiness.main(["--input", str(source), "--task-labels", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "candidates": 1,
+        "rows": [
+            {
+                "target": "fixture#9",
+                "title": "Legacy removal",
+                "label": "refactor",
+                "routes_from": "implement",
+                "routes_to": "codemod",
+            }
+        ],
+    }
