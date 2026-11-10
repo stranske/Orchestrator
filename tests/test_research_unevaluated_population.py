@@ -5,9 +5,9 @@ import sqlite3
 import time
 
 import pytest
-from src import research_subjects
 
 import exp_abcd
+import research_subjects
 
 
 @pytest.fixture
