@@ -1052,3 +1052,10 @@ def test_closer_completion_reads_registered_observation_and_exact_remote_pin(tmp
         lambda *args, **kwargs: pytest.fail("unchanged acceptance reran"),
     )
     assert c.record_completion(state_root=source, output_root=output) == written
+
+
+def test_goal_drift_issues_are_held_from_closer_closure():
+    """Only the goals ledger closes its drift issues (Orchestrator#720 flapped daily otherwise)."""
+    import keepalive_supervisor
+
+    assert fg.GOAL_DRIFT_LABEL in keepalive_supervisor.CLOSURE_HOLD_LABELS

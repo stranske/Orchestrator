@@ -372,7 +372,13 @@ def test_router_weighted_probabilities_without_changing_posteriors():
     rng = random.Random(2)
     results = [
         router.select_agent(
-            "implement", cap, only={"codex", "claude"}, learned=learned, rng=rng, simulate=True
+            "implement",
+            cap,
+            only={"codex", "claude"},
+            learned=learned,
+            exploration_rate=0,
+            rng=rng,
+            simulate=True,
         )["agent"]
         for _ in range(1000)
     ]
@@ -1438,20 +1444,165 @@ def live_pace(n, previous_weight=0):
     )
 
 
+def test_repeated_fresh_short_history_ticks_protect_low_usage(tmp_path, monkeypatch):
+    monkeypatch.setattr(pacing_usage, "RESETS_FILE", tmp_path / "resets.json")
+    monkeypatch.setattr(pacing_usage, "CALIBRATION_FILE", tmp_path / "calibration.json")
+    pacing_usage.CALIBRATION_FILE.write_text(
+        json.dumps(dict(codex_period_start=START, claude_period_end=END))
+    )
+    for n in (0, 2):
+        handoff = tmp_path / f"resets-{n}"
+        handoff.mkdir()
+        pacing_usage.RESETS_FILE.write_text(
+            json.dumps({pool: resets(n) for pool in ("codex", "claude")})
+        )
+        prior = 1.0
+        recovery_prior = 0.0
+        weights = []
+        data = observations([START + h * 3600 for h in (3, 4, 5)], [0, 0.075, 0.15])
+        pacing_usage.append_rows(
+            handoff / "pacing-usage-samples.ndjson",
+            [dict(agent=pool, **sample) for pool in ("codex", "claude") for sample in data],
+        )
+        for tick in range(16):
+            now = START + 5 * 3600 + tick * pacing.TICK_SECONDS
+            if tick:
+                data.extend(observations([now], [0.15]))
+            row = evaluate(
+                now=now,
+                source_ts=now,
+                u=0.15,
+                n=n,
+                previous_weight=prior,
+                samples=data,
+            )
+            weight = row["routing_weight"]
+            weights.append(weight)
+            assert row["span_h"] == 2 + tick / 4 < 6 and not row["stale"]
+            assert abs(weight - prior) <= pacing.MAX_WEIGHT_CHANGE
+            assert weight >= 0.5, f"tick={tick}, resets={n}, weights={weights}"
+            prior = weight
+            recovering = evaluate(
+                now=now,
+                source_ts=now,
+                u=0.15,
+                n=n,
+                previous_weight=recovery_prior,
+                samples=data,
+            )
+            recovery_weight = recovering["routing_weight"]
+            assert abs(recovery_weight - recovery_prior) <= pacing.MAX_WEIGHT_CHANGE
+            assert recovery_weight >= min(0.5, recovery_prior + pacing.MAX_WEIGHT_CHANGE)
+            recovery_prior = recovery_weight
+            for failure in (dict(u=1), dict(u=0.15, exhausted_at=now)):
+                failed = evaluate(
+                    now=now,
+                    source_ts=now,
+                    n=n,
+                    samples=data,
+                    previous_weight=1,
+                    **failure,
+                )
+                assert failed["state"] == "shed" and failed["routing_weight"] == 0
+            # Carry each recorded tick through the same persisted history as production.
+            agents = {pool: dict(state="ok", reason="native") for pool in ("codex", "claude")}
+            usage = {pool: dict(used_fraction=0.15, ts=now, source=SOURCE) for pool in agents}
+            pacing_usage.integrate(agents, now=now, handoff=handoff, usage_data=usage, record=True)
+            snapshot = dict(generated_at=now, agents=agents)
+            (handoff / "capacity.json").write_text(json.dumps(snapshot))
+            report = pacing_usage.report(handoff, now=now, current=snapshot, previous=snapshot)
+            for pool in agents:
+                stored = agents[pool]
+                assert stored["pacing"]["routing_weight"] == weight
+                assert stored["pacing_diagnostics"]["span_h"] == row["span_h"]
+                prefix = f"pool {pool}:"
+                line = next(line for line in report.splitlines() if line.startswith(prefix))
+                assert f"span_h={row['span_h']} " in line
+                assert f"routed_weight={weight:.3f} (tick ts={now}, age=0s)" in line
+            # A later report must identify the recorded tick separately from its
+            # fresh computation and must not publish either result as another tick.
+            evidence_paths = (
+                handoff / "capacity.json",
+                handoff / "capacity-ledger.ndjson",
+                handoff / "pacing-usage-samples.ndjson",
+            )
+            recorded = {path: path.read_bytes() for path in evidence_paths}
+            report_now = now + 60
+            recomputed = {pool: dict(state="ok", reason="native") for pool in agents}
+            pacing_usage.integrate(
+                recomputed, now=report_now, handoff=handoff, usage_data=usage, record=False
+            )
+            later_report = pacing_usage.report(
+                handoff, now=report_now, current=dict(agents=recomputed)
+            )
+            for pool in agents:
+                prefix = f"pool {pool}:"
+                line = next(line for line in later_report.splitlines() if line.startswith(prefix))
+                computed_weight = recomputed[pool]["pacing"]["routing_weight"]
+                assert computed_weight >= 0.5
+                assert f"routed_weight={weight:.3f} (tick ts={now}, age=60s)" in line
+                assert f"report_weight={computed_weight:.3f} " in line
+                if tick == 0:
+                    assert computed_weight == 0.5 < weight
+                    assert "weight_delta=-0.250" in line
+            assert {path: path.read_bytes() for path in evidence_paths} == recorded
+        ledger = pacing_usage.read_rows(handoff / "capacity-ledger.ndjson")
+        assert len(ledger) == 16
+        for tick, entry in enumerate(ledger):
+            assert entry["event"] == "pacing_snapshot"
+            assert entry["ts"] == START + 5 * 3600 + tick * pacing.TICK_SECONDS
+            for stored in entry["agents"].values():
+                assert stored["pacing"]["used_fraction"] == 0.15
+                assert stored["pacing"]["routing_weight"] == weights[tick] >= 0.5
+                assert stored["pacing_diagnostics"]["span_h"] == 2 + tick / 4 < 6
+        assert weights[:2] == [0.75, 0.5]
+        assert min(weights) == 0.5
+    # Mature history may justify a lower target; actual failures always override.
+    mature = evaluate(
+        u=0.49,
+        samples=observations(
+            [START + 18 * 3600, START + 21 * 3600, START + 24 * 3600],
+            [0.44, 0.465, 0.49],
+        ),
+        previous_weight=0.5,
+    )
+    assert mature["span_h"] == 6 and mature["projected_fraction"] > 1
+    assert mature["routing_weight"] < 0.5
+    for kwargs in (dict(u=1), dict(u=0.15, exhausted_at=START + pacing.DAY_SECONDS)):
+        failed = evaluate(samples=False, previous_weight=1, **kwargs)
+        assert failed["state"] == "shed" and failed["routing_weight"] == 0
+
+
 def test_live_n_usable_raises_target_and_recovers_from_zero():
     banked, empty = live_pace(2), live_pace(0)
     assert (
-        banked["target_routing_weight"] > 2 * empty["target_routing_weight"] > 0
-    ), "n_usable must raise target beyond reserve relief alone (over twice the no-reset target)"
+        banked["sustainable_rate_per_hour"] > 2 * empty["sustainable_rate_per_hour"] > 0
+    ), "n_usable must raise the sustainable rate beyond reserve relief alone"
     assert banked["n_usable"] == 2, "n_usable must include both unexpired resets"
     assert banked["capacity_budget"] == 3
     assert banked["burn_period_per_hour"] == pytest.approx(0.03)
     assert banked["burn_effective_per_hour"] == pytest.approx(0.045)
-    target = (2.85 / 163) / 0.045
+    target = max(0.5, (2.85 / 163) / 0.045)
     assert banked["target_routing_weight"] == pytest.approx(target)
+    assert empty["target_routing_weight"] == 0.5
     assert banked["routing_weight"] == 0.25
     assert live_pace(2, 0.25)["routing_weight"] == pytest.approx(target)
     assert "oldest-expiring reset" in " ".join(banked["fyi"])
+    # Full confidence retains the original reset-budget target proof.
+    now = START + 7 * 3600
+    full = [
+        evaluate(
+            now=now,
+            source_ts=now,
+            u=0.15,
+            n=n,
+            samples=observations([now - 21600, now - 10800, now], [0, 0.075, 0.15]),
+        )
+        for n in (2, 0)
+    ]
+    assert all(row["confidence"] == 1 for row in full)
+    assert full[0]["target_routing_weight"] == pytest.approx((2.85 / 161) / 0.025)
+    assert full[0]["target_routing_weight"] > 2 * full[1]["target_routing_weight"] > 0
     print(
         f"live n_usable=2 target={target:.6f}; n_usable=0 target={empty['target_routing_weight']:.6f}"
     )
