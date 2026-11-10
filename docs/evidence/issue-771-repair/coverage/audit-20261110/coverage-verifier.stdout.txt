@@ -1,0 +1,38 @@
+{
+  "kind": "audit of recovered history; not a new coverage execution",
+  "workflow": "CI",
+  "run_id": 39180639406,
+  "job_id": 117832439523,
+  "run_head": "18ad97a054dab7f6039dd42c8131bee04267748b",
+  "checkout_sha": "12c5c58517863f747972538c9bb17c568bc0bf49",
+  "exact_head_execution": false,
+  "configuration_identical": true,
+  "comparable": false,
+  "exact_test_population": null,
+  "dependency_versions": null,
+  "observations": {
+    "num_statements": 2825,
+    "missing_statements": 226,
+    "covered_statements": 2599,
+    "reported_statement_percent": 92,
+    "pytest_collected": 5470,
+    "pytest_passed": 5443,
+    "pytest_skipped": 27,
+    "selftests_ran": 100,
+    "selftests_total": 107,
+    "selftests_skipped": 7,
+    "instrumented_processes": 113,
+    "num_branches": null,
+    "missing_branches": null,
+    "comparable_baseline": null,
+    "missing_statement_delta": null,
+    "combined_unit_delta": null,
+    "shortfall_against_180_combined_units": null
+  },
+  "limitations": [
+    "Only whole-job population totals are preserved; exact test identities are unknown.",
+    "No matching baseline report is preserved; identical configuration is insufficient.",
+    "The five tests and production fix are not isolated from background changes.",
+    "Branch coverage was disabled; combined-unit deltas and target shortfall are unknown."
+  ]
+}

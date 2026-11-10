@@ -53,5 +53,24 @@
     "5,10,15,20": "EVIDENCE.md#acceptance-checklist; EVIDENCE.md#historical-ranking-provenance; issue-771.json"
   },
   "pr_body_update": "Not performed: PR #1143 is merged and closed. Its historical body still has unchecked tasks. Updating a closed PR cannot meet the required open/non-draft handoff invariant; this local reconciliation records verified progress without reopening or altering a merged PR.",
-  "new_mutation_work": "Prepared historical mutation plan and tested replay script only; no mutation runtime criterion is marked complete."
+  "new_mutation_work": "Prepared historical mutation plan and tested replay script only; no mutation runtime criterion is marked complete.",
+  "followup_2026_11_10": {
+    "reviewed_commits": [
+      "26cd4b777d9205b56592a8d13210ed983d1911a0",
+      "7a18de0715e37dd29c392b0e9691332fccb562a1"
+    ],
+    "completed_task_numbers_unchanged": true,
+    "first_incomplete_task": 2,
+    "blockers": "Fresh probes retain exit 128 for the original-head git show and exit 1 for unavailable pytest. No historical mutation pair ran.",
+    "next_task_advanced": 3,
+    "implementation": [
+      "scripts/verify_issue_771_coverage.js",
+      "tests/test_issue_771_coverage_evidence.js"
+    ],
+    "verification": "13 new coverage-audit tests, nine CI evidence tests, and 12 mutation-recorder tests passed (34 total). Targeted Python coverage failed before collection; the Node coverage report applies only to the new JavaScript verifier.",
+    "records": "coverage/audit-20261110/commands.json",
+    "recovery_requests": "coverage/audit-20261110/retrievals.json",
+    "remaining_unknown": "Comparable baseline, branch measurements, exact test populations, mutation execution, and historical ranking provenance remain unknown. No new completion claim.",
+    "pr_body_update": "Not performed: connected GitHub fetch_pr again reports PR #1143 merged, closed, and draft=false. No PR was created or changed; the local verified checklist remains reconciled."
+  }
 }

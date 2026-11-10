@@ -1,0 +1,20 @@
+✔ the plan targets all five original test IDs and matching historical functions (6.04966ms)
+✔ mutation replacement is restricted to the named function and rejects source drift (4.002543ms)
+✔ pytest result validation requires the exact passing population (0.815657ms)
+✔ only the named assertion failure counts as deliberate-break evidence (0.76343ms)
+✔ mutation pairs capture patches, named failures, byte restoration, diff and restored passes (4.515287ms)
+✔ an import failure restores bytes and preserves an incomplete receipt (9.362678ms)
+✔ unexpected execution exceptions still restore the source and attempt restored pytest (6.888577ms)
+✔ a restored failure cannot complete a mutation pair (5.887361ms)
+✔ a dirty restoration diff prevents completion even when restored pytest passes (6.554879ms)
+✔ recorder preserves real stdout, stderr, exit status, spawn errors and argument boundaries (57.143763ms)
+✔ preflight rejects a different Git head without changing its files and records the blocker (29.249319ms)
+✔ replay refuses the working repository and previously preserved output (1.619251ms)
+ℹ tests 12
+ℹ suites 0
+ℹ pass 12
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 148.039749

@@ -1,0 +1,31 @@
+✔ raw recovered report recalculates statements and keeps unavailable comparisons unknown (9.462644ms)
+✔ unavailable baseline and branch data cannot be filled with invented numeric reductions (28.838003ms)
+✔ reported counts must agree with the raw report rather than copied annotations (24.003017ms)
+✔ corrupt raw logs fail integrity verification (10.907523ms)
+✔ rehashed configuration drift still fails the historical Git blob identity (8.217281ms)
+✔ matching file counts cannot hide a missing configuration source (7.671737ms)
+✔ baseline source inspection must refer to the requested baseline and succeed (8.849046ms)
+✔ incorrect report percentages and pytest population totals are rejected even after rehashing (10.573312ms)
+✔ a missing or ambiguous feedback report cannot stand in for one measurement (9.957567ms)
+✔ the measured checkout cannot be relabeled as original-head execution (7.139287ms)
+✔ successful job metadata cannot hide a failed coverage measurement step (7.016318ms)
+✔ a failing pytest result or a numeric exit invented from successful metadata is rejected (8.179711ms)
+✔ CLI prints a recovered-history audit and returns a failure for absent evidence (7.680292ms)
+ℹ tests 13
+ℹ suites 0
+ℹ pass 13
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 161.521432
+ℹ start of coverage report
+ℹ ------------------------------------------------------------------------------
+ℹ file                          | line % | branch % | funcs % | uncovered lines
+ℹ ------------------------------------------------------------------------------
+ℹ scripts                       |        |          |         | 
+ℹ  verify_issue_771_coverage.js |  98.08 |    96.00 |   87.50 | 152-154
+ℹ ------------------------------------------------------------------------------
+ℹ all files                     |  98.08 |    96.00 |   87.50 | 
+ℹ ------------------------------------------------------------------------------
+ℹ end of coverage report

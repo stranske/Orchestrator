@@ -1,0 +1,24 @@
+[
+  {
+    "workflow": "CI",
+    "run_id": 39180639406,
+    "job_id": 117832439061,
+    "run_head": "18ad97a054dab7f6039dd42c8131bee04267748b",
+    "checkout_sha": "12c5c58517863f747972538c9bb17c568bc0bf49",
+    "exact_head_execution": false,
+    "pytest_summary": "pytest:     5443 passed, 0 failed, 27/31 max skipped (5470 collected; floor 5465 — 5 BEHIND)",
+    "passed": 5443,
+    "result": "success"
+  },
+  {
+    "workflow": "Gate",
+    "run_id": 39180639803,
+    "job_id": 117832552676,
+    "run_head": "18ad97a054dab7f6039dd42c8131bee04267748b",
+    "checkout_sha": "12c5c58517863f747972538c9bb17c568bc0bf49",
+    "exact_head_execution": false,
+    "pytest_summary": "=========== 5429 passed, 41 skipped, 4 warnings in 407.67s (0:06:47) ===========",
+    "passed": 5429,
+    "result": "success"
+  }
+]

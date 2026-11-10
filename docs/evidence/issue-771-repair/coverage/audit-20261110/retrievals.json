@@ -1,0 +1,64 @@
+{
+  "retrieval_date": "2026-11-10",
+  "repository": "stranske/Orchestrator",
+  "requests": [
+    {
+      "tool": "github.fetch",
+      "arguments": {
+        "url": "https://api.github.com/repos/stranske/Orchestrator/actions/runs?head_sha=3b379f8b60046b1b6b21b360a931472d0b6db9c3&per_page=100"
+      },
+      "result": "success",
+      "saved_as": "baseline-runs.json",
+      "total_count": 11,
+      "returned": 11,
+      "ci_or_gate_candidates": []
+    },
+    {
+      "tool": "github.fetch_workflow_run_artifacts",
+      "arguments": {
+        "repo_full_name": "stranske/Orchestrator",
+        "run_id": 39180639803
+      },
+      "result": "success",
+      "saved_as": "gate-artifacts.json",
+      "artifacts": []
+    },
+    {
+      "tool": "github.download_workflow_artifact",
+      "arguments": {
+        "repo_full_name": "stranske/Orchestrator",
+        "artifact_id": 12156685095
+      },
+      "result": "error",
+      "saved_as": "artifact-12156685095.json",
+      "error": {
+        "error": "GitHub API error 404: {\"message\":\"Not Found\",\"documentation_url\":\"https://docs.github.com/rest/actions/artifacts#get-an-artifact\",\"status\":\"404\"}",
+        "error_code": "NOT_FOUND",
+        "error_data": {
+          "message": "Not Found",
+          "documentation_url": "https://docs.github.com/rest/actions/artifacts#get-an-artifact",
+          "status": "404"
+        }
+      }
+    },
+    {
+      "tool": "github.download_workflow_artifact",
+      "arguments": {
+        "repo_full_name": "stranske/Orchestrator",
+        "artifact_id": 12155758307
+      },
+      "result": "error",
+      "saved_as": "artifact-12155758307.json",
+      "error": {
+        "error": "GitHub API error 404: {\"message\":\"Not Found\",\"documentation_url\":\"https://docs.github.com/rest/actions/artifacts#get-an-artifact\",\"status\":\"404\"}",
+        "error_code": "NOT_FOUND",
+        "error_data": {
+          "message": "Not Found",
+          "documentation_url": "https://docs.github.com/rest/actions/artifacts#get-an-artifact",
+          "status": "404"
+        }
+      }
+    }
+  ],
+  "limitations": "The exact-baseline response contains 11 of 11 runs and no CI/Gate candidate. This is a bounded search, not proof no historical measurement ever existed. Both artifact downloads return 404; the response does not establish why the artifact is unavailable. No comparable baseline or raw artifact was recovered."
+}

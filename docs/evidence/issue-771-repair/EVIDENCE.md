@@ -2,7 +2,8 @@
 
 <!-- closer-core/v1 repair-of=stranske/Orchestrator#771@772 -->
 
-**Refs #771; follow-up #1099.** Retrieval date: **2026-11-05**.
+**Refs #771; follow-up #1099.** Initial retrieval date: **2026-11-05**;
+bounded follow-up inspection: **2026-11-10**.
 
 This record distinguishes recovered CI history from local verification performed for this follow-up. The earlier completed checklist was unsupported and has been replaced. No historical mutation execution or controlled coverage comparison is claimed.
 
@@ -11,6 +12,8 @@ This record distinguishes recovered CI history from local verification performed
 Commit `26cd4b777d9205b56592a8d13210ed983d1911a0` preserved the CI records and corrected the coverage accounting. Re-running the offline CI verifier and its tests confirmed the completed follow-up items below. [Reconciliation records](reconciliation.json) map those results to the duplicated task numbers in the supplied task list: **10 of 20 entries** have supporting evidence. This does not mean all acceptance criteria are satisfied.
 
 The GitHub service reports PR #1143 as **merged and closed**, with `draft=false`. Its body was not updated: a merged PR cannot meet the required open/non-draft handoff invariant. The local checklist and reconciliation record preserve the verified progress; no PR was created or changed in this round.
+
+The 2026-11-10 review of commits `26cd4b7` and `7a18de0` confirmed the same **10 of 20** duplicated entries have evidence. The first incomplete task, historical mutation execution, remains blocked by the missing original-head Git object and unavailable pytest. The next task advanced through a tested offline coverage audit and new bounded artifact searches below; no additional task or acceptance checkbox is marked complete.
 
 ## Follow-up tasks
 
@@ -142,6 +145,48 @@ The earlier comparison mixed the issue's **232 combined statement-and-branch uni
 This is a recovered whole-job measurement on the temporary PR merge, not a controlled attribution experiment for the five tests. A valid comparison still needs fixed background tests and configuration, the five original tests explicitly included/excluded, later additions excluded, and the selector production fix accounted for separately. Without matching baseline reports and branch measurements, no causal delta is reported. No assumptions about unreachable ingestion, learning, delegation, or provider paths are used to explain the missing coverage.
 
 The selector fix in PR #772 removed redundant counting of `invoked` from the payload after counting it from selector status. That changes production behavior as well as the tested lines; any future attribution comparison must disclose which version runs in each arm. Configuration agreement does not isolate that effect.
+
+### New coverage audit and bounded recovery attempts (2026-11-10)
+
+The repository-specific [coverage verifier](../../../scripts/verify_issue_771_coverage.js)
+now recalculates the statement result and population totals from the complete raw
+combined-job log, checks the retained configuration's Git blob identities at both
+requested commits, and checks the coverage job and measurement step against the
+preserved CI metadata. It rejects altered counts, fabricated branch measurements,
+an invented numeric exit, and unsupported baseline/combined-unit deltas. Its
+[printed audit](coverage/audit-20261110/coverage-verifier.stdout.txt) explicitly
+reports `comparable: false`, unknown exact test identities and dependency versions,
+and execution on the temporary merge commit. This is new verification of recovered
+history, not a new execution of the historical Python tests.
+
+The [recovery request index](coverage/audit-20261110/retrievals.json) preserves:
+
+- An [exact-baseline Actions run response](coverage/audit-20261110/baseline-runs.json),
+  queried with `head_sha=3b379f8b60046b1b6b21b360a931472d0b6db9c3&per_page=100`.
+  All **11 of 11** returned runs are retained; none is CI or Gate. This bounded
+  result does not prove no historical baseline measurement ever existed.
+- An [empty artifact list](coverage/audit-20261110/gate-artifacts.json) for Gate
+  run `39180639803`. Direct download attempts for combined-coverage artifact
+  **`12156685095`** and Gate coverage artifact **`12155758307`**, whose upload IDs
+  appear in the retained logs, both returned **404 Not Found**:
+  [combined response](coverage/audit-20261110/artifact-12156685095.json),
+  [Gate response](coverage/audit-20261110/artifact-12155758307.json).
+  The responses establish unavailability through these requests, not its cause.
+
+The [13 coverage-audit tests](../../../tests/test_issue_771_coverage_evidence.js)
+passed, with [Node's targeted coverage output](coverage/audit-20261110/coverage-tests.stdout.txt)
+reporting **98.08% line / 96.00% branch coverage of the new JavaScript verifier**.
+Those percentages do not measure `src/feedback.py`. The nine CI evidence tests
+and 12 mutation-recorder tests also passed: **34 tests total, zero failures**.
+[Commands, timestamps, exit codes, and separate output files](coverage/audit-20261110/commands.json)
+preserve these checks and the renewed blockers. The targeted pytest coverage
+attempt exited **1** before collection because Python **3.14.10** cannot import
+pytest; pytest-cov, coverage, and Black are also
+[unavailable](coverage/audit-20261110/dependency-versions.stdout.txt).
+`git show 18ad97a:tests/test_feedback_registry_queries.py` again exited **128**.
+The [bounded check plan](coverage/audit-20261110/PLAN.md) records the intended
+outcome and stop rule. No matching baseline, new branch measurement, exact test
+population, or mutation failure/restored-pass pair was produced.
 
 ## Historical ranking provenance
 
