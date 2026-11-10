@@ -686,6 +686,46 @@ def agy_advertised_models(*, refresh: bool = False, timeout_s: int = 30) -> list
     return advertised_models("gemini", refresh=refresh, timeout_s=timeout_s)
 
 
+# Directories a local dispatch puts in front of PATH (dispatcher._agent_path_export), plus the
+# app-bundled Codex CLI that app-launched seats resolve. Kept here so the launch check below looks
+# exactly where a launch would.
+LOCAL_AGENT_PATH_DIRS = ("/opt/homebrew/bin", str(HOME / ".local" / "bin"), str(HOME / ".cursor" / "bin"))
+EXTRA_LAUNCH_CANDIDATES = {
+    "codex": ("/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex", str(CODEX_PROFILE_BIN)),
+}
+
+
+def local_launch(agent: str) -> dict:
+    """Whether `agent`'s LOCAL launch binary exists where a dispatch would look, without running it.
+
+    Returns {agent, checked, launchable, binary, path, reason}. `checked=False` (no launch command,
+    or the check is switched off with ORCH_LAUNCH_CHECK=0) is never evidence of a missing binary.
+    Only `checked=True, launchable=False` is: 47 of 47 aider starts 11-05..11-10 died with
+    "aider-venv/bin/aider: No such file or directory" while capacity still read the seat as ok.
+    """
+    base = {"agent": agent, "checked": False, "launchable": True, "binary": None, "path": None}
+    if os.environ.get("ORCH_LAUNCH_CHECK", "1").strip().lower() in {"0", "false", "no", "off"}:
+        return {**base, "reason": "launch check disabled (ORCH_LAUNCH_CHECK=0)"}
+    try:
+        binary = build_command(agent, "launch-check")[0]
+    except Exception as exc:  # no local launch form for this agent
+        return {**base, "reason": f"no local launch command ({type(exc).__name__})"}
+    base["binary"] = binary
+    if os.path.isabs(binary):
+        candidates = [binary]
+    else:
+        search = os.pathsep.join([*LOCAL_AGENT_PATH_DIRS, os.environ.get("PATH", "")])
+        found = shutil.which(binary, path=search)  # None for a dangling symlink
+        candidates = [found] if found else []
+    candidates += [c for c in EXTRA_LAUNCH_CANDIDATES.get(agent, ()) if c]
+    for candidate in candidates:
+        if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return {**base, "checked": True, "launchable": True, "path": candidate,
+                    "reason": f"launch binary present: {candidate}"}
+    return {**base, "checked": True, "launchable": False,
+            "reason": f"launch binary missing: {binary} (not found on the dispatch PATH or known install paths)"}
+
+
 def auth_health(agent: str, *, refresh: bool = False, timeout_s: int = 30) -> dict:
     """Whether `agent`'s CLI can authenticate, WITHOUT spending tokens.
 

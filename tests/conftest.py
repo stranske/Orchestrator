@@ -79,6 +79,12 @@ def isolate_capacity_shed_markers(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def default_launch_check_off(monkeypatch):
+    """The local launch-binary check reads this machine's filesystem; tests opt in explicitly."""
+    monkeypatch.setenv("ORCH_LAUNCH_CHECK", "0")
+
+
+@pytest.fixture(autouse=True)
 def isolate_provision_events(tmp_path, monkeypatch):
     """Provision tests and their subprocesses must never append to the production ledger."""
     path = tmp_path / "provision-events.ndjson"
