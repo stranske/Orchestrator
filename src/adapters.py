@@ -689,9 +689,16 @@ def agy_advertised_models(*, refresh: bool = False, timeout_s: int = 30) -> list
 # Directories a local dispatch puts in front of PATH (dispatcher._agent_path_export), plus the
 # app-bundled Codex CLI that app-launched seats resolve. Kept here so the launch check below looks
 # exactly where a launch would.
-LOCAL_AGENT_PATH_DIRS = ("/opt/homebrew/bin", str(HOME / ".local" / "bin"), str(HOME / ".cursor" / "bin"))
+LOCAL_AGENT_PATH_DIRS = (
+    "/opt/homebrew/bin",
+    str(HOME / ".local" / "bin"),
+    str(HOME / ".cursor" / "bin"),
+)
 EXTRA_LAUNCH_CANDIDATES = {
-    "codex": ("/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex", str(CODEX_PROFILE_BIN)),
+    "codex": (
+        "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex",
+        str(CODEX_PROFILE_BIN),
+    ),
 }
 
 
@@ -720,10 +727,19 @@ def local_launch(agent: str) -> dict:
     candidates += [c for c in EXTRA_LAUNCH_CANDIDATES.get(agent, ()) if c]
     for candidate in candidates:
         if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-            return {**base, "checked": True, "launchable": True, "path": candidate,
-                    "reason": f"launch binary present: {candidate}"}
-    return {**base, "checked": True, "launchable": False,
-            "reason": f"launch binary missing: {binary} (not found on the dispatch PATH or known install paths)"}
+            return {
+                **base,
+                "checked": True,
+                "launchable": True,
+                "path": candidate,
+                "reason": f"launch binary present: {candidate}",
+            }
+    return {
+        **base,
+        "checked": True,
+        "launchable": False,
+        "reason": f"launch binary missing: {binary} (not found on the dispatch PATH or known install paths)",
+    }
 
 
 def auth_health(agent: str, *, refresh: bool = False, timeout_s: int = 30) -> dict:
