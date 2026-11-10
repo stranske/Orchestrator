@@ -2502,7 +2502,9 @@ def comparative_routing_line(rep: dict) -> str:
     # Include route_enabled and reason if available
     route_enabled = result.get("route_enabled")
     route_reason = result.get("route_reason", "")
-    route_bit = f" route_enabled={route_enabled} ({route_reason})" if route_enabled is not None else ""
+    route_bit = (
+        f" route_enabled={route_enabled} ({route_reason})" if route_enabled is not None else ""
+    )
     line = (
         f"comparative routing: classes_differing {result['classes_differing'] if result['status'] == 'optimal' else 'unmeasured'} "
         f"(window {result['window_days']}d), λ {prices or 'unmeasured'}, status {result['status']}{route_bit}"

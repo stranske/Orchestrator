@@ -580,7 +580,6 @@ def route_decision(result: dict, incidents_rows: list[dict] | None, now: int | N
 
     If the incident ledger is unreadable or any condition fails, returns route_enabled: False.
     """
-    from pacing_usage import read_rows
     from rate_incidents import INCIDENT_FILE
 
     now = int(time.time()) if now is None else now
@@ -606,11 +605,26 @@ def route_decision(result: dict, incidents_rows: list[dict] | None, now: int | N
 
     # Read incidents from the ledger if not provided
     if incidents_rows is None:
-        try:
-            incidents_rows = read_rows(INCIDENT_FILE)
-        except Exception:
-            # Any error reading the file is treated as unreadable
+        # Check if the file exists and is readable
+        if not INCIDENT_FILE.is_file():
+            # File doesn't exist - treat as unreadable
             incidents_rows = None
+        else:
+            # Try to read the file directly
+            try:
+                with INCIDENT_FILE.open() as stream:
+                    incidents_rows = []
+                    for line in stream:
+                        try:
+                            row = json.loads(line)
+                            if isinstance(row, dict):
+                                incidents_rows.append(row)
+                        except (ValueError, TypeError):
+                            # Skip malformed lines
+                            continue
+            except OSError:
+                # Any OS error reading the file is treated as unreadable
+                incidents_rows = None
 
     # Fail to False if ledger is unreadable (None means we couldn't read it)
     if incidents_rows is None:
