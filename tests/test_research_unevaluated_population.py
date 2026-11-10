@@ -124,6 +124,9 @@ def test_ab_experiment_with_meta_json_is_counted(conn, exp_dir):
                 "experiment_id": exp_id,
                 "task_type": "implement",
                 "target": "Owner/Repo#1",
+                "repo": "Owner/Repo",
+                "base": "main",
+                "agents": ["codex"],
             }
         )
     )
@@ -131,6 +134,10 @@ def test_ab_experiment_with_meta_json_is_counted(conn, exp_dir):
     # Create a valid spec.md (required for drainable by followup)
     spec_path = exp_path / "spec.md"
     spec_path.write_text("# Test spec")
+
+    # Create a non-empty diff file (required for drainable by followup)
+    diff_path = exp_path / "diff-codex.patch"
+    diff_path.write_text("diff --git a/file.py b/file.py\n+content\n")
 
     # Insert a run for this experiment
     conn.execute(
@@ -323,6 +330,9 @@ def test_mixed_experiments(conn, exp_dir):
     # Create spec.md (required for drainable by followup)
     spec_path_ab = exp_path_ab / "spec.md"
     spec_path_ab.write_text("# Test spec")
+    # Create non-empty diff file (required for drainable by followup)
+    diff_path_ab = exp_path_ab / "diff-codex.patch"
+    diff_path_ab.write_text("diff --git a/file.py b/file.py\n+content\n")
     conn.execute(
         "INSERT INTO runs (run_id, ts, agent, task_type, target, experiment_id) VALUES (?, ?, ?, ?, ?, ?)",
         ("run-ab", now, "codex", "implement", "Owner/Repo#1", ab_exp_id),
@@ -426,6 +436,8 @@ def test_followup_decision_marker_is_not_drainable(tmp_path, monkeypatch):
     edir.mkdir()
     (edir / "meta.json").write_text("{}")
     (edir / "spec.md").write_text("spec")
+    # Create a non-empty diff file
+    (edir / "diff-codex.patch").write_text("diff --git a/file.py b/file.py\n+content\n")
     assert exp_abcd.followup_will_attempt(edir) is True
     (edir / "followup-decision.json").write_text("{}")
     assert exp_abcd.followup_will_attempt(edir) is False
@@ -434,3 +446,91 @@ def test_followup_decision_marker_is_not_drainable(tmp_path, monkeypatch):
         "followup-skip.json",
         "followup-decision.json",
     }
+
+
+def test_drainable_with_non_empty_diffs(conn, exp_dir):
+    """Test that an experiment with non-empty diff files is counted as drainable."""
+    now = time.time()
+
+    exp_id = "exp-with-diffs"
+    exp_path = exp_dir / exp_id
+    exp_path.mkdir()
+
+    meta_path = exp_path / "meta.json"
+    meta_path.write_text(json.dumps({"experiment_id": exp_id}))
+
+    spec_path = exp_path / "spec.md"
+    spec_path.write_text("# Test spec")
+
+    # Create a non-empty diff file
+    diff_path = exp_path / "diff-codex.patch"
+    diff_path.write_text("diff --git a/file.py b/file.py\n+content\n")
+
+    conn.execute(
+        "INSERT INTO runs (run_id, ts, agent, task_type, target, experiment_id) VALUES (?, ?, ?, ?, ?, ?)",
+        ("run-1", now, "codex", "implement", "Owner/Repo#1", exp_id),
+    )
+
+    result = research_subjects.unevaluated_experiment_ids(conn, now=now)
+
+    assert exp_id in result["ids"]
+    assert result["drainable"] == 1
+    assert result["unreadable"] == 0
+
+
+def test_drainable_with_missing_diffs(conn, exp_dir):
+    """Test that an experiment without diff files is NOT counted as drainable."""
+    now = time.time()
+
+    exp_id = "exp-no-diffs"
+    exp_path = exp_dir / exp_id
+    exp_path.mkdir()
+
+    meta_path = exp_path / "meta.json"
+    meta_path.write_text(json.dumps({"experiment_id": exp_id}))
+
+    spec_path = exp_path / "spec.md"
+    spec_path.write_text("# Test spec")
+
+    # Do NOT create any diff files
+
+    conn.execute(
+        "INSERT INTO runs (run_id, ts, agent, task_type, target, experiment_id) VALUES (?, ?, ?, ?, ?, ?)",
+        ("run-1", now, "codex", "implement", "Owner/Repo#1", exp_id),
+    )
+
+    result = research_subjects.unevaluated_experiment_ids(conn, now=now)
+
+    assert exp_id in result["ids"]
+    assert result["drainable"] == 0, f"Expected 0 drainable for exp without diffs, got {result['drainable']}"
+    assert result["unreadable"] == 0
+
+
+def test_drainable_with_empty_diffs(conn, exp_dir):
+    """Test that an experiment with empty diff files is NOT counted as drainable."""
+    now = time.time()
+
+    exp_id = "exp-empty-diffs"
+    exp_path = exp_dir / exp_id
+    exp_path.mkdir()
+
+    meta_path = exp_path / "meta.json"
+    meta_path.write_text(json.dumps({"experiment_id": exp_id}))
+
+    spec_path = exp_path / "spec.md"
+    spec_path.write_text("# Test spec")
+
+    # Create an empty diff file
+    diff_path = exp_path / "diff-codex.patch"
+    diff_path.write_text("")
+
+    conn.execute(
+        "INSERT INTO runs (run_id, ts, agent, task_type, target, experiment_id) VALUES (?, ?, ?, ?, ?, ?)",
+        ("run-1", now, "codex", "implement", "Owner/Repo#1", exp_id),
+    )
+
+    result = research_subjects.unevaluated_experiment_ids(conn, now=now)
+
+    assert exp_id in result["ids"]
+    assert result["drainable"] == 0, f"Expected 0 drainable for exp with empty diffs, got {result['drainable']}"
+    assert result["unreadable"] == 0

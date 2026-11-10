@@ -2047,12 +2047,39 @@ def followup_terminal(edir: Path) -> bool:
     return any((edir / marker).exists() for marker in FOLLOWUP_TERMINAL_MARKERS)
 
 
+def _collected_diffs_nonempty(collected: dict) -> bool:
+    """Side-effect-free check: does a collected dict contain any non-empty diffs?
+    
+    Uses the same nonzero-byte rule as followup at lines 2488-2490.
+    """
+    return bool(sum(1 for v in (collected.get("diffs") or {}).values() if v.get("bytes")))
+
+
+def _exp_diffs_nonempty(edir: Path) -> bool:
+    """Side-effect-free check: does experiment dir have any non-empty diff files on disk?
+    
+    Checks for diff files matching the pattern used by collect (diff-*.patch) and verifies
+    at least one has non-zero size. Returns False if no diff files exist or all are empty.
+    """
+    import glob
+    
+    diff_files = list(edir.glob("diff-*.patch"))
+    if not diff_files:
+        return False
+    
+    for diff_file in diff_files:
+        if diff_file.stat().st_size > 0:
+            return True
+    return False
+
+
 def followup_will_attempt(edir: Path) -> bool:
-    """Followup's own eligibility for an unevaluated experiment dir (age aside): spec present, not terminal."""
+    """Followup's own eligibility for an unevaluated experiment dir (age aside): spec present, not terminal, and non-empty collected diffs exist."""
     return (
         (edir / "meta.json").exists()
         and (edir / "spec.md").exists()
         and not followup_terminal(edir)
+        and _exp_diffs_nonempty(edir)
     )
 
 
