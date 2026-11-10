@@ -1,0 +1,145 @@
+[
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_panel_adjudication_recording_and_cli_paths",
+    "description": "Exact outcome tuple assertion with runtime_ac_panel prefix",
+    "module": "runtime_ac_panel.py",
+    "line": 466,
+    "mutation": [
+      "f\"runtime_ac_panel: {panel['verifier_verdict']} - {panel['reason']}\"",
+      "f\"WRONG_PREFIX: {panel['verifier_verdict']} - {panel['reason']}\""
+    ],
+    "red": 1,
+    "restored": 0,
+    "assertion": "outcome_calls[0] == ('record_outcome', run_id, 'PASS_RUNTIME_AC', f'runtime_ac_panel: PASS_RUNTIME_AC - {panel_result['reason']}')"
+  },
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_panel_adjudication_recording_and_cli_paths",
+    "description": "Ordered gap tuples with runtime_ac_panel reviewer prefixes",
+    "module": "runtime_ac_panel.py",
+    "line": 471,
+    "mutation": [
+      "f\"runtime_ac_panel:{gap.get('reviewer') or 'reviewer'}\"",
+      "f\"WRONG_PREFIX:{gap.get('reviewer') or 'reviewer'}\""
+    ],
+    "red": 1,
+    "restored": 0,
+    "assertion": "gap_calls[0] == ('record_evidence_gap', run_id, 'runtime_ac_panel:vibe', 'missing trace')"
+  },
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_panel_adjudication_recording_and_cli_paths",
+    "description": "Exact citation names assertion",
+    "module": "runtime_ac_panel.py",
+    "line": 475,
+    "mutation": [
+      "[row.get(\"name\") for row in panel.get(\"evidence_type_citations\") or []]",
+      "[]"
+    ],
+    "red": 1,
+    "restored": 0,
+    "assertion": "citation_calls[0][1] == ['trace', 'log']"
+  },
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_panel_adjudication_recording_and_cli_paths",
+    "description": "Dispatch creates its own expected outcome",
+    "module": "runtime_ac_panel.py",
+    "line": 466,
+    "mutation": [
+      "f\"runtime_ac_panel: {panel['verifier_verdict']} - {panel['reason']}\"",
+      "f\"DISPATCH_WRONG: {panel['verifier_verdict']} - {panel['reason']}\""
+    ],
+    "red": 1,
+    "restored": 0,
+    "assertion": "'runtime_ac_panel: PASS_RUNTIME_AC' in dispatch_outcome_calls[0][3]"
+  },
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_runtime_ac_panel_coerce_reviews_and_edge_cases",
+    "description": "Malformed reviews fail adjudication with ValueError 'must be an object'",
+    "module": "runtime_ac_panel.py",
+    "line": 155,
+    "mutation": [
+      "raise ValueError(f\"review[{idx}] must be an object\")",
+      "pass"
+    ],
+    "red": 1,
+    "restored": 0,
+    "assertion": "pytest.raises(ValueError, match='must be an object')"
+  },
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_relearn_report_build_report_and_ordering",
+    "description": "Equal-score rows follow prior rank ordering",
+    "module": "relearn_report.py",
+    "line": 147,
+    "mutation": [
+      "-(r[\"score\"] if r.get(\"score\") is not None else -1.0)",
+      "(r[\"score\"] if r.get(\"score\") is not None else -1.0)"
+    ],
+    "red": 1,
+    "restored": 0,
+    "assertion": "equal_score_rows[0]['agent'] == 'agent1' and equal_score_rows[1]['agent'] == 'agent2'"
+  },
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_relearn_report_build_report_and_ordering",
+    "description": "Alphabetical tiebreaker for equal scores",
+    "module": "relearn_report.py",
+    "line": 148,
+    "mutation": [
+      "prior_rank.get(r[\"agent\"], len(prior_rank))",
+      "0"
+    ],
+    "red": 1,
+    "restored": 0,
+    "assertion": "equal_score_alpha[0]['agent'] == 'alpha' and equal_score_alpha[1]['agent'] == 'zebra'"
+  },
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure",
+    "description": "operator_inspect next_step",
+    "module": "keepalive_supervisor.py",
+    "line": 640,
+    "mutation": [
+      "next_step = \"operator_inspect\"",
+      "next_step = \"broken_inspect\""
+    ],
+    "red": 1,
+    "restored": 0,
+    "assertion": "plan['next_step'] == 'operator_inspect'"
+  },
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure",
+    "description": "eligible=True assertion",
+    "module": "keepalive_supervisor.py",
+    "line": 633,
+    "mutation": [
+      "if not gate[\"eligible\"]:",
+      "if True:"
+    ],
+    "red": 1,
+    "restored": 0,
+    "assertion": "plan['eligible'] is True"
+  },
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure",
+    "description": "blockers=[] assertion",
+    "module": "keepalive_supervisor.py",
+    "line": 633,
+    "mutation": [
+      "if not gate[\"eligible\"]:",
+      "if True:"
+    ],
+    "red": 1,
+    "restored": 0,
+    "assertion": "plan['eligibility']['blockers'] == []"
+  },
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure",
+    "description": "Exact --report-json/--ac/--dispatch command suffix",
+    "module": "keepalive_supervisor.py",
+    "line": 659,
+    "mutation": [
+      "proposal_command.extend([\"--backend\", proposal_backend])",
+      "proposal_command.extend([\"--wrong\", proposal_backend])"
+    ],
+    "red": 1,
+    "restored": 0,
+    "assertion": "'--report-json' in plan['proposal_command'] and '--ac' in plan['proposal_command'] and plan['proposal_command'][-1] == '--dispatch'"
+  }
+]

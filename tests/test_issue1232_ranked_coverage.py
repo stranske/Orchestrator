@@ -302,13 +302,22 @@ def test_panel_adjudication_recording_and_cli_paths(monkeypatch, tmp_path, capsy
     assert panel_result["verifier_verdict"] == "PASS_RUNTIME_AC"
 
     run_id = "test-run-1232-adjudication"
+    
+    # First recording phase - clear spies before
+    recorded_calls.clear()
     record_result = panel.record_panel_verdict(run_id, panel_result)
     assert record_result["run_id"] == run_id
     assert record_result["verifier_verdict"] == "PASS_RUNTIME_AC"
     assert record_result["recorded"] is True
     assert len(recorded_calls) >= 1
     assert any(call[0] == "record_outcome" for call in recorded_calls)
+    # Assert exact outcome tuple
+    outcome_calls = [c for c in recorded_calls if c[0] == "record_outcome"]
+    assert len(outcome_calls) == 1
+    assert outcome_calls[0] == ("record_outcome", run_id, "PASS_RUNTIME_AC", f"runtime_ac_panel: PASS_RUNTIME_AC - {panel_result['reason']}")
 
+    # Second recording phase - clear spies before
+    recorded_calls.clear()
     record_result_gaps = panel.record_panel_verdict(
         run_id,
         {
@@ -323,6 +332,18 @@ def test_panel_adjudication_recording_and_cli_paths(monkeypatch, tmp_path, capsy
     assert record_result_gaps["evidence_gaps"] == 2
     assert any(call[0] == "record_evidence_gap" for call in recorded_calls)
     assert any(call[0] == "record_evidence_type_citations" for call in recorded_calls)
+    
+    # Assert ordered gap tuples with runtime_ac_panel reviewer prefixes
+    gap_calls = [c for c in recorded_calls if c[0] == "record_evidence_gap"]
+    assert len(gap_calls) == 2
+    # Gaps should be ordered as provided
+    assert gap_calls[0] == ("record_evidence_gap", run_id, "runtime_ac_panel:vibe", "missing trace")
+    assert gap_calls[1] == ("record_evidence_gap", run_id, "runtime_ac_panel:gemini", "missing logs")
+    
+    # Assert exact citation names
+    citation_calls = [c for c in recorded_calls if c[0] == "record_evidence_type_citations"]
+    assert len(citation_calls) == 1
+    assert citation_calls[0][1] == ["trace", "log"]
 
     spec_file = tmp_path / "spec.json"
     gate_file = tmp_path / "gate.json"
@@ -381,6 +402,8 @@ def test_panel_adjudication_recording_and_cli_paths(monkeypatch, tmp_path, capsy
         },
     )
 
+    # Third recording phase - clear spies before dispatch
+    recorded_calls.clear()
     try:
         result = panel.main(
             [
@@ -398,7 +421,12 @@ def test_panel_adjudication_recording_and_cli_paths(monkeypatch, tmp_path, capsy
     except SystemExit as e:
         assert e.code == 0
 
-    assert any(call[0] == "record_outcome" and call[1] == run_id for call in recorded_calls)
+    # Assert dispatch creates its own expected outcome
+    dispatch_outcome_calls = [c for c in recorded_calls if c[0] == "record_outcome"]
+    assert len(dispatch_outcome_calls) == 1
+    assert dispatch_outcome_calls[0][1] == run_id
+    assert dispatch_outcome_calls[0][2] == "PASS_RUNTIME_AC"
+    assert "runtime_ac_panel: PASS_RUNTIME_AC" in dispatch_outcome_calls[0][3]
 
 
 def test_runtime_ac_panel_coerce_reviews_and_edge_cases(monkeypatch):
@@ -412,6 +440,10 @@ def test_runtime_ac_panel_coerce_reviews_and_edge_cases(monkeypatch):
     doc_with_invalid = {"reviews": [None, "invalid", {"verdict": "PASS"}]}
     coerced_invalid = panel.coerce_reviews(doc_with_invalid)
     assert len(coerced_invalid) == 3
+    
+    # Call adjudicate_panel with doc_with_invalid and require ValueError matching 'must be an object'
+    with pytest.raises(ValueError, match="must be an object"):
+        panel.adjudicate_panel(spec, gate, doc_with_invalid)
 
     doc_with_valid = {
         "reviews": [
@@ -481,6 +513,31 @@ def test_relearn_report_build_report_and_ordering(monkeypatch):
     )
     assert ordered_rows[0]["agent"] == "agent1"
     assert ordered_rows[1]["agent"] == "agent2"
+    
+    # Add equal-score rows whose input/alphabetical order opposes prior order
+    # Input order is ["agent2", "agent1"] which opposes prior_order ["agent1", "agent2"]
+    # With equal scores, prior rank should determine order: agent1 (prior rank 0) before agent2 (prior rank 1)
+    equal_score_rows = relearn_report._ordered_rows(
+        [
+            {"agent": "agent2", "score": 0.85},
+            {"agent": "agent1", "score": 0.85},
+        ],
+        ["agent1", "agent2"],
+    )
+    assert equal_score_rows[0]["agent"] == "agent1"
+    assert equal_score_rows[1]["agent"] == "agent2"
+    
+    # Test with equal scores and alphabetical tiebreaker
+    # When prior ranks are equal (both not in prior_order), alphabetical order is used
+    equal_score_alpha = relearn_report._ordered_rows(
+        [
+            {"agent": "zebra", "score": 0.85},
+            {"agent": "alpha", "score": 0.85},
+        ],
+        ["agent1", "agent2"],
+    )
+    assert equal_score_alpha[0]["agent"] == "alpha"
+    assert equal_score_alpha[1]["agent"] == "zebra"
 
     human_output = relearn_report.format_human(report)
     assert "test-learner" in human_output
@@ -506,6 +563,18 @@ def test_keepalive_supervisor_plan_target_and_closure(monkeypatch, tmp_path):
     plan = supervisor.plan_for_signals(signals, report_json_path=tmp_path / "report.json")
     assert "next_step" in plan
     assert "proposal_command" in plan
+    # Assert operator_inspect, eligible=True, blockers=[], direct report existence
+    assert plan["next_step"] == "operator_inspect"
+    assert plan["eligible"] is True
+    assert plan["eligibility"]["blockers"] == []
+    assert plan["report_written"] is not None
+    assert (tmp_path / "report.json").exists()
+    # Assert the exact --report-json/--ac/--dispatch command suffix
+    # Command structure: [..., '--report-json', '<path>', '--ac', '<value>', '--dispatch']
+    assert "--report-json" in plan["proposal_command"]
+    assert str(tmp_path / "report.json") in plan["proposal_command"]
+    assert "--ac" in plan["proposal_command"]
+    assert plan["proposal_command"][-1] == "--dispatch"
 
     plan_target_result = supervisor.plan_target(
         signals["target"],
@@ -518,6 +587,8 @@ def test_keepalive_supervisor_plan_target_and_closure(monkeypatch, tmp_path):
     eligible = supervisor.eligibility(signals)
     assert "eligible" in eligible
     assert "blockers" in eligible
+    assert eligible["eligible"] is True
+    assert eligible["blockers"] == []
 
     label_set = supervisor._label_set(signals)
     assert supervisor.KEEPALIVE_LABEL in label_set
