@@ -141,6 +141,8 @@ def test_prior_only_rows_with_null_success_rate_do_not_crash_the_export(tmp_path
     assert document["task_types"]["implement"]["ranking"][0]["agent"] == "codex"
     assert "cursor" not in {row["agent"] for row in document["task_types"]["implement"]["ranking"]}
     assert set(document["exploration"]["challengers"]) == set(export.CONSUMER_TASK_TYPES)
+    # The prior-only seat stays available to exploration: it is the challenger, not dropped.
+    assert document["exploration"]["challengers"]["implement"] == "cursor"
 
 
 def test_route_weights_schema_stays_v1_for_workflows_consumer() -> None:
