@@ -25,6 +25,10 @@ WINDOW_DAYS = 14
 MIN_MEASURED_HOUR_SHARE = 0.5
 _SIMPLEX_EPS = 1e-12
 
+# Route decision constants for hosted router
+ROUTE_GO_LIVE = "2026-11-17T00:00:00Z"
+ROUTE_INCIDENT_WINDOW_DAYS = 14
+
 
 def _number(value) -> TypeGuard[int | float]:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
@@ -563,3 +567,116 @@ def format_report(result: dict) -> str:
     for hour, reasons in result.get("hour_reasons", {}).items():
         lines.append(f"hour {hour}: " + "; ".join(reasons))
     return "\n".join(lines)
+
+
+def route_decision(result: dict, incidents_rows: list[dict] | None, now: int | None = None) -> dict:
+    """Compute the route_enabled flag for the hosted router.
+
+    Returns a dict with route_enabled, route_reason, incidents_recent, incidents_prior.
+    The flag is True only if:
+      1. now >= ROUTE_GO_LIVE
+      2. result["status"] == "optimal"
+      3. incidents in the last ROUTE_INCIDENT_WINDOW_DAYS <= incidents in the prior period
+
+    If the incident ledger is unreadable or any condition fails, returns route_enabled: False.
+    """
+    from rate_incidents import INCIDENT_FILE
+
+    now = int(time.time()) if now is None else now
+    go_live_ts = int(dt.datetime.fromisoformat(ROUTE_GO_LIVE).timestamp())
+
+    # Fail to False if before go-live
+    if now < go_live_ts:
+        return {
+            "route_enabled": False,
+            "route_reason": f"before go-live ({ROUTE_GO_LIVE})",
+            "incidents_recent": None,
+            "incidents_prior": None,
+        }
+
+    # Fail to False if status is not optimal
+    if result.get("status") != "optimal":
+        return {
+            "route_enabled": False,
+            "route_reason": f"status not optimal: {result.get('status', 'unknown')}",
+            "incidents_recent": None,
+            "incidents_prior": None,
+        }
+
+    # Read incidents from the ledger if not provided
+    if incidents_rows is None:
+        # Check if the file exists and is readable
+        if not INCIDENT_FILE.is_file():
+            # File doesn't exist - treat as unreadable
+            incidents_rows = None
+        else:
+            # Try to read the file directly
+            try:
+                with INCIDENT_FILE.open() as stream:
+                    incidents_rows = []
+                    for line in stream:
+                        try:
+                            row = json.loads(line)
+                            if isinstance(row, dict):
+                                incidents_rows.append(row)
+                        except (ValueError, TypeError):
+                            # Skip malformed lines
+                            continue
+            except OSError:
+                # Any OS error reading the file is treated as unreadable
+                incidents_rows = None
+
+    # Fail to False if ledger is unreadable (None means we couldn't read it)
+    if incidents_rows is None:
+        return {
+            "route_enabled": False,
+            "route_reason": "incident ledger unreadable",
+            "incidents_recent": None,
+            "incidents_prior": None,
+        }
+
+    window_days = ROUTE_INCIDENT_WINDOW_DAYS
+    window_seconds = window_days * 86400
+    prior_start = now - 2 * window_seconds
+    recent_start = now - window_seconds
+
+    # Count incidents in each window
+    incidents_recent = 0
+    incidents_prior = 0
+
+    for row in incidents_rows:
+        ts_value = row.get("ts")
+        if ts_value is None:
+            continue
+        try:
+            if isinstance(ts_value, (int, float)):
+                incident_ts = int(ts_value)
+            else:
+                # Try to parse ISO timestamp
+                incident_ts = int(
+                    dt.datetime.fromisoformat(str(ts_value).replace("Z", "+00:00")).timestamp()
+                )
+        except (ValueError, TypeError, OverflowError):
+            continue
+
+        if recent_start <= incident_ts < now:
+            incidents_recent += 1
+        elif prior_start <= incident_ts < recent_start:
+            incidents_prior += 1
+
+    # Fail to False if recent incidents exceed prior incidents
+    if incidents_recent > incidents_prior:
+        return {
+            "route_enabled": False,
+            "route_reason": f"revert: incidents rose {incidents_prior}→{incidents_recent}",
+            "incidents_recent": incidents_recent,
+            "incidents_prior": incidents_prior,
+        }
+
+    # All conditions met
+    return {
+        "route_enabled": True,
+        "route_reason": f"enabled; incidents {incidents_prior}→{incidents_recent}",
+        "incidents_recent": incidents_recent,
+        "incidents_prior": incidents_prior,
+    }

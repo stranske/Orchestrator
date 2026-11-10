@@ -425,6 +425,7 @@
       "tests/test_codemod_campaign_line_endings.py",
       "tests/test_codex_allocation.py",
       "tests/test_comparative.py",
+      "tests/test_comparative_route_decision.py",
       "tests/test_consumer_sync_artifact_ingest.py",
       "tests/test_coverage_baseline_wiring.py",
       "tests/test_coverage_round_916.py",

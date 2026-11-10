@@ -725,6 +725,9 @@ def _add_comparative(document: dict, db_path: Path, snapshot: dict | None, now: 
     for task, rows in document["reserve"].items():
         _attach_comparative_ranks(rows, result, task, document["min_observations"])
     document["comparative"] = {key: value for key, value in result.items() if key != "ranks"}
+    # Add route_decision to the comparative block
+    route_info = comparative.route_decision(result, incidents_rows=None, now=now)
+    document["comparative"].update(route_info)
 
 
 def _canonical_bytes(document: dict[str, Any]) -> bytes:
@@ -766,6 +769,12 @@ def _semantic_for_compare(document: dict[str, Any]) -> dict[str, Any]:
     semantic = {
         key: value for key, value in document.items() if key not in ("generated_at", "comparative")
     }
+    # Include route_enabled from comparative block to trigger republishing on flip
+    comparative_block = document.get("comparative")
+    if isinstance(comparative_block, dict):
+        route_enabled = comparative_block.get("route_enabled")
+        if route_enabled is not None:
+            semantic["comparative"] = {"route_enabled": route_enabled}
     capacity_block = semantic.get("capacity")
     if isinstance(capacity_block, dict):
         compared: dict[str, Any] = {}
