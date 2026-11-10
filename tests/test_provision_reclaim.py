@@ -728,8 +728,7 @@ def test_native_clean_idle_holder_is_reclaimed(layout, lane, capsys):
     assert git(wt, "branch", "--show-current") == branch
     assert not holder.exists()
     assert (
-        f"provision: reclaimed stale worktree {holder} holding {branch}"
-        in capsys.readouterr().out
+        f"provision: reclaimed stale worktree {holder} holding {branch}" in capsys.readouterr().out
     )
     rows = events()
     assert len(rows) == 1
