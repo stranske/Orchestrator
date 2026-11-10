@@ -710,3 +710,41 @@ def test_worktree_stuck_mid_cherry_pick_is_preserved_without_switching(layout, m
     assert git(canon, "rev-parse", f"{kept}^") == head  # the stash commit sits on the agent's HEAD
     assert git(canon, "show", f"{kept}:f.txt") == "resolved"
     assert git(wt, "rev-parse", "HEAD") == git(canon, "rev-parse", "origin/pr-head")
+
+
+@pytest.mark.parametrize("lane", ["closer", "opener"])
+def test_native_clean_idle_holder_is_reclaimed(layout, lane, capsys):
+    """Unmocked process probes on the dispatcher host; ledger isolated by conftest."""
+    canon, _ = layout
+    branch = "pr-head" if lane == "closer" else OPENER_BRANCH
+    if lane == "opener":
+        git(canon, "branch", branch)
+    holder = hold(layout, branch)
+    wt = provision.provision(TARGET, lane)
+    assert (wt / ".git").is_file()
+    assert git(wt, "branch", "--show-current") == branch
+    assert not holder.exists()
+    assert (
+        f"provision: reclaimed stale worktree {holder} holding {branch}" in capsys.readouterr().out
+    )
+    rows = events()
+    assert len(rows) == 1
+    assert rows[0]["outcome"] == "reclaimed"
+    assert rows[0]["cause"] == "branch-held"
+    assert rows[0]["holder_path"] == str(holder)
+
+
+@pytest.mark.parametrize("lane", ["closer", "opener"])
+def test_native_reclaim_disabled_exit_128_names_holder(layout, lane, monkeypatch):
+    """Capture git exit 128 when reclaim is disabled and holder path is visible."""
+    canon, _ = layout
+    branch = "pr-head" if lane == "closer" else OPENER_BRANCH
+    if lane == "opener":
+        git(canon, "branch", branch)
+    holder = hold(layout, branch)
+    monkeypatch.setattr(provision, "_reclaim_branch_holder", lambda *args, **kwargs: None)
+    with pytest.raises(subprocess.CalledProcessError) as caught:
+        provision.provision(TARGET, lane)
+    assert caught.value.returncode == 128
+    assert str(holder) in (caught.value.stderr or "")
+    assert holder.exists()
