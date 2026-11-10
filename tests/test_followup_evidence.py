@@ -212,3 +212,7 @@ def test_unknown_publication_resumes_frozen_packet_once_before_native_handoff(
     local = evidence.load(runtime / "followup-evidence/latest.json")
     assert local["provision"] == original
     assert evidence.load(runtime / "followup-evidence/ack-1098.json")["state"] == "pending"
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        evidence.reconcile_collected(runtime)
+    assert evidence.load(runtime / "followup-evidence/latest.json")["provision"] == original

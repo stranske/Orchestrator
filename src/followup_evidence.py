@@ -444,15 +444,38 @@ def collect(root: Path, config_path: Path, *, apply: bool = False) -> dict:
         save(state_dir / "provision-state.json", next_state)
         # A network failure cannot erase a successful local observation.
         save(state_dir / "latest.json", report)
-        # Stable reconciliation identities exclude the hourly checked-at value.
-        for packet in (provision, strategy):
-            if apply:
-                stable = {
-                    k: v
-                    for k, v in packet.items()
-                    if k not in {"checked_at", "window_start", "segments"}
-                }
-                packet["continuation"] = reconcile_ready(stable, state_dir)
+        if apply:
+            reconcile_report(report, state_dir)
+        save(state_dir / "latest.json", report)
+        return report
+
+
+def reconcile_report(report: dict, state_dir: Path) -> None:
+    for packet in (report["provision"], report["strategy"]):
+        stable = {
+            key: value
+            for key, value in packet.items()
+            if key not in {"checked_at", "window_start", "segments", "continuation"}
+        }
+        packet["continuation"] = reconcile_ready(stable, state_dir)
+
+
+def reconcile_collected(root: Path) -> dict:
+    """Publish the existing local observation after native authentication gates."""
+    state_dir = root / "followup-evidence"
+    with (state_dir / "collector.lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return {"action": "existing_collector_running", "blocking": 0, "drainable": 0}
+        report = load(state_dir / "latest.json")
+        if not report or report.get("collector_source_sha256") != digest(
+            Path(__file__).read_bytes()
+        ):
+            raise ValueError(
+                "collect with this source before reconciling; local observer drains next tick"
+            )
+        reconcile_report(report, state_dir)
         save(state_dir / "latest.json", report)
         return report
 
@@ -461,18 +484,22 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state-dir", type=Path, default=runtime_state_path())
     parser.add_argument("--config", type=Path)
-    parser.add_argument("--apply", action="store_true")
-    parser.add_argument("--apply-if-token", action="store_true")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--apply", action="store_true")
+    modes.add_argument("--reconcile", action="store_true")
     args = parser.parse_args(argv)
-    result = collect(
-        args.state_dir,
-        args.config or args.state_dir / "followup-evidence/config.json",
-        apply=args.apply
-        or (
-            args.apply_if_token
-            and bool(os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN"))
-        ),
+    result = (
+        reconcile_collected(args.state_dir)
+        if args.reconcile
+        else collect(
+            args.state_dir,
+            args.config or args.state_dir / "followup-evidence/config.json",
+            apply=args.apply,
+        )
     )
+    if result.get("action") == "existing_collector_running":
+        print("followup-evidence: original collector running; blocking=0 drainable=0")
+        return 75
     print(
         json.dumps(
             {
