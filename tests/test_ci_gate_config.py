@@ -373,18 +373,26 @@ def test_baseline_diagnostic_names_the_bumped_and_the_missing_pin():
     assert "RUFF_VERSION pinned 2.0.1, measured 2.0.0" in message
     assert "All pins:" not in message
     assert message.endswith("retain its measurements.")
+    for key in pins.keys() - {"RUFF_VERSION"}:
+        assert key not in message
 
     missing = {k: v for k, v in pins.items() if k != "COVERAGE_VERSION"}
     message = _baseline_mismatch(doc, missing)
     assert message is not None
     assert "COVERAGE_VERSION pinned missing, measured 2.0.0" in message
     assert "All pins:" not in message
+    assert message.endswith("retain its measurements.")
+    for key in missing:
+        assert key not in message
 
     incomplete = doc.replace(" coverage=2.0.0", "")
     message = _baseline_mismatch(incomplete, pins)
     assert message is not None
     assert "no complete nine-tool measurement exists" in message
     assert "All pins:" not in message
+    assert message.endswith("retain its measurements.")
+    for key in pins:
+        assert key not in message
 
 
 @pytest.mark.parametrize("closest_first", [True, False])
