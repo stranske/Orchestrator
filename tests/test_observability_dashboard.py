@@ -405,9 +405,14 @@ def test_dashboard_markdown_and_main(monkeypatch, tmp_path, capsys):
         "build_report_from_snapshot",
         lambda *a, **k: report,
     )
-    monkeypatch.setattr(dashboard.capacity, "build", lambda: {})
-    out_json = tmp_path / "out.json"
-    out_md = tmp_path / "out.md"
+
+    def forbid_capacity_probe():
+        pytest.fail("--no-capacity must not probe live capacity")
+
+    monkeypatch.setattr(dashboard.capacity, "build", forbid_capacity_probe)
+    out_json = tmp_path / "json" / "out.json"
+    out_md = tmp_path / "markdown" / "out.md"
+    assert not adapters.LEDGER.exists()
     assert (
         dashboard.main(
             [
@@ -423,8 +428,11 @@ def test_dashboard_markdown_and_main(monkeypatch, tmp_path, capsys):
         )
         == 0
     )
-    assert out_json.exists() and out_md.exists()
-    assert json.loads(out_json.read_text())
+    written = json.loads(out_json.read_text())
+    assert written == json.loads(capsys.readouterr().out)
+    assert written["source_report_generated_at"] == report["generated_at"]
+    assert out_md.read_text() == dashboard.format_markdown(written)
+    assert not adapters.LEDGER.exists()
 
 
 def test_observability_dashboard_selftest_runs(monkeypatch, tmp_path):

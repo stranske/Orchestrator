@@ -1,5 +1,38 @@
 # Coverage round 1182 recovery
 
+## Current continuation: validation blocked
+
+The 2026-11-10 automation workspace independently compared all 23 original test
+names against the source file fetched from commit
+`515371bd806b1b297704b3fef796274a216e6bde`; each occurs exactly once in the four
+delivered files. No additional original tests are missing.
+
+The current test-only changes explicitly isolate router HANDOFF/DECISION_JSON
+and strengthen the recovered CLI tests: active exploration writes the expected
+private decision, either independent dispatch blocker preserves that file and
+does not dispatch, dashboard JSON matches stdout, Markdown matches rendering,
+and `--no-capacity` forbids probing. Both CLI tests check that no ledger is created.
+Direct production-CLI smoke checks passed for dispatch blocking/decision
+preservation and dashboard exports with external process/network calls blocked.
+Those smoke checks are not pytest or coverage results.
+
+Validation is blocked in this workspace: Python 3.14.10 cannot import `pytest`
+or `black`. Installing those tools failed because `pypi.org` DNS resolution is
+unavailable; the installed tools and local wheel cache contain neither package.
+The focused pytest/coverage command and Black check both exit 1 with
+`No module named pytest` / `No module named black`. Syntax compilation and
+`git diff --check` pass. The required Black gate therefore prevents committing
+these Python changes. No task checkbox is newly completed.
+
+The requested blocker comment and `needs-human` label could not be added to
+PR #1323: both GitHub writes were rejected because they require approval while
+this run's approval policy is `never`. The PR remains open and ready for review.
+
+The measurements, passing pytest results, and CI/Gate verdicts below describe
+the earlier heads named there; they do not validate this uncommitted continuation.
+
+## Previously recorded evidence
+
 Checked 2026-11-10. Source recovery commit:
 `515371bd806b1b297704b3fef796274a216e6bde:tests/test_coverage_round_1182.py`.
 Validated test/source head: `e7f8daef8b9f12f2f5d5bb1900746253e4224381`.

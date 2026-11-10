@@ -8,6 +8,7 @@ import os
 import socket
 import subprocess
 import tempfile
+from unittest.mock import Mock
 
 import advisor_hermetic
 import pytest
@@ -31,6 +32,8 @@ def isolated_runtime(tmp_path, monkeypatch):
         # HANDOFF is captured outside ORCH_LOCAL_RUNTIME at import time.
         monkeypatch.setattr(adapters, "HANDOFF", tmp_path / "handoff")
         monkeypatch.setattr(adapters, "LEDGER", tmp_path / "handoff" / "ledger.ndjson")
+        monkeypatch.setattr(router, "HANDOFF", tmp_path / "handoff")
+        monkeypatch.setattr(router, "DECISION_JSON", tmp_path / "handoff" / "routing-decision.json")
         (tmp_path / "runtime").mkdir(parents=True, exist_ok=True)
 
         attempted_external = []
@@ -346,6 +349,12 @@ def test_build_window_active_path_and_format_human(monkeypatch, tmp_path):
 
 
 def test_exploration_collection_main_paths(monkeypatch, tmp_path, capsys):
+    dispatch = Mock(return_value={"count": 1})
+    monkeypatch.setattr(ec.dispatcher, "run", dispatch)
+    assert router.HANDOFF == tmp_path / "handoff"
+    assert router.DECISION_JSON == router.HANDOFF / "routing-decision.json"
+    assert not router.DECISION_JSON.exists()
+    assert not adapters.LEDGER.exists()
     monkeypatch.setattr(ec, "_selftest", lambda: None)
     assert ec.main(["--selftest"]) == 0
 
@@ -355,6 +364,8 @@ def test_exploration_collection_main_paths(monkeypatch, tmp_path, capsys):
     err = cap.out + cap.err
     expected = "active dispatch requires --confirm-window and ORCH_EXPLORATION_EVIDENCE=1"
     assert err.strip() == expected
+    dispatch.assert_not_called()
+    assert not router.DECISION_JSON.exists()
 
     monkeypatch.setattr(
         ec,
@@ -373,13 +384,14 @@ def test_exploration_collection_main_paths(monkeypatch, tmp_path, capsys):
             "acquisition_next_action": "n",
         },
     )
-    monkeypatch.setattr(router, "HANDOFF", tmp_path / "h")
-    monkeypatch.setattr(router, "DECISION_JSON", tmp_path / "h" / "decision.json")
-    monkeypatch.setattr(ec.dispatcher, "run", lambda decision, dry_run=False: {"count": 1})
     monkeypatch.setenv("ORCH_EXPLORATION_EVIDENCE", "1")
     assert ec.main(["--apply", "--confirm-window", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["dispatch_result"]["count"] == 1
+    dispatch.assert_called_once_with(payload["decision"], dry_run=False)
+    decision_before = router.DECISION_JSON.read_text()
+    assert json.loads(decision_before) == payload["decision"]
+    dispatch.reset_mock()
 
     monkeypatch.setattr(
         ec,
@@ -399,6 +411,22 @@ def test_exploration_collection_main_paths(monkeypatch, tmp_path, capsys):
         },
     )
     assert ec.main(["--apply", "--confirm-window"]) == 0
+    dispatch.assert_not_called()
+    assert router.DECISION_JSON.read_text() == decision_before
+
+    # Either ineligibility or an empty assignment list must block dispatch on its own.
+    capsys.readouterr()
+    for eligible, assignments in ((False, [{"target": "o/r#2"}]), (True, [])):
+        monkeypatch.setattr(
+            ec,
+            "build_window",
+            Mock(return_value={"eligible": eligible, "decision": {"assignments": assignments}}),
+        )
+        assert ec.main(["--apply", "--confirm-window", "--json"]) == 0
+        blocked = json.loads(capsys.readouterr().out)
+        assert blocked["dispatch_result"] == {"count": 0, "blocked": True}
+        dispatch.assert_not_called()
+        assert router.DECISION_JSON.read_text() == decision_before
 
     monkeypatch.setattr(
         ec,
@@ -419,6 +447,9 @@ def test_exploration_collection_main_paths(monkeypatch, tmp_path, capsys):
     )
     assert ec.main([]) == 0
     assert "exploration_collection:" in capsys.readouterr().out
+    dispatch.assert_not_called()
+    assert router.DECISION_JSON.read_text() == decision_before
+    assert not adapters.LEDGER.exists()
 
 
 def test_filter_backlog_skip_reasons():
