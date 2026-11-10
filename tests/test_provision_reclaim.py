@@ -712,12 +712,9 @@ def test_worktree_stuck_mid_cherry_pick_is_preserved_without_switching(layout, m
     assert git(wt, "rev-parse", "HEAD") == git(canon, "rev-parse", "origin/pr-head")
 
 
-@pytest.mark.provision_native_acceptance
 @pytest.mark.parametrize("lane", ["closer", "opener"])
 def test_native_clean_idle_holder_is_reclaimed(layout, lane, capsys):
     """Unmocked process probes on the dispatcher host; ledger isolated by conftest."""
-    if os.environ.get("ORCH_PROVISION_NATIVE_ACCEPTANCE") != "1":
-        pytest.skip("Native acceptance tests require ORCH_PROVISION_NATIVE_ACCEPTANCE=1")
     canon, _ = layout
     branch = "pr-head" if lane == "closer" else OPENER_BRANCH
     if lane == "opener":
@@ -737,12 +734,9 @@ def test_native_clean_idle_holder_is_reclaimed(layout, lane, capsys):
     assert rows[0]["holder_path"] == str(holder)
 
 
-@pytest.mark.provision_native_acceptance
 @pytest.mark.parametrize("lane", ["closer", "opener"])
 def test_native_reclaim_disabled_exit_128_names_holder(layout, lane, monkeypatch):
     """Capture git exit 128 when reclaim is disabled and holder path is visible."""
-    if os.environ.get("ORCH_PROVISION_NATIVE_ACCEPTANCE") != "1":
-        pytest.skip("Native acceptance tests require ORCH_PROVISION_NATIVE_ACCEPTANCE=1")
     canon, _ = layout
     branch = "pr-head" if lane == "closer" else OPENER_BRANCH
     if lane == "opener":
