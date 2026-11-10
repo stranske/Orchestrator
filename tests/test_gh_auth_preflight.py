@@ -426,6 +426,11 @@ def test_a_deferred_tick_runs_its_local_steps_and_none_that_reach_github(
 def test_an_authenticated_tick_runs_the_github_steps(tmp_path: Path, lane_live: bool) -> None:
     proc, calls = _run_tick(tmp_path, "ok", lane_live=lane_live)
     assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
+    observer = [call for call in calls if call.startswith("followup_evidence.py")]
+    assert observer == [
+        f"followup_evidence.py --state-dir {tmp_path / 'state'}",
+        f"followup_evidence.py --state-dir {tmp_path / 'state'} --reconcile",
+    ]
     for step in ("tick.py --active", "redirect_apply.py", "capability_activation_audit.py"):
         assert _ran(calls, step), f"{step} did not run on an authenticated tick"
     decisions = [
