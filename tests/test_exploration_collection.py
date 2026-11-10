@@ -470,12 +470,45 @@ def test_build_window_acquisition_blocked(monkeypatch):
         "build_plan",
         lambda **kw: _eligible_acquisition(eligible=False),
     )
-    blocked = ec.build_window(
-        backlog_payload={"items": []},
-        capacity_payload=_capacity_payload(),
-    )
-    assert any("does not currently mark" in r for r in blocked["blocked_reasons"])
-    assert any("no eligible low-risk" in r for r in blocked["blocked_reasons"])
+    planned = []
+
+    def plan_for_seed(**kwargs):
+        planned.append(kwargs)
+        return {
+            "assignments": [
+                {
+                    "target": "o/r#1",
+                    "task_type": "implement",
+                    "lane": "opener",
+                    "agent": "codex",
+                    "exploration": True,
+                }
+            ]
+        }, []
+
+    monkeypatch.setattr(ec, "_plan_for_seed", plan_for_seed)
+    item = {"target": "o/r#1", "task_type": "implement", "lane": "opener"}
+    # Valid work makes acquisition eligibility the only blocker. Keep the original
+    # empty-backlog case too, and verify active mode cannot bypass the same gate.
+    for items in ([item], []):
+        for dry_run in (True, False):
+            blocked = ec.build_window(
+                backlog_payload={"items": items},
+                capacity_payload=_capacity_payload(),
+                dry_run=dry_run,
+            )
+            reasons = ["acquisition planner does not currently mark this mode eligible"]
+            if not items:
+                reasons.append("no eligible low-risk opener backlog items selected")
+            assert blocked["blocked_reasons"] == reasons
+            assert blocked["eligible"] is False
+            assert [row["target"] for row in blocked["selected_backlog"]] == [
+                row["target"] for row in items
+            ]
+            assert blocked["decision"]["assignments"] == []
+            assert blocked["direct_exploration_assignments"] == 0
+            assert blocked["seed_search"]["attempted"] == 0
+            assert planned == []
 
 
 def test_exploration_collection_selftest_runs(monkeypatch, tmp_path):

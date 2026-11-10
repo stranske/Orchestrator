@@ -151,3 +151,64 @@ The earlier measured whole-tree statement reduction remains 169 units with an
 11-unit shortfall.
 Whole-tree branch reduction remains unavailable because the historical Gate artifact
 did not instrument branches. No new per-target coverage counts are claimed here.
+
+## 2026-11-10 acquisition-blocking continuation
+
+Fetched the original test file through GitHub at
+`515371bd806b1b297704b3fef796274a216e6bde` (blob
+`cdef7b82e389c72983fe65cef32cb992033c809a`). AST comparison confirms all 23
+original test names are present exactly once across the four current files.
+Twenty test bodies are unchanged; the loaded-session, persisted-cost, and
+acquisition-blocked tests contain additional assertions. No deferred tests are missing.
+
+`test_build_window_acquisition_blocked` now exercises valid and empty backlogs in
+both dry-run and active mode. Valid work makes acquisition eligibility the sole
+blocking reason. The test verifies the exact reasons, an ineligible result, retained
+selected backlog, empty assignments, zero exploratory assignments, zero seed
+attempts, and no planner calls. Its planner stub returns an exploratory assignment
+if called, so a broken acquisition gate cannot be hidden by a second routing failure.
+The existing temporary runtime and external-I/O guards remain in effect.
+The test count and shard registration are unchanged.
+
+GitHub reports successful Gate
+[42826765840](https://github.com/stranske/Orchestrator/actions/runs/42826765840)
+and CI [42826764353](https://github.com/stranske/Orchestrator/actions/runs/42826764353)
+for exact head `4e9b72c35d52c39a076b20c96097204b98ff31df`, which includes the
+previous continuation's isolation and reconciliation assertions. These results
+precede the new acquisition assertions and do not validate this uncommitted change.
+
+The current interpreter is Python 3.14.10. The focused command and targeted
+coverage command both exited 1 with `No module named pytest`:
+
+```sh
+python3 -m pytest tests/test_coverage_round_1182.py tests/test_ccusage_reconcile.py tests/test_exploration_collection.py tests/test_observability_dashboard.py -q --no-cov -m 'not slow'
+python3 -m pytest tests/test_exploration_collection.py --cov=exploration_collection --cov-branch --cov-report=term-missing -m 'not slow'
+```
+
+The required verification command was also run:
+
+```sh
+PYTEST_ADDOPTS='-m "not slow"' ORCH_STATE_DIR=/tmp/orch-1182-verify-current/state ORCH_LOCAL_RUNTIME=/tmp/orch-1182-verify-current/runtime HANDOFF_DIR=/tmp/orch-1182-verify-current/handoff python3 src/verify.py --coverage
+```
+
+It exited 1, reporting missing coverage for instrumented children and
+`coverage: NO DATA — no instrumented child wrote a data file (did any test run?)`.
+No new coverage reduction is claimed; the measured reduction and shortfall remain
+169 statements and 11 units, respectively, with whole-tree branches unavailable.
+
+Package installation failed with `Failed to resolve 'pypi.org'`; a local filesystem
+search found no usable pytest, coverage, or Black installation. Formatting exited 1
+with `No module named black`; the mandatory command
+`black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .`
+exited 127 with `black: command not found`. The Python change is left uncommitted
+because the required formatting gate cannot pass.
+
+A separate standard-library smoke check ran four cases with temporary runtime roots,
+blocked subprocess/network calls, and a stub planner. It passed on restored source
+and failed on both behavior-changing mutations documented in
+[COVERAGE_ROUND_1182_MUTATIONS.md](COVERAGE_ROUND_1182_MUTATIONS.md).
+This smoke check is not a pytest result. No additional task or acceptance checkbox
+is marked complete; focused pytest, Black, and CI for the new assertions remain required.
+The blocker-comment and `needs-human` label requests were both rejected by the GitHub
+connector with `MCP tool call requires approval, but approval policy is never`.
+Neither remote change was applied. The fetched PR state is open with `draft: false`.

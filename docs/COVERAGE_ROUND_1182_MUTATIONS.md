@@ -101,3 +101,64 @@ Restored output (exit 0):
 .                                                                        [100%]
 1 passed in 0.49s
 ```
+
+## Current acquisition test strengthening: smoke evidence only
+
+The current test additionally checks the ineligible result and verifies no planning
+occurs with otherwise valid work, in both dry-run and active mode. It retains the
+empty-backlog assertions above. The current runner cannot execute the named pytest
+test because pytest is absent; the historical pytest evidence above is retained
+with its original command and output. No new pytest pass is claimed here.
+
+A separate standard-library smoke script used the same four input cases and
+assertions against `build_window`, temporary runtime roots, forbidden external
+process/network calls, and a planner stub returning an exploratory assignment.
+Command: `python3 /tmp/orch_1182_acquisition_smoke.py`. This temporary smoke script
+does not import or execute `test_build_window_acquisition_blocked`.
+
+First mutation:
+
+```diff
+-    if not window.get("eligible"):
++    if False:  # temporary mutation: suppress acquisition blocker
+```
+
+Actual smoke failure (exit 1):
+
+```text
+  File "/tmp/orch_1182_acquisition_smoke.py", line 64, in <module>
+    assert blocked["blocked_reasons"] == reasons, blocked["blocked_reasons"]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: []
+```
+
+Second mutation changes the returned eligibility result, independently of the
+blocking-reason condition:
+
+```diff
+-        "eligible": (
+-            not blocked_reasons
+-            and bool(decision.get("assignments"))
+-            and _exploratory_count(decision) >= min_exploratory
+-        ),
++        "eligible": True,  # temporary mutation: force an ineligible result true
+```
+
+Actual smoke failure (exit 1):
+
+```text
+  File "/tmp/orch_1182_acquisition_smoke.py", line 65, in <module>
+    assert blocked["eligible"] is False, blocked["eligible"]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: True
+```
+
+After **each** mutation, the production source was restored byte-for-byte and the
+smoke command exited 0:
+
+```text
+Acquisition smoke: 4 cases passed; no planning or external I/O
+```
+
+The required named pytest mutation run still needs an environment with pytest;
+these smoke results do not complete that task or replace its required evidence.
