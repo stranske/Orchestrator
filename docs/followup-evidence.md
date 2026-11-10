@@ -64,3 +64,18 @@ collection changes. Comment readback precedes removing `agents:paused`; confirme
 handoff is acknowledged durably. Later hourly runs reuse the acknowledgment
 without repeated API reads or messages. Live claims and other writer locks remain
 owned by the original lanes.
+
+## Unpublished standard issue branches
+
+Provisioning now resumes a standard `orch/issue-N` or `orchestrator/issue-N`
+branch with unpublished commits by adding a checkout at its existing tip. It
+never resets that ref. Git's atomic worktree admission and existing dirty/live
+holder checks remain in force; a custom branch with ambiguous ownership still
+refuses. New productive attempts are `reused/branch-resume`; historical
+`failed/branch-exists` records retain their original outcome.
+
+The real November10 Workflows#4612 snapshot at
+`d89d9557c335481ca8f9d75be811d7c608f73254` reproduced the original refusal
+against its actual GitHub-tracking base in an isolated local clone. Restoration
+opened that exact tip in1.714s and retained the failed and successful events.
+The actual target branch and its existing native opener were not changed.

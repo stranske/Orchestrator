@@ -656,10 +656,22 @@ def _provision(target: str, lane: str, event: dict, branch: str | None = None) -
                     ["git", "-C", str(canon), "rev-list", branch, "--not", "--remotes"]
                 ).stdout.strip()
                 if unique:
-                    raise RuntimeError(
-                        f"refusing to reset existing branch {branch}: commits absent from every "
-                        f"remote ref: {unique}"
-                    )
+                    # Resume this issue's own committed work without moving its
+                    # ref. A new checkout is atomic: Git still refuses if a
+                    # holder appeared, and dirty/live holders were checked above.
+                    # Custom branch ownership remains ambiguous and fail-closed.
+                    owned = num is not None and branch in {
+                        f"orch/issue-{num}", f"orchestrator/issue-{num}"
+                    }
+                    if not owned:
+                        raise RuntimeError(
+                            f"refusing to reset existing branch {branch}: commits absent from every "
+                            f"remote ref: {unique}"
+                        )
+                    _run(["git", "-C", str(canon), "worktree", "add", str(wt), branch])
+                    event.update(outcome="reused", cause="branch-resume",
+                                 unpublished_commits=unique.splitlines())
+                    return wt
                 _run(
                     [
                         "git",
