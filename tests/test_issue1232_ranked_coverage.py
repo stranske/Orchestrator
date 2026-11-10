@@ -501,3 +501,150 @@ def test_keepalive_supervisor_plan_target_and_closure(monkeypatch, tmp_path):
 
     label_set = supervisor._label_set(signals)
     assert supervisor.KEEPALIVE_LABEL in label_set
+
+
+def test_runtime_ac_panel_substantiated_veto_and_normalize(monkeypatch):
+    import runtime_ac_panel as panel
+
+    review_pass = {
+        "reviewer": "test",
+        "verdict": "PASS",
+        "confidence": 0.8,
+        "rationale": "",
+        "ac_assessments": [],
+        "blockers": [{"ac_id": "AC1", "severity": "medium", "finding": "issue"}],
+        "evidence_gaps": [],
+        "cited_evidence_types": [],
+        "cited_evidence_contracts": [],
+    }
+    assert panel._substantiated_veto(review_pass) is False
+
+    review_fail_no_veto = {
+        "reviewer": "test",
+        "verdict": "FAIL",
+        "confidence": 0.8,
+        "rationale": "",
+        "ac_assessments": [],
+        "blockers": [{"ac_id": "AC1", "severity": "low", "finding": "issue"}],
+        "evidence_gaps": [],
+        "cited_evidence_types": [],
+        "cited_evidence_contracts": [],
+    }
+    assert panel._substantiated_veto(review_fail_no_veto) is False
+
+    review_fail_with_veto = {
+        "reviewer": "test",
+        "verdict": "FAIL",
+        "confidence": 0.8,
+        "rationale": "",
+        "ac_assessments": [],
+        "blockers": [{"ac_id": "AC1", "severity": "high", "finding": "issue"}],
+        "evidence_gaps": [],
+        "cited_evidence_types": [],
+        "cited_evidence_contracts": [],
+    }
+    assert panel._substantiated_veto(review_fail_with_veto) is True
+
+    assert panel._normalize_status("PASS") == "PASS"
+    assert panel._normalize_status("pass") == "PASS"
+    assert panel._normalize_status("FAIL") == "FAIL"
+    assert panel._normalize_status("invalid") == "NEEDS_REVIEW"
+    assert panel._normalize_status(None) == "NEEDS_REVIEW"
+
+    assert panel._clamp_confidence(0.5) == 0.5
+    assert panel._clamp_confidence(1.5) == 1.0
+    assert panel._clamp_confidence(-0.5) == 0.0
+    assert panel._clamp_confidence("0.5") == 0.5
+    assert panel._clamp_confidence("invalid") == 0.0
+
+
+def test_relearn_report_priors_and_blend(monkeypatch):
+    import relearn_report
+
+    monkeypatch.setattr(relearn_report, "_role_priors_from_registry", lambda _priors: {})
+
+    route_table = {
+        "task1": {
+            "neutral_prior": False,
+            "agents": [
+                {"agent": "agent1"},
+                {"agent": "agent2"},
+                {"agent": "agent3"},
+            ],
+        },
+        "task2": {
+            "neutral_prior": True,
+            "agents": [
+                {"agent": "agentA"},
+            ],
+        },
+    }
+    priors = relearn_report.priors_from_route_table(route_table)
+    assert "task1" in priors
+    assert "task2" in priors
+    assert priors["task1"]["agent1"] == 0.70
+    assert priors["task1"]["agent2"] == 0.65
+    assert priors["task1"]["agent3"] == 0.60
+    assert priors["task2"]["agentA"] == 0.5
+
+    blended = relearn_report.blend_bt_priors(
+        {"task1": {"agent1": 0.7, "agent2": 0.65}},
+        bt_fn=lambda **_k: {"ready": False},
+    )
+    assert blended == {}
+
+    blended_ready = relearn_report.blend_bt_priors(
+        {"task1": {"agent1": 0.7, "agent2": 0.65}},
+        bt_fn=lambda **_k: {
+            "ready": True,
+            "strengths": {"agent2": 0.9},
+            "comparisons": 10,
+        },
+    )
+    assert "task1" in blended_ready
+    assert blended_ready["task1"] == 10
+    assert blended_ready["task1"] > 0
+
+
+def test_keepalive_supervisor_repo_num_and_eligibility(monkeypatch):
+    import keepalive_supervisor as supervisor
+
+    repo, num = supervisor._repo_num("stranske/Orchestrator#1334")
+    assert repo == "stranske/Orchestrator"
+    assert num == "1334"
+
+    with pytest.raises(ValueError, match="target must be"):
+        supervisor._repo_num("invalid")
+
+    signals_open = {
+        "target": "stranske/Orchestrator#1334",
+        "pr_state": "open",
+        "labels": [supervisor.KEEPALIVE_LABEL, "needs-human"],
+        "title": "Test",
+        "body": "Test",
+    }
+    eligible = supervisor.eligibility(signals_open)
+    assert eligible["eligible"] is True
+    assert len(eligible["blockers"]) == 0
+
+    signals_closed = {
+        "target": "stranske/Orchestrator#1334",
+        "pr_state": "closed",
+        "labels": [supervisor.KEEPALIVE_LABEL, "needs-human"],
+        "title": "Test",
+        "body": "Test",
+    }
+    eligible_closed = supervisor.eligibility(signals_closed)
+    assert eligible_closed["eligible"] is False
+    assert "pr_not_open" in eligible_closed["blockers"]
+
+    signals_no_label = {
+        "target": "stranske/Orchestrator#1334",
+        "pr_state": "open",
+        "labels": ["needs-human"],
+        "title": "Test",
+        "body": "Test",
+    }
+    eligible_no_label = supervisor.eligibility(signals_no_label)
+    assert eligible_no_label["eligible"] is False
+    assert "missing_agents_keepalive_label" in eligible_no_label["blockers"]
