@@ -442,6 +442,8 @@ def collect(root: Path, config_path: Path, *, apply: bool = False) -> dict:
             "collector_source_sha256": digest(Path(__file__).read_bytes()),
         }
         save(state_dir / "provision-state.json", next_state)
+        # A network failure cannot erase a successful local observation.
+        save(state_dir / "latest.json", report)
         # Stable reconciliation identities exclude the hourly checked-at value.
         for packet in (provision, strategy):
             if apply:
@@ -460,11 +462,16 @@ def main(argv=None) -> int:
     parser.add_argument("--state-dir", type=Path, default=runtime_state_path())
     parser.add_argument("--config", type=Path)
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--apply-if-token", action="store_true")
     args = parser.parse_args(argv)
     result = collect(
         args.state_dir,
         args.config or args.state_dir / "followup-evidence/config.json",
-        apply=args.apply,
+        apply=args.apply
+        or (
+            args.apply_if_token
+            and bool(os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN"))
+        ),
     )
     print(
         json.dumps(

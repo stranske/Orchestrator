@@ -279,6 +279,19 @@ if ! cadence_shell="$(python3 "$ORCH/cadence_registry.py" shell)"; then
   exit 1
 fi
 eval "$cadence_shell"
+# ORCH-ANCHOR: followup-evidence ---------------------------------------------------------------
+# Local collection must survive an auth/capability abort later in this tick.
+# Existing launchd cadence owns this observer; no second scheduler or writer.
+# Without an exported credential it collects locally, never opens the keychain.
+if [[ "$mode" == "active" ]] && ! _step_disabled followup-evidence; then
+  echo "  [cadence] delayed follow-up evidence (hourly; before preflights)"
+  if python3 "$ORCH/followup_evidence.py" --state-dir "$STAMP_DIR" --apply-if-token >> "$STAMP_DIR/followup-evidence.log" 2>&1; then
+    followup_stamp="$(cadence_stamp followup-evidence)"
+    touch "$STAMP_DIR/$followup_stamp"
+  else
+    echo "  warn: followup-evidence incomplete; retain original writer/evidence and retry next tick; see $STAMP_DIR/followup-evidence.log"
+  fi
+fi
 # ORCH-ANCHOR: gh-auth-preflight ----------------------------------------------------------------
 # --active must never act on stale or blind state. With no usable token the rails read labels as
 # empty (a false negative) and their writes fail, so a missing or refused credential ABORTS here.
@@ -1099,17 +1112,6 @@ if _cadence_due langsmith-direct && _attempt_ok langsmith-direct; then
     echo "  [cadence] LangSmith direct cost/trace pull (daily; source=langsmith into the Brain)"
     if python3 "$ORCH/langsmith_direct.py" --ingest >/dev/null 2>&1; then _mark_success langsmith-direct; else _mark_fail langsmith-direct; fi
   else echo "  [cadence] LangSmith direct pull SKIPPED — no LANGSMITH_API_KEY"; fi
-fi
-# Original-source evidence is local and remains drainable while GitHub is shed.
-# Only a ready packet uses the API, with durable publication/readback before the
-# existing opener is revived. No replacement research runs or new scheduler.
-if [[ "$mode" == "active" ]] && _cadence_due followup-evidence; then
-  echo "  [cadence] delayed follow-up evidence (hourly)"
-  if python3 "$ORCH/followup_evidence.py" --state-dir "$STAMP_DIR" --apply >> "$STAMP_DIR/followup-evidence.log" 2>&1; then
-    _mark_success followup-evidence
-  else
-    echo "  warn: followup-evidence incomplete; original writer/evidence retained, retry next tick; see $STAMP_DIR/followup-evidence.log"
-  fi
 fi
 if _cadence_due ledger-reconcile && _attempt_ok ledger-reconcile; then
   echo "  [cadence] local ledger reconciliation (daily)"

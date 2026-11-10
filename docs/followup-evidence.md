@@ -1,7 +1,8 @@
 # Delayed original evidence
 
 The existing hourly `orchestrate.sh --active` tick owns `followup-evidence`.
-It runs `python src/followup_evidence.py --apply` (flat path in the deployed
+Before GitHub-auth and capability preflights, it runs
+`python src/followup_evidence.py --apply-if-token` (flat path in the deployed
 mirror), using the existing Python launcher. No additional scheduler, research
 run, model call or writer takeover is involved. The native collector has its own
 nonblocking writer lock and reports failure instead of silently stopping.
@@ -22,7 +23,9 @@ python src/followup_evidence.py --apply
 The command prints `outcome2`, the retained branch-refusal count and `outcome3`
 (the number of qualifying original cost exports). Full packets and continuity
 cursors are in `followup-evidence/latest.json` and `provision-state.json`.
-Incomplete evidence makes no network calls. Never edit source events or old
+A missing exported credential selects local collection only; no keychain is opened.
+Successful local observations are retained before a ready packet attempts network
+publication, so an outage cannot discard them. Incomplete evidence makes no network calls. Never edit source events or old
 receipts to manufacture a pass.
 
 For #1098, accounting reads every active/archived `provision-events.ndjson*`
