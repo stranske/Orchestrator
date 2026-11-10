@@ -1,54 +1,63 @@
 # Coverage round 1182 recovery
 
-Checked 2026-11-07. PR #1226 retains `agents/codex-1205.md`. Recovery source:
+Checked 2026-11-10. Source recovery commit:
 `515371bd806b1b297704b3fef796274a216e6bde:tests/test_coverage_round_1182.py`.
-Main was merged at `010e357f08b319867f2699f46f447293c73ba31c` (main parent
-`98f5b213`), preserving its existing tests. `rg -n
-'test_ccusage_reconcile_uses_loaded_sessions|test_build_window_acquisition_blocked' tests`
-found neither symbol before recovery. All 22 deferred functions are now in owning test files:
-7 ccusage, 10 exploration, and 5 dashboard tests. The original mode-selection test stays unchanged.
-The shard manifest registers the new files; no dependency pins or collection floor were edited.
+Validated test/source head: `e7f8daef8b9f12f2f5d5bb1900746253e4224381`.
+This continuation changes documentation and evidence only; the tests are already delivered.
+Issue #1182 was found closed and reopened; this PR does not close it.
 
-## Focused verification
+## Recovery and isolation
 
-Interpreter: `/opt/anaconda3/bin/python3`, Python 3.12.2, pytest 9.1.1,
-coverage 7.16.2. Command for all three recovered chunks:
+AST comparison against the original git blob found all 23 original test names
+exactly once: the preserved mode-selection test plus 7 ccusage, 10 exploration,
+and 5 dashboard tests in their owning files. Twenty original bodies remain
+identical; the loaded-session, persisted-cost and acquisition-blocked tests have
+additional assertions. The shard manifest includes the recovered files.
+
+The recovered fixtures activate `advisor_hermetic` under `tmp_path`, repoint
+captured runtime paths and feedback databases, and explicitly isolate adapters'
+HANDOFF and LEDGER. Subprocess probes return offline stubs; unstubbed process
+or socket calls fail the test. Selftest temporary directories are forced beneath
+the test root. The write-path test checks a temporary database: dry-run writes
+nothing, while apply persists the expected cost. No production edits or dependency
+pin changes were needed.
+
+Success outcome: all 23 recovered/preserved tests execute and pass on real module
+inputs while the fixtures prevent external I/O and isolate writes. Stop rule for
+this continuation: three failed repair attempts at the same step or 60 minutes.
+
+## Focused local verification
+
+Runtime: `/opt/anaconda3/bin/python3`, pytest 9.2.0, coverage 7.16.2.
+Commands (no full local pytest suite was run):
 
 ```sh
-/opt/anaconda3/bin/python3 -m pytest tests/test_ccusage_reconcile.py tests/test_exploration_collection.py tests/test_observability_dashboard.py -q --no-cov
-```
-
-Result after final test-file formatting: `22 passed in 3.50s`. Independent chunk commands:
-
-```sh
+/opt/anaconda3/bin/python3 -m pytest tests/test_coverage_round_1182.py tests/test_ccusage_reconcile.py tests/test_exploration_collection.py tests/test_observability_dashboard.py -q --no-cov
 /opt/anaconda3/bin/python3 -m pytest tests/test_ccusage_reconcile.py -q --no-cov
 /opt/anaconda3/bin/python3 -m pytest tests/test_exploration_collection.py -q --no-cov
 /opt/anaconda3/bin/python3 -m pytest tests/test_observability_dashboard.py -q --no-cov
 ```
 
-They printed `7 passed in 0.77s`, `10 passed in 1.85s`, and `5 passed in 0.97s`, respectively.
-Logs are retained alongside coverage output. Initial recovery yielded 21 passed / 1 failed because the dashboard
-selftest accessed an import-captured live capability-registry path. The recovered fixtures now
-use the existing `advisor_hermetic.activated` helper with a per-test temporary root, repointing
-captured paths and defaults. External process/network calls remain stubbed or forbidden.
-No production change was needed. Mutation failures and restored passes are recorded in
+Actual outputs: `23 passed in 6.34s`; individual chunks: `7 passed in 0.88s`,
+`10 passed in 2.70s`, `5 passed in 1.90s`. Full logs are retained under
+[verification/coverage-round-1182](verification/coverage-round-1182).
+The two required behavior-changing mutations failed their named pytest tests,
+and passed after byte-for-byte restoration; see
 [COVERAGE_ROUND_1182_MUTATIONS.md](COVERAGE_ROUND_1182_MUTATIONS.md).
 
-## Comparable focused branch measurement
+## Comparable focused statement and branch measurement
 
-Same source, configuration, collected test files, interpreter and branch instrumentation.
-Baseline runs only the preserved pre-existing test; final additionally executes the recovered
-22 tests. This measures the focused test contribution, **not whole-tree incremental coverage**:
-existing selftests elsewhere in CI already exercise many of these statements.
+Both commands use the same source, four test files, interpreter, configuration
+and branch instrumentation. Baseline selects the preserved mode-selection test;
+final runs that test plus all 22 recovered tests.
 
 ```sh
-COVERAGE_FILE=/tmp/1182-baseline.data /opt/anaconda3/bin/python3 -m pytest tests/test_coverage_round_1182.py tests/test_ccusage_reconcile.py tests/test_exploration_collection.py tests/test_observability_dashboard.py -k test_choose_mode_aliases_and_deficits -q --cov=ccusage_reconcile --cov=exploration_collection --cov=observability_dashboard --cov-branch --cov-report=json:/tmp/1182-baseline.json
-COVERAGE_FILE=/tmp/1182-final.data /opt/anaconda3/bin/python3 -m pytest tests/test_coverage_round_1182.py tests/test_ccusage_reconcile.py tests/test_exploration_collection.py tests/test_observability_dashboard.py -q --cov=ccusage_reconcile --cov=exploration_collection --cov=observability_dashboard --cov-branch --cov-report=json:/tmp/1182-final.json
+COVERAGE_FILE=/tmp/1182-baseline-current.data /opt/anaconda3/bin/python3 -m pytest tests/test_coverage_round_1182.py tests/test_ccusage_reconcile.py tests/test_exploration_collection.py tests/test_observability_dashboard.py -k test_choose_mode_aliases_and_deficits -q --cov=ccusage_reconcile --cov=exploration_collection --cov=observability_dashboard --cov-branch --cov-report=json:/tmp/1182-baseline-current.json
+COVERAGE_FILE=/tmp/1182-final-current.data /opt/anaconda3/bin/python3 -m pytest tests/test_coverage_round_1182.py tests/test_ccusage_reconcile.py tests/test_exploration_collection.py tests/test_observability_dashboard.py -q --cov=ccusage_reconcile --cov=exploration_collection --cov=observability_dashboard --cov-branch --cov-report=json:/tmp/1182-final-current.json
 ```
 
-The recorded baseline invocation omitted the `COVERAGE_FILE` assignment; it affects only the
-data destination. Results: baseline 1 passed / 22 deselected; final 23 passed in 9.90s.
-Raw JSON and printed logs: [verification/coverage-round-1182](verification/coverage-round-1182).
+Baseline: 1 passed, 22 deselected. Final: `23 passed in 12.86s`.
+Raw outputs are retained as `baseline-focused.json` and `final-focused.json`.
 
 | Target | Baseline uncovered statements | Final uncovered statements | Baseline uncovered branches | Final uncovered branches | Reduction in units |
 |---|---:|---:|---:|---:|---:|
@@ -56,213 +65,82 @@ Raw JSON and printed logs: [verification/coverage-round-1182](verification/cover
 | `src/exploration_collection.py` | 269 | 0 | 105 | 3 | 371 |
 | `src/observability_dashboard.py` | 660 | 8 | 238 | 18 | 872 |
 
-Focused reduction: (242+269+660+72+105+238) - (7+0+8+2+3+18) = 1548 units.
-Focused shortfall against 180 = max(0, 180-1548) = 0. This does not establish the issue's
-whole-tree goal; only a comparable Gate measurement can do that.
+Focused reduction: 1586 - 38 = 1548 units; focused shortfall against 180:
+max(0, 180-1548) = 0. These counts measure the focused contribution; they do
+not establish whole-tree incremental coverage, where other tests overlap.
 
-## Authoritative CI / whole-tree measurement
+## Authoritative CI and comparable whole-tree Gate measurement
 
-Baseline CI: [42369596492](https://github.com/stranske/Orchestrator/actions/runs/42369596492),
-head `643708a208b9303d94d51f74405176fb433eb78e`. All six pytest shards passed; aggregate
-failed because the collection floor was behind main (14884 collected versus 14788).
-Its `gate-coverage` artifact is retained as `baseline-gate.json` above. Per-target missing
-statements: ccusage 60, exploration 60, dashboard 61; total 181.
-This artifact has `branch_coverage: false`: branch counts are unavailable, not zero.
-The three production targets are unchanged between this baseline and the recovery branch.
+Baseline [CI 42369596492](https://github.com/stranske/Orchestrator/actions/runs/42369596492),
+head `643708a208b9303d94d51f74405176fb433eb78e`: six pytest shards passed;
+aggregate failed from a lagging collection floor (14884 collected vs 14788).
+The retained `baseline-gate.json` is its measured coverage, not a passing aggregate verdict.
 
-Recovery/test commit: `0e4e30164647f2436f7992ab086101c39c2a4634`.
-Authoritative CI: [42378820096](https://github.com/stranske/Orchestrator/actions/runs/42378820096),
-exact recovery head above. All pytest shards passed. The `gate-coverage` artifact
-`coverage.json` reports per-target missing statement counts from this run against the
-baseline 60 / 60 / 61:
+Current [CI 42828478565](https://github.com/stranske/Orchestrator/actions/runs/42828478565)
+and [Gate 42828479148](https://github.com/stranske/Orchestrator/actions/runs/42828479148)
+both succeeded on `e7f8daef8b9f12f2f5d5bb1900746253e4224381`.
+All six pytest shards passed. CI artifact `gate-coverage` (ID 13770636787)
+is retained as `current-gate.json`. All three production targets are byte-identical
+between the baseline and current heads, with equal statement denominators.
 
-| Target | Final missing statements | Baseline | Reduction |
-|---|---:|---:|---:|
-| `src/ccusage_reconcile.py` | 7 | 60 | 53 |
-| `src/exploration_collection.py` | 0 | 60 | 60 |
-| `src/observability_dashboard.py` | 5 | 61 | 56 |
+| Target | Statements | Baseline uncovered statements | Current uncovered statements | Reduction | Baseline/current uncovered branches |
+|---|---:|---:|---:|---:|---|
+| `src/ccusage_reconcile.py` | 285 | 60 | 7 | 53 | unavailable / unavailable |
+| `src/exploration_collection.py` | 331 | 60 | 0 | 60 | unavailable / unavailable |
+| `src/observability_dashboard.py` | 698 | 61 | 5 | 56 | unavailable / unavailable |
 
-Total whole-tree statement reduction: 169 units (181 baseline to 12 final).
-Statement shortfall against the approximately 180-unit goal: 11 units.
-Whole-tree branch reduction is unavailable due to `branch_coverage: false` in CI.
+Whole-tree statement reduction: 181 - 12 = **169 units**. Shortfall against the
+approximately 180-unit goal: **11 units**. Both Gate JSON artifacts explicitly
+have `branch_coverage: false`; whole-tree branch reduction is unknown, not zero.
+The comparable branch measurement above is focused only. The approximately
+180-unit whole-tree goal is not established as achieved.
 
-CI's repository-selected Python 3.12 runs:
+## Required verify invocation
 
-```sh
-python3 src/verify.py --aggregate shard-evidence --coverage --floor-may-lag
-```
-
-Bare `python3 src/verify.py --coverage` runs the whole local suite, selftests, and gates.
-The historical CI artifacts above establish a 169-statement reduction and an 11-unit
-shortfall. They do not establish whole-tree branch reduction. See the continuation
-below for the current local invocation and its missing-dependency failure.
-
-Stop rule: two attempts per failing verification step or 75 minutes total. No unrelated repairs.
-
-## 2026-11-10 continuation: isolation checks and verification blocker
-
-An AST comparison against the original file fetched at
-`515371bd806b1b297704b3fef796274a216e6bde` confirmed that all 23 original test
-functions were already present with identical bodies before this continuation.
-The existing three recovered chunks contain the 22 deferred tests.
-Gate [42825030539](https://github.com/stranske/Orchestrator/actions/runs/42825030539)
-and CI [42825029936](https://github.com/stranske/Orchestrator/actions/runs/42825029936)
-both succeeded on `c0b6736875c3dc41556fe082b9e61939fc97d052`.
-Those results precede the uncommitted changes below.
-
-The recovered fixtures now explicitly place `adapters.HANDOFF` and `adapters.LEDGER`
-under each test's `tmp_path`. `HANDOFF` otherwise defaults to a directory outside
-`ORCH_LOCAL_RUNTIME`, so the existing runtime-root remapping did not isolate it.
-The loaded-session test additionally checks a nonempty loader result, the forwarded
-lookback, strict failure, and zero writes. The write-path test now reads the temporary
-database to verify that a dry run writes nothing and an applied run persists the expected cost.
-
-This runner has Python 3.12.16 but no pytest, pytest-cov, coverage, or Black.
-Installing them from the package index failed because DNS/network access is unavailable;
-the local package cache contains none of them. Actual command results:
-
-```text
-/tmp/orch-1182-venv/bin/python -m pytest tests/test_coverage_round_1182.py tests/test_ccusage_reconcile.py tests/test_exploration_collection.py tests/test_observability_dashboard.py -q --no-cov -m 'not slow'
-/tmp/orch-1182-venv/bin/python: No module named pytest
-```
+Downloaded all six exact-head `pytest-shard-*` artifacts from CI 42828478565.
+Their JSON/XML summaries were placed directly in `/tmp/1182-ci-current`, as the
+aggregate interface requires; coverage files remain discoverable recursively.
+The first attempt failed on the nested download layout (`missing or unreadable
+summary for shard 1/6`); the corrected invocation is:
 
 ```sh
-PYTEST_ADDOPTS='-m "not slow"' ORCH_STATE_DIR=/tmp/orch-1182-verify/state ORCH_LOCAL_RUNTIME=/tmp/orch-1182-verify/runtime HANDOFF_DIR=/tmp/orch-1182-verify/handoff /tmp/orch-1182-venv/bin/python src/verify.py --coverage
+ORCH_STATE_DIR=/tmp/1182-verify/state ORCH_LOCAL_RUNTIME=/tmp/1182-verify/runtime HANDOFF_DIR=/tmp/1182-verify/handoff /opt/anaconda3/bin/python3 src/verify.py --coverage --aggregate /tmp/1182-ci-current --floor-may-lag
 ```
 
-The verify command exited 1, collected zero tests, reported `No module named coverage`
-for instrumented children, and ended with:
+This uses authoritative shard verdicts instead of rerunning the full suite locally;
+verify still runs its discovered selftests and capability gates under private state.
 
-```text
-coverage: NO DATA — no instrumented child wrote a data file (did any test run?)
-```
+Actual result: **exit 1**, not a passing local verification. It reused 8530 collected
+CI tests: 8501 passed, 0 failed, 27 skipped (plus xfail results); the floor lagged
+by 23. Selftests: 104 of 111 ran, 5 skipped, 2 failed (`adapters`, `tick_watchdog`).
+The first failure was adapters' default-state-directory assertion; tick_watchdog
+failed while creating a subprocess. These are follow-up failures outside the
+recovered tests; neither was repaired or suppressed. Full output is retained as
+`verify-current.log`. The run took 3m04s for selftests and 48s for gates.
 
-Formatting and the required repository-wide Black check also exited 1 with
-`No module named black`. No commit was made because the pre-commit formatting gate
-could not pass. Direct Python smoke checks passed the new loaded-session assertions,
-the dry-run/persisted-cost assertions, and temporary handoff/ledger writes; these do
-not establish a focused pytest pass or a new coverage measurement. Syntax parsing and
-`git diff --check` passed. No task checkbox is completed by this continuation.
-Attempts to post the blocker comment and add `needs-human` to PR #1323 were both
-rejected by the GitHub tools: `MCP tool call requires approval, but approval policy
-is never`. Neither remote change was applied. The PR remains open with `draft: false`.
+Coverage was still published: **128 instrumented processes combined**. Its
+per-target results are retained in `verify-targets.json` (a projection of the
+emitted JSON, not a repository-wide totals artifact):
 
-The earlier measured whole-tree statement reduction remains 169 units with an
-11-unit shortfall.
-Whole-tree branch reduction remains unavailable because the historical Gate artifact
-did not instrument branches. No new per-target coverage counts are claimed here.
+| Target | Local verify uncovered statements | Local verify uncovered branches | Gate uncovered statements |
+|---|---:|---|---:|
+| `src/ccusage_reconcile.py` | 7 | unavailable | 7 |
+| `src/exploration_collection.py` | 0 | unavailable | 0 |
+| `src/observability_dashboard.py` | 4 | unavailable | 5 |
 
-## 2026-11-10 acquisition-blocking continuation
+Local selftests add coverage to downloaded CI shards, so the local 170-statement
+reduction (181 to 11, shortfall 10) is **not** the comparable authoritative Gate
+measurement. The accepted comparison remains 169 statements recovered and an
+11-unit shortfall. Neither local nor Gate instrumentation measures whole-tree
+branches; the focused branch comparison is reported separately above.
+The local verification failure remains visible even though the exact-head CI
+and Gate verdicts succeeded. No full local pytest suite was run.
 
-Fetched the original test file through GitHub at
-`515371bd806b1b297704b3fef796274a216e6bde` (blob
-`cdef7b82e389c72983fe65cef32cb992033c809a`). AST comparison confirms all 23
-original test names are present exactly once across the four current files.
-Twenty test bodies are unchanged; the loaded-session, persisted-cost, and
-acquisition-blocked tests contain additional assertions. No deferred tests are missing.
+## Concurrent isolation strengthening preserved
 
-`test_build_window_acquisition_blocked` now exercises valid and empty backlogs in
-both dry-run and active mode. Valid work makes acquisition eligibility the sole
-blocking reason. The test verifies the exact reasons, an ineligible result, retained
-selected backlog, empty assignments, zero exploratory assignments, zero seed
-attempts, and no planner calls. Its planner stub returns an exploratory assignment
-if called, so a broken acquisition gate cannot be hidden by a second routing failure.
-The existing temporary runtime and external-I/O guards remain in effect.
-The test count and shard registration are unchanged.
-
-GitHub reports successful Gate
-[42826765840](https://github.com/stranske/Orchestrator/actions/runs/42826765840)
-and CI [42826764353](https://github.com/stranske/Orchestrator/actions/runs/42826764353)
-for exact head `4e9b72c35d52c39a076b20c96097204b98ff31df`, which includes the
-previous continuation's isolation and reconciliation assertions. These results
-precede the new acquisition assertions and do not validate this uncommitted change.
-
-The current interpreter is Python 3.14.10. The focused command and targeted
-coverage command both exited 1 with `No module named pytest`:
-
-```sh
-python3 -m pytest tests/test_coverage_round_1182.py tests/test_ccusage_reconcile.py tests/test_exploration_collection.py tests/test_observability_dashboard.py -q --no-cov -m 'not slow'
-python3 -m pytest tests/test_exploration_collection.py --cov=exploration_collection --cov-branch --cov-report=term-missing -m 'not slow'
-```
-
-The required verification command was also run:
-
-```sh
-PYTEST_ADDOPTS='-m "not slow"' ORCH_STATE_DIR=/tmp/orch-1182-verify-current/state ORCH_LOCAL_RUNTIME=/tmp/orch-1182-verify-current/runtime HANDOFF_DIR=/tmp/orch-1182-verify-current/handoff python3 src/verify.py --coverage
-```
-
-It exited 1, reporting missing coverage for instrumented children and
-`coverage: NO DATA — no instrumented child wrote a data file (did any test run?)`.
-No new coverage reduction is claimed; the measured reduction and shortfall remain
-169 statements and 11 units, respectively, with whole-tree branches unavailable.
-
-Package installation failed with `Failed to resolve 'pypi.org'`; a local filesystem
-search found no usable pytest, coverage, or Black installation. Formatting exited 1
-with `No module named black`; the mandatory command
-`black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .`
-exited 127 with `black: command not found`. The Python change is left uncommitted
-because the required formatting gate cannot pass.
-
-A separate standard-library smoke check ran four cases with temporary runtime roots,
-blocked subprocess/network calls, and a stub planner. It passed on restored source
-and failed on both behavior-changing mutations documented in
-[COVERAGE_ROUND_1182_MUTATIONS.md](COVERAGE_ROUND_1182_MUTATIONS.md).
-This smoke check is not a pytest result. No additional task or acceptance checkbox
-is marked complete; focused pytest, Black, and CI for the new assertions remain required.
-The blocker-comment and `needs-human` label requests were both rejected by the GitHub
-connector with `MCP tool call requires approval, but approval policy is never`.
-Neither remote change was applied. The fetched PR state is open with `draft: false`.
-
-## 2026-11-10 ledger-isolation continuation
-
-Fetched the original blob `cdef7b82e389c72983fe65cef32cb992033c809a` again
-and compared its test ASTs with the four current test files. All 23 original tests
-are present exactly once (1 preserved, 7 ccusage, 10 exploration, 5 dashboard).
-Twenty bodies are unchanged; the three strengthened tests are named in the
-preceding continuation. No deferred test is missing, so duplicating them would
-not advance the recovery task.
-
-The reconciliation write-path test now uses the fixture's ledger binding rather
-than overriding it. It asserts the temporary handoff and ledger paths, checks the
-start/complete consumption rows, and verifies reconciliation leaves those rows
-unchanged while persisting the expected costs. All three recovered fixtures now
-set `HANDOFF_DIR` as well as the captured adapter paths and forbid `connect` and
-`connect_ex` on sockets created before fixture setup.
-
-GitHub reports successful [Gate 42828479148](https://github.com/stranske/Orchestrator/actions/runs/42828479148)
-and [CI 42828478565](https://github.com/stranske/Orchestrator/actions/runs/42828478565)
-for exact head `e7f8daef8b9f12f2f5d5bb1900746253e4224381`. These validate the
-previously committed chunks, including the strengthened acquisition test; they
-do not validate this continuation's uncommitted isolation changes.
-
-Local focused pytest and separate targeted branch-coverage commands for each of
-`ccusage_reconcile`, `exploration_collection`, and `observability_dashboard`, all
-with `-m 'not slow'`, exited 1 with `No module named pytest`. Installing pytest,
-pytest-cov, and Black failed because `pypi.org` could not resolve. No usable local
-copies were found. Formatting exited 1 with `No module named black`; the required
-`black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .`
-exited 127 with `black: command not found`. Per the mandatory formatting gate,
-the Python edits remain uncommitted.
-
-The required verification was rerun:
-
-```sh
-PYTEST_ADDOPTS='-m "not slow"' ORCH_STATE_DIR=/tmp/orch-1182-ledger-verify/state ORCH_LOCAL_RUNTIME=/tmp/orch-1182-ledger-verify/runtime HANDOFF_DIR=/tmp/orch-1182-ledger-verify/handoff python3 src/verify.py --coverage
-```
-
-It exited 1 with missing instrumented-child coverage and
-`coverage: NO DATA — no instrumented child wrote a data file (did any test run?)`.
-The historical whole-tree reduction remains 169 statements, with an 11-unit
-shortfall; whole-tree branches remain unavailable. No new counts are claimed.
-
-A separate standard-library smoke command, `python3 /tmp/orch_1182_ledger_smoke.py`,
-exited 0 with `Ledger smoke passed: isolated ledger, dry-run and applied costs,
-unchanged consumption rows`. It exercised production reconciliation with temporary
-runtime roots and blocked subprocess/network calls. This is not a named pytest
-pass and does not complete a task or acceptance checkbox. The remaining blockers
-are focused pytest, Black, and CI for these new isolation changes.
-
-Syntax parsing and `git diff --check` passed. The GitHub connector rejected both
-the blocker comment and `needs-human` label with `MCP tool call requires approval,
-but approval policy is never`; neither mutation was applied. Final PR #1323 state
-was checked: open, `draft: false`.
+Before push, remote commit `ec4c41c5eeb8b991f49e0fbf952e1133cc586a04`
+added HANDOFF_DIR isolation, guards on socket connect/connect_ex, and ledger
+assertions exercising the fixture's actual captured paths. Those changes were
+preserved by rebasing; the focused commands and both mutations were then rerun.
+The measurements and aggregate run above identify their original tested head;
+production target files are unchanged by the concurrent test-only commit.

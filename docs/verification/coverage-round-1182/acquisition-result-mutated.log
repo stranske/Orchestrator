@@ -1,0 +1,56 @@
+command: /opt/anaconda3/bin/python3 -m pytest tests/test_exploration_collection.py::test_build_window_acquisition_blocked -q --no-cov
+exit: 1
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____________________ test_build_window_acquisition_blocked _____________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1084fc5f0>
+
+    def test_build_window_acquisition_blocked(monkeypatch):
+        monkeypatch.setattr(
+            eep,
+            "build_plan",
+            lambda **kw: _eligible_acquisition(eligible=False),
+        )
+        planned = []
+    
+        def plan_for_seed(**kwargs):
+            planned.append(kwargs)
+            return {
+                "assignments": [
+                    {
+                        "target": "o/r#1",
+                        "task_type": "implement",
+                        "lane": "opener",
+                        "agent": "codex",
+                        "exploration": True,
+                    }
+                ]
+            }, []
+    
+        monkeypatch.setattr(ec, "_plan_for_seed", plan_for_seed)
+        item = {"target": "o/r#1", "task_type": "implement", "lane": "opener"}
+        # Valid work makes acquisition eligibility the only blocker. Keep the original
+        # empty-backlog case too, and verify active mode cannot bypass the same gate.
+        for items in ([item], []):
+            for dry_run in (True, False):
+                blocked = ec.build_window(
+                    backlog_payload={"items": items},
+                    capacity_payload=_capacity_payload(),
+                    dry_run=dry_run,
+                )
+                reasons = ["acquisition planner does not currently mark this mode eligible"]
+                if not items:
+                    reasons.append("no eligible low-risk opener backlog items selected")
+                assert blocked["blocked_reasons"] == reasons
+>               assert blocked["eligible"] is False
+E               assert True is False
+
+tests/test_exploration_collection.py:504: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_exploration_collection.py::test_build_window_acquisition_blocked
+1 failed in 0.51s
+/opt/anaconda3/lib/python3.12/site-packages/pytest_asyncio/plugin.py:300: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the "fixture" caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to "function" scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
