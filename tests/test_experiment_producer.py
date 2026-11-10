@@ -1289,7 +1289,14 @@ def test_held_trial_can_resolve_and_clear_without_new_launches():
 def test_failed_trial_receipt_survives_switch_off_and_drain(monkeypatch, capsys):
     import tick
 
-    producer.save_state({"trial_verdict": "fail", "trial_reason": "unresolved_unknown"})
+    # A current-generation failed trial: the receipt must still print with the switch off.
+    producer.save_state(
+        {
+            "trial_generation": producer.TRIAL_GENERATION,
+            "trial_verdict": "fail",
+            "trial_reason": "unresolved_unknown",
+        }
+    )
     monkeypatch.setattr(tick.claims, "reap_stale", lambda: None)
     monkeypatch.setattr(tick.claims, "active_claims", lambda: {})
     monkeypatch.setattr(
@@ -1582,3 +1589,115 @@ def test_producer_red_runner_and_isolation(tmp_path, monkeypatch):
     assert "(deny network*)" in argv[2] and "(deny file-write*)" in argv[2]
     assert "(deny file-read*" in argv[2]
     assert argv[-2:] == ["pytest", "tests/test_x.py"]
+
+
+def test_generation_bump_starts_a_fresh_trial_once(tmp_path, monkeypatch, capsys):
+    """T4: First trial is 'no verdict'. On first ACTIVE producer tick after deploy,
+    archive old trial fields under previous_trials and start fresh trial with same
+    parameters, clearing trial_verdict so producer defaults ON."""
+    # Start with an old generation (1) and a terminal verdict
+    producer.save_state(
+        {
+            "trial_generation": 1,
+            "trial_start": 1000,
+            "trial_end": "20260101",
+            "trial_verdict": "fail",
+            "trial_reason": "insufficient_merged_winners",
+            "trial_metrics": {"winner_merged": 3},
+            "trial_unknown": 0,
+            "pending_since": "20260101",
+            "resolves_on": "20260102",
+            "last_verdict_check": "20260101",
+            "launched_today": 2,
+            "day": "20260101",
+            "last_draw_ts": 1000,
+            "cells_fresh": 5,
+            "cells_total": 10,
+            "skips": {"reason": 1},
+        }
+    )
+
+    # Verify old state has generation 1 and fail verdict
+    state = producer.read_state()
+    assert state["trial_generation"] == 1
+    assert state["trial_verdict"] == "fail"
+    assert "previous_trials" not in state
+
+    # First active tick should bump generation
+    now = 2000
+    trial_end, verdict = producer.trial_defaults(now=now, active=True)
+
+    # Check that generation was bumped
+    state = producer.read_state()
+    assert state["trial_generation"] == 2
+    assert state["trial_start"] == now
+    assert "trial_verdict" not in state  # Cleared to default ON
+    assert "previous_trials" in state
+    assert len(state["previous_trials"]) == 1
+
+    # Check archived trial
+    archived = state["previous_trials"][0]
+    assert archived["trial_verdict"] == "fail"
+    assert archived["trial_reason"] == "insufficient_merged_winners"
+    assert archived["trial_generation"] == 1
+
+    # Verify message was printed
+    captured = capsys.readouterr()
+    assert "generation bump from 1 to 2" in captured.err
+
+    # Second active tick should NOT bump again
+    producer.trial_defaults(now=now + 100, active=True)
+    state = producer.read_state()
+    assert state["trial_generation"] == 2  # Still 2, not bumped again
+    assert len(state["previous_trials"]) == 1  # No additional archives
+
+    # Shadow call (active=False) should not bump
+    producer.save_state({"trial_generation": 1})
+    producer.trial_defaults(now=now, active=False)
+    state = producer.read_state()
+    assert state["trial_generation"] == 1  # Not bumped for shadow
+
+    # Generation 2 calling again should not bump
+    producer.save_state({"trial_generation": 2, "trial_end": "20260102", "trial_verdict": "pass"})
+    producer.trial_defaults(now=now, active=True)
+    state = producer.read_state()
+    assert state["trial_generation"] == 2  # Still 2
+    assert state["trial_verdict"] == "pass"  # Preserved existing verdict
+
+
+def test_generation_bump_runs_when_old_verdict_is_fail(tmp_path, monkeypatch, capsys):
+    """T5: Generation bump must run on every ACTIVE tick, regardless of ORCH_EXPERIMENT_PRODUCER.
+
+    With state holding trial_verdict="fail" and producer env OFF, an active tick
+    must still bump the generation and clear the verdict so orchestrate.sh computes ON.
+    """
+    monkeypatch.setenv("ORCH_EXPERIMENT_PRODUCER", "0")  # Producer switch OFF
+    # Start with an old generation (1) and a terminal fail verdict
+    producer.save_state(
+        {
+            "trial_generation": 1,
+            "trial_start": 1000,
+            "trial_end": "20260101",
+            "trial_verdict": "fail",
+        }
+    )
+
+    # Verify old state has generation 1 and fail verdict
+    state = producer.read_state()
+    assert state["trial_generation"] == 1
+    assert state["trial_verdict"] == "fail"
+
+    # Active tick (dry_run=False) should bump generation even with producer OFF
+    now = 2000
+    producer.trial_defaults(now=now, active=True)
+
+    # Check that generation was bumped
+    state = producer.read_state()
+    assert state["trial_generation"] == 2
+    assert state["trial_start"] == now
+    # Verdict must be cleared so orchestrate.sh defaults ON
+    assert "trial_verdict" not in state
+
+    # Verify message was printed
+    captured = capsys.readouterr()
+    assert "generation bump from 1 to 2" in captured.err

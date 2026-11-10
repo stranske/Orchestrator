@@ -75,39 +75,39 @@
       "num_statements": 1688,
       "still_missing": [
         {
-          "line": 3158,
+          "line": 3172,
           "text": "                os.environ[\"ORCH_CODEX_BYPASS_INNER_SANDBOX\"] = old_bypass"
         },
         {
-          "line": 3170,
+          "line": 3184,
           "text": "            raise AssertionError(\"an evaluator was given / as its workspace\")"
         },
         {
-          "line": 3179,
+          "line": 3193,
           "text": "                os.environ.pop(\"ORCH_STATE_DIR\", None)"
         },
         {
-          "line": 3301,
+          "line": 3315,
           "text": "            return {\"status\": \"pending\"}"
         },
         {
-          "line": 3473,
+          "line": 3487,
           "text": "            os.environ[\"ORCH_RESEARCH_ARM\"] = old_research_arm"
         },
         {
-          "line": 3548,
+          "line": 3562,
           "text": "        assert False, \"all fallback-excluded judges must not be silently re-included\""
         },
         {
-          "line": 3618,
+          "line": 3632,
           "text": "            self.killed = True"
         },
         {
-          "line": 3772,
+          "line": 3786,
           "text": "            os.environ[\"ORCH_MODEL_PROBE\"] = old_model_probe"
         },
         {
-          "line": 3774,
+          "line": 3788,
           "text": "            os.environ.pop(\"ORCH_STATE_DIR\", None)"
         }
       ]
@@ -137,15 +137,15 @@
       "num_statements": 583,
       "still_missing": [
         {
-          "line": 897,
+          "line": 905,
           "text": "            _os.environ[DISPATCH_LANE_ENV] = saved"
         },
         {
-          "line": 1289,
+          "line": 1297,
           "text": "            os.environ[\"ORCH_EXPLORATION_RATE\"] = old_exploration_rate"
         },
         {
-          "line": 1293,
+          "line": 1301,
           "text": "            os.environ[\"HANDOFF_DIR\"] = old_handoff"
         }
       ]

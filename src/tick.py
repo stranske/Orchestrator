@@ -220,7 +220,7 @@ def research_tick(
         claims.reap_stale()
     rng = rng or __import__("random").Random()
     producer_enabled = env.get("ORCH_EXPERIMENT_PRODUCER", "0") == "1"
-    if not dry_run and producer_enabled:
+    if not dry_run:
         experiment_producer.trial_defaults(active=True)
     if not dry_run:
         experiment_producer.trial_verdict()
@@ -276,6 +276,8 @@ def research_tick(
                             "subject_id",
                             "subject_family_id",
                             "unevaluated_backlog",
+                            "unevaluated_backlog_drainable",
+                            "unevaluated_backlog_unreadable",
                             "unevaluated_cap",
                             "existing_exp_id",
                         )
@@ -368,6 +370,12 @@ def research_tick(
                     reason=admission["reason"],
                     metadata={
                         "unevaluated_backlog": admission.get("unevaluated_backlog"),
+                        "unevaluated_backlog_drainable": admission.get(
+                            "unevaluated_backlog_drainable"
+                        ),
+                        "unevaluated_backlog_unreadable": admission.get(
+                            "unevaluated_backlog_unreadable"
+                        ),
                         "unevaluated_cap": admission.get("unevaluated_cap"),
                     },
                     conn=conn,
@@ -1382,6 +1390,14 @@ def _research_text(research: Any) -> str:
         f"(feed {inputs.get('feed_status', '?')} {inputs.get('feed_items', '?')}, "
         f"opener {inputs.get('backlog_opener', '?')}"
     )
+    # Include unevaluated backlog with drainable count
+    unevaluated = research.get("unevaluated_backlog")
+    drainable = research.get("unevaluated_backlog_drainable")
+    cap = research.get("unevaluated_cap")
+    if unevaluated is not None and cap is not None:
+        text += f", unevaluated {unevaluated}/{cap}"
+        if drainable is not None:
+            text += f", drainable {drainable}"
     if skipped:
         text += "; skipped " + ", ".join(f"{k} {v}" for k, v in sorted(skipped.items()))
     return text + ")"

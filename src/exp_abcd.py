@@ -2038,6 +2038,24 @@ def producer_followup(
     return {**result, **delivery}
 
 
+# An experiment carrying any of these has been evaluated, skipped or decided: followup never
+# touches it again. ONE list, read by followup and by research_subjects' admission-cap drainable count.
+FOLLOWUP_TERMINAL_MARKERS = ("eval-maps.json", "followup-skip.json", "followup-decision.json")
+
+
+def followup_terminal(edir: Path) -> bool:
+    return any((edir / marker).exists() for marker in FOLLOWUP_TERMINAL_MARKERS)
+
+
+def followup_will_attempt(edir: Path) -> bool:
+    """Followup's own eligibility for an unevaluated experiment dir (age aside): spec present, not terminal."""
+    return (
+        (edir / "meta.json").exists()
+        and (edir / "spec.md").exists()
+        and not followup_terminal(edir)
+    )
+
+
 def followup(
     *,
     max_experiments: int = 1,
@@ -2307,11 +2325,7 @@ def followup(
                     edir / "strategy-result-error.json",
                     {"status": "UNKNOWN", "phase": "refresh", "error": str(exc)[:300]},
                 )
-        if (
-            (edir / "eval-maps.json").exists()
-            or (edir / "followup-skip.json").exists()
-            or (edir / "followup-decision.json").exists()
-        ):
+        if followup_terminal(edir):
             continue
         if (now - meta_p.stat().st_mtime) / 86400.0 > max_age_days:
             continue
