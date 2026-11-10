@@ -115,6 +115,8 @@ def closer_campaign_completion(now: int) -> Measurement:
     Owner scope update, 2026-11-08: current closer-core replaces the retired
     desktop observer contract. This is a canary completion signal, not fleet
     throughput. The reader never launches workers or creates missing proof.
+    Publication is the durable authenticated observation retained by the native
+    evidence entry; unchanged measurement performs no remote freshness polling.
     """
     import closer_csv_completion
 
