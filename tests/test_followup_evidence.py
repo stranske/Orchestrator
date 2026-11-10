@@ -192,3 +192,27 @@ def test_unknown_publication_resumes_frozen_packet_once_before_native_handoff(
     evidence.reconcile_ready(changed, tmp_path)
     evidence.reconcile_ready({"issue": 434, "evidence_ready": False}, tmp_path)
     assert not calls
+
+    # A later network outage must leave the new local observation visible, not
+    # only its continuity cursor. This does not grade the synthetic ready control.
+    runtime = tmp_path / "runtime"
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"export_inbox": str(tmp_path)}))
+    monkeypatch.setattr(evidence, "provision_report", lambda *args: (original.copy(), {}))
+    monkeypatch.setattr(
+        evidence, "strategy_report", lambda *args: {"issue": 434, "evidence_ready": False}
+    )
+
+    def outage(*args, **kwargs):
+        raise subprocess.TimeoutExpired("gh", 45)
+
+    monkeypatch.setattr(evidence, "gh", outage)
+    with pytest.raises(subprocess.TimeoutExpired):
+        evidence.collect(runtime, config, apply=True)
+    local = evidence.load(runtime / "followup-evidence/latest.json")
+    assert local["provision"] == original
+    assert evidence.load(runtime / "followup-evidence/ack-1098.json")["state"] == "pending"
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        evidence.reconcile_collected(runtime)
+    assert evidence.load(runtime / "followup-evidence/latest.json")["provision"] == original

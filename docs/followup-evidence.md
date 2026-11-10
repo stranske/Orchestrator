@@ -1,7 +1,9 @@
 # Delayed original evidence
 
 The existing hourly `orchestrate.sh --active` tick owns `followup-evidence`.
-It runs `python src/followup_evidence.py --apply` (flat path in the deployed
+Before GitHub-auth and capability preflights, it runs
+`python src/followup_evidence.py` locally. After authentication/admission it runs
+`python src/followup_evidence.py --reconcile` against that same observation (flat path in the deployed
 mirror), using the existing Python launcher. No additional scheduler, research
 run, model call or writer takeover is involved. The native collector has its own
 nonblocking writer lock and reports failure instead of silently stopping.
@@ -16,13 +18,21 @@ closed and prints the missing step.
 Run a bounded real-input check with the repository-selected Python:
 
 ```sh
-python src/followup_evidence.py --apply
+python src/followup_evidence.py
 ```
+
+The bounded check is local-only. `--reconcile` explicitly publishes the retained
+observation after authentication; `--apply` combines collection/publication for
+an already-authenticated interactive caller and may invoke `gh` credentials.
+Neither publishing mode belongs in the early native phase.
 
 The command prints `outcome2`, the retained branch-refusal count and `outcome3`
 (the number of qualifying original cost exports). Full packets and continuity
 cursors are in `followup-evidence/latest.json` and `provision-state.json`.
-Incomplete evidence makes no network calls. Never edit source events or old
+The early phase never uses credentials or the network. A refused credential
+prevents reconciliation while leaving local collection intact.
+Successful local observations are retained before a ready packet attempts network
+publication, so an outage cannot discard them. Incomplete evidence makes no network calls. Never edit source events or old
 receipts to manufacture a pass.
 
 For #1098, accounting reads every active/archived `provision-events.ndjson*`
