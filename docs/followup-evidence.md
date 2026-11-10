@@ -18,8 +18,13 @@ closed and prints the missing step.
 Run a bounded real-input check with the repository-selected Python:
 
 ```sh
-python src/followup_evidence.py --apply
+python src/followup_evidence.py
 ```
+
+The bounded check is local-only. `--reconcile` explicitly publishes the retained
+observation after authentication; `--apply` combines collection/publication for
+an already-authenticated interactive caller and may invoke `gh` credentials.
+Neither publishing mode belongs in the early native phase.
 
 The command prints `outcome2`, the retained branch-refusal count and `outcome3`
 (the number of qualifying original cost exports). Full packets and continuity
