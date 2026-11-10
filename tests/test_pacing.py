@@ -1444,12 +1444,26 @@ def live_pace(n, previous_weight=0):
     )
 
 
-def test_repeated_fresh_short_history_ticks_protect_low_usage():
+def test_repeated_fresh_short_history_ticks_protect_low_usage(tmp_path, monkeypatch):
+    monkeypatch.setattr(pacing_usage, "RESETS_FILE", tmp_path / "resets.json")
+    monkeypatch.setattr(pacing_usage, "CALIBRATION_FILE", tmp_path / "calibration.json")
+    pacing_usage.CALIBRATION_FILE.write_text(
+        json.dumps(dict(codex_period_start=START, claude_period_end=END))
+    )
     for n in (0, 2):
+        handoff = tmp_path / f"resets-{n}"
+        handoff.mkdir()
+        pacing_usage.RESETS_FILE.write_text(
+            json.dumps({pool: resets(n) for pool in ("codex", "claude")})
+        )
         prior = 1.0
         recovery_prior = 0.0
         weights = []
         data = observations([START + h * 3600 for h in (3, 4, 5)], [0, 0.075, 0.15])
+        pacing_usage.append_rows(
+            handoff / "pacing-usage-samples.ndjson",
+            [dict(agent=pool, **sample) for pool in ("codex", "claude") for sample in data],
+        )
         for tick in range(16):
             now = START + 5 * 3600 + tick * pacing.TICK_SECONDS
             if tick:
@@ -1490,6 +1504,30 @@ def test_repeated_fresh_short_history_ticks_protect_low_usage():
                     **failure,
                 )
                 assert failed["state"] == "shed" and failed["routing_weight"] == 0
+            # Carry each recorded tick through the same persisted history as production.
+            agents = {pool: dict(state="ok", reason="native") for pool in ("codex", "claude")}
+            usage = {pool: dict(used_fraction=0.15, ts=now, source=SOURCE) for pool in agents}
+            pacing_usage.integrate(agents, now=now, handoff=handoff, usage_data=usage, record=True)
+            snapshot = dict(generated_at=now, agents=agents)
+            (handoff / "capacity.json").write_text(json.dumps(snapshot))
+            report = pacing_usage.report(handoff, now=now, current=snapshot, previous=snapshot)
+            for pool in agents:
+                stored = agents[pool]
+                assert stored["pacing"]["routing_weight"] == weight
+                assert stored["pacing_diagnostics"]["span_h"] == row["span_h"]
+                prefix = f"pool {pool}:"
+                line = next(line for line in report.splitlines() if line.startswith(prefix))
+                assert f"span_h={row['span_h']} " in line
+                assert f"routed_weight={weight:.3f} (tick ts={now}, age=0s)" in line
+        ledger = pacing_usage.read_rows(handoff / "capacity-ledger.ndjson")
+        assert len(ledger) == 16
+        for tick, entry in enumerate(ledger):
+            assert entry["event"] == "pacing_snapshot"
+            assert entry["ts"] == START + 5 * 3600 + tick * pacing.TICK_SECONDS
+            for stored in entry["agents"].values():
+                assert stored["pacing"]["used_fraction"] == 0.15
+                assert stored["pacing"]["routing_weight"] == weights[tick] >= 0.5
+                assert stored["pacing_diagnostics"]["span_h"] == 2 + tick / 4 < 6
         assert weights[:2] == [0.75, 0.5]
         assert min(weights) == 0.5
     # Mature history may justify a lower target; actual failures always override.
