@@ -74,8 +74,8 @@ def provision_report(root: Path, state: dict, now: datetime, instrument: Path) -
         if path.is_file()
     }
     failures = []
-    counts = collections.Counter()
-    latest = {}
+    counts: collections.Counter[tuple[str, str]] = collections.Counter()
+    latest: dict[str, dict] = {}
     cutoff = now - timedelta(days=7)
     for path, lines in files.items():
         for line in lines:
@@ -297,11 +297,13 @@ def strategy_report(config: dict, inbox: Path) -> dict:
                 "run_id": item["run_id"],
                 "terminal_bound": valid_done,
                 "qualified_exports": len(candidates),
-                "missing": []
-                if len(candidates) == 1
-                else [
-                    "authentic whole-attempt provider usage, session binding, cache-aware applicable pricing"
-                ],
+                "missing": (
+                    []
+                    if len(candidates) == 1
+                    else [
+                        "authentic whole-attempt provider usage, session binding, cache-aware applicable pricing"
+                    ]
+                ),
             }
         )
     identities = {item["run_id"] for item in config["attempts"]}

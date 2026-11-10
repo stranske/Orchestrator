@@ -661,7 +661,8 @@ def _provision(target: str, lane: str, event: dict, branch: str | None = None) -
                     # holder appeared, and dirty/live holders were checked above.
                     # Custom branch ownership remains ambiguous and fail-closed.
                     owned = num is not None and branch in {
-                        f"orch/issue-{num}", f"orchestrator/issue-{num}"
+                        f"orch/issue-{num}",
+                        f"orchestrator/issue-{num}",
                     }
                     if not owned:
                         raise RuntimeError(
@@ -669,8 +670,11 @@ def _provision(target: str, lane: str, event: dict, branch: str | None = None) -
                             f"remote ref: {unique}"
                         )
                     _run(["git", "-C", str(canon), "worktree", "add", str(wt), branch])
-                    event.update(outcome="reused", cause="branch-resume",
-                                 unpublished_commits=unique.splitlines())
+                    event.update(
+                        outcome="reused",
+                        cause="branch-resume",
+                        unpublished_commits=unique.splitlines(),
+                    )
                     return wt
                 _run(
                     [

@@ -300,7 +300,9 @@ def test_missing_holder_directory_is_pruned(layout):
 
 
 @pytest.mark.parametrize("unique", [False, True])
-def test_diverged_opener_resumes_unpublished_work_and_only_resets_remote_backed_work(layout, unique):
+def test_diverged_opener_resumes_unpublished_work_and_only_resets_remote_backed_work(
+    layout, unique
+):
     canon, _ = layout
     git(canon, "switch", "-c", OPENER_BRANCH)
     git(canon, "commit", "--allow-empty", "-m", "old work")
