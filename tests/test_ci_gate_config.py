@@ -387,18 +387,23 @@ def test_baseline_diagnostic_names_the_bumped_and_the_missing_pin():
 
 @pytest.mark.parametrize("closest_first", [True, False])
 def test_baseline_diagnostic_selects_closest_complete_measurement(closest_first):
+    """With no exact match, the diagnostic reports the complete marker with fewest mismatches."""
     pins = {f"{tool.upper().replace('-', '_')}_VERSION": "2.0.0" for tool in _NINE_TOOLS}
-    complete_200 = " ".join(f"{t}=2.0.0" for t in _NINE_TOOLS)
-    bumped_201 = {**pins, "RUFF_VERSION": "2.0.1", "BLACK_VERSION": "2.0.1"}
-    complete_201 = " ".join(
-        f"{t}={v}" for t, v in zip(_NINE_TOOLS, ["2.0.1", "2.0.1"] + ["2.0.0"] * 7)
-    )
-    markers = [complete_200, complete_201]
+    closest = " ".join(f"{t}={'1.0.0' if t == 'ruff' else '2.0.0'}" for t in _NINE_TOOLS)
+    distant = " ".join(f"{t}={'1.0.0' if t in ('ruff', 'black') else '2.0.0'}" for t in _NINE_TOOLS)
+    markers = [closest, distant]
     if not closest_first:
         markers.reverse()
     doc = "".join(f"<!-- measured-with: {m} -->" for m in markers)
-    message = _baseline_mismatch(doc, bumped_201)
-    assert message is None
+    message = _baseline_mismatch(doc, pins)
+    assert message is not None
+    assert (
+        "Unmeasured pins against the closest measurement: "
+        "RUFF_VERSION pinned 2.0.0, measured 1.0.0." in message
+    )
+    # The trailing pin dump names every pin; the diagnostic ahead of it must not report the
+    # distant marker's black mismatch.
+    assert "BLACK_VERSION" not in message.split("All pins:")[0]
 
 
 @pytest.mark.parametrize("defect", ["unknown-version", "hybrid", "incomplete"])
