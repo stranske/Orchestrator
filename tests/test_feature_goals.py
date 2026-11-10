@@ -867,19 +867,25 @@ def test_closer_completion_reads_registered_observation_and_exact_remote_pin(tmp
         return json.dumps({"data": {"repository": {"pullRequest": pr}}})
 
     monkeypatch.setattr(c, "_gh", gh)
+    c.record_completion(output_root=tmp_path)
+    captured_calls = len(calls)
     measured = fg.closer_campaign_completion(NOW)
     assert measured.value == 1 and measured.as_of == NOW - 1
-    assert "comments(first:100)" in calls[-1][3]
     assert fg.closer_campaign_completion(NOW).value == 1
-    assert "comments(first:100)" not in calls[-1][3]
+    assert len(calls) == captured_calls, "measurement must reuse the native publication snapshot"
     pr["headRefOid"] = "c" * 40
+    with pytest.raises(ValueError):
+        c.record_completion(output_root=tmp_path)
     assert fg.closer_campaign_completion(NOW).value is None
     pr["headRefOid"] = head
     pr["updatedAt"] = "version-2"
     pr["comments"]["nodes"][0]["author"]["login"] = "untrusted"
+    with pytest.raises(ValueError):
+        c.record_completion(output_root=tmp_path)
     assert fg.closer_campaign_completion(NOW).value is None
     pr["updatedAt"] = "version-3"
     pr["comments"]["nodes"][0]["author"]["login"] = "stranske"
+    c.record_completion(output_root=tmp_path)
     worker_path.write_bytes(b"altered")
     assert fg.closer_campaign_completion(NOW).value is None
     worker_path.write_bytes(raw)
@@ -889,9 +895,11 @@ def test_closer_completion_reads_registered_observation_and_exact_remote_pin(tmp
     record["verification"]["result"] = "PASS"
     record["completed_at"] = NOW + 1
     receipt.write_text(json.dumps(record))
+    c.record_completion(output_root=tmp_path)
     assert fg.closer_campaign_completion(NOW).value is None
     record["completed_at"] = NOW - 15 * fg.DAY
     receipt.write_text(json.dumps(record))
+    c.record_completion(output_root=tmp_path)
     assert fg.closer_campaign_completion(NOW).value == 0
     assert worker_path.read_bytes() == raw
 
@@ -916,7 +924,7 @@ def test_closer_completion_reads_registered_observation_and_exact_remote_pin(tmp
         }
         receipt.write_text(json.dumps(bad))
         with pytest.raises(ValueError, match="verification is incomplete"):
-            read(root=tmp_path)
+            c.record_completion(output_root=tmp_path)
     receipt.write_text(json.dumps(record))
 
     fixture_path = Path(__file__).parent / c.FIXTURE.removeprefix("tests/")
@@ -982,8 +990,23 @@ def test_closer_completion_reads_registered_observation_and_exact_remote_pin(tmp
         c.worker_proof(malformed_item, state, head, branch)
     with pytest.raises(ValueError):
         c.remote(lambda args: "[]")
-    # Corrupt cached observations trigger a genuine full publication read.
-    receipt.with_suffix(".observation.json").write_text("{")
+    # A measuring query cannot repair or mint publication authority. Only the
+    # existing native evidence entry can refresh a missing/corrupt snapshot.
+    publication = receipt.with_suffix(".publication.json")
+    for broken in ("{", '{"state":"refreshing"}'):
+        publication.write_text(broken)
+        count = len(calls)
+        assert fg.closer_campaign_completion(NOW).value is None
+        assert len(calls) == count
+        original_receipt = receipt.read_bytes()
+        c.record_completion(output_root=tmp_path)
+        assert receipt.read_bytes() == original_receipt
+    snapshot = json.loads(publication.read_text())
+    snapshot["publication"]["headRefOid"] = "e" * 40
+    publication.write_text(json.dumps(snapshot))
+    with pytest.raises(ValueError, match="snapshot digest"):
+        read(root=tmp_path)
+    c.record_completion(output_root=tmp_path)
     assert read(root=tmp_path)["head"] == head
     assert "comments(first:100)" in calls[-1][3]
 

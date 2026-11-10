@@ -181,12 +181,11 @@ def _path(root):
     return Path(root) / "completions" / "stranske_orchestrator_988_989.json"
 
 
-def read_completion(*, root=STATE, gh=None):
-    path = _path(root)
-    record = _object(json.loads(_bytes(path)))
+def _validate_completion(path, publication, record_raw=None):
+    record = _object(json.loads(_bytes(path) if record_raw is None else record_raw))
     if record.get("schema") != SCHEMA or record.get("target") != KEY:
         raise ValueError("native completion receipt identity differs")
-    pr, marker = remote(gh, cache_path=path.with_suffix(".observation.json"))
+    pr, marker = publication
     if (
         record["head"] != pr["headRefOid"]
         or record["merge"] != pr["mergeCommit"]["oid"]
@@ -232,6 +231,51 @@ def read_completion(*, root=STATE, gh=None):
     return record
 
 
+def read_completion(*, root=STATE):
+    """Measure retained native facts without creating observations or API reads."""
+    path = _path(root)
+    raw_receipt = _bytes(path)
+    snapshot = _object(json.loads(_bytes(path.with_suffix(".publication.json"))))
+    if (
+        snapshot.get("schema") != "closer-core-publication-snapshot/v1"
+        or snapshot.get("state") != "observed"
+        or snapshot.get("receipt_sha256") != digest(raw_receipt)
+    ):
+        raise ValueError("native publication snapshot is missing or differs from its receipt")
+    pr = _object(snapshot.get("publication"))
+    raw = (json.dumps(pr, sort_keys=True) + "\n").encode()
+    if snapshot.get("publication_sha256") != digest(raw):
+        raise ValueError("native publication snapshot digest differs")
+    return _validate_completion(path, _publication(pr), raw_receipt)
+
+
+def _observe_publication(path, gh=None):
+    """Native evidence entry only; a failed refresh cannot leave a valid snapshot."""
+    snapshot = path.with_suffix(".publication.json")
+    _write(snapshot, (json.dumps({"state": "refreshing"}) + "\n").encode())
+    pr, marker = remote(gh)
+    raw_receipt = _bytes(path)
+    record = _validate_completion(path, (pr, marker), raw_receipt)
+    _retain_publication(path, raw_receipt, pr)
+    return record
+
+
+def _retain_publication(path, raw_receipt, pr):
+    publication_raw = (json.dumps(pr, sort_keys=True) + "\n").encode()
+    observation = {
+        "schema": "closer-core-publication-snapshot/v1",
+        "state": "observed",
+        "receipt_sha256": digest(raw_receipt),
+        "publication_sha256": digest(publication_raw),
+        "publication": pr,
+        "observed_at": int(time.time()),
+    }
+    _write(
+        path.with_suffix(".publication.json"),
+        (json.dumps(observation, sort_keys=True) + "\n").encode(),
+    )
+
+
 def _write(path, raw):
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as stream:
@@ -250,7 +294,7 @@ def _write(path, raw):
 def record_completion(*, state_root=STATE, output_root=STATE, gh=None):
     """Called by native closer-core's evidence step, never by the measuring query."""
     if _path(output_root).exists():
-        return read_completion(root=output_root, gh=gh)
+        return _observe_publication(_path(output_root), gh)
     pr, marker = remote(gh)
     state_raw = _bytes(Path(state_root) / "targets/stranske_orchestrator_988_989.json")
     state = _object(json.loads(state_raw))
@@ -325,7 +369,11 @@ def record_completion(*, state_root=STATE, output_root=STATE, gh=None):
     _write(evidence / record["worker_sha256"], raw)
     _write(evidence / record["origin_sha256"], state_raw)
     _write(_path(output_root), (json.dumps(record, indent=2, sort_keys=True) + "\n").encode())
-    return read_completion(root=output_root, gh=gh)
+    # The first authenticated read above also belongs to this native evidence
+    # entry. Retain it without requiring another publication query.
+    path = _path(output_root)
+    _retain_publication(path, _bytes(path), pr)
+    return read_completion(root=output_root)
 
 
 def main(argv=None):
