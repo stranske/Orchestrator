@@ -920,7 +920,7 @@ def assess_candidate(
             return {
                 **identity,
                 "eligible": False,
-                "reason": "unevaluated_backlog_cap",
+                "reason": f"unevaluated {backlog_count}/{max(0, int(unevaluated_cap))}, drainable {backlog_drainable}",
                 "unevaluated_backlog": backlog_count,
                 "unevaluated_backlog_total": backlog_total,
                 "unevaluated_backlog_drainable": backlog_drainable,

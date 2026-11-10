@@ -899,7 +899,7 @@ def build_research_plan(
                 "task_type": job.get("task_type"),
                 "subject_id": job.get("subject_id"),
                 "subject_family_id": job.get("subject_family_id"),
-                "reason": "unevaluated_backlog_batch_reserve",
+                "reason": f"unevaluated {current_unevaluated}/{int(unevaluated_cap)}, drainable {current_drainable}",
                 "unevaluated_backlog": current_unevaluated,
                 "unevaluated_backlog_drainable": current_drainable,
                 "unevaluated_cap": int(unevaluated_cap),
@@ -910,18 +910,19 @@ def build_research_plan(
             str(row.get("reason"))
             for row in skipped
             if row.get("reason")
-            in {
-                "unevaluated_backlog_cap",
-                "unevaluated_backlog_batch_reserve",
-                "subject_active",
-                "subject_evaluable",
-                "subject_planned",
-                "subject_cooldown",
-                "subject_backlog_cap",
-                "duplicate_candidate_in_plan",
-                "production_reserved",
-                "claimed_target",
-            }
+            and (
+                str(row.get("reason")).startswith("unevaluated")
+                or str(row.get("reason")) in {
+                    "subject_active",
+                    "subject_evaluable",
+                    "subject_planned",
+                    "subject_cooldown",
+                    "subject_backlog_cap",
+                    "duplicate_candidate_in_plan",
+                    "production_reserved",
+                    "claimed_target",
+                }
+            )
         }
     )
     return {
@@ -942,8 +943,11 @@ def build_research_plan(
 
 
 def _selftest():
+    import json
+    import os
     import sqlite3
     import tempfile
+    from pathlib import Path
 
     cap = {
         "cursor": {"status": "ok", "tier": "free"},
@@ -1303,6 +1307,13 @@ def _selftest():
         "subject_active",
         "subject_backlog_cap",
     }, repeated_plan
+    # Create a meta.json file for the 'cap-exp' experiment so it gets counted by T1
+    import exp_abcd
+    exp_dir = exp_abcd.exp_paths("cap-exp")
+    exp_dir.mkdir(parents=True, exist_ok=True)
+    with open(exp_dir / "meta.json", "w") as f:
+        json.dump({"experiment_id": "cap-exp", "status": "pending"}, f)
+    
     freshness_db.execute(
         "INSERT INTO runs (run_id,ts,target,task_type,agent,experiment_id) "
         "VALUES ('cap-run',?,?,?,'codex','cap-exp')",
@@ -1318,7 +1329,9 @@ def _selftest():
         unevaluated_cap=1,
     )
     assert capped_plan["status"] == "blocked", capped_plan
-    assert capped_plan["blocked_reasons"] == ["unevaluated_backlog_cap"], capped_plan
+    # With T2, the reason is now formatted as "unevaluated N/CAP, drainable M"
+    assert len(capped_plan["blocked_reasons"]) == 1, capped_plan
+    assert capped_plan["blocked_reasons"][0].startswith("unevaluated"), capped_plan
     reserved_plan = build_research_plan(
         [{**subject_item, "target": "o/r#reserved"}],
         live_cap,
