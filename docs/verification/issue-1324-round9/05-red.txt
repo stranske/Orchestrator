@@ -1,0 +1,44 @@
+$ .venv/bin/python -m pytest tests/test_issue1232_ranked_coverage.py::test_runtime_ac_panel_coerce_reviews_and_edge_cases -q --no-cov
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____________ test_runtime_ac_panel_coerce_reviews_and_edge_cases ______________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b420640>
+
+    def test_runtime_ac_panel_coerce_reviews_and_edge_cases(monkeypatch):
+        spec = runtime_ac._valid_spec()
+        gate = runtime_ac.evaluate_results(spec, {"check_results": panel._all_check_results(spec)})
+    
+        empty_doc = {"reviews": []}
+        coerced = panel.coerce_reviews(empty_doc)
+        assert coerced == []
+    
+        doc_with_invalid = {"reviews": [None, "invalid", {"verdict": "PASS"}]}
+        coerced_invalid = panel.coerce_reviews(doc_with_invalid)
+        assert len(coerced_invalid) == 3
+    
+        # Call adjudicate_panel with doc_with_invalid and require ValueError matching 'must be an object'
+        with pytest.raises(ValueError, match="must be an object"):
+>           panel.adjudicate_panel(spec, gate, doc_with_invalid)
+
+tests/test_issue1232_ranked_coverage.py:456: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/runtime_ac_panel.py:397: in adjudicate_panel
+    _normalize_review(review, idx, known_ac_ids)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+review = None, idx = 0, known_ac_ids = {'AC1', 'AC2'}
+
+    def _normalize_review(review: dict[str, Any], idx: int, known_ac_ids: set[str]) -> dict[str, Any]:
+        if not isinstance(review, dict):
+            pass
+>       reviewer = str(review.get("reviewer") or f"reviewer-{idx + 1}").strip()
+                       ^^^^^^^^^^
+E       AttributeError: 'NoneType' object has no attribute 'get'
+
+src/runtime_ac_panel.py:156: AttributeError
+=========================== short test summary info ============================
+FAILED tests/test_issue1232_ranked_coverage.py::test_runtime_ac_panel_coerce_reviews_and_edge_cases
+1 failed in 0.12s
+
+exit_code=1

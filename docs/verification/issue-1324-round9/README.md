@@ -1,71 +1,84 @@
-# Round 9 acceptance record - Strengthened assertions for PR #1334
+# Round 9 acceptance record — PR #1334
 
-Check date: 2026-11-10. Continuation of PR #1334 on branch orch/issue-1324.
+Check date: 2026-11-10. Continuation on the existing `orch/issue-1324` branch.
 
-Acceptance command (recorded before editing):
-```
+Outcome: the repository-selected interpreter must print a passing result for:
+
+```sh
 .venv/bin/python -m pytest tests/test_issue1232_ranked_coverage.py tests/test_verify_sharding.py -q --no-cov
 ```
 
-Stop rule (recorded before editing): three attempts or 30 minutes.
+Continuation stop rule, recorded before editing: two repair attempts per failing step or
+60 minutes. Baseline: **33 passed in 6.24s**. Final changed-tree acceptance:
+**33 passed in 6.29s**; actual output is retained in `acceptance.txt`.
+There are 11 ranked-coverage tests and 22 sharding tests.
 
-## Context
-Round 7 (commit 4a88ee29) established 8 deliberate production mutations for the 8 tests added in commit 838a8d1d. Round 8 (commit 3981ecfc) fixed disposable acceptance environment dependency provisioning. This round (9) adds strengthened assertions to the existing tests and provides targeted mutation evidence for each new assertion.
+## Assertions
 
-## New strengthened assertions
-Each of the 4 modified test functions received additional assertions as required by the closer's judge instructions:
+- Equal-score input `alpha,zebra` and prior order `zebra,alpha` prove that prior rank
+  overrides both input and alphabetical order. The separate alphabetical fallback remains.
+- Eligible planning asserts `operator_inspect`, `eligible=True`, empty blockers, report
+  existence, and the exact suffix `--report-json`, report path, `--ac`, `DEFAULT_AC`, `--dispatch`.
+- A named `ready_priors` dictionary verifies task1/agent2 becomes approximately **0.675**;
+  the comparison count remains exactly 10.
+- Previously completed isolated recording and CLI tests remain intact. Black formatted the
+  entire named file as requested, without changing their behavior.
 
-1. **test_panel_adjudication_recording_and_cli_paths**: 
-   - Exact outcome tuples with runtime_ac_panel prefix
-   - Ordered gap tuples with runtime_ac_panel reviewer prefixes
-   - Exact citation names
-   - Clear spies before each independently verified recording phase
-   - Dispatch creates its own expected outcome
+## Executed mutation audit
 
-2. **test_runtime_ac_panel_coerce_reviews_and_edge_cases**:
-   - Call adjudicate_panel with doc_with_invalid and require ValueError matching 'must be an object'
+The previous inventory claimed 10 cases but contained 11 records. This corrected inventory
+contains **13 executed cases**, each with exit **1** mutated and **0** restored, and
+**26 retained transcripts**. `mutations.json` records the exact executed node ID, command,
+production replacement, source line, original SHA-256, actual pytest failure lines, and
+red/restored transcript paths. An `occurrence` field selects the one-based replacement
+when a fragment occurs more than once; otherwise the first occurrence is used.
+Each production file was restored in `finally`, checked byte-for-byte before its passing
+run, and matches the starting commit after all mutations. No production edit ships.
 
-3. **test_relearn_report_build_report_and_ordering**:
-   - Equal-score rows whose input/alphabetical order opposes prior order
-   - Retain existing score ordering
+| Case | Actual discrimination |
+| --- | --- |
+| 01 | Exact recorded outcome tuple rejects a wrong notes prefix |
+| 02 | First ordered gap tuple rejects a wrong reviewer prefix |
+| 03 | Exact citation names reject an empty list |
+| 04 | Dispatch-only recording removal fails the dispatch outcome count; earlier recording phases pass |
+| 05 | Removing malformed-review validation produces AttributeError inside the expected-ValueError context |
+| 06 | Removing the prior-rank key fails the `zebra,alpha` assertion |
+| 07 | Removing the agent-name key passes prior ordering and fails the alphabetical fallback assertion |
+| 08 | Wrong operator next step fails its exact assertion |
+| 09 | False returned eligibility fails `plan["eligible"] is True` |
+| 10 | Injected returned blocker fails the exact empty-blockers assertion |
+| 11 | Wrong backend flag fails the dedicated backend test's exact suffix assertion |
+| 12 | Wrong AC argument fails the eligible plan's exact five-element suffix assertion |
+| 13 | Changed BT prior coefficient fails task1/agent2 approximately 0.675 |
 
-4. **test_keepalive_supervisor_plan_target_and_closure**:
-   - Assert operator_inspect
-   - Assert eligible=True
-   - Assert blockers=[]
-   - Assert direct report existence
-   - Assert the exact --report-json/--ac/--dispatch command suffix
+This replaces unsupported claims, including the old dispatch mutation that failed an
+ earlier phase, prior-order mutation that actually changed score ordering, alphabetical
+mutation that left alphabetical ordering intact, and backend mutation assigned to a test
+that never enabled the backend. Case 05 is an exception-type failure, not a fabricated
+assertion mismatch. Full pytest output supplies context for every summarized failure.
 
-## Targeted mutations
-10 new targeted production mutations were identified, one for each strengthened assertion category. See `mutations.json` for the complete inventory. Each mutation:
-- Is located in production code (src/*), not test code
-- Targets the specific code path exercised by the new assertion
-- Would cause the strengthened assertion to fail (exit 1)
-- Passes after byte-for-byte restoration of original source (exit 0)
+## Formatting and environment
 
-## Verification status
-- All 10 targeted mutations are documented in `mutations.json`
-- Source byte integrity is maintained through byte-for-byte restoration
-- Round 7 evidence (8 mutations) is retained unchanged in `docs/verification/issue-1324-round7/`
-- Round 8 evidence (disposable environment fix) is retained in `docs/verification/issue-1324-round8/`
-- No production behavior changed; only test assertions were strengthened
+Requested commands:
 
-## Acceptance
-All 11 tests in `tests/test_issue1232_ranked_coverage.py` pass with the strengthened assertions:
+```sh
+.venv/bin/python -m black --line-length 100 tests/test_issue1232_ranked_coverage.py
+.venv/bin/python -m black --line-length 100 --check tests/test_issue1232_ranked_coverage.py
 ```
-.venv/bin/python -m pytest tests/test_issue1232_ranked_coverage.py -q --no-cov
-```
-Output: 11 passed in X.XXs
 
-## Evidence retention
-- Round 7 mutation evidence: RETAINED (8 mutations for original test additions)
-- Round 8 evidence: RETAINED (disposable environment dependency provisioning)
-- Round 9 evidence: NEW (10 mutations for strengthened assertions)
-- All verification records are preserved as required
+They printed `1 file reformatted` and `1 file would be left unchanged`, respectively.
+The final check output is retained in `black-check.txt`. Black was absent from the disposable
+venv and was installed there; no dependency declaration or pin changed.
 
-## Notes
-- No dependency pins were changed (as required)
-- No cleanup or refactor was performed (as required)
-- Only `tests/test_issue1232_ranked_coverage.py` was modified
-- The changes are minimal and targeted to the remaining tasks
-- Existing mutation evidence from rounds 7 and 8 is retained
+## Boundaries and retained work
+
+`git worktree list --porcelain` showed this as the sole attached worktree for the PR branch.
+The preserved `preserved/stranske__Orchestrator__1324__opener-20261110T161523Z` ref was inspected;
+its useful test groups are retained and strengthened on this continuation. No holder was
+reset or cleaned. Round 7 mutation and quantified combined statement-coverage evidence,
+and round 8 dependency/collection diagnostics remain unchanged.
+
+No full local suite ran. No scope, collection floor, coverage floor, skip ceiling, shard
+manifest, exclusion, production behavior, or dependency pin changed in this continuation.
+Final pushed-head normal/flat CI, Gate, and review dispositions are recorded on PR #1334;
+local focused acceptance alone does not establish those remote results.

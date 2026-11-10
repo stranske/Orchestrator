@@ -302,7 +302,7 @@ def test_panel_adjudication_recording_and_cli_paths(monkeypatch, tmp_path, capsy
     assert panel_result["verifier_verdict"] == "PASS_RUNTIME_AC"
 
     run_id = "test-run-1232-adjudication"
-    
+
     # First recording phase - clear spies before
     recorded_calls.clear()
     record_result = panel.record_panel_verdict(run_id, panel_result)
@@ -314,7 +314,12 @@ def test_panel_adjudication_recording_and_cli_paths(monkeypatch, tmp_path, capsy
     # Assert exact outcome tuple
     outcome_calls = [c for c in recorded_calls if c[0] == "record_outcome"]
     assert len(outcome_calls) == 1
-    assert outcome_calls[0] == ("record_outcome", run_id, "PASS_RUNTIME_AC", f"runtime_ac_panel: PASS_RUNTIME_AC - {panel_result['reason']}")
+    assert outcome_calls[0] == (
+        "record_outcome",
+        run_id,
+        "PASS_RUNTIME_AC",
+        f"runtime_ac_panel: PASS_RUNTIME_AC - {panel_result['reason']}",
+    )
 
     # Second recording phase - clear spies before
     recorded_calls.clear()
@@ -332,14 +337,19 @@ def test_panel_adjudication_recording_and_cli_paths(monkeypatch, tmp_path, capsy
     assert record_result_gaps["evidence_gaps"] == 2
     assert any(call[0] == "record_evidence_gap" for call in recorded_calls)
     assert any(call[0] == "record_evidence_type_citations" for call in recorded_calls)
-    
+
     # Assert ordered gap tuples with runtime_ac_panel reviewer prefixes
     gap_calls = [c for c in recorded_calls if c[0] == "record_evidence_gap"]
     assert len(gap_calls) == 2
     # Gaps should be ordered as provided
     assert gap_calls[0] == ("record_evidence_gap", run_id, "runtime_ac_panel:vibe", "missing trace")
-    assert gap_calls[1] == ("record_evidence_gap", run_id, "runtime_ac_panel:gemini", "missing logs")
-    
+    assert gap_calls[1] == (
+        "record_evidence_gap",
+        run_id,
+        "runtime_ac_panel:gemini",
+        "missing logs",
+    )
+
     # Assert exact citation names
     citation_calls = [c for c in recorded_calls if c[0] == "record_evidence_type_citations"]
     assert len(citation_calls) == 1
@@ -440,7 +450,7 @@ def test_runtime_ac_panel_coerce_reviews_and_edge_cases(monkeypatch):
     doc_with_invalid = {"reviews": [None, "invalid", {"verdict": "PASS"}]}
     coerced_invalid = panel.coerce_reviews(doc_with_invalid)
     assert len(coerced_invalid) == 3
-    
+
     # Call adjudicate_panel with doc_with_invalid and require ValueError matching 'must be an object'
     with pytest.raises(ValueError, match="must be an object"):
         panel.adjudicate_panel(spec, gate, doc_with_invalid)
@@ -513,20 +523,17 @@ def test_relearn_report_build_report_and_ordering(monkeypatch):
     )
     assert ordered_rows[0]["agent"] == "agent1"
     assert ordered_rows[1]["agent"] == "agent2"
-    
-    # Add equal-score rows whose input/alphabetical order opposes prior order
-    # Input order is ["agent2", "agent1"] which opposes prior_order ["agent1", "agent2"]
-    # With equal scores, prior rank should determine order: agent1 (prior rank 0) before agent2 (prior rank 1)
+
+    # Prior order opposes both input and alphabetical order.
     equal_score_rows = relearn_report._ordered_rows(
         [
-            {"agent": "agent2", "score": 0.85},
-            {"agent": "agent1", "score": 0.85},
+            {"agent": "alpha", "score": 0.85},
+            {"agent": "zebra", "score": 0.85},
         ],
-        ["agent1", "agent2"],
+        ["zebra", "alpha"],
     )
-    assert equal_score_rows[0]["agent"] == "agent1"
-    assert equal_score_rows[1]["agent"] == "agent2"
-    
+    assert [row["agent"] for row in equal_score_rows] == ["zebra", "alpha"]
+
     # Test with equal scores and alphabetical tiebreaker
     # When prior ranks are equal (both not in prior_order), alphabetical order is used
     equal_score_alpha = relearn_report._ordered_rows(
@@ -571,10 +578,13 @@ def test_keepalive_supervisor_plan_target_and_closure(monkeypatch, tmp_path):
     assert (tmp_path / "report.json").exists()
     # Assert the exact --report-json/--ac/--dispatch command suffix
     # Command structure: [..., '--report-json', '<path>', '--ac', '<value>', '--dispatch']
-    assert "--report-json" in plan["proposal_command"]
-    assert str(tmp_path / "report.json") in plan["proposal_command"]
-    assert "--ac" in plan["proposal_command"]
-    assert plan["proposal_command"][-1] == "--dispatch"
+    assert plan["proposal_command"][-5:] == [
+        "--report-json",
+        str(tmp_path / "report.json"),
+        "--ac",
+        supervisor.DEFAULT_AC,
+        "--dispatch",
+    ]
 
     plan_target_result = supervisor.plan_target(
         signals["target"],
@@ -680,8 +690,9 @@ def test_relearn_report_priors_and_blend(monkeypatch):
     )
     assert blended == {}
 
+    ready_priors = {"task1": {"agent1": 0.7, "agent2": 0.65}}
     blended_ready = relearn_report.blend_bt_priors(
-        {"task1": {"agent1": 0.7, "agent2": 0.65}},
+        ready_priors,
         bt_fn=lambda **_k: {
             "ready": True,
             "strengths": {"agent2": 0.9},
@@ -690,7 +701,7 @@ def test_relearn_report_priors_and_blend(monkeypatch):
     )
     assert "task1" in blended_ready
     assert blended_ready["task1"] == 10
-    assert blended_ready["task1"] > 0
+    assert ready_priors["task1"]["agent2"] == pytest.approx(0.675)
 
 
 def test_keepalive_supervisor_repo_num_and_eligibility(monkeypatch):

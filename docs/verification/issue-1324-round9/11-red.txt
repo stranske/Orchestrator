@@ -1,0 +1,33 @@
+$ .venv/bin/python -m pytest tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_proposal_backend -q --no-cov
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__________________ test_keepalive_supervisor_proposal_backend __________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1097548a0>
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2332/test_keepalive_supervisor_prop0')
+
+    def test_keepalive_supervisor_proposal_backend(monkeypatch, tmp_path):
+        signals = {
+            "target": "stranske/Orchestrator#1334",
+            "pr_state": "open",
+            "labels": [supervisor.KEEPALIVE_LABEL, "needs-human"],
+        }
+        monkeypatch.setattr(
+            supervisor.keepalive_shadow, "shadow_decide", lambda _s: {"shadow_action": "wait"}
+        )
+        monkeypatch.setattr(supervisor, "build_redirect_report", lambda *_a: {"report": "safe"})
+        plan = supervisor.plan_for_signals(
+            signals, report_json_path=tmp_path / "report.json", proposal_backend="codex"
+        )
+>       assert plan["proposal_command"][-3:] == ["--backend", "codex", "--dispatch"]
+E       AssertionError: assert ['--wrong', '... '--dispatch'] == ['--backend',... '--dispatch']
+E         
+E         At index 0 diff: '--wrong' != '--backend'
+E         Use -v to get more diff
+
+tests/test_issue1232_ranked_coverage.py:762: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_proposal_backend
+1 failed in 0.13s
+
+exit_code=1

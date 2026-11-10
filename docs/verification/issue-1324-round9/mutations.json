@@ -10,7 +10,18 @@
     ],
     "red": 1,
     "restored": 0,
-    "assertion": "outcome_calls[0] == ('record_outcome', run_id, 'PASS_RUNTIME_AC', f'runtime_ac_panel: PASS_RUNTIME_AC - {panel_result['reason']}')"
+    "source_sha256": "383e20c25df6cc8e295dd4189b7bea77167df6791277f78206146811dc45fd4c",
+    "command": ".venv/bin/python -m pytest tests/test_issue1232_ranked_coverage.py::test_panel_adjudication_recording_and_cli_paths -q --no-cov",
+    "red_transcript": "01-red.txt",
+    "restored_transcript": "01-restored.txt",
+    "failure_lines": [
+      ">       assert outcome_calls[0] == (",
+      "E       AssertionError: assert ('record_outc...reshold 0.67') == ('record_outc...reshold 0.67')",
+      "E         ",
+      "E         At index 3 diff: 'WRONG_PREFIX: PASS_RUNTIME_AC - pass ratio 2/2 met threshold 0.67' != 'runtime_ac_panel: PASS_RUNTIME_AC - pass ratio 2/2 met threshold 0.67'",
+      "E         Use -v to get more diff",
+      "FAILED tests/test_issue1232_ranked_coverage.py::test_panel_adjudication_recording_and_cli_paths"
+    ]
   },
   {
     "test": "tests/test_issue1232_ranked_coverage.py::test_panel_adjudication_recording_and_cli_paths",
@@ -23,7 +34,18 @@
     ],
     "red": 1,
     "restored": 0,
-    "assertion": "gap_calls[0] == ('record_evidence_gap', run_id, 'runtime_ac_panel:vibe', 'missing trace')"
+    "source_sha256": "383e20c25df6cc8e295dd4189b7bea77167df6791277f78206146811dc45fd4c",
+    "command": ".venv/bin/python -m pytest tests/test_issue1232_ranked_coverage.py::test_panel_adjudication_recording_and_cli_paths -q --no-cov",
+    "red_transcript": "02-red.txt",
+    "restored_transcript": "02-restored.txt",
+    "failure_lines": [
+      ">       assert gap_calls[0] == (\"record_evidence_gap\", run_id, \"runtime_ac_panel:vibe\", \"missing trace\")",
+      "E       AssertionError: assert ('record_evid...issing trace') == ('record_evid...issing trace')",
+      "E         ",
+      "E         At index 2 diff: 'WRONG_PREFIX:vibe' != 'runtime_ac_panel:vibe'",
+      "E         Use -v to get more diff",
+      "FAILED tests/test_issue1232_ranked_coverage.py::test_panel_adjudication_recording_and_cli_paths"
+    ]
   },
   {
     "test": "tests/test_issue1232_ranked_coverage.py::test_panel_adjudication_recording_and_cli_paths",
@@ -36,20 +58,41 @@
     ],
     "red": 1,
     "restored": 0,
-    "assertion": "citation_calls[0][1] == ['trace', 'log']"
+    "source_sha256": "383e20c25df6cc8e295dd4189b7bea77167df6791277f78206146811dc45fd4c",
+    "command": ".venv/bin/python -m pytest tests/test_issue1232_ranked_coverage.py::test_panel_adjudication_recording_and_cli_paths -q --no-cov",
+    "red_transcript": "03-red.txt",
+    "restored_transcript": "03-restored.txt",
+    "failure_lines": [
+      ">       assert citation_calls[0][1] == [\"trace\", \"log\"]",
+      "E       AssertionError: assert [] == ['trace', 'log']",
+      "E         ",
+      "E         Right contains 2 more items, first extra item: 'trace'",
+      "E         Use -v to get more diff",
+      "FAILED tests/test_issue1232_ranked_coverage.py::test_panel_adjudication_recording_and_cli_paths"
+    ]
   },
   {
     "test": "tests/test_issue1232_ranked_coverage.py::test_panel_adjudication_recording_and_cli_paths",
-    "description": "Dispatch creates its own expected outcome",
+    "description": "Dispatch independently records an outcome (earlier recording phases remain unchanged)",
     "module": "runtime_ac_panel.py",
-    "line": 466,
+    "line": 791,
     "mutation": [
-      "f\"runtime_ac_panel: {panel['verifier_verdict']} - {panel['reason']}\"",
-      "f\"DISPATCH_WRONG: {panel['verifier_verdict']} - {panel['reason']}\""
+      "            panel[\"feedback\"] = record_panel_verdict(args.record_run_id, panel)",
+      "            panel[\"feedback\"] = {}"
     ],
     "red": 1,
     "restored": 0,
-    "assertion": "'runtime_ac_panel: PASS_RUNTIME_AC' in dispatch_outcome_calls[0][3]"
+    "occurrence": 1,
+    "source_sha256": "383e20c25df6cc8e295dd4189b7bea77167df6791277f78206146811dc45fd4c",
+    "command": ".venv/bin/python -m pytest tests/test_issue1232_ranked_coverage.py::test_panel_adjudication_recording_and_cli_paths -q --no-cov",
+    "red_transcript": "04-red.txt",
+    "restored_transcript": "04-restored.txt",
+    "failure_lines": [
+      ">       assert len(dispatch_outcome_calls) == 1",
+      "E       assert 0 == 1",
+      "E        +  where 0 = len([])",
+      "FAILED tests/test_issue1232_ranked_coverage.py::test_panel_adjudication_recording_and_cli_paths"
+    ]
   },
   {
     "test": "tests/test_issue1232_ranked_coverage.py::test_runtime_ac_panel_coerce_reviews_and_edge_cases",
@@ -62,24 +105,20 @@
     ],
     "red": 1,
     "restored": 0,
-    "assertion": "pytest.raises(ValueError, match='must be an object')"
+    "source_sha256": "383e20c25df6cc8e295dd4189b7bea77167df6791277f78206146811dc45fd4c",
+    "command": ".venv/bin/python -m pytest tests/test_issue1232_ranked_coverage.py::test_runtime_ac_panel_coerce_reviews_and_edge_cases -q --no-cov",
+    "red_transcript": "05-red.txt",
+    "restored_transcript": "05-restored.txt",
+    "failure_lines": [
+      ">           panel.adjudicate_panel(spec, gate, doc_with_invalid)",
+      ">       reviewer = str(review.get(\"reviewer\") or f\"reviewer-{idx + 1}\").strip()",
+      "E       AttributeError: 'NoneType' object has no attribute 'get'",
+      "FAILED tests/test_issue1232_ranked_coverage.py::test_runtime_ac_panel_coerce_reviews_and_edge_cases"
+    ]
   },
   {
     "test": "tests/test_issue1232_ranked_coverage.py::test_relearn_report_build_report_and_ordering",
     "description": "Equal-score rows follow prior rank ordering",
-    "module": "relearn_report.py",
-    "line": 147,
-    "mutation": [
-      "-(r[\"score\"] if r.get(\"score\") is not None else -1.0)",
-      "(r[\"score\"] if r.get(\"score\") is not None else -1.0)"
-    ],
-    "red": 1,
-    "restored": 0,
-    "assertion": "equal_score_rows[0]['agent'] == 'agent1' and equal_score_rows[1]['agent'] == 'agent2'"
-  },
-  {
-    "test": "tests/test_issue1232_ranked_coverage.py::test_relearn_report_build_report_and_ordering",
-    "description": "Alphabetical tiebreaker for equal scores",
     "module": "relearn_report.py",
     "line": 148,
     "mutation": [
@@ -88,7 +127,42 @@
     ],
     "red": 1,
     "restored": 0,
-    "assertion": "equal_score_alpha[0]['agent'] == 'alpha' and equal_score_alpha[1]['agent'] == 'zebra'"
+    "source_sha256": "efcbbf2747ac7b76bfd2694294ea9bfbe73a33ad292356ca5a53e0ab7f19031a",
+    "command": ".venv/bin/python -m pytest tests/test_issue1232_ranked_coverage.py::test_relearn_report_build_report_and_ordering -q --no-cov",
+    "red_transcript": "06-red.txt",
+    "restored_transcript": "06-restored.txt",
+    "failure_lines": [
+      ">       assert [row[\"agent\"] for row in equal_score_rows] == [\"zebra\", \"alpha\"]",
+      "E       AssertionError: assert ['alpha', 'zebra'] == ['zebra', 'alpha']",
+      "E         ",
+      "E         At index 0 diff: 'alpha' != 'zebra'",
+      "E         Use -v to get more diff",
+      "FAILED tests/test_issue1232_ranked_coverage.py::test_relearn_report_build_report_and_ordering"
+    ]
+  },
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_relearn_report_build_report_and_ordering",
+    "description": "Alphabetical tiebreaker for equal scores",
+    "module": "relearn_report.py",
+    "line": 149,
+    "mutation": [
+      "            r[\"agent\"],",
+      "            0,"
+    ],
+    "red": 1,
+    "restored": 0,
+    "source_sha256": "efcbbf2747ac7b76bfd2694294ea9bfbe73a33ad292356ca5a53e0ab7f19031a",
+    "command": ".venv/bin/python -m pytest tests/test_issue1232_ranked_coverage.py::test_relearn_report_build_report_and_ordering -q --no-cov",
+    "red_transcript": "07-red.txt",
+    "restored_transcript": "07-restored.txt",
+    "failure_lines": [
+      ">       assert equal_score_alpha[0][\"agent\"] == \"alpha\"",
+      "E       AssertionError: assert 'zebra' == 'alpha'",
+      "E         ",
+      "E         - alpha",
+      "E         + zebra",
+      "FAILED tests/test_issue1232_ranked_coverage.py::test_relearn_report_build_report_and_ordering"
+    ]
   },
   {
     "test": "tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure",
@@ -101,37 +175,67 @@
     ],
     "red": 1,
     "restored": 0,
-    "assertion": "plan['next_step'] == 'operator_inspect'"
+    "source_sha256": "1670a2aeeda956bcb68f27fcb74166cdeffd8f8fc178f6f1b5cef3c041304703",
+    "command": ".venv/bin/python -m pytest tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure -q --no-cov",
+    "red_transcript": "08-red.txt",
+    "restored_transcript": "08-restored.txt",
+    "failure_lines": [
+      ">       assert plan[\"next_step\"] == \"operator_inspect\"",
+      "E       AssertionError: assert 'broken_inspect' == 'operator_inspect'",
+      "E         ",
+      "E         - operator_inspect",
+      "E         + broken_inspect",
+      "FAILED tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure"
+    ]
   },
   {
     "test": "tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure",
     "description": "eligible=True assertion",
     "module": "keepalive_supervisor.py",
-    "line": 633,
+    "line": 682,
     "mutation": [
-      "if not gate[\"eligible\"]:",
-      "if True:"
+      "        \"eligible\": gate[\"eligible\"],",
+      "        \"eligible\": False,"
     ],
     "red": 1,
     "restored": 0,
-    "assertion": "plan['eligible'] is True"
+    "source_sha256": "1670a2aeeda956bcb68f27fcb74166cdeffd8f8fc178f6f1b5cef3c041304703",
+    "command": ".venv/bin/python -m pytest tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure -q --no-cov",
+    "red_transcript": "09-red.txt",
+    "restored_transcript": "09-restored.txt",
+    "failure_lines": [
+      ">       assert plan[\"eligible\"] is True",
+      "E       assert False is True",
+      "FAILED tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure"
+    ]
   },
   {
     "test": "tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure",
     "description": "blockers=[] assertion",
     "module": "keepalive_supervisor.py",
-    "line": 633,
+    "line": 683,
     "mutation": [
-      "if not gate[\"eligible\"]:",
-      "if True:"
+      "        \"eligibility\": gate,",
+      "        \"eligibility\": {**gate, \"blockers\": [\"injected\"]},"
     ],
     "red": 1,
     "restored": 0,
-    "assertion": "plan['eligibility']['blockers'] == []"
+    "source_sha256": "1670a2aeeda956bcb68f27fcb74166cdeffd8f8fc178f6f1b5cef3c041304703",
+    "command": ".venv/bin/python -m pytest tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure -q --no-cov",
+    "red_transcript": "10-red.txt",
+    "restored_transcript": "10-restored.txt",
+    "failure_lines": [
+      ">       assert plan[\"eligibility\"][\"blockers\"] == []",
+      "E       AssertionError: assert ['injected'] == []",
+      "E         ",
+      "E         Left contains one more item: 'injected'",
+      "E         Use -v to get more diff",
+      "FAILED tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure"
+    ]
   },
   {
-    "test": "tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure",
-    "description": "Exact --report-json/--ac/--dispatch command suffix",
+    "test": "tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_proposal_backend",
+    "description": "Exact backend argument suffix",
     "module": "keepalive_supervisor.py",
     "line": 659,
     "mutation": [
@@ -140,6 +244,66 @@
     ],
     "red": 1,
     "restored": 0,
-    "assertion": "'--report-json' in plan['proposal_command'] and '--ac' in plan['proposal_command'] and plan['proposal_command'][-1] == '--dispatch'"
+    "source_sha256": "1670a2aeeda956bcb68f27fcb74166cdeffd8f8fc178f6f1b5cef3c041304703",
+    "command": ".venv/bin/python -m pytest tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_proposal_backend -q --no-cov",
+    "red_transcript": "11-red.txt",
+    "restored_transcript": "11-restored.txt",
+    "failure_lines": [
+      ">       assert plan[\"proposal_command\"][-3:] == [\"--backend\", \"codex\", \"--dispatch\"]",
+      "E       AssertionError: assert ['--wrong', '... '--dispatch'] == ['--backend',... '--dispatch']",
+      "E         ",
+      "E         At index 0 diff: '--wrong' != '--backend'",
+      "E         Use -v to get more diff",
+      "FAILED tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_proposal_backend"
+    ]
+  },
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure",
+    "description": "Exact report/AC/dispatch suffix",
+    "module": "keepalive_supervisor.py",
+    "mutation": [
+      "            acceptance_criteria,",
+      "            \"WRONG_AC\","
+    ],
+    "line": 656,
+    "source_sha256": "1670a2aeeda956bcb68f27fcb74166cdeffd8f8fc178f6f1b5cef3c041304703",
+    "command": ".venv/bin/python -m pytest tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure -q --no-cov",
+    "red": 1,
+    "red_transcript": "12-red.txt",
+    "restored": 0,
+    "restored_transcript": "12-restored.txt",
+    "failure_lines": [
+      ">       assert plan[\"proposal_command\"][-5:] == [",
+      "E       AssertionError: assert ['--report-js... '--dispatch'] == ['--report-js... '--dispatch']",
+      "E         ",
+      "E         At index 3 diff: 'WRONG_AC' != 'Post-escalation keepalive recovery only: inspect the PR after keepalive has escalated, preserve the original PR acceptance criteria, and do not act if the escalation label is gone.'",
+      "E         Use -v to get more diff",
+      "FAILED tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure"
+    ]
+  },
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_relearn_report_priors_and_blend",
+    "description": "Blended task1/agent2 prior value",
+    "module": "relearn_report.py",
+    "mutation": [
+      "bt_prior = max(0.45, 0.70 - 0.05 * rank)",
+      "bt_prior = max(0.45, 0.71 - 0.05 * rank)"
+    ],
+    "line": 67,
+    "source_sha256": "efcbbf2747ac7b76bfd2694294ea9bfbe73a33ad292356ca5a53e0ab7f19031a",
+    "command": ".venv/bin/python -m pytest tests/test_issue1232_ranked_coverage.py::test_relearn_report_priors_and_blend -q --no-cov",
+    "red": 1,
+    "red_transcript": "13-red.txt",
+    "restored": 0,
+    "restored_transcript": "13-restored.txt",
+    "failure_lines": [
+      ">       assert ready_priors[\"task1\"][\"agent2\"] == pytest.approx(0.675)",
+      "E       assert 0.68 == 0.675 \u00b1 6.7e-07",
+      "E         ",
+      "E         comparison failed",
+      "E         Obtained: 0.68",
+      "E         Expected: 0.675 \u00b1 6.7e-07",
+      "FAILED tests/test_issue1232_ranked_coverage.py::test_relearn_report_priors_and_blend"
+    ]
   }
 ]

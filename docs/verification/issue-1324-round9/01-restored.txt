@@ -1,0 +1,5 @@
+$ .venv/bin/python -m pytest tests/test_issue1232_ranked_coverage.py::test_panel_adjudication_recording_and_cli_paths -q --no-cov
+.                                                                        [100%]
+1 passed in 0.12s
+
+exit_code=0

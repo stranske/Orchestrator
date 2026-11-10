@@ -1,0 +1,5 @@
+$ .venv/bin/python -m pytest tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure -q --no-cov
+.                                                                        [100%]
+1 passed in 0.11s
+
+exit_code=0
