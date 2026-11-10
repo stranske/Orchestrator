@@ -1100,6 +1100,17 @@ if _cadence_due langsmith-direct && _attempt_ok langsmith-direct; then
     if python3 "$ORCH/langsmith_direct.py" --ingest >/dev/null 2>&1; then _mark_success langsmith-direct; else _mark_fail langsmith-direct; fi
   else echo "  [cadence] LangSmith direct pull SKIPPED — no LANGSMITH_API_KEY"; fi
 fi
+# Original-source evidence is local and remains drainable while GitHub is shed.
+# Only a ready packet uses the API, with durable publication/readback before the
+# existing opener is revived. No replacement research runs or new scheduler.
+if [[ "$mode" == "active" ]] && _cadence_due followup-evidence; then
+  echo "  [cadence] delayed follow-up evidence (hourly)"
+  if python3 "$ORCH/followup_evidence.py" --state-dir "$STAMP_DIR" --apply >> "$STAMP_DIR/followup-evidence.log" 2>&1; then
+    _mark_success followup-evidence
+  else
+    echo "  warn: followup-evidence incomplete; original writer/evidence retained, retry next tick; see $STAMP_DIR/followup-evidence.log"
+  fi
+fi
 if _cadence_due ledger-reconcile && _attempt_ok ledger-reconcile; then
   echo "  [cadence] local ledger reconciliation (daily)"
   if python3 "$ORCH/ledger_reconcile.py" reconcile --strict >/dev/null 2>&1; then _mark_success ledger-reconcile; else _mark_fail ledger-reconcile; fi
