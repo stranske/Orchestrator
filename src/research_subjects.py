@@ -272,7 +272,9 @@ def unevaluated_experiment_ids(
                 pending_ids.add(exp_id)
                 if is_drainable:
                     drainable_count += 1
-            except (json.JSONDecodeError, PermissionError, OSError):
+            except (ValueError, OSError):
+                # ValueError covers JSONDecodeError and UnicodeDecodeError (invalid UTF-8): one corrupt
+                # meta.json must count as unreadable, never fall through to the outer fail-open handler.
                 # Unreadable meta.json - count as pending but track separately
                 pending_ids.add(exp_id)
                 unreadable_count += 1
@@ -1384,6 +1386,22 @@ def summary(
 
 
 def _selftest() -> None:
+    """Run the selftest against a temporary experiments directory, never the live one."""
+    import tempfile
+    from pathlib import Path
+
+    import exp_abcd
+
+    saved = exp_abcd.EXP_DIR
+    with tempfile.TemporaryDirectory(prefix="research-subjects-selftest-") as tmp:
+        exp_abcd.EXP_DIR = Path(tmp) / "experiments"
+        try:
+            _selftest_body()
+        finally:
+            exp_abcd.EXP_DIR = saved
+
+
+def _selftest_body() -> None:
     conn = sqlite3.connect(":memory:")
     conn.executescript(feedback.SCHEMA)
     feedback._migrate_schema(conn)
@@ -1416,7 +1434,7 @@ def _selftest() -> None:
     import exp_abcd
 
     # Ensure the experiments directory exists
-    exp_abcd.EXP_DIR.mkdir(exist_ok=True)
+    exp_abcd.EXP_DIR.mkdir(parents=True, exist_ok=True)
 
     # Create exp-fresh (within window, should be counted)
     exp_fresh_dir = exp_abcd.EXP_DIR / "exp-fresh"

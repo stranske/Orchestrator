@@ -1289,7 +1289,14 @@ def test_held_trial_can_resolve_and_clear_without_new_launches():
 def test_failed_trial_receipt_survives_switch_off_and_drain(monkeypatch, capsys):
     import tick
 
-    producer.save_state({"trial_verdict": "fail", "trial_reason": "unresolved_unknown"})
+    # A current-generation failed trial: the receipt must still print with the switch off.
+    producer.save_state(
+        {
+            "trial_generation": producer.TRIAL_GENERATION,
+            "trial_verdict": "fail",
+            "trial_reason": "unresolved_unknown",
+        }
+    )
     monkeypatch.setattr(tick.claims, "reap_stale", lambda: None)
     monkeypatch.setattr(tick.claims, "active_claims", lambda: {})
     monkeypatch.setattr(
@@ -1298,8 +1305,10 @@ def test_failed_trial_receipt_survives_switch_off_and_drain(monkeypatch, capsys)
         lambda *a, **k: {"planned": [], "skipped": [], "candidates": []},
     )
     tick.research_tick([], {}, dry_run=False, env={"ORCH_EXPERIMENT_PRODUCER": "0"})
-    # With T5, generation bump happens and clears the verdict even when producer is OFF
-    assert "generation bump from 1 to 2" in capsys.readouterr().err
+    assert (
+        "producer: trial verdict fail (unresolved_unknown); launches stopped — owner decision"
+        in capsys.readouterr().err
+    )
 
 
 def producer_derivation_proof(tmp_path, monkeypatch):

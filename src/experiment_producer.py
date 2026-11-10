@@ -877,8 +877,11 @@ def trial_defaults(now=None, *, active=False):
             }
             # Remove None values to avoid cluttering the archive
             old_trial = {k: v for k, v in old_trial.items() if v is not None}
-            if old_trial:
+            # Archive only a trial that existed: the generation tag alone is not a prior trial.
+            if set(old_trial) - {"trial_generation"}:
                 previous_trials.append(old_trial)
+            elif not previous_trials:
+                state.pop("previous_trials", None)
 
             # Start fresh trial with same parameters
             state.update(

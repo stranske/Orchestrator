@@ -883,6 +883,7 @@ def build_research_plan(
         unevaluated = research_subjects.unevaluated_experiment_ids(db)
         current_unevaluated = unevaluated["total"]
         current_drainable = unevaluated["drainable"]
+        current_unreadable = unevaluated["unreadable"]
     finally:
         if close_db:
             db.close()
@@ -902,6 +903,7 @@ def build_research_plan(
                 "reason": f"unevaluated {current_unevaluated}/{int(unevaluated_cap)}, drainable {current_drainable}",
                 "unevaluated_backlog": current_unevaluated,
                 "unevaluated_backlog_drainable": current_drainable,
+                "unevaluated_backlog_unreadable": current_unreadable,
                 "unevaluated_cap": int(unevaluated_cap),
             }
         )
@@ -938,12 +940,28 @@ def build_research_plan(
         "unevaluated_cap": unevaluated_cap,
         "unevaluated_backlog": current_unevaluated,
         "unevaluated_backlog_drainable": current_drainable,
+        "unevaluated_backlog_unreadable": current_unreadable,
         "remaining_backlog_slots": remaining_backlog_slots,
         "per_subject_cap": per_subject_cap,
     }
 
 
 def _selftest():
+    """Run the selftest against a temporary experiments directory, never the live one."""
+    import tempfile
+
+    import exp_abcd
+
+    saved = exp_abcd.EXP_DIR
+    with tempfile.TemporaryDirectory(prefix="research-scheduler-exp-") as tmp:
+        exp_abcd.EXP_DIR = Path(tmp) / "experiments"
+        try:
+            _selftest_body()
+        finally:
+            exp_abcd.EXP_DIR = saved
+
+
+def _selftest_body():
     import json
     import sqlite3
     import tempfile

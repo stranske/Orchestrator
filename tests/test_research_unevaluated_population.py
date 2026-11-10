@@ -386,33 +386,36 @@ def test_mixed_experiments(conn, exp_dir):
     assert result["unreadable"] == 1, f"Expected 1 unreadable, got {result['unreadable']}"
 
 
-# Deliberate break test - this is for the deliberate-break -> revert test
-# The test will be modified by the test runner to break and then revert
-def test_deliberate_break_meta_json_restriction(conn, exp_dir):
-    """Deliberate break: drop the meta.json restriction to verify the test catches it.
-
-    This test is designed to FAIL when the meta.json restriction is removed.
-    It will be used for the deliberate-break -> revert acceptance criterion.
-    """
+def test_invalid_utf8_meta_counts_as_unreadable_not_fail_open(conn, exp_dir):
+    """One meta.json with invalid UTF-8 is counted as unreadable; it must not zero the backlog."""
     now = time.time()
-
-    # Create a research-program experiment without an experiments dir
-    research_exp_id = "research-program:deliberate-break"
-    conn.execute(
-        "INSERT INTO runs (run_id, ts, agent, task_type, target, experiment_id) VALUES (?, ?, ?, ?, ?, ?)",
-        ("run-1", now, "codex", "implement", "Owner/Repo#1", research_exp_id),
-    )
-
+    for exp_id, payload in (
+        ("exp-good", b'{"experiment_id": "exp-good"}'),
+        ("exp-bad", b"\xff\xfe{"),
+    ):
+        (exp_dir / exp_id).mkdir()
+        (exp_dir / exp_id / "meta.json").write_bytes(payload)
+        conn.execute(
+            "INSERT INTO runs (run_id, ts, agent, task_type, target, experiment_id) VALUES (?, ?, ?, ?, ?, ?)",
+            (f"run-{exp_id}", now, "codex", "implement", "Owner/Repo#1", exp_id),
+        )
     result = research_subjects.unevaluated_experiment_ids(conn, now=now)
+    assert result["ids"] == {"exp-good", "exp-bad"}
+    assert result["unreadable"] == 1
+    assert result["total"] == 2
 
-    # This test SHOULD FAIL if the meta.json restriction is removed
-    # (i.e., if research-program IDs without exp dir are counted)
-    # The fix ensures they are NOT counted
-    assert research_exp_id not in result["ids"], (
-        "DELIBERATE BREAK CHECK: research-program ID should NOT be counted. "
-        f"If this fails, the meta.json restriction has been removed. "
-        f"Pending IDs: {result['ids']}"
-    )
+
+def test_run_older_than_window_is_not_counted_and_unknown_age_is(conn, exp_dir):
+    now = time.time()
+    for exp_id, ts in (("exp-old", now - 10**8), ("exp-nots", None)):
+        (exp_dir / exp_id).mkdir()
+        (exp_dir / exp_id / "meta.json").write_text(json.dumps({"experiment_id": exp_id}))
+        conn.execute(
+            "INSERT INTO runs (run_id, ts, agent, task_type, target, experiment_id) VALUES (?, ?, ?, ?, ?, ?)",
+            (f"run-{exp_id}", ts, "codex", "implement", "Owner/Repo#1", exp_id),
+        )
+    result = research_subjects.unevaluated_experiment_ids(conn, now=now)
+    assert result["ids"] == {"exp-nots"}
 
 
 def test_followup_decision_marker_is_not_drainable(tmp_path, monkeypatch):
