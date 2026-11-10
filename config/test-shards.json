@@ -186,6 +186,7 @@
       "tests/test_rate_incidents_expiry.py",
       "tests/test_relearn_telemetry_validity.py",
       "tests/test_research_intake.py",
+      "tests/test_research_unevaluated_population.py",
       "tests/test_review_writer_gate.py",
       "tests/test_route_weights_publication.py",
       "tests/test_runner_effect_bridge.py",

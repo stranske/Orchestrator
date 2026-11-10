@@ -266,17 +266,8 @@ def unevaluated_experiment_ids(
             try:
                 with open(meta_path, "r") as f:
                     json.load(f)  # Validate JSON
-                # Readable and valid JSON - now check if it's drainable by followup
-                # Drainable means: meta.json + spec.md present, no eval-maps.json, no followup-skip.json
-                spec_path = exp_path / "spec.md"
-                eval_maps_path = exp_path / "eval-maps.json"
-                followup_skip_path = exp_path / "followup-skip.json"
-
-                is_drainable = (
-                    spec_path.exists()
-                    and not eval_maps_path.exists()
-                    and not followup_skip_path.exists()
-                )
+                # Drainable = exp_abcd.followup will attempt it (its own predicate, not a copy).
+                is_drainable = exp_abcd.followup_will_attempt(exp_path)
 
                 pending_ids.add(exp_id)
                 if is_drainable:

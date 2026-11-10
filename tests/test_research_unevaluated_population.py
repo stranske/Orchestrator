@@ -413,3 +413,21 @@ def test_deliberate_break_meta_json_restriction(conn, exp_dir):
         f"If this fails, the meta.json restriction has been removed. "
         f"Pending IDs: {result['ids']}"
     )
+
+
+def test_followup_decision_marker_is_not_drainable(tmp_path, monkeypatch):
+    """Drainable uses exp_abcd.followup's own predicate: a decided experiment is never re-attempted."""
+    import exp_abcd
+
+    edir = tmp_path / "exp-decided"
+    edir.mkdir()
+    (edir / "meta.json").write_text("{}")
+    (edir / "spec.md").write_text("spec")
+    assert exp_abcd.followup_will_attempt(edir) is True
+    (edir / "followup-decision.json").write_text("{}")
+    assert exp_abcd.followup_will_attempt(edir) is False
+    assert set(exp_abcd.FOLLOWUP_TERMINAL_MARKERS) == {
+        "eval-maps.json",
+        "followup-skip.json",
+        "followup-decision.json",
+    }
