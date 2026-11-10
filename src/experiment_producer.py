@@ -35,6 +35,7 @@ TRIAL_PASS_MERGED = 6
 PRODUCER_FOLLOWUP_DAYS = 30
 PRODUCER_LOCK_MAX_HOURS = 72
 TERMINAL_STATUSES = {"merged", "no_winner", "discarded", "expired", "member_pushed"}
+TRIAL_GENERATION = 2
 
 
 def state_path():
@@ -850,7 +851,64 @@ def trial_defaults(now=None, *, active=False):
     now = time.time() if now is None else now
     with locked_state():
         state = read_state()
-        if not state.get("trial_end") and active:
+        current_generation = state.get("trial_generation", 1)
+        
+        # Check if we need to bump the generation
+        if current_generation < TRIAL_GENERATION and active:
+            # Archive old trial fields
+            previous_trials = state.setdefault("previous_trials", [])
+            old_trial = {
+                "trial_generation": current_generation,
+                "trial_start": state.get("trial_start"),
+                "trial_end": state.get("trial_end"),
+                "trial_verdict": state.get("trial_verdict"),
+                "trial_metrics": state.get("trial_metrics"),
+                "trial_unknown": state.get("trial_unknown"),
+                "trial_reason": state.get("trial_reason"),
+                "pending_since": state.get("pending_since"),
+                "resolves_on": state.get("resolves_on"),
+                "last_verdict_check": state.get("last_verdict_check"),
+                "launched_today": state.get("launched_today"),
+                "day": state.get("day"),
+                "last_draw_ts": state.get("last_draw_ts"),
+                "cells_fresh": state.get("cells_fresh"),
+                "cells_total": state.get("cells_total"),
+                "skips": state.get("skips"),
+            }
+            # Remove None values to avoid cluttering the archive
+            old_trial = {k: v for k, v in old_trial.items() if v is not None}
+            if old_trial:
+                previous_trials.append(old_trial)
+            
+            # Start fresh trial with same parameters
+            state.update(
+                trial_generation=TRIAL_GENERATION,
+                trial_start=now,
+                trial_end=time.strftime("%Y%m%d", time.gmtime(now + COVERAGE_DAYS * 86400)),
+            )
+            # Clear verdict to default ON by removing it
+            state.pop("trial_verdict", None)
+            # Clear state fields that should reset
+            state.pop("trial_metrics", None)
+            state.pop("trial_unknown", None)
+            state.pop("trial_reason", None)
+            state.pop("pending_since", None)
+            state.pop("resolves_on", None)
+            state.pop("last_verdict_check", None)
+            state.pop("launched_today", None)
+            state.pop("day", None)
+            state.pop("last_draw_ts", None)
+            state.pop("cells_fresh", None)
+            state.pop("cells_total", None)
+            state.pop("skips", None)
+            
+            save_state(state)
+            print(
+                f"[experiment producer] generation bump from {current_generation} to {TRIAL_GENERATION}; "
+                f"trial end {state['trial_end']}", 
+                file=sys.stderr
+            )
+        elif not state.get("trial_end") and active:
             state.update(
                 trial_start=now,
                 trial_end=time.strftime("%Y%m%d", time.gmtime(now + COVERAGE_DAYS * 86400)),
@@ -866,8 +924,10 @@ def trial_defaults(now=None, *, active=False):
 
 def _cached_verdict(state, now):
     # A terminal verdict is immutable, including when later GitHub reads would flake.
-    if state.get("trial_verdict") in {"pass", "fail"}:
-        return state["trial_verdict"]
+    # If trial_verdict is None (e.g., after generation bump), treat as pending
+    verdict = state.get("trial_verdict")
+    if verdict in {"pass", "fail"}:
+        return verdict
     if (
         not state.get("trial_start")
         or now < trial_window_end(state) + WINNER_MERGE_GRACE_DAYS * 86400
