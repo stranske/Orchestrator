@@ -19,8 +19,9 @@ def test_shard_lists_partition_every_collected_test_exactly_once():
         cwd=verify.ROOT,
         capture_output=True,
         text=True,
-        check=True,
+        check=False,
     )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
     ids = [
         line
         for line in proc.stdout.splitlines()

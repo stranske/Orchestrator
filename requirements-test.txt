@@ -1,0 +1,6 @@
+# Runtime acceptance discovers this file when provisioning a disposable repository venv.
+# Reuse CI's dependency pins, including imports required for full-suite collection.
+-r requirements.lock
+pytest
+pytest-cov
+pytest-xdist
