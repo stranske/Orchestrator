@@ -1447,6 +1447,7 @@ def live_pace(n, previous_weight=0):
 def test_repeated_fresh_short_history_ticks_protect_low_usage():
     for n in (0, 2):
         prior = 1.0
+        recovery_prior = 0.0
         weights = []
         data = observations([START + h * 3600 for h in (3, 4, 5)], [0, 0.075, 0.15])
         for tick in range(16):
@@ -1467,6 +1468,28 @@ def test_repeated_fresh_short_history_ticks_protect_low_usage():
             assert abs(weight - prior) <= pacing.MAX_WEIGHT_CHANGE
             assert weight >= 0.5, f"tick={tick}, resets={n}, weights={weights}"
             prior = weight
+            recovering = evaluate(
+                now=now,
+                source_ts=now,
+                u=0.15,
+                n=n,
+                previous_weight=recovery_prior,
+                samples=data,
+            )
+            recovery_weight = recovering["routing_weight"]
+            assert abs(recovery_weight - recovery_prior) <= pacing.MAX_WEIGHT_CHANGE
+            assert recovery_weight >= min(0.5, recovery_prior + pacing.MAX_WEIGHT_CHANGE)
+            recovery_prior = recovery_weight
+            for failure in (dict(u=1), dict(u=0.15, exhausted_at=now)):
+                failed = evaluate(
+                    now=now,
+                    source_ts=now,
+                    n=n,
+                    samples=data,
+                    previous_weight=1,
+                    **failure,
+                )
+                assert failed["state"] == "shed" and failed["routing_weight"] == 0
         assert weights[:2] == [0.75, 0.5]
         assert min(weights) == 0.5
     # Mature history may justify a lower target; actual failures always override.
