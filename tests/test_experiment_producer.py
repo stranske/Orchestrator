@@ -1671,6 +1671,9 @@ def test_generation_bump_runs_when_old_verdict_is_fail(tmp_path, monkeypatch, ca
     With state holding trial_verdict="fail" and producer env OFF, an active tick
     must still bump the generation and clear the verdict so orchestrate.sh computes ON.
     """
+    import time
+    import tick
+
     monkeypatch.setenv("ORCH_EXPERIMENT_PRODUCER", "0")  # Producer switch OFF
     # Start with an old generation (1) and a terminal fail verdict
     producer.save_state(
@@ -1689,7 +1692,14 @@ def test_generation_bump_runs_when_old_verdict_is_fail(tmp_path, monkeypatch, ca
 
     # Active tick (dry_run=False) should bump generation even with producer OFF
     now = 2000
-    producer.trial_defaults(now=now, active=True)
+    # Patch time.time to return the test's now value
+    monkeypatch.setattr(time, "time", lambda: now)
+    # Also patch time.gmtime for trial_end calculation
+    original_gmtime = time.gmtime
+    monkeypatch.setattr(time, "gmtime", lambda x: original_gmtime(0))  # Use epoch for reproducibility
+    
+    # Invoke tick.research_tick to exercise the integration with producer switch OFF
+    tick.research_tick([], {}, dry_run=False, env={"ORCH_EXPERIMENT_PRODUCER": "0"})
 
     # Check that generation was bumped
     state = producer.read_state()
@@ -1697,6 +1707,11 @@ def test_generation_bump_runs_when_old_verdict_is_fail(tmp_path, monkeypatch, ca
     assert state["trial_start"] == now
     # Verdict must be cleared so orchestrate.sh defaults ON
     assert "trial_verdict" not in state
+
+    # Verify the shell default evaluates to ON by checking trial_defaults output
+    # When verdict is cleared, trial_defaults returns (end, "pending") and shell computes default=1
+    trial_output = producer.trial_defaults()
+    assert trial_output[1] == "pending", f"Expected pending verdict for shell default ON, got {trial_output[1]}"
 
     # Verify message was printed
     captured = capsys.readouterr()
