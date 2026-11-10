@@ -76,9 +76,10 @@ this repair makes no issue-state change.
 
 AST comparison against the original git blob found all 23 original test names
 exactly once: the preserved mode-selection test plus 7 ccusage, 10 exploration,
-and 5 dashboard tests in their owning files. Twenty original bodies remain
-identical; the loaded-session, persisted-cost and acquisition-blocked tests have
-additional assertions. The shard manifest includes the recovered files.
+and 5 dashboard tests in their owning files. That earlier comparison recorded
+20 identical original bodies, before the final CLI/isolation assertions described
+above; the loaded-session, persisted-cost and acquisition-blocked tests already
+had additional assertions. The shard manifest includes the recovered files.
 
 The recovered fixtures activate `advisor_hermetic` under `tmp_path`, repoint
 captured runtime paths and feedback databases, and explicitly isolate adapters'
