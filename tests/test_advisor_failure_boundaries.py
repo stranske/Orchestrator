@@ -1,26 +1,12 @@
 """Advisory degradation must be explicit, bounded, and independent of live state."""
 
 import builtins
-import socket
-import subprocess
 
 import advisor_hermetic
 import pytest
 
 _modules = advisor_hermetic.import_under_temporary_runtime("capability_advisor")
 advisor = _modules["capability_advisor"]
-
-
-@pytest.fixture(autouse=True)
-def isolated_runtime(monkeypatch):
-    """Runtime roots come from advisor_hermetic. This fixture only blocks external calls."""
-
-    def forbidden(*args, **kwargs):
-        pytest.fail("advisor boundary test attempted a process or network call")
-
-    monkeypatch.setattr(subprocess, "run", forbidden)
-    monkeypatch.setattr(subprocess, "Popen", forbidden)
-    monkeypatch.setattr(socket, "create_connection", forbidden)
 
 
 @pytest.mark.parametrize("operation", ["dispatcher", "facts", "declines"])

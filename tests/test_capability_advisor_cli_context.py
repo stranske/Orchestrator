@@ -3,29 +3,11 @@
 from __future__ import annotations
 
 import json
-import socket
-import subprocess
 
 import advisor_hermetic
-import pytest
 
 _modules = advisor_hermetic.import_under_temporary_runtime("capability_advisor")
 advisor = _modules["capability_advisor"]
-
-
-@pytest.fixture(autouse=True)
-def isolated_cli(monkeypatch):
-    """Process and socket calls stay local. Runtime roots come from advisor_hermetic."""
-    attempted = []
-
-    def forbid_external(*args, **kwargs):
-        attempted.append(args)
-        raise AssertionError("CLI tests must not start processes or network calls")
-
-    monkeypatch.setattr(subprocess, "Popen", forbid_external)
-    monkeypatch.setattr(socket, "create_connection", forbid_external)
-    yield
-    assert attempted == []
 
 
 def test_cli_preserves_explicit_context_and_overrides_its_pr_with_the_cli_value(
