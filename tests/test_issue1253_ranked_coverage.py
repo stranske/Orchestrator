@@ -34,7 +34,7 @@ class RankedCoverageTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="issue1253-")
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
+        self.root = Path(temporary.name).resolve()
         self.use_patch(patch.object(tempfile, "tempdir", str(self.root)))
         self.use_patch(
             patch.dict(
