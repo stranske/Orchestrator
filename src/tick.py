@@ -220,7 +220,7 @@ def research_tick(
         claims.reap_stale()
     rng = rng or __import__("random").Random()
     producer_enabled = env.get("ORCH_EXPERIMENT_PRODUCER", "0") == "1"
-    if not dry_run and producer_enabled:
+    if not dry_run:
         experiment_producer.trial_defaults(active=True)
     if not dry_run:
         experiment_producer.trial_verdict()
@@ -370,8 +370,12 @@ def research_tick(
                     reason=admission["reason"],
                     metadata={
                         "unevaluated_backlog": admission.get("unevaluated_backlog"),
-                        "unevaluated_backlog_drainable": admission.get("unevaluated_backlog_drainable"),
-                        "unevaluated_backlog_unreadable": admission.get("unevaluated_backlog_unreadable"),
+                        "unevaluated_backlog_drainable": admission.get(
+                            "unevaluated_backlog_drainable"
+                        ),
+                        "unevaluated_backlog_unreadable": admission.get(
+                            "unevaluated_backlog_unreadable"
+                        ),
                         "unevaluated_cap": admission.get("unevaluated_cap"),
                     },
                     conn=conn,

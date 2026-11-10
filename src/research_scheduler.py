@@ -912,7 +912,8 @@ def build_research_plan(
             if row.get("reason")
             and (
                 str(row.get("reason")).startswith("unevaluated")
-                or str(row.get("reason")) in {
+                or str(row.get("reason"))
+                in {
                     "subject_active",
                     "subject_evaluable",
                     "subject_planned",
@@ -944,7 +945,6 @@ def build_research_plan(
 
 def _selftest():
     import json
-    import os
     import sqlite3
     import tempfile
     from pathlib import Path
@@ -1309,11 +1309,12 @@ def _selftest():
     }, repeated_plan
     # Create a meta.json file for the 'cap-exp' experiment so it gets counted by T1
     import exp_abcd
+
     exp_dir = exp_abcd.exp_paths("cap-exp")
     exp_dir.mkdir(parents=True, exist_ok=True)
     with open(exp_dir / "meta.json", "w") as f:
         json.dump({"experiment_id": "cap-exp", "status": "pending"}, f)
-    
+
     freshness_db.execute(
         "INSERT INTO runs (run_id,ts,target,task_type,agent,experiment_id) "
         "VALUES ('cap-run',?,?,?,'codex','cap-exp')",

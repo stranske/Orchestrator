@@ -23,7 +23,7 @@
       "missing_lines": [3158, 3170, 3179, 3301, 3473, 3548, 3618, 3772, 3774]
     },
     "periodic_report": {"head_missing": 2, "missing_lines": [2998, 3119]},
-    "tick": {"head_missing": 3, "missing_lines": [897, 1289, 1293]},
+    "tick": {"head_missing": 3, "missing_lines": [905, 1297, 1301]},
     "repo_knowledge": {"head_missing": 3, "missing_lines": [1994, 1995, 2490]}
   },
   "repo": {

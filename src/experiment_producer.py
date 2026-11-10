@@ -852,7 +852,7 @@ def trial_defaults(now=None, *, active=False):
     with locked_state():
         state = read_state()
         current_generation = state.get("trial_generation", 1)
-        
+
         # Check if we need to bump the generation
         if current_generation < TRIAL_GENERATION and active:
             # Archive old trial fields
@@ -879,7 +879,7 @@ def trial_defaults(now=None, *, active=False):
             old_trial = {k: v for k, v in old_trial.items() if v is not None}
             if old_trial:
                 previous_trials.append(old_trial)
-            
+
             # Start fresh trial with same parameters
             state.update(
                 trial_generation=TRIAL_GENERATION,
@@ -901,12 +901,12 @@ def trial_defaults(now=None, *, active=False):
             state.pop("cells_fresh", None)
             state.pop("cells_total", None)
             state.pop("skips", None)
-            
+
             save_state(state)
             print(
                 f"[experiment producer] generation bump from {current_generation} to {TRIAL_GENERATION}; "
-                f"trial end {state['trial_end']}", 
-                file=sys.stderr
+                f"trial end {state['trial_end']}",
+                file=sys.stderr,
             )
         elif not state.get("trial_end") and active:
             state.update(

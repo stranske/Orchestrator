@@ -17,7 +17,6 @@ import sys
 import time
 from collections import Counter, defaultdict
 from collections.abc import Collection, Mapping
-from pathlib import Path
 from typing import Any, TypeVar
 
 import feedback
@@ -222,15 +221,16 @@ def unevaluated_experiment_ids(
     Returns a dict with:
     - 'ids': set of experiment IDs that are pending (have meta.json, no evaluation row, within window)
     - 'unreadable': count of experiments with unreadable meta.json
-    - 'drainable': count of experiments with readable meta.json (drainable by followup)
+    - 'drainable': count of experiments that exp_abcd.followup can evaluate (meta.json + spec.md
+      present, no eval-maps.json, no followup-skip.json)
     - 'total': total count of pending experiments (ids only, for backward compatibility with len())
     """
     window = EVALUABLE_WINDOW_DAYS if window_days is None else int(window_days)
     cutoff = (time.time() if now is None else float(now)) - max(0, window) * 86400.0
-    
+
     # Import exp_abcd here to avoid circular import
     import exp_abcd
-    
+
     try:
         # Get all experiment IDs from runs table with their max timestamp
         rows = conn.execute(
@@ -240,40 +240,52 @@ def unevaluated_experiment_ids(
             "AND NOT EXISTS (SELECT 1 FROM evaluations_v2 e WHERE e.experiment_id=r.experiment_id) "
             "GROUP BY r.experiment_id"
         ).fetchall()
-        
+
         unreadable_count = 0
         drainable_count = 0
         pending_ids = set()
-        
+
         for row in rows:
             exp_id = str(row[0])
             ts = row[1]
-            
+
             # FAIL SAFE: experiments with None timestamp have unknown age and MUST be counted
             # Skip only if timestamp is not None and is too old
             if ts is not None and float(ts) < cutoff:
                 continue
-            
+
             # Check if meta.json exists
             exp_path = exp_abcd.exp_paths(exp_id)
             meta_path = exp_path / "meta.json"
-            
+
             if not meta_path.exists():
                 # No meta.json, not a valid A/B experiment - don't count
                 continue
-            
+
             # Try to read meta.json
             try:
                 with open(meta_path, "r") as f:
                     json.load(f)  # Validate JSON
-                # Readable and valid JSON
+                # Readable and valid JSON - now check if it's drainable by followup
+                # Drainable means: meta.json + spec.md present, no eval-maps.json, no followup-skip.json
+                spec_path = exp_path / "spec.md"
+                eval_maps_path = exp_path / "eval-maps.json"
+                followup_skip_path = exp_path / "followup-skip.json"
+
+                is_drainable = (
+                    spec_path.exists()
+                    and not eval_maps_path.exists()
+                    and not followup_skip_path.exists()
+                )
+
                 pending_ids.add(exp_id)
-                drainable_count += 1
+                if is_drainable:
+                    drainable_count += 1
             except (json.JSONDecodeError, PermissionError, OSError):
                 # Unreadable meta.json - count as pending but track separately
                 pending_ids.add(exp_id)
                 unreadable_count += 1
-        
+
         return {
             "ids": pending_ids,
             "unreadable": unreadable_count,
@@ -1409,26 +1421,27 @@ def _selftest() -> None:
     cap_now = now
     # Create experiments directories with meta.json files for A/B experiments
     import json
+
     import exp_abcd
-    
+
     # Ensure the experiments directory exists
     exp_abcd.EXP_DIR.mkdir(exist_ok=True)
-    
+
     # Create exp-fresh (within window, should be counted)
     exp_fresh_dir = exp_abcd.EXP_DIR / "exp-fresh"
     exp_fresh_dir.mkdir(exist_ok=True)
     (exp_fresh_dir / "meta.json").write_text(json.dumps({"experiment_id": "exp-fresh"}))
-    
+
     # Create exp-stale (past window, should NOT be counted)
     exp_stale_dir = exp_abcd.EXP_DIR / "exp-stale"
     exp_stale_dir.mkdir(exist_ok=True)
     (exp_stale_dir / "meta.json").write_text(json.dumps({"experiment_id": "exp-stale"}))
-    
+
     # Create exp-nots (no timestamp, FAIL SAFE should be counted)
     exp_nots_dir = exp_abcd.EXP_DIR / "exp-nots"
     exp_nots_dir.mkdir(exist_ok=True)
     (exp_nots_dir / "meta.json").write_text(json.dumps({"experiment_id": "exp-nots"}))
-    
+
     conn.execute(
         "INSERT INTO runs (run_id,ts,agent,task_type,target,experiment_id) VALUES (?,?,?,?,?,?)",
         ("run-fresh", cap_now - 2 * 86400, "codex", "testgen", "Owner/Repo#9", "exp-fresh"),
@@ -1464,14 +1477,18 @@ def _selftest() -> None:
     assert verdict["unevaluated_backlog_total"] >= verdict["unevaluated_backlog"], verdict
     # With the new meta.json requirement: exp-fresh and exp-nots are reachable (both have meta.json),
     # exp-stale is not reachable (past window). Total includes all three.
-    assert verdict["unevaluated_backlog_total"] >= 2, verdict  # includes exp-stale which is past window
+    assert (
+        verdict["unevaluated_backlog_total"] >= 2
+    ), verdict  # includes exp-stale which is past window
     assert verdict["unevaluated_backlog"] == 2, verdict  # reachable: fresh + unknown-age only
     # ...and an evaluated experiment leaves the count by the original path, unchanged.
     conn.execute(
         "INSERT INTO evaluations (experiment_id,implementer,evaluator,score,ts) VALUES (?,?,?,?,?)",
         ("exp-fresh", "codex", "cursor", 7.0, cap_now),
     )
-    assert "exp-fresh" not in unevaluated_experiment_ids(conn, now=cap_now)["ids"], "evaluated must clear"
+    assert (
+        "exp-fresh" not in unevaluated_experiment_ids(conn, now=cap_now)["ids"]
+    ), "evaluated must clear"
     # THE TWO WINDOWS ARE ONE NUMBER BY CONSTRUCTION, not by comment: followup defaults to it.
     import inspect as _inspect
 
