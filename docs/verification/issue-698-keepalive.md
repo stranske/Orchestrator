@@ -107,3 +107,58 @@ the new regression also still needs its actual pytest run and subsequent CI.
 The installed mirror and handoff directory are both absent at this timestamp.
 Post-sync live report acceptance and the repair-bound 48-hour ledger window
 remain unverified. No further runtime checkbox can be completed on this runner.
+
+## Current-head reconciliation — 2026-11-10T06:23:17Z
+
+Reviewed commits `0e443b22`, `2a6fb731` and `e6edc543`. The two checked
+implementation/mutation tasks remain supported. CI now verifies committed head
+`e6edc543f0cc73a23f21f57f98ad01e0117b951d`, testing merge revision
+`11073416d5e248920cdfef30844fda3045bf2efa`, in run
+[42767318057](https://github.com/stranske/Orchestrator/actions/runs/42767318057):
+
+- [Checkout aggregate](https://github.com/stranske/Orchestrator/actions/runs/42767318057/job/129667557195)
+  succeeded at `06:21:37Z`: 8,451 passed, zero failed, 8,480 collected;
+  104 selftests spoke, 3/5 gates green; 27 test, seven selftest and two gate
+  skips for named missing prerequisites.
+- [Mirror aggregate](https://github.com/stranske/Orchestrator/actions/runs/42767318057/job/129667913866)
+  succeeded at `06:20:38Z`: 8,430 passed; 104 selftests spoke, 3/5 gates
+  green; 48 test, seven selftest and two gate skips for named prerequisites.
+
+This supplies the pending verifier evidence for the committed head on CI's
+Python 3.14.10. It does not verify the new working-tree extension below. The
+historical focused suite used Python 3.12.2 on the original machine. No local
+full suite, shard or verifier was launched.
+
+The working-tree extension checks delayed report evidence at every fresh tick:
+recompute sixty seconds after the persisted tick, read the prior snapshot from
+disk, retain its routed weight/timestamp/age in the report, and display the
+distinct recomputed weight. At the first observation these are respectively
+0.75 and 0.5, with a displayed delta of -0.250. Capacity, usage samples and
+ledger must remain byte-identical throughout report generation. This extends
+the existing test without changing collection counts and supports interpreting
+the requested runtime evidence; it does not establish live acceptance.
+
+A direct smoke of the production functions with temporary state passed on the
+selected `/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3`:
+
+```text
+resets=0: 16 delayed reports, both pools; tick identity, recomputed weights and byte-identical evidence passed
+resets=2: 16 delayed reports, both pools; tick identity, recomputed weights and byte-identical evidence passed
+Production smoke passed; pytest and Black remain unavailable.
+```
+
+Python AST parsing and `git diff --check` passed. The focused pytest command
+with `-m 'not slow'`, Black formatting and the prescribed repository-wide Black
+check were attempted and failed with `No module named pytest` / `No module
+named black`. Temporary dependency installation also failed. The Python edit
+is intentionally uncommitted: the mandatory pre-commit Black gate cannot pass.
+Run the actual focused suite and both Black commands before committing, then
+obtain CI for the resulting revision.
+
+The PR body update, blocker comment and `needs-human` label each returned
+`MCP tool call requires approval, but approval policy is never`. No remote
+checkbox or label was changed, and no alternate mutation path was attempted.
+The verifier checkbox may be reconciled for `e6edc543`, but the pending source
+edit needs its own verification. Runtime acceptance stays unchecked: the local
+mirror and handoff directory are absent, and there is no repair-bound live
+report or clean 48-hour ledger window. PR #1312 is open and ready for review.

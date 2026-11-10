@@ -1519,6 +1519,33 @@ def test_repeated_fresh_short_history_ticks_protect_low_usage(tmp_path, monkeypa
                 line = next(line for line in report.splitlines() if line.startswith(prefix))
                 assert f"span_h={row['span_h']} " in line
                 assert f"routed_weight={weight:.3f} (tick ts={now}, age=0s)" in line
+            # A later report must identify the recorded tick separately from its
+            # fresh computation and must not publish either result as another tick.
+            evidence_paths = (
+                handoff / "capacity.json",
+                handoff / "capacity-ledger.ndjson",
+                handoff / "pacing-usage-samples.ndjson",
+            )
+            recorded = {path: path.read_bytes() for path in evidence_paths}
+            report_now = now + 60
+            recomputed = {pool: dict(state="ok", reason="native") for pool in agents}
+            pacing_usage.integrate(
+                recomputed, now=report_now, handoff=handoff, usage_data=usage, record=False
+            )
+            later_report = pacing_usage.report(
+                handoff, now=report_now, current=dict(agents=recomputed)
+            )
+            for pool in agents:
+                prefix = f"pool {pool}:"
+                line = next(line for line in later_report.splitlines() if line.startswith(prefix))
+                computed_weight = recomputed[pool]["pacing"]["routing_weight"]
+                assert computed_weight >= 0.5
+                assert f"routed_weight={weight:.3f} (tick ts={now}, age=60s)" in line
+                assert f"report_weight={computed_weight:.3f} " in line
+                if tick == 0:
+                    assert computed_weight == 0.5 < weight
+                    assert "weight_delta=-0.250" in line
+            assert {path: path.read_bytes() for path in evidence_paths} == recorded
         ledger = pacing_usage.read_rows(handoff / "capacity-ledger.ndjson")
         assert len(ledger) == 16
         for tick, entry in enumerate(ledger):
