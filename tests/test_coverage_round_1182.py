@@ -100,7 +100,14 @@ class TestExplorationCollection(unittest.TestCase):
             {**safe, "exploration": False},
             safe,
         ]
-        table = {"implement": {"agents": [None, {"agent": "late", "mode": "local", "late": True}]}}
+        table = {
+            "implement": {
+                "agents": [
+                    None,
+                    {"agent": "late", "mode": "local", "late": True},
+                ],
+            },
+        }
         with patch.object(ec.router, "BACKUP_AGENTS", {"paygo"}), patch.object(
             ec.router, "ROUTE_TABLE", table
         ):
