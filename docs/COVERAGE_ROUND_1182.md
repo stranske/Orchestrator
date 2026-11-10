@@ -1,43 +1,76 @@
 # Coverage round 1182 recovery
 
-## Current continuation: validation blocked
+## Current delivered-tree evidence (2026-11-10)
 
-The 2026-11-10 automation workspace independently compared all 23 original test
-names against the source file fetched from commit
-`515371bd806b1b297704b3fef796274a216e6bde`; each occurs exactly once in the four
-delivered files. No additional original tests are missing.
+**Outcome: 23 recovered/preserved tests pass on the delivered tree.**
+PR [#1323](https://github.com/stranske/Orchestrator/pull/1323) merged as
+`17a7c031f24a1a92f9c9e3e90320d5c1c2c13574`. This evidence-only repair starts
+from main at `c12f08149f0973882979e46be5f4bdd129175a9f` (tree
+`787522cebc596a8b8a15c8fcf78b887c296fa123`). It preserves the merged tests.
 
-The current test-only changes explicitly isolate router HANDOFF/DECISION_JSON
-and strengthen the recovered CLI tests: active exploration writes the expected
-private decision, either independent dispatch blocker preserves that file and
-does not dispatch, dashboard JSON matches stdout, Markdown matches rendering,
-and `--no-capacity` forbids probing. Both CLI tests check that no ledger is created.
-Direct production-CLI smoke checks passed for dispatch blocking/decision
-preservation and dashboard exports with external process/network calls blocked.
-Those smoke checks are not pytest or coverage results.
+The acceptance outcome, commands, runtime and stop rule were recorded before
+execution in [delivered-acceptance.txt](verification/coverage-round-1182/delivered-acceptance.txt).
+The stop rule is three failures at one step or 30 minutes. All four runs passed
+on the first attempt; no test or production repair was needed. No repository
+virtual environment was selected, so the runtime was `/opt/anaconda3/bin/python3`
+(Python 3.12.2, pytest 9.2.0). No full local suite or verify pipeline was run
+for this repair.
 
-Validation is blocked in this workspace: Python 3.14.10 cannot import `pytest`
-or `black`. Installing those tools failed because `pypi.org` DNS resolution is
-unavailable; the installed tools and local wheel cache contain neither package.
-The focused pytest/coverage command and Black check both exit 1 with
-`No module named pytest` / `No module named black`. Syntax compilation and
-`git diff --check` pass. The required Black gate therefore prevents committing
-these Python changes. No task checkbox is newly completed.
+```sh
+/opt/anaconda3/bin/python3 -m pytest tests/test_coverage_round_1182.py tests/test_ccusage_reconcile.py tests/test_exploration_collection.py tests/test_observability_dashboard.py -vv --no-cov
+/opt/anaconda3/bin/python3 -m pytest tests/test_ccusage_reconcile.py -vv --no-cov
+/opt/anaconda3/bin/python3 -m pytest tests/test_exploration_collection.py -vv --no-cov
+/opt/anaconda3/bin/python3 -m pytest tests/test_observability_dashboard.py -vv --no-cov
+```
 
-The requested blocker comment and `needs-human` label could not be added to
-PR #1323: both GitHub writes were rejected because they require approval while
-this run's approval policy is `never`. The PR remains open and ready for review.
+Complete named output, command, source SHA/tree, runtime, exit code and wall time:
 
-The measurements, passing pytest results, and CI/Gate verdicts below describe
-the earlier heads named there; they do not validate this uncommitted continuation.
+| Run | Pytest result | Wall time | Transcript |
+|---|---|---:|---|
+| Preserved test plus all recovered tests | 23 passed in 4.28s | 5.340s | [delivered-focused.log](verification/coverage-round-1182/delivered-focused.log) |
+| ccusage chunk | 7 passed in 0.67s | 1.687s | [delivered-ccusage-chunk.log](verification/coverage-round-1182/delivered-ccusage-chunk.log) |
+| exploration chunk | 10 passed in 2.19s | 3.213s | [delivered-exploration-chunk.log](verification/coverage-round-1182/delivered-exploration-chunk.log) |
+| dashboard chunk | 5 passed in 0.89s | 1.914s | [delivered-dashboard-chunk.log](verification/coverage-round-1182/delivered-dashboard-chunk.log) |
 
-## Previously recorded evidence
+These runs cover the final CLI/isolation assertions, including
+`test_exploration_collection_main_paths` (private router HANDOFF/DECISION_JSON,
+active decision persistence, each independent dispatch blocker preserving that
+decision, no ledger creation) and `test_dashboard_markdown_and_main` (JSON file
+matching stdout, Markdown matching rendering, `--no-capacity` forbidding a live
+probe, no ledger creation). They also name the two mutation-sensitive tests:
+`test_ccusage_reconcile_uses_loaded_sessions` and
+`test_build_window_acquisition_blocked`. The restored mutation evidence remains
+in [COVERAGE_ROUND_1182_MUTATIONS.md](COVERAGE_ROUND_1182_MUTATIONS.md).
+
+Final-head [CI 42849835806](https://github.com/stranske/Orchestrator/actions/runs/42849835806)
+and [Gate 42849836260](https://github.com/stranske/Orchestrator/actions/runs/42849836260)
+both completed successfully on #1323 head
+`d715b7d9d1542f5952ba5ad0cf21123af62a6ec3`, before its merge. All four test
+files are byte-identical between that head and the delivered main source SHA
+above. The new local runs validate the delivered main tree, including its
+changed shared conftest; they do not relabel the older coverage artifacts as
+final-head measurements.
+
+## Historical opening blocker (superseded by merge and results above)
+
+An earlier 2026-11-10 automation workspace recovered all 23 original names from
+`515371bd806b1b297704b3fef796274a216e6bde` and strengthened the CLI/isolation
+assertions. Its Python 3.14.10 lacked pytest and Black, and package installation
+failed on DNS resolution. It reported failed validation and approval-rejected
+GitHub writes while #1323 was still open. Those were that workspace's historical
+blockers, not the state of this delivered tree. The test changes are now merged;
+there is no open #1323 or uncommitted test continuation. Its syntax/smoke checks
+were not pytest or coverage evidence; use the named local runs above for the
+final assertions.
+
+## Previously recorded evidence and provenance
 
 Checked 2026-11-10. Source recovery commit:
 `515371bd806b1b297704b3fef796274a216e6bde:tests/test_coverage_round_1182.py`.
 Validated test/source head: `e7f8daef8b9f12f2f5d5bb1900746253e4224381`.
-This continuation changes documentation and evidence only; the tests are already delivered.
-Issue #1182 was found closed and reopened; this PR does not close it.
+The older coverage/aggregate measurements below were recorded against that
+source head. Historical issue handling recorded #1182 as closed and reopened;
+this repair makes no issue-state change.
 
 ## Recovery and isolation
 
@@ -56,12 +89,17 @@ nothing, while apply persists the expected cost. No production edits or dependen
 pin changes were needed.
 
 Success outcome: all 23 recovered/preserved tests execute and pass on real module
-inputs while the fixtures prevent external I/O and isolate writes. Stop rule for
-this continuation: three failed repair attempts at the same step or 60 minutes.
+inputs while the fixtures prevent external I/O and isolate writes. The earlier
+continuation used a three-failure/60-minute stop rule;
+this repair uses the 30-minute rule recorded above.
 
-## Focused local verification
+## Historical focused local verification
 
-Runtime: `/opt/anaconda3/bin/python3`, pytest 9.2.0, coverage 7.16.2.
+Historical runtime: `/opt/anaconda3/bin/python3`, pytest 9.2.0, coverage 7.16.2.
+The initial results were recorded for `e7f8daef8b9f12f2f5d5bb1900746253e4224381`;
+the later refreshed logs are qualified in the final section. They are preserved
+as historical evidence; the `delivered-*` logs above bind named final assertions
+to an immutable source tree.
 Commands (no full local pytest suite was run):
 
 ```sh
@@ -80,8 +118,10 @@ and passed after byte-for-byte restoration; see
 
 ## Comparable focused statement and branch measurement
 
-Both commands use the same source, four test files, interpreter, configuration
-and branch instrumentation. Baseline selects the preserved mode-selection test;
+This historical comparison was recorded on the source named above; its final
+artifact was later refreshed as noted below. The production targets are unchanged.
+Both commands use four test files, the same interpreter, configuration and branch
+instrumentation. Baseline selects the preserved mode-selection test;
 final runs that test plus all 22 recovered tests.
 
 ```sh
@@ -102,14 +142,14 @@ Focused reduction: 1586 - 38 = 1548 units; focused shortfall against 180:
 max(0, 180-1548) = 0. These counts measure the focused contribution; they do
 not establish whole-tree incremental coverage, where other tests overlap.
 
-## Authoritative CI and comparable whole-tree Gate measurement
+## Historical authoritative CI and comparable whole-tree Gate measurement
 
 Baseline [CI 42369596492](https://github.com/stranske/Orchestrator/actions/runs/42369596492),
 head `643708a208b9303d94d51f74405176fb433eb78e`: six pytest shards passed;
 aggregate failed from a lagging collection floor (14884 collected vs 14788).
 The retained `baseline-gate.json` is its measured coverage, not a passing aggregate verdict.
 
-Current [CI 42828478565](https://github.com/stranske/Orchestrator/actions/runs/42828478565)
+Earlier [CI 42828478565](https://github.com/stranske/Orchestrator/actions/runs/42828478565)
 and [Gate 42828479148](https://github.com/stranske/Orchestrator/actions/runs/42828479148)
 both succeeded on `e7f8daef8b9f12f2f5d5bb1900746253e4224381`.
 All six pytest shards passed. CI artifact `gate-coverage` (ID 13770636787)
@@ -122,13 +162,25 @@ between the baseline and current heads, with equal statement denominators.
 | `src/exploration_collection.py` | 331 | 60 | 0 | 60 | unavailable / unavailable |
 | `src/observability_dashboard.py` | 698 | 61 | 5 | 56 | unavailable / unavailable |
 
-Whole-tree statement reduction: 181 - 12 = **169 units**. Shortfall against the
+Direct recheck on 2026-11-10:
+[delivered-gate-check.log](verification/coverage-round-1182/delivered-gate-check.log)
+retains the reproducible parser command, complete output, runtime and artifact
+SHA-256 hashes. It loads both retained Gate JSON files, checks each missing-line
+list against its summary, and checks equal per-target statement denominators
+(285, 331, 698; total 1314). The three production blobs are identical at the
+baseline head, earlier measured head, #1323 final head and delivered main head.
+The repository-wide denominators differ (120428 vs 77928), so repository-wide
+totals are not used to infer this target reduction. `current-gate.json` remains
+the earlier CI 42828478565 artifact, not a final-head coverage artifact.
+
+Whole-tree statement reduction for the three targets: 181 - 12 = **169 units**.
+Shortfall against the
 approximately 180-unit goal: **11 units**. Both Gate JSON artifacts explicitly
 have `branch_coverage: false`; whole-tree branch reduction is unknown, not zero.
 The comparable branch measurement above is focused only. The approximately
 180-unit whole-tree goal is not established as achieved.
 
-## Required verify invocation
+## Historical required verify invocation (failed aggregate retained)
 
 Downloaded all six exact-head `pytest-shard-*` artifacts from CI 42828478565.
 Their JSON/XML summaries were placed directly in `/tmp/1182-ci-current`, as the
@@ -169,7 +221,7 @@ branches; the focused branch comparison is reported separately above.
 The local verification failure remains visible even though the exact-head CI
 and Gate verdicts succeeded. No full local pytest suite was run.
 
-## Concurrent isolation strengthening preserved
+## Historical concurrent isolation strengthening preserved
 
 Before push, remote commit `ec4c41c5eeb8b991f49e0fbf952e1133cc586a04`
 added HANDOFF_DIR isolation, guards on socket connect/connect_ex, and ledger
@@ -178,7 +230,11 @@ preserved by rebasing; the focused commands and both mutations were then rerun.
 The measurements and aggregate run above identify their original tested head;
 production target files are unchanged by the concurrent test-only commit.
 
-Post-rebase exact test-tree results: `23 passed in 3.36s`; chunks `7 passed in
+The refreshed focused/chunk and mutation results were recorded after rebasing
+onto `ec4c41c5eeb8b991f49e0fbf952e1133cc586a04`, as recorded in
+[COVERAGE_ROUND_1182_MUTATIONS.md](COVERAGE_ROUND_1182_MUTATIONS.md).
+They precede the final CLI/isolation assertions; use the delivered-tree logs
+above for those assertions. Historical results: `23 passed in 3.36s`; chunks `7 passed in
 0.56s`, `10 passed in 1.96s`, `5 passed in 0.85s`. The retained focused/chunk
 logs and final focused JSON were refreshed after preserving the concurrent changes.
 Both named mutations were also re-executed and their retained logs refreshed.

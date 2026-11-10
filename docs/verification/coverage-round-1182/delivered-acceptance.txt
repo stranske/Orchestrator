@@ -1,0 +1,28 @@
+Check date: 2026-11-10T16:50:35.845795+00:00
+Outcome: 23 recovered/preserved tests pass on the delivered tree
+Source SHA: c12f08149f0973882979e46be5f4bdd129175a9f
+Source tree: 787522cebc596a8b8a15c8fcf78b887c296fa123
+Runtime: /opt/anaconda3/bin/python3 (3.12.2 | packaged by conda-forge | (main, Feb 16 2024, 20:54:21) [Clang 16.0.6 ])
+No repository virtual environment selected; using owner-specified fallback.
+Stop rule: three failures at one step or 30 minutes (deadline 2026-11-10T17:20:04Z).
+Per-command timeout: 115 seconds; stop and report a timeout before widening.
+Branch: closer-r1/issue-1205, starting at current origin/main.
+Prior local closer*/issue-1205 branches: only the provisioned branch; no commits main lacks.
+Recorded before test execution or documentation edits.
+Commands:
+/opt/anaconda3/bin/python3 -m pytest tests/test_coverage_round_1182.py tests/test_ccusage_reconcile.py tests/test_exploration_collection.py tests/test_observability_dashboard.py -vv --no-cov
+/opt/anaconda3/bin/python3 -m pytest tests/test_ccusage_reconcile.py -vv --no-cov
+/opt/anaconda3/bin/python3 -m pytest tests/test_exploration_collection.py -vv --no-cov
+/opt/anaconda3/bin/python3 -m pytest tests/test_observability_dashboard.py -vv --no-cov
+
+Post-run provenance readback: 2026-11-10T16:53:09.922555+00:00
+Command: gh api repos/stranske/Orchestrator/actions/runs/42849835806 --jq {id,name,status,conclusion,head_sha,html_url}
+{"conclusion":"success","head_sha":"d715b7d9d1542f5952ba5ad0cf21123af62a6ec3","html_url":"https://github.com/stranske/Orchestrator/actions/runs/42849835806","id":42849835806,"name":"CI","status":"completed"}
+Command: gh api repos/stranske/Orchestrator/actions/runs/42849836260 --jq {id,name,status,conclusion,head_sha,html_url}
+{"conclusion":"success","head_sha":"d715b7d9d1542f5952ba5ad0cf21123af62a6ec3","html_url":"https://github.com/stranske/Orchestrator/actions/runs/42849836260","id":42849836260,"name":"Gate","status":"completed"}
+git rev-parse <head>:tests/test_coverage_round_1182.py: identical blob 12b34ae0081e9513a35f134c021dd2e1f0890bd6 at #1323 final head and delivered main SHA
+git rev-parse <head>:tests/test_ccusage_reconcile.py: identical blob 194401a6e8ff8c1e27ea29c71c28c761c84ab577 at #1323 final head and delivered main SHA
+git rev-parse <head>:tests/test_exploration_collection.py: identical blob 86fb2affae484cf59f30a8f5a1bd395f045ff63f at #1323 final head and delivered main SHA
+git rev-parse <head>:tests/test_observability_dashboard.py: identical blob e43eb5d08bd6adc8c29d9724943100754fbfb2d8 at #1323 final head and delivered main SHA
+PASS: four test files unchanged from successful #1323 final-head CI/Gate.
+Shared tests/conftest.py differs on delivered main; the four new local runs used that delivered version.
