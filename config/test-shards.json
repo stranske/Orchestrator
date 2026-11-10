@@ -38,6 +38,9 @@
     "tests/test_python_floor.py",
     "tests/test_reconcile_floor_dispatches_ci.py",
     "tests/test_router_choose_mode.py",
+    "tests/test_ccusage_reconcile.py",
+    "tests/test_exploration_collection.py",
+    "tests/test_observability_dashboard.py",
     "tests/test_storage_abort_reconciliation.py",
     "tests/test_storage_interrupted_release.py",
     "tests/test_strategy_experiment.py",
@@ -139,7 +142,8 @@
       "tests/test_workflow_compiler.py",
       "tests/test_gate_dispatch_recovery.py",
       "tests/test_coding_delivery.py",
-      "tests/test_native_storage_tmpdir.py"
+      "tests/test_native_storage_tmpdir.py",
+      "tests/test_ccusage_reconcile.py"
     ],
     [
       "tests/test_adjudicator_criterion_texts.py",
@@ -210,7 +214,8 @@
       "tests/test_storage_interrupted_release.py",
       "tests/test_issue1150_ranked_coverage.py",
       "tests/test_capability_opportunity.py",
-      "tests/test_gemini_tier_scoped_shed.py"
+      "tests/test_gemini_tier_scoped_shed.py",
+      "tests/test_exploration_collection.py"
     ],
     [
       "tests/test_activation_audit_label_index.py",
@@ -275,7 +280,8 @@
       "tests/test_usage_poll_shell.py",
       "tests/test_venv_fixture_portability.py",
       "tests/test_verifier_retry_lineage.py",
-      "tests/test_worktree_git_guard.py"
+      "tests/test_worktree_git_guard.py",
+      "tests/test_observability_dashboard.py"
     ],
     [
       "tests/test_adjudicator_retry_history.py",
