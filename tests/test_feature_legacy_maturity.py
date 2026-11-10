@@ -67,7 +67,9 @@ def test_legacy_minimal_rows_report_scan_and_list_without_rewriting(tmp_path, mo
     assert features.promotion_candidates(path) == []
     assert feature_scan.scan(path=path, root=tmp_path)["registry_entries"] == 1
     original_load = features.load
-    monkeypatch.setattr(features, "load", lambda: original_load(path))
+    monkeypatch.setattr(
+        features, "load", lambda *_args, create=False, **_kwargs: original_load(path, create=create)
+    )
     assert features.main(["list"]) == 0
     assert "operator-feature" in capsys.readouterr().out
     assert path.read_bytes() == before
