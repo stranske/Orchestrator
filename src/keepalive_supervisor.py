@@ -37,6 +37,9 @@ CLOSURE_HOLD_LABELS = {
     "agents:paused",
     "agent:paused",
     "do-not-merge",
+    # Owned by the feature goals ledger (feature_goals.GOAL_DRIFT_LABEL), which closes it on
+    # measured recovery; a closer must never close it as delivered by a PR that only mentions it.
+    "goal-drift",
     "hold",
     "needs-human",
     "tracker:durable",
