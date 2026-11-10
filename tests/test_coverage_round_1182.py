@@ -108,8 +108,9 @@ class TestExplorationCollection(unittest.TestCase):
                 ],
             },
         }
-        with patch.object(ec.router, "BACKUP_AGENTS", {"paygo"}), patch.object(
-            ec.router, "ROUTE_TABLE", table
+        with (
+            patch.object(ec.router, "BACKUP_AGENTS", {"paygo"}),
+            patch.object(ec.router, "ROUTE_TABLE", table),
         ):
             clean, rejected = ec._sanitize_decision(
                 {"assignments": assignments, "notes": ["existing"]}, require_exploration=True
@@ -153,9 +154,12 @@ class TestExplorationCollection(unittest.TestCase):
             (ec._release_assignments, assignments),
             (ec._release_rejected_claims, [{"assignment": row} for row in assignments]),
         ):
-            with self.subTest(release=release.__name__), patch.object(
-                ec.claims, "release", side_effect=[RuntimeError("lost claim"), None]
-            ) as mocked:
+            with (
+                self.subTest(release=release.__name__),
+                patch.object(
+                    ec.claims, "release", side_effect=[RuntimeError("lost claim"), None]
+                ) as mocked,
+            ):
                 release(rows)
                 self.assertEqual(
                     mocked.call_args_list, [call("o/r#1", "codex"), call("o/r#2", "codex")]
@@ -232,7 +236,10 @@ class TestExplorationCollection(unittest.TestCase):
             patch.object(
                 ec,
                 "_plan_for_seed",
-                side_effect=[({"assignments": [kept, kept]}, []), ({"assignments": [kept]}, rejected)],
+                side_effect=[
+                    ({"assignments": [kept, kept]}, []),
+                    ({"assignments": [kept]}, rejected),
+                ],
             ) as probe,
             patch.object(ec.claims, "release") as release,
         ):
