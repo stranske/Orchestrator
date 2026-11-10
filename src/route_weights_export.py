@@ -589,7 +589,9 @@ def _exploration_block(
             key=lambda row: (
                 ranks.get(row["agent"], len(ranks)),
                 -float(row["posterior"]),
-                -float(row["success_rate"]),
+                # Prior-only rows (n_obs 0) carry success_rate NULL. This is a tie-break after the
+                # posterior, so an unobserved rate orders last; it is never published as a measurement.
+                -(float(row["success_rate"]) if row["success_rate"] is not None else 0.0),
                 row["agent"],
             ),
         )

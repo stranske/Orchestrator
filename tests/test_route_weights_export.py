@@ -128,6 +128,21 @@ def test_challenger_excludes_the_thresholded_consumer_winner(tmp_path: Path) -> 
     assert document["exploration"]["challengers"]["implement"] == "cursor"
 
 
+def test_prior_only_rows_with_null_success_rate_do_not_crash_the_export(tmp_path: Path) -> None:
+    """Brain version 72 carried n_obs=0 rows with success_rate NULL; the export crashed hourly."""
+    database = tmp_path / "weights.db"
+    export._fixture_db(database)
+    with sqlite3.connect(database) as c:
+        c.execute(
+            "INSERT INTO route_weights (version, task_type, agent, posterior, n_obs, success_rate) "
+            "VALUES (2, 'implement', 'cursor', 0.7, 0, NULL)"
+        )
+    document = export.build_document(database, now=2 * export.WEEK_SECONDS)
+    assert document["task_types"]["implement"]["ranking"][0]["agent"] == "codex"
+    assert "cursor" not in {row["agent"] for row in document["task_types"]["implement"]["ranking"]}
+    assert set(document["exploration"]["challengers"]) == set(export.CONSUMER_TASK_TYPES)
+
+
 def test_route_weights_schema_stays_v1_for_workflows_consumer() -> None:
     """Hosted keepalive rejects any schema other than orchestrator.route-weights/v1."""
     assert export.SCHEMA == "orchestrator.route-weights/v1"
