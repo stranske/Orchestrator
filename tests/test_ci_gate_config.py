@@ -362,7 +362,7 @@ _NINE_TOOLS = (
 
 
 def test_baseline_diagnostic_names_the_bumped_and_the_missing_pin():
-    """A bumped pin and an absent pin are each named, with both versions, ahead of the pin dump."""
+    """A bumped pin and an absent pin are each named, with both versions."""
     pins = {f"{tool.upper().replace('-', '_')}_VERSION": "2.0.0" for tool in _NINE_TOOLS}
     doc = "<!-- measured-with: " + " ".join(f"{t}=2.0.0" for t in _NINE_TOOLS) + " -->"
     assert _baseline_mismatch(doc, pins) is None
@@ -400,8 +400,7 @@ def test_baseline_diagnostic_selects_closest_complete_measurement(closest_first)
         "Unmeasured pins against the closest measurement: "
         "RUFF_VERSION pinned 2.0.0, measured 1.0.0." in message
     )
-    # The trailing pin dump names every pin; the diagnostic ahead of it must not report the
-    # distant marker's black mismatch.
+    # The diagnostic ahead of it must not report the distant marker's black mismatch.
     assert "BLACK_VERSION" not in message
 
 
