@@ -880,7 +880,9 @@ def build_research_plan(
     db = conn or feedback._conn()
     close_db = conn is None
     try:
-        current_unevaluated = len(research_subjects.unevaluated_experiment_ids(db))
+        unevaluated = research_subjects.unevaluated_experiment_ids(db)
+        current_unevaluated = unevaluated["total"]
+        current_drainable = unevaluated["drainable"]
     finally:
         if close_db:
             db.close()
@@ -899,6 +901,7 @@ def build_research_plan(
                 "subject_family_id": job.get("subject_family_id"),
                 "reason": "unevaluated_backlog_batch_reserve",
                 "unevaluated_backlog": current_unevaluated,
+                "unevaluated_backlog_drainable": current_drainable,
                 "unevaluated_cap": int(unevaluated_cap),
             }
         )
@@ -932,6 +935,7 @@ def build_research_plan(
         "production_reserve": dict(sorted((production_reserve or {}).items())),
         "unevaluated_cap": unevaluated_cap,
         "unevaluated_backlog": current_unevaluated,
+        "unevaluated_backlog_drainable": current_drainable,
         "remaining_backlog_slots": remaining_backlog_slots,
         "per_subject_cap": per_subject_cap,
     }
