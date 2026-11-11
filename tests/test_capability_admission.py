@@ -991,10 +991,11 @@ def test_an_act_outside_the_trailing_window_is_not_acting_now(monkeypatch, tmp_p
 def test_declared_consumers_resolve_in_the_tree():
     """A reviewed binding names defined rails; an absent consumer stays explicit debt."""
     failures = {}
-    # Inspect both sources: merging tables first could hide a broken gate behind an overlay.
+    # Inspect every source: merging tables first could hide a broken declaration behind an overlay.
     for source, declarations in (
         ("KNOWN_GATES", capabilities.KNOWN_GATES),
         ("KNOWN_DECLARATIONS", capabilities.KNOWN_DECLARATIONS),
+        ("KNOWN_EXISTING_DECLARATIONS", capabilities.KNOWN_EXISTING_DECLARATIONS),
     ):
         for cid, declaration in declarations.items():
             if "downstream_consumer" not in declaration:
@@ -1004,6 +1005,8 @@ def test_declared_consumers_resolve_in_the_tree():
                 assert str(
                     declaration.get("notes") or ""
                 ).strip(), f"{source}:{cid}: explain the absent consumer"
+                cls, ok, detail = admission.consumer_class(declaration, {})
+                assert cls == "consumer_missing" and not ok, (source, cid, detail)
                 continue
             if not resolution["tokens"] or resolution["unresolved"]:
                 failures[f"{source}:{cid}"] = resolution
@@ -1062,6 +1065,9 @@ def test_missing_consumer_declaration_survives_reconciliation_without_acceptance
     assert row["status"] == "active"
     assert row["outcome_links"] == []
     cls, ok, detail = admission.consumer_class(row, {})
+    assert cls == "consumer_missing" and not ok, detail
+    unreviewed = {key: value for key, value in row.items() if key != "consumer_missing"}
+    cls, ok, detail = admission.consumer_class(unreviewed, {})
     assert cls == "prose" and not ok, detail
     assert row["event_history"][0] == {"type": "invocation", "timestamp": 1}
     assert not capabilities._reconcile_known_declarations(ledger, 3)
@@ -1083,12 +1089,71 @@ def test_missing_consumer_declaration_survives_reconciliation_without_acceptance
         assert ("consumer_acts" in verdict["blocking"]) is enforced, verdict
         assert ("consumer_acts" in verdict["deferred"]) is not enforced, verdict
         consumers = admission.consumer_report(dated_ledger, ctx, [verdict])
-        assert consumers["by_class"]["prose"] == [cid], consumers
+        assert consumers["by_class"]["consumer_missing"] == [cid], consumers
+        assert consumers["by_class"]["prose"] == [], consumers
         assert consumers["drainable"] == [cid] and not consumers["drained"], consumers
         assert consumers["blocking"] == ([cid] if enforced else []), consumers
         assert consumers["deferred"] == ([] if enforced else [cid]), consumers
         assert consumers["by_class"]["acting"] == [], consumers
         assert dated["status"] == "active" and dated["outcome_links"] == []
+
+
+def test_reviewed_absence_is_reported_as_missing_never_as_prose_or_acting():
+    """#599: `consumer_missing` counts under `missing` and DRAINABLE, and grants no credit."""
+    reason = "External repair output has no local consumer or handover rail."
+    ledger = {
+        "absent": {
+            "capability_id": "absent",
+            "downstream_consumer": "merge_guard.py:evaluate_merge_gate",
+            "consumer_missing": True,
+            "notes": reason,
+        },
+        "broken": {
+            "capability_id": "broken",
+            "downstream_consumer": "missing_module.py:missing_consumer",
+        },
+    }
+    # A resolvable token beside the flag must not buy acting credit.
+    for ctx in ({}, {"acted_on": {"absent": 3}}):
+        cls, ok, detail = admission.consumer_class(ledger["absent"], ctx)
+        assert cls == "consumer_missing" and not ok and detail.endswith(reason), detail
+    rows = [
+        {"capability_id": cid, "blocking": ["consumer_acts"], "deferred": [], "enforced": True}
+        for cid in ledger
+    ]
+    consumers = admission.consumer_report(ledger, {}, rows)
+    assert consumers["by_class"]["prose"] == []
+    assert consumers["by_class"]["consumer_missing"] == ["absent"]
+    assert consumers["by_class"]["unresolved"] == ["broken"]
+    assert consumers["reviewed_absences"] == {"absent": reason}
+    assert consumers["drainable"] == ["absent", "broken"] and not consumers["drained"]
+    rendered = admission.format_report(
+        {
+            "total": 2,
+            "admitted": 0,
+            "enforced_total": 2,
+            "enforced_failing": [],
+            "legacy_debt": [],
+            "rows": [],
+            "consumers": consumers,
+            "commitments": {"clean": True, "dangling_citations": [], "overdue_without_record": []},
+        }
+    )
+    assert "0 of 2 declare a consumer this tree can find" in rendered, rendered
+    assert "prose 0, missing 2, undeclared 0 — DRAINABLE 2" in rendered, rendered
+    assert "reviewed absent 1, unresolved 1" in rendered, rendered
+    assert f"REVIEWED ABSENT absent: {reason}" in rendered, rendered
+
+
+def test_replacing_a_reviewed_absence_clears_its_stale_flag():
+    """A declaration that names the consumer and omits the flag removes the old diagnostic."""
+    cid = "route-weights-export"
+    before = capabilities._blank_capability(cid)
+    before.update(status="active", downstream_consumer="old prose", consumer_missing=True)
+    ledger = {cid: before}
+    assert capabilities._reconcile_known_declarations(ledger, 2)
+    assert "consumer_missing" not in ledger[cid]
+    assert not capabilities._reconcile_known_declarations(ledger, 3)
 
 
 def test_original_offload_prose_is_reconciled_without_lifecycle_or_credit_changes():

@@ -470,6 +470,7 @@ CONSUMER_CLASSES = (
     "not_invoked",
     "not_acting",
     "prose",
+    "consumer_missing",
     "unresolved",
     "undeclared",
 )
@@ -598,10 +599,25 @@ def acted_on_context(ledger: dict, *, now: int | None = None) -> dict:
     return _ACTED_ON_CACHE[key]
 
 
+def _consumer_absence_reason(cap: dict) -> str:
+    """The reviewed note, falling back to the retained declaration when it is blank."""
+    return str(cap.get("notes") or "").strip() or str(cap.get("downstream_consumer") or "").strip()
+
+
 def consumer_class(cap: dict, ctx: dict) -> tuple[str, bool, str]:
     """(class, ok, detail) for the tenth part; `req_consumer_acts` and `consumer_report` share it."""
     if not _has(cap, "downstream_consumer"):
         return "undeclared", False, "no consumer declared (the fifth part names the field)"
+    # Reviewed absence (#599) is a finding, even when the declaration also names a real symbol:
+    # it must neither read as accidental prose nor acquire acting or admission credit.
+    if cap.get("consumer_missing") is True:
+        reason = _consumer_absence_reason(cap)
+        return (
+            "consumer_missing",
+            False,
+            "no local acting consumer (consumer_missing): reviewed absence"
+            + (f": {reason}" if reason else ""),
+        )
     res = consumer_resolution(cap, module_dir=ctx.get("module_dir"), repo_root=ctx.get("repo_root"))
     if not res["tokens"]:
         return (
@@ -699,15 +715,27 @@ def consumer_report(ledger: dict, ctx: dict, rows: list[dict]) -> dict:
     return {
         "total": len(rows),
         "by_class": classes,
+        # Carried into JSON and text so the capability program can cite the finding's reason.
+        "reviewed_absences": {
+            cid: _consumer_absence_reason(ledger[cid]) for cid in classes["consumer_missing"]
+        },
         # `enforced`, as `findability_report` reads it: a waived row keeps the requirement in its
         # `blocking` list but cannot fail the suite, so it is not reported as blocking here.
         "blocking": [
             r["capability_id"] for r in rows if "consumer_acts" in r["blocking"] and r["enforced"]
         ],
         "deferred": [r["capability_id"] for r in rows if "consumer_acts" in r["deferred"]],
-        # A declaration edit each: no code, no evidence to wait for.
-        "drainable": sorted(classes["prose"] + classes["unresolved"] + classes["undeclared"]),
-        "drained": not any(classes[c] for c in ("not_acting", "prose", "unresolved", "undeclared")),
+        # Explicit absence stays drainable debt; declaring it is not a waiver or an acting rail.
+        "drainable": sorted(
+            classes["prose"]
+            + classes["consumer_missing"]
+            + classes["unresolved"]
+            + classes["undeclared"]
+        ),
+        "drained": not any(
+            classes[c]
+            for c in ("not_acting", "prose", "consumer_missing", "unresolved", "undeclared")
+        ),
     }
 
 
@@ -1228,17 +1256,20 @@ def format_report(rep: dict) -> str:
     cons = rep.get("consumers") or {}
     if cons:
         by = {name: len(ids) for name, ids in cons["by_class"].items()}
+        reviewed_missing = by.get("consumer_missing", 0)
+        missing = by["unresolved"] + reviewed_missing
         out += [
             "",
-            f"  CONSUMERS (10th): {cons['total'] - by['prose'] - by['unresolved'] - by['undeclared']}"
+            f"  CONSUMERS (10th): {cons['total'] - by['prose'] - missing - by['undeclared']}"
             f" of {cons['total']} declare a consumer this tree can find — acting (capability-level) "
             f"{by['acting']}, "
             f"in grace {by['grace']}, not invoked {by['not_invoked']}, exercise-bound "
             f"{by['exercise_bound']}, unmeasured {by['unmeasured']}",
             f"                   not acting (trailing window) {by['not_acting']} (blocking {len(cons['blocking'])}, "
             f"pre-cutoff debt {len(cons['deferred'])}); prose {by['prose']}, missing "
-            f"{by['unresolved']}, undeclared {by['undeclared']} — DRAINABLE {len(cons['drainable'])} "
-            "(a declaration edit each)",
+            f"{missing}, undeclared {by['undeclared']} — DRAINABLE {len(cons['drainable'])} "
+            f"(reviewed absent {reviewed_missing}, unresolved {by['unresolved']}; "
+            "reviewed absence remains finding debt)",
         ]
         if cons["drained"]:
             out.append(
@@ -1249,6 +1280,10 @@ def format_report(rep: dict) -> str:
             )
         for cid in cons["by_class"]["not_acting"]:
             out.append(f"                   NOT ACTING (trailing window) {cid}")
+        for cid in cons["by_class"].get("consumer_missing", []):
+            reason = cons.get("reviewed_absences", {}).get(cid)
+            suffix = f": {reason}" if reason else ""
+            out.append(f"                   REVIEWED ABSENT {cid}{suffix}")
     if rep["legacy_debt"]:
         out += ["", "  legacy debt (pay down opportunistically; never a human queue):"]
         counts: dict[str, int] = {}
