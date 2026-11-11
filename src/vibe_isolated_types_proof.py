@@ -294,7 +294,7 @@ def child(payload: dict[str, Any]) -> dict[str, Any]:
         "TMPDIR",
         "PYDANTIC_DISABLE_PLUGINS",
         # macOS CoreFoundation adds this to every process of a CF-linked interpreter (the uv
-        # CPython 3.14 build is; anaconda 3.12 was not). It names a text encoding, nothing else.
+        # CPython 3.14 build is; the earlier anaconda build was not). It names an encoding only.
         "__CF_USER_TEXT_ENCODING",
     }:
         raise RuntimeError("unexpected environment keys")
