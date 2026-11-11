@@ -3087,9 +3087,7 @@ def _selftest() -> None:
             import execution_profiles as _ep2
 
             mute = next((a for a in _ad2.NO_SESSION_LOG_AGENTS if _ep2.profiles_for_agent(a)), None)
-            if (
-                mute
-            ):  # runs only while some seat genuinely lacks a model reader (none since 2026-11-11)
+            if mute:  # only while a seat lacks a model reader (none since 2026-11-11)
                 mute_profile = _ep2.profiles_for_agent(mute)[0]
                 feedback.record_run("cov-never", "offload:/tmp/y", "offload", mute)
                 feedback.record_execution_attempt(
