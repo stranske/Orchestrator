@@ -150,7 +150,7 @@ def test_prepare_current_cli_writes_the_plan_and_not_the_program_summary(tmp_pat
 
 
 def _measured_results(root: Path, manifest: dict) -> dict:
-    """Six provider-resolved attempts. The model comes from each request's registry row."""
+    """Six unverified measurements; request fields are not trusted provider provenance."""
     attempts = []
     for request in manifest["requests"]:
         artifact = root / f"identity-{request['launch_ordinal']}.json"
@@ -191,7 +191,7 @@ def _measured_results(root: Path, manifest: dict) -> dict:
         "trial_id": manifest["trial_id"],
         "packet_hash": manifest["packet_hash"],
         "acknowledged": True,
-        "identity_verified": True,
+        "identity_verified": False,
         "attempts": attempts,
         "quality_by_profile": {
             "codex-5.6-terra-high": 0.5,
@@ -215,16 +215,23 @@ def test_measured_recurring_trial_records_spec_quality_cost_and_identity(tmp_pat
         experiments_root=experiments,
     )
     results = _measured_results(tmp_path, manifest)
-    state_out = trial.finalize_trial(manifest, results, ingest_brain=True, now=2000)
+    state_out = trial.finalize_trial(manifest, results, record_feedback=True, now=2000)
     summary = json.loads((state / "capability-program" / "profile-trial.json").read_text())
     assert state_out["attempt_count"] == 6
-    assert state_out["brain_ingest_enabled"] is True
+    assert state_out["brain_ingest_enabled"] is False
     assert summary["exp_id"] == EXP_ID
     assert summary["work_shape"] == "strategy-experiment-frozen-spec"
     assert summary["spec_sha256"] == manifest["frozen_packet"]["spec_sha256"]
     assert (summary["profile_count"], summary["instance_count"]) == (2, 6)
-    assert summary["identity_verified"] is True
+    assert summary["identity_verified"] is False
     assert summary["quality_by_profile"] == results["quality_by_profile"]
+    with feedback._conn() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM execution_attempts").fetchone()[0] == 6
+        assert (
+            conn.execute("SELECT COUNT(DISTINCT attempt_id) FROM execution_attempts").fetchone()[0]
+            == 6
+        )
+        assert conn.execute("SELECT COUNT(*) FROM profile_trial_ingests").fetchone()[0] == 0
     for profile_id in trial.CURRENT_TRIAL_PROFILE_IDS:
         attempts = [row for row in results["attempts"] if row["profile_id"] == profile_id]
         assert summary["cost_tokens_by_profile"][profile_id] == {
@@ -260,10 +267,17 @@ def test_publish_current_records_measured_usage_quality_and_identity(tmp_path, m
     published = trial.publish_measured_recurring_trial(manifest, results, now=2000)
     summary = json.loads((state / "capability-program" / "profile-trial.json").read_text())
     assert published["attempt_count"] == 6
-    assert published["brain_ingest_enabled"] is True
+    assert published["brain_ingest_enabled"] is False
     assert (summary["profile_count"], summary["instance_count"]) == (2, 6)
-    assert summary["identity_verified"] is True
+    assert summary["identity_verified"] is False
     assert summary["quality_by_profile"] == results["quality_by_profile"]
+    with feedback._conn() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM execution_attempts").fetchone()[0] == 6
+        assert (
+            conn.execute("SELECT COUNT(DISTINCT attempt_id) FROM execution_attempts").fetchone()[0]
+            == 6
+        )
+        assert conn.execute("SELECT COUNT(*) FROM profile_trial_ingests").fetchone()[0] == 0
     assert summary["exp_id"] == EXP_ID
     zero_profile = trial.CURRENT_TRIAL_PROFILE_IDS[0]
     assert summary["cost_tokens_by_profile"][zero_profile] == {"tokens_in": 0, "tokens_out": 0}

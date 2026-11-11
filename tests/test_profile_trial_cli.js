@@ -115,7 +115,7 @@ function trialWorld(t) {
     trial_id: manifest.trial_id,
     packet_hash: manifest.packet_hash,
     acknowledged: true,
-    identity_verified: true,
+    identity_verified: false,
     quality_by_profile: { ...quality },
     attempts,
   };
@@ -130,6 +130,20 @@ function trialWorld(t) {
         cli, 'finalize', '--manifest', manifestPath, '--results', resultsPath,
         '--state', statePath, '--confirm-instrumentation', '--ingest',
       ], failure);
+    },
+    recordMeasurements(failure) {
+      const resultsPath = path.join(root, 'results.json');
+      fs.writeFileSync(resultsPath, JSON.stringify(results));
+      return run(['-c', `
+import json
+from pathlib import Path
+import model_profile_trial as trial
+manifest = json.loads(Path(${JSON.stringify(manifestPath)}).read_text())
+results = json.loads(Path(${JSON.stringify(resultsPath)}).read_text())
+state = trial.finalize_trial(manifest, results, state_path=Path(${JSON.stringify(statePath)}),
+                             record_feedback=True, now=2000)
+print(json.dumps(state))
+`], failure);
     },
     summary: () => JSON.parse(fs.readFileSync(summaryPath, 'utf8')),
     counts: () => run(['-c', `
@@ -148,19 +162,19 @@ print(json.dumps(switch_review.profile_trial_summary_line()))
   };
 }
 
-test('six-instance CLI trial writes the program receipt and remains idempotent on replay', (t) => {
+test('six-instance recording preserves unverified measurements and remains idempotent', (t) => {
   const w = trialWorld(t);
-  const state = w.finalize();
+  const state = w.recordMeasurements();
   assert.deepEqual(JSON.parse(fs.readFileSync(w.statePath, 'utf8')), state);
-  assert.equal(state.brain_ingest_enabled, true);
+  assert.equal(state.brain_ingest_enabled, false);
   assert.equal(state.source_integrity.unchanged, true);
   assert.deepEqual(state.shared_pool_debit, { 'codex-subscription': 6 });
   const summary = w.summary();
   assert.equal(summary.trial_id, w.manifest.trial_id);
   assert.equal(summary.profile_count, 2);
   assert.equal(summary.instance_count, 6);
-  assert.equal(summary.identity_verified, true);
-  assert.equal(summary.brain_ingest_enabled, true);
+  assert.equal(summary.identity_verified, false);
+  assert.equal(summary.brain_ingest_enabled, false);
   assert.deepEqual(summary.quality_by_profile, quality);
   assert.equal(summary.aggregate_tokens_in, 210);
   assert.equal(summary.aggregate_tokens_out, 21);
@@ -175,13 +189,13 @@ test('six-instance CLI trial writes the program receipt and remains idempotent o
       model: attempts[0].provider_resolved_model,
     });
   }
-  assert.match(w.reviewLine(), /^profile trial: profiles 2, instances 6, identity verified Y, /);
+  assert.match(w.reviewLine(), /^profile trial: profiles 2, instances 6, identity verified N, /);
   const counts = w.counts();
   assert.deepEqual(counts, {
-    runs: 6, execution_attempts: 6, outcomes: 6, profile_trial_ingests: 1,
+    runs: 6, execution_attempts: 6, outcomes: 6, profile_trial_ingests: 0,
     route_weights: 0, route_weights_v2: 0,
   });
-  assert.equal(w.finalize().brain_ingest_enabled, true);
+  assert.equal(w.recordMeasurements().brain_ingest_enabled, false);
   assert.deepEqual(w.counts(), counts);
   assert.deepEqual(w.summary(), summary);
   for (const file of w.sourceFiles) assert.equal(fs.readFileSync(file, 'utf8'), 'VALUE = 1\n');
@@ -200,6 +214,7 @@ for (const reason of [
       bytes: fs.readFileSync(attempt.identity_evidence.artifact_ref),
     }));
     let message;
+    w.results.identity_verified = true;
     if (reason === 'unverified') {
       w.results.identity_verified = false;
       message = /worker identity is unverified/;
@@ -234,7 +249,8 @@ for (const reason of [
       evidence.artifact_sha256 = `sha256:${crypto.createHash('sha256').update(bytes).digest('hex')}`;
       message = /identity evidence is not authoritative/;
     }
-    w.finalize(message);
+    if (reason === 'invalid-quality') w.recordMeasurements(message);
+    else w.finalize(message);
     assert.equal(fs.existsSync(w.statePath), false);
     assert.equal(fs.existsSync(w.summaryPath), false);
     assert.deepEqual(w.counts(), {
@@ -242,21 +258,21 @@ for (const reason of [
       route_weights: 0, route_weights_v2: 0,
     });
 
-    // Retry the same frozen trial after correcting the evidence. Rejection must
-    // leave no ingest marker that could silently suppress the operator's retry.
+    // A corrected session still lacks independent provenance. Preserve its
+    // measurements explicitly unverified without creating an ingest marker.
     Object.assign(w.results, originalResults);
     w.sourceFiles.forEach((file, index) => fs.writeFileSync(file, originalSources[index]));
     for (const artifact of originalArtifacts) fs.writeFileSync(artifact.path, artifact.bytes);
-    const state = w.finalize();
+    const state = w.recordMeasurements();
     assert.equal(state.trial_id, w.manifest.trial_id);
-    assert.equal(state.brain_ingest_enabled, true);
+    assert.equal(state.brain_ingest_enabled, false);
     assert.equal(state.source_integrity.unchanged, true);
     const summary = w.summary();
     assert.equal(summary.trial_id, w.manifest.trial_id);
     assert.equal(summary.profile_count, 2);
     assert.equal(summary.instance_count, 6);
-    assert.equal(summary.identity_verified, true);
-    assert.equal(summary.brain_ingest_enabled, true);
+    assert.equal(summary.identity_verified, false);
+    assert.equal(summary.brain_ingest_enabled, false);
     assert.deepEqual(summary.quality_by_profile, quality);
     assert.equal(summary.aggregate_tokens_in, 210);
     assert.equal(summary.aggregate_tokens_out, 21);
@@ -272,11 +288,11 @@ for (const reason of [
       });
     }
     assert.deepEqual(w.counts(), {
-      runs: 6, execution_attempts: 6, outcomes: 6, profile_trial_ingests: 1,
+      runs: 6, execution_attempts: 6, outcomes: 6, profile_trial_ingests: 0,
       route_weights: 0, route_weights_v2: 0,
     });
     const receipt = fs.readFileSync(w.summaryPath);
-    assert.equal(w.finalize().brain_ingest_enabled, true);
+    assert.equal(w.recordMeasurements().brain_ingest_enabled, false);
     assert.deepEqual(fs.readFileSync(w.summaryPath), receipt);
   });
 }

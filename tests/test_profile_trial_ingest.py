@@ -373,13 +373,26 @@ def test_finalize_refuses_ingest_when_identity_verified_is_omitted(
 
 
 def _bind_authoritative_identity(tmp_path, trial_attempt_fixture):
+    """Fake an independently authenticated provider lookup for offline ingestion tests."""
+    responses = {}
     artifact_dir = tmp_path / "identity-artifacts"
     artifact_dir.mkdir()
-    for attempt in trial_attempt_fixture["attempts"]:
+    for ordinal, attempt in enumerate(trial_attempt_fixture["attempts"], start=1):
+        response_id = f"resp_fixture{ordinal}"
+        responses[response_id] = {
+            "object": "response",
+            "id": response_id,
+            "status": "completed",
+            "model": attempt["provider_resolved_model"],
+            "metadata": {key: attempt[key] for key in ("run_id", "profile_id", "packet_hash")},
+            "usage": {"input_tokens": attempt["tokens_in"], "output_tokens": attempt["tokens_out"]},
+        }
         artifact_path = artifact_dir / f"{attempt['profile_id']}-identity.json"
         artifact_path.write_text(
             json.dumps(
                 {
+                    "object": "response",
+                    "response_id": response_id,
                     "profile_id": attempt["profile_id"],
                     "acknowledged": True,
                     "provider_resolved_provider": attempt["provider_resolved_provider"],
@@ -393,7 +406,7 @@ def _bind_authoritative_identity(tmp_path, trial_attempt_fixture):
         attempt["identity_evidence"]["artifact_ref"] = str(artifact_path)
         attempt["identity_evidence"]["artifact_sha256"] = digest
     trial_attempt_fixture["identity_verified"] = True
-    return trial_attempt_fixture
+    return responses.get
 
 
 def test_finalize_writes_measured_quality_by_profile(
@@ -402,7 +415,7 @@ def test_finalize_writes_measured_quality_by_profile(
     _use_temp_feedback(tmp_path, monkeypatch)
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
     results = copy.deepcopy(trial_attempt_fixture)
-    _bind_authoritative_identity(tmp_path, results)
+    lookup = _bind_authoritative_identity(tmp_path, results)
     quality = {
         "codex-6-astra-high": 0.82,
         "codex-5.6-terra-high": 0.76,
@@ -414,6 +427,7 @@ def test_finalize_writes_measured_quality_by_profile(
         results,
         record_feedback=True,
         ingest_brain=True,
+        provider_response_lookup=lookup,
         now=2_000,
     )
     summary = json.loads(
@@ -422,6 +436,75 @@ def test_finalize_writes_measured_quality_by_profile(
     assert summary["identity_verified"] is True
     assert summary["brain_ingest_enabled"] is True
     assert summary["quality_by_profile"] == quality
+
+
+def test_local_identity_claims_require_an_independent_provider_lookup(
+    tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture
+):
+    _use_temp_feedback(tmp_path, monkeypatch)
+    _bind_authoritative_identity(tmp_path, trial_attempt_fixture)
+    # The fixture has matching digests, response IDs, models, and a forged true
+    # flag. None of those bytes authenticate their own provenance.
+    with pytest.raises(ValueError, match="identity evidence is not authoritative"):
+        model_profile_trial.finalize_trial(trial_manifest, trial_attempt_fixture, ingest_brain=True)
+    with feedback._conn() as conn:
+        _assert_trial_feedback_tables_empty(conn)
+
+
+@pytest.mark.parametrize(
+    "response_id", [None, "", "resp_", "request_123", "resp_bad/id", 12, "resp_forged"]
+)
+def test_invalid_or_unconfirmed_response_ids_refuse_even_with_a_trusted_lookup(
+    tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture, response_id
+):
+    _use_temp_feedback(tmp_path, monkeypatch)
+    lookup = _bind_authoritative_identity(tmp_path, trial_attempt_fixture)
+    attempt = trial_attempt_fixture["attempts"][0]
+    path = Path(attempt["identity_evidence"]["artifact_ref"])
+    payload = json.loads(path.read_text())
+    if response_id is None:
+        payload.pop("response_id")
+    else:
+        payload["response_id"] = response_id
+    path.write_text(json.dumps(payload))
+    attempt["identity_evidence"]["artifact_sha256"] = (
+        "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+    )
+    with pytest.raises(ValueError, match="identity evidence is not authoritative"):
+        model_profile_trial.finalize_trial(
+            trial_manifest,
+            trial_attempt_fixture,
+            ingest_brain=True,
+            provider_response_lookup=lookup,
+        )
+    with feedback._conn() as conn:
+        _assert_trial_feedback_tables_empty(conn)
+
+
+@pytest.mark.parametrize("field", ["id", "model", "status", "metadata", "usage", "unavailable"])
+def test_provider_response_must_independently_confirm_the_trial_measurement(
+    tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture, field
+):
+    _use_temp_feedback(tmp_path, monkeypatch)
+    lookup = _bind_authoritative_identity(tmp_path, trial_attempt_fixture)
+    response = lookup("resp_fixture1")
+    if field == "unavailable":
+        lookup = lambda _response_id: None
+    elif field == "metadata":
+        response[field]["run_id"] = "another-run"
+    elif field == "usage":
+        response[field]["input_tokens"] += 1
+    else:
+        response[field] = "forged"
+    with pytest.raises(ValueError, match="identity evidence is not authoritative"):
+        model_profile_trial.finalize_trial(
+            trial_manifest,
+            trial_attempt_fixture,
+            ingest_brain=True,
+            provider_response_lookup=lookup,
+        )
+    with feedback._conn() as conn:
+        _assert_trial_feedback_tables_empty(conn)
 
 
 def _rebind_trial_id(manifest, results):
@@ -452,7 +535,7 @@ def test_finalize_refuses_ingest_when_source_seal_disagrees_with_entries(
     _use_temp_feedback(tmp_path, monkeypatch)
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
     honest = copy.deepcopy(trial_attempt_fixture)
-    _bind_authoritative_identity(tmp_path, honest)
+    lookup = _bind_authoritative_identity(tmp_path, honest)
     state_path = tmp_path / "envelope.json"
     state = model_profile_trial.finalize_trial(
         trial_manifest,
@@ -460,6 +543,7 @@ def test_finalize_refuses_ingest_when_source_seal_disagrees_with_entries(
         state_path=state_path,
         record_feedback=True,
         ingest_brain=True,
+        provider_response_lookup=lookup,
         now=2_000,
     )
     assert state["brain_ingest_enabled"] is True
@@ -483,6 +567,7 @@ def test_finalize_refuses_ingest_when_source_seal_disagrees_with_entries(
             state_path=forged_state,
             record_feedback=True,
             ingest_brain=True,
+            provider_response_lookup=lookup,
             now=2_001,
         )
     assert not forged_state.exists()
@@ -500,7 +585,7 @@ def test_finalize_refuses_ingest_when_identity_artifact_hash_mismatches(
 ):
     _use_temp_feedback(tmp_path, monkeypatch)
     results = copy.deepcopy(trial_attempt_fixture)
-    _bind_authoritative_identity(tmp_path, results)
+    lookup = _bind_authoritative_identity(tmp_path, results)
     artifact_path = Path(results["attempts"][0]["identity_evidence"]["artifact_ref"])
     artifact_path.write_text('{"tampered": true}', encoding="utf-8")
     with pytest.raises(ValueError, match="identity evidence is not authoritative"):
@@ -509,6 +594,7 @@ def test_finalize_refuses_ingest_when_identity_artifact_hash_mismatches(
             results,
             record_feedback=True,
             ingest_brain=True,
+            provider_response_lookup=lookup,
             now=2_000,
         )
     with feedback._conn() as conn:
@@ -521,7 +607,7 @@ def test_transport_recording_does_not_block_later_verified_ingest(
     _use_temp_feedback(tmp_path, monkeypatch)
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
     results = copy.deepcopy(trial_attempt_fixture)
-    _bind_authoritative_identity(tmp_path, results)
+    lookup = _bind_authoritative_identity(tmp_path, results)
     quality = {
         "codex-6-astra-high": 0.82,
         "codex-5.6-terra-high": 0.76,
@@ -544,6 +630,7 @@ def test_transport_recording_does_not_block_later_verified_ingest(
         verified,
         record_feedback=True,
         ingest_brain=True,
+        provider_response_lookup=lookup,
         now=2_001,
     )
     assert state["brain_ingest_enabled"] is True
@@ -601,15 +688,22 @@ def test_verified_ingest_replaces_transport_telemetry(
     _use_temp_feedback(tmp_path, monkeypatch)
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
     transport = copy.deepcopy(trial_attempt_fixture)
-    _bind_authoritative_identity(tmp_path, transport)
+    lookup = _bind_authoritative_identity(tmp_path, transport)
     model_profile_trial.finalize_trial(
         trial_manifest, transport, record_feedback=True, ingest_brain=False, now=2000
     )
     verified = copy.deepcopy(transport)
     verified["attempts"][0]["tokens_in"] = 999
     verified["attempts"][0]["tokens_out"] = 777
+    response = lookup("resp_fixture1")
+    response["usage"] = {"input_tokens": 999, "output_tokens": 777}
     model_profile_trial.finalize_trial(
-        trial_manifest, verified, record_feedback=True, ingest_brain=True, now=2001
+        trial_manifest,
+        verified,
+        record_feedback=True,
+        ingest_brain=True,
+        provider_response_lookup=lookup,
+        now=2001,
     )
     with feedback._conn() as conn:
         row = conn.execute(
@@ -635,7 +729,7 @@ def test_identity_artifact_content_must_match_attempt(
 ):
     _use_temp_feedback(tmp_path, monkeypatch)
     results = copy.deepcopy(trial_attempt_fixture)
-    _bind_authoritative_identity(tmp_path, results)
+    lookup = _bind_authoritative_identity(tmp_path, results)
     attempt = results["attempts"][0]
     artifact = Path(attempt["identity_evidence"]["artifact_ref"])
     contents = json.loads(artifact.read_text())
@@ -646,7 +740,12 @@ def test_identity_artifact_content_must_match_attempt(
     )
     with pytest.raises(ValueError, match="identity evidence is not authoritative"):
         model_profile_trial.finalize_trial(
-            trial_manifest, results, record_feedback=True, ingest_brain=True, now=2000
+            trial_manifest,
+            results,
+            record_feedback=True,
+            ingest_brain=True,
+            provider_response_lookup=lookup,
+            now=2000,
         )
     with feedback._conn() as conn:
         _assert_trial_feedback_tables_empty(conn)
@@ -669,11 +768,16 @@ def test_invalid_quality_refuses_all_trial_writes(
 ):
     _use_temp_feedback(tmp_path, monkeypatch)
     results = copy.deepcopy(trial_attempt_fixture)
-    _bind_authoritative_identity(tmp_path, results)
+    lookup = _bind_authoritative_identity(tmp_path, results)
     results["quality_by_profile"] = quality
     with pytest.raises(ValueError, match="quality_by_profile"):
         model_profile_trial.finalize_trial(
-            trial_manifest, results, record_feedback=True, ingest_brain=True, now=2000
+            trial_manifest,
+            results,
+            record_feedback=True,
+            ingest_brain=True,
+            provider_response_lookup=lookup,
+            now=2000,
         )
     with feedback._conn() as conn:
         _assert_trial_feedback_tables_empty(conn)

@@ -83,16 +83,16 @@ class ProfileTrialInstancesTest(unittest.TestCase):
             "packet_hash": self.manifest["packet_hash"],
             "acknowledged": True,
             "attempts": attempts,
-            "identity_verified": True,
+            "identity_verified": False,
             "quality_by_profile": dict(zip(self.profiles, (0.8, 0.9))),
         }
 
-    def test_six_instances_ingest_and_report_all_costs_without_collisions(self):
+    def test_six_unverified_instances_record_all_costs_without_collisions(self):
         results = self.results()
-        state = trial.finalize_trial(self.manifest, results, ingest_brain=True, now=2000)
+        state = trial.finalize_trial(self.manifest, results, record_feedback=True, now=2000)
         self.assertEqual(state["attempt_count"], 6)
         self.assertEqual(state["shared_pool_debit"], {"codex-subscription": 6.0})
-        self.assertTrue(state["brain_ingest_enabled"])
+        self.assertFalse(state["brain_ingest_enabled"])
         with feedback._conn() as conn:
             for table in ("runs", "execution_attempts", "outcomes"):
                 self.assertEqual(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0], 6)
@@ -103,7 +103,7 @@ class ProfileTrialInstancesTest(unittest.TestCase):
         summary = json.loads(trial._capability_program_summary_path().read_text())
         self.assertEqual((summary["profile_count"], summary["instance_count"]), (2, 6))
         self.assertEqual(summary["quality_by_profile"], results["quality_by_profile"])
-        self.assertTrue(summary["identity_verified"])
+        self.assertFalse(summary["identity_verified"])
         for pid in self.profiles:
             attempts = [a for a in results["attempts"] if a["profile_id"] == pid]
             self.assertEqual(
@@ -114,13 +114,13 @@ class ProfileTrialInstancesTest(unittest.TestCase):
                 summary["provider_resolved_identity_by_profile"][pid],
                 {"provider": "openai", "model": attempts[0]["provider_resolved_model"]},
             )
-        trial.finalize_trial(self.manifest, results, ingest_brain=True, now=2001)
+        trial.finalize_trial(self.manifest, results, record_feedback=True, now=2001)
         with feedback._conn() as conn:
             self.assertEqual(
                 conn.execute("SELECT COUNT(*) FROM execution_attempts").fetchone()[0], 6
             )
             self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM profile_trial_ingests").fetchone()[0], 1
+                conn.execute("SELECT COUNT(*) FROM profile_trial_ingests").fetchone()[0], 0
             )
 
     def test_sixth_outcome_failure_rolls_back_every_instance(self):
@@ -136,7 +136,7 @@ class ProfileTrialInstancesTest(unittest.TestCase):
 
         with patch.object(feedback, "_record_outcome_in_conn", side_effect=fail_on_sixth):
             with self.assertRaisesRegex(RuntimeError, "sixth outcome"):
-                trial.finalize_trial(self.manifest, self.results(), ingest_brain=True)
+                trial.finalize_trial(self.manifest, self.results(), record_feedback=True)
         with feedback._conn() as conn:
             for table in ("runs", "execution_attempts", "outcomes", "profile_trial_ingests"):
                 self.assertEqual(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0], 0)
@@ -185,7 +185,7 @@ class ProfileTrialInstancesTest(unittest.TestCase):
         results = self.results()
         for attempt in results["attempts"]:
             attempt.update(tokens_in=0, tokens_out=0)
-        trial.finalize_trial(self.manifest, results, ingest_brain=True)
+        trial.finalize_trial(self.manifest, results, record_feedback=True)
         summary = json.loads(trial._capability_program_summary_path().read_text())
         self.assertEqual(summary["aggregate_tokens_in"], 0)
         self.assertEqual(summary["aggregate_tokens_out"], 0)
