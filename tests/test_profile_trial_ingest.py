@@ -131,7 +131,6 @@ def test_ingest_is_one_transaction_and_a_mid_write_failure_leaves_nothing(
     tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture, writer, fail_on
 ):
     _use_temp_feedback(tmp_path, monkeypatch)
-    attempts = model_profile_trial._validate_results(trial_manifest, trial_attempt_fixture)
     calls = {"n": 0}
     original = getattr(feedback, writer)
 
@@ -144,12 +143,8 @@ def test_ingest_is_one_transaction_and_a_mid_write_failure_leaves_nothing(
 
     monkeypatch.setattr(feedback, writer, flaky)
     with pytest.raises(RuntimeError, match="simulated mid-write"):
-        feedback.ingest_profile_trial(
-            trial_attempt_fixture,
-            manifest=trial_manifest,
-            attempts=attempts,
-            auxiliary_traces=trial_attempt_fixture["auxiliary_traces"],
-            ts=2_000,
+        model_profile_trial.finalize_trial(
+            trial_manifest, trial_attempt_fixture, record_feedback=True, now=2_000
         )
     assert calls["n"] == fail_on
     with feedback._conn() as conn:

@@ -18,8 +18,8 @@ when any instance has no token count. ``run-current`` is the live read-only
 execution of that plan: six ``codex exec --sandbox read-only`` arms on the
 frozen spec. Transport acknowledgement requires four binding lines in the final
 message; recurring-work quality is scored separately from a read-only rubric
-on the frozen specification text. The prompt names the line to quote and does
-not include the completed ``work_evidence=`` answer. Cost is token counts from
+on the frozen specification text. The rubric checks the positions and word
+counts of up to two specification lines. Cost is token counts from
 the session stream. ``response.completed`` and ``turn.completed.server_model``
 provide unverified model claims. Verified ingestion additionally requires a
 provider response retrieved through an independently trusted runtime lookup;
@@ -1069,9 +1069,16 @@ def recurring_trial_prompt(manifest: dict[str, Any], request: dict[str, Any]) ->
         + "\nDo not edit, create, commit, or push files.\n"
         + "First, return exactly these four lines (transport acknowledgement), then a blank line, "
         "then one line of recurring-work evidence.\n"
-        + "The evidence line must be `work_evidence=` followed by one line copied verbatim "
-        'from the frozen specification below: the line that begins with "Acceptance criteria:" '
-        "if there is one; otherwise the first non-empty line of the specification.\n"
+        + "Number the frozen specification's physical lines starting at 1, including blanks. "
+        'Find the first line starting with "Acceptance criteria:" (case-insensitive, '
+        "ignoring indentation). Select its text after the colon if nonempty, then successive "
+        "nonblank lines below it up to a Markdown heading, for at most two selections. "
+        "Skip blank lines before the first selection and stop at a blank after it. "
+        "If the criteria block supplies no text or there is no label, select the first "
+        "two nonblank lines other than the empty label. Count whitespace-separated tokens "
+        "in each selection, including any standalone list markers. Return "
+        "`work_evidence=` followed by comma-separated `line_number:word_count` pairs "
+        "in source order, with no spaces.\n"
         + "Do not add any other text.\n"
         + "\n".join(lines)
         + "\n\nFrozen specification:\n"
@@ -1079,39 +1086,47 @@ def recurring_trial_prompt(manifest: dict[str, Any], request: dict[str, Any]) ->
     )
 
 
-def _recurring_work_rubric_line(spec: str) -> str:
-    """One spec line that read-only work quality must quote verbatim."""
-    for line in spec.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("Acceptance criteria:"):
-            return stripped
-    for line in spec.splitlines():
-        stripped = line.strip()
-        if stripped:
-            return stripped
-    raise ValueError("frozen specification has no line for the work-quality rubric")
+def _recurring_work_rubric(spec: str) -> str:
+    """Expected line-number and word-count pairs for the bounded spec task."""
+    lines = [(number, line.strip()) for number, line in enumerate(spec.splitlines(), 1)]
+    label = "acceptance criteria:"
+    criteria = []
+    for index, (number, line) in enumerate(lines):
+        if not line.lower().startswith(label):
+            continue
+        inline = line[len(label) :].strip()
+        if inline:
+            criteria.append((number, inline))
+        for next_number, continuation in lines[index + 1 :]:
+            if len(criteria) == 2 or continuation.startswith("#"):
+                break
+            if continuation:
+                criteria.append((next_number, continuation))
+            elif criteria:
+                break
+        break
+    selected = (
+        criteria or [(number, line) for number, line in lines if line and line.lower() != label][:2]
+    )
+    return ",".join(f"{number}:{len(line.split())}" for number, line in selected)
 
 
 def _work_quality_score(manifest: dict[str, Any], final_text: str) -> float:
-    """1.0 when the final message proves the rubric line; identifier echo alone scores 0."""
+    """Score a single evidence line against the exact computed answer."""
     packet = manifest.get("frozen_packet")
     if not isinstance(packet, dict):
         return 0.0
     spec = packet.get("frozen_spec")
     if not isinstance(spec, str) or not spec.strip():
         return 0.0
-    try:
-        rubric = _recurring_work_rubric_line(spec)
-    except ValueError:
-        return 0.0
-    text = final_text or ""
+    rubric = _recurring_work_rubric(spec)
     prefix = "work_evidence="
-    for raw in text.splitlines():
-        line = raw.strip()
-        if line.startswith(prefix):
-            quoted = line[len(prefix) :].strip()
-            return 1.0 if quoted == rubric else 0.0
-    return 0.0
+    answers = [
+        line[len(prefix) :]
+        for raw in (final_text or "").splitlines()
+        if (line := raw.strip()).startswith(prefix)
+    ]
+    return float(bool(rubric) and answers == [rubric])
 
 
 def _acknowledgement_score(
@@ -1119,9 +1134,8 @@ def _acknowledgement_score(
 ) -> tuple[bool, float]:
     """Transport acknowledgement (four lines) and recurring-work quality (rubric), separately.
 
-    All four binding lines must appear for acknowledgement. Work quality does not
-    use identifier-echo density: it is 1.0 only when ``work_evidence=`` carries the
-    rubric line verbatim.
+    All four binding lines must appear for acknowledgement. Work quality is 1.0
+    only when ``work_evidence=`` supplies the computed line-number and word-count pairs.
     """
     packet = manifest["frozen_packet"]
     required = (

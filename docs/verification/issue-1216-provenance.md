@@ -1,4 +1,82 @@
-# Issue #1216: provenance boundary, 2026-11-11
+# Issue #1216 verification
+
+## Local keepalive round 2, 2026-11-11
+
+The named acceptance command using `/opt/anaconda3/bin/python3` exited 0
+with **113 passed and 30 subtests passed**. The two changed test files add
+13 cases to the previous collection and pass expectations. The full
+suite runs in CI.
+
+### Deliberate break and restoration
+
+Both commands used the requested interpreter and `-m pytest -q --tb=short`.
+After each run, `src/model_profile_trial.py` was restored byte for byte.
+Restored SHA-256: `4a91202bfdff96916ce43557e236195bcb9157a9ab88ea6369203170c5f0fb12`.
+
+| Test in `tests/test_profile_trial_ingest.py` | Mutation in `src/model_profile_trial.py` | Deliberate failure | Restored run |
+| --- | --- | --- | --- |
+| `test_ingest_is_one_transaction_and_a_mid_write_failure_leaves_nothing[_record_run_in_conn-2]` | Commit the first attempt with a separate feedback call before the normal trial transaction | Exit 1, `AssertionError: runs`, `assert 1 == 0` | Exit 0, 1 passed |
+| `test_local_identity_claims_require_an_independent_provider_lookup` | Make `_authoritative_identity_verified` succeed when the independent lookup is absent | Exit 1, `Failed: DID NOT RAISE ValueError` | Exit 0, 1 passed |
+
+### Review dispositions for PR #1193
+
+All six threads below were still open when read on 2026-11-11.
+
+| Thread | Disposition on this branch |
+| --- | --- |
+| [Independent response provenance](https://github.com/stranske/Orchestrator/pull/1193#discussion_r4493714910) | `_authoritative_identity_verified` requires a lookup supplied by trusted application code and compares the returned response ID, model, completion state, trial metadata and token usage. `test_local_identity_claims_require_an_independent_provider_lookup` rejects the forged local claim. The CLI still has no trusted collector. |
+| [Headingless specifications](https://github.com/stranske/Orchestrator/pull/1193#discussion_r4493714928) | `_recurring_work_rubric` uses the first two nonblank lines when there is no criteria block. `test_work_quality_checks_the_frozen_spec_task` includes a passing headingless case and rejects both forms of criterion echo. |
+| [Empty, partial, or ambiguous evidence](https://github.com/stranske/Orchestrator/pull/1193#discussion_r4493714945) | `_work_quality_score` requires a single evidence line with the complete computed pairs. The same test covers multiline blocks, inline-plus-continuation criteria, an empty heading and answer, wrong counts, and duplicate evidence. |
+| [Matching null usage](https://github.com/stranske/Orchestrator/pull/1193#discussion_r4493714963) | `test_identity_artifact_explicit_null_usage` proves matching nulls stay unmeasured and mismatches fail in both directions. `test_identity_artifact_tokens_must_agree_with_attempt` verifies that omitted artifact fields preserve attempt usage. |
+| [Independent response ID rejection](https://github.com/stranske/Orchestrator/pull/1193#discussion_r4493714994) | `test_invalid_or_unconfirmed_response_ids_refuse_even_with_a_trusted_lookup` recomputes the artifact digest after removing or changing the ID and verifies all trial feedback tables remain empty. |
+| [Session-only feedback](https://github.com/stranske/Orchestrator/pull/1193#discussion_r4493715009) | `test_publish_current_records_measured_usage_quality_and_identity` checks six distinct returned attempt IDs, six distinct persisted `execution_attempts`, and zero `profile_trial_ingests` rows with explicitly unverified session evidence. |
+
+### Live run-current record
+
+From 20:35:43 to 20:36:55 UTC, one invocation of
+`/opt/anaconda3/bin/python3 src/model_profile_trial.py run-current` used the
+PR worktree as the Orchestrator source and the local `stranske__Workflows`
+mirror at `86e74e7842183048c2fe1b9a5ad5fd304fbce70d`. Both source manifests
+matched readback. The shared Codex pool was supplied as `warn` from the
+20:29:58 UTC native capacity poll, which reported 87% weekly usage and
+ordinary usage allowed. The runner was Codex CLI 0.167.0.
+
+The deployed receipt for `strategy434-20261006` matched the archived receipt
+byte for byte. The archived specification also appeared byte for byte in
+three retained evaluation prompts. The original spec path was absent, so
+the receipt and archived inputs were copied to an isolated directory. Only
+the copied `strategy.json` path was made relative to its copied `spec.md`.
+Outputs targeted that directory's `state/profile-trial-state.json`,
+`state/capability-program/profile-trial.json`, quarantine database, and
+`attempts/` directory.
+
+Trial `model-profile-trial:b538078409df3bff6c8b478b` bound all six final
+messages to the packet and frozen specification. Each final matched the
+corresponding native session's completed turn, from which input and output
+tokens were read. The rubric expected `1:21,3:8`.
+
+| Ordinal | Requested profile | Instance | Input tokens | Output tokens | Rubric score |
+| --- | --- | --- | --- | --- | --- |
+| 1 | `codex-5.6-terra-high` | 3 | 14380 | 315 | 1.0 |
+| 2 | `codex-6-astra-high` | 3 | 19584 | 260 | 1.0 |
+| 3 | `codex-5.6-terra-high` | 1 | 18775 | 415 | 1.0 |
+| 4 | `codex-5.6-terra-high` | 2 | 14489 | 402 | 1.0 |
+| 5 | `codex-6-astra-high` | 1 | 19584 | 267 | 1.0 |
+| 6 | `codex-6-astra-high` | 2 | 15298 | 278 | 1.0 |
+
+**Provider identity and publication are incomplete.** The command exited 2
+with `provider_resolved_identity_unavailable` after the six completions.
+The CLI produced no identity artifacts, quarantine database, trial state
+or new program summary. The existing deployed summary identified a
+different three-instance trial. The per-attempt usage and quality above
+come from the six saved sessions and final messages. They are grouped by
+requested profile and carry no independently verified provider model.
+The private evidence directory
+`~/.codex/orchestrator/measurement/orch-1352-20261111/` holds the originals,
+their hashes in `readback.json`, and the reconstructed manifest validated
+against all six run IDs.
+
+## Historical round 1 record, 2026-11-11
 
 This record covers the source issue's narrowed provenance slice on
 `codex/issue-1216`, based on `3987c448`. These changes are **uncommitted** because

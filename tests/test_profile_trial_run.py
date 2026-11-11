@@ -1,8 +1,8 @@
 """A live recurring trial is six read-only Codex sessions, or it writes nothing.
 
 Transport acknowledgement requires four binding lines in the final message;
-recurring-work quality needs a ``work_evidence=`` line quoting the rubric from
-the frozen spec. Cost is token counts from the session. An unverified model claim comes from a
+recurring-work quality needs the computed line numbers and word counts in
+``work_evidence=``. Cost is token counts from the session. An unverified model claim comes from a
 ``response.completed`` OpenAI response object or from ``turn.completed``'s
 ``server_model`` field. The CLI's ``turn_context``, and a generic ``model``
 on ``turn.completed``, do not publish. The prompt must not contain the
@@ -66,13 +66,12 @@ def _required_lines(manifest: dict, request: dict) -> list[str]:
 
 
 def _final_message_ack_and_work(manifest: dict, request: dict, *, include_work: bool) -> str:
-    """Four acknowledgement lines, optional blank line and work_evidence (rubric quote)."""
+    """Four acknowledgement lines and, optionally, the answer for SPEC."""
     lines = _required_lines(manifest, request)
     body = "\n".join(lines)
     if not include_work:
         return body + "\n"
-    rubric = trial._recurring_work_rubric_line(manifest["frozen_packet"]["frozen_spec"])
-    return body + "\n\n" + f"work_evidence={rubric}\n"
+    return body + "\n\nwork_evidence=1:6\n"
 
 
 SANITIZED_REAL_STREAM = """{"type":"response.completed","response":{"object":"response","id":"resp_fixture001","model":"gpt-6-2025-astra","usage":{"input_tokens":42,"output_tokens":7}}}
@@ -89,7 +88,7 @@ def test_sanitized_real_stream_fixture_yields_one_openai_response():
 
 
 def test_prompt_names_the_rubric_without_embedding_the_answer(tmp_path):
-    """Quality is a quote from the spec. The instruction must not hand over that line."""
+    """The prompt gives the algorithm and frozen spec without giving the result."""
     state, experiments = _seal(tmp_path)
     orchestrator, workflows = _sources(tmp_path)
     manifest = trial.build_current_recurring_trial(
@@ -102,13 +101,37 @@ def test_prompt_names_the_rubric_without_embedding_the_answer(tmp_path):
         experiments_root=experiments,
     )
     prompt = trial.recurring_trial_prompt(manifest, manifest["requests"][0])
-    rubric = trial._recurring_work_rubric_line(SPEC)
     head, marker, tail = prompt.partition("Frozen specification:\n")
     assert marker == "Frozen specification:\n"
-    assert rubric in tail
-    assert f"work_evidence={rubric}" not in head
+    assert tail == SPEC
+    assert "work_evidence=1:6" not in head
+    assert "line_number:word_count" in head
     assert "work_evidence=" in head
     assert "workspace-write" not in prompt
+
+
+@pytest.mark.parametrize(
+    ("spec", "answer", "score"),
+    [
+        ("\nKeep receipts.\nKeep the logs.\nIgnore this line.", "2:2,3:3", 1.0),
+        (
+            "# Policy\nAcceptance criteria:\n\n- Keep receipts.\n- Save the logs.\n# Notes",
+            "4:3,5:4",
+            1.0,
+        ),
+        ("Acceptance criteria: Keep receipts.\n- Save the logs.", "1:2,2:4", 1.0),
+        ("Acceptance criteria:\n\n# Notes\nKeep receipts.", "3:2,4:2", 1.0),
+        ("Acceptance criteria:", "", 0.0),
+        (SPEC, "", 0.0),
+        (SPEC, SPEC.strip(), 0.0),
+        (SPEC, "keep the frozen recurring-work body unchanged.", 0.0),
+        (SPEC, "1:5", 0.0),
+        (SPEC, "1:6\nwork_evidence=1:5", 0.0),
+    ],
+)
+def test_work_quality_checks_the_frozen_spec_task(spec, answer, score):
+    manifest = {"frozen_packet": {"frozen_spec": spec}}
+    assert trial._work_quality_score(manifest, f"work_evidence={answer}") == score
 
 
 def test_echo_only_ack_lines_score_zero_recurring_work_quality(tmp_path):
@@ -328,8 +351,7 @@ def test_server_model_preserves_unverified_measurements(tmp_path, monkeypatch):
 
     def execute(request, prompt):
         head, _, _tail = prompt.partition("Frozen specification:\n")
-        rubric = trial._recurring_work_rubric_line(SPEC)
-        assert f"work_evidence={rubric}" not in head
+        assert "work_evidence=1:6" not in head
         include_work = request["profile_id"] == full_profile
         session = json.dumps(
             {

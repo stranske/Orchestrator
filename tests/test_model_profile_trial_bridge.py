@@ -305,6 +305,30 @@ def test_identity_artifact_tokens_must_agree_with_attempt(tmp_path):
     assert saved["tokens_out"] == 1
 
 
+@pytest.mark.parametrize(
+    ("artifact_tokens", "attempt_tokens"), [(None, None), (None, 2), (2, None)]
+)
+def test_identity_artifact_explicit_null_usage(tmp_path, artifact_tokens, attempt_tokens):
+    manifest = _manifest(tmp_path)
+    _preflight, envelope = _envelope(tmp_path, manifest)
+    results = _transport_results(tmp_path, manifest, envelope)
+    attempt = results["attempts"][0]
+    attempt["tokens_in"] = attempt_tokens
+    art_path = Path(attempt["artifact_ref"])
+    artifact = json.loads(art_path.read_text(encoding="utf-8"))
+    artifact["tokens_in"] = artifact_tokens
+    art_path.write_text(json.dumps(artifact, sort_keys=True) + "\n", encoding="utf-8")
+    attempt["artifact_sha256"] = "sha256:" + hashlib.sha256(art_path.read_bytes()).hexdigest()
+
+    if artifact_tokens != attempt_tokens:
+        with pytest.raises(ValueError, match="tokens_in disagrees"):
+            bridge.ingest_transport_results(manifest, envelope, results)
+    else:
+        quarantined = bridge.ingest_transport_results(manifest, envelope, results)
+        saved = next(row for row in quarantined["attempts"] if row["run_id"] == attempt["run_id"])
+        assert saved["tokens_in"] is None
+
+
 def test_missing_transport_usage_stays_unmeasured_and_zero_stays_zero(tmp_path):
     manifest = _manifest(tmp_path)
     _preflight, envelope = _envelope(tmp_path, manifest)

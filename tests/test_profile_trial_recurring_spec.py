@@ -159,7 +159,17 @@ def _measured_results(root: Path, manifest: dict) -> dict:
             "provider_resolved_provider": request["provider"],
             "provider_resolved_model": request["requested_model"],
         }
-        artifact.write_text(json.dumps(identity), encoding="utf-8")
+        artifact.write_text(
+            json.dumps(
+                {
+                    **identity,
+                    "object": "turn.completed",
+                    "server_model": request["requested_model"],
+                    "provenance": trial.UNVERIFIED_SESSION_AUTHORITY,
+                }
+            ),
+            encoding="utf-8",
+        )
         digest = "sha256:" + hashlib.sha256(artifact.read_bytes()).hexdigest()
         attempts.append(
             {
@@ -179,7 +189,7 @@ def _measured_results(root: Path, manifest: dict) -> dict:
                 "identity_evidence": {
                     "schema": trial.IDENTITY_EVIDENCE_SCHEMA,
                     "version": trial.IDENTITY_EVIDENCE_VERSION,
-                    "authority": "openai-response-metadata/v1",
+                    "authority": trial.UNVERIFIED_SESSION_AUTHORITY,
                     "artifact_ref": str(artifact),
                     "artifact_sha256": digest,
                 },
@@ -267,6 +277,9 @@ def test_publish_current_records_measured_usage_quality_and_identity(tmp_path, m
     published = trial.publish_measured_recurring_trial(manifest, results, now=2000)
     summary = json.loads((state / "capability-program" / "profile-trial.json").read_text())
     assert published["attempt_count"] == 6
+    assert (
+        len(published["recorded_attempt_ids"]) == len(set(published["recorded_attempt_ids"])) == 6
+    )
     assert published["brain_ingest_enabled"] is False
     assert (summary["profile_count"], summary["instance_count"]) == (2, 6)
     assert summary["identity_verified"] is False
