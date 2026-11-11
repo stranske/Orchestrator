@@ -542,10 +542,17 @@ def test_the_kill_switch_and_the_limit_hold(world):
     assert live.configured_limit({live.LIVE_LIMIT: "x"}) == live.DEFAULT_LIMIT
 
 
-def test_weekly_review_prints_the_live_line(world, monkeypatch):
+def test_weekly_review_prints_the_live_line(world, monkeypatch, tmp_path):
     live.run_live(**world["common"])
     monkeypatch.setattr(live, "report_path", lambda: world["path"])
-    rendered = switch_review.format_report(
+    saved_report = world["path"].read_bytes()
+    with feedback._conn() as conn:
+        conn.execute(
+            "UPDATE outcomes SET durability='broke_later', durability_checked_ts=? WHERE run_id='live-1'",
+            (feedback.DURABILITY_DETECTION_SINCE + 10,),
+        )
+    text_path = tmp_path / "switch-review.txt"
+    switch_review.write_text_report(
         {
             "review_days": 7,
             "raise_count": 0,
@@ -555,12 +562,20 @@ def test_weekly_review_prints_the_live_line(world, monkeypatch):
             "mirror_drift": {"status": "ok"},
             "adjudicator_shadow": "adjudicator shadow: cases 0",
             "adjudicator_live": live.weekly_line(),
-        }
+        },
+        text_path,
     )
-    line = next(line for line in rendered.splitlines() if line.startswith("adjudicator shadow:"))
-    assert line.startswith(
-        "adjudicator shadow: cases 0; live: disputes 1, advised 1, uncertified 0, graded 0"
-    )
+    shadow_lines = [
+        line
+        for line in text_path.read_text().splitlines()
+        if line.startswith("adjudicator shadow:")
+    ]
+    assert shadow_lines == [
+        "adjudicator shadow: cases 0; live: disputes 1, advised 1, uncertified 0, "
+        "graded 1 (agree 1, disagree 0)"
+    ]
+    assert world["path"].read_bytes() == saved_report
+    assert len(world["calls"]) == 1
     # "Advised" is the Brain's `live_shadow_advice` event, not the report: losing the report does
     # not advise the same dispute again.
     world["path"].write_text(json.dumps({"rows": [], "summary": {}, "population": 1}))

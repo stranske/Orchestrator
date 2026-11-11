@@ -36,6 +36,7 @@ import json
 import os
 import re
 import shlex
+import sqlite3
 import subprocess
 import sys
 import time
@@ -673,7 +674,7 @@ def _backfill_advice_events(rows: list[dict], db: Path | None) -> None:
 def _grade_and_write(
     rows: list[dict], db: Path | None, path: Path, *, now: int, population: int | str
 ) -> dict:
-    _refresh_live_truth(rows, db)
+    retro._refresh_saved_verdicts(rows, db)
     summary = live_summary(rows)
     _write_report(
         path,
@@ -701,18 +702,6 @@ def reconcile_live(
     rows = _load_rows(path)
     population = len(retro.disputes(db=db, now=now))
     return _grade_and_write(rows, db, path, now=now, population=population)
-
-
-def _refresh_live_truth(rows: list[dict], db: Path | None) -> None:
-    """Later truth for every live row from the Brain's judged durability, read-only."""
-    for row in rows:
-        run_id = row.get("run_id")
-        if not isinstance(run_id, str):
-            continue
-        try:
-            row["later_truth"] = retro.native_later_truth(run_id, db)
-        except (OSError, ValueError, TypeError):
-            pass
 
 
 UNCERTIFIED_CLASSES: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -780,13 +769,12 @@ def _exact_head_checkout(target: str, sha: str):
 
 
 def weekly_line(path: Path | None = None) -> str:
-    """Format live counts followed by any refusal and retry diagnostics."""
+    """Grade against current durability even if the latest dispatch was skipped."""
     try:
         report = json.loads((path or report_path()).read_text())
         rows = [row for row in report.get("rows", []) if isinstance(row, dict)]
-        summary = live_summary(
-            rows
-        )  # the saved rows are the truth; a saved summary may predate the module
+        retro._refresh_saved_verdicts(rows)
+        summary = live_summary(rows)
         reasons = summary.get("uncertified_reasons") or {}
         refused = (
             "; uncertified reasons: "
@@ -801,8 +789,11 @@ def weekly_line(path: Path | None = None) -> str:
             f"graded {summary['graded']} (agree {summary['agree']}, disagree {summary['disagree']})"
             f"{refused}{failed}"
         )
-    except (OSError, ValueError, KeyError, TypeError):
-        return "live: disputes UNKNOWN, advised UNKNOWN, uncertified UNKNOWN, graded UNKNOWN"
+    except (OSError, ValueError, KeyError, TypeError, sqlite3.Error):
+        return (
+            "live: disputes UNKNOWN, advised UNKNOWN, uncertified UNKNOWN, "
+            "graded UNKNOWN (agree UNKNOWN, disagree UNKNOWN)"
+        )
 
 
 # --------------------------------------------------------------------------------------------
