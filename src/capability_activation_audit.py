@@ -781,6 +781,10 @@ def external_caller(cap: dict) -> dict | None:
             tree = HERE.parent if HERE.name == "src" else HERE
             if not deployed_entry.is_absolute() or not deployed_entry.is_file():
                 raise ValueError("declared external entrypoint is absent")
+            if "entrypoint" not in declaration and deployed_entry.resolve().is_relative_to(
+                tree.resolve()
+            ):
+                raise ValueError("an in-tree entrypoint requires an explicit deployed entrypoint")
             if not caller.is_absolute() or not caller.is_file() or caller.suffix != ".py":
                 raise ValueError("declared external caller Python file is absent")
             if caller.resolve().is_relative_to(tree.resolve()):
