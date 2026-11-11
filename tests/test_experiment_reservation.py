@@ -8,7 +8,9 @@ import experiment_producer as ep
 
 NOW = 1_800_000_000.0
 BODY = "## Tasks\n- [ ] x\n\n## Acceptance Criteria\n- [ ] `pytest tests/test_x.py` passes\n"
-OK_CAP = {"agents": {"codex": {"state": "ok"}, "claude": {"state": "ok"}, "cursor": {"state": "ok"}}}
+OK_CAP = {
+    "agents": {"codex": {"state": "ok"}, "claude": {"state": "ok"}, "cursor": {"state": "ok"}}
+}
 
 
 @pytest.fixture(autouse=True)
@@ -26,14 +28,18 @@ def test_reservation_takes_one_issue_per_token_at_the_design_rate():
     assert offer("o/r#1")["take"] is True
     assert offer("o/r#2", NOW + 60) == {"take": False, "reason": "no_token", "tokens": 0.001}
     assert offer("o/r#2", NOW + 12 * 3600)["take"] is True  # 2/day: one token every 12 h
-    assert offer("o/r#2", NOW + 12 * 3600 + 5)["reason"] == "already_reserved"  # still inside its 3 h hold
+    assert (
+        offer("o/r#2", NOW + 12 * 3600 + 5)["reason"] == "already_reserved"
+    )  # still inside its 3 h hold
     state = ep.read_state()
     assert state["reserve_offers"] == {"taken": 2, "no_token": 1}
 
 
 def test_tokens_bank_up_to_the_daily_cap_only():
     offer("o/r#1")
-    taken = [offer(f"o/r#{n}", NOW + 10 * 86400 + n)["take"] for n in range(2, 2 + ep.DAILY_CAP + 2)]
+    taken = [
+        offer(f"o/r#{n}", NOW + 10 * 86400 + n)["take"] for n in range(2, 2 + ep.DAILY_CAP + 2)
+    ]
     assert taken == [True] * ep.DAILY_CAP + [False, False]
 
 
@@ -56,4 +62,7 @@ def test_a_reserved_subject_fires_without_the_bernoulli_draw_but_pacing_still_ho
 
 def test_choose_subject_prefers_the_reserved_issue():
     feed = [{"target": "o/r#1", "labels": []}, {"target": "o/r#2", "labels": [ep.RESERVED]}]
-    assert ep.choose_subject(feed, [], [], random.Random(0)) == {"subject": feed[1], "reason": "reserved"}
+    assert ep.choose_subject(feed, [], [], random.Random(0)) == {
+        "subject": feed[1],
+        "reason": "reserved",
+    }

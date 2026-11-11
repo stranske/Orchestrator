@@ -75,7 +75,9 @@ def locked_state():
         yield
 
 
-def draw(now, last_draw_ts, rate_per_day, launched_today, rng, *, pools=None, cells=(), force=False):
+def draw(
+    now, last_draw_ts, rate_per_day, launched_today, rng, *, pools=None, cells=(), force=False
+):
     """Bernoulli approximation to Poisson arrivals, bounded per UTC day.
 
     Pure when called alone. cadence_draw persists every draw, including pacing skips:
@@ -105,7 +107,9 @@ def draw(now, last_draw_ts, rate_per_day, launched_today, rng, *, pools=None, ce
     return {"fire": fire, "p": p, "reason": "draw" if fire else "no_draw"}
 
 
-def cadence_draw(now, rate, rng, *, pools=None, cells=(), skip_reason=None, count_skip=True, force=False):
+def cadence_draw(
+    now, rate, rng, *, pools=None, cells=(), skip_reason=None, count_skip=True, force=False
+):
     with locked_state():
         state = read_state()
         day = time.strftime("%Y%m%d", time.gmtime(now))
@@ -147,7 +151,11 @@ def reservation_offer(target, body, *, now=None, rate_per_day=None, cap=None):
     import capacity
 
     now = time.time() if now is None else now
-    rate = float(os.environ.get("ORCH_EXPERIMENT_RATE_PER_DAY", "2") if rate_per_day is None else rate_per_day)
+    rate = float(
+        os.environ.get("ORCH_EXPERIMENT_RATE_PER_DAY", "2")
+        if rate_per_day is None
+        else rate_per_day
+    )
     hold = trial_launch_hold(now)
     if hold:
         return {"take": False, "reason": "trial_hold", "tokens": 0.0}
@@ -167,9 +175,14 @@ def reservation_offer(target, body, *, now=None, rate_per_day=None, cap=None):
         if (state.get("launched_today", 0) if state.get("day") == day else 0) >= DAILY_CAP:
             return {"take": False, "reason": "daily_cap", "tokens": 0.0}
         last = float(state.get("reserve_ts") or now)
-        tokens = min(float(DAILY_CAP), float(state.get("reserve_tokens", 1.0)) + rate * max(0.0, now - last) / 86400)
+        tokens = min(
+            float(DAILY_CAP),
+            float(state.get("reserve_tokens", 1.0)) + rate * max(0.0, now - last) / 86400,
+        )
         reservations = {
-            k: v for k, v in (state.get("reservations") or {}).items() if now - float(v) < RESERVE_HOLD_SECONDS
+            k: v
+            for k, v in (state.get("reservations") or {}).items()
+            if now - float(v) < RESERVE_HOLD_SECONDS
         }
         if target in reservations:
             return {"take": True, "reason": "already_reserved", "tokens": tokens}
@@ -181,7 +194,11 @@ def reservation_offer(target, body, *, now=None, rate_per_day=None, cap=None):
         offers = state.setdefault("reserve_offers", {})
         offers["taken" if take else "no_token"] = offers.get("taken" if take else "no_token", 0) + 1
         save_state(state)
-        return {"take": take, "reason": "reserved" if take else "no_token", "tokens": round(tokens, 3)}
+        return {
+            "take": take,
+            "reason": "reserved" if take else "no_token",
+            "tokens": round(tokens, 3),
+        }
 
 
 def record_launch(now=None, *, test_source=None):

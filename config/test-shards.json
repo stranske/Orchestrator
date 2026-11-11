@@ -283,7 +283,8 @@
       "tests/test_venv_fixture_portability.py",
       "tests/test_verifier_retry_lineage.py",
       "tests/test_worktree_git_guard.py",
-      "tests/test_observability_dashboard.py"
+      "tests/test_observability_dashboard.py",
+      "tests/test_experiment_reservation.py"
     ],
     [
       "tests/test_adjudicator_retry_history.py",
