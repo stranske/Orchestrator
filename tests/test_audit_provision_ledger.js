@@ -25,10 +25,11 @@ from pathlib import Path
 import followup_evidence as evidence
 root, source = map(Path, sys.argv[1:3])
 now = datetime.fromisoformat(sys.argv[3])
-state = {}
-for hour in range(169):
+state = json.loads(sys.argv[4]) if len(sys.argv) > 4 else {}
+hours = 1 if state else 169
+for hour in range(hours):
     report, state = evidence.provision_report(
-        root, state, now - timedelta(hours=168-hour), source / 'provision.py')
+        root, state, now - timedelta(hours=hours-1-hour), source / 'provision.py')
 print(json.dumps({'provision': report}))
 `;
 
@@ -47,14 +48,27 @@ function fixture(t, segments = { '': ndjson([event()]) }, end = now, relativeRoo
   fs.mkdirSync(path.join(root, 'followup-evidence'));
   const receipt = path.join(root, 'followup-evidence/latest.json');
   fs.writeFileSync(receipt, collected.stdout);
-  const audit = () => auditProvisionLedger(root, source,
-    { now: end, writerPath: path.join(root, 'provision-events.ndjson') });
+  const audit = (at = end) => auditProvisionLedger(root, source,
+    { now: at, writerPath: path.join(root, 'provision-events.ndjson') });
+  const observe = (at) => {
+    // The report carries every field of the collector's continuation state.
+    // Carry those values into one new observation instead of inventing a week.
+    const previous = JSON.parse(fs.readFileSync(receipt, 'utf8')).provision;
+    const collected = execute(process.env.PYTHON || 'python3',
+      ['-c', collect, collectorRoot, source, at, JSON.stringify(previous)],
+      { cwd: process.cwd(), env: { ...process.env, PYTHONPATH: source, PYTHONDONTWRITEBYTECODE: '1' } });
+    assert.equal(collected.error_code, null);
+    assert.equal(collected.signal, null);
+    assert.equal(collected.exit_code, 0, collected.stderr.toString());
+    fs.writeFileSync(receipt, collected.stdout);
+    return JSON.parse(collected.stdout).provision;
+  };
   const changeReceipt = (change) => {
     const document = JSON.parse(fs.readFileSync(receipt, 'utf8'));
     change(document.provision);
     fs.writeFileSync(receipt, JSON.stringify(document));
   };
-  return { root, receipt, audit, changeReceipt };
+  return { root, receipt, audit, changeReceipt, observe };
 }
 
 test('recounts active and archived failures with multiplicity and exact seven-day boundaries', (t) => {
@@ -242,6 +256,54 @@ test('fresh observed legitimate refusals remain unmet after successful retries i
   for (const [index, file] of inputs.entries()) {
     assert.deepEqual(fs.readFileSync(file), before[index], file);
   }
+});
+
+test('a refusal ages out only after a fresh observation with every archive retained', (t) => {
+  const f = fixture(t, { '': ndjson([event({ outcome: 'reclaimed' })]),
+    '.old': ndjson([event({ ts: cutoff })]) });
+  assert.equal(f.audit().branch_refusals, 1);
+  assert.equal(f.audit().coverage, 'continuous');
+  assert.equal(f.audit().evidence_ready, false);
+  const archives = fs.readdirSync(f.root).filter((name) => name.startsWith('provision-events.ndjson'));
+  const before = archives.map((name) => fs.readFileSync(path.join(f.root, name)));
+  const nextHour = '2026-11-11T13:00:00.123456+00:00';
+  // A still-fresh receipt continues to report its own observed window.
+  assert.equal(f.audit(nextHour).branch_refusals, 1);
+  assert.equal(f.audit(nextHour).evidence_ready, false);
+  const observed = f.observe(nextHour);
+  assert.equal(observed.evidence_ready, true);
+  assert.deepEqual(observed.continuity_failures, []);
+  const result = f.audit(nextHour);
+  assert.equal(result.counted_through, nextHour);
+  assert.equal(result.continuous_since, cutoff);
+  assert.equal(result.coverage, 'continuous');
+  assert.equal(result.branch_refusals, 0);
+  assert.equal(result.evidence_ready, true);
+  assert.equal(result.deployment_acceptance_verified, false);
+  assert.deepEqual(result.counts, { 'reclaimed/branch-held': 1 });
+  for (const [index, name] of archives.entries()) {
+    assert.deepEqual(fs.readFileSync(path.join(f.root, name)), before[index], name);
+  }
+});
+
+test('a fresh collector observation after archive loss cannot qualify a zero-refusal window', (t) => {
+  const f = fixture(t, { '': ndjson([event({ outcome: 'reclaimed' })]),
+    '.old': ndjson([event({ ts: cutoff })]), '.older': ndjson([event({ ts: cutoff })]) });
+  assert.equal(f.audit().branch_refusals, 2);
+  const retained = path.join(f.root, 'provision-events.ndjson.old');
+  const bytes = fs.readFileSync(retained);
+  fs.unlinkSync(path.join(f.root, 'provision-events.ndjson.older'));
+  const nextHour = '2026-11-11T13:00:00.123456+00:00';
+  const observed = f.observe(nextHour);
+  assert.match(observed.continuity_failures.join('\n'), /previous ledger prefix missing or rewritten/);
+  assert.equal(observed.continuous_since, nextHour);
+  assert.equal(observed.branch_refusals, 0);
+  assert.equal(observed.evidence_ready, false);
+  const result = f.audit(nextHour);
+  assert.equal(result.coverage, 'UNKNOWN');
+  assert.equal(result.branch_refusals, 0);
+  assert.equal(result.evidence_ready, false);
+  assert.deepEqual(fs.readFileSync(retained), bytes);
 });
 
 test('source absence and nonregular segments are UNKNOWN without following symlinks', (t) => {
