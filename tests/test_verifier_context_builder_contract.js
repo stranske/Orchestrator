@@ -254,6 +254,62 @@ test('CSV retained recovery command uses integer selectors bound to native sourc
   assert.equal(JSON.stringify(current), before);
 });
 
+test('CSV recovery follows the latest native comparison instead of the superseded evaluation',async()=>{
+  const { guardRetainedRecoveryHistory } = require('../.github/scripts/verifier_pending_execution.js');
+  const { parseRecoverySelector, validateEvent, digest } = require('../.github/scripts/verification_event.js');
+  const readback = require('../docs/verification/issue-1184-acceptance-20261111/round9/native-readback.json');
+  const before = JSON.stringify(readback);
+  const states = readback.verifier_events.map(comment =>
+    JSON.parse(comment.body.match(/(\{[^\n]+\})/)[1]));
+  assert.equal(states.length, 6, 'exercise the complete retained native state history');
+  const original = states.find(state => state.run_id === '42141057834');
+  const latest = states.find(state => state.run_id === '42142641060');
+  const event = validateEvent(latest.verification_event);
+  assert.equal(original.assessment_identity.mode, 'evaluate');
+  assert.equal(latest.assessment_identity.mode, 'compare');
+  assert.equal(validateEvent(original.verification_event).event_id, event.event_id);
+  const pr = readback.pull_requests.find(pr => pr.number === 1168);
+  assert.equal(event.head_sha, pr.head_sha);
+  assert.equal(event.evaluated_sha, pr.merge_commit_sha);
+  const argv = readback.recovery_dispatch.argv;
+  assert.ok(argv.includes('mode=compare'));
+  assert.ok(argv.includes(`pr_head_sha=${pr.head_sha}`));
+  const argument = argv.find(value => value.startsWith('verification_recovery='));
+  assert.ok(argument);
+  const selector = parseRecoverySelector(argument.slice('verification_recovery='.length));
+  const artifact = readback.comparison_artifact;
+  assert.equal(selector.run_id, Number(latest.run_id));
+  assert.equal(selector.run_attempt, Number(latest.run_attempt));
+  assert.equal(selector.artifact_id, artifact.id);
+  assert.equal(artifact.workflow_run.id, selector.run_id);
+  assert.equal(artifact.name, `comparison-results-${selector.run_id}`);
+  assert.equal(artifact.expired, false);
+  // Use unchanged native comments. A throwing client proves history admission
+  // performs no remote mutation or acquisition; it does not claim recovery ran.
+  const github = new Proxy({}, {get() {throw new Error('unexpected GitHub access');}});
+  const options = (state, selected) => ({
+    github, event, assessment:state.assessment_identity, comments:readback.verifier_events,
+    sourceRun:selected.run_id, sourceAttempt:selected.run_attempt,
+    currentRun:selector.run_id + 1, currentAttempt:1,
+    recoveryKey:digest({schema:'retained-revalidation-key/v1',event_id:event.event_id,
+      assessment:state.assessment_identity,selector:selected}),
+  });
+  const oldRecovery = options(original, {
+    run_id:Number(original.run_id),run_attempt:Number(original.run_attempt),artifact_id:13468410186,
+  });
+  // Positive control: the old recovery is admissible before the comparison.
+  // Omitting the later authentic comments would conceal the actual blocker.
+  assert.equal(await guardRetainedRecoveryHistory({...oldRecovery,
+    comments:readback.verifier_events.filter((comment, index) =>
+      Number(states[index].run_id) < Number(latest.run_id)),
+  }), 'ready');
+  await assert.rejects(guardRetainedRecoveryHistory(oldRecovery),
+    /Retained recovery is superseded by a newer authenticated assessment/);
+  assert.equal(await guardRetainedRecoveryHistory(options(latest, selector)), 'ready');
+  assert.deepEqual(readback.terminal_corpus_markers, []);
+  assert.equal(JSON.stringify(readback), before, 'never rewrite producer history for admission');
+});
+
 test('native CSV verifier states require both the corrective head and published merge',async()=>{
   const root = path.resolve(__dirname, '..');
   const python = fs.existsSync('/opt/anaconda3/bin/python3') && !process.env.VIRTUAL_ENV
