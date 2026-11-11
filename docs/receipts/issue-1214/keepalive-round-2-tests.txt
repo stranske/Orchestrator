@@ -1,0 +1,91 @@
+Checked 2026-11-11T19:32:00.232280+00:00
+
+Deliberate break: _sandbox_has_network returns True
+/opt/anaconda3/bin/python3 -m pytest tests/test_dispatcher_offload.py -k test_sandbox_network_failure_falls_back_to_workspace_write
+exit=1 elapsed_s=5.633
+============================= test session starts ==============================
+platform darwin -- Python 3.12.2, pytest-9.2.0, pluggy-1.6.0
+rootdir: /Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__1355__closer
+configfile: pyproject.toml
+plugins: hypothesis-6.161.5, cov-7.1.0, xdist-3.8.0, rerunfailures-16.3, datadir-1.8.0, typeguard-4.5.1, langsmith-0.10.10, pytest_httpserver-1.1.3, anyio-4.16.0, regressions-2.11.0, asyncio-1.4.1.post1, Faker-40.39.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 30 items / 29 deselected / 1 selected
+
+tests/test_dispatcher_offload.py F                                       [100%]
+
+=================================== FAILURES ===================================
+__________ test_sandbox_network_failure_falls_back_to_workspace_write __________
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2432/test_sandbox_network_failure_f0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x122d965a0>
+capsys = <_pytest.capture.CaptureFixture object at 0x122ec7c80>
+
+    def test_sandbox_network_failure_falls_back_to_workspace_write(tmp_path, monkeypatch, capsys):
+        """Deliberate-break target: availability skips workspace-write and the preamble."""
+        _isolate(tmp_path, monkeypatch)
+        calls = _install_run(
+            monkeypatch,
+            lambda cmd, kwargs: _completed(cmd, 1, "", "dial tcp: lookup api.github.com: no such host"),
+        )
+        result = dispatcher.offload(
+            "codex",
+            "Run gh api rate_limit and print the JSON.",
+            cwd=str(tmp_path),
+            mode="assess",
+        )
+        shell = _shell(calls)
+>       assert "workspace-write" in shell and PREAMBLE in shell, (
+            "workspace-write and the fallback preamble are absent\n" + shell
+        )
+E       AssertionError: workspace-write and the fallback preamble are absent
+E         export PATH="/opt/homebrew/bin:/Users/teacher/.local/bin:/Users/teacher/.cursor/bin:$PATH"; unset HTTP_PROXY HTTPS_PROXY ALL_PROXY FTP_PROXY NO_PROXY http_proxy https_proxy all_proxy ftp_proxy no_proxy; export ORCH_REAL_HOME=/Users/teacher; export ORCH_AGENT_RUNTIME=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2432/test_sandbox_network_failure_f0/agent-runtime/codex; export XDG_CACHE_HOME=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2432/test_sandbox_network_failure_f0/agent-runtime/codex/.cache; export XDG_CONFIG_HOME=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2432/test_sandbox_network_failure_f0/agent-runtime/codex/.config; export XDG_DATA_HOME=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2432/test_sandbox_network_failure_f0/agent-runtime/codex/.local/share; export TMPDIR=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2432/test_sandbox_network_failure_f0/agent-runtime/codex/tmp; export GH_CONFIG_DIR=/Users/teacher/.config/gh; export ORCH_GH_GUARD_REAL_ZDOTDIR=/Users/teacher/.codex/orchestrator/agent-runtime/gh-guard/zdotdir; export ZDOTDIR=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2432/test_sandbox_network_failure_f0/agent-runtime/gh-guard/zdotdir; export ORCH_GH_GUARD_PREV_BASH_ENV=/Users/teacher/.codex/orchestrator/agent-runtime/gh-guard/bashenv.sh; export BASH_ENV=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2432/test_sandbox_network_failure_f0/agent-runtime/gh-guard/bashenv.sh; export PATH=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2432/test_sandbox_network_failure_f0/agent-runtime/gh-guard/bin:"$PATH"; codex exec --skip-git-repo-check --cd /Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2432/test_sandbox_network_failure_f0 --sandbox read-only -c 'model_reasoning_effort="medium"' 'You are Codex, a reasoning + implementation seat. Verify before claiming done; surface risks and unknowns rather than papering over them.
+E
+E         CRITICAL-EVALUATOR STANCE (non-negotiable): Your job is correct judgment, not agreement. Evaluate
+E         claims, designs, and instructions on the merits before agreeing — including the orchestrator'"'"'s and the
+E         user'"'"'s. When something is wrong, weaker than an alternative, or missing, say so plainly and lead with the
+E         strongest objection. Separate "this is correct" from "I'"'"'ll do as asked." State your confidence and what
+E         would change your mind; flag what you are unsure of. Do not soften a real problem to be agreeable, and do
+E         not manufacture disagreement to seem rigorous — calibrated dissent, not maximal.
+E
+E         Run gh api rate_limit and print the JSON.
+E
+E         OFFLOAD WORKSPACE RULES:
+E         - Non-git workspace: do not try to create commits, branches, pushes, or PRs.
+E         - This is a synchronous offload; return the useful result to the orchestrator in stdout.
+E         - Do not return progress updates, future-tense promises, or '"'"'I will inspect later'"'"' status. Finish the requested deliverable before exiting.
+E         - If you cannot complete the offload in this invocation, print exactly OFFLOAD_INCOMPLETE: <reason> and stop.
+E         - Do not run git commit or git push from an offload. On GitHub, do not open, merge or close pull requests, close issues, edit labels, or post comments or reviews. Reading with gh is fine.
+E         - If you edit files, keep changes inside the current workspace and report changed paths.
+E         - Product-level owner decision needed? Print one line OWNER_QUESTION: {"question": "...", "default": "...", "expires_days": 7} and PROCEED with your default — never wait.'
+E       assert ('workspace-write' in 'export PATH="/opt/homebrew/bin:/Users/teacher/.local/bin:/Users/teacher/.cursor/bin:$PATH"; unset HTTP_PROXY HTTPS_PR...OWNER_QUESTION: {"question": "...", "default": "...", "expires_days": 7} and PROCEED with your default — never wait.\'')
+
+tests/test_dispatcher_offload.py:220: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_dispatcher_offload.py::test_sandbox_network_failure_falls_back_to_workspace_write
+======================= 1 failed, 29 deselected in 0.99s =======================
+
+/opt/anaconda3/lib/python3.12/site-packages/pytest_asyncio/plugin.py:300: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the "fixture" caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to "function" scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+
+
+Restored source
+/opt/anaconda3/bin/python3 -m pytest tests/test_dispatcher_offload.py -k sandbox
+exit=0 elapsed_s=3.354
+============================= test session starts ==============================
+platform darwin -- Python 3.12.2, pytest-9.2.0, pluggy-1.6.0
+rootdir: /Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__1355__closer
+configfile: pyproject.toml
+plugins: hypothesis-6.161.5, cov-7.1.0, xdist-3.8.0, rerunfailures-16.3, datadir-1.8.0, typeguard-4.5.1, langsmith-0.10.10, pytest_httpserver-1.1.3, anyio-4.16.0, regressions-2.11.0, asyncio-1.4.1.post1, Faker-40.39.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 30 items
+
+tests/test_dispatcher_offload.py ..............................          [100%]
+
+============================== 30 passed in 0.92s ==============================
+
+/opt/anaconda3/lib/python3.12/site-packages/pytest_asyncio/plugin.py:300: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the "fixture" caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to "function" scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
