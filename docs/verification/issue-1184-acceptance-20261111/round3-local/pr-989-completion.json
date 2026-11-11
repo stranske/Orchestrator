@@ -1,0 +1,29 @@
+{
+  "acceptance_authority": false,
+  "completed_at": 1794212677,
+  "head": "85adde2614db7118d6e6d28dd11e5bc4c7611319",
+  "merge": "97647baf97085724af7cb8f684af2331f73fb612",
+  "origin_sha256": "c318a33dd256a8a7f7281c660e56069e14e1fc42627dbf660665b9e782cb6e7a",
+  "publication_url": "https://github.com/stranske/Orchestrator/pull/989#issuecomment-6684682838",
+  "schema": "closer-core-completion/v1",
+  "target": "stranske/Orchestrator#988@989",
+  "verification": {
+    "interpreter": "/Users/teacher/.codex/orchestrator/worktrees/runtime-ac-f548d735f9bf4cbca6826e0e240f4338-stranske__Orchestrator-989-97647baf9708/.venv/bin/python",
+    "reason": null,
+    "result": "PASS",
+    "transcript": "{\n  \"verification_id\": \"native-closer-csv-988\",\n  \"target\": \"stranske/Orchestrator#989\",\n  \"generated_at\": 1794212676,\n  \"confirmed_run\": true,\n  \"allow_command_checks\": true,\n  \"timeout\": 120,\n  \"interpreter\": \"/Users/teacher/.codex/orchestrator/worktrees/runtime-ac-f548d735f9bf4cbca6826e0e240f4338-stranske__Orchestrator-989-97647baf9708/.venv/bin/python\",\n  \"check_results\": [\n    {\n      \"id\": \"CSV-CONTRACT\",\n      \"type\": \"command\",\n      \"status\": \"PASS\",\n      \"reason\": null,\n      \"command\": \"/Users/teacher/.codex/orchestrator/worktrees/runtime-ac-f548d735f9bf4cbca6826e0e240f4338-stranske__Orchestrator-989-97647baf9708/.venv/bin/python -I tests/fixtures/closer_real_csv_canary/v1/verify_csv_contract.py\",\n      \"returncode\": 0,\n      \"duration_s\": 0.058,\n      \"stdout_tail\": \"contract ok\\n\",\n      \"stderr_tail\": \"\",\n      \"interpreter\": \"/Users/teacher/.codex/orchestrator/worktrees/runtime-ac-f548d735f9bf4cbca6826e0e240f4338-stranske__Orchestrator-989-97647baf9708/.venv/bin/python\"\n    }\n  ],\n  \"gate\": {\n    \"verification_id\": \"native-closer-csv-988\",\n    \"target\": \"stranske/Orchestrator#989\",\n    \"verdict\": \"PASS\",\n    \"verifier_verdict\": \"PASS_RUNTIME_AC\",\n    \"pass_ratio\": 1.0,\n    \"required_check_ids\": [\n      \"CSV-CONTRACT\"\n    ],\n    \"criteria\": [\n      {\n        \"id\": \"CSV\",\n        \"statement\": \"The delivered CSV contract passes\",\n        \"status\": \"PASS\",\n        \"checks\": [\n          {\n            \"id\": \"CSV-CONTRACT\",\n            \"type\": \"command\",\n            \"required\": true,\n            \"status\": \"PASS\",\n            \"reason\": null\n          }\n        ]\n      }\n    ],\n    \"blocking\": [],\n    \"needs_review\": [],\n    \"result_count\": 1\n  }\n}"
+  },
+  "verification_engine": "runtime_ac_gate.recheck_merged",
+  "verified_merge": "97647baf97085724af7cb8f684af2331f73fb612",
+  "worker": {
+    "agents": [
+      "vibe",
+      "cursor",
+      "aider",
+      "codex"
+    ],
+    "origin_log": "/Users/teacher/.codex/handoff/dispatch-logs/stranske__Orchestrator_989.codex.log",
+    "pid": 82455
+  },
+  "worker_sha256": "75d8f3bcefdb176ca0132fe27054d69b3b49f21ad11c4285ac79270dcf835934"
+}
