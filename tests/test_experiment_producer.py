@@ -1708,10 +1708,29 @@ def test_generation_bump_runs_when_old_verdict_is_fail(tmp_path, monkeypatch, ca
     # Verdict must be cleared so orchestrate.sh defaults ON
     assert "trial_verdict" not in state
 
-    # Verify the shell default evaluates to ON by checking trial_defaults output
-    # When verdict is cleared, trial_defaults returns (end, "pending") and shell computes default=1
-    trial_output = producer.trial_defaults()
-    assert trial_output[1] == "pending", f"Expected pending verdict for shell default ON, got {trial_output[1]}"
+    # Verify the shell default evaluates to ON by running the actual producer-default
+    # calculation from orchestrate.sh (lines 409-412): sets _orch_exp_default=1 if verdict is "pending" or "pass"
+    import subprocess
+    import os
+    
+    # Get the ORCH directory - orchestrate.sh sets ORCH="$ORCH_REPO/src"
+    # So we need to set ORCH to point to src/ directory where experiment_producer.py lives
+    repo_root = os.environ.get("ORCH", os.getcwd())
+    orch_dir = os.path.join(repo_root, "src")
+    
+    # Run the same calculation as orchestrate.sh: call --trial-defaults, extract verdict, compute default
+    result = subprocess.run(
+        ["bash", "-c", f'ORCH="{orch_dir}" && _orch_exp_trial="$(python3 "$ORCH/experiment_producer.py" --trial-defaults)" && _orch_exp_verdict="${{_orch_exp_trial#* }}" && _orch_exp_default=0 && if [[ "$_orch_exp_verdict" == "pending" || "$_orch_exp_verdict" == "pass" ]]; then _orch_exp_default=1; fi && echo "$_orch_exp_default"'],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        cwd=repo_root
+    )
+    
+    # Assert the computed default is '1' (ON)
+    assert result.returncode == 0, f"Shell calculation failed: {result.stderr}"
+    computed_default = result.stdout.strip()
+    assert computed_default == "1", f"Expected shell default 1, got {computed_default}"
 
     # Verify message was printed
     captured = capsys.readouterr()
