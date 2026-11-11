@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import json
 import os
 import shutil
 import subprocess
@@ -123,7 +124,7 @@ def test_corrected_contract_exits_zero_and_partial_revision_raises(tmp_path):
     assert corrected.stderr == ""
 
 
-def test_contract_entry_point_requires_explicit_evidence_opt_in(monkeypatch, capsys):
+def test_contract_entry_point_requires_explicit_evidence_opt_in(monkeypatch, capsys, tmp_path):
     """Default and unsupported commands never start subprocess or network evidence reads."""
     spec = importlib.util.spec_from_file_location("csv_contract_entry", FIXTURE / SCRIPT_NAME)
     verifier = importlib.util.module_from_spec(spec)
@@ -146,6 +147,20 @@ def test_contract_entry_point_requires_explicit_evidence_opt_in(monkeypatch, cap
         output = capsys.readouterr()
         assert output.out == ""
         assert output.err == "unsupported arguments\n"
+
+    # This acceptance runner has no native custody. The current reader must
+    # report that gap, without falling back to contract success or legacy reads.
+    state = tmp_path / "missing-native-custody"
+    monkeypatch.setenv("CLOSER_CORE_STATE", str(state))
+    original_path = list(sys.path)
+    assert verifier.main(["--chain-evidence"]) == 2
+    output = capsys.readouterr()
+    report = json.loads(output.out)
+    assert report["completion"] == "incomplete"
+    assert str(state / "completions" / "stranske_orchestrator_988_989.json") in report["reason"]
+    assert output.err == ""
+    assert not state.exists(), "the reader must not create native custody"
+    assert sys.path == original_path
 
     calls = []
     monkeypatch.setattr(verifier, "_report_chain_evidence", lambda: calls.append(True) or 2)
