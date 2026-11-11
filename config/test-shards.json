@@ -77,6 +77,7 @@
       "tests/test_checks_reported.py",
       "tests/test_ci_gate_config.py",
       "tests/test_closer_batch_delivery.py",
+      "tests/test_closer_csv_canary_contract.py",
       "tests/test_issue1025_ranked_coverage.py",
       "tests/test_issue1025_feedback_boundaries.py",
       "tests/test_issue1025_gate_delta.py",
