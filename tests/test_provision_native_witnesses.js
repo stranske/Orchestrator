@@ -49,6 +49,12 @@ const cp = require('node:child_process');
 const args = process.argv.slice(2);
 const scenario = ${JSON.stringify(scenario)};
 if (args[0] === '-I') {
+  if (scenario.readerExit) {
+    console.log('reader partial output');
+    console.error('reader failed before verdict');
+    process.exit(scenario.readerExit);
+  }
+  if (scenario.readerInvalidJson) { console.log('not JSON'); process.exit(0); }
   const result = cp.spawnSync(${JSON.stringify(process.env.PYTHON || '/opt/anaconda3/bin/python3')}, args, { stdio: 'inherit' });
   process.exit(result.status ?? 1);
 }
@@ -59,7 +65,7 @@ fs.appendFileSync(${JSON.stringify(path.join(base, 'commands.ndjson'))}, JSON.st
 if (scenario.importProbe) {
   const prefix = args.slice(0, args.indexOf('-m'));
   const probe = cp.spawnSync(${JSON.stringify(process.env.PYTHON || '/opt/anaconda3/bin/python3')},
-    [...prefix, '-c', 'import pytest'], { stdio: 'inherit' });
+    [...prefix, '-c', 'import json'], { stdio: 'inherit' });
   if (probe.status !== 0) process.exit(92);
 }
 if (scenario.missing) { console.error('No module named pytest'); process.exit(1); }
@@ -109,6 +115,14 @@ test('binds named native verdicts, commit, mirror manifest, commands and unchang
   assert.equal(receipt.revision, options.revision);
   assert.equal(receipt.mirror, fs.realpathSync(options.mirror));
   assert.deepEqual(receipt.checks[0].cases, success());
+  const reader = receipt.checks[0].junit_reader;
+  assert.equal(reader.exit_code, 0);
+  assert.equal(reader.json_decoded, true);
+  assert.deepEqual(reader.command.slice(0, 3), [options.python, '-I', '-c']);
+  const readerLog = fs.readFileSync(path.join(options.output, reader.log));
+  assert.equal(reader.log_sha256,
+    require('node:crypto').createHash('sha256').update(readerLog).digest('hex'));
+  assert.equal(fs.statSync(path.join(options.output, reader.log)).mode & 0o777, 0o600);
   assert.ok(receipt.checks[0].command.includes('not slow'));
   assert.ok(receipt.checks[0].command.includes('-E'));
   assert.deepEqual(receipt.checks[0].command.slice(1),
@@ -255,12 +269,14 @@ test('requires explicit interpreter, revision and receipt location outside the m
   }
 });
 
-test('inherited PYTHONPATH cannot substitute a pytest package', (t) => {
+test('inherited PYTHONPATH cannot substitute an imported module', (t) => {
   const options = fixture(t, { importProbe: true });
   const poison = path.join(path.dirname(options.root), 'poison');
-  fs.mkdirSync(path.join(poison, 'pytest'), { recursive: true });
-  fs.writeFileSync(path.join(poison, 'pytest', '__init__.py'),
-    'raise RuntimeError("inherited pytest selected")\n');
+  // Use stdlib so the isolation regression needs no real pytest installation.
+  // Pytest execution elsewhere in this fixture is deliberately simulated.
+  fs.mkdirSync(path.join(poison, 'json'), { recursive: true });
+  fs.writeFileSync(path.join(poison, 'json', '__init__.py'),
+    'raise RuntimeError("inherited module selected")\n');
   const old = process.env.PYTHONPATH;
   t.after(() => {
     if (old === undefined) delete process.env.PYTHONPATH;
@@ -269,4 +285,38 @@ test('inherited PYTHONPATH cannot substitute a pytest package', (t) => {
   process.env.PYTHONPATH = poison;
   const receipt = runWitnesses(options);
   assert.equal(receipt.native_witnesses_passed, true);
+});
+
+for (const scenario of [{ readerExit: 37 }, { readerInvalidJson: true }, { malformed: true }]) {
+  test(`retains JUnit reader failure diagnostics: ${JSON.stringify(scenario)}`, (t) => {
+    const options = fixture(t, scenario);
+    const receipt = runWitnesses({ ...options, fullSuites: true });
+    assert.equal(receipt.native_witnesses_passed, false);
+    assert.equal(receipt.default_native_suites_passed, false);
+    for (const check of [...receipt.suites.map((item) => item.execution), ...receipt.checks]) {
+      assert.equal(check.exit_code, 0); // The reader, rather than pytest, failed.
+      assert.equal(check.passed, false);
+      assert.equal(check.cases, null);
+      const reader = check.junit_reader;
+      assert.equal(reader.json_decoded, false);
+      assert.equal(reader.error_code, null);
+      assert.equal(reader.signal, null);
+      assert.equal(reader.exit_code, scenario.readerExit ?? (scenario.malformed ? 1 : 0));
+      const log = fs.readFileSync(path.join(options.output, reader.log));
+      assert.equal(reader.log_sha256,
+        require('node:crypto').createHash('sha256').update(log).digest('hex'));
+      assert.match(log.toString(), scenario.readerExit ? /reader partial output\nreader failed/
+        : scenario.readerInvalidJson ? /not JSON/ : /ParseError/);
+    }
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(options.output, 'receipt.json'))), receipt);
+  });
+}
+
+test('a missing JUnit file retains the pytest failure without inventing a reader command', (t) => {
+  const options = fixture(t, { missing: true });
+  const receipt = runWitnesses(options);
+  assert.equal(receipt.native_witnesses_passed, false);
+  assert.equal(receipt.checks[0].exit_code, 1);
+  assert.equal(receipt.checks[0].junit_reader, null);
+  assert.equal(fs.existsSync(path.join(options.output, 'native-junit-reader.log')), false);
 });

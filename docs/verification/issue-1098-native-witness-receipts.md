@@ -114,3 +114,44 @@ Local validation:
   No commit was created. The blocker comment and `needs-human` label were also
   rejected by the connector's approval requirement. PR #1351 was verified open
   with `isDraft=false`.
+
+## JUnit reader diagnostics follow-up (2026-11-11)
+
+The first task remains blocked on deployment logs/runtime access. The latest
+owner receipt names the local-loop declaration/recent-heartbeat mismatch and
+ambient `f1`/`test_feature` heartbeat audit findings; this checkout has no deployed
+mirror or production state with which to reproduce them. No original task or
+acceptance checkbox is complete.
+
+The native witness runner now retains each JUnit reader's command, exit status,
+signal, error code, JSON decoding result and private output log with its SHA-256
+hash. This applies to the named witnesses and both full suites. Malformed XML,
+nonzero readers and invalid JSON still fail acceptance; missing XML does not
+invent a reader run. Previously these diagnostics were discarded and a failed
+reader left only `cases: null` in the receipt.
+
+The existing Python environment isolation regression now poisons stdlib `json`
+instead of requiring a real pytest package while the fixture simulates pytest.
+Its baseline failed here solely because pytest is absent. Removing `-E` in a
+temporary copy makes the updated regression fail, confirming it still detects
+inherited module substitution.
+
+Validation of the working tree:
+
+- Native receipt runner regressions: 33 passed, zero skipped, using
+  `PYTHON=$(command -v python3) node tests/test_provision_native_witnesses.js`.
+  These are fixture tests, not native deployment receipts.
+- Shared subprocess-helper regressions: 33 passed, zero skipped.
+- Actual default and native provision-suite attempts both exited 1 because
+  `python3 -m pytest` reports `No module named pytest`.
+- Node syntax checks and `git diff --check` passed.
+- The floor is byte-equal to `origin/main`, SHA-256
+  `12cea5203329d538fc12312c9f48b7f08686b2efd2c82c41115dd46365bcd1f6`.
+- `python3 -u src/verify.py` was interrupted with exit 130 after it produced no
+  aggregate report. Full verification is unverified. Python has no pytest or
+  Black; installation into `/tmp` failed because PyPI DNS is unavailable. No
+  Python files or verification-floor settings were edited.
+- `git add` failed because `.git` is mounted read-only and Git cannot create
+  `index.lock`; no commit was created. The connector rejected both the
+  `needs-human` label and blocker comment with `MCP tool call requires approval,
+  but approval policy is never`. PR #1351 remains open with `draft=false`.

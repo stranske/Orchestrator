@@ -149,14 +149,27 @@ function runWitnesses({ root = path.resolve(__dirname, '..'), mirror, python, re
     if (names !== undefined) {
       const xml = path.join(output, `${name}.xml`);
       let cases = null;
+      let reader = null;
       if (fs.existsSync(xml)) {
-        const parsed = execute(python, ['-I', '-c', junitReader, xml],
+        const command = [python, '-I', '-c', junitReader, xml];
+        const parsed = execute(python, command.slice(1),
           { cwd: mirror, env: environment, timeout });
+        const readerLog = Buffer.concat([parsed.stdout, parsed.stderr]);
+        const readerLogName = `${name}-junit-reader.log`;
+        fs.writeFileSync(path.join(output, readerLogName), readerLog,
+          { flag: 'wx', mode: 0o600 });
+        let decoded = false;
         if (parsed.exit_code === 0 && !parsed.error_code && !parsed.signal) {
-          try { cases = JSON.parse(parsed.stdout.toString()); } catch { /* Not a verdict. */ }
+          try {
+            cases = JSON.parse(parsed.stdout.toString());
+            decoded = true;
+          } catch { /* Retain the undecodable output for diagnosis. */ }
         }
+        reader = { command, exit_code: parsed.exit_code, signal: parsed.signal,
+          error_code: parsed.error_code, json_decoded: decoded,
+          log: readerLogName, log_sha256: sha256(readerLog) };
       }
-      Object.assign(check, { cases,
+      Object.assign(check, { cases, junit_reader: reader,
         junit_sha256: fs.existsSync(xml) ? sha256(fs.readFileSync(xml)) : null,
         passed: result.exit_code === 0 && !result.error_code && !result.signal
           && complete(cases, names) });
