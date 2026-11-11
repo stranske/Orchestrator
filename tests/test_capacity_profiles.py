@@ -191,7 +191,7 @@ def test_router_profile_envelope_replays_exact_choice():
                 "cursor": {"state": "shed"},
                 "gemini": {"state": "shed"},
                 "vibe": {"state": "shed"},
-                "aider": {"state": "shed"},
+                "muse": {"state": "shed"},
             }
         }
     )
@@ -201,7 +201,7 @@ def test_router_profile_envelope_replays_exact_choice():
         "cursor": {"state": "shed"},
         "gemini": {"state": "shed"},
         "vibe": {"state": "shed"},
-        "aider": {"state": "shed"},
+        "muse": {"state": "shed"},
     }
     assignment = router.plan(
         [{"target": "owner/repo#5", "task_type": "implement", "lane": "opener"}],
@@ -623,11 +623,11 @@ def test_registry_models_match_adapters():
 
     def bare(model: str) -> str:
         # Strip a leading `<seat>:` router prefix. Only these seats route through a wrapper; a
-        # vendor id containing a slash (`mistral/codestral-latest`) is untouched.
+        # vendor id containing a slash is untouched.
         head, _, tail = str(model).partition(":")
         return (
             tail
-            if tail and head in {"agy", "cursor", "claude", "codex", "vibe", "aider"}
+            if tail and head in {"agy", "cursor", "claude", "codex", "vibe"}
             else str(model)
         )
 
@@ -717,12 +717,12 @@ def test_named_models_are_not_adapter_tags():
         target.add(profile["agent"])
     # NO seat may request a routing tag. Each model is named from that seat's own authority --
     # codex/claude from tier research, gemini from agy's advertised-models probe, cursor from its
-    # known default, vibe from its CLI config, aider from its floating alias. A tag here would mean
+    # known default, vibe from its CLI config. A tag here would mean
     # a seat had been quietly reclassified as unidentifiable when it is merely unconfirmed.
     # No PROFILE may request a routing tag -- that is the field compared against a resolved model.
     # `model_identity` legitimately still carries the router prefix; these are different fields.
     assert tag_seats == set(), sorted(tag_seats)
-    assert {"codex", "claude", "aider", "vibe", "gemini", "cursor"} <= named_seats, sorted(
+    assert {"codex", "claude", "vibe", "gemini", "cursor"} <= named_seats, sorted(
         named_seats
     )
 

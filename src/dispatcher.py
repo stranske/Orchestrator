@@ -227,7 +227,6 @@ AUTH_FILES = {
     "claude": str(
         REAL_HOME / ".codex" / "handoff" / ".claude-oauth-token"
     ),  # exports CLAUDE_CODE_OAUTH_TOKEN
-    "aider": str(REAL_HOME / ".codex" / "handoff" / "aider.env"),  # exports MISTRAL_API_KEY
 }
 
 CRITICAL_EVALUATOR_DIRECTIVE = """CRITICAL-EVALUATOR STANCE (non-negotiable): Your job is correct judgment, not agreement. Evaluate
@@ -242,7 +241,6 @@ AGENT_PERSONAS = {
     "vibe": "You are Vibe (Devstral/Mistral), a flat-rate implementer lane. State your assumptions explicitly, prefer the smallest change that satisfies the spec, and report what you did NOT do.",
     "gemini": "You are Gemini via Antigravity (agy): large-context reasoning and big reads. CRITICAL: return the full deliverable in STDOUT — do NOT write it only to an artifact file the orchestrator cannot read. Don't spend this metered seat on trivial mechanical work.",
     "codex": "You are Codex, a reasoning + implementation seat. Verify before claiming done; surface risks and unknowns rather than papering over them.",
-    "aider": "You are Aider, running from an isolated venv. Make focused, test-backed edits; report exactly what changed.",
     "muse": "You are Muse Code (Meta), running headless in a sandbox on a subscription seat with a limited rolling allowance. Make focused, test-backed edits, spend few steps, and report exactly what changed and what you did NOT do.",
 }
 
@@ -3091,7 +3089,7 @@ def offload(
 
     `write_boundary` = {"protect": [dirs], "allow": [dirs]} bounds where the agent may write: nowhere
     under `protect` except the run's own cwd and the `allow` roots (never a `.git` beneath one).
-    codex is held by its own sandbox (`--add-dir` per root); cursor, agy, vibe, aider and claude run
+    codex is held by its own sandbox (`--add-dir` per root); cursor, agy, vibe and claude run
     under a seatbelt profile (`adapters.apply_write_boundary`). A boundary that cannot be enforced
     refuses the run (exit 2) rather than running it unbounded. None changes nothing.
 
@@ -5145,7 +5143,7 @@ def _selftest() -> None:
 
         # A SEAT THAT CANNOT REPORT PROVENANCE RECORDS NO WORKER ATTEMPT. This assertion used to
         # demand the opposite -- "a profiled seat must record a worker attempt" -- and that was the
-        # bug: gemini, cursor, vibe and aider keep no per-session model log, so every attempt they
+        # bug: gemini, cursor and vibe kept no per-session model log, so every attempt they
         # wrote completed `unresolved` and could never become anything else. Cursor produced 23 in
         # five hours at ~230 offloads per two days, each re-caching the same prose reason, dragging
         # the profile's resolved-model coverage to a permanent 0.00 over a denominator that only
@@ -5167,45 +5165,44 @@ def _selftest() -> None:
             ),
             None,
         )
-        assert (
-            mute_seat
-        ), "no seat lacks a reader any more -- delete this case rather than faking one"
-        try:
-            adapter_module.build_command = fake_build_command
-            subprocess_module.run = fake_run
-            gem_off = offload(mute_seat, "Summarize this file.", cwd=str(nongit), timeout=1)
-        finally:
-            adapter_module.build_command = old_build_command
-            subprocess_module.run = old_subprocess_run
-        with feedback._conn() as c:
-            gem_rows = c.execute(
-                "SELECT resolved_model FROM execution_attempts "
-                "WHERE run_id=? AND operation_role='worker'",
-                (gem_off["run_id"],),
-            ).fetchall()
-        assert gem_rows == [], (
-            "a seat that can never resolve a model must not write a worker attempt",
-            mute_seat,
-            gem_rows,
-        )
-        assert (
-            feedback.resolved_worker_identity_for_run(gem_off["run_id"]) is None
-        ), "no attempt means no worker identity, which is the honest answer here"
-        # The profile is still in force and still recorded, so withholding the claim has not cost
-        # the audit trail: the run still says which profile ran.
-        with feedback._conn() as c:
-            gem_meta = c.execute(
-                "SELECT routing_metadata FROM runs WHERE run_id=?", (gem_off["run_id"],)
-            ).fetchone()
-        gem_routed = json.loads(gem_meta[0]) if gem_meta and gem_meta[0] else {}
-        assert gem_routed.get("selected_profile_id"), (
-            "the profile must still be recorded even when no worker attempt is",
-            gem_routed,
-        )
-        # And the reason is a STATIC property of the seat, from one authority -- never prose
-        # re-cached on thousands of rows.
-        ok, why = adapters.can_report_cli_identity(mute_seat)
-        assert ok is False and why and "no_cli_session_log" in why, (mute_seat, ok, why)
+        # Nobody lacks a reader since aider's removal (2026-11-11): the case runs only when one does.
+        if mute_seat is not None:
+            try:
+                adapter_module.build_command = fake_build_command
+                subprocess_module.run = fake_run
+                gem_off = offload(mute_seat, "Summarize this file.", cwd=str(nongit), timeout=1)
+            finally:
+                adapter_module.build_command = old_build_command
+                subprocess_module.run = old_subprocess_run
+            with feedback._conn() as c:
+                gem_rows = c.execute(
+                    "SELECT resolved_model FROM execution_attempts "
+                    "WHERE run_id=? AND operation_role='worker'",
+                    (gem_off["run_id"],),
+                ).fetchall()
+            assert gem_rows == [], (
+                "a seat that can never resolve a model must not write a worker attempt",
+                mute_seat,
+                gem_rows,
+            )
+            assert (
+                feedback.resolved_worker_identity_for_run(gem_off["run_id"]) is None
+            ), "no attempt means no worker identity, which is the honest answer here"
+            # The profile is still in force and still recorded, so withholding the claim has not cost
+            # the audit trail: the run still says which profile ran.
+            with feedback._conn() as c:
+                gem_meta = c.execute(
+                    "SELECT routing_metadata FROM runs WHERE run_id=?", (gem_off["run_id"],)
+                ).fetchone()
+            gem_routed = json.loads(gem_meta[0]) if gem_meta and gem_meta[0] else {}
+            assert gem_routed.get("selected_profile_id"), (
+                "the profile must still be recorded even when no worker attempt is",
+                gem_routed,
+            )
+            # And the reason is a STATIC property of the seat, from one authority -- never prose
+            # re-cached on thousands of rows.
+            ok, why = adapters.can_report_cli_identity(mute_seat)
+            assert ok is False and why and "no_cli_session_log" in why, (mute_seat, ok, why)
         for seat in adapters.CLI_IDENTITY_READERS:
             assert adapters.can_report_cli_identity(seat)[0] is True, seat
 
@@ -5242,15 +5239,16 @@ def _selftest() -> None:
             ),
             None,
         )
-        assert mute, "no seat lacks a reader any more -- delete this case rather than faking one"
-        # unreportable + evidence -> RECORDED, because the round needs the join to mine at all.
-        assert _attempts_for(mute, round_id="domain/audit-x:review-corpus:2026-08-22"), (
-            "a round-bound offload must record the attempt its episode joins on",
-            mute,
-        )
-        # unreportable + no evidence -> nothing. This is the only silent cell, and the only one
-        # where the row could never be used for anything.
-        assert _attempts_for(mute, round_id=None) == [], ("the junk case must stay silent", mute)
+        # Runs only while some seat genuinely lacks a reader (none since aider's removal, 2026-11-11).
+        if mute is not None:
+            # unreportable + evidence -> RECORDED, because the round needs the join to mine at all.
+            assert _attempts_for(mute, round_id="domain/audit-x:review-corpus:2026-08-22"), (
+                "a round-bound offload must record the attempt its episode joins on",
+                mute,
+            )
+            # unreportable + no evidence -> nothing. This is the only silent cell, and the only one
+            # where the row could never be used for anything.
+            assert _attempts_for(mute, round_id=None) == [], ("the junk case must stay silent", mute)
         # reportable + no evidence -> RECORDED, because it resolves and feeds drift detection.
         assert _attempts_for(
             "codex", round_id=None
@@ -5736,7 +5734,7 @@ def _selftest() -> None:
         assert repeated_codex_profile["profile_id"] == codex_profile["profile_id"]
         # Every real seat now has a registered profile, so every seat can record a worker attempt.
         # (Before this, only codex could, which is why provenance covered one agent of six.)
-        for seat in ("claude", "gemini", "cursor", "vibe", "aider"):
+        for seat in ("claude", "gemini", "cursor", "vibe"):
             assert _select_offload_profile(seat, "mid"), f"{seat} must select a profile"
         # An agent with NO registered profile still selects nothing -- selection may not invent one.
         assert _select_offload_profile("definitely-not-an-agent", "mid") is None

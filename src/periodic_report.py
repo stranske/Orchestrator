@@ -3018,7 +3018,7 @@ def _selftest() -> None:
         # is what licensed 23 permanently-unresolvable worker rows. Assert the honest split instead.
         import adapters as _ad
 
-        for agent in ("codex", "claude", "gemini", "cursor", "vibe", "aider"):
+        for agent in ("codex", "claude", "gemini", "cursor", "vibe"):
             row = cov["agents"][agent]
             capable, why = _ad.can_report_cli_identity(agent)
             assert row["model_reportable"] is (capable and row["profiles"] > 0), (
@@ -3087,24 +3087,24 @@ def _selftest() -> None:
             import execution_profiles as _ep2
 
             mute = next((a for a in _ad2.NO_SESSION_LOG_AGENTS if _ep2.profiles_for_agent(a)), None)
-            assert mute, "no seat lacks a reader -- delete this case rather than faking one"
-            mute_profile = _ep2.profiles_for_agent(mute)[0]
-            feedback.record_run("cov-never", "offload:/tmp/y", "offload", mute)
-            feedback.record_execution_attempt(
-                "cov-never",
-                attempt_id="attempt:profile:cov-never",
-                operation_role="worker",
-                profile_id=mute_profile["profile_id"],
-                requested_provider=mute_profile["provider"],
-                requested_model=mute_profile["requested_model"],
-                status="unresolved",
-                source="orchestrator-profile-decision",
-                started_ts=int(_t.time()),
-            )
-            never = mining_coverage(30)["agents"][mute]
-            assert never["verdict"] == "model_not_reportable", never
-            assert never["cannot_report_reason"], never
-            assert never["verdict"] != built["verdict"], (never, built)
+            if mute:  # runs only while some seat genuinely lacks a model reader (none since 2026-11-11)
+                mute_profile = _ep2.profiles_for_agent(mute)[0]
+                feedback.record_run("cov-never", "offload:/tmp/y", "offload", mute)
+                feedback.record_execution_attempt(
+                    "cov-never",
+                    attempt_id="attempt:profile:cov-never",
+                    operation_role="worker",
+                    profile_id=mute_profile["profile_id"],
+                    requested_provider=mute_profile["provider"],
+                    requested_model=mute_profile["requested_model"],
+                    status="unresolved",
+                    source="orchestrator-profile-decision",
+                    started_ts=int(_t.time()),
+                )
+                never = mining_coverage(30)["agents"][mute]
+                assert never["verdict"] == "model_not_reportable", never
+                assert never["cannot_report_reason"], never
+                assert never["verdict"] != built["verdict"], (never, built)
         finally:
             feedback.DB_PATH = _probe
 

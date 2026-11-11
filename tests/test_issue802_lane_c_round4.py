@@ -14,6 +14,7 @@ Unreachable without restructuring (documented in the PR body):
 
 from __future__ import annotations
 
+import router
 import pytest
 
 import exploration_backfill as eb
@@ -54,16 +55,17 @@ def isolated_runtime(tmp_path, monkeypatch):
 def test_exploration_backfill_missing_cells_skips_backup_agents(monkeypatch) -> None:
     """Line 96: `if agent in BACKUP_AGENTS: continue` — defensive after route filter."""
     # Real `_route_agents` already drops backups; stub a list that still includes one so
-    # the continue is reachable and discriminating.
+    # the continue is reachable and discriminating. No real backup seat exists since 2026-11-11.
+    monkeypatch.setattr(router, "BACKUP_AGENTS", {"spare"})
     monkeypatch.setattr(
-        eb, "_route_agents", lambda task_type, route_table: ["codex", "aider", "claude"]
+        eb, "_route_agents", lambda task_type, route_table: ["codex", "spare", "claude"]
     )
     coverage = {
         "tasks": [
             {
                 "task_type": "implement",
                 "ready_for_default_review": False,
-                "agent_observations": {"codex": 0, "aider": 0, "claude": 0},
+                "agent_observations": {"codex": 0, "spare": 0, "claude": 0},
                 "observed_agents": 0,
                 "needed_total_observations": 5,
                 "top_agents": [],
@@ -72,21 +74,22 @@ def test_exploration_backfill_missing_cells_skips_backup_agents(monkeypatch) -> 
     }
     cells = eb._missing_cells(coverage, route_table={})
     agents = {c["agent"] for c in cells}
-    assert "aider" not in agents
+    assert "spare" not in agents
     assert agents == {"codex", "claude"}
 
 
 def test_exploration_backfill_anchor_skips_backup_then_falls_back(monkeypatch) -> None:
     """Line 240: backup continue inside `_anchor_agent`'s first loop."""
+    monkeypatch.setattr(router, "BACKUP_AGENTS", {"spare", "spare2"})
     monkeypatch.setattr(
-        eb, "_route_agents", lambda task_type, route_table: ["aider", "muse", "codex"]
+        eb, "_route_agents", lambda task_type, route_table: ["spare", "spare2", "codex"]
     )
     # All preferred agents shed → first loop skips backups then finds none available;
     # second loop still returns a non-backup outside missing_agents.
     anchor = eb._anchor_agent(
         "implement",
         missing_agents=["claude"],
-        states={"aider": "ok", "muse": "ok", "codex": "shed"},
+        states={"spare": "ok", "spare2": "ok", "codex": "shed"},
         route_table={},
     )
     assert anchor == "codex"

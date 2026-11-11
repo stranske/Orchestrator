@@ -395,10 +395,10 @@ def _close_verified_target(
     labels = {row["name"] for row in pr["labels"]["nodes"]}
     agent_pr = bool(
         labels
-        & {"agent:" + name for name in ("codex", "claude", "cursor", "gemini", "aider", "muse")}
+        & {"agent:" + name for name in ("codex", "claude", "cursor", "gemini", "muse")}
     ) or bool(
         re.match(
-            r"(?:codex|claude|claude-code|cursor|gemini|aider|muse|orch|orchestrator)/issue-\d",
+            r"(?:codex|claude|claude-code|cursor|gemini|muse|orch|orchestrator)/issue-\d",
             pr["headRefName"],
         )
     )

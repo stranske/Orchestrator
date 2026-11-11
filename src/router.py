@@ -57,7 +57,7 @@ EXPLORATION_MODE_DEFAULT = (
 PACING_POOLS = {"codex", "claude"}
 SCARCE_AGENTS = ("codex", "claude")  # review yields when these are pressured
 # Agents the GitHub keepalive can run REMOTELY via an `agent:<X>` label (must match dispatcher.REMOTE_AGENTS).
-# vibe/aider are LOCAL-only (no keepalive lane), so remote delegation can't choose them.
+# vibe is LOCAL-only (no keepalive lane), so remote delegation can't choose them.
 KEEPALIVE_AGENTS = {"cursor", "codex", "claude", "gemini"}
 # Premium/scarce seats RESERVED for high-leverage or last-resort remote work. Claude's WEEKLY cap is
 # limited (owner used ~25% on day 1) and capacity.py only sees the 5h block, not the weekly burn — so
@@ -65,12 +65,13 @@ KEEPALIVE_AGENTS = {"cursor", "codex", "claude", "gemini"}
 # keepalive agent has capacity (owner directive 2026-06-14). To force Claude off entirely when the week
 # is tight, shed it: touch ~/.codex/handoff/capacity-shed/claude.
 RESERVE_AGENTS = {"claude"}
-# Agents held OUT of routine auto-selection and kept purely as BACKUP / overflow capacity. Unlike
-# RESERVE_AGENTS (claude — still chosen as a last resort), a BACKUP agent is NEVER auto-selected: it is
-# reachable only on EXPLICIT demand — a manual `dispatcher.py offload/delegate --agent aider`, or
-# `select_agent(..., only={"aider"})`. Owner directive 2026-06-21: aider is paygo (burns the pay-go
-# Codestral credit) and was the weakest seat on the recent build-off — hold it as backup, not a seat.
-BACKUP_AGENTS = {"aider", "muse"}
+# Agents held OUT of routine auto-selection and kept purely as BACKUP capacity: a BACKUP agent is
+# NEVER auto-selected and is reachable only on EXPLICIT demand (`select_agent(..., only={...})` or a
+# manual dispatcher call). EMPTY since 2026-11-11 (owner): aider was removed from the fleet (it had
+# no working install since 11-05 and was never chosen), and muse became a routine LATE seat -- the
+# billing and readiness unknowns that made it backup-only on 2026-10-16 (#612) were resolved
+# (subscription-billed login; hosted runs proven 10-16/17). The guard stays for future backup seats.
+BACKUP_AGENTS: set[str] = set()
 GEMINI_GOOD_FIT_TASKS = {"implement", "epic", "cross_repo", "runtime_ac", "review"}
 
 
@@ -123,7 +124,6 @@ ROUTE_TABLE: dict = {
             {"agent": "cursor", "mode": "composer", "late": False},
             {"agent": "vibe", "mode": "cheap", "late": False},
             {"agent": "codex", "mode": "mid", "late": False},
-            {"agent": "aider", "mode": "cheap", "late": True},  # paygo credit -> late
             {"agent": "claude", "mode": "cheap", "late": False},
         ],
     },
@@ -139,11 +139,10 @@ ROUTE_TABLE: dict = {
             },  # reasoning seat; shines when codex/claude 5h-shed
             {"agent": "cursor", "mode": "composer", "late": False},
             {"agent": "vibe", "mode": "full", "late": False},
-            {"agent": "muse", "mode": "full", "late": True},  # explicit-only backup exploration
+            {"agent": "muse", "mode": "full", "late": True},  # late seat: metered subscription
             # REMOVED 2026-08-08 (owner policy): the late cursor/frontier lane. Cursor runs Composer
             # ONLY — see adapters.CURSOR_COMPOSER_MODEL. Cursor already appears above on composer, so
             # this entry only ever offered a second, pricier way to reach the same seat.
-            {"agent": "aider", "mode": "full", "late": True},
         ],
     },
     # STAGE 2 (2026-08-10): testgen -> mid. `testgen_gate.py` must pass before a PR, so a generated
@@ -155,7 +154,6 @@ ROUTE_TABLE: dict = {
             {"agent": "codex", "mode": "mid", "late": False},
             {"agent": "cursor", "mode": "composer", "late": False},
             {"agent": "vibe", "mode": "mid", "late": False},
-            {"agent": "aider", "mode": "mid", "late": True},
         ],
     },
     "epic": {
@@ -165,7 +163,6 @@ ROUTE_TABLE: dict = {
             {"agent": "codex", "mode": "full", "late": False},
             {"agent": "cursor", "mode": "composer", "late": False},
             {"agent": "vibe", "mode": "full", "late": False},
-            {"agent": "aider", "mode": "full", "late": True},
         ],
     },
     "cross_repo": {
@@ -175,7 +172,6 @@ ROUTE_TABLE: dict = {
             {"agent": "codex", "mode": "full", "late": False},
             {"agent": "cursor", "mode": "composer", "late": False},
             {"agent": "vibe", "mode": "full", "late": False},
-            {"agent": "aider", "mode": "full", "late": True},
         ],
     },
     "runtime_ac": {
@@ -185,7 +181,6 @@ ROUTE_TABLE: dict = {
             {"agent": "codex", "mode": "full", "late": False},
             {"agent": "cursor", "mode": "composer", "late": False},
             {"agent": "vibe", "mode": "full", "late": False},
-            {"agent": "aider", "mode": "full", "late": True},
         ],
     },
     "codemod": {
@@ -198,7 +193,6 @@ ROUTE_TABLE: dict = {
             # Watch this cell: if codemod diff quality drops, promote gemini here to 'mid' (Flash-high)
             # rather than reverting the whole tier.
             {"agent": "gemini", "mode": "cheap", "late": False},
-            {"agent": "aider", "mode": "cheap", "late": True},
         ],
     },
     "polish": {
@@ -207,7 +201,6 @@ ROUTE_TABLE: dict = {
             {"agent": "cursor", "mode": "composer", "late": False},
             {"agent": "vibe", "mode": "cheap", "late": False},
             {"agent": "codex", "mode": "mid", "late": False},
-            {"agent": "aider", "mode": "cheap", "late": True},
         ],
     },
     # STAGE 2 (2026-08-10): review -> mid, deliberately in BOTH directions. gemini drops Pro ->
@@ -217,7 +210,7 @@ ROUTE_TABLE: dict = {
     "review": {
         "role": "review",
         "agents": [
-            {"agent": "muse", "mode": "mid", "late": True},  # explicit-only backup exploration
+            {"agent": "muse", "mode": "mid", "late": True},  # late seat: metered subscription
             {"agent": "cursor", "mode": "composer", "late": False},
             {"agent": "vibe", "mode": "mid", "late": False},
             {
@@ -639,8 +632,8 @@ def select_agent(
     for idx, entry in enumerate(spec["agents"]):
         if only is not None and entry["agent"] not in only:
             continue
-        # backup-only seats (aider): never auto-selected; reachable only when a caller explicitly
-        # restricts to them via `only` (e.g. only={"aider"}). Keeps them as on-demand overflow capacity.
+        # backup-only seats (BACKUP_AGENTS, empty since 2026-11-11): never auto-selected; reachable
+        # only when a caller explicitly restricts to them via `only`.
         if (
             not neutral
             and entry["agent"] in BACKUP_AGENTS
@@ -1078,7 +1071,7 @@ def select_remote_agent(
 ):
     """Gate #2: choose which `agent:<X>` label to apply for REMOTE keepalive delegation. Route-table +
     learned-weights + capacity ranking, restricted to keepalive-runnable lanes (KEEPALIVE_AGENTS;
-    vibe/aider have no remote lane). RESERVE_AGENTS (claude) are EXCLUDED for routine work — Claude's
+    vibe has no remote lane). RESERVE_AGENTS (claude) are EXCLUDED for routine work — Claude's
     weekly cap is scarce — and used ONLY when `high_leverage=True` or no cheaper keepalive agent has
     capacity (last-resort). Returns the chosen entry {agent, mode, state} or None. The caller hands the
     agent to dispatcher.delegate_remote()."""
@@ -1191,7 +1184,7 @@ def choose_mode(
     tried = set(tried)
     local = local or local_capacity()
     route_agents = {e["agent"] for spec in _ROUTE_TABLE_TYPED.values() for e in spec["agents"]}
-    # backup seats (paygo aider, explicit-only muse) are never auto-selected, local or hosted
+    # backup seats (BACKUP_AGENTS; none since 2026-11-11) are never auto-selected, local or hosted
     untried = route_agents - tried - BACKUP_AGENTS
     if not local["ok"] and needs_local:
         return {
@@ -1580,8 +1573,7 @@ def _selftest() -> None:
                 "codex": "ok",
                 "claude": "ok",
                 "gemini": "ok",
-                "aider": "ok",
-            }
+                            }
         )
         bk = [
             {"target": "r/Repo#1", "task_type": "mechanical", "lane": "closer"},
@@ -1700,7 +1692,7 @@ def _selftest() -> None:
             "gemini": {"rank": 2, "n_obs": 4},
             "cursor": {"rank": 3, "n_obs": 2},
             "vibe": {"rank": 4, "n_obs": 1},
-            "aider": {"rank": 5, "n_obs": 0},
+            "muse": {"rank": 5, "n_obs": 0},
         }
         explore = select_agent(
             "implement", all_ok, learned=learned_meta, exploration_rate=1.0, rng=random.Random(7)
@@ -1709,7 +1701,7 @@ def _selftest() -> None:
         assert explore["exploration_mode"] == "epsilon-greedy", explore
         assert explore["agent"] == "codex", explore
         assert (
-            explore["agent"] != "aider"
+            explore["agent"] != "muse"
         ), "exploration must not jump to a late/paygo tier while non-late is available"
         epsilon_explore = select_agent(
             "implement",
@@ -1750,7 +1742,7 @@ def _selftest() -> None:
             "gemini": {"rank": 2, "n_obs": 1, "posterior": 0.40, "score": 0.40},
             "cursor": {"rank": 3, "n_obs": 1, "posterior": 0.35, "score": 0.35},
             "vibe": {"rank": 4, "n_obs": 1, "posterior": 0.30, "score": 0.30},
-            "aider": {"rank": 5, "n_obs": 0, "posterior": 0.95, "score": 0.95},
+            "muse": {"rank": 5, "n_obs": 0, "posterior": 0.95, "score": 0.95},
         }
         th = select_agent(
             "implement",
@@ -1763,7 +1755,7 @@ def _selftest() -> None:
         assert th["exploration"] is True and th["exploration_mode"] == "thompson-hybrid", th
         assert th["agent"] in {"codex", "gemini", "cursor", "vibe"}, th
         assert (
-            th["agent"] != "aider"
+            th["agent"] != "muse"
         ), "Thompson hybrid must stay in the winner's non-late policy tier"
 
         # gate #2: select_remote_agent restricts to keepalive lanes AND reserves claude (weekly-cap scarce)
@@ -1820,34 +1812,25 @@ def _selftest() -> None:
         assert replayed["rng_seed"] == profile_assignment["profile_rng_seed"]
         assert replayed["policy_version"] == profile_assignment["profile_policy_version"]
 
-        # mechanical with composer+vibe shed → codex (mid) BEFORE aider (paygo/late)
+        # mechanical with composer+vibe shed → codex (mid)
         p3 = plan(
             [bk[0]],
-            cap({"cursor": "shed", "vibe": "shed", "codex": "ok", "aider": "ok"}),
+            cap({"cursor": "shed", "vibe": "shed", "codex": "ok"}),
             dry_run=True,
         )
         assert (
             p3["assignments"][0]["agent"] == "codex" and p3["assignments"][0]["mode"] == "mid"
         ), p3["assignments"]
 
-        # backup-only (owner 2026-06-21): everything non-late shed → aider is NOT auto-selected; it is
-        # held as explicit backup capacity, reachable only via `only={"aider"}`, never routine routing.
-        cap_all_shed = cap(
-            {"cursor": "shed", "vibe": "shed", "codex": "shed", "claude": "shed", "aider": "ok"}
-        )
+        # everything shed for mechanical -> nothing auto-fills (no late or backup seat remains there)
+        cap_all_shed = cap({"cursor": "shed", "vibe": "shed", "codex": "shed", "claude": "shed"})
         p3b = plan([bk[0]], cap_all_shed, dry_run=True)
-        assert not p3b["assignments"], (
-            "aider must not auto-fill as last resort",
-            p3b["assignments"],
-        )
-        assert (
-            select_agent("mechanical", cap_all_shed, only={"aider"})["agent"] == "aider"
-        ), "aider stays reachable as explicit backup capacity"
+        assert not p3b["assignments"], p3b["assignments"]
 
         # priority: scarce seat (codex) warn → review dropped, code still runs
         p4 = plan(
             bk,
-            cap({"cursor": "ok", "vibe": "ok", "codex": "warn", "claude": "ok", "aider": "ok"}),
+            cap({"cursor": "ok", "vibe": "ok", "codex": "warn", "claude": "ok"}),
             dry_run=True,
         )
         assert p4["pressure"] is True
@@ -1882,7 +1865,7 @@ def _selftest() -> None:
         ps2 = plan(
             four_impl[:2],
             cap(
-                {"claude": "ok", "codex": "shed", "cursor": "shed", "vibe": "shed", "aider": "shed"}
+                {"claude": "ok", "codex": "shed", "cursor": "shed", "vibe": "shed"}
             ),
             dry_run=True,
         )
@@ -1939,8 +1922,7 @@ def _selftest() -> None:
                 "codex": "shed",
                 "claude": "shed",
                 "gemini": "ok",
-                "aider": "shed",
-            }
+                            }
         )
         pg = plan(
             [{"target": "g/r#1", "task_type": "implement", "lane": "opener"}], gem, dry_run=True
@@ -1956,8 +1938,7 @@ def _selftest() -> None:
                 "gemini": {"state": "ok", "policy": "drain"},
                 "cursor": {"state": "ok"},
                 "vibe": {"state": "ok"},
-                "aider": {"state": "ok"},
-            }
+                            }
         }
         pg_prom = plan(
             [{"target": "g/r#1", "task_type": "implement", "lane": "opener"}],
@@ -1983,8 +1964,7 @@ def _selftest() -> None:
                 "gemini": {"state": "ok", "policy": "reserve"},
                 "cursor": {"state": "ok"},
                 "vibe": {"state": "ok"},
-                "aider": {"state": "ok"},
-            }
+                            }
         }
         pg_dem = plan(
             [{"target": "g/r#1", "task_type": "implement", "lane": "opener"}],
@@ -2004,8 +1984,7 @@ def _selftest() -> None:
                 "gemini": {"state": "ok", "policy": "reserve"},
                 "cursor": {"state": "ok"},
                 "vibe": {"state": "shed"},
-                "aider": {"state": "ok"},
-            }
+                            }
         }
         pick_last = select_agent("implement", cap_reserve_late, load={"cursor": 1})
         assert (
@@ -2025,8 +2004,7 @@ def _selftest() -> None:
                     "vibe": "shed",
                     "codex": "shed",
                     "claude": "shed",
-                    "aider": "shed",
-                }
+                                    }
             ),
             dry_run=True,
         )
@@ -2099,20 +2077,18 @@ def _selftest() -> None:
         finally:
             globals()["BACKLOG_JSON"] = old_backlog
 
-        # muse (#612): listed for declared implement/review exploration, but BACKUP_AGENTS keeps
-        # it out of automatic selection. It is reachable only with an explicit only={"muse"}.
-        all_ok_muse = cap(
-            {
-                **{a: "ok" for a in ("cursor", "vibe", "codex", "claude", "gemini", "aider")},
-                "muse": "ok",
-            }
-        )
-        for _tt in ("implement", "mechanical", "review", "epic", "testgen", "codemod"):
+        # muse (#612; un-backed 2026-11-11): a routine LATE seat. With the non-late implement lanes up
+        # it is not chosen; with them all shed it fills the implement slot. No backup seats remain.
+        all_ok_muse = cap({**{a: "ok" for a in ("cursor", "vibe", "codex", "claude", "gemini")}, "muse": "ok"})
+        for _tt in ("implement", "review"):
             _pick = select_agent(_tt, all_ok_muse)
-            assert _pick is None or _pick["agent"] != "muse", (_tt, _pick)
-        _only = select_agent("implement", all_ok_muse, only={"muse"})
-        assert _only and _only["agent"] == "muse", _only
-        assert "muse" in BACKUP_AGENTS
+            assert _pick is not None and _pick["agent"] != "muse", (_tt, _pick)
+        only_muse_up = cap(
+            {**{a: "shed" for a in ("cursor", "vibe", "codex", "claude", "gemini")}, "muse": "ok"}
+        )
+        _late = select_agent("implement", only_muse_up)
+        assert _late and _late["agent"] == "muse", _late
+        assert not BACKUP_AGENTS
 
         print(
             "router.py selftest: OK (route-table prior, capacity sequencing, code>review "

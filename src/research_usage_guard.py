@@ -1050,7 +1050,7 @@ def _selftest() -> None:
         spec_text="spec 4",
         base_sha="sha4",
         candidate_diffs={"codex": "diff4"},
-        evaluator_agents=["vibe", "aider"],
+        evaluator_agents=["vibe", "muse"],
         env=tight,
         conn=db,
         now=now + 30,
