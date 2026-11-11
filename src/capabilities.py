@@ -1983,7 +1983,7 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
         "Fixture provenance extends the existing propensity/event/usage paths; historical contract verdicts receive append-only corrections, not a parallel store.",
     },
     "agy-runtime-isolation": {
-        "downstream_consumer": "dispatcher.py:_exercised_capability_ids; adapters.py:build_command",
+        "downstream_consumer": "dispatcher.py:plan_dispatch; dispatcher.py:offload use the confined Gemini command",
         "findability_category": "exercise_bound",
         "findability_rationale": (
             "adapters.build_command adds --add-dir on every gemini dispatch and the dispatcher tags it; this capability IS the confinement, and selection pressure must never reach a confinement property."
@@ -2189,12 +2189,6 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
     "switch-review": {
         "downstream_consumer": "switch_review.py:raise_questions; switch_review.py:format_report",
     },
-}
-
-# Existing-ledger overlays reconcile only rows that are already present.  Unlike
-# KNOWN_GATES and status-bearing KNOWN_DECLARATIONS entries, they never seed a
-# capability or supply lifecycle credit on a fresh runtime.
-KNOWN_EXISTING_DECLARATIONS: dict[str, dict[str, Any]] = {
     "offload": {
         "downstream_consumer": (
             "roles.py:run_prompt_agent; roles.py:run_adjudicator_agent consume backend output; "
@@ -2260,13 +2254,8 @@ def _reconcile_known_declarations(capabilities: dict[str, dict[str, Any]], now: 
     # retired row as live, an expired row was re-retired in the same call (two events and a full
     # rewrite per load), and the guard below was dead code.
     declaration_fields = tuple(field for field in DECLARATION_FIELDS if field != "status")
-    # Gates, seedable declarations, and existing-row overlays share reconciliation.  The overlay
-    # table deliberately stays out of fresh-ledger seeding below.
-    for name, gate in {
-        **KNOWN_GATES,
-        **KNOWN_DECLARATIONS,
-        **KNOWN_EXISTING_DECLARATIONS,
-    }.items():
+    # Status-free declarations reconcile existing rows and stay out of fresh-ledger seeding.
+    for name, gate in {**KNOWN_GATES, **KNOWN_DECLARATIONS}.items():
         cap = capabilities.get(name)
         if cap is None:
             continue

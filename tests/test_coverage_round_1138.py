@@ -1943,6 +1943,20 @@ _MEASURED_MODULES = {
 }
 
 
+def _current_statement_lines(source: str, recorded: list[dict]) -> list[int]:
+    """Locate the recorded statement text in order after edits shift source lines."""
+    source_lines = source.splitlines()
+    current_lines = []
+    start = 0
+    for item in recorded:
+        try:
+            start = source_lines.index(item["text"], start) + 1
+        except ValueError:
+            pytest.fail(f"Recorded statement from line {item['line']} is absent: {item['text']!r}")
+        current_lines.append(start)
+    return current_lines
+
+
 def test_published_head_measurement_matches_ranked_source_lines():
     """The ea6255b combined artifact's six-target gain is 296, and the 21 lines it still misses are these source lines."""
     record_path = (
@@ -1967,9 +1981,7 @@ def test_published_head_measurement_matches_ranked_source_lines():
         gain += row["gain"]
         still += row["head_missing"]
         base_missing += row["base_missing"]
-        source = Path(module.__file__).read_text().splitlines()
-        for item in row["still_missing"]:
-            assert source[item["line"] - 1] == item["text"]
+        _current_statement_lines(Path(module.__file__).read_text(), row["still_missing"])
     assert base_missing == record["base_missing"] == 317
     assert still == record["head_missing"] == 21
     assert gain == record["gain"] == 296
@@ -2023,13 +2035,11 @@ def test_current_head_remeasurement_keeps_ranked_gaps_inside_selftests():
         assert row["missing_lines"] == lines
         assert row["head_missing"] == prior_row["head_missing"] == len(lines)
         source = Path(module.__file__).read_text()
-        source_lines = source.splitlines()
-        for item in prior_row["still_missing"]:
-            assert source_lines[item["line"] - 1] == item["text"]
-            enclosing = _enclosing_function_names(source, item["line"])
+        for line in _current_statement_lines(source, prior_row["still_missing"]):
+            enclosing = _enclosing_function_names(source, line)
             assert any(fn.startswith("_selftest") for fn in enclosing), (
                 name,
-                item["line"],
+                line,
                 enclosing,
             )
 
