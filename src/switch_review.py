@@ -798,6 +798,164 @@ def _fleet_opener_cap(runner) -> dict:
     )
 
 
+CI_WALLTIME_LIMIT_S = 600  # the owner's ten-minute rule (2026-11-08)
+CI_WALLTIME_WORKFLOWS = ("Gate", "CI")
+CI_WALLTIME_DETAIL_RUNS = 5
+
+
+def _ci_stamp(value) -> int | None:
+    """A job or step timestamp, or None while it has not happened (queued, skipped)."""
+    try:
+        return _fleet_stamp(value)
+    except _FleetReadError:
+        return None
+
+
+def ci_job_phases(jobs: list[dict]) -> dict | None:
+    """Where the slowest job's time went: queue (created to started), tests, upload, other.
+
+    A step counts as upload when its name says upload, as tests when it names a test, shard or
+    verify step; the rest of the job's running time is other."""
+    slowest = None
+    for job in jobs:
+        created, started, done = (
+            _ci_stamp(job.get("created_at")),
+            _ci_stamp(job.get("started_at")),
+            _ci_stamp(job.get("completed_at")),
+        )
+        if created is None or started is None or done is None:
+            continue
+        upload = tests = 0
+        for step in job.get("steps") or []:
+            a, b = _ci_stamp(step.get("started_at")), _ci_stamp(step.get("completed_at"))
+            if a is None or b is None:
+                continue
+            name = str(step.get("name") or "").lower()
+            if "upload" in name:
+                upload += b - a
+            elif any(word in name for word in ("pytest", "test", "shard", "verify")):
+                tests += b - a
+        row = {
+            "job": job.get("name"),
+            "total": done - created,
+            "queue": max(0, started - created),
+            "tests": tests,
+            "upload": upload,
+            "other": max(0, (done - started) - tests - upload),
+        }
+        if slowest is None or row["total"] > slowest["total"]:
+            slowest = row
+    if slowest is not None:
+        slowest["dominant"] = max(("queue", "tests", "upload", "other"), key=lambda k: slowest[k])
+    return slowest
+
+
+def ci_walltime(*, now: int | None = None, gh_fn=None, repos: list[str] | None = None) -> dict:
+    """FYI only: completed Gate/CI runs in the last 24 h that ran past ten minutes, per repo,
+    with the slowest job's time split into queue, tests, upload and other.
+
+    Added 2026-11-11 after the owner asked why Orchestrator PR CI took half an hour: the tests
+    ran ~1 minute while shard artifact uploads stalled 9-10.5 minutes and aggregate jobs queued
+    12+ minutes, and nothing measured CI wall time, only local verify time. A repo whose runs
+    cannot be read prints unmeasured, never zero."""
+    from backlog import SUPPORTED_REPOS
+
+    now = int(time.time()) if now is None else int(now)
+    gh = gh_fn or _gh_call
+    repos = list(repos or dict.fromkeys(r for r in SUPPORTED_REPOS if r != "stranske/Collab-Admin"))
+    since = datetime.fromtimestamp(now - 24 * 3600, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    total = 0
+    slow: list[tuple[int, str, dict]] = []
+    unreadable: dict[str, str] = {}
+    for repo in repos:
+        try:
+            listing = _fleet_json(gh, ["api", f"repos/{repo}/actions/workflows?per_page=100"])
+            ids = [
+                w["id"]
+                for w in (listing or {}).get("workflows", [])
+                if w.get("name") in CI_WALLTIME_WORKFLOWS
+            ]
+            for workflow_id in ids:
+                runs = _fleet_json(
+                    gh,
+                    [
+                        "api",
+                        f"repos/{repo}/actions/workflows/{workflow_id}/runs"
+                        f"?per_page=100&status=completed&created=>={since}",
+                    ],
+                )
+                for run in (runs or {}).get("workflow_runs", []):
+                    start = _ci_stamp(run.get("run_started_at")) or _ci_stamp(run.get("created_at"))
+                    end = _ci_stamp(run.get("updated_at"))
+                    if start is None or end is None:
+                        continue
+                    total += 1
+                    if end - start > CI_WALLTIME_LIMIT_S:
+                        slow.append((end - start, repo, run))
+        except _FleetReadError as exc:
+            unreadable[repo] = str(exc)
+    details = []
+    for wall, repo, run in sorted(slow, key=lambda item: -item[0])[:CI_WALLTIME_DETAIL_RUNS]:
+        try:
+            jobs = _fleet_json(
+                gh,
+                [
+                    "api",
+                    f"repos/{repo}/actions/runs/{run['id']}/attempts/"
+                    f"{run.get('run_attempt') or 1}/jobs?per_page=100",
+                ],
+            )
+            phases = ci_job_phases((jobs or {}).get("jobs", []))
+        except _FleetReadError:
+            phases = None
+        details.append(
+            {
+                "repo": repo,
+                "workflow": run.get("name"),
+                "run_id": run.get("id"),
+                "minutes": round(wall / 60, 1),
+                "phases": phases,
+            }
+        )
+    return {
+        "as_of": now,
+        "window_hours": 24,
+        "limit_minutes": CI_WALLTIME_LIMIT_S // 60,
+        "runs": total,
+        "over_limit": len(slow),
+        "slowest": details,
+        "unreadable": unreadable,
+    }
+
+
+def render_ci_walltime(data: dict) -> list[str]:
+    if not data:
+        return []
+    lines = ["## CI wall time (24 h, Gate and CI, FYI only)", ""]
+    lines.append(
+        f"  {data['over_limit']} of {data['runs']} completed runs over {data['limit_minutes']} min"
+        + (
+            f"; unmeasured repos: {', '.join(sorted(data['unreadable']))}"
+            if data["unreadable"]
+            else ""
+        )
+    )
+    for row in data["slowest"]:
+        ph = row["phases"]
+        if ph:
+            split = ", ".join(
+                f"{k} {round(ph[k] / 60, 1)}" for k in ("queue", "tests", "upload", "other")
+            )
+            where = f"slowest job '{ph['job']}' {round(ph['total'] / 60, 1)} min, mostly {ph['dominant']} ({split})"
+        else:
+            where = "job phases unmeasured"
+        lines.append(
+            f"  {row['repo']} {row['workflow']} run {row['run_id']}: {row['minutes']} min -- {where}"
+        )
+    lines.append("")
+    return lines
+
+
 def fleet_delivery_measures(*, now: int | None = None, gh_fn=None, opener_runner=None) -> dict:
     """Five independent report-only rows. Missing facts never become invented numbers.
 
@@ -2901,6 +3059,11 @@ def format_report(rep: dict) -> str:
                 value = f"{row['value']} [{row['evidence_class']}]"
             lines.append(f"  {row['name']}: {value}")
         lines.append("")
+    walltime = rep.get("ci_walltime") or {}
+    if walltime.get("error"):
+        lines += ["## CI wall time (24 h, Gate and CI, FYI only)", "", f"  {walltime['error']}", ""]
+    else:
+        lines += render_ci_walltime(walltime)
     fleet = rep.get("fleet_gates") or {}
     if fleet:
         lines += ["## Fleet template-delivery gates (Maint 68 promote + sync canaries)", ""]
@@ -3853,6 +4016,10 @@ def main(argv: list[str]) -> int:
     # Like the interpreter audit, host-dependent fleet reads belong to the production
     # CLI, not isolated callers of review(). Both JSON and text carry this same snapshot.
     rep["fleet_delivery_measures"] = fleet_delivery_measures(now=rep.get("generated_at"))
+    try:
+        rep["ci_walltime"] = ci_walltime(now=rep.get("generated_at"))
+    except Exception as exc:  # noqa: BLE001 -- an FYI section never stops the review
+        rep["ci_walltime"] = {"error": f"unmeasured ({type(exc).__name__})"}
     # The production weekly caller collects the curve, rather than leaving a CLI-only instrument.
     # Pure report/selftest readers keep their no-network and no-state-write contract.
     if (
