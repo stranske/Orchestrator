@@ -1,8 +1,10 @@
 name: Install zsh for the native-shell guard tests
 description: >-
   Restores zsh's .deb files from the Actions cache and installs them with no network; on a miss
-  downloads them from Ubuntu with retries and saves them. One cache entry per Ubuntu release and
-  architecture, so a runner image rebuild reuses it and a release change refills it.
+  downloads them from Ubuntu with retries and saves them. Entries are per Ubuntu release and
+  architecture, so a runner image rebuild reuses them and a release change refills them. Each
+  save gets its own key and restores take the NEWEST entry under the prefix, so a fresh download
+  always supersedes an older entry, including one whose packages no longer install.
 runs:
   using: composite
   steps:
@@ -11,18 +13,23 @@ runs:
       shell: bash
       run: |
         . /etc/os-release
-        echo "key=ci-zsh-debs-${ID}-${VERSION_ID}-$(dpkg --print-architecture)-v1" >> "$GITHUB_OUTPUT"
+        prefix="ci-zsh-debs-${ID}-${VERSION_ID}-$(dpkg --print-architecture)-v1-"
+        echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
+        echo "key=${prefix}${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
     - name: Restore cached zsh packages
       id: cache
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: ~/.cache/ci-zsh-debs
         key: ${{ steps.key.outputs.key }}
+        restore-keys: ${{ steps.key.outputs.prefix }}
     - name: Install zsh
+      id: install
       shell: bash
       run: bash "$GITHUB_ACTION_PATH/install.sh"
     - name: Save zsh packages for later runs
-      if: steps.cache.outputs.cache-hit != 'true'
+      # Only a fresh download is worth saving; a cache install re-saving would churn entries.
+      if: steps.install.outputs.source == 'download'
       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       continue-on-error: true
       with:

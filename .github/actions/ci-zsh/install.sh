@@ -14,13 +14,18 @@
 #
 # Prints exactly one SOURCE line so a log read can tell which path ran:
 #   SOURCE=preinstalled | SOURCE=cache | SOURCE=download(attempt N)
+# and writes source=<preinstalled|cache|download> to $GITHUB_OUTPUT; the action saves the cache
+# only after a download.
 set -euo pipefail
+
+emit() { [ -n "${GITHUB_OUTPUT:-}" ] && echo "source=$1" >> "$GITHUB_OUTPUT"; return 0; }
 
 dir="${ZSH_DEB_DIR:-$HOME/.cache/ci-zsh-debs}"
 attempts="${ZSH_DOWNLOAD_ATTEMPTS:-5}"
 
 if command -v zsh >/dev/null 2>&1; then
   echo "SOURCE=preinstalled $(command -v zsh)"
+  emit preinstalled
   exit 0
 fi
 
@@ -29,9 +34,13 @@ cached=("$dir"/*.deb)
 if ((${#cached[@]})); then
   if sudo dpkg -i "${cached[@]}" && command -v zsh >/dev/null 2>&1; then
     echo "SOURCE=cache ${#cached[@]} package(s) from $dir"
+    emit cache
     exit 0
   fi
   echo "::warning::cached zsh packages in $dir did not install; downloading instead"
+  # A partial dpkg -i can leave zsh unpacked but unconfigured, and apt then refuses to run on
+  # the unmet dependency. Purging is offline and returns dpkg to the state before the attempt.
+  sudo dpkg --purge zsh zsh-common >/dev/null 2>&1 || true
   rm -f "${cached[@]}"
 fi
 
@@ -44,6 +53,7 @@ for ((i = 1; i <= attempts; i++)); do
     sudo dpkg -i "${debs[@]}"
     command -v zsh >/dev/null 2>&1
     echo "SOURCE=download(attempt $i) ${#debs[@]} package(s) saved to $dir"
+    emit download
     exit 0
   fi
   if ((i < attempts)); then
@@ -52,6 +62,6 @@ for ((i = 1; i <= attempts; i++)); do
   fi
 done
 
-echo "::error::zsh unavailable: no cached packages in $dir and the Ubuntu package servers" \
+echo "::error::zsh unavailable: no usable cached packages in $dir and the Ubuntu package servers" \
   "failed $attempts download attempts"
 exit 1
