@@ -440,6 +440,13 @@ RESEARCH_EXCLUDED_PREFIXES = ("tracker:", "campaign:")
 RESEARCH_EXCLUDED_CLASSES = {"epic", "cross_repo", "mechanical"}
 
 
+# closer-core's park triage (owner decision 2026-11-11) labels an issue the agents failed to converge on
+# `experiment:candidate` and keeps `agents:paused` so the opener does not retry it the same way. For the
+# research lane that pause is the invitation, not a hold: a comparative experiment IS the changed attempt.
+# Only the pause is waived; an `agent:*` writer or a lock still refuses the subject.
+EXPERIMENT_CANDIDATE = "experiment:candidate"
+
+
 def research_ownership_skip_reason(labels: list[str] | None) -> str | None:
     """Use the incumbent dispatch ownership rule at discovery, intake and launch."""
     import dispatcher
@@ -449,6 +456,8 @@ def research_ownership_skip_reason(labels: list[str] | None) -> str | None:
     low = None
     if isinstance(labels, list) and all(isinstance(lab, str) for lab in labels):
         low = {lab.strip().lower() for lab in labels}
+    if low is not None and EXPERIMENT_CANDIDATE in low:
+        low = low - {"agents:paused"}
     if dispatcher._remote_skip_reason(low, "research"):
         return "owned_or_paused"
     if low and low & {
