@@ -13,6 +13,7 @@ executed. Observed result: exit status 1 and
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -120,3 +121,33 @@ def test_corrected_contract_exits_zero_and_partial_revision_raises(tmp_path):
     assert corrected.returncode == 0, corrected.stderr
     assert corrected.stdout.strip() == "contract ok"
     assert corrected.stderr == ""
+
+
+def test_contract_entry_point_requires_explicit_evidence_opt_in(monkeypatch, capsys):
+    """Default and unsupported commands never start subprocess or network evidence reads."""
+    spec = importlib.util.spec_from_file_location("csv_contract_entry", FIXTURE / SCRIPT_NAME)
+    verifier = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(verifier)
+
+    def unexpected_evidence(*args, **kwargs):
+        raise AssertionError("evidence collection requires --chain-evidence")
+
+    monkeypatch.setattr(verifier.subprocess, "Popen", unexpected_evidence)
+    monkeypatch.setattr(verifier.urllib.request, "urlopen", unexpected_evidence)
+    monkeypatch.setattr(verifier, "_report_chain_evidence", unexpected_evidence)
+
+    assert verifier.main([]) == 0
+    output = capsys.readouterr()
+    assert output.out == "contract ok\n"
+    assert output.err == ""
+
+    for args in (["--legacy-chain-evidence"], ["--legacy"], ["--unknown"]):
+        assert verifier.main(args) == 1
+        output = capsys.readouterr()
+        assert output.out == ""
+        assert output.err == "unsupported arguments\n"
+
+    calls = []
+    monkeypatch.setattr(verifier, "_report_chain_evidence", lambda: calls.append(True) or 2)
+    assert verifier.main(["--chain-evidence", "--legacy"]) == 2
+    assert calls == [True]
