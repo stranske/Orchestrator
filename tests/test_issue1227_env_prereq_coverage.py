@@ -20,14 +20,33 @@ import agent_auth_check
 import capabilities
 import capability_activation_audit
 import capability_admission
+import capability_compiler
 import env_prereq
 import paths
+
+
+def _deny_external_io(monkeypatch):
+    denied = Mock(side_effect=AssertionError("unexpected process or network I/O"))
+    for module, name in (
+        (subprocess, "run"),
+        (subprocess, "Popen"),
+        (subprocess, "call"),
+        (subprocess, "check_call"),
+        (subprocess, "check_output"),
+        (os, "system"),
+        (socket, "socket"),
+        (socket, "create_connection"),
+        (urllib.request, "urlopen"),
+    ):
+        monkeypatch.setattr(module, name, denied)
+    return denied
 
 
 def test_env_prereq_selftest_runs_with_an_isolated_runtime(monkeypatch, tmp_path):
     """Exercise the detector contract without consulting local state or spawning git."""
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path))
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(env_prereq.Path, "home", lambda: tmp_path)
     monkeypatch.setattr(agent_auth_check, "HOME", tmp_path)
@@ -42,20 +61,20 @@ def test_env_prereq_selftest_runs_with_an_isolated_runtime(monkeypatch, tmp_path
     monkeypatch.setattr(capability_activation_audit, "STATE_DIR", tmp_path)
     monkeypatch.setattr(env_prereq.shutil, "which", lambda _binary: None)
     monkeypatch.setattr(capabilities, "REG", tmp_path / "capabilities.json")
-    monkeypatch.setattr(
-        env_prereq.subprocess,
-        "run",
-        lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout="[]", stderr=""),
-    )
+    denied = _deny_external_io(monkeypatch)
 
     env_prereq._selftest()
     assert env_prereq.ledger_legacy_rows_absent().startswith(
         "capability ledger holds no pre-admission-gate (legacy) capability"
     )
+    denied.assert_not_called()
 
 
-def test_ledger_detectors_name_an_unreadable_ledger(monkeypatch):
+def test_ledger_detectors_name_an_unreadable_ledger(monkeypatch, tmp_path):
     """A local-ledger read failure is a named prerequisite, never an uncaught error."""
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path))
+    denied = _deny_external_io(monkeypatch)
     monkeypatch.setattr(
         env_prereq,
         "_ledger",
@@ -70,6 +89,7 @@ def test_ledger_detectors_name_an_unreadable_ledger(monkeypatch):
     ):
         reason = detector("fixture-capability")
         assert reason == "capability ledger unreadable (OSError: fixture ledger unavailable)"
+    denied.assert_not_called()
 
 
 class PrerequisiteBoundaryTests(unittest.TestCase):
@@ -129,6 +149,35 @@ class PrerequisiteBoundaryTests(unittest.TestCase):
         self.assertIsNone(env_prereq.ledger_invocation_history_absent("ready"))
         self.assertIn("missing", env_prereq.ledger_version_lineage_absent("ready", "missing"))
         self.assertIn("missing", env_prereq.ledger_invocation_history_absent("ready", "missing"))
+
+    def test_skill_resource_accepts_installed_file_and_names_missing_fallback(self):
+        resource = self.root / "reference.sh"
+        resource.touch()
+        with patch.object(capability_compiler, "reference_skill_source") as source:
+            source.return_value = {"resources": [{"source_path": str(resource)}]}
+            self.assertIsNone(env_prereq.skill_resource_absent())
+            resource.unlink()
+            self.assertIn(str(resource), env_prereq.skill_resource_absent())
+            fallback = self.root / ".codex/skills/code-workspace-hygiene/scripts/audit_code_root.sh"
+            for error in (OSError("absent"), KeyError("resources"), IndexError("empty")):
+                with self.subTest(error=type(error).__name__):
+                    source.side_effect = error
+                    self.assertIn(str(fallback), env_prereq.skill_resource_absent())
+            fallback.parent.mkdir(parents=True)
+            fallback.touch()
+            self.assertIsNone(env_prereq.skill_resource_absent())
+
+    def test_codex_profile_detector_reports_resolver_verdict_without_launching(self):
+        with patch.object(
+            adapters, "profile_codex_binary", return_value="/fixture/codex"
+        ) as resolve:
+            self.assertIsNone(env_prereq.codex_profile_binary_absent())
+            resolve.assert_called_once_with()
+            resolve.side_effect = RuntimeError("configured Codex binary is unavailable")
+            self.assertEqual(
+                env_prereq.codex_profile_binary_absent(),
+                "configured Codex binary is unavailable",
+            )
 
     def test_legacy_detector_names_report_errors_and_accepts_legacy_rows(self):
         with patch.object(capability_admission, "report") as report:
