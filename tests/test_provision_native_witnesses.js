@@ -49,13 +49,19 @@ const cp = require('node:child_process');
 const args = process.argv.slice(2);
 const scenario = ${JSON.stringify(scenario)};
 if (args[0] === '-I') {
-  const result = cp.spawnSync('/usr/bin/python3', args, { stdio: 'inherit' });
+  const result = cp.spawnSync(${JSON.stringify(process.env.PYTHON || '/opt/anaconda3/bin/python3')}, args, { stdio: 'inherit' });
   process.exit(result.status ?? 1);
 }
 fs.writeFileSync(${JSON.stringify(path.join(base, 'command.json'))}, JSON.stringify(args));
 fs.appendFileSync(${JSON.stringify(path.join(base, 'commands.ndjson'))}, JSON.stringify({ args,
   native: process.env.ORCH_PROVISION_NATIVE_ACCEPTANCE ?? null,
   addopts: process.env.PYTEST_ADDOPTS ?? null, plugins: process.env.PYTEST_PLUGINS ?? null }) + '\\n');
+if (scenario.importProbe) {
+  const prefix = args.slice(0, args.indexOf('-m'));
+  const probe = cp.spawnSync(${JSON.stringify(process.env.PYTHON || '/opt/anaconda3/bin/python3')},
+    [...prefix, '-c', 'import pytest'], { stdio: 'inherit' });
+  if (probe.status !== 0) process.exit(92);
+}
 if (scenario.missing) { console.error('No module named pytest'); process.exit(1); }
 const cases = ${JSON.stringify(success())};
 const fullSuite = args.includes('tests/test_provision_reclaim.py');
@@ -104,6 +110,7 @@ test('binds named native verdicts, commit, mirror manifest, commands and unchang
   assert.equal(receipt.mirror, fs.realpathSync(options.mirror));
   assert.deepEqual(receipt.checks[0].cases, success());
   assert.ok(receipt.checks[0].command.includes('not slow'));
+  assert.ok(receipt.checks[0].command.includes('-E'));
   assert.deepEqual(receipt.checks[0].command.slice(1),
     JSON.parse(fs.readFileSync(path.join(path.dirname(options.root), 'command.json'))));
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(options.output, 'receipt.json'))), receipt);
@@ -136,6 +143,7 @@ test('full suites bind independent default/native collections to all executed JU
     assert.ok(!item.execution.command.includes('--collect-only'));
     for (const check of [item.collection, item.execution]) {
       assert.ok(check.command.includes('not slow'));
+      assert.ok(check.command.includes('-E'));
       assert.match(check.log_sha256, /^[a-f0-9]{64}$/);
     }
     assert.match(item.execution.junit_sha256, /^[a-f0-9]{64}$/);
@@ -228,8 +236,11 @@ test('unrelated, duplicate, skipped or vacuous verdicts do not prove the witness
 });
 
 test('refuses extra importable modules and test inputs before executing pytest', (t) => {
-  for (const file of ['conftest.py', 'injected.pyc', 'tests/extra.txt']) {
+  for (const file of ['conftest.py', 'injected.pyc', 'tests/extra.txt', 'pytest.ini',
+    '.pytest.ini', 'pytest.toml', '.pytest.toml', 'tox.ini', 'setup.cfg',
+    'shadow/pytest/__init__.py', 'shadow/pytest/__main__.py', 'shadow/module.pyc']) {
     const options = fixture(t);
+    fs.mkdirSync(path.dirname(path.join(options.mirror, file)), { recursive: true });
     fs.writeFileSync(path.join(options.mirror, file), 'unbound input');
     assert.throws(() => runWitnesses(options), /Uncommitted mirror input/);
     assert.equal(fs.existsSync(options.output), false);
@@ -242,4 +253,20 @@ test('requires explicit interpreter, revision and receipt location outside the m
     { output: path.join(options.mirror, 'receipt') }]) {
     assert.throws(() => runWitnesses({ ...options, ...override }));
   }
+});
+
+test('inherited PYTHONPATH cannot substitute a pytest package', (t) => {
+  const options = fixture(t, { importProbe: true });
+  const poison = path.join(path.dirname(options.root), 'poison');
+  fs.mkdirSync(path.join(poison, 'pytest'), { recursive: true });
+  fs.writeFileSync(path.join(poison, 'pytest', '__init__.py'),
+    'raise RuntimeError("inherited pytest selected")\n');
+  const old = process.env.PYTHONPATH;
+  t.after(() => {
+    if (old === undefined) delete process.env.PYTHONPATH;
+    else process.env.PYTHONPATH = old;
+  });
+  process.env.PYTHONPATH = poison;
+  const receipt = runWitnesses(options);
+  assert.equal(receipt.native_witnesses_passed, true);
 });

@@ -32,14 +32,15 @@ for hour in range(169):
 print(json.dumps({'provision': report}))
 `;
 
-function fixture(t, segments = { '': ndjson([event()]) }, end = now) {
+function fixture(t, segments = { '': ndjson([event()]) }, end = now, relativeRoot = false) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'provision-ledger-audit-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   for (const [suffix, bytes] of Object.entries(segments)) {
     fs.writeFileSync(path.join(root, 'provision-events.ndjson' + suffix), bytes);
   }
-  const collected = execute(process.env.PYTHON || 'python3', ['-c', collect, root, source, end],
-    { cwd: root, env: { ...process.env, PYTHONPATH: source, PYTHONDONTWRITEBYTECODE: '1' } });
+  const collectorRoot = relativeRoot ? path.relative(process.cwd(), root) : root;
+  const collected = execute(process.env.PYTHON || 'python3', ['-c', collect, collectorRoot, source, end],
+    { cwd: process.cwd(), env: { ...process.env, PYTHONPATH: source, PYTHONDONTWRITEBYTECODE: '1' } });
   assert.equal(collected.error_code, null);
   assert.equal(collected.signal, null);
   assert.equal(collected.exit_code, 0, collected.stderr.toString());
@@ -201,3 +202,34 @@ test('source absence and nonregular segments are UNKNOWN without following symli
   assert.match(f.audit().continuity_failures.join('\n'), /not a regular file/);
   assert.equal(auditProvisionLedger(f.root, f.root, { now }).coverage, 'UNKNOWN');
 });
+
+for (const counts of [[], '', 0, null]) {
+  test(`rejects malformed empty counts ${JSON.stringify(counts)}`, (t) => {
+    const f = fixture(t, { '': '' });
+    f.changeReceipt((r) => { r.counts = counts; });
+    assert.equal(f.audit().coverage, 'UNKNOWN');
+    assert.equal(f.audit().evidence_ready, false);
+  });
+}
+
+test('compares relative collector segment paths by their filesystem identity', (t) => {
+  const f = fixture(t, { '': '' }, now, true);
+  assert.equal(f.audit().coverage, 'continuous');
+  assert.equal(auditProvisionLedger(path.relative(process.cwd(), f.root), source,
+    { now }).evidence_ready, true);
+});
+
+for (const location of ['outside', 'renamed']) {
+  test(`rejects an unrelated zero ledger when the writer is ${location}`, (t) => {
+    const f = fixture(t, { '': '' });
+    const writerPath = location === 'outside'
+      ? path.join(f.root, 'writer', 'provision-events.ndjson')
+      : path.join(f.root, 'custom.ndjson');
+    fs.mkdirSync(path.dirname(writerPath), { recursive: true });
+    fs.writeFileSync(writerPath, ndjson([event()]));
+    const result = auditProvisionLedger(f.root, source, { now, writerPath });
+    assert.equal(result.coverage, 'UNKNOWN');
+    assert.equal(result.evidence_ready, false);
+    assert.match(result.continuity_failures.join('\n'), /writer ledger/);
+  });
+}

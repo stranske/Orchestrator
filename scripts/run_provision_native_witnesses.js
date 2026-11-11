@@ -78,7 +78,9 @@ function snapshot(root, mirror, revision) {
     }
   }
   for (const file of Object.keys(contents)) {
-    if ((file.startsWith('tests/') || (!file.includes('/') && /\.pyc?$/.test(file))) && !bound.has(file)) {
+    if ((file.startsWith('tests/') || /\.pyc?$/.test(file)
+        || ['pytest.ini', '.pytest.ini', 'pytest.toml', '.pytest.toml', 'tox.ini', 'setup.cfg']
+          .includes(path.posix.basename(file))) && !bound.has(file)) {
       throw new Error(`Uncommitted mirror input: ${file}`);
     }
   }
@@ -136,7 +138,7 @@ function runWitnesses({ root = path.resolve(__dirname, '..'), mirror, python, re
     floor_matches_origin_main: true, checks: [], source_unchanged: false,
     native_witnesses_passed: false, full_suites_requested: fullSuites, suites: [],
     default_native_suites_passed: false, deployment_acceptance_verified: false };
-  const pytestArgs = ['-B', '-m', 'pytest', '-o', 'addopts=', '-p', 'no:cacheprovider',
+  const pytestArgs = ['-E', '-B', '-m', 'pytest', '-o', 'addopts=', '-p', 'no:cacheprovider',
     '-m', 'not slow', '-q'];
   function runCheck(name, args, environment, names) {
     const result = execute(python, args, { cwd: mirror, env: environment, timeout });

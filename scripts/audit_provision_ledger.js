@@ -45,7 +45,8 @@ function eligibleLines(bytes) {
   return lines;
 }
 
-function auditProvisionLedger(root, sourceDirectory, { now = new Date().toISOString() } = {}) {
+function auditProvisionLedger(root, sourceDirectory, { now = new Date().toISOString(),
+  writerPath = process.env.ORCH_PROVISION_EVENTS_PATH || path.join(root, 'provision-events.ndjson') } = {}) {
   root = path.resolve(root);
   const result = { schema_version: 1, deployment_acceptance_verified: false,
     reporter_sha256: sha256(readRegular(__filename)),
@@ -89,6 +90,12 @@ function auditProvisionLedger(root, sourceDirectory, { now = new Date().toISOStr
   // Discover all segments, including archives when the active filename is absent.
   const names = fs.readdirSync(root).filter((name) => name.startsWith('provision-events.ndjson')).sort();
   if (!names.length) fail('no ledger');
+  // Use the writer's effective configured path, not an unrelated zero ledger.
+  // A collector that does not observe that path must establish a new baseline.
+  if (path.dirname(path.resolve(writerPath)) !== root
+      || !names.includes(path.basename(writerPath))) {
+    fail('writer ledger is not included in the collector directory and observation');
+  }
   const observed = [];
   for (const name of names) {
     try {
@@ -123,11 +130,13 @@ function auditProvisionLedger(root, sourceDirectory, { now = new Date().toISOStr
   // Exact segment equality binds the counts to this receipt. Appended/rotated
   // data requires a fresh existing-collector observation, never a fabricated zero.
   if (!Array.isArray(packet?.segments) || packet.segments.length !== observed.length
-      || observed.some((row) => !packet.segments.some((old) => old.path === row.path
+      || observed.some((row) => !packet.segments.some((old) => typeof old.path === 'string'
+        && path.resolve(old.path) === row.path
         && old.lines === row.lines && old.sha256 === row.sha256))) {
     fail('active/archive segments differ from the collector observation');
   }
-  if (!packet?.counts || Object.keys(packet.counts).length !== counts.size
+  if (!packet?.counts || typeof packet.counts !== 'object' || Array.isArray(packet.counts)
+      || Object.keys(packet.counts).length !== counts.size
       || [...counts].some(([key, count]) => packet.counts[key] !== count)
       || packet.branch_refusals !== result.branch_refusals) {
     fail('recount differs from the collector observation');
