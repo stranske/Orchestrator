@@ -816,13 +816,11 @@ def ci_job_phases(jobs: list[dict]) -> dict | None:
 
     A step counts as upload when its name says upload, as tests when it names a test, shard or
     verify step; the rest of the job's running time is other."""
-    slowest = None
+    best: tuple[int, dict] | None = None
     for job in jobs:
-        created, started, done = (
-            _ci_stamp(job.get("created_at")),
-            _ci_stamp(job.get("started_at")),
-            _ci_stamp(job.get("completed_at")),
-        )
+        created = _ci_stamp(job.get("created_at"))
+        started = _ci_stamp(job.get("started_at"))
+        done = _ci_stamp(job.get("completed_at"))
         if created is None or started is None or done is None:
             continue
         upload = tests = 0
@@ -835,19 +833,17 @@ def ci_job_phases(jobs: list[dict]) -> dict | None:
                 upload += b - a
             elif any(word in name for word in ("pytest", "test", "shard", "verify")):
                 tests += b - a
-        row = {
-            "job": job.get("name"),
-            "total": done - created,
+        phases = {
             "queue": max(0, started - created),
             "tests": tests,
             "upload": upload,
             "other": max(0, (done - started) - tests - upload),
         }
-        if slowest is None or row["total"] > slowest["total"]:
-            slowest = row
-    if slowest is not None:
-        slowest["dominant"] = max(("queue", "tests", "upload", "other"), key=lambda k: slowest[k])
-    return slowest
+        total = done - created
+        if best is None or total > best[0]:
+            dominant = max(phases, key=lambda key: phases[key])
+            best = (total, {"job": job.get("name"), "total": total, "dominant": dominant, **phases})
+    return best[1] if best else None
 
 
 def ci_walltime(*, now: int | None = None, gh_fn=None, repos: list[str] | None = None) -> dict:
@@ -956,7 +952,13 @@ def render_ci_walltime(data: dict) -> list[str]:
     return lines
 
 
-def fleet_delivery_measures(*, now: int | None = None, gh_fn=None, opener_runner=None) -> dict:
+def fleet_delivery_measures(
+    *,
+    now: int | None = None,
+    gh_fn=None,
+    opener_runner=None,
+    include_ci_walltime: bool | None = None,
+) -> dict:
     """Five independent report-only rows. Missing facts never become invented numbers.
 
     Agent ownership follows backlog's explicit agent-label rule. GitHub run action and
@@ -998,7 +1000,16 @@ def fleet_delivery_measures(*, now: int | None = None, gh_fn=None, opener_runner
                 "reason": f"would need valid {key} response ({type(exc).__name__})",
             }
         rows[key] = {"name": FLEET_DELIVERY_NAMES[key], **row}
-    return {"as_of": now, "window_hours": 48, "rows": rows}
+    out = {"as_of": now, "window_hours": 48, "rows": rows}
+    # The CI wall-time read rides with the fleet reads (one kill switch, one stub point) but is a
+    # separate key, so the five-row contract above is unchanged. A caller that injects its own
+    # gh_fn (a replay) does not get live CI reads unless it asks for them.
+    if include_ci_walltime if include_ci_walltime is not None else gh_fn is None:
+        try:
+            out["ci_walltime"] = ci_walltime(now=now, gh_fn=gh_fn)
+        except Exception as exc:  # noqa: BLE001 -- an FYI section never stops the review
+            out["ci_walltime"] = {"error": f"unmeasured ({type(exc).__name__})"}
+    return out
 
 
 def _parse_maint_68_registry_yaml(content: str) -> list[str]:
@@ -3059,7 +3070,7 @@ def format_report(rep: dict) -> str:
                 value = f"{row['value']} [{row['evidence_class']}]"
             lines.append(f"  {row['name']}: {value}")
         lines.append("")
-    walltime = rep.get("ci_walltime") or {}
+    walltime = (rep.get("fleet_delivery_measures") or {}).get("ci_walltime") or {}
     if walltime.get("error"):
         lines += ["## CI wall time (24 h, Gate and CI, FYI only)", "", f"  {walltime['error']}", ""]
     else:
@@ -4016,10 +4027,6 @@ def main(argv: list[str]) -> int:
     # Like the interpreter audit, host-dependent fleet reads belong to the production
     # CLI, not isolated callers of review(). Both JSON and text carry this same snapshot.
     rep["fleet_delivery_measures"] = fleet_delivery_measures(now=rep.get("generated_at"))
-    try:
-        rep["ci_walltime"] = ci_walltime(now=rep.get("generated_at"))
-    except Exception as exc:  # noqa: BLE001 -- an FYI section never stops the review
-        rep["ci_walltime"] = {"error": f"unmeasured ({type(exc).__name__})"}
     # The production weekly caller collects the curve, rather than leaving a CLI-only instrument.
     # Pure report/selftest readers keep their no-network and no-state-write contract.
     if (

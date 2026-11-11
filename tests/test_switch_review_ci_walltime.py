@@ -100,3 +100,19 @@ def test_runs_over_ten_minutes_are_counted_and_unreadable_repos_are_unmeasured()
 def test_a_drained_window_prints_zero_runs_over_the_limit():
     data = {"runs": 40, "over_limit": 0, "limit_minutes": 10, "slowest": [], "unreadable": {}}
     assert "0 of 40 completed runs over 10 min" in "\n".join(review.render_ci_walltime(data))
+
+
+def test_ci_walltime_rides_with_the_fleet_reads_only_in_production(monkeypatch):
+    """Collected inside fleet_delivery_measures, so stubbing or disabling the fleet reads also
+    stubs it; a replay that injects gh_fn gets no live CI reads unless it asks for them."""
+    monkeypatch.setattr(review, "ci_walltime", lambda **_kw: {"runs": 0, "marker": True})
+
+    def gh(_args, **_kw):
+        return False, "", "unmeasured: replay"
+
+    replay = review.fleet_delivery_measures(now=NOW, gh_fn=gh, opener_runner=lambda *a, **k: None)
+    assert "ci_walltime" not in replay
+    asked = review.fleet_delivery_measures(
+        now=NOW, gh_fn=gh, opener_runner=lambda *a, **k: None, include_ci_walltime=True
+    )
+    assert asked["ci_walltime"]["marker"] is True
