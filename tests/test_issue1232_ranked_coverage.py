@@ -243,3 +243,249 @@ def test_keepalive_supervisor_hermetic_closure_and_offline_paths(monkeypatch, tm
     )
     assert supervisor.main(["--signals-json", str(signals), "--json"]) == 0
     assert '"next_step": "operator_inspect"' in capsys.readouterr().out
+
+
+def test_panel_adjudication_recording_and_cli_paths(monkeypatch, tmp_path, capsys):
+    import json
+    from unittest.mock import MagicMock
+    import runtime_ac_panel as panel
+    import runtime_ac
+
+    spec = runtime_ac._valid_spec()
+    gate = runtime_ac.evaluate_results(spec, {"check_results": panel._all_check_results(spec)})
+
+    recorded_calls = []
+
+    def mock_record_outcome(run_id, verifier_verdict, notes):
+        recorded_calls.append(("record_outcome", run_id, verifier_verdict, notes))
+        return {}
+
+    def mock_record_evidence_gap(run_id, reviewer, gap):
+        recorded_calls.append(("record_evidence_gap", run_id, reviewer, gap))
+        return {}
+
+    def mock_record_evidence_type_citations(names):
+        recorded_calls.append(("record_evidence_type_citations", names))
+        return names
+
+    monkeypatch.setattr(feedback, "record_outcome", mock_record_outcome)
+    monkeypatch.setattr(feedback, "record_evidence_gap", mock_record_evidence_gap)
+    monkeypatch.setattr(feedback, "record_evidence_type_citations", mock_record_evidence_type_citations)
+
+    reviews_pass = {
+        "reviews": [
+            {
+                "reviewer": "vibe",
+                "verdict": "PASS",
+                "confidence": 0.8,
+                "ac_assessments": [
+                    {"ac_id": "AC1", "status": "PASS", "reason": "evidence present"}
+                ],
+            },
+            {
+                "reviewer": "gemini",
+                "verdict": "PASS",
+                "confidence": 0.9,
+                "ac_assessments": [
+                    {"ac_id": "AC2", "status": "PASS", "reason": "evidence present"}
+                ],
+            },
+        ]
+    }
+
+    panel_result = panel.adjudicate_panel(spec, gate, reviews_pass)
+    assert panel_result["verdict"] == "PASS"
+    assert panel_result["verifier_verdict"] == "PASS_RUNTIME_AC"
+
+    run_id = "test-run-1232-adjudication"
+    record_result = panel.record_panel_verdict(run_id, panel_result)
+    assert record_result["run_id"] == run_id
+    assert record_result["verifier_verdict"] == "PASS_RUNTIME_AC"
+    assert record_result["recorded"] is True
+    assert len(recorded_calls) >= 1
+    assert any(call[0] == "record_outcome" for call in recorded_calls)
+
+    record_result_gaps = panel.record_panel_verdict(
+        run_id,
+        {
+            **panel_result,
+            "evidence_gaps": [
+                {"reviewer": "vibe", "gap": "missing trace"},
+                {"reviewer": "gemini", "gap": "missing logs"},
+            ],
+            "evidence_type_citations": [{"name": "trace"}, {"name": "log"}],
+        },
+    )
+    assert record_result_gaps["evidence_gaps"] == 2
+    assert any(call[0] == "record_evidence_gap" for call in recorded_calls)
+    assert any(call[0] == "record_evidence_type_citations" for call in recorded_calls)
+
+    spec_file = tmp_path / "spec.json"
+    gate_file = tmp_path / "gate.json"
+    reviews_file = tmp_path / "reviews.json"
+    spec_file.write_text(json.dumps(spec))
+    gate_file.write_text(json.dumps(gate))
+    reviews_file.write_text(json.dumps(reviews_pass))
+
+    sys.argv = ["runtime_ac_panel", "--adjudicate", str(spec_file), "--gate", str(gate_file), "--reviews", str(reviews_file)]
+    try:
+        result = panel.main(["--adjudicate", str(spec_file), "--gate", str(gate_file), "--reviews", str(reviews_file)])
+        assert result == 0
+    except SystemExit as e:
+        assert e.code == 0
+
+    capsys.readouterr()
+
+    sys.argv = ["runtime_ac_panel", "--prompt", str(spec_file), "--gate", str(gate_file)]
+    try:
+        result = panel.main(["--prompt", str(spec_file), "--gate", str(gate_file), "--reviewer", "test-reviewer"])
+        assert result == 0
+    except SystemExit as e:
+        assert e.code == 0
+    output = capsys.readouterr().out
+    assert "STRICT JSON" in output
+    assert '"reviewer": "test-reviewer"' in output
+
+    def fake_offload(agent, prompt, **kwargs):
+        return {"agent": agent, "exit": 0, "output": '{"verdict":"PASS"}'}
+
+    monkeypatch.setattr(panel, "dispatch_reviewers", lambda *args, **kwargs: {
+        "review_doc": reviews_pass,
+        "dispatches": [{"agent": "vibe", "parsed": True}]
+    })
+
+    try:
+        result = panel.main([
+            "--dispatch", str(spec_file),
+            "--gate", str(gate_file),
+            "--reviewers", "vibe",
+            "--record-run-id", run_id,
+        ])
+        assert result == 0
+    except SystemExit as e:
+        assert e.code == 0
+
+    assert any(call[0] == "record_outcome" and call[1] == run_id for call in recorded_calls)
+
+
+def test_runtime_ac_panel_coerce_reviews_and_edge_cases(monkeypatch):
+    import runtime_ac_panel as panel
+    import runtime_ac
+
+    spec = runtime_ac._valid_spec()
+    gate = runtime_ac.evaluate_results(spec, {"check_results": panel._all_check_results(spec)})
+
+    empty_doc = {"reviews": []}
+    coerced = panel.coerce_reviews(empty_doc)
+    assert coerced == []
+
+    doc_with_invalid = {"reviews": [None, "invalid", {"verdict": "PASS"}]}
+    coerced_invalid = panel.coerce_reviews(doc_with_invalid)
+    assert len(coerced_invalid) == 3
+
+    doc_with_valid = {
+        "reviews": [
+            {"reviewer": "vibe", "verdict": "PASS"},
+            {"reviewer": "gemini", "verdict": "FAIL"},
+        ]
+    }
+    coerced_valid = panel.coerce_reviews(doc_with_valid)
+    assert len(coerced_valid) == 2
+
+    panel_result = panel.adjudicate_panel(spec, gate, doc_with_valid)
+    assert panel_result["n_reviews"] == 2
+
+    with pytest.raises(ValueError, match="review JSON must be"):
+        panel.coerce_reviews("invalid")
+
+
+def test_relearn_report_build_report_and_ordering(monkeypatch):
+    import json
+    import relearn_report
+
+    monkeypatch.setattr(relearn_report, "_role_priors_from_registry", lambda _priors: {})
+
+    report = {
+        "dry_run": False,
+        "learner": "test-learner",
+        "window_days": 7,
+        "new_version": 2,
+        "previous_version": 1,
+        "learner_note": "test note",
+        "cost_telemetry": {"task1": {"measured": True, "coverage": 0.95}},
+        "tasks": [
+            {
+                "task_type": "task1",
+                "diverges_from_prior": False,
+                "prior_order": ["agent1", "agent2"],
+                "learned_order": ["agent1", "agent2"],
+                "previous_order": ["agent1", "agent2"],
+                "note": "stable",
+                "rows": [
+                    {
+                        "agent": "agent1",
+                        "posterior": 0.8,
+                        "score": 0.85,
+                        "n_obs": 10,
+                        "learned_rank": 1,
+                        "prior_rank_delta": 0,
+                        "previous_rank_delta": 0,
+                    },
+                    {
+                        "agent": "agent2",
+                        "posterior": 0.7,
+                        "score": 0.75,
+                        "n_obs": 8,
+                        "learned_rank": 2,
+                        "prior_rank_delta": 0,
+                        "previous_rank_delta": 0,
+                    },
+                ],
+            }
+        ],
+    }
+
+    ordered_rows = relearn_report._ordered_rows(
+        [
+            {"agent": "agent2", "score": 0.75},
+            {"agent": "agent1", "score": 0.85},
+        ],
+        ["agent1", "agent2"],
+    )
+    assert ordered_rows[0]["agent"] == "agent1"
+    assert ordered_rows[1]["agent"] == "agent2"
+
+    human_output = relearn_report.format_human(report)
+    assert "test-learner" in human_output
+    assert "window_days=7" in human_output or "7 days" in human_output
+    assert "task1" in human_output
+
+
+def test_keepalive_supervisor_plan_target_and_closure(monkeypatch, tmp_path):
+    import json
+    import keepalive_supervisor as supervisor
+
+    signals = {
+        "target": "stranske/Orchestrator#1234",
+        "pr_state": "open",
+        "labels": [supervisor.KEEPALIVE_LABEL],
+        "title": "Test issue",
+        "body": "Test body",
+    }
+
+    plan = supervisor.plan_for_signals(signals, report_json_path=tmp_path / "report.json")
+    assert "next_step" in plan
+    assert "proposal_command" in plan
+
+    plan_target_result = supervisor.plan_target(
+        signals["target"],
+        report_dir=tmp_path,
+    )
+    assert "next_step" in plan_target_result
+
+    eligible = supervisor.eligibility(signals)
+    assert "eligible" in eligible
+    assert "blockers" in eligible
+
+    label_set = supervisor._label_set(signals)
+    assert supervisor.KEEPALIVE_LABEL in label_set
