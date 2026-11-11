@@ -1309,7 +1309,7 @@ def test_live_timestamp_cutoff_keeps_capped_cases_and_reconcile_does_not_advance
     assert json.loads(common["path"].read_text())["pending_case_ids"] == []
 
 
-def test_live_shadow_adjudicates_a_new_dispute_once_and_grades_on_truth(live_shadow):
+def test_live_shadow_adjudicates_a_new_dispute_once_and_grades_on_truth(live_shadow, monkeypatch):
     live, db = live_shadow["live"], live_shadow["db"]
     outcomes_before = _brain_except_events(db)["outcomes"]
     first = live.run_live(**live_shadow["common"])
@@ -1323,13 +1323,25 @@ def test_live_shadow_adjudicates_a_new_dispute_once_and_grades_on_truth(live_sha
     assert advice["decision"] == "uphold_blocker" and advice["backend"] == "stub"
     assert advice["case_id"] == first["rows"][0]["case_id"] and "cost_usd" in advice
     assert _brain_except_events(db)["outcomes"] == outcomes_before, "no outcomes row written"
-    # Exercise the event exclusion independently of the last-run cutoff.
-    assert retro.live_disputes(db=db, since_ts=0) == []
 
-    second = live.run_live(**live_shadow["common"])
+    writes = []
+    record_event = feedback.record_completion_event
+
+    def record_replay_event(*args, **kwargs):
+        writes.append(kwargs["phase"])
+        return record_event(*args, **kwargs)
+
+    monkeypatch.setattr(feedback, "record_completion_event", record_replay_event)
+    # Replay without the report or its cutoff. The Brain event must prevent a second dispatch.
+    replay_path = live_shadow["common"]["path"].with_name("replay.json")
+    second = live.run_live(**{**live_shadow["common"], "path": replay_path})
+    assert (len(live_shadow["calls"]), writes) == (
+        1,
+        [],
+    ), "the second run must not dispatch or write"
     assert _advice_events(db) == events, "the second run writes nothing"
     assert second["attempted"] == 0
-    assert len(live_shadow["calls"]) == 1 and len(live_shadow["collected"]) == 1
+    assert len(live_shadow["collected"]) == 1
 
     checked = feedback.DURABILITY_DETECTION_SINCE + 10
     with feedback._conn() as conn:
