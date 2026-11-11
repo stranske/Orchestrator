@@ -310,6 +310,86 @@ test('CSV recovery follows the latest native comparison instead of the supersede
   assert.equal(JSON.stringify(readback), before, 'never rewrite producer history for admission');
 });
 
+test('CSV recovery rechecks native revisions and supersession at the publication boundary',async()=>{
+  const { publishRetainedReport } = require('../.github/scripts/verifier_pending_execution.js');
+  const { validateEvent, digest } = require('../.github/scripts/verification_event.js');
+  const native = require('../docs/verification/issue-1184-acceptance-20261111/round9/native-readback.json');
+  const reports = require('../docs/verification/issue-1184-acceptance-20261111/round7/native-readback.json');
+  const deliveries = require('../docs/verification/issue-1184-acceptance-20261111/native-readback.json');
+  const before = JSON.stringify([native, reports, deliveries]);
+  const states = native.verifier_events.map(comment =>
+    JSON.parse(comment.body.match(/(\{[^\n]+\})/)[1]));
+  const original = states.find(state => state.run_id === '42141057834' && state.status === 'pending');
+  const latest = states.find(state => state.run_id === '42142641060' && state.status === 'pending');
+  const event = validateEvent(latest.verification_event);
+  const corrective = native.pull_requests.find(pr => pr.number === 1168);
+  const owned = deliveries.pull_requests.find(pr => pr.number === 989);
+  const pull = {merged:corrective.merged, head:{sha:corrective.head_sha},
+    merge_commit_sha:corrective.merge_commit_sha};
+  assert.equal(event.head_sha, pull.head.sha);
+  assert.equal(event.evaluated_sha, pull.merge_commit_sha);
+  assert.equal(validateEvent(original.verification_event).event_id, event.event_id);
+  assert.equal(original.assessment_identity.mode, 'evaluate');
+  assert.equal(latest.assessment_identity.mode, 'compare');
+  // Replay genuine unavailable reports, never invent an admitted terminal
+  // decision to make the final publisher appear to complete native recovery.
+  for (const report of reports.reports) {
+    assert.equal(report.author, 'github-actions[bot]');
+    assert.match(report.body, /\*\*Verdict:\*\* UNVERIFIABLE_INPUT/);
+    assert.doesNotMatch(report.body, /<!-- verifier-corpus-decision\/v1 /);
+  }
+  const exercise = async (state, observed, report, expected, expectedReads) => {
+    const reads = [];
+    let posts = 0, postAttempts = 0;
+    const check = args => {
+      assert.equal(`${args.owner}/${args.repo}`, event.repo);
+      assert.equal(args.pull_number ?? args.issue_number, Number(event.pr));
+    };
+    const github = {rest:{pulls:{get:async args => {
+      check(args); reads.push('pull'); return {data:observed};
+    }},issues:{listComments:async args => {
+      check(args); assert.equal(args.page, 1); assert.equal(args.per_page, 100);
+      reads.push('comments');
+      return {data:native.verifier_events.map(comment => ({
+        id:Number(comment.url.split('#issuecomment-')[1]), user:{login:comment.author},
+        html_url:comment.url, body:comment.body,
+      })),headers:{}};
+    },createComment:async () => {
+      posts++;
+      throw new Error('Unavailable CSV evidence must not be published');
+    }}}};
+    const selector = {run_id:Number(state.run_id), run_attempt:Number(state.run_attempt),
+      artifact_id:state === latest ? native.comparison_artifact.id : 13468410186};
+    const manifest = {verification_event:event, assessment_identity:state.assessment_identity,
+      request:{sources:[]}};
+    const origin = {verification_event:event, assessment_identity:state.assessment_identity,
+      source_run_id:state.run_id, source_run_attempt:state.run_attempt,
+      recovery_key:digest({schema:'retained-revalidation-key/v1',event_id:event.event_id,
+        assessment:state.assessment_identity,selector})};
+    await assert.rejects(publishRetainedReport({github,manifest,origin,body:report.body,
+      currentRun:Number(latest.run_id) + 1,
+      onPostAttempt:()=>{postAttempts++;},
+    }), expected);
+    assert.deepEqual(reads, expectedReads);
+    assert.equal(posts, 0);
+    assert.equal(postAttempts, 0, 'reject before invoking the consequential POST callback');
+  };
+  // Unlike history admission alone, exercise the publisher's fresh native GETs
+  // immediately before mutation. Wrong-head and wrong-merge cases borrow the
+  // other real delivery's identities rather than constructing producer records.
+  await exercise(original, pull, reports.reports[0],
+    /Retained recovery is superseded by a newer authenticated assessment/, ['pull','comments']);
+  await exercise(latest, {...pull,head:{sha:owned.head_sha}}, reports.reports[1],
+    /Recovery target revision changed before publication/, ['pull']);
+  await exercise(latest, {...pull,merge_commit_sha:owned.merge_commit_sha}, reports.reports[1],
+    /Recovery target revision changed before publication/, ['pull']);
+  // Positive control for the revision/history reads: the current native source
+  // reaches report admission, where its actual unavailable report is rejected.
+  await exercise(latest, pull, reports.reports[1],
+    /Recovery report lacks one admitted terminal decision/, ['pull','comments']);
+  assert.equal(JSON.stringify([native, reports, deliveries]), before);
+});
+
 test('native CSV comparison reconciles to existing outputs even when its evaluation step was skipped',async()=>{
   const { reconcilePendingExecution, executionBinding } = require('../.github/scripts/verifier_pending_execution.js');
   const { validateEvent } = require('../.github/scripts/verification_event.js');
