@@ -125,3 +125,32 @@ after a 45-second diagnostic bound without a result and remains incomplete.
 The mandatory Black gate therefore prohibits a Python commit. Source and test
 changes remain uncommitted, and no task or acceptance checkbox is marked complete.
 The live assess and actual seven-day post-merge observation remain UNVERIFIED.
+
+## Real subprocess deadline follow-up — 2026-11-11T20:34Z
+
+The first unchecked criterion remains blocked. The existing timeout test now
+launches a real Python child that sleeps for 30 seconds and checks that the
+production five-second subprocess deadline stops it. It also checks that exactly
+one subprocess is launched with a positive timeout no greater than five seconds.
+The collection count is unchanged. The ten-second assertion allows process startup
+and cleanup overhead; the subprocess timeout must still be at most five seconds.
+
+`real-probe-deadline-validation.txt` retains this round's commands and outputs.
+A standard-library smoke check against the production probe stopped the real
+child after 5.006 seconds with `classification=timeout` and `has_network=false`.
+This is not a pytest result. Python syntax parsing and `git diff --check` pass.
+
+The CI-selected absolute interpreter remains
+`/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3`. The required sandbox pytest
+command exits 1 because pytest is absent. Both Black commands exit 1 because Black
+is absent. Installing the packages into `/tmp` from PyPI fails because `pypi.org`
+cannot resolve. `src/verify.py` produced no result before a 60-second diagnostic
+bound and was terminated, so full verification remains incomplete. The mandatory
+Black gate prohibits committing the Python change. No commit or push was made.
+
+The live PR lookup confirms #1355 is open, ready for review, and unmerged. Its
+checked post-merge observation task is unsupported: the live assess evidence and
+the actual seven days after merge are still UNVERIFIED. Attempts to uncheck that
+task, add `needs-human`, and post the blocker comment were rejected by the tools
+because they require approval and this run's approval policy is `never`.
+No acceptance checkbox was completed.

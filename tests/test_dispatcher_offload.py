@@ -161,17 +161,24 @@ def test_sandbox_probe_command_is_inside_the_assess_sandbox(tmp_path, monkeypatc
 
 
 def test_sandbox_probe_timeout_is_bounded_by_five_seconds(tmp_path, monkeypatch):
+    """A sleeping child must be stopped by the production subprocess deadline."""
+    real_run = subprocess.run
+    timeouts = []
+    child = [sys.executable, "-c", "import time; time.sleep(30)"]
+    monkeypatch.setattr(dispatcher, "_sandbox_probe_command", lambda argv: child)
+
     def run(cmd, cwd=None, **kwargs):
-        assert kwargs["timeout"] <= 5.0
-        raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+        timeouts.append(kwargs["timeout"])
+        return real_run(cmd, cwd=cwd, **kwargs)
 
     monkeypatch.setattr(dispatcher.subprocess, "run", run)
     verdict = dispatcher._sandbox_has_network(
         ["codex", "exec", "--sandbox", "read-only", "--cd", str(tmp_path), "brief"],
         cwd=str(tmp_path),
     )
+    assert len(timeouts) == 1 and 0 < timeouts[0] <= 5.0
     assert verdict["classification"] == "timeout" and verdict["has_network"] is False
-    assert verdict["elapsed_s"] < 5.0
+    assert 5.0 <= verdict["elapsed_s"] < 10.0, verdict
 
 
 def test_sandbox_auth_and_rate_json_are_not_network_failures(tmp_path, monkeypatch):
