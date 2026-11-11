@@ -3441,29 +3441,25 @@ def offload(
     data_only_options: _DataOnlyCommandOptions = {}
 
     def _offload_argv(prompt_text: str, *, sandbox_mode: str | None = None) -> list:
-        shared = dict(
-            cwd=run_cwd,
-            transport="offload",
-            prompt_via_stdin=prompt_via_stdin,
-            prompt_file=muse_prompt,
-            write_roots=boundary[1][1:] if boundary and agent == "codex" else None,
-            sandbox_mode=sandbox_mode,
-            **data_only_options,
-        )
-        if profile:
-            return adapters.build_command(agent, prompt_text, mode, profile=profile, **shared)
         return adapters.build_command(
             agent,
             prompt_text,
             mode,
+            cwd=run_cwd,
+            transport="offload",
+            profile=profile,
+            prompt_via_stdin=prompt_via_stdin,
+            prompt_file=muse_prompt,
+            write_roots=boundary[1][1:] if boundary and agent == "codex" else None,
+            sandbox_mode=sandbox_mode,
             reasoning_effort=(
                 execution_profiles.get_profile(
                     execution_profiles.default_codex_profile("offload", mode)
                 )["reasoning_effort"]
-                if agent == "codex"
+                if agent == "codex" and not profile
                 else None
             ),
-            **shared,
+            **data_only_options,
         )
 
     argv = _offload_argv(command_prompt)  # raises ValueError on unknown agent

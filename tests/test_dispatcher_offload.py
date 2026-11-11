@@ -401,7 +401,9 @@ def test_sandbox_probe_late_return_is_not_success(tmp_path, monkeypatch):
         ("sandbox-exec: sandbox_apply: Operation not permitted", "unclassified"),
     ],
 )
-def test_sandbox_non_network_rejections_never_widen(tmp_path, monkeypatch, capsys, error, classification):
+def test_sandbox_non_network_rejections_never_widen(
+    tmp_path, monkeypatch, capsys, error, classification
+):
     _isolate(tmp_path, monkeypatch)
     calls = _install_run(monkeypatch, lambda cmd, kwargs: _completed(cmd, 1, "", error))
     result = dispatcher.offload("codex", "Run gh api rate_limit", cwd=str(tmp_path), mode="assess")
@@ -432,7 +434,10 @@ def test_sandbox_fallback_preserves_write_roots_and_profile(tmp_path, monkeypatc
     allowed.mkdir()
     calls = _install_run(monkeypatch, lambda cmd, kwargs: _completed(cmd, 1, "", "no such host"))
     result = dispatcher.offload(
-        "codex", "Run gh api rate_limit", cwd=str(tmp_path), mode="assess",
+        "codex",
+        "Run gh api rate_limit",
+        cwd=str(tmp_path),
+        mode="assess",
         profile_id="codex-6.1-sol-medium",
         write_boundary={"protect": [str(tmp_path)], "allow": [str(allowed)]},
     )
@@ -457,7 +462,8 @@ def test_sandbox_probe_only_runs_for_codex_assess(tmp_path, monkeypatch, agent, 
     monkeypatch.setattr(dispatcher, "_sandbox_has_network", unexpected)
     stdout = (
         json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "answer"}})
-        if agent == "codex" else "answer\n"
+        if agent == "codex"
+        else "answer\n"
     )
     _install_run(monkeypatch, unexpected, agent_stdout=stdout)
     result = dispatcher.offload(agent, "read the brief", cwd=str(tmp_path), mode=mode)

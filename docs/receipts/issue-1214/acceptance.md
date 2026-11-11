@@ -34,3 +34,17 @@ The post-merge live transcript/ledger and actual seven-day report are UNVERIFIED
 The recovered ancestor's empty custom `read-only` permission table and explicit disk-read override were replaced with the built-in `:read-only` profile plus `--include-managed-config`, without permission overrides. Official references: [permission profiles](https://learn.chatgpt.com/docs/permissions) and [sandbox CLI flags](https://learn.chatgpt.com/docs/cli/reference#codex-sandbox). These establish the argument design; they do not substitute for the deferred live execution. The fallback no-write preamble is a behavioral instruction; workspace-write remains technically capable of writing within the permitted roots, as the issue requests.
 
 No additional issues were opened: the issue's final narrowed scope already explicitly defers live API evidence and the seven-day observation. `src/verify.py` and the full suite remain NOT RUN under the current owner restriction.
+
+## Keepalive round 2
+
+Check date is 2026-11-11T19:30:44Z. Outcome 1 remains unverified. Success requires the dispatcher to return real GitHub rate-limit JSON, report the selected sandbox, and persist a matching successful terminal ledger row. Run from the repository root on the merged revision in the normal dispatcher runtime.
+
+```sh
+/opt/anaconda3/bin/python3 src/dispatcher.py offload --agent codex --mode assess --cwd "$PWD" --timeout 120 --subject 'stranske/Orchestrator#1214' --prompt 'Do not create, modify or delete any file; print your answer to stdout. Run gh api rate_limit and print the returned JSON.'
+```
+
+Stop this repair after two attempts or at 2026-11-11T19:45:44Z, whichever comes first. The live command uses a 120-second provider timeout. Record the UTC start, result, sandbox, and ledger row sharing the result's run ID. After seven days have elapsed, use the actual merge timestamp as `--since` in the command below and retain both counts.
+
+```sh
+/opt/anaconda3/bin/python3 src/switch_review.py --assess-sandbox-fallback --since "$MERGE_TIMESTAMP" --json
+```
