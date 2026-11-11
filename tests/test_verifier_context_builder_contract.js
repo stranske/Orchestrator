@@ -210,6 +210,60 @@ test('CSV canary native verifier attempts require retained recovery, not another
   assert.equal(JSON.stringify(readback), before, 'native evidence must remain unchanged');
 });
 
+test('native CSV verifier states require both the corrective head and published merge',async()=>{
+  const root = path.resolve(__dirname, '..');
+  const python = fs.existsSync('/opt/anaconda3/bin/python3') && !process.env.VIRTUAL_ENV
+    ? '/opt/anaconda3/bin/python3' : 'python3';
+  // Query unchanged native comments with identities from the two real merges.
+  // A reader that checks just one SHA must fail this regression.
+  const program = `
+import importlib.util
+import json
+from pathlib import Path
+
+root = Path.cwd()
+spec = importlib.util.spec_from_file_location(
+    "csv_native_state_binding",
+    root / "tests/fixtures/closer_real_csv_canary/v1/verify_csv_contract.py",
+)
+reader = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(reader)
+readback = json.loads((root / "docs/verification/issue-1184-acceptance-20261111/round4/native-readback.json").read_text())
+corrective = next(pr for pr in readback["pull_requests"] if pr["number"] == 1168)
+other = next(pr for pr in readback["pull_requests"] if pr["number"] == 989)
+comments = readback["verifier_events"]
+before = json.dumps(comments, sort_keys=True)
+def observed(head, merge):
+    return [event for comment in comments
+            for event in reader._events_from_comment(comment, 1168, head, merge)]
+head, merge = corrective["head_sha"], corrective["merge_commit_sha"]
+events = observed(head, merge)
+print(json.dumps(dict(
+    events=len(events), statuses=sorted({event["status"] for event in events}),
+    heads=sorted({event["head_sha"] for event in events}),
+    merges=sorted({event["evaluated_sha"] for event in events}),
+    expected_head=head, expected_merge=merge,
+    wrong_head=observed(other["head_sha"], merge),
+    wrong_merge=observed(head, other["merge_commit_sha"]),
+    head_as_merge=observed(head, head),
+    unchanged=json.dumps(comments, sort_keys=True) == before,
+)))
+`;
+  const result = await promisify(execFile)(python, ['-I', '-c', program], {
+    cwd:root, encoding:'utf8', timeout:30000,
+  });
+  assert.equal(result.stderr, '');
+  const measured = JSON.parse(result.stdout);
+  assert.equal(measured.events, 6, 'prove native records were read before checking rejection');
+  assert.deepEqual(measured.statuses, ['incomplete', 'pending']);
+  assert.deepEqual(measured.heads, [measured.expected_head]);
+  assert.deepEqual(measured.merges, [measured.expected_merge]);
+  assert.deepEqual(measured.wrong_head, []);
+  assert.deepEqual(measured.wrong_merge, []);
+  assert.deepEqual(measured.head_as_merge, []);
+  assert.equal(measured.unchanged, true);
+});
+
 test('native PR 984 corpus decision and successful workflows cannot complete PR 1168',async()=>{
   const root = path.resolve(__dirname, '..');
   const python = fs.existsSync('/opt/anaconda3/bin/python3') && !process.env.VIRTUAL_ENV
