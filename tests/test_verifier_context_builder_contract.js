@@ -210,6 +210,50 @@ test('CSV canary native verifier attempts require retained recovery, not another
   assert.equal(JSON.stringify(readback), before, 'native evidence must remain unchanged');
 });
 
+test('CSV retained recovery command uses integer selectors bound to native source execution',()=>{
+  const { parseRecoverySelector, validateEvent } = require('../.github/scripts/verification_event.js');
+  const previous = require('../docs/verification/issue-1184-acceptance-20261111/round7/native-readback.json');
+  const current = require('../docs/verification/issue-1184-acceptance-20261111/round8/native-readback.json');
+  const before = JSON.stringify(current);
+  const commandSelector = record => {
+    const args = record.recovery_dispatch.argv;
+    const argument = args.find(value => value.startsWith('verification_recovery='));
+    assert.ok(argument, 'the actual dispatch must supply an explicit recovery selector');
+    assert.equal(args[args.indexOf(argument) - 1], '-f');
+    return argument.slice('verification_recovery='.length);
+  };
+  // The earlier command fails native admission even if transport is restored.
+  assert.throws(()=>parseRecoverySelector(commandSelector(previous)),
+    /Recovery accepts exact run_id\/run_attempt\/artifact_id selectors only/);
+  const selector = parseRecoverySelector(commandSelector(current));
+  const state = JSON.parse(current.recovery_state.body.match(/(\{[^\n]+\})/)[1]);
+  const event = validateEvent(state.verification_event);
+  const pr = current.pull_requests.find(pr => pr.number === 1168);
+  const artifact = current.evaluation_artifact;
+  assert.equal(current.recovery_state.user.login, 'github-actions[bot]');
+  assert.equal(event.head_sha, pr.head_sha);
+  assert.equal(event.evaluated_sha, pr.merge_commit_sha);
+  assert.equal(pr.merged, true);
+  assert.deepEqual(selector, {
+    run_id:Number(state.retained_revalidation.source_run_id),
+    run_attempt:Number(state.retained_revalidation.source_run_attempt),
+    artifact_id:state.retained_revalidation.artifact_id,
+  });
+  assert.equal(selector.run_id, artifact.workflow_run.id);
+  assert.equal(artifact.name, `evaluation-results-${selector.run_id}`);
+  assert.equal(selector.artifact_id, artifact.id);
+  assert.notEqual(selector.run_id, Number(state.run_id), 'recover the original evaluation');
+  assert.equal(Object.isFrozen(selector), true);
+  for (const key of Object.keys(selector)) {
+    assert.throws(()=>parseRecoverySelector(JSON.stringify({...selector, [key]:String(selector[key])})),
+      /Recovery accepts exact run_id\/run_attempt\/artifact_id selectors only/);
+  }
+  // Parser admission is no claim that dispatch or native recovery completed.
+  assert.equal(current.recovery_dispatch.exit_status, 1);
+  assert.deepEqual(current.trusted_corpus_markers, []);
+  assert.equal(JSON.stringify(current), before);
+});
+
 test('native CSV verifier states require both the corrective head and published merge',async()=>{
   const root = path.resolve(__dirname, '..');
   const python = fs.existsSync('/opt/anaconda3/bin/python3') && !process.env.VIRTUAL_ENV
