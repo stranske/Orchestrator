@@ -715,7 +715,7 @@ def local_launch(agent: str) -> dict:
     if os.environ.get("ORCH_LAUNCH_CHECK", "1").strip().lower() in {"0", "false", "no", "off"}:
         return {**base, "reason": "launch check disabled (ORCH_LAUNCH_CHECK=0)"}
     try:
-        binary = build_command(agent, "launch-check")[0]
+        binary = build_command(agent, "launch-check", record_use=False)[0]
     except Exception as exc:  # noqa: BLE001 — any failure here is "unknown", never "missing"
         # build_command raises ValueError (unknown agent), RuntimeError or WorkspaceRefused; the
         # text is kept so an unexpected bug is visible in the seat row, not only its type.
@@ -2138,8 +2138,12 @@ def build_command(
     write_roots: list[str] | None = None,
     data_only: bool = False,
     sandbox_mode: str | None = None,
+    record_use: bool = True,
 ):
     """Construct the CLI argv for one agent. `mode` is agent-specific.
+
+    record_use: False when the argv is only inspected, never run (capacity's launch check). A
+    capability heartbeat recorded here then would count a use that never happened.
 
     sandbox_mode: codex only. When set, that sandbox is emitted and the outer-seat
     bypass is not substituted for it. A read-only profile cannot be widened.
@@ -2436,14 +2440,15 @@ def build_command(
         # so it records use exactly where it is applied. Daily-coalesced: build_command runs on
         # every dispatch. Lazy import (capabilities imports feedback), never raises, and inert
         # outside an active tick. (2026-08-09)
-        try:
-            import capabilities
+        if record_use:
+            try:
+                import capabilities
 
-            capabilities.daily_heartbeat(
-                "agy-runtime-isolation", "invocation", ref="adapters.build_command:gemini"
-            )
-        except Exception:
-            pass
+                capabilities.daily_heartbeat(
+                    "agy-runtime-isolation", "invocation", ref="adapters.build_command:gemini"
+                )
+            except Exception:
+                pass
         cmd = ["agy", "--gemini_dir", gemini_dir]
         model = requested_model or _tier_model("gemini", mode) or gemini_model()
         if model:

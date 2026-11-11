@@ -126,3 +126,39 @@ def test_a_crashing_launch_check_is_reported_not_silent(monkeypatch):
     result = capacity._local_launch("vibe")
     assert result["checked"] is False and result["launchable"] is True
     assert "OSError: disk gone" in result["reason"]
+
+
+def test_build_row_keeps_the_crash_text_in_launch_reason(monkeypatch, tmp_path):
+    def boom(agent):
+        raise OSError("disk gone")
+
+    monkeypatch.setattr(adapters, "local_launch", boom)
+    monkeypatch.setattr(capacity, "LEDGER", tmp_path / "ledger.jsonl")
+    monkeypatch.setattr(capacity, "SHED_DIR", tmp_path / "shed")
+    built = capacity.build(ccusage_block=None)
+    launch = built["agents"]["vibe"]["launch"]
+    assert launch["checked"] is False
+    assert "OSError: disk gone" in launch["reason"]
+
+
+def test_launch_check_records_no_capability_use(monkeypatch, tmp_path):
+    import capabilities
+
+    calls = []
+    monkeypatch.setattr(capabilities, "daily_heartbeat", lambda *a, **k: calls.append(a) or True)
+    adapters.build_command("gemini", "launch-check", cwd=tmp_path, record_use=False)
+    assert calls == []
+    adapters.build_command("gemini", "real prompt", cwd=tmp_path)
+    assert [c[0] for c in calls] == ["agy-runtime-isolation"]
+
+    seen = {}
+    real = adapters.build_command
+
+    def spy(*args, **kwargs):
+        seen.update(kwargs)
+        return real(*args, cwd=tmp_path, **kwargs)
+
+    monkeypatch.setenv("ORCH_LAUNCH_CHECK", "1")
+    monkeypatch.setattr(adapters, "build_command", spy)
+    adapters.local_launch("gemini")
+    assert seen.get("record_use") is False
