@@ -189,6 +189,53 @@ class PrerequisiteBoundaryTests(unittest.TestCase):
         self.assertIn("missing", env_prereq.ledger_version_lineage_absent("ready", "missing"))
         self.assertIn("missing", env_prereq.ledger_invocation_history_absent("ready", "missing"))
 
+    def test_bare_machine_requires_every_local_prerequisite_to_be_absent(self):
+        for seat_present in (False, True):
+            for skill_present in (False, True):
+                for codex_present in (False, True):
+                    with (
+                        self.subTest(
+                            seat=seat_present, skill=skill_present, codex=codex_present
+                        ),
+                        patch.object(
+                            env_prereq, "_seat_signals", return_value={"fixture": seat_present}
+                        ),
+                        patch.object(
+                            env_prereq,
+                            "skill_resource_absent",
+                            return_value=None if skill_present else "fixture skill absent",
+                        ),
+                        patch.object(
+                            env_prereq,
+                            "codex_profile_binary_absent",
+                            return_value=None if codex_present else "fixture Codex absent",
+                        ),
+                    ):
+                        reason = env_prereq.bare_machine()
+                        if seat_present or skill_present or codex_present:
+                            self.assertIsNone(reason)
+                        else:
+                            self.assertIn("no agent seat", reason)
+                            self.assertIn("no reference skill resource", reason)
+                            self.assertIn("no version-capable Codex", reason)
+
+    def test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance(self):
+        detectors = ("_seat_signals", "skill_resource_absent", "codex_profile_binary_absent")
+        for unreadable in detectors:
+            with self.subTest(unreadable=unreadable), ExitStack() as stack:
+                probes = {}
+                for name in detectors:
+                    probes[name] = stack.enter_context(
+                        patch.object(
+                            env_prereq,
+                            name,
+                            return_value={"fixture": False} if name == "_seat_signals" else "absent",
+                        )
+                    )
+                probes[unreadable].side_effect = OSError("fixture mark cannot be read")
+                self.assertIsNone(env_prereq.bare_machine())
+                probes[unreadable].assert_called_once_with()
+
     def test_skill_resource_accepts_installed_file_and_names_missing_fallback(self):
         resource = self.root / "reference.sh"
         resource.touch()

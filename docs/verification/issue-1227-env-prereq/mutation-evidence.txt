@@ -127,7 +127,7 @@ OK
 
 === test_main_reports_both_shapes_and_named_prerequisites-broken ===
 
-test_main_reports_both_shapes_and_named_prerequisites (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_main_reports_both_shapes_and_named_prerequisites) ... 
+test_main_reports_both_shapes_and_named_prerequisites (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_main_reports_both_shapes_and_named_prerequisites) ...
   test_main_reports_both_shapes_and_named_prerequisites (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_main_reports_both_shapes_and_named_prerequisites) (missing=False) ... FAIL
   test_main_reports_both_shapes_and_named_prerequisites (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_main_reports_both_shapes_and_named_prerequisites) (missing=True) ... FAIL
 
@@ -406,5 +406,139 @@ test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror (test
 
 ----------------------------------------------------------------------
 Ran 1 test in 0.002s
+
+OK
+
+=== 2026-11-11 direct bare-machine contract follow-up ===
+env_prereq.py selftest: OK (skip-is-a-skip, every detector names the missing thing, marked selftest skip speaks, vibe readers, exec-mirror shape needs BOTH marks, a bare machine needs EVERY prerequisite absent, not-live rows named with their status, a recorded pytest verdict replays as the check would have and an unreadable record replays nothing, a declared row's absence is named drainable only when every absent row is declared)
+test_env_prereq_selftest_runs_with_an_isolated_runtime: PASS (standard-library fixture adapter)
+test_ledger_detectors_name_an_unreadable_ledger: PASS (standard-library fixture adapter)
+
+=== test_bare_machine_requires_every_local_prerequisite_to_be_absent: broken ===
+exit=1
+test_bare_machine_requires_every_local_prerequisite_to_be_absent (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_bare_machine_requires_every_local_prerequisite_to_be_absent) ...
+  test_bare_machine_requires_every_local_prerequisite_to_be_absent (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_bare_machine_requires_every_local_prerequisite_to_be_absent) (seat=False, skill=False, codex=True) ... FAIL
+  test_bare_machine_requires_every_local_prerequisite_to_be_absent (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_bare_machine_requires_every_local_prerequisite_to_be_absent) (seat=False, skill=True, codex=False) ... FAIL
+  test_bare_machine_requires_every_local_prerequisite_to_be_absent (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_bare_machine_requires_every_local_prerequisite_to_be_absent) (seat=False, skill=True, codex=True) ... FAIL
+  test_bare_machine_requires_every_local_prerequisite_to_be_absent (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_bare_machine_requires_every_local_prerequisite_to_be_absent) (seat=True, skill=False, codex=False) ... FAIL
+  test_bare_machine_requires_every_local_prerequisite_to_be_absent (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_bare_machine_requires_every_local_prerequisite_to_be_absent) (seat=True, skill=False, codex=True) ... FAIL
+  test_bare_machine_requires_every_local_prerequisite_to_be_absent (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_bare_machine_requires_every_local_prerequisite_to_be_absent) (seat=True, skill=True, codex=False) ... FAIL
+
+======================================================================
+FAIL: test_bare_machine_requires_every_local_prerequisite_to_be_absent (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_bare_machine_requires_every_local_prerequisite_to_be_absent) (seat=False, skill=False, codex=True)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 216, in test_bare_machine_requires_every_local_prerequisite_to_be_absent
+    self.assertIsNone(reason)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^
+AssertionError: "this machine has none of this instance's local prerequisites: no agent seat has a CLI or a credential file, no reference skill resource is installed, and no version-capable Codex binary exists" is not None
+
+======================================================================
+FAIL: test_bare_machine_requires_every_local_prerequisite_to_be_absent (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_bare_machine_requires_every_local_prerequisite_to_be_absent) (seat=False, skill=True, codex=False)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 216, in test_bare_machine_requires_every_local_prerequisite_to_be_absent
+    self.assertIsNone(reason)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^
+AssertionError: "this machine has none of this instance's local prerequisites: no agent seat has a CLI or a credential file, no reference skill resource is installed, and no version-capable Codex binary exists" is not None
+
+======================================================================
+FAIL: test_bare_machine_requires_every_local_prerequisite_to_be_absent (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_bare_machine_requires_every_local_prerequisite_to_be_absent) (seat=False, skill=True, codex=True)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 216, in test_bare_machine_requires_every_local_prerequisite_to_be_absent
+    self.assertIsNone(reason)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^
+AssertionError: "this machine has none of this instance's local prerequisites: no agent seat has a CLI or a credential file, no reference skill resource is installed, and no version-capable Codex binary exists" is not None
+
+======================================================================
+FAIL: test_bare_machine_requires_every_local_prerequisite_to_be_absent (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_bare_machine_requires_every_local_prerequisite_to_be_absent) (seat=True, skill=False, codex=False)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 216, in test_bare_machine_requires_every_local_prerequisite_to_be_absent
+    self.assertIsNone(reason)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^
+AssertionError: "this machine has none of this instance's local prerequisites: no agent seat has a CLI or a credential file, no reference skill resource is installed, and no version-capable Codex binary exists" is not None
+
+======================================================================
+FAIL: test_bare_machine_requires_every_local_prerequisite_to_be_absent (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_bare_machine_requires_every_local_prerequisite_to_be_absent) (seat=True, skill=False, codex=True)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 216, in test_bare_machine_requires_every_local_prerequisite_to_be_absent
+    self.assertIsNone(reason)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^
+AssertionError: "this machine has none of this instance's local prerequisites: no agent seat has a CLI or a credential file, no reference skill resource is installed, and no version-capable Codex binary exists" is not None
+
+======================================================================
+FAIL: test_bare_machine_requires_every_local_prerequisite_to_be_absent (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_bare_machine_requires_every_local_prerequisite_to_be_absent) (seat=True, skill=True, codex=False)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 216, in test_bare_machine_requires_every_local_prerequisite_to_be_absent
+    self.assertIsNone(reason)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^
+AssertionError: "this machine has none of this instance's local prerequisites: no agent seat has a CLI or a credential file, no reference skill resource is installed, and no version-capable Codex binary exists" is not None
+
+----------------------------------------------------------------------
+Ran 1 test in 0.006s
+
+FAILED (failures=6)
+
+
+=== test_bare_machine_requires_every_local_prerequisite_to_be_absent: restored ===
+exit=0
+test_bare_machine_requires_every_local_prerequisite_to_be_absent (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_bare_machine_requires_every_local_prerequisite_to_be_absent) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.005s
+
+OK
+
+
+=== test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance: broken ===
+exit=1
+test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance) ...
+  test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance) (unreadable='_seat_signals') ... FAIL
+  test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance) (unreadable='skill_resource_absent') ... FAIL
+  test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance) (unreadable='codex_profile_binary_absent') ... FAIL
+
+======================================================================
+FAIL: test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance) (unreadable='_seat_signals')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 236, in test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance
+    self.assertIsNone(env_prereq.bare_machine())
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'incorrect bare-machine allowance' is not None
+
+======================================================================
+FAIL: test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance) (unreadable='skill_resource_absent')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 236, in test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance
+    self.assertIsNone(env_prereq.bare_machine())
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'incorrect bare-machine allowance' is not None
+
+======================================================================
+FAIL: test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance) (unreadable='codex_profile_binary_absent')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 236, in test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance
+    self.assertIsNone(env_prereq.bare_machine())
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'incorrect bare-machine allowance' is not None
+
+----------------------------------------------------------------------
+Ran 1 test in 0.004s
+
+FAILED (failures=3)
+
+
+=== test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance: restored ===
+exit=0
+test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.003s
 
 OK
