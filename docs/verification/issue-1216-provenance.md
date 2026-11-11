@@ -20,16 +20,24 @@ Restored SHA-256: `4a91202bfdff96916ce43557e236195bcb9157a9ab88ea6369203170c5f0f
 
 ### Review dispositions for PR #1193
 
-All six threads below were still open when read on 2026-11-11.
+Round 3 re-read the complete review-thread listing on 2026-11-11. All six
+threads were unresolved and current on the closed predecessor PR. The
+dispositions below describe their status on successor PR #1352.
 
 | Thread | Disposition on this branch |
 | --- | --- |
-| [Independent response provenance](https://github.com/stranske/Orchestrator/pull/1193#discussion_r4493714910) | `_authoritative_identity_verified` requires a lookup supplied by trusted application code and compares the returned response ID, model, completion state, trial metadata and token usage. `test_local_identity_claims_require_an_independent_provider_lookup` rejects the forged local claim. The CLI still has no trusted collector. |
-| [Headingless specifications](https://github.com/stranske/Orchestrator/pull/1193#discussion_r4493714928) | `_recurring_work_rubric` uses the first two nonblank lines when there is no criteria block. `test_work_quality_checks_the_frozen_spec_task` includes a passing headingless case and rejects both forms of criterion echo. |
-| [Empty, partial, or ambiguous evidence](https://github.com/stranske/Orchestrator/pull/1193#discussion_r4493714945) | `_work_quality_score` requires a single evidence line with the complete computed pairs. The same test covers multiline blocks, inline-plus-continuation criteria, an empty heading and answer, wrong counts, and duplicate evidence. |
+| [Independent response provenance](https://github.com/stranske/Orchestrator/pull/1193#discussion_r4493714910) | `_authoritative_identity_verified` requires a lookup supplied by trusted application code and compares the returned response ID, model, completion state, trial metadata and token usage. `test_local_identity_claims_require_an_independent_provider_lookup` rejects the forged local claim before feedback writes. The CLI fails closed because it has no trusted collector. |
+| [Headingless specifications](https://github.com/stranske/Orchestrator/pull/1193#discussion_r4493714928) | `_recurring_work_rubric` uses the first two nonblank lines when there is no criteria block. `test_work_quality_checks_the_frozen_spec_task` gives `2:2,3:3` a score of `1.0` for a headingless spec with a leading blank, and gives literal criterion echoes `0.0`. |
+| [Empty or repeated evidence](https://github.com/stranske/Orchestrator/pull/1193#discussion_r4493714945) | `_work_quality_score` requires a nonempty rubric and exactly one complete evidence line. `test_work_quality_checks_the_frozen_spec_task` gives an empty heading and empty answer `0.0`, rejects duplicate evidence, and covers multiline and inline criteria. |
 | [Matching null usage](https://github.com/stranske/Orchestrator/pull/1193#discussion_r4493714963) | `test_identity_artifact_explicit_null_usage` proves matching nulls stay unmeasured and mismatches fail in both directions. `test_identity_artifact_tokens_must_agree_with_attempt` verifies that omitted artifact fields preserve attempt usage. |
 | [Independent response ID rejection](https://github.com/stranske/Orchestrator/pull/1193#discussion_r4493714994) | `test_invalid_or_unconfirmed_response_ids_refuse_even_with_a_trusted_lookup` recomputes the artifact digest after removing or changing the ID and verifies all trial feedback tables remain empty. |
 | [Session-only feedback](https://github.com/stranske/Orchestrator/pull/1193#discussion_r4493715009) | `test_publish_current_records_measured_usage_quality_and_identity` checks six distinct returned attempt IDs, six distinct persisted `execution_attempts`, and zero `profile_trial_ingests` rows with explicitly unverified session evidence. |
+
+Round 3 repeated the acceptance command with `/opt/anaconda3/bin/python3`.
+It exited 0 with **113 passed and 30 subtests passed**. For hosted CI, use the
+[PR #1352 checks](https://github.com/stranske/Orchestrator/pull/1352/checks)
+for the commit containing this record. Match the check run's head SHA to the
+PR head before accepting its results.
 
 ### Live run-current record
 
