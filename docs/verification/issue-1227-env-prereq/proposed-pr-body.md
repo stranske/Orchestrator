@@ -1,20 +1,20 @@
 ## Summary
 
-Adds hermetic tests for the first issue-ranked target, `src/env_prereq.py`. There are now 17 tests: two pytest-style functions and fifteen unittest methods. This iteration tests that `runnable` records only the first missing prerequisite and that `report_gaps` prints each reason once, in first-seen order, with no output when there are no gaps. No production files changed and no production bug was found.
+Adds hermetic tests for the first issue-ranked target, `src/env_prereq.py`, with the test module registered in the explicit CI shard plan. There are now 18 tests: two pytest-style functions and sixteen unittest methods. The latest addition verifies that `main(["--selftest"])` invokes the selftest exactly once, returns zero, and does not report machine inventory. No production files changed and no production bug was found.
 
 ## Reconciliation (2026-11-11)
 
-Reviewed `4cd1748c` (merge from main), `06da00e2` (boundary tests), `61b1d5ee` (isolation and mutation evidence), `9701ef57` (layout regression), `d4234927` (direct selftest contract), and `463c504c` (bare-machine regressions). Before this iteration, the actual PR diff against `f56396f5` contained four files, including shard registration and 15 tests. The reported 35-file previous iteration includes inherited changes; the remote two-test summary is stale.
+Reviewed the recent commits through `f0563fcf`, including `06da00e2` (boundary tests), `61b1d5ee` (isolation and mutation evidence), `9701ef57` (layout regression), `d4234927` (direct selftest contract), `463c504c` (bare-machine regressions), and `f0563fcf` (section-skip recording/reporting). Before this iteration, the actual PR diff against base `f56396f5` contained four files and 17 tests. The reported 35-file previous iteration does not match the current base diff; the remote two-test summary is stale.
 
-Verified scope checkboxes are reconciled below. The explicit pytest break-and-revert requirement, CI acceptance, formatting and delivery remain unchecked. The PR-body update was rejected: `MCP tool call requires approval, but approval policy is never`. This is the local handoff copy; the remote body has NOT been updated. The two new tests and this handoff remain uncommitted because the mandatory Black gate cannot run. Earlier iterations were committed by the automation wrapper; this run did not make a commit. Fresh installation into `/tmp/orch-1256-tools` also failed because PyPI DNS resolution is unavailable. PR #1256 was confirmed open and ready for review (`draft=false`).
+The checkboxes below reflect verified scope and the documented partial-delivery allowance. CI acceptance, the explicit pytest mutation requirement, formatting, and delivery remain unchecked. Reconciliation of the remote PR body was attempted before implementation, but the write was rejected: `MCP tool call requires approval, but approval policy is never`. This file is the proposed replacement; the remote body has NOT been updated.
 
 ## Coverage and partial delivery
 
-CI's combined pytest plus selftest measure is authoritative; no full local suite or `verify.py` was run. The linked issue's final “Next attempt” narrows this PR to target 1. Remaining targets are deferred rather than claimed untestable.
+CI's combined pytest plus selftest measure is authoritative; no full local suite or `verify.py` was run. Issue #1227's final “Next attempt” narrows this PR to target 1. Remaining targets are deferred rather than claimed untestable.
 
 | Target | Issue-listed uncovered units | Current evidence |
 | --- | ---: | --- |
-| `src/env_prereq.py` | 40 | All 17 tests pass using standard-library runners, including its selftest; fresh coverage is unknown. |
+| `src/env_prereq.py` | 40 | All 18 tests pass using standard-library runners, including its real selftest; fresh coverage is unknown. |
 | `src/ledger_reconcile.py` | 74 | Outside the latest target-1-only scope. |
 | `src/consumer_sync_shadow.py` | 1 | Outside the same scope. |
 | `src/improvement_log.py` | 5 | Outside the same scope. |
@@ -22,30 +22,31 @@ CI's combined pytest plus selftest measure is authoritative; no full local suite
 | `src/testgen_lane.py` | 18 | Outside the same scope. |
 | `src/redirect_plan.py` | 70 | Outside the same scope. |
 
-No fresh covered-unit gain is established, so this partial delivery conservatively leaves the entire approximately 180-unit goal unverified. The two newest tests exercise section-level skip recording and reporting. No additional CI-covered units are claimed without a coverage measurement. No percentage or combined-CI result is inferred from focused test passes.
+No fresh covered-unit gain is established, so this partial delivery conservatively leaves the entire approximately 180-unit goal unverified. The newest test exercises CLI selftest dispatch. No additional CI-covered units or combined percentage are claimed from focused test passes.
 
 ## Validation and blockers
 
-- The required blocker comment and `needs-human` label were also attempted on PR #1256; both were rejected with `MCP tool call requires approval, but approval policy is never`. Final read-only verification confirms the PR is open and `draft=false`.
-- `PYTHONPATH=src:tests python3 -m unittest test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests -v`: **15 passed**. Both runtime paths, ledger access and home lookup are isolated; process and network calls are denied.
-- Both original pytest-style functions pass when called with a standard-library fixture adapter. The first executes `env_prereq._selftest()`, which prints **OK**. This is not a pytest run.
-- Both new section-skip tests fail on deliberate mutations to temporary source copies, and pass after restoring the copies. Repository production source is unchanged. Full output is appended to `mutation-evidence.txt`.
+- `PYTHONPATH=src:tests python3 -m unittest test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests -v`: **16 passed**. Both runtime paths, ledger access and home lookup are isolated; process and network calls are denied and asserted unused.
+- Both original pytest-style functions pass using a standard-library fixture adapter. The first executes the real `env_prereq._selftest()`, which prints **OK**. This is not a pytest run.
+- The new CLI test fails on each of three deliberate mutations to temporary source copies and passes after restoring each copy. Repository production source is unchanged. Output is appended to `mutation-evidence.txt`.
 - `git diff --check`: passed.
 - `python3 -m pytest tests/test_issue1227_env_prereq_coverage.py --cov=env_prereq --cov-branch --cov-report=term-missing -m "not slow"`: blocked, **No module named pytest**.
 - `python3 -m black --line-length 100 tests/test_issue1227_env_prereq_coverage.py` and `python3 -m black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .`: blocked, **No module named black**.
 - `python3 -m ruff check --extend-exclude .workflows-lib --output-format concise tests/test_issue1227_env_prereq_coverage.py`: blocked, **No module named ruff**.
-- Installation into `/tmp/orch-1256-venv` failed because `pypi.org` cannot be resolved. Searches of local Python installations and caches found no usable copies of the required tools.
+- Fresh package installation into `/tmp/orch-1256-validation` failed: **No matching distribution found for pytest**. The cache/install search found no usable tools. The mandatory Black gate therefore prevents committing or pushing this iteration's Python edits; no commit was made by this run.
+- PR-body reconciliation, blocker comment and `needs-human` label writes require approval that this run cannot obtain. The PR remains open and ready for review; the remote body is still stale.
 
 ## Break-and-revert evidence
 
-Earlier evidence records all 15 previous tests failing on deliberate source mutations and passing after restoration, using unittest or a standard-library fixture adapter. Those runs are preserved in `mutation-evidence.txt`; they do not establish the explicit pytest requirement.
+Earlier evidence records all 17 previous tests failing on deliberate source mutations and passing after restoration, using unittest or a standard-library fixture adapter. Those runs remain in `mutation-evidence.txt`; they do not establish the explicit pytest requirement.
 
-Fresh runs for this iteration used `python3 -m unittest <test-id> -v` with temporary `env_prereq.py` copies placed first on `PYTHONPATH`. Each broken run exited 1 with assertion failures; each restored run exited 0. Every case also used the fixture's temporary runtime and external-I/O denials.
+Fresh runs for the CLI test used `python3 -m unittest test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_main_selftest_dispatches_once_without_reporting_machine -v` with temporary `env_prereq.py` copies first on `PYTHONPATH`. Each broken run exited 1 with an assertion failure; each restored run exited 0. Runtime paths remain temporary and external I/O is denied.
 
-| Test | Deliberate mutation | Broken / restored |
-| --- | --- | --- |
-| first missing prerequisite controls whether a section runs | `runnable` returns True after recording a missing prerequisite | `True is not false`, exit 1 / OK, exit 0 |
-| gap reporting preserves unique first-seen reasons | `dict.fromkeys(gaps)` changed to `gaps` | duplicate output line, exit 1 / OK, exit 0 |
+| Deliberate mutation | Broken / restored |
+| --- | --- |
+| Disable the `--selftest` branch | machine-inventory assertion, exit 1 / OK, exit 0 |
+| Invoke `_selftest()` twice | call-count assertion, exit 1 / OK, exit 0 |
+| Return 1 after `_selftest()` | return-value assertion, exit 1 / OK, exit 0 |
 
 Closes #1227
 

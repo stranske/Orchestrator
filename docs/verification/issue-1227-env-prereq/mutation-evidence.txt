@@ -578,3 +578,105 @@ Trusted-tool installation into /tmp failed: PyPI DNS NameResolutionError.
 No Python changes committed because the mandatory Black gate could not pass.
 PR body reconciliation rejected by tool approval: approval policy is never.
 No pytest, coverage, CI, formatting, or remote checklist success is claimed.
+
+=== CLI selftest dispatch follow-up (2026-11-11; unittest, not pytest) ===
+
+=== main_selftest_missing_dispatch-broken ===
+test_main_selftest_dispatches_once_without_reporting_machine (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_main_selftest_dispatches_once_without_reporting_machine) ... FAIL
+
+======================================================================
+FAIL: test_main_selftest_dispatches_once_without_reporting_machine (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_main_selftest_dispatches_once_without_reporting_machine)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 439, in test_main_selftest_dispatches_once_without_reporting_machine
+    self.assertEqual(env_prereq.main(["--selftest"]), 0)
+                     ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+  File "/tmp/orch-1256-dispatch-6vo70gpm/env_prereq.py", line 1090, in main
+    shape = exec_mirror_shape()
+  File "/opt/hostedtoolcache/Python/3.14.10/x64/lib/python3.14/unittest/mock.py", line 1176, in __call__
+    return self._mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/hostedtoolcache/Python/3.14.10/x64/lib/python3.14/unittest/mock.py", line 1180, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/hostedtoolcache/Python/3.14.10/x64/lib/python3.14/unittest/mock.py", line 1241, in _execute_mock_call
+    raise effect
+AssertionError: selftest mode must not report machine inventory
+
+----------------------------------------------------------------------
+Ran 1 test in 0.003s
+
+FAILED (failures=1)
+
+exit: 1
+
+=== main_selftest_missing_dispatch-restored ===
+test_main_selftest_dispatches_once_without_reporting_machine (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_main_selftest_dispatches_once_without_reporting_machine) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.002s
+
+OK
+
+exit: 0
+
+=== main_selftest_duplicate_dispatch-broken ===
+test_main_selftest_dispatches_once_without_reporting_machine (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_main_selftest_dispatches_once_without_reporting_machine) ... FAIL
+
+======================================================================
+FAIL: test_main_selftest_dispatches_once_without_reporting_machine (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_main_selftest_dispatches_once_without_reporting_machine)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 440, in test_main_selftest_dispatches_once_without_reporting_machine
+    selftest.assert_called_once_with()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/opt/hostedtoolcache/Python/3.14.10/x64/lib/python3.14/unittest/mock.py", line 997, in assert_called_once_with
+    raise AssertionError(msg)
+AssertionError: Expected '_selftest' to be called once. Called 2 times.
+Calls: [call(), call()].
+
+----------------------------------------------------------------------
+Ran 1 test in 0.002s
+
+FAILED (failures=1)
+
+exit: 1
+
+=== main_selftest_duplicate_dispatch-restored ===
+test_main_selftest_dispatches_once_without_reporting_machine (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_main_selftest_dispatches_once_without_reporting_machine) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.002s
+
+OK
+
+exit: 0
+
+=== main_selftest_wrong_exit-broken ===
+test_main_selftest_dispatches_once_without_reporting_machine (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_main_selftest_dispatches_once_without_reporting_machine) ... FAIL
+
+======================================================================
+FAIL: test_main_selftest_dispatches_once_without_reporting_machine (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_main_selftest_dispatches_once_without_reporting_machine)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 439, in test_main_selftest_dispatches_once_without_reporting_machine
+    self.assertEqual(env_prereq.main(["--selftest"]), 0)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 1 != 0
+
+----------------------------------------------------------------------
+Ran 1 test in 0.002s
+
+FAILED (failures=1)
+
+exit: 1
+
+=== main_selftest_wrong_exit-restored ===
+test_main_selftest_dispatches_once_without_reporting_machine (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_main_selftest_dispatches_once_without_reporting_machine) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.002s
+
+OK
+
+exit: 0

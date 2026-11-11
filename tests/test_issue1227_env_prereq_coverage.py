@@ -427,3 +427,16 @@ class PrerequisiteBoundaryTests(unittest.TestCase):
                     text,
                 )
                 self.assertEqual(text.count("fixture absent"), 7 if missing else 0)
+
+    def test_main_selftest_dispatches_once_without_reporting_machine(self):
+        inventory = Mock(side_effect=AssertionError("selftest mode must not report machine inventory"))
+        with (
+            patch.object(env_prereq, "_selftest") as selftest,
+            patch.object(env_prereq, "exec_mirror_shape", inventory),
+            patch.object(env_prereq, "bare_machine", inventory),
+            redirect_stdout(io.StringIO()) as output,
+        ):
+            self.assertEqual(env_prereq.main(["--selftest"]), 0)
+        selftest.assert_called_once_with()
+        inventory.assert_not_called()
+        self.assertEqual(output.getvalue(), "")
