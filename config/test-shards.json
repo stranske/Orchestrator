@@ -285,7 +285,7 @@
       "tests/test_verifier_retry_lineage.py",
       "tests/test_worktree_git_guard.py",
       "tests/test_observability_dashboard.py",
-      "tests/test_capacity_launch_gate.py"
+      "tests/test_experiment_reservation.py"
     ],
     [
       "tests/test_adjudicator_retry_history.py",
@@ -423,7 +423,8 @@
       "tests/test_langsmith_direct.py",
       "tests/test_router_choose_mode.py",
       "tests/test_value_chain_local_loop_outcomes.py",
-      "tests/test_gh_guard_two_guards_on_path.py"
+      "tests/test_gh_guard_two_guards_on_path.py",
+      "tests/test_capacity_launch_gate.py"
     ],
     [
       "tests/test_activation_audit_source_memo.py",

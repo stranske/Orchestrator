@@ -808,7 +808,7 @@ dispatch lane: the file was last written 2026-09-17 with 0 issues, and every tic
 skipped when gh is deferred): open issues that are prioritised or ready, minus trackers, automated
 and sync issues, paused or in-progress ones, epic/cross-repo/mechanical ones, anything with an
 open PR, and anything `dispatcher._remote_skip_reason` refuses (`agents:paused`, any `agent:*`
-writer), with a count per reason; a repo it cannot read is named, never read as empty. The tick
+writer), with a count per reason; a repo it cannot read is named, never read as empty. One exception (2026-11-11, owner decision): an issue closer-core's park triage labelled `experiment:candidate` (agents tried it and did not converge) is eligible despite its `agents:paused`; the pause keeps the opener from repeating the same attempt, and a comparative experiment is the changed attempt. Any `agent:*` writer or lock still refuses it. The tick
 plans research from it only while it is under two hours old, and the TICK-PLAN line prints the
 research status beside its inputs and skip reasons. At launch the issue is re-read and refused if it
 is no longer open or has since been paused or given a writer, and the subject cooldown is per issue whatever arm set is proposed (Workflows#2710 was
@@ -823,6 +823,8 @@ draws hourly with `p = 1 - exp(-λ Δt)`, default λ=2/day, hard cap 4 per UTC d
 a firing draw reserves a daily slot even if subsequent admission/launch fails, so failures
 cannot exceed the cap. Capacity skips consume their draw time rather than accumulating
 future launches. The diagnostic names blocking pools and coverage debt beside drainable cells.
+
+**Opener intake reservation (2026-11-11, owner decision).** The producer's subjects had to be open, unowned issues at the hourly tick when its draw fired, but opener-core starts most new issues within about an hour of filing, so trial 1 launched 4 of a designed ~42 and trial 2 launched 0 with 20 `no_subject` ticks. opener-core now calls `experiment_producer.reservation_offer` before it starts an issue. The producer takes one at the design rate (a token bucket at `ORCH_EXPERIMENT_RATE_PER_DAY`, at most `DAILY_CAP` banked), only when the issue has acceptance criteria and at least two seats pace `ok`, and records it. The opener labels it `experiment:reserved` and holds it for `RESERVE_HOLD_SECONDS` (3 h). The research feed accepts it as an ordinary subject, `choose_subject` prefers it, and its launch skips the Bernoulli draw because the token was the draw (pacing and the daily cap still apply). A reservation not launched in time is released by the opener, which then starts the issue normally, so the hold always drains. This is a rail change to the producer's intake only: selection stays deterministic and the router is untouched.
 
 Released unowned feed issues retain the existing claim, fresh subject read, production
 reservation and per-issue cooldown gates. With probability 0.5 the oldest forum item
