@@ -7,6 +7,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
+const { execFile } = require('node:child_process');
+const { promisify } = require('node:util');
 const { buildVerifierContext } = require('../.github/scripts/agents_verifier_context.js');
 
 const head = 'b'.repeat(40), merge = 'c'.repeat(40), base = 'a'.repeat(40);
@@ -205,5 +207,68 @@ test('CSV canary native verifier attempts require retained recovery, not another
     attempts.add(state.run_id);
   }
   assert.deepEqual([...attempts].sort(), ['42141057834', '42142328293', '42142641060']);
+  assert.equal(JSON.stringify(readback), before, 'native evidence must remain unchanged');
+});
+
+test('merged CSV canary acknowledgment does not substitute for stored corrective custody',async()=>{
+  const root = path.resolve(__dirname, '..');
+  const readback = require('../docs/verification/issue-1184-acceptance-20261111/round4/native-readback.json');
+  const before = JSON.stringify(readback);
+  const corrective = readback.pull_requests.find(pr => pr.number === 1168);
+  const acknowledgment = readback.publication_acknowledgments[0];
+  assert.equal(corrective.merged, true);
+  assert.equal(acknowledgment.author, 'stranske');
+  assert.equal(acknowledgment.url, 'https://github.com/stranske/Orchestrator/pull/1168#issuecomment-6670373009');
+  assert.ok(acknowledgment.body.startsWith(
+    `<!-- closer-core/v1 action=merge target=stranske/Orchestrator#1168 head=${corrective.head_sha} `,
+  ));
+  // Run the real fixture reader against retained native records. No producer
+  // record, terminal reference or decision is invented to fill the custody gap.
+  const python = fs.existsSync('/opt/anaconda3/bin/python3') && !process.env.VIRTUAL_ENV
+    ? '/opt/anaconda3/bin/python3' : 'python3';
+  const program = `
+import importlib.util
+import json
+from pathlib import Path
+
+root = Path.cwd()
+spec = importlib.util.spec_from_file_location(
+    "csv_custody_regression",
+    root / "tests/fixtures/closer_real_csv_canary/v1/verify_csv_contract.py",
+)
+reader = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(reader)
+readback = json.loads((root / "docs/verification/issue-1184-acceptance-20261111/round4/native-readback.json").read_text())
+records = [dict(pr, kind="pr", name=str(pr["number"]),
+                merge_sha=pr["merge_commit_sha"])
+           for pr in readback["pull_requests"] if pr["number"] in (1168, 989)]
+corrective = next(pr for pr in records if pr["number"] == 1168)
+comments = readback["verifier_events"] + readback["publication_acknowledgments"]
+events = [event for comment in comments for event in reader._events_from_comment(
+    comment, 1168, corrective["head_sha"], corrective["merge_sha"])]
+assessment = reader._assess(events, comments, records, corrective["head_sha"])
+report, status = reader._format_report(assessment, corrective["head_sha"], None)
+print(json.dumps(dict(status=status, report=report, events=len(events),
+    merged=assessment["corrective_pr"]["merged"],
+    publication=assessment["publication"], owned_publication=assessment["owned_publication"],
+    unlabeled=assessment["unlabeled"])))
+`;
+  const result = await promisify(execFile)(python, ['-I', '-c', program], {
+    cwd:root, encoding:'utf8', timeout:30000,
+  });
+  assert.equal(result.stderr, '');
+  const measured = JSON.parse(result.stdout);
+  assert.equal(measured.events, 6, 'all exact-head native states must be admitted before rejection');
+  assert.equal(measured.merged, true);
+  assert.deepEqual(measured.unlabeled, [], 'unrelated labeling must not cause rejection');
+  assert.equal(measured.status, 2);
+  assert.equal(measured.publication, false);
+  assert.equal(measured.owned_publication, false);
+  assert.match(measured.report, /native_verify_for_corrective_head: MISSING/);
+  assert.match(measured.report, /closer_publication_proof_for_corrective_head: MISSING/);
+  assert.match(measured.report, /owned_delivery_publication: MISSING/);
+  assert.match(measured.report, /corrective_pr_merged: yes/);
+  assert.match(measured.report, /completion: evidence incomplete/);
+  assert.doesNotMatch(measured.report, /PR 1168 is unmerged/);
   assert.equal(JSON.stringify(readback), before, 'native evidence must remain unchanged');
 });
