@@ -246,11 +246,6 @@ def test_keepalive_supervisor_hermetic_closure_and_offline_paths(monkeypatch, tm
 
 
 def test_panel_adjudication_recording_and_cli_paths(monkeypatch, tmp_path, capsys):
-    import json
-    from unittest.mock import MagicMock
-    import runtime_ac_panel as panel
-    import runtime_ac
-
     spec = runtime_ac._valid_spec()
     gate = runtime_ac.evaluate_results(spec, {"check_results": panel._all_check_results(spec)})
 
@@ -270,7 +265,9 @@ def test_panel_adjudication_recording_and_cli_paths(monkeypatch, tmp_path, capsy
 
     monkeypatch.setattr(feedback, "record_outcome", mock_record_outcome)
     monkeypatch.setattr(feedback, "record_evidence_gap", mock_record_evidence_gap)
-    monkeypatch.setattr(feedback, "record_evidence_type_citations", mock_record_evidence_type_citations)
+    monkeypatch.setattr(
+        feedback, "record_evidence_type_citations", mock_record_evidence_type_citations
+    )
 
     reviews_pass = {
         "reviews": [
@@ -327,18 +324,43 @@ def test_panel_adjudication_recording_and_cli_paths(monkeypatch, tmp_path, capsy
     gate_file.write_text(json.dumps(gate))
     reviews_file.write_text(json.dumps(reviews_pass))
 
-    sys.argv = ["runtime_ac_panel", "--adjudicate", str(spec_file), "--gate", str(gate_file), "--reviews", str(reviews_file)]
+    sys.argv = [
+        "runtime_ac_panel",
+        "--adjudicate",
+        str(spec_file),
+        "--gate",
+        str(gate_file),
+        "--reviews",
+        str(reviews_file),
+    ]
     try:
-        result = panel.main(["--adjudicate", str(spec_file), "--gate", str(gate_file), "--reviews", str(reviews_file)])
+        result = panel.main(
+            [
+                "--adjudicate",
+                str(spec_file),
+                "--gate",
+                str(gate_file),
+                "--reviews",
+                str(reviews_file),
+            ]
+        )
         assert result == 0
     except SystemExit as e:
         assert e.code == 0
 
     capsys.readouterr()
 
-    sys.argv = ["runtime_ac_panel", "--prompt", str(spec_file), "--gate", str(gate_file)]
+    sys.argv = [
+        "runtime_ac_panel",
+        "--prompt",
+        str(spec_file),
+        "--gate",
+        str(gate_file),
+    ]
     try:
-        result = panel.main(["--prompt", str(spec_file), "--gate", str(gate_file), "--reviewer", "test-reviewer"])
+        result = panel.main(
+            ["--prompt", str(spec_file), "--gate", str(gate_file), "--reviewer", "test-reviewer"]
+        )
         assert result == 0
     except SystemExit as e:
         assert e.code == 0
@@ -349,18 +371,28 @@ def test_panel_adjudication_recording_and_cli_paths(monkeypatch, tmp_path, capsy
     def fake_offload(agent, prompt, **kwargs):
         return {"agent": agent, "exit": 0, "output": '{"verdict":"PASS"}'}
 
-    monkeypatch.setattr(panel, "dispatch_reviewers", lambda *args, **kwargs: {
-        "review_doc": reviews_pass,
-        "dispatches": [{"agent": "vibe", "parsed": True}]
-    })
+    monkeypatch.setattr(
+        panel,
+        "dispatch_reviewers",
+        lambda *args, **kwargs: {
+            "review_doc": reviews_pass,
+            "dispatches": [{"agent": "vibe", "parsed": True}],
+        },
+    )
 
     try:
-        result = panel.main([
-            "--dispatch", str(spec_file),
-            "--gate", str(gate_file),
-            "--reviewers", "vibe",
-            "--record-run-id", run_id,
-        ])
+        result = panel.main(
+            [
+                "--dispatch",
+                str(spec_file),
+                "--gate",
+                str(gate_file),
+                "--reviewers",
+                "vibe",
+                "--record-run-id",
+                run_id,
+            ]
+        )
         assert result == 0
     except SystemExit as e:
         assert e.code == 0
@@ -369,9 +401,6 @@ def test_panel_adjudication_recording_and_cli_paths(monkeypatch, tmp_path, capsy
 
 
 def test_runtime_ac_panel_coerce_reviews_and_edge_cases(monkeypatch):
-    import runtime_ac_panel as panel
-    import runtime_ac
-
     spec = runtime_ac._valid_spec()
     gate = runtime_ac.evaluate_results(spec, {"check_results": panel._all_check_results(spec)})
 
@@ -400,9 +429,6 @@ def test_runtime_ac_panel_coerce_reviews_and_edge_cases(monkeypatch):
 
 
 def test_relearn_report_build_report_and_ordering(monkeypatch):
-    import json
-    import relearn_report
-
     monkeypatch.setattr(relearn_report, "_role_priors_from_registry", lambda _priors: {})
 
     report = {
@@ -462,9 +488,6 @@ def test_relearn_report_build_report_and_ordering(monkeypatch):
 
 
 def test_keepalive_supervisor_plan_target_and_closure(monkeypatch, tmp_path):
-    import json
-    import keepalive_supervisor as supervisor
-
     signals = {
         "target": "stranske/Orchestrator#1234",
         "pr_state": "open",
