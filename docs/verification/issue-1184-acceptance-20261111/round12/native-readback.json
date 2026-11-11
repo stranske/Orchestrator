@@ -1,0 +1,65 @@
+{
+  "source": "GitHub connector native GET, 2026-11-11",
+  "pull_requests": [
+    {
+      "number": 1168,
+      "url": "https://github.com/stranske/Orchestrator/pull/1168",
+      "state": "closed",
+      "merged": true,
+      "draft": false,
+      "head_sha": "01e86ae7e4ef0e6a06193c916c8c780ca5cab052",
+      "merge_commit_sha": "a30b34ada04a30d04360867e14097a8c5b6d731c",
+      "updated_at": "2026-11-06T01:19:53Z"
+    }
+  ],
+  "comment_count": 51,
+  "verifier_events": [
+    {
+      "url": "https://github.com/stranske/Orchestrator/pull/1168#issuecomment-6673798353",
+      "author": "github-actions[bot]",
+      "body": "<!-- verifier-event-state/v1 {\"schema\":\"verifier-event-state/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"1168\",\"head_sha\":\"01e86ae7e4ef0e6a06193c916c8c780ca5cab052\",\"evaluated_sha\":\"a30b34ada04a30d04360867e14097a8c5b6d731c\",\"run_id\":\"42141057834\",\"run_attempt\":\"1\",\"status\":\"pending\",\"verification_event\":{\"schema\":\"verification-event/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"1168\",\"head_sha\":\"01e86ae7e4ef0e6a06193c916c8c780ca5cab052\",\"evaluated_sha\":\"a30b34ada04a30d04360867e14097a8c5b6d731c\",\"request_sha256\":\"65c87a493c35cc5c448fdc6ede6020633a89d9ab8e78fd2b23575661ee67760f\",\"material_sha256\":\"b1c469527d717ff997624642492f1ea92986f60786815cc2996cc62d7fbebafd\",\"event_id\":\"2e1928066ac3b01f9d19c425fe29844062d54c335f922144a7b4e23511619b8d\"},\"assessment_identity\":{\"mode\":\"evaluate\",\"provider\":\"\",\"model\":\"\",\"model2\":\"\",\"canonical\":true},\"execution_binding\":{\"schema\":\"verifier-execution-binding/v1\",\"workflow_path\":\".github/workflows/agents-verifier.yml\",\"job_name\":\"Run post-merge verifier\",\"pending_step\":\"Record verification event pending\",\"evaluator_step\":\"Run LLM evaluation\"}} -->"
+    },
+    {
+      "url": "https://github.com/stranske/Orchestrator/pull/1168#issuecomment-6673821163",
+      "author": "github-actions[bot]",
+      "body": "<!-- verifier-event-state/v1 {\"schema\":\"verifier-event-state/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"1168\",\"head_sha\":\"01e86ae7e4ef0e6a06193c916c8c780ca5cab052\",\"evaluated_sha\":\"a30b34ada04a30d04360867e14097a8c5b6d731c\",\"run_id\":\"42141057834\",\"run_attempt\":\"1\",\"status\":\"incomplete\",\"failure_cause\":\"retained_provider_evaluation\",\"retry_kind\":\"recover_existing_evaluation\",\"retryable\":false,\"verification_event\":{\"schema\":\"verification-event/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"1168\",\"head_sha\":\"01e86ae7e4ef0e6a06193c916c8c780ca5cab052\",\"evaluated_sha\":\"a30b34ada04a30d04360867e14097a8c5b6d731c\",\"request_sha256\":\"65c87a493c35cc5c448fdc6ede6020633a89d9ab8e78fd2b23575661ee67760f\",\"material_sha256\":\"b1c469527d717ff997624642492f1ea92986f60786815cc2996cc62d7fbebafd\",\"event_id\":\"2e1928066ac3b01f9d19c425fe29844062d54c335f922144a7b4e23511619b8d\"},\"assessment_identity\":{\"mode\":\"evaluate\",\"provider\":\"\",\"model\":\"\",\"model2\":\"\",\"canonical\":true}} -->"
+    },
+    {
+      "url": "https://github.com/stranske/Orchestrator/pull/1168#issuecomment-6673960665",
+      "author": "github-actions[bot]",
+      "body": "<!-- verifier-event-state/v1 {\"schema\":\"verifier-event-state/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"1168\",\"head_sha\":\"01e86ae7e4ef0e6a06193c916c8c780ca5cab052\",\"evaluated_sha\":\"a30b34ada04a30d04360867e14097a8c5b6d731c\",\"run_id\":\"42142328293\",\"run_attempt\":\"1\",\"status\":\"pending\",\"verification_event\":{\"schema\":\"verification-event/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"1168\",\"head_sha\":\"01e86ae7e4ef0e6a06193c916c8c780ca5cab052\",\"evaluated_sha\":\"a30b34ada04a30d04360867e14097a8c5b6d731c\",\"request_sha256\":\"65c87a493c35cc5c448fdc6ede6020633a89d9ab8e78fd2b23575661ee67760f\",\"material_sha256\":\"b1c469527d717ff997624642492f1ea92986f60786815cc2996cc62d7fbebafd\",\"event_id\":\"2e1928066ac3b01f9d19c425fe29844062d54c335f922144a7b4e23511619b8d\"},\"assessment_identity\":{\"mode\":\"evaluate\",\"provider\":\"\",\"model\":\"\",\"model2\":\"\",\"canonical\":true},\"execution_binding\":{\"schema\":\"verifier-execution-binding/v1\",\"workflow_path\":\".github/workflows/agents-verifier.yml\",\"job_name\":\"Run post-merge verifier\",\"pending_step\":\"Record verification event pending\",\"evaluator_step\":\"Run LLM evaluation\",\"retained_revalidation\":true},\"retained_revalidation\":{\"schema\":\"retained-revalidation/v1\",\"recovery_key\":\"d2ea76b6d6cc135a6f91a5b763629e038bf2cd9e398ca704d26d011ed1d02053\",\"source_run_id\":\"42141057834\",\"source_run_attempt\":\"1\",\"artifact_id\":13468410186}} -->"
+    },
+    {
+      "url": "https://github.com/stranske/Orchestrator/pull/1168#issuecomment-6673968504",
+      "author": "github-actions[bot]",
+      "body": "<!-- verifier-event-state/v1 {\"schema\":\"verifier-event-state/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"1168\",\"head_sha\":\"01e86ae7e4ef0e6a06193c916c8c780ca5cab052\",\"evaluated_sha\":\"a30b34ada04a30d04360867e14097a8c5b6d731c\",\"run_id\":\"42142328293\",\"run_attempt\":\"1\",\"status\":\"incomplete\",\"failure_cause\":\"retained_revalidation_before_publication\",\"retained_revalidation\":{\"artifact_id\":13468410186,\"provider_generation_performed\":false,\"publication_effect\":\"none\",\"recovery_key\":\"d2ea76b6d6cc135a6f91a5b763629e038bf2cd9e398ca704d26d011ed1d02053\",\"schema\":\"retained-revalidation/v1\",\"source_run_attempt\":\"1\",\"source_run_id\":\"42141057834\"},\"retry_kind\":\"known_no_evaluation\",\"retryable\":true,\"verification_event\":{\"schema\":\"verification-event/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"1168\",\"head_sha\":\"01e86ae7e4ef0e6a06193c916c8c780ca5cab052\",\"evaluated_sha\":\"a30b34ada04a30d04360867e14097a8c5b6d731c\",\"request_sha256\":\"65c87a493c35cc5c448fdc6ede6020633a89d9ab8e78fd2b23575661ee67760f\",\"material_sha256\":\"b1c469527d717ff997624642492f1ea92986f60786815cc2996cc62d7fbebafd\",\"event_id\":\"2e1928066ac3b01f9d19c425fe29844062d54c335f922144a7b4e23511619b8d\"},\"assessment_identity\":{\"mode\":\"evaluate\",\"provider\":\"\",\"model\":\"\",\"model2\":\"\",\"canonical\":true}} -->"
+    },
+    {
+      "url": "https://github.com/stranske/Orchestrator/pull/1168#issuecomment-6674004607",
+      "author": "github-actions[bot]",
+      "body": "<!-- verifier-event-state/v1 {\"schema\":\"verifier-event-state/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"1168\",\"head_sha\":\"01e86ae7e4ef0e6a06193c916c8c780ca5cab052\",\"evaluated_sha\":\"a30b34ada04a30d04360867e14097a8c5b6d731c\",\"run_id\":\"42142641060\",\"run_attempt\":\"1\",\"status\":\"pending\",\"verification_event\":{\"schema\":\"verification-event/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"1168\",\"head_sha\":\"01e86ae7e4ef0e6a06193c916c8c780ca5cab052\",\"evaluated_sha\":\"a30b34ada04a30d04360867e14097a8c5b6d731c\",\"request_sha256\":\"65c87a493c35cc5c448fdc6ede6020633a89d9ab8e78fd2b23575661ee67760f\",\"material_sha256\":\"b1c469527d717ff997624642492f1ea92986f60786815cc2996cc62d7fbebafd\",\"event_id\":\"2e1928066ac3b01f9d19c425fe29844062d54c335f922144a7b4e23511619b8d\"},\"assessment_identity\":{\"mode\":\"compare\",\"provider\":\"\",\"model\":\"\",\"model2\":\"\",\"canonical\":true},\"execution_binding\":{\"schema\":\"verifier-execution-binding/v1\",\"workflow_path\":\".github/workflows/agents-verifier.yml\",\"job_name\":\"Run post-merge verifier\",\"pending_step\":\"Record verification event pending\",\"evaluator_step\":\"Run multi-provider comparison\"}} -->"
+    },
+    {
+      "url": "https://github.com/stranske/Orchestrator/pull/1168#issuecomment-6674054696",
+      "author": "github-actions[bot]",
+      "body": "<!-- verifier-event-state/v1 {\"schema\":\"verifier-event-state/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"1168\",\"head_sha\":\"01e86ae7e4ef0e6a06193c916c8c780ca5cab052\",\"evaluated_sha\":\"a30b34ada04a30d04360867e14097a8c5b6d731c\",\"run_id\":\"42142641060\",\"run_attempt\":\"1\",\"status\":\"incomplete\",\"failure_cause\":\"retained_provider_evaluation\",\"retry_kind\":\"recover_existing_evaluation\",\"retryable\":false,\"verification_event\":{\"schema\":\"verification-event/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"1168\",\"head_sha\":\"01e86ae7e4ef0e6a06193c916c8c780ca5cab052\",\"evaluated_sha\":\"a30b34ada04a30d04360867e14097a8c5b6d731c\",\"request_sha256\":\"65c87a493c35cc5c448fdc6ede6020633a89d9ab8e78fd2b23575661ee67760f\",\"material_sha256\":\"b1c469527d717ff997624642492f1ea92986f60786815cc2996cc62d7fbebafd\",\"event_id\":\"2e1928066ac3b01f9d19c425fe29844062d54c335f922144a7b4e23511619b8d\"},\"assessment_identity\":{\"mode\":\"compare\",\"provider\":\"\",\"model\":\"\",\"model2\":\"\",\"canonical\":true}} -->"
+    }
+  ],
+  "terminal_corpus_markers": [],
+  "current_pr": {
+    "number": 1348,
+    "url": "https://github.com/stranske/Orchestrator/pull/1348",
+    "state": "open",
+    "merged": false,
+    "draft": false,
+    "head_sha": "8d47bb8bec32d12267cb64f98652d5958c4b3ca2",
+    "merge_commit_sha": "2f65b32b48e6c52f3f22feadc27df1f51613e1e5",
+    "updated_at": "2026-11-11T21:10:23Z"
+  },
+  "observed_limitations": [
+    "GitHub CLI API read fails: error connecting to api.github.com",
+    "Existing dispatched-seat guard refuses production workflow dispatch on main; no bypass attempted",
+    "Download connector supplied a remote artifact reference; archive bytes were not authenticated in this run",
+    "Native corrective publication result and coding_terminal_reference remain unavailable"
+  ]
+}

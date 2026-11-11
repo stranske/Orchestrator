@@ -1,0 +1,38 @@
+[
+  {
+    "check": "corrected-contract",
+    "argv": [
+      "/opt/anaconda3/bin/python3",
+      "/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__1348__closer/tests/fixtures/closer_real_csv_canary/v1/verify_csv_contract.py"
+    ],
+    "exit_status": 0
+  },
+  {
+    "check": "partial-contract",
+    "argv": [
+      "/opt/anaconda3/bin/python3",
+      "/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/issue1184-partial-f84w8enr/canary/verify_csv_contract.py"
+    ],
+    "exit_status": 1
+  },
+  {
+    "check": "chain-evidence",
+    "argv": [
+      "/opt/anaconda3/bin/python3",
+      "/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__1348__closer/tests/fixtures/closer_real_csv_canary/v1/verify_csv_contract.py",
+      "--chain-evidence"
+    ],
+    "exit_status": 0
+  },
+  {
+    "check": "focused-regression",
+    "argv": [
+      "/opt/anaconda3/bin/python3",
+      "-m",
+      "pytest",
+      "-q",
+      "tests/test_closer_csv_canary_contract.py"
+    ],
+    "exit_status": 0
+  }
+]
