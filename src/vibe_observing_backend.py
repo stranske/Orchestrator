@@ -48,7 +48,7 @@ EFFORT = "high"
 SERVER = "https://api.mistral.ai"
 API_BASE = SERVER + "/v1"
 ENDPOINT = API_BASE + "/chat/completions"
-PACKAGE = "/Users/teacher/.local/share/uv/tools/mistral-vibe/lib/python3.12/site-packages/"
+PACKAGE = "/Users/teacher/.local/share/uv/tools/mistral-vibe/lib/python3.14/site-packages/"
 AUDITED_SOURCES = {
     "vibe/core/llm/backend/mistral.py": "788fea10170a68bd70d8769066d56c1bce6d8820fd66e9e7236d43b0b551cf3a",
     "mistralai/client/chat.py": "9dd791daac83b51820aaea8fa23d8649806838f6157543b9f473d9c189121416",

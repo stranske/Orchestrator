@@ -403,17 +403,27 @@ def _gh_call(args: list[str], *, timeout_s: int = GH_TIMEOUT_S) -> tuple[bool, s
     """Run one `gh` invocation. Returns (ok, stdout, error_reason_for_unmeasured)."""
     if _GH_CALL_RUNNER is not None:
         return _GH_CALL_RUNNER(args, timeout_s=timeout_s)
-    cmd = ["gh", *args]
+    import sys
+
+    import github_api_observer
+
+    caller = sys._getframe(1)
     try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout_s,
-            check=False,
+        proc = github_api_observer.run_gh(
+            args,
+            timeout_s=timeout_s,
+            callsite={
+                "file": Path(caller.f_code.co_filename).name,
+                "function": caller.f_code.co_name,
+                "line": caller.f_lineno,
+            },
         )
     except subprocess.TimeoutExpired:
-        return False, "", f"unmeasured: gh timed out after {timeout_s}s ({' '.join(args[:4])})"
+        return (
+            False,
+            "",
+            f"unmeasured: gh timed out after {timeout_s}s ({github_api_observer.operation_name(args)})",
+        )
     except (OSError, subprocess.SubprocessError) as exc:
         return False, "", f"unmeasured: gh unavailable ({exc})"
     if proc.returncode != 0:
@@ -2489,9 +2499,16 @@ def comparative_routing_line(rep: dict) -> str:
         f"{agent} {value if value is not None else 'unmeasured'}"
         for agent, value in sorted({"codex": None, "claude": None, **result["lambda"]}.items())
     )
+    # Include route_enabled and reason if available
+    route_enabled = result.get("route_enabled")
+    route_reason = result.get("route_reason", "")
+    route_bit = (
+        f" route_enabled={route_enabled} ({route_reason})" if route_enabled is not None else ""
+    )
+    cd = result["classes_differing"] if result["status"] == "optimal" else "unmeasured"
     line = (
-        f"comparative routing: classes_differing {result['classes_differing'] if result['status'] == 'optimal' else 'unmeasured'} "
-        f"(window {result['window_days']}d), λ {prices or 'unmeasured'}, status {result['status']}"
+        f"comparative routing: classes_differing {cd} (window {result['window_days']}d), "
+        f"λ {prices or 'unmeasured'}, status {result['status']}{route_bit}"
     )
     if result["status"] != "optimal":
         line += " — unmeasured; " + "; ".join(result["reasons"])

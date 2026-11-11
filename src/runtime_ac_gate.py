@@ -531,6 +531,19 @@ def recheck_merged(
                 re.search(r"\b[1-9]\d* failed\b|\bFAILED \(failures=[1-9]\d*", output)
             )
 
+        def tests_skipped(row):
+            """A command whose test runner reports skipped or xfailed tests did not run its proof."""
+            if row.get("type") == "command":
+                source = row
+            elif row.get("type") == "deliberate_break":
+                # the break's green half runs the same named test on the merge; a skip there proves nothing
+                proof = _deliberate_break_proof(row)
+                source = (proof or {}).get("green") or {}
+            else:
+                return False
+            output = "\n".join(str(source.get(key) or "") for key in ("stdout_tail", "stderr_tail"))
+            return bool(SKIPPED_TESTS.search(output))
+
         def delivery_failed(row):
             if row.get("status") != "FAIL" or environment_mismatch(row):
                 return False
@@ -601,6 +614,7 @@ def recheck_merged(
             # UNRUNNABLE. The recheck's question is the named test on the merged tip; a gate
             # verdict other than PASS or that manual NEEDS_REVIEW still keeps it from PASS.
             and run["gate"]["verdict"] in {"PASS", "NEEDS_REVIEW"}
+            and not any(tests_skipped(r) for r in executable)
         ):
             result = "PASS"
         else:
@@ -623,6 +637,8 @@ def recheck_merged(
                 reason = "commands_disabled"
             elif any(hollow(r) for r in executable):
                 reason = "hollow_break"
+            elif any(tests_skipped(r) for r in executable):
+                reason = "tests_skipped"
             elif any(environment_mismatch(r) for r in executable):
                 reason = "environment_mismatch"
             else:
@@ -813,9 +829,10 @@ def env_int(env: Mapping[str, Any], name: str, default: int) -> int:
 
 
 POST_MERGE_COMMANDS_FLAG = "ORCH_RUNTIME_AC_POST_MERGE_COMMANDS"
-# Two of these are about the SPEC or the delivery and are said on the issue: `manual_only` (no
-# executable check at all) and `hollow_break` (the deliberate break ran and the named test did not
-# fail on the broken base, so the test proves nothing). The other three are about the runner —
+# Three of these are about the SPEC or the delivery and are said on the issue: `manual_only` (no
+# executable check at all), `hollow_break` (the deliberate break ran and the named test did not
+# fail on the broken base, so the test proves nothing) and `tests_skipped` (the named test skipped
+# or xfailed, so it did not run its proof). The other three are about the runner —
 # `commands_disabled`, `tool_error`, `incomplete` (launcher, collection or invocation failures the
 # verdict already refuses to count) — and are recorded without a comment. An UNRUNNABLE with no
 # reason (rows written before this field) is unknown and is commented as before.
@@ -823,9 +840,19 @@ UNRUNNABLE_REASONS = (
     "commands_disabled",
     "manual_only",
     "hollow_break",
+    # A named acceptance test that SKIPPED (or xfailed) exited 0 and read as PASS. 2026-11-09:
+    # stranske/Workflows#4432 and Trend_Model_Project#6194 were closed as delivered from a bootstrap
+    # placeholder's head because their canary test skips when its CLI is absent; the criterion (a real
+    # pinned-CLI run, no skips) was never on main. A skipped test proves nothing about the delivery.
+    "tests_skipped",
     "tool_error",
     "incomplete",
     "environment_mismatch",
+)
+# pytest's summary ("1 passed, 2 skipped", "1 xfailed"), its -rs lines ("SKIPPED [1] ..."), and unittest's
+# "OK (skipped=2)". Deliberately not "deselected": -k/-m selection is the command's own choice.
+SKIPPED_TESTS = re.compile(
+    r"\b[1-9]\d* (?:skipped|xfailed)\b|^SKIPPED \[|\(skipped=[1-9]\d*\)", re.M
 )
 RUNNER_SIDE_UNRUNNABLE = frozenset(
     {"commands_disabled", "tool_error", "incomplete", "environment_mismatch"}

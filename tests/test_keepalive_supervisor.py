@@ -715,3 +715,14 @@ def test_close_gate_bounds_git_probe(tmp_path, monkeypatch):
             },
             SHA,
         )
+
+
+def test_close_never_closes_a_goal_drift_issue(tmp_path):
+    """The feature goals ledger owns goal-drift issues; a verified PR that mentions one must not close it."""
+    import feature_goals
+
+    pr, issue, calls, recorded, options = closure_fixture(tmp_path)
+    issue["labels"] = [{"name": feature_goals.GOAL_DRIFT_LABEL}]
+    assert supervisor.close_verified_issues(**options)["skips"] == {"source issue held": 1}
+    assert issue["state"] == "open" and not recorded
+    assert not any("PATCH" in call for call in calls)

@@ -1,0 +1,64 @@
+Check date: 2026-11-10T16:51:39.931673+00:00
+Source SHA: c12f08149f0973882979e46be5f4bdd129175a9f
+Runtime: /opt/anaconda3/bin/python3 (3.12.2 | packaged by conda-forge | (main, Feb 16 2024, 20:54:21) [Clang 16.0.6 ])
+Command (heredoc equivalent of executed -c payload):
+/opt/anaconda3/bin/python3 - <<'GATE_CHECK'
+import hashlib, json, pathlib, subprocess
+root = pathlib.Path("docs/verification/coverage-round-1182")
+targets = ["src/ccusage_reconcile.py", "src/exploration_collection.py", "src/observability_dashboard.py"]
+reports = {}
+for name in ["baseline-gate.json", "current-gate.json"]:
+    raw = (root / name).read_bytes()
+    reports[name] = json.loads(raw)
+    print(name, "sha256=" + hashlib.sha256(raw).hexdigest())
+    print("  meta:", json.dumps(reports[name]["meta"], sort_keys=True))
+    print("  repository statement denominator:", reports[name]["totals"]["num_statements"])
+base, current = reports.values()
+base_missing = current_missing = denominator = 0
+heads = ["643708a208b9303d94d51f74405176fb433eb78e", "e7f8daef8b9f12f2f5d5bb1900746253e4224381", "d715b7d9d1542f5952ba5ad0cf21123af62a6ec3", "c12f08149f0973882979e46be5f4bdd129175a9f"]
+for path in targets:
+    b, c = base["files"][path], current["files"][path]
+    assert b["summary"]["num_statements"] == c["summary"]["num_statements"], path
+    for entry in [b, c]:
+        assert len(entry["missing_lines"]) == len(set(entry["missing_lines"])) == entry["summary"]["missing_lines"], path
+        assert len(entry["executed_lines"]) == entry["summary"]["covered_lines"], path
+        assert not set(entry["missing_lines"]) & set(entry["executed_lines"]), path
+        assert len(entry["executed_lines"]) + len(entry["missing_lines"]) == entry["summary"]["num_statements"], path
+    blobs = [subprocess.check_output(["git", "rev-parse", h + ":" + path], text=True).strip() for h in heads]
+    assert len(set(blobs)) == 1, path
+    print(path, "statements=", b["summary"]["num_statements"], "baseline_missing=", len(b["missing_lines"]), "current_missing=", len(c["missing_lines"]), "reduction=", len(b["missing_lines"]) - len(c["missing_lines"]))
+    print("  identical source blob:", blobs[0], "at", ", ".join(heads))
+    denominator += b["summary"]["num_statements"]
+    base_missing += len(b["missing_lines"])
+    current_missing += len(c["missing_lines"])
+reduction = base_missing - current_missing
+shortfall = max(0, 180 - reduction)
+assert (denominator, base_missing, current_missing, reduction, shortfall) == (1314, 181, 12, 169, 11)
+assert base["meta"]["branch_coverage"] is current["meta"]["branch_coverage"] is False
+print("PASS: equal target statement denominators:", denominator)
+print("PASS: missing-line totals:", base_missing, "->", current_missing)
+print("PASS: statement reduction:", reduction, "; shortfall against 180:", shortfall)
+print("Whole-tree branch reduction: UNKNOWN (both artifacts have branch_coverage=false).")
+print("Repository-wide denominators differ; only the three byte-identical targets are comparable here.")
+GATE_CHECK
+
+baseline-gate.json sha256=a1e0d5ffa39b5c19182d67021156fedb42aea09b747003733184190692bff58f
+  meta: {"branch_coverage": false, "format": 3, "show_contexts": false, "timestamp": "2026-11-07T11:55:05.498568", "version": "7.17.2"}
+  repository statement denominator: 120428
+current-gate.json sha256=7001fa3dc475a4bc3f7931b76f0dc341522cf4ed641d0e23359659243532d5b4
+  meta: {"branch_coverage": false, "format": 3, "show_contexts": false, "timestamp": "2026-11-10T13:57:43.668421", "version": "7.17.2"}
+  repository statement denominator: 77928
+src/ccusage_reconcile.py statements= 285 baseline_missing= 60 current_missing= 7 reduction= 53
+  identical source blob: 06de41540b63dcb4a83e6250ba7e7c82552c78ae at 643708a208b9303d94d51f74405176fb433eb78e, e7f8daef8b9f12f2f5d5bb1900746253e4224381, d715b7d9d1542f5952ba5ad0cf21123af62a6ec3, c12f08149f0973882979e46be5f4bdd129175a9f
+src/exploration_collection.py statements= 331 baseline_missing= 60 current_missing= 0 reduction= 60
+  identical source blob: a911778bd0b175a4f0a022dc694c66528cc2143b at 643708a208b9303d94d51f74405176fb433eb78e, e7f8daef8b9f12f2f5d5bb1900746253e4224381, d715b7d9d1542f5952ba5ad0cf21123af62a6ec3, c12f08149f0973882979e46be5f4bdd129175a9f
+src/observability_dashboard.py statements= 698 baseline_missing= 61 current_missing= 5 reduction= 56
+  identical source blob: bfe390b0fd16db4941903a84cf7e6c5f3e42e385 at 643708a208b9303d94d51f74405176fb433eb78e, e7f8daef8b9f12f2f5d5bb1900746253e4224381, d715b7d9d1542f5952ba5ad0cf21123af62a6ec3, c12f08149f0973882979e46be5f4bdd129175a9f
+PASS: equal target statement denominators: 1314
+PASS: missing-line totals: 181 -> 12
+PASS: statement reduction: 169 ; shortfall against 180: 11
+Whole-tree branch reduction: UNKNOWN (both artifacts have branch_coverage=false).
+Repository-wide denominators differ; only the three byte-identical targets are comparable here.
+
+Exit code: 0
+Wall time: 0.244s

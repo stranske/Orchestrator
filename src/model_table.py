@@ -163,7 +163,7 @@ def _sync(source: Path) -> int:
 # BEGIN AGENT MODEL TABLE: byte-identical copy of stranske/Workflows .github/agents/model-table.json
 TABLE_JSON = r"""{
   "schema": "agent-model-table/v1",
-  "as_of": "2026-11-08",
+  "as_of": "2026-11-10",
   "purpose": "The ONE agent model table for hosted (GitHub Actions) and local (Orchestrator) agent runs: per provider, a pinned model per tier, a reasoning level per kind of work, the surfaces each agent runs on, and one fallback. Hosted runners read this file at run time from .workflows-lib (stranske/Workflows@workflows_ref). Orchestrator carries a byte-identical copy as TABLE_JSON in src/model_table.py; scripts/check_model_tables.py fails when the two disagree.",
   "change_rule": "Edit this file and merge it first, then copy it to stranske/Orchestrator in a paired PR with `python3 src/model_table.py --sync <this file>`. Codex execution_profiles in .github/agents/registry.yml must agree with work_kinds below (the drift check counts every disagreement).",
   "tiers": ["cheap", "mid", "full", "frontier"],
@@ -226,21 +226,22 @@ TABLE_JSON = r"""{
         "cheap": "gemini-3.8-flash-low",
         "mid": "gemini-3.8-flash-high",
         "full": "gemini-4-argon-high",
-        "frontier": "gemini-4-argon-high"
+        "frontier": "gemini-4-carbon-high"
       },
       "surface_models": {
         "hosted": {
-          "cheap": "gemini-3.5-flash",
-          "mid": "gemini-3.5-flash",
-          "full": "gemini-2.5-pro",
-          "frontier": "gemini-2.5-pro"
+          "cheap": "gemini-3.8-flash",
+          "mid": "gemini-3.8-flash",
+          "full": "gemini-4-argon",
+          "frontier": "gemini-4-argon"
         }
       },
       "surface_model_evidence": {
-        "hosted": "gemini-cli 0.64.0 standard flash/pro ids (packages/core/src/config/models.ts at v0.64.0, the models its `auto` alias routes between); Argon is served only through local agy. Not yet seen in a live hosted run: all 37 hosted runs 2026-11-01..08 stopped at the CLI workspace-trust refusal (exit 55) before any model call."
+        "hosted": "Gemini API ids for the models the fleet runs and evaluates (Gemini 3.8 Flash, Gemini 4 Argon), the same ids config/verifier_shadow.json calls on GEMINI_API_KEY. The API id carries no effort rung; local agy ids do. Corrected 2026-11-09: the first hosted ids (gemini-3.5-flash, gemini-2.5-pro) were copied from the gemini-cli built-in model list, which lags the fleet.",
+        "local": "Gemini 4 Carbon (announced 2026-10-28, Google's frontier model above Argon) is the local frontier tier from 2026-11-10: agy 1.5.5 advertises gemini-4-carbon-{low,medium,high} and the Orchestrator's agy answered a live call on each. full stays Argon until Carbon has its own pilot record. Hosted keeps Argon: Carbon is not reported on the public Gemini API."
       },
       "fallback": "gemini-3.8-flash-high",
-      "surface_fallbacks": {"hosted": "gemini-3.5-flash"},
+      "surface_fallbacks": {"hosted": "gemini-3.8-flash"},
       "effort": {"flag": "", "levels": [], "note": "local agy ids carry the effort rung in the model id; hosted gemini-cli has no effort flag"}
     },
     "cursor": {

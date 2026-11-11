@@ -230,6 +230,8 @@ offload to GitHub when local load would hurt performance. Two rails, no role:
   `ensure-keepalive-labels.sh` skips `agents:local-loop`; closer-core waits on a PR the loop owns while
   `local_loop.owns()` is true (active and ticked within 2 h), so a stopped loop never latches the PR.
   `local_loop.py status` prints pass number (a): looped PRs merged with >= 2 CI-feedback rounds.
+  Each status row also says what became of the PR (merged, closed unmerged, open), and the loop is a
+  value-chain monitor row (`local-loop`), so it stays watched after the pass queries' stop rules.
 
 ## The one rule: selection stays deterministic; judgment becomes agent-roles
 
@@ -806,7 +808,7 @@ dispatch lane: the file was last written 2026-09-17 with 0 issues, and every tic
 skipped when gh is deferred): open issues that are prioritised or ready, minus trackers, automated
 and sync issues, paused or in-progress ones, epic/cross-repo/mechanical ones, anything with an
 open PR, and anything `dispatcher._remote_skip_reason` refuses (`agents:paused`, any `agent:*`
-writer), with a count per reason; a repo it cannot read is named, never read as empty. The tick
+writer), with a count per reason; a repo it cannot read is named, never read as empty. One exception (2026-11-11, owner decision): an issue closer-core's park triage labelled `experiment:candidate` (agents tried it and did not converge) is eligible despite its `agents:paused`; the pause keeps the opener from repeating the same attempt, and a comparative experiment is the changed attempt. Any `agent:*` writer or lock still refuses it. The tick
 plans research from it only while it is under two hours old, and the TICK-PLAN line prints the
 research status beside its inputs and skip reasons. At launch the issue is re-read and refused if it
 is no longer open or has since been paused or given a writer, and the subject cooldown is per issue whatever arm set is proposed (Workflows#2710 was
@@ -822,13 +824,20 @@ a firing draw reserves a daily slot even if subsequent admission/launch fails, s
 cannot exceed the cap. Capacity skips consume their draw time rather than accumulating
 future launches. The diagnostic names blocking pools and coverage debt beside drainable cells.
 
+**Opener intake reservation (2026-11-11, owner decision).** The producer's subjects had to be open, unowned issues at the hourly tick when its draw fired, but opener-core starts most new issues within about an hour of filing, so trial 1 launched 4 of a designed ~42 and trial 2 launched 0 with 20 `no_subject` ticks. opener-core now calls `experiment_producer.reservation_offer` before it starts an issue. The producer takes one at the design rate (a token bucket at `ORCH_EXPERIMENT_RATE_PER_DAY`, at most `DAILY_CAP` banked), only when the issue has acceptance criteria and at least two seats pace `ok`, and records it. The opener labels it `experiment:reserved` and holds it for `RESERVE_HOLD_SECONDS` (3 h). The research feed accepts it as an ordinary subject, `choose_subject` prefers it, and its launch skips the Bernoulli draw because the token was the draw (pacing and the daily cap still apply). A reservation not launched in time is released by the opener, which then starts the issue normally, so the hold always drains. This is a rail change to the producer's intake only: selection stays deterministic and the router is untouched.
+
 Released unowned feed issues retain the existing claim, fresh subject read, production
 reservation and per-issue cooldown gates. With probability 0.5 the oldest forum item
 (`experiment:forum` or at least nine checkboxes) wins; otherwise cells older than 21 days
 come first, then age-weighted task classes and uniformly selected subjects. Arms are the
 incumbent in learned rank order and the stalest challenger; 25% add a distinct member/arm
-with the incumbent agent and a test-first brief. Shared-pool pacing must be `ok` for every
-arm. Only comparative evaluation evidence refreshes route-table coverage; ordinary merges
+with the incumbent agent and a test-first brief. Every arm's seat must be arm-eligible
+(`experiment_producer.arm_pacing`): pacing `ok`, or held back only by a projection (the #668
+pacing model's warn/shed, or gemini's local weekly soft budget). A real cutoff (an active,
+manual or unreadable 429/cooldown marker, failed auth, an unresolvable model, or a non-ok
+state with no projection behind it) keeps the seat out (owner, 2026-11-11). Of the router's
+backup seats only muse may field an arm (`EXPERIMENT_BACKUP_ARMS`), since its backup status
+waits on outcomes only experiments produce; aider, which bills pay-as-you-go, stays out. Only comparative evaluation evidence refreshes route-table coverage; ordinary merges
 do not. Model-version canaries remain follow-up work.
 
 The frozen issue body and its hash are written before member launch. Missing or changed
@@ -1256,6 +1265,10 @@ caller (`docs/MIRROR_SYNC_PATCH.md`). (No stage, component or surface moved; the
 unchanged.)
 
 `closer-core` is declared wired: switch review reads its latest round's fleet-plus-scope demand, windowed nonempty rounds and usable target dispositions, and its versioned `issue_closure` Brain outcomes; the external controller hook owns invocation and rollback.
+
+`local-loop` is declared wired the same way (2026-11-09): its situations are the PRs labelled `agents:local-loop` created in the window, read from GitHub and not from the loop, so a silent loop reads a break before invocation and never `no_situation`; invocation and usable come from its state files (PRs it ran a round on, PRs it finished); acted on, outcome and success are the Brain's `keepalive:<repo>#<n>:<agent>` runs for the finished PRs, classified by the one outcome classifier, so a finished PR closed unmerged is an outcome and never a success. One `invocation` heartbeat per applied tick; the external controller hook owns invocation and rollback.
+
+`opener-core` and `sync-core` are declared wired the same way as `closer-core` (2026-11-09), each read from its own round journal (`~/.codex/orchestrator/<core>/rounds.jsonl`) and never from GitHub, so the two rows add well under a second to switch review. An unread journal is unmeasured (`evidence UNKNOWN`), a readable one with no rounds in the window is a measured zero; never one sentinel for both. **opener-core:** situations are the issues its rounds considered plus the issues it started (so invocation is never above demand); invocation is issues started (`start`, `retry-start`, or still `starting`); usable is started issues with a linked PR (`pr-linked`, `already-pr_linked`; the core's own invite placeholder is not usable); acted on is those closer-core's rounds carried (the hand-off to the closer lane); outcome and success are closer-core's versioned `issue_closure` Brain rows for those issues by the one classifier (success: durable PASS), and a handed-over issue with no closure row yet is `open`. **sync-core:** situations are the generated sync PRs it observed (`not-a-sync-pr` is none); invocation is those it classified; usable excludes `error`, `waiting` and the `*-unavailable`/`unclassified` reads; acted on is a hand-off filed, a frozen refresh dispatched, or `ready-for-maint71`; outcome is an acted-on PR merged (`delivered` or `delivered-mismatch`), success is `delivered` (merged blobs verified identical on main), a closed-unmerged one is `nomerge`; a PR that merged with no sync-core action is printed beside the row and never counted as its outcome. Neither core records a ledger heartbeat yet (closer-core does, in `record_heartbeat`), so admission reports their heartbeat missing until the cores add one; the rows themselves need none.
 
 **And a binding is only half of layer 1: `CONSULT_SITES` is the other half, and nothing declared it
 until 2026-08-23.** `SURFACE_BINDINGS` says which capabilities a surface should be offered; nothing
@@ -1831,6 +1844,10 @@ In fractions/hour, `s = max(0, C − u) / max((T1 − t)/1h, 1)` and
 `w = min(1, span_h / BURN_WINDOW_HOURS)` and
 `ḃ_eff = w·ḃ_short + (1−w)·ḃ_period`; undefined short burn uses the period average.
 The target is `clamp(s / ḃ_eff, 0, 1)`, or 1 when effective burn is nonpositive.
+For `u < 0.5`, the target is at least 0.5 unless `span_h >= 6` and the measured
+projection `ũ > 1`. This floor applies to the target on every tick, so repeated
+short-history ticks cannot compound the movement cap into starvation. A prior
+below 0.5 still recovers by at most 0.25 per tick.
 Ticks compute this even at zero weight and limit changes to 0.25; actual exhaustion/latched
 quota failures force zero immediately. A source-only change keeps the prior weight within
 the same pool and period. Reports print budget, usable resets, all hourly rates, target,

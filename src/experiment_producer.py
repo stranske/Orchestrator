@@ -35,6 +35,15 @@ TRIAL_PASS_MERGED = 6
 PRODUCER_FOLLOWUP_DAYS = 30
 PRODUCER_LOCK_MAX_HOURS = 72
 TERMINAL_STATUSES = {"merged", "no_winner", "discarded", "expired", "member_pushed"}
+TRIAL_GENERATION = 2
+# Opener intake reservation (owner decision 2026-11-11). New issues were started within ~1 h of filing, before
+# the hourly feed saw them, so trial 2 launched 0 with 20 no_subject ticks. The opener now offers each issue it
+# is about to start; the producer takes one at the design rate (a token bucket at ORCH_EXPERIMENT_RATE_PER_DAY,
+# at most DAILY_CAP banked) and the opener holds it for RESERVE_HOLD_SECONDS. A reserved subject skips the
+# Bernoulli draw (its token was the draw); pacing and the daily cap still apply. A reservation the tick does not
+# launch in time is released by the opener, which then starts the issue normally: the hold always drains.
+RESERVED = "experiment:reserved"
+RESERVE_HOLD_SECONDS = 3 * 3600
 
 
 def state_path():
@@ -66,7 +75,9 @@ def locked_state():
         yield
 
 
-def draw(now, last_draw_ts, rate_per_day, launched_today, rng, *, pools=None, cells=()):
+def draw(
+    now, last_draw_ts, rate_per_day, launched_today, rng, *, pools=None, cells=(), force=False
+):
     """Bernoulli approximation to Poisson arrivals, bounded per UTC day.
 
     Pure when called alone. cadence_draw persists every draw, including pacing skips:
@@ -76,7 +87,8 @@ def draw(now, last_draw_ts, rate_per_day, launched_today, rng, *, pools=None, ce
     p = -math.expm1(-max(0, rate_per_day) * elapsed / 86400)
     debt = sum(c.get("age_days", math.inf) > COVERAGE_DAYS for c in cells)
     drainable = sum(
-        c.get("age_days", math.inf) > COVERAGE_DAYS and c.get("pacing", "unknown") == "ok"
+        c.get("age_days", math.inf) > COVERAGE_DAYS
+        and c.get("arm", c.get("pacing", "unknown")) == "ok"
         for c in cells
     )
     blocked = {k: v for k, v in (pools or {}).items() if v != "ok"}
@@ -89,11 +101,15 @@ def draw(now, last_draw_ts, rate_per_day, launched_today, rng, *, pools=None, ce
         return {"fire": False, "p": p, "reason": reason}
     if launched_today >= DAILY_CAP:
         return {"fire": False, "p": p, "reason": "daily_cap"}
+    if force:  # an opener reservation already spent this launch's token
+        return {"fire": True, "p": 1.0, "reason": "reserved"}
     fire = rng.random() < p
     return {"fire": fire, "p": p, "reason": "draw" if fire else "no_draw"}
 
 
-def cadence_draw(now, rate, rng, *, pools=None, cells=(), skip_reason=None, count_skip=True):
+def cadence_draw(
+    now, rate, rng, *, pools=None, cells=(), skip_reason=None, count_skip=True, force=False
+):
     with locked_state():
         state = read_state()
         day = time.strftime("%Y%m%d", time.gmtime(now))
@@ -109,6 +125,7 @@ def cadence_draw(now, rate, rng, *, pools=None, cells=(), skip_reason=None, coun
                 rng,
                 pools=pools,
                 cells=cells,
+                force=force,
             )
         )
         state.update(
@@ -123,6 +140,65 @@ def cadence_draw(now, rate, rng, *, pools=None, cells=(), skip_reason=None, coun
             reasons[result["reason"]] = reasons.get(result["reason"], 0) + 1
         save_state(state)
         return result
+
+
+def reservation_offer(target, body, *, now=None, rate_per_day=None, cap=None):
+    """The opener asks before starting an issue: should the producer take it instead?
+
+    Returns {"take": bool, "reason": str, "tokens": float}. A take spends one token and records the
+    reservation. Every refusal names why, so the opener's report shows the binding limit.
+    """
+    import capacity
+
+    now = time.time() if now is None else now
+    rate = float(
+        os.environ.get("ORCH_EXPERIMENT_RATE_PER_DAY", "2")
+        if rate_per_day is None
+        else rate_per_day
+    )
+    hold = trial_launch_hold(now)
+    if hold:
+        return {"take": False, "reason": "trial_hold", "tokens": 0.0}
+    if not (acceptance_criteria(body or "") or named_test_paths(body or "")):
+        return {"take": False, "reason": "no_named_test", "tokens": 0.0}
+    if cap is None:
+        try:
+            cap = json.loads(Path(capacity.OUT).read_text())
+        except (OSError, ValueError):
+            return {"take": False, "reason": "capacity_unreadable", "tokens": 0.0}
+    ok = sorted(a for a, s in arm_pacing(cap).items() if s == "ok")
+    if len(ok) < 2:
+        return {"take": False, "reason": f"pacing ok={len(ok)}", "tokens": 0.0}
+    with locked_state():
+        state = read_state()
+        day = time.strftime("%Y%m%d", time.gmtime(now))
+        if (state.get("launched_today", 0) if state.get("day") == day else 0) >= DAILY_CAP:
+            return {"take": False, "reason": "daily_cap", "tokens": 0.0}
+        last = float(state.get("reserve_ts") or now)
+        tokens = min(
+            float(DAILY_CAP),
+            float(state.get("reserve_tokens", 1.0)) + rate * max(0.0, now - last) / 86400,
+        )
+        reservations = {
+            k: v
+            for k, v in (state.get("reservations") or {}).items()
+            if now - float(v) < RESERVE_HOLD_SECONDS
+        }
+        if target in reservations:
+            return {"take": True, "reason": "already_reserved", "tokens": tokens}
+        take = tokens >= 1.0
+        if take:
+            tokens -= 1.0
+            reservations[target] = now
+        state.update(reserve_tokens=tokens, reserve_ts=now, reservations=reservations)
+        offers = state.setdefault("reserve_offers", {})
+        offers["taken" if take else "no_token"] = offers.get("taken" if take else "no_token", 0) + 1
+        save_state(state)
+        return {
+            "take": take,
+            "reason": "reserved" if take else "no_token",
+            "tokens": round(tokens, 3),
+        }
 
 
 def record_launch(now=None, *, test_source=None):
@@ -173,6 +249,9 @@ def record_skip(reason, *, target=None, now=None, test_class=None):
 def choose_subject(feed, forum, cells, rng):
     if not feed:
         return None
+    reserved = [i for i in feed if RESERVED in (i.get("labels") or [])]
+    if reserved:
+        return {"subject": min(reserved, key=lambda i: str(i.get("target"))), "reason": "reserved"}
     forum = [i for i in forum if i in feed]
     if forum and rng.random() < 0.5:
         return {"subject": min(forum, key=lambda i: i.get("created_at", "")), "reason": "forum"}
@@ -283,6 +362,49 @@ def trial_launch_hold(now=None):
     return None
 
 
+# Owner decision 2026-11-11 (experiments chip): an experiment arm may run on a seat that is held
+# back only by a PROJECTION -- the #668 pacing model's warn/shed, or gemini's local weekly soft
+# budget. Both leave real provider headroom (that day: claude 53% of its week used with 41% of the
+# week gone, projected "shed" from a 6h burn; gemini 592/280 estimated units with no 429). A REAL
+# cutoff still keeps the seat out: an active/manual/unreadable 429 or cooldown marker, failed auth,
+# an unresolvable model, or any non-ok state with no projection behind it (fail closed).
+PROJECTION_POLICIES = frozenset({"weekly-soft-cap"})
+CUTOFF_POLICIES = frozenset({"auth-failed", "model-unresolvable"})
+# Backup seats the producer may field as ARMS though routing never auto-selects them (owner
+# 2026-11-11). muse stays a backup "until measured outcomes earn it a prior", and experiments are
+# the only producer of those outcomes; excluding it here made that exit unreachable. aider stays
+# out: it bills pay-as-you-go.
+EXPERIMENT_BACKUP_ARMS = frozenset({"muse"})
+
+
+def _projection_only(row: dict) -> bool:
+    if row.get("policy") in CUTOFF_POLICIES:
+        return False
+    state = row.get("state")
+    pacing = row.get("pacing")
+    if isinstance(pacing, dict) and pacing.get("state") in {"warn", "shed"}:
+        if state == pacing["state"]:
+            return True
+    return state == "warn" and row.get("policy") in PROJECTION_POLICIES
+
+
+def arm_pacing(cap: dict) -> dict[str, str]:
+    """Per-seat arm eligibility: "ok", or the capacity.experiment_pacing state that keeps it out."""
+    import capacity
+
+    raw = capacity.experiment_pacing(cap)
+    rows = cap.get("agents") or {}
+    out = {}
+    for agent, state in raw.items():
+        if state == "ok":
+            out[agent] = "ok"
+            continue
+        marker = capacity.shed_marker(agent)
+        cut = marker is not None and marker["state"] != "expired" and not marker.get("tier_scope")
+        out[agent] = "ok" if not cut and _projection_only(rows.get(agent) or {}) else state
+    return out
+
+
 def build_plan(
     items, cap, *, learned, claimed_targets, excluded_targets, production_reserve, rng, conn=None
 ):
@@ -301,7 +423,12 @@ def build_plan(
             "producer_cells": [],
         }
 
-    spare = research_scheduler.spare_capacity(research_scheduler.capacity_state_from_snapshot(cap))
+    arm = arm_pacing(cap)
+    cap_state = research_scheduler.capacity_state_from_snapshot(cap)
+    for agent, row in cap_state.items():
+        if arm.get(agent) == "ok":
+            row["status"] = "ok"
+    spare = research_scheduler.spare_capacity(cap_state)
     skipped = []
     state = read_state()
     failed = (
@@ -341,23 +468,28 @@ def build_plan(
         in {
             entry["agent"] for entry in router.ROUTE_TABLE.get(c["task_type"], {}).get("agents", [])
         }
-        and c["agent"] not in router.BACKUP_AGENTS
+        and c["agent"] not in router.BACKUP_AGENTS - EXPERIMENT_BACKUP_ARMS
     ]
     pacing = capacity.experiment_pacing(cap)
     for c in cells:
         c["pacing"] = pacing.get(c["agent"], "unknown")
+        c["arm"] = arm.get(c["agent"], "unknown")
     feed_classes = {i.get("task_type", "implement") for i in eligible}
-    candidate_cells = [c for c in cells if c["pacing"] == "ok" and c["task_type"] in feed_classes]
+    candidate_cells = [c for c in cells if c["arm"] == "ok" and c["task_type"] in feed_classes]
     debt = sum(c.get("age_days", math.inf) > COVERAGE_DAYS for c in cells)
     drainable = sum(c.get("age_days", math.inf) > COVERAGE_DAYS for c in candidate_cells)
-    blocked = {a: p for a, p in pacing.items() if p != "ok"}
+    blocked = {a: p for a, p in arm.items() if p != "ok"}
     if blocked:
         reason = "pacing " + ", ".join(f"{a}={p}" for a, p in sorted(blocked.items()))
         print(f"{reason}; coverage debt {debt} cells > 21d, drainable {drainable}", file=sys.stderr)
         if not candidate_cells:
+            # Name the first break. With no cell in any feed class (no eligible subject, or no
+            # route cell for its class) pacing emptied nothing: the skip is no_subject. Reported
+            # as pacing it read as a capacity block while the feed was empty (2026-11-11, 6 ticks).
+            paced_out = any(c["task_type"] in feed_classes for c in cells)
             return {
                 "planned": [],
-                "skipped": skipped + [{"reason": reason}],
+                "skipped": skipped + [{"reason": reason if paced_out else "no_subject"}],
                 "candidates": [],
                 "producer_cells": cells,
             }
@@ -393,11 +525,8 @@ def build_plan(
     pools = {}
     for agent in selected:
         state = pacing.get(agent, "unknown")
-        if "=" in state:
-            pool, pool_state = state.split("=", 1)
-            pools[pool] = pool_state
-        else:
-            pools[agent] = state
+        pool, pool_state = state.split("=", 1) if "=" in state else (agent, state)
+        pools[pool] = "ok" if arm.get(agent) == "ok" else pool_state
     for agent, n in Counter(selected).items():
         if spare.get(agent, 0) - (production_reserve or {}).get(agent, 0) < n:
             pools[agent] = "production_reserve"
@@ -409,6 +538,7 @@ def build_plan(
         "producer_arms": arms,
         "trigger": choice["reason"],
         "pools": pools,
+        "projected": {a: pacing[a] for a in dict.fromkeys(selected) if pacing.get(a, "ok") != "ok"},
     }
     return {
         "planned": [job] if len(arms) >= 2 else [],
@@ -850,7 +980,67 @@ def trial_defaults(now=None, *, active=False):
     now = time.time() if now is None else now
     with locked_state():
         state = read_state()
-        if not state.get("trial_end") and active:
+        current_generation = state.get("trial_generation", 1)
+
+        # Check if we need to bump the generation
+        if current_generation < TRIAL_GENERATION and active:
+            # Archive old trial fields
+            previous_trials = state.setdefault("previous_trials", [])
+            old_trial = {
+                "trial_generation": current_generation,
+                "trial_start": state.get("trial_start"),
+                "trial_end": state.get("trial_end"),
+                "trial_verdict": state.get("trial_verdict"),
+                "trial_metrics": state.get("trial_metrics"),
+                "trial_unknown": state.get("trial_unknown"),
+                "trial_reason": state.get("trial_reason"),
+                "pending_since": state.get("pending_since"),
+                "resolves_on": state.get("resolves_on"),
+                "last_verdict_check": state.get("last_verdict_check"),
+                "launched_today": state.get("launched_today"),
+                "day": state.get("day"),
+                "last_draw_ts": state.get("last_draw_ts"),
+                "cells_fresh": state.get("cells_fresh"),
+                "cells_total": state.get("cells_total"),
+                "skips": state.get("skips"),
+            }
+            # Remove None values to avoid cluttering the archive
+            old_trial = {k: v for k, v in old_trial.items() if v is not None}
+            # Archive only a trial that existed: the generation tag alone is not a prior trial.
+            if set(old_trial) - {"trial_generation"}:
+                previous_trials.append(old_trial)
+            elif not previous_trials:
+                state.pop("previous_trials", None)
+
+            # Start fresh trial with same parameters
+            state.update(
+                trial_generation=TRIAL_GENERATION,
+                trial_start=now,
+                trial_end=time.strftime("%Y%m%d", time.gmtime(now + COVERAGE_DAYS * 86400)),
+            )
+            # Clear verdict to default ON by removing it
+            state.pop("trial_verdict", None)
+            # Clear state fields that should reset
+            state.pop("trial_metrics", None)
+            state.pop("trial_unknown", None)
+            state.pop("trial_reason", None)
+            state.pop("pending_since", None)
+            state.pop("resolves_on", None)
+            state.pop("last_verdict_check", None)
+            state.pop("launched_today", None)
+            state.pop("day", None)
+            state.pop("last_draw_ts", None)
+            state.pop("cells_fresh", None)
+            state.pop("cells_total", None)
+            state.pop("skips", None)
+
+            save_state(state)
+            print(
+                f"[experiment producer] generation bump from {current_generation} to {TRIAL_GENERATION}; "
+                f"trial end {state['trial_end']}",
+                file=sys.stderr,
+            )
+        elif not state.get("trial_end") and active:
             state.update(
                 trial_start=now,
                 trial_end=time.strftime("%Y%m%d", time.gmtime(now + COVERAGE_DAYS * 86400)),
@@ -866,8 +1056,10 @@ def trial_defaults(now=None, *, active=False):
 
 def _cached_verdict(state, now):
     # A terminal verdict is immutable, including when later GitHub reads would flake.
-    if state.get("trial_verdict") in {"pass", "fail"}:
-        return state["trial_verdict"]
+    # If trial_verdict is None (e.g., after generation bump), treat as pending
+    verdict = state.get("trial_verdict")
+    if verdict in {"pass", "fail"}:
+        return verdict
     if (
         not state.get("trial_start")
         or now < trial_window_end(state) + WINNER_MERGE_GRACE_DAYS * 86400

@@ -86,6 +86,23 @@ def _contains_explicit_resource_exhausted(text: str) -> bool:
     )
 
 
+def _contains_billing_refusal(text: str) -> bool:
+    """A provider refusing for SPEND (HTTP 402), in the harness's or the provider's own structure.
+
+    On 2026-11-11 Mistral answered every vibe run with `status: 402 Payment Required` and
+    `"type":"billing_vibe_budget_exhausted"` from at least 15:59Z. Nothing here recognized it, so no
+    incident or shed was recorded, the seat stayed `ok`, and the closer kept dispatching repairs
+    that died in six seconds (Workflows#4647, then #4637). Structure only, never prose: the
+    provider's JSON error type, or a line-anchored `status: 402` field that the same text also names
+    as a payment or budget refusal.
+    """
+    if re.search(r'(?i)"type"\s*:\s*"billing_[a-z0-9_]*(?:exhausted|exceeded)"', text):
+        return True
+    return bool(re.search(r"(?im)^\s*status(?:\s+code)?\s*[:=]\s*402\b", text)) and bool(
+        re.search(r"(?i)\bpayment\s+required\b|\bbudget\s+exhausted\b", text)
+    )
+
+
 def classify_provider_failure(text: str) -> tuple[str, str, str]:
     """Return an authoritative category only for explicit capacity evidence."""
     if not isinstance(text, str) or not text:
@@ -102,6 +119,8 @@ def classify_provider_failure(text: str) -> tuple[str, str, str]:
         for line in text.splitlines()
     ):
         return "quota", "quota_exhausted", "high"
+    if _contains_billing_refusal(text):
+        return "quota", "billing_exhausted", "high"
     if _contains_explicit_resource_exhausted(text):
         return "capacity", "resource_exhausted", "high"
     # A bare number is ordinary task prose (issue 429, 429 lines, 429 tests).
@@ -396,8 +415,12 @@ def stdout_carries_capacity_evidence(text: str) -> bool:
     """Whether successful stdout is explicit enough to include in failure classification."""
     if not isinstance(text, str) or not text:
         return False
-    return _contains_explicit_resource_exhausted(text) or bool(
-        re.search(r"(?im)^\s*ActionRequiredError\b[^\n]*(?:out of usage|quota exhausted)", text)
+    return (
+        _contains_explicit_resource_exhausted(text)
+        or _contains_billing_refusal(text)
+        or bool(
+            re.search(r"(?im)^\s*ActionRequiredError\b[^\n]*(?:out of usage|quota exhausted)", text)
+        )
     )
 
 
@@ -628,6 +651,49 @@ def _cooldown_seconds(category: str) -> int | None:
         return DEFAULT_COOLDOWN_S
 
 
+# Gemini's tiers draw two separate provider quotas: `full` runs the Argon family, cheap/mid run
+# Flash (adapters.MODEL_TIERS). An exhausted Argon quota must not stand Flash down with it: on
+# 2026-11-07 one Argon quota incident shed all of gemini for a week while Flash still answered.
+_INIT_MODEL = re.compile(r'"init"\s*:\s*\{[^{}]*?"model"\s*:\s*"([A-Za-z0-9._:-]+)"')
+
+
+def failed_model(agent: str, evidence: str) -> str | None:
+    """The model a failed gemini run asked for, from agy's own `init` event; None when absent."""
+    if agent != "gemini" or not evidence:
+        return None
+    found = _INIT_MODEL.findall(evidence)
+    return found[-1] if found else None
+
+
+def recorded_run_model(agent: str, run_id: str | None) -> str | None:
+    """The model the feedback DB recorded for a gemini run; None when unknown.
+
+    A quota refusal can arrive before agy prints its `init` event, so the evidence never names the
+    model (2026-11-09, Workflows#4515: `dispatch gemini/full`, refused at once). The run row was
+    written at dispatch and names what was asked for (`agy:gemini-4-argon-high`). If it is wrong,
+    the next refusal carries its own `init` model and widens the shed, never narrows it.
+    """
+    if agent != "gemini" or not run_id:
+        return None
+    try:
+        import feedback
+
+        uri = Path(feedback.DB_PATH).resolve().as_uri() + "?mode=ro"
+        with sqlite3.connect(uri, uri=True, timeout=2) as conn:
+            row = conn.execute(
+                "SELECT model FROM runs WHERE run_id=? ORDER BY ts DESC LIMIT 1", (run_id,)
+            ).fetchone()
+    except Exception:
+        return None
+    model = str(row[0] or "") if row else ""
+    return model.split(":", 1)[-1] or None
+
+
+def tier_scope_for(agent: str, model: str | None) -> str | None:
+    """`full` when only gemini's top tier (the Argon family) is exhausted; None sheds the whole seat."""
+    return "full" if agent == "gemini" and model and "argon" in model.lower() else None
+
+
 def ensure_shed(
     agent: str,
     *,
@@ -635,8 +701,14 @@ def ensure_shed(
     incident_id: str,
     expires_at: int | None = None,
     reset_at: int | None = None,
+    model: str | None = None,
+    tier_scope: str | None = None,
 ) -> bool:
-    """Write or extend one JSON marker without shortening an active shed."""
+    """Write or extend one JSON marker without shortening or narrowing an active shed.
+
+    A whole-seat marker (no `tier_scope`) is never narrowed to one tier while it is active; a
+    tier-scoped marker is widened to the whole seat when a whole-seat incident arrives.
+    """
     _ensure_paths()
     marker = SHED_DIR / agent
     lock_fd = _acquire_lock()
@@ -655,15 +727,24 @@ def ensure_shed(
                 or not math.isfinite(existing_expiry)
             ):
                 return True
-            if existing_expiry > time.time() and (
-                expires_at is None or expires_at <= existing_expiry
-            ):
-                return True
+            existing_scope = existing.get("tier_scope") if isinstance(existing, dict) else None
+            if existing_expiry > time.time():
+                if existing_scope is None and tier_scope is not None:
+                    return True  # an active whole-seat shed is never narrowed
+                widening = existing_scope is not None and tier_scope is None
+                if not widening and (expires_at is None or expires_at <= existing_expiry):
+                    return True
+                if widening and (expires_at is None or expires_at < existing_expiry):
+                    expires_at = int(existing_expiry)
         payload = {"created_at": int(time.time()), "category": category, "incident_id": incident_id}
         if expires_at is not None:
             payload["expires_at"] = expires_at
         if reset_at is not None:
             payload["reset_at"] = reset_at
+        if model is not None:
+            payload["model"] = model
+        if tier_scope is not None:
+            payload["tier_scope"] = tier_scope
         try:
             with tempfile.NamedTemporaryFile(
                 mode="w", encoding="utf-8", dir=SHED_DIR, prefix=f".{agent}.", delete=False
@@ -756,6 +837,7 @@ def record_incident(
     expires_at = timestamp + cooldown if cooldown is not None else None
     if reset_at is not None and expires_at is not None:
         expires_at = max(expires_at, reset_at)
+    model = failed_model(agent, evidence) or recorded_run_model(agent, run_id)
     shed_created = (
         ensure_shed(
             agent,
@@ -763,6 +845,10 @@ def record_incident(
             incident_id=incident_id,
             expires_at=expires_at,
             reset_at=reset_at,
+            model=model,
+            tier_scope=(
+                tier_scope_for(agent, model) if category in ("quota", "rate_limit") else None
+            ),
         )
         if shed
         else False

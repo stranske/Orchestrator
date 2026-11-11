@@ -1,0 +1,31 @@
+command: /opt/anaconda3/bin/python3 -m pytest tests/test_ccusage_reconcile.py::test_ccusage_reconcile_uses_loaded_sessions -q --no-cov
+exit: 1
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________________ test_ccusage_reconcile_uses_loaded_sessions __________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a665040>
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2212/test_ccusage_reconcile_uses_lo0')
+
+    def test_ccusage_reconcile_uses_loaded_sessions(monkeypatch, tmp_path):
+        calls = []
+    
+        def load_sessions(**kwargs):
+            calls.append(kwargs)
+            return [{"agent": "vibe", "period": "loaded-session"}], ["load err"]
+    
+        monkeypatch.setattr(ccusage, "_load_ccusage_sessions", load_sessions)
+        monkeypatch.setattr(ccusage.adapters, "LEDGER", tmp_path / "ledger.ndjson")
+        (tmp_path / "ledger.ndjson").write_text("")
+        out = ccusage.reconcile(dry_run=True, since_days=3, strict=True)
+>       assert "load err" in out["errors"]
+E       AssertionError: assert 'load err' in []
+
+tests/test_ccusage_reconcile.py:226: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_ccusage_reconcile.py::test_ccusage_reconcile_uses_loaded_sessions
+1 failed in 0.28s
+/opt/anaconda3/lib/python3.12/site-packages/pytest_asyncio/plugin.py:300: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the "fixture" caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to "function" scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))

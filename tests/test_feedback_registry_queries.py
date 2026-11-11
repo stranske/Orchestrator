@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import sqlite3
+from contextlib import closing
 
 import pytest
 
@@ -48,6 +50,30 @@ def test_snapshot_json_exports_initialized_tables_to_the_requested_path(tmp_path
     assert result["rows"]["runs"] == 1
     assert exported["runs"][0]["run_id"] == "snapshot"
     assert {"completion_events", "evidence_types", "routing_decisions_v2"} <= exported.keys()
+
+
+def test_assignment_migration_backfills_nulls_then_needs_no_write_lock():
+    for run_id, source in (("assigned", "keepalive"), ("experimental", "orchestrator_local")):
+        feedback.record_run(run_id, "owner/repo#3", "implement", "codex", source=source)
+    feedback.record_run("explicit", "owner/repo#4", "implement", "codex")
+    with closing(feedback._conn()) as conn, conn:
+        conn.execute("UPDATE runs SET assignment=NULL WHERE run_id != 'explicit'")
+        conn.execute("UPDATE runs SET assignment='custom' WHERE run_id='explicit'")
+    with closing(sqlite3.connect(feedback.DB_PATH)) as conn, conn:
+        feedback._migrate_schema(conn)
+        assert dict(conn.execute("SELECT run_id,assignment FROM runs")) == {
+            "assigned": "assigned",
+            "experimental": "experimental",
+            "explicit": "custom",
+        }
+    with closing(sqlite3.connect(feedback.DB_PATH)) as writer:
+        writer.execute("BEGIN IMMEDIATE")
+        try:
+            with closing(sqlite3.connect(feedback.DB_PATH, timeout=0.1)) as reader:
+                feedback._migrate_schema(reader)
+                assert not reader.in_transaction
+        finally:
+            writer.rollback()
 
 
 def test_evidence_registry_normalizes_citations_and_retires_unused_rows():

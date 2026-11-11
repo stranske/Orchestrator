@@ -828,7 +828,7 @@ def test_unevaluated_ids_and_round_identity_fail_closed_without_tables():
         def execute(self, *_args, **_kwargs):
             raise sqlite3.OperationalError("no runs table")
 
-    assert research_subjects.unevaluated_experiment_ids(Broken()) == set()
+    assert research_subjects.unevaluated_experiment_ids(Broken())["ids"] == set()
     empty = sqlite3.connect(":memory:")
     assert research_subjects.read_round_identity(empty, "missing") is None
     empty.close()

@@ -421,26 +421,324 @@ def _closer_core_outcomes(db: Path, since: int, now: int) -> dict[str, int] | No
                     (since, now),
                 )
             ]
-        classified = [(capability_effectiveness._classify(row), row) for row in rows]
-        classes = Counter(kind for kind, _ in classified)
-        return {
-            "acted_on": len(rows),
-            **{field: classes[kind] for kind, field in CLASS_FIELDS.items()},
-            "outcome_success": sum(
-                kind == "terminal"
-                and row["adjudicated_verdict"] == "PASS"
-                and row["durability"] == "durable"
-                and row["verifier_verdict"] not in feedback.VERIFIER_FAILURES
-                for kind, row in classified
-            ),
-        }
+        return _classified_outcomes(rows)
     except (OSError, sqlite3.Error):
         return None
+
+
+def _classified_outcomes(rows: list[dict[str, Any]]) -> dict[str, int]:
+    """acted_on, its outcome classes and the durable successes of Brain outcome rows, by the one classifier."""
+    classified = [(capability_effectiveness._classify(row), row) for row in rows]
+    classes = Counter(kind for kind, _ in classified)
+    return {
+        "acted_on": len(rows),
+        **{field: classes[kind] for kind, field in CLASS_FIELDS.items()},
+        "outcome_success": sum(
+            kind == "terminal"
+            and row["adjudicated_verdict"] == "PASS"
+            and row["durability"] == "durable"
+            and row["verifier_verdict"] not in feedback.VERIFIER_FAILURES
+            for kind, row in classified
+        ),
+    }
+
+
+def _local_loop_prs(gh_fn: Callable, since: int) -> list[str] | None:
+    """The local loop's situation population, read from GitHub and not from the loop: every PR labelled
+    `agents:local-loop` (a local start, opener-core) created in the window, whatever became of it. A PR the
+    loop never ticked still counts here, so a silent loop reads `not_invoked`, never `no_situation`. None on
+    any failed, errored or partial page."""
+    import local_loop  # noqa: PLC0415
+
+    day = datetime.fromtimestamp(since, timezone.utc).strftime("%Y-%m-%d")
+    q = f"is:pr label:{local_loop.LABEL} user:{local_loop.OWNER} created:>={day} {local_loop.search_scope()}"
+    out: list[str] = []
+    cursor = None
+    seen: set[str] = set()
+    while True:
+        after = ",after:" + json.dumps(cursor) if cursor else ""
+        query = (
+            "query {search(type:ISSUE,first:100,query:"
+            + json.dumps(q.strip())
+            + after
+            + "){pageInfo{hasNextPage endCursor}nodes{... on PullRequest{number repository{nameWithOwner}}}}}"
+        )
+        ok, raw, _err = gh_fn(["api", "graphql", "-f", "query=" + query])
+        if not ok:
+            return None
+        try:
+            data = json.loads(raw)
+            if data.get("errors"):
+                return None
+            connection = data["data"]["search"]
+            out += [
+                f"{n['repository']['nameWithOwner']}#{n['number']}"
+                for n in connection["nodes"]
+                if n and local_loop.included_repo(n["repository"]["nameWithOwner"])
+            ]
+            if not connection["pageInfo"]["hasNextPage"]:
+                return out
+            cursor = connection["pageInfo"]["endCursor"]
+            if not cursor or cursor in seen:
+                return None
+            seen.add(cursor)
+        except (KeyError, TypeError, ValueError):
+            return None
+
+
+def _local_loop_rounds(since: int, state_dir: Path | None = None) -> dict[str, list[str]] | None:
+    """The loop's own state (`local_loop.STATE_DIR`, resolved as closer-core's journal is): PRs it ran at least one round on, updated in the window
+    (invoked), and those it finished (`status` done: green, its tasks verified on that head: usable).
+    """
+    import local_loop  # noqa: PLC0415
+
+    try:
+        invoked, done = set(), set()
+        root = state_dir or Path(
+            os.environ.get("ORCH_LOCAL_LOOP_STATE", str(_state_dir() / "local-loop"))
+        )
+        for path in sorted(root.glob("*.json")):
+            st = json.loads(path.read_text())
+            target = st.get("target")
+            if not isinstance(target, str) or not local_loop.included_target(target):
+                continue
+            # the window is the PR's arrival (state created), as demand's is the PR's creation
+            if not st.get("rounds") or float(st.get("created") or 0) < since:
+                continue
+            invoked.add(target)
+            if st.get("status") == "done":
+                done.add(target)
+        return {"invoked": sorted(invoked), "done": sorted(done)}
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+
+
+def _local_loop_outcomes(db: Path, targets: list[str]) -> dict[str, int] | None:
+    """What became of the PRs the loop finished, from the Brain, classified as closer-core's outcomes are.
+
+    A loop round is a LOCAL dispatcher run (`<repo>_<n>-<agent>-<ns>`, mode local, target = the PR), not a
+    `keepalive:<repo>#<n>:<agent>` run: that id is hosted keepalive's. Reading only the keepalive id saw a
+    PR only when it had ALSO been through hosted keepalive (7 of 15 finished PRs on 2026-11-10, a partly
+    different 7 from those with graded local runs). One row per PR: its latest run that carries an
+    outcome, else its latest run. A finished PR with no run yet is not acted on.
+    """
+    try:
+        with sqlite3.connect(db.resolve().as_uri() + "?mode=ro", uri=True) as con:
+            con.row_factory = sqlite3.Row
+            rows = []
+            for target in targets:
+                row = con.execute(
+                    "SELECT r.run_id, o.adjudicated_verdict, o.verifier_verdict, o.durability, "
+                    "o.merged, o.failure_class FROM runs r LEFT JOIN outcomes o ON o.run_id=r.run_id "
+                    "WHERE r.target=? OR r.run_id GLOB ? "
+                    "ORDER BY (o.run_id IS NOT NULL) DESC, r.ts DESC LIMIT 1",
+                    (target, f"keepalive:{target}:*"),
+                ).fetchone()
+                if row is not None:
+                    rows.append(dict(row))
+        return _classified_outcomes(rows)
+    except (OSError, sqlite3.Error):
+        return None
+
+
+def _local_loop_situations(inputs: dict[str, Any]) -> int | None:
+    """Labelled PRs from GitHub, plus PRs the loop ran in the same window: a hand-off to hosted keepalive
+    removes `agents:local-loop`, and the PR it handed off was still a situation. Invocation is therefore
+    never above demand, and a loop whose only PR was handed off never reads no_situation."""
+    prs = inputs.get("local_loop_prs")
+    if prs is None:
+        return None
+    return len(set(prs) | set((inputs.get("local_loop") or {}).get("invoked") or ()))
+
+
+def _core_journal(path: Path, now: int) -> list[dict[str, Any]] | None:
+    """One external core's round journal (`~/.codex/orchestrator/<core>/rounds.jsonl`), the rounds in the
+    window. A missing or unreadable file, a malformed line, or a round without a list of item dicts is
+    None (unmeasured); a readable file with no rounds in the window is [] (a measured zero). Never one
+    sentinel for both."""
+    try:
+        rounds = []
+        for line in path.read_text().splitlines():
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            stamp = int(datetime.fromisoformat(row["ts"].replace("Z", "+00:00")).timestamp())
+            if not now - WINDOW_DAYS * 86400 <= stamp <= now:
+                continue
+            if not isinstance(row["items"], list) or any(
+                not isinstance(item, dict) for item in row["items"]
+            ):
+                return None
+            rounds.append(row)
+        return rounds
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
+# opener-core: a start (or the one retry), and a started issue still waiting for its PR. `starting` keeps
+# an issue started just before the window an invocation, so usable is never above invocation.
+OPENER_INVOKED_ACTIONS = frozenset({"start", "retry-start", "starting"})
+# A PR linked to the started issue: found by the watch, or re-observed from the core's own cache. An
+# invite PR (`invite-pr-opened`) is the core's own placeholder for a remote start, not the agent's work.
+OPENER_USABLE_ACTIONS = frozenset({"pr-linked", "already-pr_linked"})
+
+
+def _opener_core_rounds(now: int, path: Path | None = None) -> dict[str, list[str]] | None:
+    """opener-core's journal: the issues it considered (each round's candidate items, the ones with no
+    `phase`), the issues it started, and the started issues that got a linked PR. Situations are the
+    candidates plus the started issues, so invocation is never above demand."""
+    rounds = _core_journal(path or _state_dir() / "opener-core/rounds.jsonl", now)
+    if rounds is None:
+        return None
+    candidates, invoked, linked = set(), set(), set()
+    for row in rounds:
+        for item in row["items"]:
+            target = item.get("target")
+            if not isinstance(target, str) or not target:
+                continue
+            action = item.get("action")
+            if not item.get("phase"):
+                candidates.add(target)
+            if action in OPENER_INVOKED_ACTIONS:
+                invoked.add(target)
+            if action in OPENER_USABLE_ACTIONS:
+                linked.add(target)
+    return {
+        "demand": sorted(candidates | invoked),
+        "invoked": sorted(invoked),
+        "usable": sorted(linked & invoked),
+    }
+
+
+def _closer_core_targets(now: int, path: Path | None = None) -> list[str] | None:
+    """Every source issue closer-core's rounds in the window carried, whatever it did with it: the issues
+    the opener lane has handed over. None when the journal is unread."""
+    rounds = _core_journal(path or _state_dir() / "closer-core/rounds.jsonl", now)
+    if rounds is None:
+        return None
+    return sorted(
+        {
+            item["target"]
+            for row in rounds
+            for item in row["items"]
+            if isinstance(item.get("target"), str) and item["target"]
+        }
+    )
+
+
+def _opener_core_outcomes(
+    db: Path, since: int, now: int, targets: list[str]
+) -> dict[str, int] | None:
+    """What became of the issues opener-core handed to the closer lane: closer-core's versioned
+    `issue_closure` Brain rows for those issues (the rows `_closer_core_outcomes` counts), one per issue
+    (its latest), by the one classifier. `acted_on` is the handed-over issues, and the ones with no closure
+    row yet are `outcome_open`, so the split still partitions acted_on and the break reads waiting.
+    """
+    try:
+        rows: dict[str, dict[str, Any]] = {}
+        with sqlite3.connect(db.resolve().as_uri() + "?mode=ro", uri=True) as con:
+            con.row_factory = sqlite3.Row
+            for target in targets:
+                row = con.execute(
+                    "SELECT r.run_id, o.adjudicated_verdict, o.verifier_verdict, "
+                    "o.durability, o.merged, o.failure_class FROM runs r "
+                    "LEFT JOIN outcomes o ON o.run_id=r.run_id "
+                    "WHERE r.target=? AND r.run_id GLOB 'closer-core:*' "
+                    "AND r.task_type='issue_closure' "
+                    "AND r.source='orchestrator_local' AND r.mode='deterministic' "
+                    "AND r.ts BETWEEN ? AND ? AND EXISTS (SELECT 1 FROM completion_events ce "
+                    "WHERE ce.run_id=r.run_id AND ce.capability_id='closer-core' "
+                    "AND ce.capability_version_id IS NOT NULL AND ce.capability_version_id!='' "
+                    "AND ce.validation_status='accepted' AND ce.event_type='decision' "
+                    "AND ce.phase='decision') ORDER BY r.ts DESC LIMIT 1",
+                    (target, since, now),
+                ).fetchone()
+                if row is not None:
+                    rows[target] = dict(row)
+        counted = _classified_outcomes(list(rows.values()))
+        counted["acted_on"] = len(targets)
+        counted["outcome_open"] += len(targets) - len(rows)
+        return counted
+    except (OSError, sqlite3.Error):
+        return None
+
+
+# sync-core dispositions (sync_core.py): not a generated sync PR at all, so not its situation.
+SYNC_NOT_SITUATION = "not-a-sync-pr"
+# A classification nothing can act on: the read failed, or the checks are still running.
+SYNC_NOT_USABLE = frozenset(
+    {
+        "error",
+        "checks-unavailable",
+        "comparison-unavailable",
+        "verification-unavailable",
+        "unclassified",
+        "waiting",
+    }
+)
+# Merged, with its blobs compared on main: `delivered` (all match) or `delivered-mismatch`.
+SYNC_MERGED = frozenset({"delivered", "delivered-mismatch"})
+
+
+def _sync_core_rounds(now: int, path: Path | None = None) -> dict[str, int] | None:
+    """sync-core's journal, by unique sync PR. Demand: every generated sync PR it observed. Invocation:
+    those it classified. Usable: a classification something can act on. Acted on: a hand-off filed to
+    the finding's owner, a frozen refresh dispatched, or `ready-for-maint71` (Maint 71 merges it).
+    Outcome: an acted-on PR merged (`delivered` or `delivered-mismatch`); success: `delivered`, the
+    merged blobs verified identical on main. A PR that merged with no sync-core action is counted
+    beside the row (`delivered_unacted`), never as its outcome. A closed-unmerged acted-on PR
+    (`superseded`) is `outcome_no_merge`; the rest are `outcome_open`."""
+    rounds = _core_journal(path or _state_dir() / "sync-core/rounds.jsonl", now)
+    if rounds is None:
+        return None
+    seen: dict[str, set[str]] = {}
+    acted: set[str] = set()
+    for row in rounds:
+        for item in row["items"]:
+            target = item.get("target")
+            disposition = item.get("disposition")
+            if not isinstance(target, str) or not target or disposition == SYNC_NOT_SITUATION:
+                continue
+            seen.setdefault(target, set())
+            if isinstance(disposition, str) and disposition:
+                seen[target].add(disposition)
+            if (
+                item.get("handoffs")
+                or disposition == "ready-for-maint71"
+                or any("refresh dispatched" in str(r) for r in item.get("reasons") or ())
+            ):
+                acted.add(target)
+    merged = {t for t, d in seen.items() if d & SYNC_MERGED}
+    delivered = {t for t, d in seen.items() if "delivered" in d}
+    superseded = {t for t, d in seen.items() if "superseded" in d} - merged
+    return {
+        "demand": len(seen),
+        "invocation_count": sum(bool(d) for d in seen.values()),
+        "usable": sum(bool(d - SYNC_NOT_USABLE) for d in seen.values()),
+        "acted_on": len(acted),
+        "outcome": len(acted & merged),
+        "outcome_success": len(acted & delivered),
+        "outcome_no_merge": len(acted & superseded),
+        "outcome_open": len(acted - merged - superseded),
+        "delivered_unacted": len(merged - acted),
+    }
+
+
+def _opener_core_situations(inputs: dict[str, Any]) -> int | None:
+    rounds = inputs.get("opener_core")
+    return None if rounds is None else len(rounds["demand"])
+
+
+def _sync_core_situations(inputs: dict[str, Any]) -> int | None:
+    return (inputs.get("sync_core") or {}).get("demand")
 
 
 # Callables can be replaced/extended without changing reporting or adding telemetry.
 SITUATION_QUERIES: dict[str, Callable[[dict[str, Any]], int | None]] = {
     "closer-core": _closer_core_situations,
+    "local-loop": _local_loop_situations,
+    "opener-core": _opener_core_situations,
+    "sync-core": _sync_core_situations,
     "role-prompt": _prompt_batches,
     "role-decomposer": _large_issues,
     "role-triage": _open_issues,
@@ -842,6 +1140,40 @@ def collect_inputs(
     inputs["closer_core_outcomes"] = _closer_core_outcomes(db, now - WINDOW_DAYS * 86400, now)
     if inputs["closer_core_outcomes"] is None:
         inputs["errors"].append("closer-core Brain outcomes unavailable")
+    inputs["local_loop_prs"] = _local_loop_prs(gh_fn, now - WINDOW_DAYS * 86400)
+    if inputs["local_loop_prs"] is None:
+        inputs["errors"].append("local-loop PR population unavailable (GitHub search failed)")
+    inputs["local_loop"] = _local_loop_rounds(now - WINDOW_DAYS * 86400)
+    if inputs["local_loop"] is None:
+        inputs["errors"].append("local-loop state unread")
+    inputs["local_loop_outcomes"] = (
+        None
+        if inputs["local_loop"] is None
+        else _local_loop_outcomes(db, inputs["local_loop"]["done"])
+    )
+    if inputs["local_loop_outcomes"] is None:
+        inputs["errors"].append("local-loop Brain outcomes unavailable")
+    inputs["opener_core"] = _opener_core_rounds(now)
+    if inputs["opener_core"] is None:
+        inputs["errors"].append("opener-core round journal unread")
+    handed = _closer_core_targets(now)
+    if handed is None:
+        inputs["errors"].append("opener-core hand-offs unread (closer-core round journal)")
+    inputs["opener_core_handed"] = (
+        None
+        if inputs["opener_core"] is None or handed is None
+        else sorted(set(inputs["opener_core"]["usable"]) & set(handed))
+    )
+    inputs["opener_core_outcomes"] = (
+        None
+        if inputs["opener_core_handed"] is None
+        else _opener_core_outcomes(db, now - WINDOW_DAYS * 86400, now, inputs["opener_core_handed"])
+    )
+    if inputs["opener_core_handed"] is not None and inputs["opener_core_outcomes"] is None:
+        inputs["errors"].append("opener-core Brain outcomes unavailable")
+    inputs["sync_core"] = _sync_core_rounds(now)
+    if inputs["sync_core"] is None:
+        inputs["errors"].append("sync-core round journal unread")
     inputs["relay_decisions"] = _relay_decisions(
         relay_log
         or Path(
@@ -948,6 +1280,40 @@ def report(
                 }
             )
             counts["success_scope"] = "durable issue closures (PASS)"
+        if cid == "local-loop":
+            loop = inputs.get("local_loop")
+            counts["invocation_count"] = None if loop is None else len(loop["invoked"])
+            counts["usable"] = None if loop is None else len(loop["done"])
+            counts.update(
+                inputs.get("local_loop_outcomes")
+                or {
+                    field: None for field in ("acted_on", *CLASS_FIELDS.values(), "outcome_success")
+                }
+            )
+            counts["success_scope"] = "loop-finished PRs merged and judged durable (PASS)"
+        if cid == "opener-core":
+            opener = inputs.get("opener_core")
+            counts["invocation_count"] = None if opener is None else len(opener["invoked"])
+            counts["usable"] = None if opener is None else len(opener["usable"])
+            counts.update(
+                inputs.get("opener_core_outcomes")
+                or {
+                    field: None for field in ("acted_on", *CLASS_FIELDS.values(), "outcome_success")
+                }
+            )
+            counts["success_scope"] = (
+                "started issues whose PR the closer lane took and closed durably (PASS)"
+            )
+        if cid == "sync-core":
+            sync = inputs.get("sync_core")
+            fields = ("invocation_count", "usable", "acted_on", *CLASS_FIELDS.values())
+            counts.update({field: None if sync is None else sync.get(field, 0) for field in fields})
+            counts["outcome_success"] = None if sync is None else sync["outcome_success"]
+            counts["success_scope"] = "acted-on sync PRs merged with blobs verified on main" + (
+                ""
+                if sync is None
+                else f"; +{sync['delivered_unacted']} merged with no sync-core action, not counted"
+            )
         if cid == feedback.RELAY_PACING_CAPABILITY:
             usable = _relay_usable(inputs, now - WINDOW_DAYS * 86400, now)
             counts["usable"] = None if usable is None else counts["usable"] + usable
@@ -1055,6 +1421,30 @@ def format_lines(section: dict) -> list[str]:
 def recurrence_fixture() -> bool:
     assert situation_count("closer-core", {"closer_core": {"demand": 3}}) == 3
     assert situation_count("closer-core", {}) is None
+    # local-loop: GitHub's labelled PRs, plus a handed-off PR the loop ran (label removed); unread is None
+    loop = {"invoked": ["o/r#1", "o/r#3"], "done": ["o/r#1"]}
+    assert (
+        situation_count("local-loop", {"local_loop_prs": ["o/r#1", "o/r#2"], "local_loop": loop})
+        == 3
+    )
+    assert situation_count("local-loop", {"local_loop_prs": [], "local_loop": None}) == 0
+    assert situation_count("local-loop", {"local_loop": loop}) is None
+    closed_unmerged: dict[str, Any] = {
+        "run_id": "keepalive:o/r#1:vibe",
+        "adjudicated_verdict": "PASS",
+        "verifier_verdict": None,
+        "durability": "abandoned",
+        "merged": 0,
+        "failure_class": None,
+    }
+    counted = _classified_outcomes([closed_unmerged])
+    assert (counted["acted_on"], counted["outcome"], counted["outcome_success"]) == (1, 1, 0)
+    # opener-core / sync-core: an unread journal is None, a read one with nothing in it is a real zero
+    assert situation_count("opener-core", {}) is None
+    assert situation_count("opener-core", {"opener_core": {"demand": [], "invoked": []}}) == 0
+    assert situation_count("opener-core", {"opener_core": {"demand": ["o/r#1", "o/r#2"]}}) == 2
+    assert situation_count("sync-core", {"sync_core": None}) is None
+    assert situation_count("sync-core", {"sync_core": {"demand": 0}}) == 0
     assert (
         situation_count(
             "generic-probe",

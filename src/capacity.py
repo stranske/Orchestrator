@@ -53,6 +53,8 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -536,9 +538,11 @@ def shed_marker(
         return {**found, "why": "not JSON"}
     if not isinstance(payload, dict):
         return {**found, "why": "JSON that is not an object"}
-    for key in ("incident_id", "category"):
+    for key in ("incident_id", "category", "model"):
         if payload.get(key) not in (None, ""):
             found[key] = str(payload[key])
+    # Only a recognised scope narrows a shed; anything else stays a whole-seat shed.
+    found["tier_scope"] = payload.get("tier_scope") if payload.get("tier_scope") == "full" else None
     found["reset_at"] = _finite_number(payload.get("reset_at"))
     found["created_at"] = _finite_number(payload.get("created_at"))
     expires_at = _finite_number(payload.get("expires_at"))
@@ -548,6 +552,57 @@ def shed_marker(
         return {**found, "why": f"expires_at {payload['expires_at']!r} is not a finite number"}
     now = time.time() if now is None else now
     return {**found, "expires_at": expires_at, "state": "active" if expires_at > now else "expired"}
+
+
+TIER_BELOW = {"full": "mid"}
+
+
+def tier_ceilings(*, now: float | None = None, shed_dir: Path | None = None) -> dict[str, dict]:
+    """{agent: {ceiling, model, until}} for every active tier-scoped shed marker."""
+    base = SHED_DIR if shed_dir is None else shed_dir
+    out: dict[str, dict] = {}
+    if not base.is_dir():
+        return out
+    for path in sorted(base.iterdir()):
+        if not path.is_file() or path.name.startswith("."):
+            continue
+        marker = shed_marker(path.name, now=now, shed_dir=base)
+        scope = marker.get("tier_scope") if marker else None
+        if marker and marker["state"] == "active" and scope in TIER_BELOW:
+            out[path.name] = {
+                "ceiling": TIER_BELOW[scope],
+                "model": marker.get("model"),
+                "until": marker.get("expires_at"),
+            }
+    return out
+
+
+def tier_ceiling_exports(environ=None, **kwargs) -> list[str]:
+    """Shell lines for the tick: `export ORCH_<AGENT>_MAX_TIER=<ceiling>` plus one report line each.
+
+    The tick `eval`s these, so every marker-derived word is shell-quoted and an agent name that
+    cannot form a variable name is skipped. An explicit owner ceiling is never overridden.
+    """
+    environ = os.environ if environ is None else environ
+    lines = []
+    for agent, row in tier_ceilings(**kwargs).items():
+        if not re.fullmatch(r"[A-Za-z0-9_]+", agent):
+            continue
+        name = f"ORCH_{agent.upper()}_MAX_TIER"
+        until = utc_stamp(row["until"]) if row.get("until") else "?"
+        model = row.get("model")
+        if environ.get(name, "").strip():
+            message = (
+                f"  tier ceiling: {agent} keeps explicit {name}; {model} exhausted until {until}"
+            )
+            lines.append("echo " + shlex.quote(message))
+            continue
+        lines.append(f"export {name}={shlex.quote(row['ceiling'])}")
+        message = (
+            f"  tier ceiling: {agent} capped at {row['ceiling']} ({model} exhausted until {until})"
+        )
+        lines.append("echo " + shlex.quote(message))
+    return lines or ["echo " + shlex.quote("  tier ceilings: none active")]
 
 
 _BUILD_PACING_USAGE: ContextVar[dict | None] = ContextVar("build_pacing_usage", default=None)
@@ -562,6 +617,10 @@ def _shed(agent: str) -> bool:
     """
     marker = shed_marker(agent)
     if marker is None:
+        return False
+    if marker["state"] == "active" and marker.get("tier_scope"):
+        # Only the seat's top tier is exhausted: the seat stays routable and `tier_ceilings`
+        # caps it below that tier until the marker expires (then the branch below removes it).
         return False
     if marker["state"] != "expired":
         # A confirmed banked reset clears only a dated provider quota incident.
@@ -770,6 +829,33 @@ def _gemini_model_health():
     return _model_health("gemini", "full")
 
 
+def _local_launch(agent: str):
+    """Local launch-binary check. A crash in the check is reported as an unchecked result naming
+    the exception (it lands in the seat row as `launch`), never as a silent None."""
+    try:
+        import adapters
+
+        return adapters.local_launch(agent)
+    except Exception as exc:  # noqa: BLE001 — a broken check must not shed a seat
+        return {
+            "agent": agent,
+            "checked": False,
+            "launchable": True,
+            "reason": f"launch check raised {type(exc).__name__}: {exc}"[:240],
+        }
+
+
+def _local_only(agent: str) -> bool:
+    """Seats with no hosted keepalive lane: a missing local binary leaves them nothing to run on.
+    Hosted-capable seats are never shed here, because their keepalive lane needs no local binary."""
+    try:
+        import router
+
+        return agent not in set(getattr(router, "KEEPALIVE_AGENTS", ()) or ())
+    except Exception:
+        return False
+
+
 def _auth_health(agent: str):
     """Non-billing credential preflight, or None when it can't be evaluated."""
     try:
@@ -844,6 +930,24 @@ def _classify(agent: str, cfg: dict, ccusage_block):
     """
     if _shed(agent):
         return SHED, _shed_reason(agent)
+    # Launch gate: a local-only seat whose launch binary does not exist starts nothing, so every
+    # pick of it is a wasted round (aider 47/47, 11-05..11-10). Clears itself: the check runs on
+    # every capacity build, independent of dispatch, and the seat returns once the binary exists.
+    launch = _local_launch(agent)
+    if launch and launch.get("checked") and not launch.get("launchable") and _local_only(agent):
+        return (
+            SHED,
+            f"not launchable: {launch.get('reason')}",
+            {
+                "policy": "launch-binary-missing",
+                "availability": "unavailable_cli_missing",
+                "launch": launch,
+                "next_action": (
+                    f"Install or restore {launch.get('binary')}; the seat returns on the next "
+                    f"capacity build once the binary exists (blocking=1 seat, drainable=install)."
+                ),
+            },
+        )
     # Dispatchability gate BEFORE any budget math: a seat whose configured model its own CLI does
     # not offer is unusable at ANY headroom. SHED (not WARN) because router._pick drops
     # shed/unknown outright — reporting `ok` here is what hid the 2026-08-08 gemini breakage.
@@ -1171,6 +1275,7 @@ def build(ccusage_block=None, *, record_pacing: bool = False) -> dict:
                     agent
                 ),  # None => uncapped; else routine spend stops here
                 "auth": (_auth_health(agent) or {}),  # {} => not evaluable; never read as a failure
+                "launch": (_local_launch(agent) or {}),  # checked=False => unknown, never "missing"
                 **(meta or {}),
             }
     finally:
@@ -1203,6 +1308,10 @@ def _selftest():
     original_shed_dir = SHED_DIR
     selftest_shed_dir = Path(tempfile.mkdtemp(prefix="capacity-shed-selftest-"))
     SHED_DIR = selftest_shed_dir
+    # The self-test's seats are fixtures: the launch-binary gate reads this machine's filesystem
+    # (CI has no vibe/aider binary), so it is off here exactly as tests/conftest.py turns it off.
+    original_launch_check = os.environ.get("ORCH_LAUNCH_CHECK")
+    os.environ["ORCH_LAUNCH_CHECK"] = "0"
 
     def blk(toks):
         return {"isActive": True, "projection": {"totalTokens": toks, "totalCost": 100.0}}
@@ -1215,6 +1324,10 @@ def _selftest():
     finally:
         SHED_DIR = original_shed_dir
         shutil.rmtree(selftest_shed_dir, ignore_errors=True)
+        if original_launch_check is None:
+            os.environ.pop("ORCH_LAUNCH_CHECK", None)
+        else:
+            os.environ["ORCH_LAUNCH_CHECK"] = original_launch_check
 
 
 def _selftest_body(blk):
@@ -1467,6 +1580,9 @@ def _selftest_body(blk):
 def main(argv):
     if "--selftest" in argv:
         _selftest()
+        return 0
+    if argv and argv[0] == "tier-ceiling-exports":
+        print("\n".join(tier_ceiling_exports()))
         return 0
     if argv and argv[0] == "calibrate-codex":
         import pacing_usage

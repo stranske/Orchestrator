@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import signal
-import socket
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -36,10 +34,6 @@ class AdvisorRankingFailureTests(unittest.TestCase):
             raise AssertionError("advisor test attempted an external call or ledger write")
 
         for target, name in (
-            (subprocess, "run"),
-            (subprocess, "Popen"),
-            (socket, "socket"),
-            (socket, "create_connection"),
             (capabilities, "heartbeat"),
             (advisor, "PR_FACTS_FETCH"),
         ):

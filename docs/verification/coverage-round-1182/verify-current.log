@@ -1,0 +1,210 @@
+# verify.py
+
+  tree:       checkout
+  state:      private copy, deleted after the run — ledger absent at the source, so it bootstraps privately; Brain absent at the source, so it bootstraps privately
+  time:       pytest 0s, selftests 3m04s (8 at a time), gates 48s
+  pytest:     8501 passed, 0 failed, 27/31 max (8530 collected; floor 8507 — 23 BEHIND)
+  selftests:  104 of 111 modules ran, 5/7 max skipped
+  activation audit   ok  CAN FIRE:   30 of 39 live  (77%)
+  recurrence replay  ok  WOULD FIRE:  36 of 57
+  set coverage       SKIP 9 of 10 capability-set coverage checks passed over 39 ledger capabilities, 1 skipped: test_no_fixtur
+  admission          SKIP 24 of 27 admission checks passed, 3 skipped: test_legacy_debt_is_reported_not_forgiven (capability l
+  ledger validate    ok  "valid": true
+  gates:      2/2 max skipped
+  declared:   no ledger when the run began, so none of the 22 rows this tree declares was registered; the first writing load creates it holding all of them
+  mypy ratchet: 0/0 max of 148 module(s) exempt, 148 checked — fully drained
+
+  SKIPPED (prerequisite absent on this machine — nothing here was checked):
+    pytest   SKIPPED [1] ../../../../../opt/hostedtoolcache/Python/3.14.10/x64/lib/python3.14/site-packages/_pytest/unittest.py:521: capability ledger has no row for adversarial-review, testgen-lane — the ledger is machine-local state (/tmp/verify-state-rfiealki/capabilities.json); it holds 0 row(s) here, and these are registered by running the system, not by checking out the tree
+    pytest   SKIPPED [1] ../../../../../opt/hostedtoolcache/Python/3.14.10/x64/lib/python3.14/site-packages/_pytest/unittest.py:521: capability ledger has no row for role-triage: declared by this tree, not yet registered here — the ledger is machine-local state (/tmp/verify-state-rfiealki/capabilities.json); it holds 0 row(s) here, and the deployed code registers these on its first writing load (`capabilities.py --json validate`, an active tick's first command; `capabilities.py seed-declared` makes the same load on a copy)
+    pytest   SKIPPED [1] tests/test_skill_compiler.py:46: reference skill resource not installed: /home/runner/.codex/skills/code-workspace-hygiene/scripts/audit_code_root.sh — the skill compiler is deliberately exercised against a real installed skill, not a fixture
+    pytest   SKIPPED [1] tests/test_skill_compiler.py:88: reference skill resource not installed: /home/runner/.codex/skills/code-workspace-hygiene/scripts/audit_code_root.sh — the skill compiler is deliberately exercised against a real installed skill, not a fixture
+    pytest   SKIPPED [1] tests/test_skill_compiler.py:113: reference skill resource not installed: /home/runner/.codex/skills/code-workspace-hygiene/scripts/audit_code_root.sh — the skill compiler is deliberately exercised against a real installed skill, not a fixture
+    pytest   SKIPPED [2] tests/test_skill_compiler.py:134: reference skill resource not installed: /home/runner/.codex/skills/code-workspace-hygiene/scripts/audit_code_root.sh — the skill compiler is deliberately exercised against a real installed skill, not a fixture
+    pytest   SKIPPED [1] tests/test_skill_compiler.py:158: reference skill resource not installed: /home/runner/.codex/skills/code-workspace-hygiene/scripts/audit_code_root.sh — the skill compiler is deliberately exercised against a real installed skill, not a fixture
+    pytest   SKIPPED [1] tests/test_skill_compiler.py:229: reference skill resource not installed: /home/runner/.codex/skills/code-workspace-hygiene/scripts/audit_code_root.sh — the skill compiler is deliberately exercised against a real installed skill, not a fixture
+    pytest   SKIPPED [2] ../../../../../opt/hostedtoolcache/Python/3.14.10/x64/lib/python3.14/site-packages/_pytest/unittest.py:521: exact Codex profiles require ORCH_CODEX_PROFILE_BIN or an installed global Codex CLI; refusing an unresolved binary
+    pytest   SKIPPED [2] ../../../../../opt/hostedtoolcache/Python/3.14.10/x64/lib/python3.14/site-packages/_pytest/unittest.py:521: reference skill resource not installed: /home/runner/.codex/skills/code-workspace-hygiene/scripts/audit_code_root.sh — the skill compiler is deliberately exercised against a real installed skill, not a fixture
+    pytest   SKIPPED [1] ../../../../../opt/hostedtoolcache/Python/3.14.10/x64/lib/python3.14/site-packages/_pytest/unittest.py:521: vibe config absent: /home/runner/.vibe/config.toml — active_model cannot be read to check for drift
+    pytest   SKIPPED [1] ../../../../../opt/hostedtoolcache/Python/3.14.10/x64/lib/python3.14/site-packages/_pytest/unittest.py:521: agy advertised-models cache absent: /home/runner/work/_temp/orch-runtime/agent-runtime/gemini/advertised-models.json
+    pytest   SKIPPED [3] tests/test_model_tier_resolution.py:96: agy CLI not installed on this box
+    pytest   SKIPPED [1] tests/test_model_tier_resolution.py:115: cursor-agent CLI not installed on this box
+    pytest   SKIPPED [1] ../../../../../opt/hostedtoolcache/Python/3.14.10/x64/lib/python3.14/site-packages/_pytest/unittest.py:521: no free auth signal on this machine for aider, claude, codex, cursor, gemini, muse, vibe: neither an installed CLI probe nor a credential file — agent_auth_check's documented UNKNOWN case
+    pytest   SKIPPED [1] ../../../../../opt/hostedtoolcache/Python/3.14.10/x64/lib/python3.14/site-packages/_pytest/unittest.py:521: credential file absent for vibe (/home/runner/.vibe/.env), aider (/home/runner/.codex/handoff/aider.env) — the fleet authenticates by sourcing that file, so without it the seat's verdict is BROKEN by design
+    pytest   SKIPPED [1] ../../../../../opt/hostedtoolcache/Python/3.14.10/x64/lib/python3.14/site-packages/_pytest/unittest.py:521: capability ledger has no row for capability-admission-gate — the ledger is machine-local state (/tmp/verify-state-fr5j11od/capabilities.json); it holds 0 row(s) here, and these are registered by running the system, not by checking out the tree
+    pytest   SKIPPED [1] ../../../../../opt/hostedtoolcache/Python/3.14.10/x64/lib/python3.14/site-packages/_pytest/unittest.py:521: capability ledger has no row for issue-readiness — the ledger is machine-local state (/tmp/verify-state-fr5j11od/capabilities.json); it holds 0 row(s) here, and these are registered by running the system, not by checking out the tree; range-lane-rollout, role-triage, thompson-hybrid-routing is declared by this tree too, but registering it alone would not clear this
+    pytest   SKIPPED [1] ../../../../../opt/hostedtoolcache/Python/3.14.10/x64/lib/python3.14/site-packages/_pytest/unittest.py:521: capability ledger has no row for live-keepalive-supervisor, redirect-apply-bootstrap: declared by this tree, not yet registered here — the ledger is machine-local state (/tmp/verify-state-fr5j11od/capabilities.json); it holds 0 row(s) here, and the deployed code registers these on its first writing load (`capabilities.py --json validate`, an active tick's first command; `capabilities.py seed-declared` makes the same load on a copy)
+    pytest   SKIPPED [2] ../../../../../opt/hostedtoolcache/Python/3.14.10/x64/lib/python3.14/site-packages/_pytest/unittest.py:521: capability ledger holds no pre-admission-gate (legacy) capability — legacy debt accrues from this instance's registration history, and a ledger bootstrapped from the committed tree has none
+    pytest   SKIPPED [1] ../../../../../opt/hostedtoolcache/Python/3.14.10/x64/lib/python3.14/site-packages/_pytest/unittest.py:521: capability ledger has no row for abcd-experiment, adversarial-review, agy-runtime-isolation, capability-activation-audit, capability-admission-gate, capability-firing-monitor, capability-propensity, capability:reference-sync-hygiene-test-gate, codemod-campaign, coverage-testgen-trigger, cross-repo-coordination, deliberate-break-verifier, docs-drift-fix-agent, epic-decomposition, evidence-acquisition, feature-reflection-cli, feature-scan, feedback-store, frontend-verifier, issue-readiness, offload, partitioned-review, redirect-plan, redirect-policy, repo-playbook, research-scheduler, stall-watcher, switch-review, testgen-lane, windowed-capacity-policy — the ledger is machine-local state (/tmp/verify-state-pzglnef_/capabilities.json); it holds 0 row(s) here, and these are registered by running the system, not by checking out the tree; closer-core, completion-event-lineage, live-keepalive-supervisor, local-loop, local-model-profile-trial, opener-core, rail-exercise-cadence, range-lane-rollout, redirect-apply-bootstrap, research-usage-guard, role-adjudicator, role-decomposer, role-prompt, role-redirect, role-triage, route-weights-export, runtime-ac-checks, strategy-experiments, sync-core, synthesis-promotion, thompson-hybrid-routing, value-chain-monitor is declared by this tree too, but registering it alone would not clear this
+    selftest capability_admission: section skipped — capability ledger holds no pre-admission-gate (legacy) capability — legacy debt accrues from this instance's registration history, and a ledger bootstrapped from the committed tree has none
+    selftest capability_advisor: section skipped — capability ledger has no row for codemod-campaign, offload, testgen-lane — the ledger is machine-local state (/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/verify-state-fjc85ot7/capabilities.json); it holds 0 row(s) here, and these are registered by running the system, not by checking out the tree
+    selftest capability_outcome_bridge: section skipped — capability ledger carries no version lineage for agy-runtime-isolation, offload (capability_version_id is unset) — lineage is established by real registration on the running instance, so a fresh bootstrap has none
+    selftest capability_recurrence_check: section skipped — capability ledger has no row for docs-drift-fix-agent — the ledger is machine-local state (/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/verify-state-fjc85ot7/capabilities.json); it holds 39 row(s) here, and these are registered by running the system, not by checking out the tree
+    selftest feedback: section skipped — capability ledger has no row for offload — the ledger is machine-local state (/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/verify-state-fjc85ot7/capabilities.json); it holds 0 row(s) here, and these are registered by running the system, not by checking out the tree; role-redirect is declared by this tree too, but registering it alone would not clear this
+    selftest feedback: section skipped — capability ledger has no row for role-triage: declared by this tree, not yet registered here — the ledger is machine-local state (/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/verify-state-fjc85ot7/capabilities.json); it holds 0 row(s) here, and the deployed code registers these on its first writing load (`capabilities.py --json validate`, an active tick's first command; `capabilities.py seed-declared` makes the same load on a copy)
+    gate     set coverage: capability ledger has no row for abcd-experiment, adversarial-review, agy-runtime-isolation, capability-activation-audit, capability-admission-gate, capability-firing-monitor, capability-propensity, capability:reference-sync-hygiene-test-gate, codemod-campaign, coverage-testgen-trigger, cross-repo-coordination, deliberate-break-verifier, docs-drift-fix-agent, epic-decomposition, evidence-acquisiti
+    gate     admission: capability ledger holds no pre-admission-gate (legacy) capability — legacy debt accrues from this instance's registration history, and a ledger bootstrapped from the committed tree has none
+    gate     admission: capability ledger holds no pre-admission-gate (legacy) capability — legacy debt accrues from this instance's registration history, and a ledger bootstrapped from the committed tree has none
+    gate     admission: capability ledger has no row for capability-admission-gate — the ledger is machine-local state (/tmp/verify-state-fr5j11od/capabilities.json); it holds 0 row(s) here, and these are registered by running the system, not by checking out the tree
+
+  PROBLEMS:
+    - floor is BEHIND reality: 8530 collected > floor 8507 — the floor is 23 test(s) permissive, so that many could silently stop being collected and still read as green. Set "collected": 8530 and "passed": 8528 in .verify-floor.json, keeping the existing note, or run `python3 verify.py --update-floor`. If a branch merged under you, REBASE FIRST: the number must be measured on the merge result.
+    - 2 module selftest(s) failed: adapters, tick_watchdog
+    selftest adapters: ason and "default state dir" in reason, reason
+AssertionError: /Users/teacher/.codex/orchestrator contains the user's ho
+    selftest tick_watchdog: le "/opt/anaconda3/lib/python3.12/subprocess.py", line 1953, in _execute_child
+    raise child_exception_type(errno_num,
+
+coverage: combined 128 instrumented process(es)
+Name                                        Stmts   Miss  Cover
+---------------------------------------------------------------
+src/adapters.py                              1560    423  72.9%
+src/adjudicator_live.py                       441     35  92.1%
+src/adjudicator_replay.py                     197     26  86.8%
+src/adjudicator_retro.py                     1567    157  90.0%
+src/adversarial.py                            919      3  99.7%
+src/agent_auth_check.py                       158      2  98.7%
+src/agent_switches.py                         544     63  88.4%
+src/backlog.py                                398      0 100.0%
+src/cadence_registry.py                       177      0 100.0%
+src/capabilities.py                          1561      0 100.0%
+src/capability_activation_audit.py           1171      4  99.7%
+src/capability_admission.py                   599     24  96.0%
+src/capability_advisor.py                    1602      0 100.0%
+src/capability_compiler.py                   1243      0 100.0%
+src/capability_effectiveness.py               273      2  99.3%
+src/capability_firing_monitor.py              431     22  94.9%
+src/capability_ir.py                          138      0 100.0%
+src/capability_lifecycle.py                   176     47  73.3%
+src/capability_matcher_proposals.py           113      0 100.0%
+src/capability_opportunity.py                 143      0 100.0%
+src/capability_outcome_bridge.py              453      0 100.0%
+src/capability_propensity.py                 2727      2  99.9%
+src/capability_recurrence_check.py            503      0 100.0%
+src/capability_targets.py                     432    155  64.1%
+src/capability_task_proposals.py              215     44  79.5%
+src/capacity.py                               700      4  99.4%
+src/ccusage_reconcile.py                      285      7  97.5%
+src/claims.py                                 300     23  92.3%
+src/closer_csv_completion.py                  200     39  80.5%
+src/codemod_lane.py                           601      1  99.8%
+src/coding_delivery.py                         93      9  90.3%
+src/comparative.py                            373     19  94.9%
+src/completion_event_adapter.py               297      0 100.0%
+src/consumer_sync_artifact_ingest.py          868     15  98.3%
+src/consumer_sync_shadow.py                   355      1  99.7%
+src/coverage_testgen_trigger.py               147      0 100.0%
+src/credential_redaction.py                   450     59  86.9%
+src/cross_repo_lane.py                        322     28  91.3%
+src/dispatcher.py                            2613    126  95.2%
+src/dry_seam_audit.py                         240     23  90.4%
+src/durability_sweep.py                      1204      4  99.7%
+src/env_prereq.py                             417     35  91.6%
+src/epic_lane.py                              304     30  90.1%
+src/escaped_defect_priority.py                288      0 100.0%
+src/evidence_acquisition.py                   127      0 100.0%
+src/evidence_schema.py                        277     35  87.4%
+src/exact_head_merge_gate.py                  180     23  87.2%
+src/execution_profiles.py                     289      0 100.0%
+src/exp_abcd.py                              1693      9  99.5%
+src/experiment_producer.py                    585     48  91.8%
+src/experiment_recovery.py                    202      0 100.0%
+src/exploration_backfill.py                   383      1  99.7%
+src/exploration_collection.py                 331      0 100.0%
+src/exploration_evidence_plan.py              251      0 100.0%
+src/exploration_offline.py                     85     11  87.1%
+src/exploration_review.py                     282     21  92.6%
+src/feature_goals.py                          396     23  94.2%
+src/feature_scan.py                           134      0 100.0%
+src/features.py                               209     15  92.8%
+src/feedback.py                              2973      3  99.9%
+src/fleet_shapes.py                           453     46  89.8%
+src/frontend_verify.py                        255      4  98.4%
+src/gh_capacity.py                            631      4  99.4%
+src/github_api_observer.py                     87      4  95.4%
+src/human_calibration.py                      323     12  96.3%
+src/improvement_log.py                        248      5  98.0%
+src/issue_quality.py                          343      0 100.0%
+src/issue_readiness.py                        550      3  99.5%
+src/issue_size_quality.py                     186     25  86.6%
+src/judge_reliability.py                      186      0 100.0%
+src/keepalive_evidence.py                     378      4  98.9%
+src/keepalive_outcomes.py                     983      0 100.0%
+src/keepalive_shadow.py                       338      0 100.0%
+src/keepalive_supervisor.py                   659     27  95.9%
+src/langsmith_direct.py                       285      0 100.0%
+src/langsmith_fetch.py                        475     71  85.1%
+src/langsmith_pull.py                         367      1  99.7%
+src/ledger_reconcile.py                       632     74  88.3%
+src/local_loop.py                             523    113  78.4%
+src/local_verify.py                           441      0 100.0%
+src/mcp_server.py                             216      0 100.0%
+src/merge_guard.py                            461     35  92.4%
+src/mirror_reader.py                          127     30  76.4%
+src/model_profile_trial.py                   1054    177  83.2%
+src/model_profile_trial_bridge.py             697      8  98.9%
+src/model_table.py                             71      4  94.4%
+src/mutable_registry.py                       196      7  96.4%
+src/non_claude_data_only_candidate.py         351     28  92.0%
+src/objective_anchor.py                       269     70  74.0%
+src/observability_dashboard.py                698      4  99.4%
+src/offload_guard.py                            8      0 100.0%
+src/outcomes.py                              1392     75  94.6%
+src/pacing.py                                 172      1  99.4%
+src/pacing_usage.py                           883     47  94.7%
+src/partitioned_review.py                     792      0 100.0%
+src/paths.py                                   59      0 100.0%
+src/pattern_miner.py                          498      0 100.0%
+src/periodic_report.py                       1077      8  99.3%
+src/production_role_observation_scorer.py     163      0 100.0%
+src/provision.py                              463     68  85.3%
+src/pushed_branches.py                        211     31  85.3%
+src/python_standard_audit.py                  311     28  91.0%
+src/rail_exercise.py                          259      0 100.0%
+src/range_lane_rollout.py                     267      0 100.0%
+src/rate_incidents.py                         551      0 100.0%
+src/redirect_apply.py                         711      0 100.0%
+src/redirect_plan.py                          385     70  81.8%
+src/redirect_policy.py                         96      0 100.0%
+src/redirect_shadow.py                        593      1  99.8%
+src/redirect_sweep.py                         446      1  99.8%
+src/relearn_report.py                         260      0 100.0%
+src/repo_knowledge.py                        1335      3  99.8%
+src/research_scheduler.py                     539     24  95.5%
+src/research_subjects.py                      727      7  99.0%
+src/research_usage_guard.py                   406      0 100.0%
+src/review_loop.py                            318     81  74.5%
+src/review_writer_gate.py                     127     16  87.4%
+src/roles.py                                 1820      0 100.0%
+src/route_weights_export.py                   758     59  92.2%
+src/router.py                                 776     22  97.2%
+src/runner_effect_bridge.py                    73     15  79.5%
+src/runtime_ac.py                             988      1  99.9%
+src/runtime_ac_flow_monitor.py                246     51  79.3%
+src/runtime_ac_gate.py                        801     83  89.6%
+src/runtime_ac_panel.py                       338      1  99.7%
+src/source_snapshot_digest.py                 104     15  85.6%
+src/spec_provenance.py                         13      2  84.6%
+src/storage_lifecycle.py                     1432    155  89.2%
+src/strategy_experiment.py                    572      1  99.8%
+src/switch_review.py                         1877     10  99.5%
+src/synthesis_promotion.py                    984      2  99.8%
+src/testgen_gate.py                           395      0 100.0%
+src/testgen_lane.py                           181     18  90.1%
+src/tick.py                                   590      6  99.0%
+src/tick_watchdog.py                          550    103  81.3%
+src/transport_qualification.py                 42      2  95.2%
+src/transport_saved_result.py                 102      7  93.1%
+src/triage_shadow.py                          347     30  91.4%
+src/utc_epoch.py                              116      9  92.2%
+src/ux_review.py                              682      0 100.0%
+src/value_chain_monitor.py                    706     42  94.1%
+src/verification_events.py                    117     91  22.2%
+src/verifier_evidence.py                      396     50  87.4%
+src/vibe_isolated_types_proof.py              198     90  54.5%
+src/vibe_observing_backend.py                 360     53  85.3%
+src/watch.py                                  489      0 100.0%
+src/worktree_git.py                           148      6  95.9%
+---------------------------------------------------------------
+TOTAL                                       77928   3762  95.2%
+coverage json: /Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__1323__closer/coverage.json

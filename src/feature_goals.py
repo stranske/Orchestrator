@@ -100,21 +100,39 @@ FEATURES = (
     Goal(
         "closer-campaign",
         "G1",
-        "independently observed desktop-qualified guarded remote completion",
+        "independently verified native closer-core canary completion",
         "feature_goals.py:closer_campaign_completion",
         "increase",
         True,
-        "owner, 2026-10-19",
+        "owner, 2026-10-19; current closer-core evidence authorized 2026-11-08",
     ),
 )
 
 
 def closer_campaign_completion(now: int) -> Measurement:
+    """Count a registered native canary only after independent pinned verification.
+
+    Owner scope update, 2026-11-08: current closer-core replaces the retired
+    desktop observer contract. This is a canary completion signal, not fleet
+    throughput. The reader never launches workers or creates missing proof.
+    Publication is the durable authenticated observation retained by the native
+    evidence entry; unchanged measurement performs no remote freshness polling.
+    """
+    import closer_csv_completion
+
+    try:
+        record = closer_csv_completion.read_completion()
+        stamp = record["completed_at"]
+        if type(stamp) is not int or not 0 < stamp <= now:
+            raise ValueError("native completion timestamp is invalid")
+    except (OSError, ValueError, TypeError, KeyError, RuntimeError) as exc:
+        return unknown(now, f"native closer-core completion unavailable: {str(exc)[:240]}")
+    value = float(stamp >= now - GOAL_SILENCE_DAYS * DAY)
     return Measurement(
-        None,
-        "unmeasured",
-        now,
-        "would need registered desktop observer and exact pinned remote completion receipt",
+        value,
+        "native worker + guarded publication + pinned runtime acceptance",
+        stamp,
+        reason=f"registered CSV canary: {record['publication_url']}",
     )
 
 
@@ -294,6 +312,12 @@ def pacing_incidents(now: int) -> Measurement:
 def pacing_share(now: int) -> Measurement:
     return _pacing(now, "non_codex_share_at_least_double")
 
+
+# The ledger is the ONLY owner of issues carrying this label: it opens, reopens and closes them on
+# measured drift and recovery. keepalive_supervisor.CLOSURE_HOLD_LABELS holds it so no closer lane
+# closes a reopened drift issue as "delivered" by a PR that merely mentions it (Orchestrator#720 was
+# reopened and re-closed within 20 minutes every day from 2026-11-07).
+GOAL_DRIFT_LABEL = "goal-drift"
 
 # The keepalive renders this line into the PR body on every verify round (Workflows#3985,
 # keepalive_loop.js renderDeterministicGates); P/T counts named acceptance commands that passed.
@@ -704,7 +728,7 @@ def reconcile_issues(section: dict, *, gh: Callable = _gh) -> dict:
         gh(
             [
                 "api",
-                f"repos/{REPO}/issues?labels=goal-drift&state=all&per_page=100",
+                f"repos/{REPO}/issues?labels={GOAL_DRIFT_LABEL}&state=all&per_page=100",
                 "--paginate",
                 "--slurp",
             ]
@@ -712,7 +736,7 @@ def reconcile_issues(section: dict, *, gh: Callable = _gh) -> dict:
     )
     issues = [issue for page in pages for issue in page if "pull_request" not in issue]
     if any(row["drifting"] for row in section["goals"]):
-        for label, color in [("goal-drift", "B60205"), ("priority:high", "D93F0B")]:
+        for label, color in [(GOAL_DRIFT_LABEL, "B60205"), ("priority:high", "D93F0B")]:
             try:
                 gh(["api", f"repos/{REPO}/labels/{label}"])
             except RuntimeError as exc:
@@ -763,7 +787,7 @@ def reconcile_issues(section: dict, *, gh: Callable = _gh) -> dict:
         if existing:
             issue = sorted(existing, key=lambda i: (i["state"] != "open", i["number"]))[0]
             # REST PATCH replaces labels; preserve labels added by other owners.
-            labels = {"goal-drift", "priority:high"}
+            labels = {GOAL_DRIFT_LABEL, "priority:high"}
             labels.update(label["name"] for label in issue.get("labels", []))
             args = [
                 "api",
@@ -793,7 +817,7 @@ def reconcile_issues(section: dict, *, gh: Callable = _gh) -> dict:
                     "-f",
                     f"body={body}",
                     "-f",
-                    "labels[]=goal-drift",
+                    f"labels[]={GOAL_DRIFT_LABEL}",
                     "-f",
                     "labels[]=priority:high",
                 ]

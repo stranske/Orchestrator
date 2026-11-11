@@ -378,5 +378,6 @@ def test_research_plan_reserves_global_unevaluated_slots(monkeypatch):
     )
     assert len(plan["planned"]) == 1
     assert plan["remaining_backlog_slots"] == 1
-    assert any(row.get("reason") == "unevaluated_backlog_batch_reserve" for row in plan["skipped"])
+    # With T2, the skip reason format is "unevaluated N/CAP, drainable M"
+    assert any(row.get("reason", "").startswith("unevaluated") for row in plan["skipped"])
     conn.close()

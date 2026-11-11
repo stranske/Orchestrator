@@ -269,6 +269,10 @@ def evaluate(
     # Source changes preserve the same period's prior; reset events restart it.
     prior_weight = min(1.0, max(0.0, previous_weight)) if previous_weight is not None else 1.0
     target_weight = routing_weight(sustainable, effective_burn)
+    # A movement cap alone compounds across ticks. Low usage needs a target floor
+    # until a full burn window actually projects exhaustion (#698).
+    if u < 0.5 and (confidence < 1 or projected is None or projected <= 1):
+        target_weight = max(0.5, target_weight)
     weight = target_weight
     if u >= 1 or latched:
         weight = 0.0

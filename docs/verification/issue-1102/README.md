@@ -154,14 +154,14 @@ Reached by this successor, named by the behavior in the head report (some lines 
 Remaining head statements that this successor does not execute. Each limit is the current line.
 `test_selftest_only_paths_stay_recorded_as_limits` pins the token on that line.
 
-- `src/capability_advisor.py:3860` — else restores a pre-seeded t-howto entry; the selftest pops the key when it was absent, and production never pre-seeds that key
-- `src/capability_advisor.py:3958` — else restores a pre-seeded t-concept entry; same pop-versus-restore split as t-howto
-- `src/capability_advisor.py:4253` — else restores a pre-seeded t-contra entry inside _selftest_contraindications
-- `src/capability_advisor.py:4590` — else restores a pre-seeded t-empty entry inside _selftest_bindings
-- `src/capability_advisor.py:4651` — else restores a pre-seeded t-surface entry inside _selftest_bindings
-- `src/capability_advisor.py:5160` — else restores a pre-seeded t-precond entry inside _selftest_preconditions
-- `src/capability_advisor.py:3993` — _selftest_front_door returns at the ledger-row gate unless offload, codemod-campaign, and testgen-lane are already registered; those rows are machine-local, and a stand-in ledger would not satisfy the real matcher assertions
-- `src/capability_advisor.py:5296` — the loop body is the tail of _selftest_findability, after that function has checked every consult-site caller; a copied assert would not execute these lines, and running the selftest section is the module selftest rather than a focused path test
+- `src/capability_advisor.py:3872` — else restores a pre-seeded t-howto entry; the selftest pops the key when it was absent, and production never pre-seeds that key
+- `src/capability_advisor.py:3970` — else restores a pre-seeded t-concept entry; same pop-versus-restore split as t-howto
+- `src/capability_advisor.py:4265` — else restores a pre-seeded t-contra entry inside _selftest_contraindications
+- `src/capability_advisor.py:4602` — else restores a pre-seeded t-empty entry inside _selftest_bindings
+- `src/capability_advisor.py:4663` — else restores a pre-seeded t-surface entry inside _selftest_bindings
+- `src/capability_advisor.py:5172` — else restores a pre-seeded t-precond entry inside _selftest_preconditions
+- `src/capability_advisor.py:4005` — _selftest_front_door returns at the ledger-row gate unless offload, codemod-campaign, and testgen-lane are already registered; those rows are machine-local, and a stand-in ledger would not satisfy the real matcher assertions
+- `src/capability_advisor.py:5308` — the loop body is the tail of _selftest_findability, after that function has checked every consult-site caller; a copied assert would not execute these lines, and running the selftest section is the module selftest rather than a focused path test
 
 ## Deliberate breaks for the successor path tests
 
@@ -218,3 +218,148 @@ Checked 2026-11-05. Every broken run exited 1. Every restored rerun exited 0.
 | `test_advisor_tests_use_temporary_runtime_roots_and_captured_defaults` | require state and runtime to be the same directory | exit 1, `assert .../state == .../runtime` | exit 0 |
 | `test_fresh_import_binds_temporary_roots_then_restores_the_process` | require the fresh ledger path to sit outside the temporary runtime | exit 1, `assert not True` | exit 0 |
 | `test_changed_files_record_matches_the_suite` | look for a heading the record does not contain | exit 1, `assert '## Missing heading' in` the report | exit 0 |
+
+## External-operation guard
+
+### PR #1152 continuation acceptance (recorded before code edits)
+
+- Check date: 2026-11-08 (America/Chicago).
+- Outcome: the exact pushed head passes CI pytest and flat exec-mirror shards,
+  and the advisor-suite command below prints
+  `external-operation attempts: 0 unexpected`.
+- Interpreter: `/opt/anaconda3/bin/python3` (Python 3.12.2); no repository-selected
+  virtual environment was found. Use this interpreter in place of `python3`
+  in the advisor-suite command below, and first run
+  `/opt/anaconda3/bin/python3 -m pytest -q tests/test_advisor_external_guard.py --tb=line`.
+- Stop rule: two focused repair attempts or 20 minutes for local repair;
+  two CI runs or 75 minutes total, whichever limit comes first.
+- Initial head: `686d67b4141e241cde0ac6d0eea05010625c03d0`.
+- CI run 42543896325 reports the same first failure in pytest and exec-mirror
+  shard 1: `test_shard_lists_partition_every_collected_test_exactly_once` finds
+  `tests/test_advisor_external_guard.py` unassigned in `config/test-shards.json`.
+- Worktree inventory: this clean worktree is the only holder of the PR branch;
+  no preserved holder for #1152 exists. The unrelated preserved #1129 ref was
+  left intact.
+- Complete integration diff reviewed, including coverage and selftest regressions:
+  process/network blockers now come from the autouse private guard; prebound
+  aliases remain covered by its audit hook. The separate live-runtime read hook
+  and per-test attempt check remain in the coverage module. Selftest binding
+  restoration and missing-ledger gates remain unchanged. No guard code or pins
+  were changed, and no rebase was needed; existing implementation mutation
+  evidence below is retained.
+- Review follow-up (outside this demonstrated shard failure): removal of the
+  combined external-operation self-check also removed its deliberate live-ledger
+  read assertion. The live-read protection remains, but that self-check coverage
+  should be restored separately.
+- Reproduction: focused shard-partition test printed `1 failed in 26.99s`, naming
+  only the new guard test module as unassigned. After assigning it once to shard
+  1 and listing it as untimed, the same test printed `1 passed in 34.70s`.
+- Initial guard check: `8 passed in 5.94s`,
+  `external-operation attempts: 0 unexpected`.
+- Initial advisor suite: `1 failed, 94 passed, 5 subtests passed in 49.29s`,
+  `external-operation attempts: 0 unexpected`. The failed temporary-root assertion
+  found the agent's default TMPDIR beneath `~/.codex/orchestrator`. Reruns use
+  `TMPDIR=/private/tmp` so the temporary ledger is outside the live runtime;
+  no test assertion or guard is weakened.
+- Exact tested implementation head:
+  `2bf229eacd267e8ae63cee372314f60856d0d769` (clean worktree).
+  Both commands above were rerun with `TMPDIR=/private/tmp` on this commit:
+  guard self-checks printed `8 passed in 1.82s`; the documented advisor suite
+  printed `95 passed, 5 subtests passed in 21.86s`. Each printed
+  `external-operation attempts: 0 unexpected`. This evidence-only update
+  changes no test or implementation bytes. CI results for the pushed head are
+  read from PR #1152, not inferred from these local results.
+- Pushed head `a62ed2cf020801e142770d943c0675f6fabc676b` also passed the guard
+  command (`8 passed in 1.57s`) and advisor suite (`95 passed, 5 subtests passed
+  in 22.19s`), both with zero unexpected attempts. CI run 42554638315 passed all
+  six pytest shards, all six flat exec-mirror shards, and both aggregates:
+  checkout `15108 passed, 0 failed`; flat mirror `15087 passed, 0 failed`.
+- Gate run 42554638697 subsequently exposed F401/F811 in the existing guard
+  self-check module: its unused module import shared the fixture parameter name.
+  Second focused repair removes only `import advisor_external_guard`; the
+  existing explicit symbol imports still load that module. No fixture,
+  assertion, patch target, audit event, or guard implementation changes.
+  Required commands after this removal printed `8 passed in 0.31s` and
+  `95 passed, 5 subtests passed in 6.46s`, both with
+  `external-operation attempts: 0 unexpected`.
+- Final pushed-head verification and CI readback are recorded separately in
+  `~/.codex/orchestrator/measurement/pr-1152/` to avoid changing the tested commit
+  just to insert its own hash. Earlier green CI is not evidence for a later head.
+
+Checked 2026-11-05. PR #1082's guard is the audit hook in the merged closer repair: it records an attempt, then raises, and the per-test fixture fails if the record is still there after the test. Python cannot remove an audit hook, so that proposal cannot show the process callables restored. `tests/advisor_external_guard.py` keeps the record-before-raise behavior and the alias coverage of the hook. The hook returns immediately while no guard is on the stack. `subprocess.Popen`, `subprocess.run`, the other subprocess helpers, `os.system`, and the socket and `urlopen` entry points are patched on a private `MonkeyPatch`. Closing the guard restores those callables and then fails if an unexpected attempt remains, including an attempt whose `ExternalOperation` the caller caught. Attempts inside `expected()` are self-checks. `urllib.Request` is not adopted: CPython emits it when a `Request` object is constructed, before any connection. `test_advisor_hermetic.py` is outside the suite because it starts a real interpreter.
+
+The suite fixture is `advisor_external_guard` in `tests/conftest.py`. The local process and socket patches in the advisor tests were removed so they cannot shadow it.
+
+Command:
+
+`python3 -m pytest -q tests/test_advisor_external_guard.py tests/test_capability_advisor_coverage.py tests/test_capability_advisor_cli_context.py tests/test_capability_advisor_selftest_regressions.py tests/test_capability_advisor_auto_decline.py tests/test_capability_advisor_reach.py tests/test_advisor_failure_boundaries.py tests/test_advisor_hermetic.py tests/test_advisor_live_rows.py tests/test_advisor_ranking_failure.py -m "not slow" --tb=line`
+
+Result: 95 passed, 5 subtests passed, in 5.33s. The run printed `external-operation attempts: 0 unexpected`.
+
+## Deliberate breaks for the guard self-checks
+
+Each break was applied only in `tests/test_advisor_external_guard.py`, then the file was restored to its original bytes. The command for every row was:
+
+`python3 -m pytest -q tests/test_advisor_external_guard.py -m "not slow" --tb=line -k <test>`
+
+Checked 2026-11-05. Every broken run exited 1. Every restored rerun exited 0.
+
+| Test | Break | Failing result | Restored result |
+| --- | --- | --- | --- |
+| `test_guard_scope_is_the_capability_advisor_suite` | treat `test_advisor_hermetic.py` as in the guard suite | exit 1, `assert False` | exit 0 |
+| `test_suite_guard_patches_the_import_time_entry_points` | require the saved `Popen` not to be the import-time callable | exit 1, `assert <class 'subprocess.Popen'> is not _REAL_POPEN` | exit 0 |
+| `test_process_and_network_operations_are_blocked_and_recorded` | require the patch record to say `audit` | exit 1, `assert 'patch' == 'audit'` | exit 0 |
+| `test_expected_self_checks_are_not_unexpected_attempts` | require the self-check attempt to be unexpected | exit 1, `assert True is False` | exit 0 |
+| `test_swallowed_attempt_fails_through_the_record_while_expected_attempts_do_not` | expect the swallowed failure to name `subprocess.Popen` | exit 1, pytest regex mismatch, message still names `subprocess.run` | exit 0 |
+| `test_prebound_popen_records_via_the_audit_hook_before_starting` | require the pre-bound alias to record `via: patch` | exit 1, attempt dict diff (`audit` vs `patch`) | exit 0 |
+| `test_test_monkeypatch_undo_does_not_remove_the_guard` | require `undo()` to leave a different `Popen` | exit 1, `assert blocked is not blocked` | exit 0 |
+| `test_close_restores_patched_callables_and_disarms_the_audit_hook` | require `Popen` to stay patched after close | exit 1, `assert <class 'subprocess.Popen'> is not _REAL_POPEN` | exit 0 |
+
+## Implementation mutations
+
+These are deliberate implementation changes (not test changes) to verify the guard's
+self-checks catch the corresponding failures. Each mutation was applied only in
+`tests/advisor_external_guard.py`, then the file was restored to its original bytes.
+Run each mutation in a fresh process.
+
+| Implementation mutation | Test | Failing result | Restored result |
+| --- | --- | --- | --- |
+| Remove `self.record(label, "patch")` from `ExternalOperationGuard._blocker` | `test_swallowed_attempt_fails_through_the_record_while_expected_attempts_do_not` | exit 1, `AssertionError: + unexpected external-operation attempts: subprocess.run` and `assert [] == [True, False]` | exit 0 |
+| Skip `patch.undo()` in `ExternalOperationGuard.close` (replace with `pass`) | `test_close_restores_patched_callables_and_disarms_the_audit_hook` | exit 1, `AssertionError: guard left patched state in place: subprocess.Popen, subprocess.run, ...` | exit 0 |
+
+Commands:
+
+```bash
+# Mutation 1: Remove record-before-raise from _blocker
+sed -i 's/            self.record(label, "patch")//' tests/advisor_external_guard.py
+python3 -m pytest -q tests/test_advisor_external_guard.py::test_swallowed_attempt_fails_through_the_record_while_expected_attempts_do_not --tb=line
+# Fails with: AssertionError: + unexpected external-operation attempts: subprocess.run
+# Restore: git checkout tests/advisor_external_guard.py
+
+# Mutation 2: Skip patch.undo() in close
+sed -i 's/            patch.undo()/            pass  # patch.undo()/' tests/advisor_external_guard.py
+python3 -m pytest -q tests/test_advisor_external_guard.py::test_close_restores_patched_callables_and_disarms_the_audit_hook --tb=line
+# Fails with: AssertionError: guard left patched state in place: subprocess.Popen, ...
+# Restore: git checkout tests/advisor_external_guard.py
+```
+
+### Issue #1270 rebase and verification
+
+- Rebase onto main (`origin/main` at `2d2309fa`) preserving hermetic advisor fixtures and autouse advisor external guard.
+- Shards reconciled in `config/test-shards.json` with `tests/test_advisor_external_guard.py` assigned to untimed modules and shard 1.
+- Focused verification run (T4):
+  `pytest -q tests/test_advisor_external_guard.py tests/test_capability_advisor_coverage.py`
+  Result: 36 passed in 1.62s, `external-operation attempts: 0 unexpected`.
+- Acceptance criteria suite (A4):
+  `pytest -q tests/test_advisor_external_guard.py tests/test_capability_advisor_coverage.py tests/test_capability_advisor_cli_context.py tests/test_capability_advisor_selftest_regressions.py`
+  Result: 43 passed in 1.90s, `external-operation attempts: 0 unexpected`.
+- Both deliberate-break mutations rerun and verified:
+  Mutation 1 (omit attempt recording): fails `test_swallowed_attempt_fails_through_the_record_while_expected_attempts_do_not`, reverted clean.
+  Mutation 2 (skip undo on teardown): fails `test_close_restores_patched_callables_and_disarms_the_audit_hook`, reverted clean.
+
+### Keepalive Round 2 verification audit
+
+- CI run 42827683401 on commit e60e1317 confirmed green: all 6 pytest + coverage shards, all 6 exec-mirror shards, and aggregate verification passed.
+- Transient GitHub Actions concurrency cancellation on parallel autofix job (run 42829531959) cleared.
+- Independent verification of all acceptance criteria A1-A5 and tasks T1-T4 confirmed green.
+
