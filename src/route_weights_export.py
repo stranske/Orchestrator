@@ -635,6 +635,9 @@ def _exploration_block(
     }
 
 
+COMPARATIVE_HOLD_FILE = "comparative-last-optimal.json"
+
+
 def build_document(
     db_path: Path,
     minimum: int = DEFAULT_MIN_OBSERVATIONS,
@@ -642,8 +645,13 @@ def build_document(
     now: int | None = None,
     capacity_snapshot: dict[str, Any] | None = None,
     include_capacity: bool = True,
+    hold_path: Path | None = None,
 ) -> dict[str, Any]:
-    """Build a snapshot with repeatable samples for this week and weight version."""
+    """Build a snapshot with repeatable samples for this week and weight version.
+
+    `hold_path` is the live export's last-optimal comparative file (comparative.hold_last_optimal);
+    None (every test and preview) neither reads nor writes it.
+    """
     if minimum < 1:
         raise ValueError("min_observations must be at least 1")
     missing = sorted(set(CONSUMER_TASK_TYPES) - set(router.ROUTE_TABLE))
@@ -714,14 +722,18 @@ def build_document(
     }
     digest = hashlib.sha256(_canonical_bytes(routing_semantic)).hexdigest()
     document["exploration"]["policy_version"] = f"route-exploration/v1:{digest}"
-    _add_comparative(document, db_path, capacity_snapshot, comparison_now)
+    _add_comparative(document, db_path, capacity_snapshot, comparison_now, hold_path)
     return document
 
 
-def _add_comparative(document: dict, db_path: Path, snapshot: dict | None, now: int) -> None:
+def _add_comparative(
+    document: dict, db_path: Path, snapshot: dict | None, now: int, hold_path: Path | None = None
+) -> None:
     """Add shadow ranks after hashing the existing policy; never reorder its entries."""
     # Opportunity cost includes every evidenced class, beyond this export's consumer set.
     result = comparative.measure(db_path, snapshot, now=now, minimum=document["min_observations"])
+    if hold_path is not None:
+        result = comparative.hold_last_optimal(result, hold_path, now)
     for task, section in document["task_types"].items():
         _attach_comparative_ranks(section["ranking"], result, task, document["min_observations"])
     for task, rows in document["reserve"].items():
@@ -1462,7 +1474,12 @@ def main() -> int:
     if not previous_rate and day <= window["end"]:
         os.environ["ORCH_EXPLORATION_RATE"] = "0.20"
     try:
-        document = build_document(db_path, args.min_observations, now=timestamp)
+        document = build_document(
+            db_path,
+            args.min_observations,
+            now=timestamp,
+            hold_path=state_dir / COMPARATIVE_HOLD_FILE,
+        )
     finally:
         if previous_rate is None:
             os.environ.pop("ORCH_EXPLORATION_RATE", None)

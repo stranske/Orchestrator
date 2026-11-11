@@ -1971,6 +1971,10 @@ count times seconds remaining divided by window seconds. The common horizon is t
 period_end of fully measured agents. Only latest-version quality cells with n_obs >= 20 count,
 including classes outside the hosted export. Measured agents alone enter the LP; excluded
 agents retain null lambda/rank and reasons, with status `partial` when some are measured.
+An agent whose capacity model has no pacing contract by design (every model except `ccusage`:
+cursor, vibe, gemini, muse, aider, where 429-shed is the authoritative limiter) is listed in
+`excluded` with reason `excluded: no pacing source` and does not make the result `partial`
+(owner 2026-11-11: cursor and vibe held it at `partial`, so routing could never go live).
 Other statuses are `optimal`, `infeasible_inputs`, and `inputs_unmeasured`. Subscription price
 is zero; Muse or explicitly metered pools require complete list-price observations. Reads
 never create or migrate the Brain.
@@ -1988,6 +1992,16 @@ export writes or publication. The published comparative block and every `compara
 ranking/reserve field are shadow diagnostics: none triggers republication. They ride along
 with a meaningful routing/capacity change or the 24 h refresh floor. Switch review computes
 the same report from local snapshot/Brain inputs and prints one summary line.
+
+`comparative.route_enabled` (#1316, read by the hosted router in Workflows
+`agent_delegation_policy.js`, which then sorts by `comparative_rank`, unranked last) is true when
+now >= `ROUTE_GO_LIVE`, the result is `optimal`, and incidents since go-live do not exceed the
+baseline rate (the 14 days BEFORE go-live) times elapsed days, floored at one day. That last test
+is a rollback after go-live, never a precondition: before go-live both windows predate any routing
+change, so comparing them measured fleet quota trouble that routing could not clear. A `partial`
+export reuses the last `optimal` result saved in `$ORCH_STATE_DIR/comparative-last-optimal.json`
+for up to 24 h (`held_from`, `held_age_seconds`, `held_because`); past that, or for any other
+status, the flag is false with the reason. Only the live export reads or writes that file.
 The live pass number requires at least one differing class with measured Codex and Claude prices
 over the 14-day pacing-history window, checked no earlier than 2026-11-07 and 14 days after
 the first #668 state. Fixture success does not meet that live pass number or enable consumption.
