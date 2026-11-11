@@ -94,8 +94,11 @@ MUSE_MODEL = model_table.single_model("muse")
 # Edit the table, never this map. codex/claude/gemini pin a model per tier; the other seats run one
 # model each (VIBE_MODEL, MUSE_MODEL, CURSOR_COMPOSER_MODEL, AIDER_MODEL) and keep an empty map,
 # which means "no tiers to pin", never "model unknown".
+# A seat the shared table no longer lists (aider left the fleet table in Workflows#4652, 2026-11-11) has
+# no tiers here and an empty model below; the capacity launch-binary gate already sheds it.
+_TABLE_AGENTS = set(model_table.TABLE.get("providers") or model_table.TABLE.get("agents") or {})
 MODEL_TIERS: dict[str, dict[str, str]] = {
-    agent: model_table.tier_models(agent)
+    agent: model_table.tier_models(agent) if agent in _TABLE_AGENTS else {}
     for agent in ("codex", "claude", "gemini", "cursor", "vibe", "aider", "muse")
 }
 MODEL_TIER_NAMES = ("cheap", "mid", "full")  # ordered cheap -> expensive; the ceiling relies on it
@@ -112,7 +115,10 @@ CURSOR_COMPOSER_MODEL = os.environ.get(
 ).strip() or model_table.single_model("cursor")
 # aider's pin is a floating alias that self-upgrades ('mistral/codestral-latest'); it comes from
 # the shared table like every other seat's model.
-AIDER_MODEL = model_table.single_model("aider")
+# aider left the shared table (Workflows#4652): keep its last pinned alias so an explicit run stays valid.
+AIDER_MODEL = (
+    model_table.single_model("aider") if "aider" in _TABLE_AGENTS else "mistral/codestral-latest"
+)
 
 # Agents whose CLI can enumerate its own models. Used to validate a pin before dispatch and to
 # auto-resolve a replacement after a vendor rename. Agents absent here are never "unresolvable":
@@ -684,6 +690,65 @@ def advertised_models(agent: str, *, refresh: bool = False, timeout_s: int = 30)
 def agy_advertised_models(*, refresh: bool = False, timeout_s: int = 30) -> list[str]:
     """Back-compat shim for the gemini-only probe."""
     return advertised_models("gemini", refresh=refresh, timeout_s=timeout_s)
+
+
+# Directories a local dispatch puts in front of PATH (dispatcher._path_prefix; a test pins the two
+# lists equal), plus the
+# app-bundled Codex CLI that app-launched seats resolve. Kept here so the launch check below looks
+# exactly where a launch would.
+LOCAL_AGENT_PATH_DIRS = (
+    "/opt/homebrew/bin",
+    str(HOME / ".local" / "bin"),
+    str(HOME / ".cursor" / "bin"),
+)
+EXTRA_LAUNCH_CANDIDATES = {
+    "codex": (
+        "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex",
+        str(CODEX_PROFILE_BIN),
+    ),
+}
+
+
+def local_launch(agent: str) -> dict:
+    """Whether `agent`'s LOCAL launch binary exists where a dispatch would look, without running it.
+
+    Returns {agent, checked, launchable, binary, path, reason}. `checked=False` (no launch command,
+    or the check is switched off with ORCH_LAUNCH_CHECK=0) is never evidence of a missing binary.
+    Only `checked=True, launchable=False` is: 47 of 47 aider starts 11-05..11-10 died with
+    "aider-venv/bin/aider: No such file or directory" while capacity still read the seat as ok.
+    """
+    base = {"agent": agent, "checked": False, "launchable": True, "binary": None, "path": None}
+    if os.environ.get("ORCH_LAUNCH_CHECK", "1").strip().lower() in {"0", "false", "no", "off"}:
+        return {**base, "reason": "launch check disabled (ORCH_LAUNCH_CHECK=0)"}
+    try:
+        binary = build_command(agent, "launch-check", record_use=False)[0]
+    except Exception as exc:  # noqa: BLE001 — any failure here is "unknown", never "missing"
+        # build_command raises ValueError (unknown agent), RuntimeError or WorkspaceRefused; the
+        # text is kept so an unexpected bug is visible in the seat row, not only its type.
+        return {**base, "reason": f"no local launch command ({type(exc).__name__}: {exc})"[:240]}
+    base["binary"] = binary
+    if os.path.isabs(binary):
+        candidates = [binary]
+    else:
+        search = os.pathsep.join([*LOCAL_AGENT_PATH_DIRS, os.environ.get("PATH", "")])
+        found = shutil.which(binary, path=search)  # None for a dangling symlink
+        candidates = [found] if found else []
+    candidates += [c for c in EXTRA_LAUNCH_CANDIDATES.get(agent, ()) if c]
+    for candidate in candidates:
+        if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return {
+                **base,
+                "checked": True,
+                "launchable": True,
+                "path": candidate,
+                "reason": f"launch binary present: {candidate}",
+            }
+    return {
+        **base,
+        "checked": True,
+        "launchable": False,
+        "reason": f"launch binary missing: {binary} (not found on the dispatch PATH or known install paths)",
+    }
 
 
 def auth_health(agent: str, *, refresh: bool = False, timeout_s: int = 30) -> dict:
@@ -2079,8 +2144,12 @@ def build_command(
     write_roots: list[str] | None = None,
     data_only: bool = False,
     sandbox_mode: str | None = None,
+    record_use: bool = True,
 ):
     """Construct the CLI argv for one agent. `mode` is agent-specific.
+
+    record_use: False when the argv is only inspected, never run (capacity's launch check). A
+    capability heartbeat recorded here then would count a use that never happened.
 
     sandbox_mode: codex only. When set, that sandbox is emitted and the outer-seat
     bypass is not substituted for it. A read-only profile cannot be widened.
@@ -2377,14 +2446,15 @@ def build_command(
         # so it records use exactly where it is applied. Daily-coalesced: build_command runs on
         # every dispatch. Lazy import (capabilities imports feedback), never raises, and inert
         # outside an active tick. (2026-08-09)
-        try:
-            import capabilities
+        if record_use:
+            try:
+                import capabilities
 
-            capabilities.daily_heartbeat(
-                "agy-runtime-isolation", "invocation", ref="adapters.build_command:gemini"
-            )
-        except Exception:
-            pass
+                capabilities.daily_heartbeat(
+                    "agy-runtime-isolation", "invocation", ref="adapters.build_command:gemini"
+                )
+            except Exception:
+                pass
         cmd = ["agy", "--gemini_dir", gemini_dir]
         model = requested_model or _tier_model("gemini", mode) or gemini_model()
         if model:

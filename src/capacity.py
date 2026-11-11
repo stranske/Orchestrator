@@ -829,6 +829,33 @@ def _gemini_model_health():
     return _model_health("gemini", "full")
 
 
+def _local_launch(agent: str):
+    """Local launch-binary check. A crash in the check is reported as an unchecked result naming
+    the exception (it lands in the seat row as `launch`), never as a silent None."""
+    try:
+        import adapters
+
+        return adapters.local_launch(agent)
+    except Exception as exc:  # noqa: BLE001 — a broken check must not shed a seat
+        return {
+            "agent": agent,
+            "checked": False,
+            "launchable": True,
+            "reason": f"launch check raised {type(exc).__name__}: {exc}"[:240],
+        }
+
+
+def _local_only(agent: str) -> bool:
+    """Seats with no hosted keepalive lane: a missing local binary leaves them nothing to run on.
+    Hosted-capable seats are never shed here, because their keepalive lane needs no local binary."""
+    try:
+        import router
+
+        return agent not in set(getattr(router, "KEEPALIVE_AGENTS", ()) or ())
+    except Exception:
+        return False
+
+
 def _auth_health(agent: str):
     """Non-billing credential preflight, or None when it can't be evaluated."""
     try:
@@ -903,6 +930,24 @@ def _classify(agent: str, cfg: dict, ccusage_block):
     """
     if _shed(agent):
         return SHED, _shed_reason(agent)
+    # Launch gate: a local-only seat whose launch binary does not exist starts nothing, so every
+    # pick of it is a wasted round (aider 47/47, 11-05..11-10). Clears itself: the check runs on
+    # every capacity build, independent of dispatch, and the seat returns once the binary exists.
+    launch = _local_launch(agent)
+    if launch and launch.get("checked") and not launch.get("launchable") and _local_only(agent):
+        return (
+            SHED,
+            f"not launchable: {launch.get('reason')}",
+            {
+                "policy": "launch-binary-missing",
+                "availability": "unavailable_cli_missing",
+                "launch": launch,
+                "next_action": (
+                    f"Install or restore {launch.get('binary')}; the seat returns on the next "
+                    f"capacity build once the binary exists (blocking=1 seat, drainable=install)."
+                ),
+            },
+        )
     # Dispatchability gate BEFORE any budget math: a seat whose configured model its own CLI does
     # not offer is unusable at ANY headroom. SHED (not WARN) because router._pick drops
     # shed/unknown outright — reporting `ok` here is what hid the 2026-08-08 gemini breakage.
@@ -1230,6 +1275,7 @@ def build(ccusage_block=None, *, record_pacing: bool = False) -> dict:
                     agent
                 ),  # None => uncapped; else routine spend stops here
                 "auth": (_auth_health(agent) or {}),  # {} => not evaluable; never read as a failure
+                "launch": (_local_launch(agent) or {}),  # checked=False => unknown, never "missing"
                 **(meta or {}),
             }
     finally:
@@ -1262,6 +1308,10 @@ def _selftest():
     original_shed_dir = SHED_DIR
     selftest_shed_dir = Path(tempfile.mkdtemp(prefix="capacity-shed-selftest-"))
     SHED_DIR = selftest_shed_dir
+    # The self-test's seats are fixtures: the launch-binary gate reads this machine's filesystem
+    # (CI has no vibe/aider binary), so it is off here exactly as tests/conftest.py turns it off.
+    original_launch_check = os.environ.get("ORCH_LAUNCH_CHECK")
+    os.environ["ORCH_LAUNCH_CHECK"] = "0"
 
     def blk(toks):
         return {"isActive": True, "projection": {"totalTokens": toks, "totalCost": 100.0}}
@@ -1274,6 +1324,10 @@ def _selftest():
     finally:
         SHED_DIR = original_shed_dir
         shutil.rmtree(selftest_shed_dir, ignore_errors=True)
+        if original_launch_check is None:
+            os.environ.pop("ORCH_LAUNCH_CHECK", None)
+        else:
+            os.environ["ORCH_LAUNCH_CHECK"] = original_launch_check
 
 
 def _selftest_body(blk):

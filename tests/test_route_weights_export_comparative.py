@@ -383,14 +383,19 @@ def test_two_paced_agents_and_one_unpaced_export_partial(agents_fixture):
             "INSERT INTO route_weights VALUES (2,0,'implement','gemini',0,0.4,20,0.5,0,0,'',0,0)"
         )
     doc = export.build_document(db, now=NOW, capacity_snapshot=snapshot)
-    assert doc["comparative"]["status"] == "partial"
+    # Owner 2026-11-11: an agent with no pacing source by design (gemini: windowed_prepaid) is
+    # excluded and named; it no longer holds the whole result at "partial".
+    assert doc["comparative"]["status"] == "optimal"
+    assert doc["comparative"]["excluded"] == ["gemini"]
     assert doc["comparative"]["lambda"]["gemini"] is None
     rows = doc["task_types"]["implement"]["ranking"]
-    assert all(r["comparative_rank"] is None for r in rows)
-    assert all(
-        "partial:" in r["comparative_status"] and "gemini" in r["comparative_status"] for r in rows
+    gemini = next(r for r in rows if r["agent"] == "gemini")
+    assert gemini["comparative_rank"] is None
+    assert (
+        "excluded: no pacing source (capacity model windowed_prepaid)"
+        in gemini["comparative_reason"]
     )
-    assert next(r for r in rows if r["agent"] == "gemini")["comparative_reason"]
+    assert all(r["comparative_rank"] is not None for r in rows if r["agent"] != "gemini")
 
 
 def test_ledger_filter_ts_and_one_stale_hour_keeps_window_verdict(agents_fixture, tmp_path):
@@ -851,7 +856,10 @@ def test_route_flag_flip_republishes(tmp_path, monkeypatch):
         after_snapshot = make_snapshot(go_live_ts + 86400)
         doc2 = export.build_document(db, now=go_live_ts + 86400, capacity_snapshot=after_snapshot)
         assert doc2["comparative"]["route_enabled"] is True
-        assert "enabled; incidents 0→0" in doc2["comparative"]["route_reason"]
+        assert (
+            "enabled; incidents since go-live 0 vs expected 0.0"
+            in doc2["comparative"]["route_reason"]
+        )
 
         # The two semantics should differ (triggering republishing)
         semantic1 = export._semantic_for_compare(doc1)
