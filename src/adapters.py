@@ -94,8 +94,11 @@ MUSE_MODEL = model_table.single_model("muse")
 # Edit the table, never this map. codex/claude/gemini pin a model per tier; the other seats run one
 # model each (VIBE_MODEL, MUSE_MODEL, CURSOR_COMPOSER_MODEL, AIDER_MODEL) and keep an empty map,
 # which means "no tiers to pin", never "model unknown".
+# A seat the shared table no longer lists (aider left the fleet table in Workflows#4652, 2026-11-11) has
+# no tiers here and an empty model below; the capacity launch-binary gate already sheds it.
+_TABLE_AGENTS = set(model_table.TABLE.get("providers") or model_table.TABLE.get("agents") or {})
 MODEL_TIERS: dict[str, dict[str, str]] = {
-    agent: model_table.tier_models(agent)
+    agent: model_table.tier_models(agent) if agent in _TABLE_AGENTS else {}
     for agent in ("codex", "claude", "gemini", "cursor", "vibe", "aider", "muse")
 }
 MODEL_TIER_NAMES = ("cheap", "mid", "full")  # ordered cheap -> expensive; the ceiling relies on it
@@ -112,7 +115,10 @@ CURSOR_COMPOSER_MODEL = os.environ.get(
 ).strip() or model_table.single_model("cursor")
 # aider's pin is a floating alias that self-upgrades ('mistral/codestral-latest'); it comes from
 # the shared table like every other seat's model.
-AIDER_MODEL = model_table.single_model("aider")
+# aider left the shared table (Workflows#4652): keep its last pinned alias so an explicit run stays valid.
+AIDER_MODEL = (
+    model_table.single_model("aider") if "aider" in _TABLE_AGENTS else "mistral/codestral-latest"
+)
 
 # Agents whose CLI can enumerate its own models. Used to validate a pin before dispatch and to
 # auto-resolve a replacement after a vendor rename. Agents absent here are never "unresolvable":
