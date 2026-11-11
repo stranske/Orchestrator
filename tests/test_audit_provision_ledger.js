@@ -196,6 +196,54 @@ test('reads all inputs without writing and CLI status distinguishes unmet eviden
   assert.equal(execute(process.execPath, [script], { cwd: f.root }).exit_code, 1);
 });
 
+test('fresh observed legitimate refusals remain unmet after successful retries in both lanes', (t) => {
+  const end = new Date().toISOString();
+  const refused = (lane, reason, cause = 'branch-held') => event({ ts: end,
+    target: `example/repo#${lane === 'closer' ? 1 : 2}`, lane, reason, cause });
+  const rows = ['closer', 'opener'].flatMap((lane) => [
+    refused(lane, 'dirty holder'), refused(lane, 'live holder'),
+    refused(lane, 'writer lock'), refused(lane, 'existing branch', 'branch-exists'),
+  ]);
+  const f = fixture(t, {
+    '.old': ndjson(rows.slice(0, 4)),
+    '.older': ndjson(rows.slice(4)),
+    '': ndjson(rows.map((row) => ({ ...row, outcome: 'reclaimed' }))),
+  }, end);
+  // The real collector just observed every retained segment. A red here must
+  // come from the legitimate refusals, rather than stale or inconsistent data.
+  const observed = JSON.parse(fs.readFileSync(f.receipt)).provision;
+  assert.equal(observed.coverage, 'continuous');
+  assert.deepEqual(observed.continuity_failures, []);
+  assert.equal(observed.branch_refusals, 8);
+  const inputs = [f.receipt, ...fs.readdirSync(f.root)
+    .filter((name) => name.startsWith('provision-events.ndjson'))
+    .map((name) => path.join(f.root, name))];
+  const before = inputs.map((file) => fs.readFileSync(file));
+  const result = execute(process.execPath, [script, f.root, source], { cwd: f.root,
+    env: { ...process.env, ORCH_LOCAL_RUNTIME: f.root,
+      ORCH_PROVISION_EVENTS_PATH: path.join(f.root, 'provision-events.ndjson') } });
+  assert.equal(result.error_code, null);
+  assert.equal(result.signal, null);
+  assert.equal(result.exit_code, 1, result.stderr.toString());
+  const output = result.stdout.toString();
+  const report = JSON.parse(output.slice(output.indexOf('{')));
+  assert.equal(report.coverage, 'continuous');
+  assert.deepEqual(report.continuity_failures, []);
+  assert.equal(report.segments.length, 3);
+  assert.equal(report.counts['failed/branch-held'], 6);
+  assert.equal(report.counts['failed/branch-exists'], 2);
+  assert.equal(report.counts['reclaimed/branch-held'], 6);
+  assert.equal(report.counts['reclaimed/branch-exists'], 2);
+  assert.equal(report.branch_refusals, 8);
+  assert.equal(report.evidence_ready, false);
+  assert.equal(report.deployment_acceptance_verified, false);
+  assert.match(output, /failed\(branch-held\|branch-exists\) = 8 over 7d/);
+  assert.match(output, /ledger evidence = unmet acceptance/);
+  for (const [index, file] of inputs.entries()) {
+    assert.deepEqual(fs.readFileSync(file), before[index], file);
+  }
+});
+
 test('source absence and nonregular segments are UNKNOWN without following symlinks', (t) => {
   const f = fixture(t, { '': '' });
   const ledger = path.join(f.root, 'provision-events.ndjson');
