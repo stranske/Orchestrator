@@ -294,6 +294,82 @@ test('copies only bound inputs from a published layout with retained runtime lin
   assert.equal(runWitnesses({ ...options, fullSuites: true }).default_native_suites_passed, true);
 });
 
+test('omits documented runtime output and regular bytecode from the manifest and private tree', (t) => {
+  const options = fixture(t);
+  const runtimeDirectories = ['.venv', '.pytest_cache', '.ruff_cache', 'docs/reports',
+    'ux_reviews', 'experiments/tick-20261111-stranske-Orchestrator-1098',
+    'experiments/invman1', 'experiments/orchskill-lanes-20260620',
+    'experiments/strategy434-20261006'];
+  const runtimeFiles = ['path.txt', 'private-ledger.lock',
+    'repo_review_registry.json.bak-2026-09-21', 'README.md', 'renovate.json', 'uv.lock',
+    'experiments/.last-ship-gate', '__pycache__/provision.cpython-314.pyc',
+    'tests/__pycache__/conftest.cpython-314.pyc',
+    'scripts/__pycache__/helper.cpython-314.pyc'];
+  const before = snapshot(options.root, options.mirror, options.revision);
+  for (const directory of runtimeDirectories) {
+    const location = path.join(options.mirror, directory);
+    fs.mkdirSync(location, { recursive: true });
+    // An excluded directory must never become an import/configuration source.
+    fs.writeFileSync(path.join(location, 'conftest.py'), 'raise RuntimeError("runtime input")');
+    fs.writeFileSync(path.join(location, 'pytest.ini'), '[pytest]\naddopts = --collect-only\n');
+  }
+  for (const file of runtimeFiles) {
+    const location = path.join(options.mirror, file);
+    fs.mkdirSync(path.dirname(location), { recursive: true });
+    fs.writeFileSync(location, 'retained runtime output');
+  }
+  const privateTree = path.join(path.dirname(options.root), 'private-source');
+  assert.deepEqual(snapshot(options.root, options.mirror, options.revision, privateTree), before);
+  for (const file of [...runtimeDirectories, ...runtimeFiles]) {
+    assert.equal(fs.existsSync(path.join(privateTree, file)), false, file);
+  }
+  assert.equal(fs.readFileSync(path.join(privateTree, 'provision.py'), 'utf8'), '# fixture\n');
+  for (const file of runtimeFiles) fs.appendFileSync(path.join(options.mirror, file), ' changed');
+  assert.deepEqual(snapshot(options.root, options.mirror, options.revision), before);
+});
+
+test('runtime exclusions do not admit importable inputs at similar or nested paths', (t) => {
+  for (const file of ['nested/.venv/injected.py', 'tests/.pytest_cache/conftest.py',
+    'docs/reports-extra/injected.py', 'experiments/tick-invalid-repo-1098/injected.py',
+    'experiments/invman1-extra/injected.py', '__pycache__/injected.pth',
+    'tests/__pycache__/injected.so', 'scripts/__pycache__/pytest.ini']) {
+    const options = fixture(t);
+    const location = path.join(options.mirror, file);
+    fs.mkdirSync(path.dirname(location), { recursive: true });
+    fs.writeFileSync(location, 'unbound input');
+    assert.throws(() => runWitnesses(options), /Uncommitted mirror input/, file);
+    assert.equal(fs.existsSync(options.output), false, file);
+  }
+});
+
+test('uses an external interpreter backing a retained mirror virtual environment', (t) => {
+  const options = fixture(t);
+  const environment = path.join(path.dirname(options.root), 'external-venv');
+  fs.mkdirSync(path.join(environment, 'bin'), { recursive: true });
+  const python = path.join(environment, 'bin', 'python3');
+  fs.copyFileSync(options.python, python);
+  fs.symlinkSync(environment, path.join(options.mirror, '.venv'));
+  const receipt = runWitnesses({ ...options, python, fullSuites: true });
+  assert.equal(receipt.default_native_suites_passed, true);
+  assert.equal(receipt.interpreter, python);
+  for (const check of [...receipt.suites.map((item) => item.execution), ...receipt.checks]) {
+    assert.equal(check.command[0], python);
+    assert.equal(check.junit_reader.command[0], python);
+  }
+});
+
+test('rejects an interpreter directory alias resolving inside the mirror', (t) => {
+  const options = fixture(t);
+  const internal = path.join(options.mirror, '.venv', 'bin');
+  fs.mkdirSync(internal, { recursive: true });
+  fs.copyFileSync(options.python, path.join(internal, 'python3'));
+  const alias = path.join(path.dirname(options.root), 'interpreter-alias');
+  fs.symlinkSync(internal, alias);
+  assert.throws(() => runWitnesses({ ...options, python: path.join(alias, 'python3') }),
+    /interpreter outside the mirror/);
+  assert.equal(fs.existsSync(options.output), false);
+});
+
 test('rejects symlinks in code, tests and configuration, including cache lookalikes', (t) => {
   for (const file of ['provision.py', 'tests/conftest.py', 'pyproject.toml',
     'tests/.ruff_cache', '__pycache__/provision.cpython-312.pyc', 'config', 'campaigns']) {
