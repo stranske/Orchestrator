@@ -1,5 +1,108 @@
 # Issue #1216 verification
 
+## Provider lookup batch verification, 2026-11-11
+
+Based on PR #1352 head `78474cdf015f76178d22bb1243da171616f8901d`, on the
+existing `codex/issue-1216` branch. The first unchecked task duplicates the
+implemented independent-provenance boundary. This round expands its regression
+evidence in `tests/test_profile_trial_ingest.py` without changing that boundary.
+
+- [x] Verify independently trusted provider provenance is required for every
+  attempt, while the existing session tests preserve explicitly unverified
+  measurements.
+- [x] Verify first, middle, and last attempt refusal before any feedback or
+  published state writes, including provider lookup exceptions.
+- [x] Repeat both requested failing mutations and restored passing tests;
+  additionally prove the expanded tests catch checking only the first attempt.
+- [ ] Commit this round's test changes on the checked-out PR branch.
+- [ ] Record required CI for a delivered head containing these changes.
+
+`test_provider_response_must_independently_confirm_the_trial_measurement`
+now contains 33 cases, replacing six. Each starts with a successful fake
+authenticated lookup as a control, then changes one response at one attempt
+position. Cases cover object type, ID, model, completion status, each of run ID,
+profile ID and packet hash, each input/output usage count, a missing response,
+and a lookup exception. They assert the exact lookup prefix through the bad
+attempt, all seven feedback tables empty, and no state or capability-program
+summary file. The fixture is offline evidence, not live provider provenance.
+
+The targeted five-file baseline passed with 147 tests and 30 subtests. The same
+command passed after the expansion and again after restoring every mutation:
+
+```text
+PYTHONPATH=/tmp/orch-1216-tools:/tmp/orch-1216-venv/lib/python3.14/site-packages/pip/_vendor \
+  ORCH_STATE_DIR=/tmp/orch-1216-state /tmp/orch-1216-venv/bin/python -m pytest -q \
+  tests/test_profile_trial_ingest.py tests/test_profile_trial_run.py \
+  tests/test_profile_trial_recurring_spec.py tests/test_model_profile_trial_bridge.py \
+  tests/test_profile_trial_instances.py -m 'not slow'
+174 passed, 30 subtests passed; exit 0.
+
+PYTHONPATH=src ORCH_STATE_DIR=/tmp/orch-1216-selftest-state \
+  python3 src/model_profile_trial.py --selftest
+model_profile_trial.py selftest: OK; exit 0.
+```
+
+Python is 3.14.10 and pytest is 9.2.0. `/opt/anaconda3/bin/python3` is absent;
+these are equivalent test arguments with the available interpreter, not a claim
+that the literal Anaconda command ran. PyPI installation could not find the
+pinned packages, so official tagged pytest/Black sources and their dependencies
+were assembled under `/tmp`; repository dependencies were unchanged.
+
+Each deliberate mutation changed only `src/model_profile_trial.py` and was
+restored in a `finally` block before the corresponding passing run. The command
+for each test below was the interpreter/environment above with
+`-m pytest -q <test> -m 'not slow' --tb=short`.
+
+| Test in `tests/test_profile_trial_ingest.py` | Deliberate source mutation | Intended failure | Restored run |
+| --- | --- | --- | --- |
+| `test_ingest_is_one_transaction_and_a_mid_write_failure_leaves_nothing[_record_run_in_conn-2]` | In `finalize_trial`, commit `attempts[:1]` through a separate `feedback.ingest_profile_trial(..., commit_ingest_marker=False)` before the normal transaction | Exit 1; `AssertionError: runs`, `assert 1 == 0`; 1 failed | Exit 0; 1 passed |
+| `test_local_identity_claims_require_an_independent_provider_lookup` | Return `True` instead of `False` when `_authoritative_identity_verified` has no trusted lookup | Exit 1; `Failed: DID NOT RAISE ValueError`; 1 failed | Exit 0; 1 passed |
+| `test_provider_response_must_independently_confirm_the_trial_measurement` | Iterate over `attempts[:1]` instead of every attempt in `_authoritative_identity_verified` | Exit 1; all 22 `middle`/`last` cases fail with `DID NOT RAISE ValueError` or `DID NOT RAISE RuntimeError`; 11 first-attempt cases pass | Exit 0; all 33 passed |
+
+All restorations matched SHA-256
+`1cdc0149de2198ebde78afa2c66852bead27c9b690f5e953cafcb90f79a3007c`.
+The 27-case increase adjusts only collection/pass expectations, from
+8699/8697 to 8726/8724; every ceiling is preserved. This is a targeted-suite
+delta, not an observed full-suite result.
+
+All six current PR #1193 threads were reread; the existing
+[review dispositions](#review-dispositions-for-pr-1193) remain supported by the
+source and this passing suite. The provenance disposition now also has explicit
+failure-before-write coverage for each attempt position and lookup exceptions.
+
+For the base head `78474cdf015f76178d22bb1243da171616f8901d`,
+[Gate run 43122276375](https://github.com/stranske/Orchestrator/actions/runs/43122276375)
+and [CI run 43122277157](https://github.com/stranske/Orchestrator/actions/runs/43122277157)
+both concluded `success`. The checkout shards, flat-mirror shards, both CI
+aggregates, and Gate's lint-format/lint-ruff/typecheck-mypy checks passed.
+These results cover the base head only. No new live trial is claimed; the
+existing dated six-attempt record below remains explicitly incomplete for
+provider provenance.
+
+Black 26.10.1 formatted the changed test at line length 100. Its worker pool
+stalled in this sandbox, so the unmodified single-file CLI was invoked over all
+842 tracked Python files to populate its normal cache; every invocation passed.
+The required repository-wide command then exited 0:
+
+```text
+PATH="/tmp/orch-1216-venv/bin:$PATH" \
+  PYTHONPATH=/tmp/orch-1216-tools:/tmp/orch-1216-venv/lib/python3.14/site-packages/pip/_vendor \
+  BLACK_NUM_WORKERS=1 XDG_CACHE_HOME=/tmp/orch-1216-cache \
+  black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .
+701 files would be left unchanged; exit 0.
+
+git add tests/test_profile_trial_ingest.py .verify-floor.json \
+  docs/verification/issue-1216-provenance.md
+fatal: Unable to create '.../.git/index.lock': Read-only file system
+```
+
+`git diff --check` passes. No commit was created. Adding `needs-human` and
+posting the blocker comment to PR #1352 were each rejected by automatic approval
+review: `MCP tool call requires approval, but approval policy is never`.
+Those remote mutations did not occur. The PR was verified open and ready
+(`draft=false`). Delivery and final-head CI remain incomplete until these
+working-tree changes can be committed to the existing branch.
+
 ## Local keepalive round 4, 2026-11-11
 
 GitHub returned six current, unresolved threads on the closed PR #1193,

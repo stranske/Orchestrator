@@ -514,31 +514,73 @@ def test_invalid_or_unconfirmed_response_ids_refuse_even_with_a_trusted_lookup(
         _assert_trial_feedback_tables_empty(conn)
 
 
-@pytest.mark.parametrize("field", ["id", "model", "status", "metadata", "usage", "unavailable"])
+@pytest.mark.parametrize("attempt_index", [0, 1, 2], ids=["first", "middle", "last"])
+@pytest.mark.parametrize(
+    "field",
+    [
+        "object",
+        "id",
+        "model",
+        "status",
+        "metadata.run_id",
+        "metadata.profile_id",
+        "metadata.packet_hash",
+        "usage.input_tokens",
+        "usage.output_tokens",
+        "unavailable",
+        "lookup-error",
+    ],
+)
 def test_provider_response_must_independently_confirm_the_trial_measurement(
-    tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture, field
+    tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture, field, attempt_index
 ):
+    """Every attempt needs confirmation before any trial feedback or state is written."""
     _use_temp_feedback(tmp_path, monkeypatch)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
     lookup = _bind_authoritative_identity(tmp_path, trial_attempt_fixture)
-    response = lookup("resp_fixture1")
-    if field == "unavailable":
-
-        def lookup(_response_id):
-            return None
-
-    elif field == "metadata":
-        response[field]["run_id"] = "another-run"
-    elif field == "usage":
-        response[field]["input_tokens"] += 1
-    else:
+    # Validation orders attempts by profile, independently of their launch order.
+    attempts = model_profile_trial._validate_results(trial_manifest, trial_attempt_fixture)
+    response_ids = [
+        json.loads(Path(attempt["identity_evidence"]["artifact_ref"]).read_text())["response_id"]
+        for attempt in attempts
+    ]
+    assert model_profile_trial._authoritative_identity_verified(
+        attempts, provider_response_lookup=lookup
+    )
+    bad_response_id = response_ids[attempt_index]
+    response = lookup(bad_response_id)
+    if "." in field:
+        parent, child = field.split(".")
+        response[parent][child] = (
+            "another-trial" if parent == "metadata" else response[parent][child] + 1
+        )
+    elif field not in {"unavailable", "lookup-error"}:
         response[field] = "forged"
-    with pytest.raises(ValueError, match="identity evidence is not authoritative"):
+    lookup_requests = []
+
+    def tracked_lookup(response_id):
+        lookup_requests.append(response_id)
+        if response_id == bad_response_id and field == "unavailable":
+            return None
+        if response_id == bad_response_id and field == "lookup-error":
+            raise RuntimeError("provider lookup unavailable")
+        return lookup(response_id)
+
+    error = RuntimeError if field == "lookup-error" else ValueError
+    message = "provider lookup unavailable" if field == "lookup-error" else "not authoritative"
+    state_path = tmp_path / "refused-state.json"
+    with pytest.raises(error, match=message):
         model_profile_trial.finalize_trial(
             trial_manifest,
             trial_attempt_fixture,
+            state_path=state_path,
+            record_feedback=True,
             ingest_brain=True,
-            provider_response_lookup=lookup,
+            provider_response_lookup=tracked_lookup,
         )
+    assert lookup_requests == response_ids[: attempt_index + 1]
+    assert not state_path.exists()
+    assert not (tmp_path / "capability-program" / "profile-trial.json").exists()
     with feedback._conn() as conn:
         _assert_trial_feedback_tables_empty(conn)
 
