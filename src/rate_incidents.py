@@ -86,6 +86,23 @@ def _contains_explicit_resource_exhausted(text: str) -> bool:
     )
 
 
+def _contains_billing_refusal(text: str) -> bool:
+    """A provider refusing for SPEND (HTTP 402), in the harness's or the provider's own structure.
+
+    On 2026-11-11 Mistral answered every vibe run with `status: 402 Payment Required` and
+    `"type":"billing_vibe_budget_exhausted"` from at least 15:59Z. Nothing here recognized it, so no
+    incident or shed was recorded, the seat stayed `ok`, and the closer kept dispatching repairs
+    that died in six seconds (Workflows#4647, then #4637). Structure only, never prose: the
+    provider's JSON error type, or a line-anchored `status: 402` field that the same text also names
+    as a payment or budget refusal.
+    """
+    if re.search(r'(?i)"type"\s*:\s*"billing_[a-z0-9_]*(?:exhausted|exceeded)"', text):
+        return True
+    return bool(re.search(r"(?im)^\s*status(?:\s+code)?\s*[:=]\s*402\b", text)) and bool(
+        re.search(r"(?i)\bpayment\s+required\b|\bbudget\s+exhausted\b", text)
+    )
+
+
 def classify_provider_failure(text: str) -> tuple[str, str, str]:
     """Return an authoritative category only for explicit capacity evidence."""
     if not isinstance(text, str) or not text:
@@ -102,6 +119,8 @@ def classify_provider_failure(text: str) -> tuple[str, str, str]:
         for line in text.splitlines()
     ):
         return "quota", "quota_exhausted", "high"
+    if _contains_billing_refusal(text):
+        return "quota", "billing_exhausted", "high"
     if _contains_explicit_resource_exhausted(text):
         return "capacity", "resource_exhausted", "high"
     # A bare number is ordinary task prose (issue 429, 429 lines, 429 tests).
@@ -396,8 +415,12 @@ def stdout_carries_capacity_evidence(text: str) -> bool:
     """Whether successful stdout is explicit enough to include in failure classification."""
     if not isinstance(text, str) or not text:
         return False
-    return _contains_explicit_resource_exhausted(text) or bool(
-        re.search(r"(?im)^\s*ActionRequiredError\b[^\n]*(?:out of usage|quota exhausted)", text)
+    return (
+        _contains_explicit_resource_exhausted(text)
+        or _contains_billing_refusal(text)
+        or bool(
+            re.search(r"(?im)^\s*ActionRequiredError\b[^\n]*(?:out of usage|quota exhausted)", text)
+        )
     )
 
 
