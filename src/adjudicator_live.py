@@ -494,7 +494,11 @@ def run_live(
     # "Advised" has ONE record, the Brain's `live_shadow_advice` event, which `live_disputes`
     # excludes by target; an advised row saved before that event existed is backfilled once here.
     _backfill_advice_events(rows, db)
-    settled = {row.get("case_id") for row in rows if _final(row) and "proposal" not in row}
+    settled = {
+        str(row["case_id"])
+        for row in rows
+        if row.get("case_id") and _final(row) and "proposal" not in row
+    }
     retrying = {row.get("case_id"): row for row in rows if not _final(row)}
     population = retro.disputes(db=db, now=now)
     attempted = advised = uncertified = 0
@@ -632,7 +636,7 @@ def _record_advice_event(row: dict, db: Path | None) -> None:
     The event's run id is synthetic (`adjudicator-live:<case>`), never the disputed run's, so the
     event cannot become that run's latest completion event or adopt its influence edges.
     """
-    kwargs = dict(
+    kwargs: dict[str, Any] = dict(
         event_type="role",
         phase=retro.LIVE_ADVICE_PHASE,
         producer=retro.LIVE_ADVICE_PRODUCER,
@@ -660,9 +664,10 @@ def _backfill_advice_events(rows: list[dict], db: Path | None) -> None:
     except Exception:  # noqa: BLE001 - an unreadable Brain is reported by the selection below
         return
     for row in rows:
-        if "proposal" in row and row.get("target") not in recorded:
+        target = row.get("target")
+        if "proposal" in row and isinstance(target, str) and target not in recorded:
             _record_advice_event(row, db)
-            recorded.add(row.get("target"))
+            recorded.add(target)
 
 
 def _grade_and_write(
