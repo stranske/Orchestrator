@@ -1,0 +1,32 @@
+{
+  "round": "20261109T091555Z",
+  "ts": "2026-11-09T09:16:04Z",
+  "apply": true,
+  "items": [
+    {
+      "age_h": 3.2,
+      "disposition": "delivered",
+      "error": null,
+      "first_seen": "2026-11-09T06:01:26Z",
+      "handoffs": [],
+      "owner": "-",
+      "reasons": [
+        "merged 2026-11-09T09:10:35Z; 1 files, 0 mismatches"
+      ],
+      "target": "stranske/Orchestrator#1289",
+      "terminal": "delivered"
+    }
+  ],
+  "target_readback": {
+    "disposition": "delivered",
+    "first_seen": 1794204086.419538,
+    "head": "6efd1db39f9ba919d0f0ff6f63e2c0056ca64172",
+    "hold_until": null,
+    "last_round": "20261109T091555Z",
+    "owner": "-",
+    "target": "stranske/Orchestrator#1289",
+    "terminal": "delivered",
+    "terminal_at": 1794204086.419562,
+    "verification_pending": false
+  }
+}

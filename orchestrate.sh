@@ -279,6 +279,21 @@ if ! cadence_shell="$(python3 "$ORCH/cadence_registry.py" shell)"; then
   exit 1
 fi
 eval "$cadence_shell"
+# ORCH-ANCHOR: followup-evidence ---------------------------------------------------------------
+# Local collection must survive an auth/capability abort later in this tick.
+# Existing launchd cadence owns this observer; no second scheduler or writer.
+# This phase is local-only; authentication gates all later reconciliation.
+followup_collected=0
+if [[ "$mode" == "active" ]] && ! _step_disabled followup-evidence; then
+  echo "  [cadence] delayed follow-up evidence (hourly; before preflights)"
+  if python3 "$ORCH/followup_evidence.py" --state-dir "$STAMP_DIR" >> "$STAMP_DIR/followup-evidence.log" 2>&1; then
+    followup_stamp="$(cadence_stamp followup-evidence)"
+    touch "$STAMP_DIR/$followup_stamp"
+    followup_collected=1
+  else
+    echo "  warn: followup-evidence incomplete; retain original writer/evidence and retry next tick; see $STAMP_DIR/followup-evidence.log"
+  fi
+fi
 # ORCH-ANCHOR: gh-auth-preflight ----------------------------------------------------------------
 # --active must never act on stale or blind state. With no usable token the rails read labels as
 # empty (a false negative) and their writes fail, so a missing or refused credential ABORTS here.
@@ -405,6 +420,10 @@ unset _orch_exp_trial _orch_exp_end _orch_exp_verdict _orch_exp_default
 # orchestrator-owned artifacts (capacity.json/backlog.json); the legacy lanes never read them, so
 # this is safe in either mode.
 python3 "$ORCH/capacity.py"        >/dev/null 2>&1 || echo "  warn: capacity.py failed (continuing)"
+# A provider quota on one tier (gemini's Argon `full`) caps that seat below it for this tick
+# instead of shedding the whole seat; every process the tick starts inherits the ceiling.
+tier_exports="$(python3 "$ORCH/capacity.py" tier-ceiling-exports 2>/dev/null)" && eval "$tier_exports" \
+  || echo "  warn: tier ceilings unavailable (continuing; scoped sheds then cap nothing)"
 # Compare the existing shadow role with opener ordering even while dispatch is off.
 # This reads GitHub and writes observations only; never labels or delegates a worker.
 if [[ "$mode" == "active" && "${ORCH_TRIAGE_SHADOW:-1}" == "1" ]] && ! _gh_deferred; then
@@ -549,6 +568,13 @@ _mark_fail() {  # $1=step key, $2=optional hint
     echo "  ALERT: cadence step $1 has failed $n consecutive attempts -- needs owner attention"
   fi
 }
+# Reconcile only after auth and the active-tick admission checks above. The
+# original local observation is reused; no second ledger/source poll occurs.
+if [[ "$mode" == "active" && "${followup_collected:-0}" == "1" ]] && ! _gh_deferred; then
+  if ! python3 "$ORCH/followup_evidence.py" --state-dir "$STAMP_DIR" --reconcile >> "$STAMP_DIR/followup-evidence.log" 2>&1; then
+    echo "  warn: followup-evidence publication pending; local observation and frozen acknowledgment retained; retry next tick"
+  fi
+fi
 # Activation is a machine invariant, not a feature-maturity claim. On every active tick, persist
 # expiry transitions, validate all declared capabilities, and regenerate the operator inventory
 # from the local lifecycle ledger. Invalid active declarations alert but do not hide the rest of

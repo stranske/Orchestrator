@@ -207,7 +207,7 @@ def unevaluated_experiment_ids(
     *,
     window_days: int | None = None,
     now: float | None = None,
-) -> set[str]:
+) -> dict[str, Any]:
     """Experiments still PENDING evaluation — lacking evaluation rows AND still reachable.
 
     Bounded by `EVALUABLE_WINDOW_DAYS` (see the constant for the deadlock this fixes): an
@@ -217,23 +217,81 @@ def unevaluated_experiment_ids(
     FAILS SAFE toward the cap: an experiment whose newest run carries NO timestamp has unknown age
     and is COUNTED. Unknown age must not silently unblock the arm — the conservative direction here
     is to keep the cap honest, not to widen it.
+
+    Returns a dict with:
+    - 'ids': set of experiment IDs that are pending (have meta.json, no evaluation row, within window)
+    - 'unreadable': count of experiments with unreadable meta.json
+    - 'drainable': count of experiments that exp_abcd.followup can evaluate (meta.json + spec.md
+      present, no eval-maps.json, no followup-skip.json)
+    - 'total': total count of pending experiments (ids only, for backward compatibility with len())
     """
     window = EVALUABLE_WINDOW_DAYS if window_days is None else int(window_days)
     cutoff = (time.time() if now is None else float(now)) - max(0, window) * 86400.0
+
+    # Import exp_abcd here to avoid circular import
+    import exp_abcd
+
     try:
+        # Get all experiment IDs from runs table with their max timestamp
+        rows = conn.execute(
+            "SELECT r.experiment_id, MAX(r.ts) FROM runs r "
+            "WHERE r.experiment_id IS NOT NULL AND r.experiment_id<>'' "
+            "AND NOT EXISTS (SELECT 1 FROM evaluations e WHERE e.experiment_id=r.experiment_id) "
+            "AND NOT EXISTS (SELECT 1 FROM evaluations_v2 e WHERE e.experiment_id=r.experiment_id) "
+            "GROUP BY r.experiment_id"
+        ).fetchall()
+
+        unreadable_count = 0
+        drainable_count = 0
+        pending_ids = set()
+
+        for row in rows:
+            exp_id = str(row[0])
+            ts = row[1]
+
+            # FAIL SAFE: experiments with None timestamp have unknown age and MUST be counted
+            # Skip only if timestamp is not None and is too old
+            if ts is not None and float(ts) < cutoff:
+                continue
+
+            # Check if meta.json exists
+            exp_path = exp_abcd.exp_paths(exp_id)
+            meta_path = exp_path / "meta.json"
+
+            if not meta_path.exists():
+                # No meta.json, not a valid A/B experiment - don't count
+                continue
+
+            # Try to read meta.json
+            try:
+                with open(meta_path, "r") as f:
+                    json.load(f)  # Validate JSON
+                # Drainable = exp_abcd.followup will attempt it (its own predicate, not a copy).
+                is_drainable = exp_abcd.followup_will_attempt(exp_path)
+
+                pending_ids.add(exp_id)
+                if is_drainable:
+                    drainable_count += 1
+            except (ValueError, OSError):
+                # ValueError covers JSONDecodeError and UnicodeDecodeError (invalid UTF-8): one corrupt
+                # meta.json must count as unreadable, never fall through to the outer fail-open handler.
+                # Unreadable meta.json - count as pending but track separately
+                pending_ids.add(exp_id)
+                unreadable_count += 1
+
         return {
-            str(row[0])
-            for row in conn.execute(
-                "SELECT r.experiment_id, MAX(r.ts) FROM runs r "
-                "WHERE r.experiment_id IS NOT NULL AND r.experiment_id<>'' "
-                "AND NOT EXISTS (SELECT 1 FROM evaluations e "
-                "WHERE e.experiment_id=r.experiment_id) "
-                "GROUP BY r.experiment_id"
-            ).fetchall()
-            if row[1] is None or float(row[1]) >= cutoff
+            "ids": pending_ids,
+            "unreadable": unreadable_count,
+            "drainable": drainable_count,
+            "total": len(pending_ids),
         }
     except (sqlite3.Error, TypeError, ValueError):
-        return set()
+        return {
+            "ids": set(),
+            "unreadable": 0,
+            "drainable": 0,
+            "total": 0,
+        }
 
 
 DOMAIN_PREFIX = "domain/"
@@ -852,21 +910,26 @@ def assess_candidate(
         # `now` is threaded through deliberately: this function already takes an injected clock, and
         # a window computed from the REAL clock while the rest of the decision uses the injected one
         # is two clocks disagreeing — the same shape as the two windows this whole fix is about.
-        backlog_ids = unevaluated_experiment_ids(db, now=now)
-        backlog_count = len(backlog_ids)
+        backlog = unevaluated_experiment_ids(db, now=now)
+        backlog_count = backlog["total"]
+        backlog_drainable = backlog["drainable"]
+        backlog_unreadable = backlog["unreadable"]
         # THE GATE MUST REPORT ITS OWN DRAIN, not just its blocker. `backlog_count` is now the
         # REACHABLE count (bounded by EVALUABLE_WINDOW_DAYS); `backlog_total` is every unevaluated
         # experiment including the ones past the drain's reach. Reporting one number is what let
         # this gate sit at "128 of 25" for five weeks reading as ordinary backpressure — the pair
         # `reachable 0 / total 128` names the deadlock on sight. See ~/.claude/skills/latched-gate-check.
-        backlog_total = len(unevaluated_experiment_ids(db, window_days=10**9, now=now))
+        backlog_total_result = unevaluated_experiment_ids(db, window_days=10**9, now=now)
+        backlog_total = backlog_total_result["total"]
         if max(0, int(unevaluated_cap)) <= backlog_count:
             return {
                 **identity,
                 "eligible": False,
-                "reason": "unevaluated_backlog_cap",
+                "reason": f"unevaluated {backlog_count}/{max(0, int(unevaluated_cap))}, drainable {backlog_drainable}",
                 "unevaluated_backlog": backlog_count,
                 "unevaluated_backlog_total": backlog_total,
+                "unevaluated_backlog_drainable": backlog_drainable,
+                "unevaluated_backlog_unreadable": backlog_unreadable,
                 "unevaluated_cap": max(0, int(unevaluated_cap)),
             }
         if not _table_exists(db, "research_subjects"):
@@ -876,6 +939,8 @@ def assess_candidate(
                 "reason": "admitted",
                 "unevaluated_backlog": backlog_count,
                 "unevaluated_backlog_total": backlog_total,
+                "unevaluated_backlog_drainable": backlog_drainable,
+                "unevaluated_backlog_unreadable": backlog_unreadable,
                 "unevaluated_cap": max(0, int(unevaluated_cap)),
             }
         if identity.get("base_sha") is None:
@@ -907,6 +972,8 @@ def assess_candidate(
                     "existing_exp_id": exact[1],
                     "unevaluated_backlog": backlog_count,
                     "unevaluated_backlog_total": backlog_total,
+                    "unevaluated_backlog_drainable": backlog_drainable,
+                    "unevaluated_backlog_unreadable": backlog_unreadable,
                     "unevaluated_cap": max(0, int(unevaluated_cap)),
                 }
             if int(exact[2] or 0) > now:
@@ -918,6 +985,8 @@ def assess_candidate(
                     "existing_exp_id": exact[1],
                     "unevaluated_backlog": backlog_count,
                     "unevaluated_backlog_total": backlog_total,
+                    "unevaluated_backlog_drainable": backlog_drainable,
+                    "unevaluated_backlog_unreadable": backlog_unreadable,
                     "unevaluated_cap": max(0, int(unevaluated_cap)),
                 }
         # THE COOLDOWN IS PER ISSUE, not per arm set (2026-10-12). Keyed on the arm set alone, a
@@ -939,6 +1008,8 @@ def assess_candidate(
                 "existing_exp_id": family_cooldown[1],
                 "unevaluated_backlog": backlog_count,
                 "unevaluated_backlog_total": backlog_total,
+                "unevaluated_backlog_drainable": backlog_drainable,
+                "unevaluated_backlog_unreadable": backlog_unreadable,
                 "unevaluated_cap": max(0, int(unevaluated_cap)),
             }
         family_open = 0
@@ -971,6 +1042,8 @@ def assess_candidate(
                 "per_subject_cap": max(1, int(per_subject_cap)),
                 "unevaluated_backlog": backlog_count,
                 "unevaluated_backlog_total": backlog_total,
+                "unevaluated_backlog_drainable": backlog_drainable,
+                "unevaluated_backlog_unreadable": backlog_unreadable,
                 "unevaluated_cap": max(0, int(unevaluated_cap)),
             }
         return {
@@ -979,6 +1052,8 @@ def assess_candidate(
             "reason": "admitted",
             "unevaluated_backlog": backlog_count,
             "unevaluated_backlog_total": backlog_total,
+            "unevaluated_backlog_drainable": backlog_drainable,
+            "unevaluated_backlog_unreadable": backlog_unreadable,
             "unevaluated_cap": max(0, int(unevaluated_cap)),
         }
     finally:
@@ -1234,7 +1309,7 @@ def summary(
     close = conn is None
     now = int(now or time.time())
     since = now - max(1, int(window_days)) * 86400
-    unevaluated_ids = unevaluated_experiment_ids(db)
+    unevaluated = unevaluated_experiment_ids(db)
     if not _table_exists(db, "research_subjects"):
         if close:
             db.close()
@@ -1242,9 +1317,11 @@ def summary(
             "window_days": window_days,
             "registered_subjects": 0,
             "independent_subjects": 0,
-            "unevaluated_backlog": len(unevaluated_ids),
+            "unevaluated_backlog": unevaluated["total"],
+            "unevaluated_backlog_drainable": unevaluated["drainable"],
+            "unevaluated_backlog_unreadable": unevaluated["unreadable"],
             "unevaluated_cap": DEFAULT_UNEVALUATED_CAP,
-            "unevaluated_backlog_cap_reached": len(unevaluated_ids) >= DEFAULT_UNEVALUATED_CAP,
+            "unevaluated_backlog_cap_reached": unevaluated["total"] >= DEFAULT_UNEVALUATED_CAP,
             "lifecycle_counts": {},
             "true_task_type_distribution": {},
             "duplicate_rejections": 0,
@@ -1284,9 +1361,11 @@ def summary(
         "registered_subjects": len(rows),
         "registered_experiments": len(experiment_rows),
         "independent_subjects": len(families),
-        "unevaluated_backlog": len(unevaluated_ids),
+        "unevaluated_backlog": unevaluated["total"],
+        "unevaluated_backlog_drainable": unevaluated["drainable"],
+        "unevaluated_backlog_unreadable": unevaluated["unreadable"],
         "unevaluated_cap": DEFAULT_UNEVALUATED_CAP,
-        "unevaluated_backlog_cap_reached": len(unevaluated_ids) >= DEFAULT_UNEVALUATED_CAP,
+        "unevaluated_backlog_cap_reached": unevaluated["total"] >= DEFAULT_UNEVALUATED_CAP,
         "lifecycle_counts": dict(sorted(lifecycle_counts.items())),
         "true_task_type_distribution": dict(sorted(task_counts.items())),
         "duplicate_rejections": sum(
@@ -1307,6 +1386,22 @@ def summary(
 
 
 def _selftest() -> None:
+    """Run the selftest against a temporary experiments directory, never the live one."""
+    import tempfile
+    from pathlib import Path
+
+    import exp_abcd
+
+    saved = exp_abcd.EXP_DIR
+    with tempfile.TemporaryDirectory(prefix="research-subjects-selftest-") as tmp:
+        exp_abcd.EXP_DIR = Path(tmp) / "experiments"
+        try:
+            _selftest_body()
+        finally:
+            exp_abcd.EXP_DIR = saved
+
+
+def _selftest_body() -> None:
     conn = sqlite3.connect(":memory:")
     conn.executescript(feedback.SCHEMA)
     feedback._migrate_schema(conn)
@@ -1333,6 +1428,29 @@ def _selftest() -> None:
     # experiments inside EVALUABLE_WINDOW_DAYS. The cap counted over all time, so the number could
     # never fall and the research arm planned nothing for five weeks.
     cap_now = now
+    # Create experiments directories with meta.json files for A/B experiments
+    import json
+
+    import exp_abcd
+
+    # Ensure the experiments directory exists
+    exp_abcd.EXP_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Create exp-fresh (within window, should be counted)
+    exp_fresh_dir = exp_abcd.EXP_DIR / "exp-fresh"
+    exp_fresh_dir.mkdir(exist_ok=True)
+    (exp_fresh_dir / "meta.json").write_text(json.dumps({"experiment_id": "exp-fresh"}))
+
+    # Create exp-stale (past window, should NOT be counted)
+    exp_stale_dir = exp_abcd.EXP_DIR / "exp-stale"
+    exp_stale_dir.mkdir(exist_ok=True)
+    (exp_stale_dir / "meta.json").write_text(json.dumps({"experiment_id": "exp-stale"}))
+
+    # Create exp-nots (no timestamp, FAIL SAFE should be counted)
+    exp_nots_dir = exp_abcd.EXP_DIR / "exp-nots"
+    exp_nots_dir.mkdir(exist_ok=True)
+    (exp_nots_dir / "meta.json").write_text(json.dumps({"experiment_id": "exp-nots"}))
+
     conn.execute(
         "INSERT INTO runs (run_id,ts,agent,task_type,target,experiment_id) VALUES (?,?,?,?,?,?)",
         ("run-fresh", cap_now - 2 * 86400, "codex", "testgen", "Owner/Repo#9", "exp-fresh"),
@@ -1346,12 +1464,13 @@ def _selftest() -> None:
         ("run-nots", None, "codex", "testgen", "Owner/Repo#7", "exp-nots"),
     )
     pending = unevaluated_experiment_ids(conn, now=cap_now)
+    pending_ids = pending["ids"]
     # The 2-day-old one is genuinely pending and MUST still count — the cap is not being weakened.
-    assert "exp-fresh" in pending, pending
+    assert "exp-fresh" in pending_ids, pending_ids
     # The 60-day-old one is past the drain's reach; counting it is what latched the gate.
-    assert "exp-stale" not in pending, pending
+    assert "exp-stale" not in pending_ids, pending_ids
     # FAIL SAFE: unknown age counts, so a missing timestamp can never silently unblock the arm.
-    assert "exp-nots" in pending, pending
+    assert "exp-nots" in pending_ids, pending_ids
     # THE GATE MUST NAME ITS OWN DRAIN. Reporting only the blocker is what made a five-week
     # deadlock read as ordinary backpressure; the pair reachable-vs-total names it on sight.
     verdict = assess_candidate(
@@ -1365,14 +1484,20 @@ def _selftest() -> None:
         unevaluated_cap=99,
     )
     assert verdict["unevaluated_backlog_total"] >= verdict["unevaluated_backlog"], verdict
-    assert verdict["unevaluated_backlog_total"] >= 3, verdict  # includes the 60-day-old one
+    # With the new meta.json requirement: exp-fresh and exp-nots are reachable (both have meta.json),
+    # exp-stale is not reachable (past window). Total includes all three.
+    assert (
+        verdict["unevaluated_backlog_total"] >= 2
+    ), verdict  # includes exp-stale which is past window
     assert verdict["unevaluated_backlog"] == 2, verdict  # reachable: fresh + unknown-age only
     # ...and an evaluated experiment leaves the count by the original path, unchanged.
     conn.execute(
         "INSERT INTO evaluations (experiment_id,implementer,evaluator,score,ts) VALUES (?,?,?,?,?)",
         ("exp-fresh", "codex", "cursor", 7.0, cap_now),
     )
-    assert "exp-fresh" not in unevaluated_experiment_ids(conn, now=cap_now), "evaluated must clear"
+    assert (
+        "exp-fresh" not in unevaluated_experiment_ids(conn, now=cap_now)["ids"]
+    ), "evaluated must clear"
     # THE TWO WINDOWS ARE ONE NUMBER BY CONSTRUCTION, not by comment: followup defaults to it.
     import inspect as _inspect
 

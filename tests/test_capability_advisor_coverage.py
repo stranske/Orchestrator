@@ -36,24 +36,6 @@ _LIVE_RUNTIME_ROOTS = tuple(
 # same reason when TMPDIR itself is the live state dir.
 _EXEMPT_ROOTS: list[Path] = [Path(__file__).resolve().parent.parent]
 _EXEMPT_ROOTS.append(advisor_hermetic.root().resolve())
-# Every process-start and network boundary the exercised code could reach, by audit event rather
-# than by helper, so an agent launch through any wrapper (dispatcher, fleet_shapes' `gh`, os.system,
-# posix_spawn) is caught the same way.
-_EXTERNAL_EVENTS = (
-    "subprocess.Popen",
-    "os.system",
-    "os.exec",
-    "os.posix_spawn",
-    "os.spawn",
-    "os.fork",
-    "os.forkpty",
-    "pty.spawn",
-    "socket.connect",
-    "socket.getaddrinfo",
-    "socket.gethostbyname",
-    "urllib.Request",
-    "http.client.connect",
-)
 _attempted: list[tuple[str, str]] | None = None
 
 
@@ -72,9 +54,6 @@ def _live_runtime_path(raw) -> bool:
 def _guard(event: str, args: tuple) -> None:
     if _attempted is None:
         return
-    if event in _EXTERNAL_EVENTS:
-        _attempted.append((event, repr(args)[:200]))
-        raise RuntimeError(f"advisor coverage test attempted external operation {event}")
     if event == "open" and args and _live_runtime_path(args[0]):
         _attempted.append((event, os.fsdecode(args[0])))
         raise RuntimeError(f"advisor coverage test touched live runtime state {args[0]}")
@@ -85,12 +64,12 @@ sys.addaudithook(_guard)
 
 @pytest.fixture(scope="module", autouse=True)
 def isolated_runtime_and_external_calls(tmp_path_factory):
-    """Arm the external-operation recorder for this module.
+    """Arm the live-runtime guard for this module.
 
     ``advisor_hermetic`` sets ``ORCH_STATE_DIR`` and ``ORCH_LOCAL_RUNTIME`` before the import and
     the conftest fixture repoints paths already captured then. This recorder only proves no read
     reached the live directories. It is not a MonkeyPatch, so a test's ``monkeypatch`` cannot
-    disarm it.
+    disarm it. Process and network guards are now provided by the advisor_external_guard fixture.
     """
     global _attempted
     _EXEMPT_ROOTS.append(tmp_path_factory.getbasetemp().resolve())
@@ -104,34 +83,11 @@ def isolated_runtime_and_external_calls(tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
-def no_external_operation_in_this_test(isolated_runtime_and_external_calls):
-    """Attribute any attempted operation to the test that made it, even if the code swallowed it."""
+def no_live_runtime_read_in_this_test(isolated_runtime_and_external_calls):
+    """Attribute any attempted live-runtime read to the test that made it, even if the code swallowed it."""
     before = len(isolated_runtime_and_external_calls)
     yield
     assert isolated_runtime_and_external_calls[before:] == []
-
-
-def test_guard_records_and_blocks_external_operations(isolated_runtime_and_external_calls):
-    """The recorder is live: a blocked launch is refused and recorded, then cleared for this check."""
-    import subprocess
-
-    live_ledger = next(
-        root / "capabilities.json"
-        for root in _LIVE_RUNTIME_ROOTS
-        if _live_runtime_path(root / "capabilities.json")
-    )
-    before = len(isolated_runtime_and_external_calls)
-    with pytest.raises(RuntimeError, match="subprocess.Popen"):
-        subprocess.run(["true"])
-    with pytest.raises(RuntimeError, match="live runtime state"):
-        open(live_ledger)
-    assert [event for event, _ in isolated_runtime_and_external_calls[before:]] == [
-        "subprocess.Popen",
-        "open",
-    ]
-    del isolated_runtime_and_external_calls[before:]
-    assert not _live_runtime_path(os.environ["ORCH_STATE_DIR"])
-    assert not _live_runtime_path(os.environ["ORCH_LOCAL_RUNTIME"])
 
 
 def test_dispatcher_failure_and_legacy_matcher_degrade_without_inventing_a_route(monkeypatch):
@@ -726,45 +682,45 @@ def test_cli_without_a_task_exits_with_the_three_ways_in(capsys):
 # consult-site scan and its machine-local ledger gate. The locations below are the limit.
 SELFTEST_PATH_LIMITS = (
     (
-        3860,
+        3872,
         'SURFACE_BINDINGS["t-howto"] = real_surface',
         "else restores a pre-seeded t-howto entry; the selftest pops the key when it was absent, "
         "and production never pre-seeds that key",
     ),
     (
-        3958,
+        3970,
         'SURFACE_BINDINGS["t-concept"] = real_surface',
         "else restores a pre-seeded t-concept entry; same pop-versus-restore split as t-howto",
     ),
     (
-        4253,
+        4265,
         'SURFACE_BINDINGS["t-contra"] = real_binding',
         "else restores a pre-seeded t-contra entry inside _selftest_contraindications",
     ),
     (
-        4590,
+        4602,
         'SURFACE_BINDINGS["t-empty"] = real_empty',
         "else restores a pre-seeded t-empty entry inside _selftest_bindings",
     ),
     (
-        4651,
+        4663,
         'SURFACE_BINDINGS["t-surface"] = real',
         "else restores a pre-seeded t-surface entry inside _selftest_bindings",
     ),
     (
-        5160,
+        5172,
         'SURFACE_BINDINGS["t-precond"] = real',
         "else restores a pre-seeded t-precond entry inside _selftest_preconditions",
     ),
     (
-        3993,
+        4005,
         "for text, expected in cases:",
         "_selftest_front_door returns at the ledger-row gate unless offload, codemod-campaign, "
         "and testgen-lane are already registered; those rows are machine-local, and a stand-in "
         "ledger would not satisfy the real matcher assertions",
     ),
     (
-        5296,
+        5308,
         "for surface, why in KNOWN_UNCONSULTED.items():",
         "the loop body is the tail of _selftest_findability, after that function has checked "
         "every consult-site caller; a copied assert would not execute these lines, and running "

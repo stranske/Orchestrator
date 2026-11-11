@@ -5,6 +5,9 @@
 # session's work, so on any one tree only the latest run counts. CI already runs the same suite on
 # every PR head and on main. What only THIS machine can check is the populated capability ledger,
 # the installed agent CLIs and the flat mirror shape, so this is the one local run a sync needs.
+# SUPERSEDED AS THE DEFAULT (owner, 2026-11-08): a sync now deploys the commit CI verified, with a
+# load check and rollback; this script runs only under `orch-mirror-sync.sh --full-local-verify`
+# and in CI's exec-mirror job. docs/MIRROR_SYNC_PATCH.md, "The verdict is CI's".
 # The sync wrapper used to take it AFTER copying into the live mirror: a red verdict arrived after
 # launchd could already run the code, and a sync landing during a mirror run left that run reading
 # a half-old, half-new tree.
@@ -402,7 +405,10 @@ done
 # verify.py. Two literal lists could drift, and the load would then seed a ledger verify.py never
 # reads.
 in_state_copy() {
-  ORCH_LOCAL_RUNTIME="$runtime_copy" ORCH_STATE_DIR="$statedir_copy" \
+  # Only the outer publisher owns this attestation destination. Validation children
+  # may exercise nested publishers, whose fixture verdicts must stay in their sandbox.
+  env -u ORCH_VERIFIED_RECEIPT_OUT \
+    ORCH_LOCAL_RUNTIME="$runtime_copy" ORCH_STATE_DIR="$statedir_copy" \
     ORCH_CAPABILITIES_PATH="$ledger_copy" ORCH_FEEDBACK_DB="$brain_copy" \
     ORCH_FEATURES_PATH="$registry_copy/features.json" \
     ORCH_REPO_KNOWLEDGE_PATH="$registry_copy/repo_knowledge.json" \

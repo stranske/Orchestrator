@@ -101,8 +101,10 @@ def test_a_clean_idle_holder_is_reclaimed(layout, lane, capsys, monkeypatch):
 
 
 @pytest.mark.parametrize("lane", ["closer", "opener"])
-def test_b_dirty_holder_is_refused(layout, lane):
+def test_b_dirty_holder_is_refused(layout, lane, monkeypatch):
     canon, _ = layout
+    monkeypatch.delenv("ORCH_PRESERVE_IDLE_DIRTY_HOLDER", raising=False)
+    monkeypatch.setenv("HANDOFF_DIR", str(canon.parent / "private-handoff"))
     branch = "pr-head" if lane == "closer" else OPENER_BRANCH
     if lane == "opener":
         git(canon, "branch", branch)
@@ -110,6 +112,10 @@ def test_b_dirty_holder_is_refused(layout, lane):
     dirty = holder / "nested" / "keep.txt"
     dirty.parent.mkdir()
     dirty.write_text("uncommitted work")
+    (holder / ".gitignore").write_text("ignored.txt\n")
+    (holder / "ignored.txt").write_text("ignored work must remain")
+    (holder / "staged.txt").write_text("staged work must remain")
+    git(holder, "add", "staged.txt")
     with pytest.raises(RuntimeError) as caught:
         provision.provision(TARGET, lane)
     assert str(holder) in str(caught.value)
@@ -118,10 +124,46 @@ def test_b_dirty_holder_is_refused(layout, lane):
     assert len(events()) == 1
     assert events()[0]["outcome"] == "failed"
     assert events()[0]["cause"] == "branch-held"
+    if lane == "closer":
+        original_head = git(holder, "rev-parse", "HEAD")
+        original_status = git(holder, "status", "--porcelain")
+        index = Path(git(holder, "rev-parse", "--git-path", "index"))
+        index_bytes = index.read_bytes()
+        monkeypatch.setenv("ORCH_PRESERVE_IDLE_DIRTY_HOLDER", "1")
+        import claims
+
+        assert claims.claim(TARGET, "original-owner", pid=99999999)
+        with pytest.raises(RuntimeError, match="native holder claim"):
+            provision.provision(TARGET, lane)
+        assert dirty.read_text() == "uncommitted work"
+        assert claims.release(TARGET, "original-owner")
+
+        def blind(_holder):
+            raise provision.ProbeBlindError("cannot establish idle holder")
+
+        monkeypatch.setattr(provision, "_live_holder_pids", blind)
+        with pytest.raises(provision.ProbeBlindError):
+            provision.provision(TARGET, lane)
+        assert git(holder, "branch", "--show-current") == branch
+        monkeypatch.setattr(provision, "_live_holder_pids", lambda _holder: set())
+        wt = provision.provision(TARGET, lane)
+        assert dirty.read_text() == "uncommitted work"
+        assert (holder / "ignored.txt").read_text() == "ignored work must remain"
+        assert (holder / "staged.txt").read_text() == "staged work must remain"
+        assert index.read_bytes() == index_bytes
+        assert git(holder, "rev-parse", "HEAD") == original_head
+        assert git(holder, "status", "--porcelain") == original_status
+        preserved = events()[-1]["preserved_branch"]
+        assert git(holder, "branch", "--show-current") == preserved
+        assert git(wt, "branch", "--show-current") == branch
+        assert git(wt, "status", "--porcelain") == ""
+        assert events()[-1]["cause"] == "dirty-holder-preserved"
 
 
-def test_c_live_holder_is_refused_naming_pid(layout):
+def test_c_live_holder_is_refused_naming_pid(layout, monkeypatch):
     holder = hold(layout)
+    (holder / "dirty.txt").write_text("preserve this live work")
+    monkeypatch.setenv("ORCH_PRESERVE_IDLE_DIRTY_HOLDER", "1")
     proc = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(300)", str(holder)],
         cwd=layout[0].parent,
@@ -258,7 +300,9 @@ def test_missing_holder_directory_is_pruned(layout):
 
 
 @pytest.mark.parametrize("unique", [False, True])
-def test_diverged_opener_only_resets_when_all_commits_are_on_remotes(layout, unique):
+def test_diverged_opener_resumes_unpublished_work_and_only_resets_remote_backed_work(
+    layout, unique
+):
     canon, _ = layout
     git(canon, "switch", "-c", OPENER_BRANCH)
     git(canon, "commit", "--allow-empty", "-m", "old work")
@@ -269,11 +313,20 @@ def test_diverged_opener_only_resets_when_all_commits_are_on_remotes(layout, uni
     git(canon, "commit", "--allow-empty", "-m", "new base")
     git(canon, "push", "origin", "main")
     if unique:
-        with pytest.raises(RuntimeError, match="commits absent from every remote ref"):
-            provision.provision(TARGET, "opener")
+        wt = provision.provision(TARGET, "opener")
         assert git(canon, "rev-parse", OPENER_BRANCH) == tip
-        assert events()[0]["outcome"] == "failed"
-        assert events()[0]["cause"] == "branch-exists"
+        assert git(wt, "rev-parse", "HEAD") == tip
+        assert events()[0]["outcome"] == "reused"
+        assert events()[0]["cause"] == "branch-resume"
+        assert tip in events()[0]["unpublished_commits"]
+        # Unrelated/custom branch ownership remains ambiguous and cannot be
+        # reset or adopted under a standard issue's dispatch authority.
+        git(canon, "branch", "custom-work", tip)
+        with pytest.raises(RuntimeError, match="commits absent from every remote ref"):
+            provision.provision("example/repo#719", "opener", branch="custom-work")
+        assert git(canon, "rev-parse", "custom-work") == tip
+        assert events()[-1]["cause"] == "branch-exists"
+        assert events()[-1]["requested_branch"] == "custom-work"
     else:
         wt = provision.provision(TARGET, "opener")
         assert git(wt, "rev-parse", "HEAD") == git(canon, "rev-parse", "origin/main")
@@ -668,3 +721,103 @@ def test_worktree_stuck_mid_cherry_pick_is_preserved_without_switching(layout, m
     assert git(canon, "rev-parse", f"{kept}^") == head  # the stash commit sits on the agent's HEAD
     assert git(canon, "show", f"{kept}:f.txt") == "resolved"
     assert git(wt, "rev-parse", "HEAD") == git(canon, "rev-parse", "origin/pr-head")
+
+
+@pytest.mark.parametrize("lane", ["closer", "opener"])
+def test_native_clean_idle_holder_is_reclaimed(layout, lane, capsys):
+    """Unmocked process probes on the dispatcher host; ledger isolated by conftest."""
+    canon, _ = layout
+    branch = "pr-head" if lane == "closer" else OPENER_BRANCH
+    if lane == "opener":
+        git(canon, "branch", branch)
+    holder = hold(layout, branch)
+    wt = provision.provision(TARGET, lane)
+    assert (wt / ".git").is_file()
+    assert git(wt, "branch", "--show-current") == branch
+    assert not holder.exists()
+    assert (
+        f"provision: reclaimed stale worktree {holder} holding {branch}" in capsys.readouterr().out
+    )
+    rows = events()
+    assert len(rows) == 1
+    assert rows[0]["outcome"] == "reclaimed"
+    assert rows[0]["cause"] == "branch-held"
+    assert rows[0]["holder_path"] == str(holder)
+
+
+@pytest.mark.parametrize("lane", ["closer", "opener"])
+def test_native_reclaim_disabled_exit_128_names_holder(layout, lane, monkeypatch):
+    """Capture git exit 128 when reclaim is disabled and holder path is visible."""
+    canon, _ = layout
+    branch = "pr-head" if lane == "closer" else OPENER_BRANCH
+    if lane == "opener":
+        git(canon, "branch", branch)
+    holder = hold(layout, branch)
+    monkeypatch.setattr(provision, "_reclaim_branch_holder", lambda *args, **kwargs: None)
+    with pytest.raises(subprocess.CalledProcessError) as caught:
+        provision.provision(TARGET, lane)
+    assert caught.value.returncode == 128
+    assert str(holder) in (caught.value.stderr or "")
+    assert holder.exists()
+
+
+@pytest.mark.parametrize(
+    "text,seconds",
+    [
+        ("11:12:09", 40329.0),
+        ("02-14:54:07", 2 * 86400 + 53647.0),
+        ("0:00.25", 0.25),
+        ("05:03", 303.0),
+    ],
+)
+def test_ps_seconds_parses_etime_and_cputime(text, seconds):
+    assert provision._ps_seconds(text) == pytest.approx(seconds)
+
+
+def _child_in(holder):
+    return subprocess.Popen(["sleep", "300"], cwd=str(holder))
+
+
+def _faked_probes(monkeypatch, proc, *, cpu_s):
+    monkeypatch.setattr(
+        provision, "_live_holder_pids", lambda _h: {str(proc.pid)} if proc.poll() is None else set()
+    )
+    monkeypatch.setattr(
+        provision,
+        "_holder_process",
+        lambda pid, _h: {
+            "pid": pid,
+            "ppid": "1",
+            "age_s": 40329.0,
+            "cpu_s": cpu_s,
+            "comm": "unzip",
+        },
+    )
+
+
+def test_a_stale_orphan_holding_the_worktree_is_ended_and_the_holder_reclaimed(layout, monkeypatch):
+    """2026-11-11: an orphaned `unzip` (11 h, 0.00 s CPU, parent pid 1) made every reclaim of
+    stranske__Workflows__4635__opener refuse "live pid" for 36 of 60 closer rounds."""
+    holder = hold(layout)
+    proc = _child_in(holder)
+    try:
+        _faked_probes(monkeypatch, proc, cpu_s=0.0)
+        wt = provision.provision(TARGET, "closer")
+        assert proc.wait(timeout=10) is not None
+        assert not holder.exists() and wt.exists()
+        ended = [e for e in events() if e.get("stale_orphans_ended")]
+        assert ended and ended[-1]["stale_orphans_ended"][0]["pid"] == str(proc.pid)
+    finally:
+        proc.kill()
+
+
+def test_a_holder_process_using_cpu_is_never_ended(layout, monkeypatch):
+    holder = hold(layout)
+    proc = _child_in(holder)
+    try:
+        _faked_probes(monkeypatch, proc, cpu_s=120.0)
+        with pytest.raises(RuntimeError, match=r"live pid \d+ \(stale orphans 0 of 1\)"):
+            provision.provision(TARGET, "closer")
+        assert proc.poll() is None and holder.exists()
+    finally:
+        proc.kill()

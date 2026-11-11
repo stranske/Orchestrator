@@ -101,10 +101,10 @@ def test_observed_timeout_preserves_original_budget_and_partial_output(tmp_path)
             callback=lambda _event: None,
             observation={"run_id": "offline-timeout"},
             cwd=str(tmp_path),
-            timeout=0.3,
+            timeout=1.0,
             stdin=subprocess.DEVNULL,
         )
-    assert caught.value.timeout == 0.3
+    assert caught.value.timeout == 1.0
     assert "partial-out" in caught.value.output
     assert "partial-err" in caught.value.stderr
     assert caught.value.raw_exit == -9

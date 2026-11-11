@@ -359,6 +359,15 @@ CADENCE_STEPS: tuple[dict[str, Any], ...] = (
         "next_transition": "retry direct cost and trace pull after backoff",
     },
     {
+        "key": "followup-evidence",
+        "success_stamp": ".last-followup-evidence",
+        "cadence_days": -1,
+        "artifact": "followup-evidence/latest.json",
+        "log": "followup-evidence.log",
+        "gate": "active tick, exact original-source configuration, intact ledger/source bindings",
+        "next_transition": "collect locally each hour; revive existing opener only when genuine delayed evidence qualifies",
+    },
+    {
         "key": "ledger-reconcile",
         "success_stamp": ".last-ledger-reconcile",
         "cadence_days": 0,

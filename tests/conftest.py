@@ -65,10 +65,31 @@ TESTS_DIR = Path(__file__).parent
 
 
 @pytest.fixture(autouse=True)
+def isolate_capacity_shed_markers(tmp_path, monkeypatch):
+    """The host's live shed markers never reach a test.
+
+    `adapters.tier_ceiling` reads them on every dispatch path, so an active tier-scoped gemini
+    marker on the developer's machine would turn every `full` resolution in the suite into Flash.
+    """
+    try:
+        import capacity
+    except ModuleNotFoundError:
+        return  # standalone guard-test repos copy this conftest without src/
+    monkeypatch.setattr(capacity, "SHED_DIR", tmp_path / "capacity-shed-isolated")
+
+
+@pytest.fixture(autouse=True)
+def default_launch_check_off(monkeypatch):
+    """The local launch-binary check reads this machine's filesystem; tests opt in explicitly."""
+    monkeypatch.setenv("ORCH_LAUNCH_CHECK", "0")
+
+
+@pytest.fixture(autouse=True)
 def isolate_provision_events(tmp_path, monkeypatch):
     """Provision tests and their subprocesses must never append to the production ledger."""
     path = tmp_path / "provision-events.ndjson"
     monkeypatch.setenv("ORCH_PROVISION_EVENTS_PATH", str(path))
+    monkeypatch.setenv("LANE_API_EVENTS", str(tmp_path / "github-api-events.jsonl"))
     # This conftest is also copied into standalone guard-test repos with no src/.
     # Patch an already imported module; later imports read the temporary env path.
     loaded = sys.modules.get("provision")
@@ -308,6 +329,11 @@ def pytest_configure(config: pytest.Config) -> None:
         "needs_coverage_module: runs `python -m coverage`; skipped where the module is not installed "
         "(Gate's coverage-off shards), a failure where ORCH_REQUIRE_COVERAGE=1 (CI coverage shards)",
     )
+    config.addinivalue_line(
+        "markers",
+        "external_guard_direct: the test installs the external-operation guard itself, so the "
+        "suite fixture stays out of its way and restoration can see the unpatched callables",
+    )
     _GUARD = arm(TESTS_DIR)
     _WATCHED.clear()
     _WATCHED.update(_GUARD.watched)
@@ -339,6 +365,11 @@ def pytest_terminal_summary(terminalreporter) -> None:
     if _GUARD is not None and (not _GUARD.armed or _GUARD.watched):
         state = "armed" if _GUARD.armed else "NOT CHECKED"
         terminalreporter.write_line(f"tracked test inputs: {state} -- {_GUARD.detail}")
+    guards = sys.modules.get("advisor_external_guard")
+    if guards is not None:
+        unexpected = guards.suite_unexpected_total()
+        if unexpected is not None:
+            terminalreporter.write_line(f"external-operation attempts: {unexpected} unexpected")
 
 
 # Repo-specific full-suite storage evidence. Copied standalone guard fixtures may omit
@@ -499,6 +530,40 @@ def isolated_advisor_runtime(request, monkeypatch):
         return
     with advisor_hermetic.activated(monkeypatch):
         yield advisor_hermetic.root()
+
+
+@pytest.fixture(autouse=True)
+def advisor_external_guard(request):
+    """Block process and network calls in the capability-advisor suite.
+
+    The guard records an attempt before it raises. Teardown restores the patched callables
+    and fails if an unexpected attempt remains, including one whose exception the code under
+    test caught. ``test_advisor_hermetic.py`` is excluded: it starts a real interpreter.
+    A test marked ``external_guard_direct`` installs its own guard so it can see the
+    unpatched callables. Copies of this conftest in synthetic repos have no guard module.
+    """
+    filename = Path(str(getattr(request.node, "path", request.node.fspath))).name
+    if not (
+        filename.startswith("test_capability_advisor_") or filename.startswith("test_advisor_")
+    ):
+        yield None
+        return
+    try:
+        import advisor_external_guard as guards
+    except ModuleNotFoundError:
+        yield None
+        return
+    if not guards.in_advisor_suite(filename) or request.node.get_closest_marker(
+        "external_guard_direct"
+    ):
+        yield None
+        return
+    guard = guards.ExternalOperationGuard()
+    guard.open()
+    try:
+        yield guard
+    finally:
+        guard.close(tally=True)
 
 
 def pytest_runtest_setup(item: pytest.Item) -> None:

@@ -404,6 +404,11 @@ def test_a_deferred_tick_runs_its_local_steps_and_none_that_reach_github(
     assert f"  {RATE_LIMITED_LINE}\n" in proc.stdout, proc.stdout
     ran_github = [step for step in DEFERRED_STEPS if _ran(calls, step)]
     assert not ran_github, f"GitHub-dependent steps ran on a deferred tick: {ran_github}"
+    observer = [call for call in calls if call.startswith("followup_evidence.py")]
+    assert observer == [f"followup_evidence.py --state-dir {tmp_path / 'state'}"], (
+        "local evidence must collect once; reconciliation must honor the deferred preflight",
+        observer,
+    )
     missing_local = [step for step in LOCAL_STEPS if not _ran(calls, step)]
     assert not missing_local, f"local steps did not run on a deferred tick: {missing_local}"
     assert "  remote tick SKIPPED — gh deferred by the preflight" in proc.stdout, proc.stdout
@@ -421,6 +426,11 @@ def test_a_deferred_tick_runs_its_local_steps_and_none_that_reach_github(
 def test_an_authenticated_tick_runs_the_github_steps(tmp_path: Path, lane_live: bool) -> None:
     proc, calls = _run_tick(tmp_path, "ok", lane_live=lane_live)
     assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
+    observer = [call for call in calls if call.startswith("followup_evidence.py")]
+    assert observer == [
+        f"followup_evidence.py --state-dir {tmp_path / 'state'}",
+        f"followup_evidence.py --state-dir {tmp_path / 'state'} --reconcile",
+    ]
     for step in ("tick.py --active", "redirect_apply.py", "capability_activation_audit.py"):
         assert _ran(calls, step), f"{step} did not run on an authenticated tick"
     decisions = [
@@ -449,7 +459,10 @@ def test_a_refused_token_still_aborts_the_whole_tick(tmp_path: Path) -> None:
     proc, calls = _run_tick(tmp_path, "refused", lane_live=False)
     assert proc.returncode == 1, proc.stdout
     assert "  ABORT: gh not authenticated (rest: HTTP 401: Bad credentials);" in proc.stderr
-    # mirror_reader pins the tick generation before the auth preflight; it is not dispatch.
+    # Generation pinning and local evidence collection precede authentication.
+    # An invalid credential must never permit publication or dispatch.
+    observer = [call for call in calls if call.startswith("followup_evidence.py")]
+    assert observer == [f"followup_evidence.py --state-dir {tmp_path / 'state'}"]
     after = [
         c
         for c in calls
@@ -459,6 +472,7 @@ def test_a_refused_token_still_aborts_the_whole_tick(tmp_path: Path) -> None:
                 "cadence_registry.py",
                 "gh_capacity.py",
                 "mirror_reader.py",
+                "followup_evidence.py",
             )
         )
     ]

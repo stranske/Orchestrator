@@ -1,4 +1,5 @@
 import copy
+import datetime as dt
 import json
 import sqlite3
 import subprocess
@@ -382,14 +383,19 @@ def test_two_paced_agents_and_one_unpaced_export_partial(agents_fixture):
             "INSERT INTO route_weights VALUES (2,0,'implement','gemini',0,0.4,20,0.5,0,0,'',0,0)"
         )
     doc = export.build_document(db, now=NOW, capacity_snapshot=snapshot)
-    assert doc["comparative"]["status"] == "partial"
+    # Owner 2026-11-11: an agent with no pacing source by design (gemini: windowed_prepaid) is
+    # excluded and named; it no longer holds the whole result at "partial".
+    assert doc["comparative"]["status"] == "optimal"
+    assert doc["comparative"]["excluded"] == ["gemini"]
     assert doc["comparative"]["lambda"]["gemini"] is None
     rows = doc["task_types"]["implement"]["ranking"]
-    assert all(r["comparative_rank"] is None for r in rows)
-    assert all(
-        "partial:" in r["comparative_status"] and "gemini" in r["comparative_status"] for r in rows
+    gemini = next(r for r in rows if r["agent"] == "gemini")
+    assert gemini["comparative_rank"] is None
+    assert (
+        "excluded: no pacing source (capacity model windowed_prepaid)"
+        in gemini["comparative_reason"]
     )
-    assert next(r for r in rows if r["agent"] == "gemini")["comparative_reason"]
+    assert all(r["comparative_rank"] is not None for r in rows if r["agent"] != "gemini")
 
 
 def test_ledger_filter_ts_and_one_stale_hour_keeps_window_verdict(agents_fixture, tmp_path):
@@ -766,3 +772,101 @@ def test_live_capacity_uses_post_collection_clock_without_trusting_future_data(
     assert document["generated_at"] == "2027-01-15T08:00:00Z"
     assert document["comparative"]["status"] == expected
     assert measured_at == [NOW + 31]
+
+
+def test_route_flag_flip_republishes(tmp_path, monkeypatch):
+    """Verify that route_enabled flip triggers republishing on the same day."""
+    import rate_incidents
+
+    db = tmp_path / "brain.db"
+    export._fixture_db(db)
+
+    # Create a simple fixture with optimal status
+    with sqlite3.connect(db) as conn:
+        conn.execute("DELETE FROM route_weights")
+        for task, qualities in (("implement", (0.9, 0.6)), ("review", (0.8, 0.7))):
+            for agent, quality in zip(("codex", "cursor"), qualities):
+                conn.execute(
+                    "INSERT INTO route_weights VALUES (2,0,?,?,0,?,20,0.5,0,0,'',0,0)",
+                    (task, agent, quality),
+                )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS runs (run_id TEXT, ts INTEGER, agent TEXT, task_type TEXT, source TEXT)"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS costs (run_id TEXT, tokens_in INTEGER, tokens_out INTEGER, cost_usd REAL, source TEXT)"
+        )
+        # Add runs for both agents within the window
+        now_val = int(dt.datetime.fromisoformat(comparative.ROUTE_GO_LIVE).timestamp()) + 86400
+        for i, (agent, task) in enumerate([("codex", "implement"), ("cursor", "review")]):
+            conn.execute(
+                "INSERT INTO runs VALUES (?,?,?,?,'orchestrator_local')",
+                (f"run{i}", now_val - 30, agent, task),
+            )
+
+    # Go-live timestamp
+    go_live_ts = int(dt.datetime.fromisoformat(comparative.ROUTE_GO_LIVE).timestamp())
+
+    # Create snapshot with timestamps relative to base_now, fresh enough to not be stale
+    def make_snapshot(base_now):
+        return {
+            "generated_at": base_now,
+            "pools": {
+                "codex-subscription": {
+                    "agent": "codex",
+                    "pacing": {
+                        "state": "ok",
+                        "used_fraction": 0.5,
+                        "effective_reserve": 0.1,
+                        "burn_rate_per_day": 10.0,
+                        "period_end": base_now + 86400 * 10,
+                        "observed_at": base_now - 900,  # 15 minutes ago (fresh)
+                    },
+                },
+                "cursor-subscription": {
+                    "agent": "cursor",
+                    "pacing": {
+                        "state": "ok",
+                        "used_fraction": 0.3,
+                        "effective_reserve": 0.1,
+                        "burn_rate_per_day": 5.0,
+                        "period_end": base_now + 86400 * 10,
+                        "observed_at": base_now - 900,  # 15 minutes ago (fresh)
+                    },
+                },
+            },
+        }
+
+    # Save original INCIDENT_FILE
+    original_incident_file = rate_incidents.INCIDENT_FILE
+
+    try:
+        # Create a fixture incident ledger file
+        fixture_incidents = tmp_path / "rate-limit-incidents.ndjson"
+        fixture_incidents.write_text("")  # Empty file - no incidents
+        rate_incidents.INCIDENT_FILE = fixture_incidents
+
+        # Build first document with now BEFORE go-live (route_enabled should be False)
+        before_snapshot = make_snapshot(go_live_ts - 86400)
+        doc1 = export.build_document(db, now=go_live_ts - 86400, capacity_snapshot=before_snapshot)
+        assert doc1["comparative"]["route_enabled"] is False
+        assert "before go-live" in doc1["comparative"]["route_reason"]
+
+        # Build second document with now AFTER go-live (route_enabled should be True)
+        after_snapshot = make_snapshot(go_live_ts + 86400)
+        doc2 = export.build_document(db, now=go_live_ts + 86400, capacity_snapshot=after_snapshot)
+        assert doc2["comparative"]["route_enabled"] is True
+        assert (
+            "enabled; incidents since go-live 0 vs expected 0.0"
+            in doc2["comparative"]["route_reason"]
+        )
+
+        # The two semantics should differ (triggering republishing)
+        semantic1 = export._semantic_for_compare(doc1)
+        semantic2 = export._semantic_for_compare(doc2)
+        assert semantic1 != semantic2
+        assert semantic1.get("comparative", {}).get("route_enabled") is False
+        assert semantic2.get("comparative", {}).get("route_enabled") is True
+    finally:
+        # Restore original INCIDENT_FILE
+        rate_incidents.INCIDENT_FILE = original_incident_file

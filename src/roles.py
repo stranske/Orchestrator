@@ -38,6 +38,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+import adapters
 import backlog as backlog_mod
 import capabilities
 import dispatcher
@@ -2772,7 +2773,11 @@ def triage_trial_mode(*, path: Path | None = None, now: float | None = None) -> 
     hour = int(now // 3600)
     if hour % 2:
         return None
-    return "mid" if (hour // 2) % 2 == 0 else "full"
+    if (hour // 2) % 2 == 0:
+        return "mid"
+    # The Argon arm needs Argon: under a tier ceiling (its quota is spent) the hour routes
+    # normally, so the arm records availability rather than a clamped Flash run.
+    return None if adapters.tier_ceiling("gemini") in ("cheap", "mid") else "full"
 
 
 def run_triage_agent(

@@ -589,7 +589,9 @@ def _exploration_block(
             key=lambda row: (
                 ranks.get(row["agent"], len(ranks)),
                 -float(row["posterior"]),
-                -float(row["success_rate"]),
+                # Prior-only rows (n_obs 0) carry success_rate NULL. This is a tie-break after the
+                # posterior, so an unobserved rate orders last; it is never published as a measurement.
+                -(float(row["success_rate"]) if row["success_rate"] is not None else 0.0),
                 row["agent"],
             ),
         )
@@ -633,6 +635,9 @@ def _exploration_block(
     }
 
 
+COMPARATIVE_HOLD_FILE = "comparative-last-optimal.json"
+
+
 def build_document(
     db_path: Path,
     minimum: int = DEFAULT_MIN_OBSERVATIONS,
@@ -640,8 +645,13 @@ def build_document(
     now: int | None = None,
     capacity_snapshot: dict[str, Any] | None = None,
     include_capacity: bool = True,
+    hold_path: Path | None = None,
 ) -> dict[str, Any]:
-    """Build a snapshot with repeatable samples for this week and weight version."""
+    """Build a snapshot with repeatable samples for this week and weight version.
+
+    `hold_path` is the live export's last-optimal comparative file (comparative.hold_last_optimal);
+    None (every test and preview) neither reads nor writes it.
+    """
     if minimum < 1:
         raise ValueError("min_observations must be at least 1")
     missing = sorted(set(CONSUMER_TASK_TYPES) - set(router.ROUTE_TABLE))
@@ -712,19 +722,26 @@ def build_document(
     }
     digest = hashlib.sha256(_canonical_bytes(routing_semantic)).hexdigest()
     document["exploration"]["policy_version"] = f"route-exploration/v1:{digest}"
-    _add_comparative(document, db_path, capacity_snapshot, comparison_now)
+    _add_comparative(document, db_path, capacity_snapshot, comparison_now, hold_path)
     return document
 
 
-def _add_comparative(document: dict, db_path: Path, snapshot: dict | None, now: int) -> None:
+def _add_comparative(
+    document: dict, db_path: Path, snapshot: dict | None, now: int, hold_path: Path | None = None
+) -> None:
     """Add shadow ranks after hashing the existing policy; never reorder its entries."""
     # Opportunity cost includes every evidenced class, beyond this export's consumer set.
     result = comparative.measure(db_path, snapshot, now=now, minimum=document["min_observations"])
+    if hold_path is not None:
+        result = comparative.hold_last_optimal(result, hold_path, now)
     for task, section in document["task_types"].items():
         _attach_comparative_ranks(section["ranking"], result, task, document["min_observations"])
     for task, rows in document["reserve"].items():
         _attach_comparative_ranks(rows, result, task, document["min_observations"])
     document["comparative"] = {key: value for key, value in result.items() if key != "ranks"}
+    # Add route_decision to the comparative block
+    route_info = comparative.route_decision(result, incidents_rows=None, now=now)
+    document["comparative"].update(route_info)
 
 
 def _canonical_bytes(document: dict[str, Any]) -> bytes:
@@ -766,6 +783,12 @@ def _semantic_for_compare(document: dict[str, Any]) -> dict[str, Any]:
     semantic = {
         key: value for key, value in document.items() if key not in ("generated_at", "comparative")
     }
+    # Include route_enabled from comparative block to trigger republishing on flip
+    comparative_block = document.get("comparative")
+    if isinstance(comparative_block, dict):
+        route_enabled = comparative_block.get("route_enabled")
+        if route_enabled is not None:
+            semantic["comparative"] = {"route_enabled": route_enabled}
     capacity_block = semantic.get("capacity")
     if isinstance(capacity_block, dict):
         compared: dict[str, Any] = {}
@@ -1388,7 +1411,9 @@ def main() -> int:
                 state_dir=args.state_dir or Path.home() / ".codex" / "orchestrator",
             )
         except subprocess.TimeoutExpired as exc:
-            print(f"deployment provenance refused: git subprocess timed out ({exc})", file=sys.stderr)
+            print(
+                f"deployment provenance refused: git subprocess timed out ({exc})", file=sys.stderr
+            )
             return 1
         except (OSError, ValueError, subprocess.SubprocessError) as exc:
             message = f"deployment provenance refused: {exc}"
@@ -1449,7 +1474,12 @@ def main() -> int:
     if not previous_rate and day <= window["end"]:
         os.environ["ORCH_EXPLORATION_RATE"] = "0.20"
     try:
-        document = build_document(db_path, args.min_observations, now=timestamp)
+        document = build_document(
+            db_path,
+            args.min_observations,
+            now=timestamp,
+            hold_path=state_dir / COMPARATIVE_HOLD_FILE,
+        )
     finally:
         if previous_rate is None:
             os.environ.pop("ORCH_EXPLORATION_RATE", None)

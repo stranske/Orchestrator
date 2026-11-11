@@ -612,6 +612,9 @@ def test_no_capability_is_unofferable_and_every_former_rail_is_exercise_bound():
     }
     assert exercise_bound == {
         "closer-core",
+        "local-loop",
+        "opener-core",
+        "sync-core",
         "capability-admission-gate",
         "docs-drift-fix-agent",
         "agy-runtime-isolation",

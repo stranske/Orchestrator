@@ -56,18 +56,29 @@ def _reroot_home_paths(monkeypatch, new_home, anchor_module):
     write to the real state. Each such path is re-pointed at the same relative location under `new_home`.
     """
     live = Path.home() / ".codex"
+    src_dir = Path(anchor_module.__file__).resolve().parent
+    checkout = src_dir.parent if src_dir.name == "src" else src_dir
 
     def moved(value):
+        # Local worktrees and immutable deployment generations also live under
+        # ~/.codex. They are code inputs, not mutable runtime state.
+        if isinstance(value, Path) and value.resolve().is_relative_to(checkout):
+            return value
         if isinstance(value, Path) and (value == live or live in value.parents):
             return new_home / value.relative_to(Path.home())
         return value
 
-    src_dir = Path(anchor_module.__file__).resolve().parent
     for module in list(sys.modules.values()):
         module_file = getattr(module, "__file__", None)
         if not module_file or Path(module_file).resolve().parent != src_dir:
             continue
         for name, value in list(vars(module).items()):
+            if (
+                name == "FLEET_ROOT"
+                and isinstance(value, Path)
+                and value.resolve() == checkout.parent
+            ):
+                continue  # immutable source topology, including a flat mirror
             if isinstance(value, Path) and moved(value) != value:
                 monkeypatch.setattr(module, name, moved(value))
             elif inspect.isfunction(value) and value.__module__ == module.__name__:
@@ -948,6 +959,9 @@ def _selector_event(role, reason, target, run_id, *, accepted, disagreement):
 def _stub_selector_world(monkeypatch, agent="codex"):
     picks = Spy(result={"agent": agent, "mode": "full"})
     monkeypatch.setattr(roles, "route_role", picks)
+    # The live Flash-vs-Argon trial file (#1037) pins triage to gemini on even hours until
+    # 2026-11-15; these tests assert normal routing, so they must not read the machine's clock.
+    monkeypatch.setattr(roles, "triage_trial_mode", lambda **_: None)
     events = Spy(result={})
     monkeypatch.setattr(feedback, "record_role_selector_event", events)
     return picks, events

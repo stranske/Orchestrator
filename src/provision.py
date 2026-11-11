@@ -438,22 +438,196 @@ def _live_holder_pids(holder: Path) -> set[str]:
     return pids
 
 
+def _preserve_dirty_holder(holder: Path, branch: str, event: dict) -> None:
+    """Free an idle branch in place; retain every tracked, untracked and ignored byte."""
+    import claims
+
+    repo, _ = parse_target(event["target"])
+    prefix = repo_slug(repo) + "__"
+    number = (
+        re.match(r"(\d+)__", holder.name[len(prefix) :]) if holder.name.startswith(prefix) else None
+    )
+    holder_target = f"{repo}#{number[1]}" if number else event["target"]
+    claim_path = claims._claims_dir() / claims._slug(holder_target)
+    if claim_path.exists() and (claims._read_meta(claim_path) or {}).get("pid") != os.getpid():
+        raise RuntimeError(
+            f"native holder claim for {holder_target} remains; blocking 1, drainable 1: "
+            "its original owner must reconcile and relay terminal custody"
+        )
+    try:
+        live = _live_holder_pids(holder)
+    except ProbeBlindError:
+        event.update(outcome="failed", cause="probe-blind")
+        raise
+    if live:
+        raise RuntimeError(
+            f"refusing to preserve dirty worktree {holder}: live pid {', '.join(sorted(live))} "
+            "(blocking 1, drainable 1: clears when that process exits)"
+        )
+    head = _wt_git(holder, ["rev-parse", "HEAD"])
+    status = _wt_git(
+        holder, ["--no-optional-locks", "status", "--porcelain", "--untracked-files=all"]
+    )
+    if head.returncode or status.returncode:
+        raise RuntimeError(f"cannot bind dirty holder state {holder}; preserve it")
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    holder_slug = re.sub(r"[^A-Za-z0-9_-]+", "_", holder.name).strip("_") or "holder"
+    preserved = f"preserved/{holder_slug}-{stamp}"
+    created = _wt_git(holder, ["branch", preserved, "HEAD"])
+    if created.returncode:
+        raise RuntimeError(f"cannot preserve holder ref {holder}: {created.stderr.strip()}")
+    rebound = _wt_git(
+        holder,
+        [
+            "symbolic-ref",
+            "-m",
+            "provision: preserve dirty holder in place",
+            "HEAD",
+            f"refs/heads/{preserved}",
+        ],
+    )
+    if rebound.returncode:
+        raise RuntimeError(f"cannot preserve holder in place {holder}: {rebound.stderr.strip()}")
+    after_head = _wt_git(holder, ["rev-parse", "HEAD"])
+    after_status = _wt_git(
+        holder, ["--no-optional-locks", "status", "--porcelain", "--untracked-files=all"]
+    )
+    if (
+        after_head.returncode
+        or after_status.returncode
+        or after_head.stdout != head.stdout
+        or after_status.stdout != status.stdout
+    ):
+        raise RuntimeError(
+            f"preserved holder state changed {holder}; inspect without reset or removal"
+        )
+    event.update(
+        cause="dirty-holder-preserved",
+        preserved_worktree=str(holder),
+        preserved_branch=preserved,
+        preserved_head=head.stdout.strip(),
+        original_branch=branch,
+    )
+    print(f"provision: preserved dirty holder {holder} in place on {preserved}")
+
+
+# A process left in a holder by a parent that died ends nowhere: 2026-11-11, `unzip -p artifact.zip .coverage`
+# sat in stranske__Workflows__4635__opener for 11 h at 0.00 s CPU with launchd as its parent, and every closer
+# reclaim of that worktree refused "live pid" (36 of 60 rounds). A holder process is a STALE ORPHAN only when
+# all of these hold: its cwd is inside the holder, its parent is pid 1, it has lived at least
+# ORPHAN_MIN_AGE_SECONDS, and it has used at most ORPHAN_MAX_CPU_SECONDS of CPU. A detached agent also has
+# parent 1, but a working one uses CPU; one that used none in two hours is hung either way.
+ORPHAN_MIN_AGE_SECONDS = int(os.environ.get("ORCH_ORPHAN_HOLDER_MIN_AGE", "7200"))
+ORPHAN_MAX_CPU_SECONDS = float(os.environ.get("ORCH_ORPHAN_HOLDER_MAX_CPU", "5"))
+
+
+def _ps_seconds(text: str) -> float:
+    """`ps` etime/time ([[dd-]hh:]mm:ss[.ff]) as seconds."""
+    days, _, rest = text.strip().rpartition("-")
+    total = 0.0
+    for part in rest.split(":"):
+        total = total * 60 + float(part)
+    return total + (int(days) * 86400 if days else 0)
+
+
+def _holder_process(pid: str, holder: Path) -> dict | None:
+    """ppid/age/cpu of a pid whose cwd is inside `holder`, or None when it cannot be shown to be."""
+    shown = _run(["ps", "-o", "ppid=,etime=,time=,comm=", "-p", pid], check=False)
+    fields = shown.stdout.split(None, 3)
+    if shown.returncode or len(fields) < 3:
+        return None
+    cwd = _run(["lsof", "-a", "-p", pid, "-d", "cwd", "-Fn"], check=False)
+    root = Path(os.path.realpath(holder))
+    paths = [
+        Path(os.path.realpath(line[1:])) for line in cwd.stdout.splitlines() if line.startswith("n")
+    ]
+    if not any(path == root or root in path.parents for path in paths):
+        return None
+    try:
+        return {
+            "pid": pid,
+            "ppid": fields[0],
+            "age_s": _ps_seconds(fields[1]),
+            "cpu_s": _ps_seconds(fields[2]),
+            "comm": fields[3].strip() if len(fields) > 3 else "",
+        }
+    except ValueError:
+        return None
+
+
+def _stale_orphans(pids: set[str], holder: Path) -> dict[str, dict]:
+    found = {}
+    for pid in pids:
+        proc = _holder_process(pid, holder)
+        if (
+            proc
+            and proc["ppid"] == "1"
+            and proc["age_s"] >= ORPHAN_MIN_AGE_SECONDS
+            and proc["cpu_s"] <= ORPHAN_MAX_CPU_SECONDS
+        ):
+            found[pid] = proc
+    return found
+
+
+def _end_stale_orphans(orphans: dict[str, dict]) -> list[dict]:
+    """SIGTERM, then SIGKILL after 5 s; returns what was ended, for the provision event."""
+    import signal
+
+    for pid in orphans:
+        try:
+            os.kill(int(pid), signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    deadline = time.time() + 5
+    while time.time() < deadline and any(_pid_alive(pid) for pid in orphans):
+        time.sleep(0.2)
+    for pid in orphans:
+        if _pid_alive(pid):
+            try:
+                os.kill(int(pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+    return list(orphans.values())
+
+
+def _pid_alive(pid: str) -> bool:
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def _reclaim_branch_holder(canon: Path, branch: str, wt: Path, event: dict) -> None:
     """Remove only a clean, idle holder of this branch, never the requested checkout."""
     _run(["git", "-C", str(canon), "worktree", "prune", "--expire", "now"])
-    listed = _run(["git", "-C", str(canon), "worktree", "list", "--porcelain", "-z"])
-    for record in listed.stdout.split("\0\0"):
-        fields = record.split("\0")
-        if f"branch refs/heads/{branch}" not in fields:
+    listed = _run(["git", "-C", str(canon), "worktree", "list", "--porcelain"])
+    for record in listed.stdout.strip().split("\n\n"):
+        fields = {}
+        for line in record.split("\n"):
+            parts = line.split(None, 1)
+            if len(parts) == 2:
+                fields[parts[0]] = parts[1]
+        if fields.get("branch") != f"refs/heads/{branch}":
             continue
-        holder = Path(next(field[9:] for field in fields if field.startswith("worktree ")))
+        holder = Path(fields["worktree"])
         if holder.resolve() == wt.resolve():
             continue
         event.update(cause="branch-held", holder_path=str(holder))
-        status = _wt_git(holder, ["status", "--porcelain", "--untracked-files=all"])
+        status = _wt_git(
+            holder, ["--no-optional-locks", "status", "--porcelain", "--untracked-files=all"]
+        )
         if status.returncode != 0:
             raise RuntimeError(f"cannot inspect holder {holder}: {status.stderr.strip()}")
         if status.stdout.strip():
+            if (
+                event.get("lane") == "closer"
+                and os.environ.get("ORCH_PRESERVE_IDLE_DIRTY_HOLDER") == "1"
+            ):
+                _preserve_dirty_holder(holder, branch, event)
+                continue
             raise RuntimeError(
                 f"refusing to reclaim dirty worktree {holder}: {status.stdout.strip()}"
             )
@@ -462,9 +636,15 @@ def _reclaim_branch_holder(canon: Path, branch: str, wt: Path, event: dict) -> N
         except ProbeBlindError:
             event.update(outcome="failed", cause="probe-blind")
             raise
+        stale = _stale_orphans(live, holder) if live else {}
+        if live and set(stale) == live:
+            event["stale_orphans_ended"] = _end_stale_orphans(stale)
+            print(f"provision: ended {len(stale)} stale orphan(s) in {holder}: {sorted(stale)}")
+            live = _live_holder_pids(holder)
         if live:
             raise RuntimeError(
-                f"refusing to reclaim worktree {holder}: live pid {', '.join(sorted(live))}"
+                f"refusing to reclaim worktree {holder}: live pid {', '.join(sorted(live))} "
+                f"(stale orphans {len(set(stale) & live)} of {len(live)})"
             )
         _run(["git", "-C", str(canon), "worktree", "remove", "--force", str(holder)])
         _run(["git", "-C", str(canon), "worktree", "prune"])
@@ -571,10 +751,26 @@ def _provision(target: str, lane: str, event: dict, branch: str | None = None) -
                     ["git", "-C", str(canon), "rev-list", branch, "--not", "--remotes"]
                 ).stdout.strip()
                 if unique:
-                    raise RuntimeError(
-                        f"refusing to reset existing branch {branch}: commits absent from every "
-                        f"remote ref: {unique}"
+                    # Resume this issue's own committed work without moving its
+                    # ref. A new checkout is atomic: Git still refuses if a
+                    # holder appeared, and dirty/live holders were checked above.
+                    # Custom branch ownership remains ambiguous and fail-closed.
+                    owned = num is not None and branch in {
+                        f"orch/issue-{num}",
+                        f"orchestrator/issue-{num}",
+                    }
+                    if not owned:
+                        raise RuntimeError(
+                            f"refusing to reset existing branch {branch}: commits absent from every "
+                            f"remote ref: {unique}"
+                        )
+                    _run(["git", "-C", str(canon), "worktree", "add", str(wt), branch])
+                    event.update(
+                        outcome="reused",
+                        cause="branch-resume",
+                        unpublished_commits=unique.splitlines(),
                     )
+                    return wt
                 _run(
                     [
                         "git",
@@ -610,11 +806,14 @@ def provision(target: str, lane: str, branch: str | None = None) -> Path:
             if branch is not None
             else _provision(target, lane, event)
         )
-        if event["outcome"] == "ok":
+        if event["outcome"] == "ok" and event["cause"] == "provision-error":
             event["cause"] = "new-worktree"
         return wt
     except BaseException as exc:
         event["outcome"] = "failed"
+        event["error"] = str(exc)[:1000]
+        if branch is not None:
+            event["requested_branch"] = branch
         if not isinstance(exc, Exception):
             event["cause"] = "interrupted"
         raise
@@ -747,116 +946,3 @@ def main(argv: list[str]) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
-
-
-def provision_absent_owned_head(target: str, head: str, branch: str, *, git_policy: dict) -> dict:
-    """Prepare one absent local named worktree, never reset/reclaim/fetch/push.
-
-    The caller supplies a freshly native-observed owned PR tuple. This local
-    DATA receipt is not native ownership or controller admission. The existing
-    canonical clone must already contain H; Root may populate a fresh namespace
-    separately. No existing branch/worktree/index is adopted or modified.
-    """
-    import closer_coding_publication as publication
-    import worktree_git
-
-    repo, number = parse_target(target)
-    if number is None or repo != repo.lower() or not re.fullmatch(r"[a-f0-9]{40}", head):
-        raise ValueError("exact lowercase owned PR target/head required")
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,199}", branch):
-        raise ValueError("bounded existing owned branch required")
-    canon = canonical_path(repo).resolve(strict=True)
-    wt = worktree_path(target, "closer")
-    if wt.exists() or wt.is_symlink():
-        raise RuntimeError("owned canary worktree must be absent; never reclaim")
-    if not (canon / ".git").is_dir() or (canon / ".git").is_symlink():
-        raise RuntimeError("existing canonical local Git repository required")
-    # Validate genuine configured namespaces rather than forging is_provisioned.
-    if canon.parent != REPOS_DIR.resolve(strict=True) or wt.parent != WORKTREES_DIR.resolve(
-        strict=True
-    ):
-        raise RuntimeError("canonical repository/worktree namespace differs")
-    original = dict(os.environ)
-    environment = publication.private_git_environment_data(git_policy, original)
-    executable = publication._PhysicalFile(git_policy["git_executable"]["path"], 256 * 1048576)
-    controls: list[publication._PhysicalFile | publication._PhysicalDirectory] = []
-    try:
-        if executable.sha256 != git_policy["git_executable"]["sha256"]:
-            raise RuntimeError("source-pinned local Git executable differs")
-
-        def run(args, *, check=True):
-            if dict(os.environ) != original:
-                raise RuntimeError("local provision environment changed")
-            executable.check()
-            for item in controls:
-                item.check()
-            if environment != publication.private_git_environment_data(git_policy, original):
-                raise RuntimeError("private local Git environment changed")
-            return subprocess.run(
-                [str(executable.path), "-C", str(canon), *args],
-                env=environment,
-                capture_output=True,
-                text=True,
-                check=check,
-                timeout=30,
-            )
-
-        names = publication._configuration_names(
-            run(
-                ["config", "--null", "--show-scope", "--show-origin", "--name-only", "--list"]
-            ).stdout.encode(),
-            git_policy["max_ack_bytes"],
-        )
-        for name in sorted({str((canon / origin).resolve()) for _scope, origin, _key in names}):
-            controls.append(publication._PhysicalFile(name, git_policy["max_ack_bytes"]))
-        hooks = canon / ".git/hooks"
-        controls.append(publication._PhysicalDirectory(hooks, closed_entries=True))
-        if any(
-            p.is_symlink() or not p.is_file() or not p.name.endswith(".sample")
-            for p in hooks.iterdir()
-        ):
-            raise RuntimeError(
-                "active canonical hooks require source closure before local provisioning"
-            )
-        run(["check-ref-format", "--branch", branch])
-        absent = run(["show-ref", "--verify", "--quiet", "refs/heads/" + branch], check=False)
-        if absent.returncode != 1:
-            raise RuntimeError("owned local branch must be absent; never reset or adopt")
-        run(["cat-file", "-e", head + "^{commit}"])
-        # -b is Git's own create-only branch lock. Existing holder/name races
-        # refuse without -B/--force/prune/remove or retrying an uncertain result.
-        run(["worktree", "add", "--checkout", "-b", branch, str(wt), head])
-        pins = worktree_git.expected_pins(wt, repo)
-        if not worktree_git.is_provisioned(wt) or not isinstance(pins, tuple):
-            raise RuntimeError("actual linked worktree metadata refused; preserve for inspection")
-        observed = subprocess.run(
-            [str(executable.path), "-C", str(wt), "rev-parse", "HEAD"],
-            env=environment,
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=15,
-        ).stdout.strip()
-        named = subprocess.run(
-            [str(executable.path), "-C", str(wt), "symbolic-ref", "HEAD"],
-            env=environment,
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=15,
-        ).stdout.strip()
-        if observed != head or named != "refs/heads/" + branch:
-            raise RuntimeError("prepared owned worktree changed; preserve without retry")
-        return {
-            "schema": "closer-owned-existing-worktree-preparation-data/v1",
-            "target": target,
-            "head": head,
-            "branch": branch,
-            "worktree": str(wt),
-            "topology": [str(p) for p in pins],
-            "managed_metadata_verified": True,
-            "native_ownership_proven": False,
-            "runtime_admission": False,
-        }
-    finally:
-        publication._close_physical_controls([executable, *controls])
