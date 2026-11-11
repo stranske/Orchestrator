@@ -84,7 +84,7 @@ function deliveryRecord(overrides = {}) {
 }
 
 function pythonReceipts(artifactsRoot, lastShardOutcome = 'success') {
-  for (const runtime of ['3.13', '3.14']) {
+  for (const runtime of ['3.13']) {
     for (let shard = 1; shard <= 6; shard++) {
       const receiptDir = path.join(artifactsRoot, 'downloads',
         `gate-shard-${shard}-coverage-${runtime}-1`);
@@ -94,7 +94,7 @@ function pythonReceipts(artifactsRoot, lastShardOutcome = 'success') {
         checks: {
           lint: { outcome: 'success' },
           type_check: { outcome: 'success' },
-          tests: { outcome: runtime === '3.14' && shard === 6 ? lastShardOutcome : 'success' },
+          tests: { outcome: shard === 6 ? lastShardOutcome : 'success' },
           coverage_minimum: { outcome: 'success' },
         },
       }));
@@ -170,7 +170,7 @@ test('an expired exact-head seal stays blocked until its lease is renewed', (t) 
   const renewed = summarize(t, deliveryRecord(), activeChecks, pythonReceipts);
   assert.match(renewed.outputs, /^state=success$/m);
   assert.match(renewed.outputs, /^description=All Gate checks succeeded\.$/m);
-  assert.match(renewed.summary, /all 6 shards reported for Python 3\.13 and 3\.14/);
+  assert.match(renewed.summary, /all 6 shards reported for Python 3\.13\./);
   assert.doesNotMatch(renewed.summary, /Generated delivery hold|fast-pass/);
 });
 
@@ -283,8 +283,8 @@ test('exact-head sealing clears the staging hold with all required Python receip
   const sealed = summarize(t, deliveryRecord(), activeChecks, pythonReceipts);
   assert.match(sealed.outputs, /^state=success$/m);
   assert.match(sealed.outputs, /^description=All Gate checks succeeded\.$/m);
-  assert.match(sealed.summary, /all 6 shards reported for Python 3\.13 and 3\.14/);
-  assert.equal((sealed.summary.match(/\| 3\.(?:13|14) shard \d\/6 \|/g) || []).length, 12);
+  assert.match(sealed.summary, /all 6 shards reported for Python 3\.13\./);
+  assert.equal((sealed.summary.match(/\| 3\.13 shard \d\/6 \|/g) || []).length, 6);
   assert.doesNotMatch(sealed.summary, /Generated delivery hold|fast-pass|artifacts: .*missing/);
 });
 
@@ -313,8 +313,8 @@ test('sealing exposes a failed or cancelled Python leg instead of clearing its v
     const sealed = summarize(t, deliveryRecord(), activeChecks, prepareArtifacts);
     assert.match(sealed.outputs, new RegExp(`^state=${state}$`, 'm'), outcome);
     assert.ok(sealed.outputs.split('\n').includes(`description=${description}`), outcome);
-    assert.match(sealed.summary, /all 6 shards reported for Python 3\.13 and 3\.14/);
-    assert.match(sealed.summary, new RegExp(`\\| 3\\.14 shard 6/6 \\|.* ${outcome} \\|`));
+    assert.match(sealed.summary, /all 6 shards reported for Python 3\.13\./);
+    assert.match(sealed.summary, new RegExp(`\\| 3\\.13 shard 6/6 \\|.* ${outcome} \\|`));
     assert.doesNotMatch(sealed.summary, /Generated delivery hold|fast-pass/);
     assert.match(sealed.outputs, /^cosmetic_failure=false$/m);
   }

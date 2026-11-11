@@ -103,14 +103,14 @@ def _declared() -> list[str]:
 def _gate_python_shard_contexts() -> set[str]:
     text = GATE.read_text(encoding="utf-8")
     assert "name: python ci shard ${{ matrix.shard }}/6" in text
-    assert 'python-versions: \'["3.13", "3.14"]\'' in text
+    assert 'python-versions: \'["3.13"]\'' in text  # 3.14 runs in CI's verdict shards
     assert "matrix: ${{ fromJSON(needs.detect.outputs.python_ci_matrix) }}" in text
     assert "pytest_args: ${{ matrix.pytest_args }}" in text
     assert "artifact-prefix: ${{ matrix.artifact_prefix }}" in text
     return {
         f"python ci shard {shard}/6 / python {runtime}"
         for shard in range(1, 7)
-        for runtime in ("3.13", "3.14")
+        for runtime in ("3.13",)
     }
 
 
@@ -213,7 +213,7 @@ def test_gate_summary_requires_every_shard_runtime_receipt(tmp_path):
     summaries = {
         (shard, runtime): _write_shard_summary(tmp_path, shard, runtime)
         for shard in range(1, 7)
-        for runtime in ("3.13", "3.14")
+        for runtime in ("3.13",)
     }
     context = gate_summary.SummaryContext(
         doc_only=False,
@@ -234,22 +234,22 @@ def test_gate_summary_requires_every_shard_runtime_receipt(tmp_path):
     assert green.state == "success"
     assert green.description == "All Gate checks succeeded."
     assert (
-        "- Python shard artifacts: ✅ all 6 shards reported for Python 3.13 and 3.14."
+        "- Python shard artifacts: ✅ all 6 shards reported for Python 3.13."
         in green.lines
     )
     assert "- Combined coverage: ✅ 81.25% from CI verify.py aggregate." in green.lines
 
-    summaries[(4, "3.14")].unlink()
+    summaries[(4, "3.13")].unlink()
     missing = gate_summary.summarize(context)
     assert missing.state == "failure"
-    assert missing.description == "Python CI artifacts missing: shard 4/6 (Python 3.14)."
-    assert "- Python shard artifacts: ❌ missing shard 4/6 (Python 3.14)." in missing.lines
+    assert missing.description == "Python CI artifacts missing: shard 4/6 (Python 3.13)."
+    assert "- Python shard artifacts: ❌ missing shard 4/6 (Python 3.13)." in missing.lines
 
 
 def test_gate_summary_never_turns_missing_combined_coverage_into_zero_or_pass(tmp_path):
     gate_summary = _load_gate_summary()
     for shard in range(1, 7):
-        for runtime in ("3.13", "3.14"):
+        for runtime in ("3.13",):
             _write_shard_summary(tmp_path, shard, runtime)
     context = gate_summary.SummaryContext(
         doc_only=False,
@@ -276,7 +276,7 @@ def test_gate_summary_never_turns_missing_combined_coverage_into_zero_or_pass(tm
 def test_gate_summary_uses_the_newest_rerun_receipt(tmp_path):
     gate_summary = _load_gate_summary()
     for shard in range(1, 7):
-        for runtime in ("3.13", "3.14"):
+        for runtime in ("3.13",):
             _write_shard_summary(tmp_path, shard, runtime)
     newest = _write_shard_summary(tmp_path, 2, "3.14", attempt=2)
     payload = json.loads(newest.read_text(encoding="utf-8"))

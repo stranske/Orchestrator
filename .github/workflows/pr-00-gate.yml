@@ -368,8 +368,12 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.detect.outputs.python_ci_matrix) }}
     with:
-      primary-python-version: '3.14'
-      python-versions: '["3.13", "3.14"]'
+      # 3.13 only (owner, 2026-11-11). CI's verdict-owning pytest + coverage shards already run the
+      # whole suite on 3.14 for every push, so Gate's 3.14 shards were exact duplicates: 6 of ~46
+      # jobs per push, on an account whose concurrent-job limit was queueing runs ~20 minutes.
+      # Gate keeps 3.13 runtime compatibility and the static checks (run here on the primary).
+      primary-python-version: '3.13'
+      python-versions: '["3.13"]'
       marker: "not quarantine and not slow"
       pytest_markers: ${{ needs.detect.outputs.pytest_markers }}
       pytest_args: ${{ matrix.pytest_args }}
