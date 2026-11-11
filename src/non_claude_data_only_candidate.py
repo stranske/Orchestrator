@@ -53,10 +53,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-PACKAGE = Path("/Users/teacher/.local/share/uv/tools/mistral-vibe/lib/python3.12/site-packages")
+PACKAGE = Path("/Users/teacher/.local/share/uv/tools/mistral-vibe/lib/python3.14/site-packages")
 INSTALLED_IMPORT_ROOTS = (
-    "/opt/anaconda3/lib/python3.12",
-    "/opt/anaconda3/lib/python3.12/lib-dynload",
+    "/Users/teacher/.local/share/uv/python/cpython-3.14.3-macos-aarch64-none/lib/python3.14",
+    "/Users/teacher/.local/share/uv/python/cpython-3.14.3-macos-aarch64-none/lib/python3.14/lib-dynload",
     str(PACKAGE),
 )
 MODEL = "mistral-medium-3.5"
@@ -198,7 +198,8 @@ def _check_locations(
     if origin == "installed_candidate":
         if (
             roots != INSTALLED_IMPORT_ROOTS
-            or str(interpreter.resolve()) != "/opt/anaconda3/bin/python3.12"
+            or str(interpreter.resolve())
+            != "/Users/teacher/.local/share/uv/python/cpython-3.14.3-macos-aarch64-none/bin/python3.14"
         ):
             raise ValueError("installed code roots/interpreter are fixed by source review")
     elif origin == "offline_fixture":
@@ -219,7 +220,9 @@ def _check_locations(
         code = path.suffix == ".py" and path.is_relative_to(repo)
         native = (
             origin == "installed_candidate"
-            and path.is_relative_to(Path("/opt/anaconda3/lib"))
+            and path.is_relative_to(
+                Path("/Users/teacher/.local/share/uv/python/cpython-3.14.3-macos-aarch64-none/lib")
+            )
             and path.suffix in (".so", ".dylib", ".zip")
         )
         if not (code or native):
@@ -264,7 +267,8 @@ def verify_manifest(manifest: RuntimeManifest) -> None:
         manifest.import_roots != INSTALLED_IMPORT_ROOTS
         or manifest.interpreter.sha256
         != "d01b09973b5bd3ff617e7849ce9c0bdb8991256f495ce190720ccc976cdaaee7"
-        or manifest.interpreter.path != "/opt/anaconda3/bin/python3.12"
+        or manifest.interpreter.path
+        != "/Users/teacher/.local/share/uv/python/cpython-3.14.3-macos-aarch64-none/bin/python3.14"
     ):
         raise ValueError("unreviewed installed import roots/interpreter")
     if manifest.origin not in ("installed_candidate", "offline_fixture"):
