@@ -1,0 +1,47 @@
+Excerpt: failing test output from a clean Python 3.14.3 / pytest 9.2.0 venv before installing requirements-test.txt. Full collected node list omitted.
+
+E         ==================================== ERRORS ====================================
+E         ____________ ERROR collecting tests/test_gate_dispatch_recovery.py _____________
+E         ImportError while importing test module '/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__1334__closer/tests/test_gate_dispatch_recovery.py'.
+E         Hint: make sure your test modules/packages have valid Python names.
+E         Traceback:
+E         ../../../../.local/share/uv/python/cpython-3.14.3-macos-aarch64-none/lib/python3.14/importlib/__init__.py:88: in import_module
+E             return _bootstrap._gcd_import(name[level:], package, level)
+E                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E         tests/test_gate_dispatch_recovery.py:7: in <module>
+E             import yaml
+E         E   ModuleNotFoundError: No module named 'yaml'
+E         ________ ERROR collecting tests/test_non_claude_data_only_candidate.py _________
+E         ImportError while importing test module '/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__1334__closer/tests/test_non_claude_data_only_candidate.py'.
+E         Hint: make sure your test modules/packages have valid Python names.
+E         Traceback:
+E         ../../../../.local/share/uv/python/cpython-3.14.3-macos-aarch64-none/lib/python3.14/importlib/__init__.py:88: in import_module
+E             return _bootstrap._gcd_import(name[level:], package, level)
+E                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E         tests/test_non_claude_data_only_candidate.py:21: in <module>
+E             from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
+E         E   ModuleNotFoundError: No module named 'pydantic'
+E         _________ ERROR collecting tests/test_reconcile_floor_dispatches_ci.py _________
+E         ImportError while importing test module '/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__1334__closer/tests/test_reconcile_floor_dispatches_ci.py'.
+E         Hint: make sure your test modules/packages have valid Python names.
+E         Traceback:
+E         ../../../../.local/share/uv/python/cpython-3.14.3-macos-aarch64-none/lib/python3.14/importlib/__init__.py:88: in import_module
+E             return _bootstrap._gcd_import(name[level:], package, level)
+E                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E         tests/test_reconcile_floor_dispatches_ci.py:14: in <module>
+E             import yaml
+E         E   ModuleNotFoundError: No module named 'yaml'
+E         =========================== short test summary info ============================
+E         ERROR tests/test_gate_dispatch_recovery.py
+E         ERROR tests/test_non_claude_data_only_candidate.py
+E         ERROR tests/test_reconcile_floor_dispatches_ci.py
+E         !!!!!!!!!!!!!!!!!!! Interrupted: 3 errors during collection !!!!!!!!!!!!!!!!!!!!
+E         8496 tests collected, 3 errors in 2.04s
+E         
+E       assert 2 == 0
+E        +  where 2 = CompletedProcess(args=['/tmp/orch-1334-round8-venv/bin/python', '-m', 'pytest', '--collect-only', '-q'], returncode=2,...!! Interrupted: 3 errors during collection !!!!!!!!!!!!!!!!!!!!\n8496 tests collected, 3 errors in 2.04s\n', stderr='').returncode
+
+tests/test_verify_sharding.py:24: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_verify_sharding.py::test_shard_lists_partition_every_collected_test_exactly_once
+1 failed in 2.96s

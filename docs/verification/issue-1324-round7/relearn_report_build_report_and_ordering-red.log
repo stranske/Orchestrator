@@ -1,0 +1,72 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+________________ test_relearn_report_build_report_and_ordering _________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x109fb8b90>
+
+    def test_relearn_report_build_report_and_ordering(monkeypatch):
+        monkeypatch.setattr(relearn_report, "_role_priors_from_registry", lambda _priors: {})
+    
+        report = {
+            "dry_run": False,
+            "learner": "test-learner",
+            "window_days": 7,
+            "new_version": 2,
+            "previous_version": 1,
+            "learner_note": "test note",
+            "cost_telemetry": {"task1": {"measured": True, "coverage": 0.95}},
+            "tasks": [
+                {
+                    "task_type": "task1",
+                    "diverges_from_prior": False,
+                    "prior_order": ["agent1", "agent2"],
+                    "learned_order": ["agent1", "agent2"],
+                    "previous_order": ["agent1", "agent2"],
+                    "note": "stable",
+                    "rows": [
+                        {
+                            "agent": "agent1",
+                            "posterior": 0.8,
+                            "score": 0.85,
+                            "n_obs": 10,
+                            "learned_rank": 1,
+                            "prior_rank_delta": 0,
+                            "previous_rank_delta": 0,
+                        },
+                        {
+                            "agent": "agent2",
+                            "posterior": 0.7,
+                            "score": 0.75,
+                            "n_obs": 8,
+                            "learned_rank": 2,
+                            "prior_rank_delta": 0,
+                            "previous_rank_delta": 0,
+                        },
+                    ],
+                }
+            ],
+        }
+    
+        ordered_rows = relearn_report._ordered_rows(
+            [
+                {"agent": "agent2", "score": 0.75},
+                {"agent": "agent1", "score": 0.85},
+            ],
+            ["agent1", "agent2"],
+        )
+>       assert ordered_rows[0]["agent"] == "agent1"
+E       AssertionError: assert 'agent2' == 'agent1'
+E         
+E         - agent1
+E         ?      ^
+E         + agent2
+E         ?      ^
+
+tests/test_issue1232_ranked_coverage.py:482: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_issue1232_ranked_coverage.py::test_relearn_report_build_report_and_ordering
+1 failed in 0.32s
+/opt/anaconda3/lib/python3.12/site-packages/pytest_asyncio/plugin.py:300: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the "fixture" caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to "function" scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))

@@ -1,0 +1,57 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____________ test_runtime_ac_panel_substantiated_veto_and_normalize ____________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x105ee3500>
+
+    def test_runtime_ac_panel_substantiated_veto_and_normalize(monkeypatch):
+        review_pass = {
+            "reviewer": "test",
+            "verdict": "PASS",
+            "confidence": 0.8,
+            "rationale": "",
+            "ac_assessments": [],
+            "blockers": [{"ac_id": "AC1", "severity": "medium", "finding": "issue"}],
+            "evidence_gaps": [],
+            "cited_evidence_types": [],
+            "cited_evidence_contracts": [],
+        }
+        assert panel._substantiated_veto(review_pass) is False
+    
+        review_fail_no_veto = {
+            "reviewer": "test",
+            "verdict": "FAIL",
+            "confidence": 0.8,
+            "rationale": "",
+            "ac_assessments": [],
+            "blockers": [{"ac_id": "AC1", "severity": "low", "finding": "issue"}],
+            "evidence_gaps": [],
+            "cited_evidence_types": [],
+            "cited_evidence_contracts": [],
+        }
+        assert panel._substantiated_veto(review_fail_no_veto) is False
+    
+        review_fail_with_veto = {
+            "reviewer": "test",
+            "verdict": "FAIL",
+            "confidence": 0.8,
+            "rationale": "",
+            "ac_assessments": [],
+            "blockers": [{"ac_id": "AC1", "severity": "high", "finding": "issue"}],
+            "evidence_gaps": [],
+            "cited_evidence_types": [],
+            "cited_evidence_contracts": [],
+        }
+>       assert panel._substantiated_veto(review_fail_with_veto) is True
+E       AssertionError: assert False is True
+E        +  where False = <function _substantiated_veto at 0x105e49760>({'reviewer': 'test', 'verdict': 'FAIL', 'confidence': 0.8, 'rationale': '', ...})
+E        +    where <function _substantiated_veto at 0x105e49760> = panel._substantiated_veto
+
+tests/test_issue1232_ranked_coverage.py:564: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_issue1232_ranked_coverage.py::test_runtime_ac_panel_substantiated_veto_and_normalize
+1 failed in 0.31s
+/opt/anaconda3/lib/python3.12/site-packages/pytest_asyncio/plugin.py:300: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the "fixture" caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to "function" scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))

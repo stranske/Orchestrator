@@ -1,0 +1,64 @@
+$ .venv/bin/python -m pytest tests/test_issue1232_ranked_coverage.py::test_relearn_report_priors_and_blend -q --no-cov
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____________________ test_relearn_report_priors_and_blend _____________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b96c8a0>
+
+    def test_relearn_report_priors_and_blend(monkeypatch):
+        monkeypatch.setattr(relearn_report, "_role_priors_from_registry", lambda _priors: {})
+    
+        route_table = {
+            "task1": {
+                "neutral_prior": False,
+                "agents": [
+                    {"agent": "agent1"},
+                    {"agent": "agent2"},
+                    {"agent": "agent3"},
+                ],
+            },
+            "task2": {
+                "neutral_prior": True,
+                "agents": [
+                    {"agent": "agentA"},
+                ],
+            },
+        }
+        priors = relearn_report.priors_from_route_table(route_table)
+        assert "task1" in priors
+        assert "task2" in priors
+        assert priors["task1"]["agent1"] == 0.70
+        assert priors["task1"]["agent2"] == 0.65
+        assert priors["task1"]["agent3"] == 0.60
+        assert priors["task2"]["agentA"] == 0.5
+    
+        blended = relearn_report.blend_bt_priors(
+            {"task1": {"agent1": 0.7, "agent2": 0.65}},
+            bt_fn=lambda **_k: {"ready": False},
+        )
+        assert blended == {}
+    
+        ready_priors = {"task1": {"agent1": 0.7, "agent2": 0.65}}
+        blended_ready = relearn_report.blend_bt_priors(
+            ready_priors,
+            bt_fn=lambda **_k: {
+                "ready": True,
+                "strengths": {"agent2": 0.9},
+                "comparisons": 10,
+            },
+        )
+        assert "task1" in blended_ready
+        assert blended_ready["task1"] == 10
+>       assert ready_priors["task1"]["agent2"] == pytest.approx(0.675)
+E       assert 0.68 == 0.675 ± 6.7e-07
+E         
+E         comparison failed
+E         Obtained: 0.68
+E         Expected: 0.675 ± 6.7e-07
+
+tests/test_issue1232_ranked_coverage.py:704: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_issue1232_ranked_coverage.py::test_relearn_report_priors_and_blend
+1 failed in 0.13s
+
+exit_code=1

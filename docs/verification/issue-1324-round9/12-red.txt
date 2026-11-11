@@ -1,0 +1,52 @@
+$ .venv/bin/python -m pytest tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure -q --no-cov
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______________ test_keepalive_supervisor_plan_target_and_closure _______________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1076bc8a0>
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2334/test_keepalive_supervisor_plan0')
+
+    def test_keepalive_supervisor_plan_target_and_closure(monkeypatch, tmp_path):
+        signals = {
+            "target": "stranske/Orchestrator#1234",
+            "pr_state": "open",
+            "labels": [supervisor.KEEPALIVE_LABEL, "needs-human"],
+            "title": "Test issue",
+            "body": "Test body",
+        }
+    
+        monkeypatch.setattr(supervisor.keepalive_shadow, "gather_signals", lambda target: signals)
+        monkeypatch.setattr(
+            supervisor.keepalive_shadow, "shadow_decide", lambda _signals: {"shadow_action": "wait"}
+        )
+        monkeypatch.setattr(supervisor, "build_redirect_report", lambda *_args: {"report": "safe"})
+    
+        plan = supervisor.plan_for_signals(signals, report_json_path=tmp_path / "report.json")
+        assert "next_step" in plan
+        assert "proposal_command" in plan
+        # Assert operator_inspect, eligible=True, blockers=[], direct report existence
+        assert plan["next_step"] == "operator_inspect"
+        assert plan["eligible"] is True
+        assert plan["eligibility"]["blockers"] == []
+        assert plan["report_written"] is not None
+        assert (tmp_path / "report.json").exists()
+        # Assert the exact --report-json/--ac/--dispatch command suffix
+        # Command structure: [..., '--report-json', '<path>', '--ac', '<value>', '--dispatch']
+>       assert plan["proposal_command"][-5:] == [
+            "--report-json",
+            str(tmp_path / "report.json"),
+            "--ac",
+            supervisor.DEFAULT_AC,
+            "--dispatch",
+        ]
+E       AssertionError: assert ['--report-js... '--dispatch'] == ['--report-js... '--dispatch']
+E         
+E         At index 3 diff: 'WRONG_AC' != 'Post-escalation keepalive recovery only: inspect the PR after keepalive has escalated, preserve the original PR acceptance criteria, and do not act if the escalation label is gone.'
+E         Use -v to get more diff
+
+tests/test_issue1232_ranked_coverage.py:581: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure
+1 failed in 0.13s
+
+exit_code=1

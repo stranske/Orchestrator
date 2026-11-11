@@ -1,0 +1,91 @@
+$ .venv/bin/python -m pytest tests/test_issue1232_ranked_coverage.py::test_relearn_report_build_report_and_ordering -q --no-cov
+F                                                                        [100%]
+=================================== FAILURES ===================================
+________________ test_relearn_report_build_report_and_ordering _________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x107380770>
+
+    def test_relearn_report_build_report_and_ordering(monkeypatch):
+        monkeypatch.setattr(relearn_report, "_role_priors_from_registry", lambda _priors: {})
+    
+        report = {
+            "dry_run": False,
+            "learner": "test-learner",
+            "window_days": 7,
+            "new_version": 2,
+            "previous_version": 1,
+            "learner_note": "test note",
+            "cost_telemetry": {"task1": {"measured": True, "coverage": 0.95}},
+            "tasks": [
+                {
+                    "task_type": "task1",
+                    "diverges_from_prior": False,
+                    "prior_order": ["agent1", "agent2"],
+                    "learned_order": ["agent1", "agent2"],
+                    "previous_order": ["agent1", "agent2"],
+                    "note": "stable",
+                    "rows": [
+                        {
+                            "agent": "agent1",
+                            "posterior": 0.8,
+                            "score": 0.85,
+                            "n_obs": 10,
+                            "learned_rank": 1,
+                            "prior_rank_delta": 0,
+                            "previous_rank_delta": 0,
+                        },
+                        {
+                            "agent": "agent2",
+                            "posterior": 0.7,
+                            "score": 0.75,
+                            "n_obs": 8,
+                            "learned_rank": 2,
+                            "prior_rank_delta": 0,
+                            "previous_rank_delta": 0,
+                        },
+                    ],
+                }
+            ],
+        }
+    
+        ordered_rows = relearn_report._ordered_rows(
+            [
+                {"agent": "agent2", "score": 0.75},
+                {"agent": "agent1", "score": 0.85},
+            ],
+            ["agent1", "agent2"],
+        )
+        assert ordered_rows[0]["agent"] == "agent1"
+        assert ordered_rows[1]["agent"] == "agent2"
+    
+        # Prior order opposes both input and alphabetical order.
+        equal_score_rows = relearn_report._ordered_rows(
+            [
+                {"agent": "alpha", "score": 0.85},
+                {"agent": "zebra", "score": 0.85},
+            ],
+            ["zebra", "alpha"],
+        )
+        assert [row["agent"] for row in equal_score_rows] == ["zebra", "alpha"]
+    
+        # Test with equal scores and alphabetical tiebreaker
+        # When prior ranks are equal (both not in prior_order), alphabetical order is used
+        equal_score_alpha = relearn_report._ordered_rows(
+            [
+                {"agent": "zebra", "score": 0.85},
+                {"agent": "alpha", "score": 0.85},
+            ],
+            ["agent1", "agent2"],
+        )
+>       assert equal_score_alpha[0]["agent"] == "alpha"
+E       AssertionError: assert 'zebra' == 'alpha'
+E         
+E         - alpha
+E         + zebra
+
+tests/test_issue1232_ranked_coverage.py:546: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_issue1232_ranked_coverage.py::test_relearn_report_build_report_and_ordering
+1 failed in 0.12s
+
+exit_code=1

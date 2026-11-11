@@ -1,0 +1,111 @@
+$ .venv/bin/python -m pytest tests/test_issue1232_ranked_coverage.py::test_panel_adjudication_recording_and_cli_paths -q --no-cov
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_______________ test_panel_adjudication_recording_and_cli_paths ________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x107aa4640>
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2314/test_panel_adjudication_record0')
+capsys = <_pytest.capture.CaptureFixture object at 0x107b51fd0>
+
+    def test_panel_adjudication_recording_and_cli_paths(monkeypatch, tmp_path, capsys):
+        spec = runtime_ac._valid_spec()
+        gate = runtime_ac.evaluate_results(spec, {"check_results": panel._all_check_results(spec)})
+    
+        recorded_calls = []
+    
+        def mock_record_outcome(run_id, verifier_verdict, notes):
+            recorded_calls.append(("record_outcome", run_id, verifier_verdict, notes))
+            return {}
+    
+        def mock_record_evidence_gap(run_id, reviewer, gap):
+            recorded_calls.append(("record_evidence_gap", run_id, reviewer, gap))
+            return {}
+    
+        def mock_record_evidence_type_citations(names):
+            recorded_calls.append(("record_evidence_type_citations", names))
+            return names
+    
+        monkeypatch.setattr(feedback, "record_outcome", mock_record_outcome)
+        monkeypatch.setattr(feedback, "record_evidence_gap", mock_record_evidence_gap)
+        monkeypatch.setattr(
+            feedback, "record_evidence_type_citations", mock_record_evidence_type_citations
+        )
+    
+        reviews_pass = {
+            "reviews": [
+                {
+                    "reviewer": "vibe",
+                    "verdict": "PASS",
+                    "confidence": 0.8,
+                    "ac_assessments": [
+                        {"ac_id": "AC1", "status": "PASS", "reason": "evidence present"}
+                    ],
+                },
+                {
+                    "reviewer": "gemini",
+                    "verdict": "PASS",
+                    "confidence": 0.9,
+                    "ac_assessments": [
+                        {"ac_id": "AC2", "status": "PASS", "reason": "evidence present"}
+                    ],
+                },
+            ]
+        }
+    
+        panel_result = panel.adjudicate_panel(spec, gate, reviews_pass)
+        assert panel_result["verdict"] == "PASS"
+        assert panel_result["verifier_verdict"] == "PASS_RUNTIME_AC"
+    
+        run_id = "test-run-1232-adjudication"
+    
+        # First recording phase - clear spies before
+        recorded_calls.clear()
+        record_result = panel.record_panel_verdict(run_id, panel_result)
+        assert record_result["run_id"] == run_id
+        assert record_result["verifier_verdict"] == "PASS_RUNTIME_AC"
+        assert record_result["recorded"] is True
+        assert len(recorded_calls) >= 1
+        assert any(call[0] == "record_outcome" for call in recorded_calls)
+        # Assert exact outcome tuple
+        outcome_calls = [c for c in recorded_calls if c[0] == "record_outcome"]
+        assert len(outcome_calls) == 1
+        assert outcome_calls[0] == (
+            "record_outcome",
+            run_id,
+            "PASS_RUNTIME_AC",
+            f"runtime_ac_panel: PASS_RUNTIME_AC - {panel_result['reason']}",
+        )
+    
+        # Second recording phase - clear spies before
+        recorded_calls.clear()
+        record_result_gaps = panel.record_panel_verdict(
+            run_id,
+            {
+                **panel_result,
+                "evidence_gaps": [
+                    {"reviewer": "vibe", "gap": "missing trace"},
+                    {"reviewer": "gemini", "gap": "missing logs"},
+                ],
+                "evidence_type_citations": [{"name": "trace"}, {"name": "log"}],
+            },
+        )
+        assert record_result_gaps["evidence_gaps"] == 2
+        assert any(call[0] == "record_evidence_gap" for call in recorded_calls)
+        assert any(call[0] == "record_evidence_type_citations" for call in recorded_calls)
+    
+        # Assert ordered gap tuples with runtime_ac_panel reviewer prefixes
+        gap_calls = [c for c in recorded_calls if c[0] == "record_evidence_gap"]
+        assert len(gap_calls) == 2
+        # Gaps should be ordered as provided
+>       assert gap_calls[0] == ("record_evidence_gap", run_id, "runtime_ac_panel:vibe", "missing trace")
+E       AssertionError: assert ('record_evid...issing trace') == ('record_evid...issing trace')
+E         
+E         At index 2 diff: 'WRONG_PREFIX:vibe' != 'runtime_ac_panel:vibe'
+E         Use -v to get more diff
+
+tests/test_issue1232_ranked_coverage.py:345: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_issue1232_ranked_coverage.py::test_panel_adjudication_recording_and_cli_paths
+1 failed in 0.12s
+
+exit_code=1

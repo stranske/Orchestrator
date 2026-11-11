@@ -1,0 +1,5 @@
+$ .venv/bin/python -m pytest tests/test_issue1232_ranked_coverage.py::test_relearn_report_build_report_and_ordering -q --no-cov
+.                                                                        [100%]
+1 passed in 0.10s
+
+exit_code=0
