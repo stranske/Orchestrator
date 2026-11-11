@@ -36,6 +36,14 @@ PRODUCER_FOLLOWUP_DAYS = 30
 PRODUCER_LOCK_MAX_HOURS = 72
 TERMINAL_STATUSES = {"merged", "no_winner", "discarded", "expired", "member_pushed"}
 TRIAL_GENERATION = 2
+# Opener intake reservation (owner decision 2026-11-11). New issues were started within ~1 h of filing, before
+# the hourly feed saw them, so trial 2 launched 0 with 20 no_subject ticks. The opener now offers each issue it
+# is about to start; the producer takes one at the design rate (a token bucket at ORCH_EXPERIMENT_RATE_PER_DAY,
+# at most DAILY_CAP banked) and the opener holds it for RESERVE_HOLD_SECONDS. A reserved subject skips the
+# Bernoulli draw (its token was the draw); pacing and the daily cap still apply. A reservation the tick does not
+# launch in time is released by the opener, which then starts the issue normally: the hold always drains.
+RESERVED = "experiment:reserved"
+RESERVE_HOLD_SECONDS = 3 * 3600
 
 
 def state_path():
@@ -67,7 +75,7 @@ def locked_state():
         yield
 
 
-def draw(now, last_draw_ts, rate_per_day, launched_today, rng, *, pools=None, cells=()):
+def draw(now, last_draw_ts, rate_per_day, launched_today, rng, *, pools=None, cells=(), force=False):
     """Bernoulli approximation to Poisson arrivals, bounded per UTC day.
 
     Pure when called alone. cadence_draw persists every draw, including pacing skips:
@@ -91,11 +99,13 @@ def draw(now, last_draw_ts, rate_per_day, launched_today, rng, *, pools=None, ce
         return {"fire": False, "p": p, "reason": reason}
     if launched_today >= DAILY_CAP:
         return {"fire": False, "p": p, "reason": "daily_cap"}
+    if force:  # an opener reservation already spent this launch's token
+        return {"fire": True, "p": 1.0, "reason": "reserved"}
     fire = rng.random() < p
     return {"fire": fire, "p": p, "reason": "draw" if fire else "no_draw"}
 
 
-def cadence_draw(now, rate, rng, *, pools=None, cells=(), skip_reason=None, count_skip=True):
+def cadence_draw(now, rate, rng, *, pools=None, cells=(), skip_reason=None, count_skip=True, force=False):
     with locked_state():
         state = read_state()
         day = time.strftime("%Y%m%d", time.gmtime(now))
@@ -111,6 +121,7 @@ def cadence_draw(now, rate, rng, *, pools=None, cells=(), skip_reason=None, coun
                 rng,
                 pools=pools,
                 cells=cells,
+                force=force,
             )
         )
         state.update(
@@ -125,6 +136,52 @@ def cadence_draw(now, rate, rng, *, pools=None, cells=(), skip_reason=None, coun
             reasons[result["reason"]] = reasons.get(result["reason"], 0) + 1
         save_state(state)
         return result
+
+
+def reservation_offer(target, body, *, now=None, rate_per_day=None, cap=None):
+    """The opener asks before starting an issue: should the producer take it instead?
+
+    Returns {"take": bool, "reason": str, "tokens": float}. A take spends one token and records the
+    reservation. Every refusal names why, so the opener's report shows the binding limit.
+    """
+    import capacity
+
+    now = time.time() if now is None else now
+    rate = float(os.environ.get("ORCH_EXPERIMENT_RATE_PER_DAY", "2") if rate_per_day is None else rate_per_day)
+    hold = trial_launch_hold(now)
+    if hold:
+        return {"take": False, "reason": "trial_hold", "tokens": 0.0}
+    if not (acceptance_criteria(body or "") or named_test_paths(body or "")):
+        return {"take": False, "reason": "no_named_test", "tokens": 0.0}
+    if cap is None:
+        try:
+            cap = json.loads(Path(capacity.OUT).read_text())
+        except (OSError, ValueError):
+            return {"take": False, "reason": "capacity_unreadable", "tokens": 0.0}
+    ok = sorted(a for a, s in arm_pacing(cap).items() if s == "ok")
+    if len(ok) < 2:
+        return {"take": False, "reason": f"pacing ok={len(ok)}", "tokens": 0.0}
+    with locked_state():
+        state = read_state()
+        day = time.strftime("%Y%m%d", time.gmtime(now))
+        if (state.get("launched_today", 0) if state.get("day") == day else 0) >= DAILY_CAP:
+            return {"take": False, "reason": "daily_cap", "tokens": 0.0}
+        last = float(state.get("reserve_ts") or now)
+        tokens = min(float(DAILY_CAP), float(state.get("reserve_tokens", 1.0)) + rate * max(0.0, now - last) / 86400)
+        reservations = {
+            k: v for k, v in (state.get("reservations") or {}).items() if now - float(v) < RESERVE_HOLD_SECONDS
+        }
+        if target in reservations:
+            return {"take": True, "reason": "already_reserved", "tokens": tokens}
+        take = tokens >= 1.0
+        if take:
+            tokens -= 1.0
+            reservations[target] = now
+        state.update(reserve_tokens=tokens, reserve_ts=now, reservations=reservations)
+        offers = state.setdefault("reserve_offers", {})
+        offers["taken" if take else "no_token"] = offers.get("taken" if take else "no_token", 0) + 1
+        save_state(state)
+        return {"take": take, "reason": "reserved" if take else "no_token", "tokens": round(tokens, 3)}
 
 
 def record_launch(now=None, *, test_source=None):
@@ -175,6 +232,9 @@ def record_skip(reason, *, target=None, now=None, test_class=None):
 def choose_subject(feed, forum, cells, rng):
     if not feed:
         return None
+    reserved = [i for i in feed if RESERVED in (i.get("labels") or [])]
+    if reserved:
+        return {"subject": min(reserved, key=lambda i: str(i.get("target"))), "reason": "reserved"}
     forum = [i for i in forum if i in feed]
     if forum and rng.random() < 0.5:
         return {"subject": min(forum, key=lambda i: i.get("created_at", "")), "reason": "forum"}

@@ -824,6 +824,8 @@ a firing draw reserves a daily slot even if subsequent admission/launch fails, s
 cannot exceed the cap. Capacity skips consume their draw time rather than accumulating
 future launches. The diagnostic names blocking pools and coverage debt beside drainable cells.
 
+**Opener intake reservation (2026-11-11, owner decision).** The producer's subjects had to be open, unowned issues at the hourly tick when its draw fired, but opener-core starts most new issues within about an hour of filing, so trial 1 launched 4 of a designed ~42 and trial 2 launched 0 with 20 `no_subject` ticks. opener-core now calls `experiment_producer.reservation_offer` before it starts an issue. The producer takes one at the design rate (a token bucket at `ORCH_EXPERIMENT_RATE_PER_DAY`, at most `DAILY_CAP` banked), only when the issue has acceptance criteria and at least two seats pace `ok`, and records it. The opener labels it `experiment:reserved` and holds it for `RESERVE_HOLD_SECONDS` (3 h). The research feed accepts it as an ordinary subject, `choose_subject` prefers it, and its launch skips the Bernoulli draw because the token was the draw (pacing and the daily cap still apply). A reservation not launched in time is released by the opener, which then starts the issue normally, so the hold always drains. This is a rail change to the producer's intake only: selection stays deterministic and the router is untouched.
+
 Released unowned feed issues retain the existing claim, fresh subject read, production
 reservation and per-issue cooldown gates. With probability 0.5 the oldest forum item
 (`experiment:forum` or at least nine checkboxes) wins; otherwise cells older than 21 days

@@ -323,6 +323,8 @@ def research_tick(
                 rng,
                 pools=job.get("pools"),
                 cells=plan_out.get("producer_cells", []),
+                # an opener reservation already spent this launch's rate token (owner decision 2026-11-11)
+                force=experiment_producer.RESERVED in (item.get("labels") or []),
             )
             plan["draw"] = draw
             if not draw["fire"]:
