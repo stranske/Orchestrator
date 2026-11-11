@@ -2634,17 +2634,18 @@ def assess_sandbox_fallback_report(
     requires `since` and replaces the default seven-day end. The start is inclusive
     and the end exclusive, so adjacent intervals never count the same event twice.
     """
-    window_days = ASSESS_SANDBOX_WINDOW_DAYS
+    window_days: int | float = ASSESS_SANDBOX_WINDOW_DAYS
+    default_window_seconds = ASSESS_SANDBOX_WINDOW_DAYS * 86400
     now_ts = int(time.time()) if now is None else int(now)
     if until is not None and since is None:
         raise ValueError("until requires since")
     if since is None:
-        start = now_ts - window_days * 86400
+        start = now_ts - default_window_seconds
         end = now_ts
         window_complete = True
     else:
         start = int(since)
-        end = int(until) if until is not None else start + window_days * 86400
+        end = int(until) if until is not None else start + default_window_seconds
         if end <= start:
             raise ValueError("window end must be after window start")
         window_days = (end - start) / 86400
