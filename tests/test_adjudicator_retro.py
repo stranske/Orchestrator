@@ -1253,6 +1253,48 @@ def test_live_disputes_selects_one_run_per_target_before_applying_cap(live_shado
     assert retro.live_disputes(db=db, now=now, since_ts=now) == []
 
 
+def test_live_disputes_defaults_to_saved_run_timestamp_and_three_targets(live_shadow, monkeypatch):
+    db, now = live_shadow["db"], live_shadow["common"]["now"]
+    path = live_shadow["common"]["path"]
+    monkeypatch.setenv("ORCH_STATE_DIR", str(path.parent))
+    state = path.parent / "capability-program" / "adjudicator-live.json"
+    state.parent.mkdir()
+    state.write_text(json.dumps({"generated_at": now - 1}))
+    with feedback._conn() as conn:
+        for index in range(4):
+            conn.execute(
+                "INSERT INTO runs(run_id,ts,target) VALUES (?,?,?)",
+                (f"fresh-{index}", now + index, f"owner/repo#{index + 2}"),
+            )
+            conn.execute(
+                "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict) "
+                "VALUES (?,'NON_PASS','PASS')", (f"fresh-{index}",),
+            )
+    selected = retro.live_disputes(db=db, now=now + 4)
+    assert [row["run_id"] for row in selected] == ["fresh-3", "fresh-2", "fresh-1"]
+    assert len(retro.live_disputes(db=db, now=now + 4, limit=None)) == 4
+    # Explicit bounds override state and remain strict even for queued work.
+    state.write_text(json.dumps({"generated_at": now + 4, "pending_case_ids": [
+        retro._case_id({"run_id": "new", "verifier_verdict": "NON_PASS", "adjudicated_verdict": "PASS"})
+    ]}))
+    assert [row["run_id"] for row in retro.live_disputes(db=db, now=now + 4)] == ["new"]
+    assert retro.live_disputes(db=db, now=now + 4, since_ts=now + 4) == []
+
+
+def test_live_timestamp_cutoff_keeps_capped_cases_and_reconcile_does_not_advance_it(live_shadow):
+    live, common = live_shadow["live"], live_shadow["common"]
+    first = live.run_live(**{**common, "limit": 0})
+    assert first["attempted"] == 0
+    saved = json.loads(common["path"].read_text())
+    assert len(saved["pending_case_ids"]) == 1
+    live.reconcile_live(db=common["db"], path=common["path"], now=common["now"] + 100)
+    saved = json.loads(common["path"].read_text())
+    assert saved["last_live_run_ts"] == common["now"]
+    second = live.run_live(**{**common, "now": common["now"] + 101})
+    assert second["advised"] == 1
+    assert json.loads(common["path"].read_text())["pending_case_ids"] == []
+
+
 def test_live_shadow_adjudicates_a_new_dispute_once_and_grades_on_truth(live_shadow):
     live, db = live_shadow["live"], live_shadow["db"]
     outcomes_before = _brain_except_events(db)["outcomes"]
@@ -1267,6 +1309,8 @@ def test_live_shadow_adjudicates_a_new_dispute_once_and_grades_on_truth(live_sha
     assert advice["decision"] == "uphold_blocker" and advice["backend"] == "stub"
     assert advice["case_id"] == first["rows"][0]["case_id"] and "cost_usd" in advice
     assert _brain_except_events(db)["outcomes"] == outcomes_before, "no outcomes row written"
+    # Exercise the event exclusion independently of the last-run cutoff.
+    assert retro.live_disputes(db=db, since_ts=0) == []
 
     second = live.run_live(**live_shadow["common"])
     assert _advice_events(db) == events, "the second run writes nothing"

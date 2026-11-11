@@ -503,7 +503,10 @@ def run_live(
     retrying = {row.get("case_id"): row for row in rows if not _final(row)}
     population = retro.disputes(db=db, now=now)
     attempted = advised = uncertified = 0
-    for dispute in retro.live_disputes(limit=limit, db=db, now=now, exclude_case_ids=settled):
+    candidates = retro.live_disputes(
+        limit=None, db=db, now=now, exclude_case_ids=settled, state_path=path
+    )
+    for dispute in candidates[:limit]:
         case_id = retro._case_id(dispute)
         attempted += 1
         earlier = retrying.pop(case_id, None)
@@ -602,7 +605,12 @@ def run_live(
     # report), so its writer would demote every live decision to needs_more_evidence. A live row
     # was decided on a case certified IN THIS PROCESS at dispatch time; this module records that
     # fact itself (`certification`), grades the advice itself, and labels the number `live`.
-    summary = _grade_and_write(rows, db, path, now=now, population=len(population))
+    pending = {retro._case_id(row) for row in candidates[limit:]}
+    pending.update(str(row["case_id"]) for row in rows if not _final(row))
+    summary = _grade_and_write(
+        rows, db, path, now=now, population=len(population),
+        selection_state={"last_live_run_ts": now, "pending_case_ids": sorted(pending)},
+    )
     return {
         "disabled": False,
         "attempted": attempted,
@@ -672,8 +680,15 @@ def _backfill_advice_events(rows: list[dict], db: Path | None) -> None:
 
 
 def _grade_and_write(
-    rows: list[dict], db: Path | None, path: Path, *, now: int, population: int | str
+    rows: list[dict], db: Path | None, path: Path, *, now: int, population: int | str,
+    selection_state: dict | None = None,
 ) -> dict:
+    if selection_state is None:
+        previous = json.loads(path.read_text()) if path.exists() else {}
+        selection_state = {
+            "last_live_run_ts": previous.get("last_live_run_ts", previous.get("generated_at", 0)),
+            "pending_case_ids": previous.get("pending_case_ids", []),
+        }
     retro._refresh_saved_verdicts(rows, db)
     summary = live_summary(rows)
     _write_report(
@@ -684,6 +699,7 @@ def _grade_and_write(
             "population": population,
             "summary": summary,
             "rows": rows,
+            **selection_state,
         },
     )
     return summary
