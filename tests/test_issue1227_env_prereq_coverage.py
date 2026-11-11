@@ -368,6 +368,31 @@ class PrerequisiteBoundaryTests(unittest.TestCase):
             self.assertEqual(str(raised.exception), expected)
         check.assert_not_called()
 
+    def test_replay_executes_only_checks_without_a_recorded_verdict(self):
+        check = Mock(__name__="test_recorded")
+        for verdicts in ({}, {"another_check": {"outcome": "passed"}}):
+            with self.subTest(verdicts=verdicts):
+                check.reset_mock()
+                self.assertIsNone(env_prereq.run_or_replay(check, verdicts))
+                check.assert_called_once_with()
+        check.reset_mock()
+        self.assertIsNone(
+            env_prereq.run_or_replay(check, {"test_recorded": {"outcome": "passed"}})
+        )
+        check.assert_not_called()
+
+    def test_replayed_skip_preserves_the_reason_without_executing_the_check(self):
+        check = Mock(__name__="test_recorded")
+        for verdict in (
+            {"outcome": "skipped", "message": "fixture prerequisite is absent"},
+            {"outcome": "skipped"},
+        ):
+            with self.subTest(verdict=verdict):
+                with self.assertRaises(env_prereq.MissingPrerequisite) as raised:
+                    env_prereq.run_or_replay(check, {"test_recorded": verdict})
+                self.assertEqual(str(raised.exception), verdict.get("message", ""))
+        check.assert_not_called()
+
     def test_runnable_records_only_the_first_absent_prerequisite(self):
         gaps = ["earlier section is absent"]
         self.assertTrue(env_prereq.runnable(gaps, None, ""))

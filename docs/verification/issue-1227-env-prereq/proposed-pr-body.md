@@ -1,10 +1,10 @@
 ## Summary
 
-Adds hermetic tests for the first issue-ranked target, `src/env_prereq.py`, with the test module registered in the explicit CI shard plan. There are now 18 tests: two pytest-style functions and sixteen unittest methods. The latest addition verifies that `main(["--selftest"])` invokes the selftest exactly once, returns zero, and does not report machine inventory. No production files changed and no production bug was found.
+Adds hermetic tests for the first issue-ranked target, `src/env_prereq.py`, with the test module registered in the explicit CI shard plan. There are now 20 tests: two pytest-style functions and eighteen unittest methods. The latest two tests verify that verdict replay runs unrecorded checks, does not rerun recorded passes, and preserves skipped verdicts and their reasons. No production files changed and no production bug was found.
 
 ## Reconciliation (2026-11-11)
 
-Reviewed the recent commits through `f0563fcf`, including `06da00e2` (boundary tests), `61b1d5ee` (isolation and mutation evidence), `9701ef57` (layout regression), `d4234927` (direct selftest contract), `463c504c` (bare-machine regressions), and `f0563fcf` (section-skip recording/reporting). Before this iteration, the actual PR diff against base `f56396f5` contained four files and 17 tests. The reported 35-file previous iteration does not match the current base diff; the remote two-test summary is stale.
+Reviewed the recent commits through `cb9b7116`, including `06da00e2` (boundary tests), `61b1d5ee` (isolation and mutation evidence), `9701ef57` (layout regression), `d4234927` (direct selftest contract), `463c504c` (bare-machine regressions), `f0563fcf` (section-skip recording/reporting), and `cb9b7116` (CLI selftest dispatch). Before this iteration, the actual PR diff against base `f56396f5` contained four files and 18 tests. The reported 35-file previous iteration does not match the current base diff; the remote two-test summary is stale.
 
 The checkboxes below reflect verified scope and the documented partial-delivery allowance. CI acceptance, the explicit pytest mutation requirement, formatting, and delivery remain unchecked. Reconciliation of the remote PR body was attempted before implementation, but the write was rejected: `MCP tool call requires approval, but approval policy is never`. This file is the proposed replacement; the remote body has NOT been updated.
 
@@ -14,7 +14,7 @@ CI's combined pytest plus selftest measure is authoritative; no full local suite
 
 | Target | Issue-listed uncovered units | Current evidence |
 | --- | ---: | --- |
-| `src/env_prereq.py` | 40 | All 18 tests pass using standard-library runners, including its real selftest; fresh coverage is unknown. |
+| `src/env_prereq.py` | 40 | All 20 tests pass using standard-library runners, including its real selftest; fresh focused coverage is unknown. |
 | `src/ledger_reconcile.py` | 74 | Outside the latest target-1-only scope. |
 | `src/consumer_sync_shadow.py` | 1 | Outside the same scope. |
 | `src/improvement_log.py` | 5 | Outside the same scope. |
@@ -22,19 +22,20 @@ CI's combined pytest plus selftest measure is authoritative; no full local suite
 | `src/testgen_lane.py` | 18 | Outside the same scope. |
 | `src/redirect_plan.py` | 70 | Outside the same scope. |
 
-No fresh covered-unit gain is established, so this partial delivery conservatively leaves the entire approximately 180-unit goal unverified. The newest test exercises CLI selftest dispatch. No additional CI-covered units or combined percentage are claimed from focused test passes.
+No fresh covered-unit gain is established, so this partial delivery conservatively leaves the entire approximately 180-unit goal unverified. The newest tests protect verdict replay behavior. No additional CI-covered units or combined percentage are claimed from focused test passes.
 
 ## Validation and blockers
 
-- `PYTHONPATH=src:tests python3 -m unittest test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests -v`: **16 passed**. Both runtime paths, ledger access and home lookup are isolated; process and network calls are denied and asserted unused.
+- `PYTHONPATH=src:tests python3 -m unittest test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests -v`: **18 passed**. Both runtime paths, ledger access and home lookup are isolated; process and network calls are denied and asserted unused.
 - Both original pytest-style functions pass using a standard-library fixture adapter. The first executes the real `env_prereq._selftest()`, which prints **OK**. This is not a pytest run.
-- The new CLI test fails on each of three deliberate mutations to temporary source copies and passes after restoring each copy. Repository production source is unchanged. Output is appended to `mutation-evidence.txt`.
+- The two new replay tests fail on four deliberate mutations to temporary source copies and pass after restoring each copy. Repository production source is unchanged. Output is appended to `mutation-evidence.txt`.
 - `git diff --check`: passed.
 - `python3 -m pytest tests/test_issue1227_env_prereq_coverage.py --cov=env_prereq --cov-branch --cov-report=term-missing -m "not slow"`: blocked, **No module named pytest**.
 - `python3 -m black --line-length 100 tests/test_issue1227_env_prereq_coverage.py` and `python3 -m black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .`: blocked, **No module named black**.
 - `python3 -m ruff check --extend-exclude .workflows-lib --output-format concise tests/test_issue1227_env_prereq_coverage.py`: blocked, **No module named ruff**.
 - Fresh package installation into `/tmp/orch-1256-validation` failed: **No matching distribution found for pytest**. The cache/install search found no usable tools. The mandatory Black gate therefore prevents committing or pushing this iteration's Python edits; no commit was made by this run.
 - PR-body reconciliation, blocker comment and `needs-human` label writes require approval that this run cannot obtain. The PR remains open and ready for review; the remote body is still stale.
+- [CI run 43085562930](https://github.com/stranske/Orchestrator/actions/runs/43085562930) for `cb9b7116` has all six pytest shards and combined coverage aggregation passing. Flat exec-mirror shard 6 fails `tests/test_model_table.py::test_copy_matches_workflows_source` because the model table differs from Workflows main; that unrelated drift is outside this target-only tests round. The new local replay tests have not run in CI.
 
 ## Break-and-revert evidence
 
@@ -47,6 +48,15 @@ Fresh runs for the CLI test used `python3 -m unittest test_issue1227_env_prereq_
 | Disable the `--selftest` branch | machine-inventory assertion, exit 1 / OK, exit 0 |
 | Invoke `_selftest()` twice | call-count assertion, exit 1 / OK, exit 0 |
 | Return 1 after `_selftest()` | return-value assertion, exit 1 / OK, exit 0 |
+
+Fresh replay proofs use unittest with temporary source copies first on `PYTHONPATH`, as above. They advance mutation verification but do not satisfy the required pytest proof. Each failure is an assertion failure; each restored run passes.
+
+| Deliberate mutation | Broken / restored |
+| --- | --- |
+| Omit execution for an unrecorded check | call-count assertion, exit 1 / OK, exit 0 |
+| Execute a check despite a recorded pass | unexpected-call assertion, exit 1 / OK, exit 0 |
+| Disable replay of a recorded skip | expected-exception assertion, exit 1 / OK, exit 0 |
+| Drop a recorded skip's reason | reason assertion, exit 1 / OK, exit 0 |
 
 Closes #1227
 

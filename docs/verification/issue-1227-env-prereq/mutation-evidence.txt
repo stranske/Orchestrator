@@ -680,3 +680,137 @@ Ran 1 test in 0.002s
 OK
 
 exit: 0
+
+=== 2026-11-11 verdict replay follow-up: unittest, not pytest ===
+
+=== unrecorded_check_not_executed: broken, exit 1 ===
+test_replay_executes_only_checks_without_a_recorded_verdict (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replay_executes_only_checks_without_a_recorded_verdict) ...
+  test_replay_executes_only_checks_without_a_recorded_verdict (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replay_executes_only_checks_without_a_recorded_verdict) (verdicts={}) ... FAIL
+  test_replay_executes_only_checks_without_a_recorded_verdict (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replay_executes_only_checks_without_a_recorded_verdict) (verdicts={'another_check': {'outcome': 'passed'}}) ... FAIL
+
+======================================================================
+FAIL: test_replay_executes_only_checks_without_a_recorded_verdict (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replay_executes_only_checks_without_a_recorded_verdict) (verdicts={})
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 377, in test_replay_executes_only_checks_without_a_recorded_verdict
+    check.assert_called_once_with()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/opt/hostedtoolcache/Python/3.14.10/x64/lib/python3.14/unittest/mock.py", line 997, in assert_called_once_with
+    raise AssertionError(msg)
+AssertionError: Expected 'mock' to be called once. Called 0 times.
+
+======================================================================
+FAIL: test_replay_executes_only_checks_without_a_recorded_verdict (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replay_executes_only_checks_without_a_recorded_verdict) (verdicts={'another_check': {'outcome': 'passed'}})
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 377, in test_replay_executes_only_checks_without_a_recorded_verdict
+    check.assert_called_once_with()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/opt/hostedtoolcache/Python/3.14.10/x64/lib/python3.14/unittest/mock.py", line 997, in assert_called_once_with
+    raise AssertionError(msg)
+AssertionError: Expected 'mock' to be called once. Called 0 times.
+
+----------------------------------------------------------------------
+Ran 1 test in 0.003s
+
+FAILED (failures=2)
+
+=== unrecorded_check_not_executed: restored, exit 0 ===
+test_replay_executes_only_checks_without_a_recorded_verdict (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replay_executes_only_checks_without_a_recorded_verdict) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.002s
+
+OK
+
+=== recorded_pass_executed_again: broken, exit 1 ===
+test_replay_executes_only_checks_without_a_recorded_verdict (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replay_executes_only_checks_without_a_recorded_verdict) ... FAIL
+
+======================================================================
+FAIL: test_replay_executes_only_checks_without_a_recorded_verdict (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replay_executes_only_checks_without_a_recorded_verdict)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 382, in test_replay_executes_only_checks_without_a_recorded_verdict
+    check.assert_not_called()
+    ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/opt/hostedtoolcache/Python/3.14.10/x64/lib/python3.14/unittest/mock.py", line 947, in assert_not_called
+    raise AssertionError(msg)
+AssertionError: Expected 'mock' to not have been called. Called 1 times.
+Calls: [call()].
+
+----------------------------------------------------------------------
+Ran 1 test in 0.002s
+
+FAILED (failures=1)
+
+=== recorded_pass_executed_again: restored, exit 0 ===
+test_replay_executes_only_checks_without_a_recorded_verdict (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replay_executes_only_checks_without_a_recorded_verdict) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.002s
+
+OK
+
+=== recorded_skip_not_raised: broken, exit 1 ===
+test_replayed_skip_preserves_the_reason_without_executing_the_check (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replayed_skip_preserves_the_reason_without_executing_the_check) ...
+  test_replayed_skip_preserves_the_reason_without_executing_the_check (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replayed_skip_preserves_the_reason_without_executing_the_check) (verdict={'outcome': 'skipped', 'message': 'fixture prerequisite is absent'}) ... FAIL
+  test_replayed_skip_preserves_the_reason_without_executing_the_check (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replayed_skip_preserves_the_reason_without_executing_the_check) (verdict={'outcome': 'skipped'}) ... FAIL
+
+======================================================================
+FAIL: test_replayed_skip_preserves_the_reason_without_executing_the_check (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replayed_skip_preserves_the_reason_without_executing_the_check) (verdict={'outcome': 'skipped', 'message': 'fixture prerequisite is absent'})
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 391, in test_replayed_skip_preserves_the_reason_without_executing_the_check
+    with self.assertRaises(env_prereq.MissingPrerequisite) as raised:
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: MissingPrerequisite not raised
+
+======================================================================
+FAIL: test_replayed_skip_preserves_the_reason_without_executing_the_check (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replayed_skip_preserves_the_reason_without_executing_the_check) (verdict={'outcome': 'skipped'})
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 391, in test_replayed_skip_preserves_the_reason_without_executing_the_check
+    with self.assertRaises(env_prereq.MissingPrerequisite) as raised:
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: MissingPrerequisite not raised
+
+----------------------------------------------------------------------
+Ran 1 test in 0.002s
+
+FAILED (failures=2)
+
+=== recorded_skip_not_raised: restored, exit 0 ===
+test_replayed_skip_preserves_the_reason_without_executing_the_check (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replayed_skip_preserves_the_reason_without_executing_the_check) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.002s
+
+OK
+
+=== recorded_skip_reason_lost: broken, exit 1 ===
+test_replayed_skip_preserves_the_reason_without_executing_the_check (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replayed_skip_preserves_the_reason_without_executing_the_check) ...
+  test_replayed_skip_preserves_the_reason_without_executing_the_check (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replayed_skip_preserves_the_reason_without_executing_the_check) (verdict={'outcome': 'skipped', 'message': 'fixture prerequisite is absent'}) ... FAIL
+
+======================================================================
+FAIL: test_replayed_skip_preserves_the_reason_without_executing_the_check (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replayed_skip_preserves_the_reason_without_executing_the_check) (verdict={'outcome': 'skipped', 'message': 'fixture prerequisite is absent'})
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 393, in test_replayed_skip_preserves_the_reason_without_executing_the_check
+    self.assertEqual(str(raised.exception), verdict.get("message", ""))
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: '' != 'fixture prerequisite is absent'
++ fixture prerequisite is absent
+
+
+----------------------------------------------------------------------
+Ran 1 test in 0.002s
+
+FAILED (failures=1)
+
+=== recorded_skip_reason_lost: restored, exit 0 ===
+test_replayed_skip_preserves_the_reason_without_executing_the_check (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replayed_skip_preserves_the_reason_without_executing_the_check) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.002s
+
+OK
