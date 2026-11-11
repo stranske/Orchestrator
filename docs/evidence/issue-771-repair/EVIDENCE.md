@@ -40,6 +40,18 @@ PR #772 (merge commit `b1511de27d025a65b4424144a405fd2625ffca28`, PR head `18ad9
 
 The five new tests were included in that collection; they were not run in isolation in CI, but the PR head run is the passing Gate pytest record for the merged change set.
 
+**Preserved CI logs (recovered 2026-11-11 for #1327, bounded CI-evidence pass):**
+
+Both runs below were verified at head `18ad97a054dab7f6039dd42c8131bee04267748b` via `gh run view <run-id> --json headSha,conclusion,jobs`.
+
+| Workflow | Run | Pytest job | Job ID | Result | Preserved log |
+|----------|-----|-----------|--------|--------|---------------|
+| CI | [39180639406](https://github.com/stranske/Orchestrator/actions/runs/39180639406) | `verify.py (real pytest counts + selftests + capability gates)` | 117832439061 | success — `5443 passed, 0 failed` | [run-39180639406-job-117832439061.log](ci/run-39180639406-job-117832439061.log) |
+| Gate | [39180639803](https://github.com/stranske/Orchestrator/actions/runs/39180639803) | `python ci / python 3.13` | 117832552036 | success — `5429 passed, 41 skipped`; log lists all five `tests/test_feedback_registry_queries.py` test IDs | [run-39180639803-job-117832552036.log](ci/run-39180639803-job-117832552036.log) |
+| Gate | [39180639803](https://github.com/stranske/Orchestrator/actions/runs/39180639803) | `python ci / python 3.12` | 117832552676 | success — `5429 passed, 41 skipped` | [run-39180639803-job-117832552676.log](ci/run-39180639803-job-117832552676.log) |
+
+Other jobs in these runs (flat exec-mirror verify, combined coverage, lint/typecheck, etc.) were identified from the same `gh run view` output but their logs were not preserved in this bounded pass; their historical log content is **unknown** beyond the recorded `success` conclusions above. No unavailable log is presented as recovered.
+
 **Focused verification at merge commit (repair instruction, five tests only):**
 
 ```text
@@ -88,10 +100,10 @@ The recovered `coverage.json` **does not include** `num_branches` / `missing_bra
 
 | Measure | Before (ranking) | After (CI artifact, PR head) | Delta |
 |---------|------------------|------------------------------|-------|
-| Missing statements (Gate combined) | Not stored for `3b379f8`; ranking cites **232** combined units | **226** | **≥6** on the statement component (232→226) |
+| Missing statements (Gate combined) | Not stored for `3b379f8`; ranking cites **232** combined units (statements+branches, not separable) | **226** statements only | **Not comparable** — the 232 ranking figure mixes statements and branches, so no like-for-like statement delta can be derived from it |
 | Missing branches (Gate combined) | Part of the **232** ranking total | Not published in recovered JSON | **Not recoverable** from artifact |
 
-PR #772’s body already stated the round goal was **not** met on Gate authority (local pytest-only `--cov` showed +109 covered statements, explicitly **not** presented as CI). The recovered Gate numbers confirm a **large shortfall** versus the ~180 combined-unit target: only a single-digit improvement on the visible statement missing count, while most of `feedback.py` remains uncovered.
+PR #772’s body already stated the round goal was **not** met on Gate authority (local pytest-only `--cov` showed +109 covered statements, explicitly **not** presented as CI). The recovered Gate numbers confirm a **large shortfall** versus the ~180 combined-unit target: the after-state is 226 missing statements of 2825 (92.0% statement coverage), and no like-for-like before/after delta is measurable from the recovered artifacts (see table above).
 
 ### Remaining meaningful coverage limitations (`src/feedback.py`)
 
