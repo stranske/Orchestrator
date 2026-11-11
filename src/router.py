@@ -1573,7 +1573,7 @@ def _selftest() -> None:
                 "codex": "ok",
                 "claude": "ok",
                 "gemini": "ok",
-                            }
+            }
         )
         bk = [
             {"target": "r/Repo#1", "task_type": "mechanical", "lane": "closer"},
@@ -1864,9 +1864,7 @@ def _selftest() -> None:
         # ONE runs this tick (claude), the other waits — no two concurrent claude rounds.
         ps2 = plan(
             four_impl[:2],
-            cap(
-                {"claude": "ok", "codex": "shed", "cursor": "shed", "vibe": "shed"}
-            ),
+            cap({"claude": "ok", "codex": "shed", "cursor": "shed", "vibe": "shed"}),
             dry_run=True,
         )
         assert [a["agent"] for a in ps2["assignments"]] == ["claude"] and ps2["lane_cap"] == 1, ps2[
@@ -1922,7 +1920,7 @@ def _selftest() -> None:
                 "codex": "shed",
                 "claude": "shed",
                 "gemini": "ok",
-                            }
+            }
         )
         pg = plan(
             [{"target": "g/r#1", "task_type": "implement", "lane": "opener"}], gem, dry_run=True
@@ -1938,7 +1936,7 @@ def _selftest() -> None:
                 "gemini": {"state": "ok", "policy": "drain"},
                 "cursor": {"state": "ok"},
                 "vibe": {"state": "ok"},
-                            }
+            }
         }
         pg_prom = plan(
             [{"target": "g/r#1", "task_type": "implement", "lane": "opener"}],
@@ -1964,7 +1962,7 @@ def _selftest() -> None:
                 "gemini": {"state": "ok", "policy": "reserve"},
                 "cursor": {"state": "ok"},
                 "vibe": {"state": "ok"},
-                            }
+            }
         }
         pg_dem = plan(
             [{"target": "g/r#1", "task_type": "implement", "lane": "opener"}],
@@ -1984,7 +1982,7 @@ def _selftest() -> None:
                 "gemini": {"state": "ok", "policy": "reserve"},
                 "cursor": {"state": "ok"},
                 "vibe": {"state": "shed"},
-                            }
+            }
         }
         pick_last = select_agent("implement", cap_reserve_late, load={"cursor": 1})
         assert (
@@ -2004,7 +2002,7 @@ def _selftest() -> None:
                     "vibe": "shed",
                     "codex": "shed",
                     "claude": "shed",
-                                    }
+                }
             ),
             dry_run=True,
         )
@@ -2079,7 +2077,9 @@ def _selftest() -> None:
 
         # muse (#612; un-backed 2026-11-11): a routine LATE seat. With the non-late implement lanes up
         # it is not chosen; with them all shed it fills the implement slot. No backup seats remain.
-        all_ok_muse = cap({**{a: "ok" for a in ("cursor", "vibe", "codex", "claude", "gemini")}, "muse": "ok"})
+        all_ok_muse = cap(
+            {**{a: "ok" for a in ("cursor", "vibe", "codex", "claude", "gemini")}, "muse": "ok"}
+        )
         for _tt in ("implement", "review"):
             _pick = select_agent(_tt, all_ok_muse)
             assert _pick is not None and _pick["agent"] != "muse", (_tt, _pick)

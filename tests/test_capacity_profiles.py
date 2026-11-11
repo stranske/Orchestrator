@@ -625,11 +625,7 @@ def test_registry_models_match_adapters():
         # Strip a leading `<seat>:` router prefix. Only these seats route through a wrapper; a
         # vendor id containing a slash is untouched.
         head, _, tail = str(model).partition(":")
-        return (
-            tail
-            if tail and head in {"agy", "cursor", "claude", "codex", "vibe"}
-            else str(model)
-        )
+        return tail if tail and head in {"agy", "cursor", "claude", "codex", "vibe"} else str(model)
 
     # PIN THE PROBE OFF. `model_identity("gemini", ...)` resolves through `resolve_model`, which
     # shells out to `agy models` when its disk cache is cold -- so this drift assertion could fail
@@ -722,9 +718,7 @@ def test_named_models_are_not_adapter_tags():
     # No PROFILE may request a routing tag -- that is the field compared against a resolved model.
     # `model_identity` legitimately still carries the router prefix; these are different fields.
     assert tag_seats == set(), sorted(tag_seats)
-    assert {"codex", "claude", "vibe", "gemini", "cursor"} <= named_seats, sorted(
-        named_seats
-    )
+    assert {"codex", "claude", "vibe", "gemini", "cursor"} <= named_seats, sorted(named_seats)
 
 
 def test_gemini_model_is_one_the_seat_advertises():

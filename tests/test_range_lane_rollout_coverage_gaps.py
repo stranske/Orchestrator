@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import router
 import json
 
 import pytest
@@ -10,6 +9,7 @@ import pytest
 import capabilities
 import feedback
 import range_lane_rollout as rollout
+import router
 
 
 @pytest.fixture(autouse=True)

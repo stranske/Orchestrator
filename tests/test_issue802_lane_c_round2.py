@@ -6,7 +6,6 @@ execution_profiles, and exploration_backfill. Stubs every subprocess/agent/netwo
 
 from __future__ import annotations
 
-import router
 import json
 import sqlite3
 from types import SimpleNamespace
@@ -19,6 +18,7 @@ import exploration_backfill as eb
 import feedback
 import redirect_apply as ra
 import research_subjects
+import router
 import ux_review as ur
 
 

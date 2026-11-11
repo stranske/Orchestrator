@@ -14,11 +14,11 @@ Unreachable without restructuring (documented in the PR body):
 
 from __future__ import annotations
 
-import router
 import pytest
 
 import exploration_backfill as eb
 import feedback
+import router
 import ux_review as ur
 
 

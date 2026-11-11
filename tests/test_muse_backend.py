@@ -647,7 +647,10 @@ def test_muse_is_a_routine_late_seat(monkeypatch):
     muse_only_capacity = {"agents": {agent: {"state": "shed"} for agent in in_table}}
     muse_only_capacity["agents"]["muse"] = {"state": "ok"}
     learned_muse_first = {"implement": {"muse": {"rank": 0}}}
-    assert roles.route_role("prompt", muse_only_capacity, learned=learned_muse_first)["agent"] == "muse"
+    assert (
+        roles.route_role("prompt", muse_only_capacity, learned=learned_muse_first)["agent"]
+        == "muse"
+    )
     assert router.select_agent("implement", muse_only_capacity)["agent"] == "muse"
     assert roles.route_role("prompt", muse_only_capacity, only={"muse"})["agent"] == "muse"
 

@@ -5248,7 +5248,10 @@ def _selftest() -> None:
             )
             # unreportable + no evidence -> nothing. This is the only silent cell, and the only one
             # where the row could never be used for anything.
-            assert _attempts_for(mute, round_id=None) == [], ("the junk case must stay silent", mute)
+            assert _attempts_for(mute, round_id=None) == [], (
+                "the junk case must stay silent",
+                mute,
+            )
         # reportable + no evidence -> RECORDED, because it resolves and feeds drift detection.
         assert _attempts_for(
             "codex", round_id=None
