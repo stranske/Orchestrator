@@ -45,7 +45,8 @@
     "tests/test_storage_interrupted_release.py",
     "tests/test_strategy_experiment.py",
     "tests/test_switch_review_fleet.py",
-    "tests/test_verify_failure_evidence.py"
+    "tests/test_verify_failure_evidence.py",
+    "tests/test_value_chain_local_loop_outcomes.py"
   ],
   "shards": [
     [
@@ -417,7 +418,8 @@
       "tests/test_verify_parallel_selftests.py",
       "tests/test_vibe_isolated_types_proof.py",
       "tests/test_langsmith_direct.py",
-      "tests/test_router_choose_mode.py"
+      "tests/test_router_choose_mode.py",
+      "tests/test_value_chain_local_loop_outcomes.py"
     ],
     [
       "tests/test_activation_audit_source_memo.py",

@@ -514,9 +514,13 @@ def _local_loop_rounds(since: int, state_dir: Path | None = None) -> dict[str, l
 
 
 def _local_loop_outcomes(db: Path, targets: list[str]) -> dict[str, int] | None:
-    """What became of the PRs the loop finished, from the Brain: each loop round is a
-    `keepalive:<repo>#<n>:<agent>` run and the durability sweep grades its PR. One row per PR (its latest
-    run), classified as closer-core's outcomes are. A finished PR with no run yet is not acted on.
+    """What became of the PRs the loop finished, from the Brain, classified as closer-core's outcomes are.
+
+    A loop round is a LOCAL dispatcher run (`<repo>_<n>-<agent>-<ns>`, mode local, target = the PR), not a
+    `keepalive:<repo>#<n>:<agent>` run: that id is hosted keepalive's. Reading only the keepalive id saw a
+    PR only when it had ALSO been through hosted keepalive (7 of 15 finished PRs on 2026-11-10, a partly
+    different 7 from those with graded local runs). One row per PR: its latest run that carries an
+    outcome, else its latest run. A finished PR with no run yet is not acted on.
     """
     try:
         with sqlite3.connect(db.resolve().as_uri() + "?mode=ro", uri=True) as con:
@@ -526,8 +530,9 @@ def _local_loop_outcomes(db: Path, targets: list[str]) -> dict[str, int] | None:
                 row = con.execute(
                     "SELECT r.run_id, o.adjudicated_verdict, o.verifier_verdict, o.durability, "
                     "o.merged, o.failure_class FROM runs r LEFT JOIN outcomes o ON o.run_id=r.run_id "
-                    "WHERE r.run_id GLOB ? ORDER BY r.ts DESC LIMIT 1",
-                    (f"keepalive:{target}:*",),
+                    "WHERE r.target=? OR r.run_id GLOB ? "
+                    "ORDER BY (o.run_id IS NOT NULL) DESC, r.ts DESC LIMIT 1",
+                    (target, f"keepalive:{target}:*"),
                 ).fetchone()
                 if row is not None:
                     rows.append(dict(row))
