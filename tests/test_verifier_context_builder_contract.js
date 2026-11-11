@@ -310,6 +310,63 @@ test('CSV recovery follows the latest native comparison instead of the supersede
   assert.equal(JSON.stringify(readback), before, 'never rewrite producer history for admission');
 });
 
+test('native CSV comparison reconciles to existing outputs even when its evaluation step was skipped',async()=>{
+  const { reconcilePendingExecution, executionBinding } = require('../.github/scripts/verifier_pending_execution.js');
+  const { validateEvent } = require('../.github/scripts/verification_event.js');
+  const readback = require('../docs/verification/issue-1184-acceptance-20261111/round10/native-readback.json');
+  const before = JSON.stringify(readback);
+  const states = readback.verifier_events.map(comment => JSON.parse(comment.body.match(/(\{[^\n]+\})/)[1]));
+  const pending = states.find(state => state.run_id === String(readback.run.id) && state.status === 'pending');
+  const incomplete = states.find(state => state.run_id === pending.run_id && state.status === 'incomplete');
+  const event = validateEvent(pending.verification_event);
+  assert.equal(event.pr, '1168');
+  assert.equal(event.head_sha, '01e86ae7e4ef0e6a06193c916c8c780ca5cab052');
+  assert.equal(event.evaluated_sha, 'a30b34ada04a30d04360867e14097a8c5b6d731c');
+  assert.equal(pending.assessment_identity.mode, 'compare');
+  assert.deepEqual(pending.execution_binding, executionBinding('compare'));
+  assert.equal(readback.jobs.total_count, readback.jobs.jobs.length);
+  const job = readback.jobs.jobs.find(row => row.name === 'verifier / Run post-merge verifier');
+  assert.equal(job.conclusion, 'success');
+  const step = name => job.steps.find(row => row.name === name);
+  assert.equal(step('Run LLM evaluation').conclusion, 'skipped');
+  assert.equal(step('Run multi-provider comparison').conclusion, 'success');
+  assert.equal(step('Upload comparison artifacts').conclusion, 'success');
+  assert.equal(incomplete.retry_kind, 'recover_existing_evaluation');
+  const calls = [];
+  // Replay unchanged native GET results through the actual reconciler. A skipped
+  // evaluate-mode step must not authorize repeating the completed comparison.
+  const check = (args, attempt = false) => {
+    assert.equal(args.owner, 'stranske');
+    assert.equal(args.repo, 'orchestrator');
+    assert.equal(args.run_id, readback.run.id);
+    if (attempt) assert.equal(args.attempt_number, readback.attempt.run_attempt);
+  };
+  const github = {rest:{actions:{
+    getWorkflowRun:async args => {
+      check(args); calls.push('run'); return {data:readback.run,headers:{}};
+    },
+    getWorkflowRunAttempt:async args => {
+      check(args,true); calls.push('attempt'); return {data:readback.attempt,headers:{}};
+    },
+    listJobsForWorkflowRunAttempt:async args => {
+      check(args,true); assert.equal(args.page,1); assert.equal(args.per_page,100);
+      calls.push('jobs'); return {data:readback.jobs,headers:{}};
+    },
+  }}};
+  const result = await reconcilePendingExecution({github,event,
+    assessment:pending.assessment_identity,state:pending});
+  assert.deepEqual(calls, ['run','attempt','jobs'], 'reach the evaluator inspection with complete native input');
+  assert.equal(result.retry_kind, 'uncertain_execution');
+  assert.equal(result.retryable, false);
+  assert.equal(result.failure_cause, 'prior_evaluator_started_collect_existing_outputs');
+  assert.deepEqual(result.existing_execution.output_names, ['comparison.json']);
+  assert.equal(result.existing_execution.run_id, pending.run_id);
+  assert.equal(result.existing_execution.run_attempt, pending.run_attempt);
+  assert.equal(result.proof, undefined, 'never mint a skipped-evaluation proof for this comparison');
+  assert.deepEqual(readback.terminal_corpus_markers, []);
+  assert.equal(JSON.stringify(readback), before, 'native run and event records remain unchanged');
+});
+
 test('native CSV verifier states require both the corrective head and published merge',async()=>{
   const root = path.resolve(__dirname, '..');
   const python = fs.existsSync('/opt/anaconda3/bin/python3') && !process.env.VIRTUAL_ENV
