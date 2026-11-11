@@ -46,6 +46,9 @@ def export_rows(rows, format):
 
 def contract_interpreter():
     """Prefer the active virtual environment, then the local Anaconda runtime."""
+    conda_prefix = os.environ.get("CONDA_PREFIX")
+    if conda_prefix and Path(conda_prefix).resolve() == Path(sys.prefix).resolve():
+        return sys.executable
     if sys.prefix == sys.base_prefix and ANACONDA.is_file() and os.access(ANACONDA, os.X_OK):
         return str(ANACONDA)
     return sys.executable
@@ -86,13 +89,51 @@ def run_contract(script, export_path=None):
     args = [contract_interpreter(), str(script)]
     if export_path is not None:
         args.append(str(export_path))
+    env = os.environ.copy()
+    env.pop("PYTHONOPTIMIZE", None)
     return subprocess.run(
         args,
         cwd=script.parent,
         capture_output=True,
         text=True,
         check=False,
+        env=env,
     )
+
+
+def test_contract_interpreter_preserves_selected_conda_environment(monkeypatch, tmp_path):
+    fallback = tmp_path / "anaconda-python"
+    fallback.write_text("", encoding="utf-8")
+    fallback.chmod(0o755)
+    selected = tmp_path / "selected-conda"
+    monkeypatch.setattr(sys, "prefix", str(selected))
+    monkeypatch.setattr(sys, "base_prefix", str(selected))
+    monkeypatch.setattr(sys, "executable", str(selected / "bin/python"))
+    monkeypatch.setattr(sys.modules[__name__], "ANACONDA", fallback)
+    monkeypatch.setenv("CONDA_PREFIX", str(selected / "."))
+
+    assert contract_interpreter() == sys.executable
+
+    monkeypatch.setenv("CONDA_PREFIX", str(tmp_path / "other-conda"))
+    assert contract_interpreter() == str(fallback)
+    monkeypatch.delenv("CONDA_PREFIX")
+    assert contract_interpreter() == str(fallback)
+
+
+def test_contract_rejects_wrong_csv_scores_with_parent_optimization(monkeypatch, tmp_path):
+    scratch = tmp_path / "wrong scores"
+    shutil.copytree(FIXTURE, scratch)
+    exporter = scratch / "csv_export.py"
+    source = exporter.read_text(encoding="utf-8")
+    source = source.replace('row["score"]])', '"wrong score"])')
+    exporter.write_text(source, encoding="utf-8")
+    monkeypatch.setenv("PYTHONOPTIMIZE", "1")
+
+    result = run_contract(scratch / SCRIPT_NAME)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "contract assertion failed" in result.stderr
+    assert "wrong score" in result.stderr
 
 
 def test_corrected_contract_exits_zero_and_partial_revision_raises(tmp_path):
