@@ -77,7 +77,8 @@ def draw(now, last_draw_ts, rate_per_day, launched_today, rng, *, pools=None, ce
     p = -math.expm1(-max(0, rate_per_day) * elapsed / 86400)
     debt = sum(c.get("age_days", math.inf) > COVERAGE_DAYS for c in cells)
     drainable = sum(
-        c.get("age_days", math.inf) > COVERAGE_DAYS and c.get("pacing", "unknown") == "ok"
+        c.get("age_days", math.inf) > COVERAGE_DAYS
+        and c.get("arm", c.get("pacing", "unknown")) == "ok"
         for c in cells
     )
     blocked = {k: v for k, v in (pools or {}).items() if v != "ok"}
@@ -284,6 +285,49 @@ def trial_launch_hold(now=None):
     return None
 
 
+# Owner decision 2026-11-11 (experiments chip): an experiment arm may run on a seat that is held
+# back only by a PROJECTION -- the #668 pacing model's warn/shed, or gemini's local weekly soft
+# budget. Both leave real provider headroom (that day: claude 53% of its week used with 41% of the
+# week gone, projected "shed" from a 6h burn; gemini 592/280 estimated units with no 429). A REAL
+# cutoff still keeps the seat out: an active/manual/unreadable 429 or cooldown marker, failed auth,
+# an unresolvable model, or any non-ok state with no projection behind it (fail closed).
+PROJECTION_POLICIES = frozenset({"weekly-soft-cap"})
+CUTOFF_POLICIES = frozenset({"auth-failed", "model-unresolvable"})
+# Backup seats the producer may field as ARMS though routing never auto-selects them (owner
+# 2026-11-11). muse stays a backup "until measured outcomes earn it a prior", and experiments are
+# the only producer of those outcomes; excluding it here made that exit unreachable. aider stays
+# out: it bills pay-as-you-go.
+EXPERIMENT_BACKUP_ARMS = frozenset({"muse"})
+
+
+def _projection_only(row: dict) -> bool:
+    if row.get("policy") in CUTOFF_POLICIES:
+        return False
+    state = row.get("state")
+    pacing = row.get("pacing")
+    if isinstance(pacing, dict) and pacing.get("state") in {"warn", "shed"}:
+        if state == pacing["state"]:
+            return True
+    return state == "warn" and row.get("policy") in PROJECTION_POLICIES
+
+
+def arm_pacing(cap: dict) -> dict[str, str]:
+    """Per-seat arm eligibility: "ok", or the capacity.experiment_pacing state that keeps it out."""
+    import capacity
+
+    raw = capacity.experiment_pacing(cap)
+    rows = cap.get("agents") or {}
+    out = {}
+    for agent, state in raw.items():
+        if state == "ok":
+            out[agent] = "ok"
+            continue
+        marker = capacity.shed_marker(agent)
+        cut = marker is not None and marker["state"] != "expired" and not marker.get("tier_scope")
+        out[agent] = "ok" if not cut and _projection_only(rows.get(agent) or {}) else state
+    return out
+
+
 def build_plan(
     items, cap, *, learned, claimed_targets, excluded_targets, production_reserve, rng, conn=None
 ):
@@ -302,7 +346,12 @@ def build_plan(
             "producer_cells": [],
         }
 
-    spare = research_scheduler.spare_capacity(research_scheduler.capacity_state_from_snapshot(cap))
+    arm = arm_pacing(cap)
+    cap_state = research_scheduler.capacity_state_from_snapshot(cap)
+    for agent, row in cap_state.items():
+        if arm.get(agent) == "ok":
+            row["status"] = "ok"
+    spare = research_scheduler.spare_capacity(cap_state)
     skipped = []
     state = read_state()
     failed = (
@@ -342,23 +391,28 @@ def build_plan(
         in {
             entry["agent"] for entry in router.ROUTE_TABLE.get(c["task_type"], {}).get("agents", [])
         }
-        and c["agent"] not in router.BACKUP_AGENTS
+        and c["agent"] not in router.BACKUP_AGENTS - EXPERIMENT_BACKUP_ARMS
     ]
     pacing = capacity.experiment_pacing(cap)
     for c in cells:
         c["pacing"] = pacing.get(c["agent"], "unknown")
+        c["arm"] = arm.get(c["agent"], "unknown")
     feed_classes = {i.get("task_type", "implement") for i in eligible}
-    candidate_cells = [c for c in cells if c["pacing"] == "ok" and c["task_type"] in feed_classes]
+    candidate_cells = [c for c in cells if c["arm"] == "ok" and c["task_type"] in feed_classes]
     debt = sum(c.get("age_days", math.inf) > COVERAGE_DAYS for c in cells)
     drainable = sum(c.get("age_days", math.inf) > COVERAGE_DAYS for c in candidate_cells)
-    blocked = {a: p for a, p in pacing.items() if p != "ok"}
+    blocked = {a: p for a, p in arm.items() if p != "ok"}
     if blocked:
         reason = "pacing " + ", ".join(f"{a}={p}" for a, p in sorted(blocked.items()))
         print(f"{reason}; coverage debt {debt} cells > 21d, drainable {drainable}", file=sys.stderr)
         if not candidate_cells:
+            # Name the first break. With no cell in any feed class (no eligible subject, or no
+            # route cell for its class) pacing emptied nothing: the skip is no_subject. Reported
+            # as pacing it read as a capacity block while the feed was empty (2026-11-11, 6 ticks).
+            paced_out = any(c["task_type"] in feed_classes for c in cells)
             return {
                 "planned": [],
-                "skipped": skipped + [{"reason": reason}],
+                "skipped": skipped + [{"reason": reason if paced_out else "no_subject"}],
                 "candidates": [],
                 "producer_cells": cells,
             }
@@ -394,11 +448,8 @@ def build_plan(
     pools = {}
     for agent in selected:
         state = pacing.get(agent, "unknown")
-        if "=" in state:
-            pool, pool_state = state.split("=", 1)
-            pools[pool] = pool_state
-        else:
-            pools[agent] = state
+        pool, pool_state = state.split("=", 1) if "=" in state else (agent, state)
+        pools[pool] = "ok" if arm.get(agent) == "ok" else pool_state
     for agent, n in Counter(selected).items():
         if spare.get(agent, 0) - (production_reserve or {}).get(agent, 0) < n:
             pools[agent] = "production_reserve"
@@ -410,6 +461,7 @@ def build_plan(
         "producer_arms": arms,
         "trigger": choice["reason"],
         "pools": pools,
+        "projected": {a: pacing[a] for a in dict.fromkeys(selected) if pacing.get(a, "ok") != "ok"},
     }
     return {
         "planned": [job] if len(arms) >= 2 else [],

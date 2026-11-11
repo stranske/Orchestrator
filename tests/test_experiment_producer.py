@@ -1687,17 +1687,148 @@ def test_generation_bump_runs_when_old_verdict_is_fail(tmp_path, monkeypatch, ca
     assert state["trial_generation"] == 1
     assert state["trial_verdict"] == "fail"
 
-    # Active tick (dry_run=False) should bump generation even with producer OFF
-    now = 2000
-    producer.trial_defaults(now=now, active=True)
+    # Drive the real tick entry point with the producer switch OFF (dry_run=False is an active
+    # tick). Stop it right after its trial step: everything later plans research launches, which
+    # this test does not cover.
+    import tick
 
-    # Check that generation was bumped
+    class _StopAfterTrialStep(Exception):
+        pass
+
+    def _stop(*_args, **_kwargs):
+        raise _StopAfterTrialStep
+
+    monkeypatch.setattr(tick.claims, "reap_stale", lambda *a, **k: None)
+    monkeypatch.setattr(tick.claims, "active_claims", _stop)
+    with pytest.raises(_StopAfterTrialStep):
+        tick.research_tick([], {}, dry_run=False, env={"ORCH_EXPERIMENT_PRODUCER": "0"})
+
+    # Check that generation was bumped and a fresh trial started
     state = producer.read_state()
     assert state["trial_generation"] == 2
-    assert state["trial_start"] == now
+    assert state["trial_start"] != 1000
     # Verdict must be cleared so orchestrate.sh defaults ON
     assert "trial_verdict" not in state
+    # orchestrate.sh reads `--trial-defaults` and turns the producer ON for "pending" or "pass".
+    assert producer.trial_defaults()[1] in {"pending", "pass"}
+
+    # Evaluate orchestrate.sh's own default calculation, not a Python re-statement of it:
+    # run the trial block between its anchors against this same producer state, with no
+    # explicit ORCH_EXPERIMENT_PRODUCER so the shell default is what gets exported.
+    import os
+
+    from paths import MODULE_DIR, REPO_ROOT
+
+    source = (REPO_ROOT / "orchestrate.sh").read_text()
+    block = source[
+        source.index("# ORCH-ANCHOR: experiment-producer-trial") : source.index(
+            "# ORCH-ANCHOR: heartbeat-producers"
+        )
+    ]
+    shell_env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"ORCH_EXPERIMENT_PRODUCER", "ORCH_EXPERIMENT_TRIAL_END"}
+    }
+    shell_env["ORCH"] = str(MODULE_DIR)
+    result = subprocess.run(
+        ["/bin/bash", "-c", block + '\nprintf "%s" "$ORCH_EXPERIMENT_PRODUCER"'],
+        env=shell_env,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "1"
 
     # Verify message was printed
     captured = capsys.readouterr()
     assert "generation bump from 1 to 2" in captured.err
+
+
+def test_projected_pacing_seats_field_arms_but_real_cutoffs_do_not(tmp_path, monkeypatch):
+    """Owner 2026-11-11: a warn/shed that is only a PROJECTION may field an arm; a cutoff may not."""
+    import capacity
+    import research_scheduler
+
+    cap, kwargs = plan_fixture(monkeypatch, shed=False)
+    cap["agents"] = {
+        # #668 pacing projection: shed from a 6h burn, with provider headroom left.
+        "claude": {"state": "shed", "pacing": {"state": "shed", "used_fraction": 0.53}},
+        # #668 pacing projection: warn.
+        "codex": {"state": "warn", "pacing": {"state": "warn", "used_fraction": 0.8}},
+        # Local soft budget with no usage API (gemini).
+        "gemini": {"state": "warn", "policy": "weekly-soft-cap", "pacing": {}},
+        # Real cutoff: an active cooldown marker, even with a projection-looking row.
+        "cursor": {"state": "shed", "pacing": {"state": "shed"}},
+        # Real cutoff: failed auth outranks a pacing dict.
+        "vibe": {"state": "shed", "policy": "auth-failed", "pacing": {"state": "shed"}},
+        # Non-ok with no projection behind it: fail closed.
+        "muse": {"state": "warn"},
+    }
+    monkeypatch.setattr(capacity, "SHED_DIR", tmp_path)
+    (tmp_path / "cursor").write_text(json.dumps({"expires_at": time.time() + 3600}))
+    # Status-aware like the real spare_capacity: a seat still read as warn/shed has no spare.
+    monkeypatch.setattr(
+        research_scheduler,
+        "spare_capacity",
+        lambda state: {a: 2 if row["status"] == "ok" else 0 for a, row in state.items()},
+    )
+
+    arm = producer.arm_pacing(cap)
+    assert {a for a, s in arm.items() if s == "ok"} == {"claude", "codex", "gemini"}, arm
+
+    item = {"target": "a/b#9", "task_type": "implement", "body": "`pytest tests/test_x.py`"}
+    plan = producer.build_plan([item], cap, **kwargs)
+    job = plan["planned"][0]
+    assert set(job["arms"]) <= {"claude", "codex", "gemini"}, job
+    assert all(state == "ok" for state in job["pools"].values()), job["pools"]
+    assert job["projected"] and set(job["projected"]) == set(job["arms"]), job
+    cells = {c["agent"]: c["arm"] for c in plan["producer_cells"]}
+    assert cells["cursor"] != "ok" and cells["vibe"] != "ok" and cells["muse"] != "ok", cells
+
+    draw = producer.draw(0, -86400, 2, 0, random.Random(0), pools=job["pools"])
+    assert draw["reason"] in {"draw", "no_draw"}, draw
+
+
+def test_muse_fields_experiment_arms_while_aider_stays_backup(monkeypatch):
+    import router
+
+    cap, kwargs = plan_fixture(monkeypatch, shed=False)
+    cap["agents"] = {a: {"state": "ok"} for a in ("muse", "aider", "vibe")}
+    monkeypatch.setattr(
+        router,
+        "ROUTE_TABLE",
+        {"implement": {"agents": [{"agent": a} for a in ("muse", "aider", "vibe")]}},
+    )
+    monkeypatch.setattr(router, "BACKUP_AGENTS", {"aider", "muse"})
+    monkeypatch.setattr(
+        producer,
+        "route_cells",
+        lambda *a, **k: [
+            {"agent": a, "task_type": "implement", "age_days": 25}
+            for a in ("muse", "aider", "vibe")
+        ],
+    )
+    item = {"target": "a/b#9", "task_type": "implement", "body": "`pytest tests/test_x.py`"}
+    plan = producer.build_plan([item], cap, **kwargs)
+    assert {c["agent"] for c in plan["producer_cells"]} == {"muse", "vibe"}, plan
+    assert set(plan["planned"][0]["arms"]) == {"muse", "vibe"}, plan
+
+
+def test_empty_feed_with_a_blocked_seat_reports_no_subject_not_pacing(monkeypatch):
+    """2026-11-11: six ticks with eligible=0 were tallied as `pacing cursor=...` skips."""
+    cap, kwargs = plan_fixture(monkeypatch, shed=True)  # claude: bare shed -> blocked
+    plan = producer.build_plan([], cap, **kwargs)
+    assert plan["skipped"][-1]["reason"] == "no_subject", plan["skipped"]
+
+    # An admitted subject whose class has no route cell is also no_subject, not pacing.
+    orphan = {"target": "a/b#4", "task_type": "testgen", "body": "`pytest tests/test_x.py`"}
+    plan = producer.build_plan([orphan], cap, **kwargs)
+    assert plan["skipped"][-1]["reason"] == "no_subject", plan["skipped"]
+
+    # When pacing really empties the feed class, the skip still names pacing.
+    for row in cap["agents"].values():
+        row["state"] = "shed"
+    item = {"target": "a/b#3", "task_type": "implement", "body": "`pytest tests/test_x.py`"}
+    plan = producer.build_plan([item], cap, **kwargs)
+    assert plan["skipped"][-1]["reason"].startswith("pacing "), plan["skipped"]

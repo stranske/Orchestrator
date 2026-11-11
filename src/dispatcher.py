@@ -1103,6 +1103,11 @@ def _gh_guard_files(guard: Path) -> dict[Path, str]:
         + '  [ -n "$d" ] || continue\n'
         + '  r=$(CDPATH= cd -- "$d" 2>/dev/null && pwd -P) || continue\n'
         + '  [ "$r" = "$self" ] && continue\n'
+        # Skip ANY guard copy, not only this one: with two guard dirs on PATH (a run's guard plus a
+        # test's or a nested agent's), each exec'd the other forever. 2026-11-10: two such loops had
+        # burned 227 CPU-minutes each over 8.5 h, and their cwd kept a worktree "live" so the closer
+        # failed to provision Orchestrator#1336 twenty times.
+        + '  head -n 2 "$d/gh" 2>/dev/null | LC_ALL=C grep -q "the gh write guard" && continue\n'
         + '  if [ -x "$d/gh" ] && [ ! -d "$d/gh" ]; then exec "$d/gh" "$@"; fi\n'
         + "done\n"
         + "echo 'orchestrator gh guard: no gh found on PATH' >&2\n"

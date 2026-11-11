@@ -21,9 +21,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-INTERPRETER = Path("/opt/anaconda3/bin/python3.12")
-STDLIB = Path("/opt/anaconda3/lib/python3.12")
-PACKAGES = Path("/Users/teacher/.local/share/uv/tools/mistral-vibe/lib/python3.12/site-packages")
+INTERPRETER = Path(
+    "/Users/teacher/.local/share/uv/python/cpython-3.14.3-macos-aarch64-none/bin/python3.14"
+)
+STDLIB = Path(
+    "/Users/teacher/.local/share/uv/python/cpython-3.14.3-macos-aarch64-none/lib/python3.14"
+)
+PACKAGES = Path("/Users/teacher/.local/share/uv/tools/mistral-vibe/lib/python3.14/site-packages")
 PUBLIC = (
     "vibe",
     "vibe.core",
@@ -289,6 +293,9 @@ def child(payload: dict[str, Any]) -> dict[str, Any]:
         "XDG_CACHE_HOME",
         "TMPDIR",
         "PYDANTIC_DISABLE_PLUGINS",
+        # macOS CoreFoundation adds this to every process of a CF-linked interpreter (the uv
+        # CPython 3.14 build is; the earlier anaconda build was not). It names an encoding only.
+        "__CF_USER_TEXT_ENCODING",
     }:
         raise RuntimeError("unexpected environment keys")
     if sys.pycache_prefix != str(Path(os.environ["HOME"]) / "empty-pycache"):
