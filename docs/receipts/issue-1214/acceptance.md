@@ -154,3 +154,45 @@ the actual seven days after merge are still UNVERIFIED. Attempts to uncheck that
 task, add `needs-human`, and post the blocker comment were rejected by the tools
 because they require approval and this run's approval policy is `never`.
 No acceptance checkbox was completed.
+
+## Reproducible mutation runner — 2026-11-11
+
+The first unchecked criterion is still blocked by the missing pytest installation
+in the CI-selected absolute interpreter. The next criterion now has a repeatable
+runner, `scripts/verify_assess_sandbox.js`. It runs the sandbox suite with a
+two-minute deadline, inserts `return True` at the start of `_sandbox_has_network`
+in a temporary import copy, runs the specific fallback regression, and reruns the
+original suite. It never edits the checked-out Python source. Each phase retains
+the command, UTC timestamp, elapsed time, output, exit status, and source/test
+hashes. Mutation evidence must name the fallback regression and its specific
+missing-workspace-write/preamble assertion. Empty collection, skipped tests,
+unrelated failures, missing tools, signals and exceeded deadlines cannot pass.
+
+Run from the repository root with a fresh evidence directory:
+
+```sh
+PYTHON=/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3 node scripts/verify_assess_sandbox.js docs/receipts/issue-1214/NEW_RUN
+```
+
+Eight Node tests pass using
+`node --test --test-isolation=none tests/test_verify_assess_sandbox.js`.
+They include real subprocess execution and missing-interpreter evidence retention;
+the successful three-phase runner test uses fixture results and does not establish
+Python acceptance. Both JavaScript syntax checks and `git diff --check` pass.
+No tracked Python files changed, so this round does not require a Python-formatting
+commit. Pytest and Black remain unavailable; no formatting pass is claimed.
+
+`mutation-runner-20261111T2130Z/result.json` retains the real runner's exit-1
+baseline (`No module named pytest`) as **unverified**. It correctly stops without
+claiming a mutation/restored success. `sandbox-required.txt` independently records
+the required selected-interpreter pytest failure. Package installation from PyPI
+could not find either tool. GitHub PR lookup failed to connect to `api.github.com`;
+current PR readiness could not be confirmed. The live assess and actual seven-day
+post-merge evidence remain unverified. No acceptance checkbox was completed.
+
+The required `src/verify.py` command ran with the same absolute interpreter and
+`PYTEST_ADDOPTS='-m "not slow"'`. It produced no output before the 60-second
+diagnostic bound; `verify.exit` records timeout exit 124. This is incomplete
+verification. `git add` then failed with `Unable to create .../.git/index.lock:
+Read-only file system`. The new JavaScript source, tests and receipts remain
+uncommitted because Git metadata is not writable. No push or PR mutation occurred.
