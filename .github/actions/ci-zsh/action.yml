@@ -1,0 +1,30 @@
+name: Install zsh for the native-shell guard tests
+description: >-
+  Restores zsh's .deb files from the Actions cache and installs them with no network; on a miss
+  downloads them from Ubuntu with retries and saves them. One cache entry per Ubuntu release and
+  architecture, so a runner image rebuild reuses it and a release change refills it.
+runs:
+  using: composite
+  steps:
+    - name: Identify the zsh package cache
+      id: key
+      shell: bash
+      run: |
+        . /etc/os-release
+        echo "key=ci-zsh-debs-${ID}-${VERSION_ID}-$(dpkg --print-architecture)-v1" >> "$GITHUB_OUTPUT"
+    - name: Restore cached zsh packages
+      id: cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      with:
+        path: ~/.cache/ci-zsh-debs
+        key: ${{ steps.key.outputs.key }}
+    - name: Install zsh
+      shell: bash
+      run: bash "$GITHUB_ACTION_PATH/install.sh"
+    - name: Save zsh packages for later runs
+      if: steps.cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      continue-on-error: true
+      with:
+        path: ~/.cache/ci-zsh-debs
+        key: ${{ steps.key.outputs.key }}
