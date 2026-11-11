@@ -12,6 +12,7 @@ executed. Observed result: exit status 1 and
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import subprocess
@@ -51,9 +52,12 @@ def contract_interpreter():
 def partial_csv_export():
     """Return the partial revision's csv_export.py, checked against git when that commit is local.
 
-    A depth-1 checkout does not contain 0507d28. The pin was taken from that blob
-    on a clone that has it, and a checkout that does have the commit must still match.
+    Always verify the embedded source's Git blob hash, including in depth-1
+    checkouts and exec mirrors. When the commit is local, also check its source.
     """
+    source = PARTIAL_CSV_EXPORT.encode("utf-8")
+    header = f"blob {len(source)}\0".encode("ascii")
+    assert hashlib.sha1(header + source).hexdigest() == PARTIAL_BLOB, "partial fixture pin changed"
     if (REPO / ".git").exists():
         present = subprocess.run(
             ["git", "cat-file", "-e", f"{PARTIAL_REVISION}^{{commit}}"],
@@ -76,9 +80,12 @@ def partial_csv_export():
     return PARTIAL_CSV_EXPORT
 
 
-def run_contract(script):
+def run_contract(script, export_path=None):
+    args = [contract_interpreter(), str(script)]
+    if export_path is not None:
+        args.append(str(export_path))
     return subprocess.run(
-        [contract_interpreter(), str(script)],
+        args,
         cwd=script.parent,
         capture_output=True,
         text=True,
@@ -93,12 +100,23 @@ def test_corrected_contract_exits_zero_and_partial_revision_raises(tmp_path):
     assert corrected.stdout.strip() == "contract ok"
     assert corrected.stderr == ""
 
-    scratch = tmp_path / "partial-canary"
+    scratch = tmp_path / "partial canary"
     shutil.copytree(FIXTURE, scratch)
-    (scratch / "csv_export.py").write_text(partial_csv_export())
-    partial = run_contract(scratch / SCRIPT_NAME)
-    assert partial.returncode == 1
-    assert partial.stdout == ""
-    assert "AssertionError: CSV contract is not implemented" in partial.stderr
-    assert "contract assertion failed" in partial.stderr
-    assert "NotImplementedError: Declared incomplete CSV canary fixture" in partial.stderr
+    partial_export = scratch / "csv_export.py"
+    partial_export.write_text(partial_csv_export(), encoding="utf-8", newline="")
+    for script, export_path in (
+        (scratch / SCRIPT_NAME, None),
+        (FIXTURE / SCRIPT_NAME, partial_export),
+    ):
+        partial = run_contract(script, export_path)
+        assert partial.returncode == 1, partial.stderr
+        assert partial.stdout == ""
+        assert "AssertionError: CSV contract is not implemented" in partial.stderr
+        assert "contract assertion failed" in partial.stderr
+        assert "NotImplementedError: Declared incomplete CSV canary fixture" in partial.stderr
+
+    # Selecting the historical module must not replace the corrected sibling.
+    corrected = run_contract(scratch / SCRIPT_NAME, FIXTURE / "csv_export.py")
+    assert corrected.returncode == 0, corrected.stderr
+    assert corrected.stdout.strip() == "contract ok"
+    assert corrected.stderr == ""
