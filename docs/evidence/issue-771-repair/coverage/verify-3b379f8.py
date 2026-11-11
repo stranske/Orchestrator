@@ -1,0 +1,2421 @@
+#!/usr/bin/env python3
+"""verify.py — the ONE honest way to verify this tree, because ad-hoc loops lie.
+
+WHY THIS EXISTS, precisely. For most of 2026-08-21 the verification command in use was:
+
+    for t in test_*.py; do python3 "$t" && echo OK; done
+
+**25 of the 28 test files are pytest-only.** Run directly they import their module, define their
+test functions, execute nothing, and exit 0. So "all 28 test files pass" meant three real runs and
+twenty-five vacuous zero-exits — reported repeatedly, in the same session that produced
+`ADDING_CAPABILITIES.md` and its first failure mode, "completion measured as paperwork instead of
+behaviour". The instrument was wrong in exactly the way the document warned about.
+
+Exit codes are not evidence on their own. `pytest --timeout=0` with no timeout plugin installed
+prints a usage error and **also exits 0**. So this module never trusts a status code alone: it reads
+the collected/passed COUNTS out of pytest and compares them against a recorded floor.
+
+What it runs:
+  1. pytest over the whole directory — the only thing that executes the pytest-only files.
+  2. every module exposing `--selftest`, discovered rather than hardcoded, so a new module with a
+     selftest is picked up without anyone remembering to add it here. They run several at a time
+     (`ORCH_VERIFY_JOBS`, default up to 8) and are reported in discovery order at any width.
+  3. the capability gates: activation audit, recurrence replay, set coverage, admission. The two
+     that are test files report the verdicts pytest just reached on the same checks instead of
+     executing them a second time, and execute any check pytest left no verdict for.
+All of it runs against ONE private copy of the capability ledger and the Brain, taken when the run
+starts and deleted when it ends (see `private_state`): no read waits on the tick's lock, and nothing
+the code under test writes can reach production state. `ORCH_VERIFY_LIVE_STATE=1` turns that off.
+
+What makes it honest:
+  * a **floor** (`.verify-floor.json`) on tests collected and passed. A silent collection drop — an
+    import error making a file uncollectable, a renamed file, a deleted test — fails instead of
+    reading as green. This is the same trap in a different costume: fewer tests running looks
+    identical to all tests passing. `collected` is an EQUALITY, not a minimum (2026-08-23): a
+    floor that has fallen BEHIND reality is permissive by exactly the gap, and that direction
+    was silent for as long as it existed. See `_floor_problems` for why only `collected` can be
+    strict, and for the merge-conflict property the equality buys.
+  * **zero collected is always a failure**, whatever the exit status.
+  * the summary states what actually executed, never "the suite passed".
+  * a **SKIP CEILING** (added 2026-08-21, with the first CI run). Skipping is the other way to
+    run less while reading green, so it is bounded exactly like collection: the floor file
+    records the maximum number of skipped tests, skipped selftests and skipped gates, and
+    exceeding any of them FAILS. Every skip must also NAME its missing prerequisite — this
+    module prints all of them, so "green" always states what did not run.
+
+    The floor is now `passed + skipped >= floor.passed`, not `passed >= floor.passed`: a check
+    may move between passing and consciously-skipped, but the two together may never shrink.
+    Turning a failure into a pass by skipping it is what the ceiling forbids; letting a machine
+    without the prerequisite report honestly is what the floor change allows.
+
+    ONE CONSTANT PER CEILING **PER TREE SHAPE** (2026-08-29). "One constant, so the measuring and
+    draining windows cannot drift apart" was the rule and it was being broken by this file's own
+    ceiling: `skipped_max` was measured on a GitHub runner and then applied to the EXEC MIRROR
+    too, which is a different deprived shape — every local prerequisite present, but a flat file
+    copy with no `.github/` and no `.git`, skipping 31 tests a runner does not skip at all. So a
+    mirror run was RED on every input including a correct tree, while CLAUDE.md §1 makes that run
+    the verdict. Two shapes, two agreements, each measured where it is enforced: the shape is
+    detected by `env_prereq.exec_mirror_shape()` (the prerequisite, never `$CI`) and selects the
+    key via `ceiling_limit`. The summary always prints which tree it decided it was in. Since
+    2026-10-02 the sync ships `.github/` too, so the mirror's only mirror-only skips are the git
+    family and the shape is detected from "flat" and "not a repository" instead.
+"""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import datetime as _dt
+import json
+import os
+import pathlib
+import re
+import shutil
+import sqlite3
+import subprocess
+import sys
+import tempfile
+import time
+import xml.etree.ElementTree as ET
+from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
+
+# TWO ROOTS, and verify.py is the module that most needs them separated: it DISCOVERS modules
+# (beside itself) and it READS repo files — the floor, the coverage artifacts — and RUNS pytest,
+# all of which belong to the checkout. They are the same directory only on a flat tree.
+HERE = pathlib.Path(__file__).resolve().parent
+try:
+    import paths
+
+    MODULES = paths.MODULE_DIR
+    ROOT = paths.checkout_root(HERE)
+except Exception:  # noqa: BLE001 — verify.py must run even if a sibling module is broken
+    MODULES = ROOT = HERE
+FLOOR = ROOT / ".verify-floor.json"
+
+# --- coverage instrumentation, OFF unless asked for -------------------------------------------
+# Every runner below spawns a SUBPROCESS. That is deliberate (a selftest must be exercised the way
+# it actually ships, and one module's crash must not take the harness with it), but it means a
+# coverage run wrapped around verify.py itself sees none of the work. Since a per-module
+# `--selftest` is this project's primary test mechanism -- 78 modules have no test_*.py at all,
+# ~79.6% of non-test root Python -- "coverage" measured over pytest alone reports a blind spot and
+# calls it a score. The measured gap on 2026-08-23: outcomes.py reported 9.0% and is 62% under its
+# own selftest; adversarial.py 14.1% vs 88%; gh_capacity.py 14.6% vs 86%; keepalive_outcomes.py
+# 14.0% vs 78%. All four selftests exit 0. Twelve of the twelve modules the report named as worst
+# were selftest-only.
+#
+# So `--coverage` prefixes each child with `-m coverage run --parallel-mode` and combines the data
+# files afterwards. It is OFF by default and MUST stay off: instrumenting ~90 subprocesses is much
+# slower, and the default path is the one that produces the verdict. Turning it on changes what is
+# MEASURED, never what is asserted -- every count, floor check and gate behaves identically.
+COVERAGE = False
+
+
+def child_argv(argv: list[str]) -> list[str]:
+    """Wrap a child command in `coverage run --parallel-mode`, or return it unchanged.
+
+    argv always starts with sys.executable. Coverage is inserted after it, so `-m pytest ...` and
+    `module.py --selftest` are both handled without the caller knowing which form it passed.
+    """
+    if not COVERAGE:
+        return argv
+    return [argv[0], "-m", "coverage", "run", "--parallel-mode", *argv[1:]]
+
+
+def coverage_reset() -> None:
+    """Delete stale parallel data files so a combine cannot mix runs."""
+    for stale in list(ROOT.glob(".coverage.*")) + [ROOT / ".coverage"]:
+        try:
+            stale.unlink()
+        except OSError:
+            pass
+
+
+def coverage_combine_and_report(root: pathlib.Path | None = None) -> str:
+    """Combine the per-process data files and return the report, or say why there is none.
+
+    An absent or empty data set is reported as such rather than as 0% or as silence: a coverage
+    number nobody produced must not be mistaken for a coverage number that is bad, and neither may
+    look like success. That is the same rule the selftest three-way split follows.
+
+    `root` exists so this is TESTABLE WITHOUT WRITING INTO THE REPOSITORY. It used to read the
+    module-level ROOT directly, which is computed at import — so the test that patched
+    `verify.HERE` never reached it, and passed only while the checkout happened to hold no
+    `.coverage.*` files. That is a test asserting nothing and looking like a guard, and it matters
+    more now: this function WRITES a report, so an unparameterised root would have it writing into
+    the working tree every time the suite ran.
+    """
+    root = ROOT if root is None else root
+    files = sorted(root.glob(".coverage.*"))
+    if not files:
+        return "coverage: NO DATA — no instrumented child wrote a data file (did any test run?)\n"
+    subprocess.run(
+        [sys.executable, "-m", "coverage", "combine", "--quiet"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "coverage", "report"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    body = (proc.stdout or "") + (proc.stderr or "")
+    if proc.returncode != 0 and not body.strip():
+        return "coverage: FAILED to report and said nothing — treat as no measurement\n"
+
+    # ALSO EMIT THE MACHINE-READABLE FORM, because the text report has no consumer but a human.
+    # `escaped_defect_priority` ranks test-writing work partly by uncovered statements, and the
+    # only coverage JSON available here was pytest-only -- which on this tree reports the selftest
+    # SUBPROCESSES as unexecuted. Measured 2026-08-30, the seven largest unexecuted blocks in the
+    # top-ranked module were all `_selftest_*` bodies: roughly 600 lines of code that is already
+    # exercised, offered to an agent as the most productive place to add tests. Ranking on that
+    # number sends test-writing at test code, which is the hollow work the ranking exists to
+    # avoid. The honest per-file figures exist right here, one command later.
+    json_path = root / "coverage.json"
+    written = subprocess.run(
+        [sys.executable, "-m", "coverage", "json", "-o", str(json_path), "--quiet"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    if written.returncode == 0 and json_path.exists():
+        note = f"coverage json: {json_path}"
+    else:
+        # Named, never silent. An absent JSON that reads as "nothing uncovered" is the same
+        # defect one layer down from the one this function's docstring already refuses.
+        detail = (written.stderr or written.stdout or "").strip().splitlines()
+        why = detail[-1] if detail else f"exit {written.returncode}"
+        note = f"coverage json: NOT WRITTEN — {why}"
+    return f"coverage: combined {len(files)} instrumented process(es)\n{body}{note}\n"
+
+
+# The token a selftest or gate prints to say "I did not run this, and here is what is missing".
+# Imported from env_prereq rather than duplicated: a shared literal in two files is a pair that
+# drifts, and a mark that drifts turns a skip back into a silent pass.
+try:
+    from env_prereq import (
+        DECLARED_UNREGISTERED_MARK,
+        PREREQ_ABSENT_MARK,
+        bare_machine,
+        exec_mirror_shape,
+    )
+except Exception:  # noqa: BLE001
+    PREREQ_ABSENT_MARK = "PREREQUISITE ABSENT:"
+    # EMPTY, not a copy of the phrase: with no env_prereq the skips that carry it cannot be counted,
+    # and `drainable_skips` reports an empty mark as NOT COUNTED rather than as zero.
+    DECLARED_UNREGISTERED_MARK = ""
+
+    def exec_mirror_shape() -> str | None:
+        """Fallback when env_prereq will not import: read the tree as a CHECKOUT.
+
+        The strict direction on purpose. "checkout" selects the SMALLER agreed ceiling, so a tree
+        whose shape could not be determined is bounded by the tighter agreement and goes red if it
+        skips more. Defaulting to the mirror would hand an unknown tree the extra headroom, which
+        is the one error worth engineering against here.
+        """
+        return None
+
+    def bare_machine() -> str | None:
+        """Fallback: read the machine as PROVISIONED, the smaller agreement, for the same reason."""
+        return None
+
+
+# --- PRIVATE STATE: the ledger and the Brain, copied once per run ------------------------------
+# Every child of a run reads the capability LEDGER and many connect to the BRAIN, and until
+# 2026-10-02 they did both on this machine's LIVE files. That cost time, and it was unsafe:
+#
+#   * TIME. `capabilities._locked` took an exclusive lock even for a read (a read has shared it
+#     since 2026-10-02, but still waits for every writer), so every ledger read in a run queued
+#     behind the tick, the MCP server and any other verify run on the machine.
+#     Measured 2026-10-02 with no code change, the admission gate took 275 s on the live ledger and
+#     119 s on a private copy of the same file; the advisor selftest took 352 s and 58 s.
+#   * SAFETY. The writing `load()` reconciles declarations from THE CODE BEING VERIFIED and writes
+#     the result back, and every Brain connection applies that code's migrations. So a run on an
+#     unmerged branch could rewrite production state before anything merged, and every later tick
+#     would read it. `capabilities.load_declared`'s docstring records one such mid-suite rewrite.
+#
+# So a run copies both into a private directory first and points every child at the copies,
+# through the variables the modules already read (named once: `capabilities.LEDGER_PATH_ENV`,
+# `feedback.DB_PATH_ENV`). The copy is taken ONCE, so every check in the run judges the same
+# ledger, and it is deleted when the run ends. A file absent at the source stays absent and
+# bootstraps privately, as it would have bootstrapped live. A copy that FAILS stops the run before
+# any child starts: falling back to the live file would hand the code under test the very write
+# this exists to prevent. `ORCH_VERIFY_LIVE_STATE=1` is the deliberate way to run against the live
+# files, and the summary's `state:` line always says which state the run used.
+#
+# A SANDBOX THAT MOVES `ORCH_LOCAL_RUNTIME` MUST DROP BOTH VARIABLES, because an explicit path wins
+# over that default and an inherited one would carry the sandbox back out to this copy.
+# `rail_exercise.sandbox_overrides()` is that rule for the rail contracts.
+LIVE_STATE_ENV = "ORCH_VERIFY_LIVE_STATE"
+
+
+def _state_sources() -> tuple[str, pathlib.Path, str, pathlib.Path]:
+    """(variable, live path) for the ledger and the Brain, ASKED of the modules that read them.
+
+    Never re-derived here. A second copy of the default-path rule would be a pair of literals free
+    to drift, and a drifted copy would snapshot the wrong file while every child read the copy.
+    """
+    import capabilities
+    import feedback
+
+    return (
+        capabilities.LEDGER_PATH_ENV,
+        pathlib.Path(capabilities.REG),
+        feedback.DB_PATH_ENV,
+        pathlib.Path(feedback.DB_PATH),
+    )
+
+
+def _megabytes(path: pathlib.Path) -> str:
+    return f"{path.stat().st_size / 1e6:.1f} MB"
+
+
+def snapshot_state(ledger: pathlib.Path, brain: pathlib.Path, root: pathlib.Path) -> dict:
+    """Copy the ledger and the Brain under `root`, never writing either source.
+
+    Returns both private paths, the line the summary prints, and `failed`: what could not be copied.
+    A failed file's private path is left ABSENT, never partial, so even a caller that ignored
+    `failed` would bootstrap an empty private file rather than read a torn copy or the live one.
+    """
+    out: dict = {
+        "ledger": root / "capabilities.json",
+        "brain": root / "feedback" / "orchestrator.db",
+    }
+    said: list[str] = []
+    failed: list[str] = []
+    try:
+        if ledger.is_file():
+            # Every writer replaces the ledger atomically, so one read of the path is one whole
+            # ledger whichever side of a write it lands on, and the copy needs no lock.
+            shutil.copy2(ledger, out["ledger"])
+            said.append(f"ledger {_megabytes(out['ledger'])}")
+        else:
+            said.append("ledger absent at the source, so it bootstraps privately")
+    except OSError as exc:
+        failed.append(f"the ledger copy failed ({type(exc).__name__}: {exc})")
+        out["ledger"].unlink(missing_ok=True)
+    try:
+        out["brain"].parent.mkdir(parents=True, exist_ok=True)
+        if brain.is_file():
+            # SQLite's own backup reads ONE consistent snapshot even while the tick writes, and the
+            # source is opened READ-ONLY: a copy that applied this tree's migrations to the live
+            # file would be the very write this exists to prevent.
+            source = sqlite3.connect(f"{brain.resolve().as_uri()}?mode=ro", uri=True, timeout=30)
+            try:
+                target = sqlite3.connect(str(out["brain"]))
+                try:
+                    source.backup(target)
+                finally:
+                    target.close()
+            finally:
+                source.close()
+            said.append(f"Brain {_megabytes(out['brain'])}")
+        else:
+            said.append("Brain absent at the source, so it bootstraps privately")
+    except (OSError, sqlite3.Error) as exc:
+        failed.append(f"the Brain copy failed ({type(exc).__name__}: {exc})")
+        out["brain"].unlink(missing_ok=True)
+    out["failed"] = failed
+    out["line"] = (
+        "NOT RUN — " + "; ".join(failed)
+        if failed
+        else "private copy, deleted after the run — " + "; ".join(said)
+    )
+    return out
+
+
+@contextlib.contextmanager
+def private_state(
+    sources: tuple[str, pathlib.Path, str, pathlib.Path] | None = None,
+) -> Iterator[dict]:
+    """For the length of the block, every child of this process reads a private copy of the state.
+
+    Yields {"line": what the summary prints, "ledger": the ledger path the children read, or None
+    when it is the live one}, plus "refused" naming why when NO child may run: a copy failed, or the
+    paths could not be resolved at all. The two variables are restored on exit and the copies deleted.
+    """
+    if os.environ.get(LIVE_STATE_ENV) == "1":
+        yield {
+            "line": f"LIVE — {LIVE_STATE_ENV}=1, so this run reads and writes the machine's own "
+            "ledger and Brain",
+            "ledger": None,
+        }
+        return
+    unresolved = None
+    try:
+        ledger_env, ledger, brain_env, brain = sources or _state_sources()
+    except Exception as exc:  # noqa: BLE001 — verify.py must run even if a sibling module is broken
+        unresolved = f"{type(exc).__name__}: {exc}"
+    if unresolved:
+        why = f"the ledger and Brain paths did not resolve ({unresolved})"
+        yield {"line": f"NOT RUN — {why}", "ledger": None, "refused": why}
+        return
+    saved = {key: os.environ.get(key) for key in (ledger_env, brain_env)}
+    with tempfile.TemporaryDirectory(prefix="verify-state-") as td:
+        snap = snapshot_state(ledger, brain, pathlib.Path(td))
+        try:
+            # BOTH, always, even when a copy failed: a failed file's private path is absent, so a
+            # child that ran anyway would bootstrap an empty private file, never touch the live one.
+            for key, private in ((ledger_env, snap["ledger"]), (brain_env, snap["brain"])):
+                os.environ[key] = str(private)
+            state = {"line": snap["line"], "ledger": snap["ledger"]}
+            if snap["failed"]:
+                state["refused"] = "; ".join(snap["failed"])
+            yield state
+        finally:
+            for key, value in saved.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+
+# pytest's terse summary line, e.g. "182 passed, 3 skipped in 41.20s"
+COUNT_RE = re.compile(r"(\d+) (passed|failed|error|errors|skipped|xfailed|xpassed)")
+
+
+def run_pytest(*, extra: list[str] | None = None, junit: pathlib.Path | None = None) -> dict:
+    """Execute the suite and read the COUNTS, not the exit code.
+
+    With `junit`, pytest also writes its per-test XML there, and the verdicts in it come back as
+    `verdicts` — which is how the two gates that are test files report them instead of executing
+    every check a second time (see `run_gates`). The counts never come from that file.
+    """
+    # `-rfEs`: failures, errors AND skip reasons in the short summary. Skip reasons are why this
+    # flag is here at all — a skip count with no story is the shape a silent narrowing hides in.
+    # But `f` and `E` are NOT optional additions: pytest's default is `-rfE`, so passing a bare
+    # `-rs` REPLACES it and silently stops printing FAILED lines. That is exactly what happened —
+    # a run with 1 real failure printed "pytest failures (0)", from the very code added here to
+    # stop failures going unlisted. An instrument that reports less, introduced by the change that
+    # was meant to make it report more.
+    cmd = child_argv(
+        [sys.executable, "-m", "pytest", "-q", "-rfEs", "-p", "no:cacheprovider", "--no-header"]
+    )
+    if junit is not None:
+        cmd.append(f"--junitxml={junit}")
+    cmd += extra or []
+    proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
+    tail = (proc.stdout or "") + (proc.stderr or "")
+    counts: dict[str, int] = {}
+    for n, kind in COUNT_RE.findall(tail):
+        kind = "error" if kind.startswith("error") else kind
+        counts[kind] = counts.get(kind, 0) + int(n)
+    collected = sum(
+        counts.get(k, 0) for k in ("passed", "failed", "error", "skipped", "xfailed", "xpassed")
+    )
+    # A usage error prints to stderr and exits 0. Absence of counts is therefore a failure, never
+    # an empty success.
+    usage_error = "usage: pytest" in tail or "unrecognized arguments" in tail
+    lines = tail.strip().splitlines()
+    # EVERY failure, not the last 12 lines of output. The first CI run reported 21 failures and
+    # the log named 7 of them, because this was `lines[-12:]` — a truncated red costs a whole
+    # round trip to diagnose.
+    failures = [
+        ln.strip()
+        for ln in lines
+        if ln.startswith(("FAILED ", "ERROR ")) or ln.lstrip().startswith(("FAILED ", "ERROR "))
+    ]
+    skips = [ln.strip() for ln in lines if ln.lstrip().startswith("SKIPPED ")]
+    return {
+        "counts": counts,
+        "collected": collected,
+        "passed": counts.get("passed", 0),
+        "skipped": counts.get("skipped", 0),
+        "failed": counts.get("failed", 0) + counts.get("error", 0),
+        "returncode": proc.returncode,
+        "usage_error": usage_error,
+        "failures": failures,
+        "skips": skips,
+        "tail": lines[-12:],
+        "verdicts": read_junit(junit) if junit is not None else {},
+    }
+
+
+# Per test, the most severe verdict wins: pytest writes a second <testcase> for a teardown error.
+_VERDICT_RANK = {"passed": 0, "skipped": 1, "failed": 2}
+
+
+def read_junit(path: pathlib.Path) -> dict[str, dict[str, dict[str, str]]]:
+    """pytest's verdict on each test: {module stem: {test name: {"outcome", "message"}}}.
+
+    Kept only where a check can be REPLAYED from it — passed, failed (a failure or an error in any
+    phase) and skipped. An xfail is left out, and so is everything in an absent or unreadable file:
+    a gate handed no verdict for a check runs that check itself, so a gap here costs time and never
+    a check. Keyed by the LAST part of pytest's classname, the module's stem, because that is the
+    one name a gate script knows about itself in both tree shapes (`tests.test_x` in a checkout,
+    `test_x` in the flat mirror). A test inside a class keys under the class name, which no gate asks.
+    """
+    try:
+        root = ET.parse(path).getroot()
+    except (OSError, ET.ParseError):
+        return {}
+    out: dict[str, dict[str, dict[str, str]]] = {}
+    unreplayable: set[tuple[str, str]] = set()
+    for case in root.iter("testcase"):
+        module = (case.get("classname") or "").rsplit(".", 1)[-1]
+        name = case.get("name") or ""
+        if not module or not name:
+            continue
+        verdict = {"outcome": "passed", "message": ""}
+        for child in case:
+            if child.tag in ("failure", "error"):
+                verdict = {"outcome": "failed", "message": child.get("message") or child.tag}
+                break
+            if child.tag == "skipped":
+                if child.get("type") == "pytest.xfail":
+                    unreplayable.add((module, name))
+                verdict = {"outcome": "skipped", "message": child.get("message") or ""}
+        prior = out.setdefault(module, {}).get(name)
+        if prior is None or _VERDICT_RANK[verdict["outcome"]] > _VERDICT_RANK[prior["outcome"]]:
+            out[module][name] = verdict
+    for module, name in unreplayable:
+        out[module].pop(name, None)
+    return out
+
+
+def selftest_modules() -> list[str]:
+    """Discover modules exposing --selftest instead of hardcoding a list that goes stale."""
+    found = []
+    for path in sorted(MODULES.glob("*.py")):
+        if path.name.startswith("test_") or path.name == "verify.py":
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:  # noqa: BLE001
+            continue
+        if '"--selftest"' in text or "'--selftest'" in text:
+            found.append(path.stem)
+    return found
+
+
+# SELFTESTS RUN SEVERAL AT A TIME. Each is its own process with its own temporary state, and one
+# after another they were the longest phase of a run. `ORCH_VERIFY_JOBS` sets how many run at once,
+# and 1 restores the serial run. Results are classified in DISCOVERY order, whatever order they
+# finish in, so the summary, the failure list and the skip list read identically at any width.
+JOBS_ENV = "ORCH_VERIFY_JOBS"
+DEFAULT_JOBS = 8
+
+
+def selftest_jobs() -> tuple[int, str]:
+    """How many selftests run at once, and the phrase the summary prints for it."""
+    default = max(1, min(DEFAULT_JOBS, os.cpu_count() or 1))
+    raw = os.environ.get(JOBS_ENV, "").strip()
+    if not raw:
+        return default, f"{default} at a time"
+    try:
+        jobs = int(raw)
+    except ValueError:
+        jobs = 0
+    if jobs < 1:
+        # Named, never silently replaced: a setting the run ignored has to say so.
+        return default, f"{default} at a time ({JOBS_ENV}={raw!r} is not a positive integer)"
+    return jobs, f"{jobs} at a time ({JOBS_ENV}={jobs})"
+
+
+def _source_size(mod: str) -> int:
+    try:
+        return (MODULES / f"{mod}.py").stat().st_size
+    except OSError:
+        return 0
+
+
+def run_selftests(modules: list[str], *, jobs: int = 1) -> dict:
+    """Run each `--selftest` and sort it into ran / skipped-with-a-reason / failed.
+
+    THREE outcomes, not two. A selftest that exits 0 having executed nothing was already caught
+    (the silent zero-exit rule). The matching hole is a selftest that exits 0, SPEAKS, and still
+    executed nothing — indistinguishable from a pass by the old two-way split. So a selftest that
+    cannot run here prints the shared `PREREQUISITE ABSENT:` mark with the missing thing named,
+    and lands in `skipped`, which is counted, printed, and ceilinged. `ok` therefore means "ran",
+    and the number after it is trustworthy again.
+
+    `jobs` selftests run at once (see `selftest_jobs`). The classification below is the same at any
+    width: it walks `modules` in the order given, never the order the processes finished.
+    """
+
+    def run_one(mod: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            child_argv([sys.executable, str(MODULES / f"{mod}.py"), "--selftest"]),
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+
+    # Largest source first. The phase ends when its slowest selftest does, so the long ones start
+    # at once and the short ones fill in behind them. Size is the proxy because it needs no history.
+    order = sorted(dict.fromkeys(modules), key=_source_size, reverse=True)
+    with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
+        finished = dict(zip(order, pool.map(run_one, order)))
+    ok, bad, skipped = [], {}, {}
+    for mod in modules:
+        proc = finished[mod]
+        out = (proc.stdout or "") + (proc.stderr or "")
+        # A selftest must both exit 0 AND say something. A silent zero-exit is the very failure
+        # this module exists to catch.
+        spoke = bool(out.strip())
+        if proc.returncode != 0 or not spoke:
+            bad[mod] = (
+                "silent zero-exit — did it run?" if proc.returncode == 0 else out.strip()[-200:]
+            )
+            continue
+        reasons = [
+            ln.split(PREREQ_ABSENT_MARK, 1)[1].strip()
+            for ln in out.splitlines()
+            if PREREQ_ABSENT_MARK in ln
+        ]
+        if reasons:
+            skipped[mod] = reasons
+        else:
+            ok.append(mod)
+    return {"ok": ok, "failed": bad, "skipped": skipped}
+
+
+# Two of the five gates are TEST files and three are modules, so they no longer live in one
+# directory. Named by bare filename and resolved below — a hardcoded prefix per entry would be a
+# second place for the layout to be recorded, and those drift.
+GATES = (
+    ("activation audit", ["capability_activation_audit.py", "--no-cache"]),
+    ("recurrence replay", ["capability_recurrence_check.py"]),
+    ("set coverage", ["test_capability_set_coverage.py"]),
+    ("admission", ["test_capability_admission.py"]),
+    ("ledger validate", ["capabilities.py", "--json", "validate"]),
+)
+
+
+def _gate_script(name: str) -> str:
+    """Absolute path to a gate's script, whether it is a module or a test file."""
+    for base in (MODULES, ROOT / "tests"):
+        candidate = base / name
+        if candidate.is_file():
+            return str(candidate)
+    # Absent is reported by the runner as a failure, never silently skipped — so return the
+    # module-dir guess and let the "cannot open file" surface with the name in it.
+    return str(MODULES / name)
+
+
+def _child_env() -> dict:
+    """`src` on PYTHONPATH, because two of the gates are TEST files.
+
+    Running `python3 tests/test_capability_admission.py` puts `tests/` on `sys.path`, not `src/`, so
+    its `import capabilities` fails — the gate reported `ModuleNotFoundError` rather than a verdict.
+    pytest gets this from `pythonpath = ["src"]` in pyproject.toml; a bare subprocess has to be told.
+    Prepended rather than replacing any inherited PYTHONPATH.
+    """
+    env = dict(os.environ)
+    existing = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = f"{MODULES}{os.pathsep}{existing}" if existing else str(MODULES)
+    return env
+
+
+def _results_flag() -> str | None:
+    """The flag a test-file gate reads its recorded verdicts from, or None.
+
+    No copy of the literal here: a gate script that cannot import env_prereq cannot read the flag
+    either, so with None every gate simply runs its checks itself.
+    """
+    try:
+        from env_prereq import PYTEST_RESULTS_FLAG
+    except Exception:  # noqa: BLE001
+        return None
+    return PYTEST_RESULTS_FLAG
+
+
+def run_gates(*, pytest_results: pathlib.Path | None = None) -> dict:
+    """Run every gate. The two that are TEST FILES get this run's pytest verdicts when there are some.
+
+    pytest has just run those files against the same private ledger, so re-executing each check
+    was the same work twice; with `pytest_results` they REPORT the recorded verdicts instead, and
+    execute only a check pytest left no verdict for (see `env_prereq.recorded_verdicts`). Each gate
+    still prints its own line and headline here.
+    """
+    out = {}
+    flag = _results_flag() if pytest_results is not None else None
+    for name, argv in GATES:
+        if flag and argv[0].startswith("test_"):
+            argv = [*argv, flag, str(pytest_results)]
+        proc = subprocess.run(
+            child_argv([sys.executable, _gate_script(argv[0]), *argv[1:]]),
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            env=_child_env(),
+        )
+        text = (proc.stdout or "") + (proc.stderr or "")
+        # Same three-way split as the selftests: a gate that could not judge here says so with
+        # the shared mark, and is reported as SKIP rather than folded into `ok`.
+        reasons = [
+            ln.split(PREREQ_ABSENT_MARK, 1)[1].strip()
+            for ln in text.splitlines()
+            if PREREQ_ABSENT_MARK in ln
+        ]
+        out[name] = {"ok": proc.returncode == 0, "skipped": reasons, "line": _headline(name, text)}
+    return out
+
+
+def _headline(name: str, text: str) -> str:
+    wanted = {
+        "activation audit": r"CAN FIRE:.*",
+        "recurrence replay": r"WOULD FIRE:.*",
+        "set coverage": r"all \d+ capability-set.*",
+        "admission": r"all \d+ admission.*",
+        "ledger validate": r'"valid": \w+',
+    }
+    pat = wanted.get(name)
+    if pat:
+        m = re.search(pat, text)
+        if m:
+            return m.group(0).strip()
+    return (text.strip().splitlines() or ["(no output)"])[-1][:100]
+
+
+def absent_entrypoint_line(ledger: pathlib.Path | None = None) -> str | None:
+    """One line naming ledger rows whose declared module is NOT in this tree, or None.
+
+    WHY IT IS IN THE SUMMARY. The capability ledger is shared per MACHINE while code is
+    branch-isolated per WORKTREE, so a row another session registered makes three checks go red
+    here with messages that read "registered with no implementation — retire it". On 2026-08-22 that
+    row was `evidence-acquisition`, its module sat on an unmerged branch, and retiring or waiving it
+    would have discarded finished work. Naming the condition once, at the top level, means the
+    reader learns it from the SUMMARY rather than from three separate failures.
+
+    DIAGNOSTIC, NOT A VERDICT. It never enters `problems`, never suppresses a failure, and never
+    counts as a skip — the three checks still fail exactly as loudly. An import failure is REPORTED
+    rather than swallowed, because a diagnostic that silently stops appearing is indistinguishable
+    from one that has nothing to say.
+    """
+    try:
+        import capabilities
+        import capability_activation_audit as audit
+
+        # load_declared: read-only. verify.py must not mutate the ledger it is reporting on. Given
+        # the run's private copy, this reads the same ledger every other check in the run judged.
+        rows = capabilities.load_declared(ledger or capabilities.REG)
+        rep = audit.absent_entrypoint_report(sorted(rows))
+    except Exception as exc:  # noqa: BLE001
+        return f"  entrypoints: NOT CHECKED ({type(exc).__name__}: {exc})"
+    return _format_absent_line(rep)
+
+
+def _format_absent_line(rep: dict) -> str | None:
+    """Render the report as one summary line, or None when nothing is absent. PURE.
+
+    Split out so the selftest exercises the real rule on synthetic reports, the same reason
+    `_floor_problems` and `_ceiling_problems` are pure: the interesting cases here are a machine
+    with an absent row and a machine without one, and no single machine is both.
+
+    It deliberately does NOT carry `PREREQ_ABSENT_MARK`. That token is how a skip is counted
+    against the ceiling, and nothing was skipped — miscounting this line as a skip would consume
+    ceiling headroom that belongs to a real missing prerequisite.
+    """
+    if not rep.get("absent"):
+        return None
+    where = []
+    for row in rep["absent"]:
+        found = row.get("found_in") or []
+        seen = (
+            f"found in {found[0]['checkout']}"
+            + (f" +{len(found) - 1} more" if len(found) > 1 else "")
+            if found
+            else "not found in any sibling checkout"
+        )
+        where.append(f"{row['capability_id']} -> {row['entrypoint']} ({seen})")
+    # Both numbers in the same place, per the house rule: "1" reads as an emergency, "1 of 43"
+    # reads as one session's in-flight branch, which is what it is.
+    return (
+        f"  entrypoints: {len(rep['absent'])} of {rep.get('total', '?')} ledger row(s) declare "
+        f"code ABSENT from this tree — {'; '.join(where)}. "
+        f"WAIT-OR-MERGE, not retire/waive."
+    )
+
+
+FLOOR_UNREADABLE = "__unreadable__"
+
+
+def load_floor() -> dict:
+    """The recorded floor, or `{}` when there is none.
+
+    A PRESENT-BUT-UNREADABLE floor is NOT the same as an absent one, and returning `{}` for both
+    made them indistinguishable: `floor_state` rendered each as `unset`, so a corrupted
+    .verify-floor.json read as "no floor agreed yet" and every count-based check silently stopped
+    applying. Same shape as the two other instances found on 2026-08-24 — one sentinel standing
+    for "measured nothing" and "could not measure". The unreadable case now carries a marker key
+    so callers can say which it is; it stays a dict so no caller breaks.
+    """
+    if FLOOR.exists():
+        try:
+            return json.loads(FLOOR.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            return {FLOOR_UNREADABLE: True}
+    return {}
+
+
+# The drift message's opening words, named ONCE. The message is built from it and the
+# `--update-floor` unblock predicate matches on it; a matching pair of literals would drift, and a
+# drifted pair here would silently re-latch the gate closed. (House rule: one constant, defined
+# once, consumed by both the measuring and the draining side.)
+DRIFT_PREFIX = "floor is BEHIND reality"
+
+
+def _blocks_floor_update(problems: list[str]) -> list[str]:
+    """Which problems must stop `--update-floor` from writing? NOT the drift one.
+
+    LATCHED-GATE FIX. `--update-floor` used to require a fully green run. The moment `collected`
+    became an equality that stopped being safe: a floor behind reality is now a PROBLEM, so the
+    one command that fixes it would have been refused for the existence of the very condition it
+    exists to clear — the clear path blocked by the thing the gate measures. Real failures still
+    block the write, because recording a floor from a broken run would bake the breakage in.
+    """
+    return [p for p in problems if not p.startswith(DRIFT_PREFIX)]
+
+
+def _failing_problems(
+    problems: list[str],
+    *,
+    forgive_healed_drift: bool,
+    wrote_floor: bool,
+    floor_may_lag: bool = False,
+) -> list[str]:
+    """Which problems make the run RED? Normally all of them. Pure, so the selftest holds the rule.
+
+    WHY A NARROWER ANSWER EXISTS AT ALL. `collected` is an equality, so a floor left behind
+    reality is a problem — correctly, it is permissive by exactly the gap. But the number is only
+    knowable on the MERGE RESULT, so on a busy day every concurrent branch records a value that
+    the next merge invalidates. The drain (write the two integers) is one command, but nothing
+    ran it automatically, which is how the floor came to be found behind reality four separate
+    times in this file's own history.
+
+    Under `--reconcile-floor` a drift that THIS RUN JUST HEALED is not a failure: the file now
+    records what was measured in this same process, in this same tree, so there is nothing left
+    for anyone to do about it. The measuring window and the draining window are the same run —
+    the house rule about one constant serving both sides, taken to its limit.
+
+    TWO THINGS KEEP THIS FROM BECOMING A GATE THAT CLEARS ITSELF:
+
+    * It reuses `_blocks_floor_update`, the SAME predicate that decided the write. A second
+      literal listing "which problems are drift" would be a matching pair, and a drifted pair
+      would either re-latch the gate or forgive a real failure.
+    * It is gated on `wrote_floor`, NOT on the flag. If the write did not happen — because a real
+      problem blocked it — every problem still fails, drift included. Forgiving an UNHEALED drift
+      would be exactly the defect this repo names most often: a gate that opens because it was
+      asked nicely rather than because the condition changed.
+
+    What it can never do is LOWER a floor. `_blocks_floor_update` keeps blocking on a collection
+    DROP, so the write never happens in that direction and there is nothing to forgive. Raising a
+    floor to observed reality makes the gate STRICTER, never weaker.
+    """
+    # THE THIRD CONSUMER OF ONE PREDICATE. `floor_may_lag` is for a PULL REQUEST, where the
+    # recorded floor is main's and main moves under the branch: the correct number is only knowable
+    # on the merge result, so demanding it from the author is demanding something no amount of care
+    # delivers. Measured: one one-line change needed SIX re-measurements in two hours while main
+    # moved eight times, and this file's own note records the floor being found behind reality four
+    # separate times before that.
+    #
+    # WHY THIS IS NOT THE "GATE THAT OPENS BECAUSE IT WAS ASKED" that `wrote_floor` exists to stop.
+    # There the drift was on MAIN with nothing recording it, so forgiving it left the gate
+    # permanently permissive. Here the drift is on a BRANCH, and main's equality is enforced
+    # separately by the push-to-main run plus the reconcile job that heals it. The lag is
+    # structural and lasts exactly one CI run.
+    #
+    # WHAT IS STILL ENFORCED ON A PR, and it is the direction that matters: a collection DROP is
+    # NOT drift, so `_blocks_floor_update` keeps it fatal. Tests silently ceasing to be collected
+    # still fails on every branch. Only "you added tests and main moved" is forgiven — and it is
+    # still PRINTED, because the problems are reported before this function is consulted. Forgiven
+    # is not hidden.
+    if floor_may_lag or (forgive_healed_drift and wrote_floor):
+        return _blocks_floor_update(problems)
+    return problems
+
+
+def _floor_needs_writing(floor: dict, collected: int, passed: int) -> bool:
+    """Would writing actually change the recorded numbers? Pure, so the selftest holds the rule.
+
+    THE DEFECT THIS CLOSES, and it was introduced by automating the write. `--update-floor` wrote
+    on every fully-green run, drift or not: with no problems at all, `_blocks_floor_update([])` is
+    empty and the guard passes. Harmless while a human ran it by hand — the redundant write
+    recorded the same integers and appended one dated stamp. But ci.yml's reconcile job runs it on
+    EVERY push to main, so each push produced a bot commit that changed nothing but the note, and
+    the note grew +150 chars a time: 22217 -> 22367 -> 22517 over three pushes, measured. A commit
+    that records nothing is noise on main, and unbounded growth in the one file whose note is
+    load-bearing documentation is worse than noise.
+
+    A no-op write also costs the audit trail nothing: a "FLOOR RECORDED" stamp for a write that
+    changed no number is a record of nothing having happened.
+
+    DRIFT ALWAYS STILL WRITES, which is what keeps the drain working. Drift means
+    `collected != floor["collected"]` by definition, so this predicate is True in exactly the case
+    the reconcile job exists for. An UNSET floor also writes: `{}` reads as 0, which differs from
+    any real count, so a fresh checkout still records its first floor.
+    """
+    return (
+        int(floor.get("collected", 0) or 0) != collected
+        or int(floor.get("passed", 0) or 0) != passed
+    )
+
+
+def _appended_note(prior: str | None, collected: int, passed: int, today: str) -> str:
+    """Append the recorded counts to the EXISTING note. Never replace it. Pure, so the selftest
+    can hold the preservation property rather than trusting it.
+
+    Until 2026-08-23 `--update-floor` overwrote the note with a generic sentence. The note is the
+    only record of WHY each ceiling is the number it is — which missing prerequisite justifies
+    each agreed skip — so overwriting it destroyed the rationale on every use. The file had to
+    carry a warning about its own tool ("must be restored by hand after every use"), and a tool
+    whose correct use requires undoing part of what it just did is a footgun, not a tool. It also
+    made the honest path — hand-editing two integers — the only safe one, which is how the floor
+    came to be updated rarely enough to fall behind in the first place.
+    """
+    stamp = (
+        f"FLOOR RECORDED by verify.py --update-floor on {today}: collected={collected}, "
+        f"passed={passed}. Ceilings preserved, never re-measured — they are edited by hand."
+    )
+    prior = (prior or "").strip()
+    return f"{prior} {stamp}" if prior else stamp
+
+
+# Ceiling keys, and what each bounds. Named once so the check below and `--update-floor` cannot
+# disagree about which number they mean.
+CEILINGS = (
+    ("skipped_max", "skipped test(s)"),
+    ("selftest_skipped_max", "skipped selftest(s)"),
+    ("gate_skipped_max", "skipped gate(s)"),
+    # The mypy exempt list is bounded exactly like skipping, and for the same reason: a list of
+    # type-check exemptions that can only GROW is an amnesty with a deadline nobody set. ONE
+    # constant, defined once in the floor file and consumed by both the count and the bound — a
+    # matching pair of literals would drift, a shared name cannot.
+    ("mypy_exempt_max", "module(s) exempt from mypy"),
+)
+
+
+# ONE NUMBER MAY NOT BOUND TWO DIFFERENT DEPRIVED ENVIRONMENTS, and until 2026-08-29 `skipped_max`
+# did. The floor file's note records the shape it was measured in — a GitHub runner with none of
+# this instance's local prerequisites, 26 skips. The EXEC MIRROR is a different shape: every local
+# prerequisite is present (it exists only on the machine the system runs on) but it is a flat file
+# copy, so it is not a git repository and has no `.github/`, and it skips 31 tests that a runner
+# does not skip at all. The result was a `verify.py` that was RED FROM THE MIRROR on every input
+# including a correct tree — and CLAUDE.md §1 makes the mirror run the verdict, so the instrument
+# that exists to catch cross-tree divergence was protecting nothing. A gate that is red whatever
+# you do gets ignored, then switched off. (Since 2026-10-02 the sync ships `.github/`, so the mirror
+# skips only the git family -- 21 -- and env_prereq detects it as the flat copy that is not a repo.)
+#
+# Raising `skipped_max` to 31 would have been the wrong repair: CI runs where 26 is right, and the
+# extra five would have let a runner skip five more checks in silence. So each shape carries its
+# own agreed number, measured in the shape it bounds — the measuring window equal to the draining
+# window, which is the house rule this file already applies everywhere else.
+#
+# THREE SHAPES SINCE 2026-10-04. CI now verifies the flat exec-mirror shape too (the `exec-mirror`
+# job, building its copy with scripts/build_exec_mirror.sh), so a mirror-only defect fails on its PR
+# rather than at the owner's sync. On a runner that copy is deprived BOTH ways: flat and not a
+# repository (the git family the owner's mirror skips), and without any local prerequisite (the
+# runner family a checkout skips). Neither number bounds that union, so it carries its own,
+# `bare_mirror_*`, measured in CI where it is enforced. `env_prereq.bare_machine()` tells it apart
+# from the owner's mirror, and `tree_shape` below is the one place that asks.
+#
+# Only the MIRROR tree splits by machine. The base agreement was already measured on the bare
+# machine (a runner checkout), and the owner's checkout runs are not a verdict anywhere. The owner's
+# mirror run is the pre-sync verdict, so its number must stay the provisioned one.
+#
+# ONE RULE, NOT A SECOND TABLE. A shape's key for any ceiling is the base key with that shape's
+# prefix, derived here and consumed by both the check and the rendering through `ceiling_limit`.
+# `--update-floor` carries every key it does not re-measure, so no shape key needs registering
+# anywhere, and a ceiling added later gets its shape variants for free. A shape key that is unset
+# (or misspelt) falls back to the BASE agreement. That is the strict direction for the bare mirror,
+# whose deprivation contains the base's, so a missing `bare_mirror_*` key goes red. It is NOT strict
+# for the owner's mirror, whose selftest and gate ceilings borrow the runner's 7 and 2 today because
+# no `mirror_` variant of those keys was ever measured. Measure one before relying on it.
+CHECKOUT, EXEC_MIRROR, BARE_EXEC_MIRROR = "checkout", "exec mirror", "bare exec mirror"
+SHAPE_CEILING_PREFIX = {CHECKOUT: "", EXEC_MIRROR: "mirror_", BARE_EXEC_MIRROR: "bare_mirror_"}
+MIRROR_CEILING_PREFIX = SHAPE_CEILING_PREFIX[EXEC_MIRROR]
+# The `tree:` line for each shape. scripts/verify_before_sync.sh matches it against the shape its
+# caller expects: the owner's sync accepts only `EXEC MIRROR`, CI's job only `BARE EXEC MIRROR`. So
+# the bare label must not BEGIN with the provisioned one: a provisioned machine misread as bare would
+# otherwise pass the owner's check with the larger agreement. The selftest pins that.
+TREE_LABELS = {
+    CHECKOUT: "checkout",
+    EXEC_MIRROR: "EXEC MIRROR — mirror_* ceilings apply",
+    BARE_EXEC_MIRROR: "BARE EXEC MIRROR — bare_mirror_* ceilings apply",
+}
+
+
+def shape_key(key: str, shape: str) -> str:
+    """The floor-file key holding `shape`'s agreed maximum for `key` (the base key on a checkout)."""
+    return f"{SHAPE_CEILING_PREFIX[shape]}{key}"
+
+
+def mirror_key(key: str) -> str:
+    """The floor-file key holding the EXEC MIRROR's agreed maximum for `key`."""
+    return shape_key(key, EXEC_MIRROR)
+
+
+def tree_shape() -> tuple[str, str | None]:
+    """Which agreement bounds THIS tree, and the detected facts that chose it.
+
+    The tree first: only a flat copy that is not a repository is an exec mirror. Then, for a mirror
+    only, the machine: a machine with none of this instance's local prerequisites is the bare one.
+    Both answers come from env_prereq detectors of the thing itself, never from `$CI`. Either detector
+    answering None keeps the smaller agreement in force, so an unknown can never buy headroom.
+    """
+    mirror_reason = exec_mirror_shape()
+    if not mirror_reason:
+        return CHECKOUT, None
+    bare_reason = bare_machine()
+    if bare_reason:
+        return BARE_EXEC_MIRROR, f"{mirror_reason}; and {bare_reason}"
+    return EXEC_MIRROR, mirror_reason
+
+
+def ceiling_limit(floor: dict, key: str, *, shape: str = CHECKOUT) -> tuple[int | None, str]:
+    """The limit in force for `key` in a tree of `shape`, and the floor key that set it.
+
+    Returns the key as well as the number because every failure message here has to name the
+    integer to raise, and on a mirror that is a DIFFERENT key. "raise `skipped_max`" read from a
+    mirror run sends the reader to edit the number CI's checkout job depends on — the gate telling
+    you to break the other environment to clear this one.
+
+    A shape value REPLACES the base rather than adding to it. On the owner's mirror the local
+    prerequisites are all present, so the runner-shape absences the base number pays for do not
+    occur, and adding the two would buy headroom nothing there can legitimately spend. The bare
+    mirror's value is measured on the union directly, so it needs no addition either.
+    """
+    if shape != CHECKOUT:
+        sk = shape_key(key, shape)
+        limit = floor.get(sk)
+        if limit is not None:
+            return int(limit), sk
+    base = floor.get(key)
+    return (None if base is None else int(base)), key
+
+
+def mypy_exempt_modules() -> list[str] | None:
+    """Modules on `[[tool.mypy.overrides]] ignore_errors` — the ratchet's blocking quantity.
+
+    None means the question COULD NOT BE ANSWERED (no pyproject.toml, or it does not parse).
+    [] means it was answered and nothing is exempt -- the drained state. REPORTED, never treated as
+    zero: a ratchet that stops being counted is indistinguishable from one that emptied, and only
+    one of those is good news.
+
+    THOSE TWO WERE THE SAME VALUE UNTIL 2026-08-24, and the docstring above was already the argument
+    against it. A readable pyproject with no `ignore_errors` override returned None, so the run that
+    FINISHED the drain printed "NOT COUNTED" -- the gate going quiet at the exact moment it
+    succeeded, which is the failure this file exists to prevent. Two things prove it was unintended:
+    `_format_mypy_exempt_line` already carries a " -- fully drained" branch that no input could
+    reach, and the selftest below asserted this function was TRUTHY, so an empty list would have
+    failed it. A gate whose own test forbids its drained state is a latched gate (CLAUDE.md), and
+    this one would have latched on the last module.
+    """
+    try:
+        import tomllib
+
+        data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return None
+    for override in data.get("tool", {}).get("mypy", {}).get("overrides") or []:
+        if override.get("ignore_errors"):
+            mods = override.get("module")
+            return sorted(mods) if isinstance(mods, list) else [str(mods)]
+    # Readable, and nothing is exempt: ANSWERED, not unanswerable. See the docstring.
+    return []
+
+
+def _module_total() -> int | None:
+    """How many modules the ratchet's denominator refers to, COUNTED not typed.
+
+    It was the literal `99` until 2026-08-25, and adding one module made the printed line say "of
+    99" while 100 existed — a denominator that drifts silently every time the tree grows, which is
+    the matching-pair-of-literals failure CLAUDE.md names. Counted here and passed explicitly by the
+    selftests, so the assertions stay machine-invariant: the mirror carries a different file set, and
+    a test pinned to the live count would be right in one tree and wrong in the other.
+    """
+    try:
+        return len([p for p in MODULES.glob("*.py") if p.is_file()])
+    except Exception:  # noqa: BLE001
+        # None, NOT 0. A zero here would print "0 checked" and read as a drained ratchet, which is
+        # the same sentinel confusion `mypy_exempt_modules` above was fixed for on 2026-08-24. My
+        # own first draft of this function returned 0 and silently printed "of 0" — caught only
+        # because the value was obviously wrong, which is not a mechanism.
+        return None
+
+
+def _format_mypy_exempt_line(
+    mods: list[str] | None, limit: int | None, total: int | None = None
+) -> str:
+    """One line carrying BOTH numbers, per the runtime rule in CLAUDE.md. PURE.
+
+    `typecheck: on` alone reads as "typed". `66/66 max of 99 modules exempt` reads as "typed where
+    it is checked, and here is exactly how much is not" — the difference between a ratchet and an
+    amnesty.
+    """
+    total = _module_total() if total is None else total
+    shown_total = "an uncounted number of" if total is None else total
+    if mods is None:
+        return "  mypy ratchet: NOT COUNTED (no readable ignore_errors override in pyproject.toml)"
+    bound = f"/{limit} max" if limit is not None else " (no ceiling set)"
+    tail = " — type a module, delete its line" if mods else " — fully drained"
+    # `checked` is only computable when the denominator is. An uncountable total must not become
+    # an arithmetic error, and must not become a 0 either — it becomes the word "an unknown number".
+    checked = "an unknown number of" if total is None else total - len(mods)
+    return (
+        f"  mypy ratchet: {len(mods)}{bound} of {shown_total} module(s) exempt, "
+        f"{checked} checked{tail}"
+    )
+
+
+def _floor_problems(floor: dict, py: dict) -> list[str]:
+    """Is the amount of CHECKING wrong in either direction? Pure, so the selftest exercises the
+    real rule.
+
+    Three problems, all of which look like passing:
+      * fewer tests COLLECTED — an import error, a rename, a deletion;
+      * MORE tests collected than the floor records — the floor has fallen behind reality;
+      * fewer tests passed-or-consciously-skipped — a test that stopped running without becoming
+        a named skip. `passed` alone cannot be the floor once skipping is legitimate, or the
+        machine missing a prerequisite fails for being honest; `passed + skipped` can be, and the
+        ceiling is what stops the skipped side swallowing everything.
+    """
+    # WHY `collected` IS AN EQUALITY AND `passed` IS NOT.
+    #
+    # Until 2026-08-23 this fired only downward, so a branch could add tests and never touch the
+    # floor: silently green, with the floor left permissive by exactly the number added. That is
+    # not hypothetical — #34 and #37 each added a test and left the file alone, and every one of
+    # the recorded drifts (21 low at the worst, then 8, then 1, then 2) was caught only because
+    # somebody happened to look. A floor below reality is the hole this file exists to close, so
+    # falling BEHIND it has to be exactly as loud as dropping below it.
+    #
+    # The equality also buys what no amount of discipline could. Once every test-adding branch
+    # must edit these same two lines, two concurrent branches CONFLICT IN GIT. The second cannot
+    # merge without rebasing onto the first, and the rebased run reports the true merge-result
+    # count. Git's own conflict detection is what enforces "measure on the merge result, not on
+    # the branch" — the rule the note in .verify-floor.json had to repeat three times precisely
+    # because nothing enforced it. (This very change was rebased that way: #42 landed underneath
+    # it and moved the floor 368 -> 387.)
+    #
+    # Only `collected` can be strict, and the asymmetry is load-bearing. Collection is
+    # machine-invariant: a skipped test is still a collected test, so a runner with none of this
+    # instance's prerequisites collects exactly what the owner's machine collects — measured on
+    # CI and locally on 2026-08-23, both 368, with pass/skip splits of 344/24 against 368/0.
+    # `passed` is NOT invariant — it trades against `skipped` machine by machine — so it stays a
+    # MINIMUM on `passed + skipped`. Making that one strict too would fail every machine for
+    # being honest about a named skip.
+    problems = []
+    fc, fp = int(floor.get("collected", 0)), int(floor.get("passed", 0))
+    if fc and py["collected"] < fc:
+        problems.append(
+            f"collection DROPPED: {py['collected']} < floor {fc} — tests stopped "
+            f"running, which looks identical to tests passing"
+        )
+    elif fc and py["collected"] > fc:
+        # Both numbers AND the remedy, per the house rule that a gate must say what would clear
+        # it. "387 > 386" alone invites a shrug; naming the exact integer to write does not.
+        problems.append(
+            f"{DRIFT_PREFIX}: {py['collected']} collected > floor {fc} — the floor is "
+            f"{py['collected'] - fc} test(s) permissive, so that many could silently stop being "
+            f"collected and still read as green. Set \"collected\": {py['collected']} and "
+            f"\"passed\": {py['passed'] + py.get('skipped', 0)} in .verify-floor.json, keeping "
+            f"the existing note, or run `python3 verify.py --update-floor`. If a branch merged "
+            f"under you, REBASE FIRST: the number must be measured on the merge result."
+        )
+    if fp and py["passed"] + py.get("skipped", 0) < fp:
+        problems.append(
+            f"executed-or-skipped count dropped: {py['passed']} passed + "
+            f"{py.get('skipped', 0)} skipped < floor {fp} — a test stopped being run "
+            f"without becoming a named skip"
+        )
+    return problems
+
+
+def _exempt_ceiling_input(exempt: list[str] | None) -> int | None:
+    """The ratchet's ceiling input: the COUNT, or None when it could not be counted. PURE.
+
+    A ONE-LINE FUNCTION ON PURPOSE. This rule previously lived inline in `verify()` as
+    `len(exempt) if exempt is not None else 0` under a comment saying uncountable "must not read
+    as 0" — the comment was right and the code was not. Extracting it makes the rule TESTABLE at
+    the call site: a selftest asserting `_ceiling_problems` handles None proves the checker is
+    right while saying nothing about what the checker is fed, and it was the feeding that was
+    broken. Demonstrated: restoring the `else 0` coercion inline left every assertion green.
+    """
+    return len(exempt) if exempt is not None else None
+
+
+# The ONLY keys `--update-floor` rewrites. Everything else in `.verify-floor.json` is carried
+# forward verbatim by `_carried_forward`, so the two are complements of one another and neither
+# needs a list of what the other owns.
+REMEASURED_FLOOR_KEYS = ("collected", "passed", "note")
+
+
+def _carried_forward(floor: dict) -> dict:
+    """Every recorded key `--update-floor` must NOT touch, verbatim. Pure, so it is asserted.
+
+    A WHITELIST WAS THE WRONG SHAPE HERE, and this is the second half of a defect whose first half
+    shipped in the same change. `--update-floor` used to write only the keys it recognised — the
+    ceilings named in `CEILINGS`. Anything else in the file was silently discarded, and the
+    reconcile job runs it on EVERY push to main, so the discard would arrive as a bot commit
+    nobody reads. `mirror_skipped_max` was one registration step away from exactly that: added to
+    the floor file, unknown to the writer, deleted on the next push, and the exec mirror re-latched
+    shut with no trace of why.
+
+    Registering each new key was never the fix — the registration step IS the trap, and forgetting
+    it is silent. So the rule is inverted: the writer names the three keys it RE-MEASURES and
+    carries everything else through untouched. A key it has never heard of now survives by default,
+    which is the direction that fails toward keeping evidence rather than losing it.
+
+    Values are copied verbatim rather than coerced. The old writer forced `int()`, which is an
+    assumption about a key's TYPE that a general carry-forward has no business making.
+    """
+    return {
+        k: v
+        for k, v in floor.items()
+        # The unreadable marker is an in-memory signal from `load_floor`, never a file key.
+        # Unreachable today (an unreadable floor is a problem, and `_blocks_floor_update` refuses
+        # the write) but excluded here so the guarantee is local rather than borrowed from a
+        # distant guard that could move.
+        if k not in REMEASURED_FLOOR_KEYS and k != FLOOR_UNREADABLE
+    }
+
+
+# ---- ROWS THIS TREE DECLARES, AND THE SKIPS THEY ALONE CAUSE (2026-10-06) ---------------------
+# A row this tree registers by itself (`capabilities.declared_row_ids`) is absent from a ledger only
+# until the deployed code's first writing load. Until this date a check needing one skipped with a
+# reason calling it registration history, the skip pushed the exec mirror past its ceiling, and the
+# pre-sync verdict refused the sync that would have registered it (`value-chain-monitor`,
+# 2026-10-05: 22 skipped > 21). The ceiling's message then said to raise the ceiling. So every run
+# states which declared rows the ledger it judges lacks, and an exceeded skip ceiling says how many
+# of its skips registration alone drains: the blocking and the drainable number in one message.
+SKIP_CEILINGS = ("skipped_max", "selftest_skipped_max", "gate_skipped_max")
+
+
+def declared_rows_at_start(ledger: pathlib.Path | None = None) -> dict:
+    """Which rows this tree declares are absent from the ledger the run is ABOUT to judge.
+
+    Read before any child runs, because the run's last gate (`ledger validate`) is a writing load
+    that seeds them: read afterwards, the private copy would already hold the rows the checks
+    lacked. Read-only, and an unreadable ledger is reported, never read as complete.
+    """
+    try:
+        import capabilities
+
+        path = pathlib.Path(ledger or capabilities.REG)
+        total = len(capabilities.declared_row_ids())
+        if not path.exists():
+            return {"state": "absent", "declared": total, "missing": None}
+        missing = capabilities.missing_declared_rows(capabilities.load_declared(path))
+        return {"state": "read", "declared": total, "missing": missing}
+    except Exception as exc:  # noqa: BLE001 — verify.py must run even if a sibling module is broken
+        return {"state": "unreadable", "error": f"{type(exc).__name__}: {exc}"}
+
+
+def drainable_skips(
+    py: dict, st: dict, gates: dict, *, mark: str = DECLARED_UNREGISTERED_MARK
+) -> dict[str, int | None]:
+    """Of each skipped population, how many skipped ONLY for rows this tree declares. Pure.
+
+    A pytest skip counts when its message carries env_prereq's mark, which `ledger_rows_absent`
+    writes only when every absent row is declared, so registering them clears it. A selftest or a
+    gate counts only when every reason it gave carries the mark. None is NOT COUNTED (pytest left
+    no per-test record of its skips, or there is no mark to look for), never zero.
+    """
+    if not mark:
+        uncounted: dict[str, int | None] = {}
+        for ceiling in SKIP_CEILINGS:
+            uncounted[ceiling] = None
+        return uncounted
+    tests = [v for by_name in (py.get("verdicts") or {}).values() for v in by_name.values()]
+    counted = bool(tests) or not py.get("skipped")
+    in_tests = sum(1 for v in tests if v["outcome"] == "skipped" and mark in v["message"])
+
+    def only_declared(reasons: list[str]) -> bool:
+        return bool(reasons) and all(mark in reason for reason in reasons)
+
+    return {
+        "skipped_max": in_tests if counted else None,
+        "selftest_skipped_max": sum(1 for r in st["skipped"].values() if only_declared(r)),
+        "gate_skipped_max": sum(1 for g in gates.values() if only_declared(g["skipped"])),
+    }
+
+
+def _format_declared_line(rows: dict, drainable: dict[str, int | None]) -> str:
+    """The `declared:` summary line, printed on every run. Pure."""
+    if rows.get("state") == "unreadable":
+        return f"  declared:   NOT CHECKED ({rows.get('error')})"
+    total = rows["declared"]
+    if rows.get("state") == "absent":
+        return (
+            f"  declared:   no ledger when the run began, so none of the {total} rows this tree "
+            f"declares was registered; the first writing load creates it holding all of them"
+        )
+    missing = rows.get("missing") or []
+    if not missing:
+        return (
+            f"  declared:   all {total} rows this tree declares are registered in the ledger judged"
+        )
+
+    def n(key: str) -> str:
+        value = drainable.get(key)
+        return "NOT COUNTED" if value is None else str(value)
+
+    return (
+        f"  declared:   {len(missing)} of the {total} rows this tree declares are NOT registered in "
+        f"the ledger judged ({', '.join(missing)}); {n('skipped_max')} test(s), "
+        f"{n('selftest_skipped_max')} selftest(s) and {n('gate_skipped_max')} gate(s) skipped for "
+        f"them alone. The deployed code's first writing load registers them, and the pre-sync "
+        f"verdict seeds them into its copy first: never raise a ceiling for these"
+    )
+
+
+def _drainable_clause(count: int | None, key: str) -> str:
+    """What an exceeded skip ceiling adds about the skips registration alone drains. Pure."""
+    if count is None:
+        return " How many skipped only for a declared row awaiting registration: NOT COUNTED."
+    if count == 0:
+        return " None of them skipped only for a row this tree declares (see `declared:`)."
+    return (
+        f" {count} of them skipped only for a row this tree declares and the ledger judged lacks "
+        f"(see `declared:`): the deployed code's first writing load registers it, which drains "
+        f"them, so they are never a reason to raise `{key}`."
+    )
+
+
+def _ceiling_report(
+    floor: dict, actual: dict, *, shape: str, drainable: dict[str, int | None] | None = None
+) -> tuple[list[str], dict[str, str]]:
+    """The ceiling VERDICT and the `count/limit` RENDERING for every ceiling, from ONE shape
+    decision. Pure.
+
+    THEY ARE RETURNED TOGETHER ON PURPOSE. Two readers of one quantity that reach the shape
+    separately can disagree, and this file has already been bitten by exactly that: the mypy
+    ratchet's LINE said "NOT COUNTED" while its ENFORCEMENT cleared, because the renderer and the
+    checker coerced an uncountable value differently and the permissive one decided the exit code.
+    With the shape it would have been worse — a summary reading `31/31 max` above a verdict
+    computed against 26, which reads as a bug in the tool rather than in the tree. One call, one
+    decision, and the selftest can hold both halves against each other.
+    """
+    problems = _ceiling_problems(floor, actual, shape=shape, drainable=drainable)
+    rendered = {}
+    for key, _label in CEILINGS:
+        limit, in_force = ceiling_limit(floor, key, shape=shape)
+        observed = actual.get(key)
+        if limit is None:
+            rendered[key] = f"{observed} (no ceiling set)"
+            continue
+        # Name the KEY whenever it is not the base one. A bare "31/31 max" on the mirror looks
+        # like the number CI enforces and is not; the reader has to be able to see which
+        # agreement they are reading without going to look it up.
+        via = "" if in_force == key else f" [{in_force}]"
+        rendered[key] = f"{observed}/{limit} max{via}"
+    return problems, rendered
+
+
+def _ceiling_problems(
+    floor: dict,
+    actual: dict,
+    *,
+    shape: str = CHECKOUT,
+    drainable: dict[str, int | None] | None = None,
+) -> list[str]:
+    """Is anything skipping MORE than the agreed maximum FOR THIS TREE SHAPE? Pure, same reason.
+
+    With `drainable` (from `drainable_skips`), an exceeded SKIP ceiling also says how many of its
+    skips registering a declared row alone would drain, so the message that names the integer to
+    raise never sends the reader to raise it for a row the deployed code is about to register.
+
+    `shape` defaults to CHECKOUT so an unshaped call is bounded by the base (smaller) agreement —
+    the strict direction, and the one every existing caller and selftest already means.
+
+    An UNSET ceiling means "nothing agreed yet", not "zero" — reading a missing key as 0 would
+    condemn every machine that legitimately lacks a prerequisite.
+
+    AN UNCOUNTABLE QUANTITY UNDER A SET CEILING IS A FAILURE, not a pass. `actual[key] is None`
+    means the run could not measure that population at all; treating it as 0 lets the ceiling
+    clear by being BLIND, which is the same defect as a gate that cannot announce its own
+    success — one value standing for both "measured zero" and "could not measure". The ceiling is
+    an agreement about a number; if the number is unknown the agreement cannot be checked, and
+    silence is the wrong answer.
+    """
+    problems = []
+    where = "" if shape == CHECKOUT else f" ({shape})"
+    for key, label in CEILINGS:
+        # The key that SET the limit, not the base key — on the mirror they differ, and every
+        # message below has to send the reader to the number that actually governs this run.
+        limit, in_force = ceiling_limit(floor, key, shape=shape)
+        if limit is None:
+            continue
+        observed = actual.get(key, 0)
+        if observed is None:
+            problems.append(
+                f"CEILING UNCHECKABLE: {label} could not be counted, but `{in_force}` is set to "
+                f"{limit}. A bounded quantity that cannot be measured is a failure, not a pass — "
+                f"fix whatever made it uncountable, or remove the ceiling deliberately."
+            )
+            continue
+        if observed > int(limit):
+            problems.append(
+                # `CEILING`, not `SKIP CEILING`: the mypy exempt list is bounded by this same
+                # machinery and is not a skip, so the old wording sent a reader hunting for a skip
+                # that does not exist. The label already names WHICH population overflowed.
+                f"CEILING exceeded{where}: {observed} {label} > agreed maximum {limit}. "
+                f"This is bounded on purpose — either the new one is wrong, or raise "
+                f"`{in_force}` in .verify-floor.json deliberately and say why."
+                + (
+                    _drainable_clause(drainable.get(key), in_force)
+                    if drainable is not None and key in SKIP_CEILINGS
+                    else ""
+                )
+            )
+    return problems
+
+
+def verify(
+    *,
+    update_floor: bool = False,
+    forgive_healed_drift: bool = False,
+    floor_may_lag: bool = False,
+) -> tuple[int, str]:
+    jobs, jobs_said = selftest_jobs()
+    took: dict[str, float] = {}
+    # Every child below runs inside ONE private copy of the ledger and the Brain; see
+    # `private_state`. The run directory holds pytest's XML and the verdicts handed to the gates.
+    with private_state() as run_state, tempfile.TemporaryDirectory(prefix="verify-run-") as run_dir:
+        if run_state.get("refused"):
+            return 1, _not_run_summary(run_state)
+        # BEFORE any child: the run's last gate is a writing load that seeds these rows.
+        declared_rows = declared_rows_at_start(run_state["ledger"])
+        started = time.monotonic()
+        py = run_pytest(junit=pathlib.Path(run_dir) / "pytest.xml")
+        took["pytest"] = time.monotonic() - started
+        floor = load_floor()
+        mods = selftest_modules()
+        started = time.monotonic()
+        st = run_selftests(mods, jobs=jobs)
+        took["selftests"] = time.monotonic() - started
+        verdicts = pathlib.Path(run_dir) / "pytest-verdicts.json"
+        verdicts.write_text(json.dumps(py["verdicts"]), encoding="utf-8")
+        started = time.monotonic()
+        gates = run_gates(pytest_results=verdicts if py["verdicts"] else None)
+        took["gates"] = time.monotonic() - started
+        entrypoints = absent_entrypoint_line(run_state["ledger"])
+
+    problems = []
+    if py["usage_error"]:
+        problems.append("pytest reported a usage error (and still exited 0)")
+    if py["collected"] == 0:
+        problems.append("pytest collected ZERO tests — the suite did not run")
+    if py["failed"]:
+        problems.append(f"{py['failed']} pytest failure(s)/error(s)")
+    fc = int(floor.get("collected", 0))
+    problems += _floor_problems(floor, py)
+    if st["failed"]:
+        problems.append(
+            f"{len(st['failed'])} module selftest(s) failed: " f"{', '.join(sorted(st['failed']))}"
+        )
+    for name, res in gates.items():
+        if not res["ok"]:
+            problems.append(f"gate failed: {name}")
+
+    # THE SKIP CEILING. Skipping is bounded, not open-ended: exceeding an agreed maximum fails,
+    # so a future change cannot quietly convert a red into a skip. Each ceiling reports its own
+    # value against the limit in the same breath, per the house rule that a gate must always say
+    # both numbers — `24/24` alone reads as "fine", `24/24 (ceiling)` reads as "at the limit".
+    exempt = mypy_exempt_modules()
+    actual = {
+        "skipped_max": py["skipped"],
+        "selftest_skipped_max": len(st["skipped"]),
+        "gate_skipped_max": sum(1 for r in gates.values() if r["skipped"]),
+        # None (uncountable) must not read as 0 — that would let the ceiling pass by being
+        # blind. The rule lives in `_exempt_ceiling_input` rather than inline here, because
+        # inline it was untestable and therefore wrong for as long as it existed.
+        "mypy_exempt_max": _exempt_ceiling_input(exempt),
+    }
+    if floor.get(FLOOR_UNREADABLE):
+        problems.append(
+            "FLOOR UNREADABLE: .verify-floor.json exists but does not parse, so neither the "
+            "collection floor nor any ceiling can be checked. That is a failure, not an unset "
+            "floor — fix the file rather than letting a run pass unmeasured."
+        )
+    # WHICH TREE IS THIS? Detected from the tree itself — never from `$CI` — because the exec
+    # mirror and a bare runner are two different deprived shapes and one number cannot bound both.
+    # See `ceiling_limit`. Computed once and threaded through the check and the rendering, so the
+    # verdict and the summary cannot disagree about which agreement was in force.
+    detected_shape, shape_reason = tree_shape()
+    drainable = drainable_skips(py, st, gates)
+    ceiling_problems, ceiling_rendered = _ceiling_report(
+        floor, actual, shape=detected_shape, drainable=drainable
+    )
+    problems += ceiling_problems
+
+    def _cap(key: str) -> str:
+        """Both numbers, always in the same place: the count AND what bounds it."""
+        return ceiling_rendered[key]
+
+    # The floor reports its RELATIONSHIP to reality, not just its value. "floor 386" reads as
+    # fine at a glance; "floor 386 — 1 BEHIND" cannot be misread, which is the same house rule
+    # that makes each ceiling print its count against its limit.
+    floor_state = (
+        # UNREADABLE IS NOT UNSET. A corrupted .verify-floor.json used to render as "unset",
+        # i.e. "no floor agreed yet" — so a run whose floor could not be parsed looked like a
+        # run that never had one, and the count checks stopped applying without saying so.
+        "UNREADABLE (.verify-floor.json exists but does not parse)"
+        if floor.get(FLOOR_UNREADABLE)
+        else (
+            "unset"
+            if not fc
+            else (
+                f"{fc}"
+                if py["collected"] == fc
+                else (
+                    f"{fc} — {py['collected'] - fc} BEHIND"
+                    if py["collected"] > fc
+                    else f"{fc} — NOT MET"
+                )
+            )
+        )
+    )
+    lines = ["# verify.py", ""]
+    # ALWAYS printed, in both shapes. A line that only appears on the mirror tells a reader
+    # nothing on the machine where it is silent, and the whole point is that "which ceilings are
+    # in force" must never have to be inferred.
+    lines.append(
+        f"  tree:       {TREE_LABELS[detected_shape]}"
+        + (f"\n              {shape_reason}" if shape_reason else "")
+    )
+    # ALWAYS printed, like `tree:`. Which state the run judged is never something to infer.
+    lines.append(f"  state:      {run_state['line']}")
+    lines.append(
+        f"  time:       pytest {_duration(took['pytest'])}, selftests "
+        f"{_duration(took['selftests'])} ({jobs_said}), gates {_duration(took['gates'])}"
+    )
+    lines.append(
+        f"  pytest:     {py['passed']} passed, {py['failed']} failed, "
+        f"{_cap('skipped_max')} skipped "
+        f"({py['collected']} collected; floor {floor_state})"
+    )
+    lines.append(
+        f"  selftests:  {len(st['ok'])} of {len(mods)} modules ran, "
+        f"{_cap('selftest_skipped_max')} skipped"
+    )
+    for name, res in gates.items():
+        state = "SKIP" if res["skipped"] else ("ok " if res["ok"] else "FAIL")
+        lines.append(f"  {name:<18} {state} {res['line']}")
+    if actual["gate_skipped_max"]:
+        lines.append(f"  gates:      {_cap('gate_skipped_max')} skipped")
+    # ALWAYS printed, like `tree:`: whether the ledger judged lacks a row this tree registers itself.
+    lines.append(_format_declared_line(declared_rows, drainable))
+
+    # Printed under a GREEN verdict as much as a red one: a row registered by another checkout can
+    # be present while every check still passes, and the reader wants to know before the next merge.
+    if entrypoints:
+        lines.append(entrypoints)
+    # ALWAYS printed: a drained ratchet is news, and a ratchet that stopped being counted is
+    # exactly what this line exists to expose.
+    lines.append(_format_mypy_exempt_line(exempt, floor.get("mypy_exempt_max")))
+
+    # WHAT DID NOT RUN, always — under a green verdict as much as a red one. A number of skips
+    # with no reasons beside it is how "green" quietly stops meaning "checked".
+    if py["skips"] or st["skipped"] or actual["gate_skipped_max"]:
+        lines.append("")
+        lines.append("  SKIPPED (prerequisite absent on this machine — nothing here was checked):")
+        for ln in py["skips"]:
+            lines.append(f"    pytest   {ln}")
+        for mod, reasons in sorted(st["skipped"].items()):
+            for reason in reasons:
+                lines.append(f"    selftest {mod}: {reason}")
+        for name, res in gates.items():
+            for reason in res["skipped"]:
+                lines.append(f"    gate     {name}: {reason}")
+
+    lines.append("")
+    if problems:
+        lines.append("  PROBLEMS:")
+        lines += [f"    - {p}" for p in problems]
+        for mod, why in sorted(st["failed"].items()):
+            lines.append(f"    selftest {mod}: {why[:120]}")
+        if py["failed"] or py["usage_error"]:
+            # EVERY failure by name, then the tail for context. A truncated failure list costs a
+            # whole CI round trip, which is what happened on the first run.
+            lines += ["", f"  pytest failures ({len(py['failures'])}):"]
+            lines += [f"    {ln}" for ln in py["failures"]]
+            lines += ["", "  pytest tail:"] + [f"    {ln}" for ln in py["tail"]]
+    else:
+        lines.append(
+            f"  VERIFIED — {py['passed']} tests actually executed and passed, "
+            f"{len(st['ok'])} selftests spoke, "
+            f"{len(gates) - actual['gate_skipped_max']} of {len(gates)} gates green"
+            + (
+                f"; {py['skipped']} test(s), {actual['selftest_skipped_max']} selftest(s) "
+                f"and {actual['gate_skipped_max']} gate(s) SKIPPED for a named missing "
+                f"prerequisite, listed above"
+                if (py["skipped"] or actual["selftest_skipped_max"] or actual["gate_skipped_max"])
+                else ""
+            )
+        )
+
+    # Drift does NOT block the write — see `_blocks_floor_update`. A real failure still does.
+    wrote_floor = False
+    if (
+        update_floor
+        and not _blocks_floor_update(problems)
+        # Third conjunct, and it is what stops the reconcile job committing on every push. See
+        # `_floor_needs_writing`: drift is always still written, a no-op never is.
+        and _floor_needs_writing(floor, py["collected"], py["passed"] + py["skipped"])
+    ):
+        # `collected` and `passed` are re-measured; the CEILINGS are NOT. A ceiling re-recorded
+        # from whatever the last run happened to skip is not a ceiling, it is a ratchet that
+        # follows the leak — and on the machine that has every prerequisite it would record 0 and
+        # fail every other machine. So the agreed maxima are preserved from the existing file and
+        # only ever changed by hand, deliberately.
+        # `passed + skipped`, not `passed`: the floor means "checks that ran or were named", so
+        # it records the same number on a machine with every prerequisite and on one without.
+        # Recording bare `passed` from a skipping machine would RATCHET THE FLOOR DOWN by exactly
+        # the amount that was skipped — the floor following the leak instead of catching it.
+        blob = {"collected": py["collected"], "passed": py["passed"] + py["skipped"]}
+        blob.update(_carried_forward(floor))
+        blob["note"] = _appended_note(
+            str(floor.get("note", "")),
+            py["collected"],
+            blob["passed"],
+            _dt.datetime.now(_dt.timezone.utc).date().isoformat(),
+        )
+        FLOOR.write_text(json.dumps(blob, indent=1) + "\n", encoding="utf-8")
+        wrote_floor = True
+        # Report the number WRITTEN, not `py["passed"]`. The blob records `passed + skipped`
+        # (machine-invariant, see above), so printing the bare pass count made the line disagree
+        # with the file it had just written: the first production run logged `passed=416` while
+        # recording 442. A log that contradicts the artifact is how a correct write comes to look
+        # like a bug -- and how a real one could hide.
+        lines.append(
+            f"  floor updated: collected={blob['collected']} passed={blob['passed']} "
+            f"(ceilings preserved)"
+        )
+
+    failing = _failing_problems(
+        problems,
+        forgive_healed_drift=forgive_healed_drift,
+        wrote_floor=wrote_floor,
+        floor_may_lag=floor_may_lag,
+    )
+    return (1 if failing else 0), "\n".join(lines) + "\n"
+
+
+def _not_run_summary(run_state: dict) -> str:
+    """The whole summary of a run that refused to start: why, and both ways forward.
+
+    A failure, never a skip: nothing was checked, and a red that names its own drain is the honest
+    report of that. The drain needs nothing this refusal withholds.
+    """
+    return (
+        "# verify.py\n\n"
+        f"  state:      {run_state['line']}\n\n"
+        "  PROBLEMS:\n"
+        "    - no check ran. Without a private copy the children would read and write this "
+        "machine's live ledger and Brain, which is the write the copy exists to prevent. Fix the "
+        f"cause on the state: line and run again, or set {LIVE_STATE_ENV}=1 to run against the "
+        "live files deliberately.\n"
+    )
+
+
+def _duration(seconds: float) -> str:
+    whole = int(round(seconds))
+    return f"{whole // 60}m{whole % 60:02d}s" if whole >= 60 else f"{whole}s"
+
+
+def _selftest() -> None:
+    # Count parsing must survive the real shapes pytest emits.
+    for text, expect_collected, expect_passed in (
+        ("182 passed, 3 skipped in 41.20s", 185, 182),
+        ("1 failed, 181 passed in 40s", 182, 181),
+        ("5 passed in 1s", 5, 5),
+        ("no tests ran in 0.01s", 0, 0),
+    ):
+        counts: dict[str, int] = {}
+        for n, kind in COUNT_RE.findall(text):
+            kind = "error" if kind.startswith("error") else kind
+            counts[kind] = counts.get(kind, 0) + int(n)
+        collected = sum(
+            counts.get(k, 0) for k in ("passed", "failed", "error", "skipped", "xfailed", "xpassed")
+        )
+        assert collected == expect_collected, (text, collected)
+        assert counts.get("passed", 0) == expect_passed, (text, counts)
+
+    # Discovery must find real modules, and must not include test files or itself.
+    mods = selftest_modules()
+    assert mods, "no modules with --selftest discovered — discovery is broken"
+    assert "verify" not in mods and not any(m.startswith("test_") for m in mods), mods
+    assert "capability_admission" in mods, mods
+
+    # A SILENT ZERO-EXIT MUST BE A FAILURE. This is the exact hole that let 25 pytest-only files
+    # read as passing: they exited 0 having executed nothing. Point run_selftests at a module that
+    # does precisely that and confirm it is classified as failed, not ok.
+
+    saved, saved_mods = globals()["HERE"], globals()["MODULES"]
+    with tempfile.TemporaryDirectory(prefix="verify-") as td:
+        (pathlib.Path(td) / "silent_mod.py").write_text(
+            'import sys\nif "--selftest" in sys.argv:\n    sys.exit(0)\n'
+        )
+        (pathlib.Path(td) / "loud_mod.py").write_text(
+            'import sys\nif "--selftest" in sys.argv:\n    print("loud selftest: OK")\n'
+        )
+        # A LOUD ZERO-EXIT THAT EXECUTED NOTHING MUST NOT READ AS A PASS. This is the silent
+        # zero-exit's twin, and the reason `ok` had to stop meaning "exited 0 and spoke": a
+        # skipped selftest speaks. It must land in `skipped`, with its reason carried out.
+        (pathlib.Path(td) / "skipping_mod.py").write_text(
+            "import sys\n"
+            'if "--selftest" in sys.argv:\n'
+            f'    print("skipping_mod selftest: {PREREQ_ABSENT_MARK} the widget is not installed")\n'
+        )
+        try:
+            globals()["HERE"] = globals()["MODULES"] = pathlib.Path(td)
+            got = run_selftests(["silent_mod", "loud_mod", "skipping_mod"])
+            # The same three at once must classify identically: the width is never a verdict.
+            wide = run_selftests(["silent_mod", "loud_mod", "skipping_mod"], jobs=3)
+        finally:
+            globals()["HERE"], globals()["MODULES"] = saved, saved_mods
+    assert wide == got, f"running selftests at once changed the result: {got} vs {wide}"
+    assert "silent_mod" in got["failed"], f"a silent zero-exit must FAIL: {got}"
+    assert "did it run?" in got["failed"]["silent_mod"], got
+    assert got["ok"] == ["loud_mod"], f"a skipped selftest must not be counted as ok: {got}"
+    assert got["skipped"] == {"skipping_mod": ["the widget is not installed"]}, got
+
+    # THE -r FLAG MUST NOT SUPPRESS FAILURES. Passing `-rs` replaces pytest's default `-rfE`, so
+    # skip reasons arrive and FAILED lines silently stop — which is how a run with 1 real failure
+    # printed "pytest failures (0)" from the code added to stop exactly that. Assert on the flag,
+    # because the symptom only shows on a red run and a green suite would never reveal it.
+    import inspect
+
+    src = inspect.getsource(run_pytest)
+    flag = [tok for tok in src.split() if tok.strip("\",'").startswith("-r")]
+    assert flag, "run_pytest no longer passes an -r flag; skip reasons would vanish"
+    got_flag = flag[0].strip("\",'")
+    for letter, what in (("f", "failures"), ("E", "errors"), ("s", "skip reasons")):
+        assert letter in got_flag[2:], (
+            f"{got_flag} omits {letter!r}: {what} would not be listed. pytest's default is -rfE, "
+            f"so any -r you pass must re-include f and E as well as s"
+        )
+
+    # ---- THE SKIP CEILING, in both directions -------------------------------------------------
+    # Bounding skips is the whole reason skipping was allowed at all, so the bound is tested the
+    # way a gate must be: it has to FAIL when exceeded and PASS when not, and the failure has to
+    # name the key to raise. `_ceiling_problems` is the same code path `verify()` uses.
+    at_limit = _ceiling_problems(
+        {"skipped_max": 24}, {"skipped_max": 24, "selftest_skipped_max": 0, "gate_skipped_max": 0}
+    )
+    assert at_limit == [], f"exactly at the ceiling must pass: {at_limit}"
+    over = _ceiling_problems(
+        {"skipped_max": 24}, {"skipped_max": 25, "selftest_skipped_max": 0, "gate_skipped_max": 0}
+    )
+    assert len(over) == 1 and "CEILING exceeded" in over[0], over
+    assert "skipped_max" in over[0], "the failure must name the key to raise deliberately"
+    # Each ceiling is independent — one slipping must not be masked by the others holding.
+    for key in ("selftest_skipped_max", "gate_skipped_max"):
+        counts = {"skipped_max": 0, "selftest_skipped_max": 0, "gate_skipped_max": 0}
+        counts[key] = 3
+        got_c = _ceiling_problems({key: 2}, counts)
+        assert len(got_c) == 1 and key in got_c[0], (key, got_c)
+    # An UNSET ceiling is not a ceiling of zero — it means nothing has been agreed yet. Reading
+    # `None` as 0 would fail every machine that legitimately skips anything.
+    assert (
+        _ceiling_problems({}, {"skipped_max": 99, "selftest_skipped_max": 9, "gate_skipped_max": 9})
+        == []
+    )
+
+    # ---- TWO SHAPES, TWO AGREEMENTS (2026-08-29) ----------------------------------------------
+    # `skipped_max` bounded a GitHub runner (26, per the floor note) and was ALSO applied to the
+    # exec mirror, which skips a different 31 — so a mirror run was red on every input including a
+    # correct tree, and CLAUDE.md §1 makes that run the verdict. The whole repair is that the
+    # limit in force depends on the detected shape, so that is what is asserted, in both
+    # directions and on the permissive side especially.
+    _two = {"skipped_max": 26, "mirror_skipped_max": 31}
+    _s31 = {**{k: 0 for k, _ in CEILINGS}, "skipped_max": 31}
+    # The bug, reproduced: on a CHECKOUT 31 skips is still a breach and must stay one.
+    _as_checkout = _ceiling_problems(_two, _s31, shape=CHECKOUT)
+    assert len(_as_checkout) == 1 and "CEILING exceeded" in _as_checkout[0], _as_checkout
+    assert "`skipped_max`" in _as_checkout[0], "a checkout must be sent to the base key"
+    # The fix: the same 31 on the MIRROR is exactly at its own agreed maximum, and passes. This is
+    # the assertion that would have been red for as long as the defect existed — the drained
+    # state, which the house rule says must be reachable by some real input. It is: this is the
+    # live mirror's measured count.
+    assert (
+        _ceiling_problems(_two, _s31, shape=EXEC_MIRROR) == []
+    ), "the mirror must be able to go GREEN"
+    # And the mirror ceiling is still a ceiling: one over it fails, naming the MIRROR key. Sending
+    # a mirror reader to raise `skipped_max` would tell them to loosen the number CI depends on.
+    _over_m = _ceiling_problems(_two, {**_s31, "skipped_max": 32}, shape=EXEC_MIRROR)
+    assert len(_over_m) == 1 and "`mirror_skipped_max`" in _over_m[0], _over_m
+    assert "exec mirror" in _over_m[0], "the message must say which shape it is bounding"
+    # A ceiling with NO mirror variant falls back to the base agreement — the strict direction, so
+    # a misspelt or forgotten key fails loudly instead of going unbounded.
+    _fallback = _ceiling_problems(
+        {"selftest_skipped_max": 7},
+        {**{k: 0 for k, _ in CEILINGS}, "selftest_skipped_max": 8},
+        shape=EXEC_MIRROR,
+    )
+    assert len(_fallback) == 1 and "`selftest_skipped_max`" in _fallback[0], _fallback
+    # CHECKOUT is the default shape, and it must be the STRICT one: an unshaped call cannot help
+    # itself to the looser number.
+    assert _ceiling_problems(_two, _s31) == _as_checkout, "the default shape is checkout"
+    # The key rule itself, since both the check and `--update-floor` derive from it. A second
+    # table would be a matching pair, and a drifted pair here deletes the mirror ceiling.
+    assert mirror_key("skipped_max") == "mirror_skipped_max"
+    assert ceiling_limit(_two, "skipped_max", shape=EXEC_MIRROR) == (31, "mirror_skipped_max")
+    assert ceiling_limit(_two, "skipped_max", shape=CHECKOUT) == (26, "skipped_max")
+    assert ceiling_limit({"skipped_max": 26}, "skipped_max", shape=EXEC_MIRROR) == (
+        26,
+        "skipped_max",
+    )
+    assert ceiling_limit({}, "skipped_max", shape=EXEC_MIRROR) == (None, "skipped_max")
+    # THE REAL FLOOR FILE must actually carry the mirror agreement, or every assertion above is
+    # about a shape that nothing configures — the defect would still be live with a green suite.
+    _real_floor = load_floor()
+    assert _real_floor.get("mirror_skipped_max") is not None, (
+        ".verify-floor.json records no `mirror_skipped_max`; a mirror run is then bounded by the "
+        "runner's number again, which is red on every input"
+    )
+    # NOT ASSERTED: that the mirror ceiling is >= the base one. It is today (31 vs 26) and that is
+    # a coincidence, not an invariant — the two populations are DISJOINT, one runner-shape and one
+    # mirror-shape. Worse, the assertion would have latched: the drain named in the floor note is
+    # teaching orch-sync-mirror.sh to copy `.github/`, which drops 12 mirror skips and takes this
+    # number to 19, and a `>=` here would then refuse the drain it exists to encourage. A gate
+    # whose clear path is blocked by the thing it measures is the defect this whole file is about.
+    # And `--update-floor` must PRESERVE it. The reconcile job rewrites this file on every push to
+    # main, from a checkout, where the mirror keys are never consulted — a writer that kept only
+    # the keys it used would delete the ceiling and silently re-latch the mirror shut.
+    assert _carried_forward({"skipped_max": 26, "mirror_skipped_max": 31, "note": "n"}) == {
+        "skipped_max": 26,
+        "mirror_skipped_max": 31,
+    }, "--update-floor must carry BOTH shapes' agreements forward"
+    assert "mirror_skipped_max" in _carried_forward(
+        _real_floor
+    ), "--update-floor would drop the real mirror ceiling on the next push to main"
+    # AND ANY KEY IT HAS NEVER HEARD OF, which is the half a whitelist could not do. The writer
+    # used to keep only the keys named in CEILINGS, so a newly added floor key was deleted on the
+    # next push to main by the reconcile job — silently, in a bot commit. `mirror_skipped_max` was
+    # one forgotten registration away from exactly that. DELIBERATE-BREAK DEMO: restore the
+    # CEILINGS-driven whitelist and this assert is the only one that fails.
+    _future = {"collected": 1, "passed": 1, "skipped_max": 26, "a_key_from_the_future": 7}
+    assert _carried_forward(_future) == {"skipped_max": 26, "a_key_from_the_future": 7}, (
+        "a floor key the writer does not recognise must survive --update-floor; registering each "
+        "new key was the trap, because forgetting to is silent"
+    )
+    # The three re-measured keys are the complement, and they must be EXACTLY those three: a
+    # fourth in this tuple would start silently dropping a real agreement.
+    assert set(REMEASURED_FLOOR_KEYS) == {"collected", "passed", "note"}, REMEASURED_FLOOR_KEYS
+    assert not (set(REMEASURED_FLOOR_KEYS) & {k for k, _ in CEILINGS}), (
+        "a ceiling is never re-measured — a ceiling re-recorded from whatever the last run "
+        "happened to skip is a ratchet that follows the leak"
+    )
+    # The in-memory unreadable marker is never written into the file.
+    assert _carried_forward({FLOOR_UNREADABLE: True, "skipped_max": 26}) == {"skipped_max": 26}
+    # THE VERDICT AND THE SUMMARY MUST AGREE, which is why they come from one call. Held against
+    # each other here, in both shapes: a run that renders `31/31 max` above a verdict computed
+    # against 26 reads as a broken tool, and the reader stops believing either number.
+    _probs_m, _rend_m = _ceiling_report(_two, _s31, shape=EXEC_MIRROR)
+    assert _probs_m == [] and _rend_m["skipped_max"] == "31/31 max [mirror_skipped_max]", _rend_m
+    _probs_c, _rend_c = _ceiling_report(_two, _s31, shape=CHECKOUT)
+    assert len(_probs_c) == 1 and _rend_c["skipped_max"] == "31/26 max", _rend_c
+    # An unset ceiling still says so rather than rendering a bare count.
+    assert "no ceiling set" in _ceiling_report({}, _s31, shape=EXEC_MIRROR)[1]["skipped_max"]
+
+    # ---- THE THIRD SHAPE: the flat copy on a BARE machine (2026-10-04) ------------------------
+    # CI's exec-mirror job verifies the flat tree on a runner, deprived both ways, so it skips the
+    # runner family AND the git family. Its own agreement must govern it, be named in every message,
+    # and fall back to the base (the strict direction for a shape whose deprivation contains the
+    # base's) when unset. Numbers here are illustrative; the real ones are in the floor file.
+    _three = {"skipped_max": 26, "mirror_skipped_max": 21, "bare_mirror_skipped_max": 47}
+    _s47 = {**{k: 0 for k, _ in CEILINGS}, "skipped_max": 47}
+    assert shape_key("skipped_max", BARE_EXEC_MIRROR) == "bare_mirror_skipped_max"
+    assert ceiling_limit(_three, "skipped_max", shape=BARE_EXEC_MIRROR) == (
+        47,
+        "bare_mirror_skipped_max",
+    )
+    # The bare union passes under its own agreement and is a breach under BOTH of the others:
+    # neither the runner's number nor the owner's mirror's may silently stand in for it.
+    _probs_b, _rend_b = _ceiling_report(_three, _s47, shape=BARE_EXEC_MIRROR)
+    assert (
+        _probs_b == [] and _rend_b["skipped_max"] == "47/47 max [bare_mirror_skipped_max]"
+    ), _rend_b
+    for _other, _key in ((CHECKOUT, "`skipped_max`"), (EXEC_MIRROR, "`mirror_skipped_max`")):
+        _breach = _ceiling_problems(_three, _s47, shape=_other)
+        assert len(_breach) == 1 and _key in _breach[0], (_other, _breach)
+    _over_b = _ceiling_problems(_three, {**_s47, "skipped_max": 48}, shape=BARE_EXEC_MIRROR)
+    assert len(_over_b) == 1 and "`bare_mirror_skipped_max`" in _over_b[0], _over_b
+    assert "(bare exec mirror)" in _over_b[0], "the message must say which shape it is bounding"
+    # Unset bare key: the base agreement governs, and the bare union is RED against it.
+    _unset_b = _ceiling_problems({"skipped_max": 26}, _s47, shape=BARE_EXEC_MIRROR)
+    assert len(_unset_b) == 1 and "`skipped_max`" in _unset_b[0], _unset_b
+    # WHICH SHAPE, composed from the two detectors in all four combinations. A checkout is a
+    # checkout on any machine, because the base agreement was measured on the bare one; only a
+    # mirror tree splits by machine. DELIBERATE-BREAK DEMO: let `tree_shape` ask the machine first
+    # and a bare CHECKOUT (CI's verify job) reads as the bare mirror, so the second case goes red.
+    _real_tree, _real_machine = exec_mirror_shape, bare_machine
+    try:
+        for _is_mirror, _is_bare, _want in (
+            (False, False, CHECKOUT),
+            (False, True, CHECKOUT),
+            (True, False, EXEC_MIRROR),
+            (True, True, BARE_EXEC_MIRROR),
+        ):
+            globals()["exec_mirror_shape"] = lambda _m=_is_mirror: (
+                "flat, not a repo" if _m else None
+            )
+            globals()["bare_machine"] = lambda _b=_is_bare: "no prerequisites" if _b else None
+            _got_shape, _why = tree_shape()
+            assert _got_shape == _want, (_is_mirror, _is_bare, _got_shape)
+            # The reason names every fact that chose the shape, so a reader can check it.
+            assert (_why is None) is (_want == CHECKOUT), _why
+            if _want == BARE_EXEC_MIRROR:
+                assert _why and "flat, not a repo" in _why and "no prerequisites" in _why, _why
+    finally:
+        globals()["exec_mirror_shape"] = _real_tree
+        globals()["bare_machine"] = _real_machine
+    # The bare label must NOT begin with the provisioned one. scripts/verify_before_sync.sh accepts
+    # the owner's verdict only when the line reads `tree: <spaces>EXEC MIRROR`, so a provisioned
+    # machine misread as bare is refused there instead of verified under the larger agreement.
+    assert TREE_LABELS[EXEC_MIRROR].startswith("EXEC MIRROR ")
+    assert TREE_LABELS[BARE_EXEC_MIRROR].startswith("BARE EXEC MIRROR ")
+    assert not re.match(r"EXEC MIRROR", TREE_LABELS[BARE_EXEC_MIRROR]), TREE_LABELS
+    # Every shape's label names the key family it applies, so the summary is self-explaining.
+    for _shape, _prefix in SHAPE_CEILING_PREFIX.items():
+        if _prefix:
+            assert f"{_prefix}*" in TREE_LABELS[_shape], (_shape, TREE_LABELS[_shape])
+    # And the REAL floor file must carry the bare agreement for every skip ceiling, or CI's
+    # exec-mirror job is bounded by a number measured on another shape.
+    for _key in ("skipped_max", "selftest_skipped_max", "gate_skipped_max"):
+        assert _real_floor.get(shape_key(_key, BARE_EXEC_MIRROR)) is not None, (
+            f".verify-floor.json records no `{shape_key(_key, BARE_EXEC_MIRROR)}`; the bare exec "
+            "mirror would be bounded by the runner checkout's number, which it cannot meet"
+        )
+    # THE ONE WIRING PIN, because everything above is pure and `verify()` is not cheap to call:
+    # dropping the keyword reverts the defect exactly (the mirror bounded by the runner's number)
+    # while every assertion above stays green — this repo's founding failure, code that exists and
+    # is not invoked. Split so the needle cannot match its own line, and the fragment is the
+    # smallest thing that would be ABSENT if the wiring were removed: no newline, no indentation,
+    # no argument list a formatter owns.
+    _src = pathlib.Path(__file__).read_text(encoding="utf-8")
+    # COUNT, not `in`, and this pin is why the rule exists. Written as `in`, it did NOT FIRE
+    # against a deliberate break: the shape was reaching the ceilings AND the renderer through
+    # two separate call sites, so removing one left the needle matching the other and the demo
+    # passed while the defect was fully restored. The two sites are now one (`_ceiling_report`),
+    # and the count assertion is what will say so if they ever split again.
+    _shape_pin = "shape=" + "detected_shape"
+    assert _src.count(_shape_pin) == 1, (
+        f"the exec-mirror shape needle matches {_src.count(_shape_pin)} site(s), not 1. At 0, "
+        "verify() no longer feeds the DETECTED shape into the ceilings and the mirror is bounded "
+        "by the runner's `skipped_max` again — red on every input. Above 1, the shape has more "
+        "than one consumer again and the pin can no longer discriminate: route them through one "
+        "call, as `_ceiling_report` already does for the verdict and the summary."
+    )
+
+    # ---- the floor counts what RAN OR WAS NAMED, and the ceiling stops that being a loophole --
+    # 330 -> 300 passed with 30 named skips is fine; 300 passed with 0 skips is a test that
+    # vanished. Both directions, because only having one is how a floor becomes decoration.
+    assert (
+        _floor_problems(
+            {"collected": 330, "passed": 330}, {"collected": 330, "passed": 306, "skipped": 24}
+        )
+        == []
+    )
+    dropped = _floor_problems(
+        {"collected": 330, "passed": 330}, {"collected": 330, "passed": 306, "skipped": 0}
+    )
+    assert len(dropped) == 1 and "dropped" in dropped[0], dropped
+    shrank = _floor_problems(
+        {"collected": 330, "passed": 330}, {"collected": 320, "passed": 320, "skipped": 0}
+    )
+    assert any("collection DROPPED" in p for p in shrank), shrank
+
+    # ---- and the floor may not fall BEHIND reality either (2026-08-23) ------------------------
+    # The permissive direction, silent until this was added: a branch adds tests, leaves the file
+    # alone, and the floor is now slack by exactly the number added. DELIBERATE-BREAK DEMO: revert
+    # the `elif` in `_floor_problems` and this assert fails while every other check here still
+    # passes — which is precisely the shape of the bug, a real hole that reads as green.
+    behind = _floor_problems(
+        {"collected": 366, "passed": 366}, {"collected": 368, "passed": 368, "skipped": 0}
+    )
+    assert len(behind) == 1 and "BEHIND reality" in behind[0], behind
+    # It must name the exact integers to write; "too low" that does not say the number is how a
+    # gate becomes something people shrug at rather than clear.
+    assert '"collected": 368' in behind[0] and '"passed": 368' in behind[0], behind
+    assert "REBASE FIRST" in behind[0], behind
+    # Exact agreement is the only clean state, and a machine that SKIPS is still exact: skipped
+    # tests are collected, so the runner and the owner's machine hit the same equality.
+    assert (
+        _floor_problems(
+            {"collected": 368, "passed": 368}, {"collected": 368, "passed": 344, "skipped": 24}
+        )
+        == []
+    )
+    # An UNSET floor still means "nothing agreed yet" — it must not suddenly demand equality.
+    assert _floor_problems({}, {"collected": 368, "passed": 368, "skipped": 0}) == []
+
+    # ---- --update-floor can run while the floor gate is CLOSED (latched-gate fix) -------------
+    # DELIBERATE-BREAK DEMO: change the guard back to `not problems` and the remedy the drift
+    # message names becomes unreachable — the gate forbidding its own drain, which is the defect
+    # this repo hits most. The predicate is what keeps the two windows the same size.
+    assert _blocks_floor_update(behind) == [], behind
+    assert _blocks_floor_update(behind + ["3 pytest failure(s)/error(s)"]) == [
+        "3 pytest failure(s)/error(s)"
+    ]
+    # A collection DROP is not drift and must keep blocking: recording a floor from a run that
+    # lost tests would bake the loss in as the new normal.
+    assert _blocks_floor_update(shrank) != []
+    # ...and the predicate must be WIRED, not merely present. The three asserts above all pass
+    # while the call site still reads `not problems` -- the helper exists, nothing calls it,
+    # built-but-not-wired, which is this repo's founding defect wearing yet another hat. It got
+    # through the first draft of this very change and was caught only by the deliberate-break
+    # demo, so the guard line itself is now the assertion.
+    _src = pathlib.Path(__file__).read_text(encoding="utf-8")
+    # The needle is BUILT FROM TWO PIECES on purpose. Written as one literal it would appear in
+    # this very line, so `_src` would contain it no matter what the call site said and the assert
+    # could never fail -- a test that cannot fail, guarding against a defect that already
+    # happened once. Split, the joined form exists only at the real guard.
+    # Narrowed 2026-08-24 from the whole `if` line to just this conjunct. The guard legitimately
+    # became a multi-line `if (...)` when `_floor_needs_writing` was ANDed in, which broke a
+    # needle that pinned the entire single-line form — the same brittleness that made a reformat
+    # look like a coverage regression in test_verify_coverage_mode.py. The conjunct is the part
+    # that carries the meaning: pin that, not the formatting around it.
+    _guard = "and not " + "_blocks_floor_update(problems)"
+    # COUNT, not `in`. A pin proves the wiring only while the needle matches ONE site: the day a
+    # second call site appears, deleting the site the pin MEANS leaves it green, and a pin that
+    # cannot fail is this repo's founding defect wearing the costume of a guard against it. That
+    # is not hypothetical — it happened on 2026-08-29, when the exec-mirror pin below silently
+    # stopped discriminating because the shape reached a second consumer. Uniqueness decays
+    # QUIETLY; asserting it makes the decay a red that names the choice to make.
+    assert _src.count(_guard) == 1, (
+        f"the --update-floor guard needle matches {_src.count(_guard)} site(s), not 1. At 0 the "
+        "guard no longer calls _blocks_floor_update, and a floor behind reality would once again "
+        "block the one command that fixes it. Above 1 the pin has stopped discriminating — "
+        "re-narrow it to the single site that carries the meaning."
+    )
+
+    # ---- --reconcile-floor forgives a drift it HEALED, and nothing else ------------------------
+    # DELIBERATE-BREAK DEMO: drop the `wrote_floor` conjunct from `_failing_problems` and the
+    # third assert below fails — an UNHEALED drift starts passing, which is the gate opening
+    # because it was asked rather than because the condition changed.
+    _drift = [f"{DRIFT_PREFIX}: 417 collected > floor 416 — ..."]
+    _real = ["3 pytest failure(s)/error(s)"]
+    # Healed drift, reconciling: green. The file now says what this run measured.
+    assert _failing_problems(_drift, forgive_healed_drift=True, wrote_floor=True) == []
+    # Same drift, NOT reconciling: still red. The default path is unchanged, which is what keeps
+    # a PR honest — its author still has to record the number on the merge result.
+    assert _failing_problems(_drift, forgive_healed_drift=False, wrote_floor=True) == _drift
+    # Drift that was NOT written (a real problem blocked the write): still red, drift included.
+    assert _failing_problems(_drift, forgive_healed_drift=True, wrote_floor=False) == _drift
+    # A real failure is never forgiven, even alongside a healed drift.
+    assert _failing_problems(_drift + _real, forgive_healed_drift=True, wrote_floor=True) == _real
+    # A collection DROP cannot reach forgiveness at all: `_blocks_floor_update` refuses the write,
+    # so `wrote_floor` is False by construction. Asserted so the two guards stay coupled.
+    _dropped = ["collection DROPPED: 400 < floor 416 — tests stopped running"]
+    assert _blocks_floor_update(_dropped) == _dropped
+    assert _failing_problems(_dropped, forgive_healed_drift=True, wrote_floor=False) == _dropped
+    # ...and WIRED, not merely present — the same lesson as the guard above. Split literal so the
+    # needle cannot match this line itself.
+    _recon = "failing = _failing_problems(" + "\n"
+    assert _recon in _src, (
+        "verify() no longer routes its exit code through _failing_problems — --reconcile-floor "
+        "would silently stop forgiving, or worse, forgive unconditionally"
+    )
+
+    # ---- a no-op floor write is not performed at all -----------------------------------------
+    # DELIBERATE-BREAK DEMO: drop the `_floor_needs_writing` conjunct from the write guard and the
+    # first assert below still passes (the predicate is pure and unaffected) but the WIRING assert
+    # at the end fails. That ordering is the point: this defect shipped once already as a helper
+    # that existed and a guard that ignored it.
+    #
+    # WHY IT MATTERS: --update-floor wrote on every green run, so ci.yml's reconcile job committed
+    # to main on every push, changing nothing but appending a dated stamp — the note grew
+    # 22217 -> 22367 -> 22517 over three pushes before this was caught.
+    assert not _floor_needs_writing({"collected": 442, "passed": 442}, 442, 442)
+    # Drift ALWAYS still writes — this is the case the reconcile job exists for, so the guard must
+    # never suppress it.
+    assert _floor_needs_writing({"collected": 441, "passed": 441}, 442, 442)
+    # `passed` moving alone is still a real change worth recording.
+    assert _floor_needs_writing({"collected": 442, "passed": 440}, 442, 442)
+    # An UNSET floor must record its first value rather than read as "already correct".
+    assert _floor_needs_writing({}, 442, 442)
+    # A collection DROP would also "need writing", which is exactly why this conjunct is ANDed
+    # with `_blocks_floor_update` and never replaces it: that one refuses the downward write.
+    assert _floor_needs_writing({"collected": 442, "passed": 442}, 400, 400)
+    assert _blocks_floor_update(["collection DROPPED: 400 < floor 442"]) != []
+    # ...and WIRED. Split literal so the needle cannot match this line.
+    _noop_guard = (
+        "and _floor_needs_writing(floor, " + 'py["collected"], py["passed"] + py["skipped"])'
+    )
+    assert _noop_guard in _src, (
+        "the write guard no longer consults _floor_needs_writing — the reconcile job will commit "
+        "to main on every push again, appending a stamp that records nothing"
+    )
+
+    # ---- --floor-may-lag forgives a LAGGING floor on a PR, never a DROP -----------------------
+    # DELIBERATE-BREAK DEMO: widen it to `return []` and the third assert fails — a collection
+    # drop would stop failing on every branch, which is the one direction that must never be
+    # forgiven anywhere.
+    _lag = [f"{DRIFT_PREFIX}: 443 collected > floor 442 — ..."]
+    _drop = ["collection DROPPED: 400 < floor 442 — tests stopped running"]
+    # A PR whose floor lags because main moved: reported, not fatal.
+    assert (
+        _failing_problems(_lag, forgive_healed_drift=False, wrote_floor=False, floor_may_lag=True)
+        == []
+    )
+    # The SAME input without the flag still fails — main and local runs are unchanged.
+    assert (
+        _failing_problems(_lag, forgive_healed_drift=False, wrote_floor=False, floor_may_lag=False)
+        == _lag
+    )
+    # A collection DROP is fatal even on a PR. This is the assertion that makes the flag safe:
+    # `_blocks_floor_update` is what distinguishes them, so the flag can never widen into it.
+    assert (
+        _failing_problems(_drop, forgive_healed_drift=False, wrote_floor=False, floor_may_lag=True)
+        == _drop
+    )
+    # A real failure is never forgiven either.
+    assert _failing_problems(
+        _lag + ["3 pytest failure(s)/error(s)"],
+        forgive_healed_drift=False,
+        wrote_floor=False,
+        floor_may_lag=True,
+    ) == ["3 pytest failure(s)/error(s)"]
+
+    # ---- --update-floor APPENDS to the note, so the ceiling rationale survives the tool -------
+    # DELIBERATE-BREAK DEMO: restore the old `blob["note"] = (...)` literal and the first assert
+    # fails — the prior text, which is the only record of why each ceiling is what it is, is gone.
+    kept = _appended_note(
+        "26/7/2 is what a bare runner skips, measured 2026-08-21.", 387, 387, "2026-08-23"
+    )
+    assert kept.startswith("26/7/2 is what a bare runner skips, measured 2026-08-21."), kept
+    assert "collected=387" in kept and "2026-08-23" in kept, kept
+    assert _appended_note("", 387, 387, "2026-08-23").startswith("FLOOR RECORDED")
+    assert _appended_note(None, 1, 1, "2026-08-23")  # a missing note is not a crash
+
+    # ---- the absent-module summary line -------------------------------------------------------
+    # A row registered by another checkout makes three checks fail with messages that read
+    # "registered with no implementation — retire it", and retiring it discards finished work. The
+    # line exists so the reader meets that fact in the SUMMARY. Two properties are load-bearing:
+    # it stays silent when there is nothing to say, and it is NOT a skip.
+    assert _format_absent_line({"absent": [], "checked": 43, "total": 43}) is None
+    assert _format_absent_line({}) is None
+    one = _format_absent_line(
+        {
+            "total": 43,
+            "checked": 43,
+            "absent": [
+                {
+                    "capability_id": "evidence-acquisition",
+                    "entrypoint": "evidence_acquisition.py:run",
+                    "found_in": [
+                        {"checkout": ".claude/worktrees/other", "modules": ["x.py"]},
+                        {"checkout": "repo root", "modules": ["x.py"]},
+                    ],
+                }
+            ],
+        }
+    )
+    assert one is not None, "the absent-module line must render for a non-empty report"
+    for phrase in (
+        "1 of 43",
+        "evidence-acquisition",
+        ".claude/worktrees/other",
+        "+1 more",
+        "WAIT-OR-MERGE",
+    ):
+        assert phrase in one, (phrase, one)
+    # `PREREQ_ABSENT_MARK` is how verify.py counts a SKIP against the ceiling. Nothing was
+    # skipped here, so carrying the mark would spend ceiling headroom that belongs to a real
+    # missing prerequisite — and would make a diagnostic look like a narrowing of the suite.
+    assert PREREQ_ABSENT_MARK not in one, one
+    # A row whose module is nowhere at all must say so rather than implying a sibling has it.
+    nowhere = _format_absent_line(
+        {
+            "total": 43,
+            "checked": 1,
+            "absent": [{"capability_id": "ghost", "entrypoint": "ghost.py", "found_in": []}],
+        }
+    )
+    assert nowhere is not None and "not found in any sibling checkout" in nowhere, nowhere
+
+    # THE TWO ROOTS. On a flat tree they coincide, which is exactly why an assertion is needed:
+    # without one, code that re-merged them would pass here and only fail after the layout moved.
+    assert ROOT == paths.checkout_root(HERE), (ROOT, HERE)
+    assert MODULES == HERE or MODULES.name == "src", (MODULES, HERE)
+    assert FLOOR.parent == ROOT, "the floor belongs to the checkout, not the module dir"
+
+    # ---- the mypy ratchet ---------------------------------------------------------------------
+    # An exempt list that can only GROW is an amnesty with a deadline nobody set. Two properties
+    # make it a ratchet: the count is always PRINTED with its bound, and it is CEILINGED by the
+    # same generic machinery as the skips.
+    assert "64/64 max of 99" in _format_mypy_exempt_line(["m"] * 64, 64, total=99)
+    assert "35 checked" in _format_mypy_exempt_line(["m"] * 64, 64, total=99)
+    assert "type a module, delete its line" in _format_mypy_exempt_line(["m"], 1)
+    # A DRAINED ratchet must say so, not print a bare 0 — the drain finishing is news.
+    assert "fully drained" in _format_mypy_exempt_line([], 64)
+    # UNCOUNTABLE must never render as zero: a ratchet that stopped being counted looks identical
+    # to one that emptied, and only one of those is good news.
+    nc = _format_mypy_exempt_line(None, 64)
+    assert "NOT COUNTED" in nc and " 0" not in nc, nc
+    # It is not a skip, so it must not carry the mark that spends skip-ceiling headroom.
+    assert PREREQ_ABSENT_MARK not in _format_mypy_exempt_line(["m"], 64)
+    # Bounded by the SAME `_ceiling_problems` used for skips — one mechanism, so the measuring and
+    # draining windows cannot drift apart.
+    assert ("mypy_exempt_max", "module(s) exempt from mypy") in CEILINGS
+    _zero = {k: 0 for k, _ in CEILINGS}
+    assert _ceiling_problems({"mypy_exempt_max": 64}, {**_zero, "mypy_exempt_max": 64}) == []
+    _over = _ceiling_problems({"mypy_exempt_max": 64}, {**_zero, "mypy_exempt_max": 65})
+    assert len(_over) == 1 and "mypy_exempt_max" in _over[0], _over
+    # The three states are DISTINCT, and conflating the last two is what made this a latched gate:
+    # a full drain must read as "fully drained", never as "NOT COUNTED".
+    assert "NOT COUNTED" in _format_mypy_exempt_line(None, 0), "unanswerable must say so"
+    assert "fully drained" in _format_mypy_exempt_line([], 0), "an empty ratchet is the good news"
+    assert "1/1 max" in _format_mypy_exempt_line(["m"], 1), "a live ratchet reports both numbers"
+    # And the real file must PARSE -- `is not None`, not truthiness. Asserting truthiness here meant
+    # the ratchet's own selftest failed the moment the list emptied, i.e. the gate forbade its drain.
+    assert (
+        mypy_exempt_modules() is not None
+    ), "pyproject.toml does not parse; the ratchet cannot be counted"
+
+    # ---- A CEILING MUST NOT PASS BY BEING BLIND. The renderer was fixed first and that was
+    # only half of it: `actual["mypy_exempt_max"]` coerced an uncountable None to 0, so the
+    # ENFORCEMENT cleared while the LINE said NOT COUNTED. Two readers of one quantity
+    # disagreeing, with the permissive one deciding the exit code.
+    # The FEED, asserted separately from the CHECKER — the checker was never the broken half.
+    assert _exempt_ceiling_input(None) is None, "uncountable must stay uncountable, not become 0"
+    assert _exempt_ceiling_input([]) == 0, "a drained ratchet counts as zero, not as unknown"
+    assert _exempt_ceiling_input(["a", "b"]) == 2
+    _z = {k: 0 for k, _ in CEILINGS}
+    _blind = _ceiling_problems({"mypy_exempt_max": 0}, {**_z, "mypy_exempt_max": None})
+    assert len(_blind) == 1 and "UNCHECKABLE" in _blind[0], _blind
+    # an UNSET ceiling over an uncountable quantity is still fine — nothing was agreed
+    assert _ceiling_problems({}, {**_z, "mypy_exempt_max": None}) == []
+    # and the ordinary paths are untouched
+    assert _ceiling_problems({"mypy_exempt_max": 2}, {**_z, "mypy_exempt_max": 2}) == []
+    assert len(_ceiling_problems({"mypy_exempt_max": 2}, {**_z, "mypy_exempt_max": 3})) == 1
+
+    # ---- AN UNREADABLE FLOOR IS NOT AN UNSET ONE. Both used to return {} and render "unset",
+    # so a corrupt .verify-floor.json looked like a repo that had never agreed a floor, and every
+    # count check quietly stopped applying.
+    _saved_floor = FLOOR
+    try:
+        with tempfile.TemporaryDirectory(prefix="verify-floor-") as _td:
+            _bad = pathlib.Path(_td) / ".verify-floor.json"
+            _bad.write_text("{ not json", encoding="utf-8")
+            globals()["FLOOR"] = _bad
+            _got = load_floor()
+            assert _got.get(FLOOR_UNREADABLE) is True, _got
+            assert _got != {}, "unreadable must be distinguishable from absent"
+            globals()["FLOOR"] = pathlib.Path(_td) / "does-not-exist.json"
+            assert load_floor() == {}, "an absent floor is still simply absent"
+    finally:
+        globals()["FLOOR"] = _saved_floor
+
+    # ---- ONE PRIVATE COPY OF THE STATE PER RUN. Children read the copy through the two
+    # variables, neither source is written, and the variables and the copy are gone on exit.
+    # Variable names of its own, so this cannot disturb a real setting.
+    with tempfile.TemporaryDirectory(prefix="verify-state-selftest-") as _td:
+        _src_ledger, _src_brain = (
+            pathlib.Path(_td) / "capabilities.json",
+            pathlib.Path(_td) / "b.db",
+        )
+        _src_ledger.write_text('{"schema_version": 1, "capabilities": {}}\n', encoding="utf-8")
+        _conn = sqlite3.connect(_src_brain)
+        _conn.execute("CREATE TABLE probe (n INTEGER)")
+        _conn.commit()
+        _conn.close()
+        _before = (_src_ledger.read_bytes(), _src_brain.read_bytes())
+        _names = ("VERIFY_SELFTEST_LEDGER", "VERIFY_SELFTEST_BRAIN")
+        with private_state((_names[0], _src_ledger, _names[1], _src_brain)) as _state:
+            _copy = pathlib.Path(os.environ[_names[0]])
+            assert _copy != _src_ledger and _copy.read_bytes() == _before[0], _state
+            assert pathlib.Path(os.environ[_names[1]]).is_file(), _state
+        assert not any(k in os.environ for k in _names), "the variables outlived the run"
+        assert not _copy.exists(), "the private copy outlived the run"
+        assert (_src_ledger.read_bytes(), _src_brain.read_bytes()) == _before, "a source changed"
+        # A copy that FAILS refuses the run, and still points nothing at the source.
+        _src_brain.write_bytes(b"not a database" * 64)
+        with private_state((_names[0], _src_ledger, _names[1], _src_brain)) as _state:
+            assert "the Brain copy failed" in _state.get("refused", ""), _state
+            assert pathlib.Path(os.environ[_names[1]]) != _src_brain, "the run would read live"
+        assert not any(k in os.environ for k in _names), "the variables outlived a refusal"
+
+    # ---- PYTEST'S VERDICTS, as the two test-file gates replay them: only what a check can be
+    # replayed from, the most severe of a duplicate, and nothing at all from an unreadable file.
+    with tempfile.TemporaryDirectory(prefix="verify-junit-") as _td:
+        _xml = pathlib.Path(_td) / "pytest.xml"
+        _xml.write_text(
+            "<testsuites><testsuite>"
+            '<testcase classname="tests.test_g" name="test_ok"/>'
+            '<testcase classname="tests.test_g" name="test_skip"><skipped message="why"/></testcase>'
+            '<testcase classname="tests.test_g" name="test_td"/>'
+            '<testcase classname="tests.test_g" name="test_td"><error message="down"/></testcase>'
+            '<testcase classname="tests.test_g" name="test_xf">'
+            '<skipped type="pytest.xfail" message="x"/></testcase>'
+            "</testsuite></testsuites>",
+            encoding="utf-8",
+        )
+        assert read_junit(_xml) == {
+            "test_g": {
+                "test_ok": {"outcome": "passed", "message": ""},
+                "test_skip": {"outcome": "skipped", "message": "why"},
+                "test_td": {"outcome": "failed", "message": "down"},
+            }
+        }, read_junit(_xml)
+        _xml.write_text("<testsuites><testcase", encoding="utf-8")
+        assert read_junit(_xml) == {}, "a truncated file must yield no verdicts, never a guess"
+
+    # ---- ROWS THIS TREE DECLARES (2026-10-06). The pre-sync verdict on the tree declaring
+    # `value-chain-monitor` skipped one test more than the mirror's ceiling, for a row only that
+    # tree's deployment registers, and the message said to raise the ceiling.
+    _m = DECLARED_UNREGISTERED_MARK
+    _py_d = {
+        "skipped": 3,
+        "verdicts": {
+            "test_a": {
+                "t1": {"outcome": "skipped", "message": f"no row for x: {_m} — drains"},
+                "t2": {"outcome": "skipped", "message": "agent CLI absent"},
+                "t3": {"outcome": "skipped", "message": f"no row for y: {_m}"},
+                "t4": {"outcome": "passed", "message": ""},
+            }
+        },
+    }
+    _st_d = {"skipped": {"m1": [f"x {_m}"], "m2": [f"x {_m}", "agent CLI absent"]}}
+    _gates_d = {"g1": {"skipped": [f"y {_m}"]}, "g2": {"skipped": []}}
+    _d = drainable_skips(_py_d, _st_d, _gates_d)
+    assert _d == {"skipped_max": 2, "selftest_skipped_max": 1, "gate_skipped_max": 1}, _d
+    # NOT COUNTED is never zero: skips pytest left no per-test record of, or no mark to look for.
+    assert drainable_skips({"skipped": 2}, {"skipped": {}}, {})["skipped_max"] is None
+    assert drainable_skips({"skipped": 0}, {"skipped": {}}, {})["skipped_max"] == 0
+    assert set(drainable_skips(_py_d, _st_d, _gates_d, mark="").values()) == {None}
+    # An exceeded skip ceiling carries the blocking AND the drainable number, in one message.
+    _z_d = {k: 0 for k, _ in CEILINGS}
+    _over_d = _ceiling_problems(
+        {"mirror_skipped_max": 21},
+        {**_z_d, "skipped_max": 22},
+        shape=EXEC_MIRROR,
+        drainable={**_d, "skipped_max": 1},
+    )
+    assert len(_over_d) == 1 and "22 skipped test(s) > agreed maximum 21" in _over_d[0], _over_d
+    assert "1 of them skipped only for a row this tree declares" in _over_d[0], _over_d
+    assert "never a reason to raise `mirror_skipped_max`" in _over_d[0], _over_d
+    for _count, _says in ((0, "None of them skipped only"), (None, "NOT COUNTED")):
+        _over_c = _ceiling_problems(
+            {"skipped_max": 1}, {**_z_d, "skipped_max": 2}, drainable={"skipped_max": _count}
+        )
+        assert len(_over_c) == 1 and _says in _over_c[0], (_count, _over_c)
+    # Only skip ceilings gain the clause; the mypy ratchet's message is unchanged.
+    _over_x = _ceiling_problems(
+        {"mypy_exempt_max": 0}, {**_z_d, "mypy_exempt_max": 1}, drainable=_d
+    )
+    assert len(_over_x) == 1 and "registration" not in _over_x[0], _over_x
+    # The `declared:` line, every state reachable: drained, pending, no ledger, unreadable.
+    assert _format_declared_line({"state": "read", "declared": 18, "missing": []}, _d) == (
+        "  declared:   all 18 rows this tree declares are registered in the ledger judged"
+    )
+    _pending = _format_declared_line(
+        {"state": "read", "declared": 18, "missing": ["value-chain-monitor"]}, _d
+    )
+    for _phrase in ("1 of the 18", "(value-chain-monitor)", "2 test(s)", "never raise a ceiling"):
+        assert _phrase in _pending, (_phrase, _pending)
+    assert PREREQ_ABSENT_MARK not in _pending, "a diagnostic line must not spend skip headroom"
+    assert "NOT COUNTED test(s)" in _format_declared_line(
+        {"state": "read", "declared": 18, "missing": ["x"]}, dict.fromkeys(SKIP_CEILINGS)
+    )
+    assert "no ledger when the run began" in _format_declared_line(
+        {"state": "absent", "declared": 18, "missing": None}, _d
+    )
+    assert "NOT CHECKED (boom)" in _format_declared_line(
+        {"state": "unreadable", "error": "boom"}, _d
+    )
+    # It reads the ledger the run is ABOUT to judge, and writes nothing to do it.
+    with tempfile.TemporaryDirectory(prefix="verify-declared-") as _td:
+        import capabilities as _caps
+
+        _ledger_d = pathlib.Path(_td) / "capabilities.json"
+        assert declared_rows_at_start(_ledger_d)["state"] == "absent"
+        _caps._write_ledger_unlocked(_ledger_d, {})
+        _caps.seed_declared(_ledger_d)
+        assert declared_rows_at_start(_ledger_d)["missing"] == [], "seeding left a declared row"
+        _rows_d = _caps.load(_ledger_d, create=False)
+        _gone = _caps.declared_row_ids()[-1]
+        del _rows_d[_gone]
+        _caps._write_ledger_unlocked(_ledger_d, _rows_d)
+        _bytes_d = _ledger_d.read_bytes()
+        _at = declared_rows_at_start(_ledger_d)
+        assert _at == {
+            "state": "read",
+            "declared": len(_caps.declared_row_ids()),
+            "missing": [_gone],
+        }, _at
+        assert _ledger_d.read_bytes() == _bytes_d, "reading the ledger to be judged wrote it"
+
+    print(
+        "verify.py selftest: OK (count parsing, selftest discovery, silent-zero-exit is a "
+        "FAILURE, a loud skip is not a pass, skip ceiling fails when exceeded and holds when "
+        "not, floor counts passed+skipped, floor fails BEHIND reality as loudly as below "
+        "it and names the integers to write, --update-floor appends to the note instead of "
+        "clobbering the ceiling rationale, a no-op floor write is skipped entirely, "
+        "--floor-may-lag forgives a lagging floor on a PR but never a collection drop, "
+        "--reconcile-floor forgives ONLY a drift it "
+        "healed and never an unwritten one, absent-module line is silent when clean and is "
+        "never counted as a skip, mypy ratchet prints both numbers and its ceiling can fail, "
+        "three tree shapes carry three agreed ceilings, each mirror shape GREEN under its own, "
+        "selftests classify identically at any width, a run reads one private copy of the "
+        "state and writes neither source, a failed copy refuses the run, only a replayable "
+        "pytest verdict is kept, and the declared-rows line names what the judged ledger lacks "
+        "while an exceeded skip ceiling counts the skips registration alone drains)"
+    )
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--selftest", action="store_true")
+    ap.add_argument(
+        "--update-floor",
+        action="store_true",
+        help="record the current counts as the floor (only when everything passes)",
+    )
+    ap.add_argument(
+        "--floor-may-lag",
+        action="store_true",
+        help=(
+            "for a PULL REQUEST: a floor BEHIND reality is reported but does not fail the run, "
+            "because the correct number is only knowable on the merge result. A collection DROP "
+            "still fails. Never pass this on main — the push-to-main run is what keeps the "
+            "equality honest."
+        ),
+    )
+    ap.add_argument(
+        "--reconcile-floor",
+        action="store_true",
+        help=(
+            "like --update-floor, but a drift this run HEALED does not fail the run. For CI on "
+            "main: heals a floor left behind reality, and still fails on anything real."
+        ),
+    )
+    ap.add_argument(
+        "--coverage",
+        action="store_true",
+        help=(
+            "also measure coverage, by running each child under `coverage run --parallel-mode` "
+            "and combining. Much slower; OFF by default. Needed because the per-module "
+            "--selftest is a SUBPROCESS, so a pytest-only coverage run cannot see ~80%% of this "
+            "codebase and reports the blind spot as a score."
+        ),
+    )
+    args = ap.parse_args()
+    if args.selftest:
+        _selftest()
+        return 0
+    if args.coverage:
+        globals()["COVERAGE"] = True
+        coverage_reset()
+    code, text = verify(
+        update_floor=args.update_floor or args.reconcile_floor,
+        forgive_healed_drift=args.reconcile_floor,
+        floor_may_lag=args.floor_may_lag,
+    )
+    print(text, end="")
+    if args.coverage:
+        # Printed AFTER the verdict, and it never alters the exit code. Coverage is a measurement,
+        # not a gate: making it one here would be a threshold nobody agreed to, against a number
+        # that has been wrong until this run.
+        print("\n" + coverage_combine_and_report(), end="")
+    return code
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

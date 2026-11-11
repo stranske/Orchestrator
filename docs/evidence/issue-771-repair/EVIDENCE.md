@@ -170,6 +170,12 @@ From https://github.com/stranske/Orchestrator/pull/772 **Break-and-revert proof*
 
 ---
 
+## 5. Mutation and coverage artifacts (#1327 completion)
+
+- Mutation records (deliberate break -> failure -> restored pass, patch included) for all five original tests: [mutations/](mutations/) — one file per test ID.
+- Controlled coverage comparison separating missing statements from missing branches, with raw JSON reports and both commits' CI/coverage configs: [coverage/SUMMARY.md](coverage/SUMMARY.md).
+- Acceptance checklist: CI evidence §1 (preserved logs in [ci/](ci/)), mutations (this section), coverage (this section) link to preserved artifacts above. Historical-ranking provenance (§4): verified items cite issue/PR records; unrecovered per-line ranking provenance remains explicitly **unknown**.
+
 ## Commands executed for this repair
 
 ```bash
