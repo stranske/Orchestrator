@@ -1,7 +1,7 @@
 # Local operational readback — 2026-11-11
 
-Outcome: a native verifier-corpus-decision/v1 binds PR 1168 head
-01e86ae7e4ef0e6a06193c916c8c780ca5cab052 to published merge
+Required outcome, still unverified: a native verifier-corpus-decision/v1 binding
+PR 1168 head 01e86ae7e4ef0e6a06193c916c8c780ca5cab052 to published merge
 a30b34ada04a30d04360867e14097a8c5b6d731c, with authentic worker/publication custody.
 Command: `/opt/anaconda3/bin/python3 tests/fixtures/closer_real_csv_canary/v1/verify_csv_contract.py --chain-evidence`
 Check date: 2026-11-11. This command currently targets PR 989; its success alone

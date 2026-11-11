@@ -210,6 +210,71 @@ test('CSV canary native verifier attempts require retained recovery, not another
   assert.equal(JSON.stringify(readback), before, 'native evidence must remain unchanged');
 });
 
+test('native PR 984 corpus decision and successful workflows cannot complete PR 1168',async()=>{
+  const root = path.resolve(__dirname, '..');
+  const python = fs.existsSync('/opt/anaconda3/bin/python3') && !process.env.VIRTUAL_ENV
+    ? '/opt/anaconda3/bin/python3' : 'python3';
+  // Exercise the real reader with the retained native partial decision. Do not
+  // manufacture a terminal decision by rewriting the corrective pending state.
+  const program = `
+import importlib.util
+import json
+from pathlib import Path
+
+root = Path.cwd()
+spec = importlib.util.spec_from_file_location(
+    "csv_native_revision_regression",
+    root / "tests/fixtures/closer_real_csv_canary/v1/verify_csv_contract.py",
+)
+reader = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(reader)
+partial = json.loads((root / "tests/fixtures/verifier_native_bot_origin/canary984-selected-origin.json").read_text())
+readback = json.loads((root / "docs/verification/issue-1184-acceptance-20261111/native-readback.json").read_text())
+comments = [dict(body=c["body"], url=c["url"], author=c["author"]["login"])
+            for c in partial["comments"]["nodes"]]
+comments += readback["verifier_events"]
+records = [dict(pr, kind="pr", name=str(pr["number"]), merge_sha=pr["merge_commit_sha"])
+           for pr in readback["pull_requests"] if pr["number"] in (1168, 989)]
+corrective = next(pr for pr in records if pr["number"] == 1168)
+head, merge = corrective["head_sha"], corrective["merge_sha"]
+partial_corpus = [d for c in comments for d in reader._partial_corpus_from_comment(c)]
+corpus = [d for c in comments for d in reader._corpus_from_comment(c, head)]
+events = [e for c in comments for number, h, m in (
+    (984, partial["headRefOid"], partial["mergeCommit"]["oid"]), (1168, head, merge))
+    for e in reader._events_from_comment(c, number, h, m)]
+assessment = reader._assess(events, comments, records, head,
+                            corpus=corpus, partial_corpus=partial_corpus)
+report, status = reader._format_report(assessment, head, None,
+                                      verifier_runs=readback["workflow_runs"])
+print(json.dumps(dict(status=status, report=report, partial=partial_corpus,
+    corrective=corpus, partial_events=len(assessment["partial"]),
+    corrective_events=len(assessment["corrective"]), unlabeled=assessment["unlabeled"])))
+`;
+  const result = await promisify(execFile)(python, ['-I', '-c', program], {
+    cwd:root, encoding:'utf8', timeout:30000,
+  });
+  assert.equal(result.stderr, '');
+  const measured = JSON.parse(result.stdout);
+  // Prove the real partial corpus was accepted for its own revision before
+  // asserting exclusion from the corrective result; missing input cannot pass.
+  assert.equal(measured.partial.length, 1);
+  assert.equal(measured.partial[0].run_id, '40620861168');
+  assert.equal(measured.partial[0].verdict, 'NON_PASS');
+  assert.equal(measured.partial[0].head_sha, '0507d28acf68d6bf21c68138d18d56cd01968827');
+  assert.equal(measured.partial[0].evaluated_sha, 'd1947b5b4775c2e6a07bb46b3f85eb2e28c1b001');
+  assert.equal(measured.partial_events, 5);
+  assert.equal(measured.corrective_events, 3);
+  assert.deepEqual(measured.corrective, []);
+  assert.deepEqual(measured.unlabeled, []);
+  assert.equal(measured.status, 2);
+  assert.match(measured.report, /partial_corpus_decision: verdict=NON_PASS run_id=40620861168/);
+  assert.match(measured.report, /agents_verifier_run: id=42141057834 .*conclusion=success/);
+  assert.match(measured.report, /agents_verifier_run: id=42142641060 .*conclusion=success/);
+  assert.match(measured.report, /native_verify_for_corrective_head: MISSING/);
+  assert.match(measured.report, /completion: evidence incomplete/);
+  assert.doesNotMatch(measured.report, /native_verify_for_corrective_head: PRESENT/);
+});
+
 test('merged CSV canary acknowledgment does not substitute for stored corrective custody',async()=>{
   const root = path.resolve(__dirname, '..');
   const readback = require('../docs/verification/issue-1184-acceptance-20261111/round4/native-readback.json');
