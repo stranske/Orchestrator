@@ -1,5 +1,43 @@
 # Operational acceptance readback — 2026-11-11
 
+## Round 2 local readback
+
+The native PR state in the table below was reconfirmed. Both PRs are merged and
+their heads and published merges match the earlier readback. No merge action was
+needed. Using `/opt/anaconda3/bin/python3`, the corrected contract printed
+`contract ok` and exited 0. The same script with the exporter extracted from
+`0507d28acf68d6bf21c68138d18d56cd01968827` in an isolated copy exited 1 with
+`AssertionError: CSV contract is not implemented`. Focused pytest collection
+found the two wrapper tests and collected nothing from the fixture tree. Both
+wrapper tests passed.
+
+On this host, `verify_csv_contract.py --chain-evidence` exited 0. The current
+reader validated the retained `closer-core-completion/v1` receipt, publication
+snapshot, frozen worker and origin bytes, and postmerge contract result for PR
+989. The worker log records a successful push to `codex/test-csv-followup-988-open`,
+a later readback of the full PR head and terminal completion. The native merge
+acknowledgment pins the same head. [PR 989 acknowledgment](https://github.com/stranske/Orchestrator/pull/989#issuecomment-6684682838)
+
+For PR 1168, the available terminal worker log records pushes to `d7502402` and
+`860c9125`. The final GitHub head is `01e86ae7e4ef0e6a06193c916c8c780ca5cab052`.
+The historical `retain_confirmed_result` writer binds its stored
+`provenance.coding_terminal_reference` to a confirmed push and native ref and
+commit readback. No corresponding stored result or terminal reference for the
+final corrective head was located. The current chain command reports only PR
+989 and carries `acceptance_authority: false`.
+
+PR 1168 still lacks a native `verifier-corpus-decision/v1` bound to its final head
+and published merge. The dispatched agent's `gh` guard refused a fresh
+`agents-verifier.yml` run on `main` before contacting GitHub. The exact-head
+workflow events remain incomplete. [Latest recorded run](https://github.com/stranske/Orchestrator/actions/runs/42142641060)
+
+The local measurement bundle `issue-1184-round2.8LwAEI` contains the full chain
+stdout and stderr, command exit statuses, native verifier events, and the PR 989
+receipt and publication snapshot. The SHA-256 of the full chain stdout is
+`dc0924fe4dc34ad9cded246d34337094139116c91715f3a3a883ced3f295178b`.
+
+## Round 1 evidence
+
 Acceptance remains incomplete. No exporter defect was observed, no native producer
 records were manufactured, and neither historical PR head was changed.
 
