@@ -329,6 +329,53 @@ print(json.dumps(dict(status=status, report=report, partial=partial_corpus,
   assert.doesNotMatch(measured.report, /native_verify_for_corrective_head: PRESENT/);
 });
 
+test('native unavailable CSV reports cannot turn provider concerns into a corpus decision',async()=>{
+  const root = path.resolve(__dirname, '..');
+  const python = fs.existsSync('/opt/anaconda3/bin/python3') && !process.env.VIRTUAL_ENV
+    ? '/opt/anaconda3/bin/python3' : 'python3';
+  // Preserve the actual native headline and provider table. Rewriting either
+  // would hide the distinction between diagnostic output and a corpus decision.
+  const program = `
+import importlib.util
+import json
+from pathlib import Path
+
+root = Path.cwd()
+spec = importlib.util.spec_from_file_location(
+    "csv_unavailable_reports",
+    root / "tests/fixtures/closer_real_csv_canary/v1/verify_csv_contract.py",
+)
+reader = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(reader)
+readback = json.loads((root / "docs/verification/issue-1184-acceptance-20261111/round7/native-readback.json").read_text())
+head = "01e86ae7e4ef0e6a06193c916c8c780ca5cab052"
+reports = readback["reports"]
+before = json.dumps(reports, sort_keys=True)
+print(json.dumps(dict(
+    headlines=[reader._verdict_lines(report["body"]) for report in reports],
+    corpus=[reader._corpus_from_comment(report, head) for report in reports],
+    trusted=[reader._native_comment(report, 1168, reader._TRUSTED_VERIFIER_AUTHORS)
+             for report in reports],
+    unchanged=json.dumps(reports, sort_keys=True) == before,
+)))
+`;
+  const readback = require('../docs/verification/issue-1184-acceptance-20261111/round7/native-readback.json');
+  assert.deepEqual(readback.reports.map(report => report.url.split('#')[1]), [
+    'issuecomment-6673820837', 'issuecomment-6674054349',
+  ]);
+  assert.match(readback.reports[0].body, /Provider execution is not established/);
+  assert.match(readback.reports[1].body, /CONCERNS/);
+  const result = await promisify(execFile)(python, ['-I', '-c', program], {
+    cwd:root, encoding:'utf8', timeout:30000,
+  });
+  assert.equal(result.stderr, '');
+  const measured = JSON.parse(result.stdout);
+  assert.deepEqual(measured.trusted, [true, true], 'reject the contents, not the native authors');
+  assert.deepEqual(measured.headlines, [['UNVERIFIABLE_INPUT'], ['UNVERIFIABLE_INPUT']]);
+  assert.deepEqual(measured.corpus, [[], []]);
+  assert.equal(measured.unchanged, true);
+});
+
 test('merged CSV canary acknowledgment does not substitute for stored corrective custody',async()=>{
   const root = path.resolve(__dirname, '..');
   const readback = require('../docs/verification/issue-1184-acceptance-20261111/round4/native-readback.json');
