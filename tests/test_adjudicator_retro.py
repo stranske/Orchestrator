@@ -1268,15 +1268,29 @@ def test_live_disputes_defaults_to_saved_run_timestamp_and_three_targets(live_sh
             )
             conn.execute(
                 "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict) "
-                "VALUES (?,'NON_PASS','PASS')", (f"fresh-{index}",),
+                "VALUES (?,'NON_PASS','PASS')",
+                (f"fresh-{index}",),
             )
     selected = retro.live_disputes(db=db, now=now + 4)
     assert [row["run_id"] for row in selected] == ["fresh-3", "fresh-2", "fresh-1"]
     assert len(retro.live_disputes(db=db, now=now + 4, limit=None)) == 4
     # Explicit bounds override state and remain strict even for queued work.
-    state.write_text(json.dumps({"generated_at": now + 4, "pending_case_ids": [
-        retro._case_id({"run_id": "new", "verifier_verdict": "NON_PASS", "adjudicated_verdict": "PASS"})
-    ]}))
+    state.write_text(
+        json.dumps(
+            {
+                "generated_at": now + 4,
+                "pending_case_ids": [
+                    retro._case_id(
+                        {
+                            "run_id": "new",
+                            "verifier_verdict": "NON_PASS",
+                            "adjudicated_verdict": "PASS",
+                        }
+                    )
+                ],
+            }
+        )
+    )
     assert [row["run_id"] for row in retro.live_disputes(db=db, now=now + 4)] == ["new"]
     assert retro.live_disputes(db=db, now=now + 4, since_ts=now + 4) == []
 

@@ -608,7 +608,11 @@ def run_live(
     pending = {retro._case_id(row) for row in candidates[limit:]}
     pending.update(str(row["case_id"]) for row in rows if not _final(row))
     summary = _grade_and_write(
-        rows, db, path, now=now, population=len(population),
+        rows,
+        db,
+        path,
+        now=now,
+        population=len(population),
         selection_state={"last_live_run_ts": now, "pending_case_ids": sorted(pending)},
     )
     return {
@@ -680,7 +684,12 @@ def _backfill_advice_events(rows: list[dict], db: Path | None) -> None:
 
 
 def _grade_and_write(
-    rows: list[dict], db: Path | None, path: Path, *, now: int, population: int | str,
+    rows: list[dict],
+    db: Path | None,
+    path: Path,
+    *,
+    now: int,
+    population: int | str,
     selection_state: dict | None = None,
 ) -> dict:
     if selection_state is None:
@@ -896,6 +905,7 @@ def _selftest() -> None:
 
             @contextmanager
             def provider(target, head):
+                assert target != "owner/repo#3", "the dispute at the cutoff must not provision"
                 assert target in {"owner/repo#1", "owner/repo#2"} and head == sha
                 yield str(root / "repo")
 
@@ -932,21 +942,26 @@ def _selftest() -> None:
                 ).fetchall()
             assert verdicts == [("NON_PASS", "PASS")], "shadow never writes an outcome"
             assert retro.live_advised_targets(feedback.DB_PATH) == {"owner/repo#1"}
-            # A body with no explicit acceptance criteria cannot be certified: recorded, no dispatch.
+            # Only the fresh dispute reaches certification, where its body is refused.
             with feedback._conn() as conn:
-                conn.execute(
-                    "INSERT INTO runs(run_id,ts,target) VALUES ('live-2',?,'owner/repo#2')",
-                    (now - 1,),
+                conn.executemany(
+                    "INSERT INTO runs(run_id,ts,target) VALUES (?,?,?)",
+                    [("live-2", now + 2, "owner/repo#2"), ("at-cutoff", now + 1, "owner/repo#3")],
                 )
-                conn.execute(
+                conn.executemany(
                     "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged) "
-                    "VALUES ('live-2','PASS','NON_PASS',1)"
+                    "VALUES (?,'PASS','NON_PASS',1)",
+                    [("live-2",), ("at-cutoff",)],
                 )
             third = run_live(
-                snapshot_reader=lambda _t: {**snapshot, "body": "No criteria here."}, **common
+                snapshot_reader=lambda _t: {**snapshot, "number": 2, "body": "No criteria here."},
+                **{**common, "now": now + 3},
             )
-            assert (third["attempted"], third["uncertified"]) == (1, 1) and len(calls) == 1, third
-            assert "live: disputes 2, advised 1, uncertified 1, graded 0" in weekly_line(
+            assert (third["attempted"], third["uncertified"], len(calls)) == (1, 1, 1)
+            refused = third["rows"][-1]
+            assert refused["run_id"] == "live-2"
+            assert "no explicit acceptance criteria" in refused["certification"]["reason"]
+            assert "live: disputes 3, advised 1, uncertified 1, graded 0" in weekly_line(
                 root / "live.json"
             )
             # The kill switch writes nothing.
