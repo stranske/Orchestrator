@@ -290,9 +290,9 @@ def test_unreadable_meta_is_counted_and_reported(conn, exp_dir):
     )
 
     # But it should be tracked as unreadable
-    assert result["unreadable"] == 1, (
-        f"Expected 1 unreadable, got {result['unreadable']}. Result: {result}"
-    )
+    assert (
+        result["unreadable"] == 1
+    ), f"Expected 1 unreadable, got {result['unreadable']}. Result: {result}"
 
     # And it should NOT be drainable
     assert result["drainable"] == 0, (
