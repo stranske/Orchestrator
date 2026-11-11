@@ -686,7 +686,8 @@ def agy_advertised_models(*, refresh: bool = False, timeout_s: int = 30) -> list
     return advertised_models("gemini", refresh=refresh, timeout_s=timeout_s)
 
 
-# Directories a local dispatch puts in front of PATH (dispatcher._agent_path_export), plus the
+# Directories a local dispatch puts in front of PATH (dispatcher._path_prefix; a test pins the two
+# lists equal), plus the
 # app-bundled Codex CLI that app-launched seats resolve. Kept here so the launch check below looks
 # exactly where a launch would.
 LOCAL_AGENT_PATH_DIRS = (
@@ -715,8 +716,10 @@ def local_launch(agent: str) -> dict:
         return {**base, "reason": "launch check disabled (ORCH_LAUNCH_CHECK=0)"}
     try:
         binary = build_command(agent, "launch-check")[0]
-    except Exception as exc:  # no local launch form for this agent
-        return {**base, "reason": f"no local launch command ({type(exc).__name__})"}
+    except Exception as exc:  # noqa: BLE001 — any failure here is "unknown", never "missing"
+        # build_command raises ValueError (unknown agent), RuntimeError or WorkspaceRefused; the
+        # text is kept so an unexpected bug is visible in the seat row, not only its type.
+        return {**base, "reason": f"no local launch command ({type(exc).__name__}: {exc})"[:240]}
     base["binary"] = binary
     if os.path.isabs(binary):
         candidates = [binary]

@@ -830,13 +830,19 @@ def _gemini_model_health():
 
 
 def _local_launch(agent: str):
-    """Local launch-binary check, or None when it can't be evaluated."""
+    """Local launch-binary check. A crash in the check is reported as an unchecked result naming
+    the exception (it lands in the seat row as `launch`), never as a silent None."""
     try:
         import adapters
 
         return adapters.local_launch(agent)
-    except Exception:
-        return None
+    except Exception as exc:  # noqa: BLE001 — a broken check must not shed a seat
+        return {
+            "agent": agent,
+            "checked": False,
+            "launchable": True,
+            "reason": f"launch check raised {type(exc).__name__}: {exc}"[:240],
+        }
 
 
 def _local_only(agent: str) -> bool:
@@ -1269,6 +1275,7 @@ def build(ccusage_block=None, *, record_pacing: bool = False) -> dict:
                     agent
                 ),  # None => uncapped; else routine spend stops here
                 "auth": (_auth_health(agent) or {}),  # {} => not evaluable; never read as a failure
+                "launch": (_local_launch(agent) or {}),  # checked=False => unknown, never "missing"
                 **(meta or {}),
             }
     finally:

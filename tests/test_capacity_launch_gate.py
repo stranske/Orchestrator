@@ -16,6 +16,7 @@ def _exe(path):
 def test_local_launch_reports_missing_absolute_binary(monkeypatch, tmp_path):
     monkeypatch.setenv("ORCH_LAUNCH_CHECK", "1")
     monkeypatch.setattr(adapters, "AIDER_BIN", tmp_path / "aider-venv" / "bin" / "aider")
+    monkeypatch.setattr(adapters, "EXTRA_LAUNCH_CANDIDATES", {})  # no host path can leak in
     result = adapters.local_launch("aider")
     assert result["checked"] is True
     assert result["launchable"] is False
@@ -79,10 +80,49 @@ def test_classify_never_sheds_hosted_capable_seat_for_a_missing_local_binary(mon
     monkeypatch.setattr(capacity, "_local_only", lambda agent: False)
     monkeypatch.setattr(capacity, "_auth_health", lambda agent: None)
     out = capacity._classify("codex", capacity.AGENTS["codex"], None)
-    assert not (out[0] == capacity.SHED and "not launchable" in str(out[1]))
+    meta = out[2] if len(out) > 2 and isinstance(out[2], dict) else {}
+    assert meta.get("policy") != "launch-binary-missing"
+    assert meta.get("availability") != "unavailable_cli_missing"
 
 
 def test_local_only_matches_router_keepalive_set():
     assert capacity._local_only("aider") is True
     assert capacity._local_only("vibe") is True
     assert capacity._local_only("codex") is False
+
+
+def test_codex_app_bundled_binary_makes_it_launchable(monkeypatch, tmp_path):
+    monkeypatch.setenv("ORCH_LAUNCH_CHECK", "1")
+    monkeypatch.setattr(adapters, "LOCAL_AGENT_PATH_DIRS", (str(tmp_path / "empty"),))
+    monkeypatch.setenv("PATH", "/nonexistent")
+    bundled = _exe(tmp_path / "codex")
+    monkeypatch.setattr(adapters, "EXTRA_LAUNCH_CANDIDATES", {"codex": (str(bundled),)})
+    result = adapters.local_launch("codex")
+    assert result["launchable"] is True and result["path"] == str(bundled)
+
+
+def test_codex_without_any_binary_stays_missing(monkeypatch, tmp_path):
+    monkeypatch.setenv("ORCH_LAUNCH_CHECK", "1")
+    monkeypatch.setattr(adapters, "LOCAL_AGENT_PATH_DIRS", (str(tmp_path / "empty"),))
+    monkeypatch.setenv("PATH", "/nonexistent")
+    monkeypatch.setattr(adapters, "EXTRA_LAUNCH_CANDIDATES", {"codex": (str(tmp_path / "gone"),)})
+    result = adapters.local_launch("codex")
+    assert result["checked"] is True and result["launchable"] is False
+
+
+def test_launch_dirs_match_the_dispatch_path_prefix():
+    import dispatcher
+
+    prefix = dispatcher._path_prefix()
+    dirs = prefix.split('PATH="', 1)[1].rsplit(":$PATH", 1)[0].split(":")
+    assert tuple(dirs) == adapters.LOCAL_AGENT_PATH_DIRS
+
+
+def test_a_crashing_launch_check_is_reported_not_silent(monkeypatch):
+    def boom(agent):
+        raise OSError("disk gone")
+
+    monkeypatch.setattr(adapters, "local_launch", boom)
+    result = capacity._local_launch("vibe")
+    assert result["checked"] is False and result["launchable"] is True
+    assert "OSError: disk gone" in result["reason"]
