@@ -28,6 +28,15 @@ _SIMPLEX_EPS = 1e-12
 # Route decision constants for hosted router
 ROUTE_GO_LIVE = "2026-11-17T00:00:00Z"
 ROUTE_INCIDENT_WINDOW_DAYS = 14
+# Capacity models that carry a pacing contract (capacity.AGENTS[agent]["model"]). Every other model
+# (metered, flat, windowed_prepaid, plan_then_credit) has no usage API: 429-shed is its authoritative
+# limiter and it never has pacing. Owner 2026-11-11: such agents are EXCLUDED from the solve and named,
+# instead of holding status at "partial" forever (cursor and vibe did, so route_enabled could never be true).
+PACED_CAPACITY_MODELS = frozenset({"ccusage"})
+# Owner 2026-11-11: a "partial" result (a paced agent's reading stale or missing, e.g. codex burn with an
+# anchor older than 8 h) reuses the last optimal result for up to this long, so a stale reading cannot
+# flip routing hour to hour; past it the flag turns off and says why.
+OPTIMAL_HOLD_SECONDS = 24 * 3600
 
 
 def _number(value) -> TypeGuard[int | float]:
@@ -239,6 +248,15 @@ def _pacing(snapshot, agent):
     return None, None, f"agents[{agent}].pacing missing; pools mapping absent or ambiguous"
 
 
+def _no_pacing_source(agent: str) -> str | None:
+    """The capacity model of an agent that has no pacing contract by design, else None."""
+    import capacity  # lazy: capacity is heavy and must not load at module import
+
+    meta = capacity.AGENTS.get(agent)
+    model = meta.get("model") if isinstance(meta, dict) else None
+    return model if model and model not in PACED_CAPACITY_MODELS else None
+
+
 def measure(
     db_path: Path,
     snapshot: dict | None,
@@ -275,6 +293,7 @@ def measure(
     pool_ids: dict = {}
     ends: dict = {}
     measured_q: dict = {}
+    excluded: set[str] = set()
     for agent, cells in q.items():
         budget[agent], price[agent] = None, None
         cost[agent] = dict.fromkeys(cells)
@@ -285,6 +304,10 @@ def measure(
         def missing(reason):
             sources[agent]["reason"] = f"{location}: {reason}"
 
+        if pacing is None and (model := _no_pacing_source(agent)):
+            missing(f"excluded: no pacing source (capacity model {model})")
+            excluded.add(agent)
+            continue
         if pacing is None:
             missing("pacing unmeasured")
             continue
@@ -407,8 +430,9 @@ def measure(
         for task in tasks
     }
     result = shadow_prices(measured_q, demand, cost, budget, price, minimum=minimum)
-    if result["status"] == "optimal" and len(measured_q) < len(q):
+    if result["status"] == "optimal" and len(measured_q) < len(q) - len(excluded):
         result["status"] = "partial"
+    result["excluded"] = sorted(excluded)
     result["lambda"] = {agent: result["lambda"].get(agent) for agent in q}
     reasons += [f"{agent}: {row['reason']}" for agent, row in sources.items() if row["reason"]]
     reasons += result.get("reasons", [])
@@ -569,23 +593,37 @@ def format_report(result: dict) -> str:
     return "\n".join(lines)
 
 
+def _incident_ts(row: dict) -> int | None:
+    ts_value = row.get("ts")
+    if ts_value is None:
+        return None
+    try:
+        if isinstance(ts_value, (int, float)):
+            return int(ts_value)
+        return int(dt.datetime.fromisoformat(str(ts_value).replace("Z", "+00:00")).timestamp())
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
 def route_decision(result: dict, incidents_rows: list[dict] | None, now: int | None = None) -> dict:
     """Compute the route_enabled flag for the hosted router.
 
-    Returns a dict with route_enabled, route_reason, incidents_recent, incidents_prior.
-    The flag is True only if:
-      1. now >= ROUTE_GO_LIVE
-      2. result["status"] == "optimal"
-      3. incidents in the last ROUTE_INCIDENT_WINDOW_DAYS <= incidents in the prior period
+    Returns route_enabled, route_reason, incidents_recent (since go-live, within the last
+    ROUTE_INCIDENT_WINDOW_DAYS), incidents_prior (the ROUTE_INCIDENT_WINDOW_DAYS before go-live, the
+    baseline) and incidents_expected (baseline rate x elapsed days, at least one day).
 
-    If the incident ledger is unreadable or any condition fails, returns route_enabled: False.
+    The flag is True when now >= ROUTE_GO_LIVE, result["status"] == "optimal", and incidents since
+    go-live do not exceed the expected count. That last test is a ROLLBACK, not a precondition (owner
+    2026-11-11, restating the 2026-10-17 rule "revert on a 429 rise"): the pre-go-live precondition
+    compared two windows in which routing had not changed, so it measured fleet quota trouble (67 vs
+    46 at go-live) and could never clear through anything routing did. Both windows are counted by
+    one function; the baseline always lies before go-live. Unreadable ledger -> False.
     """
     from rate_incidents import INCIDENT_FILE
 
     now = int(time.time()) if now is None else now
     go_live_ts = int(dt.datetime.fromisoformat(ROUTE_GO_LIVE).timestamp())
 
-    # Fail to False if before go-live
     if now < go_live_ts:
         return {
             "route_enabled": False,
@@ -594,7 +632,6 @@ def route_decision(result: dict, incidents_rows: list[dict] | None, now: int | N
             "incidents_prior": None,
         }
 
-    # Fail to False if status is not optimal
     if result.get("status") != "optimal":
         return {
             "route_enabled": False,
@@ -603,30 +640,20 @@ def route_decision(result: dict, incidents_rows: list[dict] | None, now: int | N
             "incidents_prior": None,
         }
 
-    # Read incidents from the ledger if not provided
-    if incidents_rows is None:
-        # Check if the file exists and is readable
-        if not INCIDENT_FILE.is_file():
-            # File doesn't exist - treat as unreadable
+    if incidents_rows is None and INCIDENT_FILE.is_file():
+        try:
+            with INCIDENT_FILE.open() as stream:
+                incidents_rows = []
+                for line in stream:
+                    try:
+                        row = json.loads(line)
+                    except (ValueError, TypeError):
+                        continue
+                    if isinstance(row, dict):
+                        incidents_rows.append(row)
+        except OSError:
             incidents_rows = None
-        else:
-            # Try to read the file directly
-            try:
-                with INCIDENT_FILE.open() as stream:
-                    incidents_rows = []
-                    for line in stream:
-                        try:
-                            row = json.loads(line)
-                            if isinstance(row, dict):
-                                incidents_rows.append(row)
-                        except (ValueError, TypeError):
-                            # Skip malformed lines
-                            continue
-            except OSError:
-                # Any OS error reading the file is treated as unreadable
-                incidents_rows = None
 
-    # Fail to False if ledger is unreadable (None means we couldn't read it)
     if incidents_rows is None:
         return {
             "route_enabled": False,
@@ -637,46 +664,66 @@ def route_decision(result: dict, incidents_rows: list[dict] | None, now: int | N
 
     window_days = ROUTE_INCIDENT_WINDOW_DAYS
     window_seconds = window_days * 86400
-    prior_start = now - 2 * window_seconds
-    recent_start = now - window_seconds
-
-    # Count incidents in each window
-    incidents_recent = 0
-    incidents_prior = 0
-
+    baseline_start = go_live_ts - window_seconds
+    since_start = max(go_live_ts, now - window_seconds)
+    span_days = max((now - since_start) / 86400, 1.0)
+    baseline = since = 0
     for row in incidents_rows:
-        ts_value = row.get("ts")
-        if ts_value is None:
+        ts = _incident_ts(row)
+        if ts is None:
             continue
-        try:
-            if isinstance(ts_value, (int, float)):
-                incident_ts = int(ts_value)
-            else:
-                # Try to parse ISO timestamp
-                incident_ts = int(
-                    dt.datetime.fromisoformat(str(ts_value).replace("Z", "+00:00")).timestamp()
-                )
-        except (ValueError, TypeError, OverflowError):
-            continue
-
-        if recent_start <= incident_ts < now:
-            incidents_recent += 1
-        elif prior_start <= incident_ts < recent_start:
-            incidents_prior += 1
-
-    # Fail to False if recent incidents exceed prior incidents
-    if incidents_recent > incidents_prior:
-        return {
-            "route_enabled": False,
-            "route_reason": f"revert: incidents rose {incidents_prior}→{incidents_recent}",
-            "incidents_recent": incidents_recent,
-            "incidents_prior": incidents_prior,
-        }
-
-    # All conditions met
-    return {
-        "route_enabled": True,
-        "route_reason": f"enabled; incidents {incidents_prior}→{incidents_recent}",
-        "incidents_recent": incidents_recent,
-        "incidents_prior": incidents_prior,
+        if baseline_start <= ts < go_live_ts:
+            baseline += 1
+        if since_start <= ts < now:
+            since += 1
+    expected = baseline * span_days / window_days
+    counts = (
+        f"incidents since go-live {since} vs expected {expected:.1f} "
+        f"(baseline {baseline} over the {window_days}d before go-live)"
+    )
+    decision = {
+        "incidents_recent": since,
+        "incidents_prior": baseline,
+        "incidents_expected": round(expected, 2),
     }
+    if since > expected:
+        return {"route_enabled": False, "route_reason": f"revert: {counts}", **decision}
+    return {"route_enabled": True, "route_reason": f"enabled; {counts}", **decision}
+
+
+def hold_last_optimal(result: dict, path: Path, now: int | None = None) -> dict:
+    """Save an optimal result; let a "partial" one reuse the saved result for OPTIMAL_HOLD_SECONDS.
+
+    Anything else ("inputs_unmeasured", "infeasible_inputs", ...) passes through untouched, so real
+    data loss still turns the flag off. A held result says so: held_from, held_age_seconds and the
+    reasons the fresh result was partial.
+    """
+    now = int(time.time()) if now is None else now
+    status = result.get("status")
+    if status == "optimal":
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(path.suffix + ".tmp")
+            tmp.write_text(json.dumps({"saved_at": now, "result": result}, sort_keys=True))
+            tmp.replace(path)
+        except OSError as exc:
+            result.setdefault("reasons", []).append(f"last-optimal save failed: {exc}")
+        return result
+    if status != "partial":
+        return result
+    try:
+        saved = json.loads(path.read_text())
+        age = now - int(saved["saved_at"])
+        held = dict(saved["result"])
+    except (OSError, ValueError, KeyError, TypeError):
+        result["hold_reason"] = "no saved optimal result to hold"
+        return result
+    if not 0 <= age <= OPTIMAL_HOLD_SECONDS:
+        result["hold_reason"] = f"last optimal is {age}s old (hold limit {OPTIMAL_HOLD_SECONDS}s)"
+        return result
+    held.update(
+        held_from=int(saved["saved_at"]),
+        held_age_seconds=age,
+        held_because=list(result.get("reasons") or []),
+    )
+    return held
