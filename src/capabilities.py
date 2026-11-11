@@ -1859,6 +1859,7 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
                 Path.home() / ".codex/automations/reviewed-repo-automation-controller/controller.py"
             ),
             "function": "start_local_loop",
+            "entrypoint": str(Path.home() / ".codex/orchestrator-mirror/local_loop.py"),
         },
         "external_heartbeat_max_age_seconds": 86400,
         "matcher": {"kind": "tick_phase", "equals": "local-loop"},
@@ -2051,9 +2052,8 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
         ),
     },
     "docs-drift-fix-agent": {
-        "consumer_missing": True,
-        "downstream_consumer": "External Workflows repair issues have no local acting consumer or handover rail.",
-        "notes": "Dedup #599: external docs-drift implementation is not in this tree; invocation ingestion does not consume or deliver its repair output.",
+        "downstream_consumer": "scripts/docs_drift_fix_agent.py:apply_issues hands repair batches to GitHub as issues on Maint 87's dispatch-only apply path",
+        "notes": "Maint 87 passes the repair plan to apply_issues on explicit dispatch. The invocation bridge only records workflow runs.",
         "findability_category": "exercise_bound",
         "findability_rationale": (
             "its entrypoint is a Workflows GitHub Actions workflow that fires per PR in another "

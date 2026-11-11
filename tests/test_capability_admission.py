@@ -1030,6 +1030,32 @@ def test_declared_consumer_check_cannot_hide_a_broken_gate_behind_an_overlay():
                 raise AssertionError(f"the consumer check accepted a broken gate: {broken}")
 
 
+def test_external_caller_resolves_deployed_local_loop_from_worktree_and_mirror(tmp_path):
+    mirror = tmp_path / "mirror"
+    mirror.mkdir()
+    entrypoint = mirror / "local_loop.py"
+    entrypoint.touch()
+    caller = tmp_path / "controller.py"
+    caller.write_text("def start_local_loop():\n    pass\n")
+    declaration = capabilities.KNOWN_DECLARATIONS["local-loop"]
+    cap = {
+        **declaration,
+        "external_caller": {
+            **declaration["external_caller"],
+            "path": str(caller),
+            "entrypoint": str(entrypoint),
+        },
+    }
+    for checkout in (tmp_path / "worktree" / "src", mirror):
+        with patch.object(audit, "HERE", checkout):
+            proof = audit.external_caller(cap)
+            assert proof and proof["exists"], proof
+
+    entrypoint.unlink()
+    proof = audit.external_caller(cap)
+    assert proof and not proof["exists"], proof
+
+
 def test_feature_scan_declared_consumer_applies_the_scan_output():
     """The binding must read the scan result and persist its proposed registry entries."""
     import feature_scan
@@ -1054,12 +1080,17 @@ def test_feature_scan_declared_consumer_applies_the_scan_output():
 
 def test_missing_consumer_declaration_survives_reconciliation_without_acceptance():
     """The diagnostic field must reach the ledger without granting acting or lifecycle credit."""
-    cid = "docs-drift-fix-agent"
+    cid = "reviewed-absence"
     before = capabilities._blank_capability(cid)
     before.update(status="active", downstream_consumer="old prose")
     before["event_history"] = [{"type": "invocation", "timestamp": 1}]
     ledger = {cid: before}
-    assert capabilities._reconcile_known_declarations(ledger, 2)
+    with patch.dict(
+        capabilities.KNOWN_DECLARATIONS,
+        {cid: {"consumer_missing": True, "downstream_consumer": "No rail applies the report."}},
+    ):
+        assert capabilities._reconcile_known_declarations(ledger, 2)
+        assert not capabilities._reconcile_known_declarations(ledger, 3)
     row = ledger[cid]
     assert row["consumer_missing"] is True
     assert row["status"] == "active"
@@ -1070,7 +1101,6 @@ def test_missing_consumer_declaration_survives_reconciliation_without_acceptance
     cls, ok, detail = admission.consumer_class(unreviewed, {})
     assert cls == "prose" and not ok, detail
     assert row["event_history"][0] == {"type": "invocation", "timestamp": 1}
-    assert not capabilities._reconcile_known_declarations(ledger, 3)
 
     # Missing consumers are findings, not waivers. Even an exercise-bound declaration must
     # remain visible as debt before the cutoff and block admission after it.
