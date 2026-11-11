@@ -93,14 +93,15 @@ function snapshot(root, mirror, revision) {
   return contents;
 }
 
-function complete(cases) {
-  return Array.isArray(cases) && cases.length === expected.length && expected.every((name) =>
+function complete(cases, names = expected) {
+  return names.length > 0 && new Set(names).size === names.length
+    && Array.isArray(cases) && cases.length === names.length && names.every((name) =>
     cases.filter((item) => item.name === name && item.classname === 'tests.test_provision_reclaim'
       && item.unsuccessful === false).length === 1);
 }
 
 function runWitnesses({ root = path.resolve(__dirname, '..'), mirror, python, revision, output,
-  timeout = 60000 }) {
+  timeout = 60000, fullSuites = false }) {
   if (!path.isAbsolute(python || '')) throw new Error('Select an absolute Python interpreter');
   if (!/^[a-f0-9]{40}$/.test(revision || '')) throw new Error('Select a full source revision');
   if (!path.isAbsolute(mirror || '') || !path.isAbsolute(output || '')) {
@@ -133,28 +134,63 @@ function runWitnesses({ root = path.resolve(__dirname, '..'), mirror, python, re
     revision, mirror, hostname: os.hostname(), platform: process.platform, interpreter: python,
     mirror_manifest_sha256: sha256(JSON.stringify(before)), mirror_file_count: Object.keys(before).length,
     floor_matches_origin_main: true, checks: [], source_unchanged: false,
-    native_witnesses_passed: false, deployment_acceptance_verified: false };
-  try {
-    const xml = path.join(output, 'native.xml');
-    const args = ['-B', '-m', 'pytest', '-o', 'addopts=', '-p', 'no:cacheprovider', '-m', 'not slow',
-      '-q', `--junitxml=${xml}`, ...witnesses.map((name) => `${suite}::${name}`)];
-    const result = execute(python, args, { cwd: mirror, env, timeout });
+    native_witnesses_passed: false, full_suites_requested: fullSuites, suites: [],
+    default_native_suites_passed: false, deployment_acceptance_verified: false };
+  const pytestArgs = ['-B', '-m', 'pytest', '-o', 'addopts=', '-p', 'no:cacheprovider',
+    '-m', 'not slow', '-q'];
+  function runCheck(name, args, environment, names) {
+    const result = execute(python, args, { cwd: mirror, env: environment, timeout });
     const log = Buffer.concat([result.stdout, result.stderr]);
-    fs.writeFileSync(path.join(output, 'native.log'), log, { flag: 'wx', mode: 0o600 });
-    let cases = null;
-    if (fs.existsSync(xml)) {
-      const parsed = execute(python, ['-I', '-c', junitReader, xml], { cwd: mirror, env, timeout });
-      if (parsed.exit_code === 0 && !parsed.error_code && !parsed.signal) {
-        try { cases = JSON.parse(parsed.stdout.toString()); } catch { /* Not a verdict. */ }
+    fs.writeFileSync(path.join(output, `${name}.log`), log, { flag: 'wx', mode: 0o600 });
+    const check = { command: [python, ...args], exit_code: result.exit_code,
+      signal: result.signal, error_code: result.error_code, log_sha256: sha256(log) };
+    if (names !== undefined) {
+      const xml = path.join(output, `${name}.xml`);
+      let cases = null;
+      if (fs.existsSync(xml)) {
+        const parsed = execute(python, ['-I', '-c', junitReader, xml],
+          { cwd: mirror, env: environment, timeout });
+        if (parsed.exit_code === 0 && !parsed.error_code && !parsed.signal) {
+          try { cases = JSON.parse(parsed.stdout.toString()); } catch { /* Not a verdict. */ }
+        }
+      }
+      Object.assign(check, { cases,
+        junit_sha256: fs.existsSync(xml) ? sha256(fs.readFileSync(xml)) : null,
+        passed: result.exit_code === 0 && !result.error_code && !result.signal
+          && complete(cases, names) });
+    }
+    return { check, stdout: result.stdout.toString() };
+  }
+  try {
+    if (fullSuites) {
+      for (const mode of ['default', 'native']) {
+        const environment = { ...env };
+        if (mode === 'default') delete environment.ORCH_PROVISION_NATIVE_ACCEPTANCE;
+        // Discover the selected suite first. A zero exit or a handful of native
+        // verdicts cannot substitute for execution of every collected case.
+        const collected = runCheck(`${mode}-collection`,
+          [...pytestArgs, '--collect-only', suite], environment);
+        const prefix = `${suite}::`;
+        const nodes = collected.stdout.split(/\r?\n/).filter((line) => line.startsWith(prefix));
+        const names = nodes.map((node) => node.slice(prefix.length));
+        const collection = { ...collected.check, nodes,
+          passed: collected.check.exit_code === 0 && !collected.check.error_code
+            && !collected.check.signal && names.length > 0
+            && new Set(names).size === names.length };
+        const execution = runCheck(`${mode}-suite`, [...pytestArgs,
+          `--junitxml=${path.join(output, `${mode}-suite.xml`)}`, suite], environment, names).check;
+        receipt.suites.push({ mode, native_acceptance: mode === 'native', collection, execution,
+          passed: collection.passed && execution.passed });
       }
     }
-    receipt.checks.push({ command: [python, ...args], exit_code: result.exit_code,
-      signal: result.signal, error_code: result.error_code, log_sha256: sha256(log),
-      junit_sha256: fs.existsSync(xml) ? sha256(fs.readFileSync(xml)) : null,
-      cases, passed: result.exit_code === 0 && !result.error_code && !result.signal && complete(cases) });
+    receipt.checks.push(runCheck('native', [...pytestArgs,
+      `--junitxml=${path.join(output, 'native.xml')}`,
+      ...witnesses.map((name) => `${suite}::${name}`)], env, expected).check);
     try { receipt.source_unchanged = JSON.stringify(snapshot(root, mirror, revision)) === JSON.stringify(before); }
     catch { receipt.source_unchanged = false; }
     receipt.native_witnesses_passed = receipt.source_unchanged && receipt.checks.every((item) => item.passed);
+    receipt.default_native_suites_passed = receipt.source_unchanged && fullSuites
+      && receipt.suites.length === 2 && receipt.suites.every((item) => item.passed);
     receipt.finished_at = new Date().toISOString();
     fs.writeFileSync(path.join(output, 'mirror-manifest.json'), JSON.stringify(before, null, 2),
       { flag: 'wx', mode: 0o600 });
@@ -169,12 +205,15 @@ function runWitnesses({ root = path.resolve(__dirname, '..'), mirror, python, re
 if (require.main === module) {
   try {
     const { values } = parseArgs({ options: { python: { type: 'string' }, revision: { type: 'string' },
-      mirror: { type: 'string' }, output: { type: 'string' }, timeout: { type: 'string' } } });
-    const receipt = runWitnesses({ ...values,
+      mirror: { type: 'string' }, output: { type: 'string' }, timeout: { type: 'string' },
+      'full-suites': { type: 'boolean', default: false } } });
+    const receipt = runWitnesses({ ...values, fullSuites: values['full-suites'],
       timeout: values.timeout === undefined ? 60000 : Number(values.timeout) });
     process.stdout.write(JSON.stringify({ native_witnesses_passed: receipt.native_witnesses_passed,
+      default_native_suites_passed: receipt.default_native_suites_passed,
       deployment_acceptance_verified: false }) + '\n');
-    process.exitCode = receipt.native_witnesses_passed ? 0 : 1;
+    process.exitCode = receipt.native_witnesses_passed
+      && (!receipt.full_suites_requested || receipt.default_native_suites_passed) ? 0 : 1;
   } catch (error) {
     process.stderr.write(error.message + '\n');
     process.exitCode = 2;
