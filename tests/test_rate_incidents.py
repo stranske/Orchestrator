@@ -432,3 +432,65 @@ def test_gemini_adapter_reads_reset_from_stderr(incident_paths, monkeypatch):
     duration = 140 * 3600 + 5 * 60 + 6
     assert row["reset_at"] is not None
     assert before + duration <= row["reset_at"] <= int(time.time()) + duration
+
+
+# The vibe CLI's block for Mistral's 2026-11-11 refusal, verbatim from the Workflows#4637 dispatch log.
+VIBE_BILLING_REFUSAL = (
+    "Error: API error from mistral (model: mistral-vibe-cli-latest): LLM backend error [mistral]\n"
+    "  status: 402 Payment Required\n"
+    "  reason: Payment Required\n"
+    "  request_id: N/A\n"
+    "  endpoint: https://api.mistral.ai\n"
+    "  model: mistral-vibe-cli-latest\n"
+    "  provider_message: Vibe budget exhausted.\n"
+    '  body_excerpt: {"object":"error","message":"Vibe budget exhausted.",'
+    '"type":"billing_vibe_budget_exhausted","param":null,"code":"2304","raw_status_code":402}\n'
+)
+
+
+def test_provider_billing_refusal_is_an_authoritative_quota():
+    assert rate_incidents.classify_provider_failure(VIBE_BILLING_REFUSAL) == (
+        "quota",
+        "billing_exhausted",
+        "high",
+    )
+    assert rate_incidents.stdout_carries_capacity_evidence(VIBE_BILLING_REFUSAL)
+    # Either structure alone is enough: the JSON type, or the status field plus its own reason.
+    body_only = VIBE_BILLING_REFUSAL.splitlines()[-1]
+    status_only = "\n".join(VIBE_BILLING_REFUSAL.splitlines()[:3])
+    assert rate_incidents.is_authoritative_error(body_only)
+    assert rate_incidents.is_authoritative_error(status_only)
+
+
+@pytest.mark.parametrize(
+    "prose",
+    [
+        "Return HTTP 402 Payment Required when the invoice is unpaid.",
+        "The handler maps status 402 to a billing banner; budget exhausted copy lives in i18n.",
+        "status: 402\nAll tests passed. Task complete.",
+        "Added billing_exhausted handling to the client.",
+    ],
+)
+def test_billing_prose_is_not_a_refusal(prose):
+    assert not rate_incidents.stdout_carries_capacity_evidence(prose)
+    assert not rate_incidents.is_authoritative_error(prose)
+
+
+def test_unknown_exit_vibe_billing_refusal_sheds_the_seat(incident_paths, monkeypatch):
+    """The real 4637 case: the ledger recorded no exit code, so only the capacity envelope reads it."""
+    monkeypatch.setattr(ledger_reconcile.adapters, "record_ledger", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        ledger_reconcile.feedback, "record_completion_event", lambda *args, **kwargs: None
+    )
+    log = incident_paths / "vibe-402.log"
+    log.write_text(
+        "=== 2026-11-11T17:14:52Z dispatch vibe/full -> stranske/Workflows#4637 [implement] "
+        "run_id=run-vibe-402 ===\n" + VIBE_BILLING_REFUSAL
+    )
+
+    ledger_reconcile.record_completion("run-vibe-402", "vibe", log_file=str(log), exit_code=None)
+
+    marker = json.loads((rate_incidents.SHED_DIR / "vibe").read_text())
+    assert marker["category"] == "quota"
+    assert "tier_scope" not in marker  # the whole seat: the budget covers every vibe model
+    assert marker["expires_at"] > marker["created_at"]  # expires on its own; the next run re-tests
