@@ -1687,16 +1687,58 @@ def test_generation_bump_runs_when_old_verdict_is_fail(tmp_path, monkeypatch, ca
     assert state["trial_generation"] == 1
     assert state["trial_verdict"] == "fail"
 
-    # Active tick (dry_run=False) should bump generation even with producer OFF
-    now = 2000
-    producer.trial_defaults(now=now, active=True)
+    # Drive the real tick entry point with the producer switch OFF (dry_run=False is an active
+    # tick). Stop it right after its trial step: everything later plans research launches, which
+    # this test does not cover.
+    import tick
 
-    # Check that generation was bumped
+    class _StopAfterTrialStep(Exception):
+        pass
+
+    def _stop(*_args, **_kwargs):
+        raise _StopAfterTrialStep
+
+    monkeypatch.setattr(tick.claims, "reap_stale", lambda *a, **k: None)
+    monkeypatch.setattr(tick.claims, "active_claims", _stop)
+    with pytest.raises(_StopAfterTrialStep):
+        tick.research_tick([], {}, dry_run=False, env={"ORCH_EXPERIMENT_PRODUCER": "0"})
+
+    # Check that generation was bumped and a fresh trial started
     state = producer.read_state()
     assert state["trial_generation"] == 2
-    assert state["trial_start"] == now
+    assert state["trial_start"] != 1000
     # Verdict must be cleared so orchestrate.sh defaults ON
     assert "trial_verdict" not in state
+    # orchestrate.sh reads `--trial-defaults` and turns the producer ON for "pending" or "pass".
+    assert producer.trial_defaults()[1] in {"pending", "pass"}
+
+    # Evaluate orchestrate.sh's own default calculation, not a Python re-statement of it:
+    # run the trial block between its anchors against this same producer state, with no
+    # explicit ORCH_EXPERIMENT_PRODUCER so the shell default is what gets exported.
+    import os
+
+    from paths import MODULE_DIR, REPO_ROOT
+
+    source = (REPO_ROOT / "orchestrate.sh").read_text()
+    block = source[
+        source.index("# ORCH-ANCHOR: experiment-producer-trial") : source.index(
+            "# ORCH-ANCHOR: heartbeat-producers"
+        )
+    ]
+    shell_env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"ORCH_EXPERIMENT_PRODUCER", "ORCH_EXPERIMENT_TRIAL_END"}
+    }
+    shell_env["ORCH"] = str(MODULE_DIR)
+    result = subprocess.run(
+        ["/bin/bash", "-c", block + '\nprintf "%s" "$ORCH_EXPERIMENT_PRODUCER"'],
+        env=shell_env,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "1"
 
     # Verify message was printed
     captured = capsys.readouterr()

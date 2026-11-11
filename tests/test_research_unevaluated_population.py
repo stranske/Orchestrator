@@ -290,9 +290,9 @@ def test_unreadable_meta_is_counted_and_reported(conn, exp_dir):
     )
 
     # But it should be tracked as unreadable
-    assert result["unreadable"] == 1, (
-        f"Expected 1 unreadable, got {result['unreadable']}. " f"Result: {result}"
-    )
+    assert (
+        result["unreadable"] == 1
+    ), f"Expected 1 unreadable, got {result['unreadable']}. Result: {result}"
 
     # And it should NOT be drainable
     assert result["drainable"] == 0, (
@@ -434,3 +434,34 @@ def test_followup_decision_marker_is_not_drainable(tmp_path, monkeypatch):
         "followup-skip.json",
         "followup-decision.json",
     }
+
+
+def test_uncollected_diffs_stay_drainable_until_followup_stamps_them(conn, exp_dir):
+    """Drainable must not require diffs collected in advance (#1332 correction).
+
+    exp_abcd.followup collects the diffs itself (collect_fn) and stamps followup-skip.json when
+    that collection recovers no non-empty diff (exp_abcd selftest, zero-diff experiment). So an
+    experiment with meta.json + spec.md and no diff-*.patch yet is still one followup will act
+    on, and the skip stamp is what drains it. Requiring collected diffs up front would report
+    drainable 0 for experiments the next followup pass would clear.
+    """
+    now = time.time()
+    exp_id = "exp-uncollected"
+    edir = exp_dir / exp_id
+    edir.mkdir()
+    (edir / "meta.json").write_text(json.dumps({"experiment_id": exp_id}))
+    (edir / "spec.md").write_text("# Test spec")
+    conn.execute(
+        "INSERT INTO runs (run_id, ts, agent, task_type, target, experiment_id) VALUES (?, ?, ?, ?, ?, ?)",
+        ("run-uncollected", now, "codex", "implement", "Owner/Repo#1", exp_id),
+    )
+
+    assert not list(edir.glob("diff-*.patch"))
+    before = research_subjects.unevaluated_experiment_ids(conn, now=now)
+    assert exp_id in before["ids"]
+    assert before["drainable"] == 1
+
+    # What followup writes when its own collection finds no non-empty diff.
+    (edir / "followup-skip.json").write_text(json.dumps({"reason": "no-non-empty-diffs"}))
+    after = research_subjects.unevaluated_experiment_ids(conn, now=now)
+    assert after["drainable"] == 0
