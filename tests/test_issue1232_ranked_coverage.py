@@ -477,6 +477,10 @@ def test_keepalive_supervisor_plan_target_and_closure(monkeypatch, tmp_path):
     assert "next_step" in plan
     assert "proposal_command" in plan
 
+    monkeypatch.setattr(
+        supervisor.keepalive_shadow, "gather_signals", lambda _target, **_kwargs: signals
+    )
+
     plan_target_result = supervisor.plan_target(
         signals["target"],
         report_dir=tmp_path,
