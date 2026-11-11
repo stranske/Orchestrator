@@ -1813,3 +1813,17 @@ def test_muse_fields_experiment_arms_while_aider_stays_backup(monkeypatch):
     plan = producer.build_plan([item], cap, **kwargs)
     assert {c["agent"] for c in plan["producer_cells"]} == {"muse", "vibe"}, plan
     assert set(plan["planned"][0]["arms"]) == {"muse", "vibe"}, plan
+
+
+def test_empty_feed_with_a_blocked_seat_reports_no_subject_not_pacing(monkeypatch):
+    """2026-11-11: six ticks with eligible=0 were tallied as `pacing cursor=...` skips."""
+    cap, kwargs = plan_fixture(monkeypatch, shed=True)  # claude: bare shed -> blocked
+    plan = producer.build_plan([], cap, **kwargs)
+    assert plan["skipped"][-1]["reason"] == "no_subject", plan["skipped"]
+
+    # When pacing really empties the feed class, the skip still names pacing.
+    for row in cap["agents"].values():
+        row["state"] = "shed"
+    item = {"target": "a/b#3", "task_type": "implement", "body": "`pytest tests/test_x.py`"}
+    plan = producer.build_plan([item], cap, **kwargs)
+    assert plan["skipped"][-1]["reason"].startswith("pacing "), plan["skipped"]

@@ -406,9 +406,13 @@ def build_plan(
         reason = "pacing " + ", ".join(f"{a}={p}" for a, p in sorted(blocked.items()))
         print(f"{reason}; coverage debt {debt} cells > 21d, drainable {drainable}", file=sys.stderr)
         if not candidate_cells:
+            # Name the first break. With no cell in any feed class (no eligible subject, or no
+            # route cell for its class) pacing emptied nothing: the skip is no_subject. Reported
+            # as pacing it read as a capacity block while the feed was empty (2026-11-11, 6 ticks).
+            paced_out = any(c["task_type"] in feed_classes for c in cells)
             return {
                 "planned": [],
-                "skipped": skipped + [{"reason": reason}],
+                "skipped": skipped + [{"reason": reason if paced_out else "no_subject"}],
                 "candidates": [],
                 "producer_cells": cells,
             }
