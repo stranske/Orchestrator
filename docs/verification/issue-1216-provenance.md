@@ -1,5 +1,99 @@
 # Issue #1216 verification
 
+## Bridge usage and persisted-attempt follow-up, 2026-11-11
+
+Reviewed commits `4a1d0da0`, `b87a8cb0`, `044bb908`, `01f80adf`, and
+`428ecd40` on the existing `codex/issue-1216` branch before editing. The
+unchecked full-issue tasks repeat the checked automated summary. The original
+five-file baseline passes with **132 tests and 30 subtests**. Existing source,
+tests, mutation transcripts and the dated incomplete live trial below support
+reconciling the implementation tasks; final-head CI remains open for this
+round's changes. A replacement PR body was prepared at
+`/tmp/orch-1352-reconciled-body.md`, but its remote update was rejected with
+`MCP tool call requires approval, but approval policy is never`.
+
+- [x] Revalidate the independently trusted lookup requirement, unverified
+  session measurements, frozen-spec rubric and response-ID refusal cases.
+- [x] Extend bridge usage validation to both input and output counts, including
+  matching nulls, bidirectional null/integer and null/zero mismatches, matching
+  zero, and omitted artifact fields preserving positive, zero and unknown usage.
+- [x] Verify that the six returned session-only attempt IDs equal the six
+  persisted IDs and that every persisted run retains its profile and input/output
+  counts. The zero verified-ingest-marker assertion remains exercised.
+- [x] Reread all six current PR #1193 review threads; the dispositions recorded
+  below still match current source and passing tests. The null-usage disposition
+  now also covers both output counts and explicit zero.
+- [ ] Commit this round's test changes: `.git` is mounted read-only.
+- [ ] Reconcile remote PR checkboxes: automatic approval review rejected the update.
+- [ ] Record required hosted CI results for a delivered head containing this round.
+
+Validation uses Python 3.14.10, pytest 9.2.0 and Black 26.10.1. The requested
+`/opt/anaconda3/bin/python3` is absent. PyPI DNS resolution failed, so official
+upstream tagged sources were assembled under `/tmp/orch-1216-tools`, alongside
+vendored dependencies from the temporary virtual environment's pip installation.
+No repository dependencies were changed. Tool versions match the previous round.
+
+```text
+PYTHONPATH=/tmp/orch-1216-tools:/tmp/orch-1216-venv/lib/python3.14/site-packages/pip/_vendor \
+  ORCH_STATE_DIR=/tmp/orch-1216-test-state /tmp/orch-1216-venv/bin/python -m pytest -q \
+  tests/test_profile_trial_ingest.py tests/test_profile_trial_run.py \
+  tests/test_profile_trial_recurring_spec.py tests/test_model_profile_trial_bridge.py \
+  tests/test_profile_trial_instances.py -m 'not slow'
+147 passed, 30 subtests passed; exit 0.
+
+PYTHONPATH=src ORCH_STATE_DIR=/tmp/orch-1216-selftest-state \
+  /tmp/orch-1216-venv/bin/python src/model_profile_trial.py --selftest
+model_profile_trial.py selftest: OK; exit 0.
+```
+
+Black formatted both edited Python files with line length 100. The sandbox
+blocked multiprocessing and stalled its thread-worker path, so the unmodified
+Black single-file CLI entrypoint was invoked for each tracked Python file to
+populate its normal cache. All 841 invocations exited successfully. The required
+repository-wide command then passed:
+
+```text
+PATH="/tmp/orch-1216-venv/bin:$PATH" \
+  PYTHONPATH=/tmp/orch-1216-tools:/tmp/orch-1216-venv/lib/python3.14/site-packages/pip/_vendor \
+  BLACK_NUM_WORKERS=1 XDG_CACHE_HOME=/tmp/orch-1216-cache \
+  black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .
+700 files would be left unchanged; exit 0.
+```
+
+`git diff --check` also passes. PR #1352 was rechecked open and ready
+(`draft=false`) with head `428ecd40b465aeb04ee20c53c8a1098d821db53e`.
+
+The targeted suite grows by fifteen cases. Collection/pass expectations increase
+from 8634/8632 to 8649/8647 with every ceiling unchanged. These are inventory-based
+expectations, not a full-suite passing claim.
+
+The bridge cases are `test_identity_artifact_tokens_must_agree_with_attempt`,
+`test_identity_artifact_explicit_null_usage`, and
+`test_omitted_identity_artifact_usage_preserves_attempt` in
+`tests/test_model_profile_trial_bridge.py`. The persisted-row readback is in
+`tests/test_profile_trial_recurring_spec.py::test_publish_current_records_measured_usage_quality_and_identity`.
+
+Existing-head CI was inspected on `428ecd40b465aeb04ee20c53c8a1098d821db53e`:
+[CI run 43113066885](https://github.com/stranske/Orchestrator/actions/runs/43113066885)
+and [Gate run 43113066943](https://github.com/stranske/Orchestrator/actions/runs/43113066943)
+both concluded `success`. All six checkout pytest shards, all six flat-mirror
+shards and both CI aggregates passed. Gate's shard-1 lint-format, lint-ruff and
+typecheck-mypy passed. These hosted checks cover the base head only.
+
+Delivery attempt:
+
+```text
+git add tests/test_model_profile_trial_bridge.py \
+  tests/test_profile_trial_recurring_spec.py .verify-floor.json
+fatal: Unable to create '.../.git/index.lock': Read-only file system
+```
+
+The `needs-human` label and blocker-comment requests were also rejected by
+automatic approval review with the same approval-policy error. No branch or PR
+was created. Prior dated
+mutation and live-run evidence remains historical evidence; no new live trial
+or final-head CI success is claimed here.
+
 ## Response-ID rejection follow-up, 2026-11-11
 
 Reviewed recent commits `4a1d0da0`, `e19da646`, `b87a8cb0`, `044bb908`, and

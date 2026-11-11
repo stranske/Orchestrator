@@ -290,6 +290,14 @@ def test_publish_current_records_measured_usage_quality_and_identity(tmp_path, m
             conn.execute("SELECT COUNT(DISTINCT attempt_id) FROM execution_attempts").fetchone()[0]
             == 6
         )
+        saved = conn.execute(
+            "SELECT attempt_id, run_id, profile_id, tokens_in, tokens_out FROM execution_attempts"
+        ).fetchall()
+        assert {row[0] for row in saved} == set(published["recorded_attempt_ids"])
+        assert {run_id: (profile_id, ti, to) for _, run_id, profile_id, ti, to in saved} == {
+            row["run_id"]: (row["profile_id"], row["tokens_in"], row["tokens_out"])
+            for row in results["attempts"]
+        }
         assert conn.execute("SELECT COUNT(*) FROM profile_trial_ingests").fetchone()[0] == 0
     assert summary["exp_id"] == EXP_ID
     zero_profile = trial.CURRENT_TRIAL_PROFILE_IDS[0]
