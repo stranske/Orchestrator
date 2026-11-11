@@ -64,6 +64,17 @@ def test_env_prereq_selftest_runs_with_an_isolated_runtime(monkeypatch, tmp_path
     denied = _deny_external_io(monkeypatch)
 
     env_prereq._selftest()
+    # Assert the contract _selftest checks, so removing one of its inner checks cannot pass silently.
+    assert issubclass(env_prereq.MissingPrerequisite, unittest.SkipTest)
+    assert env_prereq.require(None, None) is None
+    try:
+        env_prereq.require(None, "the named thing is missing", "a later reason")
+    except env_prereq.MissingPrerequisite as exc:
+        assert str(exc) == "the named thing is missing"
+    else:
+        raise AssertionError("require() must raise on the first named absence")
+    reason = env_prereq.ledger_rows_absent("definitely-not-a-capability")
+    assert reason is None or (isinstance(reason, str) and reason.strip())
     assert env_prereq.ledger_legacy_rows_absent().startswith(
         "capability ledger holds no pre-admission-gate (legacy) capability"
     )
