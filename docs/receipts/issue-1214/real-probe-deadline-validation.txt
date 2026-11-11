@@ -1,0 +1,24 @@
+UTC: 2026-11-11T20:34:09.200772+00:00
+Interpreter: /opt/hostedtoolcache/Python/3.14.10/x64/bin/python3
+
+$ /opt/hostedtoolcache/Python/3.14.10/x64/bin/python3 -m pytest tests/test_dispatcher_offload.py -k sandbox -m 'not slow'
+/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3: No module named pytest
+exit=1; elapsed=0.015s
+
+$ /opt/hostedtoolcache/Python/3.14.10/x64/bin/python3 -m black --line-length 100 tests/test_dispatcher_offload.py
+/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3: No module named black
+exit=1; elapsed=0.015s
+
+$ /opt/hostedtoolcache/Python/3.14.10/x64/bin/python3 -m black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .
+/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3: No module named black
+exit=1; elapsed=0.015s
+
+Python AST syntax check: PASS
+
+Standard-library production smoke check (not pytest): PASS
+A real child sleeping for 30 seconds was stopped by the five-second subprocess deadline.
+{"classification": "timeout", "command": ["/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3", "-c", "import time; time.sleep(30)"], "detail": "probe exceeded 5s", "elapsed_s": 5.005912926999997, "has_network": false}
+
+$ /opt/hostedtoolcache/Python/3.14.10/x64/bin/python3 src/verify.py
+
+INCOMPLETE: stopped at diagnostic bound 60s; exit=-15; elapsed=60.057s

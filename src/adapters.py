@@ -7,7 +7,6 @@ Reflects PR #2350 Rev-2b/2c/2d:
     'frontier:<model>' which draws the metered mid-tier pool (LOCAL_POLICY.md). Per Rev-2d the router
     sequences free-first then drains the prepaid frontier pool LATER in the cycle
     (use-it-or-lose-it), so the adapter just executes whichever mode it's handed.
-  - aider runs from its ISOLATED venv (Rev-2c), never base/--user.
   - gemini via agy (Antigravity) is LANE-READY as of 1.0.8 — headless `-p` print mode
     verified, auth auto-loads from the real macOS keychain/home context while mutable app data is
     redirected with `--gemini_dir`; now wired into the route table.
@@ -41,7 +40,6 @@ import worktree_git
 HOME = Path.home()
 HANDOFF = Path(os.environ.get("HANDOFF_DIR", HOME / ".codex" / "handoff"))
 LEDGER = HANDOFF / "capacity-ledger.ndjson"
-AIDER_BIN = HOME / ".codex" / "orchestrator" / "aider-venv" / "bin" / "aider"  # isolated (Rev-2c)
 LOCAL_RUNTIME = Path(os.environ.get("ORCH_LOCAL_RUNTIME", HOME / ".codex" / "orchestrator"))
 AGENT_RUNTIME = Path(os.environ.get("ORCH_AGENT_RUNTIME_DIR", LOCAL_RUNTIME / "agent-runtime"))
 
@@ -75,8 +73,6 @@ def _env_int(name: str, default: int) -> int:
 #            the provider-resolved model or quality.
 #   vibe   — Mistral merged its coding line into ONE model (mistral-medium-3.5, 256k, replaced
 #            Devstral 2 as the Vibe default). No tiers to pin; the CLI default is correct.
-#   aider  — 'mistral/codestral-latest' is a floating alias that self-upgrades; pinning would be
-#            a downgrade.
 #   cursor — has real tiers, but `cursor-agent --list-models` needs auth that is currently absent
 #            on this box. Left EMPTY deliberately: cursor draws a metered mid-tier pool (LOCAL_POLICY.md) and the historic
 #            burn came from an unpinned frontier default, so guessed ids are the one thing not to
@@ -92,14 +88,11 @@ MUSE_MODEL = model_table.single_model("muse")
 # DERIVED from the shared model table (model_table.TABLE_JSON; source of truth is
 # stranske/Workflows .github/agents/model-table.json, which hosted runners read at run time).
 # Edit the table, never this map. codex/claude/gemini pin a model per tier; the other seats run one
-# model each (VIBE_MODEL, MUSE_MODEL, CURSOR_COMPOSER_MODEL, AIDER_MODEL) and keep an empty map,
+# model each (VIBE_MODEL, MUSE_MODEL, CURSOR_COMPOSER_MODEL) and keep an empty map,
 # which means "no tiers to pin", never "model unknown".
-# A seat the shared table no longer lists (aider left the fleet table in Workflows#4652, 2026-11-11) has
-# no tiers here and an empty model below; the capacity launch-binary gate already sheds it.
-_TABLE_AGENTS = set(model_table.TABLE.get("providers") or model_table.TABLE.get("agents") or {})
 MODEL_TIERS: dict[str, dict[str, str]] = {
-    agent: model_table.tier_models(agent) if agent in _TABLE_AGENTS else {}
-    for agent in ("codex", "claude", "gemini", "cursor", "vibe", "aider", "muse")
+    agent: model_table.tier_models(agent)
+    for agent in ("codex", "claude", "gemini", "cursor", "vibe", "muse")
 }
 MODEL_TIER_NAMES = ("cheap", "mid", "full")  # ordered cheap -> expensive; the ceiling relies on it
 
@@ -113,12 +106,6 @@ CURSOR_FRONTIER_DEFAULT = None  # require explicit 'frontier:<model>'; bare 'fro
 CURSOR_COMPOSER_MODEL = os.environ.get(
     "ORCH_CURSOR_COMPOSER_MODEL", ""
 ).strip() or model_table.single_model("cursor")
-# aider's pin is a floating alias that self-upgrades ('mistral/codestral-latest'); it comes from
-# the shared table like every other seat's model.
-# aider left the shared table (Workflows#4652): keep its last pinned alias so an explicit run stays valid.
-AIDER_MODEL = (
-    model_table.single_model("aider") if "aider" in _TABLE_AGENTS else "mistral/codestral-latest"
-)
 
 # Agents whose CLI can enumerate its own models. Used to validate a pin before dispatch and to
 # auto-resolve a replacement after a vendor rename. Agents absent here are never "unresolvable":
@@ -714,8 +701,8 @@ def local_launch(agent: str) -> dict:
 
     Returns {agent, checked, launchable, binary, path, reason}. `checked=False` (no launch command,
     or the check is switched off with ORCH_LAUNCH_CHECK=0) is never evidence of a missing binary.
-    Only `checked=True, launchable=False` is: 47 of 47 aider starts 11-05..11-10 died with
-    "aider-venv/bin/aider: No such file or directory" while capacity still read the seat as ok.
+    Only `checked=True, launchable=False` is: 47 of 47 starts of the since-removed aider seat
+    (11-05..11-10) died on a missing binary while capacity still read the seat as ok.
     """
     base = {"agent": agent, "checked": False, "launchable": True, "binary": None, "path": None}
     if os.environ.get("ORCH_LAUNCH_CHECK", "1").strip().lower() in {"0", "false", "no", "off"}:
@@ -1130,11 +1117,9 @@ def model_identity(agent: str, mode: str | None = None, profile=None) -> str | N
         #
         # This is the REQUESTED identity. Note the config maps that alias to provider id
         # `mistral-vibe-cli-latest`, which FLOATS -- so an immutable resolved identity still has to
-        # come from the provider's own response, exactly as for aider's `codestral-latest`. Naming
+        # come from the provider's own response. Naming
         # the request honestly is an improvement; it is not a resolution claim.
         return VIBE_MODEL
-    if agent == "aider":
-        return "mistral/codestral-latest"
     if agent == "muse":
         return MUSE_MODEL
     if agent == "gemini":
@@ -1163,7 +1148,7 @@ def model_identity(agent: str, mode: str | None = None, profile=None) -> str | N
 # fabricated identity is worse than a skipped event.
 CODEX_SESSIONS = Path(os.environ.get("ORCH_CODEX_SESSIONS_DIR", HOME / ".codex" / "sessions"))
 CLAUDE_PROJECTS = Path(os.environ.get("ORCH_CLAUDE_PROJECTS_DIR", HOME / ".claude" / "projects"))
-# EVERY SEAT HERE WAS WRONG. This dict once listed cursor, gemini, vibe and aider as keeping no
+# EVERY SEAT HERE WAS WRONG. This dict once listed cursor, gemini, vibe and (since-removed) aider as keeping no
 # per-session model log, and that was asserted from an eight-line `find | head` -- inferring a
 # blocker instead of verifying it. Looking properly, four of them do:
 #
@@ -1186,8 +1171,7 @@ CLI_IDENTITY_READERS = ("codex", "claude", "cursor", "vibe", "gemini")
 CURSOR_CHATS = Path(os.environ.get("ORCH_CURSOR_CHATS_DIR", HOME / ".cursor" / "chats"))
 VIBE_SESSIONS = Path(os.environ.get("ORCH_VIBE_SESSIONS_DIR", HOME / ".vibe" / "logs" / "session"))
 AGY_HOME = Path(os.environ.get("ORCH_AGY_HOME", HOME / ".gemini" / "antigravity-cli"))
-# Only aider is left, and only because nothing has been found for it yet -- stated as an absence of
-# evidence, not as a property of the tool.
+# Empty since aider (the last entry) was removed from the fleet on 2026-11-11.
 # GEMINI IS NO LONGER HERE. Its conversation STORE genuinely records no model -- that part was
 # verified -- but its CLI LOG does:
 #   `model_config_manager.go:311] Propagating selected model override to backend: label="..."`
@@ -1195,17 +1179,7 @@ AGY_HOME = Path(os.environ.get("ORCH_AGY_HOME", HOME / ".gemini" / "antigravity-
 # a workspace-and-window guess. `_agy_model_for` stays as a store fallback; the per-run log is the
 # primary path. The lesson is the recurring one: "the tool does not record it" needed to mean "I
 # read every place it could record it", and the first pass had only read the store.
-NO_SESSION_LOG_AGENTS = {
-    # PROBED, and the finding is specific rather than "nothing found". aider's `--analytics-log`
-    # records `launched` / `repo` / `auto_commits` / `exit` with NO model in any properties, and its
-    # stdout prints `Model: mistral/codestral-latest`, which is the requested alias echoed back --
-    # and that alias FLOATS, so writing it as resolved identity is precisely the `--model` copy §2
-    # forbids. `--llm-history-file` might carry the provider's own response metadata, but settling
-    # that needs a real paid call on a seat with zero runs in the last week, which is not worth
-    # spending to learn. Named so the next reader starts from the finding, not from scratch.
-    "aider": "analytics log carries no model; stdout echoes the floating `codestral-latest` alias, "
-    "which is the request. Unsettled: --llm-history-file (needs a paid call)",
-}
+NO_SESSION_LOG_AGENTS: dict[str, str] = {}
 # A real vendor model id, used to pick the model out of a transcript that also mentions filenames,
 # branch names and prose. Deliberately an ALLOWLIST of vendor families: `_first_real_model` would
 # happily accept `claude-fleet-list.sh` from a log otherwise.
@@ -2400,16 +2374,6 @@ def build_command(
         if prompt_file is not None:
             return cmd + ["--prompt-file", str(prompt_file)]
         return cmd + [prompt]
-    if agent == "aider":
-        return [
-            str(AIDER_BIN),
-            "--model",
-            AIDER_MODEL,
-            "--message",
-            prompt,
-            "--yes-always",
-            "--no-stream",
-        ]
     if agent == "gemini":
         # agy (Antigravity): -p/--print runs headless; auth auto-loads from ~/.gemini; generous
         # --print-timeout so it doesn't self-terminate (default 5m). FIX 2026-06-15: agy's -p mode
@@ -2857,7 +2821,7 @@ def dispatch(
     """Run an agent on a task; outcome is judged by git SIDE-EFFECTS, not stdout
     (per design: a commit that touches a file, not a self-claimed 'done').
     Records one consumption row; the caller reconciles real cost_usd afterward.
-    The run happens in `cwd`, so cursor, claude, vibe and aider work there unsandboxed: a `cwd`
+    The run happens in `cwd`, so cursor, claude and vibe work there unsandboxed: a `cwd`
     that is or holds `/`, the home dir or the control plane is refused for every agent.
     """
     refuse_broad_workspace(agent, cwd)
@@ -3116,9 +3080,6 @@ def _selftest_inner(*, gaps: list[str] | None = None):
     for tier in MODEL_TIER_NAMES:  # tiers never escape the policy
         ct = build_command("cursor", "do x", mode=tier)
         assert ct[ct.index("--model") + 1] == CURSOR_COMPOSER_MODEL, (tier, ct)
-    a = build_command("aider", "do x")
-    assert a[0].endswith("/aider-venv/bin/aider"), a  # isolated venv binary
-    assert "mistral/codestral-latest" in a, a
     # A PRESENCE-ONLY PROBE MUST SAY WHY, PERMANENTLY OR NOT. `presence` means the probe proves a
     # credential EXISTS, not that the server accepts it, so every one is a known weakness. Without a
     # documented limit such a probe reads as an unfinished upgrade forever and gets re-investigated
@@ -3301,8 +3262,8 @@ def _selftest_inner(*, gaps: list[str] | None = None):
         # agy print mode REQUIRES a model, so a non-tier mode must still send the full pin.
         gnone = build_command("gemini", "x", mode="offload", cwd=gemini_cwd)
         assert gnone[gnone.index("--model") + 1] == DEFAULT_GEMINI_MODEL, gnone
-        # Agents with no tier pins keep passing no --model (vibe/aider are single-model lanes).
-        assert resolve_model("vibe", "cheap") is None and resolve_model("aider", "full") is None
+        # Agents with no tier pins keep passing no --model (vibe is a single-model lane).
+        assert resolve_model("vibe", "cheap") is None
         assert "--model" not in build_command("vibe", "x", mode="cheap")
     finally:
         if old_probe is None:
@@ -3613,7 +3574,7 @@ def _selftest_inner(*, gaps: list[str] | None = None):
                 _aac.CREDENTIAL_FILES.pop("muse", None)
     print(
         "adapters.py selftest: OK (cursor composer/explicit-frontier/safe-bare-frontier, "
-        "vibe subscription, codex/claude cheap-model map, aider venv, gemini lane-ready, "
+        "vibe subscription, codex/claude cheap-model map, gemini lane-ready, "
         "codex linked-worktree git grant, no broad agent workspace, muse seat)"
     )
 

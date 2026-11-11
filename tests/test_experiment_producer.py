@@ -1790,23 +1790,24 @@ def test_projected_pacing_seats_field_arms_but_real_cutoffs_do_not(tmp_path, mon
     assert draw["reason"] in {"draw", "no_draw"}, draw
 
 
-def test_muse_fields_experiment_arms_while_aider_stays_backup(monkeypatch):
+def test_exempt_backup_fields_arms_while_other_backups_stay_out(monkeypatch):
+    """EXPERIMENT_BACKUP_ARMS lets a listed backup seat field arms; any other backup stays out."""
     import router
 
     cap, kwargs = plan_fixture(monkeypatch, shed=False)
-    cap["agents"] = {a: {"state": "ok"} for a in ("muse", "aider", "vibe")}
+    cap["agents"] = {a: {"state": "ok"} for a in ("muse", "spare", "vibe")}
     monkeypatch.setattr(
         router,
         "ROUTE_TABLE",
-        {"implement": {"agents": [{"agent": a} for a in ("muse", "aider", "vibe")]}},
+        {"implement": {"agents": [{"agent": a} for a in ("muse", "spare", "vibe")]}},
     )
-    monkeypatch.setattr(router, "BACKUP_AGENTS", {"aider", "muse"})
+    monkeypatch.setattr(router, "BACKUP_AGENTS", {"spare", "muse"})
     monkeypatch.setattr(
         producer,
         "route_cells",
         lambda *a, **k: [
             {"agent": a, "task_type": "implement", "age_days": 25}
-            for a in ("muse", "aider", "vibe")
+            for a in ("muse", "spare", "vibe")
         ],
     )
     item = {"target": "a/b#9", "task_type": "implement", "body": "`pytest tests/test_x.py`"}

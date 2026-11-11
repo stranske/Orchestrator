@@ -1,0 +1,40 @@
+UTC start: 2026-11-11T20:04:41.004821+00:00
+Interpreter: CI-selected Python 3.14; /opt/anaconda3/bin/python3 absent.
+Dependency installation failed: pypi.org DNS resolution unavailable.
+
+$ /opt/hostedtoolcache/Python/3.14.10/x64/bin/python3 -m pytest tests/test_dispatcher_offload.py -k sandbox -m 'not slow'
+/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3: No module named pytest
+exit=1; elapsed=0.014s
+
+$ /opt/hostedtoolcache/Python/3.14.10/x64/bin/python3 -m black --line-length 100 src/switch_review.py tests/test_dispatcher_offload.py
+/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3: No module named black
+exit=1; elapsed=0.014s
+
+$ /opt/hostedtoolcache/Python/3.14.10/x64/bin/python3 -m black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .
+/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3: No module named black
+exit=1; elapsed=0.014s
+
+$ /opt/hostedtoolcache/Python/3.14.10/x64/bin/python3 src/verify.py
+exit=-15; elapsed=45.014s
+Stopped after 45s diagnostic bound; verification INCOMPLETE, not passing.
+
+Direct standard-library fixture assertions: exit=0.
+PASS: interval bounds, exclusive end, fallback deduplication, both counts
+PASS: future rows excluded and incomplete observation stays unverified
+PASS: invalid intervals rejected as CLI usage errors
+PASS: ISO offsets, explicit end and epoch zero work through CLI
+PASS: default seven-day interval preserved
+These checks do not constitute a pytest run or live post-merge observation.
+
+$ python3 -m py_compile src/switch_review.py tests/test_dispatcher_offload.py
+exit=0
+
+$ git diff --check
+exit=0
+
+$ gh pr view --json number,state,isDraft,url
+error connecting to api.github.com
+check your internet connection or https://githubstatus.com
+exit=1
+Remote PR lookup failed; no blocker comment or needs-human label could be applied.
+No remote PR was created or changed. No commit: mandatory Black gate unavailable.

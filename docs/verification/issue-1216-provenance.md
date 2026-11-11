@@ -1,5 +1,26 @@
 # Issue #1216 verification
 
+## Local keepalive round 4, 2026-11-11
+
+GitHub returned six current, unresolved threads on the closed PR #1193,
+with no additional thread or comment pages. The [dispositions below](#review-dispositions-for-pr-1193)
+cover all six. The three production-code findings were rechecked against
+`_authoritative_identity_verified`, `_recurring_work_rubric`, and
+`_work_quality_score`. The remaining threads concern the bridge, response-ID,
+and session-only persistence regression tests. The five-file A1 command
+using `/opt/anaconda3/bin/python3` exited 0 with 147 passed and 30 subtests
+passed both before and after integrating main.
+
+The [CI run](https://github.com/stranske/Orchestrator/actions/runs/43117087142)
+and [Gate run](https://github.com/stranske/Orchestrator/actions/runs/43117087920)
+both succeeded for predecessor head `78f4dc9eef7105867f722fc6523f5a164ec4373b`.
+The PR conflicted with main `495fd9dc` only in `.verify-floor.json`.
+Integration carries the prior head's verified 63-case delta over the new
+main floor, yielding 8699 collected and 8697 passed as CI expectations.
+Read the [checks on PR #1352](https://github.com/stranske/Orchestrator/pull/1352/checks)
+for the commit containing this section. T6 and A4 require results bound to
+that delivered head.
+
 ## Bridge usage and persisted-attempt follow-up, 2026-11-11
 
 Reviewed commits `4a1d0da0`, `b87a8cb0`, `044bb908`, `01f80adf`, and

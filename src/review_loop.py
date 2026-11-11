@@ -23,7 +23,6 @@ _FAMILY = {
     "gemini": "google",
     "vibe": "mistral",
     "muse": "meta",
-    "aider": "mistral",
 }
 _PR_URL_MARKER = re.compile(r"^PR_URL=(https://github\.com/([^/\s]+)/([^/\s]+)/pull/(\d+))\s*$")
 _TARGET = re.compile(r"^([\w.-]+)/([\w.-]+)#(\d+)$")

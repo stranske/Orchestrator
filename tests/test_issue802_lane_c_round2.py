@@ -18,6 +18,7 @@ import exploration_backfill as eb
 import feedback
 import redirect_apply as ra
 import research_subjects
+import router
 import ux_review as ur
 
 
@@ -802,7 +803,8 @@ def test_exploration_backfill_evaluated_targets_from_feedback(monkeypatch, tmp_p
 
 
 def test_exploration_backfill_missing_cells_and_target_parsers(tmp_path, monkeypatch) -> None:
-    route = {"implement": {"agents": [{"agent": "codex"}, {"agent": "claude"}, {"agent": "aider"}]}}
+    monkeypatch.setattr(router, "BACKUP_AGENTS", {"spare"})  # no real backup seat since 2026-11-11
+    route = {"implement": {"agents": [{"agent": "codex"}, {"agent": "claude"}, {"agent": "spare"}]}}
     coverage = {
         "tasks": [
             {"task_type": None},
@@ -819,7 +821,7 @@ def test_exploration_backfill_missing_cells_and_target_parsers(tmp_path, monkeyp
         ]
     }
     cells = eb._missing_cells(coverage, route_table=route)
-    assert cells and all(c["agent"] != "aider" for c in cells)
+    assert cells and all(c["agent"] != "spare" for c in cells)
 
     spec = tmp_path / "spec.md"
     spec.write_text("Title\nTarget: owner/repo#9\n", encoding="utf-8")
