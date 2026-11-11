@@ -452,6 +452,46 @@ def test_sandbox_fallback_preserves_write_roots_and_profile(tmp_path, monkeypatc
     assert "sandbox=workspace-write sandbox_fallback=true" in Path(result["log"]).read_text()
 
 
+def test_sandbox_fallback_rechecks_protected_write_roots(tmp_path, monkeypatch, capsys):
+    """A root restricted during the probe must not become a fallback write grant."""
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(adapters, "codex_bypass_inner_sandbox", lambda: False)
+    workspace = tmp_path / "workspace"
+    allowed = tmp_path / "allowed"
+    workspace.mkdir()
+    allowed.mkdir()
+
+    def probe(cmd, kwargs):
+        # The original read-only command grants no extra roots. Before building
+        # workspace-write, a newly protected descendant makes this grant unsafe.
+        monkeypatch.setattr(
+            adapters,
+            "protected_workspace_anchors",
+            lambda: [(allowed / "control-plane", "the test control plane")],
+        )
+        return _completed(cmd, 1, "", "no such host")
+
+    calls = _install_run(monkeypatch, probe)
+    result = dispatcher.offload(
+        "codex",
+        "Run gh api rate_limit",
+        cwd=str(workspace),
+        mode="assess",
+        write_boundary={"protect": [str(tmp_path)], "allow": [str(allowed)]},
+    )
+    assert _probe_call(calls)
+    assert result["exit"] == 2 and result["process_started"] is False
+    assert result["sandbox"] == "read-only" and result["sandbox_fallback"] is False
+    assert result["run_id"] is None
+    assert "contains the test control plane" in result["error"]
+    assert _shell(calls) == ""
+    assert _ledger(tmp_path) == []
+    assert list((tmp_path / "logs").iterdir()) == []
+    diagnostic = capsys.readouterr().err
+    assert "workspace-write fallback refused" in diagnostic
+    assert dispatcher.ASSESS_FALLBACK_DIAGNOSTIC not in diagnostic
+
+
 @pytest.mark.parametrize("agent,mode", [("codex", "mid"), ("cursor", "assess")])
 def test_sandbox_probe_only_runs_for_codex_assess(tmp_path, monkeypatch, agent, mode):
     _isolate(tmp_path, monkeypatch)

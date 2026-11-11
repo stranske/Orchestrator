@@ -48,3 +48,51 @@ Stop this repair after two attempts or at 2026-11-11T19:45:44Z, whichever comes 
 ```sh
 /opt/anaconda3/bin/python3 src/switch_review.py --assess-sandbox-fallback --since "$MERGE_TIMESTAMP" --json
 ```
+
+## Keepalive inspection — 2026-11-11
+
+- [x] Inspect dispatcher, adapter command generation, existing capacity-ledger writer,
+  switch-review interval report, and sandbox tests before assigning changes.
+
+Inspection baseline: checked-out `f410e500`, with local `origin/main` at `4551cd69`.
+This is a local-ref reconciliation, not a claim that a network fetch succeeded.
+`adapters.py` and `switch_review.py` have no diff against that main ref. The branch
+already implements `_sandbox_has_network`, the five-second shared probe clock,
+DNS/connection/timeout versus authentication/API classification, adapter-built
+fallback arguments, the no-write preamble, conditional diagnostic, restricted
+profile refusal, and `sandbox_fallback=true` on start and terminal ledger rows.
+`adapters.record_ledger` is the existing NDJSON writer; no parallel writer is needed.
+`switch_review.assess_sandbox_fallback_report` already accepts an explicit start,
+prints both counts, and leaves incomplete observation windows unverified.
+
+The missing regression identified here is a write root becoming protected during
+the network probe. `test_sandbox_fallback_rechecks_protected_write_roots` exercises
+the real adapter's refusal when rebuilding the workspace-write command, and checks
+that no provider, dispatch log, run ID, ledger row, or fallback-success diagnostic
+is produced. No dispatcher, adapter, or reporting implementation changes were made.
+
+A direct standard-library smoke check of that scenario exited 0 and printed:
+
+```text
+PASS: real adapter refuses a newly protected write root after a DNS probe failure
+PASS: no provider launch, run ID, dispatch log, ledger row or fallback-success diagnostic
+```
+
+The new pytest test remains unverified by pytest. This runner's CI-selected absolute
+interpreter is `/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3` (CI selects 3.14;
+`/opt/anaconda3/bin/python3` is absent). It lacks both pytest and Black. Installing
+them failed because `pypi.org` could not resolve; the local wheel cache also lacks
+both packages. The attempted sandbox command failed with `No module named pytest`.
+Both Black formatting and the required repository-wide Black check failed with
+`No module named black`. Python syntax compilation and `git diff --check` passed.
+No Python commit is permitted until the required Black gate can run successfully.
+The pre-existing green/mutation receipts above do not validate this new test.
+`src/verify.py` was also launched with that absolute interpreter as requested in
+this task. It emitted no result while running its module self-tests and was
+interrupted after more than six minutes (exit 130); this is incomplete verification,
+not a passing result. `keepalive-validation-blocked.txt` retains this round's
+validation outcomes. No acceptance checkbox was marked complete for these runs.
+
+The live assess outcome and the actual seven days after implementation merge remain
+UNVERIFIED. No live provider command, merge, or synthetic observation interval was
+used to substitute for that evidence.
