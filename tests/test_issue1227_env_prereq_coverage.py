@@ -64,7 +64,7 @@ def test_env_prereq_selftest_runs_with_an_isolated_runtime(monkeypatch, tmp_path
     denied = _deny_external_io(monkeypatch)
 
     env_prereq._selftest()
-    # Assert the contract _selftest checks, so removing one of its inner checks cannot pass silently.
+    # Check the underlying contract independently; this does not detect removed _selftest assertions.
     assert issubclass(env_prereq.MissingPrerequisite, unittest.SkipTest)
     assert env_prereq.require(None, None) is None
     try:
@@ -194,9 +194,7 @@ class PrerequisiteBoundaryTests(unittest.TestCase):
             for skill_present in (False, True):
                 for codex_present in (False, True):
                     with (
-                        self.subTest(
-                            seat=seat_present, skill=skill_present, codex=codex_present
-                        ),
+                        self.subTest(seat=seat_present, skill=skill_present, codex=codex_present),
                         patch.object(
                             env_prereq, "_seat_signals", return_value={"fixture": seat_present}
                         ),
@@ -229,7 +227,9 @@ class PrerequisiteBoundaryTests(unittest.TestCase):
                         patch.object(
                             env_prereq,
                             name,
-                            return_value={"fixture": False} if name == "_seat_signals" else "absent",
+                            return_value=(
+                                {"fixture": False} if name == "_seat_signals" else "absent"
+                            ),
                         )
                     )
                 probes[unreadable].side_effect = OSError("fixture mark cannot be read")
@@ -376,9 +376,7 @@ class PrerequisiteBoundaryTests(unittest.TestCase):
                 self.assertIsNone(env_prereq.run_or_replay(check, verdicts))
                 check.assert_called_once_with()
         check.reset_mock()
-        self.assertIsNone(
-            env_prereq.run_or_replay(check, {"test_recorded": {"outcome": "passed"}})
-        )
+        self.assertIsNone(env_prereq.run_or_replay(check, {"test_recorded": {"outcome": "passed"}}))
         check.assert_not_called()
 
     def test_replayed_skip_preserves_the_reason_without_executing_the_check(self):
@@ -454,7 +452,9 @@ class PrerequisiteBoundaryTests(unittest.TestCase):
                 self.assertEqual(text.count("fixture absent"), 7 if missing else 0)
 
     def test_main_selftest_dispatches_once_without_reporting_machine(self):
-        inventory = Mock(side_effect=AssertionError("selftest mode must not report machine inventory"))
+        inventory = Mock(
+            side_effect=AssertionError("selftest mode must not report machine inventory")
+        )
         with (
             patch.object(env_prereq, "_selftest") as selftest,
             patch.object(env_prereq, "exec_mirror_shape", inventory),
