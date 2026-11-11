@@ -20,6 +20,8 @@ import switch_review
 def world(tmp_path, monkeypatch):
     sha = live._toy_repository(tmp_path)
     monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    # The advice event's daily lineage heartbeat must never reach the live capability ledger.
+    monkeypatch.setattr(feedback, "_capability_daily_heartbeat", lambda *_a, **_k: None)
     now = int(time.time())
     with feedback._conn() as conn:
         conn.execute(
@@ -558,10 +560,11 @@ def test_weekly_review_prints_the_live_line(world, monkeypatch):
         }
     )
     assert "adjudicator live: disputes 1, advised 1, uncertified 0, graded 0" in rendered
-    # Deliberate break, in place: without the case-id dedup the same dispute is advised again.
+    # "Advised" is the Brain's `live_shadow_advice` event, not the report: losing the report does
+    # not advise the same dispute again.
     world["path"].write_text(json.dumps({"rows": [], "summary": {}, "population": 1}))
     again = live.run_live(**world["common"])
-    assert again["attempted"] == 1 and len(world["calls"]) == 2
+    assert again["attempted"] == 0 and len(world["calls"]) == 1
 
 
 def test_a_failed_role_run_is_retried_up_to_the_cap_and_counted_as_failed(world):

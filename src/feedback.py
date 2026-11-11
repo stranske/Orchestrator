@@ -539,6 +539,7 @@ MAX_COMPLETION_LIST_ITEMS = 32
 MAX_COMPLETION_STRING_CHARS = 256
 MAX_COMPLETION_ARTIFACTS = 16
 COMPLETION_PAYLOAD_FIELDS = {
+    "live_shadow",
     "closer_stage",
     "relay_pacing",
     "changed_path_classes",
@@ -595,6 +596,7 @@ VALID_COMPLETION_EVENT_TYPES = {
     "panel",
 }
 VALID_COMPLETION_PHASES = {
+    "live_shadow_advice",
     "post_merge_recheck",
     "trigger",
     "decision",
@@ -606,6 +608,7 @@ VALID_COMPLETION_PHASES = {
     "durability",
 }
 VALID_COMPLETION_PRODUCERS = {
+    "role-adjudicator",
     "verifier_evidence",
     "closer_disposition.integrate_ordinary",
     "closer_dispatcher.response_binding",
@@ -660,6 +663,19 @@ VALID_COMPLETION_STATUSES = {
     "unknown",
 }
 COMPLETION_NESTED_FIELDS = {
+    # The adjudicator's live shadow advice (#643): shadow only, never an outcome or merge input.
+    "live_shadow": {
+        "case_id",
+        "run_id",
+        "target",
+        "decision",
+        "disposition",
+        "backend",
+        "backend_run_id",
+        "cost_usd",
+        "merge_rule_verdict",
+        "evaluated_sha",
+    },
     "relay_pacing": {
         "source",
         "chosen",
@@ -1920,6 +1936,7 @@ def _sanitize_completion_payload(payload: dict | None) -> tuple[dict, str, int]:
 def _normalize_completion_producer(producer: str) -> str:
     value = str(producer or "").strip().lower().replace("-", "_")
     aliases = {
+        "role_adjudicator": "role-adjudicator",
         "feedback.execution_attempt": "feedback.execution_attempt",
         "feedback.record_run": "feedback.record_run",
         "feedback.record_outcome": "feedback.record_outcome",

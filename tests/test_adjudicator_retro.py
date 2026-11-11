@@ -1094,3 +1094,152 @@ def test_retry_pending_reproduces_the_original_skip_rule():
                     shape,
                 )
         assert retro._retry_pending(None, retry=retry) is False
+
+
+# --------------------------------------------------------------------------------------------
+# The live shadow (#643): a NEW dispute, certified at dispatch, advised once, graded on truth.
+# --------------------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def live_shadow(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+
+    import adjudicator_live as live
+
+    sha = live._toy_repository(tmp_path)
+    db = tmp_path / "brain.db"
+    monkeypatch.setattr(feedback, "DB_PATH", db)
+    ledger = tmp_path / "capabilities.json"
+    monkeypatch.setattr(capabilities, "REG", ledger)
+    monkeypatch.setenv("ORCH_CAPABILITIES_PATH", str(ledger))
+    monkeypatch.setattr(feedback, "_capability_daily_heartbeat", lambda *_a, **_k: None)
+    monkeypatch.setattr(retro, "_gh_json", lambda _args: {"total_count": 0, "check_runs": []})
+    now = int(time.time())
+    with feedback._conn() as conn:
+        conn.execute("INSERT INTO runs(run_id,ts,target) VALUES ('new',?,'owner/repo#1')", (now,))
+        conn.execute(
+            "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged) "
+            "VALUES ('new','NON_PASS','PASS',1)"
+        )
+    # Let the Brain's own open-time migrations (e.g. the `runs.assignment` backfill) settle, so a
+    # before/after comparison sees only what the live shadow writes.
+    with feedback._conn():
+        pass
+    calls: list[dict] = []
+    collected: list[tuple[str, str]] = []
+
+    def runner(**kw):
+        calls.append(kw)
+        assert kw["source"] == "live" and kw["dispatch"] is True and kw["timeout"] == 600
+        assert isinstance(kw["case"], roles.CollectedAdjudicationCase)
+        return {
+            "backend_run_id": "backend-live",
+            "backend": "stub",
+            "proposal": {"decision": "uphold_blocker", "rationale": "x"},
+            "advisory_plan": {"decision": "uphold_blocker"},
+            "errors": [],
+        }
+
+    @contextmanager
+    def collector(target, head):
+        collected.append((target, head))
+        yield str(tmp_path / "repo")
+
+    common = dict(
+        db=db,
+        path=tmp_path / "live.json",
+        now=now + 1,
+        env={},
+        evidence_reader=lambda _row: live._evidence_for(sha),
+        runner=runner,
+        provider=collector,
+        snapshot_reader=lambda _t: {"number": 1, "headRefOid": sha, "body": live.AC_BODY},
+    )
+    return {"live": live, "db": db, "calls": calls, "collected": collected, "common": common}
+
+
+def _advice_events(db):
+    with sqlite3.connect(db) as conn:
+        return conn.execute(
+            "SELECT event_id,run_id,producer,payload_json,updated_ts FROM completion_events "
+            "WHERE phase='live_shadow_advice'"
+        ).fetchall()
+
+
+def _brain_except_events(db):
+    with sqlite3.connect(db) as conn:
+        tables = [
+            name
+            for (name,) in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            if name != "completion_events"
+        ]
+        return {name: sorted(map(repr, conn.execute(f"SELECT * FROM {name}"))) for name in tables}
+
+
+def test_live_shadow_adjudicates_a_new_dispute_once_and_grades_on_truth(live_shadow):
+    live, db = live_shadow["live"], live_shadow["db"]
+    outcomes_before = _brain_except_events(db)["outcomes"]
+    first = live.run_live(**live_shadow["common"])
+    assert (first["attempted"], first["advised"], first["uncertified"]) == (1, 1, 0)
+    events = _advice_events(db)
+    assert len(events) == 1
+    _event_id, run_id, producer, payload, _ts = events[0]
+    assert producer == "role-adjudicator" and run_id.startswith("adjudicator-live:")
+    advice = json.loads(payload)["live_shadow"]
+    assert advice["target"] == "owner/repo#1" and advice["run_id"] == "new"
+    assert advice["decision"] == "uphold_blocker" and advice["backend"] == "stub"
+    assert advice["case_id"] == first["rows"][0]["case_id"] and "cost_usd" in advice
+    assert _brain_except_events(db)["outcomes"] == outcomes_before, "no outcomes row written"
+
+    second = live.run_live(**live_shadow["common"])
+    assert _advice_events(db) == events, "the second run writes nothing"
+    assert second["attempted"] == 0
+    assert len(live_shadow["calls"]) == 1 and len(live_shadow["collected"]) == 1
+
+    checked = feedback.DURABILITY_DETECTION_SINCE + 10
+    with feedback._conn() as conn:
+        conn.execute(
+            "UPDATE outcomes SET durability='broke_later', durability_checked_ts=? "
+            "WHERE run_id='new'",
+            (checked,),
+        )
+    graded = live.reconcile_live(db=db, path=live_shadow["common"]["path"])
+    assert graded["graded"] == 1 and graded["agree"] == 1  # uphold <-> broke_later
+    line = live.weekly_line(live_shadow["common"]["path"])
+    assert "live: disputes 1, advised 1, uncertified 0, graded 1" in line
+    assert len(live_shadow["calls"]) == 1, "grading never dispatches"
+
+
+def test_live_shadow_never_adjudicates_an_uncertified_case(live_shadow):
+    live = live_shadow["live"]
+    common = {
+        **live_shadow["common"],
+        "snapshot_reader": lambda _t: {"number": 1, "headRefOid": "x", "body": "no criteria"},
+    }
+    result = live.run_live(**common)
+    assert (result["attempted"], result["advised"], result["uncertified"]) == (1, 0, 1)
+    assert result["rows"][0]["certification"]["status"] == "uncertified"
+    assert result["rows"][0]["certification"]["reason"]
+    assert live_shadow["calls"] == [] and _advice_events(live_shadow["db"]) == []
+    assert "uncertified 1" in live.weekly_line(common["path"])
+    # Settled: a later run neither re-collects nor dispatches it from metadata.
+    again = live.run_live(**common)
+    assert again["attempted"] == 0 and live_shadow["calls"] == []
+
+
+def test_live_shadow_writes_no_merge_input(live_shadow):
+    live, db = live_shadow["live"], live_shadow["db"]
+    assert live.enabled({})  # the flag is on by default
+    before = _brain_except_events(db)
+    result = live.run_live(**live_shadow["common"])
+    assert result["advised"] == 1
+    assert _brain_except_events(db) == before, "only completion events may change"
+    with sqlite3.connect(db) as conn:
+        assert conn.execute(
+            "SELECT verifier_verdict,adjudicated_verdict,merged,durability FROM outcomes"
+        ).fetchall() == [("NON_PASS", "PASS", 1, "pending")]
+        # The advice is never attached to the disputed run, so it cannot read as its event.
+        assert conn.execute(
+            "SELECT count(*) FROM completion_events WHERE run_id='new'"
+        ).fetchone() == (0,)

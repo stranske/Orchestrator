@@ -984,6 +984,65 @@ def disputes(*, db: Path | None = None, now: int | None = None, days: int = 90) 
         ]
 
 
+# The live arm's advice record (#643): one completion event per advised dispute, in the Brain.
+LIVE_ADVICE_PRODUCER = "role-adjudicator"
+LIVE_ADVICE_PHASE = "live_shadow_advice"
+
+
+def live_advised_targets(db: Path | None = None) -> set[str]:
+    """Targets that already carry a `live_shadow_advice` event; read-only, no schema creation."""
+    with sqlite3.connect(f"file:{(db or feedback.DB_PATH).resolve()}?mode=ro", uri=True) as conn:
+        if not conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='completion_events'"
+        ).fetchone():
+            return set()
+        payloads = conn.execute(
+            "SELECT payload_json FROM completion_events WHERE producer=? AND phase=? "
+            "AND validation_status!='rejected'",
+            (LIVE_ADVICE_PRODUCER, LIVE_ADVICE_PHASE),
+        ).fetchall()
+    targets: set[str] = set()
+    for (payload,) in payloads:
+        try:
+            target = (json.loads(payload or "{}").get("live_shadow") or {}).get("target")
+        except (ValueError, AttributeError):
+            continue
+        if isinstance(target, str) and target:
+            targets.add(target)
+    return targets
+
+
+def live_disputes(
+    *,
+    since_ts: int | None = None,
+    limit: int | None = 3,
+    db: Path | None = None,
+    now: int | None = None,
+    exclude_case_ids: frozenset[str] | set[str] = frozenset(),
+) -> list[dict]:
+    """The disputes the live arm has still to handle, newest first, at most `limit`.
+
+    On top of `disputes()`: a target that already carries a `live_shadow_advice` event is never
+    selected again, and `exclude_case_ids` names the cases the live state
+    (`capability-program/adjudicator-live.json`) has already settled without advice (uncertified,
+    out of attempts). "Not yet handled" is decided by those two records, NOT by a timestamp cut at
+    the last run: `runs.ts` is when the run started, not when its dispute was persisted, and a
+    cut at the last run would drop every dispute persisted after it for a run that began before
+    it, and every dispute past the per-run cap. `since_ts`, when given, is an extra lower bound.
+    """
+    if limit is not None and limit <= 0:
+        return []
+    advised = live_advised_targets(db)
+    selected = [
+        row
+        for row in disputes(db=db, now=now)
+        if (since_ts is None or int(row["ts"] or 0) > since_ts)
+        and row["target"] not in advised
+        and _case_id(row) not in exclude_case_ids
+    ]
+    return selected if limit is None else selected[:limit]
+
+
 def _packet_metadata_only(ground_truth: dict) -> bool:
     patch = ground_truth.get("diff_patch")
     patch_text = patch.get("text") if isinstance(patch, dict) else ""

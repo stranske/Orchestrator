@@ -13,9 +13,11 @@ takes the newest ones this report has not seen, and for each: builds the same pa
 retrospective builds, provisions a disposable exact-head checkout of the merged commit, CERTIFIES
 the case with `adjudicator_retro.qualify_collected_case` (the native cohort's own certifier) from a
 deterministic inventory — every changed path, every explicit acceptance criterion mapped to the
-whole diff — and asks the role once with `source="live"`. The advice is persisted beside the
-dispute in `capability-program/adjudicator-live.json`; the retrospective's reconciler grades it
-when `outcomes.durability` lands. A case that cannot be certified is recorded `uncertified` with
+whole diff — and asks the role once with `source="live"`. The advice is persisted as a
+`live_shadow_advice` completion event in the Brain (producer `role-adjudicator`; the one record
+of "advised", so a target carrying one is never selected again) and beside the dispute in
+`capability-program/adjudicator-live.json`; `reconcile_live` grades it when
+`outcomes.durability` lands. A case that cannot be certified is recorded `uncertified` with
 its reason and never adjudicated from metadata.
 
 SHADOW ONLY. Nothing here writes an outcome, a label, a merge input or a close. Kill switch:
@@ -489,16 +491,15 @@ def run_live(
     provider = provider or _exact_head_checkout
     snapshot_reader = snapshot_reader or pr_snapshot
     rows = _load_rows(path)
-    saved = {row.get("case_id"): row for row in rows if _final(row)}
+    # "Advised" has ONE record, the Brain's `live_shadow_advice` event, which `live_disputes`
+    # excludes by target; an advised row saved before that event existed is backfilled once here.
+    _backfill_advice_events(rows, db)
+    settled = {row.get("case_id") for row in rows if _final(row) and "proposal" not in row}
     retrying = {row.get("case_id"): row for row in rows if not _final(row)}
     population = retro.disputes(db=db, now=now)
     attempted = advised = uncertified = 0
-    for dispute in population:
-        if attempted >= limit:
-            break
+    for dispute in retro.live_disputes(limit=limit, db=db, now=now, exclude_case_ids=settled):
         case_id = retro._case_id(dispute)
-        if case_id in saved:
-            continue
         attempted += 1
         earlier = retrying.pop(case_id, None)
         if earlier is not None:
@@ -577,6 +578,8 @@ def run_live(
                         entry["cost_usd"] = retro.measured_cost(result.get("backend_run_id"), db)
                     except (OSError, ValueError, KeyError, TypeError):
                         entry["cost_usd"] = None
+                    if "proposal" in entry:
+                        _record_advice_event(entry, db)
         except (ValueError, KeyError, TypeError) as exc:
             if "certification" in entry:
                 entry["error"] = str(exc)[:300]  # the role run failed after certification
@@ -588,26 +591,13 @@ def run_live(
             # kept with its error and retried by later runs until MAX_ATTEMPTS, then it is final.
             entry["error"] = str(exc)[:300]
         rows.append(entry)
-        if _final(entry):
-            saved[case_id] = entry
     # Grade every live row against later truth and write the live report. NOT the retrospective's
     # persistence: `adjudicator_retro._row_metadata_only` treats any serialized qualification as
     # metadata-only on purpose (a JSON flag cannot prove collector issuance for the retro's own
     # report), so its writer would demote every live decision to needs_more_evidence. A live row
     # was decided on a case certified IN THIS PROCESS at dispatch time; this module records that
     # fact itself (`certification`), grades the advice itself, and labels the number `live`.
-    _refresh_live_truth(rows, db)
-    summary = live_summary(rows)
-    _write_report(
-        path,
-        {
-            "schema": "adjudicator-live/v1",
-            "generated_at": now,
-            "population": len(population),
-            "summary": summary,
-            "rows": rows,
-        },
-    )
+    summary = _grade_and_write(rows, db, path, now=now, population=len(population))
     return {
         "disabled": False,
         "attempted": attempted,
@@ -617,6 +607,95 @@ def run_live(
         "summary": summary,
         "rows": rows,
     }
+
+
+def _advice_payload(row: dict) -> dict:
+    return {
+        "live_shadow": {
+            "case_id": row.get("case_id"),
+            "run_id": row.get("run_id"),
+            "target": row.get("target"),
+            "decision": row.get("decision"),
+            "disposition": row.get("disposition"),
+            "backend": row.get("backend"),
+            "backend_run_id": row.get("backend_run_id"),
+            "cost_usd": row.get("cost_usd"),
+            "merge_rule_verdict": row.get("merge_rule_verdict"),
+            "evaluated_sha": (row.get("certification") or {}).get("evaluated_sha"),
+        }
+    }
+
+
+def _record_advice_event(row: dict, db: Path | None) -> None:
+    """Persist one advice as a completion event in the Brain. Shadow only: no outcome is touched.
+
+    The event's run id is synthetic (`adjudicator-live:<case>`), never the disputed run's, so the
+    event cannot become that run's latest completion event or adopt its influence edges.
+    """
+    kwargs = dict(
+        event_type="role",
+        phase=retro.LIVE_ADVICE_PHASE,
+        producer=retro.LIVE_ADVICE_PRODUCER,
+        status="recorded",
+        payload=_advice_payload(row),
+    )
+    run_id = f"adjudicator-live:{row['case_id']}"
+    try:
+        if db is None or Path(db).resolve() == Path(feedback.DB_PATH).resolve():
+            row["advice_event"] = feedback.record_completion_event(run_id, **kwargs)["event_id"]
+        else:
+            import sqlite3
+
+            with sqlite3.connect(str(db)) as conn:
+                row["advice_event"] = feedback._record_completion_event_in_conn(
+                    conn, run_id, **kwargs
+                )["event_id"]
+    except Exception as exc:  # noqa: BLE001 - a Brain fault must not lose the saved advice
+        row["advice_event_error"] = str(exc)[:300]
+
+
+def _backfill_advice_events(rows: list[dict], db: Path | None) -> None:
+    try:
+        recorded = retro.live_advised_targets(db)
+    except Exception:  # noqa: BLE001 - an unreadable Brain is reported by the selection below
+        return
+    for row in rows:
+        if "proposal" in row and row.get("target") not in recorded:
+            _record_advice_event(row, db)
+            recorded.add(row.get("target"))
+
+
+def _grade_and_write(
+    rows: list[dict], db: Path | None, path: Path, *, now: int, population: int | str
+) -> dict:
+    _refresh_live_truth(rows, db)
+    summary = live_summary(rows)
+    _write_report(
+        path,
+        {
+            "schema": "adjudicator-live/v1",
+            "generated_at": now,
+            "population": population,
+            "summary": summary,
+            "rows": rows,
+        },
+    )
+    return summary
+
+
+def reconcile_live(
+    *, db: Path | None = None, path: Path | None = None, now: int | None = None
+) -> dict:
+    """Grade the saved live advice on later truth (`outcomes.durability`); no dispatch, no GitHub.
+
+    The same grading `run_live` ends with, callable on its own: reject <-> durable (PASS) and
+    uphold <-> broke_later (FAIL), by the retrospective's `_shadow_verdict_for_row`.
+    """
+    now = int(time.time()) if now is None else now
+    path = path or report_path()
+    rows = _load_rows(path)
+    population = len(retro.disputes(db=db, now=now))
+    return _grade_and_write(rows, db, path, now=now, population=population)
 
 
 def _refresh_live_truth(rows: list[dict], db: Path | None) -> None:
@@ -772,8 +851,9 @@ def _selftest() -> None:
     with tempfile.TemporaryDirectory(prefix="adjudicator-live-") as tmp:
         root = Path(tmp)
         sha = _toy_repository(root)
-        saved_db = feedback.DB_PATH
+        saved_db, saved_heartbeat = feedback.DB_PATH, feedback._capability_daily_heartbeat
         feedback.DB_PATH = root / "brain.db"
+        feedback._capability_daily_heartbeat = lambda *_a, **_k: None  # never the live ledger
         try:
             now = int(time.time())
             with feedback._conn() as conn:
@@ -806,7 +886,7 @@ def _selftest() -> None:
 
             @contextmanager
             def provider(target, head):
-                assert target == "owner/repo#1" and head == sha
+                assert target in {"owner/repo#1", "owner/repo#2"} and head == sha
                 yield str(root / "repo")
 
             snapshot = {"number": 1, "headRefOid": sha, "body": AC_BODY}
@@ -841,10 +921,11 @@ def _selftest() -> None:
                     "SELECT verifier_verdict,adjudicated_verdict FROM outcomes"
                 ).fetchall()
             assert verdicts == [("NON_PASS", "PASS")], "shadow never writes an outcome"
+            assert retro.live_advised_targets(feedback.DB_PATH) == {"owner/repo#1"}
             # A body with no explicit acceptance criteria cannot be certified: recorded, no dispatch.
             with feedback._conn() as conn:
                 conn.execute(
-                    "INSERT INTO runs(run_id,ts,target) VALUES ('live-2',?,'owner/repo#1')",
+                    "INSERT INTO runs(run_id,ts,target) VALUES ('live-2',?,'owner/repo#2')",
                     (now - 1,),
                 )
                 conn.execute(
@@ -865,7 +946,7 @@ def _selftest() -> None:
             )
             assert off["disabled"] and off["attempted"] == 0
         finally:
-            feedback.DB_PATH = saved_db
+            feedback.DB_PATH, feedback._capability_daily_heartbeat = saved_db, saved_heartbeat
     print(
         "adjudicator_live selftest OK (certified live dispute advised once; uncertified recorded; switch off writes nothing)"
     )
