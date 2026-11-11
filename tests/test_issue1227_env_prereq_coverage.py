@@ -368,6 +368,30 @@ class PrerequisiteBoundaryTests(unittest.TestCase):
             self.assertEqual(str(raised.exception), expected)
         check.assert_not_called()
 
+    def test_runnable_records_only_the_first_absent_prerequisite(self):
+        gaps = ["earlier section is absent"]
+        self.assertTrue(env_prereq.runnable(gaps, None, ""))
+        self.assertEqual(gaps, ["earlier section is absent"])
+        self.assertFalse(env_prereq.runnable(gaps, None, "ledger row is absent", "CLI is absent"))
+        self.assertEqual(gaps, ["earlier section is absent", "ledger row is absent"])
+
+    def test_report_gaps_prints_each_reason_once_in_first_seen_order(self):
+        output = io.StringIO()
+        with redirect_stdout(output):
+            env_prereq.report_gaps("fixture", [])
+        self.assertEqual(output.getvalue(), "")
+        with redirect_stdout(output):
+            env_prereq.report_gaps(
+                "fixture", ["ledger is absent", "CLI is absent", "ledger is absent"]
+            )
+        self.assertEqual(
+            output.getvalue().splitlines(),
+            [
+                f"fixture selftest: {env_prereq.PREREQ_ABSENT_MARK} section skipped — {reason}"
+                for reason in ("ledger is absent", "CLI is absent")
+            ],
+        )
+
     def test_main_reports_both_shapes_and_named_prerequisites(self):
         detectors = (
             "exec_mirror_shape",

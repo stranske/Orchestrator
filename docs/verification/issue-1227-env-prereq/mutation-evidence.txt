@@ -542,3 +542,39 @@ test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance (test_iss
 Ran 1 test in 0.003s
 
 OK
+
+=== 2026-11-11: section skip helpers (standard-library runners; NOT pytest) ===
+Reviewed commits through 463c504c. Repository production source remained unchanged.
+Mutation runner: /tmp/orch-1256-section-mutations.py
+Each run loaded a temporary copy of env_prereq.py first on PYTHONPATH.
+The tests set BOTH runtime paths to a temporary root, stub ledger access,
+and deny subprocess/network calls with an assert_not_called cleanup.
+
+runnable test: return False after gaps.append(reason) changed to return True.
+Broken: unittest exit 1, AssertionError: True is not false.
+Restored: unittest exit 0, Ran 1 test, OK.
+
+report_gaps test: for reason in dict.fromkeys(gaps) changed to for reason in gaps.
+Broken: unittest exit 1, duplicate 'ledger is absent' output line.
+Restored: unittest exit 0, Ran 1 test, OK.
+
+PYTHONPATH=src:tests PYTHONDONTWRITEBYTECODE=1 python3 -m unittest
+  test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests -v
+Result: Ran 15 tests, OK.
+Both original pytest-style functions also passed via a standard-library fixture adapter;
+that run executed env_prereq._selftest(), which printed OK.
+
+Required tooling attempts:
+python3 -m pytest tests/test_issue1227_env_prereq_coverage.py --cov=env_prereq
+  --cov-branch --cov-report=term-missing -m 'not slow'
+Result: exit 1, No module named pytest. Coverage remains UNKNOWN.
+python3 -m black --line-length 100 tests/test_issue1227_env_prereq_coverage.py
+Result: exit 1, No module named black.
+black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .
+Result: exit 127, black: command not found.
+ruff check --extend-exclude .workflows-lib tests/test_issue1227_env_prereq_coverage.py
+Result: exit 127, ruff: command not found.
+Trusted-tool installation into /tmp failed: PyPI DNS NameResolutionError.
+No Python changes committed because the mandatory Black gate could not pass.
+PR body reconciliation rejected by tool approval: approval policy is never.
+No pytest, coverage, CI, formatting, or remote checklist success is claimed.
