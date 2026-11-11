@@ -489,7 +489,10 @@ def test_provider_response_must_independently_confirm_the_trial_measurement(
     lookup = _bind_authoritative_identity(tmp_path, trial_attempt_fixture)
     response = lookup("resp_fixture1")
     if field == "unavailable":
-        lookup = lambda _response_id: None
+
+        def lookup(_response_id):
+            return None
+
     elif field == "metadata":
         response[field]["run_id"] = "another-run"
     elif field == "usage":
