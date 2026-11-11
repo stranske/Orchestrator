@@ -115,7 +115,10 @@ CURSOR_COMPOSER_MODEL = os.environ.get(
 ).strip() or model_table.single_model("cursor")
 # aider's pin is a floating alias that self-upgrades ('mistral/codestral-latest'); it comes from
 # the shared table like every other seat's model.
-AIDER_MODEL = model_table.single_model("aider") if "aider" in _TABLE_AGENTS else ""
+# aider left the shared table (Workflows#4652): keep its last pinned alias so an explicit run stays valid.
+AIDER_MODEL = (
+    model_table.single_model("aider") if "aider" in _TABLE_AGENTS else "mistral/codestral-latest"
+)
 
 # Agents whose CLI can enumerate its own models. Used to validate a pin before dispatch and to
 # auto-resolve a replacement after a vendor rename. Agents absent here are never "unresolvable":

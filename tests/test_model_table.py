@@ -99,9 +99,11 @@ def test_model_tiers_are_derived_from_the_table() -> None:
         assert adapters.MODEL_TIERS[agent] == {}
     assert adapters.VIBE_MODEL == table["providers"]["vibe"]["models"]["full"]
     assert adapters.MUSE_MODEL == table["providers"]["muse"]["models"]["full"]
-    # aider left the shared table (Workflows#4652, 2026-11-11): an absent seat pins no model, never raises.
+    # aider left the shared table (Workflows#4652, 2026-11-11): it keeps its last pinned alias, never raises.
     expected_aider = (
-        table["providers"]["aider"]["models"]["full"] if "aider" in table["providers"] else ""
+        table["providers"]["aider"]["models"]["full"]
+        if "aider" in table["providers"]
+        else "mistral/codestral-latest"
     )
     assert adapters.AIDER_MODEL == expected_aider
     assert adapters.CURSOR_COMPOSER_MODEL == table["providers"]["cursor"]["models"]["full"]
