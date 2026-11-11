@@ -5,25 +5,45 @@ acceptance checkbox is complete. The default provision suite, same-holder
 disable/restore cycle, deployment full verifier, mirror provenance acceptance,
 and intact zero-refusal seven-day window still require their original evidence.
 
-`scripts/run_provision_native_witnesses.js` runs the existing unmodified
+`scripts/run_provision_native_witnesses.js` runs the
 `test_native_clean_idle_holder_is_reclaimed` and
 `test_native_reclaim_disabled_exit_128_names_holder` cases for both lanes on an
 explicitly selected flat mirror. It requires four successful named JUnit cases;
 exit zero without those cases, skips, missing pytest, or malformed XML cannot
-produce a successful witness receipt. The disabled-reclaim witness itself checks
-Git exit 128 and the holder path. This runner does not add a same-holder restoration
-witness or claim that the entire provision suite passed.
+produce a successful witness receipt. The disabled-reclaim witness checks Git
+exit 128 and the holder's path, branch, commit, and directory identity. It then
+restores reclaim, retries using native process probes, and checks the replacement
+checkout and the ledger event identifying the original holder. The named-witness
+log retains the Git refusal and the successful reclaim output.
 
 The runner compares installed flat Python modules, the test tree, configuration,
-and runner/helper bytes with the selected committed Git objects. It records a
-SHA-256 manifest of the mirror's regular files before execution and checks it
-again afterward. Ordinary pytest/bytecode caches are excluded; symlinks,
-uncommitted test inputs, and extra root Python modules are refused. Receipts live
+and runner/helper bytes with the selected committed Git objects. It runs pytest
+from a private copy of the authenticated inputs read from the pinned generation.
+It records the mirror manifest and its SHA-256 digest before execution and
+recalculates the digest afterward. Symlinked code, tests and pytest configuration,
+uncommitted test inputs, and unexpected Python modules are refused. Receipts live
 outside the mirror in a new private directory. The tested floor must match
 `origin/main` byte for byte. The resolved mirror generation, revision, host,
 interpreter, commands, log/XML hashes, and named verdicts are retained.
 `deployment_acceptance_verified` always remains false: passing these four cases
 does not prove deployment identity, full verification or seven-day acceptance.
+
+The private tree omits the following runtime paths from the installed layout.
+They cannot supply Python imports or pytest configuration to the run.
+
+- Root `.venv`, `.pytest_cache` and `.ruff_cache` and regular `.pyc` files inside
+  `__pycache__` directories. Pytest caching is disabled and bytecode writes are
+  disabled. Select an interpreter outside the installed generation. For the
+  mirror's retained virtual environment, use its external backing directory's
+  `bin/python3` path so Python can still locate `pyvenv.cfg`.
+- Generated `docs/reports`, `ux_reviews`, and experiment run output
+  (`experiments/tick-<timestamp>-<target>-<number>`, `.last-ship-gate`, `invman1`,
+  `orchskill-lanes-20260620`, and `strategy434-20261006` under `experiments/`).
+- Legacy retained root files `path.txt`, `private-ledger.lock`,
+  `repo_review_registry.json.bak-2026-09-21`, `README.md`, `renovate.json`, and
+  `uv.lock`. The `campaigns` link is omitted only when it points to the matching
+  storage-maintenance data path in a retained sibling generation. The runner
+  never follows the link.
 
 After committing and installing these files, run on the deployment host, choosing
 its actual interpreter and immutable installed mirror generation:
