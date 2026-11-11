@@ -196,3 +196,24 @@ diagnostic bound; `verify.exit` records timeout exit 124. This is incomplete
 verification. `git add` then failed with `Unable to create .../.git/index.lock:
 Read-only file system`. The new JavaScript source, tests and receipts remain
 uncommitted because Git metadata is not writable. No push or PR mutation occurred.
+
+## Keepalive round 4 — 2026-11-11T21:44Z
+
+Outcome 1 remains unverified. GitHub returned `state=OPEN` and `mergedAt=null`
+for PR #1355 at `3da961fce31218887c4a13f60f3deae8ddc0617a`. The fetched main
+tip `4ed6ca01ccb2d0f65e1bb3d9f42d4ec552720ed8` lacks the dispatcher probe and
+fallback. The checked T7 entry in the PR body has no supporting merge timestamp,
+post-merge live run, or elapsed observation interval.
+
+After the implementation merges, use the keepalive round 2 assess command from
+the merged revision in the normal dispatcher runtime. Retain the UTC transcript,
+selected sandbox, terminal result, and capacity-ledger row with the same run ID.
+Set `MERGE_TIMESTAMP` to the actual GitHub merge timestamp. Once 168 hours have
+elapsed, retain the round 2 `switch_review.py` command and JSON output. Its default
+end when `--since` is supplied is exactly seven days after the start. A4 requires
+both counts, a verified window, and zero network-caused assess incompletions.
+
+The focused sandbox suite on the inspected head collected 31 tests and passed
+in 5.69 seconds with `/opt/anaconda3/bin/python3`. `src/verify.py` invokes the full
+local suite, so this round left that portion of A1 unverified under the local test
+restriction. T7, A3, and A4 remain unverified.
