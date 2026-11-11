@@ -168,3 +168,42 @@ test('actual builder preserves linked original requirements and refuses malforme
   await assert.rejects(()=>fixture({body,issues:[{...issue,body:{invalid:'source'}}]}).invoke({mode:'evaluate'}),
     /complete authoritative request and changed-code inputs/);
 }));
+
+test('CSV canary native verifier attempts require retained recovery, not another evaluation',()=>{
+  const { validateEvent, completedEvent, guardExistingEvent } = require('../.github/scripts/verification_event.js');
+  // Genuine native comments retained by the acceptance run, not generated decisions.
+  const readback = require('../docs/verification/issue-1184-acceptance-20261111/native-readback.json');
+  const corrective = readback.pull_requests.find(pr => pr.number === 1168);
+  const comments = readback.verifier_events;
+  const before = JSON.stringify(readback);
+  const attempts = new Set();
+  assert.equal(corrective.merged, true);
+  for (const comment of comments) {
+    const match = comment.body.match(/^<!-- verifier-event-state\/v1 (\{[^\n]+\}) -->$/);
+    assert.ok(match, `missing retained native state: ${comment.url}`);
+    const state = JSON.parse(match[1]);
+    // Validate the native event digest before testing rejection, so a malformed
+    // fixture cannot make the negative completion assertion pass vacuously.
+    const event = validateEvent(state.verification_event);
+    assert.equal(event.pr, '1168');
+    assert.equal(event.head_sha, corrective.head_sha);
+    assert.equal(event.evaluated_sha, corrective.merge_commit_sha);
+    assert.equal(completedEvent(event, comments, state.assessment_identity), false);
+    if (state.status !== 'incomplete') continue;
+    const run = readback.workflow_runs.find(run => String(run.id) === state.run_id);
+    assert.ok(run, `missing native workflow readback: ${state.run_id}`);
+    assert.equal(run.status, 'completed');
+    const attemptComments = comments.filter(row => {
+      const attempt = JSON.parse(row.body.match(/(\{[^\n]+\})/)[1]);
+      return attempt.run_id === state.run_id;
+    });
+    assert.throws(
+      () => guardExistingEvent(event, attemptComments, state.assessment_identity),
+      /incomplete; recover retained execution before another evaluation/,
+      `workflow ${state.run_id} (${run.conclusion}) is not retry or completion authority`,
+    );
+    attempts.add(state.run_id);
+  }
+  assert.deepEqual([...attempts].sort(), ['42141057834', '42142328293', '42142641060']);
+  assert.equal(JSON.stringify(readback), before, 'native evidence must remain unchanged');
+});
