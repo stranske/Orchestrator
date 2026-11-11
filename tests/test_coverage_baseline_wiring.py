@@ -122,11 +122,7 @@ const body = [
   'return {exportedSearched, runIds: runs.map((run) => run.id)};',
   '})();',
 ].join('\n');
-vm.runInNewContext(
-  body,
-  {context, core, github, require: localRequire},
-  {timeout: 5000},
-)
+vm.runInNewContext(body, {context, core, github, require: localRequire})
   .then((result) => process.stdout.write(JSON.stringify({
     ...result, requests, warnings, infos, failures, rejections, helperLoads, callTrace, outputs,
   })))
@@ -187,7 +183,9 @@ def _run_discovery(
         capture_output=True,
         cwd=REPO,
         text=True,
-        timeout=10,
+        # Bound the whole child, including Node startup and asynchronous discovery.
+        # The flat-mirror shard runs this alongside other subprocess-heavy tests.
+        timeout=30,
     )
     assert completed.returncode == 0, completed.stderr
     return json.loads(completed.stdout)
