@@ -2623,23 +2623,31 @@ def assess_sandbox_fallback_report(
     ledger_path: Path | str | None = None,
     now: int | None = None,
     since: int | None = None,
+    until: int | None = None,
 ) -> dict:
-    """Count fallback runs and network-caused assess incompletions over seven days.
+    """Count fallback runs and network-caused assess incompletions in an interval.
 
     A missing ledger is unmeasured, never zero. An assess failure whose log cannot
     be read, and a window that has not elapsed, stay unverified: neither is a
     success. `since` is the implementation-merge instant; without it the window
-    is the seven days ending at `now`, which has elapsed.
+    is the seven days ending at `now`, which has elapsed. An explicit `until`
+    requires `since` and replaces the default seven-day end. The start is inclusive
+    and the end exclusive, so adjacent intervals never count the same event twice.
     """
     window_days = ASSESS_SANDBOX_WINDOW_DAYS
     now_ts = int(time.time()) if now is None else int(now)
+    if until is not None and since is None:
+        raise ValueError("until requires since")
     if since is None:
         start = now_ts - window_days * 86400
         end = now_ts
         window_complete = True
     else:
         start = int(since)
-        end = start + window_days * 86400
+        end = int(until) if until is not None else start + window_days * 86400
+        if end <= start:
+            raise ValueError("window end must be after window start")
+        window_days = (end - start) / 86400
         window_complete = now_ts >= end
     if ledger_path is None:
         import adapters
@@ -2669,7 +2677,6 @@ def assess_sandbox_fallback_report(
     network = 0
     unclassifiable = 0
     malformed = 0
-    limit = min(now_ts, end)
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         if not line.strip():
             continue
@@ -2682,7 +2689,7 @@ def assess_sandbox_fallback_report(
             malformed += 1
             continue
         stamp = row.get("ts")
-        if type(stamp) is not int or not start <= stamp <= limit:
+        if type(stamp) is not int or not (start <= stamp < end and stamp <= now_ts):
             continue
         if row.get("sandbox_fallback") is True and isinstance(row.get("run_id"), str):
             fallback_ids.add(row["run_id"])
@@ -2715,7 +2722,11 @@ def assess_sandbox_fallback_report(
     if unclassifiable:
         reasons.append(f"{unclassifiable} assess incompletion(s) lack classifiable evidence")
     if not window_complete:
-        reasons.append("seven-day window has not elapsed")
+        reasons.append(
+            "seven-day window has not elapsed"
+            if window_days == ASSESS_SANDBOX_WINDOW_DAYS
+            else "observation window has not elapsed"
+        )
     if reasons:
         status = "unverified"
         reason = "; ".join(reasons)
@@ -2734,15 +2745,22 @@ def assess_sandbox_fallback_report(
 
 
 def format_assess_sandbox_fallback(section: dict) -> str:
-    """One line: the seven-day counts, and unverified/unmeasured when that is the truth."""
+    """One line: interval bounds, counts, and any evidence limitations."""
     days = section.get("window_days", ASSESS_SANDBOX_WINDOW_DAYS)
+    interval = ""
+    if "window_start" in section and "window_end" in section:
+        start, end = (
+            datetime.fromtimestamp(section[key], timezone.utc).isoformat().replace("+00:00", "Z")
+            for key in ("window_start", "window_end")
+        )
+        interval = f" [{start}, {end})"
 
     def _num(key: str) -> str:
         value = section.get(key)
         return str(value) if type(value) is int else "unmeasured"
 
     line = (
-        f"  assess sandbox fallback ({days}d): fallback_runs {_num('fallback_runs')}; "
+        f"  assess sandbox fallback ({days:g}d){interval}: fallback_runs {_num('fallback_runs')}; "
         f"network-caused assess incompletions {_num('network_caused_assess_incompletions')}"
     )
     status = section.get("status") or "unmeasured"
@@ -3777,17 +3795,29 @@ def main(argv: list[str]) -> int:
     )
     ap.add_argument(
         "--since",
+        type=_parse_window_start,
         help="window start as unix seconds or ISO-8601 (the implementation merge instant)",
+    )
+    ap.add_argument(
+        "--until",
+        type=_parse_window_start,
+        help="exclusive window end as unix seconds or ISO-8601 (requires --since)",
     )
     ap.add_argument("--ledger", help="capacity-ledger.ndjson to read")
     ap.add_argument("--now", type=int, help="unix seconds the window clock uses")
     args = ap.parse_args(argv)
+    if (args.since is not None or args.until is not None) and not args.assess_sandbox_fallback:
+        ap.error("--since and --until require --assess-sandbox-fallback")
     if args.selftest:
         _selftest()
         return 0
     if args.assess_sandbox_fallback:
-        since = _parse_window_start(args.since) if args.since else None
-        section = assess_sandbox_fallback_report(ledger_path=args.ledger, now=args.now, since=since)
+        try:
+            section = assess_sandbox_fallback_report(
+                ledger_path=args.ledger, now=args.now, since=args.since, until=args.until
+            )
+        except ValueError as exc:
+            ap.error(str(exc))
         print(
             json.dumps(section, indent=2) if args.json else format_assess_sandbox_fallback(section)
         )

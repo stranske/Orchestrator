@@ -627,6 +627,50 @@ def test_sandbox_switch_review_names_seven_days_and_unverified_windows(tmp_path)
     assert "unverified:" in proc.stdout
     assert "seven-day window has not elapsed" in proc.stdout
 
+    # Explicit bounds exclude neighbouring periods and duplicate start/complete rows.
+    interval_ledger = tmp_path / "interval.ndjson"
+    end = since + 3 * 86400
+    interval_ledger.write_text(
+        "\n".join(
+            _row(
+                stamp,
+                event=event,
+                mode="assess",
+                run_id=run_id,
+                sandbox_fallback=True,
+                exit=70,
+                error="OFFLOAD_INCOMPLETE: Could not resolve host",
+            )
+            for stamp, event, run_id in [
+                (since - 1, "complete", "before"),
+                (since, "start", "inside"),
+                (since + 1, "complete", "inside"),
+                (end - 1, "complete", "last"),
+                (end, "complete", "at-end"),
+                (end + 1, "complete", "after"),
+            ]
+        )
+        + "\n"
+    )
+    interval = switch_review.assess_sandbox_fallback_report(
+        ledger_path=interval_ledger, since=since, until=end, now=end + 86400
+    )
+    assert interval["window_start"] == since and interval["window_end"] == end
+    assert interval["window_days"] == 3 and interval["window_complete"] is True
+    assert interval["fallback_runs"] == 2
+    assert interval["network_caused_assess_incompletions"] == 2
+    assert interval["status"] == "measured"
+    interval_text = switch_review.format_assess_sandbox_fallback(interval)
+    assert "(3d) [" in interval_text and "Z)" in interval_text
+
+    partial = switch_review.assess_sandbox_fallback_report(
+        ledger_path=interval_ledger, since=since, until=end, now=since
+    )
+    assert partial["fallback_runs"] == 1
+    assert partial["network_caused_assess_incompletions"] == 0
+    assert partial["status"] == "unverified"
+    assert partial["reason"] == "observation window has not elapsed"
+
 
 def test_sandbox_switch_review_json_cli_accepts_iso_window(tmp_path, capsys):
     assert (
@@ -650,3 +694,59 @@ def test_sandbox_switch_review_json_cli_accepts_iso_window(tmp_path, capsys):
     assert report["window_complete"] is False
     assert report["status"] == "unmeasured"
     assert report["fallback_runs"] is None
+
+    ledger = tmp_path / "explicit.ndjson"
+    ledger.write_text("")
+    assert (
+        switch_review.main(
+            [
+                "--assess-sandbox-fallback",
+                "--since",
+                "2026-11-06T02:00:00+02:00",
+                "--until",
+                "2026-11-13T00:00:00Z",
+                "--now",
+                "1794528000",
+                "--ledger",
+                str(ledger),
+            ]
+        )
+        == 0
+    )
+    text = capsys.readouterr().out
+    assert "[2026-11-06T00:00:00Z, 2026-11-13T00:00:00Z)" in text
+    assert "fallback_runs 0; network-caused assess incompletions 0" in text
+    assert "unverified" not in text
+
+    # Unix epoch zero is an explicit start rather than an omitted argument.
+    switch_review.main(
+        [
+            "--assess-sandbox-fallback",
+            "--since",
+            "0",
+            "--until",
+            "86400",
+            "--now",
+            "86400",
+            "--ledger",
+            str(ledger),
+            "--json",
+        ]
+    )
+    assert json.loads(capsys.readouterr().out)["window_start"] == 0
+
+    for arguments, message in [
+        (["--since", "invalid"], "invalid _parse_window_start value"),
+        (["--until", "2026-11-13"], "until requires since"),
+        (["--since", "10", "--until", "10"], "end must be after window start"),
+        (["--since", "10", "--until", "9"], "end must be after window start"),
+    ]:
+        with pytest.raises(SystemExit) as exc:
+            switch_review.main(["--assess-sandbox-fallback", *arguments])
+        assert exc.value.code == 2
+        error = capsys.readouterr().err
+        assert message in error and "Traceback" not in error
+    with pytest.raises(SystemExit) as exc:
+        switch_review.main(["--since", "0", "--until", "86400"])
+    assert exc.value.code == 2
+    assert "require --assess-sandbox-fallback" in capsys.readouterr().err

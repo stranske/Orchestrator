@@ -96,3 +96,32 @@ validation outcomes. No acceptance checkbox was marked complete for these runs.
 The live assess outcome and the actual seven days after implementation merge remain
 UNVERIFIED. No live provider command, merge, or synthetic observation interval was
 used to substitute for that evidence.
+
+## Explicit interval follow-up — 2026-11-11
+
+The first unchecked task now has source and regression-test changes pending in the
+working tree. `switch_review.py --assess-sandbox-fallback` accepts `--since` and an
+optional exclusive `--until`, reports both UTC bounds beside the two required
+counts, rejects invalid intervals as usage errors, and excludes events at the
+end boundary or after the observation clock. Omitting `--until` retains the
+seven-day default. Incomplete windows remain unverified. The existing two sandbox
+reporting tests now exercise these cases without changing the collection count.
+
+Direct standard-library assertions against temporary ledger fixtures passed for
+boundary exclusion, start/complete deduplication, both counts, future-row exclusion,
+incomplete windows, invalid intervals, ISO offsets, epoch zero, and the default
+seven-day interval. One observed fixture report was:
+
+```text
+assess sandbox fallback (3d) [2026-11-06T00:00:00Z, 2026-11-09T00:00:00Z): fallback_runs 2; network-caused assess incompletions 2
+```
+
+This is synthetic fixture verification, not live post-merge evidence. Syntax
+compilation of both changed Python files and `git diff --check` also passed.
+`switch-review-interval-validation.txt` retains the attempted required commands:
+pytest and both Black commands failed because their modules are absent; installing
+them failed because `pypi.org` could not resolve. The verify command was stopped
+after a 45-second diagnostic bound without a result and remains incomplete.
+The mandatory Black gate therefore prohibits a Python commit. Source and test
+changes remain uncommitted, and no task or acceptance checkbox is marked complete.
+The live assess and actual seven-day post-merge observation remain UNVERIFIED.
