@@ -76,13 +76,6 @@ CAPACITY_POOLS = {
         "tier": "flat",
         "agent": "muse",
     },
-    "aider-paygo": {
-        "provider": "mistral",
-        "account": "mistral-codestral",
-        "window": "daily",
-        "tier": "paygo",
-        "agent": "aider",
-    },
 }
 
 
@@ -208,17 +201,8 @@ PROFILE_REGISTRY: dict[str, dict[str, Any]] = {
             pool="claude-subscription",
             adapter_version="claude-cli-profile-v2",
         ),
-        _profile(
-            "aider-codestral-high",
-            "mistral/codestral-latest",
-            "high",
-            agent="aider",
-            provider="mistral",
-            pool="aider-paygo",
-            adapter_version="aider-cli-profile-v1",
-        ),
         # Every seat's model is NAMED, each from the seat's own authority: codex/claude from the
-        # tier research, vibe from its CLI config, aider from its floating alias, gemini from agy's
+        # tier research, vibe from its CLI config, gemini from agy's
         # advertised-models probe, cursor from its known default. None is a routing tag, so no seat
         # is unidentifiable -- what they all still need is worker TRACING to confirm what served.
         # GEMINI HAS TWO LINES, AND THEY ARE NOT A VERSION SEQUENCE. Flash (3.7/3.6/3.5, each with

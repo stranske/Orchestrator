@@ -1,4 +1,6 @@
-"""Launch gate: a local-only seat whose launch binary is missing is SHED, never picked (aider 47/47)."""
+"""Launch gate: a local-only seat whose launch binary is missing is SHED, never picked.
+
+Found when a since-removed seat (aider) failed 47 of 47 starts on a missing binary, 11-05..11-10."""
 
 import os
 import stat
@@ -13,11 +15,12 @@ def _exe(path):
     return path
 
 
-def test_local_launch_reports_missing_absolute_binary(monkeypatch, tmp_path):
+def test_local_launch_reports_missing_binary(monkeypatch, tmp_path):
     monkeypatch.setenv("ORCH_LAUNCH_CHECK", "1")
-    monkeypatch.setattr(adapters, "AIDER_BIN", tmp_path / "aider-venv" / "bin" / "aider")
+    monkeypatch.setattr(adapters, "LOCAL_AGENT_PATH_DIRS", (str(tmp_path / "empty"),))
+    monkeypatch.setenv("PATH", "/nonexistent")
     monkeypatch.setattr(adapters, "EXTRA_LAUNCH_CANDIDATES", {})  # no host path can leak in
-    result = adapters.local_launch("aider")
+    result = adapters.local_launch("vibe")
     assert result["checked"] is True
     assert result["launchable"] is False
     assert "launch binary missing" in result["reason"]
@@ -41,8 +44,9 @@ def test_local_launch_finds_binary_on_dispatch_path_and_rejects_dangling_symlink
 
 def test_local_launch_is_unchecked_when_switched_off(monkeypatch, tmp_path):
     monkeypatch.setenv("ORCH_LAUNCH_CHECK", "0")
-    monkeypatch.setattr(adapters, "AIDER_BIN", tmp_path / "missing")
-    result = adapters.local_launch("aider")
+    monkeypatch.setattr(adapters, "LOCAL_AGENT_PATH_DIRS", (str(tmp_path / "missing"),))
+    monkeypatch.setenv("PATH", "/nonexistent")
+    result = adapters.local_launch("vibe")
     assert result["checked"] is False and result["launchable"] is True
 
 
@@ -54,12 +58,12 @@ def test_classify_sheds_local_only_seat_without_binary(monkeypatch):
         lambda agent: {
             "checked": True,
             "launchable": False,
-            "binary": "/x/aider",
-            "reason": "launch binary missing: /x/aider",
+            "binary": "/x/vibe",
+            "reason": "launch binary missing: /x/vibe",
         },
     )
     monkeypatch.setattr(capacity, "_local_only", lambda agent: True)
-    state, reason, meta = capacity._classify("aider", capacity.AGENTS["aider"], None)
+    state, reason, meta = capacity._classify("vibe", capacity.AGENTS["vibe"], None)
     assert state == capacity.SHED
     assert meta["availability"] == "unavailable_cli_missing"
     assert "drainable=install" in meta["next_action"]
@@ -86,7 +90,7 @@ def test_classify_never_sheds_hosted_capable_seat_for_a_missing_local_binary(mon
 
 
 def test_local_only_matches_router_keepalive_set():
-    assert capacity._local_only("aider") is True
+    assert capacity._local_only("muse") is True
     assert capacity._local_only("vibe") is True
     assert capacity._local_only("codex") is False
 

@@ -9,6 +9,7 @@ import pytest
 import capabilities
 import feedback
 import range_lane_rollout as rollout
+import router
 
 
 @pytest.fixture(autouse=True)
@@ -79,13 +80,14 @@ def test_filter_backlog_keeps_only_limited_eligible_opener_tasks():
     ]
 
 
-def test_sanitize_decision_rejects_each_unsafe_assignment_kind():
+def test_sanitize_decision_rejects_each_unsafe_assignment_kind(monkeypatch):
+    monkeypatch.setattr(router, "BACKUP_AGENTS", {"spare"})  # no real backup seat since 2026-11-11
     decision, rejected = rollout._sanitize_decision(
         {
             "assignments": [
                 {"target": "o/r#1", "task_type": "testgen", "lane": "closer", "agent": "codex"},
                 {"target": "o/r#2", "task_type": "implement", "lane": "opener", "agent": "codex"},
-                {"target": "o/r#3", "task_type": "testgen", "lane": "opener", "agent": "aider"},
+                {"target": "o/r#3", "task_type": "testgen", "lane": "opener", "agent": "spare"},
                 {"target": "o/r#4", "task_type": "testgen", "lane": "opener", "agent": "codex"},
                 {"target": "o/r#5", "task_type": "testgen", "lane": "opener", "agent": "codex"},
             ],
