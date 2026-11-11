@@ -222,7 +222,7 @@ def unevaluated_experiment_ids(
     - 'ids': set of experiment IDs that are pending (have meta.json, no evaluation row, within window)
     - 'unreadable': count of experiments with unreadable meta.json
     - 'drainable': count of experiments that exp_abcd.followup can evaluate (meta.json + spec.md
-      present, no eval-maps.json, no followup-skip.json, AND at least one non-empty diff-*.patch)
+      present, no eval-maps.json, no followup-skip.json)
     - 'total': total count of pending experiments (ids only, for backward compatibility with len())
     """
     window = EVALUABLE_WINDOW_DAYS if window_days is None else int(window_days)

@@ -2047,21 +2047,12 @@ def followup_terminal(edir: Path) -> bool:
     return any((edir / marker).exists() for marker in FOLLOWUP_TERMINAL_MARKERS)
 
 
-def _has_nonempty_diff(edir: Path) -> bool:
-    """Check if experiment dir has at least one non-empty diff-*.patch file."""
-    for diff_path in edir.glob("diff-*.patch"):
-        if diff_path.stat().st_size > 0:
-            return True
-    return False
-
-
 def followup_will_attempt(edir: Path) -> bool:
-    """Followup's own eligibility for an unevaluated experiment dir (age aside): spec present, not terminal, and has non-empty collected diffs."""
+    """Followup's own eligibility for an unevaluated experiment dir (age aside): spec present, not terminal."""
     return (
         (edir / "meta.json").exists()
         and (edir / "spec.md").exists()
         and not followup_terminal(edir)
-        and _has_nonempty_diff(edir)
     )
 
 

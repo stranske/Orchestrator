@@ -1671,9 +1671,6 @@ def test_generation_bump_runs_when_old_verdict_is_fail(tmp_path, monkeypatch, ca
     With state holding trial_verdict="fail" and producer env OFF, an active tick
     must still bump the generation and clear the verdict so orchestrate.sh computes ON.
     """
-    import time
-    import tick
-
     monkeypatch.setenv("ORCH_EXPERIMENT_PRODUCER", "0")  # Producer switch OFF
     # Start with an old generation (1) and a terminal fail verdict
     producer.save_state(
@@ -1690,47 +1687,30 @@ def test_generation_bump_runs_when_old_verdict_is_fail(tmp_path, monkeypatch, ca
     assert state["trial_generation"] == 1
     assert state["trial_verdict"] == "fail"
 
-    # Active tick (dry_run=False) should bump generation even with producer OFF
-    now = 2000
-    # Patch time.time to return the test's now value
-    monkeypatch.setattr(time, "time", lambda: now)
-    # Also patch time.gmtime for trial_end calculation
-    original_gmtime = time.gmtime
-    monkeypatch.setattr(time, "gmtime", lambda x: original_gmtime(0))  # Use epoch for reproducibility
-    
-    # Invoke tick.research_tick to exercise the integration with producer switch OFF
-    tick.research_tick([], {}, dry_run=False, env={"ORCH_EXPERIMENT_PRODUCER": "0"})
+    # Drive the real tick entry point with the producer switch OFF (dry_run=False is an active
+    # tick). Stop it right after its trial step: everything later plans research launches, which
+    # this test does not cover.
+    import tick
 
-    # Check that generation was bumped
+    class _StopAfterTrialStep(Exception):
+        pass
+
+    def _stop(*_args, **_kwargs):
+        raise _StopAfterTrialStep
+
+    monkeypatch.setattr(tick.claims, "reap_stale", lambda *a, **k: None)
+    monkeypatch.setattr(tick.claims, "active_claims", _stop)
+    with pytest.raises(_StopAfterTrialStep):
+        tick.research_tick([], {}, dry_run=False, env={"ORCH_EXPERIMENT_PRODUCER": "0"})
+
+    # Check that generation was bumped and a fresh trial started
     state = producer.read_state()
     assert state["trial_generation"] == 2
-    assert state["trial_start"] == now
+    assert state["trial_start"] != 1000
     # Verdict must be cleared so orchestrate.sh defaults ON
     assert "trial_verdict" not in state
-
-    # Verify the shell default evaluates to ON by running the actual producer-default
-    # calculation from orchestrate.sh (lines 409-412): sets _orch_exp_default=1 if verdict is "pending" or "pass"
-    import subprocess
-    import os
-    
-    # Get the ORCH directory - orchestrate.sh sets ORCH="$ORCH_REPO/src"
-    # So we need to set ORCH to point to src/ directory where experiment_producer.py lives
-    repo_root = os.environ.get("ORCH", os.getcwd())
-    orch_dir = os.path.join(repo_root, "src")
-    
-    # Run the same calculation as orchestrate.sh: call --trial-defaults, extract verdict, compute default
-    result = subprocess.run(
-        ["bash", "-c", f'ORCH="{orch_dir}" && _orch_exp_trial="$(python3 "$ORCH/experiment_producer.py" --trial-defaults)" && _orch_exp_verdict="${{_orch_exp_trial#* }}" && _orch_exp_default=0 && if [[ "$_orch_exp_verdict" == "pending" || "$_orch_exp_verdict" == "pass" ]]; then _orch_exp_default=1; fi && echo "$_orch_exp_default"'],
-        capture_output=True,
-        text=True,
-        timeout=10,
-        cwd=repo_root
-    )
-    
-    # Assert the computed default is '1' (ON)
-    assert result.returncode == 0, f"Shell calculation failed: {result.stderr}"
-    computed_default = result.stdout.strip()
-    assert computed_default == "1", f"Expected shell default 1, got {computed_default}"
+    # orchestrate.sh reads `--trial-defaults` and turns the producer ON for "pending" or "pass".
+    assert producer.trial_defaults()[1] in {"pending", "pass"}
 
     # Verify message was printed
     captured = capsys.readouterr()
