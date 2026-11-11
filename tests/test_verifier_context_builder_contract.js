@@ -367,6 +367,70 @@ test('native CSV comparison reconciles to existing outputs even when its evaluat
   assert.equal(JSON.stringify(readback), before, 'native run and event records remain unchanged');
 });
 
+test('CSV recovery authenticates the comparison artifact before retaining any origin proof',()=>isolated(async directory=>{
+  const { acquireRetainedExecution } = require('../.github/scripts/verifier_pending_execution.js');
+  const { validateEvent } = require('../.github/scripts/verification_event.js');
+  const native = require('../docs/verification/issue-1184-acceptance-20261111/round10/native-readback.json');
+  const older = require('../docs/verification/issue-1184-acceptance-20261111/round8/native-readback.json');
+  const before = JSON.stringify([native, older]);
+  const pending = native.verifier_events.map(comment => JSON.parse(comment.body.match(/(\{[^\n]+\})/)[1]))
+    .find(state => state.run_id === String(native.run.id) && state.status === 'pending');
+  const event = validateEvent(pending.verification_event);
+  const caller = native.source_origins.find(row => row.repository.toLowerCase() === event.repo);
+  assert.equal(event.pr, '1168');
+  assert.equal(caller.retained_sha, native.run.head_sha);
+  assert.notEqual(older.evaluation_artifact.workflow_run.id, native.run.id);
+  const selector = {run_id:native.run.id, run_attempt:native.run.run_attempt,
+    artifact_id:native.comparison_artifact.id};
+  const unavailable = new Error('Native checkout log transport unavailable in regression');
+  const calls = [];
+  let artifact = native.comparison_artifact;
+  const response = data => ({data, headers:{}});
+  const github = {rest:{repos:{
+    get:async args => {
+      assert.equal(`${args.owner}/${args.repo}`.toLowerCase(), event.repo);
+      return response({full_name:caller.repository, default_branch:caller.default_branch});
+    },
+    getCommit:async args => {
+      assert.equal(args.ref, caller.default_branch);
+      return response({sha:caller.canonical_sha});
+    },
+    compareCommitsWithBasehead:async args => {
+      assert.equal(args.basehead, `${caller.retained_sha}...${caller.canonical_sha}`);
+      return response({status:caller.comparison_status, base_commit:{sha:caller.base_sha},
+        merge_base_commit:{sha:caller.merge_base_sha}});
+    },
+  },actions:{
+    getWorkflowRun:async () => response(native.run),
+    getWorkflowRunAttempt:async () => response(native.attempt),
+    listJobsForWorkflowRunAttempt:async () => response(native.jobs),
+    getArtifact:async args => {
+      assert.equal(args.artifact_id, selector.artifact_id);
+      calls.push('artifact'); return response(artifact);
+    },
+    downloadJobLogsForWorkflowRun:async args => {
+      const job = native.jobs.jobs.find(row => row.name === 'verifier / Run post-merge verifier');
+      assert.equal(args.job_id, job.id);
+      calls.push('checkout-log'); throw unavailable;
+    },
+  }}};
+  const acquire = () => acquireRetainedExecution({github,event,selector,directory,
+    assessment:pending.assessment_identity,currentRun:native.run.id + 1});
+  // Positive control: complete native metadata reaches the next acquisition
+  // boundary. Metadata admission does not establish archive or result custody.
+  await assert.rejects(acquire(), error => error === unavailable);
+  assert.deepEqual(calls, ['artifact','checkout-log']);
+  assert.deepEqual(fs.readdirSync(directory), [], 'unavailable custody must not mint origin proof');
+  calls.length = 0;
+  // Replay a real earlier artifact as a mismatched API response, without
+  // rewriting its identity or manufacturing a terminal decision.
+  artifact = older.evaluation_artifact;
+  await assert.rejects(acquire(), /Retained artifact attempt\/origin\/size unproven/);
+  assert.deepEqual(calls, ['artifact'], 'reject the wrong artifact before further acquisition');
+  assert.deepEqual(fs.readdirSync(directory), []);
+  assert.equal(JSON.stringify([native, older]), before, 'native evidence remains unchanged');
+}));
+
 test('native CSV verifier states require both the corrective head and published merge',async()=>{
   const root = path.resolve(__dirname, '..');
   const python = fs.existsSync('/opt/anaconda3/bin/python3') && !process.env.VIRTUAL_ENV
