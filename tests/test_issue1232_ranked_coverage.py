@@ -422,10 +422,14 @@ def test_panel_adjudication_recording_and_cli_paths(monkeypatch, tmp_path, capsy
 
     # Assert dispatch creates its own expected outcome
     dispatch_outcome_calls = [c for c in recorded_calls if c[0] == "record_outcome"]
-    assert len(dispatch_outcome_calls) == 1
-    assert dispatch_outcome_calls[0][1] == run_id
-    assert dispatch_outcome_calls[0][2] == "PASS_RUNTIME_AC"
-    assert "runtime_ac_panel: PASS_RUNTIME_AC" in dispatch_outcome_calls[0][3]
+    assert dispatch_outcome_calls == [
+        (
+            "record_outcome",
+            run_id,
+            "PASS_RUNTIME_AC",
+            "runtime_ac_panel: PASS_RUNTIME_AC - pass ratio 2/2 met threshold 0.67",
+        )
+    ]
 
     monkeypatch.setattr(
         panel,
@@ -596,6 +600,7 @@ def test_keepalive_supervisor_plan_target_and_closure(monkeypatch, tmp_path):
     }
 
     gather_signals_calls = []
+
     def recording_gather_signals(target):
         gather_signals_calls.append(target)
         return signals

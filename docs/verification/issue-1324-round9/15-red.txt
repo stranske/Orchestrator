@@ -1,0 +1,295 @@
+$ .venv/bin/python -m pytest tests/test_issue1232_ranked_coverage.py::test_panel_adjudication_recording_and_cli_paths -q --no-cov
+Dispatch-only mutation: override reason with 'wrong dispatch notes' in the panel passed to record_panel_verdict.
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_______________ test_panel_adjudication_recording_and_cli_paths ________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10c1c29e0>
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2388/test_panel_adjudication_record0')
+capsys = <_pytest.capture.CaptureFixture object at 0x10c25ee40>
+
+    def test_panel_adjudication_recording_and_cli_paths(monkeypatch, tmp_path, capsys):
+        """Verify panel adjudication feedback recording and CLI adjudicate, prompt, and dispatch modes."""
+        spec = runtime_ac._valid_spec()
+        gate = runtime_ac.evaluate_results(spec, {"check_results": panel._all_check_results(spec)})
+
+        recorded_calls = []
+
+        def mock_record_outcome(run_id, verifier_verdict, notes):
+            recorded_calls.append(("record_outcome", run_id, verifier_verdict, notes))
+            return {}
+
+        def mock_record_evidence_gap(run_id, reviewer, gap):
+            recorded_calls.append(("record_evidence_gap", run_id, reviewer, gap))
+            return {}
+
+        def mock_record_evidence_type_citations(names):
+            recorded_calls.append(("record_evidence_type_citations", names))
+            return names
+
+        monkeypatch.setattr(feedback, "record_outcome", mock_record_outcome)
+        monkeypatch.setattr(feedback, "record_evidence_gap", mock_record_evidence_gap)
+        monkeypatch.setattr(
+            feedback, "record_evidence_type_citations", mock_record_evidence_type_citations
+        )
+
+        reviews_pass = {
+            "reviews": [
+                {
+                    "reviewer": "vibe",
+                    "verdict": "PASS",
+                    "confidence": 0.8,
+                    "ac_assessments": [
+                        {"ac_id": "AC1", "status": "PASS", "reason": "evidence present"}
+                    ],
+                },
+                {
+                    "reviewer": "gemini",
+                    "verdict": "PASS",
+                    "confidence": 0.9,
+                    "ac_assessments": [
+                        {"ac_id": "AC2", "status": "PASS", "reason": "evidence present"}
+                    ],
+                },
+            ]
+        }
+
+        panel_result = panel.adjudicate_panel(spec, gate, reviews_pass)
+        assert panel_result["verdict"] == "PASS"
+        assert panel_result["verifier_verdict"] == "PASS_RUNTIME_AC"
+
+        run_id = "test-run-1232-adjudication"
+
+        # First recording phase - clear spies before
+        recorded_calls.clear()
+        record_result = panel.record_panel_verdict(run_id, panel_result)
+        assert record_result["run_id"] == run_id
+        assert record_result["verifier_verdict"] == "PASS_RUNTIME_AC"
+        assert record_result["recorded"] is True
+        assert len(recorded_calls) >= 1
+        assert any(call[0] == "record_outcome" for call in recorded_calls)
+        # Assert exact outcome tuple
+        outcome_calls = [c for c in recorded_calls if c[0] == "record_outcome"]
+        assert len(outcome_calls) == 1
+        assert outcome_calls[0] == (
+            "record_outcome",
+            run_id,
+            "PASS_RUNTIME_AC",
+            f"runtime_ac_panel: PASS_RUNTIME_AC - {panel_result['reason']}",
+        )
+
+        # Second recording phase - clear spies before
+        recorded_calls.clear()
+        record_result_gaps = panel.record_panel_verdict(
+            run_id,
+            {
+                **panel_result,
+                "evidence_gaps": [
+                    {"reviewer": "vibe", "gap": "missing trace"},
+                    {"reviewer": "gemini", "gap": "missing logs"},
+                ],
+                "evidence_type_citations": [{"name": "trace"}, {"name": "log"}],
+            },
+        )
+        assert record_result_gaps["evidence_gaps"] == 2
+        assert any(call[0] == "record_evidence_gap" for call in recorded_calls)
+        assert any(call[0] == "record_evidence_type_citations" for call in recorded_calls)
+
+        # Assert ordered gap tuples with runtime_ac_panel reviewer prefixes
+        gap_calls = [c for c in recorded_calls if c[0] == "record_evidence_gap"]
+        assert len(gap_calls) == 2
+        # Gaps should be ordered as provided
+        assert gap_calls[0] == ("record_evidence_gap", run_id, "runtime_ac_panel:vibe", "missing trace")
+        assert gap_calls[1] == (
+            "record_evidence_gap",
+            run_id,
+            "runtime_ac_panel:gemini",
+            "missing logs",
+        )
+
+        # Assert exact citation names
+        citation_calls = [c for c in recorded_calls if c[0] == "record_evidence_type_citations"]
+        assert len(citation_calls) == 1
+        assert citation_calls[0][1] == ["trace", "log"]
+
+        spec_file = tmp_path / "spec.json"
+        gate_file = tmp_path / "gate.json"
+        reviews_file = tmp_path / "reviews.json"
+        spec_file.write_text(json.dumps(spec))
+        gate_file.write_text(json.dumps(gate))
+        reviews_file.write_text(json.dumps(reviews_pass))
+
+        assert (
+            panel.main(
+                [
+                    "--adjudicate",
+                    str(spec_file),
+                    "--gate",
+                    str(gate_file),
+                    "--reviews",
+                    str(reviews_file),
+                ]
+            )
+            == 0
+        )
+        capsys.readouterr()
+
+        assert (
+            panel.main(
+                ["--prompt", str(spec_file), "--gate", str(gate_file), "--reviewer", "test-reviewer"]
+            )
+            == 0
+        )
+        output = capsys.readouterr().out
+        assert "STRICT JSON" in output
+        assert '"reviewer": "test-reviewer"' in output
+
+        monkeypatch.setattr(
+            panel,
+            "dispatch_reviewers",
+            lambda *args, **kwargs: {
+                "review_doc": reviews_pass,
+                "dispatches": [{"agent": "vibe", "parsed": True}],
+            },
+        )
+
+        # Third recording phase - clear spies before dispatch
+        recorded_calls.clear()
+        assert (
+            panel.main(
+                [
+                    "--dispatch",
+                    str(spec_file),
+                    "--gate",
+                    str(gate_file),
+                    "--reviewers",
+                    "vibe",
+                    "--record-run-id",
+                    run_id,
+                ]
+            )
+            == 0
+        )
+
+        # Assert dispatch creates its own expected outcome
+        dispatch_outcome_calls = [c for c in recorded_calls if c[0] == "record_outcome"]
+>       assert dispatch_outcome_calls == [
+            (
+                "record_outcome",
+                run_id,
+                "PASS_RUNTIME_AC",
+                "runtime_ac_panel: PASS_RUNTIME_AC - pass ratio 2/2 met threshold 0.67",
+            )
+        ]
+E       AssertionError: assert [('record_out...patch notes')] == [('record_out...eshold 0.67')]
+E
+E         At index 0 diff: ('record_outcome', 'test-run-1232-adjudication', 'PASS_RUNTIME_AC', 'runtime_ac_panel: PASS_RUNTIME_AC - wrong dispatch notes') != ('record_outcome', 'test-run-1232-adjudication', 'PASS_RUNTIME_AC', 'runtime_ac_panel: PASS_RUNTIME_AC - pass ratio 2/2 met threshold 0.67')
+E         Use -v to get more diff
+
+tests/test_issue1232_ranked_coverage.py:425: AssertionError
+----------------------------- Captured stdout call -----------------------------
+{
+  "review_doc": {
+    "reviews": [
+      {
+        "reviewer": "vibe",
+        "verdict": "PASS",
+        "confidence": 0.8,
+        "ac_assessments": [
+          {
+            "ac_id": "AC1",
+            "status": "PASS",
+            "reason": "evidence present"
+          }
+        ]
+      },
+      {
+        "reviewer": "gemini",
+        "verdict": "PASS",
+        "confidence": 0.9,
+        "ac_assessments": [
+          {
+            "ac_id": "AC2",
+            "status": "PASS",
+            "reason": "evidence present"
+          }
+        ]
+      }
+    ]
+  },
+  "dispatches": [
+    {
+      "agent": "vibe",
+      "parsed": true
+    }
+  ],
+  "panel": {
+    "verification_id": "course-progress-runtime-ac",
+    "target": "owner/repo#123",
+    "verdict": "PASS",
+    "verifier_verdict": "PASS_RUNTIME_AC",
+    "reason": "pass ratio 2/2 met threshold 0.67",
+    "gate_verdict": "PASS",
+    "min_reviews": 2,
+    "fail_vetoes": 2,
+    "pass_threshold": 0.67,
+    "counts": {
+      "FAIL": 0,
+      "NEEDS_REVIEW": 0,
+      "PASS": 2
+    },
+    "n_reviews": 2,
+    "n_vetoes": 0,
+    "blockers": [],
+    "evidence_gaps": [],
+    "evidence_type_citations": [],
+    "reviews": [
+      {
+        "reviewer": "vibe",
+        "verdict": "PASS",
+        "confidence": 0.8,
+        "rationale": "",
+        "ac_assessments": [
+          {
+            "ac_id": "AC1",
+            "status": "PASS",
+            "reason": "evidence present"
+          }
+        ],
+        "blockers": [],
+        "evidence_gaps": [],
+        "cited_evidence_types": [],
+        "cited_evidence_contracts": []
+      },
+      {
+        "reviewer": "gemini",
+        "verdict": "PASS",
+        "confidence": 0.9,
+        "rationale": "",
+        "ac_assessments": [
+          {
+            "ac_id": "AC2",
+            "status": "PASS",
+            "reason": "evidence present"
+          }
+        ],
+        "blockers": [],
+        "evidence_gaps": [],
+        "cited_evidence_types": [],
+        "cited_evidence_contracts": []
+      }
+    ],
+    "feedback": {
+      "run_id": "test-run-1232-adjudication",
+      "verifier_verdict": "PASS_RUNTIME_AC",
+      "recorded": true,
+      "evidence_gaps": 0,
+      "evidence_type_citations": 0
+    }
+  }
+}
+=========================== short test summary info ============================
+FAILED tests/test_issue1232_ranked_coverage.py::test_panel_adjudication_recording_and_cli_paths
+1 failed in 0.32s
+
+exit=1

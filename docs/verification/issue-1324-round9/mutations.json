@@ -336,5 +336,25 @@
       "E           ]",
       "FAILED tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure"
     ]
+  },
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_panel_adjudication_recording_and_cli_paths",
+    "description": "Only dispatch recording receives the wrong reason",
+    "module": "runtime_ac_panel.py",
+    "line": 791,
+    "mutation": [
+      "panel[\"feedback\"] = record_panel_verdict(args.record_run_id, panel)",
+      "panel[\"feedback\"] = record_panel_verdict(\n                args.record_run_id, {**panel, \"reason\": \"wrong dispatch notes\"}\n            )"
+    ],
+    "red": 1,
+    "restored": 0,
+    "source_sha256": "383e20c25df6cc8e295dd4189b7bea77167df6791277f78206146811dc45fd4c",
+    "command": ".venv/bin/python -m pytest tests/test_issue1232_ranked_coverage.py::test_panel_adjudication_recording_and_cli_paths -q --no-cov",
+    "red_transcript": "15-red.txt",
+    "restored_transcript": "15-restored.txt",
+    "failure_lines": [
+      "E         At index 0 diff: ('record_outcome', 'test-run-1232-adjudication', 'PASS_RUNTIME_AC', 'runtime_ac_panel: PASS_RUNTIME_AC - wrong dispatch notes') != ('record_outcome', 'test-run-1232-adjudication', 'PASS_RUNTIME_AC', 'runtime_ac_panel: PASS_RUNTIME_AC - pass ratio 2/2 met threshold 0.67')",
+      "FAILED tests/test_issue1232_ranked_coverage.py::test_panel_adjudication_recording_and_cli_paths"
+    ]
   }
 ]
