@@ -46,6 +46,18 @@ class ResearchOwnershipTests(unittest.TestCase):
         }
         return backlog.build_research_items(["o/r"], lambda repo: [issue], lambda repo: [])
 
+    def test_experiment_candidate_waives_only_the_pause(self):
+        """closer-core park triage hands non-converging issues to experiments (2026-11-11)."""
+        self.assertEqual(backlog.research_ownership_skip_reason(["agents:paused", "experiment:candidate"]), None)
+        self.assertEqual(len(self.feed("agents:paused", "experiment:candidate")["items"]), 1)
+        self.assertEqual(backlog.research_ownership_skip_reason(["agents:paused"]), "owned_or_paused")
+        for held in ("agent:codex", "status:in-progress", "agents:auto-pilot-pause"):
+            self.assertEqual(
+                backlog.research_ownership_skip_reason(["agents:paused", "experiment:candidate", held]),
+                "owned_or_paused",
+                held,
+            )
+
     def candidates(self, items):
         return research_scheduler.research_job_candidates(
             items,

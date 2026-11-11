@@ -808,7 +808,7 @@ dispatch lane: the file was last written 2026-09-17 with 0 issues, and every tic
 skipped when gh is deferred): open issues that are prioritised or ready, minus trackers, automated
 and sync issues, paused or in-progress ones, epic/cross-repo/mechanical ones, anything with an
 open PR, and anything `dispatcher._remote_skip_reason` refuses (`agents:paused`, any `agent:*`
-writer), with a count per reason; a repo it cannot read is named, never read as empty. The tick
+writer), with a count per reason; a repo it cannot read is named, never read as empty. One exception (2026-11-11, owner decision): an issue closer-core's park triage labelled `experiment:candidate` (agents tried it and did not converge) is eligible despite its `agents:paused`; the pause keeps the opener from repeating the same attempt, and a comparative experiment is the changed attempt. Any `agent:*` writer or lock still refuses it. The tick
 plans research from it only while it is under two hours old, and the TICK-PLAN line prints the
 research status beside its inputs and skip reasons. At launch the issue is re-read and refused if it
 is no longer open or has since been paused or given a writer, and the subject cooldown is per issue whatever arm set is proposed (Workflows#2710 was
