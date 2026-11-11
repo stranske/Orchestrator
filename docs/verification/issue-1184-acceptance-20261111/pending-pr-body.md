@@ -1,24 +1,24 @@
-Closes #1184
+Tracks #1184
 
 Salvages the CSV contract regression and its shard registration from #1185. The test runs the existing verifier against the corrected fixture and against an isolated copy of `csv_export.py` pinned to `0507d28acf68d6bf21c68138d18d56cd01968827`. It honors a selected virtual environment and uses the Anaconda interpreter when available outside one.
 
 ## Verified on November 11, 2026
 
 - The corrected verifier printed `contract ok` and exited 0. The pinned partial revision raised `AssertionError: CSV contract is not implemented` and exited 1. The focused regression passed.
-- The standalone verifier uses the standard library, calls its assertions explicitly in `main()`, and falls outside default pytest discovery. Default execution performs no evidence collection. The explicit `--legacy-chain-evidence` flag also reaches a historical evidence reader.
+- The standalone verifier uses the standard library, calls its assertions explicitly in `main()`, and falls outside default pytest discovery. Default execution performs no evidence collection. The explicit `--chain-evidence --legacy` flag also reaches a historical evidence reader.
 - GitHub reports both PRs merged. #1168's head is `01e86ae7e4ef0e6a06193c916c8c780ca5cab052` and its published merge is `a30b34ada04a30d04360867e14097a8c5b6d731c`. #989's head is `85adde2614db7118d6e6d28dd11e5bc4c7611319` and its published merge is `97647baf97085724af7cb8f684af2331f73fb612`.
-- `--chain-evidence` exited 0 and verified the retained worker, publication and runtime acceptance for #989. The current reader targets #989. [Native publication acknowledgment](https://github.com/stranske/Orchestrator/pull/989#issuecomment-6684682838)
+- `--chain-evidence` exited 0 and reported runtime acceptance for #989 with `acceptance_authority=false`. The full stdout is retained in `chain-evidence-1348-continuation.stdout.txt`. [Native publication acknowledgment](https://github.com/stranske/Orchestrator/pull/989#issuecomment-6684682838)
 
 ## Outstanding operational evidence for #1168
 
-- Three earlier Agents Verifier runs bound to the final head and published merge ended with incomplete event states. No `verifier-corpus-decision/v1` was found. This dispatched agent's attempt to run Agents Verifier on `main` was refused by its GitHub CLI guard. [Evaluation](https://github.com/stranske/Orchestrator/pull/1168#issuecomment-6673821163), [revalidation](https://github.com/stranske/Orchestrator/pull/1168#issuecomment-6673968504), [comparison](https://github.com/stranske/Orchestrator/pull/1168#issuecomment-6674054696)
-- The retained #1168 worker log records pushes of two ancestors of the final corrective head. GitHub confirms publication of the final head, but the accessible records did not establish which worker produced that commit or supply the stored `retain_confirmed_result` record and `coding_terminal_reference`. [Native merge acknowledgment](https://github.com/stranske/Orchestrator/pull/1168#issuecomment-6670373009)
+- GitHub reports comparison run `42142641060`, attempt `1`, completed successfully. The exact event for PR #1168 is still `incomplete` with `retained_provider_evaluation` and `retryable=false`. The earlier evaluate-mode result is superseded. Artifact `13468552385` downloaded successfully and its ZIP matched GitHub's SHA-256 `2ebfd872ed901d067ddbac7990709aa23d7d46d9c03d4150e9fe091bb21dfcba`. The retained `comparison.json` matched the execution receipt's SHA-256 `3c359a5f4eb823a7d3e60da3b31a4a9b27440a31f7ce2bb5484c1a23e768cadc`. The report is `UNVERIFIABLE_INPUT`. The existing producer regression records `publishRetainedReport: Recovery report lacks one admitted terminal decision` for this report. Native comments contain zero corpus decisions. Production dispatch remains controller-owned and the dispatched seat has no callable controller recovery route. [Run](https://github.com/stranske/Orchestrator/actions/runs/42142641060/attempts/1), [native event](https://github.com/stranske/Orchestrator/pull/1168#issuecomment-6674054696)
+- Native PR, `refs/pull/1168/head`, and commit reads agree on the final corrective head. The retained worker log establishes pushes of ancestors. The first missing custody object is the original `publication-result-<sha256>.json` from `retain_confirmed_result` for the final head. Its `provenance.coding_terminal_reference` and confirmed push therefore remain unverified. [Native merge acknowledgment](https://github.com/stranske/Orchestrator/pull/1168#issuecomment-6670373009)
 
 <!-- pr-preamble:start -->
 <!-- meta:issue:1184 -->
 > **Source:** Issue #1184
 
-Closes #1184
+Tracks #1184
 
 <!-- pr-preamble:end -->
 
@@ -45,7 +45,7 @@ Source issue #983; merged PR #1168 delivered: The supplied corrective diff imple
 - [x] Route PR 1168's unchanged head through the existing authorized `merge_guard` path if PR 1168 remains open and after the review floor expires; preserve all review and merge gates and report the first remaining blocker. (Verified not applicable: already merged at a30b34ada04a30d04360867e14097a8c5b6d731c.)
 - [ ] Run the existing native `Agents Verifier` workflow to obtain and retain a `verifier-corpus-decision/v1` bound to PR 1168's final head and published merge; do not substitute skipped runs or PR 984 events.
 - [ ] Inspect `closer_coding_publication_io.retain_confirmed_result` custody and its `coding_terminal_reference` for the actual corrective delivery. Trace the worker's produced commit through native publication readback, including an earlier-started worker if it produced that commit; do not fabricate records or require a redundant worker solely to start on its own output commit.
-- [x] Run `/opt/anaconda3/bin/python3 tests/fixtures/closer_real_csv_canary/v1/verify_csv_contract.py --chain-evidence` and retain its full output alongside genuine native verifier and publication records.
+- [x] Run `/opt/anaconda3/bin/python3 tests/fixtures/closer_real_csv_canary/v1/verify_csv_contract.py --chain-evidence` and retain its full output. It exits 0 for #989. The native #1168 evidence is tracked below.
 
 #### Acceptance criteria
 - [x] `/opt/anaconda3/bin/python3 tests/fixtures/closer_real_csv_canary/v1/verify_csv_contract.py`, using the repository-selected interpreter when applicable, exits zero on corrected code and nonzero with a contract AssertionError on the partial implementation from revision 0507d28acf68d6bf21c68138d18d56cd01968827.
