@@ -1032,15 +1032,19 @@ def live_disputes(
     """
     if limit is not None and limit <= 0:
         return []
-    advised = live_advised_targets(db)
-    selected = [
-        row
-        for row in disputes(db=db, now=now)
-        if (since_ts is None or int(row["ts"] or 0) > since_ts)
-        and row["target"] not in advised
-        and _case_id(row) not in exclude_case_ids
-    ]
-    return selected if limit is None else selected[:limit]
+    seen_targets = live_advised_targets(db)
+    selected = []
+    for row in disputes(db=db, now=now):
+        target = row["target"]
+        if target in seen_targets or _case_id(row) in exclude_case_ids:
+            continue
+        if since_ts is not None and int(row["ts"] or 0) <= since_ts:
+            continue
+        selected.append(row)
+        seen_targets.add(target)
+        if limit is not None and len(selected) >= limit:
+            break
+    return selected
 
 
 def _packet_metadata_only(ground_truth: dict) -> bool:

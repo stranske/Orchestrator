@@ -780,11 +780,7 @@ def _exact_head_checkout(target: str, sha: str):
 
 
 def weekly_line(path: Path | None = None) -> str:
-    """`adjudicator live: disputes N, advised A, uncertified U (why), failed F, graded G (agree X, disagree Y)`.
-
-    `failed F` appears only when a certified case's provisioning or role run failed (retried up
-    to MAX_ATTEMPTS); `(why)` only when something was refused at certification.
-    """
+    """Format live counts followed by any refusal and retry diagnostics."""
     try:
         report = json.loads((path or report_path()).read_text())
         rows = [row for row in report.get("rows", []) if isinstance(row, dict)]
@@ -793,18 +789,20 @@ def weekly_line(path: Path | None = None) -> str:
         )  # the saved rows are the truth; a saved summary may predate the module
         reasons = summary.get("uncertified_reasons") or {}
         refused = (
-            " (" + ", ".join(f"{name} {count}" for name, count in reasons.items()) + ")"
+            "; uncertified reasons: "
+            + ", ".join(f"{name} {count}" for name, count in reasons.items())
             if summary["uncertified"] and reasons
             else ""
         )
-        failed = f", failed {summary['failed']}" if summary.get("failed") else ""
+        failed = f"; failed {summary['failed']}" if summary.get("failed") else ""
         return (
-            f"adjudicator live: disputes {report.get('population', 'UNKNOWN')}, "
-            f"advised {summary['advised']}, uncertified {summary['uncertified']}{refused}{failed}, "
+            f"live: disputes {report.get('population', 'UNKNOWN')}, "
+            f"advised {summary['advised']}, uncertified {summary['uncertified']}, "
             f"graded {summary['graded']} (agree {summary['agree']}, disagree {summary['disagree']})"
+            f"{refused}{failed}"
         )
     except (OSError, ValueError, KeyError, TypeError):
-        return "adjudicator live: disputes UNKNOWN, advised UNKNOWN, uncertified UNKNOWN, graded UNKNOWN"
+        return "live: disputes UNKNOWN, advised UNKNOWN, uncertified UNKNOWN, graded UNKNOWN"
 
 
 # --------------------------------------------------------------------------------------------
@@ -941,9 +939,8 @@ def _selftest() -> None:
                 snapshot_reader=lambda _t: {**snapshot, "body": "No criteria here."}, **common
             )
             assert (third["attempted"], third["uncertified"]) == (1, 1) and len(calls) == 1, third
-            assert (
-                "adjudicator live: disputes 2, advised 1, uncertified 1 (no_criteria 1), graded 0"
-                in weekly_line(root / "live.json")
+            assert "live: disputes 2, advised 1, uncertified 1, graded 0" in weekly_line(
+                root / "live.json"
             )
             # The kill switch writes nothing.
             off = run_live(

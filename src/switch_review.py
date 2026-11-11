@@ -2796,10 +2796,9 @@ def format_report(rep: dict) -> str:
     except (OSError, ValueError, TypeError):
         lines += ["  strategy experiment: UNKNOWN — no completed scored evaluation", ""]
     lines += [experiment_producer_line(), ""]
-    if rep.get("adjudicator_shadow"):
-        lines += [rep["adjudicator_shadow"], ""]
-    if rep.get("adjudicator_live"):
-        lines += [rep["adjudicator_live"], ""]
+    adjudicator = [rep[key] for key in ("adjudicator_shadow", "adjudicator_live") if rep.get(key)]
+    if adjudicator:
+        lines += ["; ".join(adjudicator), ""]
     lines += [adversarial_shape_line(rep.get("adversarial_shape", {})), ""]
     trial_line = profile_trial_summary_line()
     if trial_line:

@@ -103,10 +103,7 @@ def test_later_truth_grades_the_live_advice(world):
     # uphold_blocker against a delivery that broke later is agreement.
     assert graded["summary"]["graded"] == 1 and graded["summary"]["agree"] == 1
     line = live.weekly_line(world["path"])
-    assert (
-        line
-        == "adjudicator live: disputes 1, advised 1, uncertified 0, graded 1 (agree 1, disagree 0)"
-    )
+    assert line == "live: disputes 1, advised 1, uncertified 0, graded 1 (agree 1, disagree 0)"
 
 
 def test_a_body_without_criteria_is_uncertified_and_never_dispatched(world):
@@ -122,7 +119,7 @@ def test_a_body_without_criteria_is_uncertified_and_never_dispatched(world):
     assert (result["attempted"], result["advised"], result["uncertified"]) == (1, 0, 1)
     summary = json.loads(world["path"].read_text())["summary"]
     assert summary["uncertified_reasons"] == {"no_criteria": 1}
-    assert "uncertified 1 (no_criteria 1)" in live.weekly_line(world["path"])
+    assert "uncertified reasons: no_criteria 1" in live.weekly_line(world["path"])
     assert live.uncertified_class("qualified prompt exceeds byte limit; x") == "prompt_too_large"
     assert live.uncertified_class("something new") == "other"
     assert world["calls"] == []
@@ -556,10 +553,14 @@ def test_weekly_review_prints_the_live_line(world, monkeypatch):
             "on_but_idle": [],
             "unconditioned": [],
             "mirror_drift": {"status": "ok"},
+            "adjudicator_shadow": "adjudicator shadow: cases 0",
             "adjudicator_live": live.weekly_line(),
         }
     )
-    assert "adjudicator live: disputes 1, advised 1, uncertified 0, graded 0" in rendered
+    line = next(line for line in rendered.splitlines() if line.startswith("adjudicator shadow:"))
+    assert line.startswith(
+        "adjudicator shadow: cases 0; live: disputes 1, advised 1, uncertified 0, graded 0"
+    )
     # "Advised" is the Brain's `live_shadow_advice` event, not the report: losing the report does
     # not advise the same dispute again.
     world["path"].write_text(json.dumps({"rows": [], "summary": {}, "population": 1}))
@@ -580,7 +581,7 @@ def test_a_failed_role_run_is_retried_up_to_the_cap_and_counted_as_failed(world)
     row = first["rows"][0]
     assert row["certification"]["status"] == "certified" and row["error"] == "backend down"
     assert row["attempts"] == 1 and "proposal" not in row
-    assert "uncertified 0, failed 1, graded 0" in live.weekly_line(world["path"])
+    assert "; failed 1" in live.weekly_line(world["path"])
     second = live.run_live(**common)
     assert second["attempted"] == 1 and len(second["rows"]) == 1
     assert second["rows"][0]["attempts"] == 2

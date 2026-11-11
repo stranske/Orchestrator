@@ -1177,6 +1177,23 @@ def _brain_except_events(db):
         return {name: sorted(map(repr, conn.execute(f"SELECT * FROM {name}"))) for name in tables}
 
 
+def test_live_disputes_selects_one_run_per_target_before_applying_cap(live_shadow):
+    db, now = live_shadow["db"], live_shadow["common"]["now"]
+    with feedback._conn() as conn:
+        conn.executemany(
+            "INSERT INTO runs(run_id,ts,target) VALUES (?,?,?)",
+            [("newer", now, "owner/repo#1"), ("other", now - 2, "owner/repo#2")],
+        )
+        conn.executemany(
+            "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict) "
+            "VALUES (?,'NON_PASS','PASS')",
+            [("newer",), ("other",)],
+        )
+    selected = retro.live_disputes(db=db, now=now, since_ts=now - 3, limit=2)
+    assert [row["run_id"] for row in selected] == ["newer", "other"]
+    assert retro.live_disputes(db=db, now=now, since_ts=now) == []
+
+
 def test_live_shadow_adjudicates_a_new_dispute_once_and_grades_on_truth(live_shadow):
     live, db = live_shadow["live"], live_shadow["db"]
     outcomes_before = _brain_except_events(db)["outcomes"]
