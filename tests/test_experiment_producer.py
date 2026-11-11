@@ -1701,3 +1701,73 @@ def test_generation_bump_runs_when_old_verdict_is_fail(tmp_path, monkeypatch, ca
     # Verify message was printed
     captured = capsys.readouterr()
     assert "generation bump from 1 to 2" in captured.err
+
+
+def test_projected_pacing_seats_field_arms_but_real_cutoffs_do_not(tmp_path, monkeypatch):
+    """Owner 2026-11-11: a warn/shed that is only a PROJECTION may field an arm; a cutoff may not."""
+    import capacity
+    import research_scheduler
+
+    cap, kwargs = plan_fixture(monkeypatch, shed=False)
+    cap["agents"] = {
+        # #668 pacing projection: shed from a 6h burn, with provider headroom left.
+        "claude": {"state": "shed", "pacing": {"state": "shed", "used_fraction": 0.53}},
+        # #668 pacing projection: warn.
+        "codex": {"state": "warn", "pacing": {"state": "warn", "used_fraction": 0.8}},
+        # Local soft budget with no usage API (gemini).
+        "gemini": {"state": "warn", "policy": "weekly-soft-cap", "pacing": {}},
+        # Real cutoff: an active cooldown marker, even with a projection-looking row.
+        "cursor": {"state": "shed", "pacing": {"state": "shed"}},
+        # Real cutoff: failed auth outranks a pacing dict.
+        "vibe": {"state": "shed", "policy": "auth-failed", "pacing": {"state": "shed"}},
+        # Non-ok with no projection behind it: fail closed.
+        "muse": {"state": "warn"},
+    }
+    monkeypatch.setattr(capacity, "SHED_DIR", tmp_path)
+    (tmp_path / "cursor").write_text(json.dumps({"expires_at": time.time() + 3600}))
+    # Status-aware like the real spare_capacity: a seat still read as warn/shed has no spare.
+    monkeypatch.setattr(
+        research_scheduler,
+        "spare_capacity",
+        lambda state: {a: 2 if row["status"] == "ok" else 0 for a, row in state.items()},
+    )
+
+    arm = producer.arm_pacing(cap)
+    assert {a for a, s in arm.items() if s == "ok"} == {"claude", "codex", "gemini"}, arm
+
+    item = {"target": "a/b#9", "task_type": "implement", "body": "`pytest tests/test_x.py`"}
+    plan = producer.build_plan([item], cap, **kwargs)
+    job = plan["planned"][0]
+    assert set(job["arms"]) <= {"claude", "codex", "gemini"}, job
+    assert all(state == "ok" for state in job["pools"].values()), job["pools"]
+    assert job["projected"] and set(job["projected"]) == set(job["arms"]), job
+    cells = {c["agent"]: c["arm"] for c in plan["producer_cells"]}
+    assert cells["cursor"] != "ok" and cells["vibe"] != "ok" and cells["muse"] != "ok", cells
+
+    draw = producer.draw(0, -86400, 2, 0, random.Random(0), pools=job["pools"])
+    assert draw["reason"] in {"draw", "no_draw"}, draw
+
+
+def test_muse_fields_experiment_arms_while_aider_stays_backup(monkeypatch):
+    import router
+
+    cap, kwargs = plan_fixture(monkeypatch, shed=False)
+    cap["agents"] = {a: {"state": "ok"} for a in ("muse", "aider", "vibe")}
+    monkeypatch.setattr(
+        router,
+        "ROUTE_TABLE",
+        {"implement": {"agents": [{"agent": a} for a in ("muse", "aider", "vibe")]}},
+    )
+    monkeypatch.setattr(router, "BACKUP_AGENTS", {"aider", "muse"})
+    monkeypatch.setattr(
+        producer,
+        "route_cells",
+        lambda *a, **k: [
+            {"agent": a, "task_type": "implement", "age_days": 25}
+            for a in ("muse", "aider", "vibe")
+        ],
+    )
+    item = {"target": "a/b#9", "task_type": "implement", "body": "`pytest tests/test_x.py`"}
+    plan = producer.build_plan([item], cap, **kwargs)
+    assert {c["agent"] for c in plan["producer_cells"]} == {"muse", "vibe"}, plan
+    assert set(plan["planned"][0]["arms"]) == {"muse", "vibe"}, plan
