@@ -5,14 +5,16 @@ acceptance checkbox is complete. The default provision suite, same-holder
 disable/restore cycle, deployment full verifier, mirror provenance acceptance,
 and intact zero-refusal seven-day window still require their original evidence.
 
-`scripts/run_provision_native_witnesses.js` runs the existing unmodified
+`scripts/run_provision_native_witnesses.js` runs the
 `test_native_clean_idle_holder_is_reclaimed` and
 `test_native_reclaim_disabled_exit_128_names_holder` cases for both lanes on an
 explicitly selected flat mirror. It requires four successful named JUnit cases;
 exit zero without those cases, skips, missing pytest, or malformed XML cannot
 produce a successful witness receipt. The disabled-reclaim witness itself checks
-Git exit 128 and the holder path. This runner does not add a same-holder restoration
-witness or claim that the entire provision suite passed.
+Git exit 128 and the holder path, restores the real reclamation helper, and retries
+the same holder with native process probes. It checks that reclamation preserves
+the commit and records both the failed and successful attempts. Passing the named
+witnesses alone does not establish that the entire provision suite passed.
 
 The runner compares installed flat Python modules, the test tree, configuration,
 and runner/helper bytes with the selected committed Git objects. It records a

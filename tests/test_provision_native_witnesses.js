@@ -8,6 +8,7 @@ const { test } = require('node:test');
 const { execute } = require('../scripts/run_adjudicator_acceptance');
 const { complete, expected, runWitnesses, snapshot } = require('../scripts/run_provision_native_witnesses');
 
+const realPython = process.env.PYTHON || 'python3';
 const success = () => expected.map((name) => ({ name,
   classname: 'tests.test_provision_reclaim', unsuccessful: false }));
 
@@ -55,7 +56,7 @@ if (args[0] === '-I') {
     process.exit(scenario.readerExit);
   }
   if (scenario.readerInvalidJson) { console.log('not JSON'); process.exit(0); }
-  const result = cp.spawnSync(${JSON.stringify(process.env.PYTHON || '/opt/anaconda3/bin/python3')}, args, { stdio: 'inherit' });
+  const result = cp.spawnSync(${JSON.stringify(realPython)}, args, { stdio: 'inherit' });
   process.exit(result.status ?? 1);
 }
 fs.writeFileSync(${JSON.stringify(path.join(base, 'command.json'))}, JSON.stringify(args));
@@ -64,7 +65,7 @@ fs.appendFileSync(${JSON.stringify(path.join(base, 'commands.ndjson'))}, JSON.st
   addopts: process.env.PYTEST_ADDOPTS ?? null, plugins: process.env.PYTEST_PLUGINS ?? null }) + '\\n');
 if (scenario.importProbe) {
   const prefix = args.slice(0, args.indexOf('-m'));
-  const probe = cp.spawnSync(${JSON.stringify(process.env.PYTHON || '/opt/anaconda3/bin/python3')},
+  const probe = cp.spawnSync(${JSON.stringify(realPython)},
     [...prefix, '-c', 'import json'], { stdio: 'inherit' });
   if (probe.status !== 0) process.exit(92);
 }
