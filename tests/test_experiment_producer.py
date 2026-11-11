@@ -1821,6 +1821,11 @@ def test_empty_feed_with_a_blocked_seat_reports_no_subject_not_pacing(monkeypatc
     plan = producer.build_plan([], cap, **kwargs)
     assert plan["skipped"][-1]["reason"] == "no_subject", plan["skipped"]
 
+    # An admitted subject whose class has no route cell is also no_subject, not pacing.
+    orphan = {"target": "a/b#4", "task_type": "testgen", "body": "`pytest tests/test_x.py`"}
+    plan = producer.build_plan([orphan], cap, **kwargs)
+    assert plan["skipped"][-1]["reason"] == "no_subject", plan["skipped"]
+
     # When pacing really empties the feed class, the skip still names pacing.
     for row in cap["agents"].values():
         row["state"] = "shed"
