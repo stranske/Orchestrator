@@ -343,3 +343,68 @@ AssertionError
 
 env_prereq.py selftest: OK (skip-is-a-skip, every detector names the missing thing, marked selftest skip speaks, vibe readers, exec-mirror shape needs BOTH marks, a bare machine needs EVERY prerequisite absent, not-live rows named with their status, a recorded pytest verdict replays as the check would have and an unreadable record replays nothing, a declared row's absence is named drainable only when every absent row is declared)
 Both original pytest-style test functions: PASS (standard-library fixture adapter)
+
+=== Current iteration: real layout detector ===
+=== flat-layout-missing-reason: BROKEN exit 1 ===
+test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror) ... FAIL
+
+======================================================================
+FAIL: test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 150, in test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror
+    self.assertEqual(
+    ~~~~~~~~~~~~~~~~^
+        reason, f"{self.root} holds the modules at its root, not under src/"
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+AssertionError: None != '/tmp/issue1227-dvfbbe4r holds the modules at its root, not under src/'
+
+----------------------------------------------------------------------
+Ran 1 test in 0.002s
+
+FAILED (failures=1)
+
+=== flat-layout-missing-reason: RESTORED exit 0 ===
+test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.003s
+
+OK
+=== mirror-any-mark: BROKEN exit 1 ===
+test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror) ...
+  test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror) (flat=False, git_absent=True) ... FAIL
+  test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror) (flat=True, git_absent=False) ... FAIL
+
+======================================================================
+FAIL: test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror) (flat=False, git_absent=True)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 170, in test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror
+    self.assertIsNone(shape)
+    ~~~~~~~~~~~~~~~~~^^^^^^^
+AssertionError: '/tmp/issue1227-lsxrtjix is the exec mirror, not a checkout: its modules sit at the root rather than under src/, and git reports no repository here. orch-sync-mirror.sh copies files, flat, not a checkout, so the tests that ask git a question cannot run in this tree' is not None
+
+======================================================================
+FAIL: test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror) (flat=True, git_absent=False)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 170, in test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror
+    self.assertIsNone(shape)
+    ~~~~~~~~~~~~~~~~~^^^^^^^
+AssertionError: '/tmp/issue1227-lsxrtjix is the exec mirror, not a checkout: its modules sit at the root rather than under src/, and git reports no repository here. orch-sync-mirror.sh copies files, flat, not a checkout, so the tests that ask git a question cannot run in this tree' is not None
+
+----------------------------------------------------------------------
+Ran 1 test in 0.003s
+
+FAILED (failures=2)
+
+=== mirror-any-mark: RESTORED exit 0 ===
+test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.002s
+
+OK

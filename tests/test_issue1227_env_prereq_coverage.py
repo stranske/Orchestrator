@@ -141,6 +141,34 @@ class PrerequisiteBoundaryTests(unittest.TestCase):
             os.environ.pop("CLOSER_CORE_SOURCE", None)
             self.assertEqual(env_prereq.closer_core_source_path(), self.root.parent / "portable")
 
+    def test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror(self):
+        for flat in (False, True):
+            module_dir = self.root if flat else self.root / "src"
+            with patch.object(env_prereq, "__file__", str(module_dir / "env_prereq.py")):
+                reason = env_prereq._flat_layout()
+                if flat:
+                    self.assertEqual(
+                        reason, f"{self.root} holds the modules at its root, not under src/"
+                    )
+                else:
+                    self.assertIsNone(reason)
+                for git_absent in (False, True):
+                    with (
+                        self.subTest(flat=flat, git_absent=git_absent),
+                        patch.object(
+                            env_prereq,
+                            "git_repo_absent",
+                            return_value="not a repository" if git_absent else None,
+                        ) as git_check,
+                    ):
+                        shape = env_prereq.exec_mirror_shape()
+                        git_check.assert_called_once_with()
+                        if flat and git_absent:
+                            self.assertIn(f"{self.root} is the exec mirror", shape)
+                            self.assertIn("git reports no repository here", shape)
+                        else:
+                            self.assertIsNone(shape)
+
     def test_populated_rows_satisfy_lineage_and_invocation_prerequisites(self):
         self.ledger.return_value = {
             "ready": {"capability_version_id": "version:1", "last_invocation": 123}

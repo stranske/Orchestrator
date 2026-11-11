@@ -1,12 +1,12 @@
 ## Summary
 
-Adds hermetic tests for the first issue-ranked target, `src/env_prereq.py`. The module now contains 12 tests: two pytest-style functions and ten unittest methods. This round adds installed-skill and Codex-resolver contracts, blocks subprocess and network access in the original functions, and confines selftest temporary files to the test's temporary root. No production files changed.
+Adds hermetic tests for the first issue-ranked target, `src/env_prereq.py`. There are now 13 tests: two pytest-style functions and eleven unittest methods. This iteration adds a regression test for the real flat-layout detector (issue-listed uncovered line 475) and the requirement that both flat layout and Git absence identify an exec mirror. It covers flat and src layouts with Git present and absent, asserting that the detector names the temporary tree. No production files changed.
 
 ## Reconciliation
 
-Reviewed `4cd1748c` (merge from main) and `06da00e2` (eight additional boundary tests). Before this round, the actual PR diff against base `f56396f5` contained only the test module and its explicit shard registration. The reported 33-file prior round included inherited changes. The old two-test validation was stale.
+Reviewed `4cd1748c` (merge from main), `06da00e2` (boundary tests), and `61b1d5ee` (isolation, additional contracts, and mutation evidence). The reported 34-file previous iteration included inherited changes. Before this iteration the actual PR diff against base `f56396f5` contained four files, including shard registration and 12 tests. Its remote two-test summary was stale.
 
-Verified scope and mutation-proof items are checked below. CI acceptance remains unchecked. This is a proposed body saved locally: GitHub rejected the update because its tool requires approval and this run's approval policy is `never`. The new test edits are uncommitted because the mandatory Black gate could not run.
+The proposed checkboxes reflect verified scope and recorded mutation evidence. CI acceptance remains unchecked. The GitHub PR-body update was rejected: `MCP tool call requires approval, but approval policy is never`. This file is the local handoff copy; the remote body has NOT been updated. This iteration's edits remain uncommitted because the mandatory Black gate cannot run. The PR was confirmed open and ready for review (`draft=false`).
 
 ## Coverage and partial delivery
 
@@ -14,30 +14,30 @@ CI's combined pytest plus selftest measure is authoritative; no full local suite
 
 | Target | Issue-listed uncovered units | Current evidence |
 | --- | ---: | --- |
-| `src/env_prereq.py` | 40 | 12 tests pass using standard-library runners, including its selftest; fresh coverage is unknown. |
-| `src/ledger_reconcile.py` | 74 | Deferred after the first target: required test and formatting tools are unavailable. |
-| `src/consumer_sync_shadow.py` | 1 | Deferred for the same verification blocker. |
-| `src/improvement_log.py` | 5 | Deferred for the same verification blocker. |
-| `src/spec_provenance.py` | 2 | Deferred for the same verification blocker. |
-| `src/testgen_lane.py` | 18 | Deferred for the same verification blocker. |
-| `src/redirect_plan.py` | 70 | Deferred for the same verification blocker. |
+| `src/env_prereq.py` | 40 | 13 tests pass using standard-library runners, including its selftest; fresh coverage is unknown. |
+| `src/ledger_reconcile.py` | 74 | Outside the linked issue’s latest narrowed scope (target 1 only); tools are also unavailable. |
+| `src/consumer_sync_shadow.py` | 1 | Outside that narrowed scope; required test and formatting tools are unavailable. |
+| `src/improvement_log.py` | 5 | Outside that narrowed scope; required test and formatting tools are unavailable. |
+| `src/spec_provenance.py` | 2 | Outside that narrowed scope; required test and formatting tools are unavailable. |
+| `src/testgen_lane.py` | 18 | Outside that narrowed scope; required test and formatting tools are unavailable. |
+| `src/redirect_plan.py` | 70 | Outside that narrowed scope; required test and formatting tools are unavailable. |
 
-No fresh covered-unit gain is established, so this partial delivery conservatively leaves the entire approximately 180-unit goal unverified. The remaining targets are deferred, not claimed untestable. No percentage or combined-CI result is inferred from focused test passes.
+No fresh covered-unit gain is established, so this partial delivery conservatively leaves the entire approximately 180-unit goal unverified. The linked issue’s final “Next attempt” instruction narrows this PR to target 1. The remaining targets are deferred, not claimed untestable. No percentage or combined-CI result is inferred from focused test passes.
 
 ## Validation and blockers
 
-- `PYTHONPATH=src:tests python3 -m unittest test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests -v`: **10 passed** with both runtime paths set to a temporary directory.
+- `PYTHONPATH=src:tests python3 -m unittest test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests -v`: **11 passed** with both runtime paths set to a temporary directory.
 - Both original pytest-style functions pass when called with a standard-library fixture adapter. The first executes `env_prereq._selftest()`, which prints **OK**. This is not a pytest run.
-- Each of the 12 tests fails with a deliberate source mutation and passes after restoring the source. Mutations were applied to temporary copies; repository production source was unchanged.
+- The previous evidence records all 12 earlier tests failing with deliberate source mutations and passing after restoration. The new layout test was run against two independent mutations; both failed, and both restored runs passed. Mutations were applied to temporary copies; repository production source was unchanged.
 - `git diff --check`: passed.
 - `python3 -m pytest tests/test_issue1227_env_prereq_coverage.py --cov=env_prereq --cov-branch --cov-report=term-missing -m "not slow"`: blocked, **No module named pytest**.
 - Formatting the changed file and the mandatory repository-wide `black --check --line-length 100 --exclude '(\\.workflows-lib|node_modules)' .`: blocked, **No module named black**.
 - `python3 -m ruff check --extend-exclude .workflows-lib tests/test_issue1227_env_prereq_coverage.py`: blocked, **No module named ruff**.
-- Installation into a temporary virtual environment failed because PyPI DNS/network access is unavailable. No cached copies of the missing tools were found.
+- Installation into a temporary virtual environment failed because PyPI DNS/network access is unavailable. No cached copies of the missing tools were found. Retrying installation this iteration again failed to resolve `pypi.org`.
 
 ## Break-and-revert evidence
 
-All runs used the actual test code and temporary copies of `env_prereq.py`. Each restored invocation exited zero. The ten class methods ran through `python3 -m unittest <test-id> -v`; the two functions used the standard-library fixture adapter. Evidence is preserved in `mutation-evidence.txt` beside this proposed body.
+All runs used the actual test code and temporary copies of `env_prereq.py`. Each restored invocation exited zero. The earlier ten class methods ran through `python3 -m unittest <test-id> -v`; the two functions used the standard-library fixture adapter. Evidence is preserved in `mutation-evidence.txt` beside this proposed body.
 
 | Test | Deliberate source mutation | Broken / restored |
 | --- | --- | --- |
@@ -52,7 +52,9 @@ All runs used the actual test code and temporary copies of `env_prereq.py`. Each
 | replayed failure | required failure message replaced | FAIL / OK |
 | CLI report | required checkout/mirror label replaced | FAIL / OK |
 | installed skill (new) | installed-resource branch forced false | FAIL / OK |
-| Codex resolver (new) | successful resolver result changed to an absence reason | FAIL / OK |
+| Codex resolver | successful resolver result changed to an absence reason | FAIL / OK |
+| real layout detector (this iteration) | flat-layout reason changed to `None` | unittest exit 1 / exit 0 |
+| real layout detector (this iteration) | mirror AND composition changed to OR | unittest exit 1 / exit 0 |
 
 Closes #1227
 
@@ -82,7 +84,7 @@ The target order below is the Orchestrator's own ranking (escaped defects, then 
 
 #### Acceptance criteria
 - [ ] `pytest` passes in CI with the new tests, and each new test fails when the code it covers is deliberately broken (the PR body shows the break-and-revert run).
-- [ ] The PR's Gate coverage shows the targets' uncovered statements+branches down by about 180 or more, or the PR body states how far short it is and why and explains each target that could not be meaningfully covered (a partial PR meets this criterion; no PR does not).
+- [x] The PR's Gate coverage shows the targets' uncovered statements+branches down by about 180 or more, or the PR body states how far short it is and why and explains each target that could not be meaningfully covered (a partial PR meets this criterion; no PR does not).
 - [x] Production code changes only where a test found a real bug, each one explained in the PR body.
 
 - [ ] Same contract as every round in this initiative:
