@@ -47,7 +47,8 @@ function fixture(t, segments = { '': ndjson([event()]) }, end = now, relativeRoo
   fs.mkdirSync(path.join(root, 'followup-evidence'));
   const receipt = path.join(root, 'followup-evidence/latest.json');
   fs.writeFileSync(receipt, collected.stdout);
-  const audit = () => auditProvisionLedger(root, source, { now: end });
+  const audit = () => auditProvisionLedger(root, source,
+    { now: end, writerPath: path.join(root, 'provision-events.ndjson') });
   const changeReceipt = (change) => {
     const document = JSON.parse(fs.readFileSync(receipt, 'utf8'));
     change(document.provision);
@@ -180,7 +181,9 @@ test('reads all inputs without writing and CLI status distinguishes unmet eviden
   const f = fixture(t, { '': '', '.old': '' }, end);
   const before = [f.receipt, path.join(f.root, 'provision-events.ndjson'),
     path.join(f.root, 'provision-events.ndjson.old')].map((file) => [file, fs.readFileSync(file)]);
-  const result = execute(process.execPath, [script, f.root, source], { cwd: f.root });
+  const options = { cwd: f.root, env: { ...process.env, ORCH_LOCAL_RUNTIME: f.root } };
+  delete options.env.ORCH_PROVISION_EVENTS_PATH;
+  const result = execute(process.execPath, [script, f.root, source], options);
   assert.equal(result.error_code, null);
   assert.equal(result.signal, null);
   assert.equal(result.exit_code, 0, result.stderr + result.stdout);
@@ -189,7 +192,7 @@ test('reads all inputs without writing and CLI status distinguishes unmet eviden
   assert.deepEqual(fs.readdirSync(f.root).sort(), ['followup-evidence',
     'provision-events.ndjson', 'provision-events.ndjson.old']);
   fs.appendFileSync(path.join(f.root, 'provision-events.ndjson'), ndjson([event({ ts: end })]));
-  assert.equal(execute(process.execPath, [script, f.root, source], { cwd: f.root }).exit_code, 1);
+  assert.equal(execute(process.execPath, [script, f.root, source], options).exit_code, 1);
   assert.equal(execute(process.execPath, [script], { cwd: f.root }).exit_code, 1);
 });
 
@@ -216,7 +219,7 @@ test('compares relative collector segment paths by their filesystem identity', (
   const f = fixture(t, { '': '' }, now, true);
   assert.equal(f.audit().coverage, 'continuous');
   assert.equal(auditProvisionLedger(path.relative(process.cwd(), f.root), source,
-    { now }).evidence_ready, true);
+    { now, writerPath: path.join(f.root, 'provision-events.ndjson') }).evidence_ready, true);
 });
 
 for (const location of ['outside', 'renamed']) {
@@ -231,5 +234,26 @@ for (const location of ['outside', 'renamed']) {
     assert.equal(result.coverage, 'UNKNOWN');
     assert.equal(result.evidence_ready, false);
     assert.match(result.continuity_failures.join('\n'), /writer ledger/);
+  });
+}
+
+for (const location of ['configured runtime', 'home runtime']) {
+  test(`rejects an unrelated zero ledger with a separate writer ${location}`, (t) => {
+    const end = new Date().toISOString();
+    const f = fixture(t, { '': '' }, end);
+    const home = path.join(f.root, 'home');
+    const runtime = location === 'configured runtime'
+      ? path.join(f.root, 'writer') : path.join(home, '.codex', 'orchestrator');
+    fs.mkdirSync(runtime, { recursive: true });
+    fs.writeFileSync(path.join(runtime, 'provision-events.ndjson'), ndjson([event({ ts: end })]));
+    const env = { ...process.env, HOME: home };
+    delete env.ORCH_PROVISION_EVENTS_PATH;
+    delete env.ORCH_LOCAL_RUNTIME;
+    if (location === 'configured runtime') env.ORCH_LOCAL_RUNTIME = runtime;
+    const result = execute(process.execPath, [script, f.root, source], { env, cwd: f.root });
+    assert.equal(result.error_code, null);
+    assert.equal(result.exit_code, 1, result.stdout.toString());
+    assert.match(result.stdout.toString(), /writer ledger is not included/);
+    assert.match(result.stdout.toString(), /"evidence_ready": false/);
   });
 }

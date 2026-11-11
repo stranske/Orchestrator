@@ -4,6 +4,7 @@
 // An old event timestamp never establishes a continuous observation baseline.
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
 const { createHash } = require('node:crypto');
 
 const week = 7n * 24n * 3600n * 1000000n;
@@ -46,7 +47,9 @@ function eligibleLines(bytes) {
 }
 
 function auditProvisionLedger(root, sourceDirectory, { now = new Date().toISOString(),
-  writerPath = process.env.ORCH_PROVISION_EVENTS_PATH || path.join(root, 'provision-events.ndjson') } = {}) {
+  writerPath = process.env.ORCH_PROVISION_EVENTS_PATH ?? path.join(
+    process.env.ORCH_LOCAL_RUNTIME ?? path.join(os.homedir(), '.codex', 'orchestrator'),
+    'provision-events.ndjson') } = {}) {
   root = path.resolve(root);
   const result = { schema_version: 1, deployment_acceptance_verified: false,
     reporter_sha256: sha256(readRegular(__filename)),
