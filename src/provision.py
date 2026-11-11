@@ -511,6 +511,95 @@ def _preserve_dirty_holder(holder: Path, branch: str, event: dict) -> None:
     print(f"provision: preserved dirty holder {holder} in place on {preserved}")
 
 
+# A process left in a holder by a parent that died ends nowhere: 2026-11-11, `unzip -p artifact.zip .coverage`
+# sat in stranske__Workflows__4635__opener for 11 h at 0.00 s CPU with launchd as its parent, and every closer
+# reclaim of that worktree refused "live pid" (36 of 60 rounds). A holder process is a STALE ORPHAN only when
+# all of these hold: its cwd is inside the holder, its parent is pid 1, it has lived at least
+# ORPHAN_MIN_AGE_SECONDS, and it has used at most ORPHAN_MAX_CPU_SECONDS of CPU. A detached agent also has
+# parent 1, but a working one uses CPU; one that used none in two hours is hung either way.
+ORPHAN_MIN_AGE_SECONDS = int(os.environ.get("ORCH_ORPHAN_HOLDER_MIN_AGE", "7200"))
+ORPHAN_MAX_CPU_SECONDS = float(os.environ.get("ORCH_ORPHAN_HOLDER_MAX_CPU", "5"))
+
+
+def _ps_seconds(text: str) -> float:
+    """`ps` etime/time ([[dd-]hh:]mm:ss[.ff]) as seconds."""
+    days, _, rest = text.strip().rpartition("-")
+    total = 0.0
+    for part in rest.split(":"):
+        total = total * 60 + float(part)
+    return total + (int(days) * 86400 if days else 0)
+
+
+def _holder_process(pid: str, holder: Path) -> dict | None:
+    """ppid/age/cpu of a pid whose cwd is inside `holder`, or None when it cannot be shown to be."""
+    shown = _run(["ps", "-o", "ppid=,etime=,time=,comm=", "-p", pid], check=False)
+    fields = shown.stdout.split(None, 3)
+    if shown.returncode or len(fields) < 3:
+        return None
+    cwd = _run(["lsof", "-a", "-p", pid, "-d", "cwd", "-Fn"], check=False)
+    root = Path(os.path.realpath(holder))
+    paths = [
+        Path(os.path.realpath(line[1:])) for line in cwd.stdout.splitlines() if line.startswith("n")
+    ]
+    if not any(path == root or root in path.parents for path in paths):
+        return None
+    try:
+        return {
+            "pid": pid,
+            "ppid": fields[0],
+            "age_s": _ps_seconds(fields[1]),
+            "cpu_s": _ps_seconds(fields[2]),
+            "comm": fields[3].strip() if len(fields) > 3 else "",
+        }
+    except ValueError:
+        return None
+
+
+def _stale_orphans(pids: set[str], holder: Path) -> dict[str, dict]:
+    found = {}
+    for pid in pids:
+        proc = _holder_process(pid, holder)
+        if (
+            proc
+            and proc["ppid"] == "1"
+            and proc["age_s"] >= ORPHAN_MIN_AGE_SECONDS
+            and proc["cpu_s"] <= ORPHAN_MAX_CPU_SECONDS
+        ):
+            found[pid] = proc
+    return found
+
+
+def _end_stale_orphans(orphans: dict[str, dict]) -> list[dict]:
+    """SIGTERM, then SIGKILL after 5 s; returns what was ended, for the provision event."""
+    import signal
+
+    for pid in orphans:
+        try:
+            os.kill(int(pid), signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    deadline = time.time() + 5
+    while time.time() < deadline and any(_pid_alive(pid) for pid in orphans):
+        time.sleep(0.2)
+    for pid in orphans:
+        if _pid_alive(pid):
+            try:
+                os.kill(int(pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+    return list(orphans.values())
+
+
+def _pid_alive(pid: str) -> bool:
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def _reclaim_branch_holder(canon: Path, branch: str, wt: Path, event: dict) -> None:
     """Remove only a clean, idle holder of this branch, never the requested checkout."""
     _run(["git", "-C", str(canon), "worktree", "prune", "--expire", "now"])
@@ -547,9 +636,15 @@ def _reclaim_branch_holder(canon: Path, branch: str, wt: Path, event: dict) -> N
         except ProbeBlindError:
             event.update(outcome="failed", cause="probe-blind")
             raise
+        stale = _stale_orphans(live, holder) if live else {}
+        if live and set(stale) == live:
+            event["stale_orphans_ended"] = _end_stale_orphans(stale)
+            print(f"provision: ended {len(stale)} stale orphan(s) in {holder}: {sorted(stale)}")
+            live = _live_holder_pids(holder)
         if live:
             raise RuntimeError(
-                f"refusing to reclaim worktree {holder}: live pid {', '.join(sorted(live))}"
+                f"refusing to reclaim worktree {holder}: live pid {', '.join(sorted(live))} "
+                f"(stale orphans {len(set(stale) & live)} of {len(live)})"
             )
         _run(["git", "-C", str(canon), "worktree", "remove", "--force", str(holder)])
         _run(["git", "-C", str(canon), "worktree", "prune"])

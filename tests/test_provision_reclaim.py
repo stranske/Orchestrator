@@ -759,3 +759,65 @@ def test_native_reclaim_disabled_exit_128_names_holder(layout, lane, monkeypatch
     assert caught.value.returncode == 128
     assert str(holder) in (caught.value.stderr or "")
     assert holder.exists()
+
+
+@pytest.mark.parametrize(
+    "text,seconds",
+    [
+        ("11:12:09", 40329.0),
+        ("02-14:54:07", 2 * 86400 + 53647.0),
+        ("0:00.25", 0.25),
+        ("05:03", 303.0),
+    ],
+)
+def test_ps_seconds_parses_etime_and_cputime(text, seconds):
+    assert provision._ps_seconds(text) == pytest.approx(seconds)
+
+
+def _child_in(holder):
+    return subprocess.Popen(["sleep", "300"], cwd=str(holder))
+
+
+def _faked_probes(monkeypatch, proc, *, cpu_s):
+    monkeypatch.setattr(
+        provision, "_live_holder_pids", lambda _h: {str(proc.pid)} if proc.poll() is None else set()
+    )
+    monkeypatch.setattr(
+        provision,
+        "_holder_process",
+        lambda pid, _h: {
+            "pid": pid,
+            "ppid": "1",
+            "age_s": 40329.0,
+            "cpu_s": cpu_s,
+            "comm": "unzip",
+        },
+    )
+
+
+def test_a_stale_orphan_holding_the_worktree_is_ended_and_the_holder_reclaimed(layout, monkeypatch):
+    """2026-11-11: an orphaned `unzip` (11 h, 0.00 s CPU, parent pid 1) made every reclaim of
+    stranske__Workflows__4635__opener refuse "live pid" for 36 of 60 closer rounds."""
+    holder = hold(layout)
+    proc = _child_in(holder)
+    try:
+        _faked_probes(monkeypatch, proc, cpu_s=0.0)
+        wt = provision.provision(TARGET, "closer")
+        assert proc.wait(timeout=10) is not None
+        assert not holder.exists() and wt.exists()
+        ended = [e for e in events() if e.get("stale_orphans_ended")]
+        assert ended and ended[-1]["stale_orphans_ended"][0]["pid"] == str(proc.pid)
+    finally:
+        proc.kill()
+
+
+def test_a_holder_process_using_cpu_is_never_ended(layout, monkeypatch):
+    holder = hold(layout)
+    proc = _child_in(holder)
+    try:
+        _faked_probes(monkeypatch, proc, cpu_s=120.0)
+        with pytest.raises(RuntimeError, match=r"live pid \d+ \(stale orphans 0 of 1\)"):
+            provision.provision(TARGET, "closer")
+        assert proc.poll() is None and holder.exists()
+    finally:
+        proc.kill()
