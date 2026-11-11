@@ -829,8 +829,13 @@ reservation and per-issue cooldown gates. With probability 0.5 the oldest forum 
 (`experiment:forum` or at least nine checkboxes) wins; otherwise cells older than 21 days
 come first, then age-weighted task classes and uniformly selected subjects. Arms are the
 incumbent in learned rank order and the stalest challenger; 25% add a distinct member/arm
-with the incumbent agent and a test-first brief. Shared-pool pacing must be `ok` for every
-arm. Only comparative evaluation evidence refreshes route-table coverage; ordinary merges
+with the incumbent agent and a test-first brief. Every arm's seat must be arm-eligible
+(`experiment_producer.arm_pacing`): pacing `ok`, or held back only by a projection (the #668
+pacing model's warn/shed, or gemini's local weekly soft budget). A real cutoff (an active,
+manual or unreadable 429/cooldown marker, failed auth, an unresolvable model, or a non-ok
+state with no projection behind it) keeps the seat out (owner, 2026-11-11). Of the router's
+backup seats only muse may field an arm (`EXPERIMENT_BACKUP_ARMS`), since its backup status
+waits on outcomes only experiments produce; aider, which bills pay-as-you-go, stays out. Only comparative evaluation evidence refreshes route-table coverage; ordinary merges
 do not. Model-version canaries remain follow-up work.
 
 The frozen issue body and its hash are written before member launch. Missing or changed
