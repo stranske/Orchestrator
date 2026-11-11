@@ -305,5 +305,36 @@
       "E         Expected: 0.675 \u00b1 6.7e-07",
       "FAILED tests/test_issue1232_ranked_coverage.py::test_relearn_report_priors_and_blend"
     ]
+  },
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure",
+    "description": "plan_target forwards exact target to gather_signals",
+    "module": "keepalive_supervisor.py",
+    "line": 748,
+    "mutation": [
+      "signals = keepalive_shadow.gather_signals(target)",
+      "signals = keepalive_shadow.gather_signals(\"stranske/Orchestrator#9999\")"
+    ],
+    "red": 1,
+    "restored": 0,
+    "source_sha256": "1670a2aeeda956bcb68f27fcb74166cdeffd8f8fc178f6f1b5cef3c041304703",
+    "command": ".venv/bin/python -m pytest tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure -q --no-cov",
+    "red_transcript": "14-red.txt",
+    "restored_transcript": "14-restored.txt",
+    "failure_lines": [
+      ">       assert gather_signals_calls == [signals[\"target\"]]",
+      "E       AssertionError: assert ['stranske/Orchestrator#9999'] == ['stranske/Orchestrator#1234']",
+      "E         ",
+      "E         At index 0 diff: 'stranske/Orchestrator#9999' != 'stranske/Orchestrator#1234'",
+      "E         ",
+      "E         Full diff: (-: missing in left side, +: extra in left side)",
+      "E           [",
+      "E         -     'stranske/Orchestrator#1234',",
+      "E         ?                            ^^^^",
+      "E         +     'stranske/Orchestrator#9999',",
+      "E         ?                            ^^^^",
+      "E           ]",
+      "FAILED tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure"
+    ]
   }
 ]

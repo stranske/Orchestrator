@@ -1,0 +1,103 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.2, pytest-9.2.0, pluggy-1.6.0 -- /opt/anaconda3/bin/python
+cachedir: .pytest_cache
+hypothesis profile 'ci' -> database=None, deadline=None, print_blob=True, derandomize=True, suppress_health_check=(HealthCheck.too_slow,)
+rootdir: /Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__1341__closer
+configfile: pyproject.toml
+plugins: hypothesis-6.161.5, cov-7.1.0, xdist-3.8.0, rerunfailures-16.3, datadir-1.8.0, typeguard-4.5.1, langsmith-0.10.10, pytest_httpserver-1.1.3, anyio-4.16.0, regressions-2.11.0, asyncio-1.4.1.post1, Faker-40.39.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 1 item
+
+tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure FAILED
+
+=================================== FAILURES ===================================
+______________ test_keepalive_supervisor_plan_target_and_closure _______________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a3ed880>
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/vibe/tmp/pytest-of-teacher/pytest-1350/test_keepalive_supervisor_plan0')
+
+    def test_keepalive_supervisor_plan_target_and_closure(monkeypatch, tmp_path):
+        """Verify keepalive supervisor planning for both blocked and eligible escalation signals."""
+        signals_blocked = {
+            "target": "stranske/Orchestrator#1234",
+            "pr_state": "open",
+            "labels": [supervisor.KEEPALIVE_LABEL],
+            "title": "Test issue",
+            "body": "Test body",
+        }
+        signals = {
+            **signals_blocked,
+            "labels": [supervisor.KEEPALIVE_LABEL, "needs-human"],
+        }
+    
+        gather_signals_calls = []
+        def recording_gather_signals(target):
+            gather_signals_calls.append(target)
+            return signals
+    
+        monkeypatch.setattr(supervisor.keepalive_shadow, "gather_signals", recording_gather_signals)
+        monkeypatch.setattr(
+            supervisor.keepalive_shadow, "shadow_decide", lambda _signals: {"shadow_action": "wait"}
+        )
+        monkeypatch.setattr(supervisor, "build_redirect_report", lambda *_args: {"report": "safe"})
+    
+        blocked_plan = supervisor.plan_for_signals(
+            signals_blocked, report_json_path=tmp_path / "blocked-report.json"
+        )
+        assert blocked_plan["next_step"] == "do_not_intervene"
+        assert blocked_plan["proposal_command"] is None
+    
+        plan = supervisor.plan_for_signals(signals, report_json_path=tmp_path / "report.json")
+        assert "next_step" in plan
+        assert "proposal_command" in plan
+        # Assert operator_inspect, eligible=True, blockers=[], direct report existence
+        assert plan["next_step"] == "operator_inspect"
+        assert plan["eligible"] is True
+        assert plan["eligibility"]["blockers"] == []
+        assert plan["report_written"] is not None
+        assert (tmp_path / "report.json").exists()
+        # Assert the exact --report-json/--ac/--dispatch command suffix
+        # Command structure: [..., '--report-json', '<path>', '--ac', '<value>', '--dispatch']
+        assert plan["proposal_command"][-5:] == [
+            "--report-json",
+            str(tmp_path / "report.json"),
+            "--ac",
+            supervisor.DEFAULT_AC,
+            "--dispatch",
+        ]
+    
+        plan_target_result = supervisor.plan_target(
+            signals["target"],
+            report_dir=tmp_path,
+        )
+        assert plan_target_result["next_step"] == "operator_inspect"
+        assert plan_target_result["report_written"] is not None
+        assert (tmp_path / "stranske__Orchestrator__1234.keepalive-supervisor-report.json").exists()
+>       assert gather_signals_calls == [signals["target"]]
+E       AssertionError: assert ['stranske/Orchestrator#9999'] == ['stranske/Orchestrator#1234']
+E         
+E         At index 0 diff: 'stranske/Orchestrator#9999' != 'stranske/Orchestrator#1234'
+E         
+E         Full diff: (-: missing in left side, +: extra in left side)
+E           [
+E         -     'stranske/Orchestrator#1234',
+E         ?                            ^^^^
+E         +     'stranske/Orchestrator#9999',
+E         ?                            ^^^^
+E           ]
+
+tests/test_issue1232_ranked_coverage.py:641: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure - AssertionError: assert ['stranske/Orchestrator#9999'] == ['stranske/Orchestrator#1234']
+  
+  At index 0 diff: 'stranske/Orchestrator#9999' != 'stranske/Orchestrator#1234'
+  
+  Full diff: (-: missing in left side, +: extra in left side)
+    [
+  -     'stranske/Orchestrator#1234',
+  ?                            ^^^^
+  +     'stranske/Orchestrator#9999',
+  ?                            ^^^^
+    ]
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+============================== 1 failed in 0.48s ===============================

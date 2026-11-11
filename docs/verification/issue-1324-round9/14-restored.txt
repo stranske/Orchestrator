@@ -1,0 +1,13 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.2, pytest-9.2.0, pluggy-1.6.0 -- /opt/anaconda3/bin/python
+cachedir: .pytest_cache
+hypothesis profile 'ci' -> database=None, deadline=None, print_blob=True, derandomize=True, suppress_health_check=(HealthCheck.too_slow,)
+rootdir: /Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__1341__closer
+configfile: pyproject.toml
+plugins: hypothesis-6.161.5, cov-7.1.0, xdist-3.8.0, rerunfailures-16.3, datadir-1.8.0, typeguard-4.5.1, langsmith-0.10.10, pytest_httpserver-1.1.3, anyio-4.16.0, regressions-2.11.0, asyncio-1.4.1.post1, Faker-40.39.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 1 item
+
+tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure PASSED
+
+============================== 1 passed in 0.44s ===============================

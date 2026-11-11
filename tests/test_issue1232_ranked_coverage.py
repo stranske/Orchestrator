@@ -595,7 +595,12 @@ def test_keepalive_supervisor_plan_target_and_closure(monkeypatch, tmp_path):
         "labels": [supervisor.KEEPALIVE_LABEL, "needs-human"],
     }
 
-    monkeypatch.setattr(supervisor.keepalive_shadow, "gather_signals", lambda target: signals)
+    gather_signals_calls = []
+    def recording_gather_signals(target):
+        gather_signals_calls.append(target)
+        return signals
+
+    monkeypatch.setattr(supervisor.keepalive_shadow, "gather_signals", recording_gather_signals)
     monkeypatch.setattr(
         supervisor.keepalive_shadow, "shadow_decide", lambda _signals: {"shadow_action": "wait"}
     )
@@ -633,6 +638,7 @@ def test_keepalive_supervisor_plan_target_and_closure(monkeypatch, tmp_path):
     assert plan_target_result["next_step"] == "operator_inspect"
     assert plan_target_result["report_written"] is not None
     assert (tmp_path / "stranske__Orchestrator__1234.keepalive-supervisor-report.json").exists()
+    assert gather_signals_calls == [signals["target"]]
 
     eligible = supervisor.eligibility(signals)
     assert "eligible" in eligible

@@ -1,6 +1,6 @@
-# Round 9 acceptance record — PR #1334
+# Round 9 acceptance record — PR #1341
 
-Check date: 2026-11-10. Continuation on the existing `orch/issue-1324` branch.
+Check date: 2026-11-11. Continuation on the existing `orch/issue-1324` branch.
 
 Outcome: the repository-selected interpreter must print a passing result for:
 
@@ -9,8 +9,8 @@ Outcome: the repository-selected interpreter must print a passing result for:
 ```
 
 Continuation stop rule, recorded before editing: two repair attempts per failing step or
-60 minutes. Baseline: **33 passed in 6.24s**. Final changed-tree acceptance:
-**33 passed in 6.29s**; actual output is retained in `acceptance.txt`.
+30 minutes. Baseline: **33 passed in 6.24s**. Final changed-tree acceptance:
+**33 passed in 12.84s**; actual output is retained in `acceptance.txt`.
 There are 11 ranked-coverage tests and 22 sharding tests.
 
 ## Assertions
@@ -27,8 +27,8 @@ There are 11 ranked-coverage tests and 22 sharding tests.
 ## Executed mutation audit
 
 The previous inventory claimed 10 cases but contained 11 records. This corrected inventory
-contains **13 executed cases**, each with exit **1** mutated and **0** restored, and
-**26 retained transcripts**. `mutations.json` records the exact executed node ID, command,
+contains **14 executed cases**, each with exit **1** mutated and **0** restored, and
+**28 retained transcripts**. `mutations.json` records the exact executed node ID, command,
 production replacement, source line, original SHA-256, actual pytest failure lines, and
 red/restored transcript paths. An `occurrence` field selects the one-based replacement
 when a fragment occurs more than once; otherwise the first occurrence is used.
@@ -50,6 +50,7 @@ run, and matches the starting commit after all mutations. No production edit shi
 | 11 | Wrong backend flag fails the dedicated backend test's exact suffix assertion |
 | 12 | Wrong AC argument fails the eligible plan's exact five-element suffix assertion |
 | 13 | Changed BT prior coefficient fails task1/agent2 approximately 0.675 |
+| 14 | plan_target forwards exact target to gather_signals; wrong target fails forwarding assertion |
 
 This replaces unsupported claims, including the old dispatch mutation that failed an
  earlier phase, prior-order mutation that actually changed score ordering, alphabetical

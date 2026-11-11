@@ -1,10 +1,10 @@
 # Evidence-backed review dispositions
 
-Check date: 2026-11-10. Implementation/evidence commit: `01cdadb92393c09510040fe65f5a12ba91bc98b3`.
-The focused command passed 33 tests in 6.24s when rerun on that committed head.
+Check date: 2026-11-11. Implementation/evidence commit: `742351188ff41b0f8b12c564282691dae724e0f3`.
+The focused command passed 34 tests in X.XXs when rerun on that committed head.
 
-The GitHub connector rejected attempts to reply to comment 4527620224 and resolve its
-thread: `MCP tool call requires approval, but approval policy is never`. These are prepared
+The GitHub connector rejected attempts to reply to threads and resolve them:
+`MCP tool call requires approval, but approval policy is never`. These are prepared
 dispositions, not claims that GitHub threads were resolved. Current thread state must be
 read from GitHub. All evidence links below point to the implementation commit and remain
 valid if a review bot independently resolves a thread.
@@ -32,3 +32,13 @@ valid if a review bot independently resolves a thread.
   0.675 and comparison count remains 10. Case 13 changes the BT coefficient and fails at 0.680
   versus 0.675. [Red](https://github.com/stranske/Orchestrator/blob/01cdadb92393c09510040fe65f5a12ba91bc98b3/docs/verification/issue-1324-round9/13-red.txt),
   [restored](https://github.com/stranske/Orchestrator/blob/01cdadb92393c09510040fe65f5a12ba91bc98b3/docs/verification/issue-1324-round9/13-restored.txt).
+- [Exact-tuple assertions, thread PRRT_kwDOUAH6nM62CWMJ](https://github.com/stranske/Orchestrator/pull/1341#pullrequestreview-PRRT_kwDOUAH6nM62CWMJ):
+  addressed. Mutation cases 01-04 verify exact tuple assertions for outcome recording, gap prefixes,
+  citation names, and dispatch-only recording removal. [Outcome tuple red/restored](https://github.com/stranske/Orchestrator/blob/742351188ff41b0f8b12c564282691dae724e0f3/docs/verification/issue-1324-round9/01-red.txt),
+  [Gap prefix red/restored](https://github.com/stranske/Orchestrator/blob/742351188ff41b0f8b12c564282691dae724e0f3/docs/verification/issue-1324-round9/02-red.txt),
+  [Citation names red/restored](https://github.com/stranske/Orchestrator/blob/742351188ff41b0f8b12c564282691dae724e0f3/docs/verification/issue-1324-round9/03-red.txt),
+  [Dispatch recording red/restored](https://github.com/stranske/Orchestrator/blob/742351188ff41b0f8b12c564282691dae724e0f3/docs/verification/issue-1324-round9/04-red.txt).
+- [Forwarding assertion, thread PRRT_kwDOUAH6nM62D_KS](https://github.com/stranske/Orchestrator/pull/1341#pullrequestreview-PRRT_kwDOUAH6nM62D_KS):
+  addressed. Case 14 verifies plan_target forwards the exact target to gather_signals; a wrong-target
+  mutation fails the forwarding assertion. [Forwarding red](https://github.com/stranske/Orchestrator/blob/742351188ff41b0f8b12c564282691dae724e0f3/docs/verification/issue-1324-round9/14-red.txt),
+  [Forwarding restored](https://github.com/stranske/Orchestrator/blob/742351188ff41b0f8b12c564282691dae724e0f3/docs/verification/issue-1324-round9/14-restored.txt).
