@@ -1301,6 +1301,10 @@ def _selftest():
     original_shed_dir = SHED_DIR
     selftest_shed_dir = Path(tempfile.mkdtemp(prefix="capacity-shed-selftest-"))
     SHED_DIR = selftest_shed_dir
+    # The self-test's seats are fixtures: the launch-binary gate reads this machine's filesystem
+    # (CI has no vibe/aider binary), so it is off here exactly as tests/conftest.py turns it off.
+    original_launch_check = os.environ.get("ORCH_LAUNCH_CHECK")
+    os.environ["ORCH_LAUNCH_CHECK"] = "0"
 
     def blk(toks):
         return {"isActive": True, "projection": {"totalTokens": toks, "totalCost": 100.0}}
@@ -1313,6 +1317,10 @@ def _selftest():
     finally:
         SHED_DIR = original_shed_dir
         shutil.rmtree(selftest_shed_dir, ignore_errors=True)
+        if original_launch_check is None:
+            os.environ.pop("ORCH_LAUNCH_CHECK", None)
+        else:
+            os.environ["ORCH_LAUNCH_CHECK"] = original_launch_check
 
 
 def _selftest_body(blk):
