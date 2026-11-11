@@ -300,6 +300,18 @@ PROFILE_REGISTRY: dict[str, dict[str, Any]] = {
             pool="gemini-prepaid",
             adapter_version="agy-cli-profile-v1",
         ),
+        # Gemini 4 Carbon, the local frontier model (model table, 2026-11-10). Registered for the
+        # owner's live full-tier split against Argon (gemini_full_split.py, 2026-11-11). Automatic
+        # routing never picks it: router._automatic_profiles keeps only the tier's own model.
+        _profile(
+            "gemini-4-carbon-high",
+            "gemini-4-carbon-high",
+            "high",
+            agent="gemini",
+            provider="google",
+            pool="gemini-prepaid",
+            adapter_version="agy-cli-profile-v1",
+        ),
         _profile(
             "cursor-composer-2.5",
             "composer-2.5",
