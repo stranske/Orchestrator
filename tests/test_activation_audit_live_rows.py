@@ -58,6 +58,8 @@ def test_a_retired_or_superseded_row_is_never_reported_blocked(tmp_path, monkeyp
 def test_the_whole_ledger_is_still_accounted_for(tmp_path, monkeypatch):
     with monkeypatch.context() as patch:
         _external_proof_fixture(tmp_path / "external-proof", patch)
+    with monkeypatch.context() as patch:
+        _local_entrypoint_proof_fixture(tmp_path / "local-proof", patch)
     rep = _report(tmp_path, monkeypatch)
     assert rep["ledger_total"] == 3
     assert rep["not_audited"] == {
@@ -186,6 +188,69 @@ def _external_proof_fixture(root, monkeypatch):
     assert not caller_ok(bad), "external declarations cannot bypass an in-tree audit"
     bad = {**good, "external_heartbeat_max_age_seconds": 0}
     assert not admission.req_heartbeat(bad, {})[0]
+
+
+def _local_entrypoint_proof_fixture(root, monkeypatch):
+    """#1098: an external controller can call local_loop.py in either installed shape."""
+    from copy import deepcopy
+
+    root.mkdir()
+    caller = root / "controller.py"
+    caller.write_text("def start_local_loop():\n    pass\n")
+    now = 1800000000
+    monkeypatch.setattr(audit.time, "time", lambda: now)
+    for shape in ("src", "flat"):
+        tree = root / "checkout" / shape
+        tree.mkdir(parents=True)
+        entry = tree / "local_loop.py"
+        entry.write_text("def main(argv=None):\n    pass\n")
+        monkeypatch.setattr(audit, "HERE", tree)
+        cap = deepcopy(capabilities.KNOWN_DECLARATIONS["local-loop"])
+        cap["capability_id"] = "local-loop"
+        cap["external_caller"]["path"] = str(caller)
+        assert cap["external_caller"]["entrypoint_scope"] == "local"
+        cap["event_history"] = [{"type": "invocation", "timestamp": now}]
+        assert admission.req_caller_exists(cap, {"audit_rows": {}})[0]
+        assert admission.req_heartbeat(cap, {})[0]
+        verdict = audit.audit_capability(
+            "local-loop", cap, emittable=set(), templates=set(), label_index={}
+        )
+        assert verdict["reachable"], verdict
+        # A valid declaration must still carry recent, real invocation evidence.
+        for events in (
+            [],
+            [{"type": "invocation", "timestamp": now - 86401}],
+            [{"type": "invocation", "timestamp": now + 1}],
+            [{"type": "success", "timestamp": now}],
+            [{"type": "invocation", "timestamp": now, "metadata": {"counterfactual": True}}],
+        ):
+            assert not admission.req_heartbeat({**cap, "event_history": events}, {})[0]
+        for field, value in (
+            ("entrypoint_scope", "external"),
+            ("entrypoint_scope", "unknown"),
+            ("function", "absent"),
+            ("path", str(root / "absent.py")),
+            ("path", str(entry)),
+        ):
+            bad = deepcopy(cap)
+            bad["external_caller"][field] = value
+            assert not admission.req_caller_exists(bad, {"audit_rows": {}})[0]
+            assert not admission.req_heartbeat(bad, {})[0]
+        for declared in (
+            "local_loop.py:absent",
+            "local_loop.py",
+            "missing.py:main",
+            "../controller.py:start_local_loop",
+            str(caller) + ":start_local_loop",
+        ):
+            bad = {**cap, "entrypoint": declared}
+            assert not admission.req_caller_exists(bad, {"audit_rows": {}})[0]
+        for source in ("def main(:", "class Nested:\n    def main(self):\n        pass\n"):
+            entry.write_text(source)
+            assert not admission.req_caller_exists(cap, {"audit_rows": {}})[0]
+        entry.unlink()
+        entry.symlink_to(caller)
+        assert not admission.req_caller_exists(cap, {"audit_rows": {}})[0]
 
 
 # --------------------------------------------------------------------------- progress

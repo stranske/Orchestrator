@@ -1855,6 +1855,7 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
         "status": "wired",
         "entrypoint": "local_loop.py:main tick --apply",
         "external_caller": {
+            "entrypoint_scope": "local",
             "path": str(
                 Path.home() / ".codex/automations/reviewed-repo-automation-controller/controller.py"
             ),

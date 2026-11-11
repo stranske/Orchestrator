@@ -757,7 +757,9 @@ def external_caller(cap: dict) -> dict | None:
     """Verify an explicitly declared local-external caller, or a sibling CI caller.
 
     Local external associations are reviewed declarations, not inferred call-graph edges.
-    The entrypoint must be outside this tree and the named Python function must exist.
+    Entrypoints are external by default. An explicit `entrypoint_scope: local` instead
+    binds a module and top-level function in this tree to a caller outside it. Both
+    functions must exist; the runtime heartbeat requirement remains independent.
 
     `entrypoint_external` says "activation needs a change in another repository". That is only a
     BLOCKER while the change is outstanding — once the caller lands, the capability can fire and
@@ -773,16 +775,38 @@ def external_caller(cap: dict) -> dict | None:
         try:
             if not isinstance(declaration, dict):
                 raise ValueError("external_caller must name a path and function")
-            external_entry = Path(str(cap.get("entrypoint") or "").split(":", 1)[0]).expanduser()
+            entrypoint = str(cap.get("entrypoint") or "")
+            external_entry = Path(entrypoint.split(":", 1)[0]).expanduser()
             caller = Path(str(declaration.get("path") or "")).expanduser()
             function = declaration.get("function")
             tree = HERE.parent if HERE.name == "src" else HERE
-            if not external_entry.is_absolute() or external_entry.resolve().is_relative_to(
-                tree.resolve()
-            ):
-                raise ValueError("declared external entrypoint must be outside this tree")
-            if not external_entry.is_file():
-                raise ValueError("declared external entrypoint is absent")
+            scope = declaration.get("entrypoint_scope", "external")
+            if scope == "local":
+                module, _, tail = entrypoint.partition(":")
+                names = tail.split()
+                if Path(module).name != module or not _MODULE_NAME_RE.fullmatch(module):
+                    raise ValueError("declared local entrypoint must name a module in this tree")
+                entry = HERE / module
+                if entry.resolve().parent != HERE.resolve() or not entry.is_file():
+                    raise ValueError("declared local entrypoint is absent or outside this tree")
+                parsed_entry = ast.parse(entry.read_text(encoding="utf-8"))
+                if not names or not any(
+                    isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and node.name == names[0]
+                    for node in parsed_entry.body
+                ):
+                    raise ValueError("declared local entrypoint function is absent")
+                if caller.resolve().is_relative_to(tree.resolve()):
+                    raise ValueError("declared external caller must be outside this tree")
+            elif scope == "external":
+                if not external_entry.is_absolute() or external_entry.resolve().is_relative_to(
+                    tree.resolve()
+                ):
+                    raise ValueError("declared external entrypoint must be outside this tree")
+                if not external_entry.is_file():
+                    raise ValueError("declared external entrypoint is absent")
+            else:
+                raise ValueError("unknown declared entrypoint scope")
             if not caller.is_absolute() or not caller.is_file() or caller.suffix != ".py":
                 raise ValueError("declared external caller Python file is absent")
             if not isinstance(function, str) or not function.isidentifier():
