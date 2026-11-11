@@ -1712,6 +1712,34 @@ def test_generation_bump_runs_when_old_verdict_is_fail(tmp_path, monkeypatch, ca
     # orchestrate.sh reads `--trial-defaults` and turns the producer ON for "pending" or "pass".
     assert producer.trial_defaults()[1] in {"pending", "pass"}
 
+    # Evaluate orchestrate.sh's own default calculation, not a Python re-statement of it:
+    # run the trial block between its anchors against this same producer state, with no
+    # explicit ORCH_EXPERIMENT_PRODUCER so the shell default is what gets exported.
+    import os
+
+    from paths import MODULE_DIR, REPO_ROOT
+
+    source = (REPO_ROOT / "orchestrate.sh").read_text()
+    block = source[
+        source.index("# ORCH-ANCHOR: experiment-producer-trial") : source.index(
+            "# ORCH-ANCHOR: heartbeat-producers"
+        )
+    ]
+    shell_env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"ORCH_EXPERIMENT_PRODUCER", "ORCH_EXPERIMENT_TRIAL_END"}
+    }
+    shell_env["ORCH"] = str(MODULE_DIR)
+    result = subprocess.run(
+        ["/bin/bash", "-c", block + '\nprintf "%s" "$ORCH_EXPERIMENT_PRODUCER"'],
+        env=shell_env,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "1"
+
     # Verify message was printed
     captured = capsys.readouterr()
     assert "generation bump from 1 to 2" in captured.err
