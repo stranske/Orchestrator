@@ -167,7 +167,7 @@ def _request_correlations(comments, selected, candidates, repo, number, head, me
 
 
 def decision_from_pr(
-    repo: str, pr: dict[str, Any], *, include_pending: bool = False
+    repo: str, pr: dict[str, Any], *, include_pending: bool = False, include_source: bool = False
 ) -> dict[str, Any] | None:
     """Return the newest exact-identity decision from a trusted verifier comment."""
     number = pr.get("number")
@@ -266,11 +266,20 @@ def decision_from_pr(
         if invalid_correlation or len(bases) > 1
         else {"verification_request_basis": next(iter(bases))} if bases else {}
     )
+    source_url = (
+        next(
+            (url for raw, url in reversed(terminal_sources) if _public_record(raw) == selected),
+            None,
+        )
+        if include_source
+        else None
+    )
     return {
         **selected,
         "_lifecycle_history": [*records, *states],
         **inert,
         **({"_request_correlations": aliases} if aliases else {}),
+        **({"_source_url": source_url} if source_url else {}),
     }
 
 

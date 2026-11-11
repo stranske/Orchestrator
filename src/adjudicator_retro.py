@@ -1228,18 +1228,16 @@ def fetch_evidence(row: dict) -> dict:
         )
     if pr["comments"]["pageInfo"]["hasPreviousPage"] or pr["files"]["pageInfo"]["hasNextPage"]:
         raise ValueError("truncated verifier comment or diff evidence")
-    decision = verifier_evidence.decision_from_pr(repo, pr)
+    decision = verifier_evidence.decision_from_pr(repo, pr, include_source=True)
     if not decision or decision["verdict"] != row["verifier_verdict"]:
         raise ValueError("current merge-bound verifier decision missing or changed")
     comments = pr["comments"]["nodes"]
+    source_url = decision.pop("_source_url", None)
     finding = next(
         (
             c
             for c in reversed(comments)
-            if (
-                verifier_evidence.decision_from_pr(repo, {**pr, "comments": {"nodes": [c]}})
-                == decision
-            )
+            if source_url and isinstance(c, dict) and c.get("url") == source_url
         ),
         None,
     )

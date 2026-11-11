@@ -3,6 +3,7 @@
 import hashlib
 import json
 import sqlite3
+import subprocess
 import time
 
 import pytest
@@ -279,6 +280,60 @@ def test_missing_verifier_comment_uses_real_selector(monkeypatch):
         retro.fetch_evidence({"target": "owner/repo#1", "verifier_verdict": "NON_PASS"})
 
 
+def test_fetch_evidence_finds_selected_comment_in_multi_attempt_thread(monkeypatch):
+    repo = "owner/repo"
+    head, merge = "b" * 40, "a" * 40
+    comments = []
+    for run_id in (1, 2):
+        marker = {
+            "schema": retro.verifier_evidence.MARKER,
+            "repo": repo,
+            "pr": 1,
+            "head_sha": head,
+            "evaluated_sha": merge,
+            "run_id": run_id,
+            "run_attempt": 1,
+            "provider_verdicts": ["FAIL"],
+            "ci_failed": False,
+            "verdict": "NON_PASS",
+        }
+        comments.append(
+            {
+                "body": f"Finding {run_id}\n<!-- {marker['schema']} {json.dumps(marker)} -->",
+                "url": f"https://github.com/{repo}/pull/1#issuecomment-{run_id}",
+                "author": {"login": "github-actions[bot]"},
+            }
+        )
+    pr = {
+        "number": 1,
+        "state": "MERGED",
+        "headRefOid": head,
+        "mergeCommit": {"oid": merge},
+        "files": {"pageInfo": {"hasNextPage": False}, "nodes": []},
+        "comments": {"pageInfo": {"hasPreviousPage": False}, "nodes": comments},
+    }
+    monkeypatch.setattr(retro, "_gh_json", lambda _: {"data": {"repository": {"pullRequest": pr}}})
+
+    def check_selected_source(snapshot):
+        assert snapshot is pr
+        return {
+            "contexts": {
+                "nodes": [{"name": "gate"}],
+                "pageInfo": {"hasNextPage": False},
+            }
+        }
+
+    monkeypatch.setattr(retro, "_gate_rollup", check_selected_source)
+    monkeypatch.setattr(
+        retro.subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, "")
+    )
+    evidence = retro.fetch_evidence({"target": f"{repo}#1", "verifier_verdict": "NON_PASS"})
+    finding = evidence["disputed_finding"]
+    assert finding["ref"] == comments[1]["url"]
+    assert finding["body"] == comments[1]["body"]
+    assert len(finding["decision"]["_lifecycle_history"]) == 2
+
+
 def test_marker_only_finding_does_not_dispatch(private_brain, tmp_path):
     packet = evidence({})
     packet["disputed_finding"][
@@ -524,7 +579,7 @@ def test_legacy_false_flag_and_saved_decisions_resume_without_redispatch(private
 
 @pytest.mark.parametrize("paginated", [False, True])
 def test_missing_gate_commit_is_evidence_gap(monkeypatch, paginated):
-    decision = {"verdict": "NON_PASS"}
+    decision = {"verdict": "NON_PASS", "_source_url": "finding"}
     pr = {
         "state": "MERGED",
         "headRefOid": "b" * 40,
@@ -553,7 +608,9 @@ def test_missing_gate_commit_is_evidence_gap(monkeypatch, paginated):
             ]
         }
     replies = iter([pr, fresh])
-    monkeypatch.setattr(retro.verifier_evidence, "decision_from_pr", lambda *_: decision)
+    monkeypatch.setattr(
+        retro.verifier_evidence, "decision_from_pr", lambda *_, **__: dict(decision)
+    )
     monkeypatch.setattr(
         retro, "_gh_json", lambda _: {"data": {"repository": {"pullRequest": next(replies)}}}
     )
@@ -586,7 +643,7 @@ def test_missing_gate_commit_is_evidence_gap(monkeypatch, paginated):
     ],
 )
 def test_malformed_gate_contexts_are_evidence_gap(monkeypatch, paginated, rollup):
-    decision = {"verdict": "NON_PASS"}
+    decision = {"verdict": "NON_PASS", "_source_url": "finding"}
     pr = {
         "state": "MERGED",
         "headRefOid": "b" * 40,
@@ -620,7 +677,9 @@ def test_malformed_gate_contexts_are_evidence_gap(monkeypatch, paginated, rollup
     else:
         pr["commits"] = malformed
     replies = iter([pr, fresh])
-    monkeypatch.setattr(retro.verifier_evidence, "decision_from_pr", lambda *_: decision)
+    monkeypatch.setattr(
+        retro.verifier_evidence, "decision_from_pr", lambda *_, **__: dict(decision)
+    )
     monkeypatch.setattr(
         retro, "_gh_json", lambda _: {"data": {"repository": {"pullRequest": next(replies)}}}
     )
