@@ -1145,6 +1145,32 @@ def test_reviewed_absence_is_reported_as_missing_never_as_prose_or_acting():
     assert f"REVIEWED ABSENT absent: {reason}" in rendered, rendered
 
 
+def test_reviewed_absence_without_consumer_retains_classification_and_reason():
+    reason = "External repair output has no local consumer or handover rail."
+    for declaration in ({}, {"downstream_consumer": None}):
+        cap = {
+            "capability_id": "absent",
+            "consumer_missing": True,
+            "notes": reason,
+            **declaration,
+        }
+        cls, ok, detail = admission.consumer_class(cap, {})
+        assert cls == "consumer_missing" and not ok and detail.endswith(reason), detail
+        rows = [
+            {
+                "capability_id": "absent",
+                "blocking": ["consumer_acts"],
+                "deferred": [],
+                "enforced": True,
+            }
+        ]
+        consumers = admission.consumer_report({"absent": cap}, {}, rows)
+        assert consumers["by_class"]["consumer_missing"] == ["absent"]
+        assert consumers["by_class"]["undeclared"] == []
+        assert consumers["reviewed_absences"] == {"absent": reason}
+        assert consumers["drainable"] == ["absent"] and not consumers["drained"]
+
+
 def test_replacing_a_reviewed_absence_clears_its_stale_flag():
     """A declaration that names the consumer and omits the flag removes the old diagnostic."""
     cid = "route-weights-export"

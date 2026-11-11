@@ -606,8 +606,6 @@ def _consumer_absence_reason(cap: dict) -> str:
 
 def consumer_class(cap: dict, ctx: dict) -> tuple[str, bool, str]:
     """(class, ok, detail) for the tenth part; `req_consumer_acts` and `consumer_report` share it."""
-    if not _has(cap, "downstream_consumer"):
-        return "undeclared", False, "no consumer declared (the fifth part names the field)"
     # Reviewed absence (#599) is a finding, even when the declaration also names a real symbol:
     # it must neither read as accidental prose nor acquire acting or admission credit.
     if cap.get("consumer_missing") is True:
@@ -618,6 +616,8 @@ def consumer_class(cap: dict, ctx: dict) -> tuple[str, bool, str]:
             "no local acting consumer (consumer_missing): reviewed absence"
             + (f": {reason}" if reason else ""),
         )
+    if not _has(cap, "downstream_consumer"):
+        return "undeclared", False, "no consumer declared (the fifth part names the field)"
     res = consumer_resolution(cap, module_dir=ctx.get("module_dir"), repo_root=ctx.get("repo_root"))
     if not res["tokens"]:
         return (
