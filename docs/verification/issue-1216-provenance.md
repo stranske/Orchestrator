@@ -1,5 +1,114 @@
 # Issue #1216 verification
 
+## Response-ID rejection follow-up, 2026-11-11
+
+Reviewed recent commits `4a1d0da0`, `e19da646`, `b87a8cb0`, `044bb908`, and
+`01f80adf` before continuing. The unchecked tasks in the PR's full issue text
+duplicate implementation already present in its automated summary. The local
+five-file baseline passed with **121 tests and 30 subtests**. Reconciliation:
+
+- [x] Independent provider lookup required; session measurements remain
+  explicitly unverified (ingest/run tests).
+- [x] Bounded frozen-spec rubric and headingless, multiline, empty-answer,
+  and criterion-echo cases (run tests).
+- [x] Forged provenance and response IDs with recomputed artifact digests
+  refused before trial feedback writes (ingest/run tests).
+- [x] Matching null usage, both mismatch directions, omitted artifact fields,
+  and six distinct session-only attempts without ingest markers (bridge and
+  recurring-spec tests).
+- [x] Early-commit and identity-gate mutations have named failing/restored
+  runs recorded below; the restored tests pass in this round's suite.
+- [x] Prior live six-attempt `run-current` record below explicitly reports
+  incomplete provider provenance. No new live trial was attempted here.
+- [ ] Review dispositions and required CI for the final delivered head:
+  all six current PR #1193 threads were reread and match the dispositions
+  below, but hosted checks do not cover this round's local changes.
+- [ ] Commit this round's test changes on the checked-out PR branch.
+- [ ] Reconcile the remote PR body: the update request was refused with
+  `MCP tool call requires approval, but approval policy is never`.
+
+Expanded `test_invalid_or_unconfirmed_response_ids_refuse_even_with_a_trusted_lookup`
+from seven to eighteen cases. Missing IDs and explicit JSON null are separate
+cases. Boolean/container IDs, Unicode, newline/space, hyphen/underscore, and
+another attempt's valid response IDs are also refused after the artifact digest
+is recomputed. Malformed IDs never reach the authenticated lookup; earlier valid
+attempts may be checked first. Every refusal checks all seven trial feedback
+tables, the requested state file, and the capability-program summary for absence.
+
+The collection and pass expectations increase by eleven, from 8623/8621 to
+8634/8632. All ceilings remain unchanged; this is an expected delta, not a
+repository-wide passing result.
+
+Validation uses Python 3.14.10, pytest 9.2.0, and Black 26.10.1. The requested
+`/opt/anaconda3/bin/python3` is absent here. PyPI DNS resolution failed; pinned
+official upstream tool sources were assembled under `/tmp/orch-1216-tools`,
+without changing repository dependencies.
+
+```text
+PYTHONPATH=/tmp/orch-1216-tools ORCH_STATE_DIR=/tmp/orch-1216-test-state \
+  /tmp/orch-1216-venv/bin/python -m pytest -q \
+  tests/test_profile_trial_ingest.py tests/test_profile_trial_run.py \
+  tests/test_profile_trial_recurring_spec.py tests/test_model_profile_trial_bridge.py \
+  tests/test_profile_trial_instances.py -m 'not slow'
+132 passed, 30 subtests passed; exit 0.
+
+PYTHONPATH=src ORCH_STATE_DIR=/tmp/orch-1216-selftest-state \
+  /tmp/orch-1216-venv/bin/python src/model_profile_trial.py --selftest
+model_profile_trial.py selftest: OK; exit 0.
+```
+
+Black 26.10.1 formatted the changed test at line length 100. After normal
+single-file CLI checks populated its cache to avoid the sandbox's stalled
+worker pool, the required full command passed:
+
+```text
+PATH="/tmp/orch-1216-venv/bin:$PATH" PYTHONPATH=/tmp/orch-1216-tools \
+  BLACK_NUM_WORKERS=1 XDG_CACHE_HOME=/tmp/orch-1216-cache \
+  black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .
+700 files would be left unchanged; exit 0.
+```
+
+Additional deliberate mutation: remove only the response-ID `re.fullmatch`
+condition in `_authoritative_identity_verified`, then run:
+
+```text
+PYTHONPATH=/tmp/orch-1216-tools ORCH_STATE_DIR=/tmp/orch-1216-test-state \
+  /tmp/orch-1216-venv/bin/python -m pytest -q tests/test_profile_trial_ingest.py \
+  -k invalid_or_unconfirmed_response_ids -m 'not slow' --tb=short
+Mutated: 9 failed, 9 passed, 35 deselected; exit 1.
+Restored: 18 passed, 35 deselected; exit 0.
+```
+
+The nine intended failures identify the empty string, `resp_`, `request_123`,
+`resp_bad/id`, `resp_ñ`, a trailing newline, embedded space, hyphen, and
+underscore. They fail because malformed IDs reach the lookup only when the
+syntax guard is removed. Source restoration was byte-for-byte, SHA-256
+`1cdc0149de2198ebde78afa2c66852bead27c9b690f5e953cafcb90f79a3007c`.
+The passing full targeted suite above ran after restoration.
+
+Existing-head CI evidence was read for
+`01f80adf3ffff5bd559b973b90d0ff9ceaec918b`:
+[CI run 43109900747](https://github.com/stranske/Orchestrator/actions/runs/43109900747)
+and [Gate run 43109901655](https://github.com/stranske/Orchestrator/actions/runs/43109901655)
+both concluded `success`. All six checkout and six exec-mirror pytest shards,
+both aggregate jobs, and Gate lint-format/lint-ruff/typecheck-mypy succeeded.
+These checks establish the existing head's status, not CI for these local edits.
+
+Delivery attempt:
+
+```text
+git add tests/test_profile_trial_ingest.py .verify-floor.json \
+  docs/verification/issue-1216-provenance.md
+fatal: Unable to create '.../.git/index.lock': Read-only file system
+```
+
+The PR-body update, `needs-human` label, and blocker-comment requests were each
+refused with `MCP tool call requires approval, but approval policy is never`.
+No remote mutation occurred. PR #1352 was rechecked open with `draft=false`
+and head `01f80adf3ffff5bd559b973b90d0ff9ceaec918b`. Completing delivery requires
+a run that can write the existing branch's Git metadata and PR metadata;
+no new branch or PR was created.
+
 ## Local keepalive rubric follow-up, 2026-11-11
 
 Based on checked-out PR #1352 head

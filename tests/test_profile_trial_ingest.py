@@ -447,17 +447,44 @@ def test_local_identity_claims_require_an_independent_provider_lookup(
 
 
 @pytest.mark.parametrize(
-    "response_id", [None, "", "resp_", "request_123", "resp_bad/id", 12, "resp_forged"]
+    "response_id",
+    [
+        pytest.param(..., id="missing"),
+        pytest.param(None, id="explicit-null"),
+        "",
+        "resp_",
+        "request_123",
+        "resp_bad/id",
+        12,
+        "resp_forged",
+        True,
+        [],
+        {},
+        "resp_ñ",
+        "resp_a\n",
+        "resp_a b",
+        "resp_a-b",
+        "resp_a_b",
+        pytest.param("resp_fixture2", id="another-attempt-response-2"),
+        pytest.param("resp_fixture3", id="another-attempt-response-3"),
+    ],
 )
 def test_invalid_or_unconfirmed_response_ids_refuse_even_with_a_trusted_lookup(
     tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture, response_id
 ):
     _use_temp_feedback(tmp_path, monkeypatch)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
     lookup = _bind_authoritative_identity(tmp_path, trial_attempt_fixture)
+    lookup_requests = []
+
+    def tracked_lookup(response_id):
+        lookup_requests.append(response_id)
+        return lookup(response_id)
+
     attempt = trial_attempt_fixture["attempts"][0]
     path = Path(attempt["identity_evidence"]["artifact_ref"])
     payload = json.loads(path.read_text())
-    if response_id is None:
+    if response_id is ...:
         payload.pop("response_id")
     else:
         payload["response_id"] = response_id
@@ -465,13 +492,24 @@ def test_invalid_or_unconfirmed_response_ids_refuse_even_with_a_trusted_lookup(
     attempt["identity_evidence"]["artifact_sha256"] = (
         "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
     )
+    state_path = tmp_path / "refused-state.json"
     with pytest.raises(ValueError, match="identity evidence is not authoritative"):
         model_profile_trial.finalize_trial(
             trial_manifest,
             trial_attempt_fixture,
+            state_path=state_path,
+            record_feedback=True,
             ingest_brain=True,
-            provider_response_lookup=lookup,
+            provider_response_lookup=tracked_lookup,
         )
+    # Malformed IDs never reach the authenticated channel. Syntactically valid
+    # IDs still need a response bound to this attempt, even if another exists.
+    if response_id in ("resp_forged", "resp_fixture2", "resp_fixture3"):
+        assert response_id in lookup_requests
+    else:
+        assert response_id not in lookup_requests
+    assert not state_path.exists()
+    assert not (tmp_path / "capability-program" / "profile-trial.json").exists()
     with feedback._conn() as conn:
         _assert_trial_feedback_tables_empty(conn)
 
