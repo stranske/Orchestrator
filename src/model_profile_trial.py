@@ -1072,7 +1072,8 @@ def recurring_trial_prompt(manifest: dict[str, Any], request: dict[str, Any]) ->
         + "Number the frozen specification's physical lines starting at 1, including blanks. "
         'Find the first line starting with "Acceptance criteria:" (case-insensitive, '
         "ignoring indentation). Select its text after the colon if nonempty, then successive "
-        "nonblank lines below it up to a Markdown heading, for at most two selections. "
+        "nonblank lines below it up to a hash-style Markdown heading (one to six # "
+        "characters followed by whitespace or end of line), for at most two selections. "
         "Skip blank lines before the first selection and stop at a blank after it. "
         "If the criteria block supplies no text or there is no label, select the first "
         "two nonblank lines other than the empty label. Count whitespace-separated tokens "
@@ -1098,7 +1099,7 @@ def _recurring_work_rubric(spec: str) -> str:
         if inline:
             criteria.append((number, inline))
         for next_number, continuation in lines[index + 1 :]:
-            if len(criteria) == 2 or continuation.startswith("#"):
+            if len(criteria) == 2 or re.match(r"#{1,6}(?:\s|$)", continuation):
                 break
             if continuation:
                 criteria.append((next_number, continuation))

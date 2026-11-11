@@ -106,6 +106,7 @@ def test_prompt_names_the_rubric_without_embedding_the_answer(tmp_path):
     assert tail == SPEC
     assert "work_evidence=1:6" not in head
     assert "line_number:word_count" in head
+    assert "one to six # characters followed by whitespace or end of line" in head
     assert "work_evidence=" in head
     assert "workspace-write" not in prompt
 
@@ -120,6 +121,18 @@ def test_prompt_names_the_rubric_without_embedding_the_answer(tmp_path):
             1.0,
         ),
         ("Acceptance criteria: Keep receipts.\n- Save the logs.", "1:2,2:4", 1.0),
+        ("Acceptance criteria: Keep receipts.\n#123 remains open.", "1:2,2:3", 1.0),
+        ("Acceptance criteria:\n#123 remains open.\n# Notes", "2:3", 1.0),
+        ("Acceptance criteria: Keep receipts.\n####### plain text", "1:2,2:3", 1.0),
+        ("Acceptance criteria: Keep receipts.\n###### Notes\nIgnore this.", "1:2", 1.0),
+        ("Acceptance criteria: Keep receipts.\n#\nIgnore this.", "1:2", 1.0),
+        ("Acceptance criteria: Keep receipts.\n\nIgnore this.", "1:2", 1.0),
+        (
+            "\n  ACCEPTANCE CRITERIA:\n\n  - Keep\treceipts.\n  - Save logs.\n  - Ignore this.",
+            "4:3,5:3",
+            1.0,
+        ),
+        ("Acceptance criteria: Keep receipts.\n- Save logs.\n- Ignore this.", "1:2,2:3", 1.0),
         ("Acceptance criteria:\n\n# Notes\nKeep receipts.", "3:2,4:2", 1.0),
         ("Acceptance criteria:", "", 0.0),
         (SPEC, "", 0.0),

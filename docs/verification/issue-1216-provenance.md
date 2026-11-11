@@ -1,5 +1,81 @@
 # Issue #1216 verification
 
+## Local keepalive rubric follow-up, 2026-11-11
+
+Based on checked-out PR #1352 head
+`cdfa64d45e354799c25290d05ddddde2e23d186a`, branch `codex/issue-1216`.
+The provenance boundary and requested headingless, multiline, empty-answer,
+and criterion-echo cases were already implemented. The first unchecked
+provenance task was revalidated by the five-file baseline below; this round
+advances the suggested rubric task with a reproduced scoring correction.
+
+- [x] Verify the existing independent-provenance ingestion boundary and
+  explicitly unverified session measurements in the targeted suite.
+- [x] Correct and verify the bounded frozen-specification rubric's heading
+  boundary, including the previously requested answer cases.
+- [ ] Commit the source and tests to the checked-out PR branch. `git add`
+  fails because `.git` is mounted read-only.
+- [ ] Obtain required CI results for a delivered commit containing this fix.
+
+`_recurring_work_rubric` previously stopped at every `#` prefix. Ordinary
+criteria such as `#123 remains open.` and `####### plain text` therefore
+caused valid answers to score zero. The scorer now stops at one to six
+hashes followed by whitespace or end of line, and `recurring_trial_prompt`
+states that same rule explicitly. Eight added parameter cases also verify
+six-hash and empty headings, blank termination, skipped leading blanks,
+indented case-insensitive labels, tab-separated words, and the two-selection
+limit. Existing headingless, multiline, empty-answer, criterion-echo, and
+duplicate-evidence cases remain exercised.
+
+Validation used Python 3.14.10 with pytest 9.2.0 and Black 26.10.1. The requested
+`/opt/anaconda3/bin/python3` is absent in this environment. Direct PyPI access
+failed DNS resolution, so pinned upstream tool sources were assembled under
+`/tmp/orch-1216-tools`; repository dependency files were unchanged.
+
+```text
+PYTHONPATH=/tmp/orch-1216-tools ORCH_STATE_DIR=/tmp/orch-1216-baseline-state \
+  /tmp/orch-1216-venv/bin/python -m pytest -q \
+  tests/test_profile_trial_ingest.py tests/test_profile_trial_run.py \
+  tests/test_profile_trial_recurring_spec.py tests/test_model_profile_trial_bridge.py \
+  tests/test_profile_trial_instances.py -m 'not slow'
+Before changes: 113 passed, 30 subtests passed; exit 0.
+
+PYTHONPATH=/tmp/orch-1216-tools ORCH_STATE_DIR=/tmp/orch-1216-test-state \
+  /tmp/orch-1216-venv/bin/python -m pytest -q tests/test_profile_trial_run.py \
+  -k work_quality_checks -m 'not slow' --tb=short
+New cases with original implementation: 3 failed, 15 passed, 15 deselected; exit 1.
+The failures were the two #123 criteria cases and the seven-hash criteria case
+in test_work_quality_checks_the_frozen_spec_task (expected 1.0, actual 0.0).
+
+Repeat the five-file command with ORCH_STATE_DIR=/tmp/orch-1216-test-state:
+After the correction: 121 passed, 30 subtests passed; exit 0.
+
+PYTHONPATH=src ORCH_STATE_DIR=/tmp/orch-1216-selftest-state \
+  /tmp/orch-1216-venv/bin/python src/model_profile_trial.py --selftest
+model_profile_trial.py selftest: OK; exit 0.
+
+PYTHONPATH=/tmp/orch-1216-tools BLACK_NUM_WORKERS=1 \
+  XDG_CACHE_HOME=/tmp/orch-1216-cache /tmp/orch-1216-venv/bin/python -m black \
+  --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .
+700 files would be left unchanged; exit 0.
+```
+
+Black first checked the changed Python files with line length 100. Its worker
+path stalled under sandbox restrictions, so each tracked Python file was
+checked separately using the unmodified pinned CLI before the full invocation
+above passed against its populated formatter cache.
+
+The targeted suite grew by exactly eight cases. `.verify-floor.json` increases
+collection and pass expectations by eight and preserves all ceilings.
+Repository-wide collection stopped with three import errors (missing `yaml`
+and `pydantic`); no full-suite result is claimed.
+
+`git diff --check` passes. PR #1352 was verified open and ready (`draft=false`)
+at the base head above. The `needs-human` label request and blocker-comment
+request were each rejected with `MCP tool call requires approval, but approval
+policy is never`; neither remote mutation occurred. This round does not claim
+a new live trial or final-head CI success.
+
 ## Local keepalive round 2, 2026-11-11
 
 The named acceptance command using `/opt/anaconda3/bin/python3` exited 0
