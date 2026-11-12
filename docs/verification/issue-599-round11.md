@@ -85,3 +85,34 @@ No current source-issue row is marked `consumer_missing: true`.
 | `testgen-lane` | `testgen_gate.py:main consumes candidate tests for the acceptance gate` |
 | `thompson-hybrid-routing` | `router.py:select_agent dispatches the sampled challenger` |
 | `windowed-capacity-policy` | `router.py:select_agent; range_lane_rollout.py:build_rollout; rate_incidents.py:record_lane_round` |
+
+## Round 12 live-ledger acceptance
+
+On 2026-11-11, the reported runtime virtual environment was absent. The shared
+interpreter ran `/opt/anaconda3/bin/python3 -m pytest -p no:cov -o addopts= -p no:cov tests/test_capability_admission.py --tb=short`
+against a byte-for-byte live-ledger snapshot selected by `ORCH_CAPABILITIES_PATH`.
+On `0dfbe841` it returned **1 failed, 29 passed** in 71.21 seconds. The only
+failure was `test_new_capabilities_carry_all_required_parts`. Its blockers were
+`opener-core: heartbeat` and `sync-core: heartbeat`. On `main` at `2c945fa9`,
+the same test and snapshot produced both heartbeat failures and the
+`local-loop` caller and heartbeat failure already addressed on this branch.
+
+The raw snapshot held zero invocation events for either core. Their deployed
+entrypoints write round journals and have no capability heartbeat call. The
+admission check requires a recent runtime invocation event for each external
+caller. The two blockers can drain when the lane owners record a genuine
+invocation from each deployed core and the same test passes on a fresh snapshot.
+
+The named declaration test failed when the `route-weights-export` declaration
+was changed to prose in a disposable copy. It passed after byte-identical
+restoration. The admission CLI exited 0 and printed:
+
+```text
+  CONSUMERS (10th): 51 of 51 declare a consumer this tree can find — acting (capability-level) 9, in grace 0, not invoked 0, exercise-bound 21, unmeasured 0
+                   not acting (trailing window) 21 (blocking 0, pre-cutoff debt 21); prose 0, missing 0, undeclared 0 — DRAINABLE 0 (reviewed absent 0, unresolved 0; reviewed absence remains finding debt)
+```
+
+The CLI reconciles declarations in memory. Five persisted declarations in the
+snapshot still differ from this branch: `agy-runtime-isolation`,
+`codemod-campaign`, `cross-repo-coordination`, `docs-drift-fix-agent`, and
+`epic-decomposition`. Post-sync acceptance remains pending.
