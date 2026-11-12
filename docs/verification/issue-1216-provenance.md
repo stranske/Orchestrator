@@ -1,5 +1,76 @@
 # Issue #1216 verification
 
+## Refused promotion preserves unverified measurements, 2026-11-12
+
+Reviewed recent commits `bed25b51`, `a29a68fa`, `28002eb1`, `c0ab3093`,
+and `cb8c1f90` on the existing `codex/issue-1216` branch. The unchecked
+implementation tasks duplicate implemented work. Prepared checkbox reconciliation
+at `/tmp/orch-1352-reconciled-body.md`, leaving combined review/final-head CI
+tasks unchecked. Automatic approval review rejected the body update with
+`MCP tool call requires approval, but approval policy is never`; no remote
+checkbox changed.
+
+Extended `test_forged_session_provenance_cannot_enable_verified_ingest` in
+`tests/test_profile_trial_run.py` for both session formats. After recording six
+explicitly unverified attempts, it retries publication with forged verified
+status, modified usage and quality, and recomputed artifact digests. The
+independent lookup cannot confirm the response. Refusal must preserve every row
+in all seven trial feedback tables and both route-weight tables, plus the exact
+bytes of the trial state and capability-program summary. This covers refusal
+with existing measurements as well as the test's original empty-database case.
+No cases were added or removed; the collection floor is unchanged.
+
+The two extended cases passed. Before and after the change, the requested
+five-file regression suite passed with **198 passed and 30 subtests passed**,
+exit 0:
+
+```text
+PYTHONPATH=/tmp/orch-1216-tools:/usr/lib/python3/dist-packages:/usr/local/lib/python3.14/dist-packages \
+  PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 ORCH_STATE_DIR=/tmp/orch-1216-state \
+  python3 -m pytest -q tests/test_profile_trial_ingest.py \
+  tests/test_profile_trial_run.py tests/test_profile_trial_recurring_spec.py \
+  tests/test_model_profile_trial_bridge.py tests/test_profile_trial_instances.py \
+  -m 'not slow'
+```
+
+Python is 3.14.10 and pytest is 9.2.0. `/opt/anaconda3/bin/python3` is absent;
+the available interpreter ran the same test arguments. Package installation
+failed, so official tagged tooling was assembled under `/tmp`; repository
+dependencies are unchanged. Black 26.10.1 formatted the changed test at line
+length 100. Its initial repository-wide invocation stalled in this sandbox.
+Serial verification of the same 711 discovered sources populated Black's normal
+check cache, and the required unmodified CLI command then passed, exit 0:
+
+```text
+PATH=/tmp/orch-1216-bin:$PATH \
+  PYTHONPATH=/tmp/orch-1216-tools:/usr/lib/python3/dist-packages:/usr/local/lib/python3.14/dist-packages \
+  XDG_CACHE_HOME=/tmp/orch-1216-cache BLACK_NUM_WORKERS=1 \
+  black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .
+711 files would be left unchanged.
+```
+
+`git diff --check` also passed.
+
+All six current PR #1193 threads were reread; the existing source/test
+dispositions remain supported. Existing head
+`bed25b51fa4afac0c933b5829ad1b7d93a28fb72` has successful
+[CI run 43149364493](https://github.com/stranske/Orchestrator/actions/runs/43149364493)
+and [Gate run 43149365275](https://github.com/stranske/Orchestrator/actions/runs/43149365275).
+These checks do not cover the new working-tree test change. No new live trial
+or production provider provenance is claimed.
+
+Delivery stopped before committing:
+
+```text
+git add tests/test_profile_trial_run.py
+fatal: Unable to create '.../.git/index.lock': Read-only file system
+```
+
+No commit was created. The `needs-human` label and blocker comment were also
+rejected by automatic approval review with the same approval-policy error;
+neither remote mutation occurred. Commit delivery, remote checklist updates,
+and CI for a head containing this change remain outstanding.
+
 ## Session-embedded provenance claims, 2026-11-12
 
 Continued the first unchecked duplicate provenance task from `a29a68fa`.

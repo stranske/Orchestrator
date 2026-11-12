@@ -564,6 +564,48 @@ def test_forged_session_provenance_cannot_enable_verified_ingest(tmp_path, monke
         )
         assert conn.execute("SELECT COUNT(*) FROM profile_trial_ingests").fetchone()[0] == 0
 
+    # A forged promotion must also leave previously recorded measurements intact.
+    # Checking only an empty database misses destructive replacement on retry.
+    tables = (
+        "runs",
+        "execution_attempts",
+        "outcomes",
+        "execution_traces",
+        "completion_events",
+        "influence_edges",
+        "profile_trial_ingests",
+        "route_weights",
+        "route_weights_v2",
+    )
+    with feedback._conn() as conn:
+        rows_before = {
+            table: conn.execute(f"SELECT * FROM {table} ORDER BY rowid").fetchall()
+            for table in tables
+        }
+    summary_path = state / "capability-program" / "profile-trial.json"
+    state_before = state_path.read_bytes()
+    summary_before = summary_path.read_bytes()
+    results["identity_verified"] = True
+    results["attempts"][0]["tokens_in"] = 999
+    results["quality_by_profile"] = {profile: 0.0 for profile in results["quality_by_profile"]}
+    looked_up.clear()
+    with pytest.raises(ValueError, match="identity evidence is not authoritative"):
+        trial.publish_measured_recurring_trial(
+            manifest,
+            results,
+            state_path=state_path,
+            now=2002,
+            provider_response_lookup=lookup,
+        )
+    assert looked_up == ["resp_forged"]
+    assert state_path.read_bytes() == state_before
+    assert summary_path.read_bytes() == summary_before
+    with feedback._conn() as conn:
+        assert {
+            table: conn.execute(f"SELECT * FROM {table} ORDER BY rowid").fetchall()
+            for table in tables
+        } == rows_before
+
 
 def test_server_model_disagrees_with_the_response_object(tmp_path):
     state, experiments = _seal(tmp_path)
