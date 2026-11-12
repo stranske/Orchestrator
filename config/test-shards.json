@@ -269,6 +269,7 @@
       "tests/test_pacing_usage.py",
       "tests/test_partitioned_review.py",
       "tests/test_profile_trial_ingest.py",
+      "tests/test_profile_trial_mutations.py",
       "tests/test_profile_trial_recurring_spec.py",
       "tests/test_profile_trial_run.py",
       "tests/test_profile_trial_summary.py",
