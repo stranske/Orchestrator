@@ -1376,11 +1376,23 @@ def test_live_shadow_adjudicates_a_new_dispute_once_and_grades_on_truth(
     assert second["attempted"] == 0
     assert len(live_shadow["collected"]) == 1
 
-    checked = feedback.DURABILITY_DETECTION_SINCE + 10
+    # A durability label from before detection began is not judged later truth. The
+    # reconciler must consult the Brain's timestamp before it grades this advice.
     with feedback._conn() as conn:
         conn.execute(
-            "UPDATE outcomes SET durability=?, durability_checked_ts=? " "WHERE run_id='new'",
-            (durability, checked),
+            "UPDATE outcomes SET durability=?, durability_checked_ts=? WHERE run_id='new'",
+            (durability, feedback.DURABILITY_DETECTION_SINCE - 1),
+        )
+    unjudged = live.reconcile_live(db=db, path=live_shadow["common"]["path"])
+    assert (unjudged["graded"], unjudged["agree"], unjudged["disagree"]) == (0, 0, 0)
+    assert live.weekly_line(live_shadow["common"]["path"]) == (
+        "live: disputes 1, advised 1, uncertified 0, graded 0 (agree 0, disagree 0)"
+    )
+
+    with feedback._conn() as conn:
+        conn.execute(
+            "UPDATE outcomes SET durability_checked_ts=? WHERE run_id='new'",
+            (feedback.DURABILITY_DETECTION_SINCE + 10,),
         )
     before_grading = _brain_except_events(db)
     graded = live.reconcile_live(db=db, path=live_shadow["common"]["path"])
@@ -1391,6 +1403,9 @@ def test_live_shadow_adjudicates_a_new_dispute_once_and_grades_on_truth(
         "live: disputes 1, advised 1, uncertified 0, graded 1 "
         f"(agree {agree}, disagree {1 - agree})"
     )
+    # A weekly reconciliation can be repeated without counting the same advice twice.
+    assert live.reconcile_live(db=db, path=live_shadow["common"]["path"]) == graded
+    assert live.weekly_line(live_shadow["common"]["path"]) == line
     text_path = live_shadow["common"]["path"].with_name("switch-review.txt")
     switch_review.write_text_report(
         {
