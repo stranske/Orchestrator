@@ -690,7 +690,14 @@ def run_live(
                             entry["cost_usd"] = retro.measured_cost(
                                 result.get("backend_run_id"), db
                             )
-                        except (OSError, ValueError, KeyError, TypeError):
+                        except (
+                            OSError,
+                            ValueError,
+                            KeyError,
+                            TypeError,
+                            RuntimeError,
+                            sqlite3.Error,
+                        ):  # a Brain read fault must not lose a paid proposal (adjudicator_retro.run does the same)
                             entry["cost_usd"] = None
                         if "proposal" in entry:
                             _record_advice_event(entry, db)
