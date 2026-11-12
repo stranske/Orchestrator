@@ -1,0 +1,4 @@
+# Required to collect the suite when test_verify_sharding checks the shard plan.
+# runtime_ac_gate installs this file in disposable acceptance environments.
+PyYAML
+pydantic
