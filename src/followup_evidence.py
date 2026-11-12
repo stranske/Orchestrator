@@ -135,7 +135,7 @@ def provision_report(root: Path, state: dict, now: datetime, instrument: Path) -
     counts: collections.Counter[tuple[str, str]] = collections.Counter()
     latest: dict[str, dict] = {}
     cutoff = now - timedelta(days=7)
-    for path, lines in files.items():
+    for segment, lines in files.items():
         for line in lines:
             try:
                 item = json.loads(line)
@@ -147,7 +147,7 @@ def provision_report(root: Path, state: dict, now: datetime, instrument: Path) -
                 ):
                     raise ValueError("incomplete ledger line")
             except (ValueError, KeyError, TypeError):
-                failures.append(f"malformed or partial segment: {path}")
+                failures.append(f"malformed or partial segment: {segment}")
                 continue
             if cutoff <= ts <= now:
                 counts[(item["outcome"], item["cause"])] += 1
@@ -204,9 +204,7 @@ def provision_report(root: Path, state: dict, now: datetime, instrument: Path) -
     }
     deployment = provision_deployment(root, instrument.resolve().parent)
     if deployment is not None:
-        next_state["deployment"] = provision_deployment_continuity(
-            deployment, state, now, failures
-        )
+        next_state["deployment"] = provision_deployment_continuity(deployment, state, now, failures)
     coverage = not failures and now - when(start) >= timedelta(days=7)
     refused = sum(counts[("failed", cause)] for cause in ("branch-held", "branch-exists"))
     report = {
