@@ -455,8 +455,23 @@ def test_forged_session_provenance_cannot_enable_verified_ingest(tmp_path, monke
                     "usage": {"input_tokens": 42, "output_tokens": 7},
                 }
             )
+        events = [json.loads(line) for line in session.splitlines()]
+        for event in events:
+            event.update(identity_verified=True, provider_provenance_verified=True)
+            if event.get("type") == "response.completed":
+                event["response"].update(
+                    identity_verified=True,
+                    provenance="provider-verified",
+                )
+        session = "\n".join(json.dumps(event) for event in events)
         sessions.append(
-            {"run_id": request["run_id"], "session_text": session, "final_text": final_text}
+            {
+                "run_id": request["run_id"],
+                "session_text": session,
+                "final_text": final_text,
+                "identity_verified": True,
+                "provider_provenance_verified": True,
+            }
         )
     results = trial.results_from_codex_sessions(
         manifest,
@@ -471,6 +486,8 @@ def test_forged_session_provenance_cannot_enable_verified_ingest(tmp_path, monke
         path = Path(attempt["identity_evidence"]["artifact_ref"])
         payload = json.loads(path.read_text())
         assert payload["provenance"] == "codex-session-unverified/v1"
+        assert "identity_verified" not in payload
+        assert "provider_provenance_verified" not in payload
         # The attacker controls the artifact AND its claimed digest.
         payload.update(
             identity_verified=True,
@@ -508,10 +525,24 @@ def test_forged_session_provenance_cannot_enable_verified_ingest(tmp_path, monke
     assert not (state / "capability-program" / "profile-trial.json").exists()
 
     results["identity_verified"] = False
-    recorded = trial.publish_measured_recurring_trial(manifest, results, now=2001)
+
+    def unexpected_lookup(response_id):
+        pytest.fail(f"explicitly unverified measurements must not request lookup: {response_id}")
+
+    state_path = tmp_path / "unverified-trial.json"
+    recorded = trial.publish_measured_recurring_trial(
+        manifest,
+        results,
+        state_path=state_path,
+        now=2001,
+        provider_response_lookup=unexpected_lookup,
+    )
     assert recorded["identity_verified"] is False
     assert recorded["brain_ingest_enabled"] is False
     assert len(set(recorded["recorded_attempt_ids"])) == 6
+    persisted = json.loads(state_path.read_text())
+    assert persisted["identity_verified"] is False
+    assert persisted["brain_ingest_enabled"] is False
     summary = json.loads((state / "capability-program" / "profile-trial.json").read_text())
     assert summary["identity_verified"] is False
     assert summary["brain_ingest_enabled"] is False
@@ -524,6 +555,13 @@ def test_forged_session_provenance_cannot_enable_verified_ingest(tmp_path, monke
             "SELECT reported_model,resolved_provider,resolved_model FROM execution_attempts"
         ).fetchall()
         assert all(row[0] and row[1:] == (None, None) for row in rows)
+        usage = conn.execute(
+            "SELECT run_id,tokens_in,tokens_out FROM execution_attempts ORDER BY run_id"
+        ).fetchall()
+        assert usage == sorted(
+            (attempt["run_id"], attempt["tokens_in"], attempt["tokens_out"])
+            for attempt in results["attempts"]
+        )
         assert conn.execute("SELECT COUNT(*) FROM profile_trial_ingests").fetchone()[0] == 0
 
 

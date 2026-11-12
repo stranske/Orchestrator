@@ -1,5 +1,58 @@
 # Issue #1216 verification
 
+## Session-embedded provenance claims, 2026-11-12
+
+Continued the first unchecked duplicate provenance task from `a29a68fa`.
+The production boundary already requires independent provider confirmation.
+Extended `test_forged_session_provenance_cannot_enable_verified_ingest` for
+both session formats to inject forged verification flags into session rows,
+JSONL events, and response objects before measurement. Generated results and
+identity artifacts remain explicitly unverified. Forged artifact contents and
+recomputed digests still refuse ingestion with zero trial feedback rows.
+
+The same test then publishes explicitly unverified measurements with a provider
+callback that fails if invoked. It checks the persisted state's unverified
+flags, six distinct attempt IDs, each attempt's exact measured token counts,
+preserved quality, null resolved identity in feedback, and no ingest marker.
+No new test cases were added; the collection floor is unchanged.
+
+The two extended cases passed. The requested five-file regression group also
+passed with **198 passed and 30 subtests passed**, exit 0, using pytest 9.2.0
+on Python 3.14.10 and `-m 'not slow'`. The profile-trial selftest passed.
+`/opt/anaconda3/bin/python3` is absent; the available interpreter was used.
+Official tagged tooling was assembled under `/tmp` after package installation
+failed; repository dependency files are unchanged.
+
+Black 26.10.1 formatted the changed test at line length 100. After checking
+the same 711 sources serially to populate Black's normal cache, the required
+unmodified CLI check passed, exit 0:
+
+```text
+black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .
+711 files would be left unchanged.
+```
+
+`git diff --check` passed. Commit delivery and CI covering this new test remain
+pending. Existing-head `a29a68fa` has successful
+[CI](https://github.com/stranske/Orchestrator/actions/runs/43147750780) and
+[Gate](https://github.com/stranske/Orchestrator/actions/runs/43147751113) runs;
+those checks do not cover the working-tree test change.
+
+Delivery was blocked at staging:
+
+```text
+git add tests/test_profile_trial_run.py docs/verification/issue-1216-provenance.md
+fatal: Unable to create '.../.git/index.lock': Read-only file system
+```
+
+No commit was created. Automatic approval review also rejected the first
+duplicate task's checkbox reconciliation, the `needs-human` label, and the
+blocker comment with `MCP tool call requires approval, but approval policy is
+never`. No remote mutation occurred. The prepared single-checkbox body is
+`/tmp/orch-1352-provenance-checkbox.md`. PR #1352 remains open and ready for
+review. Delivery requires an environment permitting writes to this branch's
+`.git`; CI for a commit containing these changes remains outstanding.
+
 ## Durable mutation replay, 2026-11-12
 
 Reviewed `cb8c1f90`, `37f9a651`, and `c0ab3093` before continuing on
