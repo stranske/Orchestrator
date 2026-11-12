@@ -559,6 +559,9 @@ def run_live(
     # Retirement stops dispatch while later durability can still drain through reconciliation.
     summary = reconcile_live(db=db, path=path, now=now)
     report = json.loads(path.read_text())
+    # Persist legacy advice even when this cohort has retired. These receipts recover the
+    # measured sample after report loss; backfilling them never dispatches another role run.
+    _backfill_advice_events(rows, db)
     if report.get("retirement"):
         return {
             "disabled": False,
@@ -570,8 +573,7 @@ def run_live(
             "rows": rows,
         }
     # "Advised" has ONE record, the Brain's `live_shadow_advice` event, which `live_disputes`
-    # excludes by target; an advised row saved before that event existed is backfilled once here.
-    _backfill_advice_events(rows, db)
+    # excludes by target, including saved advice backfilled above.
     settled = {
         str(row["case_id"])
         for row in rows

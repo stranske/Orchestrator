@@ -109,6 +109,80 @@ def test_later_truth_grades_the_live_advice(world):
     assert "; agreement 1.000 against 0.75; qualification insufficient_sample;" in line
 
 
+@pytest.mark.parametrize("already_retired", [False, True])
+def test_retired_legacy_cohort_backfills_advice_receipts_without_dispatch(world, already_retired):
+    from copy import deepcopy
+
+    first = live.run_live(**world["common"])
+    template = first["rows"][0]
+    rows = []
+    with feedback._conn() as conn:
+        conn.execute("DELETE FROM completion_events")
+        for number in range(20):
+            run_id = f"legacy-{number}"
+            target = f"owner/repo#{number + 10}"
+            conn.execute(
+                "INSERT INTO runs(run_id,ts,target) VALUES (?,?,?)", (run_id, world["now"], target)
+            )
+            conn.execute(
+                "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged,"
+                "durability,durability_checked_ts) VALUES (?,'NON_PASS','PASS',1,?,?)",
+                (
+                    run_id,
+                    "broke_later" if number < 14 else "durable",
+                    feedback.DURABILITY_DETECTION_SINCE + 10,
+                ),
+            )
+            row = deepcopy(template)
+            row.update(
+                run_id=run_id,
+                target=target,
+                case_id=live.retro._case_id(
+                    {
+                        "run_id": run_id,
+                        "verifier_verdict": "NON_PASS",
+                        "adjudicated_verdict": "PASS",
+                    }
+                ),
+            )
+            row.pop("advice_event", None)
+            rows.append(row)
+    report = json.loads(world["path"].read_text())
+    report.update(rows=rows, retirement={"role": "role-adjudicator"} if already_retired else None)
+    world["path"].write_text(json.dumps(report))
+    with sqlite3.connect(feedback.DB_PATH) as conn:
+        before = conn.execute("SELECT * FROM outcomes ORDER BY run_id").fetchall()
+
+    def receipts():
+        with sqlite3.connect(feedback.DB_PATH) as conn:
+            return conn.execute(
+                "SELECT event_id,payload_json FROM completion_events WHERE producer=? AND phase=? "
+                "ORDER BY event_id",
+                (live.retro.LIVE_ADVICE_PRODUCER, live.retro.LIVE_ADVICE_PHASE),
+            ).fetchall()
+
+    result = live.run_live(**world["common"])
+    assert result["retired"] and result["attempted"] == 0
+    assert (result["summary"]["graded"], result["summary"]["agree"]) == (20, 14)
+    recorded = receipts()
+    assert len(recorded) == 20
+    assert {json.loads(payload)["live_shadow"]["target"] for _, payload in recorded} == {
+        row["target"] for row in rows
+    }
+    again = live.run_live(**world["common"])
+    assert again["retired"] and receipts() == recorded
+    recovered = live.reconcile_live(
+        db=feedback.DB_PATH, path=world["path"].with_name("recovered.json")
+    )
+    assert recovered == result["summary"], "the full retired sample survives report loss"
+    line = live.weekly_line(world["path"])
+    assert "graded 20 (agree 14, disagree 6)" in line
+    assert "agreement 0.700 against 0.75; qualification retired" in line
+    assert len(world["calls"]) == 1, "retirement must prevent any new role dispatch"
+    with sqlite3.connect(feedback.DB_PATH) as conn:
+        assert conn.execute("SELECT * FROM outcomes ORDER BY run_id").fetchall() == before
+
+
 def test_a_body_without_criteria_is_uncertified_and_never_dispatched(world):
     common = {
         **world["common"],

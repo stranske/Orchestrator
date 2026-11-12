@@ -325,3 +325,36 @@ PR #1356 was read back as open and ready for review (`draft=false`).
 The sole remaining production checkbox stays unchecked: owner sync and authentic
 live receipts are still needed, and this work cannot establish the elapsed
 2026-11-08 production deadline. No acceptance checklist was changed.
+
+### 2026-11-12: preserve receipts when a legacy cohort retires
+
+Found that the daily live runner returned for retirement before backfilling
+saved advice into Brain events. A legacy cohort with 20 grades below 0.75
+therefore retired without persisting its advice receipts. Moved the existing
+backfill before the retirement return; dispatch remains stopped, and the
+dispatch-free reconciler and weekly reader retain their read-only Brain access.
+
+The new regression failed with zero receipts in both newly retired and already
+retired cases before the fix. Afterward, each case persists exactly 20 receipts,
+leaves outcomes unchanged, performs no new role dispatch, and preserves the
+same receipts on the next pass. Recovery into a missing report restores all 20
+grades, with agreement 14/20 and retirement still reported. These observations
+are synthetic private-Brain tests, not live production evidence.
+
+Validation: focused adjudicator, completion-event, and capabilities tests passed
+with **195 passed, 2 existing skips**, using `-m "not slow"`. The Node M2
+integration file passed. Test tooling was loaded temporarily from official
+upstream sources because pytest and Black were absent from this runner.
+
+Read the actual [2026-11-08 weekly check on #575](https://github.com/stranske/Orchestrator/issues/575#issuecomment-6723832468):
+production had advised 4, graded 4, agree 2, disagree 2; the 20-grade deadline
+was missed. The production checkbox remains unchecked. This change repairs
+receipt persistence for retired legacy cohorts; it cannot supply missing live
+samples or retroactively satisfy that deadline.
+
+The full required Black check passed with **699 files unchanged**, using Black
+26.10.1 from its official release sources. The commit attempt then failed:
+`.git/index.lock` cannot be created because `.git` is mounted read-only. The
+three changed files remain uncommitted. Both the `needs-human` label and the
+blocker comment were rejected with `MCP tool call requires approval, but approval
+policy is never`; neither was posted.
