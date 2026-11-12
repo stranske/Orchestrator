@@ -118,7 +118,8 @@ PR #772's local pytest-only +109 covered statements is not Gate accounting.
 - The raw report enumerates missing lines; it does not establish why they
   were missed or whether integration fixtures could reach them.
 - The selector-metrics production fix and all existing mutation records are
-  retained; no new mutation work was needed.
+  retained. A reproducible replay and static patch validation are now available;
+  fresh pytest execution remains blocked as described in [mutations/REPLAY.md](mutations/REPLAY.md).
 
 ---
 
@@ -129,6 +130,10 @@ preserved in [mutations/](mutations/) — one file per test ID, measured at PR
 head `18ad97a`. Tests 3–4 are summarised inline below; tests 1, 2 and 5 are in
 their mutation files, distinct from PR #772's original break-and-revert
 account of the production fix.
+
+For the new executable replay, stronger selector-metrics mutation, static patch
+validation, and current execution blockers, see [mutations/REPLAY.md](mutations/REPLAY.md).
+No fresh historical pytest result is claimed by that static validation.
 
 ### Tests 3–4 — repair transcripts (PR #772 did not ship individual break proof)
 
