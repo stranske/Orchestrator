@@ -1187,18 +1187,19 @@ def live_shadow(tmp_path, monkeypatch):
         pass
     calls: list[dict] = []
     collected: list[tuple[str, str]] = []
+    backend_result = {
+        "backend_run_id": "backend-live",
+        "backend": "stub",
+        "proposal": {"decision": "uphold_blocker", "rationale": "x"},
+        "advisory_plan": {"decision": "uphold_blocker"},
+        "errors": [],
+    }
 
     def runner(**kw):
         calls.append(kw)
         assert kw["source"] == "live" and kw["dispatch"] is True and kw["timeout"] == 600
         assert isinstance(kw["case"], roles.CollectedAdjudicationCase)
-        return {
-            "backend_run_id": "backend-live",
-            "backend": "stub",
-            "proposal": {"decision": "uphold_blocker", "rationale": "x"},
-            "advisory_plan": {"decision": "uphold_blocker"},
-            "errors": [],
-        }
+        return backend_result
 
     @contextmanager
     def collector(target, head):
@@ -1215,7 +1216,14 @@ def live_shadow(tmp_path, monkeypatch):
         provider=collector,
         snapshot_reader=lambda _t: {"number": 1, "headRefOid": sha, "body": live.AC_BODY},
     )
-    return {"live": live, "db": db, "calls": calls, "collected": collected, "common": common}
+    return {
+        "live": live,
+        "db": db,
+        "calls": calls,
+        "collected": collected,
+        "common": common,
+        "backend_result": backend_result,
+    }
 
 
 def _advice_events(db):
@@ -1309,20 +1317,45 @@ def test_live_timestamp_cutoff_keeps_capped_cases_and_reconcile_does_not_advance
     assert json.loads(common["path"].read_text())["pending_case_ids"] == []
 
 
-def test_live_shadow_adjudicates_a_new_dispute_once_and_grades_on_truth(live_shadow, monkeypatch):
+@pytest.mark.parametrize(
+    ("decision", "durability", "agree"),
+    [
+        ("uphold_blocker", "broke_later", 1),
+        ("reject_blocker", "durable", 1),
+        ("uphold_blocker", "durable", 0),
+        ("reject_blocker", "broke_later", 0),
+    ],
+)
+def test_live_shadow_adjudicates_a_new_dispute_once_and_grades_on_truth(
+    live_shadow, monkeypatch, decision, durability, agree
+):
+    import switch_review
+
     live, db = live_shadow["live"], live_shadow["db"]
+    live_shadow["backend_result"]["proposal"]["decision"] = decision
+    live_shadow["backend_result"]["advisory_plan"]["decision"] = decision
+    with feedback._conn() as conn:
+        conn.execute(
+            "INSERT INTO costs(run_id,cost_usd,source) VALUES ('backend-live',0.25,'ccusage')"
+        )
     outcomes_before = _brain_except_events(db)["outcomes"]
     first = live.run_live(**live_shadow["common"])
     assert (first["attempted"], first["advised"], first["uncertified"]) == (1, 1, 0)
+    assert first["summary"]["graded"] == 0, "pending durability is not later truth"
     events = _advice_events(db)
     assert len(events) == 1
     _event_id, run_id, producer, payload, _ts = events[0]
     assert producer == "role-adjudicator" and run_id.startswith("adjudicator-live:")
     advice = json.loads(payload)["live_shadow"]
     assert advice["target"] == "owner/repo#1" and advice["run_id"] == "new"
-    assert advice["decision"] == "uphold_blocker" and advice["backend"] == "stub"
-    assert advice["case_id"] == first["rows"][0]["case_id"] and "cost_usd" in advice
+    assert advice["decision"] == decision and advice["backend"] == "stub"
+    assert advice["case_id"] == first["rows"][0]["case_id"] and advice["cost_usd"] == 0.25
     assert _brain_except_events(db)["outcomes"] == outcomes_before, "no outcomes row written"
+
+    # The usual daily rerun is idle, before also exercising recovery without the saved report.
+    again = live.run_live(**live_shadow["common"])
+    assert again["attempted"] == 0 and len(live_shadow["calls"]) == 1
+    assert _advice_events(db) == events
 
     writes = []
     record_event = feedback.record_completion_event
@@ -1346,14 +1379,36 @@ def test_live_shadow_adjudicates_a_new_dispute_once_and_grades_on_truth(live_sha
     checked = feedback.DURABILITY_DETECTION_SINCE + 10
     with feedback._conn() as conn:
         conn.execute(
-            "UPDATE outcomes SET durability='broke_later', durability_checked_ts=? "
+            "UPDATE outcomes SET durability=?, durability_checked_ts=? "
             "WHERE run_id='new'",
-            (checked,),
+            (durability, checked),
         )
+    before_grading = _brain_except_events(db)
     graded = live.reconcile_live(db=db, path=live_shadow["common"]["path"])
-    assert graded["graded"] == 1 and graded["agree"] == 1  # uphold <-> broke_later
+    assert (graded["graded"], graded["agree"], graded["disagree"]) == (1, agree, 1 - agree)
+    assert graded["merge_rule_agree"] == int(durability == "durable")
     line = live.weekly_line(live_shadow["common"]["path"])
-    assert "live: disputes 1, advised 1, uncertified 0, graded 1" in line
+    assert line == (
+        "live: disputes 1, advised 1, uncertified 0, graded 1 "
+        f"(agree {agree}, disagree {1 - agree})"
+    )
+    text_path = live_shadow["common"]["path"].with_name("switch-review.txt")
+    switch_review.write_text_report(
+        {
+            "review_days": 7,
+            "raise_count": 0,
+            "held_off": [],
+            "on_but_idle": [],
+            "unconditioned": [],
+            "mirror_drift": {"status": "ok"},
+            "adjudicator_shadow": "adjudicator shadow: cases 0",
+            "adjudicator_live": line,
+        },
+        text_path,
+    )
+    assert f"adjudicator shadow: cases 0; {line}" in text_path.read_text().splitlines()
+    assert _brain_except_events(db) == before_grading, "grading and reporting are read-only"
+    assert _advice_events(db) == events, "grading does not rewrite advice"
     assert len(live_shadow["calls"]) == 1, "grading never dispatches"
 
 
