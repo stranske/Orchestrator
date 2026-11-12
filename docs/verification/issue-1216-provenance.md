@@ -1,5 +1,114 @@
 # Issue #1216 verification
 
+## Provider usage type verification, 2026-11-12
+
+Reviewed commits `f133e3c8`, `78474cdf`, `78f4dc9e` and their existing source,
+tests and evidence on `codex/issue-1216` before continuing. The unchecked
+Full Issue Text tasks duplicate the checked automated summary. The implemented
+provenance boundary, rubric, forged-ID cases, bridge usage cases, six-attempt
+persistence tests and recorded mutations support checking those duplicates.
+The dated live trial below remains explicitly incomplete for provider identity;
+this round does not claim a new live execution or trusted production collector.
+
+The prepared reconciliation is `/tmp/orch-1352-reconciled-body.md`. Updating
+PR #1352's body was rejected by automatic approval review with
+`MCP tool call requires approval, but approval policy is never`; the remote
+checkboxes were not changed. Combined review/final-head CI tasks remain unchecked
+in the prepared body because predecessor checks cannot validate new local tests.
+
+The first unchecked implementation task already has the trusted-lookup gate.
+This follow-up adds 15 cases to
+`tests/test_profile_trial_ingest.py::test_provider_usage_must_be_measured_integer_counts_before_any_writes`.
+An authenticated response must also have measured integer usage. The cases cover
+missing, null, list, string and empty usage; either missing count; and either
+count supplied as an equal-valued float, boolean, negative integer or string.
+Each starts with a passing authenticated-lookup control, corrupts the final
+validated attempt, confirms every response ID was looked up, and asserts all
+seven feedback tables empty with no trial state or capability-program summary.
+These are offline lookup fixtures, not evidence of live provider identity.
+
+Validation uses Python 3.14.10 and upstream pytest 9.2.0. The literal requested
+`/opt/anaconda3/bin/python3` is absent. PyPI DNS failed, so the official tagged
+tool sources were assembled under `/tmp`, using the installed system/vendored
+dependencies; repository dependencies were unchanged.
+
+```text
+PYTHONPATH=/tmp/orch-1216-tools:/usr/lib/python3/dist-packages \
+  ORCH_STATE_DIR=/tmp/orch-1216-test-state PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+  python3 -m pytest -q tests/test_profile_trial_ingest.py \
+  tests/test_profile_trial_run.py tests/test_profile_trial_recurring_spec.py \
+  tests/test_model_profile_trial_bridge.py tests/test_profile_trial_instances.py \
+  -m 'not slow'
+Baseline: 174 passed, 30 subtests passed; exit 0.
+With the added cases: 189 passed, 30 subtests passed; exit 0.
+
+PYTHONPATH=src ORCH_STATE_DIR=/tmp/orch-1216-selftest-state \
+  python3 src/model_profile_trial.py --selftest
+model_profile_trial.py selftest: OK; exit 0.
+```
+
+A deliberate mutation removed only `type(value) is not int or` from
+`_authoritative_identity_verified`'s usage check. With the same test environment:
+
+```text
+python3 -m pytest -q \
+  tests/test_profile_trial_ingest.py::test_provider_usage_must_be_measured_integer_counts_before_any_writes \
+  -k equal-float -m 'not slow' --tb=short
+FAILED ...[equal-float-input] - Failed: DID NOT RAISE ValueError
+FAILED ...[equal-float-output] - Failed: DID NOT RAISE ValueError
+2 failed, 13 deselected; exit 1.
+Restored source: 2 passed, 13 deselected; exit 0.
+```
+
+The source was restored in `finally` and matched SHA-256
+`1cdc0149de2198ebde78afa2c66852bead27c9b690f5e953cafcb90f79a3007c`.
+Full local mutation transcripts are
+`/tmp/orch-1216-usage-mutation-failing.txt` and
+`/tmp/orch-1216-usage-mutation-restored.txt`. The 15-case delta adjusts collection
+and pass expectations from 8726/8724 to 8741/8739; every ceiling is preserved.
+Those are inventory-based expectations, not a full-suite passing claim.
+
+All six current PR #1193 threads were reread on 2026-11-12. The existing
+[source/test dispositions](#review-dispositions-for-pr-1193) remain supported;
+the new cases strengthen the independent-response usage check. For remote head
+`f133e3c8593c7109afbadf2606bd8a568aea7f20`,
+[Gate run 43124012822](https://github.com/stranske/Orchestrator/actions/runs/43124012822)
+and [CI run 43124012448](https://github.com/stranske/Orchestrator/actions/runs/43124012448)
+both concluded `success`. All six checkout shards, six flat-mirror shards,
+both CI aggregates, and Gate's lint-format, lint-ruff and typecheck-mypy passed.
+These checks cover the predecessor head only; CI for this round is pending.
+
+Black 26.10.1 formatted the changed test with line length 100. The worker pool
+stalled in this sandbox. Single-file CLI checks passed over all 842 tracked
+Python files; after serially filling any remaining normal-cache entries, the
+required repository-wide check passed without modifying Black:
+
+```text
+PATH="/tmp/orch-1216-venv/bin:$PATH" \
+  PYTHONPATH=/tmp/orch-1216-tools:/tmp/orch-1216-venv/lib/python3.14/site-packages/pip/_vendor \
+  BLACK_NUM_WORKERS=1 XDG_CACHE_HOME=/tmp/orch-1216-cache \
+  black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .
+701 files would be left unchanged; exit 0.
+```
+
+The complete five-file suite also passed again after restoring the mutation:
+189 passed and 30 subtests passed; exit 0. `git diff --check` passes.
+
+Delivery attempt:
+
+```text
+git add tests/test_profile_trial_ingest.py .verify-floor.json \
+  docs/verification/issue-1216-provenance.md
+fatal: Unable to create '.../.git/index.lock': Read-only file system
+```
+
+No commit was created. The `needs-human` label and blocker-comment requests
+were each rejected by automatic approval review with
+`MCP tool call requires approval, but approval policy is never`; neither
+remote mutation occurred. PR #1352 was rechecked open and ready (`draft=false`),
+still at `f133e3c8593c7109afbadf2606bd8a568aea7f20`. Commit, remote checkbox
+reconciliation and CI for a delivered head containing this round remain open.
+
 ## Provider lookup batch verification, 2026-11-11
 
 Based on PR #1352 head `78474cdf015f76178d22bb1243da171616f8901d`, on the

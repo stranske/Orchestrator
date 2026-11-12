@@ -585,6 +585,71 @@ def test_provider_response_must_independently_confirm_the_trial_measurement(
         _assert_trial_feedback_tables_empty(conn)
 
 
+@pytest.mark.parametrize(
+    "usage",
+    [
+        pytest.param(..., id="missing-usage"),
+        pytest.param(None, id="null-usage"),
+        pytest.param([], id="list-usage"),
+        pytest.param("unmeasured", id="string-usage"),
+        pytest.param({}, id="empty-usage"),
+        pytest.param({"input_tokens": 12}, id="missing-output"),
+        pytest.param({"output_tokens": 4}, id="missing-input"),
+        pytest.param({"input_tokens": 12.0, "output_tokens": 4}, id="equal-float-input"),
+        pytest.param({"input_tokens": 12, "output_tokens": 4.0}, id="equal-float-output"),
+        pytest.param({"input_tokens": True, "output_tokens": 4}, id="boolean-input"),
+        pytest.param({"input_tokens": 12, "output_tokens": True}, id="boolean-output"),
+        pytest.param({"input_tokens": -1, "output_tokens": 4}, id="negative-input"),
+        pytest.param({"input_tokens": 12, "output_tokens": -1}, id="negative-output"),
+        pytest.param({"input_tokens": "12", "output_tokens": 4}, id="string-input"),
+        pytest.param({"input_tokens": 12, "output_tokens": "4"}, id="string-output"),
+    ],
+)
+def test_provider_usage_must_be_measured_integer_counts_before_any_writes(
+    tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture, usage
+):
+    """Authenticated identity cannot turn missing or loosely equal usage into measurements."""
+    _use_temp_feedback(tmp_path, monkeypatch)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    lookup = _bind_authoritative_identity(tmp_path, trial_attempt_fixture)
+    attempts = model_profile_trial._validate_results(trial_manifest, trial_attempt_fixture)
+    response_ids = [
+        json.loads(Path(attempt["identity_evidence"]["artifact_ref"]).read_text())["response_id"]
+        for attempt in attempts
+    ]
+    assert model_profile_trial._authoritative_identity_verified(
+        attempts, provider_response_lookup=lookup
+    )
+    # Fail on the last attempt to prove that earlier valid responses never cause
+    # partial feedback or published state to escape the identity gate.
+    response = lookup(response_ids[-1])
+    if usage is ...:
+        response.pop("usage")
+    else:
+        response["usage"] = usage
+    lookup_requests = []
+
+    def tracked_lookup(response_id):
+        lookup_requests.append(response_id)
+        return lookup(response_id)
+
+    state_path = tmp_path / "refused-state.json"
+    with pytest.raises(ValueError, match="identity evidence is not authoritative"):
+        model_profile_trial.finalize_trial(
+            trial_manifest,
+            trial_attempt_fixture,
+            state_path=state_path,
+            record_feedback=True,
+            ingest_brain=True,
+            provider_response_lookup=tracked_lookup,
+        )
+    assert lookup_requests == response_ids
+    assert not state_path.exists()
+    assert not (tmp_path / "capability-program" / "profile-trial.json").exists()
+    with feedback._conn() as conn:
+        _assert_trial_feedback_tables_empty(conn)
+
+
 def _rebind_trial_id(manifest, results):
     """Point manifest and results at the trial id implied by the current source seals."""
     old_trial_id = manifest["trial_id"]
