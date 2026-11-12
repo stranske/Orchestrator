@@ -2645,6 +2645,14 @@ def register(capability_id: str, record: dict[str, Any], path: Path = REG) -> No
         _write_ledger_unlocked(path, capabilities)
 
 
+def adjudicator_live_policy(summary: dict) -> str:
+    """M2 qualification uses later-truth grades; a short pool never retires the role."""
+    graded = summary["graded"]
+    if graded < 20:
+        return "insufficient_sample"
+    return "retired" if summary["agree"] / graded < 0.75 else "qualified"
+
+
 def transition(
     capability_id: str,
     new_state: str,

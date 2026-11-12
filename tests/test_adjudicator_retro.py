@@ -1342,7 +1342,9 @@ def test_live_shadow_adjudicates_a_new_dispute_once_and_grades_on_truth(
         live_shadow["calls"].append(kwargs)
         assert agent == "stub" and kwargs["timeout"] == 600
         assert kwargs["cwd"] == str(common["path"].parent / "repo")
-        packet, _end = json.JSONDecoder().raw_decode(prompt.partition("Adjudication case JSON:\n")[2])
+        packet, _end = json.JSONDecoder().raw_decode(
+            prompt.partition("Adjudication case JSON:\n")[2]
+        )
         assert packet["metadata_only"] is False
         ref = packet["ground_truth_evidence"]["qualified_ground_truth_refs"][0]
         response = proposal()
@@ -1363,9 +1365,9 @@ def test_live_shadow_adjudicates_a_new_dispute_once_and_grades_on_truth(
     assert first["rows"][0]["errors"] == []
     assert first["rows"][0]["role_record_error"] is None
     with sqlite3.connect(db) as conn:
-        assert conn.execute(
-            "SELECT run_id FROM runs WHERE role_name='adjudicator'"
-        ).fetchall() == [(first["rows"][0]["role_run_id"],)]
+        assert conn.execute("SELECT run_id FROM runs WHERE role_name='adjudicator'").fetchall() == [
+            (first["rows"][0]["role_run_id"],)
+        ]
     events = _advice_events(db)
     assert len(events) == 1
     _event_id, run_id, producer, payload, _ts = events[0]
@@ -1409,7 +1411,7 @@ def test_live_shadow_adjudicates_a_new_dispute_once_and_grades_on_truth(
         )
     unjudged = live.reconcile_live(db=db, path=live_shadow["common"]["path"])
     assert (unjudged["graded"], unjudged["agree"], unjudged["disagree"]) == (0, 0, 0)
-    assert live.weekly_line(live_shadow["common"]["path"]) == (
+    assert live.weekly_line(live_shadow["common"]["path"]).startswith(
         "live: disputes 1, advised 1, uncertified 0, graded 0 (agree 0, disagree 0)"
     )
 
@@ -1423,7 +1425,7 @@ def test_live_shadow_adjudicates_a_new_dispute_once_and_grades_on_truth(
     assert (graded["graded"], graded["agree"], graded["disagree"]) == (1, agree, 1 - agree)
     assert graded["merge_rule_agree"] == int(durability == "durable")
     line = live.weekly_line(live_shadow["common"]["path"])
-    assert line == (
+    assert line.startswith(
         "live: disputes 1, advised 1, uncertified 0, graded 1 "
         f"(agree {agree}, disagree {1 - agree})"
     )
@@ -1482,3 +1484,54 @@ def test_live_shadow_writes_no_merge_input(live_shadow):
         assert conn.execute(
             "SELECT count(*) FROM completion_events WHERE run_id='new'"
         ).fetchone() == (0,)
+
+
+@pytest.mark.parametrize("agree_count,expected", [(14, "retired"), (15, "qualified")])
+def test_live_retirement_policy_stops_dispatch_and_keeps_truth_drain(
+    live_shadow, agree_count, expected
+):
+    from copy import deepcopy
+
+    live, common = live_shadow["live"], live_shadow["common"]
+    first = live.run_live(**common)
+    template = first["rows"][0]
+    rows = []
+    with feedback._conn() as conn:
+        for index in range(20):
+            run_id = f"grade-{index}"
+            conn.execute(
+                "INSERT INTO runs(run_id,ts,target) VALUES (?,?,?)",
+                (run_id, common["now"], f"owner/repo#{index + 10}"),
+            )
+            conn.execute(
+                "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged,"
+                "durability,durability_checked_ts) VALUES (?,'NON_PASS','PASS',1,?,?)",
+                (
+                    run_id,
+                    "broke_later" if index < agree_count else "durable",
+                    feedback.DURABILITY_DETECTION_SINCE + 10,
+                ),
+            )
+            row = deepcopy(template)
+            row.update(run_id=run_id, case_id=run_id, target=f"owner/repo#{index + 10}")
+            rows.append(row)
+    report = json.loads(common["path"].read_text())
+    report["rows"] = rows
+    common["path"].write_text(json.dumps(report))
+    summary = live.reconcile_live(db=common["db"], path=common["path"])
+    assert (summary["graded"], summary["agree"]) == (20, agree_count)
+    assert capabilities.adjudicator_live_policy(summary) == expected
+    line = live.weekly_line(common["path"])
+    assert f"qualification {expected}" in line and "against 0.75" in line
+    assert "drainable=durability grading" in line
+    if expected == "retired":
+        count = len(live_shadow["calls"])
+        result = live.run_live(**common)
+        assert result["retired"] and result["attempted"] == 0
+        assert len(live_shadow["calls"]) == count
+        # Retirement is sticky even if later truth is corrected; reconciliation still drains.
+        with feedback._conn() as conn:
+            conn.execute("UPDATE outcomes SET durability='broke_later' WHERE run_id LIKE 'grade-%'")
+        assert live.reconcile_live(db=common["db"], path=common["path"])["agree"] == 20
+        assert "qualification retired" in live.weekly_line(common["path"])
+    assert capabilities.adjudicator_live_policy({"graded": 19, "agree": 0}) == "insufficient_sample"

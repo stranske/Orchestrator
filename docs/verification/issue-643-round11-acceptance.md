@@ -77,3 +77,107 @@ No gate, spec, issue criteria, or runtime acceptance result was overridden.
 Remaining unverified: the automated gate is still UNRUNNABLE/hollow_break; the
 literal second-run mutation criterion and the production live sample-size/
 agreement criterion are not complete. The original 2026-11-08 deadline has passed.
+
+## Continuation check — 2026-11-11 America/Chicago (2026-11-12 UTC)
+
+Outcome required on real input: `adjudicator_live.py --line` prints advised A > 0,
+G >= 20, agreement against 0.75, and a qualification decision consumed by #575.
+Command: `/opt/anaconda3/bin/python3 src/adjudicator_live.py --line`.
+Stop rule: two repair attempts per demonstrated failure or 60 minutes. The first
+broken production step remains the missing newly certified, Brain-persisted live
+observation after owner sync; no paid dispatch or production write was launched.
+
+### Branch continuity and demonstrated CI repair
+
+Started at `00cec79b8ae2892cecc04d113c7eb4d83c22f812` on `orch/issue-643`.
+`git worktree list --porcelain` showed this sole holder for the branch, clean.
+Inspected preserved opener ref
+`preserved/stranske__Orchestrator__643__opener-20261111T190307Z` (`c2387898`).
+Its paths and content were retained untouched. The useful retirement idea was
+carried into the small policy/consumer connection below; its broader collector,
+event-recovery and UUID changes were not transplanted. Deterministic advice event
+identity is unchanged. No holder was reset or cleaned.
+
+`gh pr checks 1356 --repo stranske/Orchestrator` identified failed lint-format and
+Gate. Read job logs 130914335473 and 130916143479 of run 43136851049. Black printed
+`would reformat .../tests/test_adjudicator_retro.py` and `1 file would be
+reformatted, 706 files would be left unchanged`; Gate printed
+`Python CI result: failure`. Applied Black only to changed files. The focused
+Black check now prints `3 files would be left unchanged`. No pins, workflow
+infrastructure, gates, review floors, or existing implementation were replaced.
+
+### Fixture and behavioral mutation evidence
+
+At starting head, the exact three named pytest nodes above printed
+`6 passed in 5.28s` (four parameter combinations in the first node).
+
+In an isolated `git archive HEAD`, changed only the unique
+`seen_targets = live_advised_targets(db)` to `seen_targets = set()`.
+The first named test reached the report-free replay and printed, in all four
+variants:
+
+```text
+AssertionError: the second run must not dispatch or write
+assert (2, ['executi...adow_advice']) == (1, [])
+At index 0 diff: 2 != 1
+4 failed in 3.02s
+```
+
+Restored the exact original bytes and reran: `4 passed in 5.12s`.
+This supersedes the earlier selection-only mutation evidence: replay now reaches
+and detects the second backend dispatch AND event-write attempt. It is still
+not the literal two-event-row requirement: deterministic event identity can
+replace one stored row. No event identity was altered to manufacture two rows.
+That literal acceptance requirement remains unresolved.
+
+### Missing policy connection repaired; fixture retirement only
+
+The current branch had neither a 20-grade/0.75 decision in the weekly line nor
+a live dispatch consumer of that decision. Added `capabilities.adjudicator_live_policy`:
+fewer than 20 grades is `insufficient_sample`; agreement below 0.75 at n >= 20
+is `retired`; otherwise `qualified`. Reconciliation retains a sticky live-role
+retirement receipt, and the live runner checks it before certification or paid
+dispatch. Weekly output names agreement, decision and sample shortfall.
+Blocking/drainable pair: dispatch stops while retired or switched off;
+`reconcile_live` and `weekly_line` continue later-truth grading. This retires the
+live shadow dispatch path, not all callers of the generic adjudicator role or
+the global capabilities registry. Broader role retirement is unverified.
+
+Focused tests use 20 distinct private-Brain disputed runs with actual durability
+rows: 14/20 retires and stops dispatch, 15/20 qualifies, 19 grades cannot retire,
+and later truth corrections still reconcile after sticky retirement. These are
+fixtures, not production samples. The changed-file suite printed
+`82 passed in 10.26s`. No full suite was run.
+
+### Production readback and scheduling boundary
+
+Real `--line` output with the changed reader:
+
+```text
+live: disputes 495, advised 4, uncertified 61, graded 4 (agree 2, disagree 2); uncertified reasons: other 40, prompt_too_large 8, criteria_shape 7, no_criteria 6; agreement 0.500 against 0.75; qualification insufficient_sample; target 20 by 2026-11-08 MISSED; blocking=dispatch retired or switched off; drainable=durability grading
+```
+
+Ran `reconcile_live` against a temporary copy of the production report, reading
+the actual Brain without modifying it. Actual later-truth result: A=4, G=4,
+agree=2, disagree=2, merge-rule agree=4. Agreement 0.500 is below 0.75 but the
+pool is too short to retire or qualify. Report advice is not proof of new Brain
+persistence: a read-only aggregate found zero current `live_shadow_advice`
+events. Thus the new persisted-event criterion is NOT met by these four legacy
+report entries. No newly certified dispute or production idle rerun was observed.
+
+The launchd plist `com.stranske.orchestrator` names
+`/Users/teacher/.codex/orchestrator-mirror/orchestrate.sh --active`, minute 40.
+Both branch and deployed script contain daily `adjudicator_live.py` after the
+durability sweep (lines 1087–1093), with the existing `--enabled` check, search
+gate and bounded limit. They contain the weekly `switch_review.py` invocation
+(line 839); its report reader consumes `adjudicator_live.weekly_line` and its
+text writer includes the line. This verifies configured invocation and code
+consumption, not a fresh loaded scheduler execution or successful owner sync.
+Owner sync and observing the next authentic dispute remain undone. No mirror,
+launchd setting, switch, production report, or Brain record was changed here.
+
+The 2026-11-08 historical deadline was missed and cannot be retroactively met.
+G >= 20, production persisted advice and duplicate-free idle rerun, real
+underperforming-role retirement, and live M2 qualification remain unmet.
+PR checks/review and merge require fresh exact-head readback after this push;
+this receipt does not claim them green or the PR merged.

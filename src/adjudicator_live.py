@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import adjudicator_retro as retro
+import capabilities
 import feedback
 import roles
 
@@ -492,6 +493,19 @@ def run_live(
     provider = provider or _exact_head_checkout
     snapshot_reader = snapshot_reader or pr_snapshot
     rows = _load_rows(path)
+    # Retirement stops dispatch while later durability can still drain through reconciliation.
+    summary = reconcile_live(db=db, path=path, now=now)
+    report = json.loads(path.read_text())
+    if report.get("retirement"):
+        return {
+            "disabled": False,
+            "retired": True,
+            "attempted": 0,
+            "advised": 0,
+            "uncertified": 0,
+            "summary": summary,
+            "rows": rows,
+        }
     # "Advised" has ONE record, the Brain's `live_shadow_advice` event, which `live_disputes`
     # excludes by target; an advised row saved before that event existed is backfilled once here.
     _backfill_advice_events(rows, db)
@@ -692,14 +706,23 @@ def _grade_and_write(
     population: int | str,
     selection_state: dict | None = None,
 ) -> dict:
+    previous = json.loads(path.read_text()) if path.exists() else {}
     if selection_state is None:
-        previous = json.loads(path.read_text()) if path.exists() else {}
         selection_state = {
             "last_live_run_ts": previous.get("last_live_run_ts", previous.get("generated_at", 0)),
             "pending_case_ids": previous.get("pending_case_ids", []),
         }
     retro._refresh_saved_verdicts(rows, db)
     summary = live_summary(rows)
+    retirement = previous.get("retirement")
+    if not retirement and capabilities.adjudicator_live_policy(summary) == "retired":
+        retirement = {
+            "role": "role-adjudicator",
+            "retired_at": now,
+            "graded": summary["graded"],
+            "agreement": summary["agree"] / summary["graded"],
+            "threshold": 0.75,
+        }
     _write_report(
         path,
         {
@@ -707,6 +730,7 @@ def _grade_and_write(
             "generated_at": now,
             "population": population,
             "summary": summary,
+            "retirement": retirement,
             "rows": rows,
             **selection_state,
         },
@@ -808,11 +832,27 @@ def weekly_line(path: Path | None = None) -> str:
             else ""
         )
         failed = f"; failed {summary['failed']}" if summary.get("failed") else ""
+        policy = (
+            "retired" if report.get("retirement") else capabilities.adjudicator_live_policy(summary)
+        )
+        agreement = (
+            f"{summary['agree'] / summary['graded']:.3f}" if summary["graded"] else "UNKNOWN"
+        )
+        deadline = (
+            "MISSED"
+            if time.strftime("%Y-%m-%d", time.gmtime()) > "2026-11-08" and summary["graded"] < 20
+            else "sample target"
+        )
+        qualification = (
+            f"; agreement {agreement} against 0.75; qualification {policy}; "
+            f"target 20 by 2026-11-08 {deadline}; "
+            "blocking=dispatch retired or switched off; drainable=durability grading"
+        )
         return (
             f"live: disputes {report.get('population', 'UNKNOWN')}, "
             f"advised {summary['advised']}, uncertified {summary['uncertified']}, "
             f"graded {summary['graded']} (agree {summary['agree']}, disagree {summary['disagree']})"
-            f"{refused}{failed}"
+            f"{refused}{failed}{qualification}"
         )
     except (OSError, ValueError, KeyError, TypeError, sqlite3.Error):
         return (
