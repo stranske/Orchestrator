@@ -652,7 +652,10 @@ after the expiry clears the seat. A marker with no readable expiry says it is ma
 path to remove, and an unreadable one still holds. A codex refusal's stated reset sets the expiry,
 read only from codex's harness error events (`rate_incidents.provider_reset_at`, used by every
 recorder of a run). Until then the offload recorded no reset, and two refusals of 2026-09-25 that
-named Sep 28 shed for the 6 h cooldown. `switch_review` names every marker, FYI only, and flags one
+named Sep 28 shed for the 6 h cooldown. Since 2026-11-12 gemini (agy) and muse refusals set it
+too, each read only from an authoritative refusal line: agy's Go-duration `Resets in …` (any of
+h/m/s, plus days; `45m0s` had fallen to the cooldown) and muse's `usage window resets at <ISO
+time>` (a weekly exhaustion had re-admitted the seat every 6 h). `switch_review` names every marker, FYI only, and flags one
 placed by hand that has held its seat past 14 days, or an expired one still on disk. (No stage,
 component or surface moved; the diagram is unchanged.)
 
