@@ -22,6 +22,10 @@ import feedback
 import roles
 import switch_review
 
+# The watchdog date has elapsed. A current full sample cannot establish when it filled.
+real_gmtime = time.gmtime
+time.gmtime = lambda: real_gmtime(1794441600)  # 2026-11-12 00:00:00 UTC
+
 root = Path(sys.argv[2])
 agree_count = int(sys.argv[3])
 sha = live._toy_repository(root)
@@ -147,12 +151,17 @@ for (const [agree, policy] of [[0, 'retired'], [14, 'retired'], [15, 'qualified'
     const observed = JSON.parse(fs.readFileSync(files[0], 'utf8'));
     assert.equal(observed.short.summary.graded, 19);
     assert.match(observed.short.line, /qualification insufficient_sample;/);
+    assert.match(observed.short.line, /target 20 by 2026-11-08 MISSED;/);
     assert.equal(observed.complete.summary.graded, 20);
     assert.equal(observed.complete.summary.agree, agree);
     assert.match(observed.complete.line, new RegExp(
       `live: disputes 20, advised 20, uncertified 0, graded 20 \\(agree ${agree}, disagree ${20 - agree}\\)`));
     assert.match(observed.complete.line, new RegExp(
       `agreement ${(agree / 20).toFixed(3)} against 0\\.75; qualification ${policy};`));
+    assert.match(observed.complete.line,
+      /target 20 by 2026-11-08 timing UNVERIFIED;/);
+    assert.match(observed.complete.text,
+      /target 20 by 2026-11-08 timing UNVERIFIED;/);
     assert.deepEqual(observed.recovered.summary, observed.complete.summary);
     assert.equal(observed.recovered.line, observed.complete.line);
     const retired = policy === 'retired';

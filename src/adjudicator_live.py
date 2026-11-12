@@ -904,11 +904,11 @@ def weekly_line(path: Path | None = None) -> str:
         agreement = (
             f"{summary['agree'] / summary['graded']:.3f}" if summary["graded"] else "UNKNOWN"
         )
-        deadline = (
-            "MISSED"
-            if time.strftime("%Y-%m-%d", time.gmtime()) > "2026-11-08" and summary["graded"] < 20
-            else "sample target"
-        )
+        deadline = "sample target"
+        if time.strftime("%Y-%m-%d", time.gmtime()) > "2026-11-08":
+            # Current grades do not establish when the sample filled. No dated milestone
+            # is recorded, so reaching 20 later cannot verify the elapsed M2 deadline.
+            deadline = "MISSED" if summary["graded"] < 20 else "timing UNVERIFIED"
         qualification = (
             f"; agreement {agreement} against 0.75; qualification {policy}; "
             f"target 20 by 2026-11-08 {deadline}; "
