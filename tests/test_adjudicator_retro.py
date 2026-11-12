@@ -1378,11 +1378,6 @@ def test_live_shadow_adjudicates_a_new_dispute_once_and_grades_on_truth(
     assert advice["case_id"] == first["rows"][0]["case_id"] and advice["cost_usd"] == 0.25
     assert _brain_except_events(db)["outcomes"] == outcomes_before, "no outcomes row written"
 
-    # The usual daily rerun is idle, before also exercising recovery without the saved report.
-    again = live.run_live(**common)
-    assert again["attempted"] == 0 and len(live_shadow["calls"]) == 1
-    assert _advice_events(db) == events
-
     writes = []
     record_event = feedback.record_completion_event
 
@@ -1391,14 +1386,24 @@ def test_live_shadow_adjudicates_a_new_dispute_once_and_grades_on_truth(
         return record_event(*args, **kwargs)
 
     monkeypatch.setattr(feedback, "record_completion_event", record_replay_event)
+    brain_before_idle = _brain_except_events(db)
+    # Advance to the next daily cadence so this exercises a real saved-state cutoff.
+    next_day = common["now"] + 86400
+    again = live.run_live(**{**common, "now": next_day})
+    assert again["attempted"] == 0 and len(live_shadow["calls"]) == 1
+    assert writes == [], "the daily rerun must not attempt an event write"
+    assert _advice_events(db) == events
+    assert _brain_except_events(db) == brain_before_idle, "the daily rerun writes no Brain rows"
+
     # Replay without the report or its cutoff. The Brain event must prevent a second dispatch.
     replay_path = live_shadow["common"]["path"].with_name("replay.json")
-    second = live.run_live(**{**common, "path": replay_path})
+    second = live.run_live(**{**common, "path": replay_path, "now": next_day + 1})
     assert (len(live_shadow["calls"]), writes) == (
         1,
         [],
     ), "the second run must not dispatch or write"
     assert _advice_events(db) == events, "the second run writes nothing"
+    assert _brain_except_events(db) == brain_before_idle, "report recovery writes no Brain rows"
     assert second["attempted"] == 0
     assert len(live_shadow["collected"]) == 1
 
