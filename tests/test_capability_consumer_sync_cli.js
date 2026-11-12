@@ -170,6 +170,62 @@ test('consumer sync CLI separates measured action debt from persisted declaratio
   assert.deepEqual(fs.readFileSync(ledger), before, 'measuring action debt must preserve the ledger');
 });
 
+test('consumer sync CLI tracks each remaining live row during a partial owner sync', async (t) => {
+  const { ledger, run, check, persist } = runtime(t);
+  const declarations = JSON.parse(await run([
+    '-c',
+    'import json, capabilities; print(json.dumps(capabilities.KNOWN_GATES | capabilities.KNOWN_DECLARATIONS))',
+  ], 0));
+  const offload = {
+    capability_id: 'offload', status: 'active',
+    downstream_consumer: declarations.offload.downstream_consumer,
+    consumer_missing: true,
+    event_history: [{ type: 'invocation', timestamp: 1 }], outcome_links: [],
+  };
+  const testgen = {
+    capability_id: 'testgen-lane', status: 'active',
+    downstream_consumer: 'the acceptance gate consumes candidate tests',
+    event_history: [{ type: 'invocation', timestamp: 2 }], outcome_links: [],
+  };
+  persist(offload, testgen);
+  const partial = await check(1);
+  assert.deepEqual(partial.consumer_sync, {
+    live_rows: 2,
+    pending: {
+      offload: ['consumer_missing'],
+      'testgen-lane': ['downstream_consumer'],
+    },
+  });
+  assert.deepEqual(partial.consumers.drainable, [], 'a clean preview cannot complete a partial sync');
+
+  // Clearing one row's stale absence flag leaves the other live row owing a sync.
+  delete offload.consumer_missing;
+  persist(offload, testgen);
+  const remaining = await check(1);
+  assert.deepEqual(remaining.consumer_sync, {
+    live_rows: 2, pending: { 'testgen-lane': ['downstream_consumer'] },
+  });
+  const before = fs.readFileSync(ledger);
+  const text = await run([
+    path.join(modules, 'capability_admission.py'), '--check-consumer-sync',
+  ], 1);
+  assert.match(text, /prose 0, missing 0, undeclared 0 — DRAINABLE 0/);
+  assert.match(text, /CONSUMER SYNC: 1 of 2 live rows pending/);
+  assert.match(text, /PENDING SYNC testgen-lane: downstream_consumer/);
+  assert.doesNotMatch(text, /PENDING SYNC offload:/);
+  assert.deepEqual(fs.readFileSync(ledger), before, 'verification must preserve the unfinished sync');
+
+  testgen.downstream_consumer = declarations['testgen-lane'].downstream_consumer;
+  persist(offload, testgen);
+  const complete = await check(0);
+  assert.deepEqual(complete.consumer_sync, { live_rows: 2, pending: {} });
+  assert.deepEqual(complete.consumers.drainable, []);
+  assert.deepEqual(complete.consumers.by_class.acting, [], 'declaration sync grants no action credit');
+  assert.deepEqual(JSON.parse(fs.readFileSync(ledger, 'utf8')).capabilities, {
+    offload, 'testgen-lane': testgen,
+  }, 'verification must preserve both rows and their existing lifecycle and evidence');
+});
+
 test('consumer sync CLI verifies the full declaration inventory after a real sync', async (t) => {
   const { ledger, run, check, persist } = runtime(t);
   const declarations = JSON.parse(await run([

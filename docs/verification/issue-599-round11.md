@@ -377,3 +377,38 @@ PR #1354 remains open and ready for review (`draft=false`).
 The existing owner must sync normally and retain the actual runtime output of
 `python3 src/capability_admission.py --check-consumer-sync`; fixture results do
 not satisfy the remaining acceptance criterion.
+
+## 2026-11-12 partial owner-sync regression
+
+Reviewed recent commits through `191d882c` and reconciled PR #1354's checkboxes:
+the five verified tasks are already checked; post-sync live-ledger acceptance
+remains unchecked. The default CLI cannot open this runner's configured ledger
+because `/home/runner/.codex/orchestrator` is on a read-only filesystem.
+
+Added a fresh-process CLI regression with two live rows and a partial sync.
+It verifies pending fields independently, clears one stale absence flag, and
+checks that the other row still fails verification despite zero prose, missing,
+and DRAINABLE in the reconciled preview. Persisting the final binding passes
+without changing lifecycle, prior evidence, or action credit. JSON and text
+verification preserve ledger bytes.
+
+`node --test --test-isolation=none tests/test_capability_consumer_sync_cli.js`
+passed **11 tests**, with no skips, in 97.16 seconds. In a disposable source
+and test copy, the new test passed before mutation and failed at the partial-sync
+exit assertion after changing the guard to reject only when every row is pending.
+The checkout was unchanged by this mutation. The named declaration test also
+passed by direct Python invocation, rejected a deliberate in-process prose
+mutation, and passed after restoration. Node syntax and `git diff --check`
+passed. The focused pytest command with `-m 'not slow'` could not run because
+pytest is unavailable. No Python files changed.
+
+The connector rejected the PR-body reconciliation update, blocker comment,
+and `needs-human` label because each requires approval while this run's approval
+policy is `never`. Hosted task metadata is unchanged. The owner still needs to
+perform normal deployment/sync and retain the actual live runtime's CONSUMERS
+and CONSUMER SYNC output from
+`python3 src/capability_admission.py --check-consumer-sync`.
+
+The commit attempt stopped at `git add`: `.git/index.lock` cannot be created
+because Git metadata is mounted read-only. The tested JavaScript regression
+and this evidence note remain uncommitted and require writable Git metadata.
