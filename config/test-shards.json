@@ -49,7 +49,8 @@
     "tests/test_verify_failure_evidence.py",
     "tests/test_value_chain_local_loop_outcomes.py",
     "tests/test_gh_guard_two_guards_on_path.py",
-    "tests/test_capacity_launch_gate.py"
+    "tests/test_capacity_launch_gate.py",
+    "tests/test_switch_review_ci_walltime.py"
   ],
   "shards": [
     [
@@ -427,7 +428,8 @@
       "tests/test_router_choose_mode.py",
       "tests/test_value_chain_local_loop_outcomes.py",
       "tests/test_gh_guard_two_guards_on_path.py",
-      "tests/test_capacity_launch_gate.py"
+      "tests/test_capacity_launch_gate.py",
+      "tests/test_switch_review_ci_walltime.py"
     ],
     [
       "tests/test_activation_audit_source_memo.py",
