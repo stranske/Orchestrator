@@ -382,7 +382,6 @@ def _selftest() -> None:
                 "gemini": {"state": "ok"},
                 "cursor": {"state": "ok"},
                 "vibe": {"state": "ok"},
-                "aider": {"state": "ok"},
             }
         }
         dry = build_rollout(

@@ -46,7 +46,7 @@ cursor-agent live outside the default PATH):
 `export PATH="/opt/homebrew/bin:$HOME/.local/bin:$HOME/.cursor/bin:$PATH"`
 
 - **Assess capacity** — `python3 src/capacity.py` → per-agent `{ok|warn|shed}`. Who has headroom right
-  now? (codex/claude default OK + 429-shed; cursor=free/unlimited; vibe=subscription; aider=paygo (LOCAL_POLICY.md).)
+  now? (codex/claude default OK + 429-shed; cursor=free/unlimited; vibe=subscription; muse=subscription, late seat.)
   A shed seat's reason says what clears it: the expiry (UTC), incident and category of a cooldown or
   a provider's stated reset, or, for a marker with no readable expiry, that it is manual and the path
   to remove. The weekly `switch_review` names every marker the same way.
@@ -78,7 +78,7 @@ cursor-agent live outside the default PATH):
   (ready issues + in-flight agent PRs across the fleet; scope-blocked excluded). `--live` refreshes.
 - **Consult the rule-based prior (OPTIONAL)** — `python3 src/router.py --dry-run` → what a deterministic
   planner *would* do. A second opinion to weigh, not an instruction. Ignore it when your read differs.
-- **Delegate one task** — `python3 src/dispatcher.py delegate --agent <cursor|vibe|codex|claude|aider>
+- **Delegate one task** — `python3 src/dispatcher.py delegate --agent <cursor|vibe|codex|claude|gemini|muse>
   --target <owner/repo#N> --lane <opener|closer> (--prompt "<text>" | --prompt-file <file>)`
   → `{pid, log, worktree}`.
   This claims the target, provisions a LOCAL-disk worktree, and spawns the agent **detached** with
@@ -397,8 +397,8 @@ cursor-agent live outside the default PATH):
   by default so fleet artifacts cannot pollute the learner.
 - **Pull direct LangSmith API telemetry (NEW)** — `python3 src/langsmith_direct.py --dry-run --json`
   previews, and `python3 src/langsmith_direct.py --ingest [--json]` writes, `workflows-agents` telemetry from
-  LangSmith's API into the same `langsmith-fleet/v1` join path used by `langsmith_pull.py`. It uses the
-  official SDK when installed and otherwise falls back to stdlib HTTP (`/sessions` + `/runs/query`), so the
+  LangSmith's API into the same `langsmith-fleet/v1` join path used by `langsmith_pull.py`. It uses
+  stdlib HTTP (`/sessions` + `/api/v2/runs/query`) regardless of installed SDK version, so the
   daily cadence does not depend on a global package install. The API key comes from `LANGSMITH_API_KEY`,
   `LANGCHAIN_API_KEY`, or `~/.codex/credentials/langsmith_api_key`.
 - **Fetch LangSmith fleet artifacts (NEW)** — `python3 src/langsmith_fetch.py --ingest [--json]` reads the

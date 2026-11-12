@@ -1,0 +1,14 @@
+Check date (UTC): 2026-11-12T00:34:22.529473+00:00
+Checkout: /private/tmp/issue771-original-five-dbals4n3
+HEAD: 18ad97a054dab7f6039dd42c8131bee04267748b
+Interpreter selection: no repository-selected virtual environment present; owner fallback.
+Command: /opt/anaconda3/bin/python3 -m pytest -q tests/test_feedback_registry_queries.py
+
+/opt/anaconda3/lib/python3.12/site-packages/pytest_asyncio/plugin.py:300: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the "fixture" caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to "function" scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+.....                                                                    [100%]
+5 passed in 0.56s
+
+Exit status: 0

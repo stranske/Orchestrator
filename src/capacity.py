@@ -18,11 +18,9 @@ Corrections baked in:
     for GPT-5.5 via codex, so cursor is DEPRIORITIZED in the route table, never the default lane.
   - gemini/Antigravity AI Pro == prepaid/windowed compute: local 5h and weekly
     soft budgets, with actual 429-shed as the authoritative limiter
-  - aider/Codestral == TWO-TIER (plan_then_credit): a flat Mistral plan is the
-    PRIMARY pool (use-it-or-lose-it), the pay-go API credit is the BACKSTOP (amounts in LOCAL_POLICY.md)
-    used only after the plan is exhausted. NB: Mistral's docs say Le Chat Pro
-    does NOT cover API calls (aider uses the API) — if the user's paid tier is
-    the chat-only Pro, set plan_limit=0 and aider degrades to pure-credit.
+  - plan_then_credit == TWO-TIER: a flat plan is the PRIMARY pool (use-it-or-lose-it) and a
+    pay-go credit is the BACKSTOP. No current seat uses it; aider, its only user, was removed
+    from the fleet on 2026-11-11.
 
 Pacing sources: freshest weekly observation wins. Codex uses the scheduled
 ~/.codex/orchestrator/usage-poll/codex-usage.json app-server account/rateLimits/read
@@ -272,25 +270,11 @@ AGENTS = {
     "vibe": {"account": "mistral-vibe-sub", "model": "flat", "window": "subscription"},
     # muse (Meta Muse Code) — the owner's SUBSCRIPTION login (Power Usage plan, 5h + weekly allowance
     # per Meta's console), never an API key. No usage API (no token/usage/quota field in `--json`;
-    # the console lags up to an hour), so 429-shed is authoritative, like vibe. BACKUP-ONLY via
-    # router.BACKUP_AGENTS until measured outcomes earn it a prior. A call authenticated with a
+    # the console lags up to an hour), so 429-shed is authoritative, like vibe. A routine LATE seat
+    # since 2026-11-11 (was BACKUP-ONLY via router.BACKUP_AGENTS from 2026-10-16). A call authenticated with a
     # Default-Project API key metered PAY-AS-YOU-GO (tested 2026-10-15; the key the login itself mints in
     # the `Muse Code` project is untested), which is why this seat is the login and the wrapper scrubs META_API_KEY.
     "muse": {"account": "meta-muse-code-sub", "model": "metered", "window": "5h+weekly"},
-    # aider — BACKUP-ONLY as of 2026-06-21 (owner directive): router.BACKUP_AGENTS holds it OUT of
-    # routine auto-selection; reachable only on explicit demand (`--agent aider` / `only={"aider"}`).
-    # Capacity is still tracked so backup use respects the credit. Optional API fallback (Codestral API
-    # burns the pay-go credit; the Vibe sub does NOT cover API calls). Two-tier: flat plan (count/day) then $25.
-    # plan_limit PLACEHOLDER pending the real Mistral API tier cap; 0 => pure-credit.
-    "aider": {
-        "account": "mistral-codestral",
-        "model": "plan_then_credit",
-        "plan_limit": 2000,
-        "plan_window": "daily",
-        "credit_usd": 25.0,
-        "credit_window": "monthly",
-        "window": "daily",
-    },
 }
 WARN_FRAC = 0.8
 _WINDOW_SECONDS = {"daily": 86400, "monthly": 30 * 86400, "5h": 5 * 3600, "weekly": 7 * 86400}
@@ -305,7 +289,6 @@ def agent_tiers() -> dict[str, str]:
         "gemini": "metered",
         "vibe": "flat",
         "muse": "flat",
-        "aider": "paygo",
     }
     for pool in execution_profiles.CAPACITY_POOLS.values():
         if pool.get("agent"):
@@ -1309,7 +1292,7 @@ def _selftest():
     selftest_shed_dir = Path(tempfile.mkdtemp(prefix="capacity-shed-selftest-"))
     SHED_DIR = selftest_shed_dir
     # The self-test's seats are fixtures: the launch-binary gate reads this machine's filesystem
-    # (CI has no vibe/aider binary), so it is off here exactly as tests/conftest.py turns it off.
+    # (CI has no vibe binary), so it is off here exactly as tests/conftest.py turns it off.
     original_launch_check = os.environ.get("ORCH_LAUNCH_CHECK")
     os.environ["ORCH_LAUNCH_CHECK"] = "0"
 
@@ -1513,15 +1496,23 @@ def _selftest_body(blk):
         import shutil
 
         shutil.rmtree(tmp, ignore_errors=True)
-    # aider two-tier: empty ledger => plan headroom => OK
-    assert compute("aider", AGENTS["aider"], None)[0] == OK
-    # chat-only Pro (plan_limit=0) with credit left => WARN (pay-go backstop only)
-    chat_only = dict(AGENTS["aider"], plan_limit=0)
-    assert compute("aider", chat_only, None)[0] == WARN, compute("aider", chat_only, None)
-    # plan exhausted + credit exhausted => SHED (simulate via plan_limit=0 + a spent ledger
-    # is integration-tested; here assert the all-spent branch with a zero credit budget)
-    broke = dict(AGENTS["aider"], plan_limit=0, credit_usd=0.0)
-    assert compute("aider", broke, None)[0] == SHED, compute("aider", broke, None)
+    # plan_then_credit (generic two-tier seat; no fleet agent uses it since aider's removal 2026-11-11)
+    two_tier = {
+        "account": "example-plan",
+        "model": "plan_then_credit",
+        "plan_limit": 2000,
+        "plan_window": "daily",
+        "credit_usd": 25.0,
+        "credit_window": "monthly",
+        "window": "daily",
+    }
+    assert compute("example", two_tier, None)[0] == OK
+    # chat-only plan (plan_limit=0) with credit left => WARN (pay-go backstop only)
+    chat_only = dict(two_tier, plan_limit=0)
+    assert compute("example", chat_only, None)[0] == WARN, compute("example", chat_only, None)
+    # plan exhausted + credit exhausted => SHED
+    broke = dict(two_tier, plan_limit=0, credit_usd=0.0)
+    assert compute("example", broke, None)[0] == SHED, compute("example", broke, None)
     # A legacy empty marker remains authoritative, while an expired JSON cooldown does not.
     flag = SHED_DIR / "codex"
     flag.touch()

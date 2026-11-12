@@ -1,0 +1,19 @@
+Traceback (most recent call last):
+  File "/tmp/closer-1184-partial-xfuvaaod/partial canary/verify_csv_contract.py", line 59, in _csv_text
+    output = module.export_rows(rows, "csv")
+  File "/tmp/closer-1184-partial-xfuvaaod/partial canary/csv_export.py", line 12, in export_rows
+    raise NotImplementedError("Declared incomplete CSV canary fixture")
+NotImplementedError: Declared incomplete CSV canary fixture
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/tmp/closer-1184-partial-xfuvaaod/partial canary/verify_csv_contract.py", line 2900, in main
+    run_contract(export_path)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/tmp/closer-1184-partial-xfuvaaod/partial canary/verify_csv_contract.py", line 142, in run_contract
+    empty = _csv_text(module, [])
+  File "/tmp/closer-1184-partial-xfuvaaod/partial canary/verify_csv_contract.py", line 61, in _csv_text
+    raise AssertionError("CSV contract is not implemented") from exc
+AssertionError: CSV contract is not implemented
+contract assertion failed

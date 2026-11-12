@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 LABEL = "agents:local-loop"
-KNOWN_AGENTS = {"codex", "claude", "cursor", "gemini", "muse", "vibe", "aider"}
+KNOWN_AGENTS = {"codex", "claude", "cursor", "gemini", "muse", "vibe"}
 BRANCH_AGENT = {"claude-code": "claude"}  # branch prefixes that name an agent differently
 HOSTED_LABELS = ("agents:keepalive", "autofix")
 MARKER = "<!-- local-loop/v1 -->"

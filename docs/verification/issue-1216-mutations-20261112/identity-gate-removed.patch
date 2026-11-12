@@ -1,0 +1,13 @@
+--- a/src/model_profile_trial.py
++++ b/src/model_profile_trial.py
+@@ -863,7 +863,9 @@
+     artifacts. There is currently no such collector in the CLI, so it fails closed.
+     A response-shaped object, authority label, or digest is not provenance.
+     """
+-    if not attempts or provider_response_lookup is None:
++    if provider_response_lookup is None:
++        return True
++    if not attempts:
+         return False
+     response_ids: set[str] = set()
+     for attempt in attempts:

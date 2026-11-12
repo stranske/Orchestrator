@@ -1,0 +1,109 @@
+def retain_confirmed_result(controller, custody, operation, selection, host, receipt):
+    import closer_native_observer as native
+
+    caller = inspect.currentframe().f_back
+    _need(
+        caller.f_code is publication.execute_existing_update.__code__
+        and caller.f_globals is publication.__dict__
+        and caller.f_locals.get("receipt") is receipt,
+        "actual publication body result required",
+    )
+    scope = require_io_admission(controller, custody, operation, selection, host)
+    ledger = publication.ContractLedger(custody).read(scope.slot)
+    _need(
+        ledger["state"] == "readback"
+        and receipt["contract_consistent"] is True
+        and receipt["readback_sha256"] == publication.digest(scope.native_readback),
+        "publication ACK/readback custody incomplete",
+    )
+    origin = _origin_record(scope, operation, ledger)
+    origin_sha = ctl.digest(origin)
+    scope.origin_reference = {
+        "schema": "closer-native-owned-pr-publication-origin-reference/v1",
+        "name": "native-publication-origin-" + origin_sha + ".json",
+        "sha256": origin_sha,
+    }
+    _need(
+        custody.create(scope.origin_reference["name"], origin),
+        "native publication origin already owned",
+    )
+    _need(
+        custody.create(
+            "native-publication-origin-signature-" + origin_sha + ".json",
+            {
+                "binding": native.binding(scope.manifest),
+                "signature": native.mechanisms._signature(
+                    origin, native._existing_lifecycle_key(scope.native_root)
+                ),
+            },
+        ),
+        "publication origin signature already owned",
+    )
+    pr = scope.native_readback["pr"]
+    subject = {"kind": "pull", "number": str(pr["pr_number"]), "node_id": pr["pr_node_id"]}
+    bind = {
+        "kind": "bind",
+        "key": scope.original_identity["effect_key"],
+        "subject": subject,
+        "selector": scope.history["admitted_selector"],
+        "proof_sha256": origin_sha,
+    }
+    outcome = controller._apply_locked(bind, operation=operation, custody=custody)
+    _need(
+        outcome.get("status") == "checkpoint_confirmed",
+        "publication index bind outcome remains unknown; never repeat push",
+    )
+    indexed = controller.read_bound(custody)
+    entry = next((e for e in indexed["data"]["entries"] if e["key"] == bind["key"]), None)
+    binding = {key: bind[key] for key in ("subject", "selector", "proof_sha256")}
+    _need(
+        entry is not None
+        and any(publication._bytes(b) == publication._bytes(binding) for b in entry["bindings"]),
+        "native publication canonical bind missing",
+    )
+    incumbent = scope.original_record["request"]["incumbent"]["issue"]
+    provenance = {
+        "handoff_reference": scope.handoff_reference,
+        "coding_terminal_reference": scope.history["terminal_reference"],
+        "publication_origin_reference": scope.origin_reference,
+        "io_admission_reference": {
+            "schema": "closer-publication-io-admission-reference/v1",
+            "name": scope.admission_name,
+            "sha256": publication.digest(scope.admission_record),
+        },
+        "io_operation_sha256": origin["io_operation_sha256"],
+        "push_ack_sha256": origin["push_ack_sha256"],
+        "native_readback_sha256": publication.digest(scope.native_readback),
+        "index_binding_sha256": ctl.digest(binding),
+        "original_admission_sha256": ctl.digest(scope.original_record),
+        "original_operation_sha256": scope.history["handoff"]["operation_sha256"],
+        "source_closure_sha256": ctl.digest(scope.qualified_value["source_closure"]),
+        "scope_issue": {k: incumbent[k] for k in ("number", "node_id", "body_sha256")},
+    }
+    record = {
+        "schema": RESULT_SCHEMA,
+        "request": scope.original_record["request"],
+        "original": scope.original_identity,
+        "findings": scope.original_record["materializer"]["raw_findings"],
+        "required_tests": scope.original_record["request"]["required_tests"],
+        **{k: scope.native_readback[k] for k in ("pr", "commit", "ref")},
+        "provenance": provenance,
+        **{key: False for key in publication._AUTHORITY},
+    }
+    sha = publication.digest(record)
+    reference = {
+        "schema": RESULT_REFERENCE_SCHEMA,
+        "name": "publication-result-" + sha + ".json",
+        "sha256": sha,
+    }
+    _need(custody.create(reference["name"], record), "native publication result already retained")
+    _need(
+        publication._bytes(custody.read(reference["name"])) == publication._bytes(record),
+        "native publication result readback changed",
+    )
+    return {
+        "publication_result_reference": reference,
+        **{key: False for key in publication._AUTHORITY},
+    }
+
+
