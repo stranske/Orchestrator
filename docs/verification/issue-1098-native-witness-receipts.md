@@ -76,6 +76,10 @@ the runner does not dispatch targets, sync a mirror, or edit production ledgers.
 
 Local validation on the hosted runner:
 
+The test now requires `PYTHON` and fails at module load without it; to rerun, use
+`PYTHON="$(command -v python3)" node tests/test_provision_native_witnesses.js`. The entries below
+record the runs as made.
+
 - `node tests/test_provision_native_witnesses.js`: 14 passed, zero skipped. Pytest
   execution is doubled in these regression tests; XML parsing uses real stdlib
   Python. These are runner tests, not native deployment evidence.
@@ -115,6 +119,10 @@ disable/restore cycle and deployment identity still require evidence;
 `deployment_acceptance_verified` remains false even if both suite flags pass.
 
 Local validation:
+
+The test now requires `PYTHON` and fails at module load without it; to rerun, use
+`PYTHON="$(command -v python3)" node tests/test_provision_native_witnesses.js`. The entries below
+record the runs as made.
 
 - `node tests/test_provision_native_witnesses.js`: 28 passed, zero skipped.
   Pytest output is simulated; these validate the runner, not deployment behavior.
