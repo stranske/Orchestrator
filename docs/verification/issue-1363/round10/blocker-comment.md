@@ -1,0 +1,7 @@
+The two remaining tasks are still unverified. On checked-out revision db3072ee8e6f5a5ab36d4df6d27e55293951b1d0, the selected CI interpreter ran src/verify.py and exited 1: zero pytest cases collected, local_verify selftest failed, and admission failed because pytest is missing. The activation audit passed. The committed floor bytes match local origin/main (cmp exit 0). The full output and receipt are retained under docs/verification/issue-1363/round10; the receipt also records the test edit made during this failed run and does not claim final-delivery acceptance.
+
+Added a regression through the production verify.run_pytest subprocess and parser. All 11 receipt-runner tests pass; a disposable mutation that invents a collected test fails the regression. Installing pytest and Black outside the checkout was unsuccessful. No capability or heartbeat logic defect was established.
+
+Required follow-up: provision pytest for the selected interpreter and rerun the delivered verifier; provide the deployed mirror and effective writer/collector paths, then obtain a fresh observation from the existing hourly collector and run the read-only ledger audit with all segments retained. The incumbent host audit still records 188 legitimate refusals and unmet acceptance. This runner has no deployment paths.
+
+The required test commit is blocked because .git is read-only (cannot create .git/index.lock). Please stage and commit the test change and retained evidence from a writable checkout. No workflow or protected files changed.

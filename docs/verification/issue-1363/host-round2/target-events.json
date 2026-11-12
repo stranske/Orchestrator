@@ -1,0 +1,496 @@
+[
+  {
+    "ts": "2026-11-11T02:32:08.159118+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T02:44:39.118348+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T03:00:55.535262+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T04:31:47.464329+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T04:46:50.365783+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T05:01:50.505763+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T05:14:38.325035+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T05:30:43.272531+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T05:44:40.619523+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T06:01:08.963925+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T06:16:46.747201+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T06:30:06.255356+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T06:46:55.817807+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T07:01:56.907326+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T07:14:18.019951+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T07:31:43.413719+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T07:46:11.714947+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T08:03:49.334834+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T08:16:16.781261+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T08:31:19.598157+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T08:46:58.237606+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T09:01:10.474662+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T09:17:42.667505+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T09:32:10.094209+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T09:45:14.055375+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T10:00:13.702539+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T10:15:41.851315+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T10:33:27.736341+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T10:45:43.272950+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T10:59:36.432315+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T11:16:37.985886+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T11:31:48.710632+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T11:49:06.437014+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T12:01:50.630423+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T12:16:52.082090+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T12:29:40.208860+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T12:48:49.540000+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T13:02:00.286371+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T13:16:57.822294+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T13:29:48.251910+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T13:47:03.562301+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T14:01:18.190191+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T14:16:21.164802+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T14:30:57.058325+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T14:44:51.670860+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T15:02:11.214854+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T15:16:59.515370+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T15:29:45.657507+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T15:46:47.292531+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T16:00:14.242813+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T16:16:49.453403+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T16:31:57.343861+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T16:47:04.950677+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T16:59:47.763115+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "failed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+  },
+  {
+    "ts": "2026-11-11T17:14:49.572600+00:00",
+    "target": "stranske/Workflows#4637",
+    "lane": "closer",
+    "outcome": "reclaimed",
+    "cause": "branch-held",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener"
+  }
+]

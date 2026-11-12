@@ -1,0 +1,11 @@
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/src/local_verify.py", line 1214, in <module>
+    raise SystemExit(main(sys.argv[1:]))
+                     ~~~~^^^^^^^^^^^^^^
+  File "/home/runner/work/Orchestrator/Orchestrator/src/local_verify.py", line 1173, in main
+    _selftest()
+    ~~~~~~~~~^^
+  File "/home/runner/work/Orchestrator/Orchestrator/src/local_verify.py", line 861, in _selftest
+    assert out["node_verdict"] == "PASS", out["node_analysis"]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: {'supported': True, 'verdict': 'INDETERMINATE', 'reason': 'pytest is not importable with /opt/hostedtoolcache/Python/3.14.10/x64/bin/python3', 'python': '/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3', 'probe': {'cmd': '/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3 -m pytest tests/test_math_utils.py -v --tb=no -p no:cacheprovider', 'cwd': '/tmp/orch-local-verify-0jlq7wzv/base', 'returncode': 1, 'ok': False, 'duration_s': 0.011, 'stdout_tail': '', 'stderr_tail': '/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3: No module named pytest\n'}, 'nodes': [], 'hollow_nodes': [], 'counts': {'nodes': 0, 'discriminates': 0, 'hollow': 0, 'inconclusive': 0}}

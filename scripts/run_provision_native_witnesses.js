@@ -14,6 +14,15 @@ const witnesses = ['test_native_clean_idle_holder_is_reclaimed',
   'test_native_reclaim_disabled_exit_128_names_holder'];
 const expected = witnesses.flatMap((name) => ['closer', 'opener'].map((lane) => `${name}[${lane}]`));
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
+const pytestConfigs = new Set(['pytest.ini', '.pytest.ini', 'pytest.toml', '.pytest.toml',
+  'pyproject.toml', 'tox.ini', 'setup.cfg']);
+// Retained publisher output and host tooling. None of these paths is copied to
+// the private test tree, and Python must be selected outside the generation.
+const runtimePaths = new Set(['.venv', '.pytest_cache', '.ruff_cache', 'docs/reports',
+  'ux_reviews', 'path.txt', 'private-ledger.lock', 'repo_review_registry.json.bak-2026-09-21',
+  'README.md', 'renovate.json', 'uv.lock', 'experiments/.last-ship-gate',
+  'experiments/invman1', 'experiments/orchskill-lanes-20260620', 'experiments/strategy434-20261006']);
+const isInside = (root, file) => file === root || file.startsWith(root + path.sep);
 const junitReader = `
 import json, sys, xml.etree.ElementTree as ET
 root = ET.parse(sys.argv[1]).getroot()
@@ -31,13 +40,23 @@ function git(root, args) {
 }
 
 function manifest(directory, prefix = '') {
-  const rows = {};
+  const rows = Object.create(null);
   for (const name of fs.readdirSync(path.join(directory, prefix)).sort()) {
-    if (['.git', '.pytest_cache'].includes(name)) continue;
     const file = path.posix.join(prefix, name);
-    if (path.posix.basename(prefix) === '__pycache__' && name.endsWith('.pyc')) continue;
+    if (runtimePaths.has(file) || /^experiments\/tick-\d+-[\w-]+-\d+$/.test(file)) continue;
     const stat = fs.lstatSync(path.join(directory, file));
+    // The publisher retains the storage-maintenance campaign as runtime data
+    // in older generations. Accept only that backing-link shape, never follow it.
+    if (file === 'campaigns' && stat.isSymbolicLink()) {
+      const backing = path.resolve(directory, fs.readlinkSync(path.join(directory, file)));
+      const parent = path.dirname(backing);
+      if (path.basename(backing) === 'campaigns' && path.dirname(parent) === path.dirname(directory)
+          && /^orchestrator-mirror\.(?:retired|generation)-[0-9a-f]{32}$/.test(path.basename(parent))) {
+        continue;
+      }
+    }
     if (stat.isSymbolicLink()) throw new Error(`Mirror contains a symlink: ${file}`);
+    if (stat.isFile() && path.posix.basename(prefix) === '__pycache__' && name.endsWith('.pyc')) continue;
     if (stat.isDirectory()) Object.assign(rows, manifest(directory, file));
     else if (stat.isFile()) rows[file] = sha256(fs.readFileSync(path.join(directory, file)));
     else throw new Error(`Mirror contains a non-file: ${file}`);
@@ -45,49 +64,57 @@ function manifest(directory, prefix = '') {
   return rows;
 }
 
-function snapshot(root, mirror, revision) {
+function snapshot(root, mirror, revision, testTree) {
   if (git(root, ['rev-parse', 'HEAD']).toString().trim() !== revision) {
     throw new Error('Checkout must be at the tested revision');
   }
-  if (fs.existsSync(path.join(mirror, '.git')) || fs.existsSync(path.join(mirror, 'src'))) {
+  if (fs.readdirSync(mirror).some((name) => ['.git', 'src'].includes(name))) {
     throw new Error('Select the installed flat mirror, without .git or src');
   }
   const contents = manifest(mirror);
   // Bind all flat Python modules, the entire test tree, and pytest configuration
   // to Git objects, including inputs that the selected witnesses import lazily.
-  const files = git(root, ['ls-tree', '-r', '-z', revision, '--',
-    'src', 'tests', 'pyproject.toml', '.verify-floor.json',
-    'scripts/run_provision_native_witnesses.js', 'scripts/run_adjudicator_acceptance.js'])
+  const files = git(root, ['ls-tree', '-r', '-z', revision, '--', 'src', 'tests',
+    'scripts', '.github', 'docs', 'tools', 'pyproject.toml', '.verify-floor.json'])
     .toString().split('\0').filter(Boolean)
     .map((entry) => {
       const [metadata, file] = entry.split('\t');
       const [mode, kind, object] = metadata.split(' ');
       return { file, mode, kind, object };
-    }).filter(({ file }) => !file.startsWith('src/') || /^src\/[^/]+\.py$/.test(file));
+    });
+  const isImportOrConfig = (file) => /\.(?:py[co]?|so|pyd|pth)$/.test(file)
+    || pytestConfigs.has(path.posix.basename(file));
+  const required = ['provision.py', suite, 'tests/conftest.py', 'pyproject.toml',
+    '.verify-floor.json', 'scripts/run_provision_native_witnesses.js',
+    'scripts/run_adjudicator_acceptance.js'];
   const bound = new Set();
   for (const { file, mode, kind, object } of files) {
-    const installed = file.startsWith('src/') ? file.slice(4) : file;
+    const flatModule = /^src\/[^/]+\.py$/.test(file);
+    const installed = flatModule ? file.slice(4) : file;
+    const requiredInput = flatModule || file.startsWith('tests/') || required.includes(file);
+    if (!requiredInput && !(contents[installed] && isImportOrConfig(installed))) continue;
     bound.add(installed);
     if (!contents[installed] || kind !== 'blob' || !['100644', '100755'].includes(mode)) {
       throw new Error(`Missing or unsupported committed input: ${installed}`);
     }
     const bytes = fs.readFileSync(path.join(mirror, installed));
     const blob = createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
-    if (blob !== object) {
+    if (blob !== object || sha256(bytes) !== contents[installed]) {
       throw new Error(`Mirror differs from tested revision: ${installed}`);
+    }
+    if (testTree) {
+      const destination = path.join(testTree, installed);
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      fs.writeFileSync(destination, bytes, { flag: 'wx', mode: mode === '100755' ? 0o700 : 0o600 });
     }
   }
   for (const file of Object.keys(contents)) {
-    if ((file.startsWith('tests/') || /\.pyc?$/.test(file)
-        || ['pytest.ini', '.pytest.ini', 'pytest.toml', '.pytest.toml', 'tox.ini', 'setup.cfg']
-          .includes(path.posix.basename(file))) && !bound.has(file)) {
+    if ((file.startsWith('tests/') || isImportOrConfig(file)) && !bound.has(file)) {
       throw new Error(`Uncommitted mirror input: ${file}`);
     }
   }
-  for (const required of ['provision.py', suite, 'tests/conftest.py', 'pyproject.toml',
-    '.verify-floor.json', 'scripts/run_provision_native_witnesses.js',
-    'scripts/run_adjudicator_acceptance.js']) {
-    if (!contents[required]) throw new Error(`Missing mirror input: ${required}`);
+  for (const file of required) {
+    if (!bound.has(file)) throw new Error(`Missing mirror input: ${file}`);
   }
   if (contents['.verify-floor.json'] !== sha256(git(root, ['show', 'origin/main:.verify-floor.json']))) {
     throw new Error('Verification floor differs from origin/main');
@@ -112,71 +139,87 @@ function runWitnesses({ root = path.resolve(__dirname, '..'), mirror, python, re
   if (!Number.isSafeInteger(timeout) || timeout < 1 || timeout > 60000) {
     throw new Error('Timeout must be between 1 and 60000 milliseconds');
   }
+  const mirrorAlias = path.resolve(mirror);
   mirror = fs.realpathSync(mirror); // Pin an installed generation before running.
   output = path.join(fs.realpathSync(path.dirname(output)), path.basename(output));
-  if (output === mirror || output.startsWith(mirror + path.sep)) {
+  if (isInside(mirror, output)) {
     throw new Error('Receipts must be outside the mirror');
   }
-  const before = snapshot(root, mirror, revision);
-  // The executing runner and its subprocess helper must be the bound bytes too.
-  for (const name of ['run_provision_native_witnesses.js', 'run_adjudicator_acceptance.js']) {
-    if (sha256(fs.readFileSync(path.join(__dirname, name))) !== before[`scripts/${name}`]) {
-      throw new Error('Executing runner differs from tested revision');
-    }
+  if (isInside(mirrorAlias, path.resolve(python)) || isInside(mirror, path.resolve(python))
+      || isInside(mirror, fs.realpathSync(path.dirname(python)))
+      || isInside(mirror, fs.realpathSync(python))) {
+    throw new Error('Select a Python interpreter outside the mirror');
   }
-  fs.mkdirSync(output, { mode: 0o700 }); // Never replace an earlier receipt.
-  const state = fs.mkdtempSync(path.join(os.tmpdir(), 'provision-witness-'));
-  const env = { ...process.env, PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1', PYTHONDONTWRITEBYTECODE: '1',
-    ORCH_PROVISION_NATIVE_ACCEPTANCE: '1', ORCH_LOCAL_RUNTIME: state,
-    HANDOFF_DIR: path.join(state, 'handoff'), ORCH_STATE_DIR: state,
-    ORCH_PROVISION_EVENTS_PATH: path.join(state, 'provision-events.ndjson') };
-  delete env.PYTEST_ADDOPTS;
-  delete env.PYTEST_PLUGINS;
-  const receipt = { schema: 'provision-native-witnesses/v1', checked_at: new Date().toISOString(),
-    revision, mirror, hostname: os.hostname(), platform: process.platform, interpreter: python,
-    mirror_manifest_sha256: sha256(JSON.stringify(before)), mirror_file_count: Object.keys(before).length,
-    floor_matches_origin_main: true, checks: [], source_unchanged: false,
-    native_witnesses_passed: false, full_suites_requested: fullSuites, suites: [],
-    default_native_suites_passed: false, deployment_acceptance_verified: false };
-  const pytestArgs = ['-E', '-B', '-m', 'pytest', '-o', 'addopts=', '-p', 'no:cacheprovider',
-    '-m', 'not slow', '-q'];
-  function runCheck(name, args, environment, names) {
-    const result = execute(python, args, { cwd: mirror, env: environment, timeout });
-    const log = Buffer.concat([result.stdout, result.stderr]);
-    fs.writeFileSync(path.join(output, `${name}.log`), log, { flag: 'wx', mode: 0o600 });
-    const check = { command: [python, ...args], exit_code: result.exit_code,
-      signal: result.signal, error_code: result.error_code, log_sha256: sha256(log) };
-    if (names !== undefined) {
-      const xml = path.join(output, `${name}.xml`);
-      let cases = null;
-      let reader = null;
-      if (fs.existsSync(xml)) {
-        const command = [python, '-I', '-c', junitReader, xml];
-        const parsed = execute(python, command.slice(1),
-          { cwd: mirror, env: environment, timeout });
-        const readerLog = Buffer.concat([parsed.stdout, parsed.stderr]);
-        const readerLogName = `${name}-junit-reader.log`;
-        fs.writeFileSync(path.join(output, readerLogName), readerLog,
-          { flag: 'wx', mode: 0o600 });
-        let decoded = false;
-        if (parsed.exit_code === 0 && !parsed.error_code && !parsed.signal) {
-          try {
-            cases = JSON.parse(parsed.stdout.toString());
-            decoded = true;
-          } catch { /* Retain the undecodable output for diagnosis. */ }
-        }
-        reader = { command, exit_code: parsed.exit_code, signal: parsed.signal,
-          error_code: parsed.error_code, json_decoded: decoded,
-          log: readerLogName, log_sha256: sha256(readerLog) };
-      }
-      Object.assign(check, { cases, junit_reader: reader,
-        junit_sha256: fs.existsSync(xml) ? sha256(fs.readFileSync(xml)) : null,
-        passed: result.exit_code === 0 && !result.error_code && !result.signal
-          && complete(cases, names) });
-    }
-    return { check, stdout: result.stdout.toString() };
-  }
+  const tempRoot = fs.realpathSync(os.tmpdir());
+  if (isInside(mirror, tempRoot)) throw new Error('Temporary test state must be outside the mirror');
+  const state = fs.mkdtempSync(path.join(tempRoot, 'provision-witness-'));
   try {
+    return runInState(state);
+  } finally {
+    fs.rmSync(state, { recursive: true, force: true });
+  }
+
+  function runInState(state) {
+    const testTree = path.join(state, 'source');
+    const before = snapshot(root, mirror, revision, testTree);
+    // The executing runner and its subprocess helper must be the bound bytes too.
+    for (const name of ['run_provision_native_witnesses.js', 'run_adjudicator_acceptance.js']) {
+      if (sha256(fs.readFileSync(path.join(__dirname, name))) !== before[`scripts/${name}`]) {
+        throw new Error('Executing runner differs from tested revision');
+      }
+    }
+    fs.mkdirSync(output, { mode: 0o700 }); // Never replace an earlier receipt.
+    const env = { ...process.env, PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1', PYTHONDONTWRITEBYTECODE: '1',
+      ORCH_PROVISION_NATIVE_ACCEPTANCE: '1', ORCH_LOCAL_RUNTIME: state,
+      HANDOFF_DIR: path.join(state, 'handoff'), ORCH_STATE_DIR: state,
+      ORCH_PROVISION_EVENTS_PATH: path.join(state, 'provision-events.ndjson') };
+    delete env.PYTEST_ADDOPTS;
+    delete env.PYTEST_PLUGINS;
+    const receipt = { schema: 'provision-native-witnesses/v1', checked_at: new Date().toISOString(),
+      revision, mirror, hostname: os.hostname(), platform: process.platform, interpreter: python,
+      mirror_manifest_sha256: sha256(JSON.stringify(before)), mirror_file_count: Object.keys(before).length,
+      mirror_manifest_after_sha256: null,
+      floor_matches_origin_main: true, checks: [], source_unchanged: false,
+      native_witnesses_passed: false, full_suites_requested: fullSuites, suites: [],
+      default_native_suites_passed: false, deployment_acceptance_verified: false };
+    const pytestArgs = ['-E', '-B', '-m', 'pytest', '-o', 'addopts=', '-p', 'no:cacheprovider',
+      '-m', 'not slow', '-q'];
+    function runCheck(name, args, environment, names) {
+      const result = execute(python, args, { cwd: testTree, env: environment, timeout });
+      const log = Buffer.concat([result.stdout, result.stderr]);
+      fs.writeFileSync(path.join(output, `${name}.log`), log, { flag: 'wx', mode: 0o600 });
+      const check = { command: [python, ...args], exit_code: result.exit_code,
+        signal: result.signal, error_code: result.error_code, log_sha256: sha256(log) };
+      if (names !== undefined) {
+        const xml = path.join(output, `${name}.xml`);
+        let cases = null;
+        let reader = null;
+        if (fs.existsSync(xml)) {
+          const command = [python, '-I', '-c', junitReader, xml];
+          const parsed = execute(python, command.slice(1),
+            { cwd: testTree, env: environment, timeout });
+          const readerLog = Buffer.concat([parsed.stdout, parsed.stderr]);
+          const readerLogName = `${name}-junit-reader.log`;
+          fs.writeFileSync(path.join(output, readerLogName), readerLog,
+            { flag: 'wx', mode: 0o600 });
+          let decoded = false;
+          if (parsed.exit_code === 0 && !parsed.error_code && !parsed.signal) {
+            try {
+              cases = JSON.parse(parsed.stdout.toString());
+              decoded = true;
+            } catch { /* Retain the undecodable output for diagnosis. */ }
+          }
+          reader = { command, exit_code: parsed.exit_code, signal: parsed.signal,
+            error_code: parsed.error_code, json_decoded: decoded,
+            log: readerLogName, log_sha256: sha256(readerLog) };
+        }
+        Object.assign(check, { cases, junit_reader: reader,
+          junit_sha256: fs.existsSync(xml) ? sha256(fs.readFileSync(xml)) : null,
+          passed: result.exit_code === 0 && !result.error_code && !result.signal
+            && complete(cases, names) });
+      }
+      return { check, stdout: result.stdout.toString() };
+    }
     if (fullSuites) {
       for (const mode of ['default', 'native']) {
         const environment = { ...env };
@@ -198,11 +241,16 @@ function runWitnesses({ root = path.resolve(__dirname, '..'), mirror, python, re
           passed: collection.passed && execution.passed });
       }
     }
-    receipt.checks.push(runCheck('native', [...pytestArgs,
+    receipt.checks.push(runCheck('native', [...pytestArgs, '-rP',
       `--junitxml=${path.join(output, 'native.xml')}`,
       ...witnesses.map((name) => `${suite}::${name}`)], env, expected).check);
-    try { receipt.source_unchanged = JSON.stringify(snapshot(root, mirror, revision)) === JSON.stringify(before); }
-    catch { receipt.source_unchanged = false; }
+    try {
+      const after = snapshot(root, mirror, revision);
+      receipt.mirror_manifest_after_sha256 = sha256(JSON.stringify(after));
+      receipt.source_unchanged = receipt.mirror_manifest_after_sha256 === receipt.mirror_manifest_sha256;
+    } catch (error) {
+      receipt.source_validation_error = error.message;
+    }
     receipt.native_witnesses_passed = receipt.source_unchanged && receipt.checks.every((item) => item.passed);
     receipt.default_native_suites_passed = receipt.source_unchanged && fullSuites
       && receipt.suites.length === 2 && receipt.suites.every((item) => item.passed);
@@ -212,8 +260,6 @@ function runWitnesses({ root = path.resolve(__dirname, '..'), mirror, python, re
     fs.writeFileSync(path.join(output, 'receipt.json'), JSON.stringify(receipt, null, 2),
       { flag: 'wx', mode: 0o600 });
     return receipt;
-  } finally {
-    fs.rmSync(state, { recursive: true, force: true });
   }
 }
 
