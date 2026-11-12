@@ -1,0 +1,153 @@
+✔ recounts active and archived failures with multiplicity and exact seven-day boundaries (77.13373ms)
+✔ an archived-only ledger is measured; absent ledger stays unmeasured (114.673598ms)
+✔ empty intact observed week can qualify only ledger evidence (56.41235ms)
+✔ preserves the existing collector owner exclusion before parsing and hashing (58.630579ms)
+✔ malformed torn data cannot become an intact zero (56.850498ms)
+✔ malformed broken data cannot become an intact zero (59.629197ms)
+✔ malformed null data cannot become an intact zero (63.449853ms)
+✔ malformed array data cannot become an intact zero (64.033332ms)
+✔ malformed naive data cannot become an intact zero (60.071361ms)
+✔ malformed outcome data cannot become an intact zero (59.155564ms)
+✔ segment delete after observation requires a fresh collector receipt (64.896678ms)
+✔ segment rewrite after observation requires a fresh collector receipt (70.020058ms)
+✔ segment append after observation requires a fresh collector receipt (68.085254ms)
+✔ segment duplicate after observation requires a fresh collector receipt (66.498451ms)
+✔ segment rotate after observation requires a fresh collector receipt (67.919741ms)
+✔ inconsistent collector baseline fails closed (66.453694ms)
+✔ inconsistent collector coverage fails closed (69.955392ms)
+✔ inconsistent collector continuity fails closed (67.713183ms)
+✔ inconsistent collector gap fails closed (63.738134ms)
+✔ inconsistent collector counts fails closed (67.222715ms)
+✔ inconsistent collector timestamp fails closed (76.737477ms)
+✔ inconsistent collector window fails closed (69.990891ms)
+✔ inconsistent collector source fails closed (63.051956ms)
+✔ inconsistent collector collector fails closed (62.247709ms)
+✔ inconsistent collector readiness fails closed (62.163524ms)
+✔ missing or malformed receipt cannot infer continuity from old events (68.814988ms)
+✔ a stale or future receipt cannot qualify and timestamps retain microseconds (59.698534ms)
+✔ reads all inputs without writing and CLI status distinguishes unmet evidence (145.514196ms)
+✔ fresh observed legitimate refusals remain unmet after successful retries in both lanes (110.755153ms)
+✔ a refusal ages out only after a fresh observation with every archive retained (111.628437ms)
+✔ fresh observations after deploying changed provision.py cannot inherit the previous seven-day baseline (159.349845ms)
+✔ fresh observations after deploying changed followup_evidence.py cannot inherit the previous seven-day baseline (157.55896ms)
+✔ fresh zero-refusal observation preserves the baseline at the two-hour collector limit (113.310202ms)
+✔ fresh zero-refusal observation resets the baseline at the two-hour collector limit (155.309198ms)
+✔ a fresh collector observation after archive loss cannot qualify a zero-refusal window (109.824542ms)
+✔ fresh observation preserves rotated archives with an empty active segment (144.280091ms)
+✔ fresh observation preserves rotated archives with repeated refusals (145.810754ms)
+✔ source absence and nonregular segments are UNKNOWN without following symlinks (58.58224ms)
+✔ malformed receipt segment retains an unmet zero in CLI output (88.796689ms)
+✔ malformed receipt segment retains all refusals in CLI output (92.358221ms)
+✔ rejects malformed empty counts [] (58.852954ms)
+✔ rejects malformed empty counts "" (59.27973ms)
+✔ rejects malformed empty counts 0 (57.085957ms)
+✔ rejects malformed empty counts null (58.177098ms)
+✔ compares relative collector segment paths by their filesystem identity (56.868297ms)
+✖ runtime directory aliases retain a qualifying observation (143.116398ms)
+✖ runtime directory aliases retain every refusal (150.943029ms)
+✔ rejects an unrelated zero ledger when the writer is outside (58.095951ms)
+✔ rejects an unrelated zero ledger when the writer is renamed (58.201016ms)
+✔ rejects an unrelated zero ledger with a separate writer configured runtime (84.563882ms)
+✔ rejects an unrelated zero ledger with a separate writer home runtime (83.874898ms)
+✔ explicit writer path overrides the runtime directory when unobserved (257.692523ms)
+✔ explicit writer path overrides the runtime directory when observed (259.143121ms)
+ℹ tests 53
+ℹ suites 0
+ℹ pass 51
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4794.297843
+
+✖ failing tests:
+
+test at tests/test_audit_provision_ledger.js:551:3
+✖ runtime directory aliases retain a qualifying observation (143.116398ms)
+  AssertionError [ERR_ASSERTION]: provision: baseline = 2026-11-05T02:25:12.381000+00:00
+  provision: checked_at = 2026-11-12T02:25:12.381000+00:00
+  provision: counted_through = 2026-11-12T02:25:12.381000+00:00
+  provision: coverage = UNKNOWN
+  provision: segments = 2; malformed_lines=0
+  provision: failed(branch-held|branch-exists) = 0 over 7d
+  provision: ledger evidence = unmet acceptance
+  provision: UNKNOWN: writer ledger is not included in the collector directory and observation
+  provision: UNKNOWN: active/archive segments differ from the collector observation
+  provision: native/full-verifier/mirror acceptance requires separate receipts
+  {
+    "schema_version": 1,
+    "deployment_acceptance_verified": false,
+    "reporter_sha256": "cce7d18d678ee6882785158ccf7e57d594329fb9b64da6f998fd17d67ed2d90e",
+    "coverage": "UNKNOWN",
+    "continuous_since": "2026-11-05T02:25:12.381000+00:00",
+    "checked_at": "2026-11-12T02:25:12.381000+00:00",
+    "counts": {},
+    "branch_refusals": 0,
+    "malformed_lines": 0,
+    "segments": [
+      {
+        "path": "/tmp/provision-ledger-audit-A4Sh3s/provision-events.ndjson",
+        "lines": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0,
+        "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "/tmp/provision-ledger-audit-A4Sh3s/provision-events.ndjson.old",
+        "lines": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0,
+        "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "continuity_failures": [
+      "writer ledger is not included in the collector directory and observation",
+      "active/archive segments differ from the collector observation"
+    ],
+    "evidence_ready": false,
+    "receipt_sha256": "b25d15f248eb9d1e488cce920189faadd9fb839231a8c3a5a5c1972b30499c76",
+    "counted_through": "2026-11-12T02:25:12.381000+00:00",
+    "instrument_sha256": "0b9eb004a9fc8c162a595098bfbdf3c1a1c4f8a33ee6757b0257f407031d9de9",
+    "collector_sha256": "65fa782ef1899c4105110ea9b19654a62dd4d643a8d63512d93be2d9bc1bfe0b"
+  }
+  
+  
+  1 !== 0
+  
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_audit_provision_ledger.js:574:14)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/test_audit_provision_ledger.js:551:3
+✖ runtime directory aliases retain every refusal (150.943029ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'UNKNOWN'
+  - 'continuous'
+  
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_audit_provision_ledger.js:577:14)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'UNKNOWN',
+    expected: 'continuous',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

@@ -33,6 +33,16 @@ segment, including archives when the active filename is absent. It does not
 write state, rotate ledgers, run a collector, publish evidence or acquire a
 production writer lock.
 
+For the post-deployment check, append `--observed-after "$deployment_completed_at"`,
+using the timezone-qualified completion timestamp from the deployment evidence.
+The collector receipt must be strictly later than that timestamp. A recent receipt
+from before deployment, an equal timestamp, or an invalid boundary keeps acceptance
+unmet while retaining the refusal counts. The boundary is printed and retained as
+`observed_after` in the JSON report; it does not change the counting window or
+establish deployment identity. Wait for the existing hourly collector to observe
+the installed generation before retrying. The two-argument reporting command
+remains available without this additional ordering requirement.
+
 Counts preserve duplicate events and legitimate dirty/live-holder refusals.
 The existing collector's owner exclusion applies before parsing and hashing,
 as it does in `followup_evidence.eligible_lines`; this report introduces no new

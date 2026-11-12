@@ -1,0 +1,5 @@
+Command: ['/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3', '-m', 'pip', 'install', '--disable-pip-version-check', '--retries', '0', '--timeout', '10', '--target', '/tmp/orch-1365-prerequisite-packages', 'pytest', 'black']
+Exit: 1
+WARNING: The directory '/home/runner/.cache/pip' or its parent directory is not owned or is not writable by the current user. The cache has been disabled. Check the permissions and owner of that directory. If executing pip with sudo, you should use sudo's -H flag.
+ERROR: Could not find a version that satisfies the requirement pytest (from versions: none)
+ERROR: No matching distribution found for pytest
