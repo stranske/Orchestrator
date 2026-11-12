@@ -17,18 +17,28 @@ import runtime_ac_panel as panel
 
 @pytest.fixture(autouse=True)
 def isolated_runtime(monkeypatch, tmp_path):
+    """Isolate state directories, feedback database, argv, and subprocesses."""
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path / "runtime"))
     monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    monkeypatch.setattr(sys, "argv", list(sys.argv))
+
+    def unexpected_process(*args, **kwargs):
+        pytest.fail(f"unexpected process start: {args!r}")
+
+    monkeypatch.setattr(supervisor.subprocess, "run", unexpected_process)
+    monkeypatch.setattr(supervisor.subprocess, "Popen", unexpected_process)
 
 
 def _spec_and_gate():
+    """Return a valid runtime AC spec and passing gate evaluation."""
     spec = runtime_ac._valid_spec()
     gate = runtime_ac.evaluate_results(spec, {"check_results": panel._all_check_results(spec)})
     return spec, gate
 
 
 def test_panel_prompt_normalization_parsing_and_dispatch(monkeypatch):
+    """Verify review prompt generation, normalization, JSON parsing, and reviewer dispatch."""
     spec, gate = _spec_and_gate()
     monkeypatch.setattr(feedback, "active_evidence_types", lambda: [])
     assert "none currently registered" in panel.build_review_prompt(spec, gate)
@@ -87,6 +97,7 @@ def test_panel_prompt_normalization_parsing_and_dispatch(monkeypatch):
 
 
 def test_relearn_report_error_dry_run_formatting_and_cli(monkeypatch, capsys):
+    """Verify relearn report dry-run formatting, error fallbacks, and CLI execution."""
     monkeypatch.setattr(relearn_report, "_role_priors_from_registry", lambda _priors: {})
     assert relearn_report.priors_from_route_table(
         {"x": {"neutral_prior": True, "agents": [{"agent": "a"}]}}
@@ -168,6 +179,7 @@ def test_relearn_report_error_dry_run_formatting_and_cli(monkeypatch, capsys):
 
 
 def test_keepalive_supervisor_hermetic_closure_and_offline_paths(monkeypatch, tmp_path, capsys):
+    """Verify keepalive supervisor closure helpers, offline paths, and CLI output."""
     commands = []
 
     def run(command, **_kwargs):
@@ -243,3 +255,564 @@ def test_keepalive_supervisor_hermetic_closure_and_offline_paths(monkeypatch, tm
     )
     assert supervisor.main(["--signals-json", str(signals), "--json"]) == 0
     assert '"next_step": "operator_inspect"' in capsys.readouterr().out
+
+
+def test_panel_adjudication_recording_and_cli_paths(monkeypatch, tmp_path, capsys):
+    """Verify panel adjudication feedback recording and CLI adjudicate, prompt, and dispatch modes."""
+    spec = runtime_ac._valid_spec()
+    gate = runtime_ac.evaluate_results(spec, {"check_results": panel._all_check_results(spec)})
+
+    recorded_calls = []
+
+    def mock_record_outcome(run_id, verifier_verdict, notes):
+        recorded_calls.append(("record_outcome", run_id, verifier_verdict, notes))
+        return {}
+
+    def mock_record_evidence_gap(run_id, reviewer, gap):
+        recorded_calls.append(("record_evidence_gap", run_id, reviewer, gap))
+        return {}
+
+    def mock_record_evidence_type_citations(names):
+        recorded_calls.append(("record_evidence_type_citations", names))
+        return names
+
+    monkeypatch.setattr(feedback, "record_outcome", mock_record_outcome)
+    monkeypatch.setattr(feedback, "record_evidence_gap", mock_record_evidence_gap)
+    monkeypatch.setattr(
+        feedback, "record_evidence_type_citations", mock_record_evidence_type_citations
+    )
+
+    reviews_pass = {
+        "reviews": [
+            {
+                "reviewer": "vibe",
+                "verdict": "PASS",
+                "confidence": 0.8,
+                "ac_assessments": [
+                    {"ac_id": "AC1", "status": "PASS", "reason": "evidence present"}
+                ],
+            },
+            {
+                "reviewer": "gemini",
+                "verdict": "PASS",
+                "confidence": 0.9,
+                "ac_assessments": [
+                    {"ac_id": "AC2", "status": "PASS", "reason": "evidence present"}
+                ],
+            },
+        ]
+    }
+
+    panel_result = panel.adjudicate_panel(spec, gate, reviews_pass)
+    assert panel_result["verdict"] == "PASS"
+    assert panel_result["verifier_verdict"] == "PASS_RUNTIME_AC"
+
+    run_id = "test-run-1232-adjudication"
+
+    # First recording phase - clear spies before
+    recorded_calls.clear()
+    record_result = panel.record_panel_verdict(run_id, panel_result)
+    assert record_result["run_id"] == run_id
+    assert record_result["verifier_verdict"] == "PASS_RUNTIME_AC"
+    assert record_result["recorded"] is True
+    assert len(recorded_calls) >= 1
+    assert any(call[0] == "record_outcome" for call in recorded_calls)
+    # Assert exact outcome tuple
+    outcome_calls = [c for c in recorded_calls if c[0] == "record_outcome"]
+    assert len(outcome_calls) == 1
+    assert outcome_calls[0] == (
+        "record_outcome",
+        run_id,
+        "PASS_RUNTIME_AC",
+        f"runtime_ac_panel: PASS_RUNTIME_AC - {panel_result['reason']}",
+    )
+
+    # Second recording phase - clear spies before
+    recorded_calls.clear()
+    record_result_gaps = panel.record_panel_verdict(
+        run_id,
+        {
+            **panel_result,
+            "evidence_gaps": [
+                {"reviewer": "vibe", "gap": "missing trace"},
+                {"reviewer": "gemini", "gap": "missing logs"},
+            ],
+            "evidence_type_citations": [{"name": "trace"}, {"name": "log"}],
+        },
+    )
+    assert record_result_gaps["evidence_gaps"] == 2
+    assert any(call[0] == "record_evidence_gap" for call in recorded_calls)
+    assert any(call[0] == "record_evidence_type_citations" for call in recorded_calls)
+
+    # Assert ordered gap tuples with runtime_ac_panel reviewer prefixes
+    gap_calls = [c for c in recorded_calls if c[0] == "record_evidence_gap"]
+    assert len(gap_calls) == 2
+    # Gaps should be ordered as provided
+    assert gap_calls[0] == ("record_evidence_gap", run_id, "runtime_ac_panel:vibe", "missing trace")
+    assert gap_calls[1] == (
+        "record_evidence_gap",
+        run_id,
+        "runtime_ac_panel:gemini",
+        "missing logs",
+    )
+
+    # Assert exact citation names
+    citation_calls = [c for c in recorded_calls if c[0] == "record_evidence_type_citations"]
+    assert len(citation_calls) == 1
+    assert citation_calls[0][1] == ["trace", "log"]
+
+    spec_file = tmp_path / "spec.json"
+    gate_file = tmp_path / "gate.json"
+    reviews_file = tmp_path / "reviews.json"
+    spec_file.write_text(json.dumps(spec))
+    gate_file.write_text(json.dumps(gate))
+    reviews_file.write_text(json.dumps(reviews_pass))
+
+    assert (
+        panel.main(
+            [
+                "--adjudicate",
+                str(spec_file),
+                "--gate",
+                str(gate_file),
+                "--reviews",
+                str(reviews_file),
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    assert (
+        panel.main(
+            ["--prompt", str(spec_file), "--gate", str(gate_file), "--reviewer", "test-reviewer"]
+        )
+        == 0
+    )
+    output = capsys.readouterr().out
+    assert "STRICT JSON" in output
+    assert '"reviewer": "test-reviewer"' in output
+
+    monkeypatch.setattr(
+        panel,
+        "dispatch_reviewers",
+        lambda *args, **kwargs: {
+            "review_doc": reviews_pass,
+            "dispatches": [{"agent": "vibe", "parsed": True}],
+        },
+    )
+
+    # Third recording phase - clear spies before dispatch
+    recorded_calls.clear()
+    assert (
+        panel.main(
+            [
+                "--dispatch",
+                str(spec_file),
+                "--gate",
+                str(gate_file),
+                "--reviewers",
+                "vibe",
+                "--record-run-id",
+                run_id,
+            ]
+        )
+        == 0
+    )
+
+    # Assert dispatch creates its own expected outcome
+    dispatch_outcome_calls = [c for c in recorded_calls if c[0] == "record_outcome"]
+    assert dispatch_outcome_calls == [
+        (
+            "record_outcome",
+            run_id,
+            "PASS_RUNTIME_AC",
+            "runtime_ac_panel: PASS_RUNTIME_AC - pass ratio 2/2 met threshold 0.67",
+        )
+    ]
+
+    monkeypatch.setattr(
+        panel,
+        "dispatch_reviewers",
+        lambda *args, **kwargs: {
+            "review_doc": {"reviews": [{"reviewer": "vibe", "verdict": "FAIL"}]},
+            "dispatches": [{"agent": "vibe", "parsed": True}],
+        },
+    )
+    assert (
+        panel.main(
+            [
+                "--dispatch",
+                str(spec_file),
+                "--gate",
+                str(gate_file),
+                "--reviewers",
+                "vibe",
+            ]
+        )
+        == 1
+    )
+
+
+def test_runtime_ac_panel_coerce_reviews_and_edge_cases(monkeypatch):
+    """Verify review list coercion and invalid review rejection during panel adjudication."""
+    spec = runtime_ac._valid_spec()
+    gate = runtime_ac.evaluate_results(spec, {"check_results": panel._all_check_results(spec)})
+
+    empty_doc = {"reviews": []}
+    coerced = panel.coerce_reviews(empty_doc)
+    assert coerced == []
+
+    doc_with_invalid = {"reviews": [None, "invalid", {"verdict": "PASS"}]}
+    coerced_invalid = panel.coerce_reviews(doc_with_invalid)
+    assert len(coerced_invalid) == 3
+
+    # Call adjudicate_panel with doc_with_invalid and require ValueError matching 'must be an object'
+    with pytest.raises(ValueError, match="must be an object"):
+        panel.adjudicate_panel(spec, gate, doc_with_invalid)
+
+    doc_with_valid = {
+        "reviews": [
+            {"reviewer": "vibe", "verdict": "PASS"},
+            {"reviewer": "gemini", "verdict": "FAIL"},
+        ]
+    }
+    coerced_valid = panel.coerce_reviews(doc_with_valid)
+    assert len(coerced_valid) == 2
+
+    panel_result = panel.adjudicate_panel(spec, gate, doc_with_valid)
+    assert panel_result["n_reviews"] == 2
+    assert panel_result["verdict"] == "NEEDS_REVIEW"
+    assert panel_result["counts"] == {"FAIL": 1, "NEEDS_REVIEW": 0, "PASS": 1}
+
+    with pytest.raises(ValueError, match="review JSON must be"):
+        panel.coerce_reviews("invalid")
+
+
+def test_relearn_report_build_report_and_ordering(monkeypatch):
+    """Verify report construction, deterministic row ordering tiebreaks, and human formatting."""
+    monkeypatch.setattr(relearn_report, "_role_priors_from_registry", lambda _priors: {})
+
+    built = relearn_report.build_report(
+        window_days=7,
+        dry_run=True,
+        route_table={
+            "task1": {
+                "neutral_prior": True,
+                "agents": [{"agent": "agent1"}, {"agent": "agent2"}],
+            }
+        },
+    )
+    assert built["dry_run"] is True
+    assert built["window_days"] == 7
+    assert built["tasks"][0]["prior_order"] == ["agent1", "agent2"]
+
+    report = {
+        "dry_run": False,
+        "learner": "test-learner",
+        "window_days": 7,
+        "new_version": 2,
+        "previous_version": 1,
+        "learner_note": "test note",
+        "cost_telemetry": {"task1": {"measured": True, "coverage": 0.95}},
+        "tasks": [
+            {
+                "task_type": "task1",
+                "diverges_from_prior": False,
+                "prior_order": ["agent1", "agent2"],
+                "learned_order": ["agent1", "agent2"],
+                "previous_order": ["agent1", "agent2"],
+                "note": "stable",
+                "rows": [
+                    {
+                        "agent": "agent1",
+                        "posterior": 0.8,
+                        "score": 0.85,
+                        "n_obs": 10,
+                        "learned_rank": 1,
+                        "prior_rank_delta": 0,
+                        "previous_rank_delta": 0,
+                    },
+                    {
+                        "agent": "agent2",
+                        "posterior": 0.7,
+                        "score": 0.75,
+                        "n_obs": 8,
+                        "learned_rank": 2,
+                        "prior_rank_delta": 0,
+                        "previous_rank_delta": 0,
+                    },
+                ],
+            }
+        ],
+    }
+
+    ordered_rows = relearn_report._ordered_rows(
+        [
+            {"agent": "agent2", "score": 0.75},
+            {"agent": "agent1", "score": 0.85},
+        ],
+        ["agent1", "agent2"],
+    )
+    assert ordered_rows[0]["agent"] == "agent1"
+    assert ordered_rows[1]["agent"] == "agent2"
+
+    # Prior order opposes both input and alphabetical order.
+    equal_score_rows = relearn_report._ordered_rows(
+        [
+            {"agent": "alpha", "score": 0.85},
+            {"agent": "zebra", "score": 0.85},
+        ],
+        ["zebra", "alpha"],
+    )
+    assert [row["agent"] for row in equal_score_rows] == ["zebra", "alpha"]
+
+    # Test with equal scores and alphabetical tiebreaker
+    # When prior ranks are equal (both not in prior_order), alphabetical order is used
+    equal_score_alpha = relearn_report._ordered_rows(
+        [
+            {"agent": "zebra", "score": 0.85},
+            {"agent": "alpha", "score": 0.85},
+        ],
+        ["agent1", "agent2"],
+    )
+    assert equal_score_alpha[0]["agent"] == "alpha"
+    assert equal_score_alpha[1]["agent"] == "zebra"
+
+    human_output = relearn_report.format_human(report)
+    assert "test-learner" in human_output
+    assert "window_days=7" in human_output
+    assert "task1" in human_output
+
+
+def test_keepalive_supervisor_plan_target_and_closure(monkeypatch, tmp_path):
+    """Verify keepalive supervisor planning for both blocked and eligible escalation signals."""
+    signals_blocked = {
+        "target": "stranske/Orchestrator#1234",
+        "pr_state": "open",
+        "labels": [supervisor.KEEPALIVE_LABEL],
+        "title": "Test issue",
+        "body": "Test body",
+    }
+    signals = {
+        **signals_blocked,
+        "labels": [supervisor.KEEPALIVE_LABEL, "needs-human"],
+    }
+
+    gather_signals_calls = []
+
+    def recording_gather_signals(target):
+        gather_signals_calls.append(target)
+        return signals
+
+    monkeypatch.setattr(supervisor.keepalive_shadow, "gather_signals", recording_gather_signals)
+    monkeypatch.setattr(
+        supervisor.keepalive_shadow, "shadow_decide", lambda _signals: {"shadow_action": "wait"}
+    )
+    monkeypatch.setattr(supervisor, "build_redirect_report", lambda *_args: {"report": "safe"})
+
+    blocked_plan = supervisor.plan_for_signals(
+        signals_blocked, report_json_path=tmp_path / "blocked-report.json"
+    )
+    assert blocked_plan["next_step"] == "do_not_intervene"
+    assert blocked_plan["proposal_command"] is None
+
+    plan = supervisor.plan_for_signals(signals, report_json_path=tmp_path / "report.json")
+    assert "next_step" in plan
+    assert "proposal_command" in plan
+    # Assert operator_inspect, eligible=True, blockers=[], direct report existence
+    assert plan["next_step"] == "operator_inspect"
+    assert plan["eligible"] is True
+    assert plan["eligibility"]["blockers"] == []
+    assert plan["report_written"] is not None
+    assert (tmp_path / "report.json").exists()
+    # Assert the exact --report-json/--ac/--dispatch command suffix
+    # Command structure: [..., '--report-json', '<path>', '--ac', '<value>', '--dispatch']
+    assert plan["proposal_command"][-5:] == [
+        "--report-json",
+        str(tmp_path / "report.json"),
+        "--ac",
+        supervisor.DEFAULT_AC,
+        "--dispatch",
+    ]
+
+    plan_target_result = supervisor.plan_target(
+        signals["target"],
+        report_dir=tmp_path,
+    )
+    assert plan_target_result["next_step"] == "operator_inspect"
+    assert plan_target_result["report_written"] is not None
+    assert (tmp_path / "stranske__Orchestrator__1234.keepalive-supervisor-report.json").exists()
+    assert gather_signals_calls == [signals["target"]]
+
+    eligible = supervisor.eligibility(signals)
+    assert "eligible" in eligible
+    assert "blockers" in eligible
+    assert eligible["eligible"] is True
+    assert eligible["blockers"] == []
+
+    label_set = supervisor._label_set(signals)
+    assert supervisor.KEEPALIVE_LABEL in label_set
+
+
+def test_runtime_ac_panel_substantiated_veto_and_normalize(monkeypatch):
+    """Verify substantiated veto severity thresholds, status normalization, and confidence clamping."""
+    review_pass = {
+        "reviewer": "test",
+        "verdict": "PASS",
+        "confidence": 0.8,
+        "rationale": "",
+        "ac_assessments": [],
+        "blockers": [{"ac_id": "AC1", "severity": "medium", "finding": "issue"}],
+        "evidence_gaps": [],
+        "cited_evidence_types": [],
+        "cited_evidence_contracts": [],
+    }
+    assert panel._substantiated_veto(review_pass) is False
+
+    review_fail_no_veto = {
+        "reviewer": "test",
+        "verdict": "FAIL",
+        "confidence": 0.8,
+        "rationale": "",
+        "ac_assessments": [],
+        "blockers": [{"ac_id": "AC1", "severity": "low", "finding": "issue"}],
+        "evidence_gaps": [],
+        "cited_evidence_types": [],
+        "cited_evidence_contracts": [],
+    }
+    assert panel._substantiated_veto(review_fail_no_veto) is False
+
+    review_fail_with_veto = {
+        "reviewer": "test",
+        "verdict": "FAIL",
+        "confidence": 0.8,
+        "rationale": "",
+        "ac_assessments": [],
+        "blockers": [{"ac_id": "AC1", "severity": "high", "finding": "issue"}],
+        "evidence_gaps": [],
+        "cited_evidence_types": [],
+        "cited_evidence_contracts": [],
+    }
+    assert panel._substantiated_veto(review_fail_with_veto) is True
+
+    assert panel._normalize_status("PASS") == "PASS"
+    assert panel._normalize_status("pass") == "PASS"
+    assert panel._normalize_status("FAIL") == "FAIL"
+    assert panel._normalize_status("invalid") == "NEEDS_REVIEW"
+    assert panel._normalize_status(None) == "NEEDS_REVIEW"
+
+    assert panel._clamp_confidence(0.5) == 0.5
+    assert panel._clamp_confidence(1.5) == 1.0
+    assert panel._clamp_confidence(-0.5) == 0.0
+    assert panel._clamp_confidence("0.5") == 0.5
+    assert panel._clamp_confidence("invalid") == 0.0
+
+
+def test_relearn_report_priors_and_blend(monkeypatch):
+    """Verify prior extraction from route tables and Bradley-Terry prior blending."""
+    monkeypatch.setattr(relearn_report, "_role_priors_from_registry", lambda _priors: {})
+
+    route_table = {
+        "task1": {
+            "neutral_prior": False,
+            "agents": [
+                {"agent": "agent1"},
+                {"agent": "agent2"},
+                {"agent": "agent3"},
+            ],
+        },
+        "task2": {
+            "neutral_prior": True,
+            "agents": [
+                {"agent": "agentA"},
+            ],
+        },
+    }
+    priors = relearn_report.priors_from_route_table(route_table)
+    assert "task1" in priors
+    assert "task2" in priors
+    assert priors["task1"]["agent1"] == 0.70
+    assert priors["task1"]["agent2"] == 0.65
+    assert priors["task1"]["agent3"] == 0.60
+    assert priors["task2"]["agentA"] == 0.5
+
+    blended = relearn_report.blend_bt_priors(
+        {"task1": {"agent1": 0.7, "agent2": 0.65}},
+        bt_fn=lambda **_k: {"ready": False},
+    )
+    assert blended == {}
+
+    ready_priors = {"task1": {"agent1": 0.7, "agent2": 0.65}}
+    blended_ready = relearn_report.blend_bt_priors(
+        ready_priors,
+        bt_fn=lambda **_k: {
+            "ready": True,
+            "strengths": {"agent2": 0.9},
+            "comparisons": 10,
+        },
+    )
+    assert "task1" in blended_ready
+    assert blended_ready["task1"] == 10
+    assert ready_priors["task1"]["agent2"] == pytest.approx(0.675)
+
+
+def test_keepalive_supervisor_repo_num_and_eligibility(monkeypatch):
+    """Verify target repository/number parsing and keepalive eligibility blockers."""
+    repo, num = supervisor._repo_num("stranske/Orchestrator#1334")
+    assert repo == "stranske/Orchestrator"
+    assert num == "1334"
+
+    with pytest.raises(ValueError, match="target must be"):
+        supervisor._repo_num("invalid")
+
+    signals_open = {
+        "target": "stranske/Orchestrator#1334",
+        "pr_state": "open",
+        "labels": [supervisor.KEEPALIVE_LABEL, "needs-human"],
+        "title": "Test",
+        "body": "Test",
+    }
+    eligible = supervisor.eligibility(signals_open)
+    assert eligible["eligible"] is True
+    assert len(eligible["blockers"]) == 0
+
+    signals_closed = {
+        "target": "stranske/Orchestrator#1334",
+        "pr_state": "closed",
+        "labels": [supervisor.KEEPALIVE_LABEL, "needs-human"],
+        "title": "Test",
+        "body": "Test",
+    }
+    eligible_closed = supervisor.eligibility(signals_closed)
+    assert eligible_closed["eligible"] is False
+    assert "pr_not_open" in eligible_closed["blockers"]
+
+    signals_no_label = {
+        "target": "stranske/Orchestrator#1334",
+        "pr_state": "open",
+        "labels": ["needs-human"],
+        "title": "Test",
+        "body": "Test",
+    }
+    eligible_no_label = supervisor.eligibility(signals_no_label)
+    assert eligible_no_label["eligible"] is False
+    assert "missing_agents_keepalive_label" in eligible_no_label["blockers"]
+
+
+def test_keepalive_supervisor_proposal_backend(monkeypatch, tmp_path):
+    """Verify keepalive supervisor proposal command suffix when a proposal backend is specified."""
+    signals = {
+        "target": "stranske/Orchestrator#1334",
+        "pr_state": "open",
+        "labels": [supervisor.KEEPALIVE_LABEL, "needs-human"],
+    }
+    monkeypatch.setattr(
+        supervisor.keepalive_shadow, "shadow_decide", lambda _s: {"shadow_action": "wait"}
+    )
+    monkeypatch.setattr(supervisor, "build_redirect_report", lambda *_a: {"report": "safe"})
+    plan = supervisor.plan_for_signals(
+        signals, report_json_path=tmp_path / "report.json", proposal_backend="codex"
+    )
+    assert plan["proposal_command"][-3:] == ["--backend", "codex", "--dispatch"]
+    assert plan["stage2_record_command"] == plan["proposal_command"] + ["--record-corpus", "--json"]
