@@ -719,14 +719,12 @@ _PROBE_CONNECTION_PATTERNS = (
     r"dial tcp",
 )
 _PROBE_AUTH_API_PATTERNS = (
-    r"\bHTTP [45]\d\d\b",
+    r"\bHTTP(?:/\d+(?:\.\d+)?)?[ \t]+[45]\d{2}\b",
     r"bad credentials",
     r"requires authentication",
     r"gh auth login",
     r"authentication failed",
     r"unauthorized",
-    r"\b401\b",
-    r"\b403\b",
 )
 
 
@@ -776,7 +774,8 @@ def _classify_sandbox_probe(returncode: int, stdout: str, stderr: str) -> dict:
     """Timeout is decided by the caller. DNS and connection are networkless.
 
     An authentication or API rejection means the sandbox reached GitHub, so it
-    must not select the workspace-write fallback.
+    must not select the workspace-write fallback. A numeric code alone could
+    be a port in a DNS or connection diagnostic; require HTTP status context.
     """
     text = f"{stdout}\n{stderr}"
     detail = text.strip()[:300]

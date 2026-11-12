@@ -217,3 +217,43 @@ The focused sandbox suite on the inspected head collected 31 tests and passed
 in 5.69 seconds with `/opt/anaconda3/bin/python3`. `src/verify.py` invokes the full
 local suite, so this round left that portion of A1 unverified under the local test
 restriction. T7, A3, and A4 remain unverified.
+
+## Closer repair — 2026-11-11
+
+Check started at 23:35:16 UTC from `495fd9dc`. Stop after two repair attempts
+or at 23:55:16 UTC, whichever comes first. The focused outcome is zero sandbox
+test failures in under two minutes, including permitted fallback for DNS port
+401 and TCP port 403 diagnostics and read-only selection for HTTP rejections.
+Run `/opt/anaconda3/bin/python3 -m pytest tests/test_dispatcher_offload.py -k sandbox`
+to reproduce and check the outcome.
+
+- [Before the fix](closer-repair-20261111/classifier-before.txt): exit 1, 36
+  collected, 33 passed and 3 failed in 5.96 seconds. Both transport errors and
+  an unknown diagnostic containing `403` were classified as `auth_or_api`.
+- [After the fix](closer-repair-20261111/sandbox.txt): exit 0, 36 collected and
+  passed in 5.63 seconds (6.674 seconds elapsed).
+- [Mutation and restoration](closer-repair-20261111/mutation/result.json): the
+  selected interpreter returned exit 0, 1, and 0. The forced-availability run
+  failed `test_sandbox_network_failure_falls_back_to_workspace_write` with
+  `workspace-write and the fallback preamble are absent`. The restored run
+  passed all 36 tests in 5.57 seconds. The receipt binds the results to the
+  dispatcher and test file SHA-256 hashes.
+- A1 is **unverified** at publication pending a retained exit code for the
+  direct `<CI-selected absolute interpreter> src/verify.py` command. See the
+  repair PR body for the CI disposition. Normal PR CI uses shards and an
+  aggregate. The direct full suite was not run locally.
+
+[#1355](https://github.com/stranske/Orchestrator/pull/1355) merged at
+2026-11-11T23:07:02Z (`4da3722c`). Its `switch_review.py` accepts an explicit
+exclusive `--until` with `--since`. The default end remains seven days after
+`--since`. This supersedes the earlier pending implementation status above.
+
+T7 and A3 (live rate-limit JSON, selected sandbox and matching terminal ledger
+record) and A4 (fallback and network-caused incompletion counts over seven
+actual days) remain **deferred and unverified**. Use the live command from
+keepalive round 2 in the normal merged runtime. Once the actual seven-day window
+from #1355 has elapsed, retain the report for both UTC bounds:
+
+```sh
+/opt/anaconda3/bin/python3 src/switch_review.py --assess-sandbox-fallback --since 2026-11-11T23:07:02Z --until 2026-11-18T23:07:02Z --json
+```
