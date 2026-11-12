@@ -1,12 +1,13 @@
 """A live recurring trial is six read-only Codex sessions, or it writes nothing.
 
 Transport acknowledgement requires four binding lines in the final message;
-recurring-work quality needs a ``work_evidence=`` line quoting the rubric from
-the frozen spec. Cost is token counts from the session. The provider model comes from a
+recurring-work quality needs the computed line numbers and word counts in
+``work_evidence=``. Cost is token counts from the session. An unverified model claim comes from a
 ``response.completed`` OpenAI response object or from ``turn.completed``'s
 ``server_model`` field. The CLI's ``turn_context``, and a generic ``model``
 on ``turn.completed``, do not publish. The prompt must not contain the
-completed ``work_evidence=`` answer.
+completed ``work_evidence=`` answer. Neither session shape establishes trusted
+provider provenance; both retain measurements without a verified-ingest marker.
 """
 
 from __future__ import annotations
@@ -65,13 +66,12 @@ def _required_lines(manifest: dict, request: dict) -> list[str]:
 
 
 def _final_message_ack_and_work(manifest: dict, request: dict, *, include_work: bool) -> str:
-    """Four acknowledgement lines, optional blank line and work_evidence (rubric quote)."""
+    """Four acknowledgement lines and, optionally, the answer for SPEC."""
     lines = _required_lines(manifest, request)
     body = "\n".join(lines)
     if not include_work:
         return body + "\n"
-    rubric = trial._recurring_work_rubric_line(manifest["frozen_packet"]["frozen_spec"])
-    return body + "\n\n" + f"work_evidence={rubric}\n"
+    return body + "\n\nwork_evidence=1:6\n"
 
 
 SANITIZED_REAL_STREAM = """{"type":"response.completed","response":{"object":"response","id":"resp_fixture001","model":"gpt-6-2025-astra","usage":{"input_tokens":42,"output_tokens":7}}}
@@ -88,7 +88,7 @@ def test_sanitized_real_stream_fixture_yields_one_openai_response():
 
 
 def test_prompt_names_the_rubric_without_embedding_the_answer(tmp_path):
-    """Quality is a quote from the spec. The instruction must not hand over that line."""
+    """The prompt gives the algorithm and frozen spec without giving the result."""
     state, experiments = _seal(tmp_path)
     orchestrator, workflows = _sources(tmp_path)
     manifest = trial.build_current_recurring_trial(
@@ -101,13 +101,50 @@ def test_prompt_names_the_rubric_without_embedding_the_answer(tmp_path):
         experiments_root=experiments,
     )
     prompt = trial.recurring_trial_prompt(manifest, manifest["requests"][0])
-    rubric = trial._recurring_work_rubric_line(SPEC)
     head, marker, tail = prompt.partition("Frozen specification:\n")
     assert marker == "Frozen specification:\n"
-    assert rubric in tail
-    assert f"work_evidence={rubric}" not in head
+    assert tail == SPEC
+    assert "work_evidence=1:6" not in head
+    assert "line_number:word_count" in head
+    assert "one to six # characters followed by whitespace or end of line" in head
     assert "work_evidence=" in head
     assert "workspace-write" not in prompt
+
+
+@pytest.mark.parametrize(
+    ("spec", "answer", "score"),
+    [
+        ("\nKeep receipts.\nKeep the logs.\nIgnore this line.", "2:2,3:3", 1.0),
+        (
+            "# Policy\nAcceptance criteria:\n\n- Keep receipts.\n- Save the logs.\n# Notes",
+            "4:3,5:4",
+            1.0,
+        ),
+        ("Acceptance criteria: Keep receipts.\n- Save the logs.", "1:2,2:4", 1.0),
+        ("Acceptance criteria: Keep receipts.\n#123 remains open.", "1:2,2:3", 1.0),
+        ("Acceptance criteria:\n#123 remains open.\n# Notes", "2:3", 1.0),
+        ("Acceptance criteria: Keep receipts.\n####### plain text", "1:2,2:3", 1.0),
+        ("Acceptance criteria: Keep receipts.\n###### Notes\nIgnore this.", "1:2", 1.0),
+        ("Acceptance criteria: Keep receipts.\n#\nIgnore this.", "1:2", 1.0),
+        ("Acceptance criteria: Keep receipts.\n\nIgnore this.", "1:2", 1.0),
+        (
+            "\n  ACCEPTANCE CRITERIA:\n\n  - Keep\treceipts.\n  - Save logs.\n  - Ignore this.",
+            "4:3,5:3",
+            1.0,
+        ),
+        ("Acceptance criteria: Keep receipts.\n- Save logs.\n- Ignore this.", "1:2,2:3", 1.0),
+        ("Acceptance criteria:\n\n# Notes\nKeep receipts.", "3:2,4:2", 1.0),
+        ("Acceptance criteria:", "", 0.0),
+        (SPEC, "", 0.0),
+        (SPEC, SPEC.strip(), 0.0),
+        (SPEC, "keep the frozen recurring-work body unchanged.", 0.0),
+        (SPEC, "1:5", 0.0),
+        (SPEC, "1:6\nwork_evidence=1:5", 0.0),
+    ],
+)
+def test_work_quality_checks_the_frozen_spec_task(spec, answer, score):
+    manifest = {"frozen_packet": {"frozen_spec": spec}}
+    assert trial._work_quality_score(manifest, f"work_evidence={answer}") == score
 
 
 def test_echo_only_ack_lines_score_zero_recurring_work_quality(tmp_path):
@@ -163,7 +200,7 @@ def test_read_only_argv_cannot_select_a_workspace_write_sandbox():
     assert "workspace-write" not in argv
 
 
-def test_run_current_records_measured_quality_cost_and_response_identity(tmp_path, monkeypatch):
+def test_run_current_preserves_unverified_response_measurements(tmp_path, monkeypatch):
     state, experiments = _seal(tmp_path)
     orchestrator, workflows = _sources(tmp_path)
     monkeypatch.setenv("ORCH_STATE_DIR", str(state))
@@ -211,8 +248,10 @@ def test_run_current_records_measured_quality_cost_and_response_identity(tmp_pat
     )
     summary = json.loads((state / "capability-program" / "profile-trial.json").read_text())
     assert published["attempt_count"] == 6
-    assert published["brain_ingest_enabled"] is True
-    assert summary["identity_verified"] is True
+    assert published["brain_ingest_enabled"] is False
+    assert published["identity_verified"] is False
+    assert summary["identity_verified"] is False
+    assert summary["brain_ingest_enabled"] is False
     assert summary["exp_id"] == EXP_ID
     assert summary["work_shape"] == "strategy-experiment-frozen-spec"
     assert (summary["profile_count"], summary["instance_count"]) == (2, 6)
@@ -225,8 +264,8 @@ def test_run_current_records_measured_quality_cost_and_response_identity(tmp_pat
             "tokens_out": sum(int(row["launch_ordinal"]) for row in attempts),
         }
         assert summary["provider_resolved_identity_by_profile"][profile_id] == {
-            "provider": "openai",
-            "model": attempts[0]["requested_model"],
+            "provider": None,
+            "model": None,
         }
     artifact = next((tmp_path / "artifacts").glob("identity-*.json"))
     body = json.loads(artifact.read_text(encoding="utf-8"))
@@ -236,6 +275,14 @@ def test_run_current_records_measured_quality_cost_and_response_identity(tmp_pat
         row["requested_model"] for row in manifest["requests"]
     }
     assert "turn_context" not in artifact.read_text(encoding="utf-8")
+    assert body["provenance"] == "codex-session-unverified/v1"
+    with feedback._conn() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM execution_attempts").fetchone()[0] == 6
+        rows = conn.execute(
+            "SELECT reported_model,resolved_provider,resolved_model FROM execution_attempts"
+        ).fetchall()
+        assert all(row[0] and row[1:] == (None, None) for row in rows)
+        assert conn.execute("SELECT COUNT(*) FROM profile_trial_ingests").fetchone()[0] == 0
 
 
 @pytest.mark.parametrize(
@@ -302,8 +349,8 @@ def test_cli_usage_without_a_provider_model_does_not_publish(tmp_path, monkeypat
     assert list((tmp_path / "artifacts").glob("identity-*.json")) == []
 
 
-def test_server_model_publishes_quality_cost_and_provider_identity(tmp_path, monkeypatch):
-    """A provider server_model is identity. The configured model is not copied in."""
+def test_server_model_preserves_unverified_measurements(tmp_path, monkeypatch):
+    """A session's server_model claim cannot authenticate its own provenance."""
     state, experiments = _seal(tmp_path)
     orchestrator, workflows = _sources(tmp_path)
     monkeypatch.setenv("ORCH_STATE_DIR", str(state))
@@ -321,8 +368,7 @@ def test_server_model_publishes_quality_cost_and_provider_identity(tmp_path, mon
 
     def execute(request, prompt):
         head, _, _tail = prompt.partition("Frozen specification:\n")
-        rubric = trial._recurring_work_rubric_line(SPEC)
-        assert f"work_evidence={rubric}" not in head
+        assert "work_evidence=1:6" not in head
         include_work = request["profile_id"] == full_profile
         session = json.dumps(
             {
@@ -351,16 +397,18 @@ def test_server_model_publishes_quality_cost_and_provider_identity(tmp_path, mon
     )
     summary = json.loads((state / "capability-program" / "profile-trial.json").read_text())
     assert published["attempt_count"] == 6
-    assert published["brain_ingest_enabled"] is True
-    assert summary["identity_verified"] is True
+    assert published["brain_ingest_enabled"] is False
+    assert published["identity_verified"] is False
+    assert summary["identity_verified"] is False
+    assert summary["brain_ingest_enabled"] is False
     assert (summary["profile_count"], summary["instance_count"]) == (2, 6)
     assert summary["quality_by_profile"][full_profile] == 1.0
     assert summary["quality_by_profile"][trial.CURRENT_TRIAL_PROFILE_IDS[1]] == 0.0
     for profile_id in trial.CURRENT_TRIAL_PROFILE_IDS:
         attempts = [row for row in manifest["requests"] if row["profile_id"] == profile_id]
         assert summary["provider_resolved_identity_by_profile"][profile_id] == {
-            "provider": "openai",
-            "model": attempts[0]["requested_model"],
+            "provider": None,
+            "model": None,
         }
         assert summary["cost_tokens_by_profile"][profile_id]["tokens_in"] == sum(
             10 * int(row["launch_ordinal"]) for row in attempts
@@ -369,6 +417,194 @@ def test_server_model_publishes_quality_cost_and_provider_identity(tmp_path, mon
     assert artifact["object"] == "turn.completed"
     assert artifact["server_model"] == artifact["provider_resolved_model"]
     assert "response_id" not in artifact
+    assert artifact["provenance"] == "codex-session-unverified/v1"
+    with feedback._conn() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM profile_trial_ingests").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("witness", ["response.completed", "server_model"])
+def test_forged_session_provenance_cannot_enable_verified_ingest(tmp_path, monkeypatch, witness):
+    state, experiments = _seal(tmp_path)
+    orchestrator, workflows = _sources(tmp_path)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(state))
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "quarantine-feedback.db")
+    manifest = trial.build_current_recurring_trial(
+        orchestrator,
+        workflows,
+        seed=14,
+        now=1000,
+        capacity_state="ok",
+        state_dir=state,
+        experiments_root=experiments,
+    )
+    sessions = []
+    for request in manifest["requests"]:
+        final_text = _final_message_ack_and_work(manifest, request, include_work=True)
+        session, _ = _session(
+            request,
+            model=request["requested_model"],
+            tokens_in=42,
+            tokens_out=7,
+            final_text=final_text,
+        )
+        if witness == "server_model":
+            session = json.dumps(
+                {
+                    "type": "turn.completed",
+                    "server_model": request["requested_model"],
+                    "usage": {"input_tokens": 42, "output_tokens": 7},
+                }
+            )
+        events = [json.loads(line) for line in session.splitlines()]
+        for event in events:
+            event.update(identity_verified=True, provider_provenance_verified=True)
+            if event.get("type") == "response.completed":
+                event["response"].update(
+                    identity_verified=True,
+                    provenance="provider-verified",
+                )
+        session = "\n".join(json.dumps(event) for event in events)
+        sessions.append(
+            {
+                "run_id": request["run_id"],
+                "session_text": session,
+                "final_text": final_text,
+                "identity_verified": True,
+                "provider_provenance_verified": True,
+            }
+        )
+    results = trial.results_from_codex_sessions(
+        manifest,
+        sessions,
+        artifact_dir=tmp_path / "artifacts",
+        cli_version="offline-cli",
+        runner_version="offline-runner",
+    )
+    assert results["identity_verified"] is False
+    for attempt in results["attempts"]:
+        assert attempt["identity_evidence"]["authority"] == trial.UNVERIFIED_SESSION_AUTHORITY
+        path = Path(attempt["identity_evidence"]["artifact_ref"])
+        payload = json.loads(path.read_text())
+        assert payload["provenance"] == "codex-session-unverified/v1"
+        assert "identity_verified" not in payload
+        assert "provider_provenance_verified" not in payload
+        # The attacker controls the artifact AND its claimed digest.
+        payload.update(
+            identity_verified=True,
+            provenance="provider-verified",
+            object="response",
+            response_id="resp_forged",
+        )
+        path.write_text(json.dumps(payload))
+        attempt["identity_evidence"]["artifact_sha256"] = (
+            "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+        )
+    results["identity_verified"] = True
+    looked_up = []
+
+    def lookup(response_id):
+        looked_up.append(response_id)
+        return None
+
+    with pytest.raises(ValueError, match="identity evidence is not authoritative"):
+        trial.finalize_trial(
+            manifest, results, ingest_brain=True, now=2000, provider_response_lookup=lookup
+        )
+    assert looked_up == ["resp_forged"]
+    with feedback._conn() as conn:
+        for table in (
+            "runs",
+            "execution_attempts",
+            "outcomes",
+            "execution_traces",
+            "completion_events",
+            "influence_edges",
+            "profile_trial_ingests",
+        ):
+            assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0, table
+    assert not (state / "capability-program" / "profile-trial.json").exists()
+
+    results["identity_verified"] = False
+
+    def unexpected_lookup(response_id):
+        pytest.fail(f"explicitly unverified measurements must not request lookup: {response_id}")
+
+    state_path = tmp_path / "unverified-trial.json"
+    recorded = trial.publish_measured_recurring_trial(
+        manifest,
+        results,
+        state_path=state_path,
+        now=2001,
+        provider_response_lookup=unexpected_lookup,
+    )
+    assert recorded["identity_verified"] is False
+    assert recorded["brain_ingest_enabled"] is False
+    assert len(set(recorded["recorded_attempt_ids"])) == 6
+    persisted = json.loads(state_path.read_text())
+    assert persisted["identity_verified"] is False
+    assert persisted["brain_ingest_enabled"] is False
+    summary = json.loads((state / "capability-program" / "profile-trial.json").read_text())
+    assert summary["identity_verified"] is False
+    assert summary["brain_ingest_enabled"] is False
+    assert summary["aggregate_tokens_in"] == 6 * 42
+    assert summary["aggregate_tokens_out"] == 6 * 7
+    assert summary["quality_by_profile"] == results["quality_by_profile"]
+    with feedback._conn() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM execution_attempts").fetchone()[0] == 6
+        rows = conn.execute(
+            "SELECT reported_model,resolved_provider,resolved_model FROM execution_attempts"
+        ).fetchall()
+        assert all(row[0] and row[1:] == (None, None) for row in rows)
+        usage = conn.execute(
+            "SELECT run_id,tokens_in,tokens_out FROM execution_attempts ORDER BY run_id"
+        ).fetchall()
+        assert usage == sorted(
+            (attempt["run_id"], attempt["tokens_in"], attempt["tokens_out"])
+            for attempt in results["attempts"]
+        )
+        assert conn.execute("SELECT COUNT(*) FROM profile_trial_ingests").fetchone()[0] == 0
+
+    # A forged promotion must also leave previously recorded measurements intact.
+    # Checking only an empty database misses destructive replacement on retry.
+    tables = (
+        "runs",
+        "execution_attempts",
+        "outcomes",
+        "execution_traces",
+        "completion_events",
+        "influence_edges",
+        "profile_trial_ingests",
+        "route_weights",
+        "route_weights_v2",
+    )
+    with feedback._conn() as conn:
+        rows_before = {
+            table: conn.execute(f"SELECT * FROM {table} ORDER BY rowid").fetchall()
+            for table in tables
+        }
+    summary_path = state / "capability-program" / "profile-trial.json"
+    state_before = state_path.read_bytes()
+    summary_before = summary_path.read_bytes()
+    results["identity_verified"] = True
+    results["attempts"][0]["tokens_in"] = 999
+    results["quality_by_profile"] = {profile: 0.0 for profile in results["quality_by_profile"]}
+    looked_up.clear()
+    with pytest.raises(ValueError, match="identity evidence is not authoritative"):
+        trial.publish_measured_recurring_trial(
+            manifest,
+            results,
+            state_path=state_path,
+            now=2002,
+            provider_response_lookup=lookup,
+        )
+    assert looked_up == ["resp_forged"]
+    assert state_path.read_bytes() == state_before
+    assert summary_path.read_bytes() == summary_before
+    with feedback._conn() as conn:
+        assert {
+            table: conn.execute(f"SELECT * FROM {table} ORDER BY rowid").fetchall()
+            for table in tables
+        } == rows_before
 
 
 def test_server_model_disagrees_with_the_response_object(tmp_path):

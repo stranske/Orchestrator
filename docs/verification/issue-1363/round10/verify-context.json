@@ -1,0 +1,40 @@
+{
+  "schema": "provision-verify/v1",
+  "revision": "db3072ee8e6f5a5ab36d4df6d27e55293951b1d0",
+  "origin_main": "2d6788c112b824dcb818bade30794fde064ed550",
+  "interpreter": "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+  "command": [
+    "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+    "src/verify.py"
+  ],
+  "started_at": "2026-11-12T02:11:26.804Z",
+  "checkout_status_before": "",
+  "floor": {
+    "matches": true,
+    "comparison_exit_code": 0,
+    "delivered_sha256": "54f041a67b260dcbb3dd84fa607748747e6f5896ad0919fb1274284042bea6fe",
+    "origin_main_sha256": "54f041a67b260dcbb3dd84fa607748747e6f5896ad0919fb1274284042bea6fe"
+  },
+  "passed": false,
+  "deployment_acceptance_verified": false,
+  "runtime_overrides": {
+    "ORCH_STATE_DIR": "/tmp/provision-verify-noELdA/state",
+    "ORCH_LOCAL_RUNTIME": "/tmp/provision-verify-noELdA/runtime",
+    "HANDOFF_DIR": "/tmp/provision-verify-noELdA/handoff",
+    "ORCH_CAPABILITIES_PATH": "/tmp/provision-verify-noELdA/runtime/capabilities.json",
+    "ORCH_FEEDBACK_DB": "/tmp/provision-verify-noELdA/runtime/feedback/orchestrator.db",
+    "ORCH_VERIFY_LIVE_STATE": "0",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "PYTEST_ADDOPTS": "-m \"not slow\""
+  },
+  "execution": {
+    "exit_code": 1,
+    "error_code": null,
+    "signal": null,
+    "stdout_sha256": "3ffe18b2158a7eeecf5d1bd9e39a4851765df3ea45489c15404a2e58a958edc2",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "checkout_status_after": " M tests/test_provision_verify.js\n",
+  "head_after": "db3072ee8e6f5a5ab36d4df6d27e55293951b1d0",
+  "finished_at": "2026-11-12T02:18:13.765Z"
+}

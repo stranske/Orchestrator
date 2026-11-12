@@ -411,7 +411,7 @@ def test_a_resume_with_no_worktree_is_blocked_not_run_in_the_callers_cwd(monkeyp
     assert out == {"blocked": True, "reason": "resume lacks synthesis agent/worktree"}, out
 
 
-@pytest.mark.parametrize("agent", ["cursor", "claude", "vibe", "aider", "codex", "gemini"])
+@pytest.mark.parametrize("agent", ["cursor", "claude", "vibe", "codex", "gemini"])
 def test_adapters_dispatch_refuses_root_for_every_agent(tmp_path, monkeypatch, agent):
     _isolated_env(monkeypatch, tmp_path)
     _forbid_side_effects(monkeypatch)

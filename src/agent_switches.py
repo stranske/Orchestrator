@@ -99,7 +99,6 @@ AGENT_LABELS = (
     "agent:cursor",
     "agent:gemini",
     "agent:vibe",
-    "agent:aider",
     "agent:muse",
     "agent:copilot",
 )

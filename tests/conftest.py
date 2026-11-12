@@ -579,3 +579,18 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
     if os.environ.get("ORCH_REQUIRE_COVERAGE") == "1":
         pytest.fail("ORCH_REQUIRE_COVERAGE=1 but the coverage module is not installed")
     pytest.skip("coverage is not installed in this environment (coverage-off shard)")
+
+
+@pytest.fixture(autouse=True)
+def _no_live_gemini_full_split(monkeypatch, tmp_path):
+    """The owner's live Gemini full-tier split reads a spec under ~/.codex/orchestrator/trials.
+    A machine with that spec active must not assign arms inside unrelated dispatch tests."""
+    try:
+        import gemini_full_split
+    except ImportError:  # a scratch project that copied this conftest without src/
+        return
+
+    monkeypatch.setattr(gemini_full_split, "SPEC_PATH", tmp_path / "no-gemini-full-split.json")
+    monkeypatch.setattr(
+        gemini_full_split, "STATE_PATH", tmp_path / "no-gemini-full-split-state.json"
+    )

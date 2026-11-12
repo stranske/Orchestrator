@@ -1,7 +1,7 @@
 # Orchestrator — planning & remaining work
 
 The local multi-agent orchestrator: Claude (rotatable) assesses each task and delegates the token-heavy
-coding/reading to cheaper agents (cursor/vibe/gemini/codex/aider), then monitors, redirects, and **learns
+coding/reading to cheaper agents (cursor/vibe/gemini/codex/muse), then monitors, redirects, and **learns
 from outcomes** which agent/strategy fits which work. Design docs: [`ORCHESTRATOR.md`](ORCHESTRATOR.md)
 (operating manual), [`FEEDBACK_LOOP.md`](FEEDBACK_LOOP.md) (learning store), [`EVAL_AND_TESTING.md`](EVAL_AND_TESTING.md)
 (research arm: when/who/intensity, dataset growth, testing system, feature recognition).
@@ -12,7 +12,7 @@ from outcomes** which agent/strategy fits which work. Design docs: [`ORCHESTRATO
   `experiments/` (specs, eval outputs, diff patches, `hypotheses.json`, `features.json`), `data/`
   (`feedback-snapshot.json` — the reviewable copy of the dataset), this file.
 - **`~/.codex/orchestrator/` (LOCAL disk, NOT Dropbox)** — `repos/` + `worktrees/` (git checkouts),
-  `feedback/orchestrator.db` (live SQLite), `aider-venv/`. **These cannot live on Dropbox**: it rejects
+  `feedback/orchestrator.db` (live SQLite). **These cannot live on Dropbox**: it rejects
   `git worktree add` ("Operation not permitted") and deadlocks `git push` ("mmap"), and can corrupt a
   live SQLite file. Code defaults (`provision.LOCAL_RUNTIME`, `feedback.LOCAL_RUNTIME`) point here;
   override with `ORCH_LOCAL_RUNTIME` / `ORCH_REPOS_DIR` / `ORCH_WORKTREE_BASE` / `ORCH_FEEDBACK_DB`.

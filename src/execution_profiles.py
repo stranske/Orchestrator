@@ -76,13 +76,6 @@ CAPACITY_POOLS = {
         "tier": "flat",
         "agent": "muse",
     },
-    "aider-paygo": {
-        "provider": "mistral",
-        "account": "mistral-codestral",
-        "window": "daily",
-        "tier": "paygo",
-        "agent": "aider",
-    },
 }
 
 
@@ -208,17 +201,8 @@ PROFILE_REGISTRY: dict[str, dict[str, Any]] = {
             pool="claude-subscription",
             adapter_version="claude-cli-profile-v2",
         ),
-        _profile(
-            "aider-codestral-high",
-            "mistral/codestral-latest",
-            "high",
-            agent="aider",
-            provider="mistral",
-            pool="aider-paygo",
-            adapter_version="aider-cli-profile-v1",
-        ),
         # Every seat's model is NAMED, each from the seat's own authority: codex/claude from the
-        # tier research, vibe from its CLI config, aider from its floating alias, gemini from agy's
+        # tier research, vibe from its CLI config, gemini from agy's
         # advertised-models probe, cursor from its known default. None is a routing tag, so no seat
         # is unidentifiable -- what they all still need is worker TRACING to confirm what served.
         # GEMINI HAS TWO LINES, AND THEY ARE NOT A VERSION SEQUENCE. Flash (3.7/3.6/3.5, each with
@@ -310,6 +294,18 @@ PROFILE_REGISTRY: dict[str, dict[str, Any]] = {
         _profile(
             "gemini-4-argon-high",
             "gemini-4-argon-high",
+            "high",
+            agent="gemini",
+            provider="google",
+            pool="gemini-prepaid",
+            adapter_version="agy-cli-profile-v1",
+        ),
+        # Gemini 4 Carbon, the local frontier model (model table, 2026-11-10). Registered for the
+        # owner's live full-tier split against Argon (gemini_full_split.py, 2026-11-11). Automatic
+        # routing never picks it: router._automatic_profiles keeps only the tier's own model.
+        _profile(
+            "gemini-4-carbon-high",
+            "gemini-4-carbon-high",
             "high",
             agent="gemini",
             provider="google",

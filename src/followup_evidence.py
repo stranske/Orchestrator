@@ -16,13 +16,14 @@ import hashlib
 import json
 import math
 import os
+import re
 import subprocess
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
 
-from paths import runtime_state_path
+from paths import MODULE_DIR, runtime_state_path
 
 EXPERIMENT = "strategy434-20261006"
 EXCLUDED = "stranske/" + "Collab-Admin"
@@ -67,17 +68,74 @@ def eligible_lines(path: Path) -> list[bytes]:
     ]
 
 
+def provision_deployment(root: Path, generation: Path) -> dict | None:
+    """Read the latest successful publication from the normal mirror installer."""
+    try:
+        history = root / "mirror-sync-history.jsonl"
+        if history.is_symlink():
+            return None
+        rows = [json.loads(line) for line in history.read_bytes().splitlines()]
+        deployed = next(row for row in reversed(rows) if row["outcome"] == "deployed")
+        if (
+            deployed["mode"] == "ci-verdict"
+            and deployed["detail"] == generation.name
+            and re.fullmatch(r"orchestrator-mirror\.generation-[0-9a-f]{32}", generation.name)
+            and re.fullmatch(r"[0-9a-f]{7,40}", deployed["sha"])
+        ):
+            when(deployed["ts"])
+            return {
+                "generation": str(generation),
+                "deployed_at": deployed["ts"],
+                "revision_prefix": deployed["sha"],
+            }
+    except (OSError, ValueError, KeyError, TypeError, StopIteration):
+        pass
+    return None
+
+
+def provision_deployment_continuity(
+    deployment: dict, state: dict, now: datetime, failures: list[str]
+) -> dict:
+    previous = state.get("deployment") or {}
+    boundary = when(deployment["deployed_at"])
+    previous_identity = previous.get("identity", {})
+    same_generation = previous_identity.get("generation") == deployment["generation"]
+    previous_at = when(state["checked_at"]) if state else None
+    if same_generation:
+        problem = (
+            previous["failure"]
+            if previous_identity == deployment
+            else "deployment history changed for the same installed generation"
+        )
+    elif previous_at is None or previous_at > boundary or not state.get("segments"):
+        problem = "no retained collector observation at or before deployment"
+    else:
+        problem = None
+
+    if now <= boundary:
+        problem = "collector observation is not after deployment"
+    for failure in failures:
+        # Source changes are expected across a deployment. Within a generation
+        # the same changes break continuity, just like a gap or missing prefix.
+        if same_generation or not failure.endswith("changed; new baseline required"):
+            problem = problem or failure
+    return {"identity": deployment, "failure": problem}
+
+
 def provision_report(root: Path, state: dict, now: datetime, instrument: Path) -> tuple[dict, dict]:
-    files = {
-        str(path): eligible_lines(path)
-        for path in sorted(root.glob("provision-events.ndjson*"))
-        if path.is_file()
-    }
+    files = {}
     failures = []
+    for path in sorted(root.glob("provision-events.ndjson*")):
+        try:
+            if path.is_symlink() or not path.is_file():
+                raise ValueError("regular ledger segment required")
+            files[str(path)] = eligible_lines(path)
+        except (OSError, ValueError):
+            failures.append(f"unreadable or nonregular ledger segment: {path}")
     counts: collections.Counter[tuple[str, str]] = collections.Counter()
     latest: dict[str, dict] = {}
     cutoff = now - timedelta(days=7)
-    for path, lines in files.items():
+    for segment, lines in files.items():
         for line in lines:
             try:
                 item = json.loads(line)
@@ -89,7 +147,7 @@ def provision_report(root: Path, state: dict, now: datetime, instrument: Path) -
                 ):
                     raise ValueError("incomplete ledger line")
             except (ValueError, KeyError, TypeError):
-                failures.append(f"malformed or partial segment: {path}")
+                failures.append(f"malformed or partial segment: {segment}")
                 continue
             if cutoff <= ts <= now:
                 counts[(item["outcome"], item["cause"])] += 1
@@ -101,7 +159,7 @@ def provision_report(root: Path, state: dict, now: datetime, instrument: Path) -
                     if ts > when(latest.get(key, {"ts": cutoff.isoformat()})["ts"]):
                         latest[key] = item
     source = digest(instrument.read_bytes())
-    collector_source = digest(Path(__file__).read_bytes())
+    collector_source = digest((MODULE_DIR / "followup_evidence.py").read_bytes())
     if not files:
         failures.append("no ledger")
     if state:
@@ -137,13 +195,16 @@ def provision_report(root: Path, state: dict, now: datetime, instrument: Path) -
         {"path": path, "lines": len(lines), "sha256": digest(b"".join(lines))}
         for path, lines in files.items()
     ]
-    next_state = {
+    next_state: dict = {
         "checked_at": now.isoformat(),
         "continuous_since": start,
         "instrument_sha256": source,
         "collector_sha256": collector_source,
         "segments": segments,
     }
+    deployment = provision_deployment(root, instrument.resolve().parent)
+    if deployment is not None:
+        next_state["deployment"] = provision_deployment_continuity(deployment, state, now, failures)
     coverage = not failures and now - when(start) >= timedelta(days=7)
     refused = sum(counts[("failed", cause)] for cause in ("branch-held", "branch-exists"))
     report = {
@@ -157,6 +218,7 @@ def provision_report(root: Path, state: dict, now: datetime, instrument: Path) -
         "instrument_sha256": source,
         "collector_sha256": collector_source,
         "segments": segments,
+        "deployment": next_state.get("deployment"),
         "counts": {f"{outcome}/{cause}": n for (outcome, cause), n in sorted(counts.items())},
         "branch_refusals": refused,
         "latest_refusals": list(latest.values()),
@@ -432,14 +494,14 @@ def collect(root: Path, config_path: Path, *, apply: bool = False) -> dict:
             root,
             load(state_dir / "provision-state.json", {}),
             now,
-            Path(__file__).with_name("provision.py"),
+            MODULE_DIR / "provision.py",
         )
         strategy = strategy_report(config, Path(config["export_inbox"]))
         report = {
             "checked_at": now.isoformat(),
             "provision": provision,
             "strategy": strategy,
-            "collector_source_sha256": digest(Path(__file__).read_bytes()),
+            "collector_source_sha256": digest((MODULE_DIR / "followup_evidence.py").read_bytes()),
         }
         save(state_dir / "provision-state.json", next_state)
         # A network failure cannot erase a successful local observation.

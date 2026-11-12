@@ -133,7 +133,7 @@ def test_three_profiles_create_distinct_worker_attempts(
     assert len(attempts) == 3
     assert len({row[0] for row in attempts}) == 3
     assert {row[1] for row in attempts} == set(model_profile_trial.EXPECTED_PROFILE_IDS)
-    assert all(row[4] and row[5] == row[3] for row in attempts)
+    assert all(row[4] == row[3] and row[5] is None for row in attempts)
     assert all(row[7] and row[8] for row in attempts)
     assert runs == [("instrumentation", 3)]
     assert v1_weights == 0 and v2_weights == 0

@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="0.430" timestamp="2026-11-12T03:02:19.674996+00:00" hostname="runnervmwuk1x"><testcase classname="tests.test_profile_trial_ingest" name="test_ingest_is_one_transaction_and_a_mid_write_failure_leaves_nothing[_record_run_in_conn-2]" time="0.181"><failure message="AssertionError: runs&#10;assert 1 == 0">tests/test_profile_trial_ingest.py:152: in test_ingest_is_one_transaction_and_a_mid_write_failure_leaves_nothing
+    assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0, table
+E   AssertionError: runs
+E   assert 1 == 0</failure></testcase></testsuite></testsuites>

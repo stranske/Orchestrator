@@ -1,0 +1,17 @@
+{
+  "checked_at": "2026-11-12T02:03:06.096912+00:00",
+  "runtime": "/Users/teacher/.codex/orchestrator",
+  "installed_generation": "/Users/teacher/.codex/orchestrator-mirror.generation-bc5bc0470cd54f4799d3ade875070d1d",
+  "before": {
+    "/Users/teacher/.codex/orchestrator/provision-events.ndjson": "443b45ac293b99b6bf1e158f3edbc47e2b840acdf56c65eab9616d877a9dea8c",
+    "/Users/teacher/.codex/orchestrator/provision-events.ndjson.pre-718-repair-2026-11-03": "ccad083cf41cd3b6b839a8dd49fd6d1c651ce44458e364bf6e96ffb0a2ad1a76",
+    "/Users/teacher/.codex/orchestrator/followup-evidence/latest.json": "e4c516ce2cd86979b05b57fcb234bfd338d64aea91cff871c31e8fd2818099b9"
+  },
+  "after": {
+    "/Users/teacher/.codex/orchestrator/provision-events.ndjson": "443b45ac293b99b6bf1e158f3edbc47e2b840acdf56c65eab9616d877a9dea8c",
+    "/Users/teacher/.codex/orchestrator/provision-events.ndjson.pre-718-repair-2026-11-03": "ccad083cf41cd3b6b839a8dd49fd6d1c651ce44458e364bf6e96ffb0a2ad1a76",
+    "/Users/teacher/.codex/orchestrator/followup-evidence/latest.json": "e4c516ce2cd86979b05b57fcb234bfd338d64aea91cff871c31e8fd2818099b9"
+  },
+  "unchanged": true,
+  "deployment_of_pr_head": false
+}

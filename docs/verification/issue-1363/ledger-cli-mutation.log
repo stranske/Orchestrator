@@ -1,0 +1,207 @@
+✔ recounts active and archived failures with multiplicity and exact seven-day boundaries (78.039464ms)
+✔ an archived-only ledger is measured; absent ledger stays unmeasured (114.126236ms)
+✔ empty intact observed week can qualify only ledger evidence (57.519523ms)
+✔ preserves the existing collector owner exclusion before parsing and hashing (60.060497ms)
+✔ malformed torn data cannot become an intact zero (60.985195ms)
+✔ malformed broken data cannot become an intact zero (60.129381ms)
+✔ malformed null data cannot become an intact zero (60.903533ms)
+✔ malformed array data cannot become an intact zero (60.086206ms)
+✔ malformed naive data cannot become an intact zero (59.296862ms)
+✔ malformed outcome data cannot become an intact zero (60.764993ms)
+✔ segment delete after observation requires a fresh collector receipt (58.825539ms)
+✔ segment rewrite after observation requires a fresh collector receipt (57.888081ms)
+✔ segment append after observation requires a fresh collector receipt (58.881293ms)
+✔ segment duplicate after observation requires a fresh collector receipt (57.308203ms)
+✔ segment rotate after observation requires a fresh collector receipt (57.995172ms)
+✔ inconsistent collector baseline fails closed (57.682259ms)
+✔ inconsistent collector coverage fails closed (62.576954ms)
+✔ inconsistent collector continuity fails closed (58.043786ms)
+✔ inconsistent collector gap fails closed (57.629519ms)
+✔ inconsistent collector counts fails closed (56.734866ms)
+✔ inconsistent collector timestamp fails closed (55.879442ms)
+✔ inconsistent collector window fails closed (57.338074ms)
+✔ inconsistent collector source fails closed (58.226503ms)
+✔ inconsistent collector collector fails closed (61.884837ms)
+✔ inconsistent collector readiness fails closed (59.14374ms)
+✔ missing or malformed receipt cannot infer continuity from old events (67.028959ms)
+✔ a stale or future receipt cannot qualify and timestamps retain microseconds (57.37938ms)
+✖ reads all inputs without writing and CLI status distinguishes unmet evidence (110.495867ms)
+✖ fresh observed legitimate refusals remain unmet after successful retries in both lanes (102.163909ms)
+✔ source absence and nonregular segments are UNKNOWN without following symlinks (58.556312ms)
+✔ rejects malformed empty counts [] (57.629209ms)
+✔ rejects malformed empty counts "" (60.195802ms)
+✔ rejects malformed empty counts 0 (59.052131ms)
+✔ rejects malformed empty counts null (57.045676ms)
+✔ compares relative collector segment paths by their filesystem identity (59.032372ms)
+✔ rejects an unrelated zero ledger when the writer is outside (58.668441ms)
+✔ rejects an unrelated zero ledger when the writer is renamed (58.262638ms)
+✖ rejects an unrelated zero ledger with a separate writer configured runtime (81.766749ms)
+✖ rejects an unrelated zero ledger with a separate writer home runtime (81.594406ms)
+ℹ tests 39
+ℹ suites 0
+ℹ pass 35
+ℹ fail 4
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2525.042202
+
+✖ failing tests:
+
+test at tests/test_audit_provision_ledger.js:179:1
+✖ reads all inputs without writing and CLI status distinguishes unmet evidence (110.495867ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  0 !== 1
+  
+      at TestContext.<anonymous> (/tmp/orch-audit-cli-mutation-ij_f97to/tests/test_audit_provision_ledger.js:195:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/test_audit_provision_ledger.js:199:1
+✖ fresh observed legitimate refusals remain unmet after successful retries in both lanes (102.163909ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  0 !== 1
+  
+      at TestContext.<anonymous> (/tmp/orch-audit-cli-mutation-ij_f97to/tests/test_audit_provision_ledger.js:227:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/test_audit_provision_ledger.js:289:3
+✖ rejects an unrelated zero ledger with a separate writer configured runtime (81.766749ms)
+  AssertionError [ERR_ASSERTION]: provision: baseline = 2026-11-04T23:36:46.774000+00:00
+  provision: checked_at = 2026-11-11T23:36:46.774000+00:00
+  provision: counted_through = 2026-11-11T23:36:46.774000+00:00
+  provision: coverage = UNKNOWN
+  provision: segments = 1; malformed_lines=0
+  provision: failed(branch-held|branch-exists) = 0 over 7d
+  provision: ledger evidence = unmet acceptance
+  provision: UNKNOWN: writer ledger is not included in the collector directory and observation
+  provision: native/full-verifier/mirror acceptance requires separate receipts
+  {
+    "schema_version": 1,
+    "deployment_acceptance_verified": false,
+    "reporter_sha256": "58fbeb620c081c3e454794294a3cc6ffa519bccdb9c2e088c9c06b266d44a028",
+    "coverage": "UNKNOWN",
+    "continuous_since": "2026-11-04T23:36:46.774000+00:00",
+    "checked_at": "2026-11-11T23:36:46.774000+00:00",
+    "counts": {},
+    "branch_refusals": 0,
+    "malformed_lines": 0,
+    "segments": [
+      {
+        "path": "/tmp/provision-ledger-audit-qa36xq/provision-events.ndjson",
+        "lines": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0,
+        "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "continuity_failures": [
+      "writer ledger is not included in the collector directory and observation"
+    ],
+    "evidence_ready": false,
+    "receipt_sha256": "4618e234d3f431385449841c165b83f3037e93c03c2de61349c1c4b4dec29912",
+    "counted_through": "2026-11-11T23:36:46.774000+00:00",
+    "instrument_sha256": "0b9eb004a9fc8c162a595098bfbdf3c1a1c4f8a33ee6757b0257f407031d9de9",
+    "collector_sha256": "65fa782ef1899c4105110ea9b19654a62dd4d643a8d63512d93be2d9bc1bfe0b"
+  }
+  
+  
+  0 !== 1
+  
+      at TestContext.<anonymous> (/tmp/orch-audit-cli-mutation-ij_f97to/tests/test_audit_provision_ledger.js:303:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/test_audit_provision_ledger.js:289:3
+✖ rejects an unrelated zero ledger with a separate writer home runtime (81.594406ms)
+  AssertionError [ERR_ASSERTION]: provision: baseline = 2026-11-04T23:36:46.855000+00:00
+  provision: checked_at = 2026-11-11T23:36:46.855000+00:00
+  provision: counted_through = 2026-11-11T23:36:46.855000+00:00
+  provision: coverage = UNKNOWN
+  provision: segments = 1; malformed_lines=0
+  provision: failed(branch-held|branch-exists) = 0 over 7d
+  provision: ledger evidence = unmet acceptance
+  provision: UNKNOWN: writer ledger is not included in the collector directory and observation
+  provision: native/full-verifier/mirror acceptance requires separate receipts
+  {
+    "schema_version": 1,
+    "deployment_acceptance_verified": false,
+    "reporter_sha256": "58fbeb620c081c3e454794294a3cc6ffa519bccdb9c2e088c9c06b266d44a028",
+    "coverage": "UNKNOWN",
+    "continuous_since": "2026-11-04T23:36:46.855000+00:00",
+    "checked_at": "2026-11-11T23:36:46.855000+00:00",
+    "counts": {},
+    "branch_refusals": 0,
+    "malformed_lines": 0,
+    "segments": [
+      {
+        "path": "/tmp/provision-ledger-audit-Xpm0iq/provision-events.ndjson",
+        "lines": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0,
+        "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "continuity_failures": [
+      "writer ledger is not included in the collector directory and observation"
+    ],
+    "evidence_ready": false,
+    "receipt_sha256": "ec645b52abe51f3404563fa9daeb80b90974b21521ec0a987c469e1eb37cfd92",
+    "counted_through": "2026-11-11T23:36:46.855000+00:00",
+    "instrument_sha256": "0b9eb004a9fc8c162a595098bfbdf3c1a1c4f8a33ee6757b0257f407031d9de9",
+    "collector_sha256": "65fa782ef1899c4105110ea9b19654a62dd4d643a8d63512d93be2d9bc1bfe0b"
+  }
+  
+  
+  0 !== 1
+  
+      at TestContext.<anonymous> (/tmp/orch-audit-cli-mutation-ij_f97to/tests/test_audit_provision_ledger.js:303:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

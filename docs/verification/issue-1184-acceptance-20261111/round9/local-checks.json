@@ -1,0 +1,63 @@
+[
+  {
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+      "tests/fixtures/closer_real_csv_canary/v1/verify_csv_contract.py"
+    ],
+    "exit_status": 0,
+    "stdout": "contract ok\n",
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+      "tests/fixtures/closer_real_csv_canary/v1/verify_csv_contract.py",
+      "--chain-evidence"
+    ],
+    "exit_status": 2,
+    "stdout": "{\"completion\": \"incomplete\", \"reason\": \"[Errno 2] No such file or directory: '/home/runner/.codex/orchestrator/closer-core/completions/stranske_orchestrator_988_989.json'\"}\n",
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+      "-m",
+      "pytest",
+      "tests/test_closer_csv_canary_contract.py",
+      "-m",
+      "not slow"
+    ],
+    "exit_status": 1,
+    "stdout": "",
+    "stderr": "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3: No module named pytest\n"
+  },
+  {
+    "argv": [
+      "node",
+      "tests/test_verifier_context_builder_contract.js"
+    ],
+    "exit_status": 0,
+    "stdout": "\u2714 actual exported initial builder forwards model mode and preserves full authentic request (12.431364ms)\n\u2714 freeform model requests are authentic while default checkbox admission remains structured (6.179557ms)\n\u2714 actual repeat builder retains original verdict and admits fresh required material once (6.06232ms)\n\u2714 actual pending builder retains uncertain effects and reenters only with skipped-step proof (66.549561ms)\n\u2714 invalid requests and unavailable diff evidence cannot start evaluation (2.185856ms)\n\u2714 actual builder preserves linked original requirements and refuses malformed linked source (2.32149ms)\n\u2714 CSV canary native verifier attempts require retained recovery, not another evaluation (1.422565ms)\n\u2714 CSV retained recovery command uses integer selectors bound to native source execution (0.699585ms)\n\u2714 CSV recovery follows the latest native comparison instead of the superseded evaluation (1.716257ms)\n\u2714 native CSV verifier states require both the corrective head and published merge (62.637512ms)\n\u2714 native PR 984 corpus decision and successful workflows cannot complete PR 1168 (63.820926ms)\n\u2714 native unavailable CSV reports cannot turn provider concerns into a corpus decision (61.085211ms)\n\u2714 merged CSV canary acknowledgment does not substitute for stored corrective custody (60.699409ms)\n\u2139 tests 13\n\u2139 suites 0\n\u2139 pass 13\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 352.089724\n",
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "node",
+      "--check",
+      "tests/test_verifier_context_builder_contract.js"
+    ],
+    "exit_status": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "diff",
+      "--check"
+    ],
+    "exit_status": 0,
+    "stdout": "",
+    "stderr": ""
+  }
+]

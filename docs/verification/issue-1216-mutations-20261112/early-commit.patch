@@ -1,0 +1,13 @@
+--- a/src/model_profile_trial.py
++++ b/src/model_profile_trial.py
+@@ -1684,6 +1684,10 @@
+     brain_ingest_enabled = False
+     ingest_status = None
+     if write_feedback:
++        feedback.record_run(
++            attempts[0]['run_id'], 'stranske/Orchestrator', 'implementation',
++            'codex', ts=timestamp,
++        )
+         # Session identity is a claim until the independent lookup confirms it.
+         feedback_attempts = [dict(attempt) for attempt in attempts]
+         if not identity_verified:

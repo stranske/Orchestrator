@@ -18,6 +18,8 @@
     "tests/test_gemini_flash_routing.py",
     "tests/test_gemini_tier_scoped_shed.py",
     "tests/test_github_api_observer.py",
+    "tests/test_issue771_mutation_runner.py",
+    "tests/test_issue_771_evidence.py",
     "tests/test_issue1102_advisor_coverage_evidence.py",
     "tests/test_issue1109_pr793_acceptance.py",
     "tests/test_issue1109_runtime_isolation.py",
@@ -44,14 +46,19 @@
     "tests/test_storage_abort_reconciliation.py",
     "tests/test_storage_interrupted_release.py",
     "tests/test_strategy_experiment.py",
+    "tests/test_issue1227_env_prereq_coverage.py",
     "tests/test_switch_review_fleet.py",
     "tests/test_verify_failure_evidence.py",
     "tests/test_value_chain_local_loop_outcomes.py",
     "tests/test_gh_guard_two_guards_on_path.py",
-    "tests/test_capacity_launch_gate.py"
+    "tests/test_capacity_launch_gate.py",
+    "tests/test_switch_review_ci_walltime.py",
+    "tests/test_gemini_full_split.py"
   ],
   "shards": [
     [
+      "tests/test_issue771_mutation_runner.py",
+      "tests/test_issue_771_evidence.py",
       "tests/test_issue1253_ranked_coverage.py",
       "tests/test_issue1235_ranked_coverage.py",
       "tests/test_issue1235_supervisor_recovery.py",
@@ -62,6 +69,7 @@
       "tests/test_issue1189_ranked_coverage.py",
       "tests/test_issue1229_ranked_coverage.py",
       "tests/test_issue1215_ranked_coverage.py",
+      "tests/test_issue1227_env_prereq_coverage.py",
       "tests/test_adjudicator_packet_binding.py",
       "tests/test_adjudicator_retro.py",
       "tests/test_advisor_external_guard.py",
@@ -75,6 +83,7 @@
       "tests/test_checks_reported.py",
       "tests/test_ci_gate_config.py",
       "tests/test_closer_batch_delivery.py",
+      "tests/test_closer_csv_canary_contract.py",
       "tests/test_issue1025_ranked_coverage.py",
       "tests/test_issue1025_feedback_boundaries.py",
       "tests/test_issue1025_gate_delta.py",
@@ -260,6 +269,7 @@
       "tests/test_pacing_usage.py",
       "tests/test_partitioned_review.py",
       "tests/test_profile_trial_ingest.py",
+      "tests/test_profile_trial_mutations.py",
       "tests/test_profile_trial_recurring_spec.py",
       "tests/test_profile_trial_run.py",
       "tests/test_profile_trial_summary.py",
@@ -285,7 +295,8 @@
       "tests/test_verifier_retry_lineage.py",
       "tests/test_worktree_git_guard.py",
       "tests/test_observability_dashboard.py",
-      "tests/test_experiment_reservation.py"
+      "tests/test_experiment_reservation.py",
+      "tests/test_gemini_full_split.py"
     ],
     [
       "tests/test_adjudicator_retry_history.py",
@@ -424,7 +435,8 @@
       "tests/test_router_choose_mode.py",
       "tests/test_value_chain_local_loop_outcomes.py",
       "tests/test_gh_guard_two_guards_on_path.py",
-      "tests/test_capacity_launch_gate.py"
+      "tests/test_capacity_launch_gate.py",
+      "tests/test_switch_review_ci_walltime.py"
     ],
     [
       "tests/test_activation_audit_source_memo.py",

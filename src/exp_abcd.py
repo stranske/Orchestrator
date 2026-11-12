@@ -105,7 +105,7 @@ MIN_EVALUATORS = 4
 AUTH_FILES = {  # same as dispatcher: PATH resolves the binary, auth lets it actually run
     "cursor": "$HOME/.cursor/cursor-agent.env",
     "claude": "$HOME/.codex/handoff/.claude-oauth-token",
-    "aider": "$HOME/.codex/handoff/aider.env",
+    # (one retired seat's entry stood here until 2026-11-11; line kept so pinned line numbers hold)
 }
 
 

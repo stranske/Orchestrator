@@ -1,0 +1,47 @@
+✔ recounts active and archived failures with multiplicity and exact seven-day boundaries (76.254746ms)
+✔ an archived-only ledger is measured; absent ledger stays unmeasured (112.506655ms)
+✔ empty intact observed week can qualify only ledger evidence (56.20152ms)
+✔ preserves the existing collector owner exclusion before parsing and hashing (58.570639ms)
+✔ malformed torn data cannot become an intact zero (55.6325ms)
+✔ malformed broken data cannot become an intact zero (58.395579ms)
+✔ malformed null data cannot become an intact zero (65.543719ms)
+✔ malformed array data cannot become an intact zero (57.601765ms)
+✔ malformed naive data cannot become an intact zero (59.514555ms)
+✔ malformed outcome data cannot become an intact zero (57.447672ms)
+✔ segment delete after observation requires a fresh collector receipt (54.670917ms)
+✔ segment rewrite after observation requires a fresh collector receipt (53.345464ms)
+✔ segment append after observation requires a fresh collector receipt (55.299482ms)
+✔ segment duplicate after observation requires a fresh collector receipt (54.144932ms)
+✔ segment rotate after observation requires a fresh collector receipt (53.704497ms)
+✔ inconsistent collector baseline fails closed (55.410845ms)
+✔ inconsistent collector coverage fails closed (63.810265ms)
+✔ inconsistent collector continuity fails closed (61.554718ms)
+✔ inconsistent collector gap fails closed (57.438058ms)
+✔ inconsistent collector counts fails closed (56.818772ms)
+✔ inconsistent collector timestamp fails closed (57.2611ms)
+✔ inconsistent collector window fails closed (56.531498ms)
+✔ inconsistent collector source fails closed (58.437778ms)
+✔ inconsistent collector collector fails closed (60.362406ms)
+✔ inconsistent collector readiness fails closed (60.207748ms)
+✔ missing or malformed receipt cannot infer continuity from old events (68.212125ms)
+✔ a stale or future receipt cannot qualify and timestamps retain microseconds (58.653804ms)
+✔ reads all inputs without writing and CLI status distinguishes unmet evidence (138.5952ms)
+✔ fresh observed legitimate refusals remain unmet after successful retries in both lanes (108.424008ms)
+✔ source absence and nonregular segments are UNKNOWN without following symlinks (58.689208ms)
+✔ rejects malformed empty counts [] (62.051208ms)
+✔ rejects malformed empty counts "" (59.946948ms)
+✔ rejects malformed empty counts 0 (58.452771ms)
+✔ rejects malformed empty counts null (58.288252ms)
+✔ compares relative collector segment paths by their filesystem identity (58.271647ms)
+✔ rejects an unrelated zero ledger when the writer is outside (56.96932ms)
+✔ rejects an unrelated zero ledger when the writer is renamed (56.4598ms)
+✔ rejects an unrelated zero ledger with a separate writer configured runtime (79.035363ms)
+✔ rejects an unrelated zero ledger with a separate writer home runtime (83.600938ms)
+ℹ tests 39
+ℹ suites 0
+ℹ pass 39
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2530.429121

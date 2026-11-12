@@ -5,7 +5,7 @@ local (this Orchestrator). Its source is stranske/Workflows `.github/agents/mode
 `TABLE_JSON` below is a byte-identical copy of that file. It lives inside this module, not in a
 config file, so it ships wherever the code ships: the launchd mirror and the flat closer runtime
 package copy Python modules only. `adapters.MODEL_TIERS`, the named single-model seats (vibe, muse,
-cursor, aider) and the Codex task/offload profiles are DERIVED from it, so nothing in this
+cursor) and the Codex task/offload profiles are DERIVED from it, so nothing in this
 repository keeps its own model list.
 
 Change the table in Workflows first, then copy it here with
