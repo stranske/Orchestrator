@@ -347,3 +347,33 @@ Git metadata mount. The test remains uncommitted. PR comment and `needs-human`
 label writes were rejected because they require approval and this run's approval
 policy is `never`. PR #1354 was verified open and ready for review. The actual
 live ledger is unavailable here; post-sync acceptance remains unchecked.
+
+## 2026-11-12 post-sync declaration drift regression
+
+Reviewed recent commits through `09ae0356` against PR #1354's current body.
+The five verified tasks are already checked. The remaining owner's post-sync
+live-ledger criterion stays unchecked: the configured live ledger is absent on
+this runner.
+
+Added a CLI regression that first persists a successful sync, then changes the
+offload binding to another resolvable symbol. Clean CONSUMERS counters must not
+mask that persisted drift: JSON and text verification fail with a pending
+`downstream_consumer` edit and preserve the ledger bytes. The normal writing
+loader repairs the binding, verification succeeds again, and lifecycle state
+and prior evidence remain intact.
+
+All ten CLI tests passed with no skips; syntax and whitespace checks passed.
+A disposable test copy that bypassed the deployment check failed at the drift
+verification with actual exit 0 versus expected exit 1. Three Python checks passed by
+direct invocation: declared consumers, persisted declaration sync, and stale
+absence flag reconciliation. The focused pytest command with `-m 'not slow'`
+could not run because pytest is unavailable. No Python files changed.
+
+Git staging failed because `.git/index.lock` cannot be created on the read-only
+Git metadata mount; these changes remain uncommitted. The GitHub approval gate
+rejected the PR-body reconciliation update, blocker comment, and `needs-human`
+label because each requires approval while this run's policy is `never`.
+PR #1354 remains open and ready for review (`draft=false`).
+The existing owner must sync normally and retain the actual runtime output of
+`python3 src/capability_admission.py --check-consumer-sync`; fixture results do
+not satisfy the remaining acceptance criterion.

@@ -97,6 +97,47 @@ test('consumer sync CLI requires persisted reconciliation across fresh Python pr
   assert.deepEqual(row.event_history[0], { type: 'invocation', timestamp: 1 });
 });
 
+test('consumer sync CLI rejects resolvable declaration drift after a successful sync', async (t) => {
+  const { ledger, run, check, persist } = runtime(t);
+  persist({
+    capability_id: 'offload', status: 'active',
+    event_history: [{ type: 'invocation', timestamp: 1 }], outcome_links: [],
+  });
+  await run(['-c', 'import capabilities; capabilities.load()'], 0);
+  assert.deepEqual((await check(0)).consumer_sync.pending, {});
+  const synced = JSON.parse(fs.readFileSync(ledger, 'utf8')).capabilities;
+
+  // A different real symbol still resolves. CONSUMERS alone cannot prove that the
+  // deployed ledger has retained this tree's reviewed output-consumer binding.
+  persist(...Object.values(synced).map((row) => row.capability_id === 'offload'
+    ? { ...row, downstream_consumer: 'capability_admission.py:format_report' }
+    : row));
+  const drifted = await check(1);
+  assert.deepEqual(drifted.consumer_sync, {
+    live_rows: Object.keys(synced).length,
+    pending: { offload: ['downstream_consumer'] },
+  });
+  assert.deepEqual(drifted.consumers.by_class.prose, []);
+  assert.deepEqual(drifted.consumers.by_class.unresolved, []);
+  assert.deepEqual(drifted.consumers.drainable, []);
+  const before = fs.readFileSync(ledger);
+  const text = await run([
+    path.join(modules, 'capability_admission.py'), '--check-consumer-sync',
+  ], 1);
+  assert.match(text, /prose 0, missing 0, undeclared 0 — DRAINABLE 0/);
+  assert.match(text, /offload: downstream_consumer/);
+  assert.deepEqual(fs.readFileSync(ledger), before, 'reporting must preserve the drift for owner sync');
+
+  await run(['-c', 'import capabilities; capabilities.load()'], 0);
+  assert.deepEqual((await check(0)).consumer_sync.pending, {});
+  const repaired = JSON.parse(fs.readFileSync(ledger, 'utf8')).capabilities.offload;
+  assert.equal(repaired.downstream_consumer, synced.offload.downstream_consumer);
+  assert.equal(repaired.status, 'active');
+  assert.deepEqual(repaired.outcome_links, []);
+  assert.deepEqual(repaired.event_history.slice(0, synced.offload.event_history.length),
+    synced.offload.event_history);
+});
+
 test('consumer sync CLI separates measured action debt from persisted declarations', async (t) => {
   const { ledger, run, check, persist } = runtime(t);
   const declaration = await run([
