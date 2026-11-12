@@ -1,0 +1,6 @@
+Command: git show 790efac1cbf37f659c9e9dab8036c9fb29170369:.verify-floor.json | cmp - <(git show origin/main:.verify-floor.json)
+Delivered checkout: 790efac1cbf37f659c9e9dab8036c9fb29170369
+origin/main: 2c945fa9d0340f9352c4f0efa7ccf1fab139fd75
+Bytes: 94717
+SHA256: 2b0df1cb5b074ffb3cebb3187fc8b092095f1ebf193917d91b9fa82e0a881580
+Comparison exit: 0

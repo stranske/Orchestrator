@@ -306,6 +306,69 @@ test('a fresh collector observation after archive loss cannot qualify a zero-ref
   assert.deepEqual(fs.readFileSync(retained), bytes);
 });
 
+for (const newRefusals of [false, true]) {
+  test(`fresh observation preserves rotated archives with ${newRefusals ? 'repeated refusals' : 'an empty active segment'}`, (t) => {
+    const end = new Date().toISOString();
+    const previousHour = new Date(Date.parse(end) - 3600000).toISOString();
+    const rows = ['closer', 'opener'].flatMap((lane) => {
+      const cause = lane === 'closer' ? 'branch-held' : 'branch-exists';
+      return [event({ ts: previousHour, lane, cause }),
+        event({ ts: previousHour, lane, cause, outcome: 'reclaimed' })];
+    });
+    // Identical segments are distinct retained events, including after renaming.
+    const bytes = ndjson(rows);
+    const f = fixture(t, { '': bytes, '.old': bytes }, previousHour);
+    const initial = f.audit();
+    assert.equal(initial.coverage, 'continuous');
+    assert.equal(initial.branch_refusals, 4);
+    const active = path.join(f.root, 'provision-events.ndjson');
+    fs.renameSync(active + '.old', active + '.older');
+    fs.renameSync(active, active + '.old');
+    fs.writeFileSync(active, newRefusals ? bytes : '');
+    const stale = f.audit(end);
+    assert.equal(stale.coverage, 'UNKNOWN');
+    assert.equal(stale.evidence_ready, false);
+    assert.match(stale.continuity_failures.join('\n'), /segments differ/);
+
+    const observed = f.observe(end);
+    const expectedPerCause = newRefusals ? 3 : 2;
+    assert.deepEqual(observed.continuity_failures, []);
+    assert.equal(observed.continuous_since, initial.continuous_since);
+    assert.equal(observed.branch_refusals, expectedPerCause * 2);
+    const result = f.audit(end);
+    assert.equal(result.coverage, 'continuous');
+    assert.equal(result.continuous_since, initial.continuous_since);
+    assert.equal(instant(result.counted_through), instant(end));
+    assert.equal(result.segments.length, 3);
+    assert.deepEqual(result.counts, {
+      'failed/branch-exists': expectedPerCause,
+      'failed/branch-held': expectedPerCause,
+      'reclaimed/branch-exists': expectedPerCause,
+      'reclaimed/branch-held': expectedPerCause,
+    });
+    assert.equal(result.evidence_ready, false);
+    assert.equal(result.deployment_acceptance_verified, false);
+
+    const inputs = [f.receipt, active, active + '.old', active + '.older'];
+    const before = inputs.map((file) => fs.readFileSync(file));
+    const env = { ...process.env, ORCH_LOCAL_RUNTIME: f.root };
+    delete env.ORCH_PROVISION_EVENTS_PATH;
+    const cli = execute(process.execPath, [script, f.root, source], { cwd: f.root, env });
+    assert.equal(cli.error_code, null);
+    assert.equal(cli.signal, null);
+    assert.equal(cli.exit_code, 1, cli.stdout.toString() + cli.stderr.toString());
+    const output = cli.stdout.toString();
+    assert.match(output, /coverage = continuous/);
+    assert.ok(output.includes(`failed(branch-held|branch-exists) = ${expectedPerCause * 2} over 7d`));
+    assert.match(output, /ledger evidence = unmet acceptance/);
+    for (const [index, file] of inputs.entries()) {
+      assert.deepEqual(fs.readFileSync(file), before[index], file);
+    }
+    assert.equal(fs.readFileSync(active + '.old', 'utf8'), bytes);
+    assert.equal(fs.readFileSync(active + '.older', 'utf8'), bytes);
+  });
+}
+
 test('source absence and nonregular segments are UNKNOWN without following symlinks', (t) => {
   const f = fixture(t, { '': '' });
   const ledger = path.join(f.root, 'provision-events.ndjson');
