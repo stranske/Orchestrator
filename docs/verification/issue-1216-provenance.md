@@ -1,5 +1,92 @@
 # Issue #1216 verification
 
+## Malformed identity artifact verification, 2026-11-12
+
+Reviewed `4dc6ced4`, `f133e3c8`, and `78474cdf` and their implementation,
+regression tests, mutation transcripts and dated incomplete live-run evidence
+before continuing the first unchecked provenance task. The unchecked Full
+Issue Text checklist duplicates the implemented tasks. Reconciliation is
+prepared at `/tmp/orch-1352-reconciled-body.md`, preserving unchecked combined
+review/final-head CI tasks. The body update was rejected by automatic approval
+review: `MCP tool call requires approval, but approval policy is never`.
+No remote checkbox changed.
+
+- [x] Verify malformed local evidence cannot reach trusted provider lookup or
+  persist verified trial data, even with a recomputed digest.
+- [x] Run the five requested test files and the profile-trial selftest.
+- [ ] Commit the test changes on the existing branch and obtain final-head CI.
+
+`test_malformed_identity_artifact_refuses_before_lookup_or_writes` adds seven
+cases: absent file, directory, invalid JSON, invalid UTF-8, JSON null, JSON list,
+and oversized valid JSON with matching identity fields. Each first verifies a
+passing authenticated-lookup fixture, damages the first validated artifact,
+recomputes its digest when applicable, and then requires refusal before lookup.
+Every case asserts zero rows in all seven trial feedback tables and no trial
+state or capability-program summary. The fixture is offline evidence; it does
+not establish production provider provenance.
+
+Python 3.14.10 and upstream pytest 9.2.0 were used; the literal requested
+`/opt/anaconda3/bin/python3` is absent. Pinned official tooling sources were
+assembled under `/tmp` because package installation could not resolve PyPI.
+Repository dependency files were unchanged.
+
+```text
+PYTHONPATH=/tmp/orch-1216-tools:/usr/lib/python3/dist-packages \
+  ORCH_STATE_DIR=/tmp/orch-1216-test-state PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+  python3 -m pytest -q tests/test_profile_trial_ingest.py \
+  tests/test_profile_trial_run.py tests/test_profile_trial_recurring_spec.py \
+  tests/test_model_profile_trial_bridge.py tests/test_profile_trial_instances.py \
+  -m 'not slow'
+Baseline: 189 passed, 30 subtests passed; exit 0.
+After the additions and after Black: 196 passed, 30 subtests passed; exit 0.
+Profile-trial selftest: exit 0.
+```
+
+The seven-case increase changes collection/pass expectations from 8741/8739
+to 8748/8746, preserving every ceiling. This is an inventory-based delta,
+not an observed full-suite passing claim.
+
+Black 26.10.1 formatted the changed test with line length 100. After the
+sandbox's worker pool stalled, serial checks populated Black's normal cache.
+The required unmodified CLI check then exited 0:
+
+```text
+PATH="/tmp/orch-1216-bin:$PATH" \
+  PYTHONPATH=/tmp/orch-1216-tools:/opt/hostedtoolcache/Python/3.14.10/x64/lib/python3.14/site-packages:/opt/hostedtoolcache/Python/3.14.10/x64/lib/python3.14/site-packages/pip/_vendor:/usr/lib/python3/dist-packages \
+  XDG_CACHE_HOME=/tmp/orch-1216-cache BLACK_NUM_WORKERS=1 \
+  black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .
+701 files would be left unchanged; exit 0.
+```
+
+`git diff --check` passed. PR #1352 was rechecked open and ready (`draft=false`)
+at `4dc6ced4dfcb69b8bc84169d4f71168525219f24` after the delivery attempts.
+
+All six current PR #1193 review threads were reread. The existing
+[source/test dispositions](#review-dispositions-for-pr-1193) remain supported.
+For committed head `4dc6ced4dfcb69b8bc84169d4f71168525219f24`,
+[Gate run 43126042843](https://github.com/stranske/Orchestrator/actions/runs/43126042843)
+and [CI run 43126042496](https://github.com/stranske/Orchestrator/actions/runs/43126042496)
+concluded `success`. Both sets of six checkout/mirror shards, CI aggregates,
+and Gate lint-format, lint-ruff and typecheck-mypy passed at that exact SHA.
+These results cover the predecessor of these local test changes. No new live
+trial or final-head CI success is claimed; the recorded live trial remains
+explicitly incomplete for trusted provider identity.
+
+Delivery was attempted with:
+
+```text
+git add tests/test_profile_trial_ingest.py .verify-floor.json \
+  docs/verification/issue-1216-provenance.md
+fatal: Unable to create '.../.git/index.lock': Read-only file system
+```
+
+No commit was created. Requests to add `needs-human` and post the blocker
+comment were also rejected by automatic approval review with
+`MCP tool call requires approval, but approval policy is never`. Neither
+remote mutation occurred. The verified working-tree changes require an
+environment permitting writes to this branch's `.git`; remote checklist
+reconciliation and final delivered-head CI remain outstanding.
+
 ## Provider usage type verification, 2026-11-12
 
 Reviewed commits `f133e3c8`, `78474cdf`, `78f4dc9e` and their existing source,

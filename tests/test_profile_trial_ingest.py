@@ -744,6 +744,62 @@ def test_finalize_refuses_ingest_when_identity_artifact_hash_mismatches(
         _assert_trial_feedback_tables_empty(conn)
 
 
+@pytest.mark.parametrize(
+    "damage",
+    ["missing", "directory", "invalid-json", "invalid-utf8", "null", "list", "oversized"],
+)
+def test_malformed_identity_artifact_refuses_before_lookup_or_writes(
+    tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture, damage
+):
+    _use_temp_feedback(tmp_path, monkeypatch)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    lookup = _bind_authoritative_identity(tmp_path, trial_attempt_fixture)
+    attempts = model_profile_trial._validate_results(trial_manifest, trial_attempt_fixture)
+    assert model_profile_trial._authoritative_identity_verified(
+        attempts, provider_response_lookup=lookup
+    )
+    attempt = next(
+        row for row in trial_attempt_fixture["attempts"] if row["run_id"] == attempts[0]["run_id"]
+    )
+    artifact_path = Path(attempt["identity_evidence"]["artifact_ref"])
+    if damage in {"missing", "directory"}:
+        artifact_path.unlink()
+        if damage == "directory":
+            artifact_path.mkdir()
+    else:
+        original = artifact_path.read_bytes()
+        contents = {
+            "invalid-json": b"{",
+            "invalid-utf8": bytes([255]),
+            "null": b"null",
+            "list": b"[]",
+            # Keep the oversized artifact valid JSON with matching identity.
+            "oversized": original + b" " * (64 * 1024),
+        }[damage]
+        artifact_path.write_bytes(contents)
+        attempt["identity_evidence"]["artifact_sha256"] = (
+            "sha256:" + hashlib.sha256(contents).hexdigest()
+        )
+
+    def unexpected_lookup(response_id):
+        pytest.fail(f"malformed artifact reached provider lookup: {response_id}")
+
+    state_path = tmp_path / "refused-state.json"
+    with pytest.raises(ValueError, match="identity evidence is not authoritative"):
+        model_profile_trial.finalize_trial(
+            trial_manifest,
+            trial_attempt_fixture,
+            state_path=state_path,
+            record_feedback=True,
+            ingest_brain=True,
+            provider_response_lookup=unexpected_lookup,
+        )
+    assert not state_path.exists()
+    assert not (tmp_path / "capability-program" / "profile-trial.json").exists()
+    with feedback._conn() as conn:
+        _assert_trial_feedback_tables_empty(conn)
+
+
 def test_transport_recording_does_not_block_later_verified_ingest(
     tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture
 ):
