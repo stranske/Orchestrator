@@ -282,6 +282,7 @@
       "tests/test_role_prompt_offering.py",
       "tests/test_route_weights_publish_cadence.py",
       "tests/test_runtime_ac_flow_monitor.py",
+      "tests/test_runtime_ac_exact_head_gate.py",
       "tests/test_seatbelt_regex_quoting.py",
       "tests/test_storage_owned_peak_profile.py",
       "tests/test_storage_request_lock_deadlines.py",
