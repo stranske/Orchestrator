@@ -1332,16 +1332,42 @@ def test_live_shadow_adjudicates_a_new_dispute_once_and_grades_on_truth(
     import switch_review
 
     live, db = live_shadow["live"], live_shadow["db"]
-    live_shadow["backend_result"]["proposal"]["decision"] = decision
-    live_shadow["backend_result"]["advisory_plan"]["decision"] = decision
+    # Exercise the production runner, including proposal validation and Brain telemetry.
+    # Stub only routing and the paid backend; the collector still issues a real certified case.
+    common = {key: value for key, value in live_shadow["common"].items() if key != "runner"}
+    monkeypatch.setattr(roles, "route_role", lambda *_a, **_kw: {"agent": "stub"})
+    monkeypatch.setattr(roles, "_role_capability_event", lambda *_a, **_kw: None)
+
+    def backend(agent, prompt, **kwargs):
+        live_shadow["calls"].append(kwargs)
+        assert agent == "stub" and kwargs["timeout"] == 600
+        assert kwargs["cwd"] == str(common["path"].parent / "repo")
+        packet, _end = json.JSONDecoder().raw_decode(
+            prompt.partition("Adjudication case JSON:\n")[2]
+        )
+        assert packet["metadata_only"] is False
+        ref = packet["ground_truth_evidence"]["qualified_ground_truth_refs"][0]
+        response = proposal()
+        response["decision"] = decision
+        response["ground_truth_refs"] = [ref]
+        response["evidence_assessment"][0]["evidence_ref"] = ref
+        return {"run_id": "backend-live", "output": json.dumps(response), "exit": 0}
+
+    monkeypatch.setattr(roles.dispatcher, "offload", backend)
     with feedback._conn() as conn:
         conn.execute(
             "INSERT INTO costs(run_id,cost_usd,source) VALUES ('backend-live',0.25,'ccusage')"
         )
     outcomes_before = _brain_except_events(db)["outcomes"]
-    first = live.run_live(**live_shadow["common"])
+    first = live.run_live(**common)
     assert (first["attempted"], first["advised"], first["uncertified"]) == (1, 1, 0)
     assert first["summary"]["graded"] == 0, "pending durability is not later truth"
+    assert first["rows"][0]["errors"] == []
+    assert first["rows"][0]["role_record_error"] is None
+    with sqlite3.connect(db) as conn:
+        assert conn.execute(
+            "SELECT run_id FROM runs WHERE role_name='adjudicator'"
+        ).fetchall() == [(first["rows"][0]["role_run_id"],)]
     events = _advice_events(db)
     assert len(events) == 1
     _event_id, run_id, producer, payload, _ts = events[0]
@@ -1353,7 +1379,7 @@ def test_live_shadow_adjudicates_a_new_dispute_once_and_grades_on_truth(
     assert _brain_except_events(db)["outcomes"] == outcomes_before, "no outcomes row written"
 
     # The usual daily rerun is idle, before also exercising recovery without the saved report.
-    again = live.run_live(**live_shadow["common"])
+    again = live.run_live(**common)
     assert again["attempted"] == 0 and len(live_shadow["calls"]) == 1
     assert _advice_events(db) == events
 
@@ -1367,7 +1393,7 @@ def test_live_shadow_adjudicates_a_new_dispute_once_and_grades_on_truth(
     monkeypatch.setattr(feedback, "record_completion_event", record_replay_event)
     # Replay without the report or its cutoff. The Brain event must prevent a second dispatch.
     replay_path = live_shadow["common"]["path"].with_name("replay.json")
-    second = live.run_live(**{**live_shadow["common"], "path": replay_path})
+    second = live.run_live(**{**common, "path": replay_path})
     assert (len(live_shadow["calls"]), writes) == (
         1,
         [],
