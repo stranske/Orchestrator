@@ -103,7 +103,7 @@ def _declared() -> list[str]:
 def _gate_python_shard_contexts() -> set[str]:
     text = GATE.read_text(encoding="utf-8")
     assert "name: python ci shard ${{ matrix.shard }}/6" in text
-    assert 'python-versions: \'["3.14"]\'' in text  # 3.13 runs in CI's flat exec-mirror shards
+    assert "python-versions: '[\"3.14\"]'" in text  # 3.13 runs in CI's flat exec-mirror shards
     assert "matrix: ${{ fromJSON(needs.detect.outputs.python_ci_matrix) }}" in text
     assert "pytest_args: ${{ matrix.pytest_args }}" in text
     assert "artifact-prefix: ${{ matrix.artifact_prefix }}" in text
@@ -233,10 +233,7 @@ def test_gate_summary_requires_every_shard_runtime_receipt(tmp_path):
     green = gate_summary.summarize(context)
     assert green.state == "success"
     assert green.description == "All Gate checks succeeded."
-    assert (
-        "- Python shard artifacts: ✅ all 6 shards reported for Python 3.14."
-        in green.lines
-    )
+    assert "- Python shard artifacts: ✅ all 6 shards reported for Python 3.14." in green.lines
     assert "- Combined coverage: ✅ 81.25% from CI verify.py aggregate." in green.lines
 
     summaries[(4, "3.14")].unlink()
