@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 import test_capability_admission as gate
 
+import capabilities
 import capability_admission as admission
 
 
@@ -210,6 +211,26 @@ def test_consumer_symbol_resolution_rejects_wrong_nesting_and_accepts_shell():
     assert not admission._python_symbol_defined("not python(", "run")
     assert admission._symbol_defined("function launch() { :; }", "launch", shell=True)
     assert not admission._symbol_defined("launch_other() { :; }", "launch", shell=True)
+
+
+def test_original_offload_prose_is_reconciled_without_lifecycle_or_credit_changes():
+    """The issue #599 row belongs in the declaration audit without seeding a new row."""
+    declarations = capabilities.KNOWN_GATES | capabilities.KNOWN_DECLARATIONS
+    resolution = admission.consumer_resolution(declarations.get("offload", {}))
+    assert resolution["tokens"] and not resolution["unresolved"], resolution
+    assert "offload" not in capabilities.declared_row_ids()
+
+    before = capabilities._blank_capability("offload")
+    before.update(status="generated", downstream_consumer="the run consuming offload output")
+    before["event_history"] = [{"type": "invocation", "timestamp": 1}]
+    ledger = {"offload": before}
+    assert capabilities._reconcile_known_declarations(ledger, 2)
+    row = ledger["offload"]
+    assert row["downstream_consumer"] == declarations["offload"]["downstream_consumer"]
+    assert row["status"] == "generated"
+    assert row["outcome_links"] == []
+    assert row["event_history"][0] == {"type": "invocation", "timestamp": 1}
+    assert not capabilities._reconcile_known_declarations(ledger, 3)
 
 
 def test_actual_no_verdict_main_executes_all_six_and_cleans_fixtures(monkeypatch, tmp_path, capsys):

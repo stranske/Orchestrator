@@ -2148,19 +2148,19 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
         "downstream_consumer": "switch_review.py:firing_regressions consumes persisted findings",
     },
     "codemod-campaign": {
-        "downstream_consumer": "codemod_lane.py:build_delegation_prompt hands the validated campaign to the worker",
+        "downstream_consumer": "codemod_lane.py:build_delegation_prompt consumes the campaign and dry-run plan to produce the worker prompt",
     },
     "coverage-testgen-trigger": {
         "downstream_consumer": "testgen_lane.py:ranked_sources; testgen_gate.py:main",
     },
     "cross-repo-coordination": {
-        "downstream_consumer": "cross_repo_lane.py:build_dry_run_plan hands the validated plan to source and consumer workers",
+        "downstream_consumer": "cross_repo_lane.py:build_dry_run_plan consumes the coordination proposal to produce work items and dispatch prompts for manual release",
     },
     "deliberate-break-verifier": {
         "downstream_consumer": "runtime_ac.py:evaluate_results consumes deliberate-break JSON; local_verify.py:record_verdict records the run verdict",
     },
     "epic-decomposition": {
-        "downstream_consumer": "epic_lane.py:build_dispatch_prompts hands validated DAG tasks to workers",
+        "downstream_consumer": "epic_lane.py:build_dispatch_prompts consumes the validated DAG to produce worker prompts",
     },
     "feature-scan": {
         "downstream_consumer": (
