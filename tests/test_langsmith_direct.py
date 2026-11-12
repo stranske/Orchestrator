@@ -1,9 +1,8 @@
-"""Hermetic unit tests for langsmith_direct client construction and SDK/stdlib fallback."""
+"""Hermetic unit tests for langsmith_direct v2 transport construction independent of installed SDKs."""
 
 from __future__ import annotations
 
 import importlib.abc
-import os
 import socket
 import subprocess
 import sys
@@ -51,26 +50,25 @@ def isolated_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     assert attempted == [], f"unexpected external calls: {attempted}"
 
 
-def test_make_client_returns_langsmith_sdk_client_when_installed(
+def test_make_client_uses_v2_transport_even_when_sdk_is_installed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake_sdk = types.ModuleType("langsmith")
 
     class FakeSDKClient:
         def __init__(self, *, api_key: str) -> None:
-            self.api_key = api_key
+            raise AssertionError("installed legacy SDK must not be instantiated")
 
     fake_sdk.Client = FakeSDKClient  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "langsmith", fake_sdk)
     monkeypatch.setenv("LANGSMITH_API_KEY", "lsv2_test_sdk_key")
 
     client = ld._make_client()
-    assert isinstance(client, FakeSDKClient)
+    assert isinstance(client, ld._StdlibLangSmithClient)
     assert client.api_key == "lsv2_test_sdk_key"
-    assert os.environ.get("LANGCHAIN_API_KEY") == "lsv2_test_sdk_key"
 
 
-def test_make_client_falls_back_to_stdlib_or_reraises_broken_sdk_dependency(
+def test_make_client_uses_credentials_without_loading_broken_sdk(
     isolated_runtime: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     with pytest.raises(RuntimeError, match="no LANGSMITH_API_KEY"):
@@ -91,6 +89,6 @@ def test_make_client_falls_back_to_stdlib_or_reraises_broken_sdk_dependency(
 
     monkeypatch.delitem(sys.modules, "langsmith", raising=False)
     monkeypatch.setattr(sys, "meta_path", [BrokenSDKFinder(), *sys.meta_path])
-    with pytest.raises(ModuleNotFoundError) as caught:
-        ld._make_client()
-    assert caught.value.name == "broken_sdk_dep"
+    client = ld._make_client()
+    assert isinstance(client, ld._StdlibLangSmithClient)
+    assert client.api_key == "lsv2_file_key"
