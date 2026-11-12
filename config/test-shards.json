@@ -52,7 +52,8 @@
     "tests/test_value_chain_local_loop_outcomes.py",
     "tests/test_gh_guard_two_guards_on_path.py",
     "tests/test_capacity_launch_gate.py",
-    "tests/test_switch_review_ci_walltime.py"
+    "tests/test_switch_review_ci_walltime.py",
+    "tests/test_gemini_full_split.py"
   ],
   "shards": [
     [
@@ -293,7 +294,8 @@
       "tests/test_verifier_retry_lineage.py",
       "tests/test_worktree_git_guard.py",
       "tests/test_observability_dashboard.py",
-      "tests/test_experiment_reservation.py"
+      "tests/test_experiment_reservation.py",
+      "tests/test_gemini_full_split.py"
     ],
     [
       "tests/test_adjudicator_retry_history.py",

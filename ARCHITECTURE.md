@@ -337,6 +337,20 @@ Gemini tiers follow the other families' shape (2026-10-15): cheap/mid run 3.8 Fl
 the retired 3.1 profile follows `PROFILE_RETIREMENTS` to Argon High). Argon low/medium stay registered
 and explicitly requestable, because Argon has its own weekly-only quota and bills ~2.7x Flash per token.
 
+**A live full-tier Gemini split, Argon vs Carbon (owner, 2026-11-11).** `gemini_full_split.py` is
+data inside the dispatch rail, not a new stage or role: `dispatcher.plan_dispatch` asks it for an arm
+when a local opener `implement` run on the gemini seat has no model chosen and the tier ceiling still
+allows `full`. The arm is drawn from a SHA-256 of the policy and the target (a retry keeps its arm) and
+travels as `selected_profile_id`/`requested_model` with `profile_policy_version=gemini-full-split-v1`
+and probability 0.5 on the run row; every other gemini implement run records `split_skip_reason`.
+`gemini-4-carbon-high` is registered as an execution profile for this; automatic routing still keeps
+only the tier's own model. Assignment stops at the spec's PR target (counted on GitHub by the
+readout, `python3 src/gemini_full_split.py --readout`, which writes the count it reads), at a
+`max_assignments` backstop if the readout stops, or at `end_ts`. A missing, malformed or expired
+spec assigns nothing, so routing falls back to its normal path. The readout reports per arm the PRs,
+merged, durable and broke-later counts and the pre-registered verdict; the cost leg is reported as
+UNMEASURED because lane implement dispatches record no token usage.
+
 **An offload run records which work it was for (2026-10-12).** Both capability readers key a run's
 subject by a `subject_id` in its routing metadata, else by `runs.target`, and an offload's target is
 `offload:<cwd>`. No offload run recorded a subject, so all 591 role-backend runs since 2026-09-01 were
