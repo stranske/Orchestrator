@@ -515,18 +515,53 @@ def _harness_error_messages(event: dict) -> list[str]:
     return [message] if isinstance(message, str) else []
 
 
+_RESETS_IN = re.compile(
+    r"Resets\s+in\s+((?:\d+d)?(?:\d+h)?(?:\d+m)?(?:\d+(?:\.\d+)?s)?)(?!\w)", re.I
+)
+_DURATION_UNITS = {"d": 86400, "h": 3600, "m": 60, "s": 1}
+
+
 def parse_resets_in_duration(text: str, *, now: int | None = None) -> int | None:
-    """Parse provider copy like ``Resets in 140h5m6s`` into an absolute unix time."""
-    match = re.search(
-        r"Resets\s+in\s+(\d+)h(\d+)m(\d+)s",
-        text,
-        re.I,
-    )
+    """Parse provider copy like ``Resets in 140h5m6s`` into an absolute unix time.
+
+    agy prints a Go ``time.Duration``, which drops leading zero units: ``Resets in 45m0s`` and
+    ``Resets in 30s`` under an hour. Until 2026-11-12 only the full ``NhNmNs`` form matched, so a
+    gemini refusal due inside the hour fell back to DEFAULT_COOLDOWN_S. A day unit is accepted too.
+    """
+    match = _RESETS_IN.search(text)
+    if not match or not match.group(1):
+        return None
+    parts = re.findall(r"(\d+(?:\.\d+)?)([dhms])", match.group(1).lower())
+    if not parts:
+        return None
+    seconds = sum(float(value) * _DURATION_UNITS[unit] for value, unit in parts)
+    base = now if now is not None else int(time.time())
+    return base + int(math.ceil(seconds))
+
+
+_USAGE_WINDOW_RESET = re.compile(
+    r"usage\s+window\s+resets\s+at\s+"
+    r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2}))",
+    re.I,
+)
+
+
+def parse_usage_window_reset_at(text: str, *, now: int | None = None) -> int | None:
+    """Parse muse's ``Your usage window resets at 2026-11-16T00:00:00Z`` into a unix time.
+
+    Only a reset still in the future counts; a stale stated time is no reason to hold the seat.
+    """
+    match = _USAGE_WINDOW_RESET.search(text)
     if not match:
         return None
-    hours, minutes, seconds = (int(match.group(i)) for i in range(1, 4))
-    base = now if now is not None else int(time.time())
-    return base + hours * 3600 + minutes * 60 + seconds
+    stamp = match.group(1)
+    if stamp.endswith(("Z", "z")):
+        stamp = stamp[:-1] + "+00:00"
+    try:
+        reset_at = int(datetime.fromisoformat(stamp).timestamp())
+    except ValueError:
+        return None
+    return reset_at if reset_at > int(now if now is not None else time.time()) else None
 
 
 def provider_reset_at(agent: str, lines: list[str], *, now: int | None = None) -> int | None:
@@ -539,8 +574,14 @@ def provider_reset_at(agent: str, lines: list[str], *, now: int | None = None) -
     commands too, so a plain line may be the agent's own work, and a reset read from it would hold
     the seat until whatever date that work happened to mention.
 
-    Gemini: output is plain text (glog-prefixed agent-executor lines). Parse ``Resets in NhNmNs``
-    from those lines so shed lasts until the provider's stated window rather than DEFAULT_COOLDOWN_S.
+    Gemini: output is plain text (glog-prefixed agent-executor lines). Parse ``Resets in <Go
+    duration>`` from those lines so shed lasts until the provider's stated window rather than
+    DEFAULT_COOLDOWN_S.
+
+    Muse: the run's terminal failure states an ISO time ("Subscription quota exhausted. Your usage
+    window resets at 2026-11-16T00:00:00Z."), read only from a line that is itself an authoritative
+    provider refusal. Before 2026-11-12 muse fell to the 6 h cooldown, so a weekly exhaustion
+    re-admitted the seat every 6 h to fail again (trip-planner#2029 repair, 07:03Z).
     Every other agent's answer is None, and the seat sheds for the cooldown.
 
     One reading for every observer of a run: the synchronous offload, `adapters.dispatch` and the
@@ -556,6 +597,15 @@ def provider_reset_at(agent: str, lines: list[str], *, now: int | None = None) -
             if not _has_provider_error_context(line) or not is_authoritative_error(line):
                 continue
             reset = parse_resets_in_duration(line, now=now)
+            if reset is not None:
+                resets.append(reset)
+        return max(resets) if resets else None
+    if agent == "muse":
+        resets = []
+        for line in failure_evidence(lines):
+            if not is_authoritative_error(line):
+                continue
+            reset = parse_usage_window_reset_at(line, now=now)
             if reset is not None:
                 resets.append(reset)
         return max(resets) if resets else None
