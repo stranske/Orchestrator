@@ -49,6 +49,31 @@ MUTATIONS = {
         '            for key in ("matched", "invoked", "disagreement"):\n',
     ),
 }
+# Match the observed behavioral break, not just a nonzero pytest outcome. In
+# particular, a database/runtime error must not count as killing a mutation.
+FAILURE_SIGNATURES = {
+    "test_run_queries_keep_pending_and_mode_scopes_distinct": (
+        "AssertionError",
+        "assert None == 'remote-new'",
+    ),
+    "test_snapshot_json_exports_initialized_tables_to_the_requested_path": (
+        "FileNotFoundError",
+        "nested/snapshot.json",
+    ),
+    "test_evidence_registry_normalizes_citations_and_retires_unused_rows": (
+        "AssertionError",
+        "assert [] == ['Unused']",
+    ),
+    "test_evidence_proposals_and_approval_require_recurrence_then_reactivate": (
+        "AssertionError",
+        "assert True is False",
+    ),
+    "test_role_selector_metrics_preserve_no_match_and_rejection_signals": (
+        "AssertionError",
+        "'invoked': 4",
+        "'invoked': 2",
+    ),
+}
 
 
 def blob_hash(content: bytes) -> str:
@@ -91,6 +116,12 @@ def verify_result(xml: Path, expected_ids: list[str], failed: bool) -> None:
             raise ValueError("Pytest setup errors and skips are not mutation evidence")
         if (case.find("failure") is not None) != failed:
             raise ValueError("Pytest outcome does not match the expected mutation result")
+        if failed:
+            failure = case.find("failure")
+            details = failure.get("message", "") + "\n" + "".join(failure.itertext())
+            signatures = FAILURE_SIGNATURES[case.attrib["name"]]
+            if not all(signature in details for signature in signatures):
+                raise ValueError("Pytest failure does not demonstrate the intended mutation")
 
 
 def run_pytest(

@@ -6,6 +6,7 @@ import json
 import subprocess
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -31,12 +32,79 @@ class MutationReplayTests(unittest.TestCase):
         path.write_text(f"<testsuites><testsuite>{cases}</testsuite></testsuites>")
         return path
 
+    def failure_xml(self, name, details=None, attribute=False):
+        path = self.xml([name], "<failure/>")
+        tree = ET.parse(path)
+        failure = tree.getroot().find(".//failure")
+        if details is None:
+            details = "\n".join(replay.FAILURE_SIGNATURES[name])
+        if attribute:
+            failure.set("message", details)
+        else:
+            failure.text = details
+        tree.write(path)
+        return path
+
     def test_expected_test_failure_is_required_in_junit(self):
         name = next(iter(replay.MUTATIONS))
-        replay.verify_result(self.xml([name], "<failure/>"), [name], failed=True)
+        replay.verify_result(self.failure_xml(name), [name], failed=True)
         for outcome in ("", "<error/>", "<skipped/>"):
             with self.subTest(outcome=outcome), self.assertRaises(ValueError):
                 replay.verify_result(self.xml([name], outcome), [name], failed=True)
+
+    def test_every_mutation_requires_its_behavioral_failure(self):
+        for name in replay.MUTATIONS:
+            for attribute in (False, True):
+                with self.subTest(name=name, attribute=attribute):
+                    replay.verify_result(
+                        self.failure_xml(name, attribute=attribute), [name], failed=True
+                    )
+            signatures = replay.FAILURE_SIGNATURES[name]
+            unrelated = ["RuntimeError: database is locked", "AssertionError: unrelated", ""]
+            unrelated.extend("\n".join(s for s in signatures if s != item) for item in signatures)
+            for details in unrelated:
+                with self.subTest(name=name, details=details), self.assertRaisesRegex(
+                    ValueError, "intended mutation"
+                ):
+                    replay.verify_result(self.failure_xml(name, details), [name], failed=True)
+
+    def test_preserved_failures_match_except_the_weaker_old_selector_mutation(self):
+        selector = "test_role_selector_metrics_preserve_no_match_and_rejection_signals"
+        directory = (
+            Path(__file__).resolve().parents[1] / "docs/evidence/issue-771-repair/mutations"
+        )
+        for name in replay.MUTATIONS:
+            text = (directory / f"{name}.md").read_text()
+            failure = text.split("## Failure output", 1)[1].split("## Restored pass output", 1)[0]
+            with self.subTest(name=name):
+                if name == selector:
+                    with self.assertRaisesRegex(ValueError, "intended mutation"):
+                        replay.verify_result(self.failure_xml(name, failure), [name], failed=True)
+                else:
+                    replay.verify_result(self.failure_xml(name, failure), [name], failed=True)
+        # A realistic pytest dictionary diff from the double-counting mutation.
+        selector_failure = (
+            "AssertionError: assert {'invoked': 4} == {'invoked': 2}\n"
+            "Differing items:\n{'invoked': 4} != {'invoked': 2}"
+        )
+        replay.verify_result(self.failure_xml(selector, selector_failure), [selector], failed=True)
+
+    def test_wrong_failure_restores_source_and_prevents_receipt(self):
+        name = next(iter(replay.MUTATIONS))
+
+        def wrong_failure(checkout, output, label, names, python, failed=False):
+            if failed:
+                self.assertNotEqual(self.target.read_bytes(), self.original)
+                xml = self.failure_xml(name, "RuntimeError: database is locked")
+                replay.verify_result(xml, names, failed=True)
+            return {"exit_status": 0}
+
+        with patch.object(replay, "check_checkout"), patch.object(
+            replay, "run_pytest", side_effect=wrong_failure
+        ), self.assertRaisesRegex(ValueError, "intended mutation"):
+            replay.capture(self.checkout, self.output)
+        self.assertEqual(self.target.read_bytes(), self.original)
+        self.assertFalse((self.output / "receipt.json").exists())
 
     def test_collection_errors_and_wrong_or_duplicate_tests_are_rejected(self):
         expected = list(replay.MUTATIONS)
@@ -149,7 +217,7 @@ class MutationReplayTests(unittest.TestCase):
             self.assertTrue(Path(cache_paths[-1]).is_dir())
             kwargs["stdout"].write(b"complete output\n" * 10000)
             xml_path = Path(command[-1].removeprefix("--junitxml="))
-            xml_path.write_text(self.xml([name], "<failure/>").read_text())
+            xml_path.write_text(self.failure_xml(name).read_text())
             return SimpleNamespace(returncode=1)
 
         with patch.object(replay.subprocess, "run", side_effect=fake_process):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -128,6 +129,52 @@ def test_event_head_is_distinct_from_executed_checkout():
     evidence = (EVIDENCE_DIR / "EVIDENCE.md").read_text()
     assert f"**Event headSha (not executed checkout):** `{event_head}`" in evidence
     assert f"**Executed synthetic merge checkout:** `{checkout}`" in evidence
+
+
+def test_controlled_comparison_uses_verified_configs_and_separate_units():
+    directory = EVIDENCE_DIR / "coverage"
+    comparison = json.loads((directory / "comparison.json").read_text())
+    raw = (directory / comparison["raw_report"]["file"]).read_bytes()
+    report = json.loads(raw)
+    assert comparison["raw_report"]["sha256"] == hashlib.sha256(raw).hexdigest()
+    assert comparison["target"] == "src/feedback.py"
+    assert comparison["baseline_commit"] == "3b379f8b60046b1b6b21b360a931472d0b6db9c3"
+    assert comparison["event_head"] == "18ad97a054dab7f6039dd42c8131bee04267748b"
+    assert comparison["report_checkout"] == "12c5c58517863f747972538c9bb17c568bc0bf49"
+    assert set(comparison["configurations"]) == {
+        comparison["baseline_commit"],
+        comparison["event_head"],
+    }
+    for records in comparison["configurations"].values():
+        assert {record["historical_path"] for record in records} == {
+            ".github/workflows/ci.yml",
+            "pyproject.toml",
+            "src/verify.py",
+        }
+        for record in records:
+            content = (directory / record["preserved_file"]).read_bytes()
+            assert hashlib.sha256(content).hexdigest() == record["sha256"]
+            blob = hashlib.sha1(f"blob {len(content)}\0".encode() + content).hexdigest()
+            assert blob == record["git_blob"]
+            if record["historical_path"] == "pyproject.toml":
+                config = tomllib.loads(content.decode())["tool"]["coverage"]["run"]
+                assert config["branch"] is False
+                assert config["parallel"] is True and config["source"] == ["src"]
+            elif record["historical_path"] == ".github/workflows/ci.yml":
+                assert b"python3 src/verify.py --coverage --floor-may-lag" in content
+    counts = report["files"][comparison["target"]]["summary"]
+    after = comparison["statements"]["after"]
+    assert after == {key: counts[key] for key in after}
+    assert set(after) == {"num_statements", "covered_lines", "missing_lines"}
+    assert after["covered_lines"] + after["missing_lines"] == after["num_statements"]
+    assert comparison["statements"]["baseline"] is None
+    assert comparison["statements"]["missing_reduction"] is None
+    for metric in ("baseline", "after", "missing_reduction"):
+        assert comparison["branches"][metric] is None
+    assert comparison["combined_reduction"] is None
+    assert comparison["goal_shortfall"] is None
+    assert comparison["historical_ranking_provenance"] == "unknown"
+    assert comparison["fresh_coverage_executed"] is False
 
 
 def test_isolated_original_five_transcript_preserves_command_and_result():

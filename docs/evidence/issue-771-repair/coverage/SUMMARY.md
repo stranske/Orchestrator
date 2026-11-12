@@ -18,6 +18,17 @@ cannot be recovered from the historical configuration or its artifacts.
 Reporting `0` missing branches would be wrong: the correct value is
 **not measured / unknown**.
 
+[comparison.json](comparison.json) records the comparison in machine-readable
+form. On 2026-11-12 UTC, all six preserved configurations were checked by Git
+blob hash: the baseline against local Git objects, and the exact PR head against
+GitHub `fetch_file` metadata at that ref. CI, pyproject, and verifier blobs are
+identical between these two commits. The artifact includes SHA256 hashes and
+keeps the synthetic merge report's statement counts separate from unmeasured
+branches. Baseline counts, reductions, and goal shortfall are `null`, rather
+than inferred from the mixed ranking figure. No fresh coverage execution is
+claimed. `test_controlled_comparison_uses_verified_configs_and_separate_units`
+validates the preserved files, configuration settings, raw counts and unknowns.
+
 ## Statements vs branches (kept separate)
 
 | Measure | Baseline `3b379f8` | Executed synthetic merge `12c5c585` | Like-for-like delta |

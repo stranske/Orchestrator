@@ -26,6 +26,12 @@ Every mutation restores `src/feedback.py` in a `finally` block. Each pytest
 process uses a fresh bytecode cache so restored source cannot reuse a mutant.
 `receipt.json` is written only after every failure/restoration pair is verified.
 
+Failure validation also requires the behavioral signature of the selected
+mutation in the JUnit failure message or traceback. An unrelated database error,
+an empty failure element, or the older selector input-validation failure cannot
+count as killing the new selector double-counting mutation. Regression checks
+cover rejection, source restoration, and withholding the success receipt.
+
 The selector mutation reintroduces the original duplicate invocation counting
 in `role_activation_metrics`, exercising the metric assertion rather than the
 earlier input-validation assertion. The other four mutations reproduce the
@@ -66,3 +72,24 @@ therefore blocked by both the required formatting gate and repository permission
 
 The first unchecked mutation task remains incomplete pending a real replay and
 preservation of its full outputs. No acceptance checkbox was newly marked complete.
+
+## Follow-up validation (2026-11-12 UTC)
+
+[runner-validation-20261112.log](runner-validation-20261112.log) preserves this
+continuation's commands and output: 16 runner safety tests and eight evidence
+checks pass using Python's standard-library unittest runner. Four preserved
+historical failure excerpts satisfy the new signatures; the older selector
+mutation fails the stricter check as intended. These checks do not execute the
+historical pytest tests or establish a new historical mutation result.
+
+The exact historical head remains absent locally. The selected interpreter has
+no pytest, Black is unavailable, and installation from PyPI failed because DNS
+resolution is unavailable. Both the focused pytest/coverage verification and
+the mandatory Black formatting/check commands were attempted and could not run.
+The required Black gate therefore still prevents committing the Python changes.
+
+Attempts to add `needs-human` and post the blocker on PR #1353 were rejected by
+the tool approval gate (`MCP tool call requires approval, but approval policy is
+never`). Neither action was applied. The final read-only PR check reports that
+#1353 merged at `2026-11-12T01:15:17Z`, with `draft: false`; the changes in this
+continuation remain local and uncommitted. No branch or PR was created.

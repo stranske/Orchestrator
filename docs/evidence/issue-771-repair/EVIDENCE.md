@@ -196,6 +196,12 @@ one-line production fix (`invoked: 4` for two events) and passing after
 
 - Mutation records (deliberate break -> failure -> restored pass, patch included) for all five original tests: [mutations/](mutations/) — one file per test ID.
 - Historical coverage accounting separating missing statements from unmeasured branches, with both commits' CI/coverage configs, raw after-state report, metadata and hashes: [coverage/SUMMARY.md](coverage/SUMMARY.md). Unavailable baseline and ranking provenance remain **unknown / not measured**.
+- The [machine-readable comparison](coverage/comparison.json) verifies both
+  commits' preserved configuration blobs and reports statement counts separately
+  from unmeasured branches. [Runner validation](mutations/runner-validation-20261112.log)
+  records 24 passing safety/evidence checks, alongside failed attempts to invoke
+  unavailable pytest and Black. These are not fresh historical mutation or
+  coverage measurements; the full replay remains pending.
 - Acceptance checklist: CI evidence §1 (preserved logs in [ci/](ci/)), mutations (this section), coverage (this section) link to preserved artifacts above. Historical-ranking provenance (§4): verified items cite issue/PR records; unrecovered per-line ranking provenance remains explicitly **unknown**.
 
 ## Commands executed for this continuation
