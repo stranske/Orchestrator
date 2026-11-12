@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -71,3 +73,70 @@ def test_evidence_makes_no_unsupported_combined_claims():
     assert "unknown" in evidence.lower()
     for test_id in ORIGINAL_FIVE:
         assert f"mutations/{test_id}.md" in evidence
+
+
+def test_raw_coverage_figures_and_provenance_match_documentation():
+    directory = EVIDENCE_DIR / "coverage"
+    raw = (directory / "run-39180639406-artifact-12156286098-coverage.json").read_bytes()
+    report = json.loads(raw)
+    metadata = json.loads((directory / "artifact-12156286098-metadata.json").read_text())
+    summary = (directory / "SUMMARY.md").read_text()
+    evidence = (EVIDENCE_DIR / "EVIDENCE.md").read_text()
+    assert hashlib.sha256(raw).hexdigest() in summary
+    assert metadata["id"] == 12156286098
+    assert metadata["name"] == "gate-coverage"
+    assert metadata["workflow_run"]["id"] == 39180639406
+    assert metadata["digest"].removeprefix("sha256:") in summary
+    assert report["meta"]["branch_coverage"] is False
+    target = report["files"]["src/feedback.py"]
+    counts = target["summary"]
+    assert counts["missing_lines"] == len(target["missing_lines"])
+    assert counts["covered_lines"] == len(target["executed_lines"])
+    assert counts["num_statements"] == counts["covered_lines"] + counts["missing_lines"]
+    assert "num_branches" not in counts and "missing_branches" not in counts
+    assert f'{counts["missing_lines"]} of {counts["num_statements"]} statements' in summary
+    assert f'{counts["covered_lines"]} covered, {counts["percent_covered_display"]}%' in summary
+    for label, key in (
+        ("Statements (`num_statements`)", "num_statements"),
+        ("Missing statements (`missing_lines`)", "missing_lines"),
+        ("Covered statements", "covered_lines"),
+    ):
+        row = next(line for line in evidence.splitlines() if line.startswith(f"| {label} |"))
+        assert row.split("|")[2].strip().strip("*") == str(counts[key])
+    assert (
+        f'| Statement coverage (report, rounded) | {counts["percent_covered_display"]}% |'
+        in evidence
+    )
+    for doc in (summary, evidence):
+        assert "shortfall" in doc and "unknown" in doc
+        assert "thousands of lines" not in doc
+        assert "by itself exceeds" not in doc
+
+
+def test_event_head_is_distinct_from_executed_checkout():
+    metadata = json.loads(
+        (EVIDENCE_DIR / "coverage" / "artifact-12156286098-metadata.json").read_text()
+    )
+    event_head = metadata["workflow_run"]["head_sha"]
+    checkout = "12c5c58517863f747972538c9bb17c568bc0bf49"
+    assert event_head == "18ad97a054dab7f6039dd42c8131bee04267748b"
+    assert checkout != event_head
+    for name, line_number in zip(CI_LOGS, (128, 185, 185)):
+        lines = (EVIDENCE_DIR / "ci" / name).read_text().splitlines()
+        assert f"HEAD is now at {checkout[:7]} Merge {event_head}" in lines[line_number - 1]
+        assert checkout in "\n".join(lines)
+    evidence = (EVIDENCE_DIR / "EVIDENCE.md").read_text()
+    assert f"**Event headSha (not executed checkout):** `{event_head}`" in evidence
+    assert f"**Executed synthetic merge checkout:** `{checkout}`" in evidence
+
+
+def test_isolated_original_five_transcript_preserves_command_and_result():
+    transcript = (EVIDENCE_DIR / "ci" / "original-five-18ad97a.log").read_text()
+    assert "HEAD: 18ad97a054dab7f6039dd42c8131bee04267748b" in transcript
+    assert "Checkout: /private/tmp/issue771-original-five-" in transcript
+    assert (
+        "Command: /opt/anaconda3/bin/python3 -m pytest -q "
+        "tests/test_feedback_registry_queries.py\n"
+    ) in transcript
+    assert "5 passed" in transcript
+    assert "Exit status: 0" in transcript
