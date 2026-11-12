@@ -589,6 +589,96 @@ def test_weekly_review_prints_the_live_line(world, monkeypatch, tmp_path):
     assert again["attempted"] == 0 and len(world["calls"]) == 1
 
 
+@pytest.mark.parametrize("report_state", ["missing", "empty", "retry"])
+def test_persisted_advice_survives_report_loss_and_still_grades(world, report_state, tmp_path):
+    first = live.run_live(**world["common"])
+    original = first["rows"][0]
+    report = json.loads(world["path"].read_text())
+    if report_state == "missing":
+        world["path"].unlink()
+    else:
+        report["rows"] = []
+        if report_state == "retry":
+            report["rows"] = [
+                {key: original[key] for key in ("case_id", "run_id", "target", "source")}
+            ]
+            report["rows"][0].update(error="backend interrupted", attempts=1)
+        world["path"].write_text(json.dumps(report))
+    saved = world["path"].read_bytes() if world["path"].exists() else None
+    with feedback._conn() as conn:
+        conn.execute(
+            "UPDATE outcomes SET durability='broke_later', durability_checked_ts=? "
+            "WHERE run_id='live-1'",
+            (feedback.DURABILITY_DETECTION_SINCE + 10,),
+        )
+    with sqlite3.connect(feedback.DB_PATH) as conn:
+        before = list(conn.iterdump())
+
+    line = live.weekly_line(world["path"])
+    assert "advised 1, uncertified 0, graded 1 (agree 1, disagree 0)" in line
+    assert "agreement 1.000 against 0.75" in line
+    assert (world["path"].read_bytes() if world["path"].exists() else None) == saved
+
+    # Explicit-db reconciliation and the next daily pass recover the same observation.
+    recovered_path = tmp_path / "recovered.json"
+    summary = live.reconcile_live(db=feedback.DB_PATH, path=recovered_path)
+    assert (summary["advised"], summary["graded"], summary["agree"]) == (1, 1, 1)
+    second = live.run_live(**world["common"])
+    assert second["attempted"] == 0 and len(world["calls"]) == 1
+    assert second["summary"] == summary
+    recovered = second["rows"]
+    assert len(recovered) == 1
+    assert recovered[0]["case_id"] == original["case_id"]
+    assert recovered[0]["advice_event"] == original["advice_event"]
+    assert recovered[0]["certification"]["evaluated_sha"] == world["sha"]
+    with sqlite3.connect(feedback.DB_PATH) as conn:
+        assert list(conn.iterdump()) == before, "recovery changes no Brain row"
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"validation_status": "rejected"},
+        {"producer": "role-verifier"},
+        {"phase": "verification"},
+        {"run_id": "live-1"},
+        {"payload_json": "not json"},
+        {"payload_json": "[]"},
+        {"payload_json": '{"live_shadow": []}'},
+        {"advice": {"case_id": "wrong"}},
+        {"advice": {"evaluated_sha": None}},
+        {"advice": {"run_id": "missing-run"}},
+        {"advice": {"target": "owner/repo#2"}},
+        {"advice": {"decision": []}},
+    ],
+)
+def test_receipt_recovery_ignores_rejected_or_invalid_advice(world, changes):
+    live.run_live(**world["common"])
+    world["path"].unlink()
+    with sqlite3.connect(feedback.DB_PATH) as conn:
+        if "advice" in changes:
+            payload = json.loads(
+                conn.execute("SELECT payload_json FROM completion_events").fetchone()[0]
+            )
+            payload["live_shadow"].update(changes["advice"])
+            conn.execute("UPDATE completion_events SET payload_json=?", (json.dumps(payload),))
+        else:
+            for column, value in changes.items():
+                assert column in {
+                    "validation_status",
+                    "producer",
+                    "phase",
+                    "run_id",
+                    "payload_json",
+                }
+                conn.execute(f"UPDATE completion_events SET {column}=?", (value,))
+        before = list(conn.iterdump())
+    assert live._load_rows(world["path"], feedback.DB_PATH) == []
+    with sqlite3.connect(feedback.DB_PATH) as conn:
+        assert list(conn.iterdump()) == before
+    assert not world["path"].exists() and len(world["calls"]) == 1
+
+
 def test_a_failed_role_run_is_retried_up_to_the_cap_and_counted_as_failed(world):
     boom = {"n": 0}
 

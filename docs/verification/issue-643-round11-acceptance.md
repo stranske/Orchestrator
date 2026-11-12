@@ -291,3 +291,37 @@ loaded from official upstream repositories into `/tmp` because pytest/Black are
 absent and package-server DNS is unavailable. The first check used a periodic
 asyncio wakeup to keep completion notifications moving; formatting behavior was
 unchanged.
+
+### 2026-11-12: preserve live M2 observations after report loss
+
+Found a production reporting gap: a committed advice receipt prevented repeat
+dispatch after report loss, but its observation disappeared from the weekly
+counts and durability grading. Added read-only receipt recovery to the live
+report loader, used by daily dispatch, reconciliation, and weekly rendering.
+Existing detailed advice rows remain intact. Recovery replaces missing or
+unfinished rows only after checking the receipt's producer, phase, status,
+validation, case identity, evaluated revision, and original run/target.
+It does not dispatch a role from serialized metadata or write any Brain row.
+
+The new lifecycle regression failed before the repair for missing, empty, and
+stale retry reports; all three cases pass afterward. Additional tests reject
+malformed or rejected receipts. The M2 integration tests recover all 20 advice
+rows after report loss and preserve the 0/20 and 14/20 retirement decisions and
+the 15/20 qualification decision, without another dispatch or changed outcomes.
+These are private-Brain synthetic observations, not production M2 evidence.
+
+Validation: focused pytest suite **193 passed, 2 existing environment skips**;
+**3 M2 integration scenarios passed**; live selftest passed; required Black
+check passed with **699 files left unchanged**. Temporary official upstream
+pytest/Black sources supplied the missing tools. Black used one worker and
+periodic event-loop wakeups for this restricted host.
+
+The commit attempt failed because `.git/index.lock` cannot be created on the
+read-only `.git` mount. Source, tests, and this note remain uncommitted.
+GitHub rejected the `needs-human` label and blocker comment with
+`MCP tool call requires approval, but approval policy is never`.
+PR #1356 was read back as open and ready for review (`draft=false`).
+
+The sole remaining production checkbox stays unchecked: owner sync and authentic
+live receipts are still needed, and this work cannot establish the elapsed
+2026-11-08 production deadline. No acceptance checklist was changed.

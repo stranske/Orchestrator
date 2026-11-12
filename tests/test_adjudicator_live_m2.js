@@ -92,6 +92,13 @@ with feedback._conn() as conn:
                  "WHERE run_id='live-20'", (now + 2,))
 complete = observe("complete")
 
+# A receipt committed before a lost report still contributes to the M2 decision.
+before = outcomes()
+live.report_path().unlink()
+recovered = observe("recovered")
+assert recovered["summary"] == complete["summary"]
+assert outcomes() == before and len(calls) == 20 and advice_count() == 20
+
 # A new dispute proves that retirement stops dispatch, rather than just deduping the cohort.
 with feedback._conn() as conn:
     conn.execute("INSERT INTO runs(run_id,ts,target) VALUES ('new',?,'fixture/repo#21')",
@@ -109,7 +116,8 @@ with feedback._conn() as conn:
 before = outcomes()
 corrected = observe("corrected")
 assert outcomes() == before, "grading and weekly rendering must leave merge inputs unchanged"
-print(json.dumps({"short": short, "complete": complete, "corrected": corrected,
+print(json.dumps({"short": short, "complete": complete, "recovered": recovered,
+                  "corrected": corrected,
                   "attempted": daily["attempted"], "retired": daily.get("retired", False),
                   "calls": len(calls), "advice_events": advice_count()}))
 `;
@@ -145,6 +153,8 @@ for (const [agree, policy] of [[0, 'retired'], [14, 'retired'], [15, 'qualified'
       `live: disputes 20, advised 20, uncertified 0, graded 20 \\(agree ${agree}, disagree ${20 - agree}\\)`));
     assert.match(observed.complete.line, new RegExp(
       `agreement ${(agree / 20).toFixed(3)} against 0\\.75; qualification ${policy};`));
+    assert.deepEqual(observed.recovered.summary, observed.complete.summary);
+    assert.equal(observed.recovered.line, observed.complete.line);
     const retired = policy === 'retired';
     assert.equal(observed.retired, retired);
     assert.equal(observed.attempted, retired ? 0 : 1);

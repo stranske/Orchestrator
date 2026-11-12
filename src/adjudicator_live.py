@@ -446,12 +446,75 @@ def certify(
     return retro.qualify_collected_case(row, repository, qualification)
 
 
-def _load_rows(path: Path) -> list[dict]:
-    if not path.exists():
-        return []
-    report = json.loads(path.read_text())
+def _load_rows(path: Path, db: Path | None = None) -> list[dict]:
+    """Recover missing report rows from the advice receipts, without dispatch or Brain writes.
+
+    The event is committed before the report is replaced. A crash in that interval must not
+    leave an advice permanently excluded from selection but absent from the live M2 sample.
+    Existing detailed advice rows are retained; receipts replace only missing or unfinished rows.
+    """
+    report = json.loads(path.read_text()) if path.exists() else {}
     rows = report.get("rows") if isinstance(report, dict) else None
-    return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+    rows = [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+    by_case = {row.get("case_id"): index for index, row in enumerate(rows)}
+    with sqlite3.connect(f"file:{(db or feedback.DB_PATH).resolve()}?mode=ro", uri=True) as conn:
+        if not conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='completion_events'"
+        ).fetchone():
+            return rows
+        events = conn.execute(
+            "SELECT event_id,run_id,payload_json,created_ts FROM completion_events "
+            "WHERE producer=? AND phase=? AND event_type='role' AND status='recorded' "
+            "AND validation_status!='rejected' ORDER BY created_ts,event_id",
+            (retro.LIVE_ADVICE_PRODUCER, retro.LIVE_ADVICE_PHASE),
+        ).fetchall()
+        for event_id, event_run, payload, created in events:
+            try:
+                advice = json.loads(payload).get("live_shadow")
+            except (ValueError, AttributeError, TypeError):
+                continue
+            if not isinstance(advice, dict):
+                continue
+            case_id = advice.get("case_id")
+            sha = advice.get("evaluated_sha")
+            if (
+                not isinstance(case_id, str)
+                or re.fullmatch(r"[0-9a-f]{64}", case_id) is None
+                or event_run != f"adjudicator-live:{case_id}"
+                or not isinstance(sha, str)
+                or re.fullmatch(r"[0-9a-f]{40}", sha) is None
+                or not isinstance(advice.get("run_id"), str)
+                or not isinstance(advice.get("target"), str)
+                or advice.get("decision")
+                not in ("uphold_blocker", "reject_blocker", "needs_more_evidence")
+            ):
+                continue
+            original = conn.execute(
+                "SELECT target FROM runs WHERE run_id=?", (advice["run_id"],)
+            ).fetchone()
+            if original is None or original[0] != advice["target"]:
+                continue
+            index = by_case.get(case_id)
+            if index is not None and "proposal" in rows[index]:
+                continue
+            recovered = {
+                **advice,
+                "source": "live",
+                "attempted_at": created,
+                "advice_event": event_id,
+                "proposal": {"decision": advice["decision"]},
+                "certification": {
+                    "status": "certified",
+                    "evaluated_sha": sha,
+                    "recovered_from_event": event_id,
+                },
+            }
+            if index is None:
+                by_case[case_id] = len(rows)
+                rows.append(recovered)
+            else:
+                rows[index] = recovered
+    return rows
 
 
 MAX_ATTEMPTS = (
@@ -492,7 +555,7 @@ def run_live(
     runner = runner or roles.run_adjudicator_agent
     provider = provider or _exact_head_checkout
     snapshot_reader = snapshot_reader or pr_snapshot
-    rows = _load_rows(path)
+    rows = _load_rows(path, db)
     # Retirement stops dispatch while later durability can still drain through reconciliation.
     summary = reconcile_live(db=db, path=path, now=now)
     report = json.loads(path.read_text())
@@ -748,7 +811,7 @@ def reconcile_live(
     """
     now = int(time.time()) if now is None else now
     path = path or report_path()
-    rows = _load_rows(path)
+    rows = _load_rows(path, db)
     population = len(retro.disputes(db=db, now=now))
     return _grade_and_write(rows, db, path, now=now, population=population)
 
@@ -820,8 +883,9 @@ def _exact_head_checkout(target: str, sha: str):
 def weekly_line(path: Path | None = None) -> str:
     """Grade against current durability even if the latest dispatch was skipped."""
     try:
-        report = json.loads((path or report_path()).read_text())
-        rows = [row for row in report.get("rows", []) if isinstance(row, dict)]
+        path = path or report_path()
+        report = json.loads(path.read_text()) if path.exists() else {}
+        rows = _load_rows(path)
         retro._refresh_saved_verdicts(rows)
         summary = live_summary(rows)
         reasons = summary.get("uncertified_reasons") or {}
@@ -848,8 +912,11 @@ def weekly_line(path: Path | None = None) -> str:
             f"target 20 by 2026-11-08 {deadline}; "
             "blocking=dispatch retired or switched off; drainable=durability grading"
         )
+        population = report.get("population", "UNKNOWN")
+        if population == "UNKNOWN" and rows:
+            population = len(retro.disputes())
         return (
-            f"live: disputes {report.get('population', 'UNKNOWN')}, "
+            f"live: disputes {population}, "
             f"advised {summary['advised']}, uncertified {summary['uncertified']}, "
             f"graded {summary['graded']} (agree {summary['agree']}, disagree {summary['disagree']})"
             f"{refused}{failed}{qualification}"
