@@ -1342,9 +1342,7 @@ def test_live_shadow_adjudicates_a_new_dispute_once_and_grades_on_truth(
         live_shadow["calls"].append(kwargs)
         assert agent == "stub" and kwargs["timeout"] == 600
         assert kwargs["cwd"] == str(common["path"].parent / "repo")
-        packet, _end = json.JSONDecoder().raw_decode(
-            prompt.partition("Adjudication case JSON:\n")[2]
-        )
+        packet, _end = json.JSONDecoder().raw_decode(prompt.partition("Adjudication case JSON:\n")[2])
         assert packet["metadata_only"] is False
         ref = packet["ground_truth_evidence"]["qualified_ground_truth_refs"][0]
         response = proposal()
