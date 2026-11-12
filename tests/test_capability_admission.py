@@ -1163,7 +1163,11 @@ def _assert_consumer_sync_cli_requires_persisted_live_declarations():
             patch.object(
                 admission,
                 "commitments",
-                return_value={"clean": True, "dangling_citations": [], "overdue_without_record": []},
+                return_value={
+                    "clean": True,
+                    "dangling_citations": [],
+                    "overdue_without_record": [],
+                },
             ),
         ):
             assert run_cli()[0] == 0, "the ordinary report remains informational"
