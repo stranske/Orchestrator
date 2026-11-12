@@ -1379,8 +1379,7 @@ def test_live_shadow_adjudicates_a_new_dispute_once_and_grades_on_truth(
     checked = feedback.DURABILITY_DETECTION_SINCE + 10
     with feedback._conn() as conn:
         conn.execute(
-            "UPDATE outcomes SET durability=?, durability_checked_ts=? "
-            "WHERE run_id='new'",
+            "UPDATE outcomes SET durability=?, durability_checked_ts=? " "WHERE run_id='new'",
             (durability, checked),
         )
     before_grading = _brain_except_events(db)
