@@ -494,3 +494,50 @@ def test_unknown_exit_vibe_billing_refusal_sheds_the_seat(incident_paths, monkey
     assert marker["category"] == "quota"
     assert "tier_scope" not in marker  # the whole seat: the budget covers every vibe model
     assert marker["expires_at"] > marker["created_at"]  # expires on its own; the next run re-tests
+
+
+# agy prints a Go time.Duration, which drops leading zero units (2026-11-12).
+@pytest.mark.parametrize(
+    ("copy", "seconds"),
+    [
+        ("Resets in 3h8m36s.", 3 * 3600 + 8 * 60 + 36),
+        ("Resets in 45m0s.", 45 * 60),
+        ("Resets in 30s.", 30),
+        ("Resets in 1.5s.", 2),
+        ("Resets in 140h5m6s.", 140 * 3600 + 5 * 60 + 6),
+        ("Resets in 4d2h3m.", 4 * 86400 + 2 * 3600 + 3 * 60),
+    ],
+)
+def test_gemini_reset_reads_every_go_duration_form(copy, seconds):
+    line = (
+        "E1111 12:32:54.598632     462 errorreport.go:273] agent executor error: generating and "
+        "executing: RESOURCE_EXHAUSTED (code 429): Individual quota reached. Please upgrade your "
+        f"subscription to increase your limits. {copy}"
+    )
+    assert rate_incidents.provider_reset_at("gemini", [line], now=1000) == 1000 + seconds
+
+
+def test_resets_in_without_a_duration_is_not_a_reset():
+    assert rate_incidents.parse_resets_in_duration("Resets in a while", now=1000) is None
+
+
+# The verbatim muse terminal failure of the 2026-11-12 07:03Z trip-planner#2029 repair.
+MUSE_QUOTA_LINE = (
+    "run ended with Failed: API error 429 [request_id=8c08d686-ef50-42df-9e92-7bbd2b1842f0]: "
+    "Subscription quota exhausted. Your usage window resets at 2026-11-16T00:00:00Z. (rate_limit_error)"
+)
+MUSE_RESET = 1794787200  # 2026-11-16T00:00:00Z
+
+
+def test_muse_quota_refusal_sheds_until_its_stated_reset():
+    now = 1794467000  # 2026-11-12T07:03Z
+    assert rate_incidents.is_authoritative_error(MUSE_QUOTA_LINE)
+    assert rate_incidents.provider_reset_at("muse", [MUSE_QUOTA_LINE], now=now) == MUSE_RESET
+
+
+def test_muse_reset_ignores_prose_and_past_times():
+    now = 1794467000
+    prose = "Docs: your usage window resets at 2027-01-01T00:00:00Z"
+    assert rate_incidents.provider_reset_at("muse", [prose], now=now) is None
+    assert rate_incidents.provider_reset_at("muse", [MUSE_QUOTA_LINE], now=MUSE_RESET + 1) is None
+    assert rate_incidents.provider_reset_at("claude", [MUSE_QUOTA_LINE], now=now) is None
