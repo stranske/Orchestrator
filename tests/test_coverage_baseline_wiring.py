@@ -162,6 +162,7 @@ def _run_discovery(
     unavailable: set[str] | None = None,
     directories: set[str] | None = None,
     use_retry_helper: bool = False,
+    timeout: float = 30,
 ) -> dict:
     """Execute workflow discovery with no network, repository, or runner side effects."""
     node = shutil.which("node")
@@ -185,10 +186,16 @@ def _run_discovery(
         text=True,
         # Bound the whole child, including Node startup and asynchronous discovery.
         # The flat-mirror shard runs this alongside other subprocess-heavy tests.
-        timeout=30,
+        timeout=timeout,
     )
     assert completed.returncode == 0, completed.stderr
     return json.loads(completed.stdout)
+
+
+def test_discovery_deadline_terminates_nonterminating_script(monkeypatch):
+    monkeypatch.setattr(__import__(__name__), "_discovery_script", lambda _: "while (true) {}")
+    with pytest.raises(subprocess.TimeoutExpired):
+        _run_discovery("unused", [], existing=set(), timeout=0.2)
 
 
 def _assert_rejection_is_recorded(result: dict, workflow: str) -> None:

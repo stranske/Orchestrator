@@ -1949,12 +1949,34 @@ def _current_statement_lines(source: str, recorded: list[dict]) -> list[int]:
     current_lines = []
     start = 0
     for item in recorded:
-        try:
-            start = source_lines.index(item["text"], start) + 1
-        except ValueError:
+        matches = [
+            i + 1 for i in range(start, len(source_lines)) if source_lines[i] == item["text"]
+        ]
+        if not matches:
             pytest.fail(f"Recorded statement from line {item['line']} is absent: {item['text']!r}")
+        if len(matches) > 1:
+            pytest.fail(
+                f"Recorded statement from line {item['line']} is ambiguous at {matches}: {item['text']!r}"
+            )
+        start = matches[0]
         current_lines.append(start)
     return current_lines
+
+
+def test_current_statement_lines_preserves_unique_ordered_matches():
+    assert _current_statement_lines(
+        "prefix\nfirst\nsecond\n", [{"line": 1, "text": "first"}, {"line": 2, "text": "second"}]
+    ) == [2, 3]
+
+
+def test_current_statement_lines_rejects_missing_statement():
+    with pytest.raises(pytest.fail.Exception, match="is absent"):
+        _current_statement_lines("other\n", [{"line": 1, "text": "missing"}])
+
+
+def test_current_statement_lines_rejects_duplicate_eligible_text():
+    with pytest.raises(pytest.fail.Exception, match="is ambiguous"):
+        _current_statement_lines("same\nsame\n", [{"line": 1, "text": "same"}])
 
 
 def test_published_head_measurement_matches_ranked_source_lines():

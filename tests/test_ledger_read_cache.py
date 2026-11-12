@@ -165,14 +165,14 @@ def test_an_admission_report_reads_the_ledger_once(tmp_path, monkeypatch):
         rows[cap_id] = row
     path = tmp_path / "capabilities.json"
     capabilities.save(rows, path)
-    reads: list[Path] = []
-    real = capabilities.load_declared
+    reads: list[tuple[Path, bool]] = []
+    real = capabilities.load
 
-    def counted(where=capabilities.REG):
-        reads.append(Path(where))
-        return real(where)
+    def counted(where=capabilities.REG, *, create=True):
+        reads.append((Path(where), create))
+        return real(where, create=create)
 
-    monkeypatch.setattr(admission.capabilities, "load_declared", counted)
+    monkeypatch.setattr(capabilities, "load", counted)
     ctx = {
         "audit_rows": {},
         "fixtures": set(),
@@ -183,7 +183,7 @@ def test_an_admission_report_reads_the_ledger_once(tmp_path, monkeypatch):
     }
     rep = admission.report(path=path, ctx=ctx)
     assert rep["total"] == 3, rep["total"]
-    assert reads == [path], f"one report read the ledger {len(reads)} times"
+    assert reads == [(path, False)], f"one report read the ledger {len(reads)} times"
 
 
 def test_a_report_that_builds_its_own_context_still_reads_the_ledger_once(tmp_path, monkeypatch):
@@ -201,14 +201,14 @@ def test_a_report_that_builds_its_own_context_still_reads_the_ledger_once(tmp_pa
         rows[cap_id] = row
     path = tmp_path / "capabilities.json"
     capabilities.save(rows, path)
-    reads: list[Path] = []
-    real = capabilities.load_declared
+    reads: list[tuple[Path, bool]] = []
+    real = capabilities.load
 
-    def counted(where=capabilities.REG):
-        reads.append(Path(where))
-        return real(where)
+    def counted(where=capabilities.REG, *, create=True):
+        reads.append((Path(where), create))
+        return real(where, create=create)
 
-    monkeypatch.setattr(capabilities, "load_declared", counted)
+    monkeypatch.setattr(capabilities, "load", counted)
     rep = admission.report(path=path)
     assert rep["total"] == 3, rep["total"]
-    assert reads == [path], f"one report read the ledger {len(reads)} times: {reads}"
+    assert reads == [(path, False)], f"one report read the ledger {len(reads)} times: {reads}"
