@@ -232,3 +232,35 @@ PR #1354 was verified open with `draft=false`. Publishing the blocker comment
 and adding `needs-human` were rejected by the GitHub connector because the
 operations require approval while this run's approval policy is `never`.
 No hosted task metadata was changed.
+
+## 2026-11-12 CLI process regression
+
+Added `tests/test_capability_consumer_sync_cli.js`, following the existing Node
+tests that exercise Python CLIs. Each command uses a fresh Python process with
+explicit disposable runtime and ledger paths; no admission context is mocked.
+The test proves that an empty ledger and a clean but unpersisted preview fail,
+then invokes the production writing loader and checks successful JSON and text
+reports. Persisted prose, unresolved, undeclared, and reviewed-absent consumers
+still fail even with no pending declaration edits. Report commands preserve
+ledger bytes, and reconciliation preserves the existing lifecycle and evidence.
+
+`node --test --test-isolation=none tests/test_capability_consumer_sync_cli.js`
+passed all five tests. The existing declaration and persisted-sync regressions
+also passed by direct Python invocation; the existing route-weights CLI test
+file passed under Node. Pytest and Black remain unavailable, and the attempted
+installation failed because PyPI DNS could not resolve. This change edits no
+Python files.
+
+These disposable-ledger checks do not establish the owner's post-sync live
+result. That acceptance checkbox remains unchecked. Run
+`python3 src/capability_admission.py --check-consumer-sync` on the actual runtime
+after its normal deployment/sync and retain the CONSUMERS and CONSUMER SYNC
+output. Adding `needs-human` on PR #1354 was denied by the GitHub connector:
+the operation requires approval, while this run's approval policy is `never`.
+Posting the blocker comment was denied for the same reason. PR #1354 was
+verified open with `draft=false`.
+
+The commit attempt failed before staging: Git could not create `.git/index.lock`
+because `.git` is mounted read-only. The new test file and this evidence update
+remain uncommitted and must be committed from a checkout with writable Git
+metadata. Syntax and whitespace checks passed.
