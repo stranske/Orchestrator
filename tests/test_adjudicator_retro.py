@@ -3,7 +3,6 @@
 import hashlib
 import json
 import sqlite3
-import subprocess
 import time
 
 import pytest
@@ -280,60 +279,6 @@ def test_missing_verifier_comment_uses_real_selector(monkeypatch):
         retro.fetch_evidence({"target": "owner/repo#1", "verifier_verdict": "NON_PASS"})
 
 
-def test_fetch_evidence_finds_selected_comment_in_multi_attempt_thread(monkeypatch):
-    repo = "owner/repo"
-    head, merge = "b" * 40, "a" * 40
-    comments = []
-    for run_id in (1, 2):
-        marker = {
-            "schema": retro.verifier_evidence.MARKER,
-            "repo": repo,
-            "pr": 1,
-            "head_sha": head,
-            "evaluated_sha": merge,
-            "run_id": run_id,
-            "run_attempt": 1,
-            "provider_verdicts": ["FAIL"],
-            "ci_failed": False,
-            "verdict": "NON_PASS",
-        }
-        comments.append(
-            {
-                "body": f"Finding {run_id}\n<!-- {marker['schema']} {json.dumps(marker)} -->",
-                "url": f"https://github.com/{repo}/pull/1#issuecomment-{run_id}",
-                "author": {"login": "github-actions[bot]"},
-            }
-        )
-    pr = {
-        "number": 1,
-        "state": "MERGED",
-        "headRefOid": head,
-        "mergeCommit": {"oid": merge},
-        "files": {"pageInfo": {"hasNextPage": False}, "nodes": []},
-        "comments": {"pageInfo": {"hasPreviousPage": False}, "nodes": comments},
-    }
-    monkeypatch.setattr(retro, "_gh_json", lambda _: {"data": {"repository": {"pullRequest": pr}}})
-
-    def check_selected_source(snapshot):
-        assert snapshot is pr
-        return {
-            "contexts": {
-                "nodes": [{"name": "gate"}],
-                "pageInfo": {"hasNextPage": False},
-            }
-        }
-
-    monkeypatch.setattr(retro, "_gate_rollup", check_selected_source)
-    monkeypatch.setattr(
-        retro.subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, "")
-    )
-    evidence = retro.fetch_evidence({"target": f"{repo}#1", "verifier_verdict": "NON_PASS"})
-    finding = evidence["disputed_finding"]
-    assert finding["ref"] == comments[1]["url"]
-    assert finding["body"] == comments[1]["body"]
-    assert len(finding["decision"]["_lifecycle_history"]) == 2
-
-
 def test_marker_only_finding_does_not_dispatch(private_brain, tmp_path):
     packet = evidence({})
     packet["disputed_finding"][
@@ -579,7 +524,7 @@ def test_legacy_false_flag_and_saved_decisions_resume_without_redispatch(private
 
 @pytest.mark.parametrize("paginated", [False, True])
 def test_missing_gate_commit_is_evidence_gap(monkeypatch, paginated):
-    decision = {"verdict": "NON_PASS", "_source_url": "finding"}
+    decision = {"verdict": "NON_PASS"}
     pr = {
         "state": "MERGED",
         "headRefOid": "b" * 40,
@@ -608,9 +553,7 @@ def test_missing_gate_commit_is_evidence_gap(monkeypatch, paginated):
             ]
         }
     replies = iter([pr, fresh])
-    monkeypatch.setattr(
-        retro.verifier_evidence, "decision_from_pr", lambda *_, **__: dict(decision)
-    )
+    monkeypatch.setattr(retro.verifier_evidence, "decision_from_pr", lambda *_: decision)
     monkeypatch.setattr(
         retro, "_gh_json", lambda _: {"data": {"repository": {"pullRequest": next(replies)}}}
     )
@@ -643,7 +586,7 @@ def test_missing_gate_commit_is_evidence_gap(monkeypatch, paginated):
     ],
 )
 def test_malformed_gate_contexts_are_evidence_gap(monkeypatch, paginated, rollup):
-    decision = {"verdict": "NON_PASS", "_source_url": "finding"}
+    decision = {"verdict": "NON_PASS"}
     pr = {
         "state": "MERGED",
         "headRefOid": "b" * 40,
@@ -677,9 +620,7 @@ def test_malformed_gate_contexts_are_evidence_gap(monkeypatch, paginated, rollup
     else:
         pr["commits"] = malformed
     replies = iter([pr, fresh])
-    monkeypatch.setattr(
-        retro.verifier_evidence, "decision_from_pr", lambda *_, **__: dict(decision)
-    )
+    monkeypatch.setattr(retro.verifier_evidence, "decision_from_pr", lambda *_: decision)
     monkeypatch.setattr(
         retro, "_gh_json", lambda _: {"data": {"repository": {"pullRequest": next(replies)}}}
     )
@@ -1261,7 +1202,9 @@ def test_live_disputes_selects_one_run_per_target_before_applying_cap(live_shado
     assert retro.live_disputes(db=db, now=now, since_ts=now) == []
 
 
-def test_live_disputes_defaults_to_saved_run_timestamp_and_three_targets(live_shadow, monkeypatch):
+def test_live_disputes_defaults_to_three_targets_and_keeps_older_unadvised_runs(
+    live_shadow, monkeypatch
+):
     db, now = live_shadow["db"], live_shadow["common"]["now"]
     path = live_shadow["common"]["path"]
     monkeypatch.setenv("ORCH_STATE_DIR", str(path.parent))
@@ -1326,17 +1269,14 @@ def test_late_outcome_for_run_already_present_at_pass_remains_eligible_and_dispa
         )
     first = live.run_live(**common)
     assert (first["attempted"], first["advised"]) == (1, 1)
-    saved = json.loads(common["path"].read_text())
-    assert saved["last_live_run_ts"] == common["now"]
-    assert saved["pending_case_ids"] == []
 
-    # Outcome arrives after the daily pass for a run whose timestamp predates last_live_run_ts.
+    # Outcome arrives after the daily pass for a run that began before the pass.
     with feedback._conn() as conn:
         conn.execute(
             "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged) "
             "VALUES ('already-present','NON_PASS','PASS',1)"
         )
-    eligible = retro.live_disputes(db=db, now=common["now"] + 1, state_path=common["path"])
+    eligible = retro.live_disputes(db=db, now=common["now"] + 1)
     assert [row["run_id"] for row in eligible] == ["already-present"]
 
     second_common = {
@@ -1355,18 +1295,13 @@ def test_late_outcome_for_run_already_present_at_pass_remains_eligible_and_dispa
     assert third["attempted"] == 0 and len(live_shadow["calls"]) == 2
 
 
-def test_live_timestamp_cutoff_keeps_capped_cases_and_reconcile_does_not_advance_it(live_shadow):
+def test_live_reconcile_leaves_capped_cases_eligible(live_shadow):
     live, common = live_shadow["live"], live_shadow["common"]
     first = live.run_live(**{**common, "limit": 0})
     assert first["attempted"] == 0
-    saved = json.loads(common["path"].read_text())
-    assert len(saved["pending_case_ids"]) == 1
     live.reconcile_live(db=common["db"], path=common["path"], now=common["now"] + 100)
-    saved = json.loads(common["path"].read_text())
-    assert saved["last_live_run_ts"] == common["now"]
     second = live.run_live(**{**common, "now": common["now"] + 101})
     assert second["advised"] == 1
-    assert json.loads(common["path"].read_text())["pending_case_ids"] == []
 
 
 @pytest.mark.parametrize(

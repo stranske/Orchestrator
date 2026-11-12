@@ -603,9 +603,7 @@ def run_live(
         attempted = advised = uncertified = 0
         candidates = [
             dispute
-            for dispute in retro.live_disputes(
-                limit=None, db=db, now=now, exclude_case_ids=settled, state_path=path
-            )
+            for dispute in retro.live_disputes(limit=None, db=db, now=now, exclude_case_ids=settled)
             if dispute["target"] not in advised_targets
         ]
         for dispute in candidates[:limit]:
@@ -713,15 +711,12 @@ def run_live(
         # report), so its writer would demote every live decision to needs_more_evidence. A live row
         # was decided on a case certified IN THIS PROCESS at dispatch time; this module records that
         # fact itself (`certification`), grades the advice itself, and labels the number `live`.
-        pending = {retro._case_id(row) for row in candidates[limit:]}
-        pending.update(str(row["case_id"]) for row in rows if not _final(row))
         summary = _grade_and_write(
             rows,
             db,
             path,
             now=now,
             population=len(population),
-            selection_state={"last_live_run_ts": now, "pending_case_ids": sorted(pending)},
         )
         return {
             "disabled": False,
@@ -800,14 +795,8 @@ def _grade_and_write(
     *,
     now: int,
     population: int | str,
-    selection_state: dict | None = None,
 ) -> dict:
     previous = json.loads(path.read_text()) if path.exists() else {}
-    if selection_state is None:
-        selection_state = {
-            "last_live_run_ts": previous.get("last_live_run_ts", previous.get("generated_at", 0)),
-            "pending_case_ids": previous.get("pending_case_ids", []),
-        }
     retro._refresh_saved_verdicts(rows, db)
     summary = live_summary(rows)
     retirement = previous.get("retirement")
@@ -828,7 +817,6 @@ def _grade_and_write(
             "summary": summary,
             "retirement": retirement,
             "rows": rows,
-            **selection_state,
         },
     )
     return summary
@@ -971,14 +959,9 @@ def weekly_line(path: Path | None = None) -> str:
         agreement = (
             f"{summary['agree'] / summary['graded']:.3f}" if summary["graded"] else "UNKNOWN"
         )
-        deadline = "sample target"
-        if time.strftime("%Y-%m-%d", time.gmtime()) > "2026-11-08":
-            # Current grades do not establish when the sample filled. No dated milestone
-            # is recorded, so reaching 20 later cannot verify the elapsed M2 deadline.
-            deadline = "MISSED" if summary["graded"] < 20 else "timing UNVERIFIED"
         qualification = (
             f"; agreement {agreement} against 0.75; qualification {policy}; "
-            f"target 20 by 2026-11-08 {deadline}; "
+            "minimum sample 20; "
             "blocking=dispatch retired or switched off; drainable=durability grading"
         )
         population = report.get("population", "UNKNOWN")

@@ -1019,7 +1019,6 @@ def live_disputes(
     db: Path | None = None,
     now: int | None = None,
     exclude_case_ids: frozenset[str] | set[str] = frozenset(),
-    state_path: Path | None = None,
 ) -> list[dict]:
     """The disputes the live arm has still to handle, newest first, at most `limit`.
 
@@ -1031,7 +1030,6 @@ def live_disputes(
     cut at the last run would drop every dispute persisted after it for a run that began before
     it, and every dispute past the per-run cap. `since_ts`, when given, is a strict lower bound.
     """
-    _ = state_path
     if limit is not None and limit <= 0:
         return []
     seen_targets = live_advised_targets(db)
@@ -1230,16 +1228,18 @@ def fetch_evidence(row: dict) -> dict:
         )
     if pr["comments"]["pageInfo"]["hasPreviousPage"] or pr["files"]["pageInfo"]["hasNextPage"]:
         raise ValueError("truncated verifier comment or diff evidence")
-    decision = verifier_evidence.decision_from_pr(repo, pr, include_source=True)
+    decision = verifier_evidence.decision_from_pr(repo, pr)
     if not decision or decision["verdict"] != row["verifier_verdict"]:
         raise ValueError("current merge-bound verifier decision missing or changed")
     comments = pr["comments"]["nodes"]
-    source_url = decision.pop("_source_url", None)
     finding = next(
         (
             c
             for c in reversed(comments)
-            if source_url and isinstance(c, dict) and c.get("url") == source_url
+            if (
+                verifier_evidence.decision_from_pr(repo, {**pr, "comments": {"nodes": [c]}})
+                == decision
+            )
         ),
         None,
     )
