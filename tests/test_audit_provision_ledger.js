@@ -547,6 +547,48 @@ test('compares relative collector segment paths by their filesystem identity', (
     { now, writerPath: path.join(f.root, 'provision-events.ndjson') }).evidence_ready, true);
 });
 
+for (const refusals of [false, true]) {
+  test(`runtime directory aliases retain ${refusals ? 'every refusal' : 'a qualifying observation'}`, (t) => {
+    const end = new Date().toISOString();
+    const rows = refusals ? ['closer', 'opener'].map((lane) => event({ ts: end, lane })) : [];
+    const f = fixture(t, { '': ndjson(rows), '.old': ndjson(rows) }, end);
+    const alias = path.join(f.root, 'runtime-alias');
+    fs.symlinkSync(f.root, alias, 'dir');
+    // Observe through the directory alias with the real collector. Final ledger
+    // components remain regular files; a directory alias is not a linked ledger.
+    const observed = execute(process.env.PYTHON || 'python3',
+      ['-c', collect, alias, source, end], { cwd: f.root,
+        env: { ...process.env, PYTHONPATH: source, PYTHONDONTWRITEBYTECODE: '1' } });
+    assert.equal(observed.exit_code, 0, observed.stderr.toString());
+    fs.writeFileSync(f.receipt, observed.stdout);
+    const inputs = [f.receipt, path.join(f.root, 'provision-events.ndjson'),
+      path.join(f.root, 'provision-events.ndjson.old')];
+    const before = inputs.map((file) => fs.readFileSync(file));
+    // The writer, collector and CLI can spell the same runtime differently.
+    for (const [runtime, writerRoot] of [[f.root, alias], [alias, f.root]]) {
+      const result = execute(process.execPath, [script, runtime, source], { cwd: f.root,
+        env: { ...process.env, ORCH_LOCAL_RUNTIME: writerRoot,
+          ORCH_PROVISION_EVENTS_PATH: path.join(writerRoot, 'provision-events.ndjson') } });
+      assert.equal(result.error_code, null);
+      assert.equal(result.signal, null);
+      assert.equal(result.exit_code, refusals ? 1 : 0, result.stdout.toString());
+      const output = result.stdout.toString();
+      const report = JSON.parse(output.slice(output.indexOf('{')));
+      assert.equal(report.coverage, 'continuous');
+      assert.deepEqual(report.continuity_failures, []);
+      assert.equal(report.branch_refusals, refusals ? 4 : 0);
+      assert.equal(report.segments.length, 2);
+      assert.equal(report.evidence_ready, !refusals);
+      assert.equal(report.deployment_acceptance_verified, false);
+      assert.match(output, refusals ? /ledger evidence = unmet acceptance/
+        : /ledger evidence = ready/);
+    }
+    for (const [index, file] of inputs.entries()) {
+      assert.deepEqual(fs.readFileSync(file), before[index], file);
+    }
+  });
+}
+
 for (const location of ['outside', 'renamed']) {
   test(`rejects an unrelated zero ledger when the writer is ${location}`, (t) => {
     const f = fixture(t, { '': '' });

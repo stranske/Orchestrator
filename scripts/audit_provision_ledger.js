@@ -33,6 +33,18 @@ function readRegular(filename) {
   return fs.readFileSync(filename);
 }
 
+function segmentPath(filename) {
+  // Runtime directories may have aliases (for example /var and /private/var).
+  // Resolve only the parent: final-component symlinks must still be rejected by
+  // readRegular, and missing receipt paths must fail comparison without hiding counts.
+  try {
+    const absolute = path.resolve(filename);
+    return path.join(fs.realpathSync(path.dirname(absolute)), path.basename(absolute));
+  } catch {
+    return null;
+  }
+}
+
 function eligibleLines(bytes) {
   const lines = [];
   let start = 0;
@@ -50,7 +62,7 @@ function auditProvisionLedger(root, sourceDirectory, { now = new Date().toISOStr
   writerPath = process.env.ORCH_PROVISION_EVENTS_PATH ?? path.join(
     process.env.ORCH_LOCAL_RUNTIME ?? path.join(os.homedir(), '.codex', 'orchestrator'),
     'provision-events.ndjson') } = {}) {
-  root = path.resolve(root);
+  root = fs.realpathSync(root);
   const result = { schema_version: 1, deployment_acceptance_verified: false,
     reporter_sha256: sha256(readRegular(__filename)),
     coverage: 'UNKNOWN', continuous_since: null, checked_at: null,
@@ -95,8 +107,7 @@ function auditProvisionLedger(root, sourceDirectory, { now = new Date().toISOStr
   if (!names.length) fail('no ledger');
   // Use the writer's effective configured path, not an unrelated zero ledger.
   // A collector that does not observe that path must establish a new baseline.
-  if (path.dirname(path.resolve(writerPath)) !== root
-      || !names.includes(path.basename(writerPath))) {
+  if (!names.some((name) => path.join(root, name) === segmentPath(writerPath))) {
     fail('writer ledger is not included in the collector directory and observation');
   }
   const observed = [];
@@ -134,7 +145,7 @@ function auditProvisionLedger(root, sourceDirectory, { now = new Date().toISOStr
   // data requires a fresh existing-collector observation, never a fabricated zero.
   if (!Array.isArray(packet?.segments) || packet.segments.length !== observed.length
       || observed.some((row) => !packet.segments.some((old) => typeof old?.path === 'string'
-        && path.resolve(old.path) === row.path
+        && segmentPath(old.path) === row.path
         && old.lines === row.lines && old.sha256 === row.sha256))) {
     fail('active/archive segments differ from the collector observation');
   }
