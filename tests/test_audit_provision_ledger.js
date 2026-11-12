@@ -500,6 +500,54 @@ test('source absence and nonregular segments are UNKNOWN without following symli
   assert.equal(auditProvisionLedger(f.root, f.root, { now }).coverage, 'UNKNOWN');
 });
 
+for (const replacement of ['directory', 'symlink']) {
+  test(`an archive replaced by a ${replacement} retains every readable refusal in CLI output`, (t) => {
+    const end = new Date().toISOString();
+    const rows = ['closer', 'opener'].flatMap((lane) => [
+      event({ ts: end, lane }), event({ ts: end, lane, cause: 'branch-exists' }),
+    ]);
+    const bytes = ndjson(rows);
+    const f = fixture(t, { '': bytes, '.old': bytes, '.older': bytes }, end);
+    assert.equal(f.audit().branch_refusals, 12);
+    assert.equal(f.audit().coverage, 'continuous');
+    const active = path.join(f.root, 'provision-events.ndjson');
+    const archive = active + '.older';
+    // Only disposable test inputs are replaced. The receipt still records all
+    // three segments, so the missing archive cannot qualify the visible count.
+    fs.unlinkSync(archive);
+    if (replacement === 'directory') fs.mkdirSync(archive);
+    else fs.symlinkSync(active, archive);
+    const inputs = [f.receipt, active, active + '.old'];
+    const before = inputs.map((file) => fs.readFileSync(file));
+    const env = { ...process.env, ORCH_LOCAL_RUNTIME: f.root };
+    delete env.ORCH_PROVISION_EVENTS_PATH;
+    const cli = execute(process.execPath, [script, f.root, source], { cwd: f.root, env });
+    assert.equal(cli.error_code, null);
+    assert.equal(cli.signal, null);
+    assert.equal(cli.exit_code, 1, cli.stderr.toString());
+    const output = cli.stdout.toString();
+    const report = JSON.parse(output.slice(output.indexOf('{')));
+    assert.equal(report.coverage, 'UNKNOWN');
+    assert.equal(report.evidence_ready, false);
+    assert.equal(report.deployment_acceptance_verified, false);
+    assert.equal(report.branch_refusals, 8);
+    assert.deepEqual(report.counts, { 'failed/branch-exists': 4, 'failed/branch-held': 4 });
+    assert.equal(report.segments.length, 2);
+    assert.match(output, /failed\(branch-held\|branch-exists\) = 8 over 7d/);
+    assert.match(output, /ledger evidence = unmet acceptance/);
+    assert.ok(report.continuity_failures.includes(
+      'ledger segment unreadable or not a regular file: provision-events.ndjson.older'));
+    assert.ok(report.continuity_failures.includes(
+      'active/archive segments differ from the collector observation'));
+    assert.ok(report.continuity_failures.includes('recount differs from the collector observation'));
+    for (const [index, file] of inputs.entries()) {
+      assert.deepEqual(fs.readFileSync(file), before[index], file);
+    }
+    if (replacement === 'directory') assert.deepEqual(fs.readdirSync(archive), []);
+    else assert.equal(fs.readlinkSync(archive), active);
+  });
+}
+
 for (const refusals of [false, true]) {
   test(`malformed receipt segment retains ${refusals ? 'all refusals' : 'an unmet zero'} in CLI output`, (t) => {
     const end = new Date().toISOString();
