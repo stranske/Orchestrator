@@ -299,3 +299,33 @@ The commit attempt stopped at staging: `git add` could not create `.git/index.lo
 because Git metadata is mounted read-only. The tested JavaScript changes and this
 evidence remain uncommitted and require a checkout with writable Git metadata.
 PR #1354 remains open and ready for review (`draft=false`).
+
+## 2026-11-12 measured-action CLI regression
+
+Reviewed commits `51438f31` and `b0379795` against the PR body. The five checked
+tasks already reflect verified implementation; the owner's post-sync live-ledger
+criterion remains unchecked. This runner has no default ledger at
+`/home/runner/.codex/orchestrator/capabilities.json` and no explicit
+`ORCH_CAPABILITIES_PATH`.
+
+Added a fresh-process CLI regression for the remaining distinction in that
+criterion: measured action debt is separate from declaration completeness.
+The test starts with a persisted, resolvable offload declaration and no Brain,
+then initializes a disposable SQLite Brain with the production schema. The
+report changes from `unmeasured` to `not_acting`, with no acting credit and
+`drained=false`, while `--check-consumer-sync` still exits zero in both JSON and
+text modes. Both modes preserve the ledger bytes and report declaration
+`DRAINABLE 0`. No context or monitor result is mocked.
+
+`node --test --test-isolation=none tests/test_capability_consumer_sync_cli.js`
+passed **8 tests**, with no skips. Node syntax validation and `git diff --check`
+passed. No Python files changed. These are disposable-ledger results, not
+evidence of an owner sync.
+
+The commit attempt failed at `git add` because `.git/index.lock` cannot be
+created on the read-only Git metadata mount. The test and this note remain
+uncommitted. The GitHub connector rejected the PR-body update, blocker comment,
+and `needs-human` label because each requires approval and this run's approval
+policy is `never`. No hosted task metadata changed. The owner still needs to
+sync normally and retain the actual runtime's CONSUMERS and CONSUMER SYNC output
+from `python3 src/capability_admission.py --check-consumer-sync`.

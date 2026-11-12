@@ -97,6 +97,38 @@ test('consumer sync CLI requires persisted reconciliation across fresh Python pr
   assert.deepEqual(row.event_history[0], { type: 'invocation', timestamp: 1 });
 });
 
+test('consumer sync CLI separates measured action debt from persisted declarations', async (t) => {
+  const { ledger, run, check, persist } = runtime(t);
+  const declaration = await run([
+    '-c', 'import capabilities; print(capabilities.KNOWN_DECLARATIONS["offload"]["downstream_consumer"])',
+  ], 0);
+  persist({
+    capability_id: 'offload', status: 'active', downstream_consumer: declaration.trim(),
+    event_history: [{ type: 'invocation', timestamp: 1 }], outcome_links: [],
+  });
+  const before = fs.readFileSync(ledger);
+  const unavailable = await check(0);
+  assert.deepEqual(unavailable.consumers.by_class.unmeasured, ['offload']);
+
+  // A real, readable Brain with no consuming runs establishes a measured zero.
+  // Use the production schema rather than replacing the monitor's context.
+  await run(['-c', 'import feedback; feedback._conn().close()'], 0);
+  const measured = await check(0);
+  assert.deepEqual(measured.consumer_sync, { live_rows: 1, pending: {} });
+  assert.deepEqual(measured.consumers.by_class.unmeasured, []);
+  assert.deepEqual(measured.consumers.by_class.not_acting, ['offload']);
+  assert.deepEqual(measured.consumers.by_class.acting, []);
+  assert.deepEqual(measured.consumers.drainable, []);
+  assert.equal(measured.consumers.drained, false, 'action debt must remain visible');
+  const text = await run([
+    path.join(modules, 'capability_admission.py'), '--check-consumer-sync',
+  ], 0);
+  assert.match(text, /not acting \(trailing window\) 1/);
+  assert.match(text, /prose 0, missing 0, undeclared 0 — DRAINABLE 0/);
+  assert.match(text, /CONSUMER SYNC: persisted consumer declarations match this tree/);
+  assert.deepEqual(fs.readFileSync(ledger), before, 'measuring action debt must preserve the ledger');
+});
+
 for (const [classification, declaration] of [
   ['prose', { downstream_consumer: 'No rail applies this output.' }],
   ['unresolved', { downstream_consumer: 'absent_module.py:consume' }],
