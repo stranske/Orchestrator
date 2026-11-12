@@ -1,5 +1,100 @@
 # Issue #1216 verification
 
+## Durable mutation replay, 2026-11-12
+
+Reviewed `cb8c1f90`, `37f9a651`, and `c0ab3093` before continuing on
+`codex/issue-1216`. The duplicate unchecked implementation tasks already have
+source and test evidence, and the dated live run below explicitly reports
+incomplete provider provenance. Checklist reconciliation was prepared at
+`/tmp/orch-1352-reconciled-body.md`; the GitHub body update was rejected with
+`MCP tool call requires approval, but approval policy is never`. No remote
+checkbox changed. The combined review/final-head CI tasks remain outstanding
+for a commit containing this round's changes.
+
+The earlier mutation table recorded the intended outcomes, but supplied no
+durable full transcripts or replay command. Added
+[`verify_profile_trial_mutations.py`](../../scripts/verify_profile_trial_mutations.py)
+to reproduce both mutations in a disposable source copy. It checks the exact
+pytest node and intended assertion using JUnit output, refuses setup errors,
+skips, unrelated failures and overwritten evidence, and restores the source
+byte for byte even if verification fails. Each subprocess uses fresh bytecode
+and isolated runtime state. The operational checkout is never mutated.
+
+The replay command exited 0:
+
+```text
+PYTHONPATH=/tmp/orch-1216-tools:/usr/lib/python3/dist-packages \
+  PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 scripts/verify_profile_trial_mutations.py \
+  --output docs/verification/issue-1216-mutations-20261112
+```
+
+The [receipt](issue-1216-mutations-20261112/receipt.json) dates the execution
+and binds the source and named test bytes. Source SHA-256 before and after
+both mutations is
+`eeeaf69a3d194d2b88a6e6b5f5f4f0e11a08916242a64ecc6dbecc34d24acd07`.
+Each mutation has a patch, full pytest output and JUnit reports for the passing
+baseline, intended failure and restored passing run.
+
+| Named test in `tests/test_profile_trial_ingest.py` | Intended failure | Restored result |
+| --- | --- | --- |
+| `test_ingest_is_one_transaction_and_a_mid_write_failure_leaves_nothing[_record_run_in_conn-2]` | [Early committed run survives rollback](issue-1216-mutations-20261112/early-commit-failure.log): `AssertionError: runs`, `assert 1 == 0`; exit 1 | [1 passed](issue-1216-mutations-20261112/early-commit-restored.log); exit 0 |
+| `test_local_identity_claims_require_an_independent_provider_lookup` | [Missing independent lookup accepted](issue-1216-mutations-20261112/identity-gate-removed-failure.log): `DID NOT RAISE ValueError`; exit 1 | [1 passed](issue-1216-mutations-20261112/identity-gate-removed-restored.log); exit 0 |
+
+Five new verifier tests check unique mutation anchors, rejection of false
+mutation evidence, source restoration on verification errors, preservation of
+existing evidence, and subprocess isolation/full-output capture. The five
+requested trial test files plus this verifier test file passed with **203 passed
+and 30 subtests passed**, exit 0, using `-m 'not slow'`. The profile-trial
+selftest also exited 0. Python 3.14.10 and official pytest 9.2.0 were used;
+`/opt/anaconda3/bin/python3` is absent here. Tool sources were assembled under
+`/tmp` through the GitHub connector after PyPI DNS failed; repository dependency
+files are unchanged. The five added cases increase the collection/pass
+expectations to 8805/8803; all ceilings are preserved. This is an inventory
+delta, not a full-suite passing claim.
+
+All six PR #1193 threads were reread on 2026-11-12. The existing
+[source/test dispositions](#review-dispositions-for-pr-1193) remain supported.
+For predecessor `c0ab30933089b8c810658e251803c79773b4e65d`,
+[CI run 43144212156](https://github.com/stranske/Orchestrator/actions/runs/43144212156)
+and [Gate run 43144212422](https://github.com/stranske/Orchestrator/actions/runs/43144212422)
+both concluded `success`. These checks do not cover the new replay script and
+tests. No new live worker execution or production provider identity is claimed.
+
+- [x] Capture both intended mutation failures and restored passing named tests
+  with durable transcripts and a repeatable verifier.
+- [x] Verify the new replay verifier and the requested trial regression suite.
+- [ ] Commit these changes on the existing branch and obtain final-head CI.
+
+The five new verifier tests also passed in an isolated flat-mirror layout,
+exit 0. Black 26.10.1 formatted both changed Python files at line length 100.
+The sandbox blocks its worker processes; using Black's serial `reformat_one`
+API populated the normal check cache without altering the formatter. The
+required unmodified CLI command then passed:
+
+```text
+PATH=/tmp/orch-1216-bin:$PATH \
+  PYTHONPATH=/tmp/orch-1216-tools:/usr/lib/python3/dist-packages:/usr/local/lib/python3.14/dist-packages:/opt/pipx/venvs/yamllint/lib/python3.14/site-packages \
+  XDG_CACHE_HOME=/tmp/orch-1216-cache BLACK_NUM_WORKERS=1 \
+  black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .
+711 files would be left unchanged; exit 0.
+```
+
+`git diff --check` passed, and the receipt's source/test hashes still match the
+working tree. Delivery stopped at `git add`:
+
+```text
+git add scripts/verify_profile_trial_mutations.py tests/test_profile_trial_mutations.py \
+  .verify-floor.json docs/verification/issue-1216-provenance.md \
+  docs/verification/issue-1216-mutations-20261112
+fatal: Unable to create '.../.git/index.lock': Read-only file system
+```
+
+No commit was created. Delivery requires a run permitting writes to this
+branch's `.git`; final delivered-head CI remains outstanding.
+Adding `needs-human` and posting the blocker comment were also rejected by
+automatic approval review with `MCP tool call requires approval, but approval
+policy is never`. Neither remote mutation occurred.
+
 ## Bounded identity-artifact reads, 2026-11-12
 
 Continued the first unchecked provenance task on `codex/issue-1216`, based on

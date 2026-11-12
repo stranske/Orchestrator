@@ -1,0 +1,13 @@
+F                                                                        [100%]CI_STORAGE_DIAGNOSTIC {"exitstatus": 1, "finish": {"reason": "helper_or_base_unavailable", "status": "unavailable"}, "start": {"reason": "helper_or_base_unavailable", "status": "unavailable"}}
+
+=================================== FAILURES ===================================
+_ test_ingest_is_one_transaction_and_a_mid_write_failure_leaves_nothing[_record_run_in_conn-2] _
+tests/test_profile_trial_ingest.py:152: in test_ingest_is_one_transaction_and_a_mid_write_failure_leaves_nothing
+    assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0, table
+E   AssertionError: runs
+E   assert 1 == 0
+tracked test inputs: NOT CHECKED -- /tmp/profile-trial-mutations-sx77ig5e is not a git checkout. In the exec mirror that loses nothing: its tests/ IS `git archive HEAD tests`, so every file in it was tracked
+=========================== short test summary info ============================
+FAILED tests/test_profile_trial_ingest.py::test_ingest_is_one_transaction_and_a_mid_write_failure_leaves_nothing[_record_run_in_conn-2] - AssertionError: runs
+assert 1 == 0
+1 failed in 0.43s

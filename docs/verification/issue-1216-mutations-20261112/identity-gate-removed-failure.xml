@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="0.432" timestamp="2026-11-12T03:02:24.765454+00:00" hostname="runnervmwuk1x"><testcase classname="tests.test_profile_trial_ingest" name="test_local_identity_claims_require_an_independent_provider_lookup" time="0.180"><failure message="Failed: DID NOT RAISE ValueError">tests/test_profile_trial_ingest.py:443: in test_local_identity_claims_require_an_independent_provider_lookup
+    with pytest.raises(ValueError, match="identity evidence is not authoritative"):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   Failed: DID NOT RAISE ValueError</failure></testcase></testsuite></testsuites>
