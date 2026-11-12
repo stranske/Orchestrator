@@ -1326,8 +1326,9 @@ def test_live_timestamp_cutoff_keeps_capped_cases_and_reconcile_does_not_advance
         ("reject_blocker", "broke_later", 0),
     ],
 )
+@pytest.mark.parametrize("merged", [0, 1], ids=["merge-rule-fail", "merge-rule-pass"])
 def test_live_shadow_adjudicates_a_new_dispute_once_and_grades_on_truth(
-    live_shadow, monkeypatch, decision, durability, agree
+    live_shadow, monkeypatch, decision, durability, agree, merged
 ):
     import switch_review
 
@@ -1355,6 +1356,8 @@ def test_live_shadow_adjudicates_a_new_dispute_once_and_grades_on_truth(
 
     monkeypatch.setattr(roles.dispatcher, "offload", backend)
     with feedback._conn() as conn:
+        # The role's advice must be graded independently of either merge-rule verdict.
+        conn.execute("UPDATE outcomes SET merged=? WHERE run_id='new'", (merged,))
         conn.execute(
             "INSERT INTO costs(run_id,cost_usd,source) VALUES ('backend-live',0.25,'ccusage')"
         )
@@ -1376,6 +1379,9 @@ def test_live_shadow_adjudicates_a_new_dispute_once_and_grades_on_truth(
     assert advice["target"] == "owner/repo#1" and advice["run_id"] == "new"
     assert advice["decision"] == decision and advice["backend"] == "stub"
     assert advice["case_id"] == first["rows"][0]["case_id"] and advice["cost_usd"] == 0.25
+    merge_rule_verdict = "PASS" if merged else "FAIL"
+    assert advice["merge_rule_verdict"] == merge_rule_verdict
+    assert first["rows"][0]["merge_rule_verdict"] == merge_rule_verdict
     assert _brain_except_events(db)["outcomes"] == outcomes_before, "no outcomes row written"
 
     writes = []
@@ -1428,7 +1434,7 @@ def test_live_shadow_adjudicates_a_new_dispute_once_and_grades_on_truth(
     before_grading = _brain_except_events(db)
     graded = live.reconcile_live(db=db, path=live_shadow["common"]["path"])
     assert (graded["graded"], graded["agree"], graded["disagree"]) == (1, agree, 1 - agree)
-    assert graded["merge_rule_agree"] == int(durability == "durable")
+    assert graded["merge_rule_agree"] == int(bool(merged) == (durability == "durable"))
     line = live.weekly_line(live_shadow["common"]["path"])
     assert line.startswith(
         "live: disputes 1, advised 1, uncertified 0, graded 1 "
