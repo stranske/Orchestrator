@@ -286,6 +286,65 @@ test('a refusal ages out only after a fresh observation with every archive retai
   }
 });
 
+for (const interrupted of [false, true]) {
+  test(`fresh zero-refusal observation ${interrupted ? 'resets' : 'preserves'} the baseline at the two-hour collector limit`, (t) => {
+    const f = fixture(t, {
+      '': ndjson(['closer', 'opener'].map((lane) => event({ lane, outcome: 'reclaimed' }))),
+      '.old': ndjson([event({ ts: cutoff, lane: 'closer' })]),
+      '.older': ndjson([event({ ts: cutoff, lane: 'opener', cause: 'branch-exists' })]),
+    });
+    const initial = f.audit();
+    assert.equal(initial.coverage, 'continuous');
+    assert.equal(initial.branch_refusals, 2);
+    assert.equal(initial.evidence_ready, false);
+    const segments = fs.readdirSync(f.root)
+      .filter((name) => name.startsWith('provision-events.ndjson'));
+    const before = segments.map((name) => fs.readFileSync(path.join(f.root, name)));
+    const next = interrupted ? '2026-11-11T14:00:00.123457+00:00'
+      : '2026-11-11T14:00:00.123456+00:00';
+    const observed = f.observe(next);
+    assert.equal(observed.branch_refusals, 0);
+    assert.equal(observed.coverage, interrupted ? 'UNKNOWN' : 'continuous');
+    assert.equal(observed.evidence_ready, !interrupted);
+    assert.equal(observed.continuous_since, interrupted ? next : cutoff);
+    assert.deepEqual(observed.continuity_failures, interrupted
+      ? ['collector continuity gap exceeds two hours'] : []);
+
+    const result = f.audit(next);
+    assert.equal(result.counted_through, next);
+    assert.equal(result.coverage, observed.coverage);
+    assert.equal(result.continuous_since, observed.continuous_since);
+    assert.equal(result.branch_refusals, 0);
+    assert.equal(result.evidence_ready, !interrupted);
+    assert.equal(result.deployment_acceptance_verified, false);
+    assert.equal(result.segments.length, 3);
+    assert.deepEqual(result.counts, { 'reclaimed/branch-held': 2 });
+    assert.match(formatReport(result), /failed\(branch-held\|branch-exists\) = 0 over 7d/);
+    assert.match(formatReport(result), interrupted
+      ? /ledger evidence = unmet acceptance/ : /ledger evidence = ready/);
+
+    if (interrupted) {
+      // Resuming the hourly tick clears the immediate gap, but it does not
+      // restore the week of observation that the interruption invalidated.
+      const resumed = '2026-11-11T15:00:00.123457+00:00';
+      const following = f.observe(resumed);
+      assert.deepEqual(following.continuity_failures, []);
+      assert.equal(following.continuous_since, next);
+      assert.equal(following.branch_refusals, 0);
+      assert.equal(following.coverage, 'UNKNOWN');
+      assert.equal(following.evidence_ready, false);
+      const audit = f.audit(resumed);
+      assert.equal(audit.evidence_ready, false);
+      assert.equal(audit.coverage, 'UNKNOWN');
+      assert.equal(audit.continuous_since, next);
+      assert.match(audit.continuity_failures.join('\n'), /seven continuous observed days/);
+    }
+    for (const [index, name] of segments.entries()) {
+      assert.deepEqual(fs.readFileSync(path.join(f.root, name)), before[index], name);
+    }
+  });
+}
+
 test('a fresh collector observation after archive loss cannot qualify a zero-refusal window', (t) => {
   const f = fixture(t, { '': ndjson([event({ outcome: 'reclaimed' })]),
     '.old': ndjson([event({ ts: cutoff })]), '.older': ndjson([event({ ts: cutoff })]) });
