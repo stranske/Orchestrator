@@ -1,11 +1,12 @@
 'use strict';
 
-// Read-only #1098 reporting over the existing hourly collector's observation.
+// Read-only provisioning acceptance and reporting over the hourly collector.
 // An old event timestamp never establishes a continuous observation baseline.
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { createHash } = require('node:crypto');
+const { execFileSync } = require('node:child_process');
 
 const week = 7n * 24n * 3600n * 1000000n;
 const maxGap = 2n * 3600n * 1000000n;
@@ -58,8 +59,38 @@ function eligibleLines(bytes) {
   return lines;
 }
 
+function deploymentIdentity(root, sourceDirectory, revision) {
+  if (!/^[0-9a-f]{40}$/.test(revision)) throw new Error('full delivered SHA required');
+  const generation = fs.realpathSync(sourceDirectory);
+  const name = path.basename(generation);
+  const latest = readRegular(path.join(root, 'mirror-sync-history.jsonl')).toString('utf8')
+    .trimEnd().split('\n').map((line) => JSON.parse(line)).reverse()
+    .find((row) => row.outcome === 'deployed');
+  if (!/^orchestrator-mirror\.generation-[0-9a-f]{32}$/.test(name)
+      || latest?.detail !== name || latest.mode !== 'ci-verdict'
+      || !/^[0-9a-f]{7,40}$/.test(latest.sha) || !revision.startsWith(latest.sha)) {
+    throw new Error('latest normal deployment does not identify the installed generation and SHA');
+  }
+  instant(latest.ts);
+  const installedRevision = execFileSync('git', ['rev-parse', '--verify', `${latest.sha}^{commit}`])
+    .toString().trim();
+  if (installedRevision !== revision) throw new Error('installer SHA resolves to a different commit');
+  // The installer history uses an abbreviated SHA. Bind the actual acceptance
+  // inputs to the full delivered commit in the calling checkout.
+  for (const file of ['src/provision.py', 'src/followup_evidence.py',
+    'scripts/audit_provision_ledger.js']) {
+    const installed = file.startsWith('src/') ? path.basename(file) : file;
+    const committed = execFileSync('git', ['show', `${revision}:${file}`]);
+    if (!committed.equals(readRegular(path.join(generation, installed)))
+        || (file.startsWith('scripts/') && !committed.equals(readRegular(__filename)))) {
+      throw new Error(`installed or running acceptance input differs from delivered SHA: ${file}`);
+    }
+  }
+  return { generation, deployed_at: latest.ts, revision_prefix: latest.sha };
+}
+
 function auditProvisionLedger(root, sourceDirectory, { now = new Date().toISOString(),
-  observedAfter = null,
+  observedAfter = null, revision = null,
   writerPath = process.env.ORCH_PROVISION_EVENTS_PATH ?? path.join(
     process.env.ORCH_LOCAL_RUNTIME ?? path.join(os.homedir(), '.codex', 'orchestrator'),
     'provision-events.ndjson') } = {}) {
@@ -81,6 +112,26 @@ function auditProvisionLedger(root, sourceDirectory, { now = new Date().toISOStr
   } catch {
     fail('collector receipt missing or malformed; collect with the existing hourly tick');
   }
+  let deploymentStart = null;
+  const postdeployment = [];
+  if (revision !== null) {
+    result.cohort = { revision, deployment: null, available: 0, evaluated: 0,
+      sha256: null, counts: {}, branch_refusals: 0, accepted: false };
+    try {
+      const identity = deploymentIdentity(root, sourceDirectory, revision);
+      result.cohort.deployment = identity;
+      deploymentStart = instant(identity.deployed_at);
+      if (!Object.entries(identity).every(([key, value]) => packet?.deployment?.identity?.[key] === value)
+          || packet.deployment.failure !== null) {
+        fail(`continuous deployment observation unavailable: ${packet?.deployment?.failure ?? 'collector provenance differs'}`);
+      }
+      if (!packet || instant(packet.checked_at) <= deploymentStart) {
+        fail('collector has not observed after deployment');
+      }
+    } catch (error) {
+      fail(`deployment provenance unavailable: ${error.message}`);
+    }
+  }
   // A missing receipt loses continuity, never the visible failures. Recount the
   // current window in that case, explicitly naming its endpoint in the report.
   let end = instant(now);
@@ -94,9 +145,12 @@ function auditProvisionLedger(root, sourceDirectory, { now = new Date().toISOStr
     result.counted_through = packet.checked_at;
     const age = instant(now) - end;
     if (age < 0n || age > maxGap) fail('collector receipt is future-dated or older than two hours');
-    if (instant(packet.continuous_since) > cutoff) fail('seven continuous observed days not established');
-    if (packet.coverage !== 'continuous' || packet.collection_max_gap_seconds !== 7200
-        || !Array.isArray(packet.continuity_failures) || packet.continuity_failures.length) {
+    if (revision === null && instant(packet.continuous_since) > cutoff) {
+      fail('seven continuous observed days not established');
+    }
+    if (packet.collection_max_gap_seconds !== 7200
+        || !Array.isArray(packet.continuity_failures)
+        || (revision === null && (packet.coverage !== 'continuous' || packet.continuity_failures.length))) {
       fail('collector has not established intact continuous coverage');
     }
   } catch {
@@ -143,6 +197,9 @@ function auditProvisionLedger(root, sourceDirectory, { now = new Date().toISOStr
             const key = `${event.outcome}/${event.cause}`;
             counts.set(key, (counts.get(key) || 0) + 1);
           }
+          if (deploymentStart !== null && deploymentStart < ts && ts <= end) {
+            postdeployment.push({ ts, line, key: `${event.outcome}/${event.cause}` });
+          }
         } catch {
           result.malformed_lines += 1;
         }
@@ -180,6 +237,23 @@ function auditProvisionLedger(root, sourceDirectory, { now = new Date().toISOStr
     }
   }
   if (!result.continuity_failures.length) result.coverage = 'continuous';
+  if (result.cohort) {
+    // Writer timestamps order operations. Break exact ties with their original
+    // bytes so renaming a segment cannot move a refusal across the cutoff.
+    // Equal rows stay separate and make identical contributions to the cohort.
+    postdeployment.sort((a, b) => a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : Buffer.compare(a.line, b.line));
+    const first = postdeployment.slice(0, 100);
+    const cohortCounts = new Map();
+    for (const { key } of first) cohortCounts.set(key, (cohortCounts.get(key) || 0) + 1);
+    const refusals = (cohortCounts.get('failed/branch-held') || 0)
+      + (cohortCounts.get('failed/branch-exists') || 0);
+    const accepted = result.coverage === 'continuous' && first.length === 100 && refusals === 0;
+    Object.assign(result.cohort, { available: postdeployment.length, evaluated: first.length,
+      sha256: sha256(Buffer.concat(first.map(({ line }) => line))),
+      counts: Object.fromEntries(cohortCounts), branch_refusals: refusals, accepted });
+    result.evidence_ready = accepted;
+    return result;
+  }
   result.evidence_ready = result.coverage === 'continuous' && result.branch_refusals === 0;
   if (packet?.evidence_ready !== result.evidence_ready && !result.continuity_failures.length) {
     fail('collector readiness differs from the recounted evidence');
@@ -200,17 +274,24 @@ function formatReport(report) {
     `provision: segments = ${report.segments.length}; malformed_lines=${report.malformed_lines}`,
     ...Object.entries(report.counts).map(([key, n]) => `provision: ${key} = ${n}`),
     `provision: failed(branch-held|branch-exists) = ${count} over 7d`,
+    ...(report.cohort ? [
+      `provision: first-100 = ${report.cohort.evaluated}/100; failed(branch-held|branch-exists) = ${report.cohort.branch_refusals}; accepted = ${report.cohort.accepted}`,
+    ] : []),
     `provision: ledger evidence = ${report.evidence_ready ? 'ready' : 'unmet acceptance'}`,
     ...report.continuity_failures.map((reason) => `provision: UNKNOWN: ${reason}`),
     'provision: native/full-verifier/mirror acceptance requires separate receipts'].join('\n');
 }
 
 function main(args) {
-  if (args.length !== 2 && !(args.length === 4 && args[2] === '--observed-after')) {
-    throw new Error('usage: node scripts/audit_provision_ledger.js RUNTIME SOURCE_DIRECTORY [--observed-after TIMESTAMP]');
+  const mode = args[2];
+  if (args.length !== 2 && !(args.length === 3 && mode === '--trailing-week')
+      && !(args.length === 4 && ['--observed-after', '--revision'].includes(mode))) {
+    throw new Error('usage: node scripts/audit_provision_ledger.js RUNTIME SOURCE_DIRECTORY [--revision DELIVERED_SHA | --trailing-week | --observed-after TIMESTAMP]');
   }
+  const revision = args.length === 2 ? execFileSync('git', ['rev-parse', 'HEAD']).toString().trim()
+    : mode === '--revision' ? args[3] : null;
   const report = auditProvisionLedger(args[0], args[1],
-    { observedAfter: args.length === 4 ? args[3] : null });
+    { observedAfter: mode === '--observed-after' ? args[3] : null, revision });
   console.log(formatReport(report));
   console.log(JSON.stringify(report, null, 2));
   return report.evidence_ready ? 0 : 1;

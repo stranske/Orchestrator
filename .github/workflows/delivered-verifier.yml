@@ -1,0 +1,82 @@
+name: Delivered verifier
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact delivered commit SHA
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  # Immutable Workflows-owned Core source for real contract/package conformance.
+  CLOSER_CORE_SOURCE: ${{ github.workspace }}/.closer-core-source
+  CLOSER_CORE_SOURCE_REVISION: be8c28da2cbc181dcdec2be30f71415ccce43cf9
+
+concurrency:
+  group: delivered-verifier-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  delivered:
+    name: Unsharded delivered verifier
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check out the pinned Workflows Closer Core for conformance
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: stranske/Workflows
+          ref: ${{ env.CLOSER_CORE_SOURCE_REVISION }}
+          path: .closer-core-source
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.14'
+      - name: Install native shell test prerequisite
+        uses: ./.github/actions/ci-zsh
+      - name: Install dependencies
+        run: python -m pip install --quiet pytest pytest-xdist==3.8.0 pytest-cov==7.0.0 coverage -r requirements.lock
+
+      - name: Run the delivered checkout verifier and compare committed floors
+        id: delivered-verifier
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          VERIFY_PYTEST_WORKERS: "4"
+          ORCH_STATE_DIR: ${{ runner.temp }}/delivered-state
+          ORCH_LOCAL_RUNTIME: ${{ runner.temp }}/delivered-runtime
+          VERIFY_RECEIPT: ${{ runner.temp }}/delivered-verifier
+        run: |
+          set -o pipefail
+          mkdir "$VERIFY_RECEIPT"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$GITHUB_SHA" = "$EXPECTED_SHA"
+          git fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
+          git rev-parse HEAD origin/main > "$VERIFY_RECEIPT/revisions.txt"
+          command -v python3 > "$VERIFY_RECEIPT/interpreter.txt"
+          git show HEAD:.verify-floor.json > "$VERIFY_RECEIPT/delivered-floor.json"
+          git show origin/main:.verify-floor.json > "$VERIFY_RECEIPT/origin-main-floor.json"
+
+          floor_exit=0
+          cmp "$VERIFY_RECEIPT/delivered-floor.json" "$VERIFY_RECEIPT/origin-main-floor.json" \
+            > "$VERIFY_RECEIPT/floor.log" 2>&1 || floor_exit=$?
+          echo "$floor_exit" > "$VERIFY_RECEIPT/floor.exit"
+
+          verify_exit=0
+          timeout 20m python3 src/verify.py 2>&1 | tee "$VERIFY_RECEIPT/verify.log" || verify_exit=$?
+          echo "$verify_exit" > "$VERIFY_RECEIPT/verify.exit"
+          test "$verify_exit" = 0 && test "$floor_exit" = 0
+      - name: Upload the delivered verifier receipt
+        if: always() && (steps.delivered-verifier.outcome == 'success' || steps.delivered-verifier.outcome == 'failure')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: delivered-verifier
+          path: ${{ runner.temp }}/delivered-verifier
+          if-no-files-found: error

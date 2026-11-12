@@ -268,7 +268,7 @@ test('reads all inputs without writing and CLI status distinguishes unmet eviden
     path.join(f.root, 'provision-events.ndjson.old')].map((file) => [file, fs.readFileSync(file)]);
   const options = { cwd: f.root, env: { ...process.env, ORCH_LOCAL_RUNTIME: f.root } };
   delete options.env.ORCH_PROVISION_EVENTS_PATH;
-  const result = execute(process.execPath, [script, f.root, source], options);
+  const result = execute(process.execPath, [script, f.root, source, '--trailing-week'], options);
   assert.equal(result.error_code, null);
   assert.equal(result.signal, null);
   assert.equal(result.exit_code, 0, result.stderr + result.stdout);
@@ -277,7 +277,7 @@ test('reads all inputs without writing and CLI status distinguishes unmet eviden
   assert.deepEqual(fs.readdirSync(f.root).sort(), ['followup-evidence',
     'provision-events.ndjson', 'provision-events.ndjson.old']);
   fs.appendFileSync(path.join(f.root, 'provision-events.ndjson'), ndjson([event({ ts: end })]));
-  assert.equal(execute(process.execPath, [script, f.root, source], options).exit_code, 1);
+  assert.equal(execute(process.execPath, [script, f.root, source, '--trailing-week'], options).exit_code, 1);
   assert.equal(execute(process.execPath, [script], { cwd: f.root }).exit_code, 1);
 });
 
@@ -304,7 +304,7 @@ test('fresh observed legitimate refusals remain unmet after successful retries i
     .filter((name) => name.startsWith('provision-events.ndjson'))
     .map((name) => path.join(f.root, name))];
   const before = inputs.map((file) => fs.readFileSync(file));
-  const result = execute(process.execPath, [script, f.root, source], { cwd: f.root,
+  const result = execute(process.execPath, [script, f.root, source, '--trailing-week'], { cwd: f.root,
     env: { ...process.env, ORCH_LOCAL_RUNTIME: f.root,
       ORCH_PROVISION_EVENTS_PATH: path.join(f.root, 'provision-events.ndjson') } });
   assert.equal(result.error_code, null);
@@ -544,7 +544,7 @@ for (const newRefusals of [false, true]) {
     const before = inputs.map((file) => fs.readFileSync(file));
     const env = { ...process.env, ORCH_LOCAL_RUNTIME: f.root };
     delete env.ORCH_PROVISION_EVENTS_PATH;
-    const cli = execute(process.execPath, [script, f.root, source], { cwd: f.root, env });
+    const cli = execute(process.execPath, [script, f.root, source, '--trailing-week'], { cwd: f.root, env });
     assert.equal(cli.error_code, null);
     assert.equal(cli.signal, null);
     assert.equal(cli.exit_code, 1, cli.stdout.toString() + cli.stderr.toString());
@@ -591,7 +591,7 @@ for (const replacement of ['directory', 'symlink']) {
     const before = inputs.map((file) => fs.readFileSync(file));
     const env = { ...process.env, ORCH_LOCAL_RUNTIME: f.root };
     delete env.ORCH_PROVISION_EVENTS_PATH;
-    const cli = execute(process.execPath, [script, f.root, source], { cwd: f.root, env });
+    const cli = execute(process.execPath, [script, f.root, source, '--trailing-week'], { cwd: f.root, env });
     assert.equal(cli.error_code, null);
     assert.equal(cli.signal, null);
     assert.equal(cli.exit_code, 1, cli.stderr.toString());
@@ -636,7 +636,7 @@ for (const refusals of [false, true]) {
     assert.match(report.continuity_failures.join('\n'), /segments differ/);
     const env = { ...process.env, ORCH_LOCAL_RUNTIME: f.root };
     delete env.ORCH_PROVISION_EVENTS_PATH;
-    const cli = execute(process.execPath, [script, f.root, source], { cwd: f.root, env });
+    const cli = execute(process.execPath, [script, f.root, source, '--trailing-week'], { cwd: f.root, env });
     assert.equal(cli.error_code, null);
     assert.equal(cli.signal, null);
     assert.equal(cli.exit_code, 1, cli.stderr.toString());
@@ -684,7 +684,7 @@ for (const refusals of [false, true]) {
     const before = inputs.map((file) => fs.readFileSync(file));
     // The writer, collector and CLI can spell the same runtime differently.
     for (const [runtime, writerRoot] of [[f.root, alias], [alias, f.root]]) {
-      const result = execute(process.execPath, [script, runtime, source], { cwd: f.root,
+      const result = execute(process.execPath, [script, runtime, source, '--trailing-week'], { cwd: f.root,
         env: { ...process.env, ORCH_LOCAL_RUNTIME: writerRoot,
           ORCH_PROVISION_EVENTS_PATH: path.join(writerRoot, 'provision-events.ndjson') } });
       assert.equal(result.error_code, null);
@@ -735,7 +735,7 @@ for (const location of ['configured runtime', 'home runtime']) {
     delete env.ORCH_PROVISION_EVENTS_PATH;
     delete env.ORCH_LOCAL_RUNTIME;
     if (location === 'configured runtime') env.ORCH_LOCAL_RUNTIME = runtime;
-    const result = execute(process.execPath, [script, f.root, source], { env, cwd: f.root });
+    const result = execute(process.execPath, [script, f.root, source, '--trailing-week'], { env, cwd: f.root });
     assert.equal(result.error_code, null);
     assert.equal(result.exit_code, 1, result.stdout.toString());
     assert.match(result.stdout.toString(), /writer ledger is not included/);
@@ -768,7 +768,7 @@ for (const observedWriter of [false, true]) {
     const inputs = [f.receipt, path.join(f.root, 'provision-events.ndjson'),
       path.join(f.root, 'provision-events.ndjson.old'), otherWriter];
     const before = inputs.map((file) => fs.readFileSync(file));
-    const result = execute(process.execPath, [script, f.root, source], { cwd: f.root, env });
+    const result = execute(process.execPath, [script, f.root, source, '--trailing-week'], { cwd: f.root, env });
     assert.equal(result.error_code, null);
     assert.equal(result.signal, null);
     assert.equal(result.exit_code, observedWriter ? 0 : 1, result.stderr.toString());
@@ -784,3 +784,140 @@ for (const observedWriter of [false, true]) {
     }
   });
 }
+
+function deploymentFixture(t, rows) {
+  const deployedAt = '2026-11-11T11:30:00.000000Z';
+  const before = '2026-11-11T11:00:00.000000Z';
+  const f = fixture(t, { '': ndjson([event({ ts: before })]) }, before);
+  const name = 'orchestrator-mirror.generation-' + 'a'.repeat(32);
+  const generation = path.join(f.root, name);
+  const checkout = path.join(f.root, 'checkout');
+  for (const directory of [path.join(generation, 'scripts'), path.join(checkout, 'src'),
+    path.join(checkout, 'scripts')]) {
+    fs.mkdirSync(directory, { recursive: true });
+  }
+  for (const file of ['provision.py', 'followup_evidence.py']) {
+    fs.copyFileSync(path.join(source, file), path.join(generation, file));
+    fs.copyFileSync(path.join(source, file), path.join(checkout, 'src', file));
+  }
+  fs.copyFileSync(path.join(source, 'paths.py'), path.join(generation, 'paths.py'));
+  for (const directory of [generation, checkout]) {
+    fs.copyFileSync(script, path.join(directory, 'scripts', path.basename(script)));
+  }
+  const git = (...args) => {
+    const result = execute('git', args, { cwd: checkout });
+    assert.equal(result.exit_code, 0, result.stderr.toString());
+    return result.stdout.toString().trim();
+  };
+  git('init', '-q');
+  git('add', 'src', 'scripts');
+  git('-c', 'user.name=Test', '-c', 'user.email=test@example.org', '-c', 'commit.gpgsign=false',
+    '-c', 'core.hooksPath=/dev/null', 'commit', '-qm', 'Fixture deployment');
+  const revision = git('rev-parse', 'HEAD');
+  const history = path.join(f.root, 'mirror-sync-history.jsonl');
+  const deployment = { ts: deployedAt, sha: revision.slice(0, 8), mode: 'ci-verdict',
+    outcome: 'deployed', detail: name };
+  fs.writeFileSync(history, ndjson([deployment]));
+  const active = path.join(f.root, 'provision-events.ndjson');
+  fs.appendFileSync(active, ndjson(rows));
+  // Run the actual collector from the installed flat layout.
+  f.observe(now, generation);
+  const audit = (sourcePath = generation, sha = revision, at = now) => {
+    const run = `
+      const { auditProvisionLedger, formatReport } = require(process.argv[1]);
+      const [root, source, revision, now] = process.argv.slice(2);
+      const report = auditProvisionLedger(root, source, { revision, now });
+      console.log(formatReport(report));
+      console.log(JSON.stringify(report));
+      process.exitCode = report.evidence_ready ? 0 : 1;
+    `;
+    const cli = execute(process.execPath, ['-e', run, script, f.root, sourcePath, sha, at],
+      { cwd: checkout, env: { ...process.env, ORCH_PROVISION_EVENTS_PATH: active } });
+    const stdout = cli.stdout.toString();
+    assert.match(stdout, /first-100 = /, cli.stderr.toString());
+    return { exit: cli.exit_code, report: JSON.parse(stdout.slice(stdout.indexOf('{'))) };
+  };
+  return { ...f, audit, active, generation, history, deployment, checkout };
+}
+
+const operation = (position, changes = {}) => event({
+  ts: `2026-11-11T11:31:00.${String(position).padStart(6, '0')}Z`,
+  outcome: 'ok', cause: 'new-worktree', ...changes,
+});
+
+for (const size of [99, 100, 101]) {
+  test(`deployment acceptance evaluates exactly the first 100 of ${size} operations`, (t) => {
+    const rows = Array.from({ length: size }, (_, index) => index === 100
+      ? operation(index, { outcome: 'failed', cause: 'branch-exists' }) : operation(index));
+    // Pre-deploy and exact-boundary failures cannot enter the cohort. Neither
+    // can an operation timestamped after the collector's observation.
+    const f = deploymentFixture(t, [event({ ts: '2026-11-11T06:30:00-05:00' }),
+      event({ ts: '2026-11-11T11:29:59.999999Z' }),
+      event({ ts: '2026-11-11T12:00:00.123457Z' }), ...rows.reverse()]);
+    const { exit, report } = f.audit();
+    assert.deepEqual(report.continuity_failures, []);
+    assert.equal(exit, size < 100 ? 1 : 0);
+    assert.equal(report.cohort.available, size);
+    assert.equal(report.cohort.evaluated, Math.min(size, 100));
+    assert.equal(report.cohort.branch_refusals, 0);
+    assert.ok(report.branch_refusals >= 3);
+  });
+}
+
+for (const cause of ['branch-held', 'branch-exists']) {
+  test(`a ${cause} refusal in the cohort fails, including across rotation`, (t) => {
+    const duplicate = operation(0);
+    const f = deploymentFixture(t, [...Array(99).fill(duplicate),
+      operation(1, { outcome: 'failed', cause }), operation(2)]);
+    const initial = f.audit();
+    assert.equal(initial.exit, 1);
+    assert.equal(initial.report.cohort.counts['ok/new-worktree'], 99);
+    assert.equal(initial.report.cohort.counts[`failed/${cause}`], 1);
+    fs.renameSync(f.active, f.active + '.old');
+    fs.writeFileSync(f.active, ndjson([operation(3)]));
+    assert.equal(f.audit().report.coverage, 'UNKNOWN');
+    f.observe(now, f.generation);
+    const rotated = f.audit();
+    assert.equal(rotated.exit, 1);
+    assert.equal(rotated.report.coverage, 'continuous');
+    assert.equal(rotated.report.cohort.available, 102);
+    assert.equal(rotated.report.cohort.sha256, initial.report.cohort.sha256);
+    fs.unlinkSync(f.active + '.old');
+    f.observe(now, f.generation);
+    assert.match(f.audit().report.continuity_failures.join('\n'), /previous ledger prefix missing/);
+  });
+}
+
+test('deployment provenance and gaps cannot qualify an otherwise complete cohort', (t) => {
+  const f = deploymentFixture(t, Array(100).fill(operation(0)));
+  assert.equal(f.audit().exit, 0);
+  assert.equal(f.audit(source).exit, 1);
+  assert.equal(f.audit(f.generation, 'b'.repeat(40)).exit, 1);
+  f.changeReceipt((report) => { report.deployment.identity.generation += '-other'; });
+  assert.equal(f.audit().exit, 1);
+  f.changeReceipt((report) => { report.deployment.identity.generation = fs.realpathSync(f.generation); });
+  f.observe('2026-11-11T14:01:00Z', f.generation);
+  f.observe('2026-11-11T15:01:00Z', f.generation);
+  const gap = f.audit(f.generation, undefined, '2026-11-11T15:01:00Z');
+  assert.equal(gap.exit, 1);
+  assert.match(gap.report.continuity_failures.join('\n'), /continuity gap exceeds two hours/);
+  fs.writeFileSync(f.history, ndjson([{ ...f.deployment, detail: f.deployment.detail + '-other' }]));
+  assert.match(f.audit().report.continuity_failures.join('\n'), /deployment provenance unavailable/);
+  fs.unlinkSync(f.history);
+  const cli = execute(process.execPath, [script, f.root, f.generation], {
+    cwd: f.checkout, env: { ...process.env, ORCH_PROVISION_EVENTS_PATH: f.active },
+  });
+  assert.equal(cli.exit_code, 1, cli.stderr.toString());
+  assert.match(cli.stdout.toString(), /deployment provenance unavailable/);
+});
+
+test('a collector starting after deployment cannot establish continuity retroactively', (t) => {
+  const f = deploymentFixture(t, Array(100).fill(operation(0)));
+  f.changeReceipt((report) => { delete report.deployment; });
+  f.observe(now, f.generation);
+  f.observe(now, f.generation);
+  const { exit, report } = f.audit();
+  assert.equal(exit, 1);
+  assert.equal(report.cohort.evaluated, 100);
+  assert.match(report.continuity_failures.join('\n'), /no retained collector observation/);
+});
