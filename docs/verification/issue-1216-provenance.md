@@ -1075,3 +1075,92 @@ blocker comment were each refused by the GitHub tool with:
 Neither remote mutation occurred. A run permitting writes to the existing
 branch's `.git` is required to commit these reviewed working-tree changes;
 the PR label/comment also require an environment permitting those mutations.
+## Local artifact-binding follow-up, 2026-11-12
+
+Based on checked-out PR #1352 head
+`ef2725e9c81f10c43e9730e83d81b28c9fb4e64b`, branch `codex/issue-1216`.
+This round focuses on the first unchecked provenance task. The independent
+provider lookup and explicitly unverified session measurements were already
+implemented. A remaining consistency gap allowed a local identity artifact
+to contradict the run, frozen packet, or usage confirmed by that lookup.
+
+`_authoritative_identity_verified` now requires any recorded `run_id`,
+`packet_hash`, `tokens_in`, and `tokens_out` to match the attempt in both
+value and type. Older artifacts that omit those optional fields still need
+the full independent provider confirmation. `_identity_artifact` still
+labels session evidence unverified; a digest or matching local fields never
+establish provider provenance.
+
+- [x] Verify independently trusted provider provenance for ingestion while
+  preserving explicitly unverified session measurements. The five-file
+  trial suite passes after the artifact-binding correction.
+- [x] Reproduce contradictory-artifact acceptance and verify its correction,
+  including matching and omitted-field controls.
+- [ ] Deliver the local correction in a commit on the checked-out branch.
+- [ ] Obtain required CI results for the commit containing this correction.
+
+Validation uses Python 3.14.10, pytest 9.2.0, and Black 26.10.1. The requested
+`/opt/anaconda3/bin/python3` is absent (the exact command exits 127); the
+available interpreter runs in `/tmp/orch-1216-venv`. PyPI DNS failed, so
+pinned upstream tool sources were assembled under `/tmp/orch-1216-tools`
+through the GitHub connector. Repository dependencies were unchanged.
+
+All pytest commands below use:
+
+```text
+PYTHONPATH=/tmp/orch-1216-tools:/usr/lib/python3/dist-packages:/usr/local/lib/python3.14/dist-packages
+ORCH_STATE_DIR=/tmp/orch-1216-test-state
+/tmp/orch-1216-venv/bin/python -m pytest
+```
+
+| Verification | Arguments | Result |
+| --- | --- | --- |
+| Five-file baseline | `-q tests/test_profile_trial_ingest.py tests/test_profile_trial_run.py tests/test_profile_trial_recurring_spec.py tests/test_model_profile_trial_bridge.py tests/test_profile_trial_instances.py -m 'not slow'` | 198 passed, 30 subtests passed; exit 0 |
+| Regression before source correction | `-q tests/test_profile_trial_ingest.py -k session_artifact_bindings -m 'not slow' --tb=short` | 10 failed, 2 passed, 104 deselected; exit 1 |
+| Regression after source correction | Same regression arguments | 12 passed, 104 deselected; exit 0 |
+| Five-file final run | Same five-file arguments | 210 passed, 30 subtests passed; exit 0 |
+| Related tests | `-q tests/test_profile_trial_summary.py tests/test_model_profile_trial.py tests/test_profile_trial_mutations.py -m 'not slow'` | 30 passed; exit 0 |
+
+The ten intended failures were `DID NOT RAISE ValueError` in
+`test_session_artifact_bindings_must_agree_before_verified_ingest`: wrong
+run ID, wrong packet hash, and incorrect integer, null, boolean, or equal
+float usage in each direction. Every corrected refusal asserts all seven
+trial feedback tables are empty and neither trial state nor program summary
+was published, even though earlier attempts were valid. The two controls
+prove matching session artifacts and older omitted bindings remain usable
+with independent confirmation. Every case first verifies that matching
+session artifacts alone remain unverified.
+
+`PYTHONPATH=src ORCH_STATE_DIR=/tmp/orch-1216-selftest-state
+/tmp/orch-1216-venv/bin/python src/model_profile_trial.py --selftest`
+also exits 0. `.verify-floor.json` increases expected collection and passes
+by exactly twelve; every ceiling is preserved. Full collection and final-head
+CI remain unverified. This round makes no new live-trial claim.
+
+Black 26.10.1 formatted both changed Python files at line length 100.
+The sandbox's formatter worker path stalled; unmodified single-file CLI
+checks populated its cache before the required full command succeeded:
+
+```text
+PATH=/tmp/orch-1216-venv/bin:$PATH \
+PYTHONPATH=/tmp/orch-1216-tools:/usr/lib/python3/dist-packages:/usr/local/lib/python3.14/dist-packages \
+BLACK_NUM_WORKERS=1 XDG_CACHE_HOME=/tmp/orch-1216-cache \
+black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .
+711 files would be left unchanged; exit 0.
+```
+
+Delivery is blocked by this run's read-only Git metadata:
+
+```text
+git add src/model_profile_trial.py tests/test_profile_trial_ingest.py \
+  .verify-floor.json docs/verification/issue-1216-provenance.md
+fatal: Unable to create '.../.git/index.lock': Read-only file system
+```
+
+No commit or push occurred. The `needs-human` label and blocker-comment
+requests for PR #1352 were each rejected with
+`MCP tool call requires approval, but approval policy is never`.
+Neither remote mutation occurred. A run with writable Git metadata must
+commit the four local files on the existing branch and obtain final-head
+CI results. PR #1352 was rechecked open and ready (`draft=false`) at the
+unchanged base head above.

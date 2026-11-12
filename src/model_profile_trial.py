@@ -899,6 +899,15 @@ def _authoritative_identity_verified(
         for field in ("profile_id", "provider_resolved_provider", "provider_resolved_model"):
             if not attempt.get(field) or artifact.get(field) != attempt[field]:
                 return False
+        # Older artifacts omit these bindings. When present, they must agree
+        # exactly, including count types; a recomputed digest authenticates none
+        # of them. Independent provider confirmation is still required below.
+        for field in ("run_id", "packet_hash", "tokens_in", "tokens_out"):
+            if field in artifact and (
+                type(artifact[field]) is not type(attempt.get(field))
+                or artifact[field] != attempt.get(field)
+            ):
+                return False
         response_id = artifact.get("response_id")
         if (
             artifact.get("object") != "response"

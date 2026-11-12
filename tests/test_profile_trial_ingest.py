@@ -650,6 +650,95 @@ def test_provider_usage_must_be_measured_integer_counts_before_any_writes(
         _assert_trial_feedback_tables_empty(conn)
 
 
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        pytest.param(None, None, id="matching-bindings"),
+        pytest.param(None, ..., id="omitted-bindings"),
+        ("run_id", "another-run"),
+        ("packet_hash", "sha256:" + "0" * 64),
+        ("tokens_in", 2),
+        ("tokens_out", 2),
+        ("tokens_in", None),
+        ("tokens_out", None),
+        ("tokens_in", True),
+        ("tokens_out", True),
+        ("tokens_in", 1.0),
+        ("tokens_out", 1.0),
+    ],
+)
+def test_session_artifact_bindings_must_agree_before_verified_ingest(
+    tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture, field, value
+):
+    """An authenticated response cannot validate contradictory local evidence."""
+    _use_temp_feedback(tmp_path, monkeypatch)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    for attempt in trial_attempt_fixture["attempts"]:
+        attempt["tokens_in"] = attempt["tokens_out"] = 1
+    lookup = _bind_authoritative_identity(tmp_path, trial_attempt_fixture)
+    requests = {request["run_id"]: request for request in trial_manifest["requests"]}
+    for attempt in trial_attempt_fixture["attempts"]:
+        original = json.loads(Path(attempt["identity_evidence"]["artifact_ref"]).read_text())
+        evidence = model_profile_trial._identity_artifact(
+            tmp_path,
+            requests[attempt["run_id"]],
+            {
+                "model": attempt["provider_resolved_model"],
+                "provider": attempt["provider_resolved_provider"],
+                "response_id": original["response_id"],
+                "tokens_in": attempt["tokens_in"],
+                "tokens_out": attempt["tokens_out"],
+            },
+        )
+        attempt["identity_evidence"] = evidence
+        attempt["artifact_ref"] = evidence["artifact_ref"]
+    attempts = model_profile_trial._validate_results(trial_manifest, trial_attempt_fixture)
+    # Matching session artifacts still need an independent provider lookup.
+    assert not model_profile_trial._authoritative_identity_verified(attempts)
+    assert model_profile_trial._authoritative_identity_verified(
+        attempts, provider_response_lookup=lookup
+    )
+    # Damage the last artifact to exercise refusal after earlier valid responses.
+    attempt = attempts[-1]
+    artifact_path = Path(attempt["identity_evidence"]["artifact_ref"])
+    artifact = json.loads(artifact_path.read_text())
+    assert artifact["provenance"] == model_profile_trial.UNVERIFIED_SESSION_AUTHORITY
+    if field is not None:
+        artifact[field] = value
+    elif value is ...:
+        for binding in ("run_id", "packet_hash", "tokens_in", "tokens_out"):
+            artifact.pop(binding)
+    artifact_path.write_text(json.dumps(artifact))
+    attempt["identity_evidence"]["artifact_sha256"] = (
+        "sha256:" + hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+    )
+    state_path = tmp_path / "trial-state.json"
+    if field is None:
+        state = model_profile_trial.finalize_trial(
+            trial_manifest,
+            trial_attempt_fixture,
+            state_path=state_path,
+            ingest_brain=True,
+            provider_response_lookup=lookup,
+        )
+        assert state["identity_verified"] is True
+        assert state["brain_ingest_enabled"] is True
+        return
+    with pytest.raises(ValueError, match="identity evidence is not authoritative"):
+        model_profile_trial.finalize_trial(
+            trial_manifest,
+            trial_attempt_fixture,
+            state_path=state_path,
+            record_feedback=True,
+            ingest_brain=True,
+            provider_response_lookup=lookup,
+        )
+    assert not state_path.exists()
+    assert not (tmp_path / "capability-program" / "profile-trial.json").exists()
+    with feedback._conn() as conn:
+        _assert_trial_feedback_tables_empty(conn)
+
+
 def _rebind_trial_id(manifest, results):
     """Point manifest and results at the trial id implied by the current source seals."""
     old_trial_id = manifest["trial_id"]
