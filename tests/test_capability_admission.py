@@ -1043,7 +1043,9 @@ def test_consumer_declaration_sync_drains_persisted_prose_without_action_credit(
         ]
         ledger[cid] = row
     reviewed_absences = sorted(
-        cid for cid, declaration in declarations.items() if declaration.get("consumer_missing") is True
+        cid
+        for cid, declaration in declarations.items()
+        if declaration.get("consumer_missing") is True
     )
     ctx = {"acted_on": dict.fromkeys(ledger, 0), "now": admission._now()}
     rows = [
