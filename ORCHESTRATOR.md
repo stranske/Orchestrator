@@ -307,7 +307,12 @@ cursor-agent live outside the default PATH):
   `merge_guard.py` treats those same labels on the PR, or a spec at
   `~/.codex/orchestrator/runtime-ac/<target-slug>.json`, as a required runtime-AC gate: a dry run
   reports it; an active merge blocks until a spec exists, `ORCH_RUN_RUNTIME_AC=1` is set, and the gate
-  returns `PASS`. (`tick.py` ran the same gate before a remote delegation no closer item can reach,
+  returns `PASS`. Gate's `pr-00-gate.yml` applies the `acceptance-criteria` label when a PR carries a
+  deliberate-break marker, so the question is whether the PR's own executable proof holds on the code
+  that will merge. Given the exact head (merge_guard passes `--expected-head`), the gate runs the spec in
+  a disposable checkout of that commit, measures each deliberate break against the merge base with
+  `origin/main`, and returns `PASS` only when every executable check passes. Manual criteria are
+  reported for the closer's judge and never block; a manual-only spec returns `MANUAL_ONLY`. (`tick.py` ran the same gate before a remote delegation no closer item can reach,
   until 2026-10-05; it no longer examines closer items.) Command/non-regression
   checks still require `ORCH_RUNTIME_AC_ALLOW_COMMANDS=1`; `ORCH_RUNTIME_AC_TIMEOUT` sets the per-check
   timeout. This is a **hard opt-in machine gate**, not an advisory review: only explicitly labeled or

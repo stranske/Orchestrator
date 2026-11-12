@@ -487,8 +487,13 @@ def recheck_merged(
     *,
     allow_command_checks: bool | None = None,
     merge_ci_green: bool = False,
+    base_ref: str = "HEAD^",
 ) -> dict:
     """Run the existing named-check/break runner; manual or missing evidence is unknown.
+
+    `base_ref` is the pre-delivery code a deliberate break is measured against: the merge
+    parent (`HEAD^`) for a merged commit, the merge base with the default branch for an
+    unmerged PR head (`gate_status`).
 
     The caller provisions and pins the merge commit. Never mutate the authored spec
     or consume this observation as merge authority. An UNRUNNABLE result carries its
@@ -512,7 +517,7 @@ def recheck_merged(
                 if check.get("type") == "deliberate_break":
                     # The merge parent is the pre-delivery implementation. origin/main
                     # can already equal the merge tip or advance while this runs.
-                    check["base_ref"] = "HEAD^"
+                    check["base_ref"] = base_ref
                     check["worktree"] = str(merged_worktree)
         run = runtime_ac.run_verification(
             current,
@@ -877,6 +882,92 @@ def post_merge_commands_allowed(env: Mapping[str, Any]) -> bool:
     }
 
 
+# A closer PR is armed for this gate when Gate finds a deliberate-break marker in it
+# (pr-00-gate.yml "Apply runtime acceptance-criteria label"). The question it must answer is
+# whether the PR's own executable proof holds on the code that will merge: its named commands
+# pass and its deliberate break fails against the pre-change code and passes once restored.
+# Until 2026-11-12 the gate ran the spec outside any checkout (the break failed "not a git
+# repository") and required a 100% pass ratio over manual items it can never grade, so a
+# labelled PR could not pass (stranske/Orchestrator#1356: 1 of 12, FAIL). Manual criteria are
+# graded by the closer's judge; a manual-only spec is reported, never a block.
+NON_BLOCKING_VERDICTS = frozenset({"PASS", "MANUAL_ONLY"})
+
+
+def _merge_base(worktree: str | Path) -> str:
+    for ref in ("origin/main", "origin/HEAD"):
+        out = subprocess.run(
+            ["git", "-C", str(worktree), "merge-base", ref, "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        if out.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", out.stdout.strip()):
+            return out.stdout.strip()
+    raise RuntimeError("cannot resolve the merge base of the PR head with origin/main")
+
+
+def _exact_head_gate(
+    spec: dict,
+    target: str,
+    head: str,
+    *,
+    allow_command_checks: bool,
+    worktree_fn=None,
+    recheck_fn=None,
+) -> dict:
+    """Run `spec` in a disposable checkout of exactly `head`, grade only executable checks."""
+    if worktree_fn is None:
+        import provision
+
+        worktree_fn = provision.temporary_exact_head_worktree
+    recheck_fn = recheck_fn or recheck_merged
+    with worktree_fn(target, head) as worktree:
+        actual = subprocess.run(
+            ["git", "-C", str(worktree), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        if actual.returncode or actual.stdout.strip() != head:
+            raise RuntimeError("runtime-AC checkout does not match the PR head")
+        base = _merge_base(worktree)
+        checked = recheck_fn(
+            spec, worktree, allow_command_checks=allow_command_checks, base_ref=base
+        )
+    try:
+        gate = dict(json.loads(checked.get("transcript") or "{}").get("gate") or {})
+    except (TypeError, ValueError):
+        gate = {}
+    result = str(checked.get("result") or "UNRUNNABLE").upper()
+    reason = checked.get("reason")
+    if result == "PASS":
+        verdict = "PASS"
+    elif result == "UNRUNNABLE" and reason == "manual_only":
+        verdict = "MANUAL_ONLY"
+    elif result == "FAIL":
+        verdict = "FAIL"
+    else:
+        verdict = "UNRUNNABLE"
+    gate.update(
+        verdict=verdict,
+        executable_result=result,
+        executable_reason=reason,
+        head=head,
+        base_ref=base,
+    )
+    if verdict not in NON_BLOCKING_VERDICTS:
+        gate.setdefault("blocking", [])
+        gate["blocking"] = [
+            {
+                "status": result,
+                "reason": f"executable checks {result.lower()}: {reason or 'failed'}",
+            }
+        ]
+    return gate
+
+
 def gate_status(
     item: dict,
     *,
@@ -886,6 +977,8 @@ def gate_status(
     run_fn=None,
     latest_run_fn=None,
     record_fn=None,
+    worktree_fn=None,
+    recheck_fn=None,
 ) -> dict | None:
     """Return and persist runtime-AC gate truth for closer PRs.
 
@@ -1009,7 +1102,6 @@ def gate_status(
         )
         return result
 
-    run_fn = run_fn or runtime_ac.run_verification
     record_fn = record_fn or runtime_ac.record_gate_verdict
     try:
         spec = runtime_ac.parse_spec_json(path.read_text(encoding="utf-8"))
@@ -1024,18 +1116,30 @@ def gate_status(
             ref=target,
             metadata={"spec_path": str(path), "spec_hash": spec_sha256(path)},
         )
-        run = run_fn(
-            spec,
-            confirm_run=True,
-            allow_command_checks=env_flag(resolved_env, "ORCH_RUNTIME_AC_ALLOW_COMMANDS"),
-            timeout=env_int(resolved_env, "ORCH_RUNTIME_AC_TIMEOUT", 120),
-        )
-        gate = run["gate"]
+        head = str(item.get("head") or "")
+        if run_fn is None and re.fullmatch(r"[0-9a-f]{40}", head):
+            gate = _exact_head_gate(
+                spec,
+                target,
+                head,
+                allow_command_checks=env_flag(resolved_env, "ORCH_RUNTIME_AC_ALLOW_COMMANDS"),
+                worktree_fn=worktree_fn,
+                recheck_fn=recheck_fn,
+            )
+        else:
+            run_fn = run_fn or runtime_ac.run_verification
+            run = run_fn(
+                spec,
+                confirm_run=True,
+                allow_command_checks=env_flag(resolved_env, "ORCH_RUNTIME_AC_ALLOW_COMMANDS"),
+                timeout=env_int(resolved_env, "ORCH_RUNTIME_AC_TIMEOUT", 120),
+            )
+            gate = run["gate"]
         verdict = gate.get("verdict")
         result = {
             **base,
             "status": "executed",
-            "blocks": verdict != "PASS",
+            "blocks": verdict not in NON_BLOCKING_VERDICTS,
             "verdict": verdict,
             "verifier_verdict": gate.get("verifier_verdict"),
             "pass_ratio": gate.get("pass_ratio"),
@@ -1080,12 +1184,14 @@ def gate_status(
             dry_run=False,
             eligibility_info=eligibility_info,
             path=path,
-            blocks=verdict != "PASS",
+            blocks=verdict not in NON_BLOCKING_VERDICTS,
             closer_run_id=run_id,
             verifier_run_id=gate.get("verification_id"),
             verifier_verdict=verdict,
             terminal_reason=(
-                None if verdict == "PASS" else f"verifier_{str(verdict or 'unknown').lower()}"
+                None
+                if verdict in NON_BLOCKING_VERDICTS
+                else f"verifier_{str(verdict or 'unknown').lower()}"
             ),
         )
         return result

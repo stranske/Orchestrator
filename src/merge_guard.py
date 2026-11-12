@@ -190,6 +190,7 @@ def evaluate_merge_gate(
     remote_only: bool = False,
     metadata_fn=pr_metadata,
     gate_fn=runtime_ac_gate.gate_status,
+    expected_head: str | None = None,
 ) -> dict[str, Any]:
     meta = metadata_fn(target)
     base = {
@@ -216,6 +217,8 @@ def evaluate_merge_gate(
         "lane": "closer",
         "labels": labels,
         "title": meta.get("title") or "",
+        # The runtime-AC gate runs the PR's checks in a checkout of exactly this commit.
+        "head": expected_head or "",
     }
     footprint = None
     if remote_only:
@@ -595,6 +598,7 @@ def guarded_merge(
         remote_only=remote_only,
         metadata_fn=metadata_fn,
         gate_fn=gate_fn,
+        expected_head=expected_head,
     )
     result = {
         **gate_result,
