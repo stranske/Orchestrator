@@ -18,6 +18,8 @@
     "tests/test_gemini_flash_routing.py",
     "tests/test_gemini_tier_scoped_shed.py",
     "tests/test_github_api_observer.py",
+    "tests/test_issue771_mutation_runner.py",
+    "tests/test_issue_771_evidence.py",
     "tests/test_issue1102_advisor_coverage_evidence.py",
     "tests/test_issue1109_pr793_acceptance.py",
     "tests/test_issue1109_runtime_isolation.py",
@@ -54,6 +56,8 @@
   ],
   "shards": [
     [
+      "tests/test_issue771_mutation_runner.py",
+      "tests/test_issue_771_evidence.py",
       "tests/test_issue1253_ranked_coverage.py",
       "tests/test_issue1235_ranked_coverage.py",
       "tests/test_issue1235_supervisor_recovery.py",
