@@ -103,7 +103,10 @@ def test_later_truth_grades_the_live_advice(world):
     # uphold_blocker against a delivery that broke later is agreement.
     assert graded["summary"]["graded"] == 1 and graded["summary"]["agree"] == 1
     line = live.weekly_line(world["path"])
-    assert line == "live: disputes 1, advised 1, uncertified 0, graded 1 (agree 1, disagree 0)"
+    assert line.startswith(
+        "live: disputes 1, advised 1, uncertified 0, graded 1 (agree 1, disagree 0)"
+    )
+    assert "; agreement 1.000 against 0.75; qualification insufficient_sample;" in line
 
 
 def test_a_body_without_criteria_is_uncertified_and_never_dispatched(world):
@@ -570,10 +573,13 @@ def test_weekly_review_prints_the_live_line(world, monkeypatch, tmp_path):
         for line in text_path.read_text().splitlines()
         if line.startswith("adjudicator shadow:")
     ]
-    assert shadow_lines == [
+    assert len(shadow_lines) == 1
+    assert shadow_lines[0].startswith(
         "adjudicator shadow: cases 0; live: disputes 1, advised 1, uncertified 0, "
         "graded 1 (agree 1, disagree 0)"
-    ]
+    )
+    assert "; agreement 1.000 against 0.75; qualification insufficient_sample;" in shadow_lines[0]
+    assert "drainable=durability grading" in shadow_lines[0]
     assert world["path"].read_bytes() == saved_report
     assert len(world["calls"]) == 1
     # "Advised" is the Brain's `live_shadow_advice` event, not the report: losing the report does

@@ -181,3 +181,28 @@ G >= 20, production persisted advice and duplicate-free idle rerun, real
 underperforming-role retirement, and live M2 qualification remain unmet.
 PR checks/review and merge require fresh exact-head readback after this push;
 this receipt does not claim them green or the PR merged.
+
+### Exact-head follow-through and CI consumer assertion repair
+
+Committed/pushed `d49be919b29d0d4aee9c43d9bebd1783b896588d` on the existing
+branch. The exact three named nodes printed `6 passed in 5.50s` at that head.
+A fresh isolated archive of that exact head printed `4 failed in 3.13s` on the
+exclusion mutation (second dispatch count 2 versus 1 and advice write attempted),
+then `4 passed in 5.25s` after byte-identical restoration.
+
+Fresh CI lint-format passed. Flat exec-mirror shard 6/6 of run 43144993113 then
+printed two failures in `tests/test_adjudicator_live.py`: the pre-existing
+later-truth and weekly-consumer assertions expected the line without the newly
+required agreement/qualification suffix. Preserved their original count/prefix
+assertions and added explicit checks of agreement 1.000, threshold 0.75,
+insufficient sample, and continued grading drain. No production code changed in
+this follow-up. Focused command:
+
+```sh
+/opt/anaconda3/bin/python3 -m pytest -q tests/test_adjudicator_live.py tests/test_adjudicator_retro.py
+```
+
+Observed: `112 passed in 12.14s`. This is a changed-file run, not the full suite.
+Final CI and seven-minute exact-head review readback occur after the follow-up
+push and must be reported separately; neither production qualification nor merge
+is implied by these local results.
