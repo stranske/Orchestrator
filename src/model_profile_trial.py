@@ -880,7 +880,10 @@ def _authoritative_identity_verified(
         if not re.fullmatch(r"sha256:[0-9a-f]{64}", expected_hash):
             return False
         try:
-            raw = artifact_path.read_bytes()
+            # Read one byte beyond the limit to detect oversized evidence without
+            # loading the rest of an untrusted artifact into memory.
+            with artifact_path.open("rb") as artifact_stream:
+                raw = artifact_stream.read(64 * 1024 + 1)
             if len(raw) > 64 * 1024:
                 return False
             actual_hash = "sha256:" + hashlib.sha256(raw).hexdigest()

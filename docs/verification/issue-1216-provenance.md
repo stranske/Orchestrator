@@ -1,5 +1,89 @@
 # Issue #1216 verification
 
+## Bounded identity-artifact reads, 2026-11-12
+
+Continued the first unchecked provenance task on `codex/issue-1216`, based on
+`cb8c1f9036983bb347e9fd8ae11d810134d663a7`. The trusted provider-lookup gate and
+explicitly unverified session measurements already exist on this branch. Found
+that its 64 KiB artifact limit was enforced only after reading the whole file.
+`_authoritative_identity_verified` now reads at most 65,537 bytes before refusing
+oversized evidence, including evidence with a matching recomputed digest.
+
+Extended the existing oversized case of
+`test_malformed_identity_artifact_refuses_before_lookup_or_writes` to first
+accept valid evidence padded to exactly 65,536 bytes, then enforce a cumulative
+read budget for the oversized file. It still requires refusal before any
+provider lookup, no trial state or capability-program summary, and zero rows
+in all seven trial feedback tables. No test cases were added or removed, so
+the collection floor is unchanged.
+
+Reinstating the original unbounded read produced the intended failure:
+
+```text
+python3 -m pytest -q \
+  tests/test_profile_trial_ingest.py::test_malformed_identity_artifact_refuses_before_lookup_or_writes \
+  -k oversized -m 'not slow' --tb=short
+Unbounded read: AssertionError: identity evidence must not use an unbounded read
+1 failed, 6 deselected; exit 1.
+Restored bounded read: 1 passed, 6 deselected; exit 0.
+```
+
+The source was restored in `finally` and verified byte for byte, SHA-256
+`eeeaf69a3d194d2b88a6e6b5f5f4f0e11a08916242a64ecc6dbecc34d24acd07`.
+Transcripts: `/tmp/orch-1216-bounded-read-before.txt` and
+`/tmp/orch-1216-bounded-read-restored.txt`.
+
+Using Python 3.14.10 and upstream pytest 9.2.0, the five requested test files
+passed with **198 passed and 30 subtests passed**, exit 0, with `-m 'not slow'`.
+The profile-trial selftest also exited 0. `/opt/anaconda3/bin/python3` is absent;
+the same test arguments were run with the available interpreter. Official
+tagged test/format tooling was assembled under `/tmp` after PyPI DNS failed;
+repository dependencies were unchanged.
+
+All six PR #1193 review threads were reread; the existing
+[source/test dispositions](#review-dispositions-for-pr-1193) remain supported.
+For the committed predecessor `cb8c1f9036983bb347e9fd8ae11d810134d663a7`,
+[CI run 43142315903](https://github.com/stranske/Orchestrator/actions/runs/43142315903)
+and [Gate run 43142316543](https://github.com/stranske/Orchestrator/actions/runs/43142316543)
+both concluded `success`. These results do not validate this round's local
+changes. No new live trial or production provider provenance is claimed.
+
+Black 26.10.1 formatted both changed Python files with line length 100. This
+sandbox prevents Black's process workers from starting, so serial checks of
+850 tracked Python files populated its normal cache. The required unmodified
+CLI check then passed:
+
+```text
+PATH=/tmp/orch-1216-bin:$PATH \
+  PYTHONPATH=/tmp/orch-1216-tools:/usr/local/lib/python3.14/dist-packages:/opt/pipx/venvs/yamllint/lib/python3.14/site-packages:/usr/lib/python3/dist-packages \
+  XDG_CACHE_HOME=/tmp/orch-1216-cache BLACK_NUM_WORKERS=1 \
+  black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .
+709 files would be left unchanged; exit 0.
+```
+
+After the boundary-control addition and mutation restoration, the same five-file
+suite passed again: 198 passed and 30 subtests passed, exit 0. `git diff --check`
+also passed.
+
+- [x] Verify bounded artifact validation and the existing trusted-provenance
+  boundary while preserving explicitly unverified measurements.
+- [ ] Commit the source, regression test and evidence on the existing branch.
+- [ ] Obtain CI for a delivered head containing this round's changes.
+
+The commit attempt stopped at `git add`:
+
+```text
+fatal: Unable to create '.../.git/index.lock': Read-only file system
+```
+
+No commit was created. Updating the first duplicate unchecked provenance task,
+adding `needs-human`, and posting the blocker comment were each rejected by
+automatic approval review: `MCP tool call requires approval, but approval policy
+is never`. None of those remote mutations occurred. The prepared single-task
+checkbox reconciliation is `/tmp/orch-1352-provenance-checkbox.md`. Delivery
+requires an environment permitting writes to this branch's `.git`; final-head
+CI and the remote checklist remain outstanding.
+
 ## Malformed identity artifact verification, 2026-11-12
 
 Reviewed `4dc6ced4`, `f133e3c8`, and `78474cdf` and their implementation,

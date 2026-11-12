@@ -755,6 +755,12 @@ def test_malformed_identity_artifact_refuses_before_lookup_or_writes(
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
     lookup = _bind_authoritative_identity(tmp_path, trial_attempt_fixture)
     attempts = model_profile_trial._validate_results(trial_manifest, trial_attempt_fixture)
+    if damage == "oversized":
+        evidence = attempts[0]["identity_evidence"]
+        path = Path(evidence["artifact_ref"])
+        at_limit = path.read_bytes().ljust(64 * 1024, b" ")
+        path.write_bytes(at_limit)
+        evidence["artifact_sha256"] = "sha256:" + hashlib.sha256(at_limit).hexdigest()
     assert model_profile_trial._authoritative_identity_verified(
         attempts, provider_response_lookup=lookup
     )
@@ -780,6 +786,30 @@ def test_malformed_identity_artifact_refuses_before_lookup_or_writes(
         attempt["identity_evidence"]["artifact_sha256"] = (
             "sha256:" + hashlib.sha256(contents).hexdigest()
         )
+
+    if damage == "oversized":
+        # Refuse large evidence without first loading the entire untrusted file.
+        # Count actual bytes too, so repeated small reads cannot evade the budget.
+        original_open = Path.open
+        bytes_read = 0
+
+        def bounded_open(path, *args, **kwargs):
+            stream = original_open(path, *args, **kwargs)
+            if path == artifact_path:
+                original_read = stream.read
+
+                def bounded_read(size=-1):
+                    nonlocal bytes_read
+                    assert size >= 0, "identity evidence must not use an unbounded read"
+                    data = original_read(size)
+                    bytes_read += len(data)
+                    assert bytes_read <= 64 * 1024 + 1, "identity evidence read exceeded budget"
+                    return data
+
+                monkeypatch.setattr(stream, "read", bounded_read)
+            return stream
+
+        monkeypatch.setattr(Path, "open", bounded_open)
 
     def unexpected_lookup(response_id):
         pytest.fail(f"malformed artifact reached provider lookup: {response_id}")
