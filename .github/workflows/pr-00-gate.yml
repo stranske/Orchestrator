@@ -368,8 +368,13 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.detect.outputs.python_ci_matrix) }}
     with:
+      # 3.14 only (owner, 2026-11-11, option A'): the suite ran three times on 3.14 per push and
+      # 6 of ~46 jobs were removable while the account's concurrent-job limit queued runs ~20
+      # minutes. Gate keeps the 3.14 primary the Python standard requires (tests/
+      # test_ci_python_standard.py) and its static checks; 3.13 compatibility now runs in CI's
+      # flat exec-mirror shards, so the whole suite still runs on both runtimes every push.
       primary-python-version: '3.14'
-      python-versions: '["3.13", "3.14"]'
+      python-versions: '["3.14"]'
       marker: "not quarantine and not slow"
       pytest_markers: ${{ needs.detect.outputs.pytest_markers }}
       pytest_args: ${{ matrix.pytest_args }}
