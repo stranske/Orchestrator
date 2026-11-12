@@ -70,6 +70,34 @@ test('retains the missing-pytest failure without mistaking matching floors for a
     /No module named pytest/);
 });
 
+test('the real verifier pytest stage preserves a missing-interpreter-prerequisite failure', (t) => {
+  const modules = path.resolve(__dirname, '../src');
+  const { options } = fixture(t, 'import json, sys\nfrom pathlib import Path\n'
+    + `sys.path.insert(0, ${JSON.stringify(modules)})\n`
+    + 'import verify\n'
+    + 'verify.ROOT = Path.cwd()\n'
+    // Exercise the production subprocess and parser. Only exclude installed
+    // packages at launch, so this regression also works when CI has pytest.
+    + 'verify.child_argv = lambda argv: [argv[0], "-S", *argv[1:]]\n'
+    + 'result = verify.run_pytest(junit=Path.cwd() / "pytest.xml")\n'
+    + 'print(json.dumps(result))\n'
+    + 'raise SystemExit(result["returncode"])\n');
+  const receipt = runVerify(options);
+  const result = JSON.parse(fs.readFileSync(path.join(options.output, 'verify.stdout.log'), 'utf8'));
+  assert.equal(result.returncode, 1);
+  assert.match(result.output, /No module named pytest/);
+  assert.equal(result.collected, 0);
+  assert.equal(result.passed, 0);
+  assert.equal(result.test_inventory, null);
+  assert.match(result.inventory_error, /FileNotFoundError.*pytest\.xml/);
+  assert.deepEqual(result.verdicts, {});
+  assert.equal(receipt.execution.exit_code, result.returncode);
+  assert.equal(receipt.floor.matches, true);
+  assert.equal(receipt.passed, false);
+  assert.equal(receipt.deployment_acceptance_verified, false);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(options.output, 'receipt.json'))), receipt);
+});
+
 test('runs the verifier and retains differing floor bytes without changing either floor', (t) => {
   const { options, git, commit } = fixture(t);
   const current = Buffer.from('{"collected":2}\n');

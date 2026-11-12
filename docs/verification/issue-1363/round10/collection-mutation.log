@@ -1,0 +1,42 @@
+✔ retains complete real Python streams, selected revision and both floor blobs (82.834841ms)
+✔ retains the missing-pytest failure without mistaking matching floors for acceptance (74.723539ms)
+✖ the real verifier pytest stage preserves a missing-interpreter-prerequisite failure (185.401785ms)
+✔ runs the verifier and retains differing floor bytes without changing either floor (62.379609ms)
+✔ rejects a successful command as delivered evidence if source changes during the run (64.746866ms)
+✔ retains partial output and signal on timeout (1052.684664ms)
+✔ retains interpreter launch failure as a failed receipt (67.491282ms)
+✔ inherited explicit runtime paths and live-state opt-in stay outside this run (63.360433ms)
+✔ uncommitted test inputs cannot yield delivered-checkout acceptance (53.272624ms)
+✔ Git-ignored Python inputs cannot masquerade as committed delivery (55.756632ms)
+✔ refuses wrong revisions and output within the checkout before invoking Python (29.652547ms)
+ℹ tests 11
+ℹ suites 0
+ℹ pass 10
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1797.729215
+
+✖ failing tests:
+
+test at tests/test_provision_verify.js:73:1
+✖ the real verifier pytest stage preserves a missing-interpreter-prerequisite failure (185.401785ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  1 !== 0
+  
+      at TestContext.<anonymous> (/tmp/orch1363-round10-mutation-07NXmC/tests/test_provision_verify.js:89:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

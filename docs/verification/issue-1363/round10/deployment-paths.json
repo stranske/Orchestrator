@@ -1,0 +1,11 @@
+{
+  "checked_at": "2026-11-12T02:16:42.168Z",
+  "platform": "linux",
+  "paths": {
+    "/Users/teacher/.codex/orchestrator": false,
+    "/Users/teacher/.codex/orchestrator-mirror": false,
+    "/opt/anaconda3/bin/python3": false
+  },
+  "deployment_verified": false,
+  "fresh_host_collector_observation_verified": false
+}
