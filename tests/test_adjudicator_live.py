@@ -807,3 +807,181 @@ def test_the_tick_asks_the_module_whether_the_switch_is_on(monkeypatch):
     needle = 'adjudicator_live.py" --enabled'
     assert text.count(needle) == 1, "the tick reads the live kill switch through the module, once"
     assert "ORCH_ADJUDICATOR_LIVE_SHADOW" not in text, "the shell never reads the switch itself"
+
+
+def test_saved_proposal_excludes_target_before_cap_while_receipt_writes_fail_then_recovers(
+    world, monkeypatch
+):
+    real_record = feedback.record_completion_event
+    real_record_in_conn = feedback._record_completion_event_in_conn
+    fail_writes = {"enabled": True}
+
+    def flaky_record_in_conn(conn, run_id, **kwargs):
+        if fail_writes["enabled"]:
+            raise RuntimeError("brain receipt write failing")
+        return real_record_in_conn(conn, run_id, **kwargs)
+
+    def flaky_record(run_id, **kwargs):
+        if fail_writes["enabled"]:
+            raise RuntimeError("brain receipt write failing")
+        return real_record(run_id, **kwargs)
+
+    monkeypatch.setattr(feedback, "_record_completion_event_in_conn", flaky_record_in_conn)
+    monkeypatch.setattr(feedback, "record_completion_event", flaky_record)
+
+    @contextmanager
+    def multi_provider(target, head):
+        assert target in {"owner/repo#1", "owner/repo#2"} and head == world["sha"]
+        yield str(world["path"].parent / "repo")
+
+    common = {
+        **world["common"],
+        "provider": multi_provider,
+        "snapshot_reader": lambda target: {
+            "number": int(target.split("#")[1]),
+            "headRefOid": world["sha"],
+            "body": live.AC_BODY,
+        },
+    }
+    first = live.run_live(**common)
+    assert (first["attempted"], first["advised"]) == (1, 1)
+    assert len(world["calls"]) == 1
+    assert "advice_event" not in first["rows"][0]
+    assert "brain receipt write failing" in first["rows"][0]["advice_event_error"]
+    assert live.retro.live_advised_targets(feedback.DB_PATH) == set()
+
+    # Add a newer dispute for the already-advised target and an older dispute for a second target.
+    with feedback._conn() as conn:
+        conn.executemany(
+            "INSERT INTO runs(run_id,ts,target) VALUES (?,?,?)",
+            [
+                ("live-1-newer", world["now"] + 3, "owner/repo#1"),
+                ("live-2", world["now"] + 2, "owner/repo#2"),
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged) "
+            "VALUES (?,'PASS','NON_PASS',1)",
+            [("live-1-newer",), ("live-2",)],
+        )
+
+    # Under limit=1 while receipt backfill still fails, owner/repo#1 must be excluded before
+    # applying the cap so runner is not invoked for live-1-newer and live-2 gets the slot.
+    second = live.run_live(**{**common, "limit": 1, "now": world["now"] + 4})
+    assert (second["attempted"], second["advised"]) == (1, 1)
+    assert len(world["calls"]) == 2
+    assert [row["run_id"] for row in second["rows"]] == ["live-1", "live-2"]
+
+    # Another pass while receipt writes still fail dispatches nothing.
+    third = live.run_live(**{**common, "limit": 1, "now": world["now"] + 5})
+    assert third["attempted"] == 0 and len(world["calls"]) == 2
+
+    # Recover the writer: backfill persists the original advice without invoking the role again.
+    fail_writes["enabled"] = False
+    monkeypatch.setattr(feedback, "_record_completion_event_in_conn", real_record_in_conn)
+    recovered = live.run_live(**{**common, "limit": 1, "now": world["now"] + 6})
+    assert recovered["attempted"] == 0 and len(world["calls"]) == 2
+    assert live.retro.live_advised_targets(feedback.DB_PATH) == {
+        "owner/repo#1",
+        "owner/repo#2",
+    }
+    with sqlite3.connect(feedback.DB_PATH) as conn:
+        payloads = [
+            json.loads(raw)["live_shadow"]
+            for (raw,) in conn.execute(
+                "SELECT payload_json FROM completion_events WHERE producer=? AND phase=? "
+                "ORDER BY created_ts,event_id",
+                (live.retro.LIVE_ADVICE_PRODUCER, live.retro.LIVE_ADVICE_PHASE),
+            ).fetchall()
+        ]
+    by_target = {item["target"]: item for item in payloads}
+    assert by_target["owner/repo#1"]["run_id"] == "live-1"
+    assert by_target["owner/repo#1"]["case_id"] == first["rows"][0]["case_id"]
+    saved_rows = {row["run_id"]: row for row in json.loads(world["path"].read_text())["rows"]}
+    assert "advice_event" in saved_rows["live-1"]
+    assert "advice_event_error" not in saved_rows["live-1"]
+
+
+def test_overlapping_report_writes_use_distinct_staging_files_and_competing_pass_skips_dispatch(
+    world, monkeypatch
+):
+    staged_paths: list = []
+    real_replace = live.Path.replace
+    nested_done = {"ran": False}
+
+    def spy_replace(self, target):
+        if self.parent == world["path"].parent and self.name.endswith(".tmp"):
+            staged_paths.append(self)
+            if not nested_done["ran"]:
+                nested_done["ran"] = True
+                live._write_report(
+                    world["path"], {"schema": "adjudicator-live/v1", "rows": [{"id": 2}]}
+                )
+        return real_replace(self, target)
+
+    monkeypatch.setattr(live.Path, "replace", spy_replace)
+    live._write_report(world["path"], {"schema": "adjudicator-live/v1", "rows": [{"id": 1}]})
+    assert len(staged_paths) == 2 and staged_paths[0] != staged_paths[1]
+    assert all(p.parent == world["path"].parent for p in staged_paths)
+    assert list(world["path"].parent.glob("*.tmp")) == []
+    assert json.loads(world["path"].read_text())["rows"] == [{"id": 1}]
+    monkeypatch.setattr(live.Path, "replace", real_replace)
+    world["path"].unlink()
+
+    # If an existing writer owns the report, a competing pass must dispatch zero roles and
+    # leave work eligible for the next successful pass.
+    competing_results: list[dict] = []
+    base_runner = world["common"]["runner"]
+
+    def overlapping_runner(**kw):
+        competing_results.append(live.run_live(**{**world["common"], "now": world["now"] + 2}))
+        return base_runner(**kw)
+
+    first = live.run_live(**{**world["common"], "runner": overlapping_runner})
+    assert (first["attempted"], first["advised"]) == (1, 1)
+    assert len(world["calls"]) == 1
+    assert len(competing_results) == 1
+    assert competing_results[0]["attempted"] == 0 and competing_results[0]["advised"] == 0
+    assert competing_results[0].get("busy") is True
+
+    # Also verify a competing pass blocked before any work starts leaves work eligible for the next pass.
+    with feedback._conn() as conn:
+        conn.execute(
+            "INSERT INTO runs(run_id,ts,target) VALUES ('live-2',?,'owner/repo#2')",
+            (world["now"] + 3,),
+        )
+        conn.execute(
+            "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged) "
+            "VALUES ('live-2','NON_PASS','PASS',1)"
+        )
+
+    @contextmanager
+    def two_target_provider(target, head):
+        assert target in {"owner/repo#1", "owner/repo#2"} and head == world["sha"]
+        yield str(world["path"].parent / "repo")
+
+    common_two = {
+        **world["common"],
+        "provider": two_target_provider,
+        "snapshot_reader": lambda target: {
+            "number": int(target.split("#")[1]),
+            "headRefOid": world["sha"],
+            "body": live.AC_BODY,
+        },
+        "now": world["now"] + 4,
+    }
+    monkeypatch.setattr(live, "report_path", lambda: world["path"])
+    with live._report_writer_lock(world["path"]) as acquired:
+        assert acquired is True
+        blocked = live.run_live(**common_two)
+        assert blocked["attempted"] == 0 and blocked.get("busy") is True
+        assert live.main(["--limit", "1"]) == 1
+        assert len(world["calls"]) == 1
+
+    after_release = live.run_live(**{**common_two, "now": world["now"] + 5})
+    assert (after_release["attempted"], after_release["advised"]) == (1, 1)
+    assert len(world["calls"]) == 2
+    assert {row["target"] for row in json.loads(world["path"].read_text())["rows"]} == {
+        "owner/repo#1",
+        "owner/repo#2",
+    }

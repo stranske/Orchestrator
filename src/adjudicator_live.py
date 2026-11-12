@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import fcntl
 import hashlib
 import json
 import os
@@ -39,6 +40,7 @@ import shlex
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -555,154 +557,181 @@ def run_live(
     runner = runner or roles.run_adjudicator_agent
     provider = provider or _exact_head_checkout
     snapshot_reader = snapshot_reader or pr_snapshot
-    rows = _load_rows(path, db)
-    # Retirement stops dispatch while later durability can still drain through reconciliation.
-    summary = reconcile_live(db=db, path=path, now=now)
-    report = json.loads(path.read_text())
-    # Persist legacy advice even when this cohort has retired. These receipts recover the
-    # measured sample after report loss; backfilling them never dispatches another role run.
-    _backfill_advice_events(rows, db)
-    if report.get("retirement"):
+    with _report_writer_lock(path) as acquired:
+        if not acquired:
+            return {
+                "disabled": False,
+                "busy": True,
+                "attempted": 0,
+                "advised": 0,
+                "uncertified": 0,
+            }
+        rows = _load_rows(path, db)
+        population = retro.disputes(db=db, now=now)
+        # Persist legacy advice even when this cohort has retired. These receipts recover the
+        # measured sample after report loss; backfilling them never dispatches another role run.
+        _backfill_advice_events(rows, db)
+        # Retirement stops dispatch while later durability can still drain through reconciliation.
+        summary = _grade_and_write(rows, db, path, now=now, population=len(population))
+        report = json.loads(path.read_text())
+        if report.get("retirement"):
+            return {
+                "disabled": False,
+                "retired": True,
+                "attempted": 0,
+                "advised": 0,
+                "uncertified": 0,
+                "summary": summary,
+                "rows": rows,
+            }
+        # "Advised" has ONE record, the Brain's `live_shadow_advice` event, which `live_disputes`
+        # excludes by target, including saved advice backfilled above. A saved proposal in the
+        # report file also excludes its target while receipt backfill is failing.
+        settled = {
+            str(row["case_id"])
+            for row in rows
+            if row.get("case_id") and _final(row) and "proposal" not in row
+        }
+        advised_targets = {
+            str(row["target"])
+            for row in rows
+            if "proposal" in row
+            and not (row.get("certification") or {}).get("recovered_from_event")
+            and row.get("target")
+        }
+        retrying = {row.get("case_id"): row for row in rows if not _final(row)}
+        attempted = advised = uncertified = 0
+        candidates = [
+            dispute
+            for dispute in retro.live_disputes(
+                limit=None, db=db, now=now, exclude_case_ids=settled, state_path=path
+            )
+            if dispute["target"] not in advised_targets
+        ]
+        for dispute in candidates[:limit]:
+            case_id = retro._case_id(dispute)
+            attempted += 1
+            earlier = retrying.pop(case_id, None)
+            if earlier is not None:
+                rows.remove(earlier)
+            entry: dict[str, Any] = {
+                **retro._case_identity(dispute),
+                "case_id": case_id,
+                "target": dispute["target"],
+                "source": "live",
+                "attempted_at": now,
+                "first_attempted_at": (
+                    earlier.get("first_attempted_at", earlier.get("attempted_at"))
+                    if earlier
+                    else now
+                ),
+                "attempts": int(earlier.get("attempts") or 1) + 1 if earlier else 1,
+                "later_truth": retro.later_truth(dispute),
+                "merge_rule_verdict": (
+                    ("PASS" if dispute["merged"] else "FAIL")
+                    if dispute["merged"] is not None
+                    else None
+                ),
+                "cost_usd": None,
+                "dispatch_timeout_s": timeout,
+            }
+            try:
+                entry["packet"] = retro.build_packet(dispute, reader(dispute))
+                sha = retro._case_evaluated_sha(entry)
+                if sha is None:
+                    raise ValueError("dispute carries no exact evaluated commit")
+                with provider(dispute["target"], sha) as repository:
+                    repository = Path(repository)
+                    case = certify(
+                        entry,
+                        repository,
+                        snapshot_reader(dispute["target"]),
+                        github_reader=github_reader,
+                    )
+                    entry["certification"] = {
+                        "status": "certified",
+                        "evaluated_sha": sha,
+                        "paths": entry["collection_requirements"]["source_paths"],
+                    }
+                    # The persisted packet is the CERTIFIED one (metadata_only False, collected
+                    # evidence, qualification), so the retrospective's evidence floor, which
+                    # demotes metadata-only rows to needs_more_evidence, does not apply to a live
+                    # row; the raw merged-PR packet is kept beside it for provenance.
+                    entry["raw_packet"] = entry["packet"]
+                    entry["packet"] = roles._collected_snapshot(case)
+                    if dispatch:
+                        result = runner(
+                            case=case,
+                            dispatch=True,
+                            source="live",
+                            cwd=str(repository),
+                            timeout=timeout,
+                        )
+                        entry.update(
+                            {
+                                key: result.get(key)
+                                for key in (
+                                    "role_run_id",
+                                    "backend_run_id",
+                                    "backend",
+                                    "errors",
+                                    "role_record_error",
+                                    "role_record",
+                                )
+                            }
+                        )
+                        if result.get("proposal") and not result.get("errors"):
+                            entry["decision"] = result["proposal"]["decision"]
+                            entry["proposal"] = result["proposal"]
+                            entry["disposition"] = (result.get("advisory_plan") or {}).get(
+                                "decision", entry["decision"]
+                            )
+                            entry["shadow_verdict"] = retro._shadow_verdict_for_row(entry)
+                            advised += 1
+                        try:
+                            entry["cost_usd"] = retro.measured_cost(
+                                result.get("backend_run_id"), db
+                            )
+                        except (OSError, ValueError, KeyError, TypeError):
+                            entry["cost_usd"] = None
+                        if "proposal" in entry:
+                            _record_advice_event(entry, db)
+            except (ValueError, KeyError, TypeError) as exc:
+                if "certification" in entry:
+                    entry["error"] = str(exc)[:300]  # the role run failed after certification
+                else:
+                    entry["certification"] = {"status": "uncertified", "reason": str(exc)[:300]}
+                    uncertified += 1
+            except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
+                # Provisioning, an evidence read or the role run failed, not the case: the row is
+                # kept with its error and retried by later runs until MAX_ATTEMPTS, then it is final.
+                entry["error"] = str(exc)[:300]
+            rows.append(entry)
+        # Grade every live row against later truth and write the live report. NOT the retrospective's
+        # persistence: `adjudicator_retro._row_metadata_only` treats any serialized qualification as
+        # metadata-only on purpose (a JSON flag cannot prove collector issuance for the retro's own
+        # report), so its writer would demote every live decision to needs_more_evidence. A live row
+        # was decided on a case certified IN THIS PROCESS at dispatch time; this module records that
+        # fact itself (`certification`), grades the advice itself, and labels the number `live`.
+        pending = {retro._case_id(row) for row in candidates[limit:]}
+        pending.update(str(row["case_id"]) for row in rows if not _final(row))
+        summary = _grade_and_write(
+            rows,
+            db,
+            path,
+            now=now,
+            population=len(population),
+            selection_state={"last_live_run_ts": now, "pending_case_ids": sorted(pending)},
+        )
         return {
             "disabled": False,
-            "retired": True,
-            "attempted": 0,
-            "advised": 0,
-            "uncertified": 0,
+            "attempted": attempted,
+            "advised": advised,
+            "uncertified": uncertified,
+            "population": len(population),
             "summary": summary,
             "rows": rows,
         }
-    # "Advised" has ONE record, the Brain's `live_shadow_advice` event, which `live_disputes`
-    # excludes by target, including saved advice backfilled above.
-    settled = {
-        str(row["case_id"])
-        for row in rows
-        if row.get("case_id") and _final(row) and "proposal" not in row
-    }
-    retrying = {row.get("case_id"): row for row in rows if not _final(row)}
-    population = retro.disputes(db=db, now=now)
-    attempted = advised = uncertified = 0
-    candidates = retro.live_disputes(
-        limit=None, db=db, now=now, exclude_case_ids=settled, state_path=path
-    )
-    for dispute in candidates[:limit]:
-        case_id = retro._case_id(dispute)
-        attempted += 1
-        earlier = retrying.pop(case_id, None)
-        if earlier is not None:
-            rows.remove(earlier)
-        entry: dict[str, Any] = {
-            **retro._case_identity(dispute),
-            "case_id": case_id,
-            "target": dispute["target"],
-            "source": "live",
-            "attempted_at": now,
-            "first_attempted_at": (
-                earlier.get("first_attempted_at", earlier.get("attempted_at")) if earlier else now
-            ),
-            "attempts": int(earlier.get("attempts") or 1) + 1 if earlier else 1,
-            "later_truth": retro.later_truth(dispute),
-            "merge_rule_verdict": (
-                ("PASS" if dispute["merged"] else "FAIL") if dispute["merged"] is not None else None
-            ),
-            "cost_usd": None,
-            "dispatch_timeout_s": timeout,
-        }
-        try:
-            entry["packet"] = retro.build_packet(dispute, reader(dispute))
-            sha = retro._case_evaluated_sha(entry)
-            if sha is None:
-                raise ValueError("dispute carries no exact evaluated commit")
-            with provider(dispute["target"], sha) as repository:
-                repository = Path(repository)
-                case = certify(
-                    entry,
-                    repository,
-                    snapshot_reader(dispute["target"]),
-                    github_reader=github_reader,
-                )
-                entry["certification"] = {
-                    "status": "certified",
-                    "evaluated_sha": sha,
-                    "paths": entry["collection_requirements"]["source_paths"],
-                }
-                # The persisted packet is the CERTIFIED one (metadata_only False, collected
-                # evidence, qualification), so the retrospective's evidence floor, which
-                # demotes metadata-only rows to needs_more_evidence, does not apply to a live
-                # row; the raw merged-PR packet is kept beside it for provenance.
-                entry["raw_packet"] = entry["packet"]
-                entry["packet"] = roles._collected_snapshot(case)
-                if dispatch:
-                    result = runner(
-                        case=case,
-                        dispatch=True,
-                        source="live",
-                        cwd=str(repository),
-                        timeout=timeout,
-                    )
-                    entry.update(
-                        {
-                            key: result.get(key)
-                            for key in (
-                                "role_run_id",
-                                "backend_run_id",
-                                "backend",
-                                "errors",
-                                "role_record_error",
-                                "role_record",
-                            )
-                        }
-                    )
-                    if result.get("proposal") and not result.get("errors"):
-                        entry["decision"] = result["proposal"]["decision"]
-                        entry["proposal"] = result["proposal"]
-                        entry["disposition"] = (result.get("advisory_plan") or {}).get(
-                            "decision", entry["decision"]
-                        )
-                        entry["shadow_verdict"] = retro._shadow_verdict_for_row(entry)
-                        advised += 1
-                    try:
-                        entry["cost_usd"] = retro.measured_cost(result.get("backend_run_id"), db)
-                    except (OSError, ValueError, KeyError, TypeError):
-                        entry["cost_usd"] = None
-                    if "proposal" in entry:
-                        _record_advice_event(entry, db)
-        except (ValueError, KeyError, TypeError) as exc:
-            if "certification" in entry:
-                entry["error"] = str(exc)[:300]  # the role run failed after certification
-            else:
-                entry["certification"] = {"status": "uncertified", "reason": str(exc)[:300]}
-                uncertified += 1
-        except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
-            # Provisioning, an evidence read or the role run failed, not the case: the row is
-            # kept with its error and retried by later runs until MAX_ATTEMPTS, then it is final.
-            entry["error"] = str(exc)[:300]
-        rows.append(entry)
-    # Grade every live row against later truth and write the live report. NOT the retrospective's
-    # persistence: `adjudicator_retro._row_metadata_only` treats any serialized qualification as
-    # metadata-only on purpose (a JSON flag cannot prove collector issuance for the retro's own
-    # report), so its writer would demote every live decision to needs_more_evidence. A live row
-    # was decided on a case certified IN THIS PROCESS at dispatch time; this module records that
-    # fact itself (`certification`), grades the advice itself, and labels the number `live`.
-    pending = {retro._case_id(row) for row in candidates[limit:]}
-    pending.update(str(row["case_id"]) for row in rows if not _final(row))
-    summary = _grade_and_write(
-        rows,
-        db,
-        path,
-        now=now,
-        population=len(population),
-        selection_state={"last_live_run_ts": now, "pending_case_ids": sorted(pending)},
-    )
-    return {
-        "disabled": False,
-        "attempted": attempted,
-        "advised": advised,
-        "uncertified": uncertified,
-        "population": len(population),
-        "summary": summary,
-        "rows": rows,
-    }
 
 
 def _advice_payload(row: dict) -> dict:
@@ -746,6 +775,7 @@ def _record_advice_event(row: dict, db: Path | None) -> None:
                 row["advice_event"] = feedback._record_completion_event_in_conn(
                     conn, run_id, **kwargs
                 )["event_id"]
+        row.pop("advice_event_error", None)
     except Exception as exc:  # noqa: BLE001 - a Brain fault must not lose the saved advice
         row["advice_event_error"] = str(exc)[:300]
 
@@ -759,7 +789,8 @@ def _backfill_advice_events(rows: list[dict], db: Path | None) -> None:
         target = row.get("target")
         if "proposal" in row and isinstance(target, str) and target not in recorded:
             _record_advice_event(row, db)
-            recorded.add(target)
+            if "advice_event" in row and "advice_event_error" not in row:
+                recorded.add(target)
 
 
 def _grade_and_write(
@@ -813,9 +844,10 @@ def reconcile_live(
     """
     now = int(time.time()) if now is None else now
     path = path or report_path()
-    rows = _load_rows(path, db)
-    population = len(retro.disputes(db=db, now=now))
-    return _grade_and_write(rows, db, path, now=now, population=population)
+    with _report_writer_lock(path, blocking=True):
+        rows = _load_rows(path, db)
+        population = len(retro.disputes(db=db, now=now))
+        return _grade_and_write(rows, db, path, now=now, population=population)
 
 
 UNCERTIFIED_CLASSES: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -867,11 +899,46 @@ def live_summary(rows: list[dict]) -> dict:
     }
 
 
+def _report_lock_path(path: Path) -> Path:
+    resolved = path.resolve()
+    return resolved.with_name(f".{resolved.name}.lock")
+
+
+@contextmanager
+def _report_writer_lock(path: Path, *, blocking: bool = False):
+    lock_path = _report_lock_path(path)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+", encoding="utf-8") as handle:
+        flags = fcntl.LOCK_EX if blocking else (fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            fcntl.flock(handle.fileno(), flags)
+        except BlockingIOError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
 def _write_report(path: Path, report: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    staged = path.with_suffix(".tmp")
-    staged.write_text(json.dumps(report, indent=2, default=str) + "\n", encoding="utf-8")
-    staged.replace(path)
+    staged: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f"{path.name}.{os.getpid()}.",
+            suffix=".tmp",
+            delete=False,
+        ) as stream:
+            staged = Path(stream.name)
+            stream.write(json.dumps(report, indent=2, default=str) + "\n")
+        staged.replace(path)
+    finally:
+        if staged is not None:
+            staged.unlink(missing_ok=True)
 
 
 @contextmanager
@@ -1014,7 +1081,6 @@ def _selftest() -> None:
 
             @contextmanager
             def provider(target, head):
-                assert target != "owner/repo#3", "the dispute at the cutoff must not provision"
                 assert target in {"owner/repo#1", "owner/repo#2"} and head == sha
                 yield str(root / "repo")
 
@@ -1051,16 +1117,15 @@ def _selftest() -> None:
                 ).fetchall()
             assert verdicts == [("NON_PASS", "PASS")], "shadow never writes an outcome"
             assert retro.live_advised_targets(feedback.DB_PATH) == {"owner/repo#1"}
-            # Only the fresh dispute reaches certification, where its body is refused.
+            # A late-persisted outcome for an earlier run still reaches certification and refusal.
             with feedback._conn() as conn:
-                conn.executemany(
-                    "INSERT INTO runs(run_id,ts,target) VALUES (?,?,?)",
-                    [("live-2", now + 2, "owner/repo#2"), ("at-cutoff", now + 1, "owner/repo#3")],
+                conn.execute(
+                    "INSERT INTO runs(run_id,ts,target) VALUES ('live-2',?,'owner/repo#2')",
+                    (now - 1,),
                 )
-                conn.executemany(
+                conn.execute(
                     "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged) "
-                    "VALUES (?,'PASS','NON_PASS',1)",
-                    [("live-2",), ("at-cutoff",)],
+                    "VALUES ('live-2','PASS','NON_PASS',1)"
                 )
             third = run_live(
                 snapshot_reader=lambda _t: {**snapshot, "number": 2, "body": "No criteria here."},
@@ -1070,7 +1135,7 @@ def _selftest() -> None:
             refused = third["rows"][-1]
             assert refused["run_id"] == "live-2"
             assert "no explicit acceptance criteria" in refused["certification"]["reason"]
-            assert "live: disputes 3, advised 1, uncertified 1, graded 0" in weekly_line(
+            assert "live: disputes 2, advised 1, uncertified 1, graded 0" in weekly_line(
                 root / "live.json"
             )
             # The kill switch writes nothing.
@@ -1114,7 +1179,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if enabled() else 1
     result = run_live(limit=args.limit, dispatch=not args.no_dispatch)
     print(json.dumps({k: v for k, v in result.items() if k != "rows"}, indent=2, default=str))
-    return 0
+    return 1 if result.get("busy") else 0
 
 
 if __name__ == "__main__":

@@ -1026,28 +1026,21 @@ def live_disputes(
     On top of `disputes()`: a target that already carries a `live_shadow_advice` event is never
     selected again, and `exclude_case_ids` names the cases the live state
     (`capability-program/adjudicator-live.json`) has already settled without advice (uncertified,
-    out of attempts). New rows must be newer than `since_ts`, defaulting to the last live run
-    saved in that state. Previously admitted pending cases can drain across the cutoff; advice
-    and settled-case exclusions still apply to them. An explicit `since_ts` is a strict cutoff.
+    out of attempts). "Not yet handled" is decided by those two records, NOT by a timestamp cut at
+    the last run: `runs.ts` is when the run started, not when its dispute was persisted, and a
+    cut at the last run would drop every dispute persisted after it for a run that began before
+    it, and every dispute past the per-run cap. `since_ts`, when given, is a strict lower bound.
     """
+    _ = state_path
     if limit is not None and limit <= 0:
         return []
-    pending: set[str] = set()
-    if since_ts is None:
-        path = state_path or report_path().with_name("adjudicator-live.json")
-        try:
-            state = json.loads(path.read_text())
-        except FileNotFoundError:
-            state = {}
-        since_ts = int(state.get("last_live_run_ts", state.get("generated_at", 0)))
-        pending.update(state.get("pending_case_ids", []))
     seen_targets = live_advised_targets(db)
     selected = []
     for row in disputes(db=db, now=now):
         target = row["target"]
         if target in seen_targets or _case_id(row) in exclude_case_ids:
             continue
-        if int(row["ts"] or 0) <= since_ts and _case_id(row) not in pending:
+        if since_ts is not None and int(row["ts"] or 0) <= since_ts:
             continue
         selected.append(row)
         seen_targets.add(target)

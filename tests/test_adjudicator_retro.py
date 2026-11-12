@@ -1281,12 +1281,13 @@ def test_live_disputes_defaults_to_saved_run_timestamp_and_three_targets(live_sh
             )
     selected = retro.live_disputes(db=db, now=now + 4)
     assert [row["run_id"] for row in selected] == ["fresh-3", "fresh-2", "fresh-1"]
-    assert len(retro.live_disputes(db=db, now=now + 4, limit=None)) == 4
-    # Explicit bounds override state and remain strict even for queued work.
+    assert len(retro.live_disputes(db=db, now=now + 4, limit=None)) == 5
+    # Saved run timestamps do not drop older unadvised runs; explicit since_ts remains strict.
     state.write_text(
         json.dumps(
             {
                 "generated_at": now + 4,
+                "last_live_run_ts": now + 4,
                 "pending_case_ids": [
                     retro._case_id(
                         {
@@ -1299,8 +1300,59 @@ def test_live_disputes_defaults_to_saved_run_timestamp_and_three_targets(live_sh
             }
         )
     )
-    assert [row["run_id"] for row in retro.live_disputes(db=db, now=now + 4)] == ["new"]
+    assert [row["run_id"] for row in retro.live_disputes(db=db, now=now + 4, limit=None)] == [
+        "fresh-3",
+        "fresh-2",
+        "fresh-1",
+        "fresh-0",
+        "new",
+    ]
+    assert [
+        row["run_id"]
+        for row in retro.live_disputes(db=db, now=now + 4, since_ts=now - 1, limit=None)
+    ] == ["fresh-3", "fresh-2", "fresh-1", "fresh-0"]
     assert retro.live_disputes(db=db, now=now + 4, since_ts=now + 4) == []
+
+
+def test_late_outcome_for_run_already_present_at_pass_remains_eligible_and_dispatches_once(
+    live_shadow,
+):
+    live, db, common = live_shadow["live"], live_shadow["db"], live_shadow["common"]
+    sha = common["snapshot_reader"]("owner/repo#1")["headRefOid"]
+    with feedback._conn() as conn:
+        conn.execute(
+            "INSERT INTO runs(run_id,ts,target) VALUES ('already-present',?,'owner/repo#2')",
+            (common["now"] - 10,),
+        )
+    first = live.run_live(**common)
+    assert (first["attempted"], first["advised"]) == (1, 1)
+    saved = json.loads(common["path"].read_text())
+    assert saved["last_live_run_ts"] == common["now"]
+    assert saved["pending_case_ids"] == []
+
+    # Outcome arrives after the daily pass for a run whose timestamp predates last_live_run_ts.
+    with feedback._conn() as conn:
+        conn.execute(
+            "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged) "
+            "VALUES ('already-present','NON_PASS','PASS',1)"
+        )
+    eligible = retro.live_disputes(db=db, now=common["now"] + 1, state_path=common["path"])
+    assert [row["run_id"] for row in eligible] == ["already-present"]
+
+    second_common = {
+        **common,
+        "now": common["now"] + 1,
+        "snapshot_reader": lambda target: {
+            "number": int(target.split("#")[1]),
+            "headRefOid": sha,
+            "body": live.AC_BODY,
+        },
+    }
+    second = live.run_live(**second_common)
+    assert (second["attempted"], second["advised"]) == (1, 1)
+    assert len(live_shadow["calls"]) == 2
+    third = live.run_live(**{**second_common, "now": common["now"] + 2})
+    assert third["attempted"] == 0 and len(live_shadow["calls"]) == 2
 
 
 def test_live_timestamp_cutoff_keeps_capped_cases_and_reconcile_does_not_advance_it(live_shadow):
