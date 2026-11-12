@@ -1,0 +1,17 @@
+{
+  "command": [
+    "node",
+    "scripts/run_provision_native_witnesses.js",
+    "--python",
+    "/opt/anaconda3/bin/python3",
+    "--revision",
+    "28291fa750499615ab1489ad8f828a618218ea7b",
+    "--mirror",
+    "/Users/teacher/.codex/orchestrator-mirror.generation-7a941ab4329345c4a1945ee3bb6a20fb",
+    "--output",
+    "/tmp/orch1363-host-round2/native-receipts",
+    "--full-suites"
+  ],
+  "mirror": "/Users/teacher/.codex/orchestrator-mirror.generation-7a941ab4329345c4a1945ee3bb6a20fb",
+  "head": "28291fa750499615ab1489ad8f828a618218ea7b"
+}

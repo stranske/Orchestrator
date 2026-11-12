@@ -1,0 +1,7 @@
+{
+  "target": "stranske/Workflows#4637",
+  "dispatch_records": [],
+  "holder_exists": false,
+  "claim_exists": false,
+  "historical_reservation_and_writer_lock": "UNKNOWN; absent current holder and claim cannot establish ownership at refusal time"
+}

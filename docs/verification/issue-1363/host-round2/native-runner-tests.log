@@ -1,0 +1,47 @@
+✔ binds named native verdicts, commit, mirror manifest, commands and unchanged floor (546.2175ms)
+✔ full suites bind independent default/native collections to all executed JUnit verdicts (708.416917ms)
+✔ named witnesses cannot mask an incomplete full suite: {"suiteFailure":"default"} (686.103917ms)
+✔ named witnesses cannot mask an incomplete full suite: {"suiteFailure":"native"} (698.165292ms)
+✔ named witnesses cannot mask an incomplete full suite: {"suiteFailure":"native","failureTag":"failure"} (673.237584ms)
+✔ named witnesses cannot mask an incomplete full suite: {"suiteFailure":"native","failureTag":"error"} (681.648083ms)
+✔ named witnesses cannot mask an incomplete full suite: {"suiteOmission":true} (706.704042ms)
+✔ named witnesses cannot mask an incomplete full suite: {"suiteExtra":true} (716.905208ms)
+✔ named witnesses cannot mask an incomplete full suite: {"suiteWrongClass":true} (708.027209ms)
+✔ named witnesses cannot mask an incomplete full suite: {"emptyCollection":true} (714.5895ms)
+✔ named witnesses cannot mask an incomplete full suite: {"duplicateCollection":true} (687.199417ms)
+✔ named witnesses cannot mask an incomplete full suite: {"collectionExit":1} (690.793209ms)
+✔ named witnesses cannot mask an incomplete full suite: {"collectionWrongFile":true} (686.649584ms)
+✔ changed inputs invalidate both full suites as well as named witnesses (666.593458ms)
+✔ full-suites CLI exits nonzero when the witnesses pass but a full suite fails (1438.6525ms)
+✔ cannot credit an incomplete or changed run: {"missing":true} (359.8565ms)
+✔ cannot credit an incomplete or changed run: {"noXml":true} (363.381792ms)
+✔ cannot credit an incomplete or changed run: {"malformed":true} (416.731875ms)
+✔ cannot credit an incomplete or changed run: {"skip":true} (415.62875ms)
+✔ cannot credit an incomplete or changed run: {"omit":true} (419.155917ms)
+✔ cannot credit an incomplete or changed run: {"duplicate":true} (423.947208ms)
+✔ cannot credit an incomplete or changed run: {"exit":1} (423.359584ms)
+✔ cannot credit an incomplete or changed run: {"mutate":true} (411.331333ms)
+✔ cannot credit an incomplete or changed run: {"extra":true} (409.661167ms)
+✔ refuses drift, missing inputs, symlinks and a floor unequal to origin/main before testing (504.435667ms)
+✔ unrelated, duplicate, skipped or vacuous verdicts do not prove the witnesses (0.188375ms)
+✔ refuses extra importable modules and test inputs before executing pytest (1454.975417ms)
+✔ copies only bound inputs from a published layout with retained runtime links (830.783583ms)
+✔ omits documented runtime output and regular bytecode from the manifest and private tree (252.638333ms)
+✔ runtime exclusions do not admit importable inputs at similar or nested paths (788.804792ms)
+✔ uses an external interpreter backing a retained mirror virtual environment (686.98475ms)
+✔ rejects an interpreter directory alias resolving inside the mirror (85.616375ms)
+✔ rejects symlinks in code, tests and configuration, including cache lookalikes (563.898875ms)
+✔ requires explicit interpreter, revision and receipt location outside the mirror (72.6335ms)
+✔ inherited PYTHONPATH cannot substitute an imported module (452.247708ms)
+✔ retains JUnit reader failure diagnostics: {"readerExit":37} (611.179916ms)
+✔ retains JUnit reader failure diagnostics: {"readerInvalidJson":true} (577.611458ms)
+✔ retains JUnit reader failure diagnostics: {"malformed":true} (664.55575ms)
+✔ a missing JUnit file retains the pytest failure without inventing a reader command (359.915083ms)
+ℹ tests 39
+ℹ suites 0
+ℹ pass 39
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 22565.350917
