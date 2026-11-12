@@ -329,3 +329,21 @@ and `needs-human` label because each requires approval and this run's approval
 policy is `never`. No hosted task metadata changed. The owner still needs to
 sync normally and retain the actual runtime's CONSUMERS and CONSUMER SYNC output
 from `python3 src/capability_admission.py --check-consumer-sync`.
+# 2026-11-12 full-inventory runner follow-up
+
+The prepared JavaScript CLI regression starts all 52 current declarations as
+legacy prose, runs the production writing loader, and verifies persisted sync,
+the zero prose/missing/DRAINABLE counters, and preserved lifecycle state and
+prior evidence. An additional ledger-only unresolved consumer then fails the
+check with DRAINABLE 1 even though no declarations await sync.
+
+`node --test --test-isolation=none tests/test_capability_consumer_sync_cli.js`
+passed all 9 tests without skips. Node syntax and `git diff --check` passed.
+A disposable test mutation replacing the writing loader with its read-only
+preview failed as expected. No Python files changed.
+
+The commit failed because `.git/index.lock` cannot be created on the read-only
+Git metadata mount. The test remains uncommitted. PR comment and `needs-human`
+label writes were rejected because they require approval and this run's approval
+policy is `never`. PR #1354 was verified open and ready for review. The actual
+live ledger is unavailable here; post-sync acceptance remains unchecked.

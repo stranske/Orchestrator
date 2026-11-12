@@ -129,6 +129,73 @@ test('consumer sync CLI separates measured action debt from persisted declaratio
   assert.deepEqual(fs.readFileSync(ledger), before, 'measuring action debt must preserve the ledger');
 });
 
+test('consumer sync CLI verifies the full declaration inventory after a real sync', async (t) => {
+  const { ledger, run, check, persist } = runtime(t);
+  const declarations = JSON.parse(await run([
+    '-c',
+    'import json, capabilities; print(json.dumps(capabilities.KNOWN_GATES | capabilities.KNOWN_DECLARATIONS))',
+  ], 0));
+  const ids = Object.keys(declarations).sort();
+  assert.ok(ids.length > 0, 'acceptance needs a nonempty declaration inventory');
+  const absent = ids.filter((id) => declarations[id].consumer_missing === true);
+  const syncedStatus = absent.length ? 1 : 0;
+  persist(...ids.map((id) => ({
+    capability_id: id, status: 'active',
+    downstream_consumer: 'the run consuming this output',
+    event_history: [{ type: 'invocation', timestamp: 1 }], outcome_links: [],
+  })));
+
+  const pending = await check(1);
+  assert.deepEqual(Object.keys(pending.consumer_sync.pending).sort(), ids);
+  assert.deepEqual(pending.consumers.drainable, absent, 'the preview alone is insufficient');
+  await run(['-c', 'import capabilities; capabilities.load()'], 0);
+  const synced = await check(syncedStatus);
+  assert.deepEqual(synced.consumer_sync, { live_rows: ids.length, pending: {} });
+  assert.equal(synced.consumers.total, ids.length);
+  assert.deepEqual(synced.consumers.by_class.prose, []);
+  assert.deepEqual(synced.consumers.by_class.unresolved, []);
+  assert.deepEqual(synced.consumers.by_class.undeclared, []);
+  assert.deepEqual(synced.consumers.by_class.consumer_missing, absent);
+  assert.deepEqual(synced.consumers.drainable, absent);
+  assert.deepEqual(synced.consumers.by_class.acting, [], 'sync grants no action credit');
+  const persisted = fs.readFileSync(ledger);
+  const stored = JSON.parse(persisted).capabilities;
+  assert.deepEqual(Object.keys(stored).sort(), ids, 'sync must preserve the inventory');
+  for (const id of ids) {
+    assert.equal(stored[id].downstream_consumer, declarations[id].downstream_consumer, id);
+    assert.equal(stored[id].status, 'active', id);
+    assert.deepEqual(stored[id].outcome_links, [], id);
+    assert.deepEqual(stored[id].event_history[0], { type: 'invocation', timestamp: 1 }, id);
+  }
+  const text = await run([
+    path.join(modules, 'capability_admission.py'), '--check-consumer-sync',
+  ], syncedStatus);
+  assert.ok(text.includes(
+    `CONSUMERS (10th): ${ids.length - absent.length} of ${ids.length} declare a consumer`,
+  ));
+  assert.ok(text.includes(
+    `prose 0, missing ${absent.length}, undeclared 0 — DRAINABLE ${absent.length}`,
+  ));
+  assert.deepEqual(fs.readFileSync(ledger), persisted, 'text reporting must preserve the snapshot');
+
+  // A deployed ledger can contain rows absent from both declaration tables.
+  // A fully synced source inventory must not hide one extra unresolved live rail.
+  const extra = 'ledger-only-consumer-fixture';
+  persist(...Object.values(stored), {
+    capability_id: extra, status: 'active', downstream_consumer: 'absent_module.py:consume',
+  });
+  const incomplete = await check(1);
+  assert.deepEqual(incomplete.consumer_sync, { live_rows: ids.length + 1, pending: {} });
+  assert.deepEqual(incomplete.consumers.by_class.unresolved, [extra]);
+  assert.deepEqual(incomplete.consumers.drainable, [...absent, extra].sort());
+  const incompleteText = await run([
+    path.join(modules, 'capability_admission.py'), '--check-consumer-sync',
+  ], 1);
+  assert.ok(incompleteText.includes(
+    `prose 0, missing ${absent.length + 1}, undeclared 0 — DRAINABLE ${absent.length + 1}`,
+  ));
+});
+
 for (const [classification, declaration] of [
   ['prose', { downstream_consumer: 'No rail applies this output.' }],
   ['unresolved', { downstream_consumer: 'absent_module.py:consume' }],
