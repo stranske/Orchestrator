@@ -316,7 +316,7 @@ def readout(*, write_state: bool = True) -> dict:
     finally:
         conn.close()
     arms = raw_spec.get("arms") or sorted({row["arm"] for row in rows})
-    per_arm = {}
+    per_arm: dict[str, dict[str, Any]] = {}
     for arm in arms:
         not_run = [row for row in rows if row["arm"] == arm and row["not_run"]]
         mine = [row for row in rows if row["arm"] == arm and not row["not_run"]]
@@ -324,7 +324,7 @@ def readout(*, write_state: bool = True) -> dict:
         merged = [row for row in with_pr if row["pr"].get("mergedAt") or row["merged"]]
         durable = [row for row in merged if row["durability"] == "durable"]
         broke = [row for row in merged if row["durability"] == "broke_later"]
-        awaiting = [row for row in merged if row["durability"] in (None, "", "pending")]
+        awaiting_rows = [row for row in merged if row["durability"] in (None, "", "pending")]
         closed = [
             row
             for row in with_pr
@@ -341,7 +341,7 @@ def readout(*, write_state: bool = True) -> dict:
             "merged": len(merged),
             "durable": len(durable),
             "broke_later": len(broke),
-            "awaiting_durability": len(awaiting),
+            "awaiting_durability": len(awaiting_rows),
             "closed_unmerged": len(closed),
             "open": len(open_),
             "verifier_pass": sum(
@@ -353,10 +353,10 @@ def readout(*, write_state: bool = True) -> dict:
             ),
             "durable_share": round(len(durable) / len(with_pr), 3) if with_pr else None,
         }
-    prs = sum(arm["prs"] for arm in per_arm.values())
-    resolved = sum(arm["merged"] + arm["closed_unmerged"] for arm in per_arm.values())
-    awaiting = sum(arm["awaiting_durability"] for arm in per_arm.values())
-    open_prs = sum(arm["open"] for arm in per_arm.values())
+    prs = int(sum(arm["prs"] for arm in per_arm.values()))
+    resolved = int(sum(arm["merged"] + arm["closed_unmerged"] for arm in per_arm.values()))
+    awaiting = int(sum(arm["awaiting_durability"] for arm in per_arm.values()))
+    open_prs = int(sum(arm["open"] for arm in per_arm.values()))
     verdict = _verdict(per_arm, arms)
     out = {
         "policy": POLICY,
