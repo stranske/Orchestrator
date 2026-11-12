@@ -133,7 +133,7 @@ function auditProvisionLedger(root, sourceDirectory, { now = new Date().toISOStr
   // Exact segment equality binds the counts to this receipt. Appended/rotated
   // data requires a fresh existing-collector observation, never a fabricated zero.
   if (!Array.isArray(packet?.segments) || packet.segments.length !== observed.length
-      || observed.some((row) => !packet.segments.some((old) => typeof old.path === 'string'
+      || observed.some((row) => !packet.segments.some((old) => typeof old?.path === 'string'
         && path.resolve(old.path) === row.path
         && old.lines === row.lines && old.sha256 === row.sha256))) {
     fail('active/archive segments differ from the collector observation');
