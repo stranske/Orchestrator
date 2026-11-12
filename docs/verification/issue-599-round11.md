@@ -264,3 +264,38 @@ The commit attempt failed before staging: Git could not create `.git/index.lock`
 because `.git` is mounted read-only. The new test file and this evidence update
 remain uncommitted and must be committed from a checkout with writable Git
 metadata. Syntax and whitespace checks passed.
+
+## 2026-11-12 mixed-lifecycle CLI regression
+
+Reviewed recent commits through `51438f31` and reconciled them with PR #1354's
+body: all five verified tasks are already checked. The remaining post-sync
+live-ledger acceptance criterion stays unchecked. This runner has no default
+live ledger and no explicit `ORCH_CAPABILITIES_PATH` configuration.
+
+Extended `tests/test_capability_consumer_sync_cli.js` to exercise both retired
+and superseded rows in fresh CLI processes. A terminal-only ledger must fail
+as unverified. Adding a live row with an unpersisted consumer must still fail,
+even when the reconciled CONSUMERS preview is clean. Persisting only the live
+binding must pass without requiring edits to terminal rows or granting action
+credit. Verification preserves the ledger bytes and terminal lifecycle/evidence.
+
+`node --test --test-isolation=none tests/test_capability_consumer_sync_cli.js`
+passed **7 tests**. Both new tests also passed in a disposable source copy and
+failed after deliberately changing the live-population filter to include
+terminal rows. The original checkout was not mutated. Seven existing Python
+regressions passed by direct invocation, including the named declaration test
+and persisted-sync regression. A deliberate prose mutation failed the named
+test; restoring the declaration passed. The focused pytest command with
+`-m 'not slow'` could not run because pytest is absent. No Python files changed.
+Node syntax validation and `git diff --check` passed.
+
+The GitHub connector rejected the PR-body reconciliation update because it
+requires approval while this run's approval policy is `never`. No hosted
+checkboxes were changed. The existing owner still needs to perform its normal
+deployment/sync and run `python3 src/capability_admission.py --check-consumer-sync`
+against the actual live ledger, retaining both CONSUMERS and CONSUMER SYNC output.
+
+The commit attempt stopped at staging: `git add` could not create `.git/index.lock`
+because Git metadata is mounted read-only. The tested JavaScript changes and this
+evidence remain uncommitted and require a checkout with writable Git metadata.
+PR #1354 remains open and ready for review (`draft=false`).

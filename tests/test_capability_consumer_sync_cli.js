@@ -49,9 +49,10 @@ function runtime(t) {
     assert.deepEqual(after, before, 'verification must not persist a preview or seed a ledger');
     return report;
   }
-  function persist(row) {
+  function persist(...rows) {
     fs.writeFileSync(ledger, JSON.stringify({
-      schema_version: 1, capabilities: { [row.capability_id]: row },
+      schema_version: 1,
+      capabilities: Object.fromEntries(rows.map((row) => [row.capability_id, row])),
     }));
   }
   return { ledger, run, check, persist };
@@ -109,5 +110,55 @@ for (const [classification, declaration] of [
     assert.deepEqual(report.consumer_sync, { live_rows: 1, pending: {} });
     assert.deepEqual(report.consumers.by_class[classification], ['sync-fixture']);
     assert.deepEqual(report.consumers.drainable, ['sync-fixture']);
+  });
+}
+
+for (const status of ['retired', 'superseded']) {
+  test(`consumer sync CLI excludes ${status} rows without masking live sync debt`, async (t) => {
+    const { ledger, check, persist, run } = runtime(t);
+    // A known declaration still reconciles in the report preview after retirement.
+    // Neither that edit nor the row's existence is evidence of a live owner sync.
+    const terminal = {
+      capability_id: 'offload', status,
+      downstream_consumer: 'the run consuming offload output', consumer_missing: true,
+      event_history: [{ type: 'invocation', timestamp: 1 }],
+    };
+    persist(terminal);
+    const inactive = await check(1);
+    assert.deepEqual(inactive.consumer_sync, { live_rows: 0, pending: {} });
+    assert.equal(inactive.consumers.total, 0);
+    assert.deepEqual(inactive.consumers.drainable, []);
+    const text = await run([
+      path.join(modules, 'capability_admission.py'), '--check-consumer-sync',
+    ], 1);
+    assert.match(text, /CONSUMER SYNC: unverified \(no live ledger rows/);
+
+    // Add a real live declaration with a clean preview but an unpersisted binding.
+    const live = {
+      capability_id: 'testgen-lane', status: 'active',
+      downstream_consumer: 'the acceptance gate consumes candidate tests',
+    };
+    persist(terminal, live);
+    const pending = await check(1);
+    assert.deepEqual(pending.consumer_sync, {
+      live_rows: 1, pending: { 'testgen-lane': ['downstream_consumer'] },
+    });
+    assert.equal(pending.consumers.total, 1);
+    assert.deepEqual(pending.consumers.drainable, [], 'a clean preview cannot mask pending sync');
+
+    // Persist only the live binding. Terminal declaration debt must remain excluded.
+    const declaration = await run([
+      '-c',
+      'import capabilities; print(capabilities.KNOWN_DECLARATIONS["testgen-lane"]["downstream_consumer"])',
+    ], 0);
+    persist(terminal, { ...live, downstream_consumer: declaration.trim() });
+    const synced = await check(0);
+    assert.deepEqual(synced.consumer_sync, { live_rows: 1, pending: {} });
+    assert.equal(synced.consumers.total, 1);
+    assert.deepEqual(synced.consumers.drainable, []);
+    assert.deepEqual(synced.consumers.by_class.acting, [], 'verification grants no action credit');
+    const stored = JSON.parse(fs.readFileSync(ledger, 'utf8')).capabilities;
+    assert.deepEqual(stored.offload, terminal, 'verification must preserve terminal rows');
+    assert.equal(stored['testgen-lane'].status, 'active');
   });
 }
