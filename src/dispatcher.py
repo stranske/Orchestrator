@@ -719,14 +719,12 @@ _PROBE_CONNECTION_PATTERNS = (
     r"dial tcp",
 )
 _PROBE_AUTH_API_PATTERNS = (
-    r"\bHTTP [45]\d\d\b",
+    r"\bHTTP(?:/\d+(?:\.\d+)?)?[ \t]+[45]\d{2}\b",
     r"bad credentials",
     r"requires authentication",
     r"gh auth login",
     r"authentication failed",
     r"unauthorized",
-    r"\b401\b",
-    r"\b403\b",
 )
 
 
@@ -776,7 +774,8 @@ def _classify_sandbox_probe(returncode: int, stdout: str, stderr: str) -> dict:
     """Timeout is decided by the caller. DNS and connection are networkless.
 
     An authentication or API rejection means the sandbox reached GitHub, so it
-    must not select the workspace-write fallback.
+    must not select the workspace-write fallback. A numeric code alone could
+    be a port in a DNS or connection diagnostic; require HTTP status context.
     """
     text = f"{stdout}\n{stderr}"
     detail = text.strip()[:300]
@@ -1490,6 +1489,7 @@ def _routing_metadata(assignment: dict) -> dict | None:
         "profile_assignment_probability": assignment.get("profile_assignment_probability"),
         "profile_rng_seed": assignment.get("profile_rng_seed"),
         "profile_decision_id": (assignment.get("profile_decision") or {}).get("decision_id"),
+        "split_skip_reason": assignment.get("split_skip_reason"),
         "profile_attempt_ids": assignment.get("profile_attempt_ids") or [],
         "capability_decision": assignment.get("capability_decision"),
         "eligible_capability_ids": assignment.get("eligible_capability_ids") or [],
@@ -1562,6 +1562,19 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
             "if adding a descriptive slug. This dispatch policy overrides branch naming in "
             "the task brief. Do not switch to another agent prefix."
         )
+    # Owner's live full-tier split (gemini_full_split.py, 2026-11-11): a local opener implement
+    # run on gemini with no model chosen gets an arm. It returns None for every other run, and
+    # any failure leaves the run on its normal path (fail toward motion, never a stall).
+    try:
+        import gemini_full_split
+
+        split, split_reason = gemini_full_split.assign(assignment)
+    except Exception as exc:  # the split must never stop a dispatch
+        split, split_reason = None, f"split error: {type(exc).__name__}"
+    if split:
+        assignment = {**assignment, **split}
+    elif agent == "gemini" and task_type == "implement":
+        assignment = {**assignment, "split_skip_reason": split_reason}
     profile_id = assignment.get("selected_profile_id")
     selected_profile = execution_profiles.get_profile(profile_id) if profile_id else None
     model = adapters.model_identity(agent, mode, selected_profile)

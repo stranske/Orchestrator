@@ -1,0 +1,10 @@
+--- a/src/feedback.py
++++ b/src/feedback.py
+@@ -6272,6 +6272,7 @@
+ 
+ 
+ def snapshot_json(path=None) -> dict:
++    return {}
+     """Dump the live store to a human-readable JSON snapshot for the Code/Orchestrator project. The live
+     SQLite stays on local disk (Dropbox-safe); THIS is the reviewable, version-controllable copy of the
+     growing dataset. Defaults to <project>/data/feedback-snapshot.json."""

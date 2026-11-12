@@ -397,8 +397,8 @@ cursor-agent live outside the default PATH):
   by default so fleet artifacts cannot pollute the learner.
 - **Pull direct LangSmith API telemetry (NEW)** — `python3 src/langsmith_direct.py --dry-run --json`
   previews, and `python3 src/langsmith_direct.py --ingest [--json]` writes, `workflows-agents` telemetry from
-  LangSmith's API into the same `langsmith-fleet/v1` join path used by `langsmith_pull.py`. It uses the
-  official SDK when installed and otherwise falls back to stdlib HTTP (`/sessions` + `/runs/query`), so the
+  LangSmith's API into the same `langsmith-fleet/v1` join path used by `langsmith_pull.py`. It uses
+  stdlib HTTP (`/sessions` + `/api/v2/runs/query`) regardless of installed SDK version, so the
   daily cadence does not depend on a global package install. The API key comes from `LANGSMITH_API_KEY`,
   `LANGCHAIN_API_KEY`, or `~/.codex/credentials/langsmith_api_key`.
 - **Fetch LangSmith fleet artifacts (NEW)** — `python3 src/langsmith_fetch.py --ingest [--json]` reads the
