@@ -1119,7 +1119,7 @@ def test_consumer_declaration_sync_drains_persisted_prose_without_action_credit(
         }
     )
     assert (
-        f"prose 0, missing {len(reviewed_absences)}, undeclared 0 "
+        "prose 0, missing 0, undeclared 0 "
         f"— DRAINABLE {len(reviewed_absences)}"
     ) in rendered, rendered
 
@@ -1136,7 +1136,7 @@ def test_consumer_declaration_sync_drains_persisted_prose_without_action_credit(
 
 
 def _assert_consumer_sync_cli_requires_persisted_live_declarations():
-    """The deployment check cannot pass on a preview, empty runner or declaration debt."""
+    """The deployment check cannot pass on a preview, empty runner or unreviewed debt."""
     cid = "offload"
     ctx = {"audit_rows": {}, "fixtures": set(), "acted_on": {cid: 0}, "now": admission._now()}
 
@@ -1222,7 +1222,8 @@ def _assert_consumer_sync_cli_requires_persisted_live_declarations():
                     original = persist()
                     code, text = run_cli("--check-consumer-sync", "--json")
                     rep = json.loads(text)
-                    assert code == 1 and rep["consumer_sync"]["pending"] == {}
+                    assert code == int(not declaration.get("consumer_missing", False))
+                    assert rep["consumer_sync"]["pending"] == {}
                     assert rep["consumers"]["drainable"] == [cid]
                     assert path.read_bytes() == original
 
@@ -1331,8 +1332,8 @@ def test_missing_consumer_declaration_survives_reconciliation_without_acceptance
         assert dated["status"] == "active" and dated["outcome_links"] == []
 
 
-def test_reviewed_absence_is_reported_as_missing_never_as_prose_or_acting():
-    """#599: `consumer_missing` counts under `missing` and DRAINABLE, and grants no credit."""
+def test_reviewed_absence_is_reported_separately_from_unresolved_consumers():
+    """#599: reviewed absences remain DRAINABLE, separate from M1's missing count."""
     reason = "External repair output has no local consumer or handover rail."
     ledger = {
         "absent": {
@@ -1373,7 +1374,7 @@ def test_reviewed_absence_is_reported_as_missing_never_as_prose_or_acting():
         }
     )
     assert "0 of 2 declare a consumer this tree can find" in rendered, rendered
-    assert "prose 0, missing 2, undeclared 0 — DRAINABLE 2" in rendered, rendered
+    assert "prose 0, missing 1, undeclared 0 — DRAINABLE 2" in rendered, rendered
     assert "reviewed absent 1, unresolved 1" in rendered, rendered
     assert f"REVIEWED ABSENT absent: {reason}" in rendered, rendered
 

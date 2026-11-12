@@ -235,7 +235,6 @@ test('consumer sync CLI verifies the full declaration inventory after a real syn
   const ids = Object.keys(declarations).sort();
   assert.ok(ids.length > 0, 'acceptance needs a nonempty declaration inventory');
   const absent = ids.filter((id) => declarations[id].consumer_missing === true);
-  const syncedStatus = absent.length ? 1 : 0;
   persist(...ids.map((id) => ({
     capability_id: id, status: 'active',
     downstream_consumer: 'the run consuming this output',
@@ -246,7 +245,7 @@ test('consumer sync CLI verifies the full declaration inventory after a real syn
   assert.deepEqual(Object.keys(pending.consumer_sync.pending).sort(), ids);
   assert.deepEqual(pending.consumers.drainable, absent, 'the preview alone is insufficient');
   await run(['-c', 'import capabilities; capabilities.load()'], 0);
-  const synced = await check(syncedStatus);
+  const synced = await check(0);
   assert.deepEqual(synced.consumer_sync, { live_rows: ids.length, pending: {} });
   assert.equal(synced.consumers.total, ids.length);
   assert.deepEqual(synced.consumers.by_class.prose, []);
@@ -266,12 +265,12 @@ test('consumer sync CLI verifies the full declaration inventory after a real syn
   }
   const text = await run([
     path.join(modules, 'capability_admission.py'), '--check-consumer-sync',
-  ], syncedStatus);
+  ], 0);
   assert.ok(text.includes(
     `CONSUMERS (10th): ${ids.length - absent.length} of ${ids.length} declare a consumer`,
   ));
   assert.ok(text.includes(
-    `prose 0, missing ${absent.length}, undeclared 0 — DRAINABLE ${absent.length}`,
+    `prose 0, missing 0, undeclared 0 — DRAINABLE ${absent.length}`,
   ));
   assert.deepEqual(fs.readFileSync(ledger), persisted, 'text reporting must preserve the snapshot');
 
@@ -289,7 +288,7 @@ test('consumer sync CLI verifies the full declaration inventory after a real syn
     path.join(modules, 'capability_admission.py'), '--check-consumer-sync',
   ], 1);
   assert.ok(incompleteText.includes(
-    `prose 0, missing ${absent.length + 1}, undeclared 0 — DRAINABLE ${absent.length + 1}`,
+    `prose 0, missing 1, undeclared 0 — DRAINABLE ${absent.length + 1}`,
   ));
 });
 
@@ -297,7 +296,6 @@ for (const [classification, declaration] of [
   ['prose', { downstream_consumer: 'No rail applies this output.' }],
   ['unresolved', { downstream_consumer: 'absent_module.py:consume' }],
   ['undeclared', {}],
-  ['consumer_missing', { consumer_missing: true, notes: 'No rail applies this output.' }],
 ]) {
   test(`consumer sync CLI rejects persisted ${classification} without pending declarations`, async (t) => {
     const { check, persist } = runtime(t);
@@ -308,6 +306,49 @@ for (const [classification, declaration] of [
     assert.deepEqual(report.consumers.drainable, ['sync-fixture']);
   });
 }
+
+test('M1 permits reviewed absence debt without granting admission or action credit', async (t) => {
+  const { ledger, check, persist, run } = runtime(t);
+  const reason = 'No rail applies this output.';
+  const absent = {
+    capability_id: 'reviewed-absence-fixture', status: 'active',
+    downstream_consumer: reason, consumer_missing: true, notes: reason,
+  };
+  persist(absent);
+  const report = await check(0);
+  assert.deepEqual(report.consumer_sync, { live_rows: 1, pending: {} });
+  assert.deepEqual(report.consumers.drainable, [absent.capability_id]);
+  assert.deepEqual(report.consumers.by_class.consumer_missing, [absent.capability_id]);
+  assert.deepEqual(report.consumers.reviewed_absences, { [absent.capability_id]: reason });
+  assert.equal(report.consumers.drained, false);
+  assert.deepEqual(report.consumers.by_class.acting, []);
+  assert.equal(report.rows[0].checks.consumer_acts.ok, false);
+  assert.equal(report.rows[0].admitted, false);
+  assert.ok(report.rows[0].blocking.includes('consumer_acts'));
+  assert.deepEqual(report.consumers.blocking, [absent.capability_id]);
+  const before = fs.readFileSync(ledger);
+  const text = await run([
+    path.join(modules, 'capability_admission.py'), '--check-consumer-sync',
+  ], 0);
+  assert.match(text, /0 of 1 declare a consumer this tree can find/);
+  assert.match(text, /prose 0, missing 0, undeclared 0 — DRAINABLE 1/);
+  assert.match(text, /reviewed absent 1, unresolved 0/);
+  assert.ok(text.includes(`REVIEWED ABSENT ${absent.capability_id}: ${reason}`));
+  assert.deepEqual(fs.readFileSync(ledger), before);
+
+  // Keeping a reviewed finding cannot hide an unrelated broken declaration.
+  persist(absent, {
+    capability_id: 'unresolved-fixture', status: 'active',
+    downstream_consumer: 'absent_module.py:consume',
+  });
+  const broken = await check(1);
+  assert.deepEqual(broken.consumers.by_class.unresolved, ['unresolved-fixture']);
+  assert.deepEqual(broken.consumers.drainable, [absent.capability_id, 'unresolved-fixture']);
+  const brokenText = await run([
+    path.join(modules, 'capability_admission.py'), '--check-consumer-sync',
+  ], 1);
+  assert.match(brokenText, /prose 0, missing 1, undeclared 0 — DRAINABLE 2/);
+});
 
 for (const status of ['retired', 'superseded']) {
   test(`consumer sync CLI excludes ${status} rows without masking live sync debt`, async (t) => {
