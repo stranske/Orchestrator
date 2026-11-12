@@ -1471,27 +1471,68 @@ def test_live_shadow_adjudicates_a_new_dispute_once_and_grades_on_truth(
     assert len(live_shadow["calls"]) == 1, "grading never dispatches"
 
 
-def test_live_shadow_never_adjudicates_an_uncertified_case(live_shadow):
-    live = live_shadow["live"]
+@pytest.mark.parametrize(
+    ("snapshot_changes", "reason"),
+    [
+        ({"headRefOid": "f" * 40}, "saved target/head/body snapshot"),
+        ({"number": 2}, "saved target/head/body snapshot"),
+        ({"body": "no criteria"}, "no explicit acceptance criteria"),
+        ({"body": ""}, "PR body unavailable for criterion provenance"),
+    ],
+    ids=["wrong-head", "wrong-pr", "missing-criteria", "missing-body"],
+)
+def test_live_shadow_never_adjudicates_an_uncertified_case(live_shadow, snapshot_changes, reason):
+    live, db = live_shadow["live"], live_shadow["db"]
+    snapshot = live_shadow["common"]["snapshot_reader"]("owner/repo#1")
+    snapshot.update(snapshot_changes)
     common = {
         **live_shadow["common"],
-        "snapshot_reader": lambda _t: {"number": 1, "headRefOid": "x", "body": "no criteria"},
+        "snapshot_reader": lambda _t: snapshot,
     }
+    brain_before = _brain_except_events(db)
     result = live.run_live(**common)
     assert (result["attempted"], result["advised"], result["uncertified"]) == (1, 0, 1)
     assert result["rows"][0]["certification"]["status"] == "uncertified"
-    assert result["rows"][0]["certification"]["reason"]
-    assert live_shadow["calls"] == [] and _advice_events(live_shadow["db"]) == []
-    assert "uncertified 1" in live.weekly_line(common["path"])
+    assert reason in result["rows"][0]["certification"]["reason"]
+    saved = json.loads(common["path"].read_text())
+    assert saved["rows"][0]["certification"] == result["rows"][0]["certification"]
+    assert saved["summary"]["uncertified"] == 1
+    assert live_shadow["calls"] == [] and _advice_events(db) == []
+    assert _brain_except_events(db) == brain_before, "refusal writes no Brain rows"
+    assert live.weekly_line(common["path"]).startswith(
+        "live: disputes 1, advised 0, uncertified 1, graded 0"
+    )
     # Settled: a later run neither re-collects nor dispatches it from metadata.
-    again = live.run_live(**common)
+    again = live.run_live(**{**common, "now": common["now"] + 86400})
     assert again["attempted"] == 0 and live_shadow["calls"] == []
+    assert len(live_shadow["collected"]) == 1
+    assert again["summary"]["uncertified"] == 1
+    assert _advice_events(db) == [] and _brain_except_events(db) == brain_before
 
 
 def test_live_shadow_writes_no_merge_input(live_shadow):
     live, db = live_shadow["live"], live_shadow["db"]
     assert live.enabled({})  # the flag is on by default
+    verification = feedback.record_completion_event(
+        "new",
+        event_type="verification",
+        phase="verification",
+        producer="verifier_evidence",
+        status="fail",
+    )
+    feedback.record_influence_edge(
+        target_run_id="new",
+        influence_type="verifier",
+        influence_id="original-verifier",
+        accepted=True,
+        acceptance_gate_id="original-gate",
+    )
+    with sqlite3.connect(db) as conn:
+        original_events = conn.execute(
+            "SELECT * FROM completion_events WHERE run_id='new'"
+        ).fetchall()
     before = _brain_except_events(db)
+    assert before["influence_edges"], "exercise an existing accepted verifier influence"
     result = live.run_live(**live_shadow["common"])
     assert result["advised"] == 1
     assert _brain_except_events(db) == before, "only completion events may change"
@@ -1499,10 +1540,13 @@ def test_live_shadow_writes_no_merge_input(live_shadow):
         assert conn.execute(
             "SELECT verifier_verdict,adjudicated_verdict,merged,durability FROM outcomes"
         ).fetchall() == [("NON_PASS", "PASS", 1, "pending")]
-        # The advice is never attached to the disputed run, so it cannot read as its event.
-        assert conn.execute(
-            "SELECT count(*) FROM completion_events WHERE run_id='new'"
-        ).fetchone() == (0,)
+        # The advice must neither replace the verifier event nor adopt its influence edges.
+        assert (
+            conn.execute("SELECT * FROM completion_events WHERE run_id='new'").fetchall()
+            == original_events
+        )
+        assert feedback._latest_completion_event_id(conn, "new") == verification["event_id"]
+    assert len(_advice_events(db)) == 1
 
 
 @pytest.mark.parametrize("agree_count,expected", [(14, "retired"), (15, "qualified")])

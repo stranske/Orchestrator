@@ -240,3 +240,54 @@ Black 26.10.1 formatted the changed test without changes. Its full-repository ch
 under `/tmp` because pytest/Black were absent and PyPI DNS was unavailable. The full Black
 check used one worker and a temporary periodic asyncio wakeup to avoid stalled completion
 notifications in this sandbox; the formatter and checks were otherwise unmodified.
+
+### 2026-11-12: independent certification refusals and existing merge lineage
+
+Reviewed recent commits through `8572e9dc` and revalidated the named acceptance tests
+before changing their assertions: **10 passed** with `-m "not slow"`. The existing
+uncertified fixture changed both the head and the body, so it did not independently
+exercise target/head provenance checks. Split it into four refusal cases: wrong
+head, wrong PR number, missing criteria, and missing body. Each now verifies the
+persisted reason and count, unchanged Brain tables, no advice or dispatch, and no
+second collection on the next daily run.
+
+The merge-input isolation test now starts with a verifier completion event and an
+accepted verifier influence edge. It verifies that shadow advice preserves the
+existing event, the run's latest verification event, every non-event Brain table,
+and both persisted verdicts. This exercises preservation of populated lineage
+rather than only empty tables.
+
+Validation:
+
+- The three named acceptance nodes: **13 passed**.
+- `pytest -q tests/test_adjudicator_retro.py tests/test_adjudicator_live.py
+  tests/test_adjudicator_live_log_bounds.py tests/test_completion_events.py
+  tests/test_capabilities.py -m "not slow" -rs`: **178 passed, 2 skipped**. The
+  existing environment checks skip because the machine-local capability ledger
+  is unavailable on this read-only host; no tests were disabled or changed to skip.
+
+The verified checklist remains:
+
+- [x] Named live-dispute lifecycle and later-truth grading test.
+- [x] Named uncertified-case refusal test.
+- [x] Named merge-input isolation test.
+- [ ] Production pass number and live qualification sample.
+
+The PR-body reconciliation, `needs-human` label, and blocker comment were each
+attempted through the GitHub connector and each rejected with
+`MCP tool call requires approval, but approval policy is never`. The three verified
+PR checkboxes therefore still need to be applied externally. This does not claim
+owner sync, production receipts, or satisfaction of the elapsed 2026-11-08 deadline.
+
+Staging the two changed files failed again: `git add` could not create
+`.git/index.lock` because `.git` is mounted read-only. No commit or push was
+possible; the test changes and this receipt remain in the existing worktree.
+The PR was read back as open and ready for review (`draft=false`).
+
+Black 26.10.1 formatted the changed test. The full-repository check with
+`--check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .` passed:
+**699 files would be left unchanged**. As in the preceding receipt, tools were
+loaded from official upstream repositories into `/tmp` because pytest/Black are
+absent and package-server DNS is unavailable. The first check used a periodic
+asyncio wakeup to keep completion notifications moving; formatting behavior was
+unchanged.
