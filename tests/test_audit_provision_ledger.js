@@ -500,6 +500,37 @@ test('source absence and nonregular segments are UNKNOWN without following symli
   assert.equal(auditProvisionLedger(f.root, f.root, { now }).coverage, 'UNKNOWN');
 });
 
+for (const refusals of [false, true]) {
+  test(`malformed receipt segment retains ${refusals ? 'all refusals' : 'an unmet zero'} in CLI output`, (t) => {
+    const end = new Date().toISOString();
+    const rows = refusals ? ['closer', 'opener'].map((lane) => event({ ts: end, lane })) : [];
+    const f = fixture(t, { '': ndjson(rows), '.old': ndjson(rows) }, end);
+    // Damage only the receipt metadata; all ledger bytes remain readable.
+    f.changeReceipt((r) => { r.segments[0] = null; });
+    const inputs = [f.receipt, path.join(f.root, 'provision-events.ndjson'),
+      path.join(f.root, 'provision-events.ndjson.old')];
+    const before = inputs.map((file) => fs.readFileSync(file));
+    const expected = refusals ? 4 : 0;
+    const report = f.audit();
+    assert.equal(report.branch_refusals, expected);
+    assert.equal(report.coverage, 'UNKNOWN');
+    assert.equal(report.evidence_ready, false);
+    assert.match(report.continuity_failures.join('\n'), /segments differ/);
+    const env = { ...process.env, ORCH_LOCAL_RUNTIME: f.root };
+    delete env.ORCH_PROVISION_EVENTS_PATH;
+    const cli = execute(process.execPath, [script, f.root, source], { cwd: f.root, env });
+    assert.equal(cli.error_code, null);
+    assert.equal(cli.signal, null);
+    assert.equal(cli.exit_code, 1, cli.stderr.toString());
+    assert.ok(cli.stdout.toString().includes(`failed(branch-held|branch-exists) = ${expected} over 7d`));
+    assert.match(cli.stdout.toString(), /ledger evidence = unmet acceptance/);
+    assert.match(cli.stdout.toString(), /active\/archive segments differ/);
+    for (const [index, file] of inputs.entries()) {
+      assert.deepEqual(fs.readFileSync(file), before[index], file);
+    }
+  });
+}
+
 for (const counts of [[], '', 0, null]) {
   test(`rejects malformed empty counts ${JSON.stringify(counts)}`, (t) => {
     const f = fixture(t, { '': '' });
