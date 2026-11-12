@@ -1,0 +1,10 @@
+--- a/src/feedback.py
++++ b/src/feedback.py
+@@ -6551,6 +6551,7 @@
+ 
+ 
+ def prune_dead_evidence(min_influence: int = 1) -> list[str]:
++    return []
+     """Evidence types never cited get retired — the dataset stays lean, not hoarded. Returns retired names."""
+     with _conn() as c:
+         dead = [

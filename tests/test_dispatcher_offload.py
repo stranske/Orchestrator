@@ -263,6 +263,25 @@ def test_sandbox_connection_and_timeout_also_fall_back(tmp_path, monkeypatch):
     assert _probe_call(timeout_calls)["timeout"] <= 5.0
 
 
+@pytest.mark.parametrize(
+    "error,classification",
+    [
+        ("lookup api.github.com on 127.0.0.1:401: no such host", "dns"),
+        ("dial tcp 127.0.0.1:403: connect: connection refused", "connection"),
+    ],
+    ids=["dns-port-401", "connection-port-403"],
+)
+def test_sandbox_transport_errors_with_incidental_status_numbers_fall_back(
+    tmp_path, monkeypatch, error, classification
+):
+    _isolate(tmp_path, monkeypatch)
+    calls = _install_run(monkeypatch, lambda cmd, kwargs: _completed(cmd, 1, "", error))
+    result = dispatcher.offload("codex", "Run gh api rate_limit", cwd=str(tmp_path), mode="assess")
+    assert result["sandbox_network"]["classification"] == classification
+    assert result["sandbox"] == "workspace-write" and result["sandbox_fallback"] is True
+    assert "workspace-write" in _shell(calls) and PREAMBLE in _shell(calls)
+
+
 def test_sandbox_auth_rejection_keeps_read_only(tmp_path, monkeypatch, capsys):
     _isolate(tmp_path, monkeypatch)
     calls = _install_run(
@@ -402,9 +421,12 @@ def test_sandbox_probe_late_return_is_not_success(tmp_path, monkeypatch):
     [
         ("HTTP 401: Bad credentials", "auth_or_api"),
         ("HTTP 403: API rate limit exceeded", "auth_or_api"),
+        ("gh: request rejected (HTTP 401)", "auth_or_api"),
+        ("HTTP/2 403", "auth_or_api"),
         ("HTTP 500: Internal Server Error", "auth_or_api"),
         ("gh auth login", "auth_or_api"),
         ("unrecognized option --permission-profile", "unclassified"),
+        ("unknown sandbox error 403", "unclassified"),
         ("sandbox-exec: sandbox_apply: Operation not permitted", "unclassified"),
     ],
 )

@@ -18,6 +18,8 @@
     "tests/test_gemini_flash_routing.py",
     "tests/test_gemini_tier_scoped_shed.py",
     "tests/test_github_api_observer.py",
+    "tests/test_issue771_mutation_runner.py",
+    "tests/test_issue_771_evidence.py",
     "tests/test_issue1102_advisor_coverage_evidence.py",
     "tests/test_issue1109_pr793_acceptance.py",
     "tests/test_issue1109_runtime_isolation.py",
@@ -49,10 +51,13 @@
     "tests/test_verify_failure_evidence.py",
     "tests/test_value_chain_local_loop_outcomes.py",
     "tests/test_gh_guard_two_guards_on_path.py",
-    "tests/test_capacity_launch_gate.py"
+    "tests/test_capacity_launch_gate.py",
+    "tests/test_switch_review_ci_walltime.py"
   ],
   "shards": [
     [
+      "tests/test_issue771_mutation_runner.py",
+      "tests/test_issue_771_evidence.py",
       "tests/test_issue1253_ranked_coverage.py",
       "tests/test_issue1235_ranked_coverage.py",
       "tests/test_issue1235_supervisor_recovery.py",
@@ -427,7 +432,8 @@
       "tests/test_router_choose_mode.py",
       "tests/test_value_chain_local_loop_outcomes.py",
       "tests/test_gh_guard_two_guards_on_path.py",
-      "tests/test_capacity_launch_gate.py"
+      "tests/test_capacity_launch_gate.py",
+      "tests/test_switch_review_ci_walltime.py"
     ],
     [
       "tests/test_activation_audit_source_memo.py",
