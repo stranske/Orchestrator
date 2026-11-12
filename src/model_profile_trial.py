@@ -1679,11 +1679,18 @@ def finalize_trial(
     weights_before = _weight_snapshot() if write_feedback else {}
     recorded_attempt_ids: list[str] = []
     brain_ingest_enabled = False
+    ingest_status = None
     if write_feedback:
+        # Session identity is a claim until the independent lookup confirms it.
+        feedback_attempts = [dict(attempt) for attempt in attempts]
+        if not identity_verified:
+            for attempt in feedback_attempts:
+                attempt["provider_resolved_provider"] = None
+                attempt["provider_resolved_model"] = None
         ingest_payload = feedback.ingest_profile_trial(
             results,
             manifest=manifest,
-            attempts=attempts,
+            attempts=feedback_attempts,
             auxiliary_traces=list(results.get("auxiliary_traces") or []),
             ts=timestamp,
             commit_ingest_marker=ingest_brain,
@@ -1701,7 +1708,12 @@ def finalize_trial(
                 and existing_summary is not None
                 and existing_summary.get("trial_id") == manifest.get("trial_id")
             )
-            if not ingest_brain and same_trial_measured:
+            replacement_measured = any(
+                attempt.get(field) is not None
+                for attempt in attempts
+                for field in ("tokens_in", "tokens_out")
+            )
+            if not ingest_brain and same_trial_measured and not replacement_measured:
                 preserved = existing_summary or {}
                 preserved_quality = preserved.get("quality_by_profile")
                 if not isinstance(preserved_quality, dict):
@@ -1726,6 +1738,15 @@ def finalize_trial(
     weights_after = _weight_snapshot() if write_feedback else {}
     if weights_after != weights_before:
         raise AssertionError("instrumentation trial altered route weights")
+
+    if ingest_status == "already_ingested":
+        # A retry wrote no rows; do not replace the committed trial state.
+        if state_path:
+            committed = build_report(state_path)
+            if committed.get("trial_id") == manifest["trial_id"]:
+                return {key: value for key, value in committed.items() if key != "path"}
+        identity_verified = True
+        brain_ingest_enabled = True
 
     debit = capacity.debit_profile_pools(
         [
@@ -1772,7 +1793,7 @@ def finalize_trial(
         "identity_verified": identity_verified,
         "next_action": "retain_shadow_and_collect_only_productive_outcomes",
     }
-    if state_path:
+    if state_path and ingest_status != "already_ingested":
         roots = [Path(value["root"]) for value in manifest["source_before"].values()]
         ensure_artifact_outside_sources(state_path, roots)
         _atomic_json(state_path, state)

@@ -861,6 +861,9 @@ def test_transport_recording_preserves_measured_program_summary(
         "aggregate_tokens_out": 0,
     }
     (program_dir / "profile-trial.json").write_text(json.dumps(preserved), encoding="utf-8")
+    for attempt in trial_attempt_fixture["attempts"]:
+        attempt.pop("tokens_in")
+        attempt.pop("tokens_out")
     model_profile_trial.finalize_trial(
         trial_manifest,
         trial_attempt_fixture,
@@ -980,3 +983,66 @@ def test_invalid_quality_refuses_all_trial_writes(
         )
     with feedback._conn() as conn:
         _assert_trial_feedback_tables_empty(conn)
+
+
+def test_replacement_measurements_replace_summary_identity_and_quality(
+    tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture
+):
+    _use_temp_feedback(tmp_path, monkeypatch)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    results = copy.deepcopy(trial_attempt_fixture)
+    lookup = _bind_authoritative_identity(tmp_path, results)
+    results["quality_by_profile"] = {a["profile_id"]: 0.9 for a in results["attempts"]}
+    model_profile_trial.finalize_trial(
+        trial_manifest,
+        results,
+        record_feedback=True,
+        provider_response_lookup=lookup,
+        now=2000,
+    )
+    results["identity_verified"] = False
+    results["quality_by_profile"] = {a["profile_id"]: 0.1 for a in results["attempts"]}
+    results["attempts"][0]["tokens_in"] = 999
+    model_profile_trial.finalize_trial(
+        trial_manifest,
+        results,
+        record_feedback=True,
+        now=2001,
+    )
+    summary = json.loads((tmp_path / "capability-program/profile-trial.json").read_text())
+    assert summary["identity_verified"] is False
+    assert summary["quality_by_profile"] == results["quality_by_profile"]
+    assert summary["aggregate_tokens_in"] == 1023
+
+
+def test_unverified_retry_preserves_committed_trial_state(
+    tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture
+):
+    _use_temp_feedback(tmp_path, monkeypatch)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    results = copy.deepcopy(trial_attempt_fixture)
+    lookup = _bind_authoritative_identity(tmp_path, results)
+    path = tmp_path / "trial-state.json"
+    committed = model_profile_trial.finalize_trial(
+        trial_manifest,
+        results,
+        state_path=path,
+        ingest_brain=True,
+        provider_response_lookup=lookup,
+        now=2000,
+    )
+    before = path.read_bytes()
+    results["identity_verified"] = False
+    results["attempts"][0]["tokens_in"] = 999
+    retried = model_profile_trial.finalize_trial(
+        trial_manifest,
+        results,
+        state_path=path,
+        record_feedback=True,
+        now=2001,
+    )
+    assert retried == committed
+    assert path.read_bytes() == before
+    report = model_profile_trial.build_report(path)
+    assert report["identity_verified"] is True
+    assert report["brain_ingest_enabled"] is True

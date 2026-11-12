@@ -278,6 +278,10 @@ def test_run_current_preserves_unverified_response_measurements(tmp_path, monkey
     assert body["provenance"] == "codex-session-unverified/v1"
     with feedback._conn() as conn:
         assert conn.execute("SELECT COUNT(*) FROM execution_attempts").fetchone()[0] == 6
+        rows = conn.execute(
+            "SELECT reported_model,resolved_provider,resolved_model FROM execution_attempts"
+        ).fetchall()
+        assert all(row[0] and row[1:] == (None, None) for row in rows)
         assert conn.execute("SELECT COUNT(*) FROM profile_trial_ingests").fetchone()[0] == 0
 
 
@@ -468,14 +472,28 @@ def test_forged_session_provenance_cannot_enable_verified_ingest(tmp_path, monke
         payload = json.loads(path.read_text())
         assert payload["provenance"] == "codex-session-unverified/v1"
         # The attacker controls the artifact AND its claimed digest.
-        payload.update(identity_verified=True, provenance="provider-verified")
+        payload.update(
+            identity_verified=True,
+            provenance="provider-verified",
+            object="response",
+            response_id="resp_forged",
+        )
         path.write_text(json.dumps(payload))
         attempt["identity_evidence"]["artifact_sha256"] = (
             "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
         )
     results["identity_verified"] = True
+    looked_up = []
+
+    def lookup(response_id):
+        looked_up.append(response_id)
+        return None
+
     with pytest.raises(ValueError, match="identity evidence is not authoritative"):
-        trial.finalize_trial(manifest, results, ingest_brain=True, now=2000)
+        trial.finalize_trial(
+            manifest, results, ingest_brain=True, now=2000, provider_response_lookup=lookup
+        )
+    assert looked_up == ["resp_forged"]
     with feedback._conn() as conn:
         for table in (
             "runs",
@@ -502,6 +520,10 @@ def test_forged_session_provenance_cannot_enable_verified_ingest(tmp_path, monke
     assert summary["quality_by_profile"] == results["quality_by_profile"]
     with feedback._conn() as conn:
         assert conn.execute("SELECT COUNT(*) FROM execution_attempts").fetchone()[0] == 6
+        rows = conn.execute(
+            "SELECT reported_model,resolved_provider,resolved_model FROM execution_attempts"
+        ).fetchall()
+        assert all(row[0] and row[1:] == (None, None) for row in rows)
         assert conn.execute("SELECT COUNT(*) FROM profile_trial_ingests").fetchone()[0] == 0
 
 
