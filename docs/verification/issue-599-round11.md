@@ -140,3 +140,59 @@ before committing on this branch. Actual post-sync live-ledger acceptance remain
 unchecked. PR #1354 was verified open and ready for review. The connector rejected
 the blocker comment and `needs-human` label because both require approval while
 this run's approval policy is `never`; no hosted progress metadata was changed.
+
+## Continuation acceptance contract — 2026-11-11
+
+Real-input outcome command: `/opt/anaconda3/bin/python3 src/capability_admission.py`
+against the actual live ledger after its existing owner's normal deployment/sync.
+Success requires nonempty persisted CONSUMER SYNC, prose 0, missing 0, and
+DRAINABLE equal to consumer_missing rows; trailing-window action debt stays separate.
+No snapshot reconciliation or synthetic heartbeat can satisfy this outcome.
+Stop rule: at most two repair attempts per named failure and 60 minutes for this
+continuation; each local check is bounded below two minutes. Stop at the first
+undrained failure when either limit trips. Deployment blocking/drainable pair:
+owner sync not observed / existing owner deploys and syncs, then this seat reads
+real state. No sync writer takeover. Initial head: 7881c0e2c3a5e0a30a3973e7328256f58f6eaf4c.
+`git worktree list --porcelain` and the worktree directory inventory show only
+this holder for PR 1354; it was clean. No preserved holder was found or modified.
+
+### Continuation focused results
+
+Tested code head: `c5cd6364` (full SHA recorded by `git rev-parse HEAD` in the
+continuation log); the following documentation commit changes no tested code.
+Interpreter: `/opt/anaconda3/bin/python3` (no repository `.venv` exists).
+Both partitions used `PYTHONPATH=src`, separate `mktemp` directories for
+`ORCH_STATE_DIR`, `ORCH_LOCAL_RUNTIME`, and `ORCH_CAPABILITIES_PATH`, and
+`ORCH_CAPABILITY_HEARTBEATS=0`. Common pytest arguments:
+`-p no:cacheprovider -o addopts= -q -m 'not slow'`.
+
+- `tests/test_ledger_read_cache.py tests/test_capability_admission.py tests/test_capability_admission_standalone.py`: **53 passed, 3 skipped in 24.65s**.
+- `tests/test_coverage_baseline_wiring.py tests/test_coverage_round_1138.py`: **92 passed in 6.68s**.
+- Both report-read tests instrument `capabilities.load`, forward `create`, and
+  assert exactly `[(path, False)]`, with injected context and built context.
+- The real Node child running `while (true) {}` raises `subprocess.TimeoutExpired`
+  at the test's 0.2-second deadline; the helper default remains 30 seconds.
+- Statement regressions cover unique ordered matches, absent text, and ambiguous
+  duplicate eligible text; the existing published-source checks also pass.
+- Named prose break: replacing only the in-process `route-weights-export`
+  consumer with `the export publisher` failed
+  `test_declared_consumers_resolve_in_the_tree` with
+  `KNOWN_GATES:route-weights-export`; restoring the original declaration passed.
+  No source or ledger mutation was retained.
+- Black `--line-length 100` on the three changed tests: one reformatted, two
+  unchanged. Required repository-wide Black check: **699 files unchanged**.
+  Ruff on those tests: **All checks passed!** `git diff --check`: no output.
+
+Live command attempt on 2026-11-11 stopped with `PermissionError: [Errno 1]
+Operation not permitted: '/Users/teacher/.codex/orchestrator/capabilities.json.lock'`.
+It printed no CONSUMERS or CONSUMER SYNC counters. This is not post-sync evidence.
+No writable-copy or reconciled-snapshot substitution was used for acceptance;
+no heartbeat, deployment, or sync writer was invoked. The existing owner must
+perform normal deployment/sync, then rerun the command in a context permitted to
+read the actual ledger lock. Persisted consumer sync and action debt remain
+unverified until that real report exists.
+
+Current-head CI and post-push review are recorded against the final pushed SHA
+in PR #1354; no required-check names were exposed by `gh pr checks --required`
+at preflight (it printed `no required checks reported`). All CI checks will still
+be inspected, rather than treating that absence as success.
