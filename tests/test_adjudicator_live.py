@@ -975,8 +975,39 @@ def test_overlapping_report_writes_use_distinct_staging_files_and_competing_pass
         assert acquired is True
         blocked = live.run_live(**common_two)
         assert blocked["attempted"] == 0 and blocked.get("busy") is True
-        assert live.main(["--limit", "1"]) == 1
+        assert live.main(["--limit", "1"]) == 75
         assert len(world["calls"]) == 1
+
+    orchestrate_text = (paths.REPO_ROOT / "orchestrate.sh").read_text(encoding="utf-8")
+    anchor = "if _cadence_due adjudicator-live && _attempt_ok adjudicator-live; then\n"
+    cadence_block = anchor + orchestrate_text.split(anchor, 1)[1].split("\nfi\n", 1)[0] + "\nfi\n"
+    import subprocess
+
+    for exit_code, expected_marker, expected_stdout in [
+        (75, [], "adjudicator live busy"),
+        (1, ["fail:adjudicator-live"], ""),
+        (0, ["ok:adjudicator-live"], ""),
+    ]:
+        stamp_dir = world["path"].parent / f"stamp-{exit_code}"
+        stamp_dir.mkdir(exist_ok=True)
+        events_file = stamp_dir / "events.txt"
+        script = (
+            "set -euo pipefail\n"
+            f'STAMP_DIR="{stamp_dir}"\n'
+            'ORCH="/stub"\n'
+            "_cadence_due() { return 0; }\n"
+            "_attempt_ok() { return 0; }\n"
+            "_gh_gate() { return 0; }\n"
+            f'_mark_success() {{ echo "ok:$1" >> "{events_file}"; }}\n'
+            f'_mark_fail() {{ echo "fail:$1" >> "{events_file}"; }}\n'
+            f'python3() {{ if [[ "${{2:-}}" == "--enabled" ]]; then return 0; fi; return {exit_code}; }}\n'
+            + cadence_block
+        )
+        proc = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True)
+        recorded_markers = events_file.read_text().splitlines() if events_file.exists() else []
+        assert recorded_markers == expected_marker
+        if expected_stdout:
+            assert expected_stdout in proc.stdout
 
     after_release = live.run_live(**{**common_two, "now": world["now"] + 5})
     assert (after_release["attempted"], after_release["advised"]) == (1, 1)
@@ -985,3 +1016,76 @@ def test_overlapping_report_writes_use_distinct_staging_files_and_competing_pass
         "owner/repo#1",
         "owner/repo#2",
     }
+
+
+def test_legacy_backfill_keys_on_case_receipt_for_same_target_and_survives_report_loss(
+    world, tmp_path
+):
+    from copy import deepcopy
+
+    first = live.run_live(**world["common"])
+    template = first["rows"][0]
+
+    # A Brain without completion_events still passes the table-existence guard in backfill.
+    bare_db = tmp_path / "bare.db"
+    with sqlite3.connect(bare_db) as conn:
+        conn.execute("CREATE TABLE runs(run_id TEXT PRIMARY KEY, ts INTEGER, target TEXT)")
+    bare_row = deepcopy(template)
+    bare_row.pop("advice_event", None)
+    live._backfill_advice_events([bare_row], bare_db)
+
+    rows = []
+    with feedback._conn() as conn:
+        conn.execute("DELETE FROM completion_events")
+        for index, (run_id, durability) in enumerate(
+            [("legacy-same-1", "broke_later"), ("legacy-same-2", "durable")]
+        ):
+            conn.execute(
+                "INSERT INTO runs(run_id,ts,target) VALUES (?,?,?)",
+                (run_id, world["now"] - 10 + index, "owner/repo#1"),
+            )
+            conn.execute(
+                "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged,"
+                "durability,durability_checked_ts) VALUES (?,'NON_PASS','PASS',1,?,?)",
+                (run_id, durability, feedback.DURABILITY_DETECTION_SINCE + 10),
+            )
+            row = deepcopy(template)
+            row.update(
+                run_id=run_id,
+                target="owner/repo#1",
+                case_id=live.retro._case_id(
+                    {
+                        "run_id": run_id,
+                        "verifier_verdict": "NON_PASS",
+                        "adjudicated_verdict": "PASS",
+                    }
+                ),
+            )
+            row.pop("advice_event", None)
+            rows.append(row)
+
+    report = json.loads(world["path"].read_text())
+    report["rows"] = rows
+    world["path"].write_text(json.dumps(report))
+
+    backfilled = live.run_live(**world["common"])
+    assert backfilled["attempted"] == 0 and len(world["calls"]) == 1
+    with sqlite3.connect(feedback.DB_PATH) as conn:
+        recorded_runs = {
+            run_id
+            for (run_id,) in conn.execute(
+                "SELECT run_id FROM completion_events WHERE producer=? AND phase=? "
+                "AND validation_status!='rejected'",
+                (live.retro.LIVE_ADVICE_PRODUCER, live.retro.LIVE_ADVICE_PHASE),
+            ).fetchall()
+        }
+    assert recorded_runs == {f"adjudicator-live:{row['case_id']}" for row in rows}
+
+    world["path"].unlink()
+    summary = live.reconcile_live(db=feedback.DB_PATH, path=world["path"])
+    assert (summary["advised"], summary["graded"], summary["agree"], summary["disagree"]) == (
+        2,
+        2,
+        1,
+        1,
+    )

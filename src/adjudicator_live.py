@@ -777,15 +777,31 @@ def _record_advice_event(row: dict, db: Path | None) -> None:
 
 def _backfill_advice_events(rows: list[dict], db: Path | None) -> None:
     try:
-        recorded = retro.live_advised_targets(db)
+        with sqlite3.connect(
+            f"file:{(db or feedback.DB_PATH).resolve()}?mode=ro", uri=True
+        ) as conn:
+            if not conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='completion_events'"
+            ).fetchone():
+                recorded: set[str] = set()
+            else:
+                recorded = {
+                    run_id
+                    for (run_id,) in conn.execute(
+                        "SELECT run_id FROM completion_events WHERE producer=? AND phase=? "
+                        "AND validation_status!='rejected'",
+                        (retro.LIVE_ADVICE_PRODUCER, retro.LIVE_ADVICE_PHASE),
+                    )
+                }
     except Exception:  # noqa: BLE001 - an unreadable Brain is reported by the selection below
         return
     for row in rows:
-        target = row.get("target")
-        if "proposal" in row and isinstance(target, str) and target not in recorded:
+        case_id = row.get("case_id")
+        receipt = f"adjudicator-live:{case_id}"
+        if "proposal" in row and isinstance(case_id, str) and receipt not in recorded:
             _record_advice_event(row, db)
             if "advice_event" in row and "advice_event_error" not in row:
-                recorded.add(target)
+                recorded.add(receipt)
 
 
 def _grade_and_write(
@@ -1162,7 +1178,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if enabled() else 1
     result = run_live(limit=args.limit, dispatch=not args.no_dispatch)
     print(json.dumps({k: v for k, v in result.items() if k != "rows"}, indent=2, default=str))
-    return 1 if result.get("busy") else 0
+    return 75 if result.get("busy") else 0  # EX_TEMPFAIL: another pass holds the report lock
 
 
 if __name__ == "__main__":
