@@ -145,8 +145,9 @@ class _StdlibLangSmithClient:
 
     def __init__(self, *, api_key: str, api_url: str | None = None):
         self.api_key = api_key
-        self.api_url = (api_url or _api_url()).rstrip("/").removesuffix("/api/v1")
-        self.host_url = _host_url(self.api_url)
+        self.api_url = (api_url or _api_url()).rstrip("/")
+        self.query_api_url = self.api_url.removesuffix("/api/v1")
+        self.host_url = _host_url(self.query_api_url)
         self._project_ids: dict[str, str] = {}
 
     def _request_json(
@@ -159,8 +160,9 @@ class _StdlibLangSmithClient:
     ) -> Any:
         query = f"?{urlparse.urlencode(params)}" if params else ""
         data = json.dumps(body).encode("utf-8") if body is not None else None
+        base_url = self.query_api_url if path.startswith("/api/v2/") else self.api_url
         req = urlrequest.Request(
-            f"{self.api_url}{path}{query}",
+            f"{base_url}{path}{query}",
             data=data,
             method=method,
             headers={
@@ -202,8 +204,10 @@ class _StdlibLangSmithClient:
         if project_name is not None:
             names = [project_name] if isinstance(project_name, str) else list(project_name)
             project_ids = [self._project_id(str(name)) for name in names]
+        if not project_ids:
+            raise ValueError("SmithDB run queries require at least one project")
         body: dict[str, Any] = {
-            "project_ids": project_ids or None,
+            "project_ids": project_ids,
             "min_start_time": (start_time or datetime(1970, 1, 1, tzinfo=timezone.utc)).isoformat(),
             "selects": [field.upper() for field in (kwargs.get("select") or RUN_SELECT_FIELDS)],
             "page_size": API_MAX_PER_REQUEST,
@@ -219,9 +223,9 @@ class _StdlibLangSmithClient:
                 if isinstance(run, dict):
                     yield _StdlibRun(run, host_url=self.host_url)
             next_cursor = response.get("next_cursor")
-            if not next_cursor:
+            if next_cursor is None:
                 return
-            if not isinstance(next_cursor, str) or next_cursor in seen_cursors:
+            if not isinstance(next_cursor, str) or not next_cursor or next_cursor in seen_cursors:
                 raise RuntimeError("LangSmith v2 query returned an invalid or repeated cursor")
             seen_cursors.add(next_cursor)
             body["cursor"] = next_cursor

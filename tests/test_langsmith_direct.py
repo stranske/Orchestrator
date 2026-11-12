@@ -129,7 +129,8 @@ def test_all_time_is_not_silently_last_day(monkeypatch):
         return {"items": []}
 
     monkeypatch.setattr(client, "_request_json", request)
-    assert list(client.list_runs()) == []
+    monkeypatch.setattr(client, "_project_id", lambda name: "pid")
+    assert list(client.list_runs(project_name="project")) == []
     assert seen["min_start_time"] == "1970-01-01T00:00:00+00:00"
 
 
@@ -138,8 +139,9 @@ def test_repeated_cursor_is_reported(monkeypatch):
     monkeypatch.setattr(
         client, "_request_json", lambda *a, **k: {"items": [], "next_cursor": "repeat"}
     )
+    monkeypatch.setattr(client, "_project_id", lambda name: "pid")
     with pytest.raises(RuntimeError, match="repeated cursor"):
-        list(client.list_runs())
+        list(client.list_runs(project_name="project"))
 
 
 def test_uppercase_run_type_preserves_operation_and_own_usage():
@@ -168,3 +170,49 @@ def test_uppercase_run_type_preserves_operation_and_own_usage():
         host_url="https://smith.langchain.com",
     )
     assert "cost_usd" not in ld.run_to_record(parent)
+
+
+def test_query_requires_project_before_network(monkeypatch):
+    client = ld._StdlibLangSmithClient(api_key="synthetic")
+    with pytest.raises(ValueError, match="at least one project"):
+        list(client.list_runs())
+
+
+def test_versioned_base_preserves_project_endpoint(monkeypatch):
+    import json
+    from urllib.parse import urlparse
+
+    calls = []
+
+    class Response:
+        def __init__(self, body):
+            self.body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps(self.body).encode()
+
+    def request(req, timeout):
+        calls.append(req.full_url)
+        return Response([{"id": "pid"}] if req.method == "GET" else {"items": []})
+
+    monkeypatch.setattr(ld.urlrequest, "urlopen", request)
+    client = ld._StdlibLangSmithClient(api_key="synthetic", api_url="https://example.test/api/v1")
+    assert list(client.list_runs(project_name="project")) == []
+    assert [urlparse(url).path for url in calls] == ["/api/v1/sessions", "/api/v2/runs/query"]
+
+
+@pytest.mark.parametrize("cursor", [False, 0, [], {}, ""])
+def test_false_cursor_is_malformed(monkeypatch, cursor):
+    client = ld._StdlibLangSmithClient(api_key="synthetic")
+    monkeypatch.setattr(client, "_project_id", lambda name: "pid")
+    monkeypatch.setattr(
+        client, "_request_json", lambda *a, **kw: {"items": [], "next_cursor": cursor}
+    )
+    with pytest.raises(RuntimeError, match="invalid or repeated cursor"):
+        list(client.list_runs(project_name="project"))
