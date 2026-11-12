@@ -337,6 +337,20 @@ Gemini tiers follow the other families' shape (2026-10-15): cheap/mid run 3.8 Fl
 the retired 3.1 profile follows `PROFILE_RETIREMENTS` to Argon High). Argon low/medium stay registered
 and explicitly requestable, because Argon has its own weekly-only quota and bills ~2.7x Flash per token.
 
+**A live full-tier Gemini split, Argon vs Carbon (owner, 2026-11-11).** `gemini_full_split.py` is
+data inside the dispatch rail, not a new stage or role: `dispatcher.plan_dispatch` asks it for an arm
+when a local opener `implement` run on the gemini seat has no model chosen and the tier ceiling still
+allows `full`. The arm is drawn from a SHA-256 of the policy and the target (a retry keeps its arm) and
+travels as `selected_profile_id`/`requested_model` with `profile_policy_version=gemini-full-split-v1`
+and probability 0.5 on the run row; every other gemini implement run records `split_skip_reason`.
+`gemini-4-carbon-high` is registered as an execution profile for this; automatic routing still keeps
+only the tier's own model. Assignment stops at the spec's PR target (counted on GitHub by the
+readout, `python3 src/gemini_full_split.py --readout`, which writes the count it reads), at a
+`max_assignments` backstop if the readout stops, or at `end_ts`. A missing, malformed or expired
+spec assigns nothing, so routing falls back to its normal path. The readout reports per arm the PRs,
+merged, durable and broke-later counts and the pre-registered verdict; the cost leg is reported as
+UNMEASURED because lane implement dispatches record no token usage.
+
 **An offload run records which work it was for (2026-10-12).** Both capability readers key a run's
 subject by a `subject_id` in its routing metadata, else by `runs.target`, and an offload's target is
 `offload:<cwd>`. No offload run recorded a subject, so all 591 role-backend runs since 2026-09-01 were
@@ -486,7 +500,7 @@ feedback surface on an existing sweep, so the diagram is still unchanged.
 **An offload's caller can bound where it writes, whichever agent runs it (2026-10-11).**
 `dispatcher.offload(write_boundary={"protect": [...], "allow": [...]})` lets the run write nowhere
 under `protect` except its own cwd and the `allow` roots, and never in a `.git` beneath them. codex
-is held by its own sandbox, with one `--add-dir` per root. cursor, agy, vibe, aider and claude have
+is held by its own sandbox, with one `--add-dir` per root. cursor, agy, vibe and claude have
 no sandbox, so they run under a `sandbox-exec` profile (`adapters.seatbelt_write_profile`); cursor
 and agy also get the roots as `--add-dir`, because their file tools keep to a workspace. A boundary
 that cannot hold (an empty `protect`, a broad root, codex's seat bypass, no `sandbox-exec`, or a
@@ -496,12 +510,19 @@ boundary every argv is unchanged. The research program's driver is its first cal
 program's own code directory writable. No stage, component or surface moved, so the diagram is
 unchanged.
 
-**Muse Code is a backup-only, subscription-login backend (2026-10-15, issue #612).** Meta's `muse`
-CLI joins the delegated sub-agent band as a seat that routine selection NEVER picks: it is in
-`router.BACKUP_AGENTS` with aider. It has explicit-only entries in the `implement` and `review` route
-tables and in the corresponding role eligibility sets, but the backup guard filters those entries from
-ordinary selection; only `select_agent(..., only={"muse"})` or an explicit dispatcher call can reach it.
-This preserves deterministic selection and priors while making the declared exploration surfaces honest.
+**Muse Code is a subscription-login backend and a routine LATE seat (owner, 2026-11-11).** Meta's
+`muse` CLI joined the delegated sub-agent band on 2026-10-15 (issue #612) as a backup-only seat in
+`router.BACKUP_AGENTS`, held out while its billing and readiness were unknown. Both were since resolved
+(the login bills the subscription; hosted runs were proven 2026-10-16/17), so it now sits in the
+`implement` and `review` route tables as a `late` entry, chosen after the non-late lanes, and is an
+ordinary candidate for its declared roles and for the adversarial reviewer pool.
+**aider was removed from the fleet on 2026-11-11 (owner).** It had been backup-only since 2026-06-21,
+no working install existed after 2026-11-05 (47 of 47 starts failed), and it was never auto-selected.
+Its route entries, capacity seat, profile and pool, adapter, credentials and labels are gone, so
+`router.BACKUP_AGENTS` is empty; the guard stays for any future backup seat. Read-side parsers that
+attribute HISTORICAL runs and branches (`keepalive_outcomes`, `feedback`) still recognise the name, and
+`execution_profiles.profile_identity` keeps its one-line Closer-worker refusal, which the hosted
+verifier's correction reader mirrors.
 Its capacity seat is `metered` (`capacity.AGENTS["muse"]`) because the subscription is a constrained
 allowance, while its immutable execution-profile pool remains `flat`; the latter is a pool classification,
 not a price claim. There is no usage API, so observed local accounting never claims Meta's reset epoch and
@@ -836,8 +857,8 @@ with the incumbent agent and a test-first brief. Every arm's seat must be arm-el
 pacing model's warn/shed, or gemini's local weekly soft budget). A real cutoff (an active,
 manual or unreadable 429/cooldown marker, failed auth, an unresolvable model, or a non-ok
 state with no projection behind it) keeps the seat out (owner, 2026-11-11). Of the router's
-backup seats only muse may field an arm (`EXPERIMENT_BACKUP_ARMS`), since its backup status
-waits on outcomes only experiments produce; aider, which bills pay-as-you-go, stays out. Only comparative evaluation evidence refreshes route-table coverage; ordinary merges
+backup seats only those in `EXPERIMENT_BACKUP_ARMS` may field an arm; the router has no backup
+seats since 2026-11-11 (aider removed, muse a routine late seat), so that exemption is currently a no-op. Only comparative evaluation evidence refreshes route-table coverage; ordinary merges
 do not. Model-version canaries remain follow-up work.
 
 The frozen issue body and its hash are written before member launch. Missing or changed
@@ -1974,7 +1995,7 @@ period_end of fully measured agents. Only latest-version quality cells with n_ob
 including classes outside the hosted export. Measured agents alone enter the LP; excluded
 agents retain null lambda/rank and reasons, with status `partial` when some are measured.
 An agent whose capacity model has no pacing contract by design (every model except `ccusage`:
-cursor, vibe, gemini, muse, aider, where 429-shed is the authoritative limiter) is listed in
+cursor, vibe, gemini, muse, where 429-shed is the authoritative limiter) is listed in
 `excluded` with reason `excluded: no pacing source` and does not make the result `partial`
 (owner 2026-11-11: cursor and vibe held it at `partial`, so routing could never go live).
 Other statuses are `optimal`, `infeasible_inputs`, and `inputs_unmeasured`. Subscription price

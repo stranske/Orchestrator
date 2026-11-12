@@ -1,0 +1,11 @@
+--- a/src/feedback.py
++++ b/src/feedback.py
+@@ -6492,7 +6492,7 @@
+             "SELECT COUNT(*) FROM evidence_gaps WHERE gap=? AND status='open' AND ts>=?",
+             (gap, since),
+         ).fetchone()[0]
+-        eligible = recurrence >= min_recurrence
++        eligible = True
+         existing = c.execute(
+             "SELECT status, rationale FROM evidence_types WHERE name=?", (name,)
+         ).fetchone()

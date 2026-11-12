@@ -798,7 +798,167 @@ def _fleet_opener_cap(runner) -> dict:
     )
 
 
-def fleet_delivery_measures(*, now: int | None = None, gh_fn=None, opener_runner=None) -> dict:
+CI_WALLTIME_LIMIT_S = 600  # the owner's ten-minute rule (2026-11-08)
+CI_WALLTIME_WORKFLOWS = ("Gate", "CI")
+CI_WALLTIME_DETAIL_RUNS = 5
+
+
+def _ci_stamp(value) -> int | None:
+    """A job or step timestamp, or None while it has not happened (queued, skipped)."""
+    try:
+        return _fleet_stamp(value)
+    except _FleetReadError:
+        return None
+
+
+def ci_job_phases(jobs: list[dict]) -> dict | None:
+    """Where the slowest job's time went: queue (created to started), tests, upload, other.
+
+    A step counts as upload when its name says upload, as tests when it names a test, shard or
+    verify step; the rest of the job's running time is other."""
+    best: tuple[int, dict] | None = None
+    for job in jobs:
+        created = _ci_stamp(job.get("created_at"))
+        started = _ci_stamp(job.get("started_at"))
+        done = _ci_stamp(job.get("completed_at"))
+        if created is None or started is None or done is None:
+            continue
+        upload = tests = 0
+        for step in job.get("steps") or []:
+            a, b = _ci_stamp(step.get("started_at")), _ci_stamp(step.get("completed_at"))
+            if a is None or b is None:
+                continue
+            name = str(step.get("name") or "").lower()
+            if "upload" in name:
+                upload += b - a
+            elif any(word in name for word in ("pytest", "test", "shard", "verify")):
+                tests += b - a
+        phases = {
+            "queue": max(0, started - created),
+            "tests": tests,
+            "upload": upload,
+            "other": max(0, (done - started) - tests - upload),
+        }
+        total = done - created
+        if best is None or total > best[0]:
+            dominant = max(phases, key=lambda key: phases[key])
+            best = (total, {"job": job.get("name"), "total": total, "dominant": dominant, **phases})
+    return best[1] if best else None
+
+
+def ci_walltime(*, now: int | None = None, gh_fn=None, repos: list[str] | None = None) -> dict:
+    """FYI only: completed Gate/CI runs in the last 24 h that ran past ten minutes, per repo,
+    with the slowest job's time split into queue, tests, upload and other.
+
+    Added 2026-11-11 after the owner asked why Orchestrator PR CI took half an hour: the tests
+    ran ~1 minute while shard artifact uploads stalled 9-10.5 minutes and aggregate jobs queued
+    12+ minutes, and nothing measured CI wall time, only local verify time. A repo whose runs
+    cannot be read prints unmeasured, never zero."""
+    from backlog import SUPPORTED_REPOS
+
+    now = int(time.time()) if now is None else int(now)
+    gh = gh_fn or _gh_call
+    repos = list(repos or dict.fromkeys(r for r in SUPPORTED_REPOS if r != "stranske/Collab-Admin"))
+    since = datetime.fromtimestamp(now - 24 * 3600, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    total = 0
+    slow: list[tuple[int, str, dict]] = []
+    unreadable: dict[str, str] = {}
+    for repo in repos:
+        try:
+            listing = _fleet_json(gh, ["api", f"repos/{repo}/actions/workflows?per_page=100"])
+            ids = [
+                w["id"]
+                for w in (listing or {}).get("workflows", [])
+                if w.get("name") in CI_WALLTIME_WORKFLOWS
+            ]
+            for workflow_id in ids:
+                runs = _fleet_json(
+                    gh,
+                    [
+                        "api",
+                        f"repos/{repo}/actions/workflows/{workflow_id}/runs"
+                        f"?per_page=100&status=completed&created=>={since}",
+                    ],
+                )
+                for run in (runs or {}).get("workflow_runs", []):
+                    start = _ci_stamp(run.get("run_started_at")) or _ci_stamp(run.get("created_at"))
+                    end = _ci_stamp(run.get("updated_at"))
+                    if start is None or end is None:
+                        continue
+                    total += 1
+                    if end - start > CI_WALLTIME_LIMIT_S:
+                        slow.append((end - start, repo, run))
+        except _FleetReadError as exc:
+            unreadable[repo] = str(exc)
+    details = []
+    for wall, repo, run in sorted(slow, key=lambda item: -item[0])[:CI_WALLTIME_DETAIL_RUNS]:
+        try:
+            jobs = _fleet_json(
+                gh,
+                [
+                    "api",
+                    f"repos/{repo}/actions/runs/{run['id']}/attempts/"
+                    f"{run.get('run_attempt') or 1}/jobs?per_page=100",
+                ],
+            )
+            phases = ci_job_phases((jobs or {}).get("jobs", []))
+        except _FleetReadError:
+            phases = None
+        details.append(
+            {
+                "repo": repo,
+                "workflow": run.get("name"),
+                "run_id": run.get("id"),
+                "minutes": round(wall / 60, 1),
+                "phases": phases,
+            }
+        )
+    return {
+        "as_of": now,
+        "window_hours": 24,
+        "limit_minutes": CI_WALLTIME_LIMIT_S // 60,
+        "runs": total,
+        "over_limit": len(slow),
+        "slowest": details,
+        "unreadable": unreadable,
+    }
+
+
+def render_ci_walltime(data: dict) -> list[str]:
+    if not data:
+        return []
+    lines = ["## CI wall time (24 h, Gate and CI, FYI only)", ""]
+    lines.append(
+        f"  {data['over_limit']} of {data['runs']} completed runs over {data['limit_minutes']} min"
+        + (
+            f"; unmeasured repos: {', '.join(sorted(data['unreadable']))}"
+            if data["unreadable"]
+            else ""
+        )
+    )
+    for row in data["slowest"]:
+        ph = row["phases"]
+        if ph:
+            split = ", ".join(
+                f"{k} {round(ph[k] / 60, 1)}" for k in ("queue", "tests", "upload", "other")
+            )
+            where = f"slowest job '{ph['job']}' {round(ph['total'] / 60, 1)} min, mostly {ph['dominant']} ({split})"
+        else:
+            where = "job phases unmeasured"
+        lines.append(
+            f"  {row['repo']} {row['workflow']} run {row['run_id']}: {row['minutes']} min -- {where}"
+        )
+    lines.append("")
+    return lines
+
+
+def fleet_delivery_measures(
+    *,
+    now: int | None = None,
+    gh_fn=None,
+    opener_runner=None,
+    include_ci_walltime: bool | None = None,
+) -> dict:
     """Five independent report-only rows. Missing facts never become invented numbers.
 
     Agent ownership follows backlog's explicit agent-label rule. GitHub run action and
@@ -840,7 +1000,16 @@ def fleet_delivery_measures(*, now: int | None = None, gh_fn=None, opener_runner
                 "reason": f"would need valid {key} response ({type(exc).__name__})",
             }
         rows[key] = {"name": FLEET_DELIVERY_NAMES[key], **row}
-    return {"as_of": now, "window_hours": 48, "rows": rows}
+    out = {"as_of": now, "window_hours": 48, "rows": rows}
+    # The CI wall-time read rides with the fleet reads (one kill switch, one stub point) but is a
+    # separate key, so the five-row contract above is unchanged. A caller that injects its own
+    # gh_fn (a replay) does not get live CI reads unless it asks for them.
+    if include_ci_walltime if include_ci_walltime is not None else gh_fn is None:
+        try:
+            out["ci_walltime"] = ci_walltime(now=now, gh_fn=gh_fn)
+        except Exception as exc:  # noqa: BLE001 -- an FYI section never stops the review
+            out["ci_walltime"] = {"error": f"unmeasured ({type(exc).__name__})"}
+    return out
 
 
 def _parse_maint_68_registry_yaml(content: str) -> list[str]:
@@ -2623,23 +2792,32 @@ def assess_sandbox_fallback_report(
     ledger_path: Path | str | None = None,
     now: int | None = None,
     since: int | None = None,
+    until: int | None = None,
 ) -> dict:
-    """Count fallback runs and network-caused assess incompletions over seven days.
+    """Count fallback runs and network-caused assess incompletions in an interval.
 
     A missing ledger is unmeasured, never zero. An assess failure whose log cannot
     be read, and a window that has not elapsed, stay unverified: neither is a
     success. `since` is the implementation-merge instant; without it the window
-    is the seven days ending at `now`, which has elapsed.
+    is the seven days ending at `now`, which has elapsed. An explicit `until`
+    requires `since` and replaces the default seven-day end. The start is inclusive
+    and the end exclusive, so adjacent intervals never count the same event twice.
     """
-    window_days = ASSESS_SANDBOX_WINDOW_DAYS
+    window_days: int | float = ASSESS_SANDBOX_WINDOW_DAYS
+    default_window_seconds = ASSESS_SANDBOX_WINDOW_DAYS * 86400
     now_ts = int(time.time()) if now is None else int(now)
+    if until is not None and since is None:
+        raise ValueError("until requires since")
     if since is None:
-        start = now_ts - window_days * 86400
+        start = now_ts - default_window_seconds
         end = now_ts
         window_complete = True
     else:
         start = int(since)
-        end = start + window_days * 86400
+        end = int(until) if until is not None else start + default_window_seconds
+        if end <= start:
+            raise ValueError("window end must be after window start")
+        window_days = (end - start) / 86400
         window_complete = now_ts >= end
     if ledger_path is None:
         import adapters
@@ -2669,7 +2847,6 @@ def assess_sandbox_fallback_report(
     network = 0
     unclassifiable = 0
     malformed = 0
-    limit = min(now_ts, end)
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         if not line.strip():
             continue
@@ -2682,7 +2859,7 @@ def assess_sandbox_fallback_report(
             malformed += 1
             continue
         stamp = row.get("ts")
-        if type(stamp) is not int or not start <= stamp <= limit:
+        if type(stamp) is not int or not (start <= stamp < end and stamp <= now_ts):
             continue
         if row.get("sandbox_fallback") is True and isinstance(row.get("run_id"), str):
             fallback_ids.add(row["run_id"])
@@ -2715,7 +2892,11 @@ def assess_sandbox_fallback_report(
     if unclassifiable:
         reasons.append(f"{unclassifiable} assess incompletion(s) lack classifiable evidence")
     if not window_complete:
-        reasons.append("seven-day window has not elapsed")
+        reasons.append(
+            "seven-day window has not elapsed"
+            if window_days == ASSESS_SANDBOX_WINDOW_DAYS
+            else "observation window has not elapsed"
+        )
     if reasons:
         status = "unverified"
         reason = "; ".join(reasons)
@@ -2734,15 +2915,22 @@ def assess_sandbox_fallback_report(
 
 
 def format_assess_sandbox_fallback(section: dict) -> str:
-    """One line: the seven-day counts, and unverified/unmeasured when that is the truth."""
+    """One line: interval bounds, counts, and any evidence limitations."""
     days = section.get("window_days", ASSESS_SANDBOX_WINDOW_DAYS)
+    interval = ""
+    if "window_start" in section and "window_end" in section:
+        start, end = (
+            datetime.fromtimestamp(section[key], timezone.utc).isoformat().replace("+00:00", "Z")
+            for key in ("window_start", "window_end")
+        )
+        interval = f" [{start}, {end})"
 
     def _num(key: str) -> str:
         value = section.get(key)
         return str(value) if type(value) is int else "unmeasured"
 
     line = (
-        f"  assess sandbox fallback ({days}d): fallback_runs {_num('fallback_runs')}; "
+        f"  assess sandbox fallback ({days:g}d){interval}: fallback_runs {_num('fallback_runs')}; "
         f"network-caused assess incompletions {_num('network_caused_assess_incompletions')}"
     )
     status = section.get("status") or "unmeasured"
@@ -2901,6 +3089,11 @@ def format_report(rep: dict) -> str:
                 value = f"{row['value']} [{row['evidence_class']}]"
             lines.append(f"  {row['name']}: {value}")
         lines.append("")
+    walltime = (rep.get("fleet_delivery_measures") or {}).get("ci_walltime") or {}
+    if walltime.get("error"):
+        lines += ["## CI wall time (24 h, Gate and CI, FYI only)", "", f"  {walltime['error']}", ""]
+    else:
+        lines += render_ci_walltime(walltime)
     fleet = rep.get("fleet_gates") or {}
     if fleet:
         lines += ["## Fleet template-delivery gates (Maint 68 promote + sync canaries)", ""]
@@ -3777,17 +3970,29 @@ def main(argv: list[str]) -> int:
     )
     ap.add_argument(
         "--since",
+        type=_parse_window_start,
         help="window start as unix seconds or ISO-8601 (the implementation merge instant)",
+    )
+    ap.add_argument(
+        "--until",
+        type=_parse_window_start,
+        help="exclusive window end as unix seconds or ISO-8601 (requires --since)",
     )
     ap.add_argument("--ledger", help="capacity-ledger.ndjson to read")
     ap.add_argument("--now", type=int, help="unix seconds the window clock uses")
     args = ap.parse_args(argv)
+    if (args.since is not None or args.until is not None) and not args.assess_sandbox_fallback:
+        ap.error("--since and --until require --assess-sandbox-fallback")
     if args.selftest:
         _selftest()
         return 0
     if args.assess_sandbox_fallback:
-        since = _parse_window_start(args.since) if args.since else None
-        section = assess_sandbox_fallback_report(ledger_path=args.ledger, now=args.now, since=since)
+        try:
+            section = assess_sandbox_fallback_report(
+                ledger_path=args.ledger, now=args.now, since=args.since, until=args.until
+            )
+        except ValueError as exc:
+            ap.error(str(exc))
         print(
             json.dumps(section, indent=2) if args.json else format_assess_sandbox_fallback(section)
         )

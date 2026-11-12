@@ -1,0 +1,48 @@
+{
+  "historical_head": "18ad97a054dab7f6039dd42c8131bee04267748b",
+  "local_source_ref": "b1511de27d025a65b4424144a405fd2625ffca28",
+  "blobs": {
+    "src/feedback.py": "5cdb301107b1e8167b18578b0842917c14a5dd97",
+    "tests/test_feedback_registry_queries.py": "e4f448e592e65b9625f393c783d6fae447e0b924"
+  },
+  "verification": "Both local source blobs match the historical-head GitHub API blob IDs; all five mutated sources parse as Python.",
+  "pytest_executed": false,
+  "limitation": "Static patch validation only; no new mutation failure or restored-pass result was measured.",
+  "patches": {
+    "test_run_queries_keep_pending_and_mode_scopes_distinct": {
+      "sha256": "d529a3a4d773390f8257ac81a7a28c229947626c9768b7e50eb166b12d941efc",
+      "apply_exit_status": 0,
+      "reverse_exit_status": 0,
+      "restored_blob": "5cdb301107b1e8167b18578b0842917c14a5dd97",
+      "mutated_python_syntax_valid": true
+    },
+    "test_snapshot_json_exports_initialized_tables_to_the_requested_path": {
+      "sha256": "8a34a288d8599294178f340dbba3dff812f10362892276fcf42041ed07294ba8",
+      "apply_exit_status": 0,
+      "reverse_exit_status": 0,
+      "restored_blob": "5cdb301107b1e8167b18578b0842917c14a5dd97",
+      "mutated_python_syntax_valid": true
+    },
+    "test_evidence_registry_normalizes_citations_and_retires_unused_rows": {
+      "sha256": "59742f65a10d9edbf0ba4976072ee2b9aa9ba3fa2cba3f24bc629e0cc5d3e84e",
+      "apply_exit_status": 0,
+      "reverse_exit_status": 0,
+      "restored_blob": "5cdb301107b1e8167b18578b0842917c14a5dd97",
+      "mutated_python_syntax_valid": true
+    },
+    "test_evidence_proposals_and_approval_require_recurrence_then_reactivate": {
+      "sha256": "d5d14304e06b96c51be661883d2781417c733073a8a9eb2225e8c73db1a6985f",
+      "apply_exit_status": 0,
+      "reverse_exit_status": 0,
+      "restored_blob": "5cdb301107b1e8167b18578b0842917c14a5dd97",
+      "mutated_python_syntax_valid": true
+    },
+    "test_role_selector_metrics_preserve_no_match_and_rejection_signals": {
+      "sha256": "0a4ff61195f08a72f8418789e0b9688dd18372214dfcc832da1cf81297d44ee2",
+      "apply_exit_status": 0,
+      "reverse_exit_status": 0,
+      "restored_blob": "5cdb301107b1e8167b18578b0842917c14a5dd97",
+      "mutated_python_syntax_valid": true
+    }
+  }
+}

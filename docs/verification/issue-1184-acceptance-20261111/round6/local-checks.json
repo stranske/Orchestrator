@@ -1,0 +1,91 @@
+[
+  {
+    "check": "native-binding-regression",
+    "argv": [
+      "node",
+      "tests/test_verifier_context_builder_contract.js"
+    ],
+    "exit_status": 0,
+    "stdout": "\u2714 actual exported initial builder forwards model mode and preserves full authentic request (20.848868ms)\n\u2714 freeform model requests are authentic while default checkbox admission remains structured (12.026334ms)\n\u2714 actual repeat builder retains original verdict and admits fresh required material once (8.946536ms)\n\u2714 actual pending builder retains uncertain effects and reenters only with skipped-step proof (111.250777ms)\n\u2714 invalid requests and unavailable diff evidence cannot start evaluation (3.37465ms)\n\u2714 actual builder preserves linked original requirements and refuses malformed linked source (3.40112ms)\n\u2714 CSV canary native verifier attempts require retained recovery, not another evaluation (2.37563ms)\n\u2714 native CSV verifier states require both the corrective head and published merge (94.356663ms)\n\u2714 native PR 984 corpus decision and successful workflows cannot complete PR 1168 (95.953937ms)\n\u2714 merged CSV canary acknowledgment does not substitute for stored corrective custody (93.25686ms)\n\u2139 tests 10\n\u2139 suites 0\n\u2139 pass 10\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 451.988182\n",
+    "stderr": ""
+  },
+  {
+    "check": "corrected-contract",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+      "/home/runner/work/Orchestrator/Orchestrator/tests/fixtures/closer_real_csv_canary/v1/verify_csv_contract.py"
+    ],
+    "exit_status": 0,
+    "stdout": "contract ok\n",
+    "stderr": ""
+  },
+  {
+    "check": "pinned-partial-contract",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+      "/home/runner/work/Orchestrator/Orchestrator/tests/fixtures/closer_real_csv_canary/v1/verify_csv_contract.py",
+      "/tmp/csv-1184-dp6g4_55/csv_export.py"
+    ],
+    "exit_status": 1,
+    "stdout": "",
+    "stderr": "Traceback (most recent call last):\n  File \"/home/runner/work/Orchestrator/Orchestrator/tests/fixtures/closer_real_csv_canary/v1/verify_csv_contract.py\", line 59, in _csv_text\n    output = module.export_rows(rows, \"csv\")\n  File \"/tmp/csv-1184-dp6g4_55/csv_export.py\", line 12, in export_rows\n    raise NotImplementedError(\"Declared incomplete CSV canary fixture\")\nNotImplementedError: Declared incomplete CSV canary fixture\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"/home/runner/work/Orchestrator/Orchestrator/tests/fixtures/closer_real_csv_canary/v1/verify_csv_contract.py\", line 2900, in main\n    run_contract(export_path)\n    ~~~~~~~~~~~~^^^^^^^^^^^^^\n  File \"/home/runner/work/Orchestrator/Orchestrator/tests/fixtures/closer_real_csv_canary/v1/verify_csv_contract.py\", line 142, in run_contract\n    empty = _csv_text(module, [])\n  File \"/home/runner/work/Orchestrator/Orchestrator/tests/fixtures/closer_real_csv_canary/v1/verify_csv_contract.py\", line 61, in _csv_text\n    raise AssertionError(\"CSV contract is not implemented\") from exc\nAssertionError: CSV contract is not implemented\ncontract assertion failed\n"
+  },
+  {
+    "check": "chain-evidence",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+      "/home/runner/work/Orchestrator/Orchestrator/tests/fixtures/closer_real_csv_canary/v1/verify_csv_contract.py",
+      "--chain-evidence"
+    ],
+    "exit_status": 2,
+    "stdout": "{\"completion\": \"incomplete\", \"reason\": \"[Errno 2] No such file or directory: '/home/runner/.codex/orchestrator/closer-core/completions/stranske_orchestrator_988_989.json'\"}\n",
+    "stderr": ""
+  },
+  {
+    "check": "fixture-self-check",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+      "/home/runner/work/Orchestrator/Orchestrator/tests/fixtures/closer_real_csv_canary/v1/verify_csv_contract.py",
+      "--self-check"
+    ],
+    "exit_status": 0,
+    "stdout": "chain-evidence self-check ok\n",
+    "stderr": ""
+  },
+  {
+    "check": "focused-pytest",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+      "-m",
+      "pytest",
+      "tests/test_closer_csv_canary_contract.py",
+      "-m",
+      "not slow"
+    ],
+    "exit_status": 1,
+    "stdout": "",
+    "stderr": "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3: No module named pytest\n"
+  },
+  {
+    "check": "javascript-syntax",
+    "argv": [
+      "node",
+      "--check",
+      "tests/test_verifier_context_builder_contract.js"
+    ],
+    "exit_status": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "check": "diff-whitespace",
+    "argv": [
+      "git",
+      "diff",
+      "--check"
+    ],
+    "exit_status": 0,
+    "stdout": "",
+    "stderr": ""
+  }
+]

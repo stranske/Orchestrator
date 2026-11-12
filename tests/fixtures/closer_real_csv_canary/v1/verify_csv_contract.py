@@ -3,9 +3,9 @@
 Invoke this file directly. It is not a pytest module: ``__test__ = False`` and
 it defines no ``test_*`` functions, so pytest does not collect it. Pass one
 ``csv_export.py`` path to check that revision; the default is the sibling
-module. ``--chain-evidence`` reads the public issue, branch and PR chain and
-reports
-whether a trusted native verifier decision and closer publication proof are
+module. ``--chain-evidence`` reads current native completion evidence;
+``--chain-evidence --legacy`` reads the historical public issue, branch and PR
+chain and reports whether a trusted native verifier decision and closer publication proof are
 tied to the corrected head. A free-text verdict line is not that proof. A
 trusted corpus decision on the partial merge is reported and is not that proof
 either. A corpus decision whose evaluated commit is only the open pull
@@ -2888,7 +2888,7 @@ def main(argv=None):
             return 1
         finally:
             sys.path[:] = original_path
-    if args == ["--legacy-chain-evidence"]:
+    if args == ["--chain-evidence", "--legacy"]:
         return _report_chain_evidence()
     export_path = None
     if len(args) == 1 and not args[0].startswith("-"):
