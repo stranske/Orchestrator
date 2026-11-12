@@ -50,13 +50,14 @@ function fixture(t, segments = { '': ndjson([event()]) }, end = now, relativeRoo
   fs.writeFileSync(receipt, collected.stdout);
   const audit = (at = end) => auditProvisionLedger(root, source,
     { now: at, writerPath: path.join(root, 'provision-events.ndjson') });
-  const observe = (at) => {
+  const observe = (at, installedSource = source) => {
     // The report carries every field of the collector's continuation state.
     // Carry those values into one new observation instead of inventing a week.
     const previous = JSON.parse(fs.readFileSync(receipt, 'utf8')).provision;
     const collected = execute(process.env.PYTHON || 'python3',
-      ['-c', collect, collectorRoot, source, at, JSON.stringify(previous)],
-      { cwd: process.cwd(), env: { ...process.env, PYTHONPATH: source, PYTHONDONTWRITEBYTECODE: '1' } });
+      ['-c', collect, collectorRoot, installedSource, at, JSON.stringify(previous)],
+      { cwd: process.cwd(), env: { ...process.env, PYTHONPATH: installedSource,
+        PYTHONDONTWRITEBYTECODE: '1' } });
     assert.equal(collected.error_code, null);
     assert.equal(collected.signal, null);
     assert.equal(collected.exit_code, 0, collected.stderr.toString());
@@ -285,6 +286,67 @@ test('a refusal ages out only after a fresh observation with every archive retai
     assert.deepEqual(fs.readFileSync(path.join(f.root, name)), before[index], name);
   }
 });
+
+for (const changed of ['provision.py', 'followup_evidence.py']) {
+  test(`fresh observations after deploying changed ${changed} cannot inherit the previous seven-day baseline`, (t) => {
+    const f = fixture(t, {
+      '': ndjson([event({ outcome: 'reclaimed' })]),
+      '.old': ndjson([event({ ts: cutoff, lane: 'closer' })]),
+      '.older': ndjson([event({ ts: cutoff, lane: 'opener', cause: 'branch-exists' })]),
+    });
+    assert.equal(f.audit().coverage, 'continuous');
+    assert.equal(f.audit().branch_refusals, 2);
+    const installed = path.join(f.root, 'installed');
+    fs.mkdirSync(installed);
+    for (const name of ['provision.py', 'followup_evidence.py', 'paths.py']) {
+      fs.copyFileSync(path.join(source, name), path.join(installed, name));
+    }
+    // Change real installed bytes rather than altering hashes in a receipt.
+    fs.appendFileSync(path.join(installed, changed), '\n# New installed generation.\n');
+    const audit = (at) => auditProvisionLedger(f.root, installed,
+      { now: at, writerPath: path.join(f.root, 'provision-events.ndjson') });
+    const stale = audit(now);
+    assert.equal(stale.coverage, 'UNKNOWN');
+    assert.ok(stale.continuity_failures.includes(`${changed} differs from the observed implementation`));
+    const segments = ['provision-events.ndjson', 'provision-events.ndjson.old',
+      'provision-events.ndjson.older'].map((name) => path.join(f.root, name));
+    const before = segments.map((file) => fs.readFileSync(file));
+    const nextHour = '2026-11-11T13:00:00.123456+00:00';
+    const observed = f.observe(nextHour, installed);
+    const reason = changed === 'provision.py' ? 'provision instrument' : 'collector implementation';
+    assert.deepEqual(observed.continuity_failures, [`${reason} changed; new baseline required`]);
+    assert.equal(observed.continuous_since, nextHour);
+    assert.equal(observed.branch_refusals, 0);
+    assert.equal(observed.evidence_ready, false);
+    const first = audit(nextHour);
+    assert.equal(first.coverage, 'UNKNOWN');
+    assert.equal(first.evidence_ready, false);
+    assert.equal(first.deployment_acceptance_verified, false);
+    assert.equal(first.segments.length, 3);
+
+    // A subsequent hourly observation matches the deployed sources, but only
+    // one hour of the replacement baseline has elapsed. The aged-out refusals
+    // remain archived and a zero recount still cannot qualify this deployment.
+    const resumed = '2026-11-11T14:00:00.123456+00:00';
+    const following = f.observe(resumed, installed);
+    assert.deepEqual(following.continuity_failures, []);
+    assert.equal(following.continuous_since, nextHour);
+    const result = audit(resumed);
+    assert.equal(result.counted_through, resumed);
+    assert.equal(result.continuous_since, nextHour);
+    assert.equal(result.branch_refusals, 0);
+    assert.equal(result.coverage, 'UNKNOWN');
+    assert.equal(result.evidence_ready, false);
+    assert.equal(result.instrument_sha256, following.instrument_sha256);
+    assert.equal(result.collector_sha256, following.collector_sha256);
+    assert.match(result.continuity_failures.join('\n'), /seven continuous observed days/);
+    assert.match(formatReport(result), /failed\(branch-held\|branch-exists\) = 0 over 7d/);
+    assert.match(formatReport(result), /ledger evidence = unmet acceptance/);
+    for (const [index, file] of segments.entries()) {
+      assert.deepEqual(fs.readFileSync(file), before[index], file);
+    }
+  });
+}
 
 for (const interrupted of [false, true]) {
   test(`fresh zero-refusal observation ${interrupted ? 'resets' : 'preserves'} the baseline at the two-hour collector limit`, (t) => {
