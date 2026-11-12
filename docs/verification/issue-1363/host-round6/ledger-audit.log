@@ -24,7 +24,7 @@ provision: native/full-verifier/mirror acceptance requires separate receipts
 {
   "schema_version": 1,
   "deployment_acceptance_verified": false,
-  "reporter_sha256": "a23fa8c5d6cefca61073d9ba41d81d4b9cd4ae340b2b85b079657486f5812bd3",
+  "reporter_sha256": "cce7d18d678ee6882785158ccf7e57d594329fb9b64da6f998fd17d67ed2d90e",
   "coverage": "UNKNOWN",
   "continuous_since": "2026-11-11T18:40:07.286665+00:00",
   "checked_at": "2026-11-12T00:40:04.907857+00:00",

@@ -49,3 +49,7 @@ the collector observation byte-identical. The installed generation has different
 reclaim-test bytes from the delivery. This was an audit of the incumbent
 installation. T5 requires a fresh observation of the delivered generation from
 the existing hourly collector.
+
+The remote branch advanced during the round. The merge retained the bot's
+collector-receipt null-entry fix at `d8563d25`. The audit log above comes from
+the merged implementation, whose 51 auditor tests also passed.
