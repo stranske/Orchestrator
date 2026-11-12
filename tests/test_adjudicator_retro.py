@@ -1361,7 +1361,7 @@ def test_live_shadow_adjudicates_a_new_dispute_once_and_grades_on_truth(
         conn.execute(
             "INSERT INTO costs(run_id,cost_usd,source) VALUES ('backend-live',0.25,'ccusage')"
         )
-    outcomes_before = _brain_except_events(db)["outcomes"]
+    brain_before = _brain_except_events(db)
     first = live.run_live(**common)
     assert (first["attempted"], first["advised"], first["uncertified"]) == (1, 1, 0)
     assert first["summary"]["graded"] == 0, "pending durability is not later truth"
@@ -1382,7 +1382,15 @@ def test_live_shadow_adjudicates_a_new_dispute_once_and_grades_on_truth(
     merge_rule_verdict = "PASS" if merged else "FAIL"
     assert advice["merge_rule_verdict"] == merge_rule_verdict
     assert first["rows"][0]["merge_rule_verdict"] == merge_rule_verdict
-    assert _brain_except_events(db)["outcomes"] == outcomes_before, "no outcomes row written"
+    brain_after = _brain_except_events(db)
+    # The real role runner records its own run. It must preserve the disputed run and every
+    # other Brain table, including outcomes and the influence edges consumed by merge gates.
+    for table, previous_rows in brain_before.items():
+        if table == "runs":
+            assert len(brain_after[table]) == len(previous_rows) + 1
+            assert set(previous_rows) <= set(brain_after[table]), "existing runs are unchanged"
+        else:
+            assert brain_after[table] == previous_rows, f"live dispatch changed {table}"
 
     writes = []
     record_event = feedback.record_completion_event

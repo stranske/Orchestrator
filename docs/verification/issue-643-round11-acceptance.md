@@ -206,3 +206,37 @@ Observed: `112 passed in 12.14s`. This is a changed-file run, not the full suite
 Final CI and seven-minute exact-head review readback occur after the follow-up
 push and must be reported separately; neither production qualification nor merge
 is implied by these local results.
+
+### 2026-11-12: acceptance reconciliation and real-dispatch isolation
+
+Reviewed the recent commits through `27d21624` and ran the three named acceptance
+tests: **10 passed** (eight decision/truth/merge-rule combinations and two refusal/isolation
+tests). The named lifecycle test now checks every non-event Brain table after real role
+dispatch, allowing one new role run while requiring all existing runs to remain unchanged.
+A temporary mutation that changed the disputed run's task type failed at
+`existing runs are unchanged`; the mutation was reverted. The three adjudicator modules
+(`test_adjudicator_retro.py`, `test_adjudicator_live.py`, and
+`test_adjudicator_live_log_bounds.py`) then reported **119 passed**, with `-m "not slow"`.
+
+Verified acceptance checklist reconciliation:
+
+- [x] `test_live_shadow_adjudicates_a_new_dispute_once_and_grades_on_truth`
+- [x] `test_live_shadow_never_adjudicates_an_uncertified_case`
+- [x] `test_live_shadow_writes_no_merge_input`
+- [ ] Production pass number: still requires the owner's sync and observed live receipts.
+
+The PR-body update was attempted, but the GitHub connector returned
+`MCP tool call requires approval, but approval policy is never`. These three verified
+checkboxes still need to be applied to PR #1356. No production receipt or deadline extension
+is claimed; the original 2026-11-08 sample deadline has passed.
+
+Staging the verified change also failed: `.git` is mounted read-only, so `git add`
+could not create `.git/index.lock`. The test and this note remain uncommitted in the
+checked-out PR branch; no branch, PR, or production state was created.
+
+Black 26.10.1 formatted the changed test without changes. Its full-repository check
+(`--check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .`) passed:
+**699 files would be left unchanged**. Tools were loaded from official upstream sources
+under `/tmp` because pytest/Black were absent and PyPI DNS was unavailable. The full Black
+check used one worker and a temporary periodic asyncio wakeup to avoid stalled completion
+notifications in this sandbox; the formatter and checks were otherwise unmodified.
