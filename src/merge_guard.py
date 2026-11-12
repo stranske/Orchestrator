@@ -180,6 +180,29 @@ def remote_only_footprint(
     }
 
 
+# The runtime-AC gate can block without reaching a verdict: its runner is off for this process
+# (required_but_not_run) or no spec exists (missing_spec). A required label arms it, and on
+# 2026-11-11/12 the claude dispatch path labelled two Orchestrator PRs `acceptance-criteria`.
+# closer-core never sets ORCH_RUN_RUNTIME_AC, so nothing could clear either block (#1354 was
+# closed unmerged on it). A caller that ran the issue's acceptance commands on this exact head
+# and recorded PASS supplies that verdict. An executed gate verdict is never overridden.
+UNRUN_GATE_STATUSES = frozenset({"required_but_not_run", "missing_spec"})
+
+
+def caller_acceptance_satisfies(
+    evidence: dict[str, Any] | None, expected_head: str | None
+) -> dict[str, Any] | None:
+    """The caller's acceptance evidence when it is a PASS on exactly `expected_head`, else None."""
+    if not isinstance(evidence, dict) or not expected_head:
+        return None
+    head = str(evidence.get("head") or "")
+    if len(head) != 40 or head != expected_head:
+        return None
+    if str(evidence.get("result") or "").upper() != "PASS":
+        return None
+    return {"head": head, "result": "PASS", "source": str(evidence.get("source") or "caller")}
+
+
 def evaluate_merge_gate(
     target: str,
     *,
@@ -190,6 +213,8 @@ def evaluate_merge_gate(
     remote_only: bool = False,
     metadata_fn=pr_metadata,
     gate_fn=runtime_ac_gate.gate_status,
+    expected_head: str | None = None,
+    acceptance_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     meta = metadata_fn(target)
     base = {
@@ -239,6 +264,17 @@ def evaluate_merge_gate(
         result["remote_only_guard"] = footprint
     if gate is None:
         return result
+    if gate.get("blocks") and gate.get("status") in UNRUN_GATE_STATUSES:
+        satisfied = caller_acceptance_satisfies(acceptance_evidence, expected_head)
+        if satisfied is not None:
+            gate = {
+                **gate,
+                "status": "satisfied_by_caller_evidence",
+                "blocks": False,
+                "unrun_status": gate.get("status"),
+                "caller_evidence": satisfied,
+            }
+            result = {**result, "gate": gate}
     if gate.get("blocks"):
         return {**result, "blocked": True, "reason": f"runtime AC gate {gate.get('status')}"}
     if dry_run and gate.get("status") == "missing_spec":
@@ -556,6 +592,7 @@ def guarded_merge(
     adjudicate_fn=None,
     spawn_fn=None,
     review_loop_fn=None,
+    acceptance_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if admission_only and (confirm_merge or not remote_only):
         raise ValueError("admission-only guard requires non-mutating remote-only invocation")
@@ -595,6 +632,8 @@ def guarded_merge(
         remote_only=remote_only,
         metadata_fn=metadata_fn,
         gate_fn=gate_fn,
+        expected_head=expected_head,
+        acceptance_evidence=acceptance_evidence,
     )
     result = {
         **gate_result,

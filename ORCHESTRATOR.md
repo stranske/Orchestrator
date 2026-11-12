@@ -307,7 +307,10 @@ cursor-agent live outside the default PATH):
   `merge_guard.py` treats those same labels on the PR, or a spec at
   `~/.codex/orchestrator/runtime-ac/<target-slug>.json`, as a required runtime-AC gate: a dry run
   reports it; an active merge blocks until a spec exists, `ORCH_RUN_RUNTIME_AC=1` is set, and the gate
-  returns `PASS`. (`tick.py` ran the same gate before a remote delegation no closer item can reach,
+  returns `PASS`. When the gate cannot reach a verdict (`required_but_not_run` or `missing_spec`), a
+  caller's `acceptance_evidence` (a `PASS` of the issue's acceptance commands recorded on exactly the
+  expected head) supplies it, and the gate reports `satisfied_by_caller_evidence`. closer-core passes
+  this because it never sets the flag; an executed gate verdict is never overridden. (`tick.py` ran the same gate before a remote delegation no closer item can reach,
   until 2026-10-05; it no longer examines closer items.) Command/non-regression
   checks still require `ORCH_RUNTIME_AC_ALLOW_COMMANDS=1`; `ORCH_RUNTIME_AC_TIMEOUT` sets the per-check
   timeout. This is a **hard opt-in machine gate**, not an advisory review: only explicitly labeled or
@@ -350,7 +353,7 @@ cursor-agent live outside the default PATH):
   attribution guard and named under `outcome.deferred_to_ingest`, or under
   `outcome.delegations_already_recorded` when it already has an outcome, which ingest never re-decides. It also fails closed if PR metadata cannot be read, draft/non-open PRs are
   supplied, a required runtime-AC spec is missing, `ORCH_RUN_RUNTIME_AC=1` is absent, or the gate verdict is
-  not `PASS`. It uses the shared `runtime_ac_gate.py` helper, so tick and terminal merges enforce the same
+  not `PASS`, unless the caller supplied an exact-head acceptance `PASS` for the first two. It uses the shared `runtime_ac_gate.py` helper, so tick and terminal merges enforce the same
   policy. Use `python3 src/runtime_ac_gate.py --exercise [--json]` for a
   non-mutating active-gate smoke when no live backlog closer currently requires runtime AC; it writes a
   temporary command spec, runs the real gate executor, and removes the spec without patching feedback. Use
