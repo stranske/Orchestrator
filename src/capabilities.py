@@ -2482,6 +2482,14 @@ def load(path: Path = REG, *, create: bool = True) -> dict[str, dict[str, Any]]:
         return json.loads(json.dumps(capabilities))
 
 
+def load_declaration_views(path: Path = REG) -> tuple[dict, dict]:
+    """Read persisted and reconciled views from one snapshot without writing either."""
+    persisted = load(path, create=False)
+    declared = json.loads(json.dumps(persisted))
+    _reconcile_known_declarations(declared, _now())
+    return persisted, declared
+
+
 def load_declared(path: Path = REG) -> dict[str, dict[str, Any]]:
     """The ledger as the system will see it AFTER declaration reconciliation — WITHOUT writing it.
 

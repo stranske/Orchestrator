@@ -1166,13 +1166,13 @@ def findability_report(ledger: dict, ctx: dict, rows: list[dict] | None = None) 
 
 def report(*, path: pathlib.Path | None = None, ctx: dict | None = None) -> dict:
     _capability_heartbeat("invocation")
-    # `load_declared`, not `load`, here and in `_context` and `admit`: this gate is VERIFICATION —
-    # verify.py runs it on every PR and the tests beside it read the live ledger. The writing loader
+    # Read-only declaration views here, and `load_declared` in `_context` and `admit`: verification
+    # must not persist declarations. verify.py runs it on every PR. The writing loader
     # creates a missing ledger, seeds declared gate rows, reconciles declarations and expires rows,
     # then writes the result into the ledger the tick reads. `load_declared` reconciles an in-memory
     # copy and writes nothing. It seeds and expires nothing either: the tick's lifecycle step
     # (`capabilities.py sweep` + `validate`, every active tick) owns those writes.
-    ledger = capabilities.load_declared(path or capabilities.REG)
+    persisted, ledger = capabilities.load_declaration_views(path or capabilities.REG)
     ctx = ctx or _context(path, ledger=ledger)
     # A retired or superseded row owes nothing: the advisor never offers it and no code path will
     # heartbeat it, so it is not admitted, not enforced and not debt. Retiring a stray row on
@@ -1201,6 +1201,22 @@ def report(*, path: pathlib.Path | None = None, ctx: dict | None = None) -> dict
         ),
         "findability": findability_report(ledger, ctx, rows),
         "consumers": consumer_report(ledger, ctx, rows),
+        # CONSUMERS describes reconciled declarations, not proof of a persisted owner sync.
+        # Compare the same snapshot and only live rows; this diagnostic grants no admission credit.
+        "consumer_sync": {
+            "live_rows": len(live),
+            "pending": {
+                cid: changed
+                for cid in live
+                if (
+                    changed := [
+                        field
+                        for field in ("downstream_consumer", "consumer_missing")
+                        if persisted[cid].get(field) != ledger[cid].get(field)
+                    ]
+                )
+            },
+        },
         "rows": rows,
         "commitments": commitments(),
     }
@@ -1284,6 +1300,22 @@ def format_report(rep: dict) -> str:
             reason = cons.get("reviewed_absences", {}).get(cid)
             suffix = f": {reason}" if reason else ""
             out.append(f"                   REVIEWED ABSENT {cid}{suffix}")
+    sync = rep.get("consumer_sync")
+    if sync is not None:
+        if not sync["live_rows"]:
+            out.append("  CONSUMER SYNC: unverified (no live ledger rows on this machine)")
+        elif sync["pending"]:
+            out.append(
+                f"  CONSUMER SYNC: {len(sync['pending'])} of {sync['live_rows']} live rows pending; "
+                "CONSUMERS uses reconciled declarations"
+            )
+            for cid, fields in sync["pending"].items():
+                out.append(f"                   PENDING SYNC {cid}: {', '.join(fields)}")
+        else:
+            out.append(
+                "  CONSUMER SYNC: persisted consumer declarations match this tree "
+                f"for {sync['live_rows']} live rows"
+            )
     if rep["legacy_debt"]:
         out += ["", "  legacy debt (pay down opportunistically; never a human queue):"]
         counts: dict[str, int] = {}
@@ -1626,11 +1658,11 @@ def _selftest() -> None:
             rows[cap_id] = {**capabilities._blank_capability(cap_id), "status": "wired"}
         capabilities.save(rows, one_read)
         reads: list[pathlib.Path] = []
-        real_load_declared = capabilities.load_declared
+        real_load = capabilities.load
 
-        def counted(where: pathlib.Path = capabilities.REG) -> dict:
+        def counted(where: pathlib.Path = capabilities.REG, *, create: bool = True) -> dict:
             reads.append(pathlib.Path(where))
-            return real_load_declared(where)
+            return real_load(where, create=create)
 
         thin: dict[str, Any] = {
             "audit_rows": {},
@@ -1640,11 +1672,11 @@ def _selftest() -> None:
             "reached_surfaces": set(),
             "consult_reach": {},
         }
-        capabilities.load_declared = counted  # type: ignore[assignment]
+        capabilities.load = counted  # type: ignore[assignment]
         try:
             counted_rep = report(path=one_read, ctx=thin)
         finally:
-            capabilities.load_declared = real_load_declared  # type: ignore[assignment]
+            capabilities.load = real_load  # type: ignore[assignment]
         assert counted_rep["total"] == 2, counted_rep["total"]
         assert reads == [one_read], f"one report read the ledger {len(reads)} times"
 

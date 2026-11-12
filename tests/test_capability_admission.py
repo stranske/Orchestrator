@@ -1061,6 +1061,18 @@ def test_consumer_declaration_sync_drains_persisted_prose_without_action_credit(
         before = admission.consumer_report(capabilities.load(path, create=False), ctx, rows)
         assert len(before["by_class"]["prose"]) == len(ledger), before
 
+        with patch.object(admission, "_capability_heartbeat"):
+            pending = admission.report(path=path, ctx=ctx)
+        assert pending["consumer_sync"] == {
+            "live_rows": len(ledger),
+            "pending": {cid: ["downstream_consumer"] for cid in sorted(ledger)},
+        }
+        pending_text = admission.format_report(pending)
+        assert f"CONSUMER SYNC: {len(ledger)} of {len(ledger)} live rows pending" in pending_text
+        for cid in ledger:
+            assert f"PENDING SYNC {cid}: downstream_consumer" in pending_text
+        assert path.read_bytes() == original, "report must not count as a persisted sync"
+
         preview = admission.consumer_report(capabilities.load_declared(path), ctx, rows)
         assert path.read_bytes() == original, "preview must not count as a persisted sync"
         capabilities.load(path)
@@ -1075,6 +1087,17 @@ def test_consumer_declaration_sync_drains_persisted_prose_without_action_credit(
         assert after["drainable"] == reviewed_absences
         assert after["by_class"]["acting"] == []
         assert after["by_class"]["not_acting"], "action debt must remain separate from declarations"
+        with patch.object(admission, "_capability_heartbeat"):
+            synced = admission.report(path=path, ctx=ctx)
+        assert synced["consumer_sync"] == {"live_rows": len(ledger), "pending": {}}
+        assert synced["consumers"] == pending["consumers"]
+        assert (
+            "CONSUMER SYNC: persisted consumer declarations match this tree "
+            f"for {len(ledger)} live rows"
+        ) in admission.format_report(synced)
+        synced_bytes = path.read_bytes()
+        capabilities.load(path)
+        assert path.read_bytes() == synced_bytes, "a second sync must be idempotent"
         for cid, row in persisted.items():
             assert row["status"] == ledger[cid]["status"]
             assert row["outcome_links"] == ledger[cid]["outcome_links"]
@@ -1098,6 +1121,15 @@ def test_consumer_declaration_sync_drains_persisted_prose_without_action_credit(
         f"prose 0, missing {len(reviewed_absences)}, undeclared 0 "
         f"— DRAINABLE {len(reviewed_absences)}"
     ) in rendered, rendered
+
+    # An empty runner has no evidence of deployed sync, even when every counter is zero.
+    with tempfile.TemporaryDirectory(prefix="consumer-sync-empty-") as scratch:
+        path = pathlib.Path(scratch) / "absent.json"
+        with patch.object(admission, "_capability_heartbeat"):
+            empty = admission.report(path=path, ctx=ctx)
+        assert empty["consumer_sync"] == {"live_rows": 0, "pending": {}}
+        assert "CONSUMER SYNC: unverified (no live ledger rows" in admission.format_report(empty)
+        assert not path.exists()
 
 
 def test_external_caller_resolves_deployed_local_loop_from_worktree_and_mirror(tmp_path):
@@ -1280,6 +1312,29 @@ def test_replacing_a_reviewed_absence_clears_its_stale_flag():
     assert capabilities._reconcile_known_declarations(ledger, 2)
     assert "consumer_missing" not in ledger[cid]
     assert not capabilities._reconcile_known_declarations(ledger, 3)
+
+    # A stale flag alone still needs a persisted sync. Retired rows do not join the live debt.
+    for status in ("active", "retired"):
+        stale = {**ledger[cid], "status": status, "consumer_missing": True}
+        with tempfile.TemporaryDirectory(prefix="consumer-sync-flag-") as scratch:
+            path = pathlib.Path(scratch) / "capabilities.json"
+            path.write_text(
+                json.dumps(
+                    {"schema_version": capabilities.SCHEMA_VERSION, "capabilities": {cid: stale}}
+                )
+            )
+            original = path.read_bytes()
+            with (
+                patch.object(admission, "_capability_heartbeat"),
+                patch.object(capabilities, "load", wraps=capabilities.load) as read,
+            ):
+                rep = admission.report(path=path, ctx={"audit_rows": {}, "fixtures": set()})
+            read.assert_called_once_with(path, create=False)
+            assert rep["consumer_sync"] == {
+                "live_rows": int(status == "active"),
+                "pending": {cid: ["consumer_missing"]} if status == "active" else {},
+            }
+            assert path.read_bytes() == original
 
 
 if __name__ == "__main__":

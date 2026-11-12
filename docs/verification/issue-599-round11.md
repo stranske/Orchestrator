@@ -116,3 +116,27 @@ The CLI reconciles declarations in memory. Five persisted declarations in the
 snapshot still differ from this branch: `agy-runtime-isolation`,
 `codemod-campaign`, `cross-repo-coordination`, `docs-drift-fix-agent`, and
 `epic-decomposition`. Post-sync acceptance remains pending.
+
+## 2026-11-12 runner follow-up
+
+The prepared source change adds a `CONSUMER SYNC` diagnostic alongside the
+unchanged CONSUMERS counters. It compares persisted and reconciled consumer
+fields from one ledger read, lists pending edits on live rows, and reports an
+empty ledger as unverified. It grants no admission, lifecycle, or action credit.
+
+Seven focused checks passed by direct Python invocation, including the named
+declaration check and the extended sync and absence regressions. The regressions
+cover persisted sync, idempotence, stale absence flags, retired rows, an empty
+runner, and one read per report. Deliberately presenting the reconciled snapshot
+as persisted state failed the sync regression; restoring separate views passed.
+Syntax parsing and `git diff --check` passed. These are not pytest results.
+
+The live ledger is absent on this runner. Black and pytest are also unavailable;
+installation attempts failed, and the mandatory formatting commands and focused
+pytest command could not execute. The change remains uncommitted under the
+pre-commit formatting gate. Follow-up must run Black with line length 100, the
+required repository-wide Black check, and focused pytest with `-m "not slow"`
+before committing on this branch. Actual post-sync live-ledger acceptance remains
+unchecked. PR #1354 was verified open and ready for review. The connector rejected
+the blocker comment and `needs-human` label because both require approval while
+this run's approval policy is `never`; no hosted progress metadata was changed.
