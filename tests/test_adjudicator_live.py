@@ -20,6 +20,8 @@ import switch_review
 def world(tmp_path, monkeypatch):
     sha = live._toy_repository(tmp_path)
     monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    # The advice event's daily lineage heartbeat must never reach the live capability ledger.
+    monkeypatch.setattr(feedback, "_capability_daily_heartbeat", lambda *_a, **_k: None)
     now = int(time.time())
     with feedback._conn() as conn:
         conn.execute(
@@ -101,10 +103,84 @@ def test_later_truth_grades_the_live_advice(world):
     # uphold_blocker against a delivery that broke later is agreement.
     assert graded["summary"]["graded"] == 1 and graded["summary"]["agree"] == 1
     line = live.weekly_line(world["path"])
-    assert (
-        line
-        == "adjudicator live: disputes 1, advised 1, uncertified 0, graded 1 (agree 1, disagree 0)"
+    assert line.startswith(
+        "live: disputes 1, advised 1, uncertified 0, graded 1 (agree 1, disagree 0)"
     )
+    assert "; agreement 1.000 against 0.75; qualification insufficient_sample;" in line
+
+
+@pytest.mark.parametrize("already_retired", [False, True])
+def test_retired_legacy_cohort_backfills_advice_receipts_without_dispatch(world, already_retired):
+    from copy import deepcopy
+
+    first = live.run_live(**world["common"])
+    template = first["rows"][0]
+    rows = []
+    with feedback._conn() as conn:
+        conn.execute("DELETE FROM completion_events")
+        for number in range(20):
+            run_id = f"legacy-{number}"
+            target = f"owner/repo#{number + 10}"
+            conn.execute(
+                "INSERT INTO runs(run_id,ts,target) VALUES (?,?,?)", (run_id, world["now"], target)
+            )
+            conn.execute(
+                "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged,"
+                "durability,durability_checked_ts) VALUES (?,'NON_PASS','PASS',1,?,?)",
+                (
+                    run_id,
+                    "broke_later" if number < 14 else "durable",
+                    feedback.DURABILITY_DETECTION_SINCE + 10,
+                ),
+            )
+            row = deepcopy(template)
+            row.update(
+                run_id=run_id,
+                target=target,
+                case_id=live.retro._case_id(
+                    {
+                        "run_id": run_id,
+                        "verifier_verdict": "NON_PASS",
+                        "adjudicated_verdict": "PASS",
+                    }
+                ),
+            )
+            row.pop("advice_event", None)
+            rows.append(row)
+    report = json.loads(world["path"].read_text())
+    report.update(rows=rows, retirement={"role": "role-adjudicator"} if already_retired else None)
+    world["path"].write_text(json.dumps(report))
+    with sqlite3.connect(feedback.DB_PATH) as conn:
+        before = conn.execute("SELECT * FROM outcomes ORDER BY run_id").fetchall()
+
+    def receipts():
+        with sqlite3.connect(feedback.DB_PATH) as conn:
+            return conn.execute(
+                "SELECT event_id,payload_json FROM completion_events WHERE producer=? AND phase=? "
+                "ORDER BY event_id",
+                (live.retro.LIVE_ADVICE_PRODUCER, live.retro.LIVE_ADVICE_PHASE),
+            ).fetchall()
+
+    result = live.run_live(**world["common"])
+    assert result["retired"] and result["attempted"] == 0
+    assert (result["summary"]["graded"], result["summary"]["agree"]) == (20, 14)
+    recorded = receipts()
+    assert len(recorded) == 20
+    assert {json.loads(payload)["live_shadow"]["target"] for _, payload in recorded} == {
+        row["target"] for row in rows
+    }
+    again = live.run_live(**world["common"])
+    assert again["retired"] and receipts() == recorded
+    recovered = live.reconcile_live(
+        db=feedback.DB_PATH, path=world["path"].with_name("recovered.json")
+    )
+    assert recovered == result["summary"], "the full retired sample survives report loss"
+    line = live.weekly_line(world["path"])
+    assert "graded 20 (agree 14, disagree 6)" in line
+    assert "agreement 0.700 against 0.75; qualification retired" in line
+    assert len(world["calls"]) == 1, "retirement must prevent any new role dispatch"
+    with sqlite3.connect(feedback.DB_PATH) as conn:
+        assert conn.execute("SELECT * FROM outcomes ORDER BY run_id").fetchall() == before
 
 
 def test_a_body_without_criteria_is_uncertified_and_never_dispatched(world):
@@ -120,7 +196,7 @@ def test_a_body_without_criteria_is_uncertified_and_never_dispatched(world):
     assert (result["attempted"], result["advised"], result["uncertified"]) == (1, 0, 1)
     summary = json.loads(world["path"].read_text())["summary"]
     assert summary["uncertified_reasons"] == {"no_criteria": 1}
-    assert "uncertified 1 (no_criteria 1)" in live.weekly_line(world["path"])
+    assert "uncertified reasons: no_criteria 1" in live.weekly_line(world["path"])
     assert live.uncertified_class("qualified prompt exceeds byte limit; x") == "prompt_too_large"
     assert live.uncertified_class("something new") == "other"
     assert world["calls"] == []
@@ -543,10 +619,17 @@ def test_the_kill_switch_and_the_limit_hold(world):
     assert live.configured_limit({live.LIVE_LIMIT: "x"}) == live.DEFAULT_LIMIT
 
 
-def test_weekly_review_prints_the_live_line(world, monkeypatch):
+def test_weekly_review_prints_the_live_line(world, monkeypatch, tmp_path):
     live.run_live(**world["common"])
     monkeypatch.setattr(live, "report_path", lambda: world["path"])
-    rendered = switch_review.format_report(
+    saved_report = world["path"].read_bytes()
+    with feedback._conn() as conn:
+        conn.execute(
+            "UPDATE outcomes SET durability='broke_later', durability_checked_ts=? WHERE run_id='live-1'",
+            (feedback.DURABILITY_DETECTION_SINCE + 10,),
+        )
+    text_path = tmp_path / "switch-review.txt"
+    switch_review.write_text_report(
         {
             "review_days": 7,
             "raise_count": 0,
@@ -554,14 +637,120 @@ def test_weekly_review_prints_the_live_line(world, monkeypatch):
             "on_but_idle": [],
             "unconditioned": [],
             "mirror_drift": {"status": "ok"},
+            "adjudicator_shadow": "adjudicator shadow: cases 0",
             "adjudicator_live": live.weekly_line(),
-        }
+        },
+        text_path,
     )
-    assert "adjudicator live: disputes 1, advised 1, uncertified 0, graded 0" in rendered
-    # Deliberate break, in place: without the case-id dedup the same dispute is advised again.
+    shadow_lines = [
+        line
+        for line in text_path.read_text().splitlines()
+        if line.startswith("adjudicator shadow:")
+    ]
+    assert len(shadow_lines) == 1
+    assert shadow_lines[0].startswith(
+        "adjudicator shadow: cases 0; live: disputes 1, advised 1, uncertified 0, "
+        "graded 1 (agree 1, disagree 0)"
+    )
+    assert "; agreement 1.000 against 0.75; qualification insufficient_sample;" in shadow_lines[0]
+    assert "drainable=durability grading" in shadow_lines[0]
+    assert world["path"].read_bytes() == saved_report
+    assert len(world["calls"]) == 1
+    # "Advised" is the Brain's `live_shadow_advice` event, not the report: losing the report does
+    # not advise the same dispute again.
     world["path"].write_text(json.dumps({"rows": [], "summary": {}, "population": 1}))
     again = live.run_live(**world["common"])
-    assert again["attempted"] == 1 and len(world["calls"]) == 2
+    assert again["attempted"] == 0 and len(world["calls"]) == 1
+
+
+@pytest.mark.parametrize("report_state", ["missing", "empty", "retry"])
+def test_persisted_advice_survives_report_loss_and_still_grades(world, report_state, tmp_path):
+    first = live.run_live(**world["common"])
+    original = first["rows"][0]
+    report = json.loads(world["path"].read_text())
+    if report_state == "missing":
+        world["path"].unlink()
+    else:
+        report["rows"] = []
+        if report_state == "retry":
+            report["rows"] = [
+                {key: original[key] for key in ("case_id", "run_id", "target", "source")}
+            ]
+            report["rows"][0].update(error="backend interrupted", attempts=1)
+        world["path"].write_text(json.dumps(report))
+    saved = world["path"].read_bytes() if world["path"].exists() else None
+    with feedback._conn() as conn:
+        conn.execute(
+            "UPDATE outcomes SET durability='broke_later', durability_checked_ts=? "
+            "WHERE run_id='live-1'",
+            (feedback.DURABILITY_DETECTION_SINCE + 10,),
+        )
+    with sqlite3.connect(feedback.DB_PATH) as conn:
+        before = list(conn.iterdump())
+
+    line = live.weekly_line(world["path"])
+    assert "advised 1, uncertified 0, graded 1 (agree 1, disagree 0)" in line
+    assert "agreement 1.000 against 0.75" in line
+    assert (world["path"].read_bytes() if world["path"].exists() else None) == saved
+
+    # Explicit-db reconciliation and the next daily pass recover the same observation.
+    recovered_path = tmp_path / "recovered.json"
+    summary = live.reconcile_live(db=feedback.DB_PATH, path=recovered_path)
+    assert (summary["advised"], summary["graded"], summary["agree"]) == (1, 1, 1)
+    second = live.run_live(**world["common"])
+    assert second["attempted"] == 0 and len(world["calls"]) == 1
+    assert second["summary"] == summary
+    recovered = second["rows"]
+    assert len(recovered) == 1
+    assert recovered[0]["case_id"] == original["case_id"]
+    assert recovered[0]["advice_event"] == original["advice_event"]
+    assert recovered[0]["certification"]["evaluated_sha"] == world["sha"]
+    with sqlite3.connect(feedback.DB_PATH) as conn:
+        assert list(conn.iterdump()) == before, "recovery changes no Brain row"
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"validation_status": "rejected"},
+        {"producer": "role-verifier"},
+        {"phase": "verification"},
+        {"run_id": "live-1"},
+        {"payload_json": "not json"},
+        {"payload_json": "[]"},
+        {"payload_json": '{"live_shadow": []}'},
+        {"advice": {"case_id": "wrong"}},
+        {"advice": {"evaluated_sha": None}},
+        {"advice": {"run_id": "missing-run"}},
+        {"advice": {"target": "owner/repo#2"}},
+        {"advice": {"decision": []}},
+    ],
+)
+def test_receipt_recovery_ignores_rejected_or_invalid_advice(world, changes):
+    live.run_live(**world["common"])
+    world["path"].unlink()
+    with sqlite3.connect(feedback.DB_PATH) as conn:
+        if "advice" in changes:
+            payload = json.loads(
+                conn.execute("SELECT payload_json FROM completion_events").fetchone()[0]
+            )
+            payload["live_shadow"].update(changes["advice"])
+            conn.execute("UPDATE completion_events SET payload_json=?", (json.dumps(payload),))
+        else:
+            for column, value in changes.items():
+                assert column in {
+                    "validation_status",
+                    "producer",
+                    "phase",
+                    "run_id",
+                    "payload_json",
+                }
+                conn.execute(f"UPDATE completion_events SET {column}=?", (value,))
+        before = list(conn.iterdump())
+    assert live._load_rows(world["path"], feedback.DB_PATH) == []
+    with sqlite3.connect(feedback.DB_PATH) as conn:
+        assert list(conn.iterdump()) == before
+    assert not world["path"].exists() and len(world["calls"]) == 1
 
 
 def test_a_failed_role_run_is_retried_up_to_the_cap_and_counted_as_failed(world):
@@ -577,7 +766,7 @@ def test_a_failed_role_run_is_retried_up_to_the_cap_and_counted_as_failed(world)
     row = first["rows"][0]
     assert row["certification"]["status"] == "certified" and row["error"] == "backend down"
     assert row["attempts"] == 1 and "proposal" not in row
-    assert "uncertified 0, failed 1, graded 0" in live.weekly_line(world["path"])
+    assert "; failed 1" in live.weekly_line(world["path"])
     second = live.run_live(**common)
     assert second["attempted"] == 1 and len(second["rows"]) == 1
     assert second["rows"][0]["attempts"] == 2
@@ -618,3 +807,285 @@ def test_the_tick_asks_the_module_whether_the_switch_is_on(monkeypatch):
     needle = 'adjudicator_live.py" --enabled'
     assert text.count(needle) == 1, "the tick reads the live kill switch through the module, once"
     assert "ORCH_ADJUDICATOR_LIVE_SHADOW" not in text, "the shell never reads the switch itself"
+
+
+def test_saved_proposal_excludes_target_before_cap_while_receipt_writes_fail_then_recovers(
+    world, monkeypatch
+):
+    real_record = feedback.record_completion_event
+    real_record_in_conn = feedback._record_completion_event_in_conn
+    fail_writes = {"enabled": True}
+
+    def flaky_record_in_conn(conn, run_id, **kwargs):
+        if fail_writes["enabled"]:
+            raise RuntimeError("brain receipt write failing")
+        return real_record_in_conn(conn, run_id, **kwargs)
+
+    def flaky_record(run_id, **kwargs):
+        if fail_writes["enabled"]:
+            raise RuntimeError("brain receipt write failing")
+        return real_record(run_id, **kwargs)
+
+    monkeypatch.setattr(feedback, "_record_completion_event_in_conn", flaky_record_in_conn)
+    monkeypatch.setattr(feedback, "record_completion_event", flaky_record)
+
+    @contextmanager
+    def multi_provider(target, head):
+        assert target in {"owner/repo#1", "owner/repo#2"} and head == world["sha"]
+        yield str(world["path"].parent / "repo")
+
+    common = {
+        **world["common"],
+        "provider": multi_provider,
+        "snapshot_reader": lambda target: {
+            "number": int(target.split("#")[1]),
+            "headRefOid": world["sha"],
+            "body": live.AC_BODY,
+        },
+    }
+    first = live.run_live(**common)
+    assert (first["attempted"], first["advised"]) == (1, 1)
+    assert len(world["calls"]) == 1
+    assert "advice_event" not in first["rows"][0]
+    assert "brain receipt write failing" in first["rows"][0]["advice_event_error"]
+    assert live.retro.live_advised_targets(feedback.DB_PATH) == set()
+
+    # Add a newer dispute for the already-advised target and an older dispute for a second target.
+    with feedback._conn() as conn:
+        conn.executemany(
+            "INSERT INTO runs(run_id,ts,target) VALUES (?,?,?)",
+            [
+                ("live-1-newer", world["now"] + 3, "owner/repo#1"),
+                ("live-2", world["now"] + 2, "owner/repo#2"),
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged) "
+            "VALUES (?,'PASS','NON_PASS',1)",
+            [("live-1-newer",), ("live-2",)],
+        )
+
+    # Under limit=1 while receipt backfill still fails, owner/repo#1 must be excluded before
+    # applying the cap so runner is not invoked for live-1-newer and live-2 gets the slot.
+    second = live.run_live(**{**common, "limit": 1, "now": world["now"] + 4})
+    assert (second["attempted"], second["advised"]) == (1, 1)
+    assert len(world["calls"]) == 2
+    assert [row["run_id"] for row in second["rows"]] == ["live-1", "live-2"]
+
+    # Another pass while receipt writes still fail dispatches nothing.
+    third = live.run_live(**{**common, "limit": 1, "now": world["now"] + 5})
+    assert third["attempted"] == 0 and len(world["calls"]) == 2
+
+    # Recover the writer: backfill persists the original advice without invoking the role again.
+    fail_writes["enabled"] = False
+    monkeypatch.setattr(feedback, "_record_completion_event_in_conn", real_record_in_conn)
+    recovered = live.run_live(**{**common, "limit": 1, "now": world["now"] + 6})
+    assert recovered["attempted"] == 0 and len(world["calls"]) == 2
+    assert live.retro.live_advised_targets(feedback.DB_PATH) == {
+        "owner/repo#1",
+        "owner/repo#2",
+    }
+    with sqlite3.connect(feedback.DB_PATH) as conn:
+        payloads = [
+            json.loads(raw)["live_shadow"]
+            for (raw,) in conn.execute(
+                "SELECT payload_json FROM completion_events WHERE producer=? AND phase=? "
+                "ORDER BY created_ts,event_id",
+                (live.retro.LIVE_ADVICE_PRODUCER, live.retro.LIVE_ADVICE_PHASE),
+            ).fetchall()
+        ]
+    by_target = {item["target"]: item for item in payloads}
+    assert by_target["owner/repo#1"]["run_id"] == "live-1"
+    assert by_target["owner/repo#1"]["case_id"] == first["rows"][0]["case_id"]
+    saved_rows = {row["run_id"]: row for row in json.loads(world["path"].read_text())["rows"]}
+    assert "advice_event" in saved_rows["live-1"]
+    assert "advice_event_error" not in saved_rows["live-1"]
+
+
+def test_overlapping_report_writes_use_distinct_staging_files_and_competing_pass_skips_dispatch(
+    world, monkeypatch
+):
+    staged_paths: list = []
+    real_replace = live.Path.replace
+    nested_done = {"ran": False}
+
+    def spy_replace(self, target):
+        if self.parent == world["path"].parent and self.name.endswith(".tmp"):
+            staged_paths.append(self)
+            if not nested_done["ran"]:
+                nested_done["ran"] = True
+                live._write_report(
+                    world["path"], {"schema": "adjudicator-live/v1", "rows": [{"id": 2}]}
+                )
+        return real_replace(self, target)
+
+    monkeypatch.setattr(live.Path, "replace", spy_replace)
+    live._write_report(world["path"], {"schema": "adjudicator-live/v1", "rows": [{"id": 1}]})
+    assert len(staged_paths) == 2 and staged_paths[0] != staged_paths[1]
+    assert all(p.parent == world["path"].parent for p in staged_paths)
+    assert list(world["path"].parent.glob("*.tmp")) == []
+    assert json.loads(world["path"].read_text())["rows"] == [{"id": 1}]
+    monkeypatch.setattr(live.Path, "replace", real_replace)
+    world["path"].unlink()
+
+    # If an existing writer owns the report, a competing pass must dispatch zero roles and
+    # leave work eligible for the next successful pass.
+    competing_results: list[dict] = []
+    base_runner = world["common"]["runner"]
+
+    def overlapping_runner(**kw):
+        competing_results.append(live.run_live(**{**world["common"], "now": world["now"] + 2}))
+        return base_runner(**kw)
+
+    first = live.run_live(**{**world["common"], "runner": overlapping_runner})
+    assert (first["attempted"], first["advised"]) == (1, 1)
+    assert len(world["calls"]) == 1
+    assert len(competing_results) == 1
+    assert competing_results[0]["attempted"] == 0 and competing_results[0]["advised"] == 0
+    assert competing_results[0].get("busy") is True
+
+    # Also verify a competing pass blocked before any work starts leaves work eligible for the next pass.
+    with feedback._conn() as conn:
+        conn.execute(
+            "INSERT INTO runs(run_id,ts,target) VALUES ('live-2',?,'owner/repo#2')",
+            (world["now"] + 3,),
+        )
+        conn.execute(
+            "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged) "
+            "VALUES ('live-2','NON_PASS','PASS',1)"
+        )
+
+    @contextmanager
+    def two_target_provider(target, head):
+        assert target in {"owner/repo#1", "owner/repo#2"} and head == world["sha"]
+        yield str(world["path"].parent / "repo")
+
+    common_two = {
+        **world["common"],
+        "provider": two_target_provider,
+        "snapshot_reader": lambda target: {
+            "number": int(target.split("#")[1]),
+            "headRefOid": world["sha"],
+            "body": live.AC_BODY,
+        },
+        "now": world["now"] + 4,
+    }
+    monkeypatch.setattr(live, "report_path", lambda: world["path"])
+    with live._report_writer_lock(world["path"]) as acquired:
+        assert acquired is True
+        blocked = live.run_live(**common_two)
+        assert blocked["attempted"] == 0 and blocked.get("busy") is True
+        assert live.main(["--limit", "1"]) == 75
+        assert len(world["calls"]) == 1
+
+    orchestrate_text = (paths.REPO_ROOT / "orchestrate.sh").read_text(encoding="utf-8")
+    anchor = "if _cadence_due adjudicator-live && _attempt_ok adjudicator-live; then\n"
+    cadence_block = anchor + orchestrate_text.split(anchor, 1)[1].split("\nfi\n", 1)[0] + "\nfi\n"
+    import subprocess
+
+    for exit_code, expected_marker, expected_stdout in [
+        (75, [], "adjudicator live busy"),
+        (1, ["fail:adjudicator-live"], ""),
+        (0, ["ok:adjudicator-live"], ""),
+    ]:
+        stamp_dir = world["path"].parent / f"stamp-{exit_code}"
+        stamp_dir.mkdir(exist_ok=True)
+        events_file = stamp_dir / "events.txt"
+        script = (
+            "set -euo pipefail\n"
+            f'STAMP_DIR="{stamp_dir}"\n'
+            'ORCH="/stub"\n'
+            "_cadence_due() { return 0; }\n"
+            "_attempt_ok() { return 0; }\n"
+            "_gh_gate() { return 0; }\n"
+            f'_mark_success() {{ echo "ok:$1" >> "{events_file}"; }}\n'
+            f'_mark_fail() {{ echo "fail:$1" >> "{events_file}"; }}\n'
+            f'python3() {{ if [[ "${{2:-}}" == "--enabled" ]]; then return 0; fi; return {exit_code}; }}\n'
+            + cadence_block
+        )
+        proc = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True)
+        recorded_markers = events_file.read_text().splitlines() if events_file.exists() else []
+        assert recorded_markers == expected_marker
+        if expected_stdout:
+            assert expected_stdout in proc.stdout
+
+    after_release = live.run_live(**{**common_two, "now": world["now"] + 5})
+    assert (after_release["attempted"], after_release["advised"]) == (1, 1)
+    assert len(world["calls"]) == 2
+    assert {row["target"] for row in json.loads(world["path"].read_text())["rows"]} == {
+        "owner/repo#1",
+        "owner/repo#2",
+    }
+
+
+def test_legacy_backfill_keys_on_case_receipt_for_same_target_and_survives_report_loss(
+    world, tmp_path
+):
+    from copy import deepcopy
+
+    first = live.run_live(**world["common"])
+    template = first["rows"][0]
+
+    # A Brain without completion_events still passes the table-existence guard in backfill.
+    bare_db = tmp_path / "bare.db"
+    with sqlite3.connect(bare_db) as conn:
+        conn.execute("CREATE TABLE runs(run_id TEXT PRIMARY KEY, ts INTEGER, target TEXT)")
+    bare_row = deepcopy(template)
+    bare_row.pop("advice_event", None)
+    live._backfill_advice_events([bare_row], bare_db)
+
+    rows = []
+    with feedback._conn() as conn:
+        conn.execute("DELETE FROM completion_events")
+        for index, (run_id, durability) in enumerate(
+            [("legacy-same-1", "broke_later"), ("legacy-same-2", "durable")]
+        ):
+            conn.execute(
+                "INSERT INTO runs(run_id,ts,target) VALUES (?,?,?)",
+                (run_id, world["now"] - 10 + index, "owner/repo#1"),
+            )
+            conn.execute(
+                "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged,"
+                "durability,durability_checked_ts) VALUES (?,'NON_PASS','PASS',1,?,?)",
+                (run_id, durability, feedback.DURABILITY_DETECTION_SINCE + 10),
+            )
+            row = deepcopy(template)
+            row.update(
+                run_id=run_id,
+                target="owner/repo#1",
+                case_id=live.retro._case_id(
+                    {
+                        "run_id": run_id,
+                        "verifier_verdict": "NON_PASS",
+                        "adjudicated_verdict": "PASS",
+                    }
+                ),
+            )
+            row.pop("advice_event", None)
+            rows.append(row)
+
+    report = json.loads(world["path"].read_text())
+    report["rows"] = rows
+    world["path"].write_text(json.dumps(report))
+
+    backfilled = live.run_live(**world["common"])
+    assert backfilled["attempted"] == 0 and len(world["calls"]) == 1
+    with sqlite3.connect(feedback.DB_PATH) as conn:
+        recorded_runs = {
+            run_id
+            for (run_id,) in conn.execute(
+                "SELECT run_id FROM completion_events WHERE producer=? AND phase=? "
+                "AND validation_status!='rejected'",
+                (live.retro.LIVE_ADVICE_PRODUCER, live.retro.LIVE_ADVICE_PHASE),
+            ).fetchall()
+        }
+    assert recorded_runs == {f"adjudicator-live:{row['case_id']}" for row in rows}
+
+    world["path"].unlink()
+    summary = live.reconcile_live(db=feedback.DB_PATH, path=world["path"])
+    assert (summary["advised"], summary["graded"], summary["agree"], summary["disagree"]) == (
+        2,
+        2,
+        1,
+        1,
+    )

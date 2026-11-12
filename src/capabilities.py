@@ -565,6 +565,12 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
         "status": "shadow",
         "entrypoint": "roles.py:run_adjudicator_agent",
         "matcher": {"kind": "role", "equals": "adjudicator"},
+        "kill_switch": "ORCH_ADJUDICATOR_LIVE_SHADOW=0",
+        "rollback": (
+            "set ORCH_ADJUDICATOR_LIVE_SHADOW=0 (unsetting it restores the default, ON); the "
+            "live_shadow_advice events and capability-program/adjudicator-live.json remain and are "
+            "consumed by nothing"
+        ),
         "trigger_cadence": (
             "bounded retrospective replay and closer recorded-verdict disagreement; daily live "
             "shadow on new disputes (adjudicator_live.py, at most ORCH_ADJUDICATOR_LIVE_LIMIT per "
@@ -2637,6 +2643,14 @@ def register(capability_id: str, record: dict[str, Any], path: Path = REG) -> No
         validate_capability(cap)
         capabilities[capability_id] = cap
         _write_ledger_unlocked(path, capabilities)
+
+
+def adjudicator_live_policy(summary: dict) -> str:
+    """M2 qualification uses later-truth grades; a short pool never retires the role."""
+    graded = summary["graded"]
+    if graded < 20:
+        return "insufficient_sample"
+    return "retired" if summary["agree"] / graded < 0.75 else "qualified"
 
 
 def transition(
