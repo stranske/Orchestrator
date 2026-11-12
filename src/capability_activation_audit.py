@@ -757,8 +757,7 @@ def external_caller(cap: dict) -> dict | None:
     """Verify an explicitly declared local-external caller, or a sibling CI caller.
 
     Local external associations are reviewed declarations, not inferred call-graph edges.
-    The deployed entrypoint must exist. A launcher may declare its deployed path separately
-    from the capability's source entrypoint. The Python launcher must be outside this tree.
+    The entrypoint must be outside this tree and the named Python function must exist.
 
     `entrypoint_external` says "activation needs a change in another repository". That is only a
     BLOCKER while the change is outstanding — once the caller lands, the capability can fire and
@@ -774,21 +773,18 @@ def external_caller(cap: dict) -> dict | None:
         try:
             if not isinstance(declaration, dict):
                 raise ValueError("external_caller must name a path and function")
-            entrypoint = declaration.get("entrypoint", cap.get("entrypoint"))
-            deployed_entry = Path(str(entrypoint or "").split(":", 1)[0]).expanduser()
+            external_entry = Path(str(cap.get("entrypoint") or "").split(":", 1)[0]).expanduser()
             caller = Path(str(declaration.get("path") or "")).expanduser()
             function = declaration.get("function")
             tree = HERE.parent if HERE.name == "src" else HERE
-            if not deployed_entry.is_absolute() or not deployed_entry.is_file():
-                raise ValueError("declared external entrypoint is absent")
-            if "entrypoint" not in declaration and deployed_entry.resolve().is_relative_to(
+            if not external_entry.is_absolute() or external_entry.resolve().is_relative_to(
                 tree.resolve()
             ):
-                raise ValueError("an in-tree entrypoint requires an explicit deployed entrypoint")
+                raise ValueError("declared external entrypoint must be outside this tree")
+            if not external_entry.is_file():
+                raise ValueError("declared external entrypoint is absent")
             if not caller.is_absolute() or not caller.is_file() or caller.suffix != ".py":
                 raise ValueError("declared external caller Python file is absent")
-            if caller.resolve().is_relative_to(tree.resolve()):
-                raise ValueError("declared external caller must be outside this tree")
             if not isinstance(function, str) or not function.isidentifier():
                 raise ValueError("declared external caller function is invalid")
             parsed = ast.parse(caller.read_text(encoding="utf-8"))

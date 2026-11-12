@@ -1119,7 +1119,7 @@ def test_consumer_declaration_sync_drains_persisted_prose_without_action_credit(
         }
     )
     assert (
-        "prose 0, missing 0, undeclared 0 "
+        f"prose 0, missing {len(reviewed_absences)}, undeclared 0 "
         f"— DRAINABLE {len(reviewed_absences)}"
     ) in rendered, rendered
 
@@ -1212,52 +1212,31 @@ def _assert_consumer_sync_cli_requires_persisted_live_declarations():
             # Persisted rows outside the declaration tables must still satisfy the consumer
             # requirement. No pending sync alone does not establish declaration completeness.
             with patch.dict(capabilities.KNOWN_DECLARATIONS, {}, clear=True):
-                for declaration in (
-                    {"downstream_consumer": "No rail applies this output."},
-                    {"downstream_consumer": "absent_module.py:consume"},
-                    {"downstream_consumer": None},
-                    {"downstream_consumer": None, "consumer_missing": True},
+                for declaration, expected_code in (
+                    ({"downstream_consumer": "No rail applies this output."}, 1),
+                    ({"downstream_consumer": "absent_module.py:consume"}, 1),
+                    ({"downstream_consumer": None}, 1),
+                    ({"downstream_consumer": None, "consumer_missing": True}, 1),
+                    ({"notes": "No rail applies this output.", "consumer_missing": True}, 0),
                 ):
                     row.update(declaration)
                     original = persist()
                     code, text = run_cli("--check-consumer-sync", "--json")
                     rep = json.loads(text)
-                    assert code == int(not declaration.get("consumer_missing", False))
+                    assert code == expected_code
                     assert rep["consumer_sync"]["pending"] == {}
                     assert rep["consumers"]["drainable"] == [cid]
                     assert path.read_bytes() == original
+
+                code, text = run_cli("--check-consumer-sync")
+                assert code == 0
+                assert "prose 0, missing 1, undeclared 0 — DRAINABLE 1" in text
 
                 row["status"] = "retired"
                 original = persist()
                 code, text = run_cli("--check-consumer-sync")
                 assert code == 1 and "unverified (no live ledger rows" in text
                 assert path.read_bytes() == original
-
-
-def test_external_caller_resolves_deployed_local_loop_from_worktree_and_mirror(tmp_path):
-    mirror = tmp_path / "mirror"
-    mirror.mkdir()
-    entrypoint = mirror / "local_loop.py"
-    entrypoint.touch()
-    caller = tmp_path / "controller.py"
-    caller.write_text("def start_local_loop():\n    pass\n")
-    declaration = capabilities.KNOWN_DECLARATIONS["local-loop"]
-    cap = {
-        **declaration,
-        "external_caller": {
-            **declaration["external_caller"],
-            "path": str(caller),
-            "entrypoint": str(entrypoint),
-        },
-    }
-    for checkout in (tmp_path / "worktree" / "src", mirror):
-        with patch.object(audit, "HERE", checkout):
-            proof = audit.external_caller(cap)
-            assert proof and proof["exists"], proof
-
-    entrypoint.unlink()
-    proof = audit.external_caller(cap)
-    assert proof and not proof["exists"], proof
 
 
 def test_feature_scan_declared_consumer_applies_the_scan_output():
@@ -1333,7 +1312,7 @@ def test_missing_consumer_declaration_survives_reconciliation_without_acceptance
 
 
 def test_reviewed_absence_is_reported_separately_from_unresolved_consumers():
-    """#599: reviewed absences remain DRAINABLE, separate from M1's missing count."""
+    """#599: reviewed absences and unresolved symbols both count as missing."""
     reason = "External repair output has no local consumer or handover rail."
     ledger = {
         "absent": {
@@ -1374,7 +1353,7 @@ def test_reviewed_absence_is_reported_separately_from_unresolved_consumers():
         }
     )
     assert "0 of 2 declare a consumer this tree can find" in rendered, rendered
-    assert "prose 0, missing 1, undeclared 0 — DRAINABLE 2" in rendered, rendered
+    assert "prose 0, missing 2, undeclared 0 — DRAINABLE 2" in rendered, rendered
     assert "reviewed absent 1, unresolved 1" in rendered, rendered
     assert f"REVIEWED ABSENT absent: {reason}" in rendered, rendered
 

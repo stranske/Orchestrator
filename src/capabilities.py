@@ -1859,7 +1859,6 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
                 Path.home() / ".codex/automations/reviewed-repo-automation-controller/controller.py"
             ),
             "function": "start_local_loop",
-            "entrypoint": str(Path.home() / ".codex/orchestrator-mirror/local_loop.py"),
         },
         "external_heartbeat_max_age_seconds": 86400,
         "matcher": {"kind": "tick_phase", "equals": "local-loop"},

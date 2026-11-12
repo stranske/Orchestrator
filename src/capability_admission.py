@@ -1273,10 +1273,9 @@ def format_report(rep: dict) -> str:
     if cons:
         by = {name: len(ids) for name, ids in cons["by_class"].items()}
         reviewed_missing = by.get("consumer_missing", 0)
-        # M1 counts broken declarations separately from reviewed absences. The latter stay
-        # DRAINABLE findings and still fail admission; naming the finding is not resolving it.
-        missing = by["unresolved"]
-        findable = cons["total"] - by["prose"] - missing - reviewed_missing - by["undeclared"]
+        # Both kinds of missing consumer stay drainable, with separate counts below.
+        missing = by["unresolved"] + reviewed_missing
+        findable = cons["total"] - by["prose"] - missing - by["undeclared"]
         out += [
             "",
             f"  CONSUMERS (10th): {findable}"
@@ -1300,9 +1299,8 @@ def format_report(rep: dict) -> str:
         for cid in cons["by_class"]["not_acting"]:
             out.append(f"                   NOT ACTING (trailing window) {cid}")
         for cid in cons["by_class"].get("consumer_missing", []):
-            reason = cons.get("reviewed_absences", {}).get(cid)
-            suffix = f": {reason}" if reason else ""
-            out.append(f"                   REVIEWED ABSENT {cid}{suffix}")
+            reason = cons.get("reviewed_absences", {}).get(cid) or "explanation missing"
+            out.append(f"                   REVIEWED ABSENT {cid}: {reason}")
     sync = rep.get("consumer_sync")
     if sync is not None:
         if not sync["live_rows"]:
@@ -1710,7 +1708,7 @@ def main() -> int:
         help=(
             "exit nonzero unless a nonempty live ledger has persisted this tree's consumer "
             "declarations and has no prose, unresolved or undeclared consumers; reviewed "
-            "absences remain DRAINABLE findings and acting is separate"
+            "absences require an explanation and remain DRAINABLE findings"
         ),
     )
     args = ap.parse_args()
@@ -1749,11 +1747,13 @@ def main() -> int:
         # reviewed absences as DRAINABLE findings, but never unreviewed declaration debt.
         # Admission still fails those absent consumers, and action debt remains separate.
         sync = rep["consumer_sync"]
-        by_class = rep["consumers"]["by_class"]
+        consumers = rep["consumers"]
+        by_class = consumers["by_class"]
         return int(
             not sync["live_rows"]
             or bool(sync["pending"])
             or any(by_class[cls] for cls in ("prose", "unresolved", "undeclared"))
+            or not all(consumers["reviewed_absences"].values())
         )
     return 0
 
