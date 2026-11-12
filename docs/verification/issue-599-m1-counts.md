@@ -38,3 +38,21 @@ uncommitted. The actual live ledger is unavailable: the default CLI cannot open
 deploy/sync and capture actual live `CONSUMERS` and `CONSUMER SYNC` output using
 `python3 src/capability_admission.py --check-consumer-sync`. Fixture results do
 not complete the remaining acceptance checkbox.
+
+Follow-up regression: `consumer sync CLI rechecks deployed symbols after
+declarations are persisted` exercises a disposable deployment with the real
+`testgen-lane` declaration. Its persisted ledger initially passes. Renaming
+`testgen_gate.py:main` makes the fresh-process check fail with `prose 0, missing 1`
+and `DRAINABLE 1`, even though no declarations are pending. Restoring the symbol
+passes again. The ledger stays byte-identical throughout, and no action credit
+is awarded. Only the JavaScript test harness changed; no repository Python files
+were edited.
+
+The focused regression passed, followed by all 12 tests (no skips) from
+`node --test --test-isolation=none tests/test_capability_consumer_sync_cli.js`
+in 128.24 seconds. Node syntax validation and `git diff --check` passed.
+Direct invocation also confirmed that
+`test_declared_consumers_resolve_in_the_tree` passes and that its prose and
+unresolved-symbol deliberate breaks are rejected. The live-ledger acceptance
+criterion remains unchecked. Staging this follow-up was also blocked by the
+read-only `.git/index.lock` location; no commit was created.

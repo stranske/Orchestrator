@@ -11,13 +11,15 @@ const repo = path.resolve(__dirname, '..');
 const modules = fs.existsSync(path.join(repo, 'src')) ? path.join(repo, 'src') : repo;
 const python = process.env.PYTHON || 'python3';
 
-function runtime(t) {
+function runtime(t, sourceRepo = repo) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'consumer-sync-cli-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const ledger = path.join(directory, 'capabilities.json');
+  const sourceModules = fs.existsSync(path.join(sourceRepo, 'src'))
+    ? path.join(sourceRepo, 'src') : sourceRepo;
   const env = {
     PATH: process.env.PATH,
-    PYTHONPATH: modules,
+    PYTHONPATH: [sourceModules, modules, path.join(repo, 'tests')].join(path.delimiter),
     PYTHONDONTWRITEBYTECODE: '1',
     ORCH_LOCAL_RUNTIME: directory,
     ORCH_STATE_DIR: path.join(directory, 'state'),
@@ -26,7 +28,7 @@ function runtime(t) {
   };
   async function run(args, status) {
     const result = await new Promise((resolve, reject) => {
-      const child = spawn(python, args, { cwd: repo, env, timeout: 30000 });
+      const child = spawn(python, args, { cwd: sourceRepo, env, timeout: 30000 });
       let stdout = '';
       let stderr = '';
       child.stdout.setEncoding('utf8');
@@ -43,7 +45,7 @@ function runtime(t) {
   async function check(status) {
     const before = fs.existsSync(ledger) ? fs.readFileSync(ledger) : null;
     const report = JSON.parse(await run([
-      path.join(modules, 'capability_admission.py'), '--check-consumer-sync', '--json',
+      path.join(sourceModules, 'capability_admission.py'), '--check-consumer-sync', '--json',
     ], status));
     const after = fs.existsSync(ledger) ? fs.readFileSync(ledger) : null;
     assert.deepEqual(after, before, 'verification must not persist a preview or seed a ledger');
@@ -57,6 +59,55 @@ function runtime(t) {
   }
   return { ledger, run, check, persist };
 }
+
+test('consumer sync CLI rechecks deployed symbols after declarations are persisted', async (t) => {
+  const deployment = fs.mkdtempSync(path.join(os.tmpdir(), 'consumer-sync-deployment-'));
+  t.after(() => fs.rmSync(deployment, { recursive: true, force: true }));
+  const deployedModules = path.join(deployment, 'src');
+  fs.mkdirSync(deployedModules);
+  // Copy only the resolver, its path contract and the consumer being changed.
+  // Other imports use the original tree; resolution must use this deployment.
+  for (const name of ['capability_admission.py', 'paths.py', 'testgen_gate.py']) {
+    fs.copyFileSync(path.join(modules, name), path.join(deployedModules, name));
+  }
+  const { ledger, run, check, persist } = runtime(t, deployment);
+  const declaration = JSON.parse(await run([
+    '-c',
+    'import json, capabilities; print(json.dumps(capabilities.KNOWN_DECLARATIONS["testgen-lane"]))',
+  ], 0));
+  persist({
+    capability_id: 'testgen-lane', status: 'active',
+    downstream_consumer: declaration.downstream_consumer,
+    event_history: [{ type: 'invocation', timestamp: 1 }], outcome_links: [],
+  });
+  const stored = fs.readFileSync(ledger);
+  const synced = await check(0);
+  assert.deepEqual(synced.consumer_sync, { live_rows: 1, pending: {} });
+  assert.deepEqual(synced.consumers.drainable, []);
+
+  const consumerPath = path.join(deployedModules, 'testgen_gate.py');
+  const consumer = fs.readFileSync(consumerPath, 'utf8');
+  assert.match(consumer, /^def main\(/m);
+  fs.writeFileSync(consumerPath, consumer.replace(/^def main\(/m, 'def renamed_main('));
+  const broken = await check(1);
+  assert.deepEqual(broken.consumer_sync, { live_rows: 1, pending: {} });
+  assert.deepEqual(broken.consumers.by_class.unresolved, ['testgen-lane']);
+  assert.deepEqual(broken.consumers.drainable, ['testgen-lane']);
+  assert.equal(broken.rows[0].checks.consumer_acts.ok, false);
+  assert.deepEqual(broken.consumers.by_class.acting, []);
+  const text = await run([
+    path.join(deployedModules, 'capability_admission.py'), '--check-consumer-sync',
+  ], 1);
+  assert.match(text, /prose 0, missing 1, undeclared 0 — DRAINABLE 1/);
+  assert.match(text, /CONSUMER SYNC: persisted consumer declarations match this tree/);
+
+  fs.writeFileSync(consumerPath, consumer);
+  const restored = await check(0);
+  assert.deepEqual(restored.consumer_sync, { live_rows: 1, pending: {} });
+  assert.deepEqual(restored.consumers.drainable, []);
+  assert.deepEqual(restored.consumers.by_class.acting, [], 'restoring code grants no action credit');
+  assert.deepEqual(fs.readFileSync(ledger), stored, 'source verification must preserve the ledger');
+});
 
 test('consumer sync CLI requires persisted reconciliation across fresh Python processes', async (t) => {
   const { ledger, run, check, persist } = runtime(t);
