@@ -21,9 +21,7 @@ def test_v2_projection_window_and_cursor(monkeypatch):
 
     monkeypatch.setattr(client, "_request_json", request)
     since = datetime(2026, 10, 12, tzinfo=timezone.utc)
-    assert [
-        r.id for r in client.list_runs(project_name="project", start_time=since)
-    ] == ["1", "2"]
+    assert [r.id for r in client.list_runs(project_name="project", start_time=since)] == ["1", "2"]
     body = requests[0][2]
     assert requests[0][:2] == ("POST", "/api/v2/runs/query")
     assert body["project_ids"] == ["project-id"]
