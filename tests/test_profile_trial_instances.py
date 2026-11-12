@@ -112,7 +112,7 @@ class ProfileTrialInstancesTest(unittest.TestCase):
             )
             self.assertEqual(
                 summary["provider_resolved_identity_by_profile"][pid],
-                {"provider": "openai", "model": attempts[0]["provider_resolved_model"]},
+                {"provider": None, "model": None},
             )
         trial.finalize_trial(self.manifest, results, record_feedback=True, now=2001)
         with feedback._conn() as conn:

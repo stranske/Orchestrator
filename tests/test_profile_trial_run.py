@@ -264,8 +264,8 @@ def test_run_current_preserves_unverified_response_measurements(tmp_path, monkey
             "tokens_out": sum(int(row["launch_ordinal"]) for row in attempts),
         }
         assert summary["provider_resolved_identity_by_profile"][profile_id] == {
-            "provider": "openai",
-            "model": attempts[0]["requested_model"],
+            "provider": None,
+            "model": None,
         }
     artifact = next((tmp_path / "artifacts").glob("identity-*.json"))
     body = json.loads(artifact.read_text(encoding="utf-8"))
@@ -407,8 +407,8 @@ def test_server_model_preserves_unverified_measurements(tmp_path, monkeypatch):
     for profile_id in trial.CURRENT_TRIAL_PROFILE_IDS:
         attempts = [row for row in manifest["requests"] if row["profile_id"] == profile_id]
         assert summary["provider_resolved_identity_by_profile"][profile_id] == {
-            "provider": "openai",
-            "model": attempts[0]["requested_model"],
+            "provider": None,
+            "model": None,
         }
         assert summary["cost_tokens_by_profile"][profile_id]["tokens_in"] == sum(
             10 * int(row["launch_ordinal"]) for row in attempts

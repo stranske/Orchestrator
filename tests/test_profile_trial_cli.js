@@ -185,8 +185,8 @@ test('six-instance recording preserves unverified measurements and remains idemp
       tokens_out: attempts.reduce((total, attempt) => total + attempt.tokens_out, 0),
     });
     assert.deepEqual(summary.provider_resolved_identity_by_profile[profile], {
-      provider: attempts[0].provider_resolved_provider,
-      model: attempts[0].provider_resolved_model,
+      provider: null,
+      model: null,
     });
   }
   assert.match(w.reviewLine(), /^profile trial: profiles 2, instances 6, identity verified N, /);
@@ -283,8 +283,8 @@ for (const reason of [
         tokens_out: attempts.reduce((total, attempt) => total + attempt.tokens_out, 0),
       });
       assert.deepEqual(summary.provider_resolved_identity_by_profile[profile], {
-        provider: attempts[0].provider_resolved_provider,
-        model: attempts[0].provider_resolved_model,
+        provider: null,
+        model: null,
       });
     }
     assert.deepEqual(w.counts(), {

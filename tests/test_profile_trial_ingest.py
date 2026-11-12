@@ -1165,3 +1165,65 @@ def test_unverified_retry_preserves_committed_trial_state(
     report = model_profile_trial.build_report(path)
     assert report["identity_verified"] is True
     assert report["brain_ingest_enabled"] is True
+
+
+@pytest.mark.parametrize("record_feedback", [False, True])
+def test_unverified_identity_is_null_in_all_outputs(
+    tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture, record_feedback
+):
+    _use_temp_feedback(tmp_path, monkeypatch)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    results = copy.deepcopy(trial_attempt_fixture)
+    results["identity_verified"] = False
+    path = tmp_path / "trial-state.json"
+    state = model_profile_trial.finalize_trial(
+        trial_manifest, results, state_path=path, record_feedback=record_feedback, now=2000
+    )
+    persisted = json.loads(path.read_text())
+    for output in (state, persisted):
+        assert output["identity_verified"] is False
+        for attempt in output["attempts"]:
+            assert attempt["provider_resolved_provider"] is None
+            assert attempt["provider_resolved_model"] is None
+    if record_feedback:
+        summary = json.loads((tmp_path / "capability-program/profile-trial.json").read_text())
+        for identity in summary["provider_resolved_identity_by_profile"].values():
+            assert identity == {"provider": None, "model": None}
+    assert results == trial_attempt_fixture | {"identity_verified": False}
+
+
+@pytest.mark.parametrize("state_kind", ["omitted", "missing", "mismatched"])
+def test_retry_without_committed_state_does_not_verify_measurements(
+    tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture, state_kind
+):
+    _use_temp_feedback(tmp_path, monkeypatch)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    results = copy.deepcopy(trial_attempt_fixture)
+    lookup = _bind_authoritative_identity(tmp_path, results)
+    committed = model_profile_trial.finalize_trial(
+        trial_manifest, results, ingest_brain=True, provider_response_lookup=lookup, now=2000
+    )
+    summary_path = tmp_path / "capability-program/profile-trial.json"
+    summary_before = summary_path.read_bytes()
+    path = None if state_kind == "omitted" else tmp_path / "retry-state.json"
+    if state_kind == "mismatched":
+        path.write_text(json.dumps(committed | {"trial_id": "other-trial"}))
+    before = path.read_bytes() if path and path.exists() else None
+    results["identity_verified"] = False
+    results["attempts"][0]["tokens_in"] = 999
+    retried = model_profile_trial.finalize_trial(
+        trial_manifest, results, state_path=path, record_feedback=True, now=2001
+    )
+    assert retried["identity_verified"] is False
+    assert retried["brain_ingest_enabled"] is False
+    assert (
+        next(a for a in retried["attempts"] if a["run_id"] == results["attempts"][0]["run_id"])[
+            "tokens_in"
+        ]
+        == 999
+    )
+    for attempt in retried["attempts"]:
+        assert attempt["provider_resolved_provider"] is None
+        assert attempt["provider_resolved_model"] is None
+    assert summary_path.read_bytes() == summary_before
+    assert (path.read_bytes() if path and path.exists() else None) == before

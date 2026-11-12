@@ -249,8 +249,8 @@ def test_measured_recurring_trial_records_spec_quality_cost_and_identity(tmp_pat
             "tokens_out": sum(row["tokens_out"] for row in attempts),
         }
         assert summary["provider_resolved_identity_by_profile"][profile_id] == {
-            "provider": attempts[0]["provider_resolved_provider"],
-            "model": attempts[0]["provider_resolved_model"],
+            "provider": None,
+            "model": None,
         }
         assert len(attempts) == 3
 
@@ -308,9 +308,7 @@ def test_publish_current_records_measured_usage_quality_and_identity(tmp_path, m
         "tokens_in": sum(row["tokens_in"] for row in measured_attempts),
         "tokens_out": sum(row["tokens_out"] for row in measured_attempts),
     }
-    assert summary["provider_resolved_identity_by_profile"][measured]["model"] == (
-        measured_attempts[0]["provider_resolved_model"]
-    )
+    assert summary["provider_resolved_identity_by_profile"][measured]["model"] is None
 
 
 def test_publish_current_refuses_unmeasured_usage_before_any_write(tmp_path, monkeypatch):

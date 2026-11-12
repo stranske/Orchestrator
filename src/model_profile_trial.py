@@ -1687,6 +1687,13 @@ def finalize_trial(
         _require_verified_identity_for_ingest(results, identity_verified=identity_verified)
     quality_by_profile = _validated_quality_by_profile(results, attempts)
 
+    # Sanitize every output, including runs that do not record feedback.
+    if not identity_verified:
+        attempts = [
+            {**attempt, "provider_resolved_provider": None, "provider_resolved_model": None}
+            for attempt in attempts
+        ]
+
     write_feedback = record_feedback or ingest_brain
     weights_before = _weight_snapshot() if write_feedback else {}
     recorded_attempt_ids: list[str] = []
@@ -1694,15 +1701,10 @@ def finalize_trial(
     ingest_status = None
     if write_feedback:
         # Session identity is a claim until the independent lookup confirms it.
-        feedback_attempts = [dict(attempt) for attempt in attempts]
-        if not identity_verified:
-            for attempt in feedback_attempts:
-                attempt["provider_resolved_provider"] = None
-                attempt["provider_resolved_model"] = None
         ingest_payload = feedback.ingest_profile_trial(
             results,
             manifest=manifest,
-            attempts=feedback_attempts,
+            attempts=attempts,
             auxiliary_traces=list(results.get("auxiliary_traces") or []),
             ts=timestamp,
             commit_ingest_marker=ingest_brain,
@@ -1757,8 +1759,13 @@ def finalize_trial(
             committed = build_report(state_path)
             if committed.get("trial_id") == manifest["trial_id"]:
                 return {key: value for key, value in committed.items() if key != "path"}
-        identity_verified = True
-        brain_ingest_enabled = True
+        # The marker certifies the prior ingest, not this retry's measurements.
+        identity_verified = False
+        brain_ingest_enabled = False
+        attempts = [
+            {**attempt, "provider_resolved_provider": None, "provider_resolved_model": None}
+            for attempt in attempts
+        ]
 
     debit = capacity.debit_profile_pools(
         [
