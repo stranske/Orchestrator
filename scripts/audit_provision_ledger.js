@@ -59,13 +59,14 @@ function eligibleLines(bytes) {
 }
 
 function auditProvisionLedger(root, sourceDirectory, { now = new Date().toISOString(),
+  observedAfter = null,
   writerPath = process.env.ORCH_PROVISION_EVENTS_PATH ?? path.join(
     process.env.ORCH_LOCAL_RUNTIME ?? path.join(os.homedir(), '.codex', 'orchestrator'),
     'provision-events.ndjson') } = {}) {
   root = fs.realpathSync(root);
   const result = { schema_version: 1, deployment_acceptance_verified: false,
     reporter_sha256: sha256(readRegular(__filename)),
-    coverage: 'UNKNOWN', continuous_since: null, checked_at: null,
+    coverage: 'UNKNOWN', continuous_since: null, checked_at: null, observed_after: observedAfter,
     counts: {}, branch_refusals: 0, malformed_lines: 0, segments: [],
     continuity_failures: [], evidence_ready: false };
   const fail = (message) => result.continuity_failures.push(message);
@@ -100,6 +101,19 @@ function auditProvisionLedger(root, sourceDirectory, { now = new Date().toISOStr
     }
   } catch {
     fail('collector window or baseline missing or invalid');
+  }
+  // Recency alone can accept a receipt from before publication of the same
+  // source bytes. Let the caller require the existing collector's next tick;
+  // this boundary never advances the receipt or changes its counting window.
+  if (observedAfter !== null) {
+    try {
+      const boundary = instant(observedAfter);
+      if (!packet || instant(packet.checked_at) <= boundary) {
+        fail('collector receipt is not after the required observation boundary');
+      }
+    } catch {
+      fail('required observation boundary invalid or collector timestamp unavailable');
+    }
   }
   const counts = new Map();
   // Discover all segments, including archives when the active filename is absent.
@@ -179,6 +193,8 @@ function formatReport(report) {
   const count = report.segments.length ? report.branch_refusals : 'unmeasured: no ledger';
   return [`provision: baseline = ${report.continuous_since || 'UNKNOWN'}`,
     `provision: checked_at = ${report.checked_at || 'UNKNOWN'}`,
+    ...(report.observed_after !== null
+      ? [`provision: observed_after = ${report.observed_after}`] : []),
     `provision: counted_through = ${report.counted_through}`,
     `provision: coverage = ${report.coverage}`,
     `provision: segments = ${report.segments.length}; malformed_lines=${report.malformed_lines}`,
@@ -190,8 +206,11 @@ function formatReport(report) {
 }
 
 function main(args) {
-  if (args.length !== 2) throw new Error('usage: node scripts/audit_provision_ledger.js RUNTIME SOURCE_DIRECTORY');
-  const report = auditProvisionLedger(args[0], args[1]);
+  if (args.length !== 2 && !(args.length === 4 && args[2] === '--observed-after')) {
+    throw new Error('usage: node scripts/audit_provision_ledger.js RUNTIME SOURCE_DIRECTORY [--observed-after TIMESTAMP]');
+  }
+  const report = auditProvisionLedger(args[0], args[1],
+    { observedAfter: args.length === 4 ? args[3] : null });
   console.log(formatReport(report));
   console.log(JSON.stringify(report, null, 2));
   return report.evidence_ready ? 0 : 1;

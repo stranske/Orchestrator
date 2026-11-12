@@ -191,6 +191,76 @@ test('a stale or future receipt cannot qualify and timestamps retain microsecond
   assert.throws(() => instant('2026-02-30T12:00:00Z'), /invalid calendar/);
 });
 
+test('post-deployment auditing requires a strictly later collector observation', (t) => {
+  const f = fixture(t, { '': '' });
+  const audit = (observedAfter) => auditProvisionLedger(f.root, source,
+    { now, observedAfter, writerPath: path.join(f.root, 'provision-events.ndjson') });
+  assert.equal(audit('2026-11-11T12:00:00.123455Z').evidence_ready, true);
+  for (const boundary of [now, '2026-11-11T13:00:00.123456+01:00',
+    '2026-11-11T12:00:00.123457Z']) {
+    const report = audit(boundary);
+    assert.equal(report.evidence_ready, false);
+    assert.equal(report.coverage, 'UNKNOWN');
+    assert.equal(report.observed_after, boundary);
+    assert.match(report.continuity_failures.join('\n'), /not after the required observation boundary/);
+    assert.match(formatReport(report), /observed_after = /);
+  }
+  for (const boundary of ['', 'bad', '2026-11-11T12:00:00', '2026-02-30T12:00:00Z']) {
+    const report = audit(boundary);
+    assert.equal(report.evidence_ready, false);
+    assert.match(report.continuity_failures.join('\n'), /observation boundary invalid/);
+  }
+});
+
+for (const refusals of [false, true]) {
+  test(`CLI observation boundary waits for the collector and retains ${refusals ? 'legitimate refusals' : 'the zero count'}`, (t) => {
+    const end = new Date().toISOString();
+    const previousHour = new Date(Date.parse(end) - 3600000).toISOString();
+    const boundary = new Date(Date.parse(previousHour) + 1).toISOString();
+    const rows = refusals ? ['closer', 'opener'].map((lane) => event({ ts: previousHour,
+      lane, cause: lane === 'closer' ? 'branch-held' : 'branch-exists' })) : [];
+    const bytes = ndjson(rows);
+    const f = fixture(t, { '': bytes, '.old': bytes }, previousHour);
+    const inputs = [f.receipt, path.join(f.root, 'provision-events.ndjson'),
+      path.join(f.root, 'provision-events.ndjson.old')];
+    const segments = inputs.slice(1).map((file) => fs.readFileSync(file));
+    const env = { ...process.env, ORCH_LOCAL_RUNTIME: f.root,
+      ORCH_PROVISION_EVENTS_PATH: inputs[1] };
+    const run = () => {
+      const receipt = fs.readFileSync(f.receipt);
+      const cli = execute(process.execPath,
+        [script, f.root, source, '--observed-after', boundary], { cwd: f.root, env });
+      assert.equal(cli.error_code, null);
+      assert.equal(cli.signal, null);
+      assert.deepEqual(fs.readFileSync(f.receipt), receipt);
+      for (const [index, file] of inputs.slice(1).entries()) {
+        assert.deepEqual(fs.readFileSync(file), segments[index]);
+      }
+      const output = cli.stdout.toString();
+      const report = JSON.parse(output.slice(output.indexOf('{')));
+      assert.equal(report.branch_refusals, refusals ? 4 : 0);
+      assert.equal(report.segments.length, 2);
+      assert.equal(report.observed_after, boundary);
+      assert.equal(report.deployment_acceptance_verified, false);
+      return { cli, report, output };
+    };
+    const before = run();
+    assert.equal(before.cli.exit_code, 1);
+    assert.equal(before.report.coverage, 'UNKNOWN');
+    assert.equal(before.report.evidence_ready, false);
+    assert.match(before.output, /not after the required observation boundary/);
+    // Only the real collector advances its receipt; the auditor never does.
+    f.observe(end);
+    const after = run();
+    assert.equal(after.cli.exit_code, refusals ? 1 : 0);
+    assert.equal(after.report.coverage, 'continuous');
+    assert.deepEqual(after.report.continuity_failures, []);
+    assert.equal(after.report.evidence_ready, !refusals);
+    assert.equal(instant(after.report.checked_at), instant(end));
+    if (refusals) assert.match(after.output, /ledger evidence = unmet acceptance/);
+  });
+}
+
 test('reads all inputs without writing and CLI status distinguishes unmet evidence', (t) => {
   const end = new Date().toISOString();
   const f = fixture(t, { '': '', '.old': '' }, end);
