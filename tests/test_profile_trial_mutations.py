@@ -6,9 +6,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from scripts import verify_profile_trial_mutations as replay
 
 import model_profile_trial
-from scripts import verify_profile_trial_mutations as replay
 
 
 def test_mutations_require_unique_current_source_anchors():
