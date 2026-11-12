@@ -15,6 +15,7 @@ next mistake, keep the old debt visible.
 from __future__ import annotations
 
 import inspect
+import json
 import pathlib
 import sys
 import tempfile
@@ -1027,6 +1028,74 @@ def test_declared_consumer_check_cannot_hide_a_broken_gate_behind_an_overlay():
                 assert f"KNOWN_GATES:{cid}" in str(exc), str(exc)
             else:
                 raise AssertionError(f"the consumer check accepted a broken gate: {broken}")
+
+
+def test_consumer_declaration_sync_drains_persisted_prose_without_action_credit():
+    """#599: the writing loader must persist the same consumer drain the report previews."""
+    declarations = capabilities.KNOWN_GATES | capabilities.KNOWN_DECLARATIONS
+    ledger = {}
+    for cid in declarations:
+        row = capabilities._blank_capability(cid)
+        row.update(status="active", downstream_consumer="the run consuming this output")
+        row["event_history"] = [
+            {"type": "migrated", "timestamp": 1},
+            {"type": "invocation", "timestamp": 2},
+        ]
+        ledger[cid] = row
+    reviewed_absences = sorted(
+        cid for cid, declaration in declarations.items() if declaration.get("consumer_missing") is True
+    )
+    ctx = {"acted_on": dict.fromkeys(ledger, 0), "now": admission._now()}
+    rows = [
+        {"capability_id": cid, "blocking": [], "deferred": [], "enforced": False}
+        for cid in sorted(ledger)
+    ]
+    with tempfile.TemporaryDirectory(prefix="consumer-sync-") as scratch:
+        path = pathlib.Path(scratch) / "capabilities.json"
+        path.write_text(
+            json.dumps({"schema_version": capabilities.SCHEMA_VERSION, "capabilities": ledger})
+        )
+        original = path.read_bytes()
+        before = admission.consumer_report(capabilities.load(path, create=False), ctx, rows)
+        assert len(before["by_class"]["prose"]) == len(ledger), before
+
+        preview = admission.consumer_report(capabilities.load_declared(path), ctx, rows)
+        assert path.read_bytes() == original, "preview must not count as a persisted sync"
+        capabilities.load(path)
+        persisted = capabilities.load(path, create=False)
+        after = admission.consumer_report(persisted, ctx, rows)
+        assert after == preview
+        assert path.read_bytes() != original
+        assert set(persisted) == set(ledger)
+        assert after["by_class"]["prose"] == []
+        assert after["by_class"]["unresolved"] == []
+        assert after["by_class"]["undeclared"] == []
+        assert after["drainable"] == reviewed_absences
+        assert after["by_class"]["acting"] == []
+        assert after["by_class"]["not_acting"], "action debt must remain separate from declarations"
+        for cid, row in persisted.items():
+            assert row["status"] == ledger[cid]["status"]
+            assert row["outcome_links"] == ledger[cid]["outcome_links"]
+            assert [e for e in row["event_history"] if e["type"] != "declaration_reconciled"] == (
+                ledger[cid]["event_history"]
+            )
+
+    rendered = admission.format_report(
+        {
+            "total": len(rows),
+            "admitted": 0,
+            "enforced_total": 0,
+            "enforced_failing": [],
+            "legacy_debt": [],
+            "rows": [],
+            "consumers": after,
+            "commitments": {"clean": True, "dangling_citations": [], "overdue_without_record": []},
+        }
+    )
+    assert (
+        f"prose 0, missing {len(reviewed_absences)}, undeclared 0 "
+        f"— DRAINABLE {len(reviewed_absences)}"
+    ) in rendered, rendered
 
 
 def test_external_caller_resolves_deployed_local_loop_from_worktree_and_mirror(tmp_path):
