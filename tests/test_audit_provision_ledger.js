@@ -489,3 +489,45 @@ for (const location of ['configured runtime', 'home runtime']) {
     assert.match(result.stdout.toString(), /"evidence_ready": false/);
   });
 }
+
+for (const observedWriter of [false, true]) {
+  test(`explicit writer path overrides the runtime directory when ${observedWriter ? 'observed' : 'unobserved'}`, (t) => {
+    const end = new Date().toISOString();
+    const f = fixture(t, { '': '', '.old': '' }, end);
+    const elsewhere = path.join(f.root, 'other-runtime');
+    fs.mkdirSync(elsewhere);
+    const otherWriter = path.join(elsewhere, 'provision-events.ndjson');
+    fs.writeFileSync(otherWriter, ndjson(['closer', 'opener'].map((lane) =>
+      event({ ts: end, lane }))));
+    const env = { ...process.env,
+      ORCH_LOCAL_RUNTIME: observedWriter ? elsewhere : f.root,
+      ORCH_PROVISION_EVENTS_PATH: observedWriter
+        ? path.join(f.root, 'provision-events.ndjson') : otherWriter,
+      PYTHONPATH: source, PYTHONDONTWRITEBYTECODE: '1' };
+    // Check the actual writer's choice too: an internally consistent receipt
+    // for another directory cannot stand in for the effective writer ledger.
+    const writer = execute(process.env.PYTHON || 'python3', ['-c',
+      'import provision; print(provision.PROVISION_EVENTS_PATH)'], { cwd: f.root, env });
+    assert.equal(writer.error_code, null);
+    assert.equal(writer.signal, null);
+    assert.equal(writer.exit_code, 0, writer.stderr.toString());
+    assert.equal(writer.stdout.toString().trim(), env.ORCH_PROVISION_EVENTS_PATH);
+    const inputs = [f.receipt, path.join(f.root, 'provision-events.ndjson'),
+      path.join(f.root, 'provision-events.ndjson.old'), otherWriter];
+    const before = inputs.map((file) => fs.readFileSync(file));
+    const result = execute(process.execPath, [script, f.root, source], { cwd: f.root, env });
+    assert.equal(result.error_code, null);
+    assert.equal(result.signal, null);
+    assert.equal(result.exit_code, observedWriter ? 0 : 1, result.stderr.toString());
+    const output = result.stdout.toString();
+    const report = JSON.parse(output.slice(output.indexOf('{')));
+    assert.equal(report.evidence_ready, observedWriter);
+    assert.equal(report.coverage, observedWriter ? 'continuous' : 'UNKNOWN');
+    assert.equal(report.deployment_acceptance_verified, false);
+    if (observedWriter) assert.deepEqual(report.continuity_failures, []);
+    else assert.match(report.continuity_failures.join('\n'), /writer ledger is not included/);
+    for (const [index, file] of inputs.entries()) {
+      assert.deepEqual(fs.readFileSync(file), before[index], file);
+    }
+  });
+}

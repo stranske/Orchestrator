@@ -1,0 +1,4 @@
+node --check tests/test_audit_provision_ledger.js
+exit=0
+git diff --check
+exit=0
