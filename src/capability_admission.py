@@ -1692,13 +1692,22 @@ def _selftest() -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--selftest", action="store_true")
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--selftest", action="store_true")
     ap.add_argument("--json", action="store_true")
-    ap.add_argument("--commitments", action="store_true", help="only the dated-promise check")
-    ap.add_argument(
+    mode.add_argument("--commitments", action="store_true", help="only the dated-promise check")
+    mode.add_argument(
         "--preflight",
         metavar="JSON",
         help="answer admission for a proposed capability spec (JSON string or @file)",
+    )
+    mode.add_argument(
+        "--check-consumer-sync",
+        action="store_true",
+        help=(
+            "exit nonzero unless a nonempty live ledger has persisted this tree's consumer "
+            "declarations and has no prose, missing or undeclared consumers; acting is separate"
+        ),
     )
     args = ap.parse_args()
     if args.selftest:
@@ -1730,6 +1739,14 @@ def main() -> int:
         return 0 if com["clean"] else 1
     rep = report()
     print(json.dumps(rep, indent=2, sort_keys=True) if args.json else format_report(rep), end="")
+    if args.check_consumer_sync:
+        # The ordinary report previews reconciliation and exits zero even on an empty runner.
+        # This opt-in deployment check must observe persisted, nonempty state. DRAINABLE is
+        # declaration debt (including reviewed absences), never trailing-window action debt.
+        sync = rep["consumer_sync"]
+        return int(
+            not sync["live_rows"] or bool(sync["pending"]) or bool(rep["consumers"]["drainable"])
+        )
     return 0
 
 

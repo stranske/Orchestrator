@@ -196,3 +196,39 @@ Current-head CI and post-push review are recorded against the final pushed SHA
 in PR #1354; no required-check names were exposed by `gh pr checks --required`
 at preflight (it printed `no required checks reported`). All CI checks will still
 be inspected, rather than treating that absence as success.
+
+## 2026-11-12 consumer-sync exit check (uncommitted)
+
+The prepared code adds `python3 src/capability_admission.py --check-consumer-sync`.
+It prints the existing report and exits 1 unless live rows exist, persisted
+consumer declarations match this tree, and declaration DRAINABLE is zero.
+Reviewed absences still count as missing and drainable debt. Trailing-window
+action debt remains separate and does not fail this check. `--json` retains the
+same exit behavior; other execution modes cannot bypass the check by combination.
+The default report remains informational.
+
+The existing persisted-sync regression now exercises the CLI against disposable
+ledgers: absent, stale, synced with action debt, prose, unresolved, undeclared,
+reviewed absent, and retired-only. It checks JSON output and unchanged ledger
+bytes. Six focused regression functions passed by direct Python invocation,
+including this extended regression and the named declaration check. A deliberate
+prose mutation failed the named check; restoration passed. These are not pytest
+results. Syntax parsing and `git diff --check` passed.
+
+An actual CLI invocation against an explicitly empty disposable runtime exited 1
+and printed `CONSUMER SYNC: unverified (no live ledger rows on this machine)`.
+That is evidence for rejecting an empty runner, not live-ledger acceptance.
+The default live command failed because this runner cannot access its runtime
+directory. The owner's post-sync acceptance remains unchecked.
+
+Both required Black commands and focused pytest could not run: executables and
+modules are absent. Installing Black/pytest into `/tmp` failed because PyPI DNS
+could not resolve; the local package cache does not contain them. The Python
+changes remain uncommitted under the mandatory pre-commit Black gate. Follow-up
+must run formatting and focused pytest before committing, then run the new check
+against the actual live ledger after the owner's normal deployment/sync.
+
+PR #1354 was verified open with `draft=false`. Publishing the blocker comment
+and adding `needs-human` were rejected by the GitHub connector because the
+operations require approval while this run's approval policy is `never`.
+No hosted task metadata was changed.

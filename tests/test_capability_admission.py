@@ -15,6 +15,7 @@ next mistake, keep the old debt visible.
 from __future__ import annotations
 
 import inspect
+import io
 import json
 import pathlib
 import sys
@@ -1130,6 +1131,102 @@ def test_consumer_declaration_sync_drains_persisted_prose_without_action_credit(
         assert empty["consumer_sync"] == {"live_rows": 0, "pending": {}}
         assert "CONSUMER SYNC: unverified (no live ledger rows" in admission.format_report(empty)
         assert not path.exists()
+
+    _assert_consumer_sync_cli_requires_persisted_live_declarations()
+
+
+def _assert_consumer_sync_cli_requires_persisted_live_declarations():
+    """The deployment check cannot pass on a preview, empty runner or declaration debt."""
+    cid = "offload"
+    ctx = {"audit_rows": {}, "fixtures": set(), "acted_on": {cid: 0}, "now": admission._now()}
+
+    def run_cli(*args):
+        with (
+            patch.object(sys, "argv", ["capability_admission.py", *args]),
+            patch.object(sys, "stdout", io.StringIO()) as output,
+        ):
+            code = admission.main()
+            return code, output.getvalue()
+
+    with tempfile.TemporaryDirectory(prefix="consumer-sync-cli-") as scratch:
+        path = pathlib.Path(scratch) / "capabilities.json"
+        with (
+            patch.object(capabilities, "REG", path),
+            patch.dict(capabilities.KNOWN_GATES, {}, clear=True),
+            patch.dict(
+                capabilities.KNOWN_DECLARATIONS,
+                {cid: capabilities.KNOWN_DECLARATIONS[cid]},
+                clear=True,
+            ),
+            patch.object(admission, "_capability_heartbeat"),
+            patch.object(admission, "_context", return_value=ctx),
+            patch.object(
+                admission,
+                "commitments",
+                return_value={"clean": True, "dangling_citations": [], "overdue_without_record": []},
+            ),
+        ):
+            assert run_cli()[0] == 0, "the ordinary report remains informational"
+            code, text = run_cli("--check-consumer-sync")
+            assert code == 1 and "unverified (no live ledger rows" in text
+            assert not path.exists(), "checking an absent ledger must not seed it"
+
+            row = capabilities._blank_capability(cid)
+            row.update(status="active", downstream_consumer="the run consuming offload output")
+            row["event_history"] = [
+                {"type": "migrated", "timestamp": 1},
+                {"type": "invocation", "timestamp": 2},
+            ]
+
+            def persist():
+                path.write_text(
+                    json.dumps(
+                        {"schema_version": capabilities.SCHEMA_VERSION, "capabilities": {cid: row}}
+                    )
+                )
+                return path.read_bytes()
+
+            original = persist()
+            code, text = run_cli("--check-consumer-sync")
+            assert code == 1 and "1 of 1 live rows pending" in text
+            assert "prose 0, missing 0, undeclared 0 — DRAINABLE 0" in text
+            assert path.read_bytes() == original, "a reconciled preview is not persisted sync"
+
+            capabilities.load(path)
+            synced_bytes = path.read_bytes()
+            code, text = run_cli("--check-consumer-sync")
+            assert code == 0 and "persisted consumer declarations match this tree" in text
+            assert "not acting (trailing window) 1" in text, "action debt stays separate"
+            code, text = run_cli("--check-consumer-sync", "--json")
+            assert code == 0
+            rep = json.loads(text)
+            assert rep["consumer_sync"] == {"live_rows": 1, "pending": {}}
+            assert rep["consumers"]["drainable"] == []
+            assert rep["consumers"]["by_class"]["not_acting"] == [cid]
+            assert path.read_bytes() == synced_bytes
+
+            # Persisted rows outside the declaration tables must still satisfy the consumer
+            # requirement. No pending sync alone does not establish declaration completeness.
+            with patch.dict(capabilities.KNOWN_DECLARATIONS, {}, clear=True):
+                for declaration in (
+                    {"downstream_consumer": "No rail applies this output."},
+                    {"downstream_consumer": "absent_module.py:consume"},
+                    {"downstream_consumer": None},
+                    {"downstream_consumer": None, "consumer_missing": True},
+                ):
+                    row.update(declaration)
+                    original = persist()
+                    code, text = run_cli("--check-consumer-sync", "--json")
+                    rep = json.loads(text)
+                    assert code == 1 and rep["consumer_sync"]["pending"] == {}
+                    assert rep["consumers"]["drainable"] == [cid]
+                    assert path.read_bytes() == original
+
+                row["status"] = "retired"
+                original = persist()
+                code, text = run_cli("--check-consumer-sync")
+                assert code == 1 and "unverified (no live ledger rows" in text
+                assert path.read_bytes() == original
 
 
 def test_external_caller_resolves_deployed_local_loop_from_worktree_and_mirror(tmp_path):
