@@ -1,73 +1,79 @@
 {
   "capacity": {
     "claude": {
-      "observed_at": 1794552228,
+      "observed_at": 1794577339,
       "pacing": {
-        "allowed_fraction": 0.6158909832233238,
+        "allowed_fraction": 0.6511808685124827,
         "burn_per_day": 0.0,
         "burn_rate_per_day": 0.0,
         "desktop_sample_ts": 1794522365.249,
         "effective_reserve": 0.15,
         "fyi": [],
         "measurement": "measured",
-        "period_end": 1794718740.0,
-        "period_start": 1794113940.0,
+        "period_end": 1794718800.0,
+        "period_start": 1794114000.0,
         "projected_fraction": 1.0,
-        "reason": "claude: \u0169=1.00 vs 1-r_eff=0.85; span_h=6.000; shed; w_p_prev\u2192w_p=0.000\u21920.000; clears in reset at 1794718740 or banked reset event or on reset",
+        "reason": "claude: \u0169=1.00 vs 1-r_eff=0.85; span_h=6.000; shed; w_p_prev\u2192w_p=0.000\u21920.000; clears in reset at 1794718800 or banked reset event or on reset",
         "reset_expiries": [],
         "resets_available": 0,
         "routing_weight": 0.0,
         "source": "claude-cli:/usage",
         "stale": false,
         "state": "shed",
-        "ts": 1794551801.0,
+        "ts": 1794576814.0,
         "used_fraction": 1.0
       },
       "state": "shed",
       "window": "5h+weekly"
     },
     "codex": {
-      "observed_at": 1794552228,
+      "observed_at": 1794577339,
       "pacing": {
-        "allowed_fraction": null,
+        "allowed_fraction": 0.9533901129714238,
         "burn_per_day": null,
         "burn_rate_per_day": null,
-        "effective_reserve": 0.15,
-        "fyi": [],
-        "measurement": "unknown",
+        "effective_reserve": 0.0,
+        "fyi": [
+          "anchor ignored: age=64919s > bound=28800s"
+        ],
+        "measurement": "measured",
         "period_end": 1794605524.0,
         "period_start": 1794000724.0,
         "projected_fraction": null,
-        "reason": "pool codex: usage stale; shed; clears on fresh usage or reset at 1794605524",
-        "reset_expiries": [],
-        "resets_available": 0,
+        "reason": "codex: u=1.00 vs g(e)+\u03b4=1.05; \u0169=unmeasured; span_h=0.034; shed; w_p_prev\u2192w_p=0.000\u21920.000; clears in reset at 1794605524 or banked reset event or on reset",
+        "reset_expiries": [
+          1796068253,
+          1796163931,
+          1797114049
+        ],
+        "resets_available": 3,
         "routing_weight": 0.0,
-        "source": "codex-app-server:account/rateLimits/read",
-        "stale": true,
+        "source": "codex-rollout:rate_limits.primary",
+        "stale": false,
         "state": "shed",
-        "ts": 1794545998.0,
+        "ts": 1794576854.96,
         "used_fraction": 1.0
       },
       "state": "shed",
       "window": "5h"
     },
     "cursor": {
-      "observed_at": 1794552228,
+      "observed_at": 1794577339,
       "state": "shed",
       "window": "monthly"
     },
     "gemini": {
-      "observed_at": 1794552228,
+      "observed_at": 1794577339,
       "state": "warn",
       "window": "5h+weekly"
     },
     "muse": {
-      "observed_at": 1794552228,
+      "observed_at": 1794577339,
       "state": "shed",
       "window": "5h+weekly"
     },
     "vibe": {
-      "observed_at": 1794552228,
+      "observed_at": 1794577339,
       "state": "shed",
       "window": "subscription"
     }
@@ -89,9 +95,9 @@
       "cursor",
       "vibe"
     ],
-    "held_age_seconds": 5320,
+    "held_age_seconds": 30431,
     "held_because": [
-      "codex: agents[codex].pacing: stale=true; pacing stale (age 1.7h; threshold 0.5h)",
+      "codex: agents[codex].pacing: burn_effective_per_hour/burn_rate_per_day/burn_per_day unmeasured or invalid",
       "cursor: pools[cursor-subscription].pacing missing: excluded: no pacing source (capacity model metered)",
       "vibe: pools[vibe-subscription].pacing missing: excluded: no pacing source (capacity model flat)"
     ],
@@ -220,7 +226,7 @@
     "rate_source": "env",
     "week_start": 1794441600
   },
-  "generated_at": "2026-11-13T06:42:40Z",
+  "generated_at": "2026-11-13T13:42:10Z",
   "min_observations": 20,
   "reserve": {
     "implement": [
