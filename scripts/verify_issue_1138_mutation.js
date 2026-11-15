@@ -29,17 +29,20 @@ function runPytest(root) {
   });
 }
 
-function requireVerdict(result, failed) {
+function requireVerdict(result, failed, {
+  testNode = node,
+  failurePattern = /AssertionError: assert \{['"]broken['"]: True\} == \{\}/,
+} = {}) {
   const output = (result.stdout || '') + (result.stderr || '');
   assert.ok(!result.error, `${result.error?.message}\n${output}`);
   assert.equal(result.status, failed ? 1 : 0, output);
   const rows = output.split('\n').filter((line) => line.startsWith(`${testFile}::`));
   assert.equal(rows.length, 1, output);
-  assert.ok(rows[0].startsWith(`${node} ${failed ? 'FAILED' : 'PASSED'} `), output);
+  assert.ok(rows[0].startsWith(`${testNode} ${failed ? 'FAILED' : 'PASSED'} `), output);
   assert.match(output, failed ? /\b1 failed\b/ : /\b1 passed\b/);
   assert.doesNotMatch(output, /\b\d+ (?:errors?|skipped|xfailed|xpassed|deselected)\b/i);
   if (failed) {
-    assert.match(output, /AssertionError: assert \{['"]broken['"]: True\} == \{\}/);
+    assert.match(output, failurePattern);
   }
   return output;
 }
