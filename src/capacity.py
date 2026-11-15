@@ -174,6 +174,9 @@ def _env_float_or_none(name: str):
 #              drains a weekly-only bucket, so an Argon 429 sheds the whole seat for up to 7 days
 #              while the Flash rungs' 5h bucket may be untouched. PROPOSAL (not applied): shed per
 #              bucket (argon vs flash) so cheap/mid stay routable through an Argon weekly lockout.
+#              CORRECTED 2026-11-15 (#1387): agy `/usage` shows ONE "Gemini Models" quota group
+#              (one weekly + one 5h bucket) for Carbon, Argon, Hydrogen and Flash, so a gemini
+#              quota incident sheds the whole seat (rate_incidents.GEMINI_SEPARATE_QUOTA_FAMILIES).
 #              AI credits remain overage-only (Never/Always setting). Paid tiers are now named
 #              Pro $19.99 / Ultra 5x $99.99 / Ultra 20x $199.99 (same multiples, cosmetic).
 #              [antigravity.google/docs/plans; 429-shed authoritative]
@@ -526,6 +529,19 @@ def shed_marker(
             found[key] = str(payload[key])
     # Only a recognised scope narrows a shed; anything else stays a whole-seat shed.
     found["tier_scope"] = payload.get("tier_scope") if payload.get("tier_scope") == "full" else None
+    if found["tier_scope"] and agent == "gemini":
+        # A stored scope is honoured only while the writer's policy would still produce it, so a
+        # marker written under a retired premise (Argon and Flash on separate quotas, before
+        # #1387) sheds the whole seat once the policy changes, instead of capping at mid until
+        # it expires. If the policy cannot be read, the stored scope stands.
+        try:
+            import rate_incidents
+
+            if rate_incidents.tier_scope_for(agent, found.get("model")) is None:
+                found["tier_scope"] = None
+                found["why"] = "stored tier scope no longer matches the quota policy"
+        except Exception:
+            pass
     found["reset_at"] = _finite_number(payload.get("reset_at"))
     found["created_at"] = _finite_number(payload.get("created_at"))
     expires_at = _finite_number(payload.get("expires_at"))

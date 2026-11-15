@@ -701,9 +701,17 @@ def _cooldown_seconds(category: str) -> int | None:
         return DEFAULT_COOLDOWN_S
 
 
-# Gemini's tiers draw two separate provider quotas: `full` runs the Argon family, cheap/mid run
-# Flash (adapters.MODEL_TIERS). An exhausted Argon quota must not stand Flash down with it: on
-# 2026-11-07 one Argon quota incident shed all of gemini for a week while Flash still answered.
+# All Gemini models draw ONE provider quota (checked 2026-11-15T22:44Z, agy 1.5.9,
+# `agy -p "/usage" --output-format json`): group "Gemini Models" lists Gemini 4 Carbon, Argon,
+# Hydrogen, the Orchestrator variants and Gemini 3.8 Flash under one `gemini-weekly` and one
+# `gemini-5h` bucket; the only other group is "Claude and GPT models". So a gemini quota incident
+# sheds the whole seat: cheap/mid dispatches would go into the same exhausted pool and fail
+# (stranske/Orchestrator#1387). The earlier premise, that Argon and Flash were separate quotas,
+# came from 2026-11-07, when one Argon incident shed gemini for a week while Flash still answered.
+# Model families that DO have their own quota group, as `/usage` reports it. A quota incident on
+# one of them sheds only gemini's `full` tier. Empty while the pool is shared: a future split is
+# this one edit, and the tier-scope machinery in ensure_shed/capacity stays in place for it.
+GEMINI_SEPARATE_QUOTA_FAMILIES: tuple[str, ...] = ()
 _INIT_MODEL = re.compile(r'"init"\s*:\s*\{[^{}]*?"model"\s*:\s*"([A-Za-z0-9._:-]+)"')
 
 
@@ -739,9 +747,29 @@ def recorded_run_model(agent: str, run_id: str | None) -> str | None:
     return model.split(":", 1)[-1] or None
 
 
+_MODEL_TOKEN = re.compile(r"[^a-z0-9]+")
+
+
+def _model_tokens(text: str) -> set[str]:
+    return {token for token in _MODEL_TOKEN.split(text.lower()) if token}
+
+
 def tier_scope_for(agent: str, model: str | None) -> str | None:
-    """`full` when only gemini's top tier (the Argon family) is exhausted; None sheds the whole seat."""
-    return "full" if agent == "gemini" and model and "argon" in model.lower() else None
+    """`full` only when the failed gemini model's family has its own quota group
+    (GEMINI_SEPARATE_QUOTA_FAMILIES); otherwise None, which sheds the whole seat.
+
+    One policy for writing a marker and for honouring one already on disk (capacity.shed_marker).
+    A family matches on whole name tokens, case-insensitively ("Argon" or "gemini 4 argon" match
+    `gemini-4-argon-high`); a blank entry matches nothing, so a typo cannot scope every model.
+    """
+    if agent != "gemini" or not model:
+        return None
+    tokens = _model_tokens(model)
+    for family in GEMINI_SEPARATE_QUOTA_FAMILIES:
+        wanted = _model_tokens(family)
+        if wanted and wanted <= tokens:
+            return "full"
+    return None
 
 
 def ensure_shed(
