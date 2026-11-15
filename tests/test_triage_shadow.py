@@ -658,6 +658,44 @@ def test_linker_rule_pick_drain_deliberate_break(brain, monkeypatch):
     assert calls == [("stranske/Orchestrator", 77)]
 
 
+def test_switch_review_format_report_carries_rule_unresolved_and_drainable(brain, monkeypatch):
+    """switch_review --text-out must show rule-arm backlog via triage_shadow.summary_line()."""
+    import strategy_experiment
+    import switch_review
+
+    triage_shadow.corpus_path().parent.mkdir(parents=True, exist_ok=True)
+    triage_shadow.corpus_path().write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "ts": 100_000_000_000,
+                "triage_valid": True,
+                "live_proposal": True,
+                "rule_pick": "stranske/Orchestrator#1",
+                "triage_top_three": [],
+            }
+        )
+        + "\n"
+    )
+    record_pr_run("rule-shadow-worker", 77, ts=102)
+    receipt = brain / "strategy-receipt.json"
+    receipt.write_text(json.dumps({"status": "incomplete"}))
+    monkeypatch.setattr(strategy_experiment, "strategy_result_path", lambda: receipt)
+    rendered = switch_review.format_report(
+        {
+            "review_days": 7,
+            "raise_count": 0,
+            "held_off": [],
+            "on_but_idle": [],
+            "unconditioned": [],
+            "mirror_drift": {"status": "ok"},
+        }
+    )
+    triage_lines = [line for line in rendered.splitlines() if line.startswith("triage shadow:")]
+    assert len(triage_lines) == 1, rendered
+    assert "rule pick n/a (0 judged) [0 no delivery, 1 unresolved, drainable 1]" in triage_lines[0]
+
+
 def test_rule_picks_drainable_next_call_counts_unresolved_rule_picks(brain):
     triage_shadow.corpus_path().parent.mkdir(parents=True, exist_ok=True)
     triage_shadow.corpus_path().write_text(
