@@ -6,7 +6,7 @@ import execution_profiles as profiles
 @pytest.mark.parametrize("effort", ["low", "high"])
 def test_historical_flash_profiles_remain_addressable(effort):
     old = f"gemini-3.7-flash-{effort}"
-    new = f"gemini-3.8-flash-{effort}"
+    new = f"gemini-4-hydrogen-{effort}"  # 3.7 -> 3.8 Flash -> 4 Hydrogen (2026-11-15)
     assert profiles.get_profile(old)["requested_model"] == old
     assert profiles.resolve_production_profile_id(old) == new
     automatic = {p["profile_id"] for p in profiles.profiles_for_agent("gemini")}

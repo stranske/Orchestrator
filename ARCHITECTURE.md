@@ -332,10 +332,12 @@ bounded offload or delegation chooses that exact profile; it does not create a n
 change the feedback loop. Operator `ORCH_CODEX_MODEL_*` pins and `ORCH_CODEX_MAX_TIER` ceilings
 continue through the tier adapter for automatic routes; the explicit profile stays exact.
 Gemini catalog renames retain the pinned effort when the newest available family offers it.
-Gemini tiers follow the other families' shape (2026-10-15): cheap/mid run 3.8 Flash low/high and only
+Gemini tiers follow the other families' shape (2026-10-15): cheap/mid run 4 Hydrogen low/high (3.8 Flash
+until the owner's 2026-11-15 decision; the Flash profiles follow `PROFILE_RETIREMENTS` to Hydrogen) and only
 `full` runs the frontier model, Argon High, which replaced the Pro slot (agy no longer serves Pro 3.1;
 the retired 3.1 profile follows `PROFILE_RETIREMENTS` to Argon High). Argon low/medium stay registered
-and explicitly requestable, because Argon has its own weekly-only quota and bills ~2.7x Flash per token.
+and explicitly requestable. Argon bills ~1.3x Hydrogen per token (~2.7x after 2026-11-30), and since agy
+1.5.9 every Gemini model draws one shared quota group (Orchestrator#1387), so routine tiers stay off it.
 
 **A live full-tier Gemini split, Argon vs Carbon (owner, 2026-11-11).** `gemini_full_split.py` is
 data inside the dispatch rail, not a new stage or role: `dispatcher.plan_dispatch` asks it for an arm

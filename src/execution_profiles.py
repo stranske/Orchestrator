@@ -263,6 +263,27 @@ PROFILE_REGISTRY: dict[str, dict[str, Any]] = {
             pool="gemini-prepaid",
             adapter_version="agy-cli-profile-v1",
         ),
+        # 2026-11-15 (owner decision): Gemini 4 Hydrogen replaces 3.8 Flash for cheap/mid after a
+        # fixture trial (judge replay MAE 1.182 vs 1.705; testgen 28/28 vs 17/28). Flash stays
+        # registered and addressable; PROFILE_RETIREMENTS sends automatic selection to Hydrogen.
+        _profile(
+            "gemini-4-hydrogen-high",
+            "gemini-4-hydrogen-high",
+            "high",
+            agent="gemini",
+            provider="google",
+            pool="gemini-prepaid",
+            adapter_version="agy-cli-profile-v1",
+        ),
+        _profile(
+            "gemini-4-hydrogen-low",
+            "gemini-4-hydrogen-low",
+            "low",
+            agent="gemini",
+            provider="google",
+            pool="gemini-prepaid",
+            adapter_version="agy-cli-profile-v1",
+        ),
         _profile(
             "gemini-3.1-pro-high",
             "gemini-3.1-pro-high",
@@ -428,6 +449,8 @@ CREATE TABLE IF NOT EXISTS route_weights_v2 (
 PROFILE_RETIREMENTS: dict[str, str] = {
     "gemini-3.7-flash-high": "gemini-3.8-flash-high",
     "gemini-3.7-flash-low": "gemini-3.8-flash-low",
+    "gemini-3.8-flash-high": "gemini-4-hydrogen-high",
+    "gemini-3.8-flash-low": "gemini-4-hydrogen-low",
     "gemini-3.1-pro-high": "gemini-4-argon-high",
     "codex-5.6-sol-high": "codex-6.1-sol-high",
     "codex-5.6-sol-medium": "codex-6.1-sol-medium",
@@ -473,8 +496,8 @@ CLOSER_CANDIDATE_MODELS = (
     _closer_candidate("claude", "Claude Haiku", "claude-haiku-4-5"),
     _closer_candidate("claude", "Claude Sonnet", "claude-sonnet-5-5"),
     _closer_candidate("claude", "Claude Opus", "claude-opus-5-5"),
-    _closer_candidate("gemini", "Gemini Flash low", "gemini-3.8-flash-low"),
-    _closer_candidate("gemini", "Gemini Flash high", "gemini-3.8-flash-high"),
+    _closer_candidate("gemini", "Gemini Hydrogen low", "gemini-4-hydrogen-low"),
+    _closer_candidate("gemini", "Gemini Hydrogen high", "gemini-4-hydrogen-high"),
     _closer_candidate("gemini", "Gemini Argon", "gemini-4-argon-high"),
     _closer_candidate("cursor", "Cursor Composer", "composer-2.5"),
     _closer_candidate("vibe", "Vibe Medium 3.5", "mistral-medium-3.5"),
@@ -584,14 +607,15 @@ def validate_profile(profile: dict[str, Any]) -> dict[str, Any]:
 
 def _selftest() -> None:
     for effort in ("low", "high"):
-        old = f"gemini-3.7-flash-{effort}"
-        current = f"gemini-3.8-flash-{effort}"
-        assert get_profile(old)["requested_model"] == old, "historical profiles stay immutable"
-        assert (
-            resolve_production_profile_id(old) == current
-        ), "historical Flash must resolve to Flash"
+        current = f"gemini-4-hydrogen-{effort}"
         routable = {p["profile_id"] for p in profiles_for_agent("gemini")}
-        assert current in routable and old not in routable, "current Flash must remain routable"
+        for old in (f"gemini-3.7-flash-{effort}", f"gemini-3.8-flash-{effort}"):
+            assert get_profile(old)["requested_model"] == old, "historical profiles stay immutable"
+            assert (
+                resolve_production_profile_id(old) == current
+            ), "historical Flash must resolve to Hydrogen"
+            assert old not in routable, "retired Flash must not be selected automatically"
+        assert current in routable, "current Hydrogen must remain routable"
     # Muse high/low share one existing subscription allowance pool.
     _mp = profiles_for_agent("muse", transport="offload")
     assert [p["profile_id"] for p in _mp] == ["muse-wonder-1.0", "muse-wonder-1.0-low"], _mp
