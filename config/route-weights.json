@@ -1,9 +1,9 @@
 {
   "capacity": {
     "claude": {
-      "observed_at": 1794726577,
+      "observed_at": 1794732081,
       "pacing": {
-        "allowed_fraction": 0.01092333524151848,
+        "allowed_fraction": 0.018658923314342265,
         "burn_per_day": 0.0,
         "burn_rate_per_day": 0.0,
         "desktop_sample_ts": 1794522365.249,
@@ -13,32 +13,32 @@
         "period_end": 1795323600.0,
         "period_start": 1794718800.0,
         "projected_fraction": 0.0,
-        "reason": "claude: u=0.00 vs g(e)+\u03b4=0.11; \u0169_eff=0.00; c=0.248; schedule decides state; span_h=1.488; ok; w_p_prev\u2192w_p=1.000\u21921.000; clears in fresh samples or schedule advancing or on reset",
+        "reason": "claude: u=0.00 vs g(e)+\u03b4=0.12; \u0169_eff=0.00; c=0.503; schedule decides state; span_h=3.017; ok; w_p_prev\u2192w_p=1.000\u21921.000; clears in fresh samples or schedule advancing or on reset",
         "reset_expiries": [],
         "resets_available": 0,
         "routing_weight": 1.0,
         "source": "claude-cli:/usage",
         "stale": false,
         "state": "ok",
-        "ts": 1794726059.0,
+        "ts": 1794731535.0,
         "used_fraction": 0.0
       },
       "state": "ok",
       "window": "5h+weekly"
     },
     "codex": {
-      "observed_at": 1794726577,
+      "observed_at": 1794732081,
       "pacing": {
-        "allowed_fraction": 0.19925144560004354,
-        "burn_per_day": 0.060770277031766254,
-        "burn_rate_per_day": 0.060770277031766254,
+        "allowed_fraction": 0.20835213745042444,
+        "burn_per_day": 0.04919149856687014,
+        "burn_rate_per_day": 0.04919149856687014,
         "effective_reserve": 0.0,
         "fyi": [],
         "measurement": "measured",
         "period_end": 1795210865.0,
         "period_start": 1794606065.0,
-        "projected_fraction": 0.350631980385702,
-        "reason": "codex: \u0169=0.35 vs 1-r_eff=1.00; span_h=6.000; ok; w_p_prev\u2192w_p=1.000\u21921.000; clears in ~0.0h at current burn or on reset",
+        "projected_fraction": 0.2825964128725128,
+        "reason": "codex: \u0169=0.28 vs 1-r_eff=1.00; span_h=6.000; ok; w_p_prev\u2192w_p=1.000\u21921.000; clears in ~0.0h at current burn or on reset",
         "reset_expiries": [
           1796068253,
           1796163931,
@@ -49,30 +49,30 @@
         "source": "codex-app-server:account/rateLimits/read",
         "stale": false,
         "state": "ok",
-        "ts": 1794726055.0,
+        "ts": 1794731530.0,
         "used_fraction": 0.01
       },
       "state": "ok",
       "window": "5h"
     },
     "cursor": {
-      "observed_at": 1794726577,
+      "observed_at": 1794732081,
       "state": "ok",
       "window": "monthly"
     },
     "gemini": {
-      "observed_at": 1794726577,
+      "observed_at": 1794732081,
       "state": "warn",
       "window": "5h+weekly"
     },
     "muse": {
-      "observed_at": 1794726577,
+      "observed_at": 1794732081,
       "state": "shed",
       "window": "5h+weekly"
     },
     "vibe": {
-      "observed_at": 1794656501,
-      "state": "shed",
+      "observed_at": 1794732081,
+      "state": "ok",
       "window": "subscription"
     }
   },
@@ -80,13 +80,13 @@
   "comparative": {
     "assignment": {
       "implement": {
-        "claude": 729.0744444444445
+        "claude": 721.1842328042328
       },
       "review": {
-        "codex": 939.6692592592592
+        "codex": 928.9897883597883
       },
       "testgen": {
-        "codex": 25.623703703703704
+        "codex": 25.33248677248677
       }
     },
     "excluded": [
@@ -110,9 +110,9 @@
           "review": 0.0
         },
         "codex": {
-          "implement": 0.000987247798432459,
-          "review": 0.00010042823323913532,
-          "testgen": 0.0007259552835731018
+          "implement": 0.0007985530763714873,
+          "review": 8.123317644769744e-05,
+          "testgen": 0.0005872019425375261
         },
         "cursor": {
           "implement": null,
@@ -128,14 +128,14 @@
       },
       "cost_source_by_agent": {
         "claude": {
-          "allowed_fraction": 0.01092333524151848,
+          "allowed_fraction": 0.018658923314342265,
           "imputed": [],
           "over_reserve": false,
           "reason": null,
           "source": "agents[claude].pacing.burn_rate_per_day / runs_per_day; local token ratio (1.0 if imputed)"
         },
         "codex": {
-          "allowed_fraction": 0.19925144560004354,
+          "allowed_fraction": 0.20835213745042444,
           "imputed": [],
           "over_reserve": false,
           "reason": null,
@@ -158,11 +158,11 @@
         }
       },
       "demand": {
-        "implement": 729.0744444444445,
-        "review": 939.6692592592592,
-        "testgen": 25.623703703703704
+        "implement": 721.1842328042328,
+        "review": 928.9897883597883,
+        "testgen": 25.33248677248677
       },
-      "pacing_observed_at": 1794726577.0,
+      "pacing_observed_at": 1794732081.0,
       "period_end": 1795210865.0,
       "period_end_source": "earliest fully measured agent period_end",
       "pool_by_agent": {
@@ -179,7 +179,7 @@
         "gemini": null,
         "vibe": null
       },
-      "seconds_left": 484288.0
+      "seconds_left": 478784.0
     },
     "iterations": 4,
     "lambda": {
@@ -194,7 +194,7 @@
       "review": 0.7323707461834763,
       "testgen": 0.8502187799807612
     },
-    "objective": 1302.6705160125982,
+    "objective": 1288.1872662517883,
     "reasons": [
       "cursor: pools[cursor-subscription].pacing missing: excluded: no pacing source (capacity model metered)",
       "gemini: pools[gemini-prepaid].pacing missing: excluded: no pacing source (capacity model windowed_prepaid)",
@@ -211,7 +211,7 @@
     },
     "usage": {
       "claude": 0.0,
-      "codex": 0.11297098662494975
+      "codex": 0.0903400768380502
     },
     "window_days": 14
   },
@@ -231,7 +231,7 @@
     "rate_source": "env",
     "week_start": 1794441600
   },
-  "generated_at": "2026-11-15T07:09:27Z",
+  "generated_at": "2026-11-15T08:41:12Z",
   "min_observations": 20,
   "reserve": {
     "implement": [
