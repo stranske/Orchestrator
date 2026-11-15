@@ -51,6 +51,7 @@ import json
 import os
 import pathlib
 import re
+import sys
 import tempfile
 from typing import Any
 
@@ -470,6 +471,7 @@ CONSUMER_CLASSES = (
     "not_invoked",
     "not_acting",
     "prose",
+    "consumer_missing",
     "unresolved",
     "undeclared",
 )
@@ -598,10 +600,25 @@ def acted_on_context(ledger: dict, *, now: int | None = None) -> dict:
     return _ACTED_ON_CACHE[key]
 
 
+def _consumer_absence_reason(cap: dict) -> str:
+    """Use the reviewed note, falling back to the retained declaration if it is blank."""
+    return str(cap.get("notes") or "").strip() or str(cap.get("downstream_consumer") or "").strip()
+
+
 def consumer_class(cap: dict, ctx: dict) -> tuple[str, bool, str]:
     """(class, ok, detail) for the tenth part; `req_consumer_acts` and `consumer_report` share it."""
     if not _has(cap, "downstream_consumer"):
         return "undeclared", False, "no consumer declared (the fifth part names the field)"
+    # Reviewed absence remains a finding, even if the declaration also names a real symbol.
+    # It must neither masquerade as accidental prose nor acquire acting/admission credit.
+    if cap.get("consumer_missing") is True:
+        reason = _consumer_absence_reason(cap)
+        return (
+            "consumer_missing",
+            False,
+            "no local acting consumer (consumer_missing): reviewed absence"
+            + (f": {reason}" if reason else ""),
+        )
     res = consumer_resolution(cap, module_dir=ctx.get("module_dir"), repo_root=ctx.get("repo_root"))
     if not res["tokens"]:
         return (
@@ -699,15 +716,27 @@ def consumer_report(ledger: dict, ctx: dict, rows: list[dict]) -> dict:
     return {
         "total": len(rows),
         "by_class": classes,
+        # Carry the reviewed finding into JSON/text so M4/M8 can cite its actual reason.
+        "reviewed_absences": {
+            cid: _consumer_absence_reason(ledger[cid]) for cid in classes["consumer_missing"]
+        },
         # `enforced`, as `findability_report` reads it: a waived row keeps the requirement in its
         # `blocking` list but cannot fail the suite, so it is not reported as blocking here.
         "blocking": [
             r["capability_id"] for r in rows if "consumer_acts" in r["blocking"] and r["enforced"]
         ],
         "deferred": [r["capability_id"] for r in rows if "consumer_acts" in r["deferred"]],
-        # A declaration edit each: no code, no evidence to wait for.
-        "drainable": sorted(classes["prose"] + classes["unresolved"] + classes["undeclared"]),
-        "drained": not any(classes[c] for c in ("not_acting", "prose", "unresolved", "undeclared")),
+        # Explicit absence stays drainable debt; declaring it is not a waiver or an acting rail.
+        "drainable": sorted(
+            classes["prose"]
+            + classes["consumer_missing"]
+            + classes["unresolved"]
+            + classes["undeclared"]
+        ),
+        "drained": not any(
+            classes[c]
+            for c in ("not_acting", "prose", "consumer_missing", "unresolved", "undeclared")
+        ),
     }
 
 
@@ -1228,17 +1257,20 @@ def format_report(rep: dict) -> str:
     cons = rep.get("consumers") or {}
     if cons:
         by = {name: len(ids) for name, ids in cons["by_class"].items()}
+        reviewed_missing = by.get("consumer_missing", 0)
+        missing = by["unresolved"] + reviewed_missing
         out += [
             "",
-            f"  CONSUMERS (10th): {cons['total'] - by['prose'] - by['unresolved'] - by['undeclared']}"
+            f"  CONSUMERS (10th): {cons['total'] - by['prose'] - missing - by['undeclared']}"
             f" of {cons['total']} declare a consumer this tree can find — acting (capability-level) "
             f"{by['acting']}, "
             f"in grace {by['grace']}, not invoked {by['not_invoked']}, exercise-bound "
             f"{by['exercise_bound']}, unmeasured {by['unmeasured']}",
             f"                   not acting (trailing window) {by['not_acting']} (blocking {len(cons['blocking'])}, "
             f"pre-cutoff debt {len(cons['deferred'])}); prose {by['prose']}, missing "
-            f"{by['unresolved']}, undeclared {by['undeclared']} — DRAINABLE {len(cons['drainable'])} "
-            "(a declaration edit each)",
+            f"{missing}, undeclared {by['undeclared']} — DRAINABLE {len(cons['drainable'])} "
+            f"(reviewed absent {reviewed_missing}, unresolved {by['unresolved']}; "
+            "reviewed absence remains finding debt)",
         ]
         if cons["drained"]:
             out.append(
@@ -1249,6 +1281,10 @@ def format_report(rep: dict) -> str:
             )
         for cid in cons["by_class"]["not_acting"]:
             out.append(f"                   NOT ACTING (trailing window) {cid}")
+        for cid in cons["by_class"].get("consumer_missing", []):
+            reason = cons.get("reviewed_absences", {}).get(cid)
+            suffix = f": {reason}" if reason else ""
+            out.append(f"                   REVIEWED ABSENT {cid}{suffix}")
     if rep["legacy_debt"]:
         out += ["", "  legacy debt (pay down opportunistically; never a human queue):"]
         counts: dict[str, int] = {}
@@ -1629,11 +1665,21 @@ def main() -> int:
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--commitments", action="store_true", help="only the dated-promise check")
     ap.add_argument(
+        "--check-consumer-declarations",
+        action="store_true",
+        help=(
+            "fail for an empty live catalogue or consumer declaration debt beyond reviewed "
+            "absences; does not check acting or grant admission"
+        ),
+    )
+    ap.add_argument(
         "--preflight",
         metavar="JSON",
         help="answer admission for a proposed capability spec (JSON string or @file)",
     )
     args = ap.parse_args()
+    if args.check_consumer_declarations and (args.selftest or args.preflight or args.commitments):
+        ap.error("--check-consumer-declarations requires the live-ledger report")
     if args.selftest:
         _selftest()
         return 0
@@ -1663,6 +1709,17 @@ def main() -> int:
         return 0 if com["clean"] else 1
     rep = report()
     print(json.dumps(rep, indent=2, sort_keys=True) if args.json else format_report(rep), end="")
+    if args.check_consumer_declarations:
+        consumers = rep["consumers"]
+        invalid = sorted(
+            cid
+            for cls in ("prose", "unresolved", "undeclared")
+            for cid in consumers["by_class"][cls]
+        )
+        if not consumers["total"] or invalid:
+            reason = ", ".join(invalid) if invalid else "no live capabilities in the ledger"
+            print(f"consumer declaration check failed: {reason}", file=sys.stderr)
+            return 1
     return 0
 
 
