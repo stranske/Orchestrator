@@ -696,6 +696,48 @@ def test_switch_review_format_report_carries_rule_unresolved_and_drainable(brain
     assert "rule pick n/a (0 judged) [0 no delivery, 1 unresolved, drainable 1]" in triage_lines[0]
 
 
+def test_switch_review_write_text_out_carries_rule_unresolved_and_drainable(
+    brain, monkeypatch, tmp_path
+):
+    """switch_review --text-out writes the same rule-arm triage shadow line as format_report."""
+    import strategy_experiment
+    import switch_review
+
+    triage_shadow.corpus_path().parent.mkdir(parents=True, exist_ok=True)
+    triage_shadow.corpus_path().write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "ts": 100_000_000_000,
+                "triage_valid": True,
+                "live_proposal": True,
+                "rule_pick": "stranske/Orchestrator#1",
+                "triage_top_three": [],
+            }
+        )
+        + "\n"
+    )
+    record_pr_run("rule-shadow-worker", 77, ts=102)
+    receipt = brain / "strategy-receipt.json"
+    receipt.write_text(json.dumps({"status": "incomplete"}))
+    monkeypatch.setattr(strategy_experiment, "strategy_result_path", lambda: receipt)
+    report = {
+        "review_days": 7,
+        "raise_count": 0,
+        "held_off": [],
+        "on_but_idle": [],
+        "unconditioned": [],
+        "mirror_drift": {"status": "ok"},
+    }
+    out = tmp_path / "switch-review.md"
+    switch_review.write_text_report(report, out)
+    triage_lines = [
+        line for line in out.read_text().splitlines() if line.startswith("triage shadow:")
+    ]
+    assert len(triage_lines) == 1
+    assert "rule pick n/a (0 judged) [0 no delivery, 1 unresolved, drainable 1]" in triage_lines[0]
+
+
 def test_summary_line_rule_pick_judged_when_cover_graded(brain):
     """Weekly triage shadow line must show rule-arm judged>0 once delivery is graded."""
     path = brain / "rows.jsonl"
