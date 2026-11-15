@@ -623,6 +623,60 @@ def test_linker_resolves_rule_picks_within_the_read_bound(brain):
     assert calls == [("stranske/Orchestrator", 77)]
 
 
+def test_linker_rule_pick_drain_deliberate_break(brain, monkeypatch):
+    triage_shadow.corpus_path().parent.mkdir(parents=True, exist_ok=True)
+    triage_shadow.corpus_path().write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "ts": 100_000_000_000,
+                "triage_valid": True,
+                "live_proposal": True,
+                "rule_pick": "stranske/Orchestrator#1",
+                "triage_top_three": ["stranske/Orchestrator#2"],
+            }
+        )
+        + "\n"
+    )
+    record_pr_run("rule-shadow-worker", 77, ts=102)
+    calls = []
+    read = pr_reader({77: "Closes #1"}, calls)
+    assert outcomes._read_pr_covers() == {}
+
+    drain_rule_pick_covers = outcomes._drain_rule_pick_covers
+    monkeypatch.setattr(outcomes, "_drain_rule_pick_covers", lambda *a, **k: None)
+    broken = outcomes.link_triage_consumption(now=10_000, pr_reader=read)
+    assert "pr_reads" not in broken
+    assert ("stranske/Orchestrator", 77) not in outcomes._read_pr_covers()
+    assert calls == []
+
+    monkeypatch.setattr(outcomes, "_drain_rule_pick_covers", drain_rule_pick_covers)
+    calls.clear()
+    result = outcomes.link_triage_consumption(now=10_000, pr_reader=read)
+    assert result["pr_reads"] <= outcomes.PR_READS_PER_CALL
+    assert ("stranske/Orchestrator", 77) in outcomes._read_pr_covers()
+    assert calls == [("stranske/Orchestrator", 77)]
+
+
+def test_rule_picks_drainable_next_call_counts_unresolved_rule_picks(brain):
+    triage_shadow.corpus_path().parent.mkdir(parents=True, exist_ok=True)
+    triage_shadow.corpus_path().write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "ts": 100_000_000_000,
+                "triage_valid": True,
+                "live_proposal": True,
+                "rule_pick": "stranske/Orchestrator#1",
+                "triage_top_three": [],
+            }
+        )
+        + "\n"
+    )
+    record_pr_run("rule-shadow-worker", 77, ts=102)
+    assert outcomes.rule_picks_drainable_next_call() == 1
+
+
 def test_summary_does_not_credit_an_outcome_before_the_live_cycle(brain):
     path = brain / "rows.jsonl"
     feedback.record_run("old", "stranske/Orchestrator#3", "implement", "codex", mode="local")
