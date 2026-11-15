@@ -1,6 +1,6 @@
 # Issue 1138 continuation acceptance
 
-Current issue #1156 repair evidence is in the final section below. Earlier sections
+Current issue #1156 repair evidence is in the sections below. Earlier sections
 are historical reports at their named commits and runner environments; their pending
 statements do not describe this repair. Final-head CI is recorded in the repair PR
 acceptance record after the evidence commit, avoiding a self-referential SHA claim.
@@ -825,3 +825,62 @@ remain unverified. Attempts to post the blocker comment and add `needs-human`
 to PR #1380 also failed to connect; neither remote action completed.
 A writable Git checkout, a working pytest runtime, and GitHub connectivity
 are needed to finish delivery.
+
+## Issue 1156 reconciliation and observed CI (2026-11-15 UTC)
+
+Measured checkout: `4a764241ff8fbdeff2d1df95e6e38b518561b262`, PR #1380,
+branch `codex/issue-1156`. Reviewed the four keepalive commits after bootstrap:
+they change JavaScript experiment verifiers/tests and this evidence log. The
+Python isolation correction was already merged by PR #1164 (`e78794e4`).
+The current test SHA-256 is still
+`f7cd686974888ac8ddb8e312e7913f608fdb9425784812d00949c50c47a96161`, exactly
+matching the real corrected-test follow-up experiment at `d068c59` above.
+
+Proposed checklist reconciliation, based on the committed real evidence:
+
+- [x] Carry forward the test correction: verified at `d068c59`; test bytes match.
+- [x] Run the required Python command pair and record results: recorded at `d068c59`.
+- [x] Repeat the corrected-test mutation: real baseline/red/green outputs are in
+  `mutation-proof-pass3.json` for `d068c59`.
+- [x] Demonstrate both artifact-lock failures and restored passes: real independent
+  experiments are recorded above for `d068c59`.
+- [ ] Complete final delivery: fresh-head review and merge gates remain pending.
+
+These historical results do not claim fresh local Python execution or completion
+of the final-head acceptance criterion. The attempted PR-body reconciliation was
+rejected with `MCP tool call requires approval, but approval policy is never`;
+the remote checklist remains unchanged.
+
+The GitHub connector returned successful CI jobs for this exact measured head:
+
+| Check | Observed result |
+|---|---|
+| [CI run 43690462174](https://github.com/stranske/Orchestrator/actions/runs/43690462174) | All six `pytest + coverage shard N/6` and six `flat exec-mirror shard N/6` jobs succeeded. |
+| [Combined coverage aggregate](https://github.com/stranske/Orchestrator/actions/runs/43690462174/job/132740197170) | `verify.py aggregate + combined coverage` succeeded. |
+| [Flat-copy aggregate](https://github.com/stranske/Orchestrator/actions/runs/43690462174/job/132740259689) | `verify.py aggregate in the flat exec-mirror shape` succeeded. |
+| [Gate run 43690462412](https://github.com/stranske/Orchestrator/actions/runs/43690462412) | Workflow succeeded. |
+
+Added a regression in `tests/test_issue_1138_mutation.js` that runs the result
+validator against the committed real baseline, mutation, and restored pytest
+transcripts, and rejects each transcript with the opposite expected verdict.
+This prevents the verifier's synthetic fixtures from being its only compatibility
+check. It does not rerun the production mutation or generate new Python evidence.
+Local commands pass: `node tests/test_issue_1138_mutation.js` (23 tests),
+`node tests/test_issue_1138_artifacts.js` (42), and
+`node tests/test_redirect_routing_mutations.js` (11).
+
+Both requested Anaconda pytest commands with `-m 'not slow'` exit 127 because
+the interpreter is absent. The targeted coverage command with `python3` exits 1
+(`No module named pytest`), producing no coverage table. Installing pytest,
+pytest-cov, Black, PyYAML, and httpx under `/tmp` failed (`No matching distribution
+found for pytest`). The real mutation script stops at baseline (`spawnSync
+python3 EPERM` and missing pytest), leaving production and historical evidence
+unchanged. No Python files changed, so the Python formatting gate does not apply.
+
+`git add tests/test_issue_1138_mutation.js` failed with exit 128: cannot create
+`.git/index.lock` on a read-only filesystem. The test and this log remain
+uncommitted. The merge guard dry-run for the measured head exits 1 with
+`review-thread GraphQL query failed`, `blocked=true`, and `merge_executed=false`.
+No merge was attempted after that blocker. PR #1380 was observed open with
+`draft=false`. Blocker-comment and `needs-human` label requests were also rejected
+by the GitHub tool's approval policy; neither remote action completed.

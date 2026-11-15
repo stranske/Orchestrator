@@ -157,3 +157,19 @@ test('rejects an extra result in the baseline or restored summary', () => {
   result.stdout = result.stdout.replace('1 passed in', '2 passed in');
   assert.throws(() => requireVerdict(result, false));
 });
+
+test('accepts the recorded real corrected-test mutation transcripts', () => {
+  const evidence = JSON.parse(fs.readFileSync(path.join(__dirname,
+    '../docs/verification/issue-1138/mutation-proof-pass3.json'), 'utf8'));
+  const cases = evidence.followup_runs.flatMap((run) => run.cases)
+    .filter((record) => `${record.file}` === edit.file && record.test === node.split('::')[1]);
+  assert.ok(cases.length > 0, 'missing real corrected-test mutation evidence');
+  for (const record of cases) {
+    for (const phase of ['baseline', 'red', 'green']) {
+      const result = { status: record[`${phase}_exit`], stdout: record[`${phase}_output`] };
+      assert.equal(requireVerdict(result, phase === 'red'), result.stdout);
+      // The real assertion and node must not make the opposite verdict valid.
+      assert.throws(() => requireVerdict(result, phase !== 'red'));
+    }
+  }
+});
