@@ -323,3 +323,20 @@ def test_family_matching_is_token_based_and_ignores_blank_entries(
     """Review on #1389: case-insensitive whole-token matching; a blank entry scopes nothing."""
     monkeypatch.setattr(rate_incidents, "GEMINI_SEPARATE_QUOTA_FAMILIES", families)
     assert rate_incidents.tier_scope_for("gemini", model) == scope
+
+
+def test_a_scoped_marker_for_another_agent_is_left_as_it_was(shed_dir):
+    """Re-review on #1389: the shared-pool policy is gemini's alone; other agents' scopes stand."""
+    (shed_dir / "claude").write_text(
+        json.dumps(
+            {
+                "category": "quota",
+                "created_at": 1,
+                "expires_at": int(time.time()) + 100_000,
+                "model": "claude-opus-5-5",
+                "tier_scope": "full",
+            }
+        )
+    )
+    assert capacity.shed_marker("claude")["tier_scope"] == "full"
+    assert capacity._shed("claude") is False

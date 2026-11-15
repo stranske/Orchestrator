@@ -529,7 +529,7 @@ def shed_marker(
             found[key] = str(payload[key])
     # Only a recognised scope narrows a shed; anything else stays a whole-seat shed.
     found["tier_scope"] = payload.get("tier_scope") if payload.get("tier_scope") == "full" else None
-    if found["tier_scope"]:
+    if found["tier_scope"] and agent == "gemini":
         # A stored scope is honoured only while the writer's policy would still produce it, so a
         # marker written under a retired premise (Argon and Flash on separate quotas, before
         # #1387) sheds the whole seat once the policy changes, instead of capping at mid until
