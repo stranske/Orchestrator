@@ -343,8 +343,13 @@ def test_summary_counts_only_known_durable_target_outcomes(brain, monkeypatch):
     assert triage_shadow.summary(path)["triage"]["judged"] == 0
     feedback.record_outcome("worker", durability="durable")
     result = triage_shadow.summary(path)
-    assert result["triage"] == {"judged": 0, "merged_durable": 0, "no_delivery": 0}
-    assert result["rule"] == {"judged": 0, "merged_durable": 0, "no_delivery": 1}
+    assert result["triage"] == {
+        "judged": 0,
+        "merged_durable": 0,
+        "no_delivery": 0,
+        "unresolved": 0,
+    }
+    assert result["rule"] == {"judged": 0, "merged_durable": 0, "no_delivery": 0, "unresolved": 1}
 
 
 @pytest.fixture
@@ -452,6 +457,7 @@ def test_each_followed_consumption_uses_its_own_run(followed_pick):
         "judged": 2,
         "merged_durable": 1,
         "no_delivery": 0,
+        "unresolved": 0,
     }
 
 
@@ -464,6 +470,7 @@ def test_only_followed_consumptions_are_graded(followed_pick, status):
         "judged": 0,
         "merged_durable": 0,
         "no_delivery": 0,
+        "unresolved": 0,
     }
 
 
@@ -476,10 +483,11 @@ def test_followed_pick_without_delivery_is_reported(followed_pick, run_id):
         "judged": 0,
         "merged_durable": 0,
         "no_delivery": 1,
+        "unresolved": 0,
     }
     text = triage_shadow.summary_line(followed_pick)
     assert "triage top-1 merged+durable n/a (0 judged) [1 no delivery]" in text
-    assert "rule pick n/a (0 judged) [1 no delivery]" in text
+    assert "rule pick n/a (0 judged) [0 no delivery, 1 unresolved," in text
 
 
 @pytest.mark.parametrize(
@@ -502,7 +510,12 @@ def test_delivery_judging_preserves_unknown_and_excluded_outcomes(
         )
     result = triage_shadow.summary(followed_pick)
     for arm in ("triage", "rule"):
-        assert result[arm] == {"judged": 0, "merged_durable": 0, "no_delivery": 0}
+        assert result[arm] == {
+            "judged": 0,
+            "merged_durable": 0,
+            "no_delivery": 0,
+            "unresolved": 0,
+        }
 
 
 def test_delivered_run_without_outcome_is_unknown(followed_pick):
@@ -512,6 +525,7 @@ def test_delivered_run_without_outcome_is_unknown(followed_pick):
         "judged": 0,
         "merged_durable": 0,
         "no_delivery": 0,
+        "unresolved": 0,
     }
 
 
@@ -555,7 +569,388 @@ def test_rule_pick_is_graded_through_covering_pr_run(brain):
         "judged": 1,
         "merged_durable": 1,
         "no_delivery": 0,
+        "unresolved": 0,
     }
+
+
+def test_rule_pick_without_a_cover_is_unresolved_not_no_delivery(brain):
+    with feedback._conn():
+        pass
+    path = brain / "rows.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "ts": 100_000_000_000,
+                "triage_valid": True,
+                "live_proposal": True,
+                "rule_pick": "stranske/Orchestrator#1",
+                "triage_top_three": [],
+            }
+        )
+        + "\n"
+    )
+    assert triage_shadow.summary(path)["rule"] == {
+        "judged": 0,
+        "merged_durable": 0,
+        "no_delivery": 0,
+        "unresolved": 1,
+    }
+
+
+def test_linker_resolves_rule_picks_within_the_read_bound(brain, monkeypatch):
+    triage_shadow.corpus_path().parent.mkdir(parents=True, exist_ok=True)
+    triage_shadow.corpus_path().write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "ts": 100_000_000_000,
+                "triage_valid": True,
+                "live_proposal": True,
+                "rule_pick": "stranske/Orchestrator#1",
+                "triage_top_three": ["stranske/Orchestrator#2"],
+            }
+        )
+        + "\n"
+    )
+    record_pr_run("rule-shadow-worker", 77, ts=102)
+    calls = []
+    read = pr_reader({77: "Closes #1"}, calls)
+    assert outcomes._read_pr_covers() == {}
+
+    drain_rule_pick_covers = outcomes._drain_rule_pick_covers
+    monkeypatch.setattr(outcomes, "_drain_rule_pick_covers", lambda *a, **k: None)
+    broken = outcomes.link_triage_consumption(now=10_000, pr_reader=read)
+    assert "pr_reads" not in broken
+    assert ("stranske/Orchestrator", 77) not in outcomes._read_pr_covers()
+    assert calls == []
+
+    monkeypatch.setattr(outcomes, "_drain_rule_pick_covers", drain_rule_pick_covers)
+    calls.clear()
+    result = outcomes.link_triage_consumption(now=10_000, pr_reader=read)
+    assert result["pr_reads"] <= outcomes.PR_READS_PER_CALL
+    assert ("stranske/Orchestrator", 77) in outcomes._read_pr_covers()
+    assert calls == [("stranske/Orchestrator", 77)]
+
+
+def test_switch_review_format_report_carries_rule_unresolved_and_drainable(brain, monkeypatch):
+    """switch_review --text-out must show rule-arm backlog via triage_shadow.summary_line()."""
+    import strategy_experiment
+    import switch_review
+
+    triage_shadow.corpus_path().parent.mkdir(parents=True, exist_ok=True)
+    triage_shadow.corpus_path().write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "ts": 100_000_000_000,
+                "triage_valid": True,
+                "live_proposal": True,
+                "rule_pick": "stranske/Orchestrator#1",
+                "triage_top_three": [],
+            }
+        )
+        + "\n"
+    )
+    record_pr_run("rule-shadow-worker", 77, ts=102)
+    receipt = brain / "strategy-receipt.json"
+    receipt.write_text(json.dumps({"status": "incomplete"}))
+    monkeypatch.setattr(strategy_experiment, "strategy_result_path", lambda: receipt)
+    rendered = switch_review.format_report(
+        {
+            "review_days": 7,
+            "raise_count": 0,
+            "held_off": [],
+            "on_but_idle": [],
+            "unconditioned": [],
+            "mirror_drift": {"status": "ok"},
+        }
+    )
+    triage_lines = [line for line in rendered.splitlines() if line.startswith("triage shadow:")]
+    assert len(triage_lines) == 1, rendered
+    assert "rule pick n/a (0 judged) [0 no delivery, 1 unresolved, drainable 1]" in triage_lines[0]
+
+
+def test_switch_review_write_text_out_carries_rule_unresolved_and_drainable(
+    brain, monkeypatch, tmp_path
+):
+    """switch_review --text-out writes the same rule-arm triage shadow line as format_report."""
+    import strategy_experiment
+    import switch_review
+
+    triage_shadow.corpus_path().parent.mkdir(parents=True, exist_ok=True)
+    triage_shadow.corpus_path().write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "ts": 100_000_000_000,
+                "triage_valid": True,
+                "live_proposal": True,
+                "rule_pick": "stranske/Orchestrator#1",
+                "triage_top_three": [],
+            }
+        )
+        + "\n"
+    )
+    record_pr_run("rule-shadow-worker", 77, ts=102)
+    receipt = brain / "strategy-receipt.json"
+    receipt.write_text(json.dumps({"status": "incomplete"}))
+    monkeypatch.setattr(strategy_experiment, "strategy_result_path", lambda: receipt)
+    report = {
+        "review_days": 7,
+        "raise_count": 0,
+        "held_off": [],
+        "on_but_idle": [],
+        "unconditioned": [],
+        "mirror_drift": {"status": "ok"},
+    }
+    out = tmp_path / "switch-review.md"
+    switch_review.write_text_report(report, out)
+    triage_lines = [
+        line for line in out.read_text().splitlines() if line.startswith("triage shadow:")
+    ]
+    assert len(triage_lines) == 1
+    assert "rule pick n/a (0 judged) [0 no delivery, 1 unresolved, drainable 1]" in triage_lines[0]
+
+
+def test_switch_review_main_text_out_carries_rule_unresolved_and_drainable(
+    brain, monkeypatch, tmp_path, capsys
+):
+    """switch_review.main --text-out is the weekly path that must show rule-arm backlog."""
+    import adversarial
+    import strategy_experiment
+    import switch_review
+
+    triage_shadow.corpus_path().parent.mkdir(parents=True, exist_ok=True)
+    triage_shadow.corpus_path().write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "ts": 100_000_000_000,
+                "triage_valid": True,
+                "live_proposal": True,
+                "rule_pick": "stranske/Orchestrator#1",
+                "triage_top_three": [],
+            }
+        )
+        + "\n"
+    )
+    record_pr_run("rule-shadow-worker", 77, ts=102)
+    receipt = brain / "strategy-receipt.json"
+    receipt.write_text(json.dumps({"status": "incomplete"}))
+    monkeypatch.setattr(strategy_experiment, "strategy_result_path", lambda: receipt)
+    monkeypatch.setenv("ORCH_CREDENTIAL_EXPOSURE_SCAN", "0")
+    monkeypatch.setattr(adversarial, "record_shape_measurement", lambda *a, **kw: False)
+    monkeypatch.setattr(
+        switch_review,
+        "adversarial_shape_population",
+        lambda **kw: {"status": "unknown", "reason": "unit-test fixture"},
+    )
+    for name, value in (
+        ("switch_states", lambda **kw: {"held_off": [], "on_but_idle": []}),
+        ("stale_runners", lambda: []),
+        ("mirror_drift", lambda: {"status": "ok"}),
+        ("fleet_gates", lambda **kw: {}),
+        ("_exploration_gate", lambda: {}),
+        ("gate_expiry", lambda **kw: {}),
+    ):
+        monkeypatch.setattr(switch_review, name, value)
+    out = tmp_path / "switch-review.md"
+    assert switch_review.main(["--env", "process", "--json", "--text-out", str(out)]) == 0
+    capsys.readouterr()
+    triage_lines = [
+        line for line in out.read_text().splitlines() if line.startswith("triage shadow:")
+    ]
+    assert len(triage_lines) == 1
+    assert "rule pick n/a (0 judged) [0 no delivery, 1 unresolved, drainable 1]" in triage_lines[0]
+
+
+def test_summary_line_rule_pick_judged_when_cover_graded(brain):
+    """Weekly triage shadow line must show rule-arm judged>0 once delivery is graded."""
+    path = brain / "rows.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "ts": 100_000_000_000,
+                "triage_valid": True,
+                "live_proposal": True,
+                "rule_pick": "stranske/Orchestrator#1",
+                "triage_top_three": [],
+            }
+        )
+        + "\n"
+    )
+    triage_shadow._append(
+        outcomes._pr_cover_path(),
+        {
+            "repo": "stranske/Orchestrator",
+            "pr": 77,
+            "covers": [1],
+            "ts": 101,
+            "final": True,
+        },
+    )
+    record_pr_run("rule-keepalive-run", 77, ts=102)
+    feedback.record_outcome("rule-keepalive-run", merged=True, durability="durable")
+    text = triage_shadow.summary_line(path)
+    assert "rule pick 100.0% (1 judged) [0 no delivery, 0 unresolved, drainable 0]" in text
+
+
+def test_summary_line_unresolved_falls_after_rule_pick_linker_drain(brain):
+    """Rule-arm unresolved must drop after link_triage_consumption drains a cover read."""
+    path = brain / "rows.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "ts": 100_000_000_000,
+                "triage_valid": True,
+                "live_proposal": True,
+                "rule_pick": "stranske/Orchestrator#1",
+                "triage_top_three": ["stranske/Orchestrator#2"],
+            }
+        )
+        + "\n"
+    )
+    triage_shadow.corpus_path().parent.mkdir(parents=True, exist_ok=True)
+    triage_shadow.corpus_path().write_text(path.read_text())
+    record_pr_run("rule-shadow-worker", 77, ts=102)
+    before = triage_shadow.summary_line(path)
+    assert "1 unresolved, drainable 1" in before
+    read = pr_reader({77: "Closes #1"}, [])
+    outcomes.link_triage_consumption(now=10_000, pr_reader=read)
+    after = triage_shadow.summary_line(path)
+    assert "0 unresolved, drainable 0" in after
+
+
+def _switch_review_text_out_fixture(monkeypatch, brain, tmp_path):
+    """Minimal switch_review.main --text-out stubs for triage shadow line tests."""
+    import adversarial
+    import strategy_experiment
+    import switch_review
+
+    receipt = brain / "strategy-receipt.json"
+    receipt.write_text(json.dumps({"status": "incomplete"}))
+    monkeypatch.setattr(strategy_experiment, "strategy_result_path", lambda: receipt)
+    monkeypatch.setenv("ORCH_CREDENTIAL_EXPOSURE_SCAN", "0")
+    monkeypatch.setattr(adversarial, "record_shape_measurement", lambda *a, **kw: False)
+    monkeypatch.setattr(
+        switch_review,
+        "adversarial_shape_population",
+        lambda **kw: {"status": "unknown", "reason": "unit-test fixture"},
+    )
+    for name, value in (
+        ("switch_states", lambda **kw: {"held_off": [], "on_but_idle": []}),
+        ("stale_runners", lambda: []),
+        ("mirror_drift", lambda: {"status": "ok"}),
+        ("fleet_gates", lambda **kw: {}),
+        ("_exploration_gate", lambda: {}),
+        ("gate_expiry", lambda **kw: {}),
+    ):
+        monkeypatch.setattr(switch_review, name, value)
+    out = tmp_path / "switch-review.md"
+    return switch_review, out
+
+
+def test_switch_review_text_out_rule_judged_with_twenty_graded_deliveries(
+    brain, monkeypatch, tmp_path, capsys
+):
+    """Weekly --text-out must show rule-arm judged once twenty deliveries are graded."""
+    triage_shadow.corpus_path().parent.mkdir(parents=True, exist_ok=True)
+    base_ts = 100_000_000_000
+    triage_shadow.corpus_path().write_text(
+        "\n".join(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "ts": base_ts + issue,
+                    "triage_valid": True,
+                    "live_proposal": True,
+                    "rule_pick": f"stranske/Orchestrator#{issue}",
+                    "triage_top_three": [],
+                }
+            )
+            for issue in range(1, 21)
+        )
+        + "\n"
+    )
+    for issue in range(1, 21):
+        pr = 1000 + issue
+        triage_shadow._append(
+            outcomes._pr_cover_path(),
+            {
+                "repo": "stranske/Orchestrator",
+                "pr": pr,
+                "covers": [issue],
+                "ts": 101 + issue,
+                "final": True,
+            },
+        )
+        record_pr_run(f"rule-run-{issue}", pr, ts=102 + issue)
+        feedback.record_outcome(f"rule-run-{issue}", merged=True, durability="durable")
+    switch_review, out = _switch_review_text_out_fixture(monkeypatch, brain, tmp_path)
+    assert switch_review.main(["--env", "process", "--json", "--text-out", str(out)]) == 0
+    capsys.readouterr()
+    triage_lines = [
+        line for line in out.read_text().splitlines() if line.startswith("triage shadow:")
+    ]
+    assert len(triage_lines) == 1
+    assert "rule pick 100.0% (20 judged)" in triage_lines[0]
+
+
+def test_switch_review_text_out_rule_unresolved_falls_between_two_weekly_runs(
+    brain, monkeypatch, tmp_path, capsys
+):
+    """Before judged backlog drains, consecutive weekly reports must show falling unresolved."""
+    triage_shadow.corpus_path().parent.mkdir(parents=True, exist_ok=True)
+    triage_shadow.corpus_path().write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "ts": 100_000_000_000,
+                "triage_valid": True,
+                "live_proposal": True,
+                "rule_pick": "stranske/Orchestrator#1",
+                "triage_top_three": ["stranske/Orchestrator#2"],
+            }
+        )
+        + "\n"
+    )
+    record_pr_run("rule-shadow-worker", 77, ts=102)
+    switch_review, out = _switch_review_text_out_fixture(monkeypatch, brain, tmp_path)
+    assert switch_review.main(["--env", "process", "--json", "--text-out", str(out)]) == 0
+    capsys.readouterr()
+    first = [line for line in out.read_text().splitlines() if line.startswith("triage shadow:")][0]
+    assert "1 unresolved, drainable 1" in first
+    read = pr_reader({77: "Closes #1"}, [])
+    outcomes.link_triage_consumption(now=10_000, pr_reader=read)
+    out2 = tmp_path / "switch-review-2.md"
+    assert switch_review.main(["--env", "process", "--json", "--text-out", str(out2)]) == 0
+    capsys.readouterr()
+    second = [line for line in out2.read_text().splitlines() if line.startswith("triage shadow:")][
+        0
+    ]
+    assert "0 unresolved, drainable 0" in second
+
+
+def test_rule_picks_drainable_next_call_counts_unresolved_rule_picks(brain):
+    triage_shadow.corpus_path().parent.mkdir(parents=True, exist_ok=True)
+    triage_shadow.corpus_path().write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "ts": 100_000_000_000,
+                "triage_valid": True,
+                "live_proposal": True,
+                "rule_pick": "stranske/Orchestrator#1",
+                "triage_top_three": [],
+            }
+        )
+        + "\n"
+    )
+    record_pr_run("rule-shadow-worker", 77, ts=102)
+    assert outcomes.rule_picks_drainable_next_call() == 1
 
 
 def test_summary_does_not_credit_an_outcome_before_the_live_cycle(brain):
@@ -913,7 +1308,7 @@ def test_a_failed_pull_request_read_is_never_not_followed(consumable, monkeypatc
         now=10_000, pr_reader=pr_reader({78: f"Closes #{second_issue + 100}"})
     )
     assert drained["unread_candidates"] == 0
-    assert drained["pr_reads"] == 1 and drained["not_followed"] == []
+    assert drained["pr_reads"] == 2 and drained["not_followed"] == []
 
 
 def test_a_cover_read_before_the_pull_request_settled_is_read_again(consumable):
@@ -927,7 +1322,7 @@ def test_a_cover_read_before_the_pull_request_settled_is_read_again(consumable):
     edited = pr_reader({77: f"Closes #{issue}"}, calls, opened="1970-01-01T02:45:59Z")
     second = outcomes.link_triage_consumption(now=10_100, pr_reader=edited)
     assert [f["run_id"] for f in second["followed"]] == ["pr-worker"]
-    assert len(calls) == 2  # the early "does not cover" was not final, so it was read again
+    assert len(calls) == 3  # consumption re-read plus rule-pick cover pass on the same pull request
 
 
 def test_the_pull_request_search_reads_a_bounded_number_and_drains_across_calls(consumable):
@@ -1314,3 +1709,107 @@ def test_duplicate_link_receipts_refuse_before_any_credit(consumable, legacy, se
     assert triage_shadow.linked_path().read_bytes() == before
     with feedback._conn() as conn:
         assert conn.execute("SELECT COUNT(*) FROM influence_edges").fetchone()[0] == 0
+
+
+def write_rule_cycles(*cycles):
+    """Live rule-pick cycles, ``(rule_pick, ts_seconds)``, as the corpus records them."""
+    triage_shadow.corpus_path().parent.mkdir(parents=True, exist_ok=True)
+    triage_shadow.corpus_path().write_text(
+        "".join(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "ts": ts * 1_000_000_000,
+                    "triage_valid": True,
+                    "live_proposal": True,
+                    "rule_pick": pick,
+                    "triage_top_three": [],
+                }
+            )
+            + "\n"
+            for pick, ts in cycles
+        )
+    )
+    return triage_shadow.corpus_path()
+
+
+def remember_cover(number, covers, final=True):
+    triage_shadow._append(
+        outcomes._pr_cover_path(),
+        {"repo": "stranske/Orchestrator", "pr": number, "covers": covers, "ts": 1, "final": final},
+    )
+
+
+def test_a_remembered_cover_settles_the_cycle_even_with_a_later_unread_candidate(brain):
+    """Review on #1385: the drain stops at the first covering PR, so the count must too."""
+    write_rule_cycles(("stranske/Orchestrator#1", 100))
+    record_pr_run("covering", 77, ts=102)
+    record_pr_run("later-unread", 78, ts=103)
+    remember_cover(77, [1])
+    assert outcomes.rule_picks_drainable_next_call() == 0
+    calls = []
+    outcomes.link_triage_consumption(now=10_000, pr_reader=pr_reader({78: ""}, calls))
+    assert calls == []
+
+
+def test_two_cycles_of_one_issue_are_drained_separately(brain):
+    """Review on #1385: picked at 100 and 200; PR 77 (run 150) covers and is remembered, PR 78 (run
+    250) is unread. The second cycle must still read PR 78, on this call and not never."""
+    write_rule_cycles(("stranske/Orchestrator#1", 100), ("stranske/Orchestrator#1", 200))
+    record_pr_run("first-cover", 77, ts=150)
+    record_pr_run("second-cover", 78, ts=250)
+    remember_cover(77, [1])
+    assert outcomes.rule_picks_drainable_next_call() == 1
+    calls = []
+    outcomes.link_triage_consumption(now=10_000, pr_reader=pr_reader({78: "Closes #1"}, calls))
+    assert calls == [("stranske/Orchestrator", 78)]
+    assert outcomes.rule_picks_drainable_next_call() == 0
+
+
+def test_an_unrelated_or_non_final_cover_leaves_the_rule_pick_unresolved(brain):
+    """Review on #1385: a cover for another issue, or a negative record not yet final, is not proof
+    that this pick's own candidates were read, so the pick is unresolved, never no delivery."""
+    path = write_rule_cycles(("stranske/Orchestrator#1", 100))
+    record_pr_run("other-issue", 77, ts=102)
+    record_pr_run("young-pr", 78, ts=103)
+    remember_cover(77, [5])
+    remember_cover(78, [], final=False)
+    assert triage_shadow.summary(path)["rule"]["unresolved"] == 1
+    assert triage_shadow.summary(path)["rule"]["no_delivery"] == 0
+    remember_cover(78, [])  # read again once settled: final, and it does not cover #1
+    assert triage_shadow.summary(path)["rule"]["no_delivery"] == 1
+    assert triage_shadow.summary(path)["rule"]["unresolved"] == 0
+
+
+def test_summary_line_reports_unknown_when_the_drainable_scan_fails(brain, monkeypatch):
+    """Review on #1385: the drainable scan sits inside the report's error guard."""
+    write_rule_cycles(("stranske/Orchestrator#1", 100))
+    with feedback._conn():
+        pass
+
+    def broken():
+        raise sqlite3.OperationalError("attempt to write a readonly database")
+
+    monkeypatch.setattr(outcomes, "rule_picks_drainable_next_call", broken)
+    line = triage_shadow.summary_line()
+    assert line.startswith("triage shadow: UNKNOWN — outcome evidence unreadable")
+
+
+def test_rule_pick_reads_are_bounded_oldest_first_and_continue_next_call(brain):
+    """Review on #1385: more rule-pick candidates than the bound; no consumption records, so the
+    rule pass alone decides what is read."""
+    bound = outcomes.PR_READS_PER_CALL
+    write_rule_cycles(("stranske/Orchestrator#1", 100))
+    numbers = list(range(200, 200 + bound + 2))
+    for offset, number in enumerate(numbers):
+        record_pr_run(f"candidate-{number}", number, ts=101 + offset)
+    calls = []
+    read = pr_reader({n: "" for n in numbers}, calls)
+    first = outcomes.link_triage_consumption(now=10_000, pr_reader=read)
+    assert calls == [("stranske/Orchestrator", n) for n in numbers[:bound]]
+    assert first["pr_reads"] == bound
+    assert outcomes.rule_picks_drainable_next_call() == 1
+    calls.clear()
+    outcomes.link_triage_consumption(now=10_000, pr_reader=read)
+    assert calls == [("stranske/Orchestrator", n) for n in numbers[bound:]]
+    assert outcomes.rule_picks_drainable_next_call() == 0
