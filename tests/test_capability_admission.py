@@ -1351,25 +1351,75 @@ def test_cli_consumer_declaration_check_requires_nonempty_live_ledger(tmp_path):
                 json.dumps({"schema_version": capabilities.SCHEMA_VERSION, "capabilities": ledger})
             )
             before = path.read_bytes()
-            for extra in ([], ["--json"]):
-                output, errors = io.StringIO(), io.StringIO()
-                argv = ["capability_admission.py", "--check-consumer-declarations", *extra]
-                with patch.object(sys, "argv", argv):
-                    with redirect_stdout(output), redirect_stderr(errors):
-                        assert admission.main() == expected_status, (ledger, extra)
-                assert errors.getvalue() == (
-                    f"consumer declaration check failed: {reason}\n" if reason else ""
-                )
-                if extra:
-                    report = json.loads(output.getvalue())
-                    assert report["consumers"]["total"] == sum(
-                        row["status"] not in capabilities.NOT_LIVE_STATES for row in ledger.values()
+            for flag in ("--check-consumer-declarations", "--check-consumer-sync"):
+                for extra in ([], ["--json"]):
+                    output, errors = io.StringIO(), io.StringIO()
+                    argv = ["capability_admission.py", flag, *extra]
+                    with patch.object(sys, "argv", argv):
+                        with redirect_stdout(output), redirect_stderr(errors):
+                            assert admission.main() == expected_status, (ledger, flag, extra)
+                    assert errors.getvalue() == (
+                        f"consumer declaration check failed: {reason}\n" if reason else ""
                     )
-                    # Neither reviewed absence nor a real symbol grants acting/admission credit.
-                    assert all(not row["checks"]["consumer_acts"]["ok"] for row in report["rows"])
-                else:
-                    assert "CONSUMERS (10th):" in output.getvalue()
-                assert path.read_bytes() == before
+                    if extra:
+                        report = json.loads(output.getvalue())
+                        assert report["consumers"]["total"] == sum(
+                            row["status"] not in capabilities.NOT_LIVE_STATES
+                            for row in ledger.values()
+                        )
+                        # Neither reviewed absence nor a real symbol grants acting/admission credit.
+                        assert all(
+                            not row["checks"]["consumer_acts"]["ok"] for row in report["rows"]
+                        )
+                    else:
+                        assert "CONSUMERS (10th):" in output.getvalue()
+                        assert "CONSUMER SYNC:" in output.getvalue()
+                    assert path.read_bytes() == before
+
+        # A declared capability with stale persisted consumer text reconciles in memory for
+        # CONSUMERS, but fails the sync check until a writing load persists the declaration.
+        declared_cid = "route-weights-export"
+        stale_declared = capabilities._blank_capability(declared_cid)
+        stale_declared.update(
+            {
+                **capabilities.KNOWN_GATES[declared_cid],
+                "downstream_consumer": "old persisted prose",
+                "expiry": admission.CONSUMER_ACTS_ENFORCED_FROM + 86400 * 30,
+            }
+        )
+        stale_declared["event_history"] = [{"type": "gate_registered", "timestamp": 1}]
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": capabilities.SCHEMA_VERSION,
+                    "capabilities": {declared_cid: stale_declared},
+                }
+            )
+        )
+        before_sync = path.read_bytes()
+        for flag in ("--check-consumer-declarations", "--check-consumer-sync"):
+            output, errors = io.StringIO(), io.StringIO()
+            with patch.object(sys, "argv", ["capability_admission.py", flag, "--json"]):
+                with redirect_stdout(output), redirect_stderr(errors):
+                    assert admission.main() == 1
+            unsynced = json.loads(output.getvalue())
+            assert unsynced["consumers"]["by_class"]["prose"] == []
+            assert unsynced["consumer_sync"]["pending"] == {declared_cid: ["downstream_consumer"]}
+            assert errors.getvalue() == f"consumer declaration check failed: {declared_cid}\n"
+            assert path.read_bytes() == before_sync
+
+        capabilities.load(path)
+        after_sync = path.read_bytes()
+        assert after_sync != before_sync
+        for flag in ("--check-consumer-declarations", "--check-consumer-sync"):
+            output, errors = io.StringIO(), io.StringIO()
+            with patch.object(sys, "argv", ["capability_admission.py", flag, "--json"]):
+                with redirect_stdout(output), redirect_stderr(errors):
+                    assert admission.main() == 0
+            synced = json.loads(output.getvalue())
+            assert synced["consumer_sync"]["pending"] == {}
+            assert errors.getvalue() == ""
+            assert path.read_bytes() == after_sync
 
         # Ordinary diagnostic reports retain their exit status even with an empty ledger.
         path.write_text(
@@ -1501,10 +1551,27 @@ def test_consumer_report_reconciles_source_inventory_without_writing_the_ledger(
     }
     assert consumers["drainable"] == expected
     assert not consumers["drained"]
+    assert report["consumer_sync"] == {
+        "live_rows": len(declarations),
+        "pending": {
+            cid: (
+                ["downstream_consumer"]
+                if cid in expected
+                else ["downstream_consumer", "consumer_missing"]
+            )
+            for cid in sorted(declarations)
+        },
+    }
     verdicts = {row["capability_id"]: row for row in report["rows"]}
     assert all(not verdicts[cid]["checks"]["consumer_acts"]["ok"] for cid in expected)
     rendered = admission.format_report(report)
     assert f"prose 0, missing {len(expected)}, undeclared 0 — DRAINABLE {len(expected)}" in rendered
+    assert (
+        f"CONSUMER SYNC: {len(declarations)} of {len(declarations)} live rows pending; "
+        "CONSUMERS uses reconciled declarations"
+    ) in rendered
+    assert "PENDING SYNC route-weights-export: downstream_consumer, consumer_missing" in rendered
+    assert "PENDING SYNC docs-drift-fix-agent: downstream_consumer" in rendered
     assert [line.strip() for line in rendered.splitlines() if "REVIEWED ABSENT" in line] == [
         f"REVIEWED ABSENT {cid}: {declarations[cid]['notes'].strip()}" for cid in expected
     ]

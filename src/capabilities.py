@@ -2527,6 +2527,16 @@ def load_declared(path: Path = REG) -> dict[str, dict[str, Any]]:
     return capabilities
 
 
+def persisted_snapshot(path: Path = REG) -> dict[str, dict[str, Any]]:
+    """Return the raw persisted capabilities from the latest cached read of `path` without writing."""
+    if not path.exists():
+        return {}
+    hit = _READ_CACHE.get(os.path.abspath(path))
+    if hit is not None:
+        return _checked_ledger(marshal.loads(hit[1]))["capabilities"]
+    return load(path, create=False)
+
+
 def seed_declared(path: Path = REG) -> dict[str, Any]:
     """Make the WRITING load on `path` and report which declared rows it registered.
 

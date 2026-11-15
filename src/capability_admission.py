@@ -1173,7 +1173,9 @@ def report(*, path: pathlib.Path | None = None, ctx: dict | None = None) -> dict
     # then writes the result into the ledger the tick reads. `load_declared` reconciles an in-memory
     # copy and writes nothing. It seeds and expires nothing either: the tick's lifecycle step
     # (`capabilities.py sweep` + `validate`, every active tick) owns those writes.
-    ledger = capabilities.load_declared(path or capabilities.REG)
+    target = path or capabilities.REG
+    ledger = capabilities.load_declared(target)
+    persisted = capabilities.persisted_snapshot(target)
     ctx = ctx or _context(path, ledger=ledger)
     # A retired or superseded row owes nothing: the advisor never offers it and no code path will
     # heartbeat it, so it is not admitted, not enforced and not debt. Retiring a stray row on
@@ -1202,6 +1204,21 @@ def report(*, path: pathlib.Path | None = None, ctx: dict | None = None) -> dict
         ),
         "findability": findability_report(ledger, ctx, rows),
         "consumers": consumer_report(ledger, ctx, rows),
+        "consumer_sync": {
+            "live_rows": len(live),
+            "pending": {
+                cid: changed
+                for cid in live
+                if cid in persisted
+                and (
+                    changed := [
+                        field
+                        for field in ("downstream_consumer", "consumer_missing")
+                        if persisted[cid].get(field) != ledger[cid].get(field)
+                    ]
+                )
+            },
+        },
         "rows": rows,
         "commitments": commitments(),
     }
@@ -1285,6 +1302,22 @@ def format_report(rep: dict) -> str:
             reason = cons.get("reviewed_absences", {}).get(cid)
             suffix = f": {reason}" if reason else ""
             out.append(f"                   REVIEWED ABSENT {cid}{suffix}")
+        sync = rep.get("consumer_sync")
+        if sync is not None:
+            if not sync["live_rows"]:
+                out.append("  CONSUMER SYNC: unverified (no live ledger rows on this machine)")
+            elif sync["pending"]:
+                out.append(
+                    f"  CONSUMER SYNC: {len(sync['pending'])} of {sync['live_rows']} live rows pending; "
+                    "CONSUMERS uses reconciled declarations"
+                )
+                for cid, fields in sync["pending"].items():
+                    out.append(f"                   PENDING SYNC {cid}: {', '.join(fields)}")
+            else:
+                out.append(
+                    "  CONSUMER SYNC: persisted consumer declarations match this tree "
+                    f"for {sync['live_rows']} live rows"
+                )
     if rep["legacy_debt"]:
         out += ["", "  legacy debt (pay down opportunistically; never a human queue):"]
         counts: dict[str, int] = {}
@@ -1666,10 +1699,12 @@ def main() -> int:
     ap.add_argument("--commitments", action="store_true", help="only the dated-promise check")
     ap.add_argument(
         "--check-consumer-declarations",
+        "--check-consumer-sync",
+        dest="check_consumer_declarations",
         action="store_true",
         help=(
-            "fail for an empty live catalogue or consumer declaration debt beyond reviewed "
-            "absences; does not check acting or grant admission"
+            "fail for an empty live catalogue, pending persisted declaration sync, or consumer "
+            "declaration debt beyond reviewed absences; does not check acting or grant admission"
         ),
     )
     ap.add_argument(
@@ -1711,10 +1746,20 @@ def main() -> int:
     print(json.dumps(rep, indent=2, sort_keys=True) if args.json else format_report(rep), end="")
     if args.check_consumer_declarations:
         consumers = rep["consumers"]
+        sync = rep["consumer_sync"]
+        unexplained = [
+            cid for cid, reason in consumers.get("reviewed_absences", {}).items() if not reason
+        ]
         invalid = sorted(
-            cid
-            for cls in ("prose", "unresolved", "undeclared")
-            for cid in consumers["by_class"][cls]
+            {
+                *(
+                    cid
+                    for cls in ("prose", "unresolved", "undeclared")
+                    for cid in consumers["by_class"][cls]
+                ),
+                *sync["pending"],
+                *unexplained,
+            }
         )
         if not consumers["total"] or invalid:
             reason = ", ".join(invalid) if invalid else "no live capabilities in the ledger"
