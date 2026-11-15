@@ -598,32 +598,7 @@ def test_rule_pick_without_a_cover_is_unresolved_not_no_delivery(brain):
     }
 
 
-def test_linker_resolves_rule_picks_within_the_read_bound(brain):
-    triage_shadow.corpus_path().parent.mkdir(parents=True, exist_ok=True)
-    triage_shadow.corpus_path().write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "ts": 100_000_000_000,
-                "triage_valid": True,
-                "live_proposal": True,
-                "rule_pick": "stranske/Orchestrator#1",
-                "triage_top_three": ["stranske/Orchestrator#2"],
-            }
-        )
-        + "\n"
-    )
-    record_pr_run("rule-shadow-worker", 77, ts=102)
-    calls = []
-    read = pr_reader({77: "Closes #1"}, calls)
-    assert outcomes._read_pr_covers() == {}
-    result = outcomes.link_triage_consumption(now=10_000, pr_reader=read)
-    assert result["pr_reads"] <= outcomes.PR_READS_PER_CALL
-    assert ("stranske/Orchestrator", 77) in outcomes._read_pr_covers()
-    assert calls == [("stranske/Orchestrator", 77)]
-
-
-def test_linker_rule_pick_drain_deliberate_break(brain, monkeypatch):
+def test_linker_resolves_rule_picks_within_the_read_bound(brain, monkeypatch):
     triage_shadow.corpus_path().parent.mkdir(parents=True, exist_ok=True)
     triage_shadow.corpus_path().write_text(
         json.dumps(
