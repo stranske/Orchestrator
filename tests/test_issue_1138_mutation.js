@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const { createHash } = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -40,6 +41,9 @@ test('records a baseline, the intended assertion failure, and a restored pass', 
   assert.equal(calls, 3);
   assert.deepEqual(fs.readFileSync(path.join(root, edit.file)), original);
   assert.equal(record.source_sha256, record.restored_source_sha256);
+  const broken = original.toString('utf8').replace(edit.before, edit.after);
+  assert.equal(record.broken_source_sha256, createHash('sha256').update(broken).digest('hex'));
+  assert.notEqual(record.broken_source_sha256, record.source_sha256);
   assert.match(record.test_sha256, /^[a-f0-9]{64}$/);
   assert.deepEqual([record.baseline_exit, record.red_exit, record.green_exit], [0, 1, 0]);
   assert.match(record.red_output, /AssertionError/);
@@ -57,6 +61,48 @@ test('missing pytest blocks before any production edit', (t) => {
   assert.equal(calls, 1);
   assert.deepEqual(fs.readFileSync(path.join(root, edit.file)), original);
 });
+
+test('a failed restored run cannot produce successful mutation evidence', (t) => {
+  const root = sources(t);
+  const original = fs.readFileSync(path.join(root, edit.file));
+  let calls = 0;
+  assert.throws(() => verify(root, () => {
+    calls += 1;
+    return verdict(calls !== 1);
+  }));
+  assert.equal(calls, 3);
+  assert.deepEqual(fs.readFileSync(path.join(root, edit.file)), original);
+});
+
+for (const [label, file] of [
+  ['production', edit.file],
+  ['test', 'tests/test_coverage_round_1138.py'],
+]) {
+  test(`rejects ${label} source changes during the baseline before mutating production`, (t) => {
+    const root = sources(t);
+    let calls = 0;
+    assert.throws(() => verify(root, () => {
+      calls += 1;
+      fs.appendFileSync(path.join(root, file), '# unexpected baseline change\n');
+      return verdict();
+    }), new RegExp(`baseline changed ${label} source`));
+    assert.equal(calls, 1);
+    assert.ok(fs.readFileSync(path.join(root, edit.file), 'utf8').includes(edit.before));
+  });
+
+  test(`rejects ${label} source changes during the deliberate break and restores production`, (t) => {
+    const root = sources(t);
+    const original = fs.readFileSync(path.join(root, edit.file));
+    let calls = 0;
+    assert.throws(() => verify(root, () => {
+      calls += 1;
+      if (calls === 2) fs.appendFileSync(path.join(root, file), '# unexpected mutation change\n');
+      return verdict(calls === 2);
+    }), new RegExp(`mutation run changed ${label} source`));
+    assert.equal(calls, 2);
+    assert.deepEqual(fs.readFileSync(path.join(root, edit.file)), original);
+  });
+}
 
 for (const [label, red] of [
   ['timeout', () => ({ status: null, error: new Error('ETIMEDOUT') })],

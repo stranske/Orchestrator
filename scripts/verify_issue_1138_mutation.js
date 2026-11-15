@@ -52,7 +52,19 @@ function verify(root, run = runPytest) {
   const original = fs.readFileSync(source);
   const testSource = fs.readFileSync(path.join(root, testFile));
   const baseline = requireVerdict(run(root), false);
-  const red = withMutation(root, { edits: [edit] }, () => requireVerdict(run(root), true));
+  assert.deepEqual(fs.readFileSync(source), original, 'baseline changed production source');
+  assert.deepEqual(fs.readFileSync(path.join(root, testFile)), testSource,
+    'baseline changed test source');
+  let brokenSource;
+  const red = withMutation(root, { edits: [edit] }, () => {
+    brokenSource = fs.readFileSync(source);
+    const output = requireVerdict(run(root), true);
+    assert.deepEqual(fs.readFileSync(source), brokenSource,
+      'mutation run changed production source');
+    assert.deepEqual(fs.readFileSync(path.join(root, testFile)), testSource,
+      'mutation run changed test source');
+    return output;
+  });
   assert.deepEqual(fs.readFileSync(source), original, 'production source was not restored');
   const green = requireVerdict(run(root), false);
   assert.deepEqual(fs.readFileSync(source), original, 'restored test changed production source');
@@ -61,6 +73,7 @@ function verify(root, run = runPytest) {
     test, file: edit.file, before: edit.before, broken: edit.after,
     command: [process.env.PYTHON || 'python3', ...args],
     source_sha256: digest(original), restored_source_sha256: digest(fs.readFileSync(source)),
+    broken_source_sha256: digest(brokenSource),
     test_sha256: digest(testSource),
     baseline_exit: 0, baseline_output: baseline,
     red_exit: 1, red_output: red, green_exit: 0, green_output: green,

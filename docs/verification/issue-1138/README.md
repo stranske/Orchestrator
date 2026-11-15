@@ -651,3 +651,44 @@ remain pending; this run did not push or merge.
 Attempts to add `needs-human` and post the blocker comment on PR #1380 were both
 rejected by the GitHub tool: `MCP tool call requires approval, but approval
 policy is never`. No remote task status or comment was changed.
+
+## Issue 1156 keepalive: mutation source integrity (2026-11-15 UTC)
+
+Measured checkout: `9130fbc78491b05248d805991cff11338462e754`, branch
+`codex/issue-1156`, PR #1380. The isolation correction is already present in
+`tests/test_coverage_round_1138.py`; its actual pytest verification remains
+blocked in this environment. No task or acceptance checkbox was completed.
+
+The working-tree mutation verifier now checks that baseline execution leaves
+production and test inputs unchanged, checks both inputs again during the
+deliberate break, and records the SHA-256 of the actual mutated production
+source. Five new regression cases cover baseline and mutation input changes
+and a failed restored run. These changes are **uncommitted** because Git's
+metadata directory is read-only.
+
+| Command | Observed result |
+|---|---|
+| `node tests/test_issue_1138_mutation.js` | Exit 0; 17 passed. These exercise the verifier with private fixtures and injected pytest results, not the production Python mutation. |
+| `node tests/test_issue_1138_artifacts.js` | Exit 0; 20 passed. Verifier regression tests only. |
+| `/opt/anaconda3/bin/python3 -m pytest -q tests/test_coverage_round_1138.py -m 'not slow'` | Exit 127; the requested interpreter does not exist. |
+| `/opt/anaconda3/bin/python3 -m pytest -q tests/test_verify_sharding.py::test_shard_lists_partition_every_collected_test_exactly_once -m 'not slow'` | Exit 127; the requested interpreter does not exist. |
+| `python3 -m pytest tests/test_coverage_round_1138.py --cov=src/periodic_report --cov-report=term-missing -m 'not slow'` | Exit 1; `No module named pytest`. No coverage table was produced; no new coverage target is claimed. |
+| `node scripts/verify_issue_1138_mutation.js` | Exit 1 at baseline; `spawnSync python3 EPERM` and `No module named pytest`. No production mutation or evidence append occurred. |
+| `node scripts/verify_issue_1138_artifacts.js > /tmp/issue-1156-artifact-evidence.json` | Exit 1 at baseline with the same errors; no artifact corruption occurred and the output file is empty. |
+| `git diff --check` | Exit 0. |
+| `git diff --exit-code HEAD -- src tests/test_coverage_round_1138.py docs/verification/issue-1138/head-ea6255b-combined.json docs/verification/issue-1138/head-ecb0707-combined.json docs/verification/issue-1138/mutation-proof-pass3.json` | Exit 0; production source, Python tests, coverage records, and historical mutation evidence remain unchanged. |
+| `git add scripts/verify_issue_1138_mutation.js tests/test_issue_1138_mutation.js` | Exit 128; cannot create `.git/index.lock`: read-only file system. The subsequent commit could not run. |
+
+Recovery in `/tmp/issue-1156-runtime` also failed: pip could not obtain pytest
+(`No matching distribution found for pytest`). Python 3.14.10 has neither pytest
+nor Black installed. No Python files or dependency pins changed, so the Python
+formatting gate does not apply to this JavaScript-only implementation.
+
+GitHub metadata confirmed PR #1380 was open with `draft=false` at measured head
+`9130fbc78491b05248d805991cff11338462e754`. A writable Git metadata directory and
+a working pytest runtime are required to commit and perform the real mutation,
+coverage, and shard checks. Final-head CI and guarded merge remain unverified.
+
+The requested blocker comment and `needs-human` label were attempted on PR #1380;
+both GitHub calls returned `MCP tool call requires approval, but approval policy
+is never`. Neither remote action completed.
