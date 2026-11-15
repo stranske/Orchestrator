@@ -9,6 +9,7 @@ default so the Dropbox code checkout never holds runtime state.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import copy
 import hashlib
 import json
@@ -890,7 +891,61 @@ def post_merge_commands_allowed(env: Mapping[str, Any]) -> bool:
 # repository") and required a 100% pass ratio over manual items it can never grade, so a
 # labelled PR could not pass (stranske/Orchestrator#1356: 1 of 12, FAIL). Manual criteria are
 # graded by the closer's judge; a manual-only spec is reported, never a block.
-NON_BLOCKING_VERDICTS = frozenset({"PASS", "MANUAL_ONLY"})
+#
+# The checks run state-free, exactly as CI runs the suite (ORCH_STATE_DIR and ORCH_LOCAL_RUNTIME
+# pointed at empty directories; .github/workflows/ci.yml explains why both knobs). Run against
+# this machine's live ledger, a test that CI passes failed on every commit, main included
+# (stranske/Orchestrator#1354, 2026-11-12: test_new_capabilities_carry_all_required_parts). Run
+# state-free, such a test skips exactly as it does in CI, so a skip here is a CI-documented
+# machine-state skip: its proof cannot be shown before merge. Owner decision 2026-11-15: that is
+# reported as UNVERIFIABLE_BEFORE_MERGE for the closer's judge, never a block. Real failures, and
+# hollow breaks whose tests did run, still block.
+NON_BLOCKING_VERDICTS = frozenset({"PASS", "MANUAL_ONLY", "UNVERIFIABLE_BEFORE_MERGE"})
+
+
+@contextlib.contextmanager
+def _state_free_environment():
+    """CI's state-free run for the checks: empty state dirs, skip reasons in the transcript."""
+    keys = ("ORCH_STATE_DIR", "ORCH_LOCAL_RUNTIME", "PYTEST_ADDOPTS")
+    saved = {key: os.environ.get(key) for key in keys}
+    with tempfile.TemporaryDirectory(prefix="runtime-ac-state-free-") as root:
+        os.environ["ORCH_STATE_DIR"] = str(Path(root) / "state")
+        os.environ["ORCH_LOCAL_RUNTIME"] = str(Path(root) / "runtime")
+        os.environ["PYTEST_ADDOPTS"] = " ".join(filter(None, [saved["PYTEST_ADDOPTS"], "-rs"]))
+        try:
+            yield
+        finally:
+            for key, value in saved.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+
+def _skipped_rows(transcript: str | None) -> list[dict]:
+    """Executable check rows whose test run (a break's green half included) reported skips."""
+    try:
+        rows = json.loads(transcript or "{}").get("check_results") or []
+    except (TypeError, ValueError):
+        return []
+    skipped = []
+    for row in rows:
+        if row.get("type") == "command":
+            source = row
+        elif row.get("type") == "deliberate_break":
+            source = (_deliberate_break_proof(row) or {}).get("green") or {}
+        else:
+            continue
+        text = "\n".join(str(source.get(key) or "") for key in ("stdout_tail", "stderr_tail"))
+        if SKIPPED_TESTS.search(text):
+            skipped.append(
+                {
+                    "check_id": row.get("check_id"),
+                    "type": row.get("type"),
+                    "skips": [ln for ln in text.splitlines() if ln.startswith("SKIPPED")][:10],
+                }
+            )
+    return skipped
 
 
 def _merge_base(worktree: str | Path) -> str:
@@ -933,9 +988,10 @@ def _exact_head_gate(
         if actual.returncode or actual.stdout.strip() != head:
             raise RuntimeError("runtime-AC checkout does not match the PR head")
         base = _merge_base(worktree)
-        checked = recheck_fn(
-            spec, worktree, allow_command_checks=allow_command_checks, base_ref=base
-        )
+        with _state_free_environment():
+            checked = recheck_fn(
+                spec, worktree, allow_command_checks=allow_command_checks, base_ref=base
+            )
     try:
         gate = dict(json.loads(checked.get("transcript") or "{}").get("gate") or {})
     except (TypeError, ValueError):
@@ -948,6 +1004,9 @@ def _exact_head_gate(
         verdict = "MANUAL_ONLY"
     elif result == "FAIL":
         verdict = "FAIL"
+    elif result == "UNRUNNABLE" and (skipped := _skipped_rows(checked.get("transcript"))):
+        verdict = "UNVERIFIABLE_BEFORE_MERGE"
+        gate["unverifiable_before_merge"] = skipped
     else:
         verdict = "UNRUNNABLE"
     gate.update(
