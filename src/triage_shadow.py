@@ -405,39 +405,15 @@ def summary(path: Path | None = None) -> dict:
             totals[arm]["judged"] += 1
             totals[arm]["merged_durable"] += int(found[0] == 1 and found[1] == "durable")
 
-    def rule_run_id(conn, target: str, since_ts: float) -> str | None:
-        repo, _, issue = target.rpartition("#")
-        if not repo or not issue.isdigit():
-            return None
-        covers = [
-            cover
-            for cover in outcomes._read_pr_covers().values()
-            if cover.get("repo") == repo and int(issue) in cover.get("covers", [])
-        ]
-        if not covers:
-            return None
-        for cover in sorted(covers, key=lambda row: (row.get("ts", 0), row["pr"]), reverse=True):
-            found = conn.execute(
-                "SELECT run_id FROM runs WHERE target=? AND mode != 'role' AND ts > ? "
-                "ORDER BY ts DESC,run_id DESC LIMIT 1",
-                (f"{repo}#{cover['pr']}", since_ts),
-            ).fetchone()
-            if found:
-                return found[0]
-        return None
-
-    def rule_pick_repo_searched(target: str) -> bool:
-        repo, _, _ = target.rpartition("#")
-        if not repo:
-            return False
-        return any(cover.get("repo") == repo for cover in outcomes._read_pr_covers().values())
+    pr_covers = outcomes._read_pr_covers()
 
     def grade_rule_pick(conn, rule_pick: str, since_ts: float) -> None:
-        run_id = rule_run_id(conn, rule_pick, since_ts)
-        if run_id:
+        # The drain's own predicate: "no delivery" only once every candidate pull request of THIS
+        # cycle has a final read and none covers the pick; anything still to read is unresolved.
+        state, run_id = outcomes.rule_pick_cover_state(conn, rule_pick, since_ts, pr_covers)
+        if state == "covered":
             grade_run(conn, "rule", run_id, since_ts)
-            return
-        if rule_pick_repo_searched(rule_pick):
+        elif state == "none":
             totals["rule"]["no_delivery"] += 1
         else:
             totals["rule"]["unresolved"] += 1
@@ -530,6 +506,7 @@ def summary_line(path: Path | None = None) -> str:
         unresolved = sum(
             linked.get(consumption_key(row), {}).get("status") == "unresolved" for row in consumed
         )
+        drainable = outcomes.rule_picks_drainable_next_call() if data["valid_cycles"] else 0
     except (OSError, UnicodeError, ValueError, KeyError, sqlite3.Error) as exc:
         return f"triage shadow: UNKNOWN — outcome evidence unreadable ({type(exc).__name__})"
     if data["malformed_rows"]:
@@ -537,8 +514,6 @@ def summary_line(path: Path | None = None) -> str:
             f"triage shadow: UNKNOWN — malformed corpus rows {data['malformed_rows']}; "
             f"valid cycles {data['valid_cycles']}"
         )
-
-    drainable = outcomes.rule_picks_drainable_next_call() if data["valid_cycles"] else 0
 
     def percent(arm):
         count = data[arm]["judged"]

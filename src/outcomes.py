@@ -82,6 +82,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+from contextlib import closing
 from pathlib import Path
 
 import feedback
@@ -2021,7 +2022,9 @@ def first_run_for_pick(
     return None, stopped or "none"
 
 
-def _rule_pick_cover_candidates(conn, rule_pick: str, since_ts: float) -> list[tuple[int, str]]:
+def _rule_pick_cover_candidates(conn, rule_pick: str, since_ts: float) -> list[tuple[str, int]]:
+    """``(run_id, pr_number)`` for every non-role run on a pull request in the pick's repository
+    after ``since_ts``, oldest first: the order the drain reads them in."""
     repo, _, tail = rule_pick.rpartition("#")
     if not repo or not tail.isdigit():
         return []
@@ -2031,23 +2034,48 @@ def _rule_pick_cover_candidates(conn, rule_pick: str, since_ts: float) -> list[t
         (since_ts,),
     ).fetchall()
     return [
-        (int(pr_number), target)
-        for _run_id, target, pr_number in rows
+        (run_id, int(pr_number))
+        for run_id, target, pr_number in rows
         if target.rpartition("#")[0] == repo
     ]
+
+
+def rule_pick_cover_state(
+    conn, rule_pick: str, since_ts: float, covers: dict[tuple[str, int], dict]
+) -> tuple[str, str | None]:
+    """One cycle's cover state, walked the way the drain reads: oldest candidate pull request first.
+
+    ``("covered", run_id)`` at the first candidate whose recorded cover names the pick, with that
+    candidate's first run; ``("pending", None)`` at the first candidate the drain would still read
+    (no record, or a record that is not final); ``("none", None)`` once at least one candidate was
+    read, every candidate's read is final, and none covers the pick; ``("no_candidates", None)``
+    when no pull request in the repository has a run since the cycle, so there is nothing to read
+    yet (graded unresolved, never drainable). The drain, the drainable count and the rule arm's
+    grade all use this one predicate, so the count can never name work the drain would not do, and
+    a pick is graded "no delivery" only when its own candidates were all read.
+    """
+    repo, _, tail = rule_pick.rpartition("#")
+    if not repo or not tail.isdigit():
+        return "no_candidates", None
+    issue = int(tail)
+    candidates = _rule_pick_cover_candidates(conn, rule_pick, since_ts)
+    if not candidates:
+        return "no_candidates", None
+    for run_id, pr_number in candidates:
+        known = covers.get((repo, pr_number))
+        if known is None or not known.get("final"):
+            return "pending", None
+        if issue in known.get("covers", []):
+            return "covered", run_id
+    return "none", None
 
 
 def rule_pick_needs_cover_read(
     conn, rule_pick: str, since_ts: float, covers: dict[tuple[str, int], dict] | None = None
 ) -> bool:
-    """A rule pick still owes at least one pull-request read before its cover memory is final."""
+    """The drain would read at least one more pull request for this cycle (it stops at a cover)."""
     covers = _read_pr_covers() if covers is None else covers
-    for pr_number, _ in _rule_pick_cover_candidates(conn, rule_pick, since_ts):
-        repo = rule_pick.rpartition("#")[0]
-        known = covers.get((repo, pr_number))
-        if known is None or not known.get("final"):
-            return True
-    return False
+    return rule_pick_cover_state(conn, rule_pick, since_ts, covers)[0] == "pending"
 
 
 def _drain_rule_pick_covers(
@@ -2056,7 +2084,7 @@ def _drain_rule_pick_covers(
     repo, _, _ = rule_pick.rpartition("#")
     search.ran = True
     stopped = None
-    for pr_number, _target in _rule_pick_cover_candidates(conn, rule_pick, since_ts):
+    for _run_id, pr_number in _rule_pick_cover_candidates(conn, rule_pick, since_ts):
         key = (repo, pr_number)
         if stopped:
             if not search.settled(key):
@@ -2070,8 +2098,25 @@ def _drain_rule_pick_covers(
             break
 
 
+def rule_pick_cycles(rows: list[dict]) -> list[tuple[str, float]]:
+    """Distinct ``(rule_pick, since_ts)`` cycles, oldest first. The same issue picked at two times is
+    two cycles: a cover found for the first does not settle a later pull request for the second."""
+    seen: set[tuple[str, int]] = set()
+    cycles = []
+    for row in sorted(rows, key=lambda r: r["ts"]):
+        key = (row["rule_pick"], row["ts"])
+        if key not in seen:
+            seen.add(key)
+            cycles.append((row["rule_pick"], row["ts"] / 1_000_000_000))
+    return cycles
+
+
 def rule_picks_drainable_next_call() -> int:
-    """How many rule picks the next linker call can read, oldest backlog first."""
+    """How many rule-pick cycles the next linker call would read for, oldest backlog first.
+
+    Reads the Brain read-only: this runs inside a report, which must never migrate the schema or
+    take the write lock. Capped at PR_READS_PER_CALL, since each such cycle needs at least one read.
+    """
     import triage_shadow
 
     covers = _read_pr_covers()
@@ -2085,15 +2130,11 @@ def rule_picks_drainable_next_call() -> int:
     )
     if not rows:
         return 0
-    seen: set[str] = set()
     pending = 0
-    with feedback._conn() as conn:
-        for row in rows:
-            rule_pick = row["rule_pick"]
-            if rule_pick in seen:
-                continue
-            seen.add(rule_pick)
-            if rule_pick_needs_cover_read(conn, rule_pick, row["ts"] / 1_000_000_000, covers):
+    db_path = Path(feedback.DB_PATH).resolve()
+    with closing(sqlite3.connect(db_path.as_uri() + "?mode=ro", uri=True, timeout=5)) as conn:
+        for rule_pick, since_ts in rule_pick_cycles(rows):
+            if rule_pick_cover_state(conn, rule_pick, since_ts, covers)[0] == "pending":
                 pending += 1
                 if pending >= PR_READS_PER_CALL:
                     return PR_READS_PER_CALL
@@ -2193,24 +2234,17 @@ def link_triage_consumption(*, now: float | None = None, limit: int = 100, pr_re
         key=lambda r: r["ts"],
     )
     consumption_unread = set(search.unread)
-    seen_rule_picks: set[str] = set()
     with feedback._conn() as conn:
-        for row in corpus_rows:
+        # Each (pick, time) cycle separately; search.covers caches every read, so a pull request
+        # shared by two cycles of the same issue is read once.
+        for rule_pick, since_ts in rule_pick_cycles(corpus_rows):
             if search.left <= 0:
                 break
-            rule_pick = row["rule_pick"]
-            if rule_pick in seen_rule_picks:
+            if rule_pick_cover_state(conn, rule_pick, since_ts, search.covers)[0] != "pending":
                 continue
-            since_ts = row["ts"] / 1_000_000_000
-            if not rule_pick_needs_cover_read(conn, rule_pick, since_ts, search.covers):
-                seen_rule_picks.add(rule_pick)
-                continue
-            _, _, tail = rule_pick.rpartition("#")
-            if not tail.isdigit():
-                seen_rule_picks.add(rule_pick)
-                continue
-            _drain_rule_pick_covers(conn, rule_pick, since_ts, search, int(tail))
-            seen_rule_picks.add(rule_pick)
+            _drain_rule_pick_covers(
+                conn, rule_pick, since_ts, search, int(rule_pick.rpartition("#")[2])
+            )
     if search.ran:
         result["pr_reads"] = search.reads
         result["unread_candidates"] = len({k for k in consumption_unread if not search.settled(k)})

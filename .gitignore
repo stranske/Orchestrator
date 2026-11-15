@@ -244,3 +244,6 @@ node_modules/
 # GitNexus code-map cache (a symlink the weekly design review creates). Committed so `gitnexus analyze`
 # finds it and stops appending an uncommitted line, which made the mirror sync refuse the clone as dirty.
 .gitnexus
+
+# Per-shard test output written by local/CI test runs; never committed (stray on #1385).
+shard-results/

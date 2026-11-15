@@ -1709,3 +1709,107 @@ def test_duplicate_link_receipts_refuse_before_any_credit(consumable, legacy, se
     assert triage_shadow.linked_path().read_bytes() == before
     with feedback._conn() as conn:
         assert conn.execute("SELECT COUNT(*) FROM influence_edges").fetchone()[0] == 0
+
+
+def write_rule_cycles(*cycles):
+    """Live rule-pick cycles, ``(rule_pick, ts_seconds)``, as the corpus records them."""
+    triage_shadow.corpus_path().parent.mkdir(parents=True, exist_ok=True)
+    triage_shadow.corpus_path().write_text(
+        "".join(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "ts": ts * 1_000_000_000,
+                    "triage_valid": True,
+                    "live_proposal": True,
+                    "rule_pick": pick,
+                    "triage_top_three": [],
+                }
+            )
+            + "\n"
+            for pick, ts in cycles
+        )
+    )
+    return triage_shadow.corpus_path()
+
+
+def remember_cover(number, covers, final=True):
+    triage_shadow._append(
+        outcomes._pr_cover_path(),
+        {"repo": "stranske/Orchestrator", "pr": number, "covers": covers, "ts": 1, "final": final},
+    )
+
+
+def test_a_remembered_cover_settles_the_cycle_even_with_a_later_unread_candidate(brain):
+    """Review on #1385: the drain stops at the first covering PR, so the count must too."""
+    write_rule_cycles(("stranske/Orchestrator#1", 100))
+    record_pr_run("covering", 77, ts=102)
+    record_pr_run("later-unread", 78, ts=103)
+    remember_cover(77, [1])
+    assert outcomes.rule_picks_drainable_next_call() == 0
+    calls = []
+    outcomes.link_triage_consumption(now=10_000, pr_reader=pr_reader({78: ""}, calls))
+    assert calls == []
+
+
+def test_two_cycles_of_one_issue_are_drained_separately(brain):
+    """Review on #1385: picked at 100 and 200; PR 77 (run 150) covers and is remembered, PR 78 (run
+    250) is unread. The second cycle must still read PR 78, on this call and not never."""
+    write_rule_cycles(("stranske/Orchestrator#1", 100), ("stranske/Orchestrator#1", 200))
+    record_pr_run("first-cover", 77, ts=150)
+    record_pr_run("second-cover", 78, ts=250)
+    remember_cover(77, [1])
+    assert outcomes.rule_picks_drainable_next_call() == 1
+    calls = []
+    outcomes.link_triage_consumption(now=10_000, pr_reader=pr_reader({78: "Closes #1"}, calls))
+    assert calls == [("stranske/Orchestrator", 78)]
+    assert outcomes.rule_picks_drainable_next_call() == 0
+
+
+def test_an_unrelated_or_non_final_cover_leaves_the_rule_pick_unresolved(brain):
+    """Review on #1385: a cover for another issue, or a negative record not yet final, is not proof
+    that this pick's own candidates were read, so the pick is unresolved, never no delivery."""
+    path = write_rule_cycles(("stranske/Orchestrator#1", 100))
+    record_pr_run("other-issue", 77, ts=102)
+    record_pr_run("young-pr", 78, ts=103)
+    remember_cover(77, [5])
+    remember_cover(78, [], final=False)
+    assert triage_shadow.summary(path)["rule"]["unresolved"] == 1
+    assert triage_shadow.summary(path)["rule"]["no_delivery"] == 0
+    remember_cover(78, [])  # read again once settled: final, and it does not cover #1
+    assert triage_shadow.summary(path)["rule"]["no_delivery"] == 1
+    assert triage_shadow.summary(path)["rule"]["unresolved"] == 0
+
+
+def test_summary_line_reports_unknown_when_the_drainable_scan_fails(brain, monkeypatch):
+    """Review on #1385: the drainable scan sits inside the report's error guard."""
+    write_rule_cycles(("stranske/Orchestrator#1", 100))
+    with feedback._conn():
+        pass
+
+    def broken():
+        raise sqlite3.OperationalError("attempt to write a readonly database")
+
+    monkeypatch.setattr(outcomes, "rule_picks_drainable_next_call", broken)
+    line = triage_shadow.summary_line()
+    assert line.startswith("triage shadow: UNKNOWN — outcome evidence unreadable")
+
+
+def test_rule_pick_reads_are_bounded_oldest_first_and_continue_next_call(brain):
+    """Review on #1385: more rule-pick candidates than the bound; no consumption records, so the
+    rule pass alone decides what is read."""
+    bound = outcomes.PR_READS_PER_CALL
+    write_rule_cycles(("stranske/Orchestrator#1", 100))
+    numbers = list(range(200, 200 + bound + 2))
+    for offset, number in enumerate(numbers):
+        record_pr_run(f"candidate-{number}", number, ts=101 + offset)
+    calls = []
+    read = pr_reader({n: "" for n in numbers}, calls)
+    first = outcomes.link_triage_consumption(now=10_000, pr_reader=read)
+    assert calls == [("stranske/Orchestrator", n) for n in numbers[:bound]]
+    assert first["pr_reads"] == bound
+    assert outcomes.rule_picks_drainable_next_call() == 1
+    calls.clear()
+    outcomes.link_triage_consumption(now=10_000, pr_reader=read)
+    assert calls == [("stranske/Orchestrator", n) for n in numbers[bound:]]
+    assert outcomes.rule_picks_drainable_next_call() == 0
