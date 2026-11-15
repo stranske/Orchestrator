@@ -692,3 +692,92 @@ coverage, and shard checks. Final-head CI and guarded merge remain unverified.
 The requested blocker comment and `needs-human` label were attempted on PR #1380;
 both GitHub calls returned `MCP tool call requires approval, but approval policy
 is never`. Neither remote action completed.
+
+## Issue 1156 keepalive: artifact experiment input integrity (2026-11-15 UTC)
+
+Measured checkout: `af45b0abe4c279bb906986124ea396e1fa03f133`,
+branch `codex/issue-1156`, PR #1380. The first task's catalog-traffic and
+unused-adapter removals are already present, together with malformed pattern
+artifacts, subprocess isolation, the temporary capabilities path, and all four
+pattern-miner result assertions. Local Python execution is still blocked, so
+this run does not complete that task or any other acceptance checkbox.
+
+The working-tree change to `scripts/verify_issue_1138_artifacts.js` advances the
+artifact-lock verification task: it checks both coverage records and the test
+source immediately after the baseline and while the intended corruption is
+still applied. Previously, a runner could rewrite the active corrupted record
+during the deliberate break and have that rewrite silently removed by restoration,
+allowing the verifier to return evidence for changed inputs. Now any such change
+rejects evidence; the intentional corruption is still restored in `finally`.
+
+Eighteen regression cases exercise changes to the active record, the other record,
+and the test source in each phase of both experiments. Against the committed
+verifier copied to a private temporary tree, the expanded suite exits 1 with
+30 passed and 8 failed. With the fix it exits 0 with all 38 passed. The existing
+production-mutation verifier suite also exits 0 with all 17 passed. These are
+JavaScript verifier tests with injected runner results; they do not substitute
+for the real Python deliberate-break experiments.
+
+| Local command | Observed result |
+|---|---|
+| `node tests/test_issue_1138_artifacts.js` | Exit 0; 38 passed. |
+| `node tests/test_issue_1138_mutation.js` | Exit 0; 17 passed. |
+| `/opt/anaconda3/bin/python3 -m pytest -q tests/test_coverage_round_1138.py -m 'not slow'` | Exit 127; required interpreter does not exist. |
+| `/opt/anaconda3/bin/python3 -m pytest -q tests/test_verify_sharding.py::test_shard_lists_partition_every_collected_test_exactly_once -m 'not slow'` | Exit 127; required interpreter does not exist. |
+| `python3 -m pytest tests/test_coverage_round_1138.py --cov=src/periodic_report --cov-report=term-missing -m 'not slow'` | Exit 1; no module named pytest. No coverage table or percentage produced. |
+| `node scripts/verify_issue_1138_mutation.js` | Exit 1 at baseline; reports `spawnSync python3 EPERM` and no module named pytest. Historical mutation evidence unchanged. |
+| `node scripts/verify_issue_1138_artifacts.js > /tmp/issue-1156-artifact-locks.json` | Exit 1 at baseline with the same errors; output file empty, no record corruption applied. |
+| `git diff --check` | Exit 0. |
+
+Python 3.11.18, 3.12.16, 3.13.18, 3.14.10, and 3.15.2 all lack pytest.
+An install attempt targeting `/tmp/issue-1156-deps`, including an explicit
+`https://pypi.org/simple` attempt, failed with no matching distribution for pytest.
+The local pip cache contains no pytest or Black wheel. No Python file was changed.
+
+### Observed CI for the existing committed head
+
+GitHub's commit workflow-run query for
+`af45b0abe4c279bb906986124ea396e1fa03f133` reports successful
+[CI run 43688492376](https://github.com/stranske/Orchestrator/actions/runs/43688492376)
+and [Gate run 43688492872](https://github.com/stranske/Orchestrator/actions/runs/43688492872).
+Their job queries report:
+
+| CI job | Conclusion |
+|---|---|
+| [pytest + coverage shard 1/6](https://github.com/stranske/Orchestrator/actions/runs/43688492376/job/132733901809) | success |
+| [pytest + coverage shard 3/6](https://github.com/stranske/Orchestrator/actions/runs/43688492376/job/132733901936) | success |
+| [flat exec-mirror shard 1/6](https://github.com/stranske/Orchestrator/actions/runs/43688492376/job/132733901957) | success |
+| [pytest + coverage shard 2/6](https://github.com/stranske/Orchestrator/actions/runs/43688492376/job/132733901975) | success |
+| [flat exec-mirror shard 2/6](https://github.com/stranske/Orchestrator/actions/runs/43688492376/job/132733901978) | success |
+| [pytest + coverage shard 5/6](https://github.com/stranske/Orchestrator/actions/runs/43688492376/job/132733902001) | success |
+| [flat exec-mirror shard 5/6](https://github.com/stranske/Orchestrator/actions/runs/43688492376/job/132733902012) | success |
+| [flat exec-mirror shard 3/6](https://github.com/stranske/Orchestrator/actions/runs/43688492376/job/132733902016) | success |
+| [flat exec-mirror shard 4/6](https://github.com/stranske/Orchestrator/actions/runs/43688492376/job/132733902035) | success |
+| [flat exec-mirror shard 6/6](https://github.com/stranske/Orchestrator/actions/runs/43688492376/job/132733902042) | success |
+| [pytest + coverage shard 4/6](https://github.com/stranske/Orchestrator/actions/runs/43688492376/job/132733902043) | success |
+| [pytest + coverage shard 6/6](https://github.com/stranske/Orchestrator/actions/runs/43688492376/job/132733902077) | success |
+| [verify.py aggregate + combined coverage](https://github.com/stranske/Orchestrator/actions/runs/43688492376/job/132734258001) | success |
+| [verify.py aggregate in the flat exec-mirror shape](https://github.com/stranske/Orchestrator/actions/runs/43688492376/job/132734424923) | success |
+| [Gate summary](https://github.com/stranske/Orchestrator/actions/runs/43688492872/job/132734338776) | success |
+
+These CI results apply to the named committed head, before this run's working-tree
+changes. They do not establish final-head acceptance for those changes, the
+specified local-interpreter commands, or the real mutation experiments.
+The final review and guarded merge remain pending.
+
+The commit preparation attempt failed:
+
+```text
+git add scripts/verify_issue_1138_artifacts.js tests/test_issue_1138_artifacts.js
+fatal: Unable to create '/home/runner/work/Orchestrator/Orchestrator/.git/index.lock': Read-only file system
+```
+
+The source/test changes and this log remain uncommitted. A writable Git checkout
+and a Python environment with pytest are required to complete delivery. No
+production source, Python tests, frozen coverage records, or historical
+`mutation-proof-pass3.json` data changed. PR #1380 was verified open and ready
+for review (`draft=false`).
+
+GitHub rejected both the blocker comment and the `needs-human` label request
+with `MCP tool call requires approval, but approval policy is never`. Neither
+remote mutation occurred; this local record preserves the blocker details.

@@ -132,3 +132,32 @@ test('rejects an unexpected starting gain without invoking pytest', (t) => {
   fs.writeFileSync(path.join(root, experiments[0].file), '{"gain": 297}\n');
   assert.throws(() => verify(root, () => assert.fail('must not run')), /unexpected starting value/);
 });
+
+for (const index of [0, 1]) {
+  for (const phase of ['baseline', 'mutation', 'restored']) {
+    for (const target of ['active record', 'other record', 'test source']) {
+      test(`rejects ${target} changes during ${phase} in experiment ${index + 1}`, (t) => {
+        const { root, originals } = inputs(t);
+        const phaseCall = ['baseline', 'mutation', 'restored'].indexOf(phase);
+        const file = target === 'test source' ? 'tests/test_coverage_round_1138.py'
+          : experiments[target === 'active record' ? index : 1 - index].file;
+        let calls = 0;
+        assert.throws(() => verify(root, (_cwd, name) => {
+          const call = calls++;
+          if (call === index * 3 + phaseCall) {
+            fs.appendFileSync(path.join(root, file), '\n');
+          }
+          return verdict(name, call % 3 === 1,
+            Math.floor(call / 3) === 0 ? '296 == 297' : '297 == 296');
+        }), /coverage record (?:changed|was not restored)|test source changed/);
+        assert.equal(calls, index * 3 + phaseCall + 1);
+        // The intended corruption is always restored, including when the runner
+        // rewrites that record during the deliberately failing test.
+        if (phase === 'mutation') {
+          const active = experiments[index].file;
+          assert.deepEqual(fs.readFileSync(path.join(root, active)), originals.get(active));
+        }
+      });
+    }
+  }
+}

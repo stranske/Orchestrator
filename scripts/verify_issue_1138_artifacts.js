@@ -43,28 +43,34 @@ function verify(root, run = runPytest) {
     file, fs.readFileSync(path.join(root, file)),
   ]));
   const testSource = fs.readFileSync(path.join(root, testFile));
-  function requireRestored() {
+  function requireInputs(activeFile, activeBytes) {
     for (const [file, original] of originals) {
-      assert.deepEqual(fs.readFileSync(path.join(root, file)), original,
-        `coverage record was not restored: ${file}`);
+      const expected = file === activeFile ? activeBytes : original;
+      assert.deepEqual(fs.readFileSync(path.join(root, file)), expected,
+        `coverage record changed: ${file}`);
     }
     assert.deepEqual(fs.readFileSync(path.join(root, testFile)), testSource,
       'test source changed');
   }
   return experiments.map(({ test, file, field, failurePattern }) => {
-    requireRestored();
+    requireInputs();
     const original = originals.get(file);
     const record = JSON.parse(original.toString('utf8'));
     assert.equal(record[field], 296, `unexpected starting value: ${file}:${field}`);
     const options = { testNode: `${testFile}::${test}`, failurePattern };
     const baseline = requireVerdict(run(root, test), false, options);
+    requireInputs();
     const broken = `${JSON.stringify({ ...record, [field]: 297 }, null, 2)}\n`;
     const red = withMutation(root, { edits: [{
       file, before: original.toString('utf8'), after: broken,
-    }] }, () => requireVerdict(run(root, test), true, options));
-    requireRestored();
+    }] }, () => {
+      const output = requireVerdict(run(root, test), true, options);
+      requireInputs(file, Buffer.from(broken));
+      return output;
+    });
+    requireInputs();
     const green = requireVerdict(run(root, test), false, options);
-    requireRestored();
+    requireInputs();
     return {
       test, file, field, before: 296, broken: 297,
       command: [process.env.PYTHON || 'python3', ...args(test)],
