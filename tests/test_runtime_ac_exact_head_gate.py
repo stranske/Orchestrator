@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -141,3 +142,82 @@ def test_recheck_measures_the_break_against_the_given_base(monkeypatch, tmp_path
     assert check["base_ref"] == "c" * 40
     runtime_ac_gate.recheck_merged(spec, tmp_path, allow_command_checks=True)
     assert captured["spec"]["acceptance_criteria"][0]["checks"][0]["base_ref"] == "HEAD^"
+
+
+def _transcript(rows):
+    return json.dumps({"check_results": rows, "gate": {"verdict": "NEEDS_REVIEW"}})
+
+
+def test_checks_run_state_free_like_ci_and_the_environment_is_restored(
+    tmp_path, monkeypatch, pr_checkout
+):
+    """stranske/Orchestrator#1354 (2026-11-12): a test CI passes failed here against the live ledger."""
+    checkout, _, head = pr_checkout
+    monkeypatch.setenv("ORCH_STATE_DIR", "/live/state")
+    monkeypatch.delenv("ORCH_LOCAL_RUNTIME", raising=False)
+    seen = {}
+
+    def recheck(spec_arg, wt, *, allow_command_checks, base_ref):
+        seen.update(
+            {
+                k: os.environ.get(k)
+                for k in ("ORCH_STATE_DIR", "ORCH_LOCAL_RUNTIME", "PYTEST_ADDOPTS")
+            }
+        )
+        return {"result": "PASS"}
+
+    @contextlib.contextmanager
+    def worktree(target, sha):
+        yield checkout
+
+    runtime_ac_gate._exact_head_gate(
+        {}, TARGET, head, allow_command_checks=True, worktree_fn=worktree, recheck_fn=recheck
+    )
+    assert seen["ORCH_STATE_DIR"] not in (None, "/live/state")
+    assert seen["ORCH_LOCAL_RUNTIME"] and "-rs" in seen["PYTEST_ADDOPTS"]
+    assert os.environ["ORCH_STATE_DIR"] == "/live/state"
+    assert "ORCH_LOCAL_RUNTIME" not in os.environ
+
+
+def test_a_machine_state_skip_goes_to_the_judge_not_a_block(tmp_path, monkeypatch, pr_checkout):
+    checkout, _, head = pr_checkout
+    skipped = _transcript(
+        [
+            {
+                "check_id": "AC1-CMD",
+                "type": "command",
+                "status": "PASS",
+                "stdout_tail": "SKIPPED [1] x.py:9: capability ledger has no row\n24 passed, 1 skipped",
+            },
+        ]
+    )
+    result, _ = _gate(
+        tmp_path,
+        monkeypatch,
+        checkout,
+        head,
+        {"result": "UNRUNNABLE", "reason": "tests_skipped", "transcript": skipped},
+    )
+    assert result["blocks"] is False and result["verdict"] == "UNVERIFIABLE_BEFORE_MERGE", result
+
+
+def test_a_hollow_break_whose_tests_ran_still_blocks(tmp_path, monkeypatch, pr_checkout):
+    checkout, _, head = pr_checkout
+    ran = _transcript(
+        [
+            {
+                "check_id": "AC1-CMD",
+                "type": "command",
+                "status": "PASS",
+                "stdout_tail": "30 passed",
+            },
+        ]
+    )
+    result, _ = _gate(
+        tmp_path,
+        monkeypatch,
+        checkout,
+        head,
+        {"result": "UNRUNNABLE", "reason": "hollow_break", "transcript": ran},
+    )
+    assert result["blocks"] is True and result["verdict"] == "UNRUNNABLE", result

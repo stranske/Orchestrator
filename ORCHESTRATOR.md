@@ -312,7 +312,11 @@ cursor-agent live outside the default PATH):
   that will merge. Given the exact head (merge_guard passes `--expected-head`), the gate runs the spec in
   a disposable checkout of that commit, measures each deliberate break against the merge base with
   `origin/main`, and returns `PASS` only when every executable check passes. Manual criteria are
-  reported for the closer's judge and never block; a manual-only spec returns `MANUAL_ONLY`. (`tick.py` ran the same gate before a remote delegation no closer item can reach,
+  reported for the closer's judge and never block; a manual-only spec returns `MANUAL_ONLY`. The checks
+  run state-free, as CI runs the suite (`ORCH_STATE_DIR` and `ORCH_LOCAL_RUNTIME` pointed at empty
+  directories), so a test that reads this machine's live ledger skips here exactly as in CI. A check
+  whose tests skip that way returns `UNVERIFIABLE_BEFORE_MERGE` with the skip reasons for the judge, never
+  a block; real failures and hollow breaks whose tests ran still block. (`tick.py` ran the same gate before a remote delegation no closer item can reach,
   until 2026-10-05; it no longer examines closer items.) Command/non-regression
   checks still require `ORCH_RUNTIME_AC_ALLOW_COMMANDS=1`; `ORCH_RUNTIME_AC_TIMEOUT` sets the per-check
   timeout. This is a **hard opt-in machine gate**, not an advisory review: only explicitly labeled or
