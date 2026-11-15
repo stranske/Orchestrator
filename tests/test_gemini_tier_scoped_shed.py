@@ -1,7 +1,9 @@
-"""An exhausted Argon quota sheds only gemini's `full` tier; Flash (cheap/mid) keeps routing.
+"""Gemini quota incidents and the tier-scope machinery.
 
-On 2026-11-07 one Argon quota incident shed all of gemini until 2026-11-14 while Flash still
-answered, and the Flash-vs-Argon triage trial got zero gemini runs.
+All Gemini models share ONE provider quota (agy `/usage`, 2026-11-15; stranske/Orchestrator#1387),
+so a gemini quota incident sheds the whole seat. The tier-scoped (`full` only) path remains for a
+model family listed in rate_incidents.GEMINI_SEPARATE_QUOTA_FAMILIES, which is empty today; the
+scoped-marker tests below exercise that machinery directly.
 """
 
 from __future__ import annotations
@@ -54,20 +56,28 @@ def _marker(shed_dir) -> dict:
     return json.loads((shed_dir / "gemini").read_text())
 
 
-def test_argon_quota_end_to_end_caps_gemini_at_flash_instead_of_shedding_it(shed_dir, monkeypatch):
+ARGON_HIGH_FAILURE = ARGON_FAILURE.replace("gemini-4-argon-medium", "gemini-4-argon-high")
+
+
+def test_argon_quota_incident_sheds_the_whole_gemini_seat_on_a_shared_pool(shed_dir):
+    """stranske/Orchestrator#1387: Argon, Hydrogen and Flash share one quota, so an Argon quota
+    incident stands the whole seat down instead of capping it at mid."""
+    _record(ARGON_HIGH_FAILURE, "run-argon")
+    marker = _marker(shed_dir)
+    assert marker["model"] == "gemini-4-argon-high"
+    assert "tier_scope" not in marker
+    assert capacity._shed("gemini") is True, "the whole seat is shed, not capped at mid"
+    assert capacity.tier_ceilings() == {}
+    assert adapters.tier_ceiling("gemini") is None
+
+
+def test_a_family_with_its_own_quota_group_still_gets_a_full_tier_scope(shed_dir, monkeypatch):
+    """The scope is one constant away: listing a family restores the `full`-only shed."""
+    monkeypatch.setattr(rate_incidents, "GEMINI_SEPARATE_QUOTA_FAMILIES", ("argon",))
     _record(ARGON_FAILURE, "run-argon")
     marker = _marker(shed_dir)
-    assert marker["model"] == "gemini-4-argon-medium" and marker["tier_scope"] == "full"
-    assert capacity._shed("gemini") is False, "the seat stays routable"
-    exports = capacity.tier_ceiling_exports(environ={})
-    assert "export ORCH_GEMINI_MAX_TIER=mid" in exports
-    assert any("capped at mid" in line and "gemini-4-argon-medium" in line for line in exports)
-    monkeypatch.setenv("ORCH_GEMINI_MAX_TIER", "mid")
-    assert adapters.effective_tier("gemini", "full") == "mid"
-    assert (
-        adapters.resolve_model("gemini", adapters.effective_tier("gemini", "full"))
-        == adapters.MODEL_TIERS["gemini"]["mid"]
-    )
+    assert marker["tier_scope"] == "full" and capacity._shed("gemini") is False
+    assert "export ORCH_GEMINI_MAX_TIER=mid" in capacity.tier_ceiling_exports(environ={})
 
 
 def test_a_flash_quota_still_sheds_the_whole_seat(shed_dir):
@@ -129,7 +139,9 @@ def test_an_unknown_scope_is_a_whole_seat_shed(shed_dir):
     assert capacity._shed("gemini") is True and capacity.tier_ceilings() == {}
 
 
-def test_an_explicit_owner_ceiling_is_kept(shed_dir):
+def test_an_explicit_owner_ceiling_is_kept(shed_dir, monkeypatch):
+    # Scope machinery: only a family with its own quota group produces a scoped marker (#1387).
+    monkeypatch.setattr(rate_incidents, "GEMINI_SEPARATE_QUOTA_FAMILIES", ("argon",))
     _record(ARGON_FAILURE, "run-argon")
     exports = capacity.tier_ceiling_exports(environ={"ORCH_GEMINI_MAX_TIER": "cheap"})
     assert not any(line.startswith("export ") for line in exports)
@@ -243,15 +255,14 @@ def _runs_db(tmp_path, monkeypatch, run_id, model):
     monkeypatch.setattr(feedback, "DB_PATH", db)
 
 
-def test_refusal_without_init_event_is_scoped_from_the_recorded_run_model(
-    shed_dir, tmp_path, monkeypatch
-):
+def test_refusal_without_init_event_reads_the_recorded_run_model(shed_dir, tmp_path, monkeypatch):
     """Workflows#4515: the 429 came before agy's init event, so the evidence named no model."""
     _runs_db(tmp_path, monkeypatch, "run-lane", "agy:gemini-4-argon-high")
     _record(LANE_REFUSAL, "run-lane")
     marker = _marker(shed_dir)
-    assert marker["tier_scope"] == "full" and marker["model"] == "gemini-4-argon-high"
-    assert capacity._shed("gemini") is False
+    # The recorded model is still found; on the shared pool (#1387) it sheds the whole seat.
+    assert marker["model"] == "gemini-4-argon-high" and "tier_scope" not in marker
+    assert capacity._shed("gemini") is True
 
 
 def test_refusal_without_init_event_on_a_flash_run_still_sheds_the_seat(
