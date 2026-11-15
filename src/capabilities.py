@@ -2277,6 +2277,15 @@ def _reconcile_known_declarations(capabilities: dict[str, dict[str, Any]], now: 
         if cap is None:
             continue
         changed_fields = []
+        # Replacing a reviewed-absent consumer must also remove its old diagnostic. Only a
+        # declaration that owns the consumer may clear it; explicit True/False values still win.
+        if (
+            "downstream_consumer" in gate
+            and "consumer_missing" not in gate
+            and "consumer_missing" in cap
+        ):
+            cap.pop("consumer_missing")
+            changed_fields.append("consumer_missing")
         for field in declaration_fields:
             if field in gate and cap.get(field) != gate[field]:
                 cap[field] = json.loads(json.dumps(gate[field]))
@@ -2516,6 +2525,16 @@ def load_declared(path: Path = REG) -> dict[str, dict[str, Any]]:
     capabilities = load(path, create=False)
     _reconcile_known_declarations(capabilities, _now())
     return capabilities
+
+
+def persisted_snapshot(path: Path = REG) -> dict[str, dict[str, Any]]:
+    """Return the raw persisted capabilities from the latest cached read of `path` without writing."""
+    if not path.exists():
+        return {}
+    hit = _READ_CACHE.get(os.path.abspath(path))
+    if hit is not None:
+        return _checked_ledger(marshal.loads(hit[1]))["capabilities"]
+    return load(path, create=False)
 
 
 def seed_declared(path: Path = REG) -> dict[str, Any]:
