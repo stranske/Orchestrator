@@ -64,11 +64,11 @@ def _env_int(name: str, default: int) -> int:
 #            (moved from Sonnet 5 on 2026-09-30),
 #            Haiku 4.5 cheap.
 #   gemini — Gemini 4 Argon is the FULL tier only (2026-10-15; it replaces the Pro slot, which agy no
-#            longer serves). cheap/mid stay on 3.8 Flash (low/high), matching the other families: the
+#            longer serves). cheap/mid run 4 Hydrogen (low/high; 3.8 Flash until 2026-11-15), matching the other families: the
 #            routine tiers run the smaller, cheaper model and only `full` runs the frontier model
-#            (codex Luna/Terra/Sol, claude Haiku/Sonnet/Opus). Argon bills ~2.7x Flash per token
-#            (~5.3x after 2026-11-30) and carries its own weekly-only quota, so routine reads and
-#            edits must not draw it down. Argon low/medium remain registered and explicitly
+#            (codex Luna/Terra/Sol, claude Haiku/Sonnet/Opus). Argon bills ~1.3x Hydrogen per token
+#            (~2.7x after 2026-11-30); since agy 1.5.9 every Gemini model draws ONE shared quota
+#            group (Orchestrator#1387), so routine reads and edits still must not spend Argon. Argon low/medium remain registered and explicitly
 #            requestable. These are requested CLI identities; advertisement alone does not attest
 #            the provider-resolved model or quality.
 #   vibe   — Mistral merged its coding line into ONE model (mistral-medium-3.5, 256k, replaced
@@ -963,7 +963,7 @@ def _auto_resolve(agent: str, tier: str, pinned: str, advertised: list[str]) -> 
     """
     if agent != "gemini":
         return None
-    family = next((name for name in ("argon", "pro", "flash") if name in pinned), None)
+    family = next((name for name in ("argon", "hydrogen", "pro", "flash") if name in pinned), None)
     candidates = [m for m in advertised if m.startswith("gemini-")]
     if not candidates:
         return None
@@ -3061,6 +3061,7 @@ def _selftest_inner(*, gaps: list[str] | None = None):
     assert "combined_output.splitlines()" in inspect.getsource(dispatch)
     assert _auto_resolve("gemini", "mid", "gemini-3.8-flash-high", ["gemini-4-argon-high"]) is None
     assert _auto_resolve("gemini", "full", "gemini-4-argon-high", ["gemini-3.8-flash-high"]) is None
+    assert _auto_resolve("gemini", "mid", "gemini-4-hydrogen-high", ["gemini-4-argon-high"]) is None
     import env_prereq  # imported here: env_prereq reads this module
 
     gaps = gaps if gaps is not None else []
@@ -3250,10 +3251,10 @@ def _selftest_inner(*, gaps: list[str] | None = None):
         assert agy_advertised_models() == [], "kill-switch must suppress the CLI probe entirely"
         unprobed = gemini_model_health()
         assert unprobed["resolvable"] and unprobed["source"] == "pinned_default", unprobed
-        # cheap/mid ride Flash; only full pays for the frontier Argon model.
+        # cheap/mid ride Hydrogen (Flash until 2026-11-15); only full pays for Argon.
         for tier, expected in (
-            ("cheap", "gemini-3.8-flash-low"),
-            ("mid", "gemini-3.8-flash-high"),
+            ("cheap", "gemini-4-hydrogen-low"),
+            ("mid", "gemini-4-hydrogen-high"),
             ("full", "gemini-4-argon-high"),
         ):
             gt = build_command("gemini", "x", mode=tier, cwd=gemini_cwd)

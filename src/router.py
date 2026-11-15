@@ -1541,7 +1541,7 @@ def _selftest_gemini_policy() -> None:
         adapters, "advertised_models", return_value=list(adapters.MODEL_TIERS["gemini"].values())
     ):
         assert {p["requested_model"] for p in _automatic_profiles(entry, transport="local")} == {
-            "gemini-3.8-flash-high"
+            "gemini-4-hydrogen-high"
         }, "automatic profiles must obey the effective ceiling"
     with patch.object(adapters, "model_health", return_value={"resolvable": False, "model": None}):
         assert not _automatic_profiles(entry, transport="local"), "unresolved models must refuse"

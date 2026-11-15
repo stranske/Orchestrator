@@ -312,7 +312,7 @@ def test_build_command_honours_every_tier(tmp_path, monkeypatch):
     expected = {
         "codex": ("gpt-6-luna", "gpt-5.6-terra", "gpt-6.1-sol"),
         "claude": ("claude-haiku-4-5", "claude-sonnet-5-5", "claude-opus-5-5"),
-        "gemini": ("gemini-3.8-flash-low", "gemini-3.8-flash-high", "gemini-4-argon-high"),
+        "gemini": ("gemini-4-hydrogen-low", "gemini-4-hydrogen-high", "gemini-4-argon-high"),
     }
     for agent, models in expected.items():
         for tier, model in zip(adapters.MODEL_TIER_NAMES, models):
@@ -322,10 +322,10 @@ def test_build_command_honours_every_tier(tmp_path, monkeypatch):
             assert model == adapters.MODEL_TIERS[agent][expected_tier], (agent, tier)
 
 
-def test_gemini_cheap_and_mid_are_flash_and_only_full_is_argon():
+def test_gemini_cheap_and_mid_are_hydrogen_and_only_full_is_argon():
     """Same shape as codex/claude: routine tiers run the cheaper model, only full the frontier one."""
     for tier in ("cheap", "mid"):
-        assert "flash" in adapters.MODEL_TIERS["gemini"][tier], tier
+        assert "hydrogen" in adapters.MODEL_TIERS["gemini"][tier], tier
     assert adapters.MODEL_TIERS["gemini"]["full"] == "gemini-4-argon-high"
 
 
@@ -1142,8 +1142,8 @@ def test_argon_successor_tiers_reach_matching_offload_profiles(monkeypatch, tmp_
     ):
         monkeypatch.delenv(name, raising=False)
     expected = {
-        "cheap": "gemini-3.8-flash-low",
-        "mid": "gemini-3.8-flash-high",
+        "cheap": "gemini-4-hydrogen-low",
+        "mid": "gemini-4-hydrogen-high",
         "full": "gemini-4-argon-high",
     }
     assert adapters.MODEL_TIERS["gemini"] == expected
@@ -1318,21 +1318,24 @@ def test_argon_retirement_preserves_historical_profile_identity():
     import execution_profiles
 
     expected = {
-        "gemini-3.7-flash-low": "gemini-3.8-flash-low",
-        "gemini-3.7-flash-high": "gemini-3.8-flash-high",
+        "gemini-3.7-flash-low": "gemini-4-hydrogen-low",
+        "gemini-3.7-flash-high": "gemini-4-hydrogen-high",
+        "gemini-3.8-flash-low": "gemini-4-hydrogen-low",
+        "gemini-3.8-flash-high": "gemini-4-hydrogen-high",
         "gemini-3.1-pro-high": "gemini-4-argon-high",
     }
     for old, successor in expected.items():
         assert execution_profiles.get_profile(old)["requested_model"] == old
         assert execution_profiles.resolve_production_profile_id(old) == successor
-    # Current Flash is NOT retired: its identity resolves to itself.
-    for flash in ("gemini-3.8-flash-low", "gemini-3.8-flash-high"):
-        assert execution_profiles.resolve_production_profile_id(flash) == flash
+    # Current Hydrogen is NOT retired: its identity resolves to itself.
+    for current in ("gemini-4-hydrogen-low", "gemini-4-hydrogen-high"):
+        assert execution_profiles.resolve_production_profile_id(current) == current
     active = {
         p["requested_model"]
         for p in execution_profiles.profiles_for_agent("gemini", transport="offload")
     }
-    assert {"gemini-3.8-flash-low", "gemini-3.8-flash-high", "gemini-4-argon-high"} <= active
+    assert {"gemini-4-hydrogen-low", "gemini-4-hydrogen-high", "gemini-4-argon-high"} <= active
+    assert not {"gemini-3.8-flash-low", "gemini-3.8-flash-high"} & active
 
 
 def test_argon_rename_preserves_family_and_effort(monkeypatch):
@@ -1367,13 +1370,13 @@ def test_automatic_gemini_respects_effective_model_policy(monkeypatch, scenario,
     if scenario == "ceiling":
         monkeypatch.setenv("ORCH_GEMINI_MAX_TIER", "mid")
         _fake_catalog(monkeypatch, list(adapters.MODEL_TIERS["gemini"].values()))
-        expected = "gemini-3.8-flash-high"
+        expected = "gemini-4-hydrogen-high"
     elif scenario == "override":
         monkeypatch.setenv("ORCH_GEMINI_MODEL_FULL", "gemini-4-argon-medium")
         _fake_catalog(monkeypatch, ["gemini-4-argon-medium", "gemini-4-argon-high"])
         expected = "gemini-4-argon-medium"
     else:
-        _fake_catalog(monkeypatch, ["gemini-3.8-flash-high"])
+        _fake_catalog(monkeypatch, ["gemini-4-hydrogen-high"])
         expected = None
     if surface == "router":
         selected = router._automatic_profiles(
