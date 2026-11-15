@@ -121,6 +121,29 @@ for (const [label, red] of [
   });
 }
 
+for (const phase of ['baseline', 'restored']) {
+  for (const outcome of ['pass', 'failure', 'exception']) {
+    test(`restores production rewritten during ${phase} with runner ${outcome}`, (t) => {
+      const root = sources(t);
+      const source = path.join(root, edit.file);
+      const original = fs.readFileSync(source);
+      const phaseCall = phase === 'baseline' ? 1 : 3;
+      let calls = 0;
+      assert.throws(() => verify(root, () => {
+        calls += 1;
+        if (calls === phaseCall) {
+          fs.writeFileSync(source, original.toString().replace(edit.before, edit.after));
+          if (outcome === 'exception') throw new Error('runner rewrote production');
+          return verdict(outcome === 'failure');
+        }
+        return verdict(calls === 2);
+      }));
+      assert.equal(calls, phaseCall);
+      assert.deepEqual(fs.readFileSync(source), original);
+    });
+  }
+}
+
 for (const [label, result] of [
   ['missing pytest', { status: 1, stderr: 'No module named pytest' }],
   ['collection error', { status: 2, stdout: '1 error during collection' }],

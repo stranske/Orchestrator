@@ -884,3 +884,50 @@ uncommitted. The merge guard dry-run for the measured head exits 1 with
 No merge was attempted after that blocker. PR #1380 was observed open with
 `draft=false`. Blocker-comment and `needs-human` label requests were also rejected
 by the GitHub tool's approval policy; neither remote action completed.
+
+## Issue 1156: restore production after runner rewrites (2026-11-15 UTC)
+
+Measured checkout: `45983477ff81f8b8681d7d5137f6a9d7ca73250a`, branch
+`codex/issue-1156`. Reviewed the five keepalive commits since bootstrap and the
+original correction in PR #1164 (`e78794e4`). The first task is already implemented.
+The reconciliation above remains supported by the committed `d068c59` Python
+results and mutation/artifact experiments. The final delivery task should remain
+unchecked because review and merge gates have not completed. The attempted PR-body
+update, blocker comment, and `needs-human` label were each rejected with
+`MCP tool call requires approval, but approval policy is never`.
+
+The mutation verifier detected production rewrites during baseline and restored
+runs but left the changed bytes in place when it rejected those runs. An outer
+`finally` now restores the original production bytes on both success and failure.
+Six new tests use private source copies to reproduce a rewrite during either
+phase, followed by a passing result, failing result, or runner exception. These
+are verifier regressions, not fresh production-mutation acceptance evidence.
+
+| Local check | Result |
+|---|---|
+| New regressions against the previous verifier | Exit 1; 23 passed, 6 failed, each at the original-byte restoration assertion. |
+| `node tests/test_issue_1138_mutation.js` after cleanup fix | Exit 0; 29 passed. |
+| `node tests/test_issue_1138_artifacts.js` | Exit 0; 42 passed. |
+| `node tests/test_redirect_routing_mutations.js` | Exit 0; 11 passed. |
+| Both requested Anaconda pytest commands, with `-m 'not slow'` | Exit 127; `/opt/anaconda3/bin/python3` does not exist. |
+| `python3 -m pytest tests/test_coverage_round_1138.py --cov=src/periodic_report --cov-report=term-missing -m 'not slow'` | Exit 1; no module named pytest; no coverage table produced. |
+| Install pytest, pytest-cov, Black, PyYAML, and httpx under `/tmp` | Exit 1; no matching distribution found for pytest. |
+| Actual mutation and artifact verification scripts | Each exits 1 at baseline with `spawnSync python3 EPERM` and missing pytest; no evidence generated. |
+| `git diff --exit-code HEAD -- src tests/test_coverage_round_1138.py docs/verification/issue-1138/head-ea6255b-combined.json docs/verification/issue-1138/head-ecb0707-combined.json docs/verification/issue-1138/mutation-proof-pass3.json` | Exit 0; production, corrected Python test, coverage records, and historical mutation evidence unchanged. |
+| `git diff --check` | Exit 0. No Python files changed. |
+
+GitHub returned successful CI for the measured committed head:
+[run 43690967600](https://github.com/stranske/Orchestrator/actions/runs/43690967600)
+has all six pytest/coverage shards and all six flat-copy shards successful, plus
+the [combined coverage aggregate](https://github.com/stranske/Orchestrator/actions/runs/43690967600/job/132741702890)
+and [flat-copy aggregate](https://github.com/stranske/Orchestrator/actions/runs/43690967600/job/132741827995).
+[Gate run 43690967789](https://github.com/stranske/Orchestrator/actions/runs/43690967789)
+also succeeded. These results precede the local cleanup change.
+
+`git add scripts/verify_issue_1138_mutation.js tests/test_issue_1138_mutation.js`
+exits 128: `.git/index.lock` cannot be created on a read-only filesystem. Changes
+remain uncommitted. The merge guard dry-run for the measured head exits 1 with
+`blocked=true`, `reason="review-thread GraphQL query failed"`, and
+`merge_executed=false`; no terminal merge was attempted. PR #1380 was observed
+open with `draft=false`. A writable checkout, working Python test tools, and
+access to update the PR and read review threads remain required for delivery.
