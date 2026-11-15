@@ -738,6 +738,58 @@ def test_switch_review_write_text_out_carries_rule_unresolved_and_drainable(
     assert "rule pick n/a (0 judged) [0 no delivery, 1 unresolved, drainable 1]" in triage_lines[0]
 
 
+def test_switch_review_main_text_out_carries_rule_unresolved_and_drainable(
+    brain, monkeypatch, tmp_path, capsys
+):
+    """switch_review.main --text-out is the weekly path that must show rule-arm backlog."""
+    import adversarial
+    import strategy_experiment
+    import switch_review
+
+    triage_shadow.corpus_path().parent.mkdir(parents=True, exist_ok=True)
+    triage_shadow.corpus_path().write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "ts": 100_000_000_000,
+                "triage_valid": True,
+                "live_proposal": True,
+                "rule_pick": "stranske/Orchestrator#1",
+                "triage_top_three": [],
+            }
+        )
+        + "\n"
+    )
+    record_pr_run("rule-shadow-worker", 77, ts=102)
+    receipt = brain / "strategy-receipt.json"
+    receipt.write_text(json.dumps({"status": "incomplete"}))
+    monkeypatch.setattr(strategy_experiment, "strategy_result_path", lambda: receipt)
+    monkeypatch.setenv("ORCH_CREDENTIAL_EXPOSURE_SCAN", "0")
+    monkeypatch.setattr(adversarial, "record_shape_measurement", lambda *a, **kw: False)
+    monkeypatch.setattr(
+        switch_review,
+        "adversarial_shape_population",
+        lambda **kw: {"status": "unknown", "reason": "unit-test fixture"},
+    )
+    for name, value in (
+        ("switch_states", lambda **kw: {"held_off": [], "on_but_idle": []}),
+        ("stale_runners", lambda: []),
+        ("mirror_drift", lambda: {"status": "ok"}),
+        ("fleet_gates", lambda **kw: {}),
+        ("_exploration_gate", lambda: {}),
+        ("gate_expiry", lambda **kw: {}),
+    ):
+        monkeypatch.setattr(switch_review, name, value)
+    out = tmp_path / "switch-review.md"
+    assert switch_review.main(["--env", "process", "--json", "--text-out", str(out)]) == 0
+    capsys.readouterr()
+    triage_lines = [
+        line for line in out.read_text().splitlines() if line.startswith("triage shadow:")
+    ]
+    assert len(triage_lines) == 1
+    assert "rule pick n/a (0 judged) [0 no delivery, 1 unresolved, drainable 1]" in triage_lines[0]
+
+
 def test_summary_line_rule_pick_judged_when_cover_graded(brain):
     """Weekly triage shadow line must show rule-arm judged>0 once delivery is graded."""
     path = brain / "rows.jsonl"
