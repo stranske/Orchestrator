@@ -781,3 +781,47 @@ for review (`draft=false`).
 GitHub rejected both the blocker comment and the `needs-human` label request
 with `MCP tool call requires approval, but approval policy is never`. Neither
 remote mutation occurred; this local record preserves the blocker details.
+
+## Issue 1156 keepalive: single-test experiment results (2026-11-15 UTC)
+
+Measured checkout: `04c694ca7be9e4eec058398ed215984f53683ce3`, branch
+`codex/issue-1156`. The first task's test correction is already present. Its
+required Python verification remains blocked; no acceptance checkbox is completed.
+
+The shared mutation-result validator previously accepted `1 failed, 1 passed`
+as a single-test failure, including an additional test from another Python module.
+It now checks all Python test-result rows and requires one single-test summary.
+Warnings, pytest's summary separators, and elapsed-time annotations remain valid.
+This applies to both the production mutation and the independent artifact-lock
+experiments. New artifact regressions use each lock's actual assertion order.
+
+The expanded mutation suite failed against the previous validator (19 passed,
+2 failed before the final baseline-summary case was added). The final artifact
+suite failed against the previous validator in a private temporary tree
+(38 passed, 4 failed). With the fix, `node tests/test_issue_1138_mutation.js`
+passes all 22 tests and `node tests/test_issue_1138_artifacts.js` passes all 42.
+The validator also accepts all three real pytest transcripts from the existing
+`mutation-proof-pass3.json` follow-up run. These checks exercise result validation;
+they do not constitute fresh Python mutation or coverage evidence.
+
+Both required `/opt/anaconda3/bin/python3 -m pytest` commands, with
+`-m 'not slow'`, exit 127 because the interpreter does not exist.
+`python3 -m pytest tests/test_coverage_round_1138.py --cov=src/periodic_report
+--cov-report=term-missing -m 'not slow'` exits 1: no module named pytest.
+No coverage table or percentage is available. Installing pytest, pytest-cov,
+and Black under `/tmp` failed because PyPI DNS resolution is unavailable.
+Black is also unavailable; this run changes no Python files.
+
+Both actual verification scripts stop at baseline with `spawnSync python3 EPERM`
+and `No module named pytest`. The artifact script emits no evidence. Production
+source, the corrected Python test, both coverage records, and historical mutation
+evidence remain identical to HEAD (`git diff --exit-code HEAD --` on those paths
+exits 0). `git diff --check` passes.
+
+Git staging is blocked by the read-only `.git/index.lock` location, so the
+source/test changes cannot be committed here. GitHub CLI requests cannot connect
+to `api.github.com`; current PR readiness, final-head CI, and review/merge gates
+remain unverified. Attempts to post the blocker comment and add `needs-human`
+to PR #1380 also failed to connect; neither remote action completed.
+A writable Git checkout, a working pytest runtime, and GitHub connectivity
+are needed to finish delivery.

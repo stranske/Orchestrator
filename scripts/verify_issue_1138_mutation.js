@@ -36,10 +36,18 @@ function requireVerdict(result, failed, {
   const output = (result.stdout || '') + (result.stderr || '');
   assert.ok(!result.error, `${result.error?.message}\n${output}`);
   assert.equal(result.status, failed ? 1 : 0, output);
-  const rows = output.split('\n').filter((line) => line.startsWith(`${testFile}::`));
+  const lines = output.split('\n');
+  const rows = lines.filter((line) => /^[^\s]+\.py::/.test(line));
   assert.equal(rows.length, 1, output);
   assert.ok(rows[0].startsWith(`${testNode} ${failed ? 'FAILED' : 'PASSED'} `), output);
-  assert.match(output, failed ? /\b1 failed\b/ : /\b1 passed\b/);
+  // The summary must describe just this test. Matching "1 failed" anywhere
+  // also accepts "1 failed, 1 passed", hiding an unintended additional test.
+  const summaries = lines.map((line) => line.trim().replace(/^=+\s*|\s*=+$/g, ''))
+    .filter((line) => /^\d+ (?:passed|failed|errors?|skipped|xfailed|xpassed|deselected)\b/.test(line));
+  assert.equal(summaries.length, 1, output);
+  assert.match(summaries[0], new RegExp(
+    `^1 ${failed ? 'failed' : 'passed'}(?:, \\d+ warnings?)? in \\d+(?:\\.\\d+)?s(?: \\([\\d:]+\\))?$`,
+  ));
   assert.doesNotMatch(output, /\b\d+ (?:errors?|skipped|xfailed|xpassed|deselected)\b/i);
   if (failed) {
     assert.match(output, failurePattern);

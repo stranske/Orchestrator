@@ -128,8 +128,32 @@ for (const [label, result] of [
   ['wrong test', { ...verdict(true), stdout: verdict(true).stdout.replaceAll(node, 'other::test') }],
   ['duplicate results', { ...verdict(true), stdout: verdict(true).stdout.repeat(2) }],
   ['skipped tests', { ...verdict(true), stdout: verdict(true).stdout + '1 skipped' }],
+  ['extra test from another module', { ...verdict(true),
+    stdout: verdict(true).stdout.replace('1 failed in',
+      'tests/test_other.py::test_other PASSED [100%]\n1 failed, 1 passed in') }],
+  ['extra result only in summary', { ...verdict(true),
+    stdout: verdict(true).stdout.replace('1 failed in', '1 failed, 1 passed in') }],
+  ['missing summary', { ...verdict(true),
+    stdout: verdict(true).stdout.replace('1 failed in 0.1s\n', '') }],
 ]) {
   test(`rejects ${label} as deliberate-break evidence`, () => {
     assert.throws(() => requireVerdict(result, true));
   });
 }
+
+test('accepts pytest warning counts in a single-test summary', () => {
+  for (const failed of [false, true]) {
+    for (const warnings of ['', ', 1 warning', ', 2 warnings']) {
+      const result = verdict(failed);
+      result.stdout = result.stdout.replace(' in 0.1s\n', `${warnings} in 70.00s (0:01:10)\n`);
+      result.stdout = result.stdout.replace(/^(1 (?:failed|passed).*s.*)$/m, '===== $1 =====');
+      assert.equal(requireVerdict(result, failed), result.stdout);
+    }
+  }
+});
+
+test('rejects an extra result in the baseline or restored summary', () => {
+  const result = verdict();
+  result.stdout = result.stdout.replace('1 passed in', '2 passed in');
+  assert.throws(() => requireVerdict(result, false));
+});

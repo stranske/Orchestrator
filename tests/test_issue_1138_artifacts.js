@@ -83,6 +83,11 @@ for (const index of [0, 1]) {
     ['surviving corruption', (name) => verdict(name)],
     ['unrelated assertion', (name) => verdict(name, true, '0 == 1')],
     ['wrong node', () => verdict('test_other', true)],
+    ['extra test from another module', (name, mismatch) => ({ ...verdict(name, true, mismatch),
+      stdout: verdict(name, true, mismatch).stdout.replace('1 failed in',
+        'tests/test_other.py::test_other PASSED [100%]\n1 failed, 1 passed in') })],
+    ['extra result only in summary', (name, mismatch) => ({ ...verdict(name, true, mismatch),
+      stdout: verdict(name, true, mismatch).stdout.replace('1 failed in', '1 failed, 1 passed in') })],
     ['skip', (name) => ({ ...verdict(name, true),
       stdout: verdict(name, true).stdout + '1 skipped\n' })],
   ]) {
@@ -91,7 +96,9 @@ for (const index of [0, 1]) {
       let calls = 0;
       assert.throws(() => verify(root, (_cwd, name) => {
         const call = calls++;
-        if (call === index * 3 + 1) return brokenResult(name);
+        if (call === index * 3 + 1) {
+          return brokenResult(name, index === 0 ? '296 == 297' : '297 == 296');
+        }
         return verdict(name, call % 3 === 1, '296 == 297');
       }));
       assert.equal(calls, index * 3 + 2);
