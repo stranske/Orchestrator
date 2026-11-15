@@ -1384,7 +1384,7 @@ def test_cli_consumer_declaration_check_requires_nonempty_live_ledger(tmp_path):
             {
                 **capabilities.KNOWN_GATES[declared_cid],
                 "downstream_consumer": "old persisted prose",
-                "expiry": admission.CONSUMER_ACTS_ENFORCED_FROM + 86400 * 30,
+                "expiry": admission._now() + 86400 * 30,
             }
         )
         stale_declared["event_history"] = [{"type": "gate_registered", "timestamp": 1}]
@@ -1408,7 +1408,12 @@ def test_cli_consumer_declaration_check_requires_nonempty_live_ledger(tmp_path):
             assert errors.getvalue() == f"consumer declaration check failed: {declared_cid}\n"
             assert path.read_bytes() == before_sync
 
-        capabilities.load(path)
+        loaded = capabilities.load(path)
+        assert loaded[declared_cid]["status"] not in capabilities.NOT_LIVE_STATES
+        assert (
+            loaded[declared_cid]["downstream_consumer"]
+            == capabilities.KNOWN_GATES[declared_cid]["downstream_consumer"]
+        )
         after_sync = path.read_bytes()
         assert after_sync != before_sync
         for flag in ("--check-consumer-declarations", "--check-consumer-sync"):
@@ -1417,6 +1422,7 @@ def test_cli_consumer_declaration_check_requires_nonempty_live_ledger(tmp_path):
                 with redirect_stdout(output), redirect_stderr(errors):
                     assert admission.main() == 0
             synced = json.loads(output.getvalue())
+            assert any(r["capability_id"] == declared_cid for r in synced["rows"])
             assert synced["consumer_sync"]["pending"] == {}
             assert errors.getvalue() == ""
             assert path.read_bytes() == after_sync
