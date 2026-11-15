@@ -529,6 +529,19 @@ def shed_marker(
             found[key] = str(payload[key])
     # Only a recognised scope narrows a shed; anything else stays a whole-seat shed.
     found["tier_scope"] = payload.get("tier_scope") if payload.get("tier_scope") == "full" else None
+    if found["tier_scope"]:
+        # A stored scope is honoured only while the writer's policy would still produce it, so a
+        # marker written under a retired premise (Argon and Flash on separate quotas, before
+        # #1387) sheds the whole seat once the policy changes, instead of capping at mid until
+        # it expires. If the policy cannot be read, the stored scope stands.
+        try:
+            import rate_incidents
+
+            if rate_incidents.tier_scope_for(agent, found.get("model")) is None:
+                found["tier_scope"] = None
+                found["why"] = "stored tier scope no longer matches the quota policy"
+        except Exception:
+            pass
     found["reset_at"] = _finite_number(payload.get("reset_at"))
     found["created_at"] = _finite_number(payload.get("created_at"))
     expires_at = _finite_number(payload.get("expires_at"))

@@ -747,13 +747,29 @@ def recorded_run_model(agent: str, run_id: str | None) -> str | None:
     return model.split(":", 1)[-1] or None
 
 
+_MODEL_TOKEN = re.compile(r"[^a-z0-9]+")
+
+
+def _model_tokens(text: str) -> set[str]:
+    return {token for token in _MODEL_TOKEN.split(text.lower()) if token}
+
+
 def tier_scope_for(agent: str, model: str | None) -> str | None:
     """`full` only when the failed gemini model's family has its own quota group
-    (GEMINI_SEPARATE_QUOTA_FAMILIES); otherwise None, which sheds the whole seat."""
+    (GEMINI_SEPARATE_QUOTA_FAMILIES); otherwise None, which sheds the whole seat.
+
+    One policy for writing a marker and for honouring one already on disk (capacity.shed_marker).
+    A family matches on whole name tokens, case-insensitively ("Argon" or "gemini 4 argon" match
+    `gemini-4-argon-high`); a blank entry matches nothing, so a typo cannot scope every model.
+    """
     if agent != "gemini" or not model:
         return None
-    lowered = model.lower()
-    return "full" if any(family in lowered for family in GEMINI_SEPARATE_QUOTA_FAMILIES) else None
+    tokens = _model_tokens(model)
+    for family in GEMINI_SEPARATE_QUOTA_FAMILIES:
+        wanted = _model_tokens(family)
+        if wanted and wanted <= tokens:
+            return "full"
+    return None
 
 
 def ensure_shed(

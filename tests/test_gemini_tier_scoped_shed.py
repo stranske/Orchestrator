@@ -40,6 +40,13 @@ def shed_dir(tmp_path, monkeypatch):
     return shed
 
 
+@pytest.fixture
+def argon_has_own_quota(monkeypatch):
+    """The tier-scope machinery, exercised under a policy where Argon has its own quota group.
+    Production lists no such family since #1387, so these tests name one explicitly."""
+    monkeypatch.setattr(rate_incidents, "GEMINI_SEPARATE_QUOTA_FAMILIES", ("argon",))
+
+
 def _record(evidence: str, run_id: str, reset_in: int = 3600) -> dict:
     return rate_incidents.record_incident(
         agent="gemini",
@@ -71,9 +78,10 @@ def test_argon_quota_incident_sheds_the_whole_gemini_seat_on_a_shared_pool(shed_
     assert adapters.tier_ceiling("gemini") is None
 
 
-def test_a_family_with_its_own_quota_group_still_gets_a_full_tier_scope(shed_dir, monkeypatch):
+def test_a_family_with_its_own_quota_group_still_gets_a_full_tier_scope(
+    shed_dir, argon_has_own_quota
+):
     """The scope is one constant away: listing a family restores the `full`-only shed."""
-    monkeypatch.setattr(rate_incidents, "GEMINI_SEPARATE_QUOTA_FAMILIES", ("argon",))
     _record(ARGON_FAILURE, "run-argon")
     marker = _marker(shed_dir)
     assert marker["tier_scope"] == "full" and capacity._shed("gemini") is False
@@ -93,15 +101,17 @@ def test_a_failure_without_a_model_still_sheds_the_whole_seat(shed_dir):
     assert "tier_scope" not in _marker(shed_dir) and capacity._shed("gemini") is True
 
 
-def test_an_active_whole_seat_shed_is_never_narrowed(shed_dir):
+def test_an_active_whole_seat_shed_is_never_narrowed(shed_dir, argon_has_own_quota):
     # Resets beyond the quota cooldown, so the later Argon expiry would otherwise win.
     _record(FLASH_FAILURE, "run-flash", reset_in=100_000)
+    assert rate_incidents.tier_scope_for("gemini", "gemini-4-argon-medium") == "full"
     _record(ARGON_FAILURE, "run-argon", reset_in=200_000)
     assert "tier_scope" not in _marker(shed_dir) and capacity._shed("gemini") is True
 
 
-def test_a_scoped_shed_widens_when_flash_runs_out_too(shed_dir):
+def test_a_scoped_shed_widens_when_flash_runs_out_too(shed_dir, argon_has_own_quota):
     _record(ARGON_FAILURE, "run-argon", reset_in=200_000)
+    assert _marker(shed_dir)["tier_scope"] == "full", "a real scoped marker before widening"
     _record(FLASH_FAILURE, "run-flash", reset_in=600)
     marker = _marker(shed_dir)
     assert "tier_scope" not in marker and capacity._shed("gemini") is True
@@ -139,9 +149,7 @@ def test_an_unknown_scope_is_a_whole_seat_shed(shed_dir):
     assert capacity._shed("gemini") is True and capacity.tier_ceilings() == {}
 
 
-def test_an_explicit_owner_ceiling_is_kept(shed_dir, monkeypatch):
-    # Scope machinery: only a family with its own quota group produces a scoped marker (#1387).
-    monkeypatch.setattr(rate_incidents, "GEMINI_SEPARATE_QUOTA_FAMILIES", ("argon",))
+def test_an_explicit_owner_ceiling_is_kept(shed_dir, argon_has_own_quota):
     _record(ARGON_FAILURE, "run-argon")
     exports = capacity.tier_ceiling_exports(environ={"ORCH_GEMINI_MAX_TIER": "cheap"})
     assert not any(line.startswith("export ") for line in exports)
@@ -166,7 +174,9 @@ def test_no_scoped_shed_prints_that_none_is_active(shed_dir):
     assert capacity.tier_ceiling_exports(environ={}) == ["echo '  tier ceilings: none active'"]
 
 
-def test_marker_text_cannot_execute_when_the_tick_evals_the_exports(shed_dir, tmp_path):
+def test_marker_text_cannot_execute_when_the_tick_evals_the_exports(
+    shed_dir, tmp_path, argon_has_own_quota
+):
     import subprocess
 
     pwned = tmp_path / "pwned"
@@ -177,7 +187,8 @@ def test_marker_text_cannot_execute_when_the_tick_evals_the_exports(shed_dir, tm
                 "created_at": 1,
                 "expires_at": int(time.time()) + 600,
                 "tier_scope": "full",
-                "model": f"x'; touch {pwned}; echo '$(touch {pwned})`touch {pwned}`",
+                # Hostile text that still names a family with its own quota, so the scope stands.
+                "model": f"argon x'; touch {pwned}; echo '$(touch {pwned})`touch {pwned}`",
             }
         )
     )
@@ -219,7 +230,7 @@ def _scoped_marker(shed_dir, scope="full"):
     (shed_dir / "gemini").write_text(json.dumps(payload))
 
 
-def test_lane_dispatch_without_the_tick_env_is_capped_by_the_marker(shed_dir):
+def test_lane_dispatch_without_the_tick_env_is_capped_by_the_marker(shed_dir, argon_has_own_quota):
     """2026-11-09: closer/opener dispatches never ran the tick's export and went to Argon."""
     _scoped_marker(shed_dir)
     assert adapters.tier_ceiling("gemini") == "mid"
@@ -237,7 +248,9 @@ def test_whole_seat_or_absent_marker_sets_no_ceiling(shed_dir):
     assert adapters.tier_ceiling("gemini") is None
 
 
-def test_explicit_owner_ceiling_still_wins_over_the_marker(shed_dir, monkeypatch):
+def test_explicit_owner_ceiling_still_wins_over_the_marker(
+    shed_dir, monkeypatch, argon_has_own_quota
+):
     _scoped_marker(shed_dir)
     monkeypatch.setenv("ORCH_GEMINI_MAX_TIER", "cheap")
     assert adapters.tier_ceiling("gemini") == "cheap"
@@ -271,3 +284,42 @@ def test_refusal_without_init_event_on_a_flash_run_still_sheds_the_seat(
     _runs_db(tmp_path, monkeypatch, "run-flash", "agy:gemini-3.8-flash-high")
     _record(LANE_REFUSAL, "run-flash")
     assert "tier_scope" not in _marker(shed_dir) or _marker(shed_dir)["tier_scope"] is None
+
+
+def test_a_scoped_marker_from_before_the_shared_pool_sheds_the_whole_seat(shed_dir):
+    """Review on #1389: an Argon-only marker written before the deploy must not keep capping
+    gemini at mid; the reading honours a stored scope only while the policy still produces it."""
+    (shed_dir / "gemini").write_text(
+        json.dumps(
+            {
+                "category": "quota",
+                "created_at": 1,
+                "expires_at": int(time.time()) + 100_000,
+                "model": "gemini-4-argon-high",
+                "tier_scope": "full",
+            }
+        )
+    )
+    assert capacity._shed("gemini") is True
+    assert capacity.tier_ceilings() == {}
+    assert adapters.tier_ceiling("gemini") is None
+    assert (shed_dir / "gemini").exists(), "still active: only its scope is no longer honoured"
+
+
+@pytest.mark.parametrize(
+    ("families", "model", "scope"),
+    [
+        (("Argon",), "gemini-4-argon-high", "full"),
+        (("gemini 4 argon",), "gemini-4-argon-high", "full"),
+        (("",), "gemini-4-argon-high", None),
+        (("  ",), "gemini-3.8-flash-high", None),
+        (("argo",), "gemini-4-argon-high", None),
+        (("argon",), "gemini-4-hydrogen-high", None),
+    ],
+)
+def test_family_matching_is_token_based_and_ignores_blank_entries(
+    monkeypatch, families, model, scope
+):
+    """Review on #1389: case-insensitive whole-token matching; a blank entry scopes nothing."""
+    monkeypatch.setattr(rate_incidents, "GEMINI_SEPARATE_QUOTA_FAMILIES", families)
+    assert rate_incidents.tier_scope_for("gemini", model) == scope
