@@ -343,8 +343,13 @@ def test_summary_counts_only_known_durable_target_outcomes(brain, monkeypatch):
     assert triage_shadow.summary(path)["triage"]["judged"] == 0
     feedback.record_outcome("worker", durability="durable")
     result = triage_shadow.summary(path)
-    assert result["triage"] == {"judged": 0, "merged_durable": 0, "no_delivery": 0}
-    assert result["rule"] == {"judged": 0, "merged_durable": 0, "no_delivery": 1}
+    assert result["triage"] == {
+        "judged": 0,
+        "merged_durable": 0,
+        "no_delivery": 0,
+        "unresolved": 0,
+    }
+    assert result["rule"] == {"judged": 0, "merged_durable": 0, "no_delivery": 0, "unresolved": 1}
 
 
 @pytest.fixture
@@ -452,6 +457,7 @@ def test_each_followed_consumption_uses_its_own_run(followed_pick):
         "judged": 2,
         "merged_durable": 1,
         "no_delivery": 0,
+        "unresolved": 0,
     }
 
 
@@ -464,6 +470,7 @@ def test_only_followed_consumptions_are_graded(followed_pick, status):
         "judged": 0,
         "merged_durable": 0,
         "no_delivery": 0,
+        "unresolved": 0,
     }
 
 
@@ -476,10 +483,11 @@ def test_followed_pick_without_delivery_is_reported(followed_pick, run_id):
         "judged": 0,
         "merged_durable": 0,
         "no_delivery": 1,
+        "unresolved": 0,
     }
     text = triage_shadow.summary_line(followed_pick)
     assert "triage top-1 merged+durable n/a (0 judged) [1 no delivery]" in text
-    assert "rule pick n/a (0 judged) [1 no delivery]" in text
+    assert "rule pick n/a (0 judged) [0 no delivery, 1 unresolved," in text
 
 
 @pytest.mark.parametrize(
@@ -502,7 +510,12 @@ def test_delivery_judging_preserves_unknown_and_excluded_outcomes(
         )
     result = triage_shadow.summary(followed_pick)
     for arm in ("triage", "rule"):
-        assert result[arm] == {"judged": 0, "merged_durable": 0, "no_delivery": 0}
+        assert result[arm] == {
+            "judged": 0,
+            "merged_durable": 0,
+            "no_delivery": 0,
+            "unresolved": 0,
+        }
 
 
 def test_delivered_run_without_outcome_is_unknown(followed_pick):
@@ -512,6 +525,7 @@ def test_delivered_run_without_outcome_is_unknown(followed_pick):
         "judged": 0,
         "merged_durable": 0,
         "no_delivery": 0,
+        "unresolved": 0,
     }
 
 
@@ -555,7 +569,58 @@ def test_rule_pick_is_graded_through_covering_pr_run(brain):
         "judged": 1,
         "merged_durable": 1,
         "no_delivery": 0,
+        "unresolved": 0,
     }
+
+
+def test_rule_pick_without_a_cover_is_unresolved_not_no_delivery(brain):
+    with feedback._conn():
+        pass
+    path = brain / "rows.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "ts": 100_000_000_000,
+                "triage_valid": True,
+                "live_proposal": True,
+                "rule_pick": "stranske/Orchestrator#1",
+                "triage_top_three": [],
+            }
+        )
+        + "\n"
+    )
+    assert triage_shadow.summary(path)["rule"] == {
+        "judged": 0,
+        "merged_durable": 0,
+        "no_delivery": 0,
+        "unresolved": 1,
+    }
+
+
+def test_linker_resolves_rule_picks_within_the_read_bound(brain):
+    triage_shadow.corpus_path().parent.mkdir(parents=True, exist_ok=True)
+    triage_shadow.corpus_path().write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "ts": 100_000_000_000,
+                "triage_valid": True,
+                "live_proposal": True,
+                "rule_pick": "stranske/Orchestrator#1",
+                "triage_top_three": ["stranske/Orchestrator#2"],
+            }
+        )
+        + "\n"
+    )
+    record_pr_run("rule-shadow-worker", 77, ts=102)
+    calls = []
+    read = pr_reader({77: "Closes #1"}, calls)
+    assert outcomes._read_pr_covers() == {}
+    result = outcomes.link_triage_consumption(now=10_000, pr_reader=read)
+    assert result["pr_reads"] <= outcomes.PR_READS_PER_CALL
+    assert ("stranske/Orchestrator", 77) in outcomes._read_pr_covers()
+    assert calls == [("stranske/Orchestrator", 77)]
 
 
 def test_summary_does_not_credit_an_outcome_before_the_live_cycle(brain):
@@ -913,7 +978,7 @@ def test_a_failed_pull_request_read_is_never_not_followed(consumable, monkeypatc
         now=10_000, pr_reader=pr_reader({78: f"Closes #{second_issue + 100}"})
     )
     assert drained["unread_candidates"] == 0
-    assert drained["pr_reads"] == 1 and drained["not_followed"] == []
+    assert drained["pr_reads"] == 2 and drained["not_followed"] == []
 
 
 def test_a_cover_read_before_the_pull_request_settled_is_read_again(consumable):
@@ -927,7 +992,7 @@ def test_a_cover_read_before_the_pull_request_settled_is_read_again(consumable):
     edited = pr_reader({77: f"Closes #{issue}"}, calls, opened="1970-01-01T02:45:59Z")
     second = outcomes.link_triage_consumption(now=10_100, pr_reader=edited)
     assert [f["run_id"] for f in second["followed"]] == ["pr-worker"]
-    assert len(calls) == 2  # the early "does not cover" was not final, so it was read again
+    assert len(calls) == 3  # consumption re-read plus rule-pick cover pass on the same pull request
 
 
 def test_the_pull_request_search_reads_a_bounded_number_and_drains_across_calls(consumable):

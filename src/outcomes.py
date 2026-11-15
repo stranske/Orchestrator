@@ -2021,6 +2021,85 @@ def first_run_for_pick(
     return None, stopped or "none"
 
 
+def _rule_pick_cover_candidates(conn, rule_pick: str, since_ts: float) -> list[tuple[int, str]]:
+    repo, _, tail = rule_pick.rpartition("#")
+    if not repo or not tail.isdigit():
+        return []
+    rows = conn.execute(
+        "SELECT run_id,target,pr_number FROM runs WHERE mode != 'role' AND pr_number IS NOT NULL "
+        "AND ts > ? ORDER BY ts,run_id",
+        (since_ts,),
+    ).fetchall()
+    return [
+        (int(pr_number), target)
+        for _run_id, target, pr_number in rows
+        if target.rpartition("#")[0] == repo
+    ]
+
+
+def rule_pick_needs_cover_read(
+    conn, rule_pick: str, since_ts: float, covers: dict[tuple[str, int], dict] | None = None
+) -> bool:
+    """A rule pick still owes at least one pull-request read before its cover memory is final."""
+    covers = _read_pr_covers() if covers is None else covers
+    for pr_number, _ in _rule_pick_cover_candidates(conn, rule_pick, since_ts):
+        repo = rule_pick.rpartition("#")[0]
+        known = covers.get((repo, pr_number))
+        if known is None or not known.get("final"):
+            return True
+    return False
+
+
+def _drain_rule_pick_covers(
+    conn, rule_pick: str, since_ts: float, search: _PrSearch, issue: int
+) -> None:
+    repo, _, _ = rule_pick.rpartition("#")
+    search.ran = True
+    stopped = None
+    for pr_number, _target in _rule_pick_cover_candidates(conn, rule_pick, since_ts):
+        key = (repo, pr_number)
+        if stopped:
+            if not search.settled(key):
+                search.unread.add(key)
+            continue
+        verdict = search.answer(repo, pr_number, issue)
+        if verdict == "yes":
+            break
+        if verdict != "no":
+            stopped = verdict
+            break
+
+
+def rule_picks_drainable_next_call() -> int:
+    """How many rule picks the next linker call can read, oldest backlog first."""
+    import triage_shadow
+
+    covers = _read_pr_covers()
+    rows = sorted(
+        (
+            r
+            for r in triage_shadow._read_rows(triage_shadow.corpus_path())
+            if r.get("triage_valid") and r.get("live_proposal") and r.get("rule_pick")
+        ),
+        key=lambda r: r["ts"],
+    )
+    if not rows:
+        return 0
+    seen: set[str] = set()
+    pending = 0
+    with feedback._conn() as conn:
+        for row in rows:
+            rule_pick = row["rule_pick"]
+            if rule_pick in seen:
+                continue
+            seen.add(rule_pick)
+            if rule_pick_needs_cover_read(conn, rule_pick, row["ts"] / 1_000_000_000, covers):
+                pending += 1
+                if pending >= PR_READS_PER_CALL:
+                    return PR_READS_PER_CALL
+    return pending
+
+
 def link_triage_consumption(*, now: float | None = None, limit: int = 100, pr_reader=None) -> dict:
     """Credit only a completed first downstream run matching the consumed pick.
 
@@ -2105,9 +2184,36 @@ def link_triage_consumption(*, now: float | None = None, limit: int = 100, pr_re
             result["unresolved"].append(record)
         else:
             result["pending"].append(row["ts"])
+    corpus_rows = sorted(
+        (
+            r
+            for r in triage_shadow._read_rows(triage_shadow.corpus_path())
+            if r.get("triage_valid") and r.get("live_proposal") and r.get("rule_pick")
+        ),
+        key=lambda r: r["ts"],
+    )
+    consumption_unread = set(search.unread)
+    seen_rule_picks: set[str] = set()
+    with feedback._conn() as conn:
+        for row in corpus_rows:
+            if search.left <= 0:
+                break
+            rule_pick = row["rule_pick"]
+            if rule_pick in seen_rule_picks:
+                continue
+            since_ts = row["ts"] / 1_000_000_000
+            if not rule_pick_needs_cover_read(conn, rule_pick, since_ts, search.covers):
+                seen_rule_picks.add(rule_pick)
+                continue
+            _, _, tail = rule_pick.rpartition("#")
+            if not tail.isdigit():
+                seen_rule_picks.add(rule_pick)
+                continue
+            _drain_rule_pick_covers(conn, rule_pick, since_ts, search, int(tail))
+            seen_rule_picks.add(rule_pick)
     if search.ran:
         result["pr_reads"] = search.reads
-        result["unread_candidates"] = len({k for k in search.unread if not search.settled(k)})
+        result["unread_candidates"] = len({k for k in consumption_unread if not search.settled(k)})
     return result
 
 

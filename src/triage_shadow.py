@@ -368,7 +368,8 @@ def summary(path: Path | None = None) -> dict:
             except (ValueError, TypeError):
                 malformed += 1
     totals = {
-        arm: {"judged": 0, "merged_durable": 0, "no_delivery": 0} for arm in ("triage", "rule")
+        arm: {"judged": 0, "merged_durable": 0, "no_delivery": 0, "unresolved": 0}
+        for arm in ("triage", "rule")
     }
     live_rows = [row for row in rows if row.get("triage_valid") and row.get("live_proposal")]
     if not live_rows:
@@ -425,6 +426,22 @@ def summary(path: Path | None = None) -> dict:
                 return found[0]
         return None
 
+    def rule_pick_repo_searched(target: str) -> bool:
+        repo, _, _ = target.rpartition("#")
+        if not repo:
+            return False
+        return any(cover.get("repo") == repo for cover in outcomes._read_pr_covers().values())
+
+    def grade_rule_pick(conn, rule_pick: str, since_ts: float) -> None:
+        run_id = rule_run_id(conn, rule_pick, since_ts)
+        if run_id:
+            grade_run(conn, "rule", run_id, since_ts)
+            return
+        if rule_pick_repo_searched(rule_pick):
+            totals["rule"]["no_delivery"] += 1
+        else:
+            totals["rule"]["unresolved"] += 1
+
     # Reports must not run schema migrations or compete for the Brain's write lock.
     db_path = Path(feedback.DB_PATH).resolve()
     with closing(sqlite3.connect(db_path.as_uri() + "?mode=ro", uri=True, timeout=5)) as conn:
@@ -450,12 +467,7 @@ def summary(path: Path | None = None) -> dict:
                         )
             rule_pick = row.get("rule_pick")
             if rule_pick:
-                grade_run(
-                    conn,
-                    "rule",
-                    rule_run_id(conn, rule_pick, row["ts"] / 1_000_000_000),
-                    row["ts"] / 1_000_000_000,
-                )
+                grade_rule_pick(conn, rule_pick, row["ts"] / 1_000_000_000)
     return {
         "cycles": len(rows),
         "malformed_rows": malformed,
@@ -526,13 +538,20 @@ def summary_line(path: Path | None = None) -> str:
             f"valid cycles {data['valid_cycles']}"
         )
 
+    drainable = outcomes.rule_picks_drainable_next_call() if data["valid_cycles"] else 0
+
     def percent(arm):
         count = data[arm]["judged"]
+        tail = f"[{data[arm]['no_delivery']} no delivery]"
+        if arm == "rule":
+            tail = (
+                f"[{data[arm]['no_delivery']} no delivery, "
+                f"{data[arm]['unresolved']} unresolved, drainable {drainable}]"
+            )
         return (
-            f"{100 * data[arm]['merged_durable'] / count:.1f}% ({count} judged) "
-            f"[{data[arm]['no_delivery']} no delivery]"
+            f"{100 * data[arm]['merged_durable'] / count:.1f}% ({count} judged) {tail}"
             if count
-            else f"n/a (0 judged) [{data[arm]['no_delivery']} no delivery]"
+            else f"n/a (0 judged) {tail}"
         )
 
     return (
