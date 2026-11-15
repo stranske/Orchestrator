@@ -696,6 +696,65 @@ def test_switch_review_format_report_carries_rule_unresolved_and_drainable(brain
     assert "rule pick n/a (0 judged) [0 no delivery, 1 unresolved, drainable 1]" in triage_lines[0]
 
 
+def test_summary_line_rule_pick_judged_when_cover_graded(brain):
+    """Weekly triage shadow line must show rule-arm judged>0 once delivery is graded."""
+    path = brain / "rows.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "ts": 100_000_000_000,
+                "triage_valid": True,
+                "live_proposal": True,
+                "rule_pick": "stranske/Orchestrator#1",
+                "triage_top_three": [],
+            }
+        )
+        + "\n"
+    )
+    triage_shadow._append(
+        outcomes._pr_cover_path(),
+        {
+            "repo": "stranske/Orchestrator",
+            "pr": 77,
+            "covers": [1],
+            "ts": 101,
+            "final": True,
+        },
+    )
+    record_pr_run("rule-keepalive-run", 77, ts=102)
+    feedback.record_outcome("rule-keepalive-run", merged=True, durability="durable")
+    text = triage_shadow.summary_line(path)
+    assert "rule pick 100.0% (1 judged) [0 no delivery, 0 unresolved, drainable 0]" in text
+
+
+def test_summary_line_unresolved_falls_after_rule_pick_linker_drain(brain):
+    """Rule-arm unresolved must drop after link_triage_consumption drains a cover read."""
+    path = brain / "rows.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "ts": 100_000_000_000,
+                "triage_valid": True,
+                "live_proposal": True,
+                "rule_pick": "stranske/Orchestrator#1",
+                "triage_top_three": ["stranske/Orchestrator#2"],
+            }
+        )
+        + "\n"
+    )
+    triage_shadow.corpus_path().parent.mkdir(parents=True, exist_ok=True)
+    triage_shadow.corpus_path().write_text(path.read_text())
+    record_pr_run("rule-shadow-worker", 77, ts=102)
+    before = triage_shadow.summary_line(path)
+    assert "1 unresolved, drainable 1" in before
+    read = pr_reader({77: "Closes #1"}, [])
+    outcomes.link_triage_consumption(now=10_000, pr_reader=read)
+    after = triage_shadow.summary_line(path)
+    assert "0 unresolved, drainable 0" in after
+
+
 def test_rule_picks_drainable_next_call_counts_unresolved_rule_picks(brain):
     triage_shadow.corpus_path().parent.mkdir(parents=True, exist_ok=True)
     triage_shadow.corpus_path().write_text(
