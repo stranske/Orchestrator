@@ -1097,6 +1097,111 @@ def test_consumption_cached_stop_preserves_response_independent_reach(
         assert injected == live_expected
 
 
+REPO_A = "stranske/OtherA"
+REPO_B = "stranske/OtherB"
+
+
+def _record_cross_repo_pr(run_id, repo, number, ts=200):
+    feedback.record_run(
+        run_id,
+        f"{repo}#{number}",
+        "implement",
+        "codex",
+        mode="remote",
+        source="keepalive",
+        pr_number=number,
+        ts=ts,
+    )
+
+
+def _append_pending_consumption(picked, *, consumption_id=None, ts=100_000_000_000):
+    row = {"ts": ts, "role_run_id": "missing", "picked": picked}
+    if consumption_id is not None:
+        row["consumption_id"] = consumption_id
+    triage_shadow._append(triage_shadow.consumed_path(), row)
+
+
+@pytest.mark.parametrize(
+    "bodies",
+    [
+        {801: "Closes #9", 802: "Closes #9", 700: "Closes #1"},
+        {801: "", 802: "", 700: ""},
+        {},
+    ],
+    ids=["positive", "negative", "failed"],
+)
+def test_offline_mandatory_reads_from_two_receipts_exhaust_budget(brain, monkeypatch, bodies):
+    """Two pending receipts in two repos each force one read; a third repo holds the rule cycle."""
+    write_rule_cycles(("stranske/Orchestrator#1", 100))
+    record_pr_run("rule-pr", 700, ts=200)
+    _record_cross_repo_pr("pick-a", REPO_A, 801, ts=200)
+    _record_cross_repo_pr("pick-b", REPO_B, 802, ts=201)
+    _append_pending_consumption(f"{REPO_A}#9")
+    _append_pending_consumption(f"{REPO_B}#9", ts=100_000_000_001)
+    search = outcomes._PrSearch
+    monkeypatch.setattr(outcomes, "_PrSearch", lambda *a, **kw: search(*a, bound=2, **kw))
+    before = {p: p.read_bytes() for p in brain.rglob("*") if p.is_file()}
+    with monkeypatch.context() as offline:
+        offline.setattr(outcomes, "default_pr_reader", lambda *a: pytest.fail("forecast fetched"))
+        offline.setattr(feedback, "_conn", lambda: pytest.fail("forecast opened a writer"))
+        offline.setattr(triage_shadow, "_append", lambda *a: pytest.fail("forecast persisted"))
+        assert outcomes.rule_picks_drainable_next_call(now=10_000) == 0
+    assert {p: p.read_bytes() for p in brain.rglob("*") if p.is_file()} == before
+
+    reader = pr_reader(bodies)
+    reach = outcomes.rule_picks_drainable_next_call(now=10_000, pr_reader=reader)
+    assert reach == 0
+    reached = []
+    drain = outcomes._drain_rule_pick_covers
+
+    def track(conn, pick, since_ts, search, issue):
+        reached.append((pick, since_ts))
+        return drain(conn, pick, since_ts, search, issue)
+
+    monkeypatch.setattr(outcomes, "_drain_rule_pick_covers", track)
+    result = outcomes.link_triage_consumption(now=10_000, pr_reader=reader)
+    assert len(reached) == reach == 0
+    assert result["pr_reads"] == 2
+
+
+def test_offline_one_eligible_consumption_receipt_leaves_rule_cycle_reachable(brain, monkeypatch):
+    write_rule_cycles(("stranske/Orchestrator#1", 100))
+    record_pr_run("rule-pr", 700, ts=200)
+    _record_cross_repo_pr("pick-a", REPO_A, 801, ts=200)
+    _record_cross_repo_pr("pick-b", REPO_B, 802, ts=201)
+    _append_pending_consumption(f"{REPO_A}#9", consumption_id="linked")
+    _append_pending_consumption(f"{REPO_B}#9", consumption_id="pending", ts=100_000_000_001)
+    triage_shadow._append(
+        triage_shadow.linked_path(),
+        {"consumption_id": "linked", "status": "unresolved"},
+    )
+    search = outcomes._PrSearch
+    monkeypatch.setattr(outcomes, "_PrSearch", lambda *a, **kw: search(*a, bound=2, **kw))
+    before = {p: p.read_bytes() for p in brain.rglob("*") if p.is_file()}
+    with monkeypatch.context() as offline:
+        offline.setattr(outcomes, "default_pr_reader", lambda *a: pytest.fail("forecast fetched"))
+        offline.setattr(feedback, "_conn", lambda: pytest.fail("forecast opened a writer"))
+        offline.setattr(triage_shadow, "_append", lambda *a: pytest.fail("forecast persisted"))
+        assert outcomes.rule_picks_drainable_next_call(now=10_000) == 1
+    assert {p: p.read_bytes() for p in brain.rglob("*") if p.is_file()} == before
+
+    bodies = {802: "Closes #9", 700: "Closes #1"}
+    reader = pr_reader(bodies)
+    reach = outcomes.rule_picks_drainable_next_call(now=10_000, pr_reader=reader)
+    assert reach == 1
+    reached = []
+    drain = outcomes._drain_rule_pick_covers
+
+    def track(conn, pick, since_ts, search, issue):
+        reached.append((pick, since_ts))
+        return drain(conn, pick, since_ts, search, issue)
+
+    monkeypatch.setattr(outcomes, "_drain_rule_pick_covers", track)
+    result = outcomes.link_triage_consumption(now=10_000, pr_reader=reader)
+    assert len(reached) == reach == 1
+    assert result["pr_reads"] == 2
+
+
 def test_next_call_reach_is_unknown_when_unread_response_changes_traversal(brain, monkeypatch):
     write_rule_cycles(("stranske/Orchestrator#1", 100), ("stranske/Orchestrator#2", 100))
     record_pr_run("shared", 700, ts=200)

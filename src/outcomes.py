@@ -2141,6 +2141,51 @@ def _walk_triage_consumptions(conn, search: _PrSearch, limit: int):
         yield row, run_id, via
 
 
+def _consumption_mandatory_reads(conn, search: _PrSearch, limit: int) -> int:
+    """Conservative lower bound on reads consumption must take before rule cycles.
+
+    Count at most one forced first unread candidate per distinct repository among
+    eligible receipts, using the same direct-then-pull-request order as
+    ``first_run_for_pick``. Direct runs and preceding final cached covers cannot
+    force a read.
+    """
+    forced_repos: set[str] = set()
+    mandatory = 0
+    budget = search.reads + search.left
+    for row in _pending_triage_consumptions(limit):
+        picked = row["picked"]
+        since_ts = row["ts"] / 1_000_000_000
+        if conn.execute(
+            "SELECT run_id FROM runs WHERE target=? AND mode != 'role' AND ts > ? "
+            "ORDER BY ts,run_id LIMIT 1",
+            (picked, since_ts),
+        ).fetchone():
+            continue
+        repo, _, tail = picked.rpartition("#")
+        if not repo or not tail.isdigit():
+            continue
+        issue = int(tail)
+        for _run_id, target, pr_number in conn.execute(
+            "SELECT run_id,target,pr_number FROM runs WHERE mode != 'role' AND pr_number IS NOT NULL "
+            "AND ts > ? ORDER BY ts,run_id",
+            (since_ts,),
+        ):
+            if target.rpartition("#")[0] != repo:
+                continue
+            known = search.covers.get((repo, int(pr_number)))
+            if known is not None and known.get("final"):
+                if issue in known.get("covers", []):
+                    break
+                continue
+            if repo not in forced_repos:
+                forced_repos.add(repo)
+                mandatory += 1
+            break
+        if mandatory >= budget:
+            return mandatory
+    return mandatory
+
+
 def _live_rule_pick_rows() -> list[dict]:
     import triage_shadow
 
@@ -2259,6 +2304,8 @@ def rule_picks_drainable_next_call(*, now=None, limit: int = 100, pr_reader=None
                 pass
         except _UnknownPrResponse:
             if search.left <= 0:
+                return 0
+            if _consumption_mandatory_reads(conn, search, limit) >= search.reads + search.left:
                 return 0
             return _consumption_independent_rule_pick_reach(conn, rows, search, limit)
         try:
