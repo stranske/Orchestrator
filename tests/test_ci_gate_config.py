@@ -425,6 +425,16 @@ def test_baseline_accepts_measured_sync_pr_1403_toolchain(tmp_path):
     assert commands
     for command in commands:
         assert command["exit_code"] == 0, command
+    # A successful version probe cannot stand in for an omitted measured check.
+    executed_commands = {" ".join(command["command"]) for command in commands}
+    for name in ("lint-ruff", "lint-format", "typecheck-mypy"):
+        assert checks[name]["command"] in executed_commands, checks[name]
+    coverage_probe = {"--cov", "--cov-config=pyproject.toml", "--collect-only"}
+    assert any(
+        command["command"][1:3] == ["-m", "pytest"]
+        and coverage_probe <= set(command["command"])
+        for command in commands
+    ), "the measurement must retain the pytest coverage-startup command"
     doc = BASELINE_DOC.read_text(encoding="utf-8")
 
     # Replay the proposed payload through the real file reader without editing the live pins.

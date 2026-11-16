@@ -214,3 +214,21 @@ Attempts to post these blockers on #1405 and add `needs-human` were rejected
 because the GitHub write tools require approval under an approval policy of
 `never`. Validate and commit the test change with pytest and Black available,
 then collect regenerated-head CI and native sync-core evidence after delivery.
+
+## Hosted command-receipt follow-up — 2026-11-16
+
+The pending-pin regression now also requires captured commands for the three
+measured lint/type checks and the pytest coverage-startup probe. Successful
+version probes alone cannot satisfy those assertions. Compilation and
+`git diff --check` pass, but pytest and Black remain unavailable; installation
+in a temporary environment failed. Both required Black invocations failed, so
+this test change remains **uncommitted and unverified by pytest**.
+The repository command `python3 src/verify.py`, with slow tests excluded via
+`PYTEST_ADDOPTS`, produced no verdict before a 45-second timeout (exit 124).
+
+Connector readback confirms #1403 still has original head `125965ca868c` and
+its named aggregate failed in run `43820436609`. Both #1403 and #1405 are open
+and ready. `gh run view` cannot connect, and the native sync-core journal is
+unavailable. Both outstanding acceptance criteria remain unchecked. Posting
+this blocker and adding `needs-human` were rejected because the write tools
+require approval while the run's approval policy is `never`.
