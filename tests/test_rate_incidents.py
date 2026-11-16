@@ -133,6 +133,111 @@ def test_success_stdout_capacity_gate_rejects_review_prose():
     assert rate_incidents.is_authoritative_error(review) is False
 
 
+@pytest.mark.parametrize(
+    "message",
+    [
+        "The model is not supported.",
+        "The 'test-model' model is not supported with this account.",
+        "The model `test-model` is not supported.",
+        "The model test-model does not exist or you do not have access to it.",
+        "Unsupported model: test-model",
+        "Invalid model selection: test-model",
+    ],
+)
+@pytest.mark.parametrize(
+    "prefix", ["unexpected status 400 Bad Request: ", "Provider error: HTTP 400: "]
+)
+def test_model_rejection_is_authoritative_without_shedding(message, prefix):
+    text = prefix + json.dumps({"error": {"message": message, "type": "invalid_request_error"}})
+    assert rate_incidents.classify_provider_failure(text) == (
+        "model_rejected",
+        "http_400_model_rejected",
+        "high",
+    )
+    evidence = rate_incidents.get_structured_evidence(text, "codex", "test", "rejected")
+    assert evidence["category"] == "model_rejected"
+    assert evidence["subcategory"] == "http_400_model_rejected"
+    assert evidence["confidence"] == "high"
+    assert evidence["is_authoritative"] is True
+    assert evidence["should_shed"] is False
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Document HTTP 400 when the model is not supported.",
+        "The model test-model does not exist.",
+        'Added handling for HTTP 400: {"error": {"message": "The model is not supported."}}',
+        'unexpected status 404 Not Found: {"error": {"message": "The model does not exist."}}',
+        'HTTP 400: {"message": "The model is not supported."}',
+        'HTTP 400: {"error": "The model is not supported."}',
+        'HTTP 400: {"error": {"message": "Your input exceeds the context window of this model."}}',
+        'HTTP 400: {"error": {"message": "The model is supported; this option is not supported."}}',
+        'HTTP 400: {"error": {"message": "The model configuration file does not exist."}}',
+        'HTTP 400: {"error": {"message": null}}',
+        'HTTP 400: {"error": {"message": ["model not supported"]}}',
+        'HTTP 400: {"error": {"message": "model not supported"}',
+        "HTTP 400: []\nThe model is not supported.",
+        'HTTP 400: {"error": {"message": "Invalid request"}}\nThe model does not exist.',
+        'HTTP 400: invalid request\nHTTP 404: {"error": {"message": "model not supported"}}',
+    ],
+)
+def test_model_rejection_requires_http_400_and_its_own_provider_message(text):
+    assert rate_incidents.classify_provider_failure(text) == (
+        "unknown",
+        "non_authoritative",
+        "none",
+    )
+
+
+def test_model_rejection_accepts_a_multiline_provider_error_body():
+    text = "unexpected status 400 Bad Request:\n" + json.dumps(
+        {"error": {"message": "The model does not exist."}}, indent=2
+    )
+    assert rate_incidents.classify_provider_failure(text)[0] == "model_rejected"
+
+
+def test_model_rejection_incident_skips_the_shed_writer(incident_paths, monkeypatch):
+    def unexpected_shed(*args, **kwargs):
+        pytest.fail("a model rejection must not call the shed writer")
+
+    monkeypatch.setattr(rate_incidents, "ensure_shed", unexpected_shed)
+    result = rate_incidents.record_incident(
+        agent="codex",
+        surface="test",
+        category="model_rejected",
+        run_id="rejected",
+        evidence="model not supported",
+    )
+    assert result["shed"] is False
+    assert json.loads(rate_incidents.INCIDENT_FILE.read_text())["category"] == "model_rejected"
+    assert not (rate_incidents.SHED_DIR / "codex").exists()
+    assert rate_incidents._cooldown_seconds("model_rejected") is None
+
+
+@pytest.mark.parametrize("existing_shed", [False, True])
+def test_direct_model_rejection_shed_request_leaves_markers_untouched(
+    incident_paths, existing_shed
+):
+    marker = rate_incidents.SHED_DIR / "codex"
+    prior = b""
+    if existing_shed:
+        assert rate_incidents.ensure_shed(
+            "codex", category="quota", incident_id="prior", expires_at=int(time.time()) + 3600
+        )
+        prior = marker.read_bytes()
+    assert not rate_incidents.ensure_shed(
+        "codex",
+        category="model_rejected",
+        incident_id="rejected",
+        expires_at=int(time.time()) + 7200,
+    )
+    if existing_shed:
+        assert marker.read_bytes() == prior
+    else:
+        assert not marker.exists()
+
+
 def test_json_shed_marker_expiry_and_legacy_marker(incident_paths, monkeypatch):
     monkeypatch.setattr(capacity, "SHED_DIR", rate_incidents.SHED_DIR)
     assert rate_incidents.ensure_shed(

@@ -38,6 +38,10 @@ REFUSAL = (
 )
 # The far-future spelling, for the one test that needs `reset_at` to be in the future.
 FUTURE_REFUSAL = "You've hit your usage limit. Try again at Jan 5th, 2099 3:11 AM."
+MODEL_REJECTION = (
+    'unexpected status 400 Bad Request: {"error": {"message": '
+    '"The model `test-model` is not supported.", "type": "invalid_request_error"}}'
+)
 # Verbatim shape of the 2026-09-15 segments, minus the per-run ids.
 WARNING = {
     "type": "item.completed",
@@ -234,6 +238,75 @@ def test_reconcile_classifies_a_refused_failure_and_no_learner_scores_it(world):
         ).fetchone()
     assert n_obs == 1, f"the learner scored the refused run: n_obs={n_obs}"
     assert posterior < prior, "the control FAIL must still lower the posterior"
+
+
+def test_model_rejection_turn_failed_before_work_is_transient_infra(world):
+    lines = _refused(MODEL_REJECTION)
+    assert ledger_reconcile.provider_limit_before_work(lines) == {
+        "category": "model_rejected",
+        "subcategory": "http_400_model_rejected",
+        "message": MODEL_REJECTION,
+    }
+    _dispatch(world, "model-rejected", lines, outcome=FAIL)
+    _dispatch(world, "control-failure", [json.dumps({"type": "turn.completed"})], outcome=FAIL)
+
+    summary = ledger_reconcile.reconcile(adapters.LEDGER)
+
+    assert summary["provider_limit_deaths"] == {**ZEROS, "seen": 1, "classified": 1}
+    row = _row("model-rejected")
+    assert row[-1] == "transient_infra", row
+    assert "provider limit before any work: http_400_model_rejected" in row[-2]
+    assert _row("control-failure")[-1] is None
+    version = feedback.relearn_quality({"testgen": {"codex": 0.5}})
+    with feedback._conn() as c:
+        n_obs = c.execute(
+            "SELECT n_obs FROM route_weights WHERE version=? AND task_type='testgen' "
+            "AND agent='codex'",
+            (version,),
+        ).fetchone()[0]
+    assert n_obs == 1, "the rejected run must not train the learner"
+    assert not (rate_incidents.SHED_DIR / "codex").exists()
+
+
+def test_model_rejection_before_work_records_an_incident_without_shedding(world):
+    evidence = ledger_reconcile._classify_run_log_segment(
+        _refused(MODEL_REJECTION), "codex", "model-rejected", successful=True
+    )
+    assert evidence is not None and evidence["category"] == "model_rejected"
+    assert evidence["is_authoritative"] is True
+    assert evidence["should_shed"] is False
+    incidents = [json.loads(line) for line in rate_incidents.INCIDENT_FILE.read_text().splitlines()]
+    assert len(incidents) == 1
+    assert incidents[0]["category"] == "model_rejected"
+    assert incidents[0]["extra"]["source"] == "turn_failed_event"
+    assert not (rate_incidents.SHED_DIR / "codex").exists()
+
+
+@pytest.mark.parametrize("where", ["before", "after"])
+def test_model_rejection_with_work_keeps_the_recorded_outcome(world, where):
+    work = _item("item.started", "command_execution", command="git status")
+    lines = _refused(MODEL_REJECTION, **{where: (work,)})
+    assert ledger_reconcile.provider_limit_before_work(lines) is None
+    _dispatch(world, "worked", lines, outcome=FAIL)
+    recorded = _row("worked")
+    summary = ledger_reconcile.reconcile(adapters.LEDGER)
+    assert summary["provider_limit_deaths"] == ZEROS
+    assert _row("worked") == recorded
+    assert not (rate_incidents.SHED_DIR / "codex").exists()
+
+
+@pytest.mark.parametrize(
+    "lines",
+    [
+        [MODEL_REJECTION],
+        [json.dumps({"type": "error", "message": MODEL_REJECTION})],
+        [json.dumps(_item("item.completed", "agent_message", text=MODEL_REJECTION))],
+        _refused("Document HTTP 400 when the model is not supported."),
+    ],
+    ids=["bare-text", "error-event-only", "agent-prose", "terminal-prose"],
+)
+def test_model_rejection_requires_the_terminal_provider_envelope(lines):
+    assert ledger_reconcile.provider_limit_before_work(lines) is None
 
 
 def test_each_reason_is_counted_once_and_untouched_rows_stay_byte_identical(world):
