@@ -424,7 +424,7 @@ def default_acceptance(pr_target: str, issue_target: str | None, body: str, head
 
     try:
         gate = keepalive_supervisor._closure_gate(
-            pr_target, {"target": issue_target or pr_target, "body": body}, head
+            pr_target, {"target": issue_target or pr_target, "body": body}, head, unmerged_head=True
         )
     except Exception as exc:  # noqa: BLE001 — an unrunnable gate is reported, never a pass
         return {"result": "UNRUNNABLE", "detail": f"gate error: {str(exc)[:300]}"}
