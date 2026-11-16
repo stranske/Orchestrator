@@ -430,10 +430,14 @@ def test_baseline_accepts_measured_sync_pr_1403_toolchain(tmp_path):
     for name in ("lint-ruff", "lint-format", "typecheck-mypy"):
         assert checks[name]["command"] in executed_commands, checks[name]
     coverage_probe = {"--cov", "--cov-config=pyproject.toml", "--collect-only"}
+    def is_pytest_coverage_probe(command):
+        return (
+            command["command"][1:3] == ["-m", "pytest"]
+            and coverage_probe <= set(command["command"])
+        )
+
     assert any(
-        command["command"][1:3] == ["-m", "pytest"]
-        and coverage_probe <= set(command["command"])
-        for command in commands
+        is_pytest_coverage_probe(command) for command in commands
     ), "the measurement must retain the pytest coverage-startup command"
     doc = BASELINE_DOC.read_text(encoding="utf-8")
 
