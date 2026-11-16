@@ -144,3 +144,20 @@ Attempts to post these blockers on #1405 and add `needs-human` were rejected:
 the GitHub write tools require approval, but this run's approval policy is `never`.
 Resume in an environment with pytest and Black, validate and commit the test change,
 then collect regenerated-head CI and native sync-core evidence after source delivery.
+
+## Round 10 readback — 2026-11-16 10:00 UTC
+
+**0/2 outstanding criteria verified.** The hosted replay change is present on
+repair head `c2cdd3715497`. The local command
+`/opt/anaconda3/bin/python3 -m pytest -q tests/test_ci_gate_config.py` passed all
+21 tests, including rejection and restoration of the stale Ruff and Coverage
+markers. All nine recorded pins match the pin file read from #1403 at
+`125965ca868c`. The full local suite was outside this round's scope.
+
+`gh run view` confirmed that the named aggregate passed on the repair head
+in [run 43844091578](https://github.com/stranske/Orchestrator/actions/runs/43844091578).
+#1403 has yet to regenerate. Its only CI run,
+[43820436609](https://github.com/stranske/Orchestrator/actions/runs/43820436609),
+still shows the named aggregate failing. Native sync-core round
+`20261116T095916Z`, completed at 09:59:19 UTC, still classified #1403 as
+`pin-conflict` / `pin-held`.
