@@ -1,6 +1,54 @@
 # Issue #1399 forecast verification
 
-## Current round: reproducible mutation runner (2026-11-16)
+## Current round: response-independent consumption reach (2026-11-16)
+
+Reviewed the recent commits through `26d3bc1` and PR #1400's current body. The
+duplicated unchecked renderer task is stale: `summary_line` already renders
+`drainable unknown` while retaining all rule-arm counts. Attempting to reconcile
+that checkbox through `github_update_pull_request` was rejected with
+`MCP tool call requires approval, but approval policy is never`. No checkbox or
+acceptance criterion was changed. The connector confirmed the PR is open and
+ready for review at `26d3bc10ee97e2b8fb304ce977492ea5a0724969`.
+The requested blocker comment and additive `needs-human` label were also rejected
+with the same approval-policy error; neither was applied.
+
+The active review finding at `src/outcomes.py:2243` is valid. A consumption of
+`#9@100`, unread PR `700@200`, cached final cover `701@250 -> #9`, and rule cycle
+`#1@300` with candidate `702@400` always leave the rule cycle reachable under the
+default budget. The previous forecast incorrectly returned `None`.
+
+Added a read-only proof that reuses `_PrSearch` and the consumption traversal.
+Private young-negative responses establish the maximum possible consumption
+reads without settling candidates. A numeric result is returned only when every
+pending rule cycle remains disjoint from those unread consumption keys and fits
+in the worst-case remaining budget. Shared keys or insufficient budget retain
+the existing indeterminate result. No hypothetical cover is persisted or graded.
+
+Added 32 pytest variants comparing the offline forecast with injected forecasts
+and actual linker reach. They cover the review example, repeated young PRs,
+one- and two-read budgets, successful/negative/failed responses, and shared PRs
+that can settle a rule pick during consumption. Offline checks forbid fetching,
+opening the Brain write path, and appending evidence; all state bytes must remain
+unchanged.
+
+Validation with `/opt/hostedtoolcache/Python/3.14.10/x64/bin/python`:
+
+- A standard-library reproducer against `HEAD`'s original `outcomes.py` failed:
+  `AssertionError: (None, False, 20, 300, None, 1)`.
+- The same reproducer passed against the changed source; all 32 standalone
+  offline/injected/linker comparisons passed. These do not replace pytest.
+- Both module selftests, Python compilation, and `git diff --check` passed.
+- The required full suite and named mutation-test command both stopped before
+  collection with `No module named pytest`. The named removal/restoration pytest
+  criterion remains unverified in this environment.
+- Black formatting and the exact repository-wide check both failed because
+  `black` is not installed. Installing pytest and Black failed because
+  `pypi.org` could not resolve. The mandatory formatting gate prevents a commit.
+- The sandbox also grants read-only access to `.git`; no branch, PR, commit,
+  workflow, or production-state change was made. Source/test changes remain
+  available in the working tree for a run with the required tools and Git access.
+
+## Reproducible mutation runner (earlier round, 2026-11-16)
 
 Reviewed commits `1d3518d`, `8a41f45`, `b3af101`, and `e4777f9`. The renderer
 already prints `drainable unknown`, and the latest regression preserves judged,

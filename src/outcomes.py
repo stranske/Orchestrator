@@ -2180,14 +2180,16 @@ def _resolve_rule_pick_covers(conn, rows: list[dict], search: _PrSearch) -> int:
     return reached
 
 
-def _independent_rule_pick_reach(conn, rows: list[dict], search: _PrSearch) -> int | None:
-    """Prove reach when pending cycles share no unread PRs and all can enter the budget.
+def _independent_rule_pick_reach(
+    conn, rows: list[dict], search: _PrSearch, *, unread_before=()
+) -> int | None:
+    """Prove reach when cycles share no unread PRs with prior reads or each other.
 
     Count every non-final candidate as a possible read, including repeated runs on a young PR.
     A response may stop its own cycle early, but cannot settle a disjoint later cycle. The
     worst-case reads before each cycle must still leave at least one read to enter it.
     """
-    seen: set[tuple[str, int]] = set()
+    seen: set[tuple[str, int]] = set(unread_before)
     reads_before = reached = 0
     for pick, since_ts in rule_pick_cycles(rows):
         if not rule_pick_needs_cover_read(conn, pick, since_ts, search.covers):
@@ -2206,6 +2208,28 @@ def _independent_rule_pick_reach(conn, rows: list[dict], search: _PrSearch) -> i
         reads_before += len(pending)
         reached += 1
     return reached
+
+
+def _consumption_independent_rule_pick_reach(conn, rows, search, limit) -> int | None:
+    """Prove exact reach when consumption cannot settle any pending rule candidates.
+
+    Young negative responses maximize consumption reads, including repeated PRs, while final
+    recorded covers still stop the shared traversal. If every disjoint rule cycle fits in the
+    remaining worst-case budget, shorter consumption paths reach exactly those same cycles.
+    The hypothetical responses remain private to this read-only proof and never grade a pick.
+    """
+    unread = set()
+    opened = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(search.now))
+
+    def longest_response(repo, number):
+        unread.add((repo, number))
+        return {"body": "", "createdAt": opened}
+
+    proof = _PrSearch(longest_response, now=search.now, persist=False)
+    proof.left = search.left + search.reads
+    for _row, _run_id, _via in _walk_triage_consumptions(conn, proof, limit):
+        pass
+    return _independent_rule_pick_reach(conn, rows, proof, unread_before=unread)
 
 
 def rule_picks_drainable_next_call(*, now=None, limit: int = 100, pr_reader=None) -> int | None:
@@ -2233,14 +2257,18 @@ def rule_picks_drainable_next_call(*, now=None, limit: int = 100, pr_reader=None
         try:
             for _row, _run_id, _via in _walk_triage_consumptions(conn, search, limit):
                 pass
+        except _UnknownPrResponse:
+            if search.left <= 0:
+                return 0
+            return _consumption_independent_rule_pick_reach(conn, rows, search, limit)
+        try:
             if pr_reader is None:
                 independent_reach = _independent_rule_pick_reach(conn, rows, search)
                 if independent_reach is not None:
                     return independent_reach
             return _resolve_rule_pick_covers(conn, rows, search)
         except _UnknownPrResponse:
-            # Consumption cannot leave budget for a rule read after spending the last read.
-            return 0 if search.left <= 0 else None
+            return None
 
 
 def link_triage_consumption(*, now: float | None = None, limit: int = 100, pr_reader=None) -> dict:

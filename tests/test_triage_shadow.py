@@ -1038,6 +1038,65 @@ def test_next_call_reach_matches_linker_with_shared_budget_and_cache(
         assert len(live_calls) == (1 if scenario == "shared_failed" else 3)
 
 
+@pytest.mark.parametrize("body", [None, "", "Closes #9", "Closes #9\nCloses #1"])
+@pytest.mark.parametrize("repeated", [False, True])
+@pytest.mark.parametrize("bound,cycle_ts", [(20, 300), (2, 300), (1, 300), (20, 150)])
+def test_consumption_cached_stop_preserves_response_independent_reach(
+    brain, monkeypatch, body, repeated, bound, cycle_ts
+):
+    """A cached consumption cover can guarantee budget for a later disjoint rule cycle."""
+    write_rule_cycles(("stranske/Orchestrator#1", cycle_ts))
+    record_pr_run("unread", 700, ts=200)
+    if repeated:
+        record_pr_run("repeated-1", 700, ts=201)
+        record_pr_run("repeated-2", 700, ts=202)
+    record_pr_run("cached-stop", 701, ts=250)
+    remember_cover(701, [9])
+    record_pr_run("rule-only", 702, ts=400)
+    triage_shadow._append(
+        triage_shadow.consumed_path(),
+        {"ts": 100_000_000_000, "role_run_id": "missing", "picked": "stranske/Orchestrator#9"},
+    )
+    search = outcomes._PrSearch
+    monkeypatch.setattr(outcomes, "_PrSearch", lambda *a, **kw: search(*a, bound=bound, **kw))
+    expected = 0 if bound == 1 else 1
+    if cycle_ts == 150 or (bound == 2 and repeated):
+        expected = None
+    before = {p: p.read_bytes() for p in brain.rglob("*") if p.is_file()}
+    with monkeypatch.context() as offline:
+        offline.setattr(outcomes, "default_pr_reader", lambda *a: pytest.fail("forecast fetched"))
+        offline.setattr(feedback, "_conn", lambda: pytest.fail("forecast opened a writer"))
+        offline.setattr(triage_shadow, "_append", lambda *a: pytest.fail("forecast persisted"))
+        assert outcomes.rule_picks_drainable_next_call(now=10_000) == expected
+    assert {p: p.read_bytes() for p in brain.rglob("*") if p.is_file()} == before
+
+    bodies = {702: "Closes #1"}
+    if body is not None:
+        bodies[700] = body
+    read = pr_reader(bodies, opened="1970-01-01T02:46:39Z")
+    injected = outcomes.rule_picks_drainable_next_call(now=10_000, pr_reader=read)
+    assert {p: p.read_bytes() for p in brain.rglob("*") if p.is_file()} == before
+    reached = []
+    drain = outcomes._drain_rule_pick_covers
+
+    def track(conn, pick, since_ts, search, issue):
+        reached.append((pick, since_ts))
+        return drain(conn, pick, since_ts, search, issue)
+
+    monkeypatch.setattr(outcomes, "_drain_rule_pick_covers", track)
+    outcomes.link_triage_consumption(now=10_000, pr_reader=read)
+    assert len(reached) == injected
+    if expected is not None:
+        assert injected == expected
+    else:
+        # A young repeated negative can exhaust the budget; a covering shared response can
+        # settle the rule pick during consumption. Failures leave one cycle reachable.
+        live_expected = 0 if (repeated and bound == 2 and body == "") else 1
+        if cycle_ts == 150 and body == "Closes #9\nCloses #1":
+            live_expected = 0
+        assert injected == live_expected
+
+
 def test_next_call_reach_is_unknown_when_unread_response_changes_traversal(brain, monkeypatch):
     write_rule_cycles(("stranske/Orchestrator#1", 100), ("stranske/Orchestrator#2", 100))
     record_pr_run("shared", 700, ts=200)
