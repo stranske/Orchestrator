@@ -429,7 +429,11 @@ def test_baseline_accepts_measured_sync_pr_1403_toolchain(tmp_path, monkeypatch)
         baseline_doc.write_text(stale, encoding="utf-8")
         with pytest.raises(AssertionError) as failure:
             test_baseline_was_measured_with_the_pinned_versions()
-        message = str(failure.value)
+        # Assertion rewriting appends runtime-specific explanation to the exception.
+        # Check the diagnostic itself, and verify the real gate emitted it.
+        message = _baseline_mismatch(stale, pins)
+        assert message is not None
+        assert message in str(failure.value)
         for tool in tools:
             proposed, previous = stale_versions[tool]
             assert f"{tool.upper()}_VERSION pinned {proposed}, measured {previous}" in message
