@@ -151,10 +151,11 @@ internal to the Orchestrator. The pipeline it participates in has its **system-o
 this document has already produced confidently wrong fleet-level conclusions.
 
 ```
-  repo review (Workflows)  ->  human-decision packet  ->  APPROVED-ISSUE QUEUE (steward repo)
+  issue producers: repo-review uploader (Workflows), closer-core follow-ups, health jobs, sessions
                                                                     |
-                                                     opener lane (local, outside this tree)
-                                                     creates issues + ready PRs, own PR cap
+                                                     opener-core (local, outside this tree)
+                                                     judges + starts existing issues, own PR cap;
+                                                     opens the bootstrap PR in invite-mode repos
                                                                     |
                                         KEEPALIVE (Workflows GitHub Actions) drives each PR:
                                         agent:* label + green Gate + unchecked tasks -> rounds,
@@ -163,8 +164,15 @@ this document has already produced confidently wrong fleet-level conclusions.
                                         first), local_loop.py drives it: agents:local-loop,
                                         CI-feedback rounds on this machine (see below)
                                                                     |
-                                                     closer lane (local) merge -> verify -> close
+                                                     closer-core (local) merge -> verify -> close,
+                                                     or follow-up issue, or park
+  sync-core (local) classifies generated sync PRs and hands findings to their owners;
+  Maint 71 (Workflows Actions) is the only merger of sync PRs.
 ```
+
+The whole lane design (controller seats, opener-core, closer-core, sync-core, the local loop, holds, and the
+model families) is described for the owner in `Audits/closer-lane-2026-11/design/lane-design.html` (and `.pdf`)
+in the owner's workspace, updated 2026-11-16. Change it with this diagram when a lane's design changes.
 
 **The Orchestrator's four real interfaces to that pipeline:**
 
