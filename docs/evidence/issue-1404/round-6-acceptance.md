@@ -79,3 +79,27 @@ the seven-minute floor; the automation does not wait or claim that pass complete
 The delivery step still pending is the landing of the measured baseline from
 #1405 before the pin writer regenerates #1403. Recheck the generated head's CI
 and the first native sync-core classification of that head.
+
+## Round 8 readback — 2026-11-16 09:32 UTC
+
+**0/2 outstanding criteria verified.** #1403 is still at `125965ca868c`.
+`gh run view 43820436609 --repo stranske/Orchestrator` confirms that its only
+CI run failed the named aggregate job. The
+[coverage shard](https://github.com/stranske/Orchestrator/actions/runs/43820436609/job/133142044085)
+and [flat exec-mirror shard](https://github.com/stranske/Orchestrator/actions/runs/43820436609/job/133142044028)
+each report one failed test, `test_baseline_was_measured_with_the_pinned_versions`,
+for Coverage 7.17.3 versus 7.17.2 and Ruff 0.17.5 versus 0.17.4. The
+[aggregate log](https://github.com/stranske/Orchestrator/actions/runs/43820436609/job/133143654504)
+reports that shard 1/6 supplied no coverage data. This identifies the first
+failing test upstream of the aggregate.
+
+On repair head `9961b14b1e3e`, the named job passed in
+[run 43838261567](https://github.com/stranske/Orchestrator/actions/runs/43838261567),
+and `/opt/anaconda3/bin/python3 -m pytest -q tests/test_ci_gate_config.py` passed
+all 21 tests in 8.75 seconds. The full local repository test command remains
+unrun under the round's focused-test rule.
+
+The latest native sync-core round, `20261116T093115Z`, finished at 09:31:18 UTC
+and still records #1403 as `pin-conflict` / `pin-held`. The next required
+delivery step remains the guarded landing of #1405 so the pin writer can
+regenerate #1403.
