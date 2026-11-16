@@ -1,5 +1,52 @@
 # Issue #1399 forecast verification
 
+## Current round: reproducible mutation runner (2026-11-16)
+
+Reviewed commits `1d3518d`, `8a41f45`, `b3af101`, and `e4777f9`. The renderer
+already prints `drainable unknown`, and the latest regression preserves judged,
+no-delivery and unresolved counts together. The duplicated renderer checkbox in
+the PR body is stale. Updating that checkbox through the GitHub connector was
+rejected: `MCP tool call requires approval, but approval policy is never`.
+The PR remains open and ready for review. No acceptance checkbox was changed.
+
+Added `scripts/verify_triage_shadow_mutation.js` to make the outstanding mutation
+check repeatable with the explicitly selected interpreter:
+
+```sh
+PYTHON=/absolute/path/to/python3 node scripts/verify_triage_shadow_mutation.js
+```
+
+It requires the named test to pass, replaces only the actual rule-pass invocation
+with `pass`, requires the named test to fail for missing `pr_reads`, restores the
+original source bytes, and requires the same command to pass again. A fresh
+bytecode-cache directory prevents stale imports. Successful output contains all
+three transcripts, source/test hashes, and the measured Git HEAD. Missing pytest,
+collection errors, timeouts, unexpected assertions and changed inputs refuse
+successful evidence. Source restoration also runs after exceptions.
+
+Verified in this round:
+
+- `node tests/test_verify_triage_shadow_mutation.js`: 26 unit tests passed.
+- `node tests/test_issue_1138_mutation.js`: 29 existing helper tests passed.
+- `node tests/test_redirect_routing_mutations.js`: 11 existing helper tests passed.
+- Both Python module selftests passed, as did JavaScript syntax and diff checks.
+
+The runner unit tests use simulated pytest output and **do not** establish the
+Python acceptance criteria. The selected interpreter remains
+`/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3`; both the full triage-shadow
+pytest command and the named test command with `-m 'not slow'` failed before
+collection with `No module named pytest`. The real mutation runner refused its
+baseline, emitted no success receipt, and left the Python source/test unchanged.
+Black is also unavailable, and package-host DNS resolution fails. This round
+changes only JavaScript and this verification note, so it introduces no Python
+changes requiring the Black pre-commit gate. The remaining acceptance checks
+still require pytest in the selected interpreter.
+
+The required commit was attempted after verification, but `git add` failed:
+`Unable to create '.git/index.lock': Read-only file system`. This environment
+grants only read access to `.git`; all three round changes remain uncommitted on
+`codex/issue-1399`. Follow-up requires writable Git metadata as well as pytest.
+
 The linker and forecast now share consumption eligibility/traversal and live rule-cycle
 selection. Both retain the ordered rule drain and `_PrSearch` cache/budget behavior.
 An unknown response consuming the final read now leaves an exact reach: zero during
