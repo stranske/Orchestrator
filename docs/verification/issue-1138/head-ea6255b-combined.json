@@ -137,15 +137,15 @@
       "num_statements": 583,
       "still_missing": [
         {
-          "line": 907,
+          "line": 920,
           "text": "            _os.environ[DISPATCH_LANE_ENV] = saved"
         },
         {
-          "line": 1299,
+          "line": 1312,
           "text": "            os.environ[\"ORCH_EXPLORATION_RATE\"] = old_exploration_rate"
         },
         {
-          "line": 1303,
+          "line": 1316,
           "text": "            os.environ[\"HANDOFF_DIR\"] = old_handoff"
         }
       ]
