@@ -404,7 +404,8 @@ def test_baseline_accepts_measured_sync_pr_1403_toolchain(tmp_path):
     """Replay the full Gate config with pending pins, then break and restore each stale pin."""
     require_checkout()
     record = BASELINE_DOC.parent / "evidence" / "issue-1404" / "measurement.json"
-    report = json.loads(record.read_text(encoding="utf-8"))["report"]
+    measurement = json.loads(record.read_text(encoding="utf-8"))
+    report = measurement["report"]
     pins = report["pins"]
     # A matching marker alone cannot prove that the proposed bundle was installed.
     # Bind the replay to the strict collector's observed versions for all nine tools.
@@ -413,6 +414,17 @@ def test_baseline_accepts_measured_sync_pr_1403_toolchain(tmp_path):
     }
     assert report["installed_versions"] == expected_versions
     assert report["problems"] == []
+    # Versions alone cannot establish that the measured checks actually passed.
+    # Require every check and its captured command result before replaying the bundle.
+    checks = {check["check"]: check for check in report["checks"]}
+    assert set(checks) == {"lint-ruff", "lint-format", "typecheck-mypy", "coverage"}
+    for check in checks.values():
+        assert check["blocking"] == 0, check
+        assert check["drainable"] == 0, check
+    commands = measurement["commands"]
+    assert commands
+    for command in commands:
+        assert command["exit_code"] == 0, command
     doc = BASELINE_DOC.read_text(encoding="utf-8")
 
     # Replay the proposed payload through the real file reader without editing the live pins.
