@@ -129,3 +129,40 @@ Commit and remote handoff were attempted after verification. `git add` failed wi
 The GitHub connector refused both the requested `needs-human` label and blocker
 comment on PR #1395 with `MCP tool call requires approval, but approval policy is never`.
 The changes remain in the checked-out PR working tree for a writable seat to commit.
+
+## Task reconciliation and pagination regression — subsequent 2026-11-16 round
+
+Reviewed commits `973bbdb` and `93041c7`. The retained paginated comments command
+has exit status 0 and its output was inspected. The task to run that command and
+check the native decision bindings is complete, independently of the acceptance
+criterion requiring a decision. The first two tasks and the conditional historical
+checker task remain unchecked: authenticated artifact bytes and the canonical
+index, immutable producer result and worker terminal are still unavailable.
+
+A fresh connector read again returns 53 comments, eight native event-state
+markers and zero native corpus decisions. Native PR readback confirms the required
+head and merge. The repeated CLI command cannot connect to `api.github.com`;
+artifact download returns HTTP 404. All three custody environment variables are
+unset, the default custody root is absent, and no `canonical-index*.json` is
+present in the checkout. These are bounded observations of this runner.
+
+The added publisher regression splits the eight unchanged authentic states across
+two API pages. Earlier history alone reaches report admission; reading the later
+page instead rejects the original recovery as superseded. Both cases prove zero
+publication attempts. This verifies complete history inspection at the publication
+boundary; it does not recover retained bytes or historical producer custody.
+
+`node tests/test_verifier_context_builder_contract.js` passes all 18 tests;
+JavaScript syntax and `git diff --check` pass. No Python files changed. Pytest is
+still unavailable (`No module named pytest`). The requested historical checker
+remains conditional on recovery of the genuine records.
+
+The PR-body reconciliation update was rejected with `MCP tool call requires
+approval, but approval policy is never`. The reviewable checkbox disposition is
+retained in `task-reconciliation.md`; both acceptance criteria remain unchecked.
+
+Commit was attempted after verification and failed to create `.git/index.lock`
+because `.git` is read-only. The blocker comment and `needs-human` label were
+also rejected by the same connector approval requirement. Final native readback
+confirms PR #1395 remains open and ready for review (`draft=false`), at
+`93041c7426672ed3d022f1f7efe0e3db9bddb11b`. The new edits remain uncommitted.

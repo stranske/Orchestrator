@@ -444,6 +444,64 @@ test('CSV recovery rechecks native revisions and supersession at the publication
   assert.equal(JSON.stringify([native, reports, deliveries]), before);
 });
 
+test('CSV publication reads later comment pages before admitting the original recovery',async()=>{
+  const { publishRetainedReport } = require('../.github/scripts/verifier_pending_execution.js');
+  const { validateEvent, digest } = require('../.github/scripts/verification_event.js');
+  const native = require('../docs/verification/issue-1364/recovery-readback-20261116.json');
+  const reports = require('../docs/verification/issue-1184-acceptance-20261111/round7/native-readback.json');
+  const before = JSON.stringify([native, reports]);
+  const states = native.verifier_events.map(comment => JSON.parse(comment.body.match(/(\{[^\n]+\})/)[1]));
+  const original = states.find(row => row.run_id === '42142641060' && row.status === 'pending');
+  const event = validateEvent(original.verification_event);
+  const later = native.verifier_events.filter((comment, index) => states[index].run_id === '43133282976');
+  const earlier = native.verifier_events.filter(comment => !later.includes(comment));
+  assert.equal(earlier.length, 6);
+  assert.equal(later.length, 2, 'retain both authentic later recovery states');
+  const selector = {run_id:Number(original.run_id),run_attempt:Number(original.run_attempt),
+    artifact_id:states.find(row => row.run_id === '43133282976').retained_revalidation.artifact_id};
+  const origin = {verification_event:event,assessment_identity:original.assessment_identity,
+    source_run_id:original.run_id,source_run_attempt:original.run_attempt,
+    recovery_key:digest({schema:'retained-revalidation-key/v1',event_id:event.event_id,
+      assessment:original.assessment_identity,selector})};
+  const manifest = {verification_event:event,assessment_identity:original.assessment_identity,
+    request:{sources:[]}};
+  // Split unchanged authentic states across transport pages. The Link header
+  // requires another read even when this filtered first page has fewer than 100 rows.
+  const exercise = async (pages, expected, expectedReads) => {
+    const reads = [];
+    let posts = 0, postAttempts = 0;
+    const github = {rest:{pulls:{get:async () => ({data:{merged:true,
+      head:{sha:event.head_sha},merge_commit_sha:event.evaluated_sha}})},issues:{
+      listComments:async args => {
+        assert.equal(`${args.owner}/${args.repo}`, event.repo);
+        assert.equal(args.issue_number, Number(event.pr));
+        assert.equal(args.per_page, 100);
+        assert.ok(args.page >= 1 && args.page <= pages.length);
+        reads.push(args.page);
+        return {data:pages[args.page - 1].map(comment => ({
+          id:Number(comment.url.split('#issuecomment-')[1]),user:{login:comment.author},
+          html_url:comment.url,body:comment.body,
+        })),headers:args.page < pages.length ? {
+          link:`<https://api.github.com/repos/${event.repo}/issues/${event.pr}/comments?page=${args.page + 1}>; rel="next"`,
+        } : {}};
+      },
+      createComment:async () => {posts++; throw new Error('Unexpected publication');},
+    }}};
+    await assert.rejects(publishRetainedReport({github,manifest,origin,
+      body:reports.reports[1].body,currentRun:native.run.id,
+      onPostAttempt:()=>{postAttempts++;},
+    }), expected);
+    assert.deepEqual(reads, expectedReads);
+    assert.equal(posts, 0);
+    assert.equal(postAttempts, 0);
+  };
+  // Earlier history alone reaches report admission. Complete pagination must
+  // instead stop at history supersession, before attempting any publication.
+  await exercise([earlier], /Recovery report lacks one admitted terminal decision/, [1]);
+  await exercise([earlier, later], /Retained recovery is superseded by a newer authenticated assessment/, [1,2]);
+  assert.equal(JSON.stringify([native, reports]), before);
+});
+
 test('native CSV comparison reconciles to existing outputs even when its evaluation step was skipped',async()=>{
   const { reconcilePendingExecution, executionBinding } = require('../.github/scripts/verifier_pending_execution.js');
   const { validateEvent } = require('../.github/scripts/verification_event.js');
