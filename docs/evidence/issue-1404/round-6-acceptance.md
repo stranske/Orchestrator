@@ -59,3 +59,23 @@ sync-core result. The local full-suite restriction remains an explicit limitatio
 
 This documentation-only push requires the scheduled post-push review pass after
 the seven-minute floor; the automation does not wait or claim that pass complete.
+
+## Round 7 readback — 2026-11-16 09:15 UTC
+
+**0/2 outstanding criteria verified.**
+
+- **A1.** The CI run list for `deps/sync-dev-versions-f5d01d8ca39f` still contains
+  only run `43820436609`. A fresh `gh run view` confirmed that the named job
+  failed on the unchanged #1403 head `125965ca868c`. The same job passed on
+  repair head `cfe6985b7da0` in
+  [run 43836289749](https://github.com/stranske/Orchestrator/actions/runs/43836289749).
+  The focused local gate file passed all 21 tests. This round's instructions
+  prohibit running the full repository test command locally.
+- **A3.** The native sync-core journal records #1403 as `pin-conflict` with
+  terminal disposition `pin-held` in round `20261116T091416Z`, completed at
+  09:14:19 UTC. The combined-coverage failure is still listed, and the handoff
+  remains open on #1404.
+
+The delivery step still pending is the landing of the measured baseline from
+#1405 before the pin writer regenerates #1403. Recheck the generated head's CI
+and the first native sync-core classification of that head.
