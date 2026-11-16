@@ -1044,9 +1044,12 @@ def test_next_call_reach_is_unknown_when_unread_response_changes_traversal(brain
     # The same unread key can settle both cycles, or force a second failed read attempt.
     assert outcomes.rule_picks_drainable_next_call() is None
     assert "2 unresolved, drainable unknown" in triage_shadow.summary_line()
-    assert outcomes.rule_picks_drainable_next_call(
-        now=10_000, pr_reader=pr_reader({700: "Closes #1\nCloses #2"})
-    ) == 1
+    assert (
+        outcomes.rule_picks_drainable_next_call(
+            now=10_000, pr_reader=pr_reader({700: "Closes #1\nCloses #2"})
+        )
+        == 1
+    )
     assert outcomes.rule_picks_drainable_next_call(now=10_000, pr_reader=pr_reader({})) == 2
     assert not outcomes._pr_cover_path().exists()
 
