@@ -890,9 +890,7 @@ def format_lines(section: dict) -> list[str]:
         value = (
             f"unmeasured — would need {m['reason']}"
             if row["state"] == "unmeasured"
-            else "measured zero"
-            if m["value"] == 0
-            else str(m["value"])
+            else "measured zero" if m["value"] == 0 else str(m["value"])
         )
         values = [
             f"{row['feature']}/{row['goal_id']}",
