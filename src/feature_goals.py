@@ -450,7 +450,7 @@ def _keepalive_acceptance_counts(items: list[dict]) -> tuple[int, int, int]:
 
 def _keepalive_acceptance_loaded(
     now: int,
-) -> tuple[str, int, int, int] | tuple[None, RuntimeError]:
+) -> tuple[tuple[str, int, int, int] | None, RuntimeError | None]:
     try:
         items, since = _fetch_merged_keepalive_items(now)
     except RuntimeError as exc:
@@ -492,6 +492,8 @@ def keepalive_acceptance_rest_share(now: int) -> tuple[float | None, dict]:
     loaded, err = _keepalive_acceptance_loaded(now)
     if err is not None:
         return None, {"as_of": now, "error": str(err)}
+    if loaded is None:
+        return None, {"as_of": now, "error": "unmeasured: keepalive acceptance load returned no data"}
     since, citing, population, undelivered = loaded
     rest = _keepalive_acceptance_rest_payload(now, since, citing, population, undelivered)
     share = rest.get("share")
@@ -514,6 +516,17 @@ def keepalive_acceptance_verification_record(now: int | None = None) -> dict:
             "measure_reason": measured.reason,
             "rest": rest,
         }
+    if loaded is None:
+        reason = "keepalive acceptance load returned no data"
+        measured = unknown(as_of, reason)
+        return {
+            "as_of": as_of,
+            "measure_share": measured.value,
+            "rest_share": None,
+            "equal": False,
+            "measure_reason": measured.reason,
+            "rest": {"as_of": as_of, "error": reason},
+        }
     since, citing, population, undelivered = loaded
     rest = _keepalive_acceptance_rest_payload(as_of, since, citing, population, undelivered)
     rest_share = rest.get("share")
@@ -524,8 +537,9 @@ def keepalive_acceptance_verification_record(now: int | None = None) -> dict:
             "without the gate)",
         )
     else:
+        share = citing / population
         measured = Measurement(
-            rest_share,
+            share,
             "GitHub REST search: merged keepalive PR bodies (Deterministic gates line)",
             as_of,
             reason=_keepalive_acceptance_reason(since, citing, population, undelivered),
@@ -551,6 +565,8 @@ def keepalive_acceptance(now: int) -> Measurement:
     loaded, err = _keepalive_acceptance_loaded(now)
     if err is not None:
         return unknown(now, str(err).removeprefix("unmeasured: "))
+    if loaded is None:
+        return unknown(now, "keepalive acceptance load returned no data")
     since, citing, population, undelivered = loaded
     if not population:
         return unknown(
