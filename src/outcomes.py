@@ -2132,6 +2132,25 @@ def _pending_triage_consumptions(limit: int) -> list[dict]:
     return [r for r in consumed if triage_shadow.consumption_key(r) not in linked][: max(0, limit)]
 
 
+def _walk_triage_consumptions(conn, search: _PrSearch, limit: int):
+    """Search eligible receipts in receipt order, before spending any reads on rule cycles."""
+    for row in _pending_triage_consumptions(limit):
+        run_id, via = first_run_for_pick(
+            conn, row["picked"], row["ts"] / 1_000_000_000, search=search
+        )
+        yield row, run_id, via
+
+
+def _live_rule_pick_rows() -> list[dict]:
+    import triage_shadow
+
+    return [
+        row
+        for row in triage_shadow._read_rows(triage_shadow.corpus_path())
+        if row.get("triage_valid") and row.get("live_proposal") and row.get("rule_pick")
+    ]
+
+
 def _resolve_rule_pick_covers(conn, rows: list[dict], search: _PrSearch) -> int:
     """Count cycles actually reached for a read, sharing consumption's remaining budget/cache."""
     reached = 0
@@ -2147,6 +2166,9 @@ def _resolve_rule_pick_covers(conn, rows: list[dict], search: _PrSearch) -> int:
                 conn, rule_pick, since_ts, search, int(rule_pick.rpartition("#")[2])
             )
         except _UnknownPrResponse:
+            if search.left <= 0:
+                # Even a successful cover cannot admit another cycle without read budget.
+                return reached
             # This cycle is reached regardless of the response. If there is no later pending
             # cycle, whether this read stops or continues cannot change the cycle count.
             if any(
@@ -2158,6 +2180,58 @@ def _resolve_rule_pick_covers(conn, rows: list[dict], search: _PrSearch) -> int:
     return reached
 
 
+def _independent_rule_pick_reach(
+    conn, rows: list[dict], search: _PrSearch, *, unread_before=()
+) -> int | None:
+    """Prove reach when cycles share no unread PRs with prior reads or each other.
+
+    Count every non-final candidate as a possible read, including repeated runs on a young PR.
+    A response may stop its own cycle early, but cannot settle a disjoint later cycle. The
+    worst-case reads before each cycle must still leave at least one read to enter it.
+    """
+    seen: set[tuple[str, int]] = set(unread_before)
+    reads_before = reached = 0
+    for pick, since_ts in rule_pick_cycles(rows):
+        if not rule_pick_needs_cover_read(conn, pick, since_ts, search.covers):
+            continue
+        repo, _, tail = pick.rpartition("#")
+        pending = []
+        for _run_id, number in _rule_pick_cover_candidates(conn, pick, since_ts):
+            key = (repo, number)
+            if not search.settled(key):
+                pending.append(key)
+            elif int(tail) in search.covers[key].get("covers", []):
+                break
+        if seen.intersection(pending) or reads_before >= search.left:
+            return None
+        seen.update(pending)
+        reads_before += len(pending)
+        reached += 1
+    return reached
+
+
+def _consumption_independent_rule_pick_reach(conn, rows, search, limit) -> int | None:
+    """Prove exact reach when consumption cannot settle any pending rule candidates.
+
+    Young negative responses maximize consumption reads, including repeated PRs, while final
+    recorded covers still stop the shared traversal. If every disjoint rule cycle fits in the
+    remaining worst-case budget, shorter consumption paths reach exactly those same cycles.
+    The hypothetical responses remain private to this read-only proof and never grade a pick.
+    """
+    unread = set()
+    opened = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(search.now))
+
+    def longest_response(repo, number):
+        unread.add((repo, number))
+        return {"body": "", "createdAt": opened}
+
+    proof = _PrSearch(longest_response, now=search.now, persist=False)
+    proof.left = search.left + search.reads
+    for _row, _run_id, _via in _walk_triage_consumptions(conn, proof, limit):
+        pass
+    return _independent_rule_pick_reach(conn, rows, proof, unread_before=unread)
+
+
 def rule_picks_drainable_next_call(*, now=None, limit: int = 100, pr_reader=None) -> int | None:
     """Replay next-call reach without network reads, schema migration or persisted writes.
 
@@ -2165,16 +2239,7 @@ def rule_picks_drainable_next_call(*, now=None, limit: int = 100, pr_reader=None
     An injected reader permits deterministic replay; reports use persisted evidence alone and
     return None when an unread response prevents determining subsequent cycle reach.
     """
-    import triage_shadow
-
-    rows = sorted(
-        (
-            r
-            for r in triage_shadow._read_rows(triage_shadow.corpus_path())
-            if r.get("triage_valid") and r.get("live_proposal") and r.get("rule_pick")
-        ),
-        key=lambda r: r["ts"],
-    )
+    rows = _live_rule_pick_rows()
     if not rows:
         return 0
 
@@ -2190,8 +2255,17 @@ def rule_picks_drainable_next_call(*, now=None, limit: int = 100, pr_reader=None
         ):
             return 0
         try:
-            for row in _pending_triage_consumptions(limit):
-                first_run_for_pick(conn, row["picked"], row["ts"] / 1_000_000_000, search=search)
+            for _row, _run_id, _via in _walk_triage_consumptions(conn, search, limit):
+                pass
+        except _UnknownPrResponse:
+            if search.left <= 0:
+                return 0
+            return _consumption_independent_rule_pick_reach(conn, rows, search, limit)
+        try:
+            if pr_reader is None:
+                independent_reach = _independent_rule_pick_reach(conn, rows, search)
+                if independent_reach is not None:
+                    return independent_reach
             return _resolve_rule_pick_covers(conn, rows, search)
         except _UnknownPrResponse:
             return None
@@ -2212,15 +2286,12 @@ def link_triage_consumption(*, now: float | None = None, limit: int = 100, pr_re
     now = time.time() if now is None else now
     result: dict = {"followed": [], "not_followed": [], "unresolved": [], "pending": []}
     search = _PrSearch(pr_reader, now=now)
-    for row in _pending_triage_consumptions(limit):
-        consumption_id = triage_shadow.consumption_key(row)
-        with feedback._conn() as conn:
+    with feedback._conn() as conn:
+        for row, run_id, via in _walk_triage_consumptions(conn, search, limit):
+            consumption_id = triage_shadow.consumption_key(row)
             source = conn.execute(
                 "SELECT role_name FROM runs WHERE run_id=? AND mode='role'", (row["role_run_id"],)
             ).fetchone()
-            run_id, via = first_run_for_pick(
-                conn, row["picked"], row["ts"] / 1_000_000_000, search=search
-            )
             run = (run_id,) if run_id else None
             completed = (
                 run
@@ -2231,60 +2302,53 @@ def link_triage_consumption(*, now: float | None = None, limit: int = 100, pr_re
                     (run[0],),
                 ).fetchone()
             )
-        if run and completed and source and source[0] == "triage":
-            edge = feedback.record_capability_consumption(
-                capability_id="role-triage",
-                capability_version_id=row["capability_version_id"],
-                source_run_id=row["role_run_id"],
-                target_run_id=run[0],
-                accepted=True,
-                producer="triage_consumption",
-                attempt_id=row.get("consumption_id") or str(row["ts"]),
-                receipt_ref=f"{triage_shadow.consumed_path()}#{consumption_id}",
-            )
-            record = {
-                "consumed_ts": row["ts"],
-                "consumption_id": consumption_id,
-                "status": "followed",
-                "run_id": run[0],
-            }
-            triage_shadow._append(triage_shadow.linked_path(), record)
-            result["followed"].append({**record, "edge": edge})
-        elif not run and via == "none" and now - row["ts"] / 1_000_000_000 >= 48 * 3600:
-            record = {
-                "consumed_ts": row["ts"],
-                "consumption_id": consumption_id,
-                "status": "not_followed",
-                "run_id": None,
-            }
-            triage_shadow._append(triage_shadow.linked_path(), record)
-            result["not_followed"].append(record)
-        elif now - row["ts"] / 1_000_000_000 >= 48 * 3600:
-            if not run:
-                reason = via
-            elif not source or source[0] != "triage":
-                reason = "invalid_source_role"
+            if run and completed and source and source[0] == "triage":
+                edge = feedback.record_capability_consumption(
+                    capability_id="role-triage",
+                    capability_version_id=row["capability_version_id"],
+                    source_run_id=row["role_run_id"],
+                    target_run_id=run[0],
+                    accepted=True,
+                    producer="triage_consumption",
+                    attempt_id=row.get("consumption_id") or str(row["ts"]),
+                    receipt_ref=f"{triage_shadow.consumed_path()}#{consumption_id}",
+                )
+                record = {
+                    "consumed_ts": row["ts"],
+                    "consumption_id": consumption_id,
+                    "status": "followed",
+                    "run_id": run[0],
+                }
+                triage_shadow._append(triage_shadow.linked_path(), record)
+                result["followed"].append({**record, "edge": edge})
+            elif not run and via == "none" and now - row["ts"] / 1_000_000_000 >= 48 * 3600:
+                record = {
+                    "consumed_ts": row["ts"],
+                    "consumption_id": consumption_id,
+                    "status": "not_followed",
+                    "run_id": None,
+                }
+                triage_shadow._append(triage_shadow.linked_path(), record)
+                result["not_followed"].append(record)
+            elif now - row["ts"] / 1_000_000_000 >= 48 * 3600:
+                if not run:
+                    reason = via
+                elif not source or source[0] != "triage":
+                    reason = "invalid_source_role"
+                else:
+                    reason = "first_run_incomplete"
+                record = {
+                    "consumed_ts": row["ts"],
+                    "consumption_id": consumption_id,
+                    "status": "unresolved",
+                    "run_id": run[0] if run else None,
+                    "reason": reason,
+                }
+                triage_shadow._append(triage_shadow.linked_path(), record)
+                result["unresolved"].append(record)
             else:
-                reason = "first_run_incomplete"
-            record = {
-                "consumed_ts": row["ts"],
-                "consumption_id": consumption_id,
-                "status": "unresolved",
-                "run_id": run[0] if run else None,
-                "reason": reason,
-            }
-            triage_shadow._append(triage_shadow.linked_path(), record)
-            result["unresolved"].append(record)
-        else:
-            result["pending"].append(row["ts"])
-    corpus_rows = sorted(
-        (
-            r
-            for r in triage_shadow._read_rows(triage_shadow.corpus_path())
-            if r.get("triage_valid") and r.get("live_proposal") and r.get("rule_pick")
-        ),
-        key=lambda r: r["ts"],
-    )
+                result["pending"].append(row["ts"])
+    corpus_rows = _live_rule_pick_rows()
     consumption_unread = set(search.unread)
     with feedback._conn() as conn:
         _resolve_rule_pick_covers(conn, corpus_rows, search)
