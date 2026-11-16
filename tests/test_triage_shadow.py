@@ -1064,6 +1064,66 @@ def test_next_call_reach_is_unknown_when_unread_response_changes_traversal(brain
     assert not outcomes._pr_cover_path().exists()
 
 
+@pytest.mark.parametrize("body", [None, "", "Closes #1"])
+@pytest.mark.parametrize("bound,expected", [(1, 1), (2, 2)])
+@pytest.mark.parametrize("repeated", [False, True])
+def test_offline_reach_of_independent_cycles_respects_worst_case_reads(
+    brain, monkeypatch, body, bound, expected, repeated
+):
+    """Disjoint candidates cannot settle another cycle, but a young PR can spend two reads."""
+    write_rule_cycles(("stranske/Other#1", 101), ("stranske/Orchestrator#1", 100))
+    record_pr_run("first", 700, ts=200)
+    if repeated:
+        record_pr_run("repeated", 700, ts=200.5)
+    feedback.record_run(
+        "second",
+        "stranske/Other#701",
+        "implement",
+        "codex",
+        mode="remote",
+        source="keepalive",
+        pr_number=701,
+        ts=201,
+    )
+    search = outcomes._PrSearch
+    monkeypatch.setattr(outcomes, "_PrSearch", lambda *a, **kw: search(*a, bound=bound, **kw))
+    before = {p: p.read_bytes() for p in brain.rglob("*") if p.is_file()}
+    with monkeypatch.context() as offline:
+        offline.setattr(outcomes, "default_pr_reader", lambda *a: pytest.fail("forecast fetched"))
+        offline.setattr(feedback, "_conn", lambda: pytest.fail("forecast opened a writer"))
+        offline.setattr(triage_shadow, "_append", lambda *a: pytest.fail("forecast persisted"))
+        offline_expected = None if repeated and bound == 2 else expected
+        assert outcomes.rule_picks_drainable_next_call(now=10_000) == offline_expected
+    assert {p: p.read_bytes() for p in brain.rglob("*") if p.is_file()} == before
+    bodies = {} if body is None else {700: body, 701: body}
+    opened = "1970-01-01T02:46:39Z"
+    live_expected = 1 if repeated and body == "" else expected
+    assert (
+        outcomes.rule_picks_drainable_next_call(
+            now=10_000, pr_reader=pr_reader(bodies, opened=opened)
+        )
+        == live_expected
+    )
+    reached = []
+    drain = outcomes._drain_rule_pick_covers
+
+    def track(conn, pick, since_ts, search, issue):
+        reached.append((pick, since_ts))
+        return drain(conn, pick, since_ts, search, issue)
+
+    monkeypatch.setattr(outcomes, "_drain_rule_pick_covers", track)
+    calls = []
+    result = outcomes.link_triage_consumption(
+        now=10_000, pr_reader=pr_reader(bodies, calls, opened=opened)
+    )
+    assert reached == [("stranske/Orchestrator#1", 100), ("stranske/Other#1", 101)][:live_expected]
+    expected_calls = [("stranske/Orchestrator", 700), ("stranske/Other", 701)][:expected]
+    if repeated and body == "" and bound == 2:
+        expected_calls[1] = ("stranske/Orchestrator", 700)
+    assert calls == expected_calls
+    assert result["pr_reads"] == expected
+
+
 @pytest.mark.parametrize("consumption", [False, True])
 @pytest.mark.parametrize("body", [None, "", "Closes #1\nCloses #2"])
 def test_next_call_reach_is_exact_when_unknown_response_uses_last_read(

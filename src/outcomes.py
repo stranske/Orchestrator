@@ -2180,6 +2180,34 @@ def _resolve_rule_pick_covers(conn, rows: list[dict], search: _PrSearch) -> int:
     return reached
 
 
+def _independent_rule_pick_reach(conn, rows: list[dict], search: _PrSearch) -> int | None:
+    """Prove reach when pending cycles share no unread PRs and all can enter the budget.
+
+    Count every non-final candidate as a possible read, including repeated runs on a young PR.
+    A response may stop its own cycle early, but cannot settle a disjoint later cycle. The
+    worst-case reads before each cycle must still leave at least one read to enter it.
+    """
+    seen: set[tuple[str, int]] = set()
+    reads_before = reached = 0
+    for pick, since_ts in rule_pick_cycles(rows):
+        if not rule_pick_needs_cover_read(conn, pick, since_ts, search.covers):
+            continue
+        repo, _, tail = pick.rpartition("#")
+        pending = []
+        for _run_id, number in _rule_pick_cover_candidates(conn, pick, since_ts):
+            key = (repo, number)
+            if not search.settled(key):
+                pending.append(key)
+            elif int(tail) in search.covers[key].get("covers", []):
+                break
+        if seen.intersection(pending) or reads_before >= search.left:
+            return None
+        seen.update(pending)
+        reads_before += len(pending)
+        reached += 1
+    return reached
+
+
 def rule_picks_drainable_next_call(*, now=None, limit: int = 100, pr_reader=None) -> int | None:
     """Replay next-call reach without network reads, schema migration or persisted writes.
 
@@ -2205,6 +2233,10 @@ def rule_picks_drainable_next_call(*, now=None, limit: int = 100, pr_reader=None
         try:
             for _row, _run_id, _via in _walk_triage_consumptions(conn, search, limit):
                 pass
+            if pr_reader is None:
+                independent_reach = _independent_rule_pick_reach(conn, rows, search)
+                if independent_reach is not None:
+                    return independent_reach
             return _resolve_rule_pick_covers(conn, rows, search)
         except _UnknownPrResponse:
             # Consumption cannot leave budget for a rule read after spending the last read.

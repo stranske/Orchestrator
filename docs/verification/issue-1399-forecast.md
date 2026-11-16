@@ -80,3 +80,58 @@ $ /opt/anaconda3/bin/python3 -m pytest tests/test_triage_shadow.py -q
 ```
 
 Committed on branch `codex/issue-1399` (PR #1400); production mirror sync not performed here.
+
+## Follow-up verification in the hosted sandbox (2026-11-16)
+
+Found an additional determinate case: two cycles with disjoint PR candidates and a
+two-read budget always reach both cycles, independently of either response. Before
+the follow-up change, the offline forecast returned `None`; a standalone Python
+assertion expecting `2` failed. `_independent_rule_pick_reach` now proves reach
+when candidates are disjoint and the worst-case preceding reads leave budget for
+each cycle. It counts repeated non-final candidates separately so a young PR
+cannot hide possible budget exhaustion.
+
+Added 12 pytest cases comparing independent cycles with actual linker traversal,
+including reverse corpus order, one- and two-read budgets, failed/negative/positive
+responses, repeated young PRs, and no forecast fetches or persistence.
+
+Current interpreter: `/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3`.
+The earlier Python 3.12 results above describe a previous environment.
+
+Checks completed in this environment:
+
+- Both `src/outcomes.py --selftest` and `src/triage_shadow.py --selftest` passed.
+- `python3 -m py_compile src/outcomes.py tests/test_triage_shadow.py` passed.
+- `git diff --check` passed.
+- Standalone standard-library harness `/tmp/verify_1399_reach.py` passed 24
+  offline/injected/linker comparisons, including consumption-budget competition,
+  shared PRs, repeated young PRs, and checks against forecast fetching or writing.
+- Removing the actual `_resolve_rule_pick_covers(conn, corpus_rows, search)`
+  invocation made that harness fail with `AssertionError: ([], 1)` (no cycle
+  reached where one was forecast). Restoring the invocation restored all 24
+  passing comparisons. Bytecode was cleared between mutations.
+
+Required gates remain blocked in this environment:
+
+```text
+$ python3 -m pytest tests/test_triage_shadow.py -m 'not slow'
+.../python3: No module named pytest
+
+$ python3 -m pytest tests/test_triage_shadow.py::test_linker_resolves_rule_picks_within_the_read_bound -m 'not slow'
+.../python3: No module named pytest
+
+$ black --line-length 100 src/outcomes.py tests/test_triage_shadow.py
+black: command not found
+
+$ black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .
+black: command not found
+```
+
+The named pytest command was blocked both with the actual invocation removed
+and restored; this is not a completed pytest mutation check. Installing pytest
+and Black also failed because the sandbox could not resolve `pypi.org`; neither
+package was available in the local package cache. The standalone harness does
+not replace the required pytest suite. No additional checkboxes were marked
+complete. Follow-up source/test changes remain **uncommitted** because the
+mandatory Black gate cannot run. Required next step: provision pytest and Black,
+run formatting and the required pytest checks, then commit on the existing branch.
