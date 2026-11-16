@@ -103,10 +103,38 @@ def _contains_billing_refusal(text: str) -> bool:
     )
 
 
+def _contains_model_rejection(text: str) -> bool:
+    """Require HTTP 400 and the provider's JSON error message in the same envelope."""
+    for match in re.finditer(
+        r"(?im)^[ \t]*(?:(?:provider[ \t]+)?error:[ \t]*)?"
+        r"(?:unexpected[ \t]+status|http(?:[ \t]+status)?|status(?:[ \t]+code)?)"
+        r"[ \t]*[:=]?[ \t]*400(?:[ \t]+Bad[ \t]+Request)?[ \t]*:?[ \t]*"
+        r"(?:\r?\n[ \t]*)?(?=\{)",
+        text,
+    ):
+        try:
+            body, _ = json.JSONDecoder().raw_decode(text[match.end() :].lstrip())
+        except json.JSONDecodeError:
+            continue
+        error = body.get("error") if isinstance(body, dict) else None
+        message = error.get("message") if isinstance(error, dict) else None
+        if isinstance(message, str) and re.search(
+            r"\bmodel(?:\s+[`'\"]?[\w./:-]+[`'\"]?)?\s+(?:is\s+)?"
+            r"(?:not\s+supported|does\s+not\s+exist)\b"
+            r"|\bunsupported\s+model\b|\binvalid\s+model\s+selection\b",
+            message,
+            re.I,
+        ):
+            return True
+    return False
+
+
 def classify_provider_failure(text: str) -> tuple[str, str, str]:
-    """Return an authoritative category only for explicit capacity evidence."""
+    """Return an authoritative category only for explicit provider refusal evidence."""
     if not isinstance(text, str) or not text:
         return "unknown", "non_authoritative", "none"
+    if _contains_model_rejection(text):
+        return "model_rejected", "http_400_model_rejected", "high"
     if re.search(
         r"(?:out of usage|usage exhausted|quota exhausted|capacity exhausted)"
         r"|(?:you(?:'|’)ve hit your usage limit)"
@@ -633,7 +661,7 @@ def get_structured_evidence(
         "subcategory": subcategory,
         "confidence": confidence,
         "is_authoritative": confidence == "high",
-        "should_shed": confidence == "high",
+        "should_shed": confidence == "high" and category != "model_rejected",
         "evidence_excerpt": _redact_bounded(error_text),
         "evidence_hash": _hash_evidence(error_text),
     }
@@ -787,6 +815,8 @@ def ensure_shed(
     A whole-seat marker (no `tier_scope`) is never narrowed to one tier while it is active; a
     tier-scoped marker is widened to the whole seat when a whole-seat incident arrives.
     """
+    if category == "model_rejected":
+        return False  # A rejected model says nothing about the seat's remaining capacity.
     _ensure_paths()
     marker = SHED_DIR / agent
     lock_fd = _acquire_lock()
@@ -928,7 +958,7 @@ def record_incident(
                 tier_scope_for(agent, model) if category in ("quota", "rate_limit") else None
             ),
         )
-        if shed
+        if shed and category != "model_rejected"
         else False
     )
     return {"status": "ok", "deduped": False, "incident_id": incident_id, "shed": shed_created}
