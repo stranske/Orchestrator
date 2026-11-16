@@ -57,17 +57,55 @@ and Black and could not resolve PyPI, so official tagged sources were placed und
 runtime/state path overrides under `/tmp`. Black used one worker and an event-loop timer
 to wake its sandboxed worker completions; all formatting and AST checks remained enabled.
 
-## Delivery blocker
+## Follow-up: provider envelope boundary
 
-The implementation is verified locally but remains uncommitted. Staging failed because
-this environment mounts `.git` read-only:
+The next round found four false positives in the original HTTP prefix matcher:
+`HTTP 400 handling example: {error JSON}`, `HTTP 400; HTTP 404: {error JSON}`,
+`HTTP 400.5: {error JSON}`, and a newline between `HTTP` and `400`. Each returned
+high-confidence `model_rejected` before the correction. The matcher now accepts only a
+complete status field, an optional `Bad Request` reason phrase and separator, and the
+immediately following JSON body. Horizontal whitespace inside the status field prevents
+separate lines from supplying its words. JSON bodies on the next line remain supported.
+
+Regression tests now exercise these four negative cases and three additional valid
+prefixes, including LF and CRLF body separators. The follow-up checks passed:
+
+- [x] Classifier and structured evidence: **53 passed** for model-rejection tests in
+  `tests/test_rate_incidents.py`.
+- [x] No shed or cooldown: related incident tests pass as part of the same selection.
+- [x] Pre-work infrastructure classification, prose exclusion and work-event protection:
+  `tests/test_provider_limit_infra.py`: **43 passed**.
+- [x] Named acceptance test: **1 passed**.
+- [x] Deliberate break and restoration repeated: deleting only the classifier branch
+  returned `provider_limit_before_work: None` and **1 failed**, exit 1, at line 245;
+  restoring the exact source bytes in `finally` returned **1 passed**, exit 0.
+- [x] Combined incident, expiry and provider-refusal tests: **163 passed**.
+- [x] Black formatted both changed Python files at line length 100; the required
+  repository-wide check passed: **712 files would be left unchanged**.
+
+All pytest commands included `-m "not slow"`. Pytest 9.0.2 and Black 26.10.1 were loaded
+from official source snapshots under `/tmp` because the runner lacks these tools and
+cannot resolve PyPI. Runtime/state overrides isolated tests under `/tmp`.
+Black used one worker and an event-loop wakeup timer for this sandbox; its formatting
+and AST checks remained enabled.
+
+The follow-up commit attempt also failed at `git add` with the read-only `.git/index.lock`
+error below. Posting the evidence comment and adding `needs-human` were refused because
+the GitHub write tools require approval and this run's approval policy is `never`.
+The three follow-up files remain modified locally; no new commit or remote task-checkbox
+update was made. The PR was rechecked open with `isDraft=false` before handoff.
+
+## Prior round delivery blocker
+
+The prior round could not stage the implementation because its environment mounted
+`.git` read-only:
 
 ```text
 fatal: Unable to create '/home/runner/work/Orchestrator/Orchestrator/.git/index.lock': Read-only file system
 ```
 
-Posting the evidence to PR #1397 and adding `needs-human` were also refused: the GitHub
-write tools require approval, while this run's approval policy is `never`. No remote PR
-metadata changed; the PR was verified open and ready for review. A writable runner must
-commit the source, tests, and this verification record on the existing branch and deliver
-them before checking the PR task boxes.
+Posting the evidence to PR #1397 and adding `needs-human` were also refused in that
+round: the GitHub write tools required approval while the approval policy was `never`.
+The implementation, tests and original verification record subsequently arrived in
+commit `677e727` through the keepalive runner. The follow-up began on that commit, with
+PR #1397 open and ready for review.

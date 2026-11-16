@@ -106,9 +106,10 @@ def _contains_billing_refusal(text: str) -> bool:
 def _contains_model_rejection(text: str) -> bool:
     """Require HTTP 400 and the provider's JSON error message in the same envelope."""
     for match in re.finditer(
-        r"(?im)^\s*(?:(?:provider\s+)?error:\s*)?"
-        r"(?:unexpected\s+status|http(?:\s+status)?|status(?:\s+code)?)"
-        r"\s*[:=]?\s*400\b[^\n{]*",
+        r"(?im)^[ \t]*(?:(?:provider[ \t]+)?error:[ \t]*)?"
+        r"(?:unexpected[ \t]+status|http(?:[ \t]+status)?|status(?:[ \t]+code)?)"
+        r"[ \t]*[:=]?[ \t]*400(?:[ \t]+Bad[ \t]+Request)?[ \t]*:?[ \t]*"
+        r"(?:\r?\n[ \t]*)?(?=\{)",
         text,
     ):
         try:

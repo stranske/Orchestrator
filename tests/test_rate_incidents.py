@@ -145,7 +145,14 @@ def test_success_stdout_capacity_gate_rejects_review_prose():
     ],
 )
 @pytest.mark.parametrize(
-    "prefix", ["unexpected status 400 Bad Request: ", "Provider error: HTTP 400: "]
+    "prefix",
+    [
+        "unexpected status 400 Bad Request: ",
+        "Provider error: HTTP 400: ",
+        "error: status code = 400 Bad Request:\n",
+        "HTTP status: 400 ",
+        "status=400:\r\n",
+    ],
 )
 def test_model_rejection_is_authoritative_without_shedding(message, prefix):
     text = prefix + json.dumps({"error": {"message": message, "type": "invalid_request_error"}})
@@ -180,6 +187,10 @@ def test_model_rejection_is_authoritative_without_shedding(message, prefix):
         "HTTP 400: []\nThe model is not supported.",
         'HTTP 400: {"error": {"message": "Invalid request"}}\nThe model does not exist.',
         'HTTP 400: invalid request\nHTTP 404: {"error": {"message": "model not supported"}}',
+        'HTTP 400 handling example: {"error": {"message": "model not supported"}}',
+        'HTTP 400; HTTP 404: {"error": {"message": "model does not exist"}}',
+        'HTTP 400.5: {"error": {"message": "model not supported"}}',
+        'HTTP\n400: {"error": {"message": "model not supported"}}',
     ],
 )
 def test_model_rejection_requires_http_400_and_its_own_provider_message(text):
