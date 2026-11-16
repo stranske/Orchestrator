@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import socket
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -338,3 +339,111 @@ def test_verify_marks_a_red_overlay_invalid_when_candidate_test_was_not_copied(
     assert result["verdict"] == "PASS"
     assert result["demonstration_valid"] is False
     assert "NOT A VALID DEMONSTRATION" in result["reason"]
+
+
+_GATED = {
+    "ok": False,
+    "returncode": 1,
+    "stdout_tail": (
+        "FAIL Required test coverage of 80% not reached. Total coverage: 12.00%\n"
+        "============================== 3 passed in 0.40s ==============================\n"
+    ),
+    "stderr_tail": "",
+}
+_GREEN = {"ok": True, "returncode": 0, "stdout_tail": "== 3 passed in 0.1s ==", "stderr_tail": ""}
+_RED = {"ok": False, "returncode": 1, "stdout_tail": "== 3 failed in 0.1s ==", "stderr_tail": ""}
+
+
+def _scripted_runs(monkeypatch, *runs):
+    calls = []
+    queue = iter(runs)
+
+    def fake_run(cmd, cwd, _timeout):
+        calls.append((cmd, Path(cwd)))
+        return dict(next(queue))
+
+    monkeypatch.setattr(local_verify, "_run", fake_run)
+    monkeypatch.setattr(local_verify, "_changed_paths", lambda *_args: ["tests/test_feature.py"])
+    monkeypatch.setattr(local_verify, "_extract_base", lambda *_args: None)
+    monkeypatch.setattr(
+        local_verify, "_copy_candidate_paths", lambda *_args: ["tests/test_feature.py"]
+    )
+    seen_probe = []
+
+    def fake_nodes(_root, cmd, *_args):
+        seen_probe.append(cmd)
+        return {"verdict": "PASS", "hollow_nodes": [], "counts": {"nodes": 3}}
+
+    monkeypatch.setattr(local_verify, "_analyse_nodes", fake_nodes)
+    return calls, seen_probe
+
+
+def test_verify_applies_no_cov_when_only_the_coverage_gate_fails_green(monkeypatch, tmp_path):
+    # stranske/Ready#683: every named test passed, `fail_under = 80` fired on the narrowed run,
+    # and the remedy was named in the record but never applied, so delivery said no_winner.
+    calls, probe = _scripted_runs(monkeypatch, _GATED, _GREEN, _RED)
+    result = local_verify.verify(tmp_path, test_cmd="pytest tests/test_feature.py")
+    assert [cmd for cmd, _ in calls] == [
+        "pytest tests/test_feature.py",
+        "pytest tests/test_feature.py --no-cov",
+        "pytest tests/test_feature.py --no-cov",
+    ]
+    assert result["verdict"] == "PASS" and result["ok"] is True
+    assert result["coverage_gate"]["green"]["returncode"] == 1
+    assert result["coverage_gate"]["red"] is None
+    assert "--no-cov" in result["reason"]
+    assert probe == ["pytest tests/test_feature.py --no-cov"]
+
+
+def test_a_gate_firing_only_on_the_base_is_not_a_discriminating_failure(monkeypatch, tmp_path):
+    # Green clears the gate, the base run trips it with every test passing. Read as a red, that
+    # would be a false PASS for a hollow test; re-run without the gate, it is FAIL_HOLLOW.
+    calls, _probe = _scripted_runs(monkeypatch, _GREEN, _GATED, _GREEN)
+    result = local_verify.verify(tmp_path, test_cmd="python -m pytest tests/test_feature.py")
+    assert [cmd for cmd, _ in calls][1:] == [
+        "python -m pytest tests/test_feature.py",
+        "python -m pytest tests/test_feature.py --no-cov",
+    ]
+    assert result["verdict"] == "FAIL_HOLLOW" and result["ok"] is False
+    assert result["coverage_gate"]["green"] is None
+    assert result["coverage_gate"]["red"]["returncode"] == 1
+
+
+def test_a_real_failure_beside_the_coverage_marker_is_never_retried(monkeypatch, tmp_path):
+    failing = dict(
+        _GATED, stdout_tail=_GATED["stdout_tail"].replace("3 passed", "1 failed, 2 passed")
+    )
+    calls, _probe = _scripted_runs(monkeypatch, failing)
+    result = local_verify.verify(tmp_path, test_cmd="pytest tests/test_feature.py")
+    assert len(calls) == 1
+    assert result["verdict"] == "FAIL_BROKEN"
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["npm test -- tests/test_feature.py", "pytest tests/test_feature.py --no-cov"],
+)
+def test_the_retry_is_only_for_a_pytest_command_not_already_ungated(monkeypatch, tmp_path, command):
+    calls, _probe = _scripted_runs(monkeypatch, _GATED)
+    result = local_verify.verify(tmp_path, test_cmd=command)
+    assert len(calls) == 1
+    assert result["verdict"] == "ERROR"
+    assert result["coverage_gate"] == {"green": None, "red": None}
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ("pytest tests/t.py", True),
+        ("/repo/.venv/bin/pytest tests/t.py", True),
+        ("python3 -m pytest tests/t.py", True),
+        ("/repo/.venv/bin/python -m pytest tests/t.py", True),
+        ("uv run pytest tests/t.py", True),
+        ("npm test -- tests/t.py", False),
+        ("bash -c 'pytest tests/t.py'", False),
+        ("pytest 'unterminated", False),
+        ("", False),
+    ],
+)
+def test_is_pytest_command(command, expected):
+    assert local_verify._is_pytest_command(command) is expected

@@ -618,6 +618,55 @@ def _pytest_failure_cause(run: dict) -> dict:
         return {"test_failure": True, "cause": "a test failed", "remedy": ""}
 
 
+# The marker `pytest-cov` prints when `--cov-fail-under` fires. It names the condition the retry below
+# is for and nothing else; `testgen_gate.NON_TEST_FAILURE_MARKERS` owns the wider vocabulary.
+COVERAGE_GATE_MARKER = "Required test coverage of"
+
+
+def _is_pytest_command(cmd: str) -> bool:
+    """Is `cmd` a direct pytest invocation, the only kind `--no-cov` can be appended to safely?"""
+    try:
+        tokens = shlex.split(cmd)
+    except ValueError:
+        return False
+    if not tokens:
+        return False
+    if Path(tokens[0]).name == "pytest":
+        return True
+    stem = Path(tokens[0]).name.lower()
+    if (stem == "python" or stem.startswith(("python3", "python."))) and tokens[1:3] == [
+        "-m",
+        "pytest",
+    ]:
+        return True
+    return tokens[:3] == ["uv", "run", "pytest"]
+
+
+def _without_coverage_gate(
+    cmd: str, run: dict, cwd: Path, timeout: int
+) -> tuple[str, dict, dict | None]:
+    """Re-run ONCE with `--no-cov` when the only thing wrong with `run` is the repo's coverage gate.
+
+    `_pytest_failure_cause` already recognises this case and names `--no-cov` as the remedy, but
+    naming it is not applying it: stranske/Ready sets `fail_under = 80` with `--cov` in addopts, so
+    every narrowed named-test run exits 1 there while every selected test passes, and delivery
+    recorded `no_winner` for an experiment whose winning arm was fine (Ready#683, 2026-11-16).
+
+    Same conservatism as the classifier: only a pytest command, only when the coverage marker is
+    present AND the parsed summary shows no failure or error, and never twice. Returns the command
+    that produced the returned run, that run, and the gated run it replaced (None if no retry).
+    """
+    if run.get("ok") or not _is_pytest_command(cmd):
+        return cmd, run, None
+    if "--no-cov" in shlex.split(cmd):
+        return cmd, run, None
+    text = f"{run.get('stdout_tail') or ''}\n{run.get('stderr_tail') or ''}"
+    if COVERAGE_GATE_MARKER not in text or _pytest_failure_cause(run)["test_failure"]:
+        return cmd, run, None
+    retry_cmd = f"{cmd} --no-cov"
+    return retry_cmd, _run(retry_cmd, cwd, timeout), run
+
+
 def verify(
     worktree: str | Path,
     *,
@@ -643,6 +692,10 @@ def verify(
         }
 
     green = _run(test_cmd, wt, timeout)
+    # The red run and the node probe use the command the green run settled on, so a gate
+    # bypassed for green cannot fire on the base and pass for a discriminating test.
+    test_cmd, green, gated_green = _without_coverage_gate(test_cmd, green, wt, timeout)
+    coverage_gate: dict = {"green": gated_green, "red": None}
     if not green["ok"]:
         # A NON-ZERO EXIT IS NOT PROOF THE TESTS FAILED. `pytest-cov --cov-fail-under` exits 1 — the
         # same code as a real red — while every selected test passed, and narrowing with `-k` is
@@ -668,6 +721,7 @@ def verify(
                 "test_paths": tests,
                 "green": green,
                 "red": None,
+                "coverage_gate": coverage_gate,
             }
         return {
             "verdict": "FAIL_BROKEN",
@@ -678,6 +732,7 @@ def verify(
             "test_paths": tests,
             "green": green,
             "red": None,
+            "coverage_gate": coverage_gate,
         }
 
     with tempfile.TemporaryDirectory(prefix="orch-local-verify-") as tmp:
@@ -697,6 +752,11 @@ def verify(
             }
         copied = _copy_candidate_paths(wt, red_root, tests)
         red = _run(test_cmd, red_root, timeout)
+        # Without this, a hollow test whose base run trips only the coverage gate exits 1 and
+        # reads as "fails against the base": a false PASS, the expensive direction.
+        _red_cmd, red, coverage_gate["red"] = _without_coverage_gate(
+            test_cmd, red, red_root, timeout
+        )
         # Inside the temporary directory on purpose: the probe needs the SAME extracted base the
         # red run used, and that base stops existing when this block exits.
         nodes = _analyse_nodes(red_root, test_cmd, selections, timeout)
@@ -720,6 +780,11 @@ def verify(
         )
     elif nodes["verdict"] == "INDETERMINATE":
         reason += f"; per-node attribution unavailable: {nodes['reason']}"
+    if gated_green or coverage_gate["red"]:
+        reason += (
+            "; re-ran without the repository's coverage gate (--no-cov): it fired on the narrowed "
+            "selection while every selected test passed"
+        )
     result = {
         "verdict": verdict,
         "ok": ok,
@@ -731,6 +796,7 @@ def verify(
         "changed_paths": changed,
         "green": green,
         "red": red,
+        "coverage_gate": coverage_gate,
         "node_verdict": nodes["verdict"],
         "hollow_nodes": nodes["hollow_nodes"],
         "node_analysis": nodes,
