@@ -1,44 +1,44 @@
 {
   "capacity": {
     "claude": {
-      "observed_at": 1794829309,
+      "observed_at": 1794840084,
       "pacing": {
-        "allowed_fraction": 0.15538968967248207,
-        "burn_per_day": 0.035201426335205906,
-        "burn_rate_per_day": 0.035201426335205906,
+        "allowed_fraction": 0.17052935792771834,
+        "burn_per_day": 0.2778416513517669,
+        "burn_rate_per_day": 0.2778416513517669,
         "desktop_sample_ts": 1794755665.309,
         "effective_reserve": 0.15,
         "fyi": [],
         "measurement": "measured",
         "period_end": 1795323540.0,
         "period_start": 1794718740.0,
-        "projected_fraction": 0.43136343022903584,
-        "reason": "claude: \u0169=0.43 vs 1-r_eff=0.85; span_h=6.000; ok; w_p_prev\u2192w_p=1.000\u21921.000; clears in ~0.0h at current burn or on reset",
+        "projected_fraction": 1.8347020196104198,
+        "reason": "claude: \u0169=1.83 vs 1-r_eff=0.85; span_h=6.000; shed; w_p_prev\u2192w_p=1.000\u21920.750; clears in ~85.1h at current burn or on reset",
         "reset_expiries": [],
         "resets_available": 0,
-        "routing_weight": 1.0,
+        "routing_weight": 0.75,
         "source": "claude-cli:/usage",
         "stale": false,
-        "state": "ok",
-        "ts": 1794829072.0,
-        "used_fraction": 0.23
+        "state": "shed",
+        "ts": 1794840026.0,
+        "used_fraction": 0.28
       },
-      "state": "ok",
+      "state": "shed",
       "window": "5h+weekly"
     },
     "codex": {
-      "observed_at": 1794829309,
+      "observed_at": 1794840084,
       "pacing": {
-        "allowed_fraction": 0.3691126562284414,
-        "burn_per_day": 0.1924047438551334,
-        "burn_rate_per_day": 0.1924047438551334,
+        "allowed_fraction": 0.38692403064636643,
+        "burn_per_day": 0.11710832156653717,
+        "burn_rate_per_day": 0.11710832156653717,
         "effective_reserve": 0.0,
         "fyi": [],
         "measurement": "measured",
         "period_end": 1795210865.0,
         "period_start": 1794606065.0,
-        "projected_fraction": 0.9697000244586855,
-        "reason": "codex: \u0169=0.97 vs 1-r_eff=1.00; span_h=6.000; ok; w_p_prev\u2192w_p=1.000\u21921.000; clears in ~0.0h at current burn or on reset",
+        "projected_fraction": 0.6325740843464727,
+        "reason": "codex: \u0169=0.63 vs 1-r_eff=1.00; span_h=6.000; ok; w_p_prev\u2192w_p=1.000\u21921.000; clears in ~0.0h at current burn or on reset",
         "reset_expiries": [
           1796068253,
           1796163931,
@@ -49,29 +49,29 @@
         "source": "codex-rollout:rate_limits.primary",
         "stale": false,
         "state": "ok",
-        "ts": 1794829259.7,
-        "used_fraction": 0.12
+        "ts": 1794840068.163,
+        "used_fraction": 0.13
       },
       "state": "ok",
       "window": "5h"
     },
     "cursor": {
-      "observed_at": 1794829309,
+      "observed_at": 1794840084,
       "state": "ok",
       "window": "monthly"
     },
     "gemini": {
-      "observed_at": 1794829309,
+      "observed_at": 1794840084,
       "state": "warn",
       "window": "5h+weekly"
     },
     "muse": {
-      "observed_at": 1794829309,
+      "observed_at": 1794840084,
       "state": "ok",
       "window": "5h+weekly"
     },
     "vibe": {
-      "observed_at": 1794829309,
+      "observed_at": 1794840084,
       "state": "shed",
       "window": "subscription"
     }
@@ -80,14 +80,14 @@
   "comparative": {
     "assignment": {
       "implement": {
-        "claude": 287.87058405149264,
-        "codex": 239.46159413377146
+        "claude": 33.83013925611297,
+        "codex": 461.65361685261115
       },
       "review": {
-        "codex": 784.1833796296296
+        "codex": 769.3950975529101
       },
       "testgen": {
-        "codex": 20.188148148148148
+        "codex": 19.61804232804233
       }
     },
     "excluded": [
@@ -99,21 +99,21 @@
     "incidents_recent": null,
     "inputs": {
       "budget": {
-        "claude": 0.62,
-        "codex": 0.88,
+        "claude": 0.57,
+        "codex": 0.87,
         "cursor": null,
         "gemini": null,
         "vibe": null
       },
       "cost": {
         "claude": {
-          "implement": 0.0021537455869026826,
-          "review": 0.00029710636613050433
+          "implement": 0.016848881279641886,
+          "review": 0.0023242809739462858
         },
         "codex": {
-          "implement": 0.0025370142399189664,
-          "review": 0.0002943198669764146,
-          "testgen": 0.0020646657378052533
+          "implement": 0.0015347247402281547,
+          "review": 0.00017804392828468736,
+          "testgen": 0.001248985338061149
         },
         "cursor": {
           "implement": null,
@@ -129,14 +129,14 @@
       },
       "cost_source_by_agent": {
         "claude": {
-          "allowed_fraction": 0.15538968967248207,
+          "allowed_fraction": 0.17052935792771834,
           "imputed": [],
           "over_reserve": false,
           "reason": null,
           "source": "agents[claude].pacing.burn_rate_per_day / runs_per_day; local token ratio (1.0 if imputed)"
         },
         "codex": {
-          "allowed_fraction": 0.3691126562284414,
+          "allowed_fraction": 0.38692403064636643,
           "imputed": [],
           "over_reserve": false,
           "reason": null,
@@ -159,11 +159,11 @@
         }
       },
       "demand": {
-        "implement": 639.3965046296296,
-        "review": 784.1833796296296,
-        "testgen": 20.188148148148148
+        "implement": 628.0838864087301,
+        "review": 769.3950975529101,
+        "testgen": 19.61804232804233
       },
-      "pacing_observed_at": 1794829309.0,
+      "pacing_observed_at": 1794840084.0,
       "period_end": 1795210865.0,
       "period_end_source": "earliest fully measured agent period_end",
       "pool_by_agent": {
@@ -180,22 +180,22 @@
         "gemini": null,
         "vibe": null
       },
-      "seconds_left": 381556.0
+      "seconds_left": 370781.0
     },
-    "iterations": 5,
+    "iterations": 6,
     "lambda": {
-      "claude": 377.45704987368003,
-      "codex": 293.5448705712039,
+      "claude": 48.249283849664806,
+      "codex": 485.25152242193076,
       "cursor": null,
       "gemini": null,
       "vibe": null
     },
     "mu": {
       "implement": 0.0,
-      "review": 0.6459746589253508,
+      "review": 0.6459746589253507,
       "testgen": 0.24414674320391894
     },
-    "objective": 1003.8343188372085,
+    "objective": 951.4703331643948,
     "reasons": [
       "cursor: pools[cursor-subscription].pacing missing: excluded: no pacing source (capacity model metered)",
       "gemini: pools[gemini-prepaid].pacing missing: excluded: no pacing source (capacity model windowed_prepaid)",
@@ -206,13 +206,13 @@
     "schema": "orchestrator.route-weights-comparative/v1",
     "status": "optimal",
     "unmet_demand": {
-      "implement": 112.06432644436552,
+      "implement": 132.60013030000596,
       "review": 0.0,
       "testgen": 0.0
     },
     "usage": {
-      "claude": 0.62,
-      "codex": 0.88
+      "claude": 0.57,
+      "codex": 0.87
     },
     "window_days": 14
   },
@@ -232,13 +232,13 @@
     "rate_source": "env",
     "week_start": 1794441600
   },
-  "generated_at": "2026-11-16T11:41:40Z",
+  "generated_at": "2026-11-16T14:41:10Z",
   "min_observations": 20,
   "reserve": {
     "implement": [
       {
         "agent": "claude",
-        "comparative_rank": 1,
+        "comparative_rank": 2,
         "comparative_status": "optimal: cursor: pools[cursor-subscription].pacing missing: excluded: no pacing source (capacity model metered); gemini: pools[gemini-prepaid].pacing missing: excluded: no pacing source (capacity model windowed_prepaid); vibe: pools[vibe-subscription].pacing missing: excluded: no pacing source (capacity model flat)",
         "n_obs": 785,
         "posterior": 0.8129464554107442,
@@ -272,7 +272,7 @@
       "ranking": [
         {
           "agent": "codex",
-          "comparative_rank": 2,
+          "comparative_rank": 1,
           "comparative_status": "optimal: cursor: pools[cursor-subscription].pacing missing: excluded: no pacing source (capacity model metered); gemini: pools[gemini-prepaid].pacing missing: excluded: no pacing source (capacity model windowed_prepaid); vibe: pools[vibe-subscription].pacing missing: excluded: no pacing source (capacity model flat)",
           "n_obs": 2109,
           "posterior": 0.7447275166943143,
