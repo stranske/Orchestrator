@@ -122,3 +122,25 @@ still `pin-conflict` / `pin-held` and its handoff open on #1404. The existing
 closer can land #1405 through its guarded merge after this push's review floor.
 Resume acceptance readback when the pin writer regenerates #1403 and sync-core
 classifies that head.
+
+## Hosted keepalive runner follow-up — 2026-11-16
+
+The pending-pin regression now replays the full configuration test file, excluding
+itself to prevent recursive subprocesses, before breaking and restoring the stale
+Ruff and Coverage markers. Python compilation and `git diff --check` pass. This
+change is **unverified and uncommitted**: the runner's Python 3.14.10 has no pytest,
+Black is unavailable, and installing them in a temporary environment fails because
+`pypi.org` cannot resolve. Both required Black commands fail with command not found;
+the pre-commit gate therefore prohibits committing. The repository verifier was
+attempted and interrupted after the missing pytest prerequisite was confirmed.
+
+The connected GitHub tool confirms #1403 remains open and ready at original head
+`125965ca868ceb44aff1b6fb5123ffe302d7b3da`; run `43820436609` still reports the named
+aggregate as failed. #1405 is also open and ready. The shell's `gh run view` cannot
+connect to GitHub. No subsequent native sync-core classification was verified.
+Neither remaining acceptance criterion is complete.
+
+Attempts to post these blockers on #1405 and add `needs-human` were rejected:
+the GitHub write tools require approval, but this run's approval policy is `never`.
+Resume in an environment with pytest and Black, validate and commit the test change,
+then collect regenerated-head CI and native sync-core evidence after source delivery.

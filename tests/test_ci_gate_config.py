@@ -401,7 +401,7 @@ def test_baseline_diagnostic_names_the_bumped_and_the_missing_pin():
 
 
 def test_baseline_accepts_measured_sync_pr_1403_toolchain(tmp_path):
-    """Verify pytest's exit status with pending pins, then break and restore each stale pin."""
+    """Replay the full Gate config with pending pins, then break and restore each stale pin."""
     require_checkout()
     record = BASELINE_DOC.parent / "evidence" / "issue-1404" / "measurement.json"
     pins = json.loads(record.read_text(encoding="utf-8"))["report"]["pins"]
@@ -430,7 +430,14 @@ def test_baseline_accepts_measured_sync_pr_1403_toolchain(tmp_path):
         "PYTEST_ADDOPTS": "",
     }
 
-    def run_gate():
+    def run_gate(*, whole_config=False):
+        # The proposed bundle must satisfy all configuration checks as well as the baseline.
+        # Exclude this subprocess-driving test so the full-file replay cannot recurse.
+        target = (
+            ["-k", "not test_baseline_accepts_measured_sync_pr_1403_toolchain", __file__]
+            if whole_config
+            else [f"{__file__}::test_baseline_was_measured_with_the_pinned_versions"]
+        )
         return subprocess.run(
             [
                 sys.executable,
@@ -441,7 +448,7 @@ def test_baseline_accepts_measured_sync_pr_1403_toolchain(tmp_path):
                 "not slow",
                 "-p",
                 "pending_baseline",
-                f"{__file__}::test_baseline_was_measured_with_the_pinned_versions",
+                *target,
             ],
             cwd=tmp_path,
             env=env,
@@ -450,10 +457,11 @@ def test_baseline_accepts_measured_sync_pr_1403_toolchain(tmp_path):
             timeout=60,
         )
 
-    result = run_gate()
+    result = run_gate(whole_config=True)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "test_baseline_was_measured_with_the_pinned_versions PASSED" in result.stdout
-    assert "1 passed" in result.stdout
+    assert "test_pin_file_exists_and_pins_exactly PASSED" in result.stdout
+    assert "1 deselected" in result.stdout
 
     stale_versions = {"ruff": ("0.17.5", "0.17.4"), "coverage": ("7.17.3", "7.17.2")}
     for tools in (("ruff",), ("coverage",), ("ruff", "coverage")):
