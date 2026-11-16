@@ -397,25 +397,49 @@ def test_baseline_diagnostic_names_the_bumped_and_the_missing_pin():
         assert key not in message
 
 
-def test_baseline_accepts_measured_sync_pr_1403_toolchain():
-    """Replay the pending sync pins against the recorded and stale Ruff/Coverage baseline."""
+def test_baseline_accepts_measured_sync_pr_1403_toolchain(tmp_path, monkeypatch):
+    """Run the named gate with pending sync pins, then break and restore each stale pin."""
     require_checkout()
     record = BASELINE_DOC.parent / "evidence" / "issue-1404" / "measurement.json"
     pins = json.loads(record.read_text(encoding="utf-8"))["report"]["pins"]
     doc = BASELINE_DOC.read_text(encoding="utf-8")
 
-    mismatch = _baseline_mismatch(doc, pins)
-    assert mismatch is None, mismatch
+    # Replay the proposed payload through the real file reader without editing the live pins.
+    pin_file = tmp_path / "autofix-versions.env"
+    baseline_doc = tmp_path / "CI_LINT_BASELINE.md"
+    pin_file.write_text(
+        "\n".join(f"{key}={value}" for key, value in pins.items()) + "\n", encoding="utf-8"
+    )
+    baseline_doc.write_text(doc, encoding="utf-8")
+    monkeypatch.setitem(globals(), "PINS", pin_file)
+    monkeypatch.setitem(globals(), "BASELINE_DOC", baseline_doc)
+    test_baseline_was_measured_with_the_pinned_versions()
 
-    stale = doc.replace("ruff=0.17.5", "ruff=0.17.4").replace("coverage=7.17.3", "coverage=7.17.2")
-    message = _baseline_mismatch(stale, pins)
-    assert message is not None
-    assert "COVERAGE_VERSION pinned 7.17.3, measured 7.17.2" in message
-    assert "RUFF_VERSION pinned 0.17.5, measured 0.17.4" in message
-    assert "All pins:" not in message
-    assert message.endswith("retain its measurements.")
-    for key in pins.keys() - {"COVERAGE_VERSION", "RUFF_VERSION"}:
-        assert key not in message
+    stale_versions = {"ruff": ("0.17.5", "0.17.4"), "coverage": ("7.17.3", "7.17.2")}
+    for tools in (("ruff",), ("coverage",), ("ruff", "coverage")):
+        stale = doc
+        expected_pins = set()
+        for tool in tools:
+            proposed, previous = stale_versions[tool]
+            key = f"{tool.upper()}_VERSION"
+            assert pins[key] == proposed
+            assert f"{tool}={proposed}" in doc
+            expected_pins.add(key)
+            stale = stale.replace(f"{tool}={proposed}", f"{tool}={previous}")
+        baseline_doc.write_text(stale, encoding="utf-8")
+        with pytest.raises(AssertionError) as failure:
+            test_baseline_was_measured_with_the_pinned_versions()
+        message = str(failure.value)
+        for tool in tools:
+            proposed, previous = stale_versions[tool]
+            assert f"{tool.upper()}_VERSION pinned {proposed}, measured {previous}" in message
+        assert "All pins:" not in message
+        assert message.endswith("retain its measurements.")
+        for key in pins.keys() - expected_pins:
+            assert key not in message
+
+        baseline_doc.write_text(doc, encoding="utf-8")
+        test_baseline_was_measured_with_the_pinned_versions()
 
 
 @pytest.mark.parametrize("complete_measurement", [True, False])
