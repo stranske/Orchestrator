@@ -756,6 +756,25 @@ def test_keepalive_acceptance_verification_gate_records_equal_shares(monkeypatch
     assert record["rest"]["population"] == 2
 
 
+def test_keepalive_acceptance_verification_fetches_once(monkeypatch):
+    items = [
+        {
+            "repository_url": "https://api.github.com/repos/stranske/Workflows",
+            "body": "Deterministic gates: 1/1 passed",
+        },
+    ]
+    calls = {"fetch": 0}
+
+    def fetch(now):
+        calls["fetch"] += 1
+        return items, fg.KEEPALIVE_GATE_LIVE
+
+    monkeypatch.setattr(fg, "_fetch_merged_keepalive_items", fetch)
+    record = fg.keepalive_acceptance_verification_record(NOW)
+    assert calls["fetch"] == 1
+    assert record["equal"] is True
+
+
 def test_keepalive_acceptance_reads_pull_body_when_search_body_lacks_gates(monkeypatch):
     items = [
         {

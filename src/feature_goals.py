@@ -448,22 +448,36 @@ def _keepalive_acceptance_counts(items: list[dict]) -> tuple[int, int, int]:
     return citing, len(population), undelivered
 
 
-def keepalive_acceptance_rest_share(now: int) -> tuple[float | None, dict]:
-    """Independent REST recount of the keepalive acceptance share at ``now``."""
+def _keepalive_acceptance_loaded(
+    now: int,
+) -> tuple[str, int, int, int] | tuple[None, RuntimeError]:
     try:
         items, since = _fetch_merged_keepalive_items(now)
     except RuntimeError as exc:
-        return None, {"as_of": now, "error": str(exc)}
+        return None, exc
     citing, population, undelivered = _keepalive_acceptance_counts(items)
+    return (since, citing, population, undelivered), None
+
+
+def _keepalive_acceptance_reason(since: str, citing: int, population: int, undelivered: int) -> str:
+    return (
+        f"{citing}/{population} keepalive PRs merged since {since} in gate repos report "
+        f"all named gates passing; {undelivered} merged in repos without the gate"
+    )
+
+
+def _keepalive_acceptance_rest_payload(
+    now: int, since: str, citing: int, population: int, undelivered: int
+) -> dict:
     if not population:
-        return None, {
+        return {
             "as_of": now,
             "since": since,
             "population": 0,
             "undelivered": undelivered,
         }
     share = citing / population
-    return share, {
+    return {
         "as_of": now,
         "since": since,
         "citing": citing,
@@ -473,16 +487,53 @@ def keepalive_acceptance_rest_share(now: int) -> tuple[float | None, dict]:
     }
 
 
+def keepalive_acceptance_rest_share(now: int) -> tuple[float | None, dict]:
+    """Independent REST recount of the keepalive acceptance share at ``now``."""
+    loaded, err = _keepalive_acceptance_loaded(now)
+    if err is not None:
+        return None, {"as_of": now, "error": str(err)}
+    since, citing, population, undelivered = loaded
+    rest = _keepalive_acceptance_rest_payload(now, since, citing, population, undelivered)
+    share = rest.get("share")
+    return share, rest
+
+
 def keepalive_acceptance_verification_record(now: int | None = None) -> dict:
     """Record the measure share and an independent REST recount at one timestamp."""
     as_of = int(time.time()) if now is None else now
-    measured = keepalive_acceptance(as_of)
-    rest_share, rest = keepalive_acceptance_rest_share(as_of)
+    loaded, err = _keepalive_acceptance_loaded(as_of)
+    if err is not None:
+        reason = str(err).removeprefix("unmeasured: ")
+        measured = unknown(as_of, reason)
+        rest = {"as_of": as_of, "error": str(err)}
+        return {
+            "as_of": as_of,
+            "measure_share": measured.value,
+            "rest_share": None,
+            "equal": False,
+            "measure_reason": measured.reason,
+            "rest": rest,
+        }
+    since, citing, population, undelivered = loaded
+    rest = _keepalive_acceptance_rest_payload(as_of, since, citing, population, undelivered)
+    rest_share = rest.get("share")
+    if not population:
+        measured = unknown(
+            as_of,
+            f"merged keepalive PRs since {since} in gate repos (none; {undelivered} in repos "
+            "without the gate)",
+        )
+    else:
+        measured = Measurement(
+            rest_share,
+            "GitHub REST search: merged keepalive PR bodies (Deterministic gates line)",
+            as_of,
+            reason=_keepalive_acceptance_reason(since, citing, population, undelivered),
+        )
     verified = (
         measured.value is not None
         and rest_share is not None
         and measured.value == rest_share
-        and not rest.get("error")
         and measured.evidence_class != "unmeasured"
     )
     return {
@@ -497,11 +548,10 @@ def keepalive_acceptance_verification_record(now: int | None = None) -> dict:
 
 def keepalive_acceptance(now: int) -> Measurement:
     """Share of keepalive PRs merged in the window whose body reports every named gate passing."""
-    try:
-        items, since = _fetch_merged_keepalive_items(now)
-    except RuntimeError as exc:
-        return unknown(now, str(exc).removeprefix("unmeasured: "))
-    citing, population, undelivered = _keepalive_acceptance_counts(items)
+    loaded, err = _keepalive_acceptance_loaded(now)
+    if err is not None:
+        return unknown(now, str(err).removeprefix("unmeasured: "))
+    since, citing, population, undelivered = loaded
     if not population:
         return unknown(
             now,
@@ -512,10 +562,7 @@ def keepalive_acceptance(now: int) -> Measurement:
         citing / population,
         "GitHub REST search: merged keepalive PR bodies (Deterministic gates line)",
         now,
-        reason=(
-            f"{citing}/{population} keepalive PRs merged since {since} in gate repos report "
-            f"all named gates passing; {undelivered} merged in repos without the gate"
-        ),
+        reason=_keepalive_acceptance_reason(since, citing, population, undelivered),
     )
 
 

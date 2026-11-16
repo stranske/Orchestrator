@@ -1,17 +1,17 @@
 {
-  "as_of": 1794806667,
+  "as_of": 1794812051,
+  "command": "python3 src/feature_goals.py --verify-keepalive-acceptance",
   "equal": true,
-  "measure_reason": "1/73 keepalive PRs merged since 2026-11-02T05:24:27Z in gate repos report all named gates passing; 165 merged in repos without the gate",
+  "measure_reason": "1/73 keepalive PRs merged since 2026-11-02T06:54:11Z in gate repos report all named gates passing; 167 merged in repos without the gate",
   "measure_share": 0.0136986301369863,
+  "recorded_at": "2026-11-16T06:54:11Z",
   "rest": {
-    "as_of": 1794806667,
+    "as_of": 1794812051,
     "citing": 1,
     "population": 73,
     "share": 0.0136986301369863,
-    "since": "2026-11-02T05:24:27Z",
-    "undelivered": 165
+    "since": "2026-11-02T06:54:11Z",
+    "undelivered": 167
   },
-  "rest_share": 0.0136986301369863,
-  "command": "python3 src/feature_goals.py --verify-keepalive-acceptance",
-  "recorded_at": "2026-11-16T05:24:27Z"
+  "rest_share": 0.0136986301369863
 }
