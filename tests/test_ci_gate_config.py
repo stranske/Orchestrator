@@ -414,25 +414,35 @@ def test_baseline_accepts_measured_sync_pr_1403_toolchain(tmp_path):
         "\n".join(f"{key}={value}" for key, value in pins.items()) + "\n", encoding="utf-8"
     )
     baseline_doc.write_text(doc, encoding="utf-8")
-    runner = tmp_path / "test_pending_baseline.py"
-    runner.write_text(
+    plugin = tmp_path / "pending_baseline.py"
+    plugin.write_text(
         "from pathlib import Path\n"
         "import test_ci_gate_config as gate\n\n"
         "gate.PINS = Path(__file__).with_name('autofix-versions.env')\n"
-        "gate.BASELINE_DOC = Path(__file__).with_name('CI_LINT_BASELINE.md')\n\n"
-        "def test_pending_baseline():\n"
-        "    gate.test_baseline_was_measured_with_the_pinned_versions()\n",
+        "gate.BASELINE_DOC = Path(__file__).with_name('CI_LINT_BASELINE.md')\n",
         encoding="utf-8",
     )
     env = {
         **os.environ,
-        "PYTHONPATH": os.pathsep.join(str(path) for path in (HERE / "src", HERE, HERE / "tests")),
+        "PYTHONPATH": os.pathsep.join(
+            str(path) for path in (tmp_path, HERE / "src", HERE, HERE / "tests")
+        ),
         "PYTEST_ADDOPTS": "",
     }
 
     def run_gate():
         return subprocess.run(
-            [sys.executable, "-m", "pytest", "-q", "-m", "not slow", str(runner)],
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "-v",
+                "-m",
+                "not slow",
+                "-p",
+                "pending_baseline",
+                f"{__file__}::test_baseline_was_measured_with_the_pinned_versions",
+            ],
             cwd=tmp_path,
             env=env,
             capture_output=True,
@@ -442,6 +452,7 @@ def test_baseline_accepts_measured_sync_pr_1403_toolchain(tmp_path):
 
     result = run_gate()
     assert result.returncode == 0, result.stdout + result.stderr
+    assert "test_baseline_was_measured_with_the_pinned_versions PASSED" in result.stdout
     assert "1 passed" in result.stdout
 
     stale_versions = {"ruff": ("0.17.5", "0.17.4"), "coverage": ("7.17.3", "7.17.2")}
@@ -458,6 +469,7 @@ def test_baseline_accepts_measured_sync_pr_1403_toolchain(tmp_path):
         baseline_doc.write_text(stale, encoding="utf-8")
         result = run_gate()
         assert result.returncode == 1, result.stdout + result.stderr
+        assert "test_baseline_was_measured_with_the_pinned_versions FAILED" in result.stdout
         assert "1 failed" in result.stdout
         # Check the diagnostic itself, and verify the real pytest failure emitted it.
         message = _baseline_mismatch(stale, pins)
