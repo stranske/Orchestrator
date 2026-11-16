@@ -103,6 +103,11 @@ would have done better. It confirms its own habits — exactly the "Cursor alway
   refinement that keeps the ε cap but chooses the challenger with a reconstructed Beta posterior sample.
   Router-dispatched runs persist `exploration` / `exploration_mode` in `runs.routing_metadata`, while
   leaving `runs.assignment` reserved for causal-learning filters.
+  Remote keepalive delegations (`tick.remote_tick` → `delegate_remote`) now carry the same router
+  exploration fields into `runs.routing_metadata` via `_routing_metadata`; manual `delegate_remote`
+  callers that omit routing record nothing fabricated. `exploration_review.build_report()` exposes
+  `unjoined_exploration_evidence` — exploration-flagged dispatches whose outcomes have not joined yet —
+  beside the existing direct-mode evidence counters.
 
 ## 6. Human calibration — guard against proxy drift
 

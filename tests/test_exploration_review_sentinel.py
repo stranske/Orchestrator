@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+from unittest.mock import Mock
+
+import claims
+import dispatcher
 import exploration_review
 import feedback
 import switch_review
+import tick
 
 
 def test_db_error_is_named_not_zero(tmp_path, monkeypatch):
@@ -50,6 +55,48 @@ def test_db_error_is_named_not_zero(tmp_path, monkeypatch):
     assert sweep["exploration_gate"]["evidence_error"].startswith("OperationalError:")
     assert sweep["exploration_gate"]["drainable"] == "repair the Brain read"
     assert "SUSPECT — direct_mode_evidence_unreadable" in switch_review.format_report(sweep)
+
+
+def test_remote_exploratory_pick_reaches_exploration_review(tmp_path, monkeypatch):
+    """Remote keepalive delegations must record router exploration provenance for exploration_review."""
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    monkeypatch.setattr(claims, "holder", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        tick.roles,
+        "activate_tick_triage",
+        lambda *_a, **_k: {"recommendations": {}, "result": {}},
+    )
+    monkeypatch.setattr(
+        tick.router,
+        "select_remote_agent",
+        lambda *_a, **_k: {
+            "agent": "codex",
+            "exploration": True,
+            "exploration_mode": "epsilon-greedy",
+        },
+    )
+    monkeypatch.setattr(dispatcher, "_target_labels", lambda *_a, **_k: (set(), ""))
+    monkeypatch.setattr(
+        dispatcher.subprocess,
+        "run",
+        Mock(return_value=Mock(returncode=0, stderr="")),
+    )
+    with feedback._conn():
+        pass
+    tick.remote_tick(
+        [{"target": "o/r#1", "task_type": "implement", "lane": "opener"}],
+        {"agents": {"codex": {"state": "ok"}, "cursor": {"state": "ok"}}},
+        dry_run=False,
+        do_ingest=False,
+        env={},
+        research_tick_fn=lambda *_a, **_k: {"status": "skipped", "planned": [], "active": False},
+    )
+    evidence = exploration_review._recorded_exploration_evidence()
+    assert evidence["exploration_runs"] == 1, evidence
+    report = exploration_review.build_report(route_table={"implement": {}}, version=0, trials=1)
+    unjoined = report["unjoined_exploration_evidence"]
+    assert unjoined["count"] == 1, unjoined
+    assert unjoined["run_ids"] == ["remote:o/r#1:codex"]
 
 
 def test_unexpected_exploration_report_error_has_distinct_remediation(monkeypatch):
