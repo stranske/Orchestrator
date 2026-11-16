@@ -1084,9 +1084,9 @@ def test_next_call_reach_is_exact_when_unknown_response_uses_last_read(
     assert outcomes.rule_picks_drainable_next_call(now=10_000) == expected
     assert {p: p.read_bytes() for p in brain.rglob("*") if p.is_file()} == before
     bodies = {} if body is None else {700: body}
-    assert outcomes.rule_picks_drainable_next_call(
-        now=10_000, pr_reader=pr_reader(bodies)
-    ) == expected
+    assert (
+        outcomes.rule_picks_drainable_next_call(now=10_000, pr_reader=pr_reader(bodies)) == expected
+    )
     reached = []
     drain = outcomes._drain_rule_pick_covers
 
