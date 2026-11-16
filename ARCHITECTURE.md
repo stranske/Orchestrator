@@ -166,6 +166,8 @@ this document has already produced confidently wrong fleet-level conclusions.
                                                                     |
                                                      closer-core (local) merge -> verify -> close,
                                                      or follow-up issue, or park
+  session PRs (Claude Code, cloud or local; no issue) -> closer-core orphan path: judged, then
+                                                     merge_guard (cloud after 30 quiet min, local after 7 d)
   sync-core (local) classifies generated sync PRs and hands findings to their owners;
   Maint 71 (Workflows Actions) is the only merger of sync PRs.
 ```
