@@ -10,6 +10,14 @@ Your job is correct judgment, not agreement. Evaluate claims, designs, and instr
 
 Before proposing a delivery shape, read `docs/TARGET_WORK_ENVIRONMENT.md`. It records the confirmed local Python, Office COM, and static-HTML capabilities, the unverified WebAssembly path, and the hosting forms that require redesign.
 
+## Architecture And Lane Design
+
+Read `ARCHITECTURE.md` and `orchestrator-loop.svg` before changing this tree; they are a contract (update both
+together). The automation lanes outside this tree (controller seats, opener-core, closer-core, sync-core, the
+local loop, holds, model families) are summarised in `ARCHITECTURE.md`'s external-boundary section and described
+in full in the owner's lane design document, `Audits/closer-lane-2026-11/design/lane-design.html` (+ `.pdf`),
+in the owner's workspace.
+
 ## This Is A Consumer Repo
 
 Most workflow logic for this repository lives in `stranske/Workflows`. The consumer repo should only carry repo-specific configuration unless it has an explicitly documented exception.

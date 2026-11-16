@@ -33,6 +33,11 @@ immediately before mutation, then pins the merge with `--match-head-commit`.
 only before proposing a design change.** §5 below already makes them a contract you must UPDATE; this
 rule makes them something you must READ first, because the doc defines the vocabulary every other
 rule in this file uses, and reasoning about this system without it produces confident, wrong answers.
+**The lanes outside this tree** (controller seats, opener-core, closer-core, sync-core, the local loop, holds,
+model families) are summarised in `ARCHITECTURE.md`'s external-boundary section and described in full in the
+owner's lane design document, `Audits/closer-lane-2026-11/design/lane-design.html` (+ `.pdf`) in the owner's
+workspace. Read both before reasoning about what the lanes do; update both when a lane's design changes.
+
 That has happened: a full session's work was planned and executed here while treating "capability" as
 the system's core noun, when `ARCHITECTURE.md`'s taxonomy is rails / roles / delegated sub-agents /
 gates / feedback surfaces — and "capability" is a different axis entirely.
