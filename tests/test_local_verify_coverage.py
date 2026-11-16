@@ -447,3 +447,19 @@ def test_the_retry_is_only_for_a_pytest_command_not_already_ungated(monkeypatch,
 )
 def test_is_pytest_command(command, expected):
     assert local_verify._is_pytest_command(command) is expected
+
+
+def test_a_base_retry_that_never_finished_is_not_a_pass(monkeypatch, tmp_path):
+    timed_out = {"ok": False, "returncode": None, "stdout_tail": "", "stderr_tail": "timed out"}
+    _calls, _probe = _scripted_runs(monkeypatch, _GREEN, _GATED, timed_out)
+    result = local_verify.verify(tmp_path, test_cmd="pytest tests/test_feature.py")
+    assert result["verdict"] == "ERROR" and result["ok"] is False
+    assert "did not complete" in result["error"]
+    assert result["coverage_gate"]["red"]["returncode"] == 1
+
+
+def test_no_cov_goes_before_a_double_dash_terminator(monkeypatch, tmp_path):
+    calls, _probe = _scripted_runs(monkeypatch, _GATED, _GREEN, _RED)
+    result = local_verify.verify(tmp_path, test_cmd="pytest -q -- tests/test_feature.py")
+    assert calls[1][0] == "pytest -q --no-cov -- tests/test_feature.py"
+    assert result["verdict"] == "PASS"

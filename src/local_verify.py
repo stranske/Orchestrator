@@ -663,7 +663,13 @@ def _without_coverage_gate(
     text = f"{run.get('stdout_tail') or ''}\n{run.get('stderr_tail') or ''}"
     if COVERAGE_GATE_MARKER not in text or _pytest_failure_cause(run)["test_failure"]:
         return cmd, run, None
-    retry_cmd = f"{cmd} --no-cov"
+    tokens = shlex.split(cmd)
+    if "--" in tokens:
+        # After `--` pytest reads every token as a path, so the flag has to go in front of it.
+        tokens.insert(tokens.index("--"), "--no-cov")
+        retry_cmd = shlex.join(tokens)
+    else:
+        retry_cmd = f"{cmd} --no-cov"
     return retry_cmd, _run(retry_cmd, cwd, timeout), run
 
 
@@ -760,6 +766,26 @@ def verify(
         # Inside the temporary directory on purpose: the probe needs the SAME extracted base the
         # red run used, and that base stops existing when this block exits.
         nodes = _analyse_nodes(red_root, test_cmd, selections, timeout)
+
+    if coverage_gate["red"] is not None and red.get("returncode") is None:
+        # The gated base run showed the tests PASSING; a retry that never finished shows nothing.
+        # Reading its non-zero `ok` as "fails against the base" would be a PASS with no evidence.
+        return {
+            "verdict": "ERROR",
+            "ok": False,
+            "error": (
+                "the base re-run without the coverage gate did not complete, so nothing showed "
+                "the candidate tests failing against the base"
+            ),
+            "worktree": str(wt),
+            "base_ref": base_ref,
+            "test_paths": tests,
+            "copied_test_paths": copied,
+            "changed_paths": changed,
+            "green": green,
+            "red": red,
+            "coverage_gate": coverage_gate,
+        }
 
     if red["ok"]:
         verdict = "FAIL_HOLLOW"
