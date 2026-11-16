@@ -1064,6 +1064,50 @@ def test_next_call_reach_is_unknown_when_unread_response_changes_traversal(brain
     assert not outcomes._pr_cover_path().exists()
 
 
+def test_summary_line_preserves_rule_grades_when_reach_is_unknown(brain, monkeypatch):
+    """An indeterminate read forecast must preserve every known rule-arm grade."""
+    write_rule_cycles(
+        ("stranske/Orchestrator#1", 100),
+        ("stranske/Other#9", 100),
+        ("stranske/Orchestrator#2", 100),
+        ("stranske/Orchestrator#3", 100),
+    )
+    record_pr_run("graded", 77, ts=102)
+    remember_cover(77, [1])
+    feedback.record_outcome("graded", merged=True, durability="durable")
+    feedback.record_run(
+        "no-delivery",
+        "stranske/Other#78",
+        "implement",
+        "codex",
+        mode="remote",
+        source="keepalive",
+        pr_number=78,
+        ts=102,
+    )
+    triage_shadow._append(
+        outcomes._pr_cover_path(),
+        {"repo": "stranske/Other", "pr": 78, "covers": [], "ts": 103, "final": True},
+    )
+    record_pr_run("shared-unread", 700, ts=200)
+    before = {p: p.read_bytes() for p in brain.rglob("*") if p.is_file()}
+    with monkeypatch.context() as offline:
+        offline.setattr(outcomes, "default_pr_reader", lambda *a: pytest.fail("report fetched"))
+        offline.setattr(feedback, "_conn", lambda: pytest.fail("report opened a writer"))
+        offline.setattr(triage_shadow, "_append", lambda *a: pytest.fail("report persisted"))
+        assert outcomes.rule_picks_drainable_next_call() is None
+        assert triage_shadow.summary()["rule"] == {
+            "judged": 1,
+            "merged_durable": 1,
+            "no_delivery": 1,
+            "unresolved": 2,
+        }
+        assert "rule pick 100.0% (1 judged) [1 no delivery, 2 unresolved, drainable unknown]" in (
+            triage_shadow.summary_line()
+        )
+    assert {p: p.read_bytes() for p in brain.rglob("*") if p.is_file()} == before
+
+
 @pytest.mark.parametrize("body", [None, "", "Closes #1"])
 @pytest.mark.parametrize("bound,expected", [(1, 1), (2, 2)])
 @pytest.mark.parametrize("repeated", [False, True])

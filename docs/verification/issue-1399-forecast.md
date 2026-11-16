@@ -135,3 +135,43 @@ not replace the required pytest suite. No additional checkboxes were marked
 complete. Follow-up source/test changes remain **uncommitted** because the
 mandatory Black gate cannot run. Required next step: provision pytest and Black,
 run formatting and the required pytest checks, then commit on the existing branch.
+
+## Mixed-grade unknown-reach regression (2026-11-16, subsequent round)
+
+Added `test_summary_line_preserves_rule_grades_when_reach_is_unknown` in
+`tests/test_triage_shadow.py`. It constructs real recorded state with one judged
+durable delivery, one confirmed no-delivery pick in another repository, and two
+unresolved picks sharing an unread PR. The offline report must retain all those
+counts while rendering `drainable unknown`. Fetching, the Brain write path, and
+evidence appends are forbidden during the report; file bytes must remain unchanged.
+The existing renderer already implements this behavior, so no production change
+was needed.
+
+With `/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3`:
+
+- A separate standard-library harness reproducing that recorded state passed,
+  including the no-fetch/no-write checks. This does **not** establish that the
+  pytest regression passes.
+- Both module selftests passed; test compilation and `git diff --check` passed.
+- The required full pytest suite and the new individual regression both failed
+  before collection: `No module named pytest`.
+- The actual rule-pass invocation was temporarily removed and the required named
+  pytest command attempted; it failed before collection with the same missing
+  module. The invocation was restored byte-for-byte and the command attempted
+  again, with the same result. This is **not** a successful mutation check.
+- Black formatting and the exact repository-wide Black check both failed with
+  `black: command not found`.
+- Installing pytest and Black into `/tmp/issue-1399-tools` failed because the
+  environment could not resolve `pypi.org`. No local copies of either tool were
+  found. GitHub CLI inspection failed because `api.github.com` was unreachable,
+  but the GitHub connector verified PR #1400 is open with `draft=false` at head
+  `b3af10177bedc3c7cf87978efe845ca0160ef5f6`.
+- The requested blocker comment and `needs-human` label were attempted through
+  the GitHub connector. Both calls were refused with
+  `MCP tool call requires approval, but approval policy is never`; neither
+  mutation was applied.
+
+The new regression remains **uncommitted** because the mandatory Black gate cannot
+run. No additional task or acceptance checkbox is marked complete. Provision
+pytest and Black, run formatting and the named pytest checks, then commit the
+regression on the existing branch.
