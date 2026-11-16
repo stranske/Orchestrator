@@ -449,9 +449,10 @@ def test_is_pytest_command(command, expected):
     assert local_verify._is_pytest_command(command) is expected
 
 
-def test_a_base_retry_that_never_finished_is_not_a_pass(monkeypatch, tmp_path):
-    timed_out = {"ok": False, "returncode": None, "stdout_tail": "", "stderr_tail": "timed out"}
-    _calls, _probe = _scripted_runs(monkeypatch, _GREEN, _GATED, timed_out)
+@pytest.mark.parametrize("returncode", [None, 2, 4])
+def test_a_base_retry_that_never_finished_is_not_a_pass(monkeypatch, tmp_path, returncode):
+    stopped = {"ok": False, "returncode": returncode, "stdout_tail": "", "stderr_tail": "stopped"}
+    _calls, _probe = _scripted_runs(monkeypatch, _GREEN, _GATED, stopped)
     result = local_verify.verify(tmp_path, test_cmd="pytest tests/test_feature.py")
     assert result["verdict"] == "ERROR" and result["ok"] is False
     assert "did not complete" in result["error"]

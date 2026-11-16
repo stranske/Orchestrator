@@ -767,15 +767,17 @@ def verify(
         # red run used, and that base stops existing when this block exits.
         nodes = _analyse_nodes(red_root, test_cmd, selections, timeout)
 
-    if coverage_gate["red"] is not None and red.get("returncode") is None:
-        # The gated base run showed the tests PASSING; a retry that never finished shows nothing.
-        # Reading its non-zero `ok` as "fails against the base" would be a PASS with no evidence.
+    if coverage_gate["red"] is not None and red.get("returncode") not in (0, 1):
+        # The gated base run showed the tests PASSING. Only pytest's exit 1 says a test then failed;
+        # a retry that timed out (None) or stopped as a runner error (2-5) shows nothing, and
+        # reading its non-zero `ok` as "fails against the base" would be a PASS with no evidence.
         return {
             "verdict": "ERROR",
             "ok": False,
             "error": (
-                "the base re-run without the coverage gate did not complete, so nothing showed "
-                "the candidate tests failing against the base"
+                "the base re-run without the coverage gate did not complete (exit "
+                f"{red.get('returncode')}), so nothing showed the candidate tests failing against "
+                "the base"
             ),
             "worktree": str(wt),
             "base_ref": base_ref,
