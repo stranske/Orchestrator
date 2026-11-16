@@ -240,12 +240,20 @@ def test_reconcile_classifies_a_refused_failure_and_no_learner_scores_it(world):
     assert posterior < prior, "the control FAIL must still lower the posterior"
 
 
-def test_model_rejection_turn_failed_before_work_is_transient_infra(world):
-    lines = _refused(MODEL_REJECTION)
+@pytest.mark.parametrize(
+    "message",
+    [
+        MODEL_REJECTION,
+        MODEL_REJECTION.replace("is not supported", "does not exist"),
+    ],
+    ids=["unsupported-model", "nonexistent-model"],
+)
+def test_model_rejection_turn_failed_before_work_is_transient_infra(world, message):
+    lines = _refused(message)
     assert ledger_reconcile.provider_limit_before_work(lines) == {
         "category": "model_rejected",
         "subcategory": "http_400_model_rejected",
-        "message": MODEL_REJECTION,
+        "message": message,
     }
     _dispatch(world, "model-rejected", lines, outcome=FAIL)
     _dispatch(world, "control-failure", [json.dumps({"type": "turn.completed"})], outcome=FAIL)

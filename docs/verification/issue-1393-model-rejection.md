@@ -109,3 +109,36 @@ round: the GitHub write tools required approval while the approval policy was `n
 The implementation, tests and original verification record subsequently arrived in
 commit `677e727` through the keepalive runner. The follow-up began on that commit, with
 PR #1397 open and ready for review.
+
+## Follow-up: both rejection messages through reconciliation
+
+The named acceptance test now runs with both `is not supported` and `does not exist`
+in the provider's HTTP 400 error message. Both cases verify `transient_infra`, learning
+exclusion, preservation of the control failure, and absence of a shed marker.
+
+- [x] Named acceptance test: **2 passed**, exit 0.
+- [x] Deliberate break verified locally: removed only the `model_rejected` classifier
+  branch, confirmed `provider_limit_before_work: None`, and observed **2 failed**, exit 1,
+  at `tests/test_provider_limit_infra.py:253` (`assert None == {...}`). Restored the exact
+  source bytes in `finally`; the same named test returned **2 passed**, exit 0.
+- [x] Full `tests/test_provider_limit_infra.py`: **44 passed**, exit 0.
+- [x] Provider, incident and expiry suites together: **164 passed**, exit 0.
+- [x] Black formatted the changed test at line length 100; the required repository-wide
+  check passed: **712 files would be left unchanged**, exit 0.
+- [ ] Publish this round's break-and-restore evidence in PR #1397 and reconcile the
+  remaining unchecked acceptance criteria in its full issue text.
+
+All pytest commands used `-q -m "not slow"`. Pytest 9.0.2 and Black 26.10.1 came from
+official tagged source snapshots under `/tmp`, obtained through the GitHub connector
+because this runner lacks both tools and cannot resolve PyPI. Runtime and state paths
+were isolated under `/tmp`. The implementation file has no remaining diff after the
+deliberate break and restoration.
+The Black launcher used one worker and an event-loop wakeup timer for this sandbox;
+formatting and AST checks remained enabled. An initial 90-second check completed 584
+files before timing out; the final full invocation used that cache and checked all 712.
+
+Delivery remains blocked: `git add tests/test_provider_limit_infra.py` cannot create
+`.git/index.lock` because `.git` is mounted read-only. Automatic approval review also
+rejected the evidence comment and `needs-human` label: both GitHub write tools require
+approval, while this run's approval policy is `never`. No new commit or remote checkbox
+update was made. PR #1397 was rechecked open with `isDraft=false`.
