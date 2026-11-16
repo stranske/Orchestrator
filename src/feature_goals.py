@@ -563,6 +563,21 @@ def keepalive_acceptance_verification_record(now: int | None = None) -> dict:
     }
 
 
+KEEPALIVE_VERIFICATION_COMMAND = "python3 src/feature_goals.py --verify-keepalive-acceptance"
+
+
+def keepalive_acceptance_verification_artifact(
+    record: dict,
+    *,
+    command: str = KEEPALIVE_VERIFICATION_COMMAND,
+) -> dict:
+    """Attach the runnable command and ISO ``recorded_at`` for committed verification evidence."""
+    artifact = dict(record)
+    artifact["command"] = command
+    artifact["recorded_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(record["as_of"])))
+    return artifact
+
+
 def keepalive_acceptance(now: int) -> Measurement:
     """Share of keepalive PRs merged in the window whose body reports every named gate passing."""
     loaded, err = _keepalive_acceptance_loaded(now)
@@ -1031,12 +1046,24 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="record feature_goals.py:keepalive_acceptance share and an independent REST recount",
     )
+    group.add_argument(
+        "--write-verification",
+        metavar="PATH",
+        help="with --verify-keepalive-acceptance, write the verification artifact JSON",
+    )
     args = parser.parse_args(argv)
+    if args.write_verification and not args.verify_keepalive_acceptance:
+        parser.error("--write-verification requires --verify-keepalive-acceptance")
     if not any((args.report, args.check, args.file_drift_issues, args.verify_keepalive_acceptance)):
         parser.error("at least one action is required")
     if args.verify_keepalive_acceptance:
         record = keepalive_acceptance_verification_record()
-        print(json.dumps(record, indent=2, sort_keys=True))
+        artifact = keepalive_acceptance_verification_artifact(record)
+        if args.write_verification:
+            out = Path(args.write_verification)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        print(json.dumps(artifact, indent=2, sort_keys=True))
         return 0 if record["equal"] else 1
     section = report()
     print("\n".join(format_lines(section)))

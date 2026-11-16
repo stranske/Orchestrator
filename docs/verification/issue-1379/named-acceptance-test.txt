@@ -10,10 +10,10 @@ Exit code: 0
 
 Output:
 ▶ keepalive-gate-citation survives status refresh only for the current acceptance plan
-  ✔ Workflows source (670.960571ms)
-  ✔ consumer template (533.825299ms)
-✔ keepalive-gate-citation survives status refresh only for the current acceptance plan (1205.583682ms)
-✔ keepalive-gate-citation extractor is included in the reusable metadata checkout (0.365737ms)
+  ✔ Workflows source (635.827025ms)
+  ✔ consumer template (605.199824ms)
+✔ keepalive-gate-citation survives status refresh only for the current acceptance plan (1242.174489ms)
+✔ keepalive-gate-citation extractor is included in the reusable metadata checkout (0.424151ms)
 ℹ tests 4
 ℹ suites 0
 ℹ pass 4
@@ -21,4 +21,4 @@ Output:
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 1276.198393
+ℹ duration_ms 1330.766291

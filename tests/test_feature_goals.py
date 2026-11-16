@@ -756,6 +756,13 @@ def test_keepalive_acceptance_verification_gate_records_equal_shares(monkeypatch
     assert record["rest"]["population"] == 2
 
 
+def test_keepalive_acceptance_verification_artifact_adds_command_and_timestamp():
+    record = {"as_of": NOW, "equal": True, "measure_share": 0.5, "rest_share": 0.5, "rest": {}}
+    artifact = fg.keepalive_acceptance_verification_artifact(record)
+    assert artifact["command"] == fg.KEEPALIVE_VERIFICATION_COMMAND
+    assert artifact["recorded_at"] == time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(NOW))
+
+
 def test_keepalive_acceptance_verification_fetches_once(monkeypatch):
     items = [
         {
