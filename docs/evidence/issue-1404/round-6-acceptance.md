@@ -193,3 +193,24 @@ review and merge guard, and the sole pin writer owns regeneration. This seat
 changed only this evidence record, without editing pins or starting another lane.
 No additional repair attempt was made. The documentation push leaves its
 seven-minute post-push review to the scheduled automation; that review is pending.
+
+## Hosted receipt consistency follow-up — 2026-11-16
+
+The pending-pin regression now checks that all nine recorded installed versions
+match the proposed pins and that the strict collector recorded no problems.
+Compilation, `git diff --check`, and a standalone receipt consistency check
+passed, including changed-version and missing-version mutations for each tool.
+The pytest regression remains unverified: Python has no pytest, installation in
+a temporary environment found no available distribution, and both required Black
+commands fail because Black is absent. The pre-commit gate therefore prohibits
+committing; the test change is **uncommitted**. The full repository verifier was
+attempted and interrupted after the missing pytest prerequisite was confirmed.
+
+Connector readback still shows #1403 open and ready at `125965ca868c`, with the
+named aggregate failing in run `43820436609`; #1405 is also open and ready.
+`gh run view` cannot connect from this runner, and the native sync-core journal
+is unavailable here. Neither remaining acceptance criterion is verified.
+Attempts to post these blockers on #1405 and add `needs-human` were rejected
+because the GitHub write tools require approval under an approval policy of
+`never`. Validate and commit the test change with pytest and Black available,
+then collect regenerated-head CI and native sync-core evidence after delivery.
