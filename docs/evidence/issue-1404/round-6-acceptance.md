@@ -161,3 +161,35 @@ in [run 43844091578](https://github.com/stranske/Orchestrator/actions/runs/43844
 still shows the named aggregate failing. Native sync-core round
 `20261116T095916Z`, completed at 09:59:19 UTC, still classified #1403 as
 `pin-conflict` / `pin-held`.
+
+## Round 12 readback — 2026-11-16 10:32 UTC
+
+**0/2 outstanding criteria verified.** Readback began on repair head
+`de5d4b03f70f7ad0b0fc849a4842d8d82262f52a`; the operational outcome and
+one-evidence-pass/one-focused-test stop rule above still apply.
+
+- **A1 remains incomplete.** #1403 still has original head
+  `125965ca868ceb44aff1b6fb5123ffe302d7b3da`. Its branch's CI run list contains
+  only [43820436609](https://github.com/stranske/Orchestrator/actions/runs/43820436609).
+  `gh run view 43820436609 --repo stranske/Orchestrator --json headSha,conclusion,jobs`
+  confirms both aggregate jobs failed. The same read of repair run
+  [43844936619](https://github.com/stranske/Orchestrator/actions/runs/43844936619)
+  confirms both aggregates passed on `de5d4b03f70f`; that is not the regenerated
+  sync-PR evidence A1 requires. The focused local command
+  `/opt/anaconda3/bin/python3 -m pytest -q tests/test_ci_gate_config.py`
+  passed all 21 tests in 8.88 seconds, including the mismatch/restoration
+  regression. The full repository command remains unrun under this round's
+  explicit prohibition on full-suite local tests.
+- **A3 remains incomplete.** The native journal
+  `~/.codex/orchestrator/sync-core/rounds.jsonl` records round
+  `20261116T103121Z`, completed at `2026-11-16T10:31:26Z`, with #1403 still
+  `pin-conflict` / `pin-held`. Its reasons still include the combined-coverage
+  aggregate failure; the source handoff remains #1404 (open).
+
+First broken acceptance step: no regenerated #1403 head with passing CI exists
+in the observed run list. Blocking/drainable: acceptance is blocked on that
+external delivery; the existing closer can process #1405 through its normal
+review and merge guard, and the sole pin writer owns regeneration. This seat
+changed only this evidence record, without editing pins or starting another lane.
+No additional repair attempt was made. The documentation push leaves its
+seven-minute post-push review to the scheduled automation; that review is pending.
