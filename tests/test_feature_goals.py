@@ -721,6 +721,20 @@ def test_keepalive_acceptance_window_never_starts_before_the_gate(monkeypatch):
     ]
 
 
+def test_keepalive_acceptance_verification_gate_is_false_when_unmeasured(monkeypatch):
+    def fail(_args):
+        raise RuntimeError("unmeasured: gh unavailable")
+
+    monkeypatch.setattr(fg, "_gh", fail)
+    monkeypatch.setattr(
+        fg, "_github_rest_get", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("offline"))
+    )
+    record = fg.keepalive_acceptance_verification_record(NOW)
+    assert record["equal"] is False
+    assert record["measure_share"] is None
+    assert record["rest_share"] is None
+
+
 def test_keepalive_acceptance_verification_gate_records_equal_shares(monkeypatch):
     items = [
         {

@@ -149,6 +149,48 @@ def _gh(args: list[str]) -> str:
     return output
 
 
+def _github_rest_get(endpoint: str, params: dict[str, str] | None = None) -> str:
+    """Read-only GitHub REST GET used when ``gh`` is unavailable (e.g. missing GH_TOKEN)."""
+    import urllib.parse
+    import urllib.request
+
+    query = f"?{urllib.parse.urlencode(params)}" if params else ""
+    url = f"https://api.github.com/{endpoint.lstrip('/')}{query}"
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "feature-goals-keepalive",
+    }
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            return resp.read().decode()
+    except Exception as exc:
+        raise RuntimeError(f"unmeasured: GitHub REST GET {endpoint}: {exc}") from exc
+
+
+def _keepalive_github_json(args: list[str]) -> str:
+    """``gh api -X GET`` with a REST fallback so keepalive acceptance can measure without the CLI."""
+    try:
+        return _gh(args)
+    except RuntimeError:
+        if args[:3] != ["api", "-X", "GET"] or len(args) < 4:
+            raise
+        endpoint = args[3]
+        params: dict[str, str] = {}
+        index = 4
+        while index < len(args):
+            if args[index] == "-f" and index + 1 < len(args):
+                key, _, value = args[index + 1].partition("=")
+                params[key] = value
+                index += 2
+            else:
+                index += 1
+        return _github_rest_get(endpoint, params or None)
+
+
 def _brain() -> sqlite3.Connection:
     # Do not use feedback._conn(): it migrates/creates the live Brain on a read.
     import feedback
@@ -347,7 +389,9 @@ def _merged_keepalive_body(item: dict) -> str:
     except (TypeError, ValueError, KeyError):
         return body
     try:
-        payload = json.loads(_gh(["api", "-X", "GET", f"repos/{repo}/pulls/{number}"]))
+        payload = json.loads(
+            _keepalive_github_json(["api", "-X", "GET", f"repos/{repo}/pulls/{number}"])
+        )
     except RuntimeError:
         return body
     return payload.get("body") or body
@@ -368,7 +412,7 @@ def _fetch_merged_keepalive_items(now: int) -> tuple[list[dict], str]:
     items: list[dict] = []
     for page in range(1, 11):
         payload = json.loads(
-            _gh(
+            _keepalive_github_json(
                 [
                     "api",
                     "-X",
@@ -434,11 +478,18 @@ def keepalive_acceptance_verification_record(now: int | None = None) -> dict:
     as_of = int(time.time()) if now is None else now
     measured = keepalive_acceptance(as_of)
     rest_share, rest = keepalive_acceptance_rest_share(as_of)
+    verified = (
+        measured.value is not None
+        and rest_share is not None
+        and measured.value == rest_share
+        and not rest.get("error")
+        and measured.evidence_class != "unmeasured"
+    )
     return {
         "as_of": as_of,
         "measure_share": measured.value,
         "rest_share": rest_share,
-        "equal": measured.value == rest_share,
+        "equal": verified,
         "measure_reason": measured.reason,
         "rest": rest,
     }
