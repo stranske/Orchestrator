@@ -59,6 +59,7 @@
     [
       "tests/test_issue771_mutation_runner.py",
       "tests/test_issue_771_evidence.py",
+      "tests/test_issue_1379_keepalive_evidence.py",
       "tests/test_issue1253_ranked_coverage.py",
       "tests/test_issue1235_ranked_coverage.py",
       "tests/test_issue1235_supervisor_recovery.py",
