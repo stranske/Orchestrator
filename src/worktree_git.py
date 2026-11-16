@@ -136,6 +136,23 @@ def is_provisioned(worktree: str | Path) -> bool:
         return False
 
 
+def _same_dir(a: Path, b: Path) -> bool:
+    """Whether two paths name one directory: identity, not spelling.
+
+    On a case-insensitive volume (the macOS default) one clone has several spellings. `provision`
+    derives the slug from the repo name with its case kept, while an older clone can sit under a
+    lowercase name (`stranske__manager-mosaic`): every repair dispatch for that repo was refused
+    on 2026-11-16 (Manager-Mosaic#156). On a case-sensitive volume a differently-cased name is a
+    different directory or none, so this never widens what is accepted there.
+    """
+    if a == b:
+        return True
+    try:
+        return a.is_dir() and b.is_dir() and os.path.samefile(a, b)
+    except OSError:
+        return False
+
+
 def _read_pointer(path: Path) -> str:
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"{path} is missing or not a regular file")
@@ -166,11 +183,15 @@ def expected_pins(worktree: str | Path, repo: str | None = None) -> tuple[Path, 
         if repo is not None:
             # The caller knows the repo: its canonical clone is the only acceptable owner.
             expected = _real(provision.canonical_path(repo))
-            if clone != expected:
+            if not _same_dir(clone, expected):
                 return Refusal(
                     f"{dotgit} names a git dir of {clone}, not of {expected}; {_CLEAR}", dotgit
                 )
-        elif clone.parent != repos or not wt.name.startswith(clone.name + "__"):
+        elif (
+            clone.parent != repos
+            or not wt.name[len(clone.name) :].startswith("__")
+            or not _same_dir(repos / wt.name[: len(clone.name)], clone)
+        ):
             # Otherwise the worktree's own name says which canonical clone it belongs to.
             return Refusal(
                 f"{dotgit} names {git_dir}, which is not under "
