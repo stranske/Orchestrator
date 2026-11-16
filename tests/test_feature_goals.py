@@ -721,6 +721,27 @@ def test_keepalive_acceptance_window_never_starts_before_the_gate(monkeypatch):
     ]
 
 
+def test_keepalive_acceptance_verification_gate_records_equal_shares(monkeypatch):
+    items = [
+        {
+            "repository_url": "https://api.github.com/repos/stranske/Workflows",
+            "body": "Deterministic gates: 2/2 passed",
+        },
+        {
+            "repository_url": "https://api.github.com/repos/stranske/Workflows",
+            "body": "Deterministic gates: 1/2 passed",
+        },
+    ]
+    monkeypatch.setattr(fg, "_gh", lambda args: _search(items))
+    record = fg.keepalive_acceptance_verification_record(NOW)
+    assert record["as_of"] == NOW
+    assert record["equal"] is True
+    assert record["measure_share"] == 0.5
+    assert record["rest_share"] == 0.5
+    assert record["rest"]["citing"] == 1
+    assert record["rest"]["population"] == 2
+
+
 def test_keepalive_acceptance_reads_pull_body_when_search_body_lacks_gates(monkeypatch):
     items = [
         {

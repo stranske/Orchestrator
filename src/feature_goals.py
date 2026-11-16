@@ -332,12 +332,16 @@ KEEPALIVE_GATE_REPOS = frozenset({"stranske/Workflows"})
 KEEPALIVE_LABEL_QUERY = 'label:"agents:keepalive"'
 
 
+def _keepalive_repo_of(item: dict) -> str:
+    return "/".join((item.get("repository_url") or "").split("/")[-2:])
+
+
 def _merged_keepalive_body(item: dict) -> str:
     """PR bodies from issue search are often empty; the pulls endpoint is authoritative."""
     body = item.get("body") or ""
     if DETERMINISTIC_GATES_RE.search(body):
         return body
-    repo = "/".join((item.get("repository_url") or "").split("/")[-2:])
+    repo = _keepalive_repo_of(item)
     try:
         number = int(item["number"])
     except (TypeError, ValueError, KeyError):
@@ -349,8 +353,15 @@ def _merged_keepalive_body(item: dict) -> str:
     return payload.get("body") or body
 
 
-def keepalive_acceptance(now: int) -> Measurement:
-    """Share of keepalive PRs merged in the window whose body reports every named gate passing."""
+def _keepalive_all_gates_pass(body: str) -> bool:
+    gates = DETERMINISTIC_GATES_RE.findall(body)
+    if not gates:
+        return False
+    passed, total = (int(x) for x in gates[-1])
+    return total > 0 and passed == total
+
+
+def _fetch_merged_keepalive_items(now: int) -> tuple[list[dict], str]:
     window = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - GOAL_SILENCE_DAYS * DAY))
     since = max(window, KEEPALIVE_GATE_LIVE)
     query = f"org:stranske is:pr is:merged merged:>={since} {KEEPALIVE_LABEL_QUERY}"
@@ -373,38 +384,85 @@ def keepalive_acceptance(now: int) -> Measurement:
             )
         )
         if payload.get("incomplete_results"):
-            return unknown(now, "complete GitHub search for merged keepalive PRs (incomplete)")
+            raise RuntimeError(
+                "unmeasured: complete GitHub search for merged keepalive PRs (incomplete)"
+            )
         batch = payload.get("items") or []
         items += batch
         if len(batch) < 100:
             break
     else:
-        return unknown(now, "merged keepalive PRs beyond 1000 search results")
+        raise RuntimeError("unmeasured: merged keepalive PRs beyond 1000 search results")
+    return items, since
 
-    def repo_of(item: dict) -> str:
-        return "/".join((item.get("repository_url") or "").split("/")[-2:])
 
-    eligible = [item for item in items if repo_of(item) not in EXCLUDED_REPOS]
-    population = [item for item in eligible if repo_of(item) in KEEPALIVE_GATE_REPOS]
+def _keepalive_acceptance_counts(items: list[dict]) -> tuple[int, int, int]:
+    eligible = [item for item in items if _keepalive_repo_of(item) not in EXCLUDED_REPOS]
+    population = [item for item in eligible if _keepalive_repo_of(item) in KEEPALIVE_GATE_REPOS]
     undelivered = len(eligible) - len(population)
+    citing = sum(_keepalive_all_gates_pass(_merged_keepalive_body(item)) for item in population)
+    return citing, len(population), undelivered
+
+
+def keepalive_acceptance_rest_share(now: int) -> tuple[float | None, dict]:
+    """Independent REST recount of the keepalive acceptance share at ``now``."""
+    try:
+        items, since = _fetch_merged_keepalive_items(now)
+    except RuntimeError as exc:
+        return None, {"as_of": now, "error": str(exc)}
+    citing, population, undelivered = _keepalive_acceptance_counts(items)
+    if not population:
+        return None, {
+            "as_of": now,
+            "since": since,
+            "population": 0,
+            "undelivered": undelivered,
+        }
+    share = citing / population
+    return share, {
+        "as_of": now,
+        "since": since,
+        "citing": citing,
+        "population": population,
+        "undelivered": undelivered,
+        "share": share,
+    }
+
+
+def keepalive_acceptance_verification_record(now: int | None = None) -> dict:
+    """Record the measure share and an independent REST recount at one timestamp."""
+    as_of = int(time.time()) if now is None else now
+    measured = keepalive_acceptance(as_of)
+    rest_share, rest = keepalive_acceptance_rest_share(as_of)
+    return {
+        "as_of": as_of,
+        "measure_share": measured.value,
+        "rest_share": rest_share,
+        "equal": measured.value == rest_share,
+        "measure_reason": measured.reason,
+        "rest": rest,
+    }
+
+
+def keepalive_acceptance(now: int) -> Measurement:
+    """Share of keepalive PRs merged in the window whose body reports every named gate passing."""
+    try:
+        items, since = _fetch_merged_keepalive_items(now)
+    except RuntimeError as exc:
+        return unknown(now, str(exc).removeprefix("unmeasured: "))
+    citing, population, undelivered = _keepalive_acceptance_counts(items)
     if not population:
         return unknown(
             now,
             f"merged keepalive PRs since {since} in gate repos (none; {undelivered} in repos "
             "without the gate)",
         )
-    citing = 0
-    for item in population:
-        gates = DETERMINISTIC_GATES_RE.findall(_merged_keepalive_body(item))
-        if gates:
-            passed, total = (int(x) for x in gates[-1])
-            citing += int(total > 0 and passed == total)
     return Measurement(
-        citing / len(population),
+        citing / population,
         "GitHub REST search: merged keepalive PR bodies (Deterministic gates line)",
         now,
         reason=(
-            f"{citing}/{len(population)} keepalive PRs merged since {since} in gate repos report "
+            f"{citing}/{population} keepalive PRs merged since {since} in gate repos report "
             f"all named gates passing; {undelivered} merged in repos without the gate"
         ),
     )
@@ -851,9 +909,18 @@ def main(argv: list[str] | None = None) -> int:
     group.add_argument("--report", action="store_true")
     group.add_argument("--check", action="store_true")
     group.add_argument("--file-drift-issues", action="store_true")
+    group.add_argument(
+        "--verify-keepalive-acceptance",
+        action="store_true",
+        help="record feature_goals.py:keepalive_acceptance share and an independent REST recount",
+    )
     args = parser.parse_args(argv)
-    if not any((args.report, args.check, args.file_drift_issues)):
+    if not any((args.report, args.check, args.file_drift_issues, args.verify_keepalive_acceptance)):
         parser.error("at least one action is required")
+    if args.verify_keepalive_acceptance:
+        record = keepalive_acceptance_verification_record()
+        print(json.dumps(record, indent=2, sort_keys=True))
+        return 0 if record["equal"] else 1
     section = report()
     print("\n".join(format_lines(section)))
     if not section.get("history_writable", True):
