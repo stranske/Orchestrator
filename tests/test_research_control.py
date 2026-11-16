@@ -123,7 +123,10 @@ def test_production_range_item_is_reserved_before_research(tmp_path, monkeypatch
     monkeypatch.setattr(
         tick.dispatcher,
         "delegate_remote",
-        lambda agent, target, task_type, dry_run: {"applied": not dry_run, "skip": None},
+        lambda *args, **kwargs: {
+            "applied": not kwargs.get("dry_run"),
+            "skip": None,
+        },
     )
     captured = {}
 

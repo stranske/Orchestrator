@@ -4485,6 +4485,7 @@ def delegate_remote(
     rationale: str = "",
     dry_run: bool = False,
     labels: set | None = None,
+    routing: dict | None = None,
     influenced_by_role_run_ids=None,
     influenced_by_skill_event_ids=None,
     influenced_by_workflow_ids=None,
@@ -4535,6 +4536,7 @@ def delegate_remote(
     res = subprocess.run(cmd, capture_output=True, text=True)
     applied = res.returncode == 0
     try:  # decision capture — keepalive outcomes (merge/durability) join this by PR later
+        routing_metadata = _routing_metadata(dict(routing or {})) if routing else None
         feedback.record_run(
             f"remote:{repo}#{num}:{agent}",
             target,
@@ -4544,6 +4546,7 @@ def delegate_remote(
             rationale=rationale or "remote keepalive delegation via agent label",
             pr_number=num,
             model=adapters.model_identity(agent, None),
+            routing_metadata=routing_metadata,
             influenced_by_role_run_ids=influenced_by_role_run_ids,
             influenced_by_skill_event_ids=influenced_by_skill_event_ids,
             influenced_by_workflow_ids=influenced_by_workflow_ids,

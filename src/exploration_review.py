@@ -226,6 +226,7 @@ def _recorded_exploration_evidence(window_days: int = 120) -> dict:
     router_decision_runs = 0
     exploration_runs = 0
     outcome_exploration_runs = 0
+    unjoined_run_ids: list[str] = []
     evidence_error = None
     try:
         with feedback._conn() as c:
@@ -259,6 +260,10 @@ def _recorded_exploration_evidence(window_days: int = 120) -> dict:
         if not metadata.get("exploration"):
             continue
         exploration_runs += 1
+        if not feedback._has_outcome_evidence(
+            durability, adjudicated, verifier, failure_class=failure_class
+        ):
+            unjoined_run_ids.append(run_id)
         mode = metadata.get("exploration_mode") or "epsilon-greedy"
         stat = by_mode.setdefault(
             mode,
@@ -346,6 +351,7 @@ def _recorded_exploration_evidence(window_days: int = 120) -> dict:
         "router_decision_runs": router_decision_runs,
         "exploration_runs": exploration_runs,
         "outcome_exploration_runs": outcome_exploration_runs,
+        "unjoined_run_ids": sorted(unjoined_run_ids),
         "task_types_with_outcomes": sorted(task_types_with_outcomes),
         "mode_counts": sorted(by_mode.values(), key=lambda item: item["mode"]),
         "ready_for_direct_comparison": ready,
@@ -458,6 +464,10 @@ def build_report(
         "task_count": len(tasks),
         "zero_observation_cell_rate": zero_cell_rate,
         "recorded_exploration_evidence": recorded_evidence,
+        "unjoined_exploration_evidence": {
+            "count": len(recorded_evidence.get("unjoined_run_ids") or []),
+            "run_ids": list(recorded_evidence.get("unjoined_run_ids") or []),
+        },
         "tasks": tasks,
     }
     if recorded_evidence.get("evidence_error"):
