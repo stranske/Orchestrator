@@ -47,7 +47,10 @@ decorative. Repeated 2026-08-23 for `test_every_cited_repo_path_resolves`: resto
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
+import sys
 import tomllib
 
 import pytest
@@ -397,8 +400,8 @@ def test_baseline_diagnostic_names_the_bumped_and_the_missing_pin():
         assert key not in message
 
 
-def test_baseline_accepts_measured_sync_pr_1403_toolchain(tmp_path, monkeypatch):
-    """Run the named gate with pending sync pins, then break and restore each stale pin."""
+def test_baseline_accepts_measured_sync_pr_1403_toolchain(tmp_path):
+    """Verify pytest's exit status with pending pins, then break and restore each stale pin."""
     require_checkout()
     record = BASELINE_DOC.parent / "evidence" / "issue-1404" / "measurement.json"
     pins = json.loads(record.read_text(encoding="utf-8"))["report"]["pins"]
@@ -411,9 +414,35 @@ def test_baseline_accepts_measured_sync_pr_1403_toolchain(tmp_path, monkeypatch)
         "\n".join(f"{key}={value}" for key, value in pins.items()) + "\n", encoding="utf-8"
     )
     baseline_doc.write_text(doc, encoding="utf-8")
-    monkeypatch.setitem(globals(), "PINS", pin_file)
-    monkeypatch.setitem(globals(), "BASELINE_DOC", baseline_doc)
-    test_baseline_was_measured_with_the_pinned_versions()
+    runner = tmp_path / "test_pending_baseline.py"
+    runner.write_text(
+        "from pathlib import Path\n"
+        "import test_ci_gate_config as gate\n\n"
+        "gate.PINS = Path(__file__).with_name('autofix-versions.env')\n"
+        "gate.BASELINE_DOC = Path(__file__).with_name('CI_LINT_BASELINE.md')\n\n"
+        "def test_pending_baseline():\n"
+        "    gate.test_baseline_was_measured_with_the_pinned_versions()\n",
+        encoding="utf-8",
+    )
+    env = {
+        **os.environ,
+        "PYTHONPATH": os.pathsep.join(str(path) for path in (HERE / "src", HERE, HERE / "tests")),
+        "PYTEST_ADDOPTS": "",
+    }
+
+    def run_gate():
+        return subprocess.run(
+            [sys.executable, "-m", "pytest", "-q", "-m", "not slow", str(runner)],
+            cwd=tmp_path,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+    result = run_gate()
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "1 passed" in result.stdout
 
     stale_versions = {"ruff": ("0.17.5", "0.17.4"), "coverage": ("7.17.3", "7.17.2")}
     for tools in (("ruff",), ("coverage",), ("ruff", "coverage")):
@@ -427,13 +456,13 @@ def test_baseline_accepts_measured_sync_pr_1403_toolchain(tmp_path, monkeypatch)
             expected_pins.add(key)
             stale = stale.replace(f"{tool}={proposed}", f"{tool}={previous}")
         baseline_doc.write_text(stale, encoding="utf-8")
-        with pytest.raises(AssertionError) as failure:
-            test_baseline_was_measured_with_the_pinned_versions()
-        # Assertion rewriting appends runtime-specific explanation to the exception.
-        # Check the diagnostic itself, and verify the real gate emitted it.
+        result = run_gate()
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert "1 failed" in result.stdout
+        # Check the diagnostic itself, and verify the real pytest failure emitted it.
         message = _baseline_mismatch(stale, pins)
         assert message is not None
-        assert message in str(failure.value)
+        assert message in result.stdout
         for tool in tools:
             proposed, previous = stale_versions[tool]
             assert f"{tool.upper()}_VERSION pinned {proposed}, measured {previous}" in message
@@ -443,7 +472,9 @@ def test_baseline_accepts_measured_sync_pr_1403_toolchain(tmp_path, monkeypatch)
             assert key not in message
 
         baseline_doc.write_text(doc, encoding="utf-8")
-        test_baseline_was_measured_with_the_pinned_versions()
+        result = run_gate()
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "1 passed" in result.stdout
 
 
 @pytest.mark.parametrize("complete_measurement", [True, False])
