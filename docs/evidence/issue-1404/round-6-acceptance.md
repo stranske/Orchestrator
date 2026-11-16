@@ -103,3 +103,22 @@ The latest native sync-core round, `20261116T093115Z`, finished at 09:31:18 UTC
 and still records #1403 as `pin-conflict` / `pin-held`. The next required
 delivery step remains the guarded landing of #1405 so the pin writer can
 regenerate #1403.
+
+## Round 9 readback — 2026-11-16 09:43 UTC
+
+**0/2 outstanding criteria verified.** The live generated pin file at #1403
+head `125965ca868c` matches all nine pins in `measurement.json`. The branch
+still has only [CI run 43820436609](https://github.com/stranske/Orchestrator/actions/runs/43820436609).
+`gh run view` confirms that `verify.py aggregate + combined coverage` failed.
+
+On repair head `243f016a2e97`, the same job passed in
+[CI run 43840782087](https://github.com/stranske/Orchestrator/actions/runs/43840782087).
+`/opt/anaconda3/bin/python3 -m pytest -q tests/test_ci_gate_config.py` passed
+all 21 tests in 9.43 seconds. The local full-suite command remains unrun under
+the focused-test rule.
+
+Native sync-core round `20261116T094313Z` finished at 09:43:16 UTC with #1403
+still `pin-conflict` / `pin-held` and its handoff open on #1404. The existing
+closer can land #1405 through its guarded merge after this push's review floor.
+Resume acceptance readback when the pin writer regenerates #1403 and sync-core
+classifies that head.
