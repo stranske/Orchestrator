@@ -1929,8 +1929,16 @@ def default_pr_reader(repo: str, number: int) -> dict | None:
 class _PrSearch:
     """What one link_triage_consumption call has read, may still read, and could not read."""
 
-    def __init__(self, reader=None, *, now: float | None = None, bound: int = PR_READS_PER_CALL):
+    def __init__(
+        self,
+        reader=None,
+        *,
+        now: float | None = None,
+        bound: int = PR_READS_PER_CALL,
+        persist: bool = True,
+    ):
         self.reader = reader or default_pr_reader
+        self.persist = persist
         self.now = time.time() if now is None else now
         self.covers = _read_pr_covers()
         self.left = bound
@@ -1972,7 +1980,8 @@ class _PrSearch:
                 "ts": self.now,
                 "final": bool(refs) or opened is None or self.now - opened >= PR_COVER_SETTLE_S,
             }
-            triage_shadow._append(_pr_cover_path(), self.covers[key])
+            if self.persist:
+                triage_shadow._append(_pr_cover_path(), self.covers[key])
         return "yes" if issue in self.covers[key]["covers"] else "no"
 
 
@@ -2111,15 +2120,53 @@ def rule_pick_cycles(rows: list[dict]) -> list[tuple[str, float]]:
     return cycles
 
 
-def rule_picks_drainable_next_call() -> int:
-    """How many rule-pick cycles the next linker call would read for, oldest backlog first.
+class _UnknownPrResponse(Exception):
+    """A read-only forecast cannot invent an unread pull request's response."""
 
-    Reads the Brain read-only: this runs inside a report, which must never migrate the schema or
-    take the write lock. Capped at PR_READS_PER_CALL, since each such cycle needs at least one read.
+
+def _pending_triage_consumptions(limit: int) -> list[dict]:
+    import triage_shadow
+
+    consumed = triage_shadow._read_rows(triage_shadow.consumed_path())
+    linked = triage_shadow.linked_consumptions(consumed)
+    return [r for r in consumed if triage_shadow.consumption_key(r) not in linked][: max(0, limit)]
+
+
+def _resolve_rule_pick_covers(conn, rows: list[dict], search: _PrSearch) -> int:
+    """Count cycles actually reached for a read, sharing consumption's remaining budget/cache."""
+    reached = 0
+    cycles = rule_pick_cycles(rows)
+    for index, (rule_pick, since_ts) in enumerate(cycles):
+        if search.left <= 0:
+            break
+        if not rule_pick_needs_cover_read(conn, rule_pick, since_ts, search.covers):
+            continue
+        reached += 1
+        try:
+            _drain_rule_pick_covers(
+                conn, rule_pick, since_ts, search, int(rule_pick.rpartition("#")[2])
+            )
+        except _UnknownPrResponse:
+            # This cycle is reached regardless of the response. If there is no later pending
+            # cycle, whether this read stops or continues cannot change the cycle count.
+            if any(
+                rule_pick_needs_cover_read(conn, pick, ts, search.covers)
+                for pick, ts in cycles[index + 1 :]
+            ):
+                raise
+            return reached
+    return reached
+
+
+def rule_picks_drainable_next_call(*, now=None, limit: int = 100, pr_reader=None) -> int | None:
+    """Replay next-call reach without network reads, schema migration or persisted writes.
+
+    Consumption runs first, then ordered rule cycles, with the linker's shared cache and bound.
+    An injected reader permits deterministic replay; reports use persisted evidence alone and
+    return None when an unread response prevents determining subsequent cycle reach.
     """
     import triage_shadow
 
-    covers = _read_pr_covers()
     rows = sorted(
         (
             r
@@ -2130,15 +2177,24 @@ def rule_picks_drainable_next_call() -> int:
     )
     if not rows:
         return 0
-    pending = 0
+
+    def unknown_response(repo, number):
+        raise _UnknownPrResponse
+
+    search = _PrSearch(pr_reader or unknown_response, now=now, persist=False)
     db_path = Path(feedback.DB_PATH).resolve()
     with closing(sqlite3.connect(db_path.as_uri() + "?mode=ro", uri=True, timeout=5)) as conn:
-        for rule_pick, since_ts in rule_pick_cycles(rows):
-            if rule_pick_cover_state(conn, rule_pick, since_ts, covers)[0] == "pending":
-                pending += 1
-                if pending >= PR_READS_PER_CALL:
-                    return PR_READS_PER_CALL
-    return pending
+        if not any(
+            rule_pick_needs_cover_read(conn, pick, ts, search.covers)
+            for pick, ts in rule_pick_cycles(rows)
+        ):
+            return 0
+        try:
+            for row in _pending_triage_consumptions(limit):
+                first_run_for_pick(conn, row["picked"], row["ts"] / 1_000_000_000, search=search)
+            return _resolve_rule_pick_covers(conn, rows, search)
+        except _UnknownPrResponse:
+            return None
 
 
 def link_triage_consumption(*, now: float | None = None, limit: int = 100, pr_reader=None) -> dict:
@@ -2154,13 +2210,9 @@ def link_triage_consumption(*, now: float | None = None, limit: int = 100, pr_re
     import triage_shadow
 
     now = time.time() if now is None else now
-    consumed = triage_shadow._read_rows(triage_shadow.consumed_path())
-    linked = triage_shadow.linked_consumptions(consumed)
     result: dict = {"followed": [], "not_followed": [], "unresolved": [], "pending": []}
     search = _PrSearch(pr_reader, now=now)
-    for row in [r for r in consumed if triage_shadow.consumption_key(r) not in linked][
-        : max(0, limit)
-    ]:
+    for row in _pending_triage_consumptions(limit):
         consumption_id = triage_shadow.consumption_key(row)
         with feedback._conn() as conn:
             source = conn.execute(
@@ -2235,16 +2287,7 @@ def link_triage_consumption(*, now: float | None = None, limit: int = 100, pr_re
     )
     consumption_unread = set(search.unread)
     with feedback._conn() as conn:
-        # Each (pick, time) cycle separately; search.covers caches every read, so a pull request
-        # shared by two cycles of the same issue is read once.
-        for rule_pick, since_ts in rule_pick_cycles(corpus_rows):
-            if search.left <= 0:
-                break
-            if rule_pick_cover_state(conn, rule_pick, since_ts, search.covers)[0] != "pending":
-                continue
-            _drain_rule_pick_covers(
-                conn, rule_pick, since_ts, search, int(rule_pick.rpartition("#")[2])
-            )
+        _resolve_rule_pick_covers(conn, corpus_rows, search)
     if search.ran:
         result["pr_reads"] = search.reads
         result["unread_candidates"] = len({k for k in consumption_unread if not search.settled(k)})
