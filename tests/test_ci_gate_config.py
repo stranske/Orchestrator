@@ -432,14 +432,13 @@ def test_baseline_accepts_measured_sync_pr_1403_toolchain(tmp_path):
     coverage_probe = {"--cov", "--cov-config=pyproject.toml", "--collect-only"}
 
     def is_pytest_coverage_probe(command):
-        return (
-            command["command"][1:3] == ["-m", "pytest"]
-            and coverage_probe <= set(command["command"])
+        return command["command"][1:3] == ["-m", "pytest"] and coverage_probe <= set(
+            command["command"]
         )
 
-    assert any(is_pytest_coverage_probe(command) for command in commands), (
-        "the measurement must retain the pytest coverage-startup command"
-    )
+    assert any(
+        is_pytest_coverage_probe(command) for command in commands
+    ), "the measurement must retain the pytest coverage-startup command"
     doc = BASELINE_DOC.read_text(encoding="utf-8")
 
     # Replay the proposed payload through the real file reader without editing the live pins.

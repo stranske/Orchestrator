@@ -232,3 +232,27 @@ and ready. `gh run view` cannot connect, and the native sync-core journal is
 unavailable. Both outstanding acceptance criteria remain unchecked. Posting
 this blocker and adding `needs-human` were rejected because the write tools
 require approval while the run's approval policy is `never`.
+
+## Round 13 readback — 2026-11-16 14:20 UTC (closer continuation, PR #1405)
+
+Black reformatted `is_pytest_coverage_probe` and its neighboring assert in
+`tests/test_ci_gate_config.py` so `black --check` accepts the file. No baseline,
+measurement, or test-logic changes.
+
+Commands on the formatted tree (pre-commit head `b567b39becebc39220393d02966fca63ca5ebecb`,
+format-only commit follows):
+
+- `black --line-length 100 tests/test_ci_gate_config.py` — reformatted 1 file.
+- `black --check --line-length 100 --exclude '(\.venv|\.workflows-lib|node_modules)' .` —
+  `712 files would be left unchanged.`
+- `ruff check --extend-exclude .workflows-lib --output-format concise .` —
+  `All checks passed!`
+- `/opt/anaconda3/bin/python3 -m pytest -q tests/test_ci_gate_config.py` —
+  `21 passed in 8.50s`
+- `/opt/anaconda3/bin/python3 src/verify.py` — **exit 1** after ~44 minutes:
+  `9004 passed, 12 failed, 4 errors` (pytest), plus `adapters` and
+  `capability_propensity` selftests and the `admission` gate. Failures cluster on
+  agent-runtime isolation (`test_advisor_hermetic`, `test_agent_workspace_never_broad`,
+  `test_propensity_selftest_private_state`, `test_synthesis_promotion_coverage` errors).
+  This seat treats that red as **local environment contention**, not a regression from
+  the Black-only diff; CI on a clean runner remains the merge verdict for the full suite.
