@@ -1,0 +1,29 @@
+name: Maint Branch Hygiene
+
+# Daily prune of this repository's stale branches through the Workflows reusable (rules in
+# stranske/Workflows scripts/branch_hygiene.py): merged/closed-PR branches unchanged since the PR, branches
+# contained in main, and archive-then-delete (refs/archive/branches/<name>) for branches with commits no PR
+# carries after 7 untouched days. Open-PR, protected, release, export and recent branches are kept.
+on:
+  schedule:
+    - cron: '47 6 * * *'
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: 'Delete and archive (false = dry run)'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: branch-hygiene
+  cancel-in-progress: false
+
+jobs:
+  hygiene:
+    uses: stranske/Workflows/.github/workflows/reusable-branch-hygiene.yml@main
+    with:
+      apply: ${{ github.event_name == 'schedule' || inputs.apply }}
