@@ -310,6 +310,60 @@ test('CSV recovery follows the latest native comparison instead of the supersede
   assert.equal(JSON.stringify(readback), before, 'never rewrite producer history for admission');
 });
 
+test('CSV recovery preserves the later native material identity after a no-publication failure',async()=>{
+  const { guardRetainedRecoveryHistory } = require('../.github/scripts/verifier_pending_execution.js');
+  const { validateEvent, digest, sameAssessment } = require('../.github/scripts/verification_event.js');
+  const native = require('../docs/verification/issue-1364/recovery-readback-20261116.json');
+  const before = JSON.stringify(native);
+  const states = native.verifier_events.map(comment => JSON.parse(comment.body.match(/(\{[^\n]+\})/)[1]));
+  const original = states.find(row => row.run_id === '42142641060' && row.status === 'pending');
+  const later = states.find(row => row.run_id === '43133282976' && row.status === 'incomplete');
+  const selector = {run_id:Number(original.run_id),run_attempt:Number(original.run_attempt),
+    artifact_id:later.retained_revalidation.artifact_id};
+  const originalEvent = validateEvent(original.verification_event);
+  const laterEvent = validateEvent(later.verification_event);
+  for (const key of ['repo','pr','head_sha','evaluated_sha','request_sha256']) {
+    assert.equal(originalEvent[key], laterEvent[key]);
+  }
+  assert.equal(sameAssessment(original.assessment_identity, later.assessment_identity), true);
+  assert.notEqual(originalEvent.material_sha256, laterEvent.material_sha256);
+  assert.notEqual(originalEvent.event_id, laterEvent.event_id);
+  assert.equal(later.retry_kind, 'known_no_evaluation');
+  assert.equal(later.retained_revalidation.publication_effect, 'none');
+  assert.equal(later.retained_revalidation.provider_generation_performed, false);
+  const options = event => ({
+    // History admission must stop before artifact acquisition or publication.
+    github:new Proxy({}, {get() {throw new Error('unexpected GitHub access');}}),
+    event,assessment:original.assessment_identity,comments:native.verifier_events,
+    sourceRun:selector.run_id,sourceAttempt:selector.run_attempt,
+    currentRun:native.run.id,currentAttempt:native.run.run_attempt,
+    recoveryKey:digest({schema:'retained-revalidation-key/v1',event_id:event.event_id,
+      assessment:original.assessment_identity,selector}),
+  });
+  const originalOptions = options(originalEvent);
+  // Positive control: the unchanged comparison history admits its own source.
+  assert.equal(await guardRetainedRecoveryHistory({...originalOptions,
+    comments:native.verifier_events.filter((comment, index) =>
+      Number(states[index].run_id) <= selector.run_id),
+  }), 'ready');
+  await assert.rejects(guardRetainedRecoveryHistory(originalOptions),
+    /Retained recovery is superseded by a newer authenticated assessment/);
+  // A known no-publication failure permits retry only of the same immutable
+  // request/material/key. It cannot authorize reuse under the original event.
+  const laterOptions = options(laterEvent);
+  assert.equal(laterOptions.recoveryKey, later.retained_revalidation.recovery_key);
+  assert.equal(await guardRetainedRecoveryHistory(laterOptions), 'ready');
+  const job = native.verifier_job;
+  assert.equal(job.steps.find(step => step.name === 'Build verifier context').conclusion, 'failure');
+  for (const name of ['Revalidate authenticated retained output',
+    'Publish retained revalidation through verifier lifecycle','Record verification event terminal']) {
+    assert.equal(job.steps.find(step => step.name === name).conclusion, 'skipped');
+  }
+  assert.ok(native.failure_log_excerpt.some(line => line.includes('at guardRecoveryHistory (')));
+  assert.deepEqual(native.terminal_corpus_markers, []);
+  assert.equal(JSON.stringify(native), before, 'retain both genuine material identities unchanged');
+});
+
 test('CSV recovery rechecks native revisions and supersession at the publication boundary',async()=>{
   const { publishRetainedReport } = require('../.github/scripts/verifier_pending_execution.js');
   const { validateEvent, digest } = require('../.github/scripts/verification_event.js');
@@ -452,7 +506,8 @@ test('CSV recovery authenticates the comparison artifact before retaining any or
   const { validateEvent } = require('../.github/scripts/verification_event.js');
   const native = require('../docs/verification/issue-1184-acceptance-20261111/round10/native-readback.json');
   const older = require('../docs/verification/issue-1184-acceptance-20261111/round8/native-readback.json');
-  const before = JSON.stringify([native, older]);
+  const current = require('../docs/verification/issue-1364/recovery-readback-20261116.json');
+  const before = JSON.stringify([native, older, current]);
   const pending = native.verifier_events.map(comment => JSON.parse(comment.body.match(/(\{[^\n]+\})/)[1]))
     .find(state => state.run_id === String(native.run.id) && state.status === 'pending');
   const event = validateEvent(pending.verification_event);
@@ -465,6 +520,7 @@ test('CSV recovery authenticates the comparison artifact before retaining any or
   const unavailable = new Error('Native checkout log transport unavailable in regression');
   const calls = [];
   let artifact = native.comparison_artifact;
+  let artifactError;
   const response = data => ({data, headers:{}});
   const github = {rest:{repos:{
     get:async args => {
@@ -486,7 +542,9 @@ test('CSV recovery authenticates the comparison artifact before retaining any or
     listJobsForWorkflowRunAttempt:async () => response(native.jobs),
     getArtifact:async args => {
       assert.equal(args.artifact_id, selector.artifact_id);
-      calls.push('artifact'); return response(artifact);
+      calls.push('artifact');
+      if (artifactError) throw artifactError;
+      return response(artifact);
     },
     downloadJobLogsForWorkflowRun:async args => {
       const job = native.jobs.jobs.find(row => row.name === 'verifier / Run post-merge verifier');
@@ -502,13 +560,26 @@ test('CSV recovery authenticates the comparison artifact before retaining any or
   assert.deepEqual(calls, ['artifact','checkout-log']);
   assert.deepEqual(fs.readdirSync(directory), [], 'unavailable custody must not mint origin proof');
   calls.length = 0;
+  // Today's native 404 must not fall back to the earlier metadata/digest or
+  // mint a source archive, authentication proof, or publication authority.
+  assert.equal(selector.artifact_id, 13468552385);
+  assert.equal(current.artifact_download.error_code, 'NOT_FOUND');
+  artifactError = Object.assign(new Error(current.artifact_download.error), {
+    status:Number(current.artifact_download.error_data.status),
+  });
+  assert.equal(artifactError.status, 404);
+  await assert.rejects(acquire(), error => error === artifactError);
+  assert.deepEqual(calls, ['artifact'], 'stop before checkout-log and archive acquisition');
+  assert.deepEqual(fs.readdirSync(directory), []);
+  calls.length = 0;
+  artifactError = undefined;
   // Replay a real earlier artifact as a mismatched API response, without
   // rewriting its identity or manufacturing a terminal decision.
   artifact = older.evaluation_artifact;
   await assert.rejects(acquire(), /Retained artifact attempt\/origin\/size unproven/);
   assert.deepEqual(calls, ['artifact'], 'reject the wrong artifact before further acquisition');
   assert.deepEqual(fs.readdirSync(directory), []);
-  assert.equal(JSON.stringify([native, older]), before, 'native evidence remains unchanged');
+  assert.equal(JSON.stringify([native, older, current]), before, 'native evidence remains unchanged');
 }));
 
 test('native CSV verifier states require both the corrective head and published merge',async()=>{

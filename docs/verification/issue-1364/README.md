@@ -1,4 +1,4 @@
-# Recover native verifier and worker publication records — 2026-11-15
+# Recover native verifier and worker publication records — updated 2026-11-16
 
 Follow-up to [stranske/Orchestrator#1364](https://github.com/stranske/Orchestrator/issues/1364)
 after merged PR #1348. This round records the authorized recovery path, fresh native
@@ -29,15 +29,28 @@ Native PR #1168 comments now include matching `verifier-event-state/v1` markers 
 `failure_cause=retained_revalidation_before_publication`). No
 `verifier-corpus-decision/v1` was published.
 
-**This seat (2026-11-15).** A fresh `gh workflow run agents-verifier.yml` on `main`
-with the same recovery JSON is refused by the orchestrator gh guard (production dispatch
-is controller-owned). No bypass was attempted.
+**Dispatch readback correction (2026-11-16).** The earlier record described the fresh
+dispatch as refused, but its recorded exit status was 0 and stdout linked to native run
+[43788513880](https://github.com/stranske/Orchestrator/actions/runs/43788513880).
+Fresh native run, job and log reads confirm that this dispatch executed on `main`.
+It failed at **Build verifier context**, before retained-output acquisition or
+revalidation, with:
+
+```text
+Error: Retained recovery is superseded by a newer authenticated assessment
+```
+
+The rejecting function is `guardRecoveryHistory`, called by
+`guardRetainedRecoveryHistory` and `buildVerifierContext`. The revalidation,
+publication and event-terminal steps were skipped. This is distinct from the prior
+run's Python immutable-request rejection; it does not authenticate any artifact bytes.
+See `recovery-readback-20261116.json` for native job steps and the failure stack excerpt.
 
 **Retained artifact bytes.** `GET .../actions/artifacts/13468552385` returns HTTP 404
 today. Prior readback recorded digest
 `sha256:2ebfd872ed901d067ddbac7990709aa23d7d46d9c03d4150e9fe091bb21dfcba` and expiry
 `2026-11-13T01:19:54Z`; authentic byte authentication is therefore unavailable on this
-runner.
+runner. The GitHub connector's artifact download also returns 404 on 2026-11-16.
 
 Disposition: recovery is blocked by **expired/missing artifact custody** and the prior
 run's **immutable-request revalidation rejection**, not by a missing workflow definition.
@@ -82,4 +95,37 @@ Both acceptance criteria remain **unchecked**:
 
 Confirmed access failures (artifact 404, dispatch guard, missing local custody) change
 the disposition to **parked**: controller-owned recovery or historical custody surfacing
-is required before the criteria can pass. No code under `src/` or `tests/` was changed.
+is required before the criteria can pass.
+
+## Verified regression changes — 2026-11-16
+
+The consumer's JavaScript contract now replays all eight authentic verifier state
+comments, including recovery run `43133282976`. Its request, head and merge match
+the original comparison, but its material hash and event identity differ. The
+regression proves that a failure with no publication permits retry of its own
+recovery key while still superseding the original event. It also replays today's
+artifact 404 through `acquireRetainedExecution` and checks that no archive or origin
+proof is written. These checks preserve the original records and grant no native
+decision or producer custody.
+
+`node tests/test_verifier_context_builder_contract.js` passes all 17 tests.
+`node --check tests/test_verifier_context_builder_contract.js` and `git diff --check`
+also pass. No Python files changed. The Python Gate wrapper cannot run on this seat:
+`python3 -m pytest` reports `No module named pytest`.
+
+The requested paginated `gh api` read was attempted again and failed to connect to
+`api.github.com`. The GitHub connector's all-pages comments read succeeds: 53 comments,
+eight native event-state markers, and zero native corpus decisions. The three custody
+environment variables are unset and `~/.codex/orchestrator` does not exist here, so
+the canonical index and immutable result cannot be read. `/opt/anaconda3/bin/python3`
+is also absent. The conditional historical checker run remains deferred until its
+required records are available; there is no observed checker disagreement to diagnose.
+
+All incomplete task and acceptance checkboxes remain unchecked. The first task still
+lacks authenticated retained bytes; a successful local regression cannot supply them.
+
+Commit and remote handoff were attempted after verification. `git add` failed with
+`Unable to create '.git/index.lock': Read-only file system`, so no commit was created.
+The GitHub connector refused both the requested `needs-human` label and blocker
+comment on PR #1395 with `MCP tool call requires approval, but approval policy is never`.
+The changes remain in the checked-out PR working tree for a writable seat to commit.
