@@ -47,7 +47,10 @@ decorative. Repeated 2026-08-23 for `test_every_cited_repo_path_resolves`: resto
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
+import sys
 import tomllib
 
 import pytest
@@ -377,12 +380,14 @@ def test_baseline_diagnostic_names_the_bumped_and_the_missing_pin():
         assert key not in message
 
     missing = {k: v for k, v in pins.items() if k != "COVERAGE_VERSION"}
+    missing["RUFF_VERSION"] = "2.0.1"
     message = _baseline_mismatch(doc, missing)
     assert message is not None
+    assert "RUFF_VERSION pinned 2.0.1, measured 2.0.0" in message
     assert "COVERAGE_VERSION pinned missing, measured 2.0.0" in message
     assert "All pins:" not in message
     assert message.endswith("retain its measurements.")
-    for key in missing:
+    for key in missing.keys() - {"RUFF_VERSION"}:
         assert key not in message
 
     incomplete = doc.replace(" coverage=2.0.0", "")
@@ -395,22 +400,135 @@ def test_baseline_diagnostic_names_the_bumped_and_the_missing_pin():
         assert key not in message
 
 
-def test_baseline_diagnostic_reports_simultaneous_bumped_and_missing_pins():
-    """Keep every differing comparison while omitting pins that still match."""
-    pins = {f"{tool.upper().replace('-', '_')}_VERSION": "2.0.0" for tool in _NINE_TOOLS}
-    doc = "<!-- measured-with: " + " ".join(f"{t}=2.0.0" for t in _NINE_TOOLS) + " -->"
-    pins["RUFF_VERSION"] = "2.0.1"
-    del pins["COVERAGE_VERSION"]
+def test_baseline_accepts_measured_sync_pr_1403_toolchain(tmp_path):
+    """Replay the full Gate config with pending pins, then break and restore each stale pin."""
+    require_checkout()
+    record = BASELINE_DOC.parent / "evidence" / "issue-1404" / "measurement.json"
+    measurement = json.loads(record.read_text(encoding="utf-8"))
+    report = measurement["report"]
+    pins = report["pins"]
+    # A matching marker alone cannot prove that the proposed bundle was installed.
+    # Bind the replay to the strict collector's observed versions for all nine tools.
+    expected_versions = {
+        tool: pins[f"{tool.upper().replace('-', '_')}_VERSION"] for tool in _NINE_TOOLS
+    }
+    assert report["installed_versions"] == expected_versions
+    assert report["problems"] == []
+    # Versions alone cannot establish that the measured checks actually passed.
+    # Require every check and its captured command result before replaying the bundle.
+    checks = {check["check"]: check for check in report["checks"]}
+    assert set(checks) == {"lint-ruff", "lint-format", "typecheck-mypy", "coverage"}
+    for check in checks.values():
+        assert check["blocking"] == 0, check
+        assert check["drainable"] == 0, check
+    commands = measurement["commands"]
+    assert commands
+    for command in commands:
+        assert command["exit_code"] == 0, command
+    # A successful version probe cannot stand in for an omitted measured check.
+    executed_commands = {" ".join(command["command"]) for command in commands}
+    for name in ("lint-ruff", "lint-format", "typecheck-mypy"):
+        assert checks[name]["command"] in executed_commands, checks[name]
+    coverage_probe = {"--cov", "--cov-config=pyproject.toml", "--collect-only"}
 
-    message = _baseline_mismatch(doc, pins)
+    def is_pytest_coverage_probe(command):
+        return command["command"][1:3] == ["-m", "pytest"] and coverage_probe <= set(
+            command["command"]
+        )
 
-    assert message is not None
-    assert "RUFF_VERSION pinned 2.0.1, measured 2.0.0" in message
-    assert "COVERAGE_VERSION pinned missing, measured 2.0.0" in message
-    assert "All pins:" not in message
-    assert message.endswith("retain its measurements.")
-    for key in pins.keys() - {"RUFF_VERSION"}:
-        assert key not in message
+    assert any(
+        is_pytest_coverage_probe(command) for command in commands
+    ), "the measurement must retain the pytest coverage-startup command"
+    doc = BASELINE_DOC.read_text(encoding="utf-8")
+
+    # Replay the proposed payload through the real file reader without editing the live pins.
+    pin_file = tmp_path / "autofix-versions.env"
+    baseline_doc = tmp_path / "CI_LINT_BASELINE.md"
+    pin_file.write_text(
+        "\n".join(f"{key}={value}" for key, value in pins.items()) + "\n", encoding="utf-8"
+    )
+    baseline_doc.write_text(doc, encoding="utf-8")
+    plugin = tmp_path / "pending_baseline.py"
+    plugin.write_text(
+        "from pathlib import Path\n"
+        "import test_ci_gate_config as gate\n\n"
+        "gate.PINS = Path(__file__).with_name('autofix-versions.env')\n"
+        "gate.BASELINE_DOC = Path(__file__).with_name('CI_LINT_BASELINE.md')\n",
+        encoding="utf-8",
+    )
+    env = {
+        **os.environ,
+        "PYTHONPATH": os.pathsep.join(
+            str(path) for path in (tmp_path, HERE / "src", HERE, HERE / "tests")
+        ),
+        "PYTEST_ADDOPTS": "",
+    }
+
+    def run_gate(*, whole_config=False):
+        # The proposed bundle must satisfy all configuration checks as well as the baseline.
+        # Exclude this subprocess-driving test so the full-file replay cannot recurse.
+        target = (
+            ["-k", "not test_baseline_accepts_measured_sync_pr_1403_toolchain", __file__]
+            if whole_config
+            else [f"{__file__}::test_baseline_was_measured_with_the_pinned_versions"]
+        )
+        return subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "-v",
+                "-m",
+                "not slow",
+                "-p",
+                "pending_baseline",
+                *target,
+            ],
+            cwd=tmp_path,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+    result = run_gate(whole_config=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "test_baseline_was_measured_with_the_pinned_versions PASSED" in result.stdout
+    assert "test_pin_file_exists_and_pins_exactly PASSED" in result.stdout
+    assert "1 deselected" in result.stdout
+
+    stale_versions = {"ruff": ("0.17.5", "0.17.4"), "coverage": ("7.17.3", "7.17.2")}
+    for tools in (("ruff",), ("coverage",), ("ruff", "coverage")):
+        stale = doc
+        expected_pins = set()
+        for tool in tools:
+            proposed, previous = stale_versions[tool]
+            key = f"{tool.upper()}_VERSION"
+            assert pins[key] == proposed
+            assert f"{tool}={proposed}" in doc
+            expected_pins.add(key)
+            stale = stale.replace(f"{tool}={proposed}", f"{tool}={previous}")
+        baseline_doc.write_text(stale, encoding="utf-8")
+        result = run_gate()
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert "test_baseline_was_measured_with_the_pinned_versions FAILED" in result.stdout
+        assert "1 failed" in result.stdout
+        # Check the diagnostic itself, and verify the real pytest failure emitted it.
+        message = _baseline_mismatch(stale, pins)
+        assert message is not None
+        assert message in result.stdout
+        for tool in tools:
+            proposed, previous = stale_versions[tool]
+            assert f"{tool.upper()}_VERSION pinned {proposed}, measured {previous}" in message
+        assert "All pins:" not in message
+        assert message.endswith("retain its measurements.")
+        for key in pins.keys() - expected_pins:
+            assert key not in message
+
+        baseline_doc.write_text(doc, encoding="utf-8")
+        result = run_gate()
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "1 passed" in result.stdout
 
 
 @pytest.mark.parametrize("complete_measurement", [True, False])
