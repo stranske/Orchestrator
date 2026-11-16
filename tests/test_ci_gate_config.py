@@ -377,12 +377,14 @@ def test_baseline_diagnostic_names_the_bumped_and_the_missing_pin():
         assert key not in message
 
     missing = {k: v for k, v in pins.items() if k != "COVERAGE_VERSION"}
+    missing["RUFF_VERSION"] = "2.0.1"
     message = _baseline_mismatch(doc, missing)
     assert message is not None
+    assert "RUFF_VERSION pinned 2.0.1, measured 2.0.0" in message
     assert "COVERAGE_VERSION pinned missing, measured 2.0.0" in message
     assert "All pins:" not in message
     assert message.endswith("retain its measurements.")
-    for key in missing:
+    for key in missing.keys() - {"RUFF_VERSION"}:
         assert key not in message
 
     incomplete = doc.replace(" coverage=2.0.0", "")
@@ -395,21 +397,24 @@ def test_baseline_diagnostic_names_the_bumped_and_the_missing_pin():
         assert key not in message
 
 
-def test_baseline_diagnostic_reports_simultaneous_bumped_and_missing_pins():
-    """Keep every differing comparison while omitting pins that still match."""
-    pins = {f"{tool.upper().replace('-', '_')}_VERSION": "2.0.0" for tool in _NINE_TOOLS}
-    doc = "<!-- measured-with: " + " ".join(f"{t}=2.0.0" for t in _NINE_TOOLS) + " -->"
-    pins["RUFF_VERSION"] = "2.0.1"
-    del pins["COVERAGE_VERSION"]
+def test_baseline_accepts_measured_sync_pr_1403_toolchain():
+    """Replay the pending sync pins against the recorded and stale Ruff/Coverage baseline."""
+    require_checkout()
+    record = BASELINE_DOC.parent / "evidence" / "issue-1404" / "measurement.json"
+    pins = json.loads(record.read_text(encoding="utf-8"))["report"]["pins"]
+    doc = BASELINE_DOC.read_text(encoding="utf-8")
 
-    message = _baseline_mismatch(doc, pins)
+    mismatch = _baseline_mismatch(doc, pins)
+    assert mismatch is None, mismatch
 
+    stale = doc.replace("ruff=0.17.5", "ruff=0.17.4").replace("coverage=7.17.3", "coverage=7.17.2")
+    message = _baseline_mismatch(stale, pins)
     assert message is not None
-    assert "RUFF_VERSION pinned 2.0.1, measured 2.0.0" in message
-    assert "COVERAGE_VERSION pinned missing, measured 2.0.0" in message
+    assert "COVERAGE_VERSION pinned 7.17.3, measured 7.17.2" in message
+    assert "RUFF_VERSION pinned 0.17.5, measured 0.17.4" in message
     assert "All pins:" not in message
     assert message.endswith("retain its measurements.")
-    for key in pins.keys() - {"RUFF_VERSION"}:
+    for key in pins.keys() - {"COVERAGE_VERSION", "RUFF_VERSION"}:
         assert key not in message
 
 

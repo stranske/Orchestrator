@@ -1,0 +1,200 @@
+{
+  "measured_source_head": "d43b18be394cb0e113b1e3c79b5ee6016169a115",
+  "proposed_pins_pr": 1403,
+  "proposed_pins_head": "125965ca868ceb44aff1b6fb5123ffe302d7b3da",
+  "pins_sha256": "efc66231c8dc438c183d2d4c926eef980c3d215e3633358417d9e658d0158045",
+  "collector_sha256": "2b06e57331a505296b32ca89bfdaba065e58f313edefb68f6640419339e6c401",
+  "python_version": "3.12.2",
+  "report": {
+    "pins": {
+      "BLACK_VERSION": "26.10.1",
+      "RUFF_VERSION": "0.17.5",
+      "ISORT_VERSION": "9.0.2",
+      "DOCFORMATTER_VERSION": "1.7.8",
+      "MYPY_VERSION": "2.4.1",
+      "PYTEST_VERSION": "9.2.0",
+      "PYTEST_COV_VERSION": "7.1.0",
+      "PYTEST_XDIST_VERSION": "3.8.0",
+      "COVERAGE_VERSION": "7.17.3"
+    },
+    "installed_versions": {
+      "black": "26.10.1",
+      "ruff": "0.17.5",
+      "isort": "9.0.2",
+      "docformatter": "1.7.8",
+      "mypy": "2.4.1",
+      "pytest": "9.2.0",
+      "pytest-cov": "7.1.0",
+      "pytest-xdist": "3.8.0",
+      "coverage": "7.17.3"
+    },
+    "checks": [
+      {
+        "check": "lint-ruff",
+        "command": "ruff check --extend-exclude .workflows-lib --output-format concise .",
+        "blocking": 0,
+        "blocking_unit": "findings",
+        "drainable": 0,
+        "drain": "`ruff check --fix` for the mechanical share; hand edits for the rest",
+        "by_code": {}
+      },
+      {
+        "check": "lint-format",
+        "command": "black --check --line-length 100 --exclude (\\.venv|\\.workflows-lib|node_modules) .",
+        "blocking": 0,
+        "blocking_unit": "files",
+        "drainable": 0,
+        "drain": "one `black --line-length 100 .` run",
+        "by_code": {}
+      },
+      {
+        "check": "typecheck-mypy",
+        "command": "mypy --config-file pyproject.toml --exclude .workflows-lib src",
+        "blocking": 0,
+        "blocking_unit": "errors",
+        "behind_exempt_list": 0,
+        "exempt_modules": 0,
+        "drainable": 0,
+        "drain": "typed modules landing incrementally; there is no mechanical fixer",
+        "files": null,
+        "setup_abort": false,
+        "by_code": {}
+      },
+      {
+        "check": "coverage",
+        "command": "pytest --cov --cov-config=pyproject.toml (arguments built by the reusable workflow)",
+        "blocking": 0,
+        "blocking_unit": "startup errors",
+        "drainable": 0,
+        "drain": "nothing to drain while this reads 0. It was 1 until stranske/Workflows#3202 (merged 2026-08-23) made `--cov-config` conditional on the file existing and gated the editable install on real packaging metadata; if it goes back to 1, the drain is upstream again",
+        "by_code": {}
+      }
+    ],
+    "problems": []
+  },
+  "commands": [
+    {
+      "command": [
+        "ruff",
+        "--version"
+      ],
+      "exit_code": 0,
+      "stdout": "ruff 0.17.5\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "ruff",
+        "check",
+        "--extend-exclude",
+        ".workflows-lib",
+        "--output-format",
+        "concise",
+        "."
+      ],
+      "exit_code": 0,
+      "stdout": "All checks passed!\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "ruff",
+        "check",
+        "--fix",
+        "--exit-zero",
+        "."
+      ],
+      "exit_code": 0,
+      "stdout": "All checks passed!\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "ruff",
+        "check",
+        "--fix",
+        "--exit-zero",
+        "--unsafe-fixes",
+        "."
+      ],
+      "exit_code": 0,
+      "stdout": "All checks passed!\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "ruff",
+        "check",
+        "--extend-exclude",
+        ".workflows-lib",
+        "--output-format",
+        "concise",
+        "."
+      ],
+      "exit_code": 0,
+      "stdout": "All checks passed!\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "black",
+        "--version"
+      ],
+      "exit_code": 0,
+      "stdout": "black, 26.10.1 (compiled: yes)\nPython (CPython) 3.12.2\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "black",
+        "--check",
+        "--line-length",
+        "100",
+        "--exclude",
+        "(\\.venv|\\.workflows-lib|node_modules)",
+        "."
+      ],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": "All done! \u2728 \ud83c\udf70 \u2728\n712 files would be left unchanged.\n"
+    },
+    {
+      "command": [
+        "mypy",
+        "--version"
+      ],
+      "exit_code": 0,
+      "stdout": "mypy 2.4.1 (compiled: yes)\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "mypy",
+        "--config-file",
+        "pyproject.toml",
+        "--exclude",
+        ".workflows-lib",
+        "src"
+      ],
+      "exit_code": 0,
+      "stdout": "src/gh_capacity.py:966: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]\nsrc/gh_capacity.py:1096: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]\nsrc/feedback.py:7708: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]\nsrc/capability_propensity.py:5098: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]\nsrc/capability_propensity.py:5107: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]\nsrc/exp_abcd.py:3241: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]\nSuccess: no issues found in 150 source files\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "python",
+        "-m",
+        "pytest",
+        "--cov",
+        "--cov-config=pyproject.toml",
+        "--collect-only",
+        "-q",
+        "-p",
+        "no:cacheprovider"
+      ],
+      "exit_code": 0,
+      "stdout": "src/worktree_git.py                           148    118  20.3%\n---------------------------------------------------------------\nTOTAL                                       79380  70990  10.6%\n9018 tests collected in 38.01s",
+      "stderr": "/opt/anaconda3/lib/python3.12/site-packages/pytest_asyncio/plugin.py:300: PytestDeprecationWarning: The configuration option \"asyncio_default_fixture_loop_scope\" is unset.\nThe event loop scope for asynchronous fixtures will default to the \"fixture\" caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to \"function\" scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: \"function\", \"class\", \"module\", \"package\", \"session\"\n\n  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))\n"
+    }
+  ]
+}
