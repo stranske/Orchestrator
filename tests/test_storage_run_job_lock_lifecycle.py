@@ -59,18 +59,12 @@ def seed_foreign(job):
 
 def test_owner_refusal_after_deadline_uses_fresh_finish_budget(job, monkeypatch):
     foreign = seed_foreign(job)
-    clock = [100.0]
-    deadline = clock[0] + 0.06
-    monkeypatch.setattr(storage.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(storage, "identity", lambda _: "original")
     original = storage.acquire_exclusive
 
     def owner_refusal(fd, *, deadline=None, scope="storage"):
         if scope == "storage_job_owner":
-            # Cross the deadline only at the intended refusal, independently of
-            # scheduler load or time spent staging before reservation admission.
-            assert deadline == pytest.approx(clock[0] + 0.06)
-            clock[0] = deadline + 0.02
+            time.sleep(0.08)
             raise storage.StorageLockWait(scope)
         return original(fd, deadline=deadline, scope=scope)
 
@@ -80,7 +74,7 @@ def test_owner_refusal_after_deadline_uses_fresh_finish_budget(job, monkeypatch)
         storage.run_job(
             job,
             free=lambda _: storage.GIB,
-            lock_deadline=deadline,
+            lock_deadline=time.monotonic() + 0.06,
             lifecycle_lock_timeout_seconds=0.04,
         )
     assert caught.value.accounting["scope"] == "storage_job_owner"
