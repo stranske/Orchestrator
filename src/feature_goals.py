@@ -493,7 +493,10 @@ def keepalive_acceptance_rest_share(now: int) -> tuple[float | None, dict]:
     if err is not None:
         return None, {"as_of": now, "error": str(err)}
     if loaded is None:
-        return None, {"as_of": now, "error": "unmeasured: keepalive acceptance load returned no data"}
+        return None, {
+            "as_of": now,
+            "error": "unmeasured: keepalive acceptance load returned no data",
+        }
     since, citing, population, undelivered = loaded
     rest = _keepalive_acceptance_rest_payload(now, since, citing, population, undelivered)
     share = rest.get("share")
@@ -887,7 +890,9 @@ def format_lines(section: dict) -> list[str]:
         value = (
             f"unmeasured — would need {m['reason']}"
             if row["state"] == "unmeasured"
-            else "measured zero" if m["value"] == 0 else str(m["value"])
+            else "measured zero"
+            if m["value"] == 0
+            else str(m["value"])
         )
         values = [
             f"{row['feature']}/{row['goal_id']}",
