@@ -328,13 +328,32 @@ KEEPALIVE_GATE_LIVE = "2026-10-17T03:57:07Z"
 # their execution step is delivered"; widen this when consumer delivery lands, so the measure
 # grades agents where the gate exists instead of being pinned near zero by the rollout.
 KEEPALIVE_GATE_REPOS = frozenset({"stranske/Workflows"})
+# GitHub search treats unquoted colons as qualifiers; quote so the label is agents:keepalive.
+KEEPALIVE_LABEL_QUERY = 'label:"agents:keepalive"'
+
+
+def _merged_keepalive_body(item: dict) -> str:
+    """PR bodies from issue search are often empty; the pulls endpoint is authoritative."""
+    body = item.get("body") or ""
+    if DETERMINISTIC_GATES_RE.search(body):
+        return body
+    repo = "/".join((item.get("repository_url") or "").split("/")[-2:])
+    try:
+        number = int(item["number"])
+    except (TypeError, ValueError, KeyError):
+        return body
+    try:
+        payload = json.loads(_gh(["api", "-X", "GET", f"repos/{repo}/pulls/{number}"]))
+    except RuntimeError:
+        return body
+    return payload.get("body") or body
 
 
 def keepalive_acceptance(now: int) -> Measurement:
     """Share of keepalive PRs merged in the window whose body reports every named gate passing."""
     window = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - GOAL_SILENCE_DAYS * DAY))
     since = max(window, KEEPALIVE_GATE_LIVE)
-    query = f"org:stranske is:pr is:merged merged:>={since} label:agents:keepalive"
+    query = f"org:stranske is:pr is:merged merged:>={since} {KEEPALIVE_LABEL_QUERY}"
     items: list[dict] = []
     for page in range(1, 11):
         payload = json.loads(
@@ -376,7 +395,7 @@ def keepalive_acceptance(now: int) -> Measurement:
         )
     citing = 0
     for item in population:
-        gates = DETERMINISTIC_GATES_RE.findall(item.get("body") or "")
+        gates = DETERMINISTIC_GATES_RE.findall(_merged_keepalive_body(item))
         if gates:
             passed, total = (int(x) for x in gates[-1])
             citing += int(total > 0 and passed == total)

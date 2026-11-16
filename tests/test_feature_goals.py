@@ -717,8 +717,37 @@ def test_keepalive_acceptance_window_never_starts_before_the_gate(monkeypatch):
     monkeypatch.setattr(fg, "_gh", search)
     fg.keepalive_acceptance(NOW)
     assert queries == [
-        f"q=org:stranske is:pr is:merged merged:>={max(time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(NOW - fg.GOAL_SILENCE_DAYS * fg.DAY)), fg.KEEPALIVE_GATE_LIVE)} label:agents:keepalive"
+        f"q=org:stranske is:pr is:merged merged:>={max(time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(NOW - fg.GOAL_SILENCE_DAYS * fg.DAY)), fg.KEEPALIVE_GATE_LIVE)} {fg.KEEPALIVE_LABEL_QUERY}"
     ]
+
+
+def test_keepalive_acceptance_reads_pull_body_when_search_body_lacks_gates(monkeypatch):
+    items = [
+        {
+            "number": 9,
+            "repository_url": "https://api.github.com/repos/stranske/Workflows",
+            "body": "",
+        },
+        {
+            "number": 10,
+            "repository_url": "https://api.github.com/repos/stranske/Workflows",
+            "body": "Deterministic gates: 1/1 passed",
+        },
+    ]
+    pulls = {
+        9: {"body": "Deterministic gates: 2/2 passed\nCriterion 1: PASS"},
+    }
+
+    def gh(args):
+        if "search/issues" in args:
+            return _search(items)
+        if args[-1] == "repos/stranske/Workflows/pulls/9":
+            return json.dumps(pulls[9])
+        raise AssertionError(args)
+
+    monkeypatch.setattr(fg, "_gh", gh)
+    result = fg.keepalive_acceptance(NOW)
+    assert result.value == 1.0
 
 
 def test_pacing_unknown_carries_the_reports_reason(monkeypatch):
