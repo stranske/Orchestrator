@@ -721,6 +721,7 @@ def test_switch_review_main_text_out_carries_rule_unresolved_and_drainable(
     import strategy_experiment
     import switch_review
 
+    _isolate_weekly_external_inputs(monkeypatch)
     triage_shadow.corpus_path().parent.mkdir(parents=True, exist_ok=True)
     triage_shadow.corpus_path().write_text(
         json.dumps(
@@ -824,12 +825,24 @@ def test_summary_line_unresolved_falls_after_rule_pick_linker_drain(brain):
     assert "0 unresolved, drainable 0" in after
 
 
+def _isolate_weekly_external_inputs(monkeypatch):
+    """These triage report checks must not call live fleet readers or probe host interpreters."""
+    import switch_review
+
+    monkeypatch.setenv("ORCH_VALUE_CHAIN_MONITOR", "0")
+    monkeypatch.setenv("ORCH_DISABLE_STEPS", "issue-size-quality")
+    monkeypatch.setattr(switch_review, "_gh_call", lambda *a, **kw: (False, "", "fixture"))
+    monkeypatch.setattr(switch_review, "fleet_delivery_measures", lambda **kw: {})
+    monkeypatch.setattr(switch_review.python_standard_audit, "snapshot", lambda: {})
+
+
 def _switch_review_text_out_fixture(monkeypatch, brain, tmp_path):
     """Minimal switch_review.main --text-out stubs for triage shadow line tests."""
     import adversarial
     import strategy_experiment
     import switch_review
 
+    _isolate_weekly_external_inputs(monkeypatch)
     receipt = brain / "strategy-receipt.json"
     receipt.write_text(json.dumps({"status": "incomplete"}))
     monkeypatch.setattr(strategy_experiment, "strategy_result_path", lambda: receipt)
@@ -951,6 +964,94 @@ def test_rule_picks_drainable_next_call_counts_unresolved_rule_picks(brain):
     )
     record_pr_run("rule-shadow-worker", 77, ts=102)
     assert outcomes.rule_picks_drainable_next_call() == 1
+
+
+@pytest.mark.parametrize(
+    "scenario,expected",
+    [
+        ("consumption_budget", 0),
+        ("oldest_many_reads", 2),
+        ("shared_cycles", 1),
+        ("shared_consumption", 0),
+    ],
+)
+def test_next_call_reach_matches_linker_with_shared_budget_and_cache(
+    brain, monkeypatch, scenario, expected
+):
+    bound = outcomes.PR_READS_PER_CALL
+    picks = [1, 2, 3] if scenario == "oldest_many_reads" else [1]
+    times = [100, 101, 102] if scenario == "shared_cycles" else [100]
+    write_rule_cycles(*[(f"stranske/Orchestrator#{pick}", ts) for ts in times for pick in picks])
+    bodies = {}
+    total = bound + 1 if scenario in ("consumption_budget", "oldest_many_reads") else 1
+    # Reverse insertion order: candidate traversal must use timestamp order, not insertion order.
+    for index in reversed(range(total)):
+        number = 700 + index
+        record_pr_run(f"worker-{index}", number, ts=200 + index)
+        bodies[number] = ""
+    if scenario == "oldest_many_reads":
+        bodies[700 + bound - 2] = "Closes #1"
+        bodies[700 + bound - 1] = "Closes #2"
+    elif scenario == "shared_cycles":
+        bodies[700] = "Closes #1"
+    if scenario in ("consumption_budget", "shared_consumption"):
+        triage_shadow._append(
+            triage_shadow.consumed_path(),
+            {
+                "ts": 100_000_000_000,
+                "role_run_id": "missing-role",
+                "picked": "stranske/Orchestrator#9",
+            },
+        )
+        if scenario == "shared_consumption":
+            bodies[700] = "Closes #9\nCloses #1"
+
+    before = {p: p.read_bytes() for p in brain.rglob("*") if p.is_file()}
+    report_calls = []
+    connect = sqlite3.connect
+
+    def read_only_connect(path, **kw):
+        assert path.endswith("?mode=ro") and kw["uri"]
+        return connect(path, **kw)
+
+    with monkeypatch.context() as report:
+        report.setattr(sqlite3, "connect", read_only_connect)
+        report.setattr(feedback, "_conn", lambda: pytest.fail("report took the Brain write path"))
+        report.setattr(triage_shadow, "_append", lambda *a: pytest.fail("report appended evidence"))
+        reach = outcomes.rule_picks_drainable_next_call(
+            now=10_000, pr_reader=pr_reader(bodies, report_calls)
+        )
+    assert reach == expected
+    assert {p: p.read_bytes() for p in brain.rglob("*") if p.is_file()} == before
+    reached = []
+    drain = outcomes._drain_rule_pick_covers
+
+    def track(conn, pick, since_ts, search, issue):
+        reached.append((pick, since_ts))
+        return drain(conn, pick, since_ts, search, issue)
+
+    monkeypatch.setattr(outcomes, "_drain_rule_pick_covers", track)
+    live_calls = []
+    result = outcomes.link_triage_consumption(now=10_000, pr_reader=pr_reader(bodies, live_calls))
+    assert len(reached) == reach
+    assert live_calls == report_calls
+    assert result["pr_reads"] == len(live_calls) <= bound
+
+
+def test_next_call_reach_is_unknown_when_unread_response_changes_traversal(brain):
+    write_rule_cycles(("stranske/Orchestrator#1", 100), ("stranske/Orchestrator#2", 100))
+    record_pr_run("shared", 700, ts=200)
+    # The same unread key can settle both cycles, or force a second failed read attempt.
+    assert outcomes.rule_picks_drainable_next_call() is None
+    assert "2 unresolved, drainable unknown" in triage_shadow.summary_line()
+    assert (
+        outcomes.rule_picks_drainable_next_call(
+            now=10_000, pr_reader=pr_reader({700: "Closes #1\nCloses #2"})
+        )
+        == 1
+    )
+    assert outcomes.rule_picks_drainable_next_call(now=10_000, pr_reader=pr_reader({})) == 2
+    assert not outcomes._pr_cover_path().exists()
 
 
 def test_summary_does_not_credit_an_outcome_before_the_live_cycle(brain):

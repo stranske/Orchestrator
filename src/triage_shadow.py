@@ -507,6 +507,7 @@ def summary_line(path: Path | None = None) -> str:
             linked.get(consumption_key(row), {}).get("status") == "unresolved" for row in consumed
         )
         drainable = outcomes.rule_picks_drainable_next_call() if data["valid_cycles"] else 0
+        drainable_text = "unknown" if drainable is None else drainable
     except (OSError, UnicodeError, ValueError, KeyError, sqlite3.Error) as exc:
         return f"triage shadow: UNKNOWN — outcome evidence unreadable ({type(exc).__name__})"
     if data["malformed_rows"]:
@@ -521,7 +522,7 @@ def summary_line(path: Path | None = None) -> str:
         if arm == "rule":
             tail = (
                 f"[{data[arm]['no_delivery']} no delivery, "
-                f"{data[arm]['unresolved']} unresolved, drainable {drainable}]"
+                f"{data[arm]['unresolved']} unresolved, drainable {drainable_text}]"
             )
         return (
             f"{100 * data[arm]['merged_durable'] / count:.1f}% ({count} judged) {tail}"
