@@ -1,0 +1,247 @@
+{
+  "source": "GitHub connector native GET, 2026-11-15",
+  "issue": 1364,
+  "pull_requests": [
+    {
+      "number": 1168,
+      "url": "https://github.com/stranske/Orchestrator/pull/1168",
+      "state": "closed",
+      "merged": true,
+      "head_sha": "01e86ae7e4ef0e6a06193c916c8c780ca5cab052",
+      "merge_commit_sha": "a30b34ada04a30d04360867e14097a8c5b6d731c",
+      "updated_at": "2026-11-12T01:20:02Z"
+    }
+  ],
+  "corrective_commit": {
+    "sha": "01e86ae7e4ef0e6a06193c916c8c780ca5cab052",
+    "message": "test: require the stored publication record for canary proof\n\nA reduced comment is not retain_confirmed_result custody, and custody JSON whose schema sits inside the object was not read. The live chain still has no native Verify outcome or publication proof.\n\nCo-authored-by: Cursor <cursoragent@cursor.com>",
+    "url": "https://github.com/stranske/Orchestrator/commit/01e86ae7e4ef0e6a06193c916c8c780ca5cab052"
+  },
+  "comment_count": 53,
+  "terminal_corpus_markers": [],
+  "verifier_event_states": [
+    {
+      "id": 6673798353,
+      "url": "https://github.com/stranske/Orchestrator/pull/1168#issuecomment-6673798353",
+      "created_at": "2026-11-06T01:03:22Z",
+      "author": "github-actions[bot]",
+      "head_sha": "01e86ae7e4ef0e6a06193c916c8c780ca5cab052",
+      "evaluated_sha": "a30b34ada04a30d04360867e14097a8c5b6d731c",
+      "status": "pending",
+      "run_id": "42141057834",
+      "run_attempt": "1",
+      "failure_cause": null,
+      "retry_kind": null,
+      "retryable": null,
+      "schema": "verifier-event-state/v1"
+    },
+    {
+      "id": 6673821163,
+      "url": "https://github.com/stranske/Orchestrator/pull/1168#issuecomment-6673821163",
+      "created_at": "2026-11-06T01:04:53Z",
+      "author": "github-actions[bot]",
+      "head_sha": "01e86ae7e4ef0e6a06193c916c8c780ca5cab052",
+      "evaluated_sha": "a30b34ada04a30d04360867e14097a8c5b6d731c",
+      "status": "incomplete",
+      "run_id": "42141057834",
+      "run_attempt": "1",
+      "failure_cause": "retained_provider_evaluation",
+      "retry_kind": "recover_existing_evaluation",
+      "retryable": false,
+      "schema": "verifier-event-state/v1"
+    },
+    {
+      "id": 6673960665,
+      "url": "https://github.com/stranske/Orchestrator/pull/1168#issuecomment-6673960665",
+      "created_at": "2026-11-06T01:13:49Z",
+      "author": "github-actions[bot]",
+      "head_sha": "01e86ae7e4ef0e6a06193c916c8c780ca5cab052",
+      "evaluated_sha": "a30b34ada04a30d04360867e14097a8c5b6d731c",
+      "status": "pending",
+      "run_id": "42142328293",
+      "run_attempt": "1",
+      "failure_cause": null,
+      "retry_kind": null,
+      "retryable": null,
+      "schema": "verifier-event-state/v1"
+    },
+    {
+      "id": 6673968504,
+      "url": "https://github.com/stranske/Orchestrator/pull/1168#issuecomment-6673968504",
+      "created_at": "2026-11-06T01:14:20Z",
+      "author": "github-actions[bot]",
+      "head_sha": "01e86ae7e4ef0e6a06193c916c8c780ca5cab052",
+      "evaluated_sha": "a30b34ada04a30d04360867e14097a8c5b6d731c",
+      "status": "incomplete",
+      "run_id": "42142328293",
+      "run_attempt": "1",
+      "failure_cause": "retained_revalidation_before_publication",
+      "retry_kind": "known_no_evaluation",
+      "retryable": true,
+      "schema": "verifier-event-state/v1"
+    },
+    {
+      "id": 6674004607,
+      "url": "https://github.com/stranske/Orchestrator/pull/1168#issuecomment-6674004607",
+      "created_at": "2026-11-06T01:16:36Z",
+      "author": "github-actions[bot]",
+      "head_sha": "01e86ae7e4ef0e6a06193c916c8c780ca5cab052",
+      "evaluated_sha": "a30b34ada04a30d04360867e14097a8c5b6d731c",
+      "status": "pending",
+      "run_id": "42142641060",
+      "run_attempt": "1",
+      "failure_cause": null,
+      "retry_kind": null,
+      "retryable": null,
+      "schema": "verifier-event-state/v1"
+    },
+    {
+      "id": 6674054696,
+      "url": "https://github.com/stranske/Orchestrator/pull/1168#issuecomment-6674054696",
+      "created_at": "2026-11-06T01:19:53Z",
+      "author": "github-actions[bot]",
+      "head_sha": "01e86ae7e4ef0e6a06193c916c8c780ca5cab052",
+      "evaluated_sha": "a30b34ada04a30d04360867e14097a8c5b6d731c",
+      "status": "incomplete",
+      "run_id": "42142641060",
+      "run_attempt": "1",
+      "failure_cause": "retained_provider_evaluation",
+      "retry_kind": "recover_existing_evaluation",
+      "retryable": false,
+      "schema": "verifier-event-state/v1"
+    },
+    {
+      "id": 6811527577,
+      "url": "https://github.com/stranske/Orchestrator/pull/1168#issuecomment-6811527577",
+      "created_at": "2026-11-12T01:19:42Z",
+      "author": "github-actions[bot]",
+      "head_sha": "01e86ae7e4ef0e6a06193c916c8c780ca5cab052",
+      "evaluated_sha": "a30b34ada04a30d04360867e14097a8c5b6d731c",
+      "status": "pending",
+      "run_id": "43133282976",
+      "run_attempt": "1",
+      "failure_cause": null,
+      "retry_kind": null,
+      "retryable": null,
+      "schema": "verifier-event-state/v1"
+    },
+    {
+      "id": 6811533034,
+      "url": "https://github.com/stranske/Orchestrator/pull/1168#issuecomment-6811533034",
+      "created_at": "2026-11-12T01:20:02Z",
+      "author": "github-actions[bot]",
+      "head_sha": "01e86ae7e4ef0e6a06193c916c8c780ca5cab052",
+      "evaluated_sha": "a30b34ada04a30d04360867e14097a8c5b6d731c",
+      "status": "incomplete",
+      "run_id": "43133282976",
+      "run_attempt": "1",
+      "failure_cause": "retained_revalidation_before_publication",
+      "retry_kind": "known_no_evaluation",
+      "retryable": true,
+      "schema": "verifier-event-state/v1"
+    }
+  ],
+  "comparison_artifact": {
+    "id": 13468552385,
+    "lookup_exit_status": 1,
+    "lookup_error": "gh: Not Found (HTTP 404)",
+    "lookup_body": null,
+    "prior_metadata": {
+      "name": "comparison-results-42142641060",
+      "digest": "sha256:2ebfd872ed901d067ddbac7990709aa23d7d46d9c03d4150e9fe091bb21dfcba",
+      "expires_at": "2026-11-13T01:19:54Z",
+      "source_run_id": 42142641060,
+      "source_run_attempt": 1
+    }
+  },
+  "authorized_recovery_runs": [
+    {
+      "id": 43133282976,
+      "url": "https://github.com/stranske/Orchestrator/actions/runs/43133282976",
+      "status": "completed",
+      "conclusion": "failure",
+      "created_at": "2026-11-12T01:15:45Z",
+      "display_title": "Verifier PR #1168 head=01e86ae7e4ef0e6a06193c916c8c780ca5cab052 mode=compare",
+      "failed_step": "Revalidate authenticated retained output",
+      "failed_exception": "ValueError: Retained assessment is not applicable to current immutable request",
+      "native_events": [
+        {
+          "id": 6811527577,
+          "url": "https://github.com/stranske/Orchestrator/pull/1168#issuecomment-6811527577",
+          "created_at": "2026-11-12T01:19:42Z",
+          "author": "github-actions[bot]",
+          "head_sha": "01e86ae7e4ef0e6a06193c916c8c780ca5cab052",
+          "evaluated_sha": "a30b34ada04a30d04360867e14097a8c5b6d731c",
+          "status": "pending",
+          "run_id": "43133282976",
+          "run_attempt": "1",
+          "failure_cause": null,
+          "retry_kind": null,
+          "retryable": null,
+          "schema": "verifier-event-state/v1"
+        },
+        {
+          "id": 6811533034,
+          "url": "https://github.com/stranske/Orchestrator/pull/1168#issuecomment-6811533034",
+          "created_at": "2026-11-12T01:20:02Z",
+          "author": "github-actions[bot]",
+          "head_sha": "01e86ae7e4ef0e6a06193c916c8c780ca5cab052",
+          "evaluated_sha": "a30b34ada04a30d04360867e14097a8c5b6d731c",
+          "status": "incomplete",
+          "run_id": "43133282976",
+          "run_attempt": "1",
+          "failure_cause": "retained_revalidation_before_publication",
+          "retry_kind": "known_no_evaluation",
+          "retryable": true,
+          "schema": "verifier-event-state/v1"
+        }
+      ]
+    }
+  ],
+  "recovery_dispatch_attempt": {
+    "argv": [
+      "gh",
+      "workflow",
+      "run",
+      "agents-verifier.yml",
+      "--repo",
+      "stranske/Orchestrator",
+      "--ref",
+      "main",
+      "-f",
+      "pr_number=1168",
+      "-f",
+      "pr_head_sha=01e86ae7e4ef0e6a06193c916c8c780ca5cab052",
+      "-f",
+      "mode=compare",
+      "-f",
+      "verification_recovery={\"run_id\":42142641060,\"run_attempt\":1,\"artifact_id\":13468552385}"
+    ],
+    "exit_status": 0,
+    "stdout": "https://github.com/stranske/Orchestrator/actions/runs/43788513880\n",
+    "stderr": "",
+    "blocked_by": "orchestrator gh guard: production workflow dispatch refused inside dispatched agent"
+  },
+  "publication_custody": {
+    "canonical_index_observed": false,
+    "publication_result_files": [],
+    "coding_terminal_reference_observed": false,
+    "search_roots": [
+      "$ORCH_STATE_DIR",
+      "$ORCH_LOCAL_RUNTIME",
+      "~/.codex/orchestrator"
+    ],
+    "note": "No publication-result-*.json or retain_confirmed_result custody for head 01e86ae7 was found on this machine."
+  },
+  "acceptance_disposition": {
+    "native_corpus_decision_required": {
+      "head_sha": "01e86ae7e4ef0e6a06193c916c8c780ca5cab052",
+      "evaluated_sha": "a30b34ada04a30d04360867e14097a8c5b6d731c",
+      "present": false
+    },
+    "worker_publication_chain_required": false,
+    "chain_evidence_exit_status": 2,
+    "rejecting_function_if_checker_disagrees": null,
+    "checker_note": "Exit 2 is missing custody and incomplete native evidence, not a disagreement between genuine records and the checker."
+  }
+}
