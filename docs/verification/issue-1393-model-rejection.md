@@ -142,3 +142,32 @@ Delivery remains blocked: `git add tests/test_provider_limit_infra.py` cannot cr
 rejected the evidence comment and `needs-human` label: both GitHub write tools require
 approval, while this run's approval policy is `never`. No new commit or remote checkbox
 update was made. PR #1397 was rechecked open with `isDraft=false`.
+
+## Follow-up: complete whole-file verification
+
+Expanded `test_model_rejection_with_work_keeps_the_recorded_outcome` to cover both
+provider rejection messages and all seven recognized work-event shapes, before and
+after the terminal failure. Each case checks that reconciliation preserves the
+recorded outcome and writes no shed marker.
+
+- [x] Whole-file acceptance command: `python3 -m pytest tests/test_provider_limit_infra.py -q -m "not slow"`
+  returned **70 passed**, exit 0 (the unchanged baseline returned **44 passed**).
+- [x] Provider, incident and expiry suites together returned **190 passed**, exit 0.
+- [x] Black formatted the changed test at line length 100; the required command
+  `black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .`
+  returned **712 files would be left unchanged**, exit 0.
+- [ ] Commit the verified changes and reconcile the unchecked whole-file acceptance
+  checkbox in PR #1397's embedded full issue text.
+
+Pytest 9.0.2 and repository-pinned Black 26.10.1 were loaded from official tagged
+source snapshots under `/tmp`, with local dependencies and isolated runtime/state
+paths. The Black launcher used one worker and an event-loop wakeup timer; formatting
+and AST checks remained enabled. No repository dependencies changed.
+
+The commit attempt failed at `git add tests/test_provider_limit_infra.py` because
+`.git/index.lock` cannot be created on the read-only filesystem. Automatic approval
+review rejected the PR checkbox update because GitHub writes require approval and
+the run's approval policy is `never`. Posting the verification/blocker comment and
+adding `needs-human` were rejected for the same reason. The checked whole-file item
+above records local verification only; the remote checkbox remains unchanged.
+PR #1397 was rechecked open with `isDraft=false`.

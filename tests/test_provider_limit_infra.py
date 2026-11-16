@@ -290,10 +290,27 @@ def test_model_rejection_before_work_records_an_incident_without_shedding(world)
     assert not (rate_incidents.SHED_DIR / "codex").exists()
 
 
+@pytest.mark.parametrize(
+    "message",
+    [MODEL_REJECTION, MODEL_REJECTION.replace("is not supported", "does not exist")],
+    ids=["unsupported-model", "nonexistent-model"],
+)
+@pytest.mark.parametrize(
+    "work",
+    [
+        _item("item.started", "command_execution", command="git status"),
+        _item("item.completed", "command_execution", command="pytest", exit_code=1),
+        _item("item.completed", "file_change", changes=[]),
+        _item("item.completed", "agent_message", text="Looking at the tests."),
+        _item("item.completed", "reasoning", text="Plan."),
+        _item("item.updated", "todo_list", items=[]),
+        {"type": "turn.completed", "usage": {"input_tokens": 10, "output_tokens": 5}},
+    ],
+    ids=lambda e: f"{e['type']}:{(e.get('item') or {}).get('type', '-')}",
+)
 @pytest.mark.parametrize("where", ["before", "after"])
-def test_model_rejection_with_work_keeps_the_recorded_outcome(world, where):
-    work = _item("item.started", "command_execution", command="git status")
-    lines = _refused(MODEL_REJECTION, **{where: (work,)})
+def test_model_rejection_with_work_keeps_the_recorded_outcome(world, where, work, message):
+    lines = _refused(message, **{where: (work,)})
     assert ledger_reconcile.provider_limit_before_work(lines) is None
     _dispatch(world, "worked", lines, outcome=FAIL)
     recorded = _row("worked")
