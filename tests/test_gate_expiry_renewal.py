@@ -466,6 +466,135 @@ def test_drained_unmeasured_and_empty_each_say_something_different(tmp_path):
     assert len(set(texts.values())) == 4, "two different states rendered the same words"
 
 
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        "invoked",
+        "silent",
+        "fixture",
+        "completion",
+        "field-only",
+        "renewed",
+        "live-transition",
+        "latest-clean",
+        "latest-invoked",
+        "late-recorded-old-invocation",
+        "same-second",
+        "no-retirement",
+        "live-status",
+        "superseded",
+    ],
+)
+def test_invoked_after_retirement_reads_only_the_latest_unrenewed_retirement(scenario):
+    retirement = {"type": "transition", "from": "wired", "to": "retired", "timestamp": 100}
+    invocation = {"type": "invocation", "timestamp": 110, "ref": "production"}
+    history = [retirement, invocation]
+    status = "retired"
+    expected_retirement = retirement
+    if scenario == "silent":
+        history = [retirement]
+    elif scenario == "fixture":
+        history = [retirement, {**invocation, "metadata": {"source": "fixture"}}]
+    elif scenario == "completion":
+        history = [
+            {**invocation, "timestamp": 90},
+            retirement,
+            {"type": "success", "timestamp": 110},
+            {"type": "outcome", "timestamp": 120},
+        ]
+    elif scenario == "field-only":
+        history = [retirement]
+    elif scenario == "renewed":
+        # The event cancels the old retirement even if the row's status is stale.
+        history += [{"type": capabilities.RENEWAL_EVENT, "timestamp": 120}, invocation]
+    elif scenario == "live-transition":
+        history += [{"type": "transition", "to": "observed", "timestamp": 120}, invocation]
+    elif scenario in ("latest-clean", "latest-invoked"):
+        expected_retirement = {**retirement, "timestamp": 200}
+        history += [
+            {"type": capabilities.RENEWAL_EVENT, "timestamp": 120},
+            expected_retirement,
+        ]
+        if scenario == "latest-invoked":
+            invocation = {**invocation, "timestamp": 210}
+            history.append(invocation)
+    elif scenario == "late-recorded-old-invocation":
+        history = [retirement, {**invocation, "timestamp": 90}]
+    elif scenario == "same-second":
+        invocation = {**invocation, "timestamp": 100}
+        history = [retirement, invocation]
+    elif scenario == "no-retirement":
+        history = [invocation]
+    elif scenario in ("live-status", "superseded"):
+        status = "wired" if scenario == "live-status" else "superseded"
+    cap = _plain_row(
+        "example", status=status, event_history=history, last_invocation=999, kill_switch="stop"
+    )
+    before = json.dumps(cap, sort_keys=True)
+    evidence = capabilities.invoked_after_retirement(cap)
+    if scenario in ("invoked", "latest-invoked", "same-second"):
+        assert evidence == {
+            "retirement": expected_retirement,
+            "invocations": [invocation],
+            "kill_switch": "stop",
+        }
+    else:
+        assert evidence is None
+    assert json.dumps(cap, sort_keys=True) == before
+
+
+@pytest.mark.parametrize("state", ["missing", "corrupt", "unreadable", "empty"])
+def test_retired_invocations_in_gate_expiry_are_unmeasured_without_a_ledger(tmp_path, state):
+    ledger = tmp_path / "ledger.json"
+    if state == "corrupt":
+        ledger.write_text("{not json")
+    elif state == "unreadable":
+        ledger.mkdir()
+    elif state == "empty":
+        capabilities.save({}, ledger)
+    section = switch_review.gate_expiry(now=NOW, path=ledger)
+    text = "\n".join(switch_review.format_gate_expiry(section))
+    assert section["retired_but_invoked"] == []
+    if state == "empty":
+        assert section["retired_but_invoked_count"] == 0
+        assert section["retired_but_invoked_measurement"] is None
+        assert "retired_but_invoked: 0" in text
+    else:
+        assert section["retired_but_invoked_count"] is None
+        assert "unmeasured" in section["retired_but_invoked_measurement"]
+        assert "retired_but_invoked: unmeasured" in text
+        assert "Nothing due" not in _report(section)
+
+
+def test_old_retirement_without_expiry_still_names_invocations_in_gate_review(tmp_path, monkeypatch):
+    retirement = {
+        "type": "transition",
+        "from": "wired",
+        "to": "retired",
+        "timestamp": NOW - 40 * DAY,
+    }
+    invocation = {"type": "invocation", "timestamp": NOW - DAY, "ref": "tick:old-retirement"}
+    ledger = _ledger(
+        tmp_path,
+        {"old": _plain_row("old", status="retired", event_history=[retirement, invocation])},
+    )
+    monkeypatch.setattr(switch_review, "_acting_index", lambda *_: None)
+    before = ledger.read_bytes()
+    section = switch_review.gate_expiry(now=NOW, path=ledger)
+    assert section["expiring"] == section["lapsed"] == []
+    assert section["retired_but_invoked_count"] == 1
+    (entry,) = section["retired_but_invoked"]
+    assert entry == {
+        "capability_id": "old",
+        "retirement": retirement,
+        "invocations": [invocation],
+        "kill_switch": None,
+    }
+    assert "kill switch: undeclared" in "\n".join(switch_review.format_gate_expiry(section))
+    assert "Nothing due" not in _report(section)
+    assert ledger.read_bytes() == before
+
+
 def _report(gate_expiry: dict | None) -> str:
     rep = {
         "generated_at": 0,

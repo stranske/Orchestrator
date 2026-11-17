@@ -396,7 +396,15 @@ def review(
     # tick, the invocation heartbeat above (the kill switch stops the history write). `load_declared`
     # reconciles an in-memory copy and writes nothing. It seeds and expires nothing, even in memory:
     # until a writer does, the ledger is judged as it is.
-    ledger = capabilities.load_declared(path or capabilities.REG)
+    ledger_path = pathlib.Path(path or capabilities.REG)
+    retired_unmeasured = None
+    try:
+        ledger = capabilities.load_declared(ledger_path)
+        if not ledger_path.exists():
+            retired_unmeasured = f"unmeasured: no capability ledger at {ledger_path}"
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
+        ledger = {}
+        retired_unmeasured = f"unmeasured: capability ledger unreadable ({type(exc).__name__})"
     history = _load_history()
     previous = {row["capability_id"]: row for row in (history[-1]["rows"] if history else [])}
     # ONE READ of the registry's retirements for the whole run. A malformed declaration holds
@@ -415,8 +423,12 @@ def review(
     found: dict[str, list[Any]] = {key: [] for key in SILENCE_FINDINGS}
     evidence: dict[str, dict[str, Any]] = {}
     not_monitored: dict[str, list[str]] = {}
+    retired_but_invoked: list[dict[str, Any]] = []
     for cap_id in sorted(ledger):
         cap = ledger[cap_id]
+        retirement_evidence = capabilities.invoked_after_retirement(cap)
+        if retirement_evidence is not None:
+            retired_but_invoked.append({"capability_id": cap_id, **retirement_evidence})
         last = int(cap.get("last_invocation") or 0)
         silent_days = None if not last else round((now - last) / 86400, 1)
         observer = capabilities.is_observer(cap)
@@ -440,7 +452,8 @@ def review(
         if not monitored:
             # LIVE ROWS ONLY. The row stays in `rows`, and so in the history snapshot, which keeps
             # the ledger accounted for and lets a row revived out of `retired` be compared against
-            # its past; it reaches no finding list and no count.
+            # its past; it reaches no live silence finding list or count. Retirement
+            # invocation evidence is reported separately above.
             row["not_monitored_because"] = f"status {cap.get('status')!r}: {NOT_MONITORED_REASON}"
             not_monitored.setdefault(str(cap.get("status")), []).append(cap_id)
             continue
@@ -526,6 +539,9 @@ def review(
         "ledger_total": len(rows),
         "not_monitored": {status: sorted(ids) for status, ids in sorted(not_monitored.items())},
         "not_monitored_count": sum(len(ids) for ids in not_monitored.values()),
+        "retired_but_invoked": retired_but_invoked,
+        "retired_but_invoked_count": None if retired_unmeasured else len(retired_but_invoked),
+        "retired_but_invoked_measurement": retired_unmeasured,
         capabilities.FINDING_POPULATION_KEY: finding_population(),
         "fired_ever": sum(1 for r in live if r["ever_fired"]),
         "never_fired": found["never_fired"],
@@ -698,6 +714,19 @@ def format_report(rep: dict) -> str:
             "establishes the baseline"
         )
     out.append("")
+    unmeasured = rep.get("retired_but_invoked_measurement")
+    if unmeasured:
+        out += [f"  retired_but_invoked: {unmeasured}", ""]
+    else:
+        retired = rep.get("retired_but_invoked") or []
+        out.append(f"  retired_but_invoked: {len(retired)}")
+        for entry in retired:
+            out.append(
+                f"    {entry['capability_id']}  retirement: {entry['retirement']}  "
+                f"invocations: {entry['invocations']}  "
+                f"kill switch: {entry.get('kill_switch') or 'undeclared'}"
+            )
+        out.append("")
     evidence = rep.get("silence_evidence") or {}
     shown: set[str] = set()
 

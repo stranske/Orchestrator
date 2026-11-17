@@ -13,11 +13,14 @@ from __future__ import annotations
 
 import json
 import os
+from copy import deepcopy
+from functools import partial
 
 import capabilities
 import capability_advisor
 import capability_firing_monitor as monitor
 import capability_propensity as cp
+import switch_review
 
 NOW = 1_800_000_000
 CAP = "capability-firing-monitor"
@@ -121,6 +124,129 @@ def test_the_report_declares_its_population_under_the_graders_key(tmp_path, monk
         "held_off_kinds": list(monitor.HOLD_KINDS),
         "held_off_excluded_from": list(monitor.SILENCE_FINDINGS),
     }
+
+
+def test_invocation_after_retirement_is_named(tmp_path, monkeypatch):
+    """A retired row can still run; keep that evidence outside the live silence findings."""
+    ledger = _ledger(tmp_path)
+    rows = capabilities.load(ledger, create=False)
+    retirement = {
+        "type": "transition",
+        "from": "wired",
+        "to": "retired",
+        "timestamp": NOW - 100,
+        "reason": "owner decision",
+        "evidence_refs": ["owner/repo#1"],
+    }
+    kill_switch = "ORCH_RETIRED_EXAMPLE_DISABLED=1"
+    scenarios = {
+        "retired-but-running": [],
+        "retired-clean": [],
+        "retired-fixture": [],
+        "retired-completion": [
+            {"type": "invocation", "timestamp": NOW - 200, "ref": "started-before-retirement"}
+        ],
+        "retired-renewed": [],
+    }
+    for cap_id, earlier in scenarios.items():
+        row = capabilities._blank_capability(cap_id)
+        row.update(
+            status="retired",
+            kill_switch=kill_switch,
+            matcher={"kind": "transport", "name": "example"},
+            trigger_cadence="daily",
+            event_history=[*earlier, deepcopy(retirement)],
+        )
+        rows[cap_id] = row
+    capabilities.save(rows, ledger)
+    monkeypatch.setattr(monitor, "HISTORY", tmp_path / "history.json")
+    monkeypatch.setattr(switch_review, "_acting_index", lambda *_: None)
+    monkeypatch.delenv("ORCH_CAPABILITY_HEARTBEATS", raising=False)
+    baseline = monitor.review(now=NOW, path=ledger)
+
+    # Exercise the existing production emitter against this temporary ledger. Retirement
+    # must not suppress evidence at the writer; the report is responsible for naming it.
+    monkeypatch.setattr(
+        capabilities, "heartbeat", partial(capabilities.heartbeat, path=ledger, timestamp=NOW - 50)
+    )
+    monkeypatch.setenv("ORCH_CAPABILITY_HEARTBEATS", "1")
+    assert capabilities.production_heartbeat(
+        "retired-but-running", "invocation", ref="tick:production", metadata={"source": "tick"}
+    )
+    assert capabilities.production_heartbeat(
+        "retired-fixture", "invocation", ref="exercise", metadata={"source": "fixture"}
+    )
+    for event_type in ("success", "failure", "outcome"):
+        assert capabilities.production_heartbeat(
+            "retired-completion", event_type, ref="started-before-retirement"
+        )
+    assert capabilities.production_heartbeat("retired-renewed", "invocation", ref="before-renewal")
+    renewed = capabilities.load(ledger, create=False)
+    renewed["retired-renewed"]["status"] = "wired"
+    renewed["retired-renewed"]["event_history"].append(
+        {"type": capabilities.RENEWAL_EVENT, "timestamp": NOW - 25}
+    )
+    capabilities.save(renewed, ledger)
+    monkeypatch.delenv("ORCH_CAPABILITY_HEARTBEATS")
+    before = ledger.read_bytes()
+    rep = monitor.review(now=NOW, path=ledger)
+    expiry = switch_review.gate_expiry(now=NOW, path=ledger)
+    for section in (rep, expiry):
+        assert section["retired_but_invoked_count"] == 1, section["retired_but_invoked"]
+        (entry,) = section["retired_but_invoked"]
+        assert entry["capability_id"] == "retired-but-running"
+        assert entry["kill_switch"] == kill_switch
+        assert entry["retirement"] == retirement
+        assert entry["invocations"] == [
+            {
+                "type": "invocation",
+                "timestamp": NOW - 50,
+                "ref": "tick:production",
+                "metadata": {"source": "tick"},
+            }
+        ]
+        assert section["retired_but_invoked_measurement"] is None
+    for text in (monitor.format_report(rep), "\n".join(switch_review.format_gate_expiry(expiry))):
+        assert "retired_but_invoked: 1" in text
+        assert "retired-but-running" in text and kill_switch in text
+        assert "tick:production" in text and "owner decision" in text
+    for key in (*monitor.SILENCE_FINDINGS, "no_cadence_declared", "not_tick_observable"):
+        assert rep[key] == baseline[key], key
+    assert rep[capabilities.FINDING_POPULATION_KEY] == baseline[capabilities.FINDING_POPULATION_KEY]
+    assert "retired-but-running" in rep["not_monitored"]["retired"]
+    assert rep["not_monitored"] == {
+        status: [cap_id for cap_id in ids if cap_id != "retired-renewed"]
+        for status, ids in baseline["not_monitored"].items()
+    }
+    assert rep["ledger_total"] == rep["total"] + rep["not_monitored_count"]
+    assert ledger.read_bytes() == before, "a reporting predicate wrote lifecycle evidence"
+
+
+def _check_retired_invocation_measurement(tmp_path, monkeypatch, state):
+    ledger = tmp_path / f"{state}.json"
+    if state == "corrupt":
+        ledger.write_text("{not json")
+    elif state == "empty":
+        capabilities.save({}, ledger)
+    before = ledger.read_bytes() if ledger.exists() else None
+    monkeypatch.setattr(monitor, "HISTORY", tmp_path / "history.json")
+    monkeypatch.delenv("ORCH_CAPABILITY_HEARTBEATS", raising=False)
+    rep = monitor.review(now=NOW, path=ledger)
+    assert rep["retired_but_invoked"] == []
+    if state == "empty":
+        assert rep["retired_but_invoked_count"] == 0
+        assert rep["retired_but_invoked_measurement"] is None
+        assert "retired_but_invoked: 0" in monitor.format_report(rep)
+    else:
+        assert rep["retired_but_invoked_count"] is None
+        assert "unmeasured" in rep["retired_but_invoked_measurement"]
+        assert "retired_but_invoked: unmeasured" in monitor.format_report(rep)
+    assert (ledger.read_bytes() if ledger.exists() else None) == before
+
+
+def test_retired_invocation_measurement_distinguishes_unread_from_zero(tmp_path, monkeypatch):
+    for state in ("missing", "corrupt", "empty"):
+        _check_retired_invocation_measurement(tmp_path, monkeypatch, state)
 
 
 def _exempt_observer_eval(rep, *, report_changed):

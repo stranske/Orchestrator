@@ -1551,6 +1551,47 @@ def expiry_retirement(cap: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+def invoked_after_retirement(cap: dict[str, Any]) -> dict[str, Any] | None:
+    """Evidence of non-fixture invocation after the latest still-effective retirement.
+
+    History is append-only: a renewal or transition back to a live state cancels the
+    preceding retirement. Results can finish after retirement without a new invocation,
+    so neither result events nor the reconciled `last_invocation` field are evidence.
+    This predicate reads the row only; it never expires, renews or emits a heartbeat.
+    """
+    if cap.get("status") != "retired":
+        return None
+    history = cap.get("event_history") or []
+    for index in range(len(history) - 1, -1, -1):
+        event = history[index]
+        if event.get("type") == RENEWAL_EVENT:
+            return None
+        if event.get("type") != "transition":
+            continue
+        if event.get("to") in set(CANONICAL_STATES) - NOT_LIVE_STATES:
+            return None
+        if event.get("to") != "retired":
+            continue
+        retired_at = int(event["timestamp"])
+        invocations = [
+            invocation
+            for invocation in history[index + 1 :]
+            if invocation.get("type") == "invocation"
+            and (invocation.get("metadata") or {}).get("source") != "fixture"
+            # Same-second events retain their append order; a late-recorded older
+            # invocation is still pre-retirement work.
+            and int(invocation["timestamp"]) >= retired_at
+        ]
+        if invocations:
+            return {
+                "retirement": event,
+                "invocations": invocations,
+                "kill_switch": cap.get("kill_switch"),
+            }
+        return None
+    return None
+
+
 def artifact_lifecycle(cap: dict[str, Any]) -> str | None:
     """What owns this row's expiry when the LEDGER does not, or None when the ledger does.
 

@@ -1582,6 +1582,9 @@ def gate_expiry(*, now: int | None = None, path=None) -> dict:
         "lapsed": [],
         "renewable": 0,
         "next_expiry": None,
+        "retired_but_invoked": [],
+        "retired_but_invoked_count": None,
+        "retired_but_invoked_measurement": "unmeasured: capability ledger not read",
     }
     # UNMEASURED IS NOT ZERO. A ledger that is missing or unreadable must not print the drained
     # line: "nothing expires" is good news, and "could not look" is not.
@@ -1590,6 +1593,7 @@ def gate_expiry(*, now: int | None = None, path=None) -> dict:
             **report,
             "status": "unknown",
             "measurement": f"unmeasured: no capability ledger at {ledger_path}",
+            "retired_but_invoked_measurement": f"unmeasured: no capability ledger at {ledger_path}",
         }
     try:
         later = []
@@ -1598,6 +1602,9 @@ def gate_expiry(*, now: int | None = None, path=None) -> dict:
         for cap_id, cap in sorted(rows_all.items()):
             if not isinstance(cap, dict):
                 continue
+            retirement_evidence = capabilities.invoked_after_retirement(cap)
+            if retirement_evidence is not None:
+                report["retired_but_invoked"].append({"capability_id": cap_id, **retirement_evidence})
             if cap.get("status") not in capabilities.NOT_LIVE_STATES:
                 if cap.get("expiry") is None:
                     continue
@@ -1624,7 +1631,12 @@ def gate_expiry(*, now: int | None = None, path=None) -> dict:
             "expiring": [],
             "lapsed": [],
             "rows_with_expiry": 0,
+            "retired_but_invoked": [],
+            "retired_but_invoked_count": None,
+            "retired_but_invoked_measurement": "unmeasured: capability ledger unreadable",
         }
+    report["retired_but_invoked_count"] = len(report["retired_but_invoked"])
+    report["retired_but_invoked_measurement"] = None
     report["expiring"].sort(key=lambda row: (row["expiry"], row["capability_id"]))
     report["renewable"] = sum(
         1 for row in report["expiring"] + report["lapsed"] if row["renewable"]
@@ -3221,7 +3233,12 @@ def format_report(rep: dict) -> str:
         and not exploration_gate.get("suspect")
         and (
             expiry is None
-            or (expiry.get("status") == "ok" and not expiry["expiring"] and not expiry["lapsed"])
+            or (
+                expiry.get("status") == "ok"
+                and not expiry["expiring"]
+                and not expiry["lapsed"]
+                and not expiry.get("retired_but_invoked")
+            )
         )
         and (shed is None or (shed.get("status") == "ok" and shed.get("suspect") == 0))
     ):
@@ -3232,6 +3249,19 @@ def format_report(rep: dict) -> str:
 def format_gate_expiry(section: dict) -> list[str]:
     """The notice in words. It ALWAYS prints, because the drained state is a statement too."""
     lines = ["## Gate expiry (FYI only; nothing here renews anything)", ""]
+    unmeasured = section.get("retired_but_invoked_measurement")
+    if unmeasured:
+        lines += [f"  retired_but_invoked: {unmeasured}", ""]
+    else:
+        retired = section.get("retired_but_invoked") or []
+        lines.append(f"  retired_but_invoked: {len(retired)}")
+        for entry in retired:
+            lines.append(
+                f"    {entry['capability_id']}  retirement: {entry['retirement']}  "
+                f"invocations: {entry['invocations']}  "
+                f"kill switch: {entry.get('kill_switch') or 'undeclared'}"
+            )
+        lines.append("")
     if section.get("status") != "ok":
         return lines + [f"  NOT MEASURED — {section.get('measurement', 'no reason recorded')}", ""]
     window = section["window_days"]

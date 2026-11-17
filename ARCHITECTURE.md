@@ -1826,6 +1826,14 @@ production is judged by the rule it was produced under, and a report that declar
 A row retired LATER still leaves the monitor's findings and is still graded: that finding was
 answered by a lifecycle action, where this one was answered by an edit to the monitor.
 
+**Retired invocations remain visible (2026-11-17).** The firing monitor and switch review's
+gate-expiry notice separately report `retired_but_invoked`, with the latest unrenewed retirement,
+subsequent non-fixture invocation events and the declared kill switch. The shared read-only
+`capabilities.invoked_after_retirement` predicate ignores completion events from earlier work;
+a renewal or transition back to a live state cancels the old retirement. Missing or unreadable
+ledgers are unmeasured. Live silence findings, their declared population, not-monitored accounting
+and heartbeat emission retain their existing rules.
+
 **A deliberately-off capability is held off, not overdue (2026-10-02).** The firing monitor listed
 `issue-readiness` (its cadence step retired by default) and `range-lane-rollout` (its declared gate
 blocks the delivering path) under `overdue` and `regressed` on every run. A silent live row that a
