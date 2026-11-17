@@ -371,6 +371,43 @@ def test_invocation_after_retirement_is_named(tmp_path, monkeypatch):
             }
         ]
 
+    # Independent retired producers retain their own evidence and kill switch. A second
+    # anomaly must increase the capability count, even while the first has several events.
+    second_invocation = {**invocation, "timestamp": NOW + 8, "ref": "run:second-producer"}
+    capabilities.heartbeat(
+        "silent",
+        "invocation",
+        timestamp=second_invocation["timestamp"],
+        ref=second_invocation["ref"],
+        metadata=second_invocation["metadata"],
+        path=ledger,
+    )
+    second_expected = {
+        "capability_id": "silent",
+        "retirement": retirement,
+        "invocations": [second_invocation],
+        "kill_switch": "disable silent",
+    }
+    reports = reports_at(NOW + 8)
+    for report in reports:
+        assert report["retired_but_invoked_count"] == 2
+        assert report["retired_but_invoked"] == [
+            {
+                **expected,
+                "retirement": new_retirement,
+                "invocations": [*new_invocations, legacy_invocation],
+            },
+            second_expected,
+        ]
+        assert report["retired_but_invoked_measurement"] == "measured"
+    for text in (
+        monitor.format_report(reports[0]),
+        "\n".join(switch_review.format_gate_expiry(reports[1])),
+    ):
+        assert "retired_but_invoked: 2" in text
+        for evidence in ("disable retired-running", "disable silent", "run:second-producer"):
+            assert evidence in text
+
 
 def test_retirement_predicate_is_read_only_and_uses_latest_retirement():
     retirement = {"type": "transition", "to": "retired", "timestamp": NOW - 100}

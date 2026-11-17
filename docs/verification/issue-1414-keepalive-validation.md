@@ -329,3 +329,54 @@ review rejected adding `needs-human`, posting the evidence comment, and updating
 the verified named-test/whole-file checkboxes: `MCP tool call requires approval,
 but approval policy is never`. Remote checkboxes remain unchanged. PR 1426 was
 verified open and ready (`draft=false`).
+
+## Independent retired producers — 2026-11-17
+
+Reviewed commits `f06f224` and `793380f` before extending the named acceptance
+test. The implementation and earlier validation are present; the remote checklist
+still has duplicate unchecked acceptance items. The new test case records a real
+production heartbeat for a second retired capability and checks that both readers
+report two distinct capabilities, each with its own invocation evidence and kill
+switch. Multiple invocations of the first capability still count as one. Rendered
+reports name both producers, and reads preserve the ledger bytes. Test collection
+counts are unchanged.
+
+Verified using Python 3.14.10, official upstream pytest 9.0.2 and Black 26.10.1
+loaded into `/tmp/issue-1414-test-tools`, with `ORCH_STATE_DIR` in `/tmp` and
+`-m "not slow"` on every pytest command:
+
+- [x] Named acceptance test: **1 passed in 0.13s** after exact source restoration.
+- [x] Whole firing-monitor file after restoration: **25 passed in 0.24s**.
+- [x] Six-file targeted regression set listed above: **104 passed in 1.97s**.
+- [x] Deliberate unconditional `return None`: **1 failed in 0.15s**, with
+  **`assert 0 == 1`** at the retired capability count. A `finally` block restored
+  the original source bytes; the named command then passed.
+- [x] Black formatted the changed Python file at line length 100; unchanged.
+- [x] `git diff --check` passed; `src/capabilities.py` has no diff.
+- [ ] Publish the verified checklist reconciliation and new evidence on PR 1426.
+- [ ] Commit the test change on the checked-out branch.
+
+Automatic approval review rejected the checkbox update, evidence comment and
+`needs-human` label with `MCP tool call requires approval, but approval policy is
+never`. The reconciled body is saved at
+`/tmp/issue-1414-validation/pr-body.md`; raw mutation/restoration outputs are in
+the same directory. The Git metadata, index, objects and branch refs are
+read-only. Remote checklist reconciliation and committing remain delivery
+blockers rather than unverified implementation tasks.
+
+The mandatory full formatting command passed (exit 0):
+
+```text
+black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .
+715 files would be left unchanged.
+```
+
+As in the earlier run, the temporary launcher dispatches CLI-discovered files
+through Black's ordinary single-file checker sequentially because async worker
+reporting stalls in this sandbox. Formatting and AST-equivalence checks remain
+enabled. No repository dependency or formatter configuration changed.
+
+After that gate passed, staging the two changed files failed with
+`Unable to create .git/index.lock: Read-only file system`; the commit command
+could not run. PR 1426 was re-read and remains open with `draft=false` at
+`f06f2243efeb102b62af57ff3f99b01a595d4213`.
