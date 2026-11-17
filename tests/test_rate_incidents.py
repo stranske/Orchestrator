@@ -665,8 +665,7 @@ def test_failed_marker_publication_is_repaired_on_dedup_retry(incident_paths, mo
     now = int(time.time())
     reset_at = now + 10 * 3600
     evidence = (
-        '{"event":"init","init":{"model":"gemini-4-argon-high"}}\n'
-        + GEMINI_INDIVIDUAL_QUOTA_LINE
+        '{"event":"init","init":{"model":"gemini-4-argon-high"}}\n' + GEMINI_INDIVIDUAL_QUOTA_LINE
     )
     real_replace = rate_incidents.os.replace
     replace_calls = 0
@@ -716,7 +715,9 @@ def test_failed_marker_publication_is_repaired_on_dedup_retry(incident_paths, mo
         "incident_id": first["incident_id"],
         "shed": True,
     }
-    rows_after = [json.loads(line) for line in rate_incidents.INCIDENT_FILE.read_text().splitlines()]
+    rows_after = [
+        json.loads(line) for line in rate_incidents.INCIDENT_FILE.read_text().splitlines()
+    ]
     assert len(rows_after) == 1
     marker = json.loads((rate_incidents.SHED_DIR / "gemini").read_text())
     assert marker["incident_id"] == first["incident_id"]

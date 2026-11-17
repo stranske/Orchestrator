@@ -726,14 +726,10 @@ def _existing_incident_context(
             return None, set(), set()
         matched = parsed_rows[match_index]
         earlier_ids = {
-            str(r["incident_id"])
-            for r in parsed_rows[:match_index]
-            if r.get("incident_id")
+            str(r["incident_id"]) for r in parsed_rows[:match_index] if r.get("incident_id")
         }
         later_ids = {
-            str(r["incident_id"])
-            for r in parsed_rows[match_index + 1 :]
-            if r.get("incident_id")
+            str(r["incident_id"]) for r in parsed_rows[match_index + 1 :] if r.get("incident_id")
         }
         return matched, earlier_ids, later_ids
     except OSError:
@@ -1172,7 +1168,9 @@ def record_incident(
                 )
                 existing_row = {**existing_row, "recovered": True}
         else:
-            line = (json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+            line = (json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n").encode(
+                "utf-8"
+            )
             ledger_fd = os.open(INCIDENT_FILE, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
             with os.fdopen(ledger_fd, "wb") as handle:
                 handle.write(line)
