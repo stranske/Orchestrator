@@ -1458,6 +1458,51 @@ EXPIRY_CAUSE = "expiry"
 RENEWAL_EVENT = "renewed"
 
 
+def invoked_after_retirement(cap: dict[str, Any]) -> dict[str, Any] | None:
+    """Evidence of invocations after the latest retirement, read without changing the row.
+
+    History order establishes lifecycle order (including events in the same second). A renewal
+    or transition back to a live state cancels an earlier retirement. Backdated invocations,
+    fixture invocations and completion events never establish post-retirement execution.
+    """
+    if cap.get("status") != "retired":
+        return None
+    # Only an ABSENT key means "no history". A stored non-list (null, 0, "", {}) is corrupt, and
+    # coercing it to [] would report a measured zero; raising lets both readers say unmeasured.
+    history = cap.get("event_history", [])
+    if not isinstance(history, list):
+        raise ValueError(
+            f"retired capability event_history must be a list, got {type(history).__name__}"
+        )
+    for index in range(len(history) - 1, -1, -1):
+        event = history[index]
+        if event.get("type") == RENEWAL_EVENT:
+            return None
+        if event.get("type") != "transition":
+            continue
+        target = event.get("to")
+        if target in CANONICAL_STATES and target not in NOT_LIVE_STATES:
+            return None
+        if target != "retired":
+            continue
+        retired_at = int(event["timestamp"])
+        invocations = [
+            later
+            for later in history[index + 1 :]
+            if later.get("type") == "invocation"
+            and int(later["timestamp"]) >= retired_at
+            and (later.get("metadata") or {}).get("source") != "fixture"
+        ]
+        if invocations:
+            return {
+                "retirement": event,
+                "invocations": invocations,
+                "kill_switch": cap.get("kill_switch"),
+            }
+        return None
+    return None
+
+
 def _expire_in_place(capabilities: dict[str, dict[str, Any]], now: int) -> list[str]:
     retired: list[str] = []
     for name, cap in capabilities.items():
