@@ -76,16 +76,66 @@ package version metadata. Prepending `/tmp/issue-1414-tools26/bin` to `PATH` sel
 
 ## Delivery blocker
 
-The code and test verification above succeeded, but the changes remain uncommitted. Local
-`git add` failed to create `.git/index.lock` because `.git` is mounted read-only. Creating the
-commit through the connected GitHub API was also blocked at `create_tree`:
+The previous iteration's test isolation and verification changes were subsequently committed in
+`99bf287`. This round reviewed `9dcfc46`, `78301a4`, and `99bf287` and confirmed that the helper,
+both report sections, and the requested controls were already implemented. The first unchecked
+helper task can be reconciled against that implementation and the passing tests.
+
+This round strengthens the named test with mixed production and fixture invocation events on
+the same retired row. Both reports must retain both production invocations (including one with
+no source metadata), exclude the fixture invocation, and count one anomalous capability.
+
+Fresh verification against this change, with `-m "not slow"` throughout:
+
+```text
+named test baseline:       1 passed in 0.11s
+unconditional return None: 1 failed in 0.15s (AssertionError: []; assert 0 == 1)
+exact-byte restoration:    1 passed in 0.12s
+whole firing-monitor file: 8 passed in 0.13s
+both relevant test files:  53 passed in 0.64s
+```
+
+The break probe restored the source in a `finally` block, removed its compiled bytecode, and
+verified the same source SHA256 recorded above. Its full transcript is retained locally at
+`/tmp/issue-1414-break-revert.txt`.
+
+Black 26.10.1 formatted the changed test file successfully (`1 file left unchanged`), and
+`git diff --check` passed. Initial repository-wide attempts stalled, and a diagnostic retry
+exited 139 while reporting `blib2to3/pytree.py:update_sibling_maps`. Checking the tracked Python
+files individually with Black's CLI completed successfully: `712 files checked; 0 failures`.
+This populated Black's normal cache from successful checks. The required repository-wide command
+then exited zero with `712 files would be left unchanged`:
+
+```text
+python3 -m black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .
+```
+
+This round used CPython 3.12.16 and the official upstream sources staged at
+`/tmp/issue-1414-tools` (`PYTHONPATH=/tmp/issue-1414-tools`), with
+`BLACK_NUM_WORKERS=1` and `BLACK_CACHE_DIR=/tmp/issue-1414-black-cache`. The individual-check
+result is retained at `/tmp/issue-1414-black-individual.log`.
+
+Task reconciliation from the implementation and fresh test evidence:
+
+- [x] Read-only helper examines the latest unrenewed retirement and excludes fixtures.
+- [x] Firing monitor separately reports retirement anomalies without changing live findings.
+- [x] Gate expiry and its formatter name anomalies and distinguish unmeasured from zero.
+- [x] Named test and clean, fixture, completion, renewal, and missing-ledger controls exist.
+- [x] Required named test passes.
+- [x] Whole firing-monitor test file passes.
+- [ ] Deliberate break/restoration evidence is shown on the PR (verified locally; posting blocked).
+
+The current test change remains uncommitted. Local `git add` failed to create `.git/index.lock`
+because `.git` is mounted read-only. Updating the PR body to reconcile the helper checkbox and
+adding `needs-human` were rejected by the connected GitHub write tools:
 
 ```text
 MCP tool call requires approval, but approval policy is never
 ```
 
-Posting the verification/blocker comment and adding `needs-human` to PR #1416 were attempted
-and rejected by the same approval policy. No PR checkboxes were changed. The requirement to show
-the deliberate break/revert evidence on the PR therefore remains outstanding, along with
-committing these two files to the existing `claude/issue-1414` branch. A writable checkout or
-approved GitHub write capability is required. PR #1416 was confirmed open with `draft=false`.
+Posting the verification and blocker comment was also attempted and rejected by the same policy.
+
+No PR checkboxes were changed. The requirement to show the deliberate break/revert evidence on
+the PR therefore remains outstanding, along with committing the test and this verification note
+to the existing `claude/issue-1414` branch. A writable Git directory and an approved GitHub write
+capability are required. PR #1416 was confirmed open with `draft=false`.

@@ -177,6 +177,13 @@ def test_invocation_after_retirement_is_named(tmp_path, monkeypatch):
     assert capabilities.production_heartbeat(
         "retired-but-running", "invocation", ref="tick:production", metadata={"source": "tick"}
     )
+    # A fixture on the same row must not hide real invocations or leak into their evidence.
+    assert capabilities.production_heartbeat(
+        "retired-but-running", "invocation", ref="tick:fixture", metadata={"source": "fixture"}
+    )
+    assert capabilities.production_heartbeat(
+        "retired-but-running", "invocation", ref="tick:production-without-source"
+    )
     assert capabilities.production_heartbeat(
         "retired-fixture", "invocation", ref="exercise", metadata={"source": "fixture"}
     )
@@ -220,7 +227,12 @@ def test_invocation_after_retirement_is_named(tmp_path, monkeypatch):
                 "timestamp": NOW - 50,
                 "ref": "tick:production",
                 "metadata": {"source": "tick"},
-            }
+            },
+            {
+                "type": "invocation",
+                "timestamp": NOW - 50,
+                "ref": "tick:production-without-source",
+            },
         ]
         assert section["retired_but_invoked_measurement"] is None
     for text in (monitor.format_report(rep), "\n".join(switch_review.format_gate_expiry(expiry))):
