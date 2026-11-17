@@ -5356,10 +5356,21 @@ def completion_event_episodes(
 
 
 def record_cost(run_id, tokens_in=0, tokens_out=0, cost_usd=0.0, latency_s=0.0, source="ledger"):
+    from adapters import CURSOR_CLI_COST_SOURCE, CURSOR_CLI_COST_SOURCES
+
     with _conn() as c:
+        # Preserve the run's terminal Cursor result when trace import or ledger reconciliation
+        # writes later. A priced terminal measurement may replace an unpriced one.
+        # An overlapping reconcile may still have a pre-completion latency of zero.
         c.execute(
-            "INSERT OR REPLACE INTO costs "
-            "(run_id,tokens_in,tokens_out,cost_usd,latency_s,source,pulled_ts) VALUES (?,?,?,?,?,?,?)",
+            "INSERT INTO costs "
+            "(run_id,tokens_in,tokens_out,cost_usd,latency_s,source,pulled_ts) VALUES (?,?,?,?,?,?,?) "
+            "ON CONFLICT(run_id) DO UPDATE SET tokens_in=excluded.tokens_in, "
+            "tokens_out=excluded.tokens_out, cost_usd=excluded.cost_usd, "
+            "latency_s=CASE WHEN costs.source IN (?,?,?) "
+            "THEN MAX(COALESCE(costs.latency_s,0),excluded.latency_s) ELSE excluded.latency_s END, "
+            "source=excluded.source, pulled_ts=excluded.pulled_ts "
+            "WHERE COALESCE(costs.source,'') NOT IN (?,?,?) OR excluded.source=?",
             (
                 run_id,
                 tokens_in,
@@ -5368,6 +5379,9 @@ def record_cost(run_id, tokens_in=0, tokens_out=0, cost_usd=0.0, latency_s=0.0, 
                 latency_s,
                 source,
                 int(time.time()),
+                *CURSOR_CLI_COST_SOURCES,
+                *CURSOR_CLI_COST_SOURCES,
+                CURSOR_CLI_COST_SOURCE,
             ),
         )
 

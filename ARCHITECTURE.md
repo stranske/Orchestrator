@@ -2034,10 +2034,18 @@ count times seconds remaining divided by window seconds. The common horizon is t
 period_end of fully measured agents. Only latest-version quality cells with n_obs >= 20 count,
 including classes outside the hosted export. Measured agents alone enter the LP; excluded
 agents retain null lambda/rank and reasons, with status `partial` when some are measured.
-An agent whose capacity model has no pacing contract by design (every model except `ccusage`:
-cursor, vibe, gemini, muse, where 429-shed is the authoritative limiter) is listed in
+An agent whose capacity model has no pacing contract by design (every model except `ccusage`,
+where 429-shed is the authoritative limiter for the other models) is ordinarily listed in
 `excluded` with reason `excluded: no pacing source` and does not make the result `partial`
 (owner 2026-11-11: cursor and vibe held it at `partial`, so routing could never go live).
+Cursor lane dispatches capture the CLI's terminal JSON and print its decoded message in the
+run log. Ledger reconciliation records Composer 2.5 list-price dollars from the result's
+model and token counts, or a per-run reason when usage or pricing is unavailable. Later ledger
+completion or done-marker evidence can recover latency while preserving that cost. With at least
+20 `cursor-cli-json` prices in the window, Cursor enters the LP at its mean dollars per run,
+subject to task demand. It has no modeled pool cap or capacity dual. If all Cursor runs in the
+window reported absent usage, the exclusion names that reason. A cost-only solve uses the
+observation-window duration to project demand when there is no measured pacing horizon.
 Other statuses are `optimal`, `infeasible_inputs`, and `inputs_unmeasured`. Subscription price
 is zero; Muse or explicitly metered pools require complete list-price observations. Reads
 never create or migrate the Brain.
