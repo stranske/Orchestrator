@@ -340,16 +340,16 @@ def test_generic_row_with_success_signal_counts_only_eligible_successes(
 @pytest.mark.parametrize("declared", [False, True])
 def test_generic_success_count_includes_both_window_boundaries(tmp_path, declared):
     capability = "capability-propensity"
-    path = ledger(tmp_path, (capability,))
+    path = tmp_path / "capabilities.json"
+    declaration = {"status": "wired"}
     if declared:
-        capabilities.register(capability, {"usable_signal": "success"}, path)
+        declaration["usable_signal"] = "success"
+    capabilities.register(capability, declaration, path)
     capabilities.heartbeat(capability, "invocation", timestamp=NOW, path=path)
     for stamp in (NOW - monitor.WINDOW_DAYS * 86400, NOW):
         capabilities.heartbeat(capability, "success", timestamp=stamp, path=path)
 
-    section = monitor.report(
-        now=NOW, path=path, env={}, inputs={"cadence_inputs": {capability: 1}}
-    )
+    section = monitor.report(now=NOW, path=path, env={}, inputs={"cadence_inputs": {capability: 1}})
     row = section["rows"][0]
     assert row["usable"] == 2
     assert "usable_reason" not in row
