@@ -215,9 +215,29 @@ def test_multiple_items_count_once_per_round_and_last_decision_wins(tmp_path):
 
 def test_skip_classification_follows_live_hold_policy(tmp_path):
     roots = _roots(tmp_path)
-    for action, expected in (("skip", 1), ("skip-held", 0), ("wait", 1)):
-        _write(roots["opener-core"], _repeated(action=action, reason="experiment lock busy"))
-        assert switch_review.stuck_lane_targets(now=NOW, roots=roots)["suspect"] == expected
+    for action, reason, expected in (
+        ("skip", "experiment lock busy", 1),
+        ("skip-held", "experiment lock busy", 1),
+        ("wait", "experiment lock busy", 1),
+        ("error", "held: repair failed", 1),
+        ("skip", "held: agents:paused", 0),
+        ("skip-held", "held: owner", 0),
+    ):
+        rounds = _repeated(6, action=action, reason=reason, step=720)
+        _write(roots["opener-core"], rounds)
+        report = switch_review.stuck_lane_targets(now=NOW, roots=roots)
+        assert report["suspect"] == expected, (action, reason, report)
+        if expected:
+            assert report["rows"] == [
+                {
+                    "lane": "opener-core",
+                    "target": TARGET,
+                    "action": action,
+                    "reason": reason,
+                    "rounds": 6,
+                    "since": rounds[0]["ts"],
+                }
+            ]
 
 
 def test_render_limits_to_five_rows_and_keeps_lanes_separate(tmp_path):
@@ -454,7 +474,7 @@ def test_weekly_review_includes_and_formats_section(journals, monkeypatch):
 
 
 def test_live_hold_wording_is_not_suspect_but_a_repeating_failure_is(journals):
-    """2026-11-17 live journals: 44 of 45 first-run suspects were each lane's own deliberate holds."""
+    """The issue exempts explicit held: skips among these journal decisions."""
     opener, closer = [], []
     for i in range(21):
         opener.append(
@@ -478,7 +498,7 @@ def test_live_hold_wording_is_not_suspect_but_a_repeating_failure_is(journals):
                     {
                         "target": "o/r#4",
                         "action": "skip-held",
-                        "reason": "hold label agents:paused",
+                        "reason": "held: agents:paused",
                     },
                     {
                         "target": "o/r#5",
@@ -491,7 +511,12 @@ def test_live_hold_wording_is_not_suspect_but_a_repeating_failure_is(journals):
     _journal(journals, "opener-core", opener)
     _journal(journals, "closer-core", closer)
     report = switch_review.stuck_lane_targets(now=NOW)
-    assert [(r["lane"], r["target"]) for r in report["rows"]] == [("opener-core", "o/r#2")]
+    assert [(r["lane"], r["target"]) for r in report["rows"]] == [
+        ("closer-core", "o/r#3"),
+        ("closer-core", "o/r#5"),
+        ("opener-core", "o/r#1"),
+        ("opener-core", "o/r#2"),
+    ]
 
 
 def test_a_run_broken_by_the_targets_absence_is_not_suspect(journals):
