@@ -400,7 +400,10 @@ def _comparative_rank(task_type: str, agent: str) -> int | None:
         try:
             loaded = json.loads(path.read_text(encoding="utf-8"))
             _COMPARATIVE_EXPORT_CACHE[path] = loaded if isinstance(loaded, dict) else None
-        except (OSError, ValueError, TypeError):
+        except FileNotFoundError:
+            _COMPARATIVE_EXPORT_CACHE[path] = None
+        except (OSError, ValueError, TypeError) as exc:
+            print(f"[router] cannot load comparative export {path}: {exc}", file=sys.stderr)
             _COMPARATIVE_EXPORT_CACHE[path] = None
     doc = _COMPARATIVE_EXPORT_CACHE[path]
     if not isinstance(doc, dict):
@@ -690,7 +693,7 @@ def select_agent(
         }
     scored: list[ScoredSelection] = []
     base_scored: list[ScoredSelection] = []
-    comparative_on = _local_comparative_enabled()
+    comparative_on = profile_transport == "local" and _local_comparative_enabled()
     pacing_active = any(_measured_pacing(r) for r in cap.get("agents", {}).values())
     for idx, entry in enumerate(spec["agents"]):
         if only is not None and entry["agent"] not in only:
@@ -832,8 +835,15 @@ def select_agent(
                     "invocation",
                     ref=f"{task_type}:{entry_agent(challenger)}",
                 )
+    baseline_picked = base_scored[0]
     if pacing_active and not explored and not cold_start:
         picked, pacing_decision = _pacing_choice(scored, cap, learned, rng)
+        if comparative_on and pacing_decision is None:
+            # Comparative keys follow the five capacity keys: the same candidates
+            # reach the same unmeasured fallback in either ordering. Replaying
+            # that deterministic path consumes no random draws. Weighted pacing
+            # retains its policy and is never attributed to comparative ranking.
+            baseline_picked, _ = _pacing_choice(base_scored, cap, learned, rng)
     _, entry, st, _idx = picked
     route_source = (
         "route_weights_comparative"
@@ -842,7 +852,7 @@ def select_agent(
             and not explored
             and not cold_start
             and pacing_decision is None
-            and entry["agent"] != base_scored[0][1]["agent"]
+            and entry["agent"] != baseline_picked[1]["agent"]
         )
         else "route_weights"
     )

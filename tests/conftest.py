@@ -604,18 +604,18 @@ def _no_live_comparative_export(monkeypatch, tmp_path):
     except ImportError:  # a scratch project that copied this conftest without src/
         return
 
-    ambient = os.environ.get("ORCH_STATE_DIR")
+    real_path = router._comparative_export_path
+    ambient_path = real_path()
     isolated = tmp_path / "no-live-orchestrator-state"
     monkeypatch.setattr(router, "_DEFAULT_STATE_DIR", isolated)
-    if ambient is not None:
-        real_path = router._comparative_export_path
-        monkeypatch.setattr(
-            router,
-            "_comparative_export_path",
-            lambda: (
-                (isolated / router.ROUTE_WEIGHTS_EXPORT_NAME)
-                if os.environ.get("ORCH_STATE_DIR") == ambient
-                else real_path()
-            ),
+
+    def isolated_export_path():
+        resolved = real_path()
+        return (
+            isolated / router.ROUTE_WEIGHTS_EXPORT_NAME
+            if resolved == ambient_path
+            else resolved
         )
+
+    monkeypatch.setattr(router, "_comparative_export_path", isolated_export_path)
     monkeypatch.setattr(router, "_COMPARATIVE_EXPORT_CACHE", {})

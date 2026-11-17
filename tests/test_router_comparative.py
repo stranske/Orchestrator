@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 import router
 
 
@@ -250,3 +252,124 @@ def test_comparative_rank_reads_export_once_per_process_and_handles_bad_files(
     )
     monkeypatch.setenv("ORCH_STATE_DIR", str(nonbool_dir))
     assert router._comparative_rank("review", "codex") is None
+
+
+@pytest.mark.parametrize("transport", ["local", "remote"])
+def test_comparative_export_respects_transport(tmp_path, monkeypatch, transport):
+    _write_export(tmp_path)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    picked = router.select_agent(
+        "review",
+        {"agents": {"cursor": {"state": "ok"}, "codex": {"state": "ok"}}},
+        learned={"cursor": 0, "codex": 1},
+        profile_transport=transport,
+        exploration_rate=0.0,
+        simulate=True,
+    )
+    assert picked["agent"] == ("codex" if transport == "local" else "cursor")
+    assert picked["route_source"] == (
+        "route_weights_comparative" if transport == "local" else "route_weights"
+    )
+
+
+@pytest.mark.parametrize("export", ["missing", "disabled", "flag-off", "ineffective", "changed"])
+def test_unmeasured_pacing_fallback_attribution(tmp_path, monkeypatch, export):
+    if export != "missing":
+        _write_export(
+            tmp_path,
+            route_enabled=export != "disabled",
+            ranking=[
+                {"agent": "cursor" if export == "changed" else "codex", "comparative_rank": 1}
+            ],
+        )
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ORCH_LOCAL_COMPARATIVE", "0" if export == "flag-off" else "1")
+    # The learned winner is shed. Pacing deterministically falls back to the
+    # unmeasured warn tier; comparative evidence may reorder only that tier.
+    cap = {
+        "agents": {
+            "cursor": {"state": "warn"},
+            "vibe": {"state": "warn"},
+            "codex": {"state": "shed", "pacing": {"state": "shed", "routing_weight": 0.0}},
+        }
+    }
+
+    class NoDraws:
+        def choices(self, *args, **kwargs):
+            pytest.fail("deterministic pacing fallback consumed a random draw")
+
+        def random(self):
+            pytest.fail("zero exploration consumed a random draw")
+
+    monkeypatch.setattr(router, "_route_profiles", lambda *args: [])
+    # Also cover the exact cursor-warn/codex-shed report with no third seat.
+    for only in ({"cursor", "codex"}, {"cursor", "vibe", "codex"}):
+        picked = router.select_agent(
+            "review",
+            cap,
+            learned={"codex": 0, "vibe": 1, "cursor": 2},
+            only=only,
+            exploration_rate=0.0,
+            rng=NoDraws(),
+            simulate=True,
+        )
+        changed = export == "changed" and "vibe" in only
+        assert picked["agent"] == ("cursor" if changed or "vibe" not in only else "vibe")
+        assert picked["route_source"] == (
+            "route_weights_comparative" if changed else "route_weights"
+        )
+        assert "pacing_decision" not in picked
+
+
+@pytest.mark.parametrize("rank", [True, -1, 1.5, None])
+def test_enabled_export_rejects_invalid_ranks(tmp_path, monkeypatch, rank):
+    _write_export(tmp_path, ranking=[{"agent": "codex", "comparative_rank": rank}])
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    assert router._comparative_rank("review", "codex") is None
+
+
+@pytest.mark.parametrize("source", ["ORCH_STATE_DIR", "HANDOFF_DIR", "feedback.DB_PATH"])
+def test_ambient_export_isolated_but_explicit_override_effective(tmp_path, monkeypatch, source):
+    from conftest import _no_live_comparative_export
+
+    monkeypatch.delenv("ORCH_STATE_DIR", raising=False)
+    monkeypatch.delenv("HANDOFF_DIR", raising=False)
+    ambient = tmp_path / "ambient"
+    explicit = tmp_path / "explicit"
+    _write_export(ambient)
+    _write_export(explicit)
+
+    def set_source(patch, directory):
+        if source == "feedback.DB_PATH":
+            patch.setattr(router.feedback, "DB_PATH", directory / "feedback.db")
+        else:
+            patch.setenv(source, str(directory))
+
+    set_source(monkeypatch, ambient)
+    # Invoke the real fixture with an ambient redirect present at fixture setup.
+    with pytest.MonkeyPatch.context() as isolation:
+        _no_live_comparative_export.__wrapped__(isolation, tmp_path / "inner")
+        assert router._comparative_rank("review", "codex") is None
+        with pytest.MonkeyPatch.context() as override:
+            set_source(override, explicit)
+            assert router._comparative_rank("review", "codex") == 1
+        assert router._comparative_rank("review", "codex") is None
+
+
+@pytest.mark.parametrize("failure", ["missing", "malformed", "unreadable"])
+def test_export_load_diagnostic_once_per_path(tmp_path, monkeypatch, capsys, failure):
+    target = tmp_path / router.ROUTE_WEIGHTS_EXPORT_NAME
+    if failure == "malformed":
+        target.write_text("{not-json", encoding="utf-8")
+    elif failure == "unreadable":
+        # A directory is deterministically unreadable as an export on CI too.
+        target.mkdir()
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    for _ in range(2):
+        assert router._comparative_rank("review", "codex") is None
+    diagnostic = capsys.readouterr().err
+    if failure == "missing":
+        assert diagnostic == ""
+    else:
+        assert diagnostic.count("cannot load comparative export") == 1
+        assert str(target) in diagnostic
