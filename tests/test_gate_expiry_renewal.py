@@ -566,7 +566,9 @@ def test_retired_invocations_in_gate_expiry_are_unmeasured_without_a_ledger(tmp_
         assert "Nothing due" not in _report(section)
 
 
-def test_old_retirement_without_expiry_still_names_invocations_in_gate_review(tmp_path, monkeypatch):
+def test_old_retirement_without_expiry_still_names_invocations_in_gate_review(
+    tmp_path, monkeypatch
+):
     retirement = {
         "type": "transition",
         "from": "wired",

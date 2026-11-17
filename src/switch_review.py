@@ -1604,7 +1604,9 @@ def gate_expiry(*, now: int | None = None, path=None) -> dict:
                 continue
             retirement_evidence = capabilities.invoked_after_retirement(cap)
             if retirement_evidence is not None:
-                report["retired_but_invoked"].append({"capability_id": cap_id, **retirement_evidence})
+                report["retired_but_invoked"].append(
+                    {"capability_id": cap_id, **retirement_evidence}
+                )
             if cap.get("status") not in capabilities.NOT_LIVE_STATES:
                 if cap.get("expiry") is None:
                     continue
