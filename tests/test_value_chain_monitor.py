@@ -293,15 +293,24 @@ def test_generic_row_without_success_signal_reports_usable_unmeasured(tmp_path):
 
 
 @pytest.mark.parametrize("success_count", [0, 1])
-def test_generic_row_with_success_signal_counts_only_eligible_successes(tmp_path, success_count):
+@pytest.mark.parametrize("usable_signal", [None, "success"])
+def test_generic_row_with_success_signal_counts_only_eligible_successes(
+    tmp_path, success_count, usable_signal
+):
     capability = "capability-propensity"
     path = tmp_path / "capabilities.json"
-    capabilities.register(capability, {"status": "wired", "usable_signal": "success"}, path)
+    declaration = {"status": "wired"}
+    if usable_signal is not None:
+        declaration["usable_signal"] = usable_signal
+    capabilities.register(capability, declaration, path)
     capabilities.heartbeat(capability, "invocation", timestamp=NOW, path=path)
     for event in (
         {"timestamp": NOW - monitor.WINDOW_DAYS * 86400 - 1},
         {"timestamp": NOW + 1},
         {"timestamp": NOW, "metadata": {"evidence_provenance": "fixture_observed"}},
+        {"timestamp": NOW, "metadata": {"verdict_provenance": "fixture_observed"}},
+        {"timestamp": NOW, "metadata": {"evidence_source": "fixture_observed"}},
+        {"timestamp": NOW, "metadata": {"evidence_weight": 0}},
         {"timestamp": NOW, "metadata": {"experiment_id": "experiment-1"}},
         {"timestamp": NOW, "ref": "advice:trial"},
     ):
@@ -309,12 +318,42 @@ def test_generic_row_with_success_signal_counts_only_eligible_successes(tmp_path
     if success_count:
         capabilities.heartbeat(capability, "success", timestamp=NOW, path=path)
 
+    # Excluded successes update the cached timestamp too; it cannot prove usability.
+    assert capabilities.load(path, create=False)[capability]["last_success"] == NOW + 1
+    before = path.read_bytes()
     inputs = {"cadence_inputs": {capability: 1}}
     section = monitor.report(now=NOW, path=path, env={}, inputs=inputs)
     row = section["rows"][0]
-    assert row["usable"] == success_count
-    assert row["first_break"] == (None if success_count else "unusable")
-    assert f"usable {success_count};" in "\n".join(monitor.format_lines(section))
+    text = "\n".join(monitor.format_lines(section))
+    if usable_signal is None and success_count == 0:
+        assert row["usable"] is None
+        assert row["first_break"] is None
+        assert f"usable unmeasured ({row['usable_reason']})" in text
+    else:
+        assert row["usable"] == success_count
+        assert row["first_break"] == (None if success_count else "unusable")
+        assert "usable_reason" not in row
+        assert f"usable {success_count};" in text
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("declared", [False, True])
+def test_generic_success_count_includes_both_window_boundaries(tmp_path, declared):
+    capability = "capability-propensity"
+    path = ledger(tmp_path, (capability,))
+    if declared:
+        capabilities.register(capability, {"usable_signal": "success"}, path)
+    capabilities.heartbeat(capability, "invocation", timestamp=NOW, path=path)
+    for stamp in (NOW - monitor.WINDOW_DAYS * 86400, NOW):
+        capabilities.heartbeat(capability, "success", timestamp=stamp, path=path)
+
+    section = monitor.report(
+        now=NOW, path=path, env={}, inputs={"cadence_inputs": {capability: 1}}
+    )
+    row = section["rows"][0]
+    assert row["usable"] == 2
+    assert "usable_reason" not in row
+    assert "usable 2;" in "\n".join(monitor.format_lines(section))
 
 
 def test_generic_report_does_not_measure_an_unread_ledger(tmp_path):
