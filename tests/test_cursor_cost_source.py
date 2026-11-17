@@ -73,16 +73,15 @@ def _reconcile_fixture(tmp_path, **fields):
         pytest.param({"prompt_tokens": 1000, "completion_tokens": 200}, id="prompt-completion"),
     ],
 )
-def test_cursor_json_result_with_usage_records_a_priced_cost(tmp_path, brain, usage):
+@pytest.mark.parametrize("model", ["Composer 2.5", "composer-2.5", "Composer Pro 2.5"])
+def test_cursor_json_result_with_usage_records_a_priced_cost(tmp_path, brain, usage, model):
     lane_argv = adapters.build_command("cursor", "Implement it.", transport="local")
     assert "-p" in lane_argv  # Cursor's alias for --print.
     assert lane_argv[lane_argv.index("--output-format") + 1] == "json"
     offload_argv = adapters.build_command("cursor", "Review it.", transport="offload")
     assert offload_argv[offload_argv.index("--output-format") + 1] == "stream-json"
 
-    tokens_in, tokens_out, cost_usd, source = _reconcile_fixture(
-        tmp_path, model="Composer 2.5", usage=usage
-    )
+    tokens_in, tokens_out, cost_usd, source = _reconcile_fixture(tmp_path, model=model, usage=usage)
     assert source == "cursor-cli-json"
     assert (tokens_in, tokens_out) == (1000, 200)
     assert cost_usd == pytest.approx(0.001)
