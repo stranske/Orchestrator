@@ -1819,9 +1819,7 @@ def stuck_lane_targets(
                     report["rows"].append(
                         {
                             **row,
-                            "since": datetime.fromtimestamp(
-                                row["since"], timezone.utc
-                            ).isoformat(),
+                            "since": datetime.fromtimestamp(row["since"], timezone.utc).isoformat(),
                         }
                     )
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
