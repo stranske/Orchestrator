@@ -928,14 +928,11 @@ def _selftest():
 
     old_exploration_rate = os.environ.get("ORCH_EXPLORATION_RATE")
     old_handoff = os.environ.get("HANDOFF_DIR")
-    old_state_dir = os.environ.get("ORCH_STATE_DIR")
     old_feedback_db = feedback.DB_PATH
     old_claims_handoff = claims._handoff_dir
     os.environ["ORCH_EXPLORATION_RATE"] = "0"
     tmp_handoff = tempfile.mkdtemp(prefix="tick-selftest-handoff-")
     os.environ["HANDOFF_DIR"] = tmp_handoff
-    os.environ["ORCH_STATE_DIR"] = tmp_handoff
-    router._COMPARATIVE_EXPORT_CACHE.clear()
     # Role selector hooks intentionally record accepted/missed seams. Keep the
     # selftest evidence in a disposable Brain rather than the live learning DB.
     feedback.DB_PATH = Path(tmp_handoff) / "feedback.db"
@@ -1317,11 +1314,6 @@ def _selftest():
             os.environ.pop("HANDOFF_DIR", None)
         else:
             os.environ["HANDOFF_DIR"] = old_handoff
-        router._COMPARATIVE_EXPORT_CACHE.clear()
-        if old_state_dir is None:
-            os.environ.pop("ORCH_STATE_DIR", None)
-        else:
-            os.environ["ORCH_STATE_DIR"] = old_state_dir
         import shutil
 
         subject_conn.close()

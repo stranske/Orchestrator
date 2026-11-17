@@ -48,6 +48,8 @@ CAPACITY_JSON = HANDOFF / "capacity.json"
 BACKLOG_JSON = HANDOFF / "backlog.json"  # written by the (gh-backed) discovery step
 DECISION_JSON = HANDOFF / "routing-decision.json"
 _DEFAULT_STATE_DIR = Path.home() / ".codex" / "orchestrator"
+_DEFAULT_HANDOFF_DIR = Path.home() / ".codex" / "handoff"
+_DEFAULT_FEEDBACK_DB = feedback.DB_PATH
 ROUTE_WEIGHTS_EXPORT_NAME = "route-weights-export.json"
 _COMPARATIVE_EXPORT_CACHE: dict[Path, dict[str, Any] | None] = {}
 
@@ -378,7 +380,17 @@ def _local_comparative_enabled() -> bool:
 
 
 def _comparative_export_path() -> Path:
-    state_dir = Path(os.environ.get("ORCH_STATE_DIR") or _DEFAULT_STATE_DIR).expanduser()
+    if os.environ.get("ORCH_STATE_DIR"):
+        state_dir = Path(os.environ["ORCH_STATE_DIR"]).expanduser()
+    elif (
+        os.environ.get("HANDOFF_DIR")
+        and Path(os.environ["HANDOFF_DIR"]).expanduser() != _DEFAULT_HANDOFF_DIR
+    ):
+        state_dir = Path(os.environ["HANDOFF_DIR"]).expanduser()
+    elif Path(feedback.DB_PATH) != _DEFAULT_FEEDBACK_DB:
+        state_dir = Path(feedback.DB_PATH).parent
+    else:
+        state_dir = Path(_DEFAULT_STATE_DIR).expanduser()
     return state_dir / ROUTE_WEIGHTS_EXPORT_NAME
 
 
