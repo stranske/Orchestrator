@@ -31,10 +31,24 @@ def test_the_label_job_can_write_pull_requests_and_runs_no_pr_code():
     assert not any("checkout" in str(step.get("uses", "")) for step in job["steps"])
     assert "test-quality" in job["needs"]
     assert "deliberate_break_marker" in job["if"]
-    assert "acceptance-criteria-label" not in jobs["summary"]["needs"]
+    # Blocking (review on #1415): the runtime-AC merge guard keys on this label,
+    # so a failed write must fail Gate.
+    step = next(s for s in job["steps"] if s.get("name") == LABEL_STEP)
+    assert not step.get("continue-on-error")
+    assert "catch" not in step["with"]["script"]
+    summary = jobs["summary"]
+    assert "acceptance-criteria-label" in summary["needs"]
+    summarize = next(s for s in summary["steps"] if s.get("id") == "summarize")
+    assert (
+        "needs.acceptance-criteria-label.result == 'failure'"
+        in summarize["env"]["TEST_QUALITY_RESULT"]
+    )
 
 
 def test_test_quality_keeps_pull_requests_read_and_exports_the_marker():
     job = _jobs()["test-quality"]
     assert job["permissions"]["pull-requests"] == "read"
-    assert job["outputs"]["deliberate_break_marker"] == "${{ steps.deliberate_break.outputs.has_marker }}"
+    assert (
+        job["outputs"]["deliberate_break_marker"]
+        == "${{ steps.deliberate_break.outputs.has_marker }}"
+    )
