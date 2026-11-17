@@ -873,7 +873,7 @@ def reconcile(
 
     known = _known_runs()
     sources = _cost_sources()
-    protected_sources = {"ccusage", "imputed:subscription", *adapters.CURSOR_CLI_COST_SOURCES}
+    protected_sources = {"ccusage", "imputed:subscription"}
     writers_by_log = _writers_by_log(rows)
     written = 0
     marker_backfills = 0
@@ -929,6 +929,7 @@ def reconcile(
                 bucket = _settle_provider_limit_death(run_id, refusal, dry_run=dry_run)
                 provider_limit_deaths[bucket] += 1
         existing_source = sources.get(run_id)
+        protected_cursor_cost = existing_source in adapters.CURSOR_CLI_COST_SOURCES
         cursor_json_output = any(
             row.get("agent") == "cursor" and row.get("cursor_json_output") is True
             for row in run_rows
@@ -939,7 +940,7 @@ def reconcile(
             skipped[f"{existing_source}_cost_exists"] += 1
             continue
         # 16f/16h harvest from the run's log segment (same segment _log_usage scans).
-        if log_file is not None and not dry_run:
+        if log_file is not None and not dry_run and not protected_cursor_cost:
             seg = _log_segment(log_file, run_id, writers)
             agent = next((str(r.get("agent")) for r in run_rows if r.get("agent")), "")
             target = next((str(r.get("target")) for r in run_rows if r.get("target")), "")
@@ -982,7 +983,10 @@ def reconcile(
                 except Exception:
                     pass
         source = "ledger"
-        if cursor_json_output:
+        if protected_cursor_cost:
+            # Completion evidence can arrive after the terminal JSON was priced.
+            tokens_in, tokens_out, cost_usd = None, None, None
+        elif cursor_json_output:
             seg = _log_segment(log_file, run_id, writers) if log_file is not None else []
             result = adapters.cursor_json_result(seg)
             if result is None and existing_source == "langsmith":
@@ -1074,6 +1078,17 @@ def reconcile(
         elif signal_rc is not None and not dry_run:
             if feedback.mark_transient_infra(run_id, reason=f"marker rc={signal_rc}"):
                 infra_classified += 1
+        if protected_cursor_cost:
+            if not dry_run and latency_s > 0:
+                with feedback._conn() as c:
+                    updated = c.execute(
+                        "UPDATE costs SET latency_s=? WHERE run_id=? AND source IN (?,?,?) "
+                        "AND COALESCE(latency_s,0) < ?",
+                        (latency_s, run_id, *adapters.CURSOR_CLI_COST_SOURCES, latency_s),
+                    )
+                    written += updated.rowcount
+            skipped[f"{existing_source}_cost_exists"] += 1
+            continue
         if source == "ledger" and not (tokens_in or tokens_out or cost_usd or latency_s):
             skipped["no_measurement"] += 1
             continue

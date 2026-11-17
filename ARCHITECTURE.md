@@ -2040,7 +2040,8 @@ where 429-shed is the authoritative limiter for the other models) is ordinarily 
 (owner 2026-11-11: cursor and vibe held it at `partial`, so routing could never go live).
 Cursor lane dispatches capture the CLI's terminal JSON and print its decoded message in the
 run log. Ledger reconciliation records Composer 2.5 list-price dollars from the result's
-model and token counts, or a per-run reason when usage or pricing is unavailable. With at least
+model and token counts, or a per-run reason when usage or pricing is unavailable. Later ledger
+completion or done-marker evidence can recover latency while preserving that cost. With at least
 20 `cursor-cli-json` prices in the window, Cursor enters the LP at its mean dollars per run,
 subject to task demand. It has no modeled pool cap or capacity dual. If all Cursor runs in the
 window reported absent usage, the exclusion names that reason. A cost-only solve uses the

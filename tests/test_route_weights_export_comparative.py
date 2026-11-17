@@ -21,7 +21,7 @@ def fixture(tmp_path):
     with sqlite3.connect(db) as conn:
         conn.execute("DELETE FROM route_weights")
         for task, qualities in (("implement", (0.9, 0.6)), ("review", (0.8, 0.7))):
-            for agent, quality in zip(("codex", "cursor"), qualities):
+            for agent, quality in zip(("codex", "claude"), qualities):
                 conn.execute(
                     "INSERT INTO route_weights VALUES (2,0,?,?,0,?,20,0.5,0,0,'',0,0)",
                     (task, agent, quality),
@@ -37,8 +37,8 @@ def fixture(tmp_path):
             [
                 ("a1", NOW - 30, "codex", "implement", "orchestrator_local"),
                 ("a2", NOW - 30, "codex", "review", "keepalive"),
-                ("b1", NOW - 30, "cursor", "implement", "orchestrator_local"),
-                ("b2", NOW - 30, "cursor", "review", "keepalive"),
+                ("b1", NOW - 30, "claude", "implement", "orchestrator_local"),
+                ("b2", NOW - 30, "claude", "review", "keepalive"),
             ],
         )
     snapshot = {
@@ -56,17 +56,19 @@ def fixture(tmp_path):
                     "burn_per_day": 1.0,
                 },
             }
-            for agent, allowed in (("codex", 0.75), ("cursor", 1.0))
+            for agent, allowed in (("codex", 0.75), ("claude", 1.0))
         },
     }
     return db, snapshot
 
 
-def test_export_carries_comparative_rank_and_keeps_v1_order(tmp_path):
+def test_export_carries_comparative_rank_and_keeps_v1_order(tmp_path, monkeypatch):
     db, snapshot = fixture(tmp_path)
+    # Exercise re-ranking with both paced seats eligible for the main ranking.
+    monkeypatch.setattr(export.router, "RESERVE_AGENTS", set())
     doc = export.build_document(db, now=NOW, capacity_snapshot=snapshot)
     ranking = doc["task_types"]["review"]["ranking"]
-    assert [row["agent"] for row in ranking] == ["codex", "cursor"]
+    assert [row["agent"] for row in ranking] == ["codex", "claude"]
     assert [row["comparative_rank"] for row in ranking] == [2, 1]
     assert [row["posterior"] for row in ranking] == [0.8, 0.7]
     assert doc["schema"] == "orchestrator.route-weights/v1"
@@ -139,14 +141,14 @@ def test_local_tokens_scale_class_cost_and_remote_tokens_do_not(tmp_path):
         )
     result = comparative.measure(db, snapshot, now=NOW)
     assert result["inputs"]["cost"]["codex"] == {"implement": 10.5, "review": 3.5}
-    assert result["inputs"]["cost"]["cursor"] == {"implement": 7.0, "review": 7.0}
+    assert result["inputs"]["cost"]["claude"] == {"implement": 7.0, "review": 7.0}
     assert result["inputs"]["demand"] == pytest.approx({"implement": 1 / 7, "review": 1 / 7})
 
 
 def test_subscription_price_is_zero_and_metered_price_needs_complete_row(tmp_path):
     db, snapshot = fixture(tmp_path)
     result = comparative.measure(db, snapshot, now=NOW)
-    assert result["inputs"]["price"] == {"codex": 0.0, "cursor": 0.0}
+    assert result["inputs"]["price"] == {"codex": 0.0, "claude": 0.0}
     snapshot["pools"]["codex-metered"] = snapshot["pools"].pop("codex-subscription")
     result = comparative.measure(db, snapshot, now=NOW)
     assert result["status"] == "partial"
@@ -159,7 +161,7 @@ def test_subscription_price_is_zero_and_metered_price_needs_complete_row(tmp_pat
 def test_threshold_window_zero_burn_and_read_only_database(tmp_path):
     db, snapshot = fixture(tmp_path)
     with sqlite3.connect(db) as conn:
-        conn.execute("UPDATE route_weights SET n_obs=19 WHERE agent='cursor'")
+        conn.execute("UPDATE route_weights SET n_obs=19 WHERE agent='claude'")
         conn.execute(
             "INSERT INTO runs VALUES ('old',?,'codex','implement','local')", (NOW - 15 * 86400,)
         )
@@ -178,11 +180,6 @@ def test_threshold_window_zero_burn_and_read_only_database(tmp_path):
 
 def test_report_counts_distinct_hours_and_slack_verdict(tmp_path):
     db, snapshot = fixture(tmp_path)
-    with sqlite3.connect(db) as conn:
-        conn.execute("UPDATE route_weights SET agent='claude' WHERE agent='cursor'")
-        conn.execute("UPDATE runs SET agent='claude' WHERE agent='cursor'")
-    snapshot["pools"]["claude-subscription"] = snapshot["pools"].pop("cursor-subscription")
-    snapshot["pools"]["claude-subscription"]["agent"] = "claude"
     later = copy.deepcopy(snapshot)
     later["generated_at"] += 3600
     path = tmp_path / "pacing-history.ndjson"
@@ -279,7 +276,7 @@ def test_fresh_snapshot_cannot_refresh_stale_pacing(tmp_path):
 def test_opportunity_cost_includes_classes_outside_the_hosted_export(tmp_path):
     db, snapshot = fixture(tmp_path)
     with sqlite3.connect(db) as conn:
-        for agent, quality in (("codex", 0.99), ("cursor", 0.2)):
+        for agent, quality in (("codex", 0.99), ("claude", 0.2)):
             conn.execute(
                 "INSERT INTO route_weights VALUES (2,0,'analysis',?,0,?,20,0.5,0,0,'',0,0)",
                 (agent, quality),
@@ -289,11 +286,12 @@ def test_opportunity_cost_includes_classes_outside_the_hosted_export(tmp_path):
                 (f"{agent}-analysis", NOW - 30, agent),
             )
     snapshot["pools"]["codex-subscription"]["pacing"]["effective_reserve"] = 0.38
-    snapshot["pools"]["cursor-subscription"]["pacing"]["burn_per_day"] = 0.01
+    snapshot["pools"]["claude-subscription"]["pacing"]["burn_per_day"] = 0.01
     doc = export.build_document(db, now=NOW, capacity_snapshot=snapshot)
     assert "analysis" not in doc["task_types"]
     assert doc["comparative"]["assignment"]["analysis"]["codex"] > 0
-    assert [row["comparative_rank"] for row in doc["task_types"]["implement"]["ranking"]] == [2, 1]
+    assert doc["task_types"]["implement"]["ranking"][0]["comparative_rank"] == 2
+    assert doc["reserve"]["implement"][0]["comparative_rank"] == 1
 
 
 @pytest.fixture
@@ -349,7 +347,7 @@ def test_realistic_units_bind_codex_and_clamp_over_reserve(agents_fixture):
             "INSERT INTO runs VALUES (?,?,?,?,?)",
             [
                 (str(i), NOW - 30, a, "implement", "orchestrator_local")
-                for i, a in enumerate(["codex"] * 560 + ["cursor"] * 560)
+                for i, a in enumerate(["codex"] * 560 + ["claude"] * 560)
             ],
         )
     for a, row in snapshot["agents"].items():
@@ -368,7 +366,7 @@ def test_realistic_units_bind_codex_and_clamp_over_reserve(agents_fixture):
     assert r["usage"]["codex"] == pytest.approx(0.15)
     assert r["lambda"]["codex"] > 0
     snapshot["agents"]["codex"]["pacing"]["used_fraction"] = 0.9
-    snapshot["agents"]["cursor"]["pacing"]["period_end"] = NOW + 86400
+    snapshot["agents"]["claude"]["pacing"]["period_end"] = NOW + 86400
     r = comparative.measure(db, snapshot, now=NOW)
     assert r["inputs"]["budget"]["codex"] == 0
     assert r["inputs"]["cost_source_by_agent"]["codex"]["over_reserve"] is True
@@ -400,10 +398,6 @@ def test_two_paced_agents_and_one_unpaced_export_partial(agents_fixture):
 
 def test_ledger_filter_ts_and_one_stale_hour_keeps_window_verdict(agents_fixture, tmp_path):
     db, snapshot = agents_fixture
-    with sqlite3.connect(db) as conn:
-        conn.execute("UPDATE route_weights SET agent='claude' WHERE agent='cursor'")
-        conn.execute("UPDATE runs SET agent='claude' WHERE agent='cursor'")
-    snapshot["agents"]["claude"] = snapshot["agents"].pop("cursor")
     rows = []
     for i in range(12):
         row = copy.deepcopy(snapshot)
@@ -468,7 +462,7 @@ def main_680_pacing_fixture(tmp_path):
     """Use evaluate() itself so unknown reset inventory matches the live contract."""
     db, snapshot = fixture(tmp_path)
     snapshot["agents"] = {}
-    for agent in ("codex", "cursor"):
+    for agent in ("codex", "claude"):
         row = pacing.evaluate(
             agent,
             now=NOW,
@@ -495,7 +489,7 @@ def test_main_680_unknown_resets_remain_optimal(main_680_pacing_fixture):
     db, snapshot = main_680_pacing_fixture
     result = comparative.measure(db, snapshot, now=NOW)
     assert result["status"] == "optimal"
-    assert result["inputs"]["budget"] == pytest.approx(dict(codex=0.456, cursor=0.456))
+    assert result["inputs"]["budget"] == pytest.approx(dict(codex=0.456, claude=0.456))
     assert result["inputs"]["cost_source_by_agent"]["codex"]["over_reserve"] is False
 
 
@@ -637,10 +631,6 @@ def test_comparative_uses_export_threshold(tmp_path, minimum):
 
 def test_stale_claude_suppresses_every_export_rank(agents_fixture):
     db, snapshot = agents_fixture
-    with sqlite3.connect(db) as conn:
-        conn.execute("UPDATE route_weights SET agent='claude' WHERE agent='cursor'")
-        conn.execute("UPDATE runs SET agent='claude' WHERE agent='cursor'")
-    snapshot["agents"]["claude"] = snapshot["agents"].pop("cursor")
     snapshot["agents"]["claude"]["pacing"]["ts"] = NOW - 20.1 * 3600
     doc = export.build_document(db, now=NOW, capacity_snapshot=snapshot)
     assert doc["comparative"]["status"] == "partial"
@@ -785,7 +775,7 @@ def test_route_flag_flip_republishes(tmp_path, monkeypatch):
     with sqlite3.connect(db) as conn:
         conn.execute("DELETE FROM route_weights")
         for task, qualities in (("implement", (0.9, 0.6)), ("review", (0.8, 0.7))):
-            for agent, quality in zip(("codex", "cursor"), qualities):
+            for agent, quality in zip(("codex", "claude"), qualities):
                 conn.execute(
                     "INSERT INTO route_weights VALUES (2,0,?,?,0,?,20,0.5,0,0,'',0,0)",
                     (task, agent, quality),
@@ -798,7 +788,7 @@ def test_route_flag_flip_republishes(tmp_path, monkeypatch):
         )
         # Add runs for both agents within the window
         now_val = int(dt.datetime.fromisoformat(comparative.ROUTE_GO_LIVE).timestamp()) + 86400
-        for i, (agent, task) in enumerate([("codex", "implement"), ("cursor", "review")]):
+        for i, (agent, task) in enumerate([("codex", "implement"), ("claude", "review")]):
             conn.execute(
                 "INSERT INTO runs VALUES (?,?,?,?,'orchestrator_local')",
                 (f"run{i}", now_val - 30, agent, task),
@@ -823,8 +813,8 @@ def test_route_flag_flip_republishes(tmp_path, monkeypatch):
                         "observed_at": base_now - 900,  # 15 minutes ago (fresh)
                     },
                 },
-                "cursor-subscription": {
-                    "agent": "cursor",
+                "claude-subscription": {
+                    "agent": "claude",
                     "pacing": {
                         "state": "ok",
                         "used_fraction": 0.3,

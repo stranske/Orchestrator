@@ -5575,8 +5575,7 @@ def _selftest() -> None:
         assert (
             offload_argv[offload_argv.index("--output-format") + 1] == "stream-json"
         ), offload_argv
-        # And the long-running dispatch path is deliberately UNCHANGED: its output is parsed
-        # elsewhere, so reshaping it is a separate and riskier change.
+        # Local dispatch uses the single terminal result for cost reconciliation.
         local_argv = adapters.build_command(
             "cursor", "p", "composer", cwd=str(nongit), transport="local"
         )

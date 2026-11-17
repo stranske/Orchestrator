@@ -321,7 +321,7 @@ def measure(
             sources[agent]["reason"] = f"{location}: {reason}"
 
         agent_runs = [row for row in runs if row["agent"] == agent]
-        if agent == "cursor" and pacing is None:
+        if agent == "cursor":
             priced = [
                 row["cost_usd"]
                 for row in agent_runs
