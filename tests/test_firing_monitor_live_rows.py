@@ -127,6 +127,71 @@ def test_the_report_declares_its_population_under_the_graders_key(tmp_path, monk
         "held_off_kinds": list(monitor.HOLD_KINDS),
         "held_off_excluded_from": list(monitor.SILENCE_FINDINGS),
     }
+    # Detect retired execution beside real live silences and a stored regression baseline.
+    # The diagnostic must not change the findings, population, accounting or heartbeat call.
+    ledger = _ledger(tmp_path)
+    monkeypatch.setattr(monitor, "STATE_DIR", tmp_path / "state")
+    monkeypatch.setattr(monitor, "HISTORY", tmp_path / "history.json")
+    monkeypatch.delenv("ORCH_CAPABILITY_HEARTBEATS", raising=False)
+    monitor.record(monitor.review(now=NOW, path=ledger))
+    later = NOW + 8 * 86400
+    before = monitor.review(now=later, path=ledger)
+    assert before["never_fired"] == ["live-silent"]
+    assert _ids(before, "overdue") == {"live-stale"}
+    assert _ids(before, "regressed") == {"live-stale"}
+    assert before["retired_but_invoked_count"] == 0
+
+    rows = capabilities.load_declared(ledger)
+    retirement = {"type": "transition", "to": "retired", "timestamp": NOW}
+    rows["retired-silent"]["event_history"].append(retirement)
+    rows["retired-silent"]["kill_switch"] = "disable retired producer"
+    capabilities.save(rows, ledger)
+    capabilities.heartbeat(
+        "retired-silent", "invocation", timestamp=later - 1, ref="run:late", path=ledger
+    )
+    ledger_before = ledger.read_bytes()
+    history_before = monitor.HISTORY.read_bytes()
+    heartbeat_calls = []
+    monkeypatch.setattr(
+        capabilities,
+        "production_heartbeat",
+        lambda *args, **kwargs: heartbeat_calls.append((args, kwargs)),
+    )
+
+    after = monitor.review(now=later, path=ledger)
+
+    assert after["retired_but_invoked_count"] == 1
+    assert after["retired_but_invoked_measurement"] == "measured"
+    assert after["retired_but_invoked"] == [
+        {
+            "capability_id": "retired-silent",
+            "retirement": retirement,
+            "invocations": [{"type": "invocation", "timestamp": later - 1, "ref": "run:late"}],
+            "kill_switch": "disable retired producer",
+        }
+    ]
+    for key in (
+        capabilities.FINDING_POPULATION_KEY,
+        *monitor.SILENCE_FINDINGS,
+        "no_cadence_declared",
+        "not_tick_observable",
+        "not_monitored",
+        "not_monitored_count",
+        "total",
+        "ledger_total",
+        "fired_ever",
+        "overdue_count",
+        "held_off",
+        "held_off_count",
+        "silence_evidence",
+        "snapshots_stored",
+    ):
+        assert after[key] == before[key], key
+    assert heartbeat_calls == [
+        (("capability-firing-monitor", "invocation"), {"ref": "capability_firing_monitor.review"})
+    ]
+    assert ledger.read_bytes() == ledger_before
+    assert monitor.HISTORY.read_bytes() == history_before
 
 
 def test_invocation_after_retirement_is_named(tmp_path, monkeypatch):

@@ -193,3 +193,52 @@ Automatic approval review rejected publishing the PR evidence comment, adding
 `MCP tool call requires approval, but approval policy is never`. The remote
 checklist remains unchanged, and publication of the deliberate-break evidence
 remains incomplete. PR 1426 was verified open and ready (`draft=false`).
+
+## Mixed-population validation — 2026-11-17
+
+Extended the existing population test in `tests/test_firing_monitor_live_rows.py`
+with a retired invocation beside actual live `never_fired`, `overdue`, and
+`regressed` findings and a stored snapshot. It verifies retirement/invocation
+evidence and the kill switch while preserving the live findings, declared
+population, non-live accounting, counts, snapshot bytes, ledger bytes, and the
+monitor's production heartbeat call. This extends an existing collected test;
+the collection floor is unchanged.
+
+Verified with Python 3.14.10 and pytest 9.0.2 from official upstream sources in
+`/tmp`, with `-m "not slow"` on every pytest invocation:
+
+```text
+Named acceptance test: 1 passed
+tests/test_firing_monitor_live_rows.py: 25 passed in 0.28s
+tests/test_gate_expiry_renewal.py: 27 passed
+Both complete files after the final test edit: 52 passed in 1.15s
+git diff --check: passed
+```
+
+The deliberate break temporarily inserted an unconditional `return None` at the
+start of `invoked_after_retirement`. The named test failed with `assert 0 == 1`
+(`1 failed in 0.25s`, exit 1), demonstrating the zero retired count. A `finally`
+block restored the original source bytes; the identical named command then
+reported `1 passed in 0.21s`, exit 0. The final complete-file run above also
+passed after restoration. `git diff -- src/capabilities.py` is empty.
+
+The earlier repository-wide formatting blocker is resolved using **Black
+26.10.1**, the version pinned in `ci-python-versions.env`. Its official upstream
+sources and dependencies were loaded into `/tmp`; no repository dependency was
+changed. A temporary launcher dispatches every file through Black's normal
+single-file checker because background worker reporting stalls in this sandbox.
+Formatting and AST checks remain enabled. The changed test file was formatted
+at line length 100, and the mandatory full command passed:
+
+```text
+black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .
+714 files would be left unchanged. (exit 0)
+```
+
+Delivery remains blocked. Staging the exact test file failed with
+`Unable to create .git/index.lock: Read-only file system`; no commit or push
+was possible. Automatic approval review rejected both the PR evidence comment
+and the `needs-human` label with `MCP tool call requires approval, but approval
+policy is never`. The source/test change and these results remain local, and
+remote task checkboxes remain unchanged. A writable Git mount and an approved
+GitHub mutation path are still needed to commit and publish the verified work.
