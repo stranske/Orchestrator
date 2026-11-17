@@ -86,6 +86,21 @@ SHED_EXPIRED_GRACE_S = 86400
 STUCK_MIN_ROUNDS = 6
 STUCK_MIN_SPAN_S = 3600
 STUCK_JOURNAL_LINES = 200
+# Decisions that are a deliberate, bounded hold rather than a stall, in each lane's own words (read from the
+# live journals 2026-11-17: 44 of 45 first-run "suspects" were these). already-pr_linked: the opener handed the
+# issue to the closer; probe / skip-held / wait-hold: the closer's hold labels and paused probes.
+STUCK_HOLD_ACTIONS = frozenset(
+    {
+        "already-parked",
+        "already-pr_linked",
+        "already-reserved",
+        "complete",
+        "probe",
+        "skip-held",
+        "wait-hold",
+    }
+)
+STUCK_HOLD_REASONS = ("held:", "dependency-bot PR opened under")
 
 # Fleet template-delivery gates (Maint 68 promote + sync-branch canaries). Same horizon as switch
 # review: a chain latched for a week with open canaries is the failure mode observed 2026-09-02.
@@ -1760,12 +1775,17 @@ def stuck_lane_targets(
                 decisions = {}
                 for item in items:
                     target, action = item.get("target"), item.get("action")
-                    reason = item.get("reason") or item.get("error") or ""
-                    if not all(isinstance(v, str) for v in (target, action, reason)):
+                    if target is None:
+                        continue  # a round-level summary names no target
+                    reason, error = item.get("reason"), item.get("error")
+                    if not all(isinstance(v, str) for v in (target, action)) or any(
+                        value is not None and not isinstance(value, str)
+                        for value in (reason, error)
+                    ):
                         raise ValueError("item target, action and reason/error must be text")
                     if not target or not action:
                         raise ValueError("item target and action must not be empty")
-                    decisions[target] = (action, reason)
+                    decisions[target] = (action, reason or error or "")
                 current = {}
                 for target, (action, reason) in decisions.items():
                     prior = runs.get(target)
@@ -1788,15 +1808,17 @@ def stuck_lane_targets(
                 rounds_read += 1
             report["rounds_read"][lane] = rounds_read
             for row in runs.values():
-                deliberate_hold = row["action"] in {"already-parked", "complete"} or (
-                    row["action"] in {"skip", "skip-held"} and row["reason"].startswith("held:")
+                deliberate_hold = row["action"] in STUCK_HOLD_ACTIONS or (
+                    row["reason"].startswith(STUCK_HOLD_REASONS)
                 )
                 if (
                     row["rounds"] >= STUCK_MIN_ROUNDS
                     and latest_stamp - row["since"] >= STUCK_MIN_SPAN_S
                     and not deliberate_hold
                 ):
-                    report["rows"].append(row)
+                    report["rows"].append(
+                        {**row, "since": datetime.fromtimestamp(row["since"], timezone.utc).isoformat()}
+                    )
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
             errors.append(f"{lane}: {journal} unreadable ({type(exc).__name__}: {exc})")
     report["rows"].sort(key=lambda row: (-row["rounds"], row["since"], row["lane"], row["target"]))
@@ -2533,7 +2555,7 @@ def review(
         "gate_expiry": gate_expiry(now=now, path=path),
         # And a seat stood down by hand is a switch held off. FYI only, on the real clock.
         "capacity_shed": capacity_shed(),
-        "stuck_lane_targets": stuck_lane_targets(),
+        "stuck_lane_targets": stuck_lane_targets(now=now),
         "weekly_pacing": weekly_pacing_check(now=now),
         # Collected by the CLI, so pure readers/selftests never probe the host's interpreters.
         "python_standard": python_standard_report,
@@ -3414,7 +3436,7 @@ def format_stuck_lane_targets(section: dict) -> list[str]:
     if section["suspect"]:
         lines.append(f"  stuck lane targets: {section['suspect']} SUSPECT")
         for row in section["rows"][:5]:
-            since = datetime.fromtimestamp(row["since"], timezone.utc).isoformat()
+            since = row["since"]
             lines.append(
                 f"    {row['lane']} {row['target']}: {row['action']} — {row['reason']} "
                 f"({row['rounds']} rounds, since {since})"

@@ -742,6 +742,14 @@ step and input switches held off. Unknown demand never becomes zero. It changes 
 selection, gate, dispatcher or lifecycle decision; the existing weekly artifact carries
 the section rather than a second audit log or inventory.
 
+The same weekly report's `stuck_lane_targets` section reads the last 200 lines of
+the opener-core and closer-core round journals under `ORCH_STATE_DIR` (default
+`~/.codex/orchestrator`). Each target's newest consecutive run of identical action
+and reason/error text is SUSPECT after at least six rounds spanning one hour.
+Explicit parked, complete and `held:` skip decisions are excluded. The report names
+up to five suspects, prints measured round counts when drained, and preserves
+unreadable or malformed journals as unknown. It is FYI only and changes no lane state.
+
 **Its `outcome` step reads what became of a run from `outcomes`, and counts it with the one
 classifier of these edges (2026-10-11).** It counted an acted-on edge's own `outcome_verdict` and
 `durability`, the copy that `capability_effectiveness` stopped trusting the same day (see the
