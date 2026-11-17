@@ -611,11 +611,9 @@ def _no_live_comparative_export(monkeypatch, tmp_path):
 
     def isolated_export_path():
         resolved = real_path()
-        return (
-            isolated / router.ROUTE_WEIGHTS_EXPORT_NAME
-            if resolved == ambient_path
-            else resolved
-        )
+        if resolved == ambient_path:
+            return isolated / router.ROUTE_WEIGHTS_EXPORT_NAME
+        return resolved
 
     monkeypatch.setattr(router, "_comparative_export_path", isolated_export_path)
     monkeypatch.setattr(router, "_COMPARATIVE_EXPORT_CACHE", {})
