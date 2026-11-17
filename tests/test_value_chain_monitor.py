@@ -13,6 +13,7 @@ import capability_admission
 import capability_advisor
 import feedback
 import switch_review
+import triage_shadow
 import value_chain_monitor as monitor
 
 NOW = 1791183600
@@ -37,6 +38,9 @@ def isolated_adversarial_population(monkeypatch):
         "adversarial_shape_population",
         lambda **kw: {"status": "unknown", "reason": "unit-test fixture"},
     )
+    # Weekly review also reads the live triage journal and launches opener health.
+    monkeypatch.setattr(triage_shadow, "summary_line", lambda: "")
+    monkeypatch.setattr(switch_review, "fleet_delivery_measures", lambda **kw: {})
 
 
 def ledger(tmp_path, names=("role-prompt",)):
@@ -273,6 +277,124 @@ def test_missing_brain_is_unknown_and_does_not_create_database(tmp_path):
     assert result["completion_events"] is None
     assert result["errors"]
     assert not path.exists()
+
+
+def test_generic_row_without_success_signal_reports_usable_unmeasured(tmp_path):
+    capability = "capability-propensity"
+    path = ledger(tmp_path, (capability,))
+    capabilities.heartbeat(capability, "invocation", timestamp=NOW, path=path)
+    capabilities.heartbeat(capability, "output", ref="report.json", timestamp=NOW, path=path)
+
+    # Measured downstream zeros must not mask the unknown usable step.
+    inputs = {"cadence_inputs": {capability: 1}, "edges": []}
+    before = path.read_bytes()
+    section = monitor.report(now=NOW, path=path, env={}, inputs=inputs)
+    row = section["rows"][0]
+    assert row["situation_count"] == 1
+    assert row["offered"] == 0
+    assert row["invocation_count"] == 1
+    assert row["usable"] is None
+    assert row["acted_on"] == 0
+    assert row["outcome"] == 0
+    assert row["first_break"] is None
+    assert "usable_signal='success'" in row["usable_reason"]
+    text = "\n".join(monitor.format_lines(section))
+    assert f"usable unmeasured ({row['usable_reason']})" in text
+    assert "usable 0;" not in text
+    assert "usable None;" not in text
+    assert "first_break unmeasured" in text
+    assert path.read_bytes() == before
+
+    # The same readable event window measures zero only after an explicit declaration.
+    records = capabilities.load(path, create=False)
+    records[capability]["usable_signal"] = "success"
+    capabilities.save(records, path)
+    declared_before = path.read_bytes()
+    declared = monitor.report(now=NOW, path=path, env={}, inputs=inputs)
+    declared_row = declared["rows"][0]
+    assert declared_row["usable"] == 0
+    assert declared_row["first_break"] == "unusable"
+    assert "usable_reason" not in declared_row
+    for field in ("situation_count", "offered", "invocation_count", "acted_on", "outcome"):
+        assert declared_row[field] == row[field]
+    assert "usable 0;" in "\n".join(monitor.format_lines(declared))
+    assert path.read_bytes() == declared_before
+
+
+@pytest.mark.parametrize("success_count", [0, 1])
+@pytest.mark.parametrize("usable_signal", [None, "success"])
+def test_generic_row_with_success_signal_counts_only_eligible_successes(
+    tmp_path,
+    success_count,
+    usable_signal,
+):
+    capability = "capability-propensity"
+    path = tmp_path / "capabilities.json"
+    declaration = {"status": "wired"}
+    if usable_signal is not None:
+        declaration["usable_signal"] = usable_signal
+    capabilities.register(capability, declaration, path)
+    capabilities.heartbeat(capability, "invocation", timestamp=NOW, path=path)
+    for event in (
+        {"timestamp": NOW - monitor.WINDOW_DAYS * 86400 - 1},
+        {"timestamp": NOW + 1},
+        {"timestamp": NOW, "metadata": {"evidence_provenance": "fixture_observed"}},
+        {"timestamp": NOW, "metadata": {"verdict_provenance": "fixture_observed"}},
+        {"timestamp": NOW, "metadata": {"evidence_source": "fixture_observed"}},
+        {"timestamp": NOW, "metadata": {"evidence_weight": 0}},
+        {"timestamp": NOW, "metadata": {"experiment_id": "experiment-1"}},
+        {"timestamp": NOW, "ref": "advice:trial"},
+    ):
+        capabilities.heartbeat(capability, "success", path=path, **event)
+    if success_count:
+        capabilities.heartbeat(capability, "success", timestamp=NOW, path=path)
+
+    # Excluded successes update the cached timestamp too; it cannot prove usability.
+    assert capabilities.load(path, create=False)[capability]["last_success"] == NOW + 1
+    before = path.read_bytes()
+    inputs = {"cadence_inputs": {capability: 1}}
+    section = monitor.report(now=NOW, path=path, env={}, inputs=inputs)
+    row = section["rows"][0]
+    text = "\n".join(monitor.format_lines(section))
+    if usable_signal is None and success_count == 0:
+        assert row["usable"] is None
+        assert row["first_break"] is None
+        assert f"usable unmeasured ({row['usable_reason']})" in text
+    else:
+        assert row["usable"] == success_count
+        assert row["first_break"] == (None if success_count else "unusable")
+        assert "usable_reason" not in row
+        assert f"usable {success_count};" in text
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("declared", [False, True])
+def test_generic_success_count_includes_both_window_boundaries(tmp_path, declared):
+    capability = "capability-propensity"
+    path = tmp_path / "capabilities.json"
+    declaration = {"status": "wired"}
+    if declared:
+        declaration["usable_signal"] = "success"
+    capabilities.register(capability, declaration, path)
+    capabilities.heartbeat(capability, "invocation", timestamp=NOW, path=path)
+    for stamp in (NOW - monitor.WINDOW_DAYS * 86400, NOW):
+        capabilities.heartbeat(capability, "success", timestamp=stamp, path=path)
+
+    section = monitor.report(now=NOW, path=path, env={}, inputs={"cadence_inputs": {capability: 1}})
+    row = section["rows"][0]
+    assert row["usable"] == 2
+    assert "usable_reason" not in row
+    assert "usable 2;" in "\n".join(monitor.format_lines(section))
+
+
+def test_generic_report_does_not_measure_an_unread_ledger(tmp_path):
+    path = tmp_path / "capabilities.json"
+    assert monitor.report(now=NOW, path=path, env={})["rows"] == []
+    assert not path.exists()
+
+    path.write_text("{")
+    with pytest.raises(json.JSONDecodeError):
+        monitor.report(now=NOW, path=path, env={})
 
 
 def test_counts_exclude_fixture_trials_and_ungraded_edges(tmp_path):
