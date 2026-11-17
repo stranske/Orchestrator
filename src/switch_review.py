@@ -56,6 +56,7 @@ import statistics
 import subprocess
 import sys
 import time
+from collections import deque
 from collections.abc import Callable, Mapping
 from contextlib import closing
 from datetime import datetime, timezone
@@ -81,6 +82,10 @@ SHED_MANUAL_HORIZON_DAYS = 2 * REVIEW_DAYS
 # An expired marker leaves at the first capacity read after its expiry, and the tick reads capacity
 # on every run, before this step (orchestrate.sh). One still on disk a day later is not leaving.
 SHED_EXPIRED_GRACE_S = 86400
+
+STUCK_MIN_ROUNDS = 6
+STUCK_MIN_SPAN_S = 3600
+STUCK_JOURNAL_LINES = 200
 
 # Fleet template-delivery gates (Maint 68 promote + sync-branch canaries). Same horizon as switch
 # review: a chain latched for a week with open canaries is the failure mode observed 2026-09-02.
@@ -1699,6 +1704,106 @@ def capacity_shed(*, now: float | None = None, shed_dir: Path | None = None) -> 
     return report
 
 
+def stuck_lane_targets(
+    *, now: float | None = None, roots: Mapping[str, Path] | None = None
+) -> dict:
+    """FYI: identical decisions persisting across consecutive lane rounds.
+
+    ``roots`` maps opener-core/closer-core to their journal directories; by default
+    both live under ORCH_STATE_DIR. Only the last 200 physical lines are examined.
+    A changed decision or a round without the target drains its streak. Count each
+    target once per round, using its last item (the round's final decision).
+    Missing, unreadable or malformed journals are unknown, never a measured zero.
+    """
+    now = time.time() if now is None else now
+    lanes = ("opener-core", "closer-core")
+    if roots is None:
+        state = Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex" / "orchestrator"))
+        roots = {lane: state / lane for lane in lanes}
+    report: dict = {
+        "status": "ok",
+        "rows": [],
+        "suspect": 0,
+        "rounds_read": dict.fromkeys(lanes),
+    }
+    errors = []
+    for lane in lanes:
+        journal = Path(roots[lane]) / "rounds.jsonl" if lane in roots else None
+        try:
+            if journal is None:
+                raise ValueError(f"no journal root configured for {lane}")
+            with journal.open(encoding="utf-8") as stream:
+                tail = deque(stream, maxlen=STUCK_JOURNAL_LINES)
+            runs: dict[str, dict] = {}
+            rounds_read = 0
+            previous_stamp = None
+            latest_stamp = 0.0
+            for line in tail:
+                if not line.strip():
+                    continue
+                round_ = json.loads(line)
+                parsed_stamp = datetime.fromisoformat(round_["ts"].replace("Z", "+00:00"))
+                if parsed_stamp.tzinfo is None:
+                    raise ValueError("round timestamp has no timezone")
+                stamp = parsed_stamp.timestamp()
+                if previous_stamp is not None and stamp < previous_stamp:
+                    raise ValueError("round timestamps are out of order")
+                previous_stamp = stamp
+                items = round_["items"]
+                if not isinstance(items, list) or any(not isinstance(i, dict) for i in items):
+                    raise ValueError("round items must be a list of objects")
+                if stamp > now:
+                    continue
+                latest_stamp = stamp
+                decisions = {}
+                for item in items:
+                    target, action = item.get("target"), item.get("action")
+                    reason = item.get("reason") or item.get("error") or ""
+                    if not all(isinstance(v, str) for v in (target, action, reason)):
+                        raise ValueError("item target, action and reason/error must be text")
+                    if not target or not action:
+                        raise ValueError("item target and action must not be empty")
+                    decisions[target] = (action, reason)
+                current = {}
+                for target, (action, reason) in decisions.items():
+                    prior = runs.get(target)
+                    if prior is not None and (prior["action"], prior["reason"]) == (
+                        action,
+                        reason,
+                    ):
+                        count, since = prior["rounds"] + 1, prior["since"]
+                    else:
+                        count, since = 1, stamp
+                    current[target] = {
+                        "lane": lane,
+                        "target": target,
+                        "action": action,
+                        "reason": reason,
+                        "rounds": count,
+                        "since": since,
+                    }
+                runs = current
+                rounds_read += 1
+            report["rounds_read"][lane] = rounds_read
+            for row in runs.values():
+                deliberate_hold = row["action"] in {"already-parked", "complete"} or (
+                    row["action"] in {"skip", "skip-held"} and row["reason"].startswith("held:")
+                )
+                if (
+                    row["rounds"] >= STUCK_MIN_ROUNDS
+                    and latest_stamp - row["since"] >= STUCK_MIN_SPAN_S
+                    and not deliberate_hold
+                ):
+                    report["rows"].append(row)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            errors.append(f"{lane}: {journal} unreadable ({type(exc).__name__}: {exc})")
+    report["rows"].sort(key=lambda row: (-row["rounds"], row["since"], row["lane"], row["target"]))
+    report["suspect"] = len(report["rows"])
+    if errors:
+        report.update(status="unknown", measurement="unmeasured: " + "; ".join(errors))
+    return report
+
+
 def _shed_row(marker: dict, entry: Path, *, now: float) -> dict:
     import capacity
 
@@ -2426,6 +2531,7 @@ def review(
         "gate_expiry": gate_expiry(now=now, path=path),
         # And a seat stood down by hand is a switch held off. FYI only, on the real clock.
         "capacity_shed": capacity_shed(),
+        "stuck_lane_targets": stuck_lane_targets(),
         "weekly_pacing": weekly_pacing_check(now=now),
         # Collected by the CLI, so pure readers/selftests never probe the host's interpreters.
         "python_standard": python_standard_report,
@@ -3203,6 +3309,9 @@ def format_report(rep: dict) -> str:
     shed = rep.get("capacity_shed")
     if shed is not None:
         lines += format_capacity_shed(shed)
+    stuck = rep.get("stuck_lane_targets")
+    if stuck is not None:
+        lines += format_stuck_lane_targets(stuck)
     refusals = rep.get("worktree_git_refusals")
     if refusals is not None:
         lines += format_worktree_git_refusals(refusals)
@@ -3224,6 +3333,7 @@ def format_report(rep: dict) -> str:
             or (expiry.get("status") == "ok" and not expiry["expiring"] and not expiry["lapsed"])
         )
         and (shed is None or (shed.get("status") == "ok" and shed.get("suspect") == 0))
+        and (stuck is None or (stuck.get("status") == "ok" and stuck.get("suspect") == 0))
     ):
         lines += ["  Nothing due. Every switch is either triggering or has a fresh decision.", ""]
     return "\n".join(lines)
@@ -3292,6 +3402,28 @@ def format_gate_expiry(section: dict) -> list[str]:
         "",
     ]
     return lines
+
+
+def format_stuck_lane_targets(section: dict) -> list[str]:
+    """Always name the drained state; partial measurements retain known suspects."""
+    lines = ["## Stuck lane targets (FYI only)", ""]
+    if section["status"] != "ok":
+        lines.append(f"  stuck lane targets: unknown — {section['measurement']}")
+    if section["suspect"]:
+        lines.append(f"  stuck lane targets: {section['suspect']} SUSPECT")
+        for row in section["rows"][:5]:
+            since = datetime.fromtimestamp(row["since"], timezone.utc).isoformat()
+            lines.append(
+                f"    {row['lane']} {row['target']}: {row['action']} — {row['reason']} "
+                f"({row['rounds']} rounds, since {since})"
+            )
+    elif section["status"] == "ok":
+        counts = section["rounds_read"]
+        lines.append(
+            f"  stuck lane targets: none (opener {counts['opener-core']} rounds, "
+            f"closer {counts['closer-core']} rounds read)"
+        )
+    return lines + [""]
 
 
 def format_capacity_shed(section: dict) -> list[str]:
