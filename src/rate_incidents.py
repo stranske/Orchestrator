@@ -720,13 +720,6 @@ def _idempotency_key(run_id: str, agent: str, category: str, surface: str) -> st
     return f"{run_id}|{agent}|{category}"
 
 
-def _existing_idempotency_key(key: str) -> str | None:
-    for row in reversed(_recent_rows()):
-        if row.get("idempotency_key") == key:
-            return row.get("incident_id")
-    return None
-
-
 def _recent_rows() -> list[dict[str, Any]]:
     """The ledger's rows within its bounded suffix, oldest first; unreadable rows are skipped."""
     if not INCIDENT_FILE.exists():
@@ -750,6 +743,32 @@ def _recent_rows() -> list[dict[str, Any]]:
         if isinstance(row, dict):
             rows.append(row)
     return rows
+
+
+def _existing_incident_context(
+    key: str,
+) -> tuple[dict[str, Any] | None, set[str], set[str]]:
+    parsed_rows = _recent_rows()
+    match_index: int | None = None
+    for index, row in enumerate(parsed_rows):
+        if row.get("idempotency_key") == key:
+            match_index = index
+    if match_index is None:
+        return None, set(), set()
+    matched = dict(parsed_rows[match_index])
+    earlier_ids = {str(r["incident_id"]) for r in parsed_rows[:match_index] if r.get("incident_id")}
+    later_rows = parsed_rows[match_index + 1 :]
+    later_ids = {str(r["incident_id"]) for r in later_rows if r.get("incident_id")}
+    if any(
+        r.get("agent") == matched.get("agent") and _is_incident_recovered(r) for r in later_rows
+    ):
+        matched["recovered"] = True
+    return matched, earlier_ids, later_ids
+
+
+def _existing_idempotency_key(key: str) -> str | None:
+    matched, _, _ = _existing_incident_context(key)
+    return matched.get("incident_id") if matched else None
 
 
 def _cooldown_seconds(
@@ -942,6 +961,182 @@ def ensure_shed(
                 temporary.unlink(missing_ok=True)
 
 
+_RECOVERED_STATUSES = frozenset({"recovered", "cleared", "resolved"})
+
+
+def _is_recovered_fields(
+    *,
+    status: str | None = None,
+    next_success_at: int | None = None,
+    extra: Mapping[str, Any] | None = None,
+) -> bool:
+    if next_success_at is not None:
+        return True
+    if isinstance(status, str) and status.strip().lower() in _RECOVERED_STATUSES:
+        return True
+    if isinstance(extra, Mapping) and bool(extra.get("recovered") or extra.get("cleared")):
+        return True
+    return False
+
+
+def _is_incident_recovered(row: Mapping[str, Any]) -> bool:
+    if bool(row.get("recovered") or row.get("cleared")):
+        return True
+    if row.get("recovered_at") is not None or row.get("cleared_at") is not None:
+        return True
+    extra = row.get("extra") if isinstance(row.get("extra"), Mapping) else None
+    return _is_recovered_fields(
+        status=row.get("status") if isinstance(row.get("status"), str) else None,
+        next_success_at=row.get("next_success_at"),
+        extra=extra,
+    )
+
+
+def _mark_incident_recovered_locked(
+    *,
+    agent: str,
+    incident_id: str | None = None,
+    cleared_at: int | None = None,
+    next_success_at: int | None = None,
+) -> None:
+    if not INCIDENT_FILE.exists() or not INCIDENT_FILE.is_file():
+        return
+    try:
+        lines = INCIDENT_FILE.read_text(encoding="utf-8", errors="replace").splitlines()
+        updated = False
+        new_lines: list[str] = []
+        stamp = int(cleared_at if cleared_at is not None else time.time())
+        for line in lines:
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                new_lines.append(line)
+                continue
+            if not isinstance(row, dict):
+                new_lines.append(line)
+                continue
+            matches = (
+                row.get("incident_id") == incident_id
+                if incident_id is not None
+                else row.get("agent") == agent
+            )
+            if matches and not _is_incident_recovered(row):
+                row["recovered"] = True
+                row["cleared_at"] = stamp
+                if next_success_at is not None:
+                    row["next_success_at"] = next_success_at
+                new_lines.append(json.dumps(row, sort_keys=True, separators=(",", ":")))
+                updated = True
+            else:
+                new_lines.append(line)
+        if updated:
+            INCIDENT_FILE.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    except OSError:
+        return
+
+
+def _inspect_existing_hold(
+    agent: str,
+    existing_row: Mapping[str, Any],
+    *,
+    orig_expires_at: int,
+    now: int,
+    earlier_incident_ids: set[str],
+    later_incident_ids: set[str],
+) -> str:
+    """Return 'none', 'own_active', or 'newer_or_manual'."""
+    marker = SHED_DIR / agent
+    if not marker.exists():
+        return "none"
+    try:
+        payload = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return "newer_or_manual"
+    if not isinstance(payload, dict):
+        return "newer_or_manual"
+    marker_expiry = payload.get("expires_at")
+    if (
+        isinstance(marker_expiry, bool)
+        or not isinstance(marker_expiry, (int, float))
+        or not math.isfinite(marker_expiry)
+    ):
+        return "newer_or_manual"
+    if marker_expiry <= now:
+        return "none"
+    existing_id = existing_row.get("incident_id")
+    marker_incident_id = payload.get("incident_id")
+    if not isinstance(marker_incident_id, str) or not marker_incident_id:
+        return "newer_or_manual"
+    if marker_incident_id in later_incident_ids:
+        return "newer_or_manual"
+    if marker_incident_id != existing_id and marker_incident_id not in earlier_incident_ids:
+        return "newer_or_manual"
+    marker_scope = payload.get("tier_scope")
+    row_scope = existing_row.get("tier_scope")
+    widening = marker_scope is not None and row_scope is None
+    if not widening and marker_expiry >= orig_expires_at:
+        return "own_active" if marker_incident_id == existing_id else "newer_or_manual"
+    return "none"
+
+
+def _repair_dedup_incident(
+    *,
+    existing_id: str,
+    existing_row: Mapping[str, Any] | None,
+    earlier_incident_ids: set[str],
+    later_incident_ids: set[str],
+    agent: str,
+    category: str,
+    now: int,
+    recovered: bool,
+) -> dict[str, Any]:
+    if existing_row is None:
+        return {"status": "ok", "deduped": True, "incident_id": existing_id, "shed": False}
+    row_category = str(existing_row.get("category") or category)
+    row_shed_requested = (
+        bool(existing_row.get("shed_requested")) and row_category != "model_rejected"
+    )
+    if not row_shed_requested or recovered or _is_incident_recovered(existing_row):
+        return {"status": "ok", "deduped": True, "incident_id": existing_id, "shed": False}
+    row_expires_at = existing_row.get("expires_at")
+    if (
+        isinstance(row_expires_at, bool)
+        or not isinstance(row_expires_at, (int, float))
+        or not math.isfinite(row_expires_at)
+    ):
+        return {"status": "ok", "deduped": True, "incident_id": existing_id, "shed": False}
+    orig_expires_at = int(row_expires_at)
+    if now >= orig_expires_at:
+        return {"status": "ok", "deduped": True, "incident_id": existing_id, "shed": False}
+    hold_state = _inspect_existing_hold(
+        agent,
+        existing_row,
+        orig_expires_at=orig_expires_at,
+        now=now,
+        earlier_incident_ids=earlier_incident_ids,
+        later_incident_ids=later_incident_ids,
+    )
+    if hold_state == "own_active":
+        return {"status": "ok", "deduped": True, "incident_id": existing_id, "shed": True}
+    if hold_state == "newer_or_manual":
+        return {"status": "ok", "deduped": True, "incident_id": existing_id, "shed": False}
+    shed_created = ensure_shed(
+        agent,
+        category=row_category,
+        incident_id=existing_id,
+        expires_at=orig_expires_at,
+        reset_at=existing_row.get("reset_at"),
+        model=existing_row.get("model"),
+        tier_scope=existing_row.get("tier_scope"),
+    )
+    return {
+        "status": "ok" if shed_created else "shed_unfulfilled",
+        "deduped": True,
+        "incident_id": existing_id,
+        "shed": shed_created,
+    }
+
+
 def record_incident(
     *,
     agent: str,
@@ -964,10 +1159,15 @@ def record_incident(
     """Append exactly one incident line while holding an exclusive fcntl lock."""
     if not agent or not surface or not category:
         raise ValueError("agent, surface, and category are required")
-    timestamp = int(timestamp or time.time())
+    now = int(timestamp if timestamp is not None else time.time())
+    timestamp = now
     stable_run_id = run_id or f"sync:{_hash_evidence(str(target) + evidence)}"
     key = _idempotency_key(stable_run_id, agent, category, surface)
     incident_id = _hash_evidence(key)
+    model = failed_model(agent, evidence) or recorded_run_model(agent, run_id)
+    tier_scope = tier_scope_for(agent, model) if category in ("quota", "rate_limit") else None
+    shed_requested = bool(shed) and category != "model_rejected"
+    recovered = _is_recovered_fields(status=status, next_success_at=next_success_at, extra=extra)
     record: dict[str, Any] = {
         "schema": SCHEMA,
         "incident_id": incident_id,
@@ -980,6 +1180,10 @@ def record_incident(
         "category": category,
         "status": status,
         "target": target,
+        "shed_requested": shed_requested,
+        "model": model,
+        "tier_scope": tier_scope,
+        "recovered": recovered,
         "evidence_hash": _hash_evidence(evidence),
         "evidence_excerpt": _redact_bounded(evidence),
     }
@@ -998,21 +1202,55 @@ def record_incident(
     )
     if extra:
         record["extra"] = {key: value for key, value in extra.items() if value is not None}
+    existing: str | None = None
+    existing_row: dict[str, Any] | None = None
+    earlier_incident_ids: set[str] = set()
+    later_incident_ids: set[str] = set()
+    expires_at: int | None = None
     with incident_lock():
-        existing = _existing_idempotency_key(key)
+        existing_row, earlier_incident_ids, later_incident_ids = _existing_incident_context(key)
+        existing = existing_row.get("incident_id") if existing_row else None
         if existing:
-            return {"status": "ok", "deduped": True, "incident_id": existing}
-        line = (json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
-        ledger_fd = os.open(INCIDENT_FILE, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
-        with os.fdopen(ledger_fd, "wb") as handle:
-            handle.write(line)
-            handle.flush()
-            os.fsync(handle.fileno())
-    cooldown = _cooldown_seconds(category, agent, timestamp, incident_id)
-    expires_at = timestamp + cooldown if cooldown is not None else None
-    if reset_at is not None and expires_at is not None:
-        expires_at = max(expires_at, reset_at)
-    model = failed_model(agent, evidence) or recorded_run_model(agent, run_id)
+            if recovered and existing_row is not None and not _is_incident_recovered(existing_row):
+                _mark_incident_recovered_locked(
+                    agent=agent,
+                    incident_id=existing,
+                    cleared_at=now,
+                    next_success_at=next_success_at,
+                )
+                existing_row = {**existing_row, "recovered": True}
+        else:
+            # Persist the escalated expiry before publication so dedup repair restores it exactly.
+            cooldown = _cooldown_seconds(category, agent, timestamp, incident_id)
+            expires_at = timestamp + cooldown if cooldown is not None else None
+            if reset_at is not None and expires_at is not None:
+                expires_at = max(expires_at, reset_at)
+            record["expires_at"] = expires_at
+            if recovered:
+                _mark_incident_recovered_locked(
+                    agent=agent,
+                    cleared_at=now,
+                    next_success_at=next_success_at,
+                )
+            line = (json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n").encode(
+                "utf-8"
+            )
+            ledger_fd = os.open(INCIDENT_FILE, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
+            with os.fdopen(ledger_fd, "wb") as handle:
+                handle.write(line)
+                handle.flush()
+                os.fsync(handle.fileno())
+    if existing:
+        return _repair_dedup_incident(
+            existing_id=existing,
+            existing_row=existing_row,
+            earlier_incident_ids=earlier_incident_ids,
+            later_incident_ids=later_incident_ids,
+            agent=agent,
+            category=category,
+            now=now,
+            recovered=recovered,
+        )
     shed_created = (
         ensure_shed(
             agent,
@@ -1021,14 +1259,19 @@ def record_incident(
             expires_at=expires_at,
             reset_at=reset_at,
             model=model,
-            tier_scope=(
-                tier_scope_for(agent, model) if category in ("quota", "rate_limit") else None
-            ),
+            tier_scope=tier_scope,
         )
-        if shed and category != "model_rejected"
+        if shed_requested and not recovered
         else False
     )
-    return {"status": "ok", "deduped": False, "incident_id": incident_id, "shed": shed_created}
+    return {
+        "status": (
+            "shed_unfulfilled" if (shed_requested and not recovered and not shed_created) else "ok"
+        ),
+        "deduped": False,
+        "incident_id": incident_id,
+        "shed": shed_created,
+    }
 
 
 def check_shed(agent: str) -> bool:
@@ -1036,6 +1279,8 @@ def check_shed(agent: str) -> bool:
 
 
 def clear_shed(agent: str) -> bool:
+    with incident_lock():
+        _mark_incident_recovered_locked(agent=agent)
     try:
         (SHED_DIR / agent).unlink()
         return True
