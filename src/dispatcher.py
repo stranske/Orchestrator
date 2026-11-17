@@ -4365,7 +4365,7 @@ def offload(
         print(f"warn: rate-incident classification failed for {agent}: {exc}", file=sys.stderr)
     if evidence_result and evidence_result.get("is_authoritative"):
         try:
-            rate_incidents.record_incident(
+            incident_result = rate_incidents.record_incident(
                 agent=agent,
                 surface="dispatcher.offload",
                 category=evidence_result["category"],
@@ -4380,6 +4380,17 @@ def offload(
                     "attempts": attempts,
                 },
             )
+            if isinstance(incident_result, dict):
+                evidence_result["incident_status"] = incident_result.get("status")
+                evidence_result["shed"] = bool(incident_result.get("shed"))
+                if incident_result.get("status") == "shed_unfulfilled":
+                    evidence_result["shed_unfulfilled"] = True
+                    out["shed_unfulfilled"] = True
+                    print(
+                        f"warn: rate-incident shed unfulfilled for {agent}: "
+                        f"incident_id={incident_result.get('incident_id')}",
+                        file=sys.stderr,
+                    )
         except Exception as exc:
             print(f"warn: rate-incident recording failed for {agent}: {exc}", file=sys.stderr)
     if agent == "codex" and mode == "assess":
