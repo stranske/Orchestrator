@@ -496,3 +496,49 @@ failed with `Unable to create .git/index.lock: Read-only file system`. The
 conditional commit did not run; the verified change remains uncommitted.
 Automatic approval review also rejected the PR evidence/blocker comment with
 the same approval-policy error, so these fresh results were not published.
+
+## Ledger availability and non-list history — 2026-11-17
+
+Source revision under test: `46c5532915684204c49dd23a3737e4e5db9acfa7` (the fix commit; this
+record is committed on top of it and changes no source).
+
+Changes:
+
+- `capability_firing_monitor.review` carries `ledger_measurement` separately from
+  `retired_but_invoked_measurement`. When the ledger is missing or unreadable, `format_report`
+  prints `live findings: unmeasured: …` and no `N of M live capabilities`, `overdue: 0`,
+  `no regressions` or `nothing overdue` text. When only a retired row's history is malformed, the
+  ledger stays `measured` and the live findings are still printed (review thread r4595639995).
+- `capabilities.invoked_after_retirement` defaults to `[]` only for an absent `event_history`
+  key; a stored non-list value (`None`, `0`, `""`, `{}`) raises `ValueError`, which both readers
+  already report as unmeasured. An absent key and a stored `[]` still return `None` (review thread
+  r4598612846).
+
+### Deliberate break and exact restoration
+
+`invoked_after_retirement` was forced to `return None` as its first statement:
+
+```text
+$ python3 -m pytest tests/test_firing_monitor_live_rows.py::test_invocation_after_retirement_is_named -q
+>           assert report["retired_but_invoked_count"] == 1
+E           assert 0 == 1
+tests/test_firing_monitor_live_rows.py:294: AssertionError
+1 failed in 0.39s
+$ git checkout -- src/capabilities.py && git diff --quiet HEAD && echo RESTORED-EXACT
+RESTORED-EXACT
+$ python3 -m pytest tests/test_firing_monitor_live_rows.py::test_invocation_after_retirement_is_named -q
+1 passed in 0.36s
+$ python3 -m pytest tests/test_firing_monitor_live_rows.py tests/test_gate_expiry_renewal.py -q
+56 passed in 32.82s
+```
+
+The non-list check was also reverted to the old `cap.get("event_history") or []` coercion: the
+`null-history`, `zero-history`, `empty-string-history` and `empty-object-history` cases of
+`test_unreadable_retirement_history_preserves_live_findings` failed (4 failed, 5 passed), and
+passed again after `git checkout` restored the source exactly.
+
+### `hollow_break`
+
+No `hollow_break` report was visible on PR 1426 (its comments, reviews or checks) from this
+session, so its base SHA, overlay paths and red output could not be captured here. The break
+above is reproducible from the named command on the named revision.
