@@ -624,7 +624,9 @@ def _marker_identity(marker: dict) -> tuple:
     return tuple(marker.get(key) for key in _MARKER_IDENTITY_KEYS)
 
 
-def _recovery_clears_marker(agent: str, marker: dict, *, emit_fyi: bool = True) -> bool:
+def _recovery_clears_marker(
+    agent: str, marker: dict, *, emit_fyi: bool = True, prefer_live_recovery: bool = False
+) -> bool:
     """Return whether confirmed reset or fresh post-incident usage clears an active quota marker."""
     if marker["state"] != "active":
         return False
@@ -649,12 +651,15 @@ def _recovery_clears_marker(agent: str, marker: dict, *, emit_fyi: bool = True) 
         else []
     )
     if agent == "codex":
-        snapshot = _BUILD_PACING_USAGE.get()
-        poll = (
-            (snapshot.get(agent) or {}).get("poll")
-            if snapshot is not None
-            else pacing_usage.polled_usage(agent, time.time())["poll"]
-        ) or {}
+        if prefer_live_recovery:
+            poll = pacing_usage.polled_usage(agent, time.time())["poll"] or {}
+        else:
+            snapshot = _BUILD_PACING_USAGE.get()
+            poll = (
+                (snapshot.get(agent) or {}).get("poll")
+                if snapshot is not None
+                else pacing_usage.polled_usage(agent, time.time())["poll"]
+            ) or {}
         if poll.get("fresh"):
             # The hand inventory may contain a false rollover debit. Fresh
             # provider inventory cannot establish that consumption timestamp.
@@ -674,14 +679,19 @@ def _recovery_clears_marker(agent: str, marker: dict, *, emit_fyi: bool = True) 
         and not reset_clears
     ):
         now = time.time()
-        snapshot = _BUILD_PACING_USAGE.get()
-        datum = (
-            snapshot[agent]
-            if snapshot is not None
-            else pacing_usage.usage(
+        if prefer_live_recovery:
+            datum = pacing_usage.usage(
                 agent, now, pacing_usage.read_json(pacing_usage.CALIBRATION_FILE) or {}
             )
-        )
+        else:
+            snapshot = _BUILD_PACING_USAGE.get()
+            datum = (
+                snapshot[agent]
+                if snapshot is not None
+                else pacing_usage.usage(
+                    agent, now, pacing_usage.read_json(pacing_usage.CALIBRATION_FILE) or {}
+                )
+            )
         used, observed = datum.get("used_fraction"), datum.get("ts")
         short = datum.get("short_used_fraction")
         short_ts = datum.get("short_ts", observed)
@@ -736,7 +746,7 @@ def _shed(agent: str) -> bool:
             if _marker_identity(current) != _marker_identity(marker):
                 return True
             if current["state"] != "expired" and not _recovery_clears_marker(
-                agent, current, emit_fyi=False
+                agent, current, emit_fyi=False, prefer_live_recovery=True
             ):
                 return True
             Path(current["path"]).unlink()
