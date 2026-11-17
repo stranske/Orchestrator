@@ -198,6 +198,18 @@ def test_invocation_after_retirement_is_named(tmp_path, monkeypatch, invocation_
     assert capabilities.production_heartbeat(
         "retired-fixture", "invocation", ref="exercise", metadata={"source": "fixture"}
     )
+    # Delayed recording of pre-retirement work updates the row's counters but must
+    # not turn its later completion into a new invocation after retirement.
+    with monkeypatch.context() as delayed:
+        delayed.setattr(
+            capabilities, "heartbeat", partial(capabilities.heartbeat, timestamp=NOW - 200)
+        )
+        assert capabilities.production_heartbeat(
+            "retired-completion",
+            "invocation",
+            ref="late-recorded-before-retirement",
+            metadata={"source": "tick"},
+        )
     for event_type in ("success", "failure", "outcome"):
         assert capabilities.production_heartbeat(
             "retired-completion", event_type, ref="started-before-retirement"

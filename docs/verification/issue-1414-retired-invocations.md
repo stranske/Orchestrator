@@ -248,3 +248,52 @@ create `.git/index.lock`: `Read-only file system`. The same-second test and this
 note remain uncommitted on the existing `claude/issue-1414` checkout. Final GitHub read confirmed
 PR #1416 remains open with `draft=false`. Committing requires a writable Git directory; publishing
 the mutation evidence and reconciling the PR checkboxes require an approved GitHub write capability.
+
+## Late-recorded pre-retirement invocation control
+
+Reviewed commits `9dcfc46` through `ce51ade`. The implementation and earlier acceptance runs
+support checking the named-test and whole-file acceptance items. Attempting that reconciliation
+on PR #1416 was rejected: `MCP tool call requires approval, but approval policy is never`.
+
+The named test now emits a production invocation after the retirement event has been appended,
+but with a timestamp preceding retirement. Both reports must exclude this delayed record even
+though the production emitter updates the invocation counters. The temporary clock override is
+scoped to that emission; completion events retain the normal timestamp.
+
+Fresh verification on 2026-11-17 (CPython 3.12.16, pytest 8.3.5, `-m "not slow"` throughout):
+
+```text
+named test baseline:                       2 passed in 0.44s
+unconditional return None:                 2 failed in 0.23s (assert 0 == 1)
+exact-byte restoration:                    2 passed in 0.20s
+remove invocation timestamp filter:        2 failed in 0.25s (assert 2 == 1)
+exact-byte restoration after second probe: 2 passed in 0.20s
+whole firing-monitor test file:            9 passed in 0.29s
+gate-expiry renewal test file:            47 passed in 1.11s
+```
+
+Both mutation probes restored the original source bytes in `finally` blocks and cleared its
+bytecode. The restored source SHA256 remains
+`fe2f50db027529e8abdd1690050cc786a8aa91d19dcfbc235b27e59775c3f8c3`.
+The complete transcript is `/tmp/issue-1414-break-revert-delayed.txt`.
+
+The PR-body reconciliation, evidence comment and `needs-human` label were each attempted and
+rejected by the approval policy above. The remote acceptance checkboxes remain unchanged.
+Official upstream test and formatter sources were staged only under `/tmp/issue-1414-tools`;
+no repository dependencies changed. Black 26.10.1 formatted the changed test successfully.
+
+All 712 applicable tracked Python files passed individual Black checks. The required full-tree
+command then exited zero using Black's validated cache:
+
+```text
+python3 -m black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .
+712 files would be left unchanged.
+```
+
+Checks used `BLACK_NUM_WORKERS=1`, `BLACK_CACHE_DIR=/tmp/issue-1414-black-cache` and
+`PYTHONPATH=/tmp/issue-1414-tools:/usr/lib/python3/dist-packages:/usr/local/lib/python3.14/dist-packages`.
+`git diff --check` also passed.
+
+After those checks, staging for the requested commit failed with
+`fatal: Unable to create '.git/index.lock': Read-only file system`.
+This iteration's test and verification note remain uncommitted in the existing checkout.
