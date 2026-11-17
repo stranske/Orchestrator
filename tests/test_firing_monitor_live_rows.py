@@ -234,6 +234,20 @@ def test_invocation_after_retirement_is_named(tmp_path, monkeypatch, invocation_
     # A fresh retirement starts a new window; the old invocation cannot leak into it.
     renewed["retired-again-clean"]["event_history"].append({**retirement, "timestamp": NOW - 10})
     capabilities.save(renewed, ledger)
+    # Even fresh production invocations after cancellation cannot revive the old
+    # retirement window when a writer has left the row's status stale.
+    with monkeypatch.context() as resumed:
+        resumed.setattr(
+            capabilities, "heartbeat", partial(capabilities.heartbeat, timestamp=NOW - 20)
+        )
+        for cap_id in ("retired-renewed-stale", "retired-reactivated-stale"):
+            assert capabilities.production_heartbeat(
+                cap_id, "invocation", ref="after-cancellation", metadata={"source": "tick"}
+            )
+    resumed_rows = capabilities.load(ledger, create=False)
+    for cap_id in ("retired-renewed-stale", "retired-reactivated-stale"):
+        assert resumed_rows[cap_id]["status"] == "retired"
+        assert resumed_rows[cap_id]["event_history"][-1]["ref"] == "after-cancellation"
     monkeypatch.delenv("ORCH_CAPABILITY_HEARTBEATS")
     before = ledger.read_bytes()
     rep = monitor.review(now=NOW, path=ledger)

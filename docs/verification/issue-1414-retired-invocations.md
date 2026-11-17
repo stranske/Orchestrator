@@ -297,3 +297,49 @@ Checks used `BLACK_NUM_WORKERS=1`, `BLACK_CACHE_DIR=/tmp/issue-1414-black-cache`
 After those checks, staging for the requested commit failed with
 `fatal: Unable to create '.git/index.lock': Read-only file system`.
 This iteration's test and verification note remain uncommitted in the existing checkout.
+
+## Production invocations after retirement cancellation
+
+Reviewed the recent commits through `f608b45`. The named test and whole-file acceptance items
+already have implementation and passing evidence; their PR checkboxes still need reconciliation.
+This iteration strengthens the named test with fresh production invocations after renewal and
+reactivation while both stored statuses remain stale as `retired`. Both reports must exclude
+these rows because the old retirement was cancelled, even though the later invocation is real.
+
+Fresh verification on 2026-11-17 used CPython 3.12.16 and pytest 8.3.5, with `-m "not slow"`:
+
+```text
+named test baseline:             2 passed in 0.16s
+unconditional return None:       2 failed in 0.28s (assert 0 == 1 in both cases)
+exact-byte restoration:          2 passed in 0.19s
+whole firing-monitor test file:  9 passed in 0.23s
+both relevant test files:       56 passed in 1.29s
+```
+
+The source was restored in a `finally` block, its compiled bytecode cleared, and its original
+SHA256 verified as `fe2f50db027529e8abdd1690050cc786a8aa91d19dcfbc235b27e59775c3f8c3`.
+The mutation transcript is `/tmp/issue-1414-break-revert-renewed.txt`. Official upstream tools
+were staged only under `/tmp/issue-1414-tools`; no repository dependencies changed.
+
+The PR-body reconciliation (including the mutation evidence), evidence comment and `needs-human`
+label were each rejected: `MCP tool call requires approval, but approval policy is never`.
+The remote acceptance checkboxes remain unchanged; the requirement to show the mutation evidence
+on the PR remains blocked. Black 26.10.1 formatted the changed test successfully.
+
+The initial repository-wide Black run stalled and was interrupted. Checking all 853 tracked
+Python paths individually completed with zero failures, populating Black's validated cache.
+The required repository-wide command then passed (`712 files would be left unchanged`):
+
+```text
+black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .
+```
+
+Checks used `BLACK_NUM_WORKERS=1`, `BLACK_CACHE_DIR=/tmp/issue-1414-black-cache`, and
+`PYTHONPATH=/tmp/issue-1414-tools:/usr/lib/python3/dist-packages:/usr/local/lib/python3.14/dist-packages`.
+The reconciled PR body, including mutation evidence, is saved at `/tmp/issue-1414-pr-body.md`.
+
+After formatting passed, the requested commit attempt stopped at staging:
+`fatal: Unable to create '.git/index.lock': Read-only file system`.
+The test change and this note remain uncommitted. PR #1416 was confirmed open with `draft=false`.
+Remaining delivery requires a writable Git directory and an approved GitHub write capability;
+the implementation and local acceptance checks are verified.
