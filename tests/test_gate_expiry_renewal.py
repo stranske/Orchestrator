@@ -480,6 +480,8 @@ def test_drained_unmeasured_and_empty_each_say_something_different(tmp_path):
         "latest-invoked",
         "late-recorded-old-invocation",
         "same-second",
+        "same-second-before-retirement",
+        "future-dated-before-retirement",
         "no-retirement",
         "live-status",
         "superseded",
@@ -523,6 +525,10 @@ def test_invoked_after_retirement_reads_only_the_latest_unrenewed_retirement(sce
     elif scenario == "same-second":
         invocation = {**invocation, "timestamp": 100}
         history = [retirement, invocation]
+    elif scenario == "same-second-before-retirement":
+        history = [{**invocation, "timestamp": 100}, retirement]
+    elif scenario == "future-dated-before-retirement":
+        history = [invocation, retirement]
     elif scenario == "no-retirement":
         history = [invocation]
     elif scenario in ("live-status", "superseded"):

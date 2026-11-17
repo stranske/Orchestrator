@@ -139,3 +139,51 @@ No PR checkboxes were changed. The requirement to show the deliberate break/reve
 the PR therefore remains outstanding, along with committing the test and this verification note
 to the existing `claude/issue-1414` branch. A writable Git directory and an approved GitHub write
 capability are required. PR #1416 was confirmed open with `draft=false`.
+
+## Current iteration: ordering and unreadable-ledger controls
+
+Reviewed the recent commits through `d3ce201`; the previously uncommitted changes described above
+are now in that commit. The helper task remains unchecked on the PR despite the implementation
+and passing tests. Attempting to reconcile it through the GitHub connector was rejected again.
+
+This iteration strengthens the named test with an invocation appended before retirement in the
+same second. The helper tests also exclude a future-dated invocation appended before retirement.
+The firing-monitor measurement control now covers a directory at the ledger path, requiring
+`unmeasured` and verifying the directory survives the read unchanged.
+
+Fresh verification used CPython 3.12.16 and pytest 8.3.5, with `-m "not slow"` on every pytest run:
+
+```text
+named test baseline:       1 passed in 0.22s
+unconditional return None: 1 failed in 0.24s (AssertionError: []; assert 0 == 1)
+exact-byte restoration:    1 passed in 0.22s
+whole firing-monitor file: 8 passed in 0.27s
+both relevant test files:  55 passed in 1.11s
+```
+
+The mutation probe restored the original source in a `finally` block and verified the same
+SHA256 recorded above. The transcript is at `/tmp/issue-1414-break-revert-current.txt`.
+Black 26.10.1 formatted each changed test file separately; both were already formatted.
+Trusted upstream test/formatter sources were staged under `/tmp/issue-1414-tools` because this
+fresh runner lacked those tools and PyPI DNS resolution failed. No dependencies were added to
+the repository.
+
+The PR-body update, verification comment, and `needs-human` label were each rejected with
+`MCP tool call requires approval, but approval policy is never`. Consequently the PR checkboxes
+are unchanged and the requirement to show the mutation evidence on the PR remains incomplete.
+Git still cannot create `.git/index.lock` because `.git` is mounted read-only, so the new test
+changes require a writable Git directory before they can be committed to the checked-out branch.
+
+The repository-wide Black run initially timed out. Running each tracked Python file through
+Black's CLI individually in one interpreter completed successfully: `712 files checked;
+0 failures`. The required repository-wide command then passed from Black's validated cache:
+
+```text
+python3 -m black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .
+712 files would be left unchanged.
+```
+
+Both checks used Black 26.10.1, `BLACK_NUM_WORKERS=1` and
+`BLACK_CACHE_DIR=/tmp/issue-1414-black-cache`. The individual-check transcript is at
+`/tmp/issue-1414-black-individual-current.log`; `git diff --check` also passes.
+PR #1416 remains open and ready for review (`draft=false`).

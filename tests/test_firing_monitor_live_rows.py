@@ -145,7 +145,9 @@ def test_invocation_after_retirement_is_named(tmp_path, monkeypatch):
         "retired-clean": [],
         "retired-fixture": [],
         "retired-completion": [
-            {"type": "invocation", "timestamp": NOW - 200, "ref": "started-before-retirement"}
+            {"type": "invocation", "timestamp": NOW - 200, "ref": "started-before-retirement"},
+            # Equal timestamps still require append order: this invocation preceded retirement.
+            {"type": "invocation", "timestamp": NOW - 100, "ref": "same-second-before-retirement"},
         ],
         "retired-renewed": [],
         "retired-renewed-stale": [],
@@ -255,9 +257,11 @@ def _check_retired_invocation_measurement(tmp_path, monkeypatch, state):
     ledger = tmp_path / f"{state}.json"
     if state == "corrupt":
         ledger.write_text("{not json")
+    elif state == "unreadable":
+        ledger.mkdir()
     elif state == "empty":
         capabilities.save({}, ledger)
-    before = ledger.read_bytes() if ledger.exists() else None
+    before = ledger.read_bytes() if ledger.is_file() else None
     monkeypatch.setattr(monitor, "HISTORY", tmp_path / "history.json")
     monkeypatch.delenv("ORCH_CAPABILITY_HEARTBEATS", raising=False)
     rep = monitor.review(now=NOW, path=ledger)
@@ -270,11 +274,13 @@ def _check_retired_invocation_measurement(tmp_path, monkeypatch, state):
         assert rep["retired_but_invoked_count"] is None
         assert "unmeasured" in rep["retired_but_invoked_measurement"]
         assert "retired_but_invoked: unmeasured" in monitor.format_report(rep)
-    assert (ledger.read_bytes() if ledger.exists() else None) == before
+    assert (ledger.read_bytes() if ledger.is_file() else None) == before
+    if state == "unreadable":
+        assert ledger.is_dir()
 
 
 def test_retired_invocation_measurement_distinguishes_unread_from_zero(tmp_path, monkeypatch):
-    for state in ("missing", "corrupt", "empty"):
+    for state in ("missing", "corrupt", "unreadable", "empty"):
         _check_retired_invocation_measurement(tmp_path, monkeypatch, state)
 
 
