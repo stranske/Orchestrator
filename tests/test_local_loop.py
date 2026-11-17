@@ -24,6 +24,33 @@ Make the widget fast.
 """
 
 
+def thread_node(
+    *,
+    is_resolved=False,
+    is_outdated=False,
+    path="src/widget.py",
+    line=19,
+    author="coderabbitai[bot]",
+    comment_id=4242,
+    body="Cache key misses locale; this returns stale translations.",
+):
+    return {
+        "isResolved": is_resolved,
+        "isOutdated": is_outdated,
+        "path": path,
+        "line": line,
+        "comments": {
+            "nodes": [
+                {
+                    "databaseId": comment_id,
+                    "author": {"login": author} if author is not None else None,
+                    "body": body,
+                }
+            ]
+        },
+    }
+
+
 def pr_node(
     *,
     state="FAILURE",
@@ -32,6 +59,7 @@ def pr_node(
     labels=("agent:codex", ll.LABEL),
     body=ISSUE_BODY,
     number=7,
+    review_threads=(),
 ):
     contexts = [
         {
@@ -55,6 +83,7 @@ def pr_node(
         "closingIssuesReferences": {
             "nodes": [{"number": number, "title": "t", "state": "OPEN", "body": body}]
         },
+        "reviewThreads": {"nodes": list(review_threads)},
         "commits": {
             "nodes": [
                 {
@@ -160,6 +189,23 @@ def test_pure_helpers():
     assert ll.claimed_ids("echoed prompt: `LOOP-TASKS-DONE: none`") == set()
     assert ll.error_lines("x\n2026Z E   boom\nfine") == ["E   boom"]
     assert ll.job_id("https://github.com/o/r/actions/runs/1/job/42") == "42"
+    assert (
+        "reviewThreads(first:50){nodes{isResolved isOutdated path line "
+        "comments(first:1){nodes{databaseId author{login} body}}}}" in ll.SEARCH
+    )
+    active = ll.active_review_threads(
+        pr_node(
+            review_threads=(
+                None,
+                thread_node(is_resolved=True),
+                thread_node(is_outdated=True),
+                thread_node(path="src/a.py", line=12, author="bot", comment_id=9, body="z" * 2000),
+            )
+        )
+    )
+    assert active == [
+        {"path": "src/a.py", "line": 12, "author": "bot", "comment_id": 9, "body": "z" * 1500}
+    ]
 
 
 def test_agent_running_waits_without_reads():
@@ -202,6 +248,56 @@ def test_green_with_acceptance_pass_and_claims_ticks_boxes_and_is_done():
     assert bodies and all(i["done"] for i in ll.checklist(bodies[-1]))
     assert any(c[0] == "comment" and "done after 1 round" in c[2] for c in gh.calls)
     assert ll.owns("o/r#3") is None  # done: closer-core's normal path merges it
+
+
+def test_green_done_pr_with_an_active_review_thread_runs_another_round():
+    done_body = ISSUE_BODY.replace("- [ ]", "- [x]")
+    thread = thread_node(
+        is_resolved=False,
+        is_outdated=False,
+        path="src/widget.py",
+        line=19,
+        author="coderabbitai[bot]",
+        comment_id=4242,
+        body="Cache key misses locale; this returns stale translations.",
+    )
+    gh = FakeGH([pr_node(state="SUCCESS", failing=(), body=done_body, review_threads=(thread,))])
+    tick, launches, _ = make_tick(gh)
+    tick.run()
+    assert tick.items[0]["action"] == "round"
+    assert len(launches) == 1
+    prompt = launches[0]["prompt"]
+    assert (
+        "CI is green and the tasks are done, but 1 review thread(s) are unanswered (below)."
+        in prompt
+    )
+    assert "## Unanswered review threads" in prompt
+    assert "src/widget.py:19" in prompt
+    assert "coderabbitai[bot]" in prompt
+    assert "Cache key misses locale; this returns stale translations." in prompt
+    assert "repos/o/r/pulls/3/comments/<comment_id>/replies" in prompt
+    assert "4242" in prompt
+    assert "Never resolve" in prompt
+
+
+def test_resolved_or_outdated_threads_do_not_block_done():
+    done_body = ISSUE_BODY.replace("- [ ]", "- [x]")
+    for kwargs in (
+        {"is_resolved": True, "is_outdated": False},
+        {"is_resolved": False, "is_outdated": True},
+    ):
+        pr = pr_node(
+            state="SUCCESS",
+            failing=(),
+            body=done_body,
+            review_threads=(thread_node(**kwargs),),
+        )
+        assert ll.active_review_threads(pr) == []
+        ll.state_path("o/r#3").unlink(missing_ok=True)
+        gh = FakeGH([pr])
+        tick, launches, _ = make_tick(gh)
+        tick.run()
+        assert tick.items[0]["action"] == "done" and not launches
 
 
 def test_green_with_unchecked_tasks_runs_another_round():
