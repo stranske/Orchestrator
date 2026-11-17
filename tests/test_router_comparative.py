@@ -401,6 +401,7 @@ def test_measured_pacing_weighted_draw_ignores_comparative_order(tmp_path, monke
     _write_export(
         tmp_path,
         route_enabled=True,
+        task_type="implement",
         ranking=[
             {"agent": "claude", "comparative_rank": 1},
             {"agent": "codex", "comparative_rank": 2},
