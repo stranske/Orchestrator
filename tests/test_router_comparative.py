@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import random
 from pathlib import Path
 
 import pytest
@@ -355,6 +356,102 @@ def test_ambient_export_isolated_but_explicit_override_effective(tmp_path, monke
             set_source(override, explicit)
             assert router._comparative_rank("review", "codex") == 1
         assert router._comparative_rank("review", "codex") is None
+
+
+def test_exploration_challenger_pool_uses_baseline_not_comparative(tmp_path, monkeypatch):
+    _write_export(
+        tmp_path,
+        route_enabled=True,
+        ranking=[
+            {"agent": "codex", "comparative_rank": 1},
+            {"agent": "cursor", "comparative_rank": 2},
+        ],
+    )
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    monkeypatch.delenv("ORCH_LOCAL_COMPARATIVE", raising=False)
+
+    cap = {"agents": {"cursor": {"state": "ok"}, "codex": {"state": "ok"}}}
+    learned = {"cursor": 0, "codex": 1}
+
+    class AlwaysExplore:
+        def random(self):
+            return 0.0
+
+        def choice(self, seq):
+            return seq[0]
+
+        def choices(self, population, weights=None, k=1):
+            return [population[0]]
+
+    picked = router.select_agent(
+        "review",
+        cap,
+        learned=learned,
+        exploration_rate=1.0,
+        rng=AlwaysExplore(),
+        simulate=True,
+    )
+    assert picked is not None
+    assert picked["exploration"] is True
+    assert picked["agent"] == "codex"
+    assert picked["route_source"] == "route_weights"
+
+
+def test_measured_pacing_weighted_draw_ignores_comparative_order(tmp_path, monkeypatch):
+    _write_export(
+        tmp_path,
+        route_enabled=True,
+        ranking=[
+            {"agent": "claude", "comparative_rank": 1},
+            {"agent": "codex", "comparative_rank": 2},
+        ],
+    )
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    monkeypatch.delenv("ORCH_LOCAL_COMPARATIVE", raising=False)
+
+    cap = {
+        "agents": {
+            "codex": {
+                "state": "ok",
+                "pacing": {"state": "ok", "routing_weight": 0.5},
+            },
+            "claude": {
+                "state": "ok",
+                "pacing": {"state": "ok", "routing_weight": 0.5},
+            },
+        }
+    }
+    learned = {
+        "codex": {"posterior": 0.5, "score": 0.5, "rank": 0},
+        "claude": {"posterior": 0.5, "score": 0.5, "rank": 1},
+    }
+    comparative_off = tmp_path / "off"
+    comparative_off.mkdir()
+    monkeypatch.setenv("ORCH_STATE_DIR", str(comparative_off))
+
+    baseline = router.select_agent(
+        "implement",
+        cap,
+        only={"codex", "claude"},
+        learned=learned,
+        exploration_rate=0.0,
+        rng=random.Random(2),
+        simulate=True,
+    )
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    with_comparative = router.select_agent(
+        "implement",
+        cap,
+        only={"codex", "claude"},
+        learned=learned,
+        exploration_rate=0.0,
+        rng=random.Random(2),
+        simulate=True,
+    )
+    assert baseline is not None and with_comparative is not None
+    assert with_comparative["pacing_decision"] is not None
+    assert with_comparative["agent"] == baseline["agent"]
+    assert with_comparative["route_source"] == "route_weights"
 
 
 @pytest.mark.parametrize("failure", ["missing", "malformed", "unreadable"])

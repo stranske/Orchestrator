@@ -821,6 +821,74 @@ class PostMergeBreakTests(unittest.TestCase):
         install_env = run.call_args_list[1].kwargs["env"]
         self.assertEqual(install_env["PATH"].split(os.pathsep)[0], str(Path(interpreter).parent))
 
+    def test_worktree_interpreter_installs_the_ci_lock_and_app_extra(self):
+        """Inv-Man-Intake#1083 (2026-11-17): requirements.lock carried an optional extra CI installs."""
+        (self.checkout / "pyproject.toml").write_text(
+            '[project]\nname = "delivery"\nversion = "1"\n'
+            "[project.optional-dependencies]\napp = []\ndev = []\nextraction-doc-lineage = []\n"
+        )
+        (self.checkout / "requirements.lock").touch()
+        interpreter = str(self.checkout / ".venv/bin/python")
+        with (
+            patch.object(subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run,
+            patch.object(gate, "_uv", return_value=None),  # the pip fallback; uv is covered below
+        ):
+            self.assertEqual(gate._worktree_interpreter(self.checkout), interpreter)
+        install = run.call_args_list[1]
+        self.assertEqual(
+            install.args[0],
+            [
+                interpreter,
+                "-m",
+                "pip",
+                "install",
+                "--disable-pip-version-check",
+                "pytest",
+                "-r",
+                str(self.checkout / "requirements.lock"),
+                ".[app,dev]",
+            ],
+        )
+        self.assertEqual(install.kwargs["timeout"], gate.SETUP_TIMEOUT_LOCK_S)
+
+    def test_a_lock_is_installed_with_uv_when_available(self):
+        """pip could not resolve Inv-Man-Intake's universal uv lock; uv (what CI uses) installs it."""
+        (self.checkout / "pyproject.toml").write_text(
+            '[project]\nname = "delivery"\nversion = "1"\n[project.optional-dependencies]\ndev = []\n'
+        )
+        (self.checkout / "requirements.lock").touch()
+        interpreter = str(self.checkout / ".venv/bin/python")
+        with (
+            patch.object(subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run,
+            patch.object(gate, "_uv", return_value="/opt/homebrew/bin/uv"),
+        ):
+            gate._worktree_interpreter(self.checkout)
+        self.assertEqual(
+            run.call_args_list[1].args[0],
+            [
+                "/opt/homebrew/bin/uv",
+                "pip",
+                "install",
+                "--python",
+                interpreter,
+                "pytest",
+                "-r",
+                str(self.checkout / "requirements.lock"),
+                ".[dev]",
+            ],
+        )
+
+    def test_without_a_lock_uv_is_not_used(self):
+        (self.checkout / "pyproject.toml").write_text(
+            '[project]\nname = "delivery"\nversion = "1"\n'
+        )
+        with (
+            patch.object(subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run,
+            patch.object(gate, "_uv", return_value="/opt/homebrew/bin/uv"),
+        ):
+            gate._worktree_interpreter(self.checkout)
+        self.assertEqual(run.call_args_list[1].args[0][1:3], ["-m", "pip"])
+
     def test_failed_environment_setup_never_runs_checks_or_leaves_partial_venv(self):
         spec = runtime_ac.author_issue_spec(
             "owner/repo#1", "## Acceptance Criteria\n- Named test: `tests/test_delivery.py`.\n"

@@ -807,17 +807,17 @@ def select_agent(
     if cold_start:
         # Sample only an equally admissible capacity tier. This is allocation of
         # an already-needed job, not extra comparison/benchmark dispatches.
-        tier = scored[0][0][:5]
-        picked = rng.choice([row for row in scored if row[0][:5] == tier])
+        tier = base_scored[0][0][:5]
+        picked = rng.choice([row for row in base_scored if row[0][:5] == tier])
     pacing_decision = None
     # Draw legacy exploration first so pacing cannot consume or suppress the
     # unrelated pools' exploration share. Pace only the exploitation choice.
     epsilon = _exploration_rate(exploration_rate)
     if epsilon > 0 and rng.random() < epsilon:
         mode = _exploration_mode(exploration_mode)
-        exploration_scored = scored
+        exploration_scored = base_scored
         if pacing_active:
-            exploration_scored = [r for r in scored if r[2] != "shed"]
+            exploration_scored = [r for r in base_scored if r[2] != "shed"]
         challenger = (
             _thompson_exploration_choice(exploration_scored, learned, rng)
             if mode == "thompson-hybrid"
@@ -837,13 +837,14 @@ def select_agent(
                 )
     baseline_picked = base_scored[0]
     if pacing_active and not explored and not cold_start:
-        picked, pacing_decision = _pacing_choice(scored, cap, learned, rng)
+        picked, pacing_decision = _pacing_choice(base_scored, cap, learned, rng)
         if comparative_on and pacing_decision is None:
             # Comparative keys follow the five capacity keys: the same candidates
             # reach the same unmeasured fallback in either ordering. Replaying
             # that deterministic path consumes no random draws. Weighted pacing
             # retains its policy and is never attributed to comparative ranking.
-            baseline_picked, _ = _pacing_choice(base_scored, cap, learned, rng)
+            baseline_picked = picked
+            picked, _ = _pacing_choice(scored, cap, learned, rng)
     _, entry, st, _idx = picked
     route_source = (
         "route_weights_comparative"
