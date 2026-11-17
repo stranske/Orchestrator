@@ -740,29 +740,50 @@ def test_repeated_quota_incidents_escalate_the_cooldown_and_cap(incident_paths, 
     )
     assert _shed_expiry("vibe") == reset
 
+    monkeypatch.setenv("ORCH_PROVIDER_COOLDOWN_S", "259201")
+    cap_ts = reset + 1
+    rate_incidents.record_incident(
+        agent="override-cap",
+        surface="dispatch",
+        category="quota",
+        run_id="override-1",
+        evidence="402 Payment Required: budget exhausted",
+        timestamp=cap_ts,
+    )
+    assert _shed_expiry("override-cap") - cap_ts == rate_incidents.MAX_COOLDOWN_S
+
 
 def test_escalation_is_per_agent(incident_paths, monkeypatch):
     monkeypatch.delenv("ORCH_PROVIDER_COOLDOWN_S", raising=False)
     start = int(time.time())
-    for i in range(4):
-        rate_incidents.record_incident(
-            agent="vibe",
-            surface="dispatch",
-            category="quota",
-            run_id=f"vibe-{i}",
-            evidence="402 Payment Required",
-            timestamp=start + i * 3600,
-        )
-    ts = start + 5 * 3600
+    hour = 3600
+    rate_incidents.record_incident(
+        agent="vibe",
+        surface="dispatch",
+        category="quota",
+        run_id="vibe-0",
+        evidence="402 Payment Required",
+        timestamp=start,
+    )
+    ts2 = start + 6 * hour
+    rate_incidents.record_incident(
+        agent="vibe",
+        surface="dispatch",
+        category="quota",
+        run_id="vibe-1",
+        evidence="402 Payment Required",
+        timestamp=ts2,
+    )
+    assert _shed_expiry("vibe") - ts2 == 12 * hour
     rate_incidents.record_incident(
         agent="codex",
         surface="dispatch",
         category="quota",
         run_id="codex-1",
         evidence="quota exhausted",
-        timestamp=ts,
+        timestamp=ts2,
     )
-    assert _shed_expiry("codex") - ts == rate_incidents.DEFAULT_COOLDOWN_S
+    assert _shed_expiry("codex") - ts2 == rate_incidents.DEFAULT_COOLDOWN_S
     # A different category for the same agent does not escalate either.
     rate_incidents.record_incident(
         agent="vibe",
@@ -770,9 +791,9 @@ def test_escalation_is_per_agent(incident_paths, monkeypatch):
         category="capacity",
         run_id="vibe-capacity",
         evidence="503 overloaded",
-        timestamp=ts,
+        timestamp=ts2 + 6 * hour,
     )
     assert (
-        rate_incidents._cooldown_seconds("capacity", "vibe", ts + 6 * 3600, None)
+        rate_incidents._cooldown_seconds("capacity", "vibe", ts2 + 12 * hour, None)
         == 2 * rate_incidents.DEFAULT_COOLDOWN_S
     )
