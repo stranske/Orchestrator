@@ -1341,9 +1341,24 @@ def build(ccusage_block=None, *, record_pacing: bool = False) -> dict:
 
 def _selftest():
     global SHED_DIR
+    import rate_incidents
+
     original_shed_dir = SHED_DIR
+    original_incident_paths = (
+        rate_incidents.HANDOFF,
+        rate_incidents.INCIDENT_FILE,
+        rate_incidents.LOCK_FILE,
+        rate_incidents.SHED_DIR,
+    )
     selftest_shed_dir = Path(tempfile.mkdtemp(prefix="capacity-shed-selftest-"))
     SHED_DIR = selftest_shed_dir
+    # `_shed` serializes cleanup through the incident writer's lock.  Keep that lock and the
+    # marker under the disposable self-test directory too; otherwise this isolated check reaches
+    # a real (and, in CI, read-only) handoff directory.
+    rate_incidents.HANDOFF = selftest_shed_dir
+    rate_incidents.INCIDENT_FILE = selftest_shed_dir / "rate-limit-incidents.ndjson"
+    rate_incidents.LOCK_FILE = selftest_shed_dir / "rate-limit-incidents.ndjson.lock"
+    rate_incidents.SHED_DIR = selftest_shed_dir
     # The self-test's seats are fixtures: the launch-binary gate reads this machine's filesystem
     # (CI has no vibe binary), so it is off here exactly as tests/conftest.py turns it off.
     original_launch_check = os.environ.get("ORCH_LAUNCH_CHECK")
@@ -1359,6 +1374,12 @@ def _selftest():
         _selftest_body(blk)
     finally:
         SHED_DIR = original_shed_dir
+        (
+            rate_incidents.HANDOFF,
+            rate_incidents.INCIDENT_FILE,
+            rate_incidents.LOCK_FILE,
+            rate_incidents.SHED_DIR,
+        ) = original_incident_paths
         shutil.rmtree(selftest_shed_dir, ignore_errors=True)
         if original_launch_check is None:
             os.environ.pop("ORCH_LAUNCH_CHECK", None)
