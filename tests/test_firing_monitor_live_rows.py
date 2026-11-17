@@ -221,6 +221,66 @@ def test_invocation_after_retirement_is_named(tmp_path, monkeypatch):
         assert "run:production" in text and retirement["reason"] in text
     assert ledger.read_bytes() == before, "reports must not change the ledger"
 
+    # Exercise lifecycle changes through the real writer too: old execution must not leak
+    # into a new retirement window, even after another invocation while the row is live.
+    capabilities.transition(
+        "retired-running", "observed", reason="revived", timestamp=NOW + 1, path=ledger
+    )
+    capabilities.heartbeat(
+        "retired-running", "invocation", ref="run:live", timestamp=NOW + 2, path=ledger
+    )
+
+    def reports_at(timestamp):
+        before = ledger.read_bytes()
+        reports = (
+            monitor.review(now=timestamp, path=ledger),
+            switch_review.gate_expiry(now=timestamp, path=ledger),
+        )
+        assert ledger.read_bytes() == before, "reports must not change lifecycle evidence"
+        return reports
+
+    live, expiry = reports_at(NOW + 2)
+    for report in (live, expiry):
+        assert report["retired_but_invoked_count"] == 0
+        assert report["retired_but_invoked"] == []
+        assert report["retired_but_invoked_measurement"] == "measured"
+    assert live["total"] == 1
+    assert "retired-running" not in live["not_monitored"]["retired"]
+
+    capabilities.transition(
+        "retired-running", "retired", reason="retired again", timestamp=NOW + 3, path=ledger
+    )
+    new_retirement = capabilities.load_declared(ledger)["retired-running"]["event_history"][-1]
+    capabilities.heartbeat(
+        "retired-running",
+        "invocation",
+        ref="run:fixture",
+        metadata={"source": "fixture"},
+        timestamp=NOW + 4,
+        path=ledger,
+    )
+    for report in reports_at(NOW + 4):
+        assert report["retired_but_invoked_count"] == 0
+        assert report["retired_but_invoked"] == []
+
+    new_invocations = [
+        {**invocation, "timestamp": NOW + offset, "ref": f"run:new-{offset}"} for offset in (5, 6)
+    ]
+    for event in new_invocations:
+        capabilities.heartbeat(
+            "retired-running",
+            "invocation",
+            timestamp=event["timestamp"],
+            ref=event["ref"],
+            metadata=event["metadata"],
+            path=ledger,
+        )
+    for report in reports_at(NOW + 6):
+        assert report["retired_but_invoked_count"] == 1, "count capabilities, not invocations"
+        assert report["retired_but_invoked"] == [
+            {**expected, "retirement": new_retirement, "invocations": new_invocations}
+        ]
+
 
 def test_retirement_predicate_is_read_only_and_uses_latest_retirement():
     retirement = {"type": "transition", "to": "retired", "timestamp": NOW - 100}

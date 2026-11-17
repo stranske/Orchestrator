@@ -149,3 +149,47 @@ the local deliberate-break/restoration check succeeded.
 
 Follow-up needs the unrelated formatting baseline resolved, writable Git
 metadata, and approval to publish this verified reconciliation and evidence.
+
+## Real lifecycle writer regression follow-up — 2026-11-17
+
+Extended two existing tests without changing collection counts:
+
+- The named acceptance test now revives the invoked row through `transition`,
+  records a live invocation, and retires it again. Both readers exclude the old
+  and fixture invocations, then report two new production invocations as one
+  capability with only the new retirement evidence. Every report preserves the
+  ledger bytes.
+- The gate-expiry control now calls `renew` on an expired, invoked row and proves
+  that the diagnostic clears and stays clear after a new invocation.
+
+Using Python 3.12.16, pytest 8.3.5 and Black 24.10.0 from pinned official upstream
+sources in `/tmp/orchestrator-test-tools`, with all pytest runs selecting
+`-m "not slow"` and `ORCH_STATE_DIR=/tmp/issue-1414-validation-state`:
+
+```text
+Named acceptance test: 1 passed in 0.22s (after source restoration)
+tests/test_firing_monitor_live_rows.py: 25 passed in 0.28s
+tests/test_gate_expiry_renewal.py: 27 passed in 0.81s
+Six-file targeted regressions listed above: 104 passed in 4.38s
+Edited files, Black line length 100: 2 files would be left unchanged
+git diff --check: passed
+```
+
+The deliberate break inserted an unconditional `return None` in
+`invoked_after_retirement`. The named test failed at
+`assert report["retired_but_invoked_count"] == 1` with `E assert 0 == 1`
+(`1 failed in 0.23s`). A `finally` block restored the original bytes; the named
+test and both complete files passed afterward. `src/capabilities.py` was compared
+byte-for-byte with `HEAD` after restoration and is unchanged.
+
+The mandatory full Black command again exited 1: **21 files would be reformatted,
+693 left unchanged**. Every flagged file was compared byte-for-byte with `HEAD`
+and is unchanged. `.git`, its index, objects and branch refs are read-only.
+No commit or push was attempted: the mandatory formatting gate forbids it.
+The two test improvements remain local.
+
+Automatic approval review rejected publishing the PR evidence comment, adding
+`needs-human`, and updating verified checkboxes, each with
+`MCP tool call requires approval, but approval policy is never`. The remote
+checklist remains unchanged, and publication of the deliberate-break evidence
+remains incomplete. PR 1426 was verified open and ready (`draft=false`).
