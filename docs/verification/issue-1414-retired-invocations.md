@@ -343,3 +343,35 @@ After formatting passed, the requested commit attempt stopped at staging:
 The test change and this note remain uncommitted. PR #1416 was confirmed open with `draft=false`.
 Remaining delivery requires a writable Git directory and an approved GitHub write capability;
 the implementation and local acceptance checks are verified.
+
+
+## Merge conflict resolution — 2026-11-17
+
+Integrated `main` at `e4fd36743913f058a9e3017767f7c3fb75e9ef11` into
+`claude/issue-1414` at `31b05015b3c6215ffb700a9af7abc41542c91aba`.
+The GitHub branch API independently confirmed the base SHA. Network access from
+the shell was unavailable, so the merge used that existing local Git object in
+an isolated checkout with writable Git metadata.
+
+Kept main's newer retirement predicate, ledger/history measurement handling and
+report formatters. Removed the duplicate predicate introduced by the automatic
+merge, retained both branches' tests, and gave the PR's parameterized production
+heartbeat test a distinct name so it cannot hide the named acceptance test.
+Aligned the retained tests with main's `measured` marker and kill-switch wording.
+Kept main's matching architecture document and diagram without duplicate notices.
+
+Validation on the resolved files with Python 3.14.10 and upstream pytest 9.0.2:
+
+- Named acceptance command: **1 passed**.
+- Whole firing-monitor test file: **32 passed**.
+- Firing-monitor and gate-expiry test files together: **80 passed**.
+- Full collection with `--collect-only -m "not slow" -q`: **9224 collected**.
+- Collection floor reconciled from main's 9200 to 9224; expected passing floor
+  increased by the same 24 cases, with every ceiling preserved. This is not a
+  claim that the full suite ran.
+- Changed Python files parse without duplicate top-level definitions;
+  `git diff --check` passes and no merge-conflict markers remain.
+
+The earlier deliberate-break/restoration evidence above was retained, not repeated.
+Test tooling was assembled under `/tmp` from official upstream source tags through
+the GitHub connector; repository dependencies were unchanged.

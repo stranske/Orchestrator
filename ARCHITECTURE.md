@@ -671,6 +671,15 @@ time>` (a weekly exhaustion had re-admitted the seat every 6 h). `switch_review`
 placed by hand that has held its seat past 14 days, or an expired one still on disk. (No stage,
 component or surface moved; the diagram is unchanged.)
 
+**Repeated lane decisions are reported by the weekly review (2026-11-17).**
+`switch_review.stuck_lane_targets` reads the last 200 lines of the opener-core and closer-core
+round journals. An identical action and reason/error for a target across at least six consecutive
+rounds spanning an hour is SUSPECT, except explicit parked, complete and `held:` skip decisions.
+A changed decision or an absent target drains the streak. The JSON and readable weekly artifact
+carry the count and up to five readable examples; unreadable journals remain unknown rather than
+zero. This is an FYI feedback surface only: it changes no lane, raises no owner question and
+initiates no action. The loop diagram records the same read-only journal connection.
+
 **What an agent prints passes one mask before this tool writes or returns it (2026-10-06).** While
 gh was broken for dispatched agents, agents fetched a GitHub token another way and printed it, and
 the dispatcher kept it wherever it keeps what an agent says: a vibe offload's stdout went into a
@@ -732,6 +741,14 @@ with ledger invocations and existing Brain influence edges, naming the earliest 
 step and input switches held off. Unknown demand never becomes zero. It changes no
 selection, gate, dispatcher or lifecycle decision; the existing weekly artifact carries
 the section rather than a second audit log or inventory.
+
+The same weekly report's `stuck_lane_targets` section reads the last 200 lines of
+the opener-core and closer-core round journals under `ORCH_STATE_DIR` (default
+`~/.codex/orchestrator`). Each target's newest consecutive run of identical action
+and reason/error text is SUSPECT after at least six rounds spanning one hour.
+Explicit parked, complete and `held:` skip decisions are excluded. The report names
+up to five suspects, prints measured round counts when drained, and preserves
+unreadable or malformed journals as unknown. It is FYI only and changes no lane state.
 
 **Its `outcome` step reads what became of a run from `outcomes`, and counts it with the one
 classifier of these edges (2026-10-11).** It counted an acted-on edge's own `outcome_verdict` and
@@ -1848,6 +1865,14 @@ a hold, which is the ledger changing (the `reachable_ids` lesson above), and its
 lists already is graded. The monitor's declared population names the hold kinds and the three
 silence findings they exclude a row from, so this edit re-baselined the grader, while a hold declared
 or lifted later moves a graded finding exactly as a retirement does.
+
+**Retired execution is a separate diagnostic.** `capabilities.invoked_after_retirement` reads the
+latest retirement with no later renewal or live transition and names subsequent non-fixture
+invocation events. The firing monitor and switch review's gate-expiry notice expose
+`retired_but_invoked` with retirement/invocation evidence and the declared kill switch, independently
+of the expiry notice window. Missing or unreadable ledgers are unmeasured, never a measured zero.
+This read-only diagnostic leaves live finding populations, silence findings, `not_monitored`,
+and heartbeat emission unchanged.
 
 **A silence the row's own history contradicts is named as one (2026-10-02).** Only an `invocation`
 event moves `last_invocation`, and two producers broke the reading "silent means it did not run": a

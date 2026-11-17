@@ -464,6 +464,60 @@ def test_drained_unmeasured_and_empty_each_say_something_different(tmp_path):
     assert "NOT MEASURED" in texts["missing"] and "NOT MEASURED" in texts["broken"]
     assert "NOT MEASURED" not in texts["drained"] and "NOT MEASURED" not in texts["none"]
     assert len(set(texts.values())) == 4, "two different states rendered the same words"
+    for section in (missing, broken):
+        assert section["retired_but_invoked_count"] is None
+        assert section["retired_but_invoked"] == []
+        assert section["retired_but_invoked_measurement"] == "unmeasured"
+        assert "retired_but_invoked: unmeasured" in "\n".join(
+            switch_review.format_gate_expiry(section)
+        )
+
+
+def test_clean_retirement_is_a_measured_zero_and_invocation_is_not_expiry_limited(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(switch_review, "_acting_index", lambda *_: None)
+    ledger = _ledger(tmp_path, {"old": _expired("old", 90, "owner decision")})
+    clean = switch_review.gate_expiry(now=NOW, path=ledger)
+    assert clean["retired_but_invoked_count"] == 0
+    assert clean["retired_but_invoked_measurement"] == "measured"
+    assert "retired_but_invoked: 0" in "\n".join(switch_review.format_gate_expiry(clean))
+    capabilities.heartbeat("old", "invocation", timestamp=NOW - DAY, ref="run:late", path=ledger)
+    before = ledger.read_bytes()
+    invoked = switch_review.gate_expiry(now=NOW, path=ledger)
+    assert invoked["retired_but_invoked_count"] == 1
+    assert invoked["retired_but_invoked"][0]["capability_id"] == "old"
+    assert invoked["lapsed"] == [], "decisions and old retirements stay out of the expiry notice"
+    assert "Nothing due" not in _report(invoked)
+    assert ledger.read_bytes() == before
+
+    # A real expiry renewal must remove the diagnostic, including after a fresh invocation.
+    ledger = _ledger(
+        tmp_path,
+        {"lapsed-running": _expired("lapsed-running", 90, capabilities.EXPIRY_RETIREMENT_REASON)},
+    )
+    capabilities.heartbeat(
+        "lapsed-running", "invocation", timestamp=NOW - DAY, ref="run:late", path=ledger
+    )
+    assert switch_review.gate_expiry(now=NOW, path=ledger)["retired_but_invoked_count"] == 1
+    renewed = capabilities.renew(
+        "lapsed-running",
+        reason="still needed",
+        evidence_refs=["run:late"],
+        timestamp=NOW,
+        path=ledger,
+    )
+    assert renewed["revived_from"] == "retired"
+    capabilities.heartbeat(
+        "lapsed-running", "invocation", timestamp=NOW + 1, ref="run:renewed", path=ledger
+    )
+    before = ledger.read_bytes()
+    after = switch_review.gate_expiry(now=NOW + 1, path=ledger)
+    assert after["retired_but_invoked_measurement"] == "measured"
+    assert after["retired_but_invoked_count"] == 0
+    assert after["retired_but_invoked"] == []
+    assert "retired_but_invoked: 0" in "\n".join(switch_review.format_gate_expiry(after))
+    assert ledger.read_bytes() == before
 
 
 @pytest.mark.parametrize(

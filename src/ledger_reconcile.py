@@ -318,7 +318,7 @@ def _classify_run_log_segment(
     if not evidence_result.get("is_authoritative"):
         return None
     try:
-        rate_incidents.record_incident(
+        incident_result = rate_incidents.record_incident(
             agent=agent,
             surface="ledger_reconcile.completion",
             category=evidence_result["category"],
@@ -337,6 +337,16 @@ def _classify_run_log_segment(
                 "log_file": str(log_file) if log_file else None,
             },
         )
+        if isinstance(incident_result, dict):
+            evidence_result["incident_status"] = incident_result.get("status")
+            evidence_result["shed"] = bool(incident_result.get("shed"))
+            if incident_result.get("status") == "shed_unfulfilled":
+                evidence_result["shed_unfulfilled"] = True
+                print(
+                    f"warn: rate-incident shed unfulfilled for {agent}/{run_id}: "
+                    f"incident_id={incident_result.get('incident_id')}",
+                    file=sys.stderr,
+                )
     except Exception as exc:
         print(f"warn: rate-incident recording failed for {agent}/{run_id}: {exc}", file=sys.stderr)
     return evidence_result

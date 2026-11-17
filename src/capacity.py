@@ -606,6 +606,117 @@ def tier_ceiling_exports(environ=None, **kwargs) -> list[str]:
 
 _BUILD_PACING_USAGE: ContextVar[dict | None] = ContextVar("build_pacing_usage", default=None)
 
+_MARKER_IDENTITY_KEYS = (
+    "agent",
+    "path",
+    "why",
+    "incident_id",
+    "category",
+    "created_at",
+    "expires_at",
+    "reset_at",
+    "model",
+    "tier_scope",
+)
+
+
+def _marker_identity(marker: dict) -> tuple:
+    return tuple(marker.get(key) for key in _MARKER_IDENTITY_KEYS)
+
+
+def _recovery_clears_marker(
+    agent: str, marker: dict, *, emit_fyi: bool = True, prefer_live_recovery: bool = False
+) -> bool:
+    """Return whether confirmed reset or fresh post-incident usage clears an active quota marker."""
+    if marker["state"] != "active":
+        return False
+    # A confirmed banked reset clears only a dated provider quota incident.
+    # Continue through ordinary auth/model checks after removal. Manual and
+    # unreadable markers are never reset by an allowance inventory change.
+    import pacing
+    import pacing_usage
+
+    inventory = pacing_usage.read_json(pacing_usage.RESETS_FILE) or {}
+    entries = inventory.get(agent, []) if isinstance(inventory, dict) else []
+    created = marker.get("created_at")
+    reset_events = (
+        [
+            stamp
+            for entry in entries
+            if isinstance(entry, dict)
+            and (stamp := pacing.timestamp(entry.get("consumed_at"))) is not None
+            and stamp <= time.time()
+        ]
+        if isinstance(entries, list)
+        else []
+    )
+    if agent == "codex":
+        if prefer_live_recovery:
+            poll = pacing_usage.polled_usage(agent, time.time())["poll"] or {}
+        else:
+            snapshot = _BUILD_PACING_USAGE.get()
+            poll = (
+                (snapshot.get(agent) or {}).get("poll")
+                if snapshot is not None
+                else pacing_usage.polled_usage(agent, time.time())["poll"]
+            ) or {}
+        if poll.get("fresh"):
+            # The hand inventory may contain a false rollover debit. Fresh
+            # provider inventory cannot establish that consumption timestamp.
+            reset_events = []
+    reset_clears = (
+        marker["state"] == "active"
+        and marker.get("category") in ("quota", "rate_limit", "capacity")
+        and created is not None
+        and any(stamp > created for stamp in reset_events)
+    )
+    sample_clears = False
+    if (
+        agent in ("codex", "claude")
+        and marker["state"] == "active"
+        and marker.get("category") in ("quota", "rate_limit", "capacity")
+        and created is not None
+        and not reset_clears
+    ):
+        now = time.time()
+        if prefer_live_recovery:
+            datum = pacing_usage.usage(
+                agent, now, pacing_usage.read_json(pacing_usage.CALIBRATION_FILE) or {}
+            )
+        else:
+            snapshot = _BUILD_PACING_USAGE.get()
+            datum = (
+                snapshot[agent]
+                if snapshot is not None
+                else pacing_usage.usage(
+                    agent, now, pacing_usage.read_json(pacing_usage.CALIBRATION_FILE) or {}
+                )
+            )
+        used, observed = datum.get("used_fraction"), datum.get("ts")
+        short = datum.get("short_used_fraction")
+        short_ts = datum.get("short_ts", observed)
+        sample_clears = (
+            used is not None
+            and 0 <= used < 1
+            and short is not None
+            and 0 <= short < 1
+            and observed is not None
+            and short_ts is not None
+            and created < short_ts <= now
+            and now - short_ts <= pacing.STALE_AFTER_SECONDS
+            and created < observed <= now
+            and now - observed <= pacing.usage_max_age(agent)
+        )
+        if not sample_clears and emit_fyi:
+            print(
+                f"pool {agent}: quota marker age={now - created:.0f}s; weekly u={used}; "
+                f"short-window u={short if short is not None else 'unmeasured'}; "
+                f"drain: fresh post-incident weekly AND short-window u<1, confirmed reset, "
+                f"or cooldown in {marker['expires_at'] - now:.0f}s",
+                file=sys.stderr,
+            )
+    return reset_clears or sample_clears
+
 
 def _shed(agent: str) -> bool:
     """Honor legacy empty flags; expire only well-formed JSON cooldown flags.
@@ -621,88 +732,24 @@ def _shed(agent: str) -> bool:
         # Only the seat's top tier is exhausted: the seat stays routable and `tier_ceilings`
         # caps it below that tier until the marker expires (then the branch below removes it).
         return False
-    if marker["state"] != "expired":
-        # A confirmed banked reset clears only a dated provider quota incident.
-        # Continue through ordinary auth/model checks after removal. Manual and
-        # unreadable markers are never reset by an allowance inventory change.
-        import pacing
-        import pacing_usage
+    if marker["state"] != "expired" and not _recovery_clears_marker(agent, marker):
+        return True
+    import rate_incidents
 
-        inventory = pacing_usage.read_json(pacing_usage.RESETS_FILE) or {}
-        entries = inventory.get(agent, []) if isinstance(inventory, dict) else []
-        created = marker.get("created_at")
-        reset_events = (
-            [
-                stamp
-                for entry in entries
-                if isinstance(entry, dict)
-                and (stamp := pacing.timestamp(entry.get("consumed_at"))) is not None
-                and stamp <= time.time()
-            ]
-            if isinstance(entries, list)
-            else []
-        )
-        if agent == "codex":
-            snapshot = _BUILD_PACING_USAGE.get()
-            poll = (
-                (snapshot.get(agent) or {}).get("poll")
-                if snapshot is not None
-                else pacing_usage.polled_usage(agent, time.time())["poll"]
-            ) or {}
-            if poll.get("fresh"):
-                # The hand inventory may contain a false rollover debit. Fresh
-                # provider inventory cannot establish that consumption timestamp.
-                reset_events = []
-        reset_clears = (
-            marker["state"] == "active"
-            and marker.get("category") in ("quota", "rate_limit", "capacity")
-            and created is not None
-            and any(stamp > created for stamp in reset_events)
-        )
-        sample_clears = False
-        if (
-            agent in ("codex", "claude")
-            and marker["state"] == "active"
-            and marker.get("category") in ("quota", "rate_limit", "capacity")
-            and created is not None
-            and not reset_clears
-        ):
-            now = time.time()
-            snapshot = _BUILD_PACING_USAGE.get()
-            datum = (
-                snapshot[agent]
-                if snapshot is not None
-                else pacing_usage.usage(
-                    agent, now, pacing_usage.read_json(pacing_usage.CALIBRATION_FILE) or {}
-                )
-            )
-            used, observed = datum.get("used_fraction"), datum.get("ts")
-            short = datum.get("short_used_fraction")
-            short_ts = datum.get("short_ts", observed)
-            sample_clears = (
-                used is not None
-                and 0 <= used < 1
-                and short is not None
-                and 0 <= short < 1
-                and observed is not None
-                and short_ts is not None
-                and created < short_ts <= now
-                and now - short_ts <= pacing.STALE_AFTER_SECONDS
-                and created < observed <= now
-                and now - observed <= pacing.usage_max_age(agent)
-            )
-            if not sample_clears:
-                print(
-                    f"pool {agent}: quota marker age={now - created:.0f}s; weekly u={used}; "
-                    f"short-window u={short if short is not None else 'unmeasured'}; "
-                    f"drain: fresh post-incident weekly AND short-window u<1, confirmed reset, "
-                    f"or cooldown in {marker['expires_at'] - now:.0f}s",
-                    file=sys.stderr,
-                )
-        if not (reset_clears or sample_clears):
-            return True
     try:
-        Path(marker["path"]).unlink()
+        with rate_incidents.incident_lock(blocking=False):
+            current = shed_marker(agent)
+            if current is None:
+                return False
+            if current["state"] == "active" and current.get("tier_scope"):
+                return False
+            if _marker_identity(current) != _marker_identity(marker):
+                return True
+            if current["state"] != "expired" and not _recovery_clears_marker(
+                agent, current, emit_fyi=False, prefer_live_recovery=True
+            ):
+                return True
+            Path(current["path"]).unlink()
     except OSError:
         return True
     return False
@@ -1304,9 +1351,24 @@ def build(ccusage_block=None, *, record_pacing: bool = False) -> dict:
 
 def _selftest():
     global SHED_DIR
+    import rate_incidents
+
     original_shed_dir = SHED_DIR
+    original_incident_paths = (
+        rate_incidents.HANDOFF,
+        rate_incidents.INCIDENT_FILE,
+        rate_incidents.LOCK_FILE,
+        rate_incidents.SHED_DIR,
+    )
     selftest_shed_dir = Path(tempfile.mkdtemp(prefix="capacity-shed-selftest-"))
     SHED_DIR = selftest_shed_dir
+    # `_shed` serializes cleanup through the incident writer's lock.  Keep that lock and the
+    # marker under the disposable self-test directory too; otherwise this isolated check reaches
+    # a real (and, in CI, read-only) handoff directory.
+    rate_incidents.HANDOFF = selftest_shed_dir
+    rate_incidents.INCIDENT_FILE = selftest_shed_dir / "rate-limit-incidents.ndjson"
+    rate_incidents.LOCK_FILE = selftest_shed_dir / "rate-limit-incidents.ndjson.lock"
+    rate_incidents.SHED_DIR = selftest_shed_dir
     # The self-test's seats are fixtures: the launch-binary gate reads this machine's filesystem
     # (CI has no vibe binary), so it is off here exactly as tests/conftest.py turns it off.
     original_launch_check = os.environ.get("ORCH_LAUNCH_CHECK")
@@ -1322,6 +1384,12 @@ def _selftest():
         _selftest_body(blk)
     finally:
         SHED_DIR = original_shed_dir
+        (
+            rate_incidents.HANDOFF,
+            rate_incidents.INCIDENT_FILE,
+            rate_incidents.LOCK_FILE,
+            rate_incidents.SHED_DIR,
+        ) = original_incident_paths
         shutil.rmtree(selftest_shed_dir, ignore_errors=True)
         if original_launch_check is None:
             os.environ.pop("ORCH_LAUNCH_CHECK", None)
