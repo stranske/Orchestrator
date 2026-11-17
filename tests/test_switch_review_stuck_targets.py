@@ -208,3 +208,24 @@ def test_weekly_review_includes_and_formats_section(journals, monkeypatch):
     assert "stuck lane targets: 1 SUSPECT" in rendered
     assert TARGET in rendered
     assert "Nothing due." not in rendered
+
+
+def test_live_hold_wording_is_not_suspect_but_a_repeating_failure_is(journals):
+    """2026-11-17 live journals: 44 of 45 first-run suspects were each lane's own deliberate holds."""
+    opener, closer = [], []
+    for i in range(21):
+        opener.append(_round(i, [
+            {"target": "o/r#1", "action": "already-pr_linked"},
+            {"target": "o/r#2", "action": "format-unfixed",
+             "reason": "rewrite did not pass the validator; next round"},
+        ]))
+        closer.append(_round(i, [
+            {"target": "o/r#3", "action": "probe"},
+            {"target": "o/r#4", "action": "skip-held", "reason": "hold label agents:paused"},
+            {"target": "o/r#5", "action": "wait-unmerged",
+             "reason": "dependency-bot PR opened under 3 days ago: its own automerge has it"},
+        ]))
+    _journal(journals, "opener-core", opener)
+    _journal(journals, "closer-core", closer)
+    report = switch_review.stuck_lane_targets(now=NOW)
+    assert [(r["lane"], r["target"]) for r in report["rows"]] == [("opener-core", "o/r#2")]

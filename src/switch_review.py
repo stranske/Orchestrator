@@ -86,6 +86,12 @@ SHED_EXPIRED_GRACE_S = 86400
 STUCK_MIN_ROUNDS = 6
 STUCK_MIN_SPAN_S = 3600
 STUCK_JOURNAL_LINES = 200
+# Decisions that are a deliberate, bounded hold rather than a stall, in each lane's own words (read from the
+# live journals 2026-11-17: 44 of 45 first-run "suspects" were these). already-pr_linked: the opener handed the
+# issue to the closer; probe / skip-held / wait-hold: the closer's hold labels and paused probes.
+STUCK_HOLD_ACTIONS = frozenset({"already-parked", "already-pr_linked", "already-reserved", "complete",
+                                "probe", "skip-held", "wait-hold"})
+STUCK_HOLD_REASONS = ("held:", "dependency-bot PR opened under")
 
 # Fleet template-delivery gates (Maint 68 promote + sync-branch canaries). Same horizon as switch
 # review: a chain latched for a week with open canaries is the failure mode observed 2026-09-02.
@@ -1724,8 +1730,8 @@ def stuck_lane_targets(*, now=None, roots=None) -> dict:
                 count += 1
             rows = []
             for row in runs.values():
-                deliberate_hold = row["action"] in {"already-parked", "complete"} or (
-                    row["action"] in {"skip", "skip-held"} and row["reason"].startswith("held:")
+                deliberate_hold = row["action"] in STUCK_HOLD_ACTIONS or (
+                    row["reason"].startswith(STUCK_HOLD_REASONS)
                 )
                 if (
                     row["rounds"] >= STUCK_MIN_ROUNDS
