@@ -404,9 +404,12 @@ def polled_usage(pool: str, now: float, directory: Path | None = None, *, data=N
     valid = used is not None and end is not None
     if pool == "codex":
         valid = valid and window.get("window_minutes") == 10080
+    elif pool == "gemini":
+        valid = valid and window.get("id") == "gemini-weekly"
     else:
         valid = valid and str(window.get("label", "")).lower() == "all models"
-    short = data.get("secondary" if pool == "codex" else "session") or {}
+    short_key = "secondary" if pool == "codex" else "five_hour" if pool == "gemini" else "session"
+    short = data.get(short_key) or {}
     if not isinstance(short, dict):
         short = {}
     age = now - ts if ts is not None else None
@@ -418,7 +421,7 @@ def polled_usage(pool: str, now: float, directory: Path | None = None, *, data=N
         valid=valid,
         ticks_missed=max(0, int(age // pacing.POLL_TICK_SECONDS) - 1) if age is not None else None,
     )
-    if pool == "claude" and valid and end is not None and end <= now:
+    if pool in ("claude", "gemini") and valid and end is not None and end <= now:
         old_end = end
         end += (int((now - end) // pacing.PERIOD_SECONDS) + 1) * pacing.PERIOD_SECONDS
         poll.update(observed_period_end=old_end, rolled_period_end=end)
@@ -459,11 +462,13 @@ def polled_usage(pool: str, now: float, directory: Path | None = None, *, data=N
         period_end=end,
         short_used_fraction=(
             fraction(short.get("used_percent"))
-            if pool == "claude" or short.get("window_minutes") == 300
+            if pool in ("claude", "gemini") or short.get("window_minutes") == 300
             else None
         ),
         source=(
-            "codex-app-server:account/rateLimits/read" if pool == "codex" else "claude-cli:/usage"
+            "codex-app-server:account/rateLimits/read"
+            if pool == "codex"
+            else "agy:/usage" if pool == "gemini" else "claude-cli:/usage"
         ),
         poll=poll,
     )

@@ -28,10 +28,8 @@ _SIMPLEX_EPS = 1e-12
 # Route decision constants for hosted router
 ROUTE_GO_LIVE = "2026-11-17T00:00:00Z"
 ROUTE_INCIDENT_WINDOW_DAYS = 14
-# Capacity models that carry a pacing contract (capacity.AGENTS[agent]["model"]). Every other model
-# (metered, flat, windowed_prepaid, plan_then_credit) has no usage API: 429-shed is its authoritative
-# limiter and it never has pacing. Owner 2026-11-11: such agents are EXCLUDED from the solve and named,
-# instead of holding status at "partial" forever (cursor and vibe did, so route_enabled could never be true).
+# Capacity models that always carry a pacing contract (capacity.AGENTS[agent]["model"]). Other models
+# enter the solve when their usage poll is fresh and valid, and are excluded and named when stale/absent.
 PACED_CAPACITY_MODELS = frozenset({"ccusage"})
 # Owner 2026-11-11: a "partial" result (a paced agent's reading stale or missing, e.g. codex burn with an
 # anchor older than 8 h) reuses the last optimal result for up to this long, so a stale reading cannot
@@ -248,13 +246,49 @@ def _pacing(snapshot, agent):
     return None, None, f"agents[{agent}].pacing missing; pools mapping absent or ambiguous"
 
 
-def _no_pacing_source(agent: str) -> str | None:
-    """The capacity model of an agent that has no pacing contract by design, else None."""
+def _no_pacing_source(agent: str, now: float | None = None) -> str | None:
+    """The capacity model of an agent that has no pacing contract or fresh poll, else None."""
     import capacity  # lazy: capacity is heavy and must not load at module import
+    import pacing_usage
 
     meta = capacity.AGENTS.get(agent)
     model = meta.get("model") if isinstance(meta, dict) else None
-    return model if model and model not in PACED_CAPACITY_MODELS else None
+    if not model or model in PACED_CAPACITY_MODELS:
+        return None
+    clock = time.time() if now is None else float(now)
+    if pacing_usage.polled_usage(agent, clock)["poll"]["fresh"]:
+        return None
+    return model
+
+
+def _polled_pacing(agent: str, now: float, location: str) -> tuple[dict | None, str]:
+    """Build a pacing row from a fresh valid usage poll when the snapshot omits one."""
+    import capacity  # lazy: capacity is heavy and must not load at module import
+    import pacing as pacing_model
+    import pacing_usage
+
+    meta = capacity.AGENTS.get(agent)
+    model = meta.get("model") if isinstance(meta, dict) else None
+    if not model or model in PACED_CAPACITY_MODELS:
+        return None, location
+    polled = pacing_usage.polled_usage(agent, float(now))
+    if not polled["poll"].get("fresh"):
+        return None, location
+    end = _timestamp(polled.get("period_end"))
+    if end is None:
+        return None, location
+    row = pacing_model.evaluate(
+        agent,
+        now=float(now),
+        used_fraction=polled.get("used_fraction"),
+        period_start=end - pacing_model.PERIOD_SECONDS,
+        period_end=end,
+        resets=None,
+        samples=[],
+        source=str(polled.get("source") or f"{agent}-poll"),
+        source_ts=_timestamp(polled.get("ts")),
+    )
+    return row, f"poll[{agent}]"
 
 
 def measure(
@@ -304,10 +338,14 @@ def measure(
         def missing(reason):
             sources[agent]["reason"] = f"{location}: {reason}"
 
-        if pacing is None and (model := _no_pacing_source(agent)):
+        if pacing is None and (model := _no_pacing_source(agent, now)):
             missing(f"excluded: no pacing source (capacity model {model})")
             excluded.add(agent)
             continue
+        if pacing is None:
+            pacing, location = _polled_pacing(agent, now, location)
+            if pacing is not None and pool_id is None:
+                pool_id = pool_ids[agent] = agent
         if pacing is None:
             missing("pacing unmeasured")
             continue

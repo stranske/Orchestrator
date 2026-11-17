@@ -56,7 +56,8 @@
     "tests/test_gemini_full_split.py",
     "tests/test_gate_label_job.py",
     "tests/test_runtime_ac_pr_body_spec.py",
-    "tests/test_switch_review_stuck_targets.py"
+    "tests/test_switch_review_stuck_targets.py",
+    "tests/test_gemini_pacing_source.py"
   ],
   "shards": [
     [
@@ -513,7 +514,8 @@
       "tests/test_tick_evidence_projection.py",
       "tests/test_strategy_experiment.py",
       "tests/test_model_table.py",
-      "tests/test_model_table_local.py"
+      "tests/test_model_table_local.py",
+      "tests/test_gemini_pacing_source.py"
     ]
   ]
 }
