@@ -316,6 +316,7 @@ def test_retirement_uses_append_order_and_metadata_source():
 def test_retired_invocation_measurement_requires_a_readable_ledger(tmp_path, monkeypatch):
     monkeypatch.setattr(monitor, "HISTORY", tmp_path / "history.json")
     monkeypatch.delenv("ORCH_CAPABILITY_HEARTBEATS", raising=False)
+    monkeypatch.setattr(switch_review, "_acting_index", lambda *_: None)
     for index, contents in enumerate([None, "{not json", '{"schema_version": -1}']):
         ledger = tmp_path / f"capabilities-{index}.json"
         if contents is not None:
@@ -325,6 +326,14 @@ def test_retired_invocation_measurement_requires_a_readable_ledger(tmp_path, mon
         assert rep["retired_but_invoked"] == []
         assert "unmeasured" in rep["retired_but_invoked_measurement"]
         assert "retired_but_invoked: unmeasured" in monitor.format_report(rep)
+        expiry = switch_review.gate_expiry(now=NOW, path=ledger)
+        assert expiry["status"] == "unknown"
+        assert expiry["retired_but_invoked_count"] is None
+        assert expiry["retired_but_invoked"] == []
+        assert expiry["retired_but_invoked_measurement"] == "unmeasured"
+        assert "retired_but_invoked: unmeasured" in "\n".join(
+            switch_review.format_gate_expiry(expiry)
+        )
         assert ledger.exists() is (contents is not None)
         if contents is not None:
             assert ledger.read_text() == contents
@@ -358,6 +367,7 @@ def test_unreadable_retirement_history_preserves_live_findings(
 ):
     monkeypatch.setattr(monitor, "HISTORY", tmp_path / "history.json")
     monkeypatch.delenv("ORCH_CAPABILITY_HEARTBEATS", raising=False)
+    monkeypatch.setattr(switch_review, "_acting_index", lambda *_: None)
     rows = capabilities.load(_ledger(tmp_path), create=False)
     retirement = {"type": "transition", "to": "retired", "timestamp": NOW - 100}
     invocation = {"type": "invocation", "timestamp": NOW - 50}
@@ -390,6 +400,15 @@ def test_unreadable_retirement_history_preserves_live_findings(
     }
     assert rep["total"] == len(LIVE)
     assert rep["ledger_total"] == rep["total"] + rep["not_monitored_count"] == len(rows)
+    expiry = switch_review.gate_expiry(now=NOW, path=ledger)
+    assert expiry["status"] == "unknown"
+    assert "unreadable" in expiry["measurement"]
+    assert expiry["retired_but_invoked"] == []
+    assert expiry["retired_but_invoked_count"] is None
+    assert expiry["retired_but_invoked_measurement"] == "unmeasured"
+    text = "\n".join(switch_review.format_gate_expiry(expiry))
+    assert "NOT MEASURED" in text and "retired_but_invoked: unmeasured" in text
+    assert "disable a-running" not in text and "disable z-running" not in text
     assert ledger.read_bytes() == before
 
 
