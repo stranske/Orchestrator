@@ -14,6 +14,8 @@ from __future__ import annotations
 import json
 import os
 
+import pytest
+
 import capabilities
 import capability_advisor
 import capability_firing_monitor as monitor
@@ -53,6 +55,7 @@ def _ledger(tmp_path):
 
 
 def _review(tmp_path, monkeypatch, *, now=NOW):
+    monkeypatch.setattr(monitor, "STATE_DIR", tmp_path / "state")
     monkeypatch.setattr(monitor, "HISTORY", tmp_path / "firing-history.json")
     monkeypatch.delenv("ORCH_CAPABILITY_HEARTBEATS", raising=False)
     return monitor.review(now=now, path=_ledger(tmp_path))
@@ -235,6 +238,78 @@ def test_retirement_predicate_is_read_only_and_uses_latest_retirement():
     assert found["retirement"]["timestamp"] == NOW - 50
     assert found["invocations"] == [{**invocation, "timestamp": NOW - 25}]
     cap["status"] = "observed"
+    assert capabilities.invoked_after_retirement(cap) is None
+
+
+@pytest.mark.parametrize(
+    "cancellation",
+    [
+        {"type": "renewed"},
+        *[
+            {"type": "transition", "to": status}
+            for status in capabilities.CANONICAL_STATES
+            if status not in capabilities.NOT_LIVE_STATES
+        ],
+    ],
+    ids=lambda event: event.get("to", event["type"]),
+)
+def test_retirement_cancellation_requires_a_new_retirement(cancellation):
+    """Later execution cannot revive an anomaly cancelled by a lifecycle decision."""
+    retirement = {"type": "transition", "to": "retired", "timestamp": NOW - 100}
+    old_invocation = {"type": "invocation", "timestamp": NOW - 75, "ref": "old"}
+    later_invocation = {"type": "invocation", "timestamp": NOW - 25, "ref": "later"}
+    cap = {
+        "status": "retired",
+        "kill_switch": "disable producer",
+        "event_history": [
+            retirement,
+            old_invocation,
+            {**cancellation, "timestamp": NOW - 50},
+            later_invocation,
+        ],
+    }
+    before = json.dumps(cap)
+    assert capabilities.invoked_after_retirement(cap) is None
+    assert json.dumps(cap) == before
+
+    # Another retirement starts a fresh window; neither earlier invocation belongs to it.
+    new_retirement = {**retirement, "timestamp": NOW - 10}
+    cap["event_history"].append(new_retirement)
+    assert capabilities.invoked_after_retirement(cap) is None
+    new_invocation = {**later_invocation, "timestamp": NOW, "ref": "new"}
+    cap["event_history"].append(new_invocation)
+    before = json.dumps(cap)
+    assert capabilities.invoked_after_retirement(cap) == {
+        "retirement": new_retirement,
+        "invocations": [new_invocation],
+        "kill_switch": "disable producer",
+    }
+    assert json.dumps(cap) == before
+
+
+def test_retirement_uses_append_order_and_metadata_source():
+    """Same-second events use append order, and only metadata.source identifies fixtures."""
+    retirement = {"type": "transition", "to": "retired", "timestamp": NOW}
+    invocation = {"type": "invocation", "timestamp": NOW}
+    production = {**invocation, "metadata": {"source": "production"}, "source": "fixture"}
+    cap = {
+        "status": "retired",
+        "event_history": [
+            {**invocation, "ref": "before retirement"},
+            retirement,
+            {**invocation, "metadata": {"source": "fixture"}, "source": "production"},
+            production,
+            invocation,
+        ],
+    }
+    before = json.dumps(cap)
+    assert capabilities.invoked_after_retirement(cap) == {
+        "retirement": retirement,
+        "invocations": [production, invocation],
+        "kill_switch": None,
+    }
+    assert json.dumps(cap) == before
+    cap["event_history"].append({"type": "renewed", "timestamp": NOW})
     assert capabilities.invoked_after_retirement(cap) is None
 
 

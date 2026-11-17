@@ -76,3 +76,63 @@ verification/blocker comment through the GitHub connector were also rejected bec
 those actions require approval and this run's approval policy is `never`. The
 implementation and test changes remain in the working tree. PR #1426 was verified open
 and ready for review (`draft: false`). Task checkboxes remain open pending delivery.
+
+## Follow-up verification (2026-11-17, keepalive round 2)
+
+The implementation was already present in commit `75f3d52`. This round extends
+`test_firing_monitor_live_rows.py` with eleven collected cases covering every live
+transition and renewal cancellation, a fresh retirement after cancellation, same-second
+append ordering, metadata-only fixture classification, and predicate immutability.
+The existing `_review` fixture now isolates `STATE_DIR` as well as `HISTORY`, so the
+requested whole-file command works when the home directory is read-only.
+
+Using Python 3.12.16 and pytest 8.3.5 from official upstream release sources in `/tmp`:
+
+```text
+python3 -m pytest tests/test_firing_monitor_live_rows.py::test_invocation_after_retirement_is_named -q -m "not slow"
+1 passed in 0.14s
+
+python3 -m pytest tests/test_firing_monitor_live_rows.py -q -m "not slow"
+20 passed in 0.17s
+```
+
+The deliberate-break check was repeated against the actual source file. An unconditional
+`return None` inserted immediately after the helper's docstring made the named test fail:
+
+```text
+> assert report["retired_but_invoked_count"] == 1
+E assert 0 == 1
+1 failed in 0.27s
+```
+
+A `finally` block restored the original source bytes. The same named command then passed
+in 0.14s, and `git diff -- src/capabilities.py` was empty.
+
+The six-file regression run passed all 99 tests with `-m "not slow"`:
+`test_firing_monitor_live_rows.py`, `test_gate_expiry_renewal.py`,
+`test_firing_monitor_read_only.py`, `test_firing_monitor_held_off.py`,
+`test_firing_silence_invocations.py`, and `test_firing_regressions_section.py`.
+It used `ORCH_STATE_DIR=/tmp/retired-invocations-state` because two pre-existing held-off
+tests otherwise attempt to create a directory under the read-only home.
+
+Full collection with Python 3.14.10, pytest 8.3.5, and temporary cached copies of the
+repository's test dependencies succeeded: `python3 -m pytest --collect-only -q -m
+"not slow"` reported **9117 tests collected**, with no collection errors. The recorded
+collection floor is updated to 9117. The pass expectation is 9115, preserving the previous
+two-test difference; this is an expectation, not a claim that the full suite ran. All
+skip, selftest, gate and mypy ceilings are unchanged.
+
+The edited Python file passes Black 24.10.0 at line length 100. The exact required
+repository-wide Black check still exits 1: **21 files would be reformatted, 692 would be
+left unchanged**. Every flagged file was compared byte-for-byte with `HEAD` and is
+unchanged. The temporary launcher uses Black's thread fallback with periodic event-loop
+wakeups; formatting and AST checks remain enabled.
+
+Staging the test change still fails because `.git/index.lock` cannot be created on the
+read-only `.git` mount. No commit or push was attempted after the failing formatting
+gate. The new test and floor changes remain pending delivery.
+
+Posting this round's verification comment to PR #1426 and adding `needs-human` were
+both rejected by automatic approval review: `MCP tool call requires approval, but
+approval policy is never`. The remote task checkboxes were not changed. These local
+notes preserve the results for delivery from a writable, approved environment.
