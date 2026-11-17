@@ -275,6 +275,58 @@ def test_missing_brain_is_unknown_and_does_not_create_database(tmp_path):
     assert not path.exists()
 
 
+def test_generic_row_without_success_signal_reports_usable_unmeasured(tmp_path):
+    capability = "capability-propensity"
+    path = ledger(tmp_path, (capability,))
+    capabilities.heartbeat(capability, "invocation", timestamp=NOW, path=path)
+    capabilities.heartbeat(capability, "output", ref="report.json", timestamp=NOW, path=path)
+
+    inputs = {"cadence_inputs": {capability: 1}}
+    section = monitor.report(now=NOW, path=path, env={}, inputs=inputs)
+    row = section["rows"][0]
+    assert row["situation_count"] == 1
+    assert row["invocation_count"] == 1
+    assert row["usable"] is None
+    assert row["first_break"] is None
+    assert "usable_signal='success'" in row["usable_reason"]
+    assert f"usable unmeasured ({row['usable_reason']})" in "\n".join(monitor.format_lines(section))
+
+
+@pytest.mark.parametrize("success_count", [0, 1])
+def test_generic_row_with_success_signal_counts_only_eligible_successes(tmp_path, success_count):
+    capability = "capability-propensity"
+    path = tmp_path / "capabilities.json"
+    capabilities.register(capability, {"status": "wired", "usable_signal": "success"}, path)
+    capabilities.heartbeat(capability, "invocation", timestamp=NOW, path=path)
+    for event in (
+        {"timestamp": NOW - monitor.WINDOW_DAYS * 86400 - 1},
+        {"timestamp": NOW + 1},
+        {"timestamp": NOW, "metadata": {"evidence_provenance": "fixture_observed"}},
+        {"timestamp": NOW, "metadata": {"experiment_id": "experiment-1"}},
+        {"timestamp": NOW, "ref": "advice:trial"},
+    ):
+        capabilities.heartbeat(capability, "success", path=path, **event)
+    if success_count:
+        capabilities.heartbeat(capability, "success", timestamp=NOW, path=path)
+
+    inputs = {"cadence_inputs": {capability: 1}}
+    section = monitor.report(now=NOW, path=path, env={}, inputs=inputs)
+    row = section["rows"][0]
+    assert row["usable"] == success_count
+    assert row["first_break"] == (None if success_count else "unusable")
+    assert f"usable {success_count};" in "\n".join(monitor.format_lines(section))
+
+
+def test_generic_report_does_not_measure_an_unread_ledger(tmp_path):
+    path = tmp_path / "capabilities.json"
+    assert monitor.report(now=NOW, path=path, env={})["rows"] == []
+    assert not path.exists()
+
+    path.write_text("{")
+    with pytest.raises(json.JSONDecodeError):
+        monitor.report(now=NOW, path=path, env={})
+
+
 def test_counts_exclude_fixture_trials_and_ungraded_edges(tmp_path):
     path = ledger(tmp_path)
     row = capabilities.load(path, create=False)["role-prompt"]
