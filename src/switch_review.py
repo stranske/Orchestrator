@@ -1712,7 +1712,8 @@ def stuck_lane_targets(*, now=None, roots=None) -> dict:
                     action = item.get("action")
                     reason, error = item.get("reason"), item.get("error")
                     if not isinstance(action, str) or any(
-                        value is not None and not isinstance(value, str) for value in (reason, error)
+                        value is not None and not isinstance(value, str)
+                        for value in (reason, error)
                     ):
                         raise ValueError("target action and reason must be text")
                     decisions[target] = (action, reason or error or "")
