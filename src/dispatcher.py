@@ -5580,7 +5580,7 @@ def _selftest() -> None:
         local_argv = adapters.build_command(
             "cursor", "p", "composer", cwd=str(nongit), transport="local"
         )
-        assert local_argv[local_argv.index("--output-format") + 1] == "text", local_argv
+        assert local_argv[local_argv.index("--output-format") + 1] == "json", local_argv
         import ledger_reconcile
 
         dry_cost = ledger_reconcile.reconcile(adapters.LEDGER, dry_run=True)

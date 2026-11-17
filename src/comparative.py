@@ -321,7 +321,7 @@ def measure(
             sources[agent]["reason"] = f"{location}: {reason}"
 
         agent_runs = [row for row in runs if row["agent"] == agent]
-        if agent == "cursor":
+        if agent == "cursor" and pacing is None:
             priced = [
                 row["cost_usd"]
                 for row in agent_runs
@@ -331,7 +331,9 @@ def measure(
             ]
             if len(priced) < MIN_OBS:
                 reason = "excluded: no pacing source (capacity model metered)"
-                if agent_runs and all(row["cost_source"] == CURSOR_CLI_NO_USAGE for row in agent_runs):
+                if agent_runs and all(
+                    row["cost_source"] == CURSOR_CLI_NO_USAGE for row in agent_runs
+                ):
                     reason = f"excluded: {CURSOR_CLI_NO_USAGE}"
                 missing(reason)
                 excluded.add(agent)

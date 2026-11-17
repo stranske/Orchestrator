@@ -38,10 +38,14 @@ def _reconcile_fixture(tmp_path, **fields):
     with log.open("a") as stream, redirect_stdout(stream):
         args = [
             "complete",
-            "--run-id", "lane-run",
-            "--agent", "cursor",
-            "--log-file", str(log),
-            "--exit-code", "0",
+            "--run-id",
+            "lane-run",
+            "--agent",
+            "cursor",
+            "--log-file",
+            str(log),
+            "--exit-code",
+            "0",
             "--cursor-json-output",
         ]
         assert ledger_reconcile.main(args) == 0

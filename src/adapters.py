@@ -553,8 +553,15 @@ def cursor_result_cost(result: dict[str, Any]) -> tuple[int | None, int | None, 
     if not isinstance(usage, dict):
         return None, None, None, CURSOR_CLI_NO_USAGE
     tokens_in = usage.get("input_tokens", usage.get("inputTokens", usage.get("prompt_tokens")))
-    tokens_out = usage.get("output_tokens", usage.get("outputTokens", usage.get("completion_tokens")))
-    if any(type(count) is not int or not 0 <= count < 2**63 for count in (tokens_in, tokens_out)):
+    tokens_out = usage.get(
+        "output_tokens", usage.get("outputTokens", usage.get("completion_tokens"))
+    )
+    if (
+        type(tokens_in) is not int
+        or type(tokens_out) is not int
+        or not 0 <= tokens_in < 2**63
+        or not 0 <= tokens_out < 2**63
+    ):
         return None, None, None, CURSOR_CLI_NO_USAGE
     model = result.get("model")
     if not isinstance(model, str) or model.strip().lower() not in {
