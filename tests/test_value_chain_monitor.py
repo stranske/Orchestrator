@@ -281,15 +281,34 @@ def test_generic_row_without_success_signal_reports_usable_unmeasured(tmp_path):
     capabilities.heartbeat(capability, "invocation", timestamp=NOW, path=path)
     capabilities.heartbeat(capability, "output", ref="report.json", timestamp=NOW, path=path)
 
-    inputs = {"cadence_inputs": {capability: 1}}
+    # Measured downstream zeros must not mask the unknown usable step.
+    inputs = {"cadence_inputs": {capability: 1}, "edges": []}
+    before = path.read_bytes()
     section = monitor.report(now=NOW, path=path, env={}, inputs=inputs)
     row = section["rows"][0]
     assert row["situation_count"] == 1
     assert row["invocation_count"] == 1
     assert row["usable"] is None
+    assert row["acted_on"] == 0
+    assert row["outcome"] == 0
     assert row["first_break"] is None
     assert "usable_signal='success'" in row["usable_reason"]
-    assert f"usable unmeasured ({row['usable_reason']})" in "\n".join(monitor.format_lines(section))
+    text = "\n".join(monitor.format_lines(section))
+    assert f"usable unmeasured ({row['usable_reason']})" in text
+    assert "usable 0;" not in text
+    assert "usable None;" not in text
+    assert "first_break unmeasured" in text
+    assert path.read_bytes() == before
+
+    # The same readable event window measures zero only after an explicit declaration.
+    records = capabilities.load(path, create=False)
+    records[capability]["usable_signal"] = "success"
+    capabilities.save(records, path)
+    declared = monitor.report(now=NOW, path=path, env={}, inputs=inputs)
+    assert declared["rows"][0]["usable"] == 0
+    assert declared["rows"][0]["first_break"] == "unusable"
+    assert "usable_reason" not in declared["rows"][0]
+    assert "usable 0;" in "\n".join(monitor.format_lines(declared))
 
 
 @pytest.mark.parametrize("success_count", [0, 1])
