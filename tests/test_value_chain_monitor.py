@@ -295,7 +295,9 @@ def test_generic_row_without_success_signal_reports_usable_unmeasured(tmp_path):
 @pytest.mark.parametrize("success_count", [0, 1])
 @pytest.mark.parametrize("usable_signal", [None, "success"])
 def test_generic_row_with_success_signal_counts_only_eligible_successes(
-    tmp_path, success_count, usable_signal
+    tmp_path,
+    success_count,
+    usable_signal,
 ):
     capability = "capability-propensity"
     path = tmp_path / "capabilities.json"
