@@ -724,13 +724,16 @@ def _existing_incident_context(
             parsed_rows.append(row)
         if match_index is None:
             return None, set(), set()
-        matched = parsed_rows[match_index]
+        matched = dict(parsed_rows[match_index])
         earlier_ids = {
             str(r["incident_id"]) for r in parsed_rows[:match_index] if r.get("incident_id")
         }
-        later_ids = {
-            str(r["incident_id"]) for r in parsed_rows[match_index + 1 :] if r.get("incident_id")
-        }
+        later_rows = parsed_rows[match_index + 1 :]
+        later_ids = {str(r["incident_id"]) for r in later_rows if r.get("incident_id")}
+        if any(
+            r.get("agent") == matched.get("agent") and _is_incident_recovered(r) for r in later_rows
+        ):
+            matched["recovered"] = True
         return matched, earlier_ids, later_ids
     except OSError:
         return None, set(), set()
@@ -997,22 +1000,11 @@ def _inspect_existing_hold(
         return "none"
     existing_id = existing_row.get("incident_id")
     marker_incident_id = payload.get("incident_id")
-    if isinstance(marker_incident_id, str) and marker_incident_id in later_incident_ids:
+    if not isinstance(marker_incident_id, str) or not marker_incident_id:
         return "newer_or_manual"
-    marker_created = payload.get("created_at")
-    row_ts = existing_row.get("ts")
-    created_before_row = (
-        not isinstance(marker_created, bool)
-        and isinstance(marker_created, (int, float))
-        and not isinstance(row_ts, bool)
-        and isinstance(row_ts, (int, float))
-        and marker_created < row_ts
-    )
-    if (
-        marker_incident_id != existing_id
-        and marker_incident_id not in earlier_incident_ids
-        and not created_before_row
-    ):
+    if marker_incident_id in later_incident_ids:
+        return "newer_or_manual"
+    if marker_incident_id != existing_id and marker_incident_id not in earlier_incident_ids:
         return "newer_or_manual"
     marker_scope = payload.get("tier_scope")
     row_scope = existing_row.get("tier_scope")
@@ -1168,6 +1160,12 @@ def record_incident(
                 )
                 existing_row = {**existing_row, "recovered": True}
         else:
+            if recovered:
+                _mark_incident_recovered_locked(
+                    agent=agent,
+                    cleared_at=now,
+                    next_success_at=next_success_at,
+                )
             line = (json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n").encode(
                 "utf-8"
             )

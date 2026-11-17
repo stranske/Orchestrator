@@ -860,6 +860,25 @@ def test_dedup_repair_negative_controls_expired_recovered_shed_false_and_newer_h
     }
     assert (rate_incidents.SHED_DIR / "muse").read_bytes() == prior_bytes
 
+    manual_marker = rate_incidents.SHED_DIR / "muse"
+    manual_marker.write_text(json.dumps({"created_at": 1, "expires_at": now + 10_000}) + "\n")
+    manual_bytes = manual_marker.read_bytes()
+    manual_hold_retry = rate_incidents.record_incident(
+        agent="muse",
+        surface="ledger_reconcile.completion",
+        category="quota",
+        run_id="run-older-unfulfilled",
+        evidence="quota exhausted",
+        timestamp=now + 20,
+    )
+    assert manual_hold_retry == {
+        "status": "ok",
+        "deduped": True,
+        "incident_id": old_first["incident_id"],
+        "shed": False,
+    }
+    assert manual_marker.read_bytes() == manual_bytes
+
 
 def test_callers_warn_and_surface_shed_unfulfilled(incident_paths, monkeypatch, capsys):
     monkeypatch.setattr(rate_incidents, "ensure_shed", lambda *a, **k: False)
