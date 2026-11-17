@@ -497,6 +497,9 @@ def test_retirement_predicate_is_read_only_and_uses_latest_retirement():
     assert found["invocations"] == [{**invocation, "timestamp": NOW - 25}]
     cap["status"] = "observed"
     assert capabilities.invoked_after_retirement(cap) is None
+    # An absent history and a stored empty list both still mean "no history", measured.
+    assert capabilities.invoked_after_retirement({"status": "retired"}) is None
+    assert capabilities.invoked_after_retirement({"status": "retired", "event_history": []}) is None
 
 
 @pytest.mark.parametrize(
@@ -583,7 +586,15 @@ def test_retired_invocation_measurement_requires_a_readable_ledger(tmp_path, mon
         assert rep["retired_but_invoked_count"] is None
         assert rep["retired_but_invoked"] == []
         assert "unmeasured" in rep["retired_but_invoked_measurement"]
-        assert "retired_but_invoked: unmeasured" in monitor.format_report(rep)
+        text = monitor.format_report(rep)
+        assert "retired_but_invoked: unmeasured" in text
+        # The live findings were not measured either: no zero counts and no all-clear sentences.
+        assert "unmeasured" in rep["ledger_measurement"]
+        assert "live findings: unmeasured" in text
+        assert "no regressions" not in text
+        assert "nothing overdue" not in text
+        assert "overdue: 0" not in text
+        assert "0 of 0 live capabilities" not in text
         expiry = switch_review.gate_expiry(now=NOW, path=ledger)
         assert expiry["status"] == "unknown"
         assert expiry["retired_but_invoked_count"] is None
@@ -611,6 +622,10 @@ def test_retired_invocation_measurement_requires_a_readable_ledger(tmp_path, mon
             {"type": "invocation", "timestamp": NOW, "metadata": "invalid"},
         ],
         [None],
+        None,
+        0,
+        "",
+        {},
     ],
     ids=[
         "missing-timestamp",
@@ -618,6 +633,10 @@ def test_retired_invocation_measurement_requires_a_readable_ledger(tmp_path, mon
         "null-timestamp",
         "invalid-metadata",
         "null-event",
+        "null-history",
+        "zero-history",
+        "empty-string-history",
+        "empty-object-history",
     ],
 )
 def test_unreadable_retirement_history_preserves_live_findings(
@@ -648,7 +667,12 @@ def test_unreadable_retirement_history_preserves_live_findings(
     assert rep["retired_but_invoked_count"] is None
     assert "unmeasured" in rep["retired_but_invoked_measurement"]
     assert "b-unreadable" in rep["retired_but_invoked_measurement"]
-    assert "retired_but_invoked: unmeasured" in monitor.format_report(rep)
+    text = monitor.format_report(rep)
+    assert "retired_but_invoked: unmeasured" in text
+    # The ledger itself was readable, so the live findings stay measured and visible.
+    assert rep["ledger_measurement"] == "measured"
+    assert "live findings: unmeasured" not in text
+    assert "live-silent" in text and "live-stale" in text
     assert rep[capabilities.FINDING_POPULATION_KEY] == monitor.finding_population()
     assert rep["never_fired"] == ["live-silent"]
     assert _ids(rep, "overdue") == {"live-stale"}

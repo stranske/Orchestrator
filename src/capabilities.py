@@ -1467,7 +1467,13 @@ def invoked_after_retirement(cap: dict[str, Any]) -> dict[str, Any] | None:
     """
     if cap.get("status") != "retired":
         return None
-    history = cap.get("event_history") or []
+    # Only an ABSENT key means "no history". A stored non-list (null, 0, "", {}) is corrupt, and
+    # coercing it to [] would report a measured zero; raising lets both readers say unmeasured.
+    history = cap.get("event_history", [])
+    if not isinstance(history, list):
+        raise ValueError(
+            f"retired capability event_history must be a list, got {type(history).__name__}"
+        )
     for index in range(len(history) - 1, -1, -1):
         event = history[index]
         if event.get("type") == RENEWAL_EVENT:
