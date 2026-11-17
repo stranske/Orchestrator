@@ -15,6 +15,8 @@ import sqlite3
 import sys
 import tempfile
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -675,14 +677,20 @@ def get_structured_evidence(
 def _ensure_paths() -> None:
     HANDOFF.mkdir(parents=True, exist_ok=True)
     SHED_DIR.mkdir(parents=True, exist_ok=True)
+    LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
 
 
-def _acquire_lock() -> int:
+def _acquire_lock(blocking: bool = True) -> int:
     import fcntl
 
     _ensure_paths()
     fd = os.open(LOCK_FILE, os.O_CREAT | os.O_RDWR, 0o600)
-    fcntl.flock(fd, fcntl.LOCK_EX)
+    flags = fcntl.LOCK_EX if blocking else (fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        fcntl.flock(fd, flags)
+    except BaseException:
+        os.close(fd)
+        raise
     return fd
 
 
@@ -693,6 +701,16 @@ def _release_lock(fd: int) -> None:
         fcntl.flock(fd, fcntl.LOCK_UN)
     finally:
         os.close(fd)
+
+
+@contextmanager
+def incident_lock(blocking: bool = True) -> Iterator[int]:
+    """Hold the shared incident/shed fcntl lock with guaranteed descriptor cleanup."""
+    fd = _acquire_lock(blocking=blocking)
+    try:
+        yield fd
+    finally:
+        _release_lock(fd)
 
 
 def _idempotency_key(run_id: str, agent: str, category: str, surface: str) -> str:
@@ -868,57 +886,60 @@ def ensure_shed(
         return False  # A rejected model says nothing about the seat's remaining capacity.
     _ensure_paths()
     marker = SHED_DIR / agent
-    lock_fd = _acquire_lock()
     temporary: Path | None = None
-    try:
-        if marker.exists():
-            try:
-                existing = json.loads(marker.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                # Legacy empty or malformed markers remain manual, authoritative sheds.
-                return True
-            existing_expiry = existing.get("expires_at") if isinstance(existing, dict) else None
-            if (
-                isinstance(existing_expiry, bool)
-                or not isinstance(existing_expiry, (int, float))
-                or not math.isfinite(existing_expiry)
-            ):
-                return True
-            existing_scope = existing.get("tier_scope") if isinstance(existing, dict) else None
-            if existing_expiry > time.time():
-                if existing_scope is None and tier_scope is not None:
-                    return True  # an active whole-seat shed is never narrowed
-                widening = existing_scope is not None and tier_scope is None
-                if not widening and (expires_at is None or expires_at <= existing_expiry):
-                    return True
-                if widening and (expires_at is None or expires_at < existing_expiry):
-                    expires_at = int(existing_expiry)
-        payload = {"created_at": int(time.time()), "category": category, "incident_id": incident_id}
-        if expires_at is not None:
-            payload["expires_at"] = expires_at
-        if reset_at is not None:
-            payload["reset_at"] = reset_at
-        if model is not None:
-            payload["model"] = model
-        if tier_scope is not None:
-            payload["tier_scope"] = tier_scope
+    with incident_lock():
         try:
-            with tempfile.NamedTemporaryFile(
-                mode="w", encoding="utf-8", dir=SHED_DIR, prefix=f".{agent}.", delete=False
-            ) as handle:
-                temporary = Path(handle.name)
-                handle.write(json.dumps(payload, sort_keys=True) + "\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, marker)
-            temporary = None
-            return True
-        except OSError:
-            return False
-    finally:
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)
-        _release_lock(lock_fd)
+            if marker.exists():
+                try:
+                    existing = json.loads(marker.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    # Legacy empty or malformed markers remain manual, authoritative sheds.
+                    return True
+                existing_expiry = existing.get("expires_at") if isinstance(existing, dict) else None
+                if (
+                    isinstance(existing_expiry, bool)
+                    or not isinstance(existing_expiry, (int, float))
+                    or not math.isfinite(existing_expiry)
+                ):
+                    return True
+                existing_scope = existing.get("tier_scope") if isinstance(existing, dict) else None
+                if existing_expiry > time.time():
+                    if existing_scope is None and tier_scope is not None:
+                        return True  # an active whole-seat shed is never narrowed
+                    widening = existing_scope is not None and tier_scope is None
+                    if not widening and (expires_at is None or expires_at <= existing_expiry):
+                        return True
+                    if widening and (expires_at is None or expires_at < existing_expiry):
+                        expires_at = int(existing_expiry)
+            payload = {
+                "created_at": int(time.time()),
+                "category": category,
+                "incident_id": incident_id,
+            }
+            if expires_at is not None:
+                payload["expires_at"] = expires_at
+            if reset_at is not None:
+                payload["reset_at"] = reset_at
+            if model is not None:
+                payload["model"] = model
+            if tier_scope is not None:
+                payload["tier_scope"] = tier_scope
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode="w", encoding="utf-8", dir=SHED_DIR, prefix=f".{agent}.", delete=False
+                ) as handle:
+                    temporary = Path(handle.name)
+                    handle.write(json.dumps(payload, sort_keys=True) + "\n")
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temporary, marker)
+                temporary = None
+                return True
+            except OSError:
+                return False
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
 
 
 def record_incident(
@@ -977,8 +998,7 @@ def record_incident(
     )
     if extra:
         record["extra"] = {key: value for key, value in extra.items() if value is not None}
-    lock_fd = _acquire_lock()
-    try:
+    with incident_lock():
         existing = _existing_idempotency_key(key)
         if existing:
             return {"status": "ok", "deduped": True, "incident_id": existing}
@@ -988,8 +1008,6 @@ def record_incident(
             handle.write(line)
             handle.flush()
             os.fsync(handle.fileno())
-    finally:
-        _release_lock(lock_fd)
     cooldown = _cooldown_seconds(category, agent, timestamp, incident_id)
     expires_at = timestamp + cooldown if cooldown is not None else None
     if reset_at is not None and expires_at is not None:
