@@ -12,6 +12,7 @@ import capacity
 import comparative
 import pacing
 import pacing_usage
+import rate_incidents
 import route_weights_export as export
 
 NOW = 1_800_000_000
@@ -219,6 +220,10 @@ def test_polled_usage_overrides_the_soft_estimate(
     monkeypatch.setattr(pacing_usage, "POLL_DIR", poll_dir)
     monkeypatch.setattr(capacity, "LEDGER", ledger)
     monkeypatch.setattr(capacity, "SHED_DIR", shed_dir)
+    monkeypatch.setattr(rate_incidents, "HANDOFF", tmp_path)
+    monkeypatch.setattr(rate_incidents, "INCIDENT_FILE", tmp_path / "rate-limit-incidents.ndjson")
+    monkeypatch.setattr(rate_incidents, "LOCK_FILE", tmp_path / "rate-limit-incidents.ndjson.lock")
+    monkeypatch.setattr(rate_incidents, "SHED_DIR", shed_dir)
     monkeypatch.setattr(capacity, "_auth_health", lambda agent: None)
     monkeypatch.setattr(capacity, "_unresolvable_tier", lambda agent: None)
     monkeypatch.setattr(
