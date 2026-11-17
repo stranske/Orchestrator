@@ -229,3 +229,33 @@ def test_live_hold_wording_is_not_suspect_but_a_repeating_failure_is(journals):
     _journal(journals, "closer-core", closer)
     report = switch_review.stuck_lane_targets(now=NOW)
     assert [(r["lane"], r["target"]) for r in report["rows"]] == [("opener-core", "o/r#2")]
+
+
+def test_a_run_broken_by_the_targets_absence_is_not_suspect(journals):
+    item = {"target": TARGET, "action": "error", "reason": "same"}
+    rounds = [_round(i, [item]) for i in range(6)] + [_round(6, [])]
+    _journal(journals, "closer-core", rounds)
+    assert switch_review.stuck_lane_targets(now=NOW)["suspect"] == 0
+
+
+@pytest.mark.parametrize("closer_rounds,nothing_due", [("clean", True), ("suspect", False), ("missing", False)])
+def test_nothing_due_depends_on_the_stuck_target_section(journals, monkeypatch, closer_rounds, nothing_due):
+    for name in ("_capability_heartbeat", "stale_runners", "adversarial_shape_population", "fleet_gates",
+                 "firing_regressions", "_exploration_gate", "worktree_git_refusals"):
+        monkeypatch.setattr(switch_review, name, lambda *a, **kw: {})
+    monkeypatch.setattr(switch_review, "mirror_drift", lambda *a, **kw: {"status": "ok"})
+    monkeypatch.setattr(switch_review, "gate_expiry",
+                        lambda *a, **kw: {"status": "ok", "expiring": [], "lapsed": [], "window_days": 14})
+    monkeypatch.setattr(switch_review, "capacity_shed", lambda *a, **kw: {"status": "ok", "suspect": 0, "markers": [], "dir": "shed", "horizon_days": 14})
+    monkeypatch.setattr(switch_review, "switch_states", lambda **kw: {"held_off": [], "on_but_idle": []})
+    _journal(journals, "opener-core", [_round(0, [])])
+    item = {"target": TARGET, "action": "error", "reason": "same"}
+    if closer_rounds == "clean":
+        _journal(journals, "closer-core", [_round(0, [])])
+    elif closer_rounds == "suspect":
+        _journal(journals, "closer-core", [_round(i, [item]) for i in range(6)])
+    else:
+        (journals / "closer-core" / "rounds.jsonl").unlink(missing_ok=True)
+    report = switch_review.review(now=NOW, sources={}, env={"ORCH_VALUE_CHAIN_MONITOR": "0"},
+                                  feature_goals_fn=lambda stamp: {})
+    assert ("Nothing due." in switch_review.format_report(report)) is nothing_due

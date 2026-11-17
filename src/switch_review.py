@@ -1734,7 +1734,8 @@ def stuck_lane_targets(*, now=None, roots=None) -> dict:
                     row["reason"].startswith(STUCK_HOLD_REASONS)
                 )
                 if (
-                    row["rounds"] >= STUCK_MIN_ROUNDS
+                    row["last_round"] == count - 1  # still present in the newest round read
+                    and row["rounds"] >= STUCK_MIN_ROUNDS
                     and row["until"] - row["start"] >= STUCK_MIN_SPAN_S
                     and not deliberate_hold
                 ):
