@@ -55,6 +55,7 @@ def _ledger(tmp_path):
 
 
 def _review(tmp_path, monkeypatch, *, now=NOW):
+    monkeypatch.setattr(monitor, "STATE_DIR", tmp_path)
     monkeypatch.setattr(monitor, "HISTORY", tmp_path / "firing-history.json")
     monkeypatch.delenv("ORCH_CAPABILITY_HEARTBEATS", raising=False)
     return monitor.review(now=now, path=_ledger(tmp_path))
@@ -147,6 +148,9 @@ def test_invocation_after_retirement_is_named(tmp_path, monkeypatch):
             {"type": "invocation", "timestamp": NOW - 200, "ref": "started-before-retirement"}
         ],
         "retired-renewed": [],
+        "retired-renewed-stale": [],
+        "retired-reactivated-stale": [],
+        "retired-again-clean": [],
     }
     for cap_id, earlier in scenarios.items():
         row = capabilities._blank_capability(cap_id)
@@ -180,12 +184,25 @@ def test_invocation_after_retirement_is_named(tmp_path, monkeypatch):
         assert capabilities.production_heartbeat(
             "retired-completion", event_type, ref="started-before-retirement"
         )
-    assert capabilities.production_heartbeat("retired-renewed", "invocation", ref="before-renewal")
+    for cap_id in (
+        "retired-renewed",
+        "retired-renewed-stale",
+        "retired-reactivated-stale",
+        "retired-again-clean",
+    ):
+        assert capabilities.production_heartbeat(cap_id, "invocation", ref="before-renewal")
     renewed = capabilities.load(ledger, create=False)
     renewed["retired-renewed"]["status"] = "wired"
-    renewed["retired-renewed"]["event_history"].append(
-        {"type": capabilities.RENEWAL_EVENT, "timestamp": NOW - 25}
+    for cap_id in ("retired-renewed", "retired-renewed-stale", "retired-again-clean"):
+        renewed[cap_id]["event_history"].append(
+            {"type": capabilities.RENEWAL_EVENT, "timestamp": NOW - 25}
+        )
+    # History must cancel obsolete evidence even if the row's status is still retired.
+    renewed["retired-reactivated-stale"]["event_history"].append(
+        {"type": "transition", "from": "retired", "to": "wired", "timestamp": NOW - 25}
     )
+    # A fresh retirement starts a new window; the old invocation cannot leak into it.
+    renewed["retired-again-clean"]["event_history"].append({**retirement, "timestamp": NOW - 10})
     capabilities.save(renewed, ledger)
     monkeypatch.delenv("ORCH_CAPABILITY_HEARTBEATS")
     before = ledger.read_bytes()
