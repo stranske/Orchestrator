@@ -330,6 +330,69 @@ def test_retired_invocation_measurement_requires_a_readable_ledger(tmp_path, mon
             assert ledger.read_text() == contents
 
 
+@pytest.mark.parametrize(
+    "broken_history",
+    [
+        [{"type": "transition", "to": "retired"}],
+        [{"type": "transition", "to": "retired", "timestamp": "invalid"}],
+        [
+            {"type": "transition", "to": "retired", "timestamp": NOW - 100},
+            {"type": "invocation", "timestamp": None},
+        ],
+        [
+            {"type": "transition", "to": "retired", "timestamp": NOW - 100},
+            {"type": "invocation", "timestamp": NOW, "metadata": "invalid"},
+        ],
+        [None],
+    ],
+    ids=[
+        "missing-timestamp",
+        "invalid-timestamp",
+        "null-timestamp",
+        "invalid-metadata",
+        "null-event",
+    ],
+)
+def test_unreadable_retirement_history_preserves_live_findings(
+    tmp_path, monkeypatch, broken_history
+):
+    monkeypatch.setattr(monitor, "HISTORY", tmp_path / "history.json")
+    monkeypatch.delenv("ORCH_CAPABILITY_HEARTBEATS", raising=False)
+    rows = capabilities.load(_ledger(tmp_path), create=False)
+    retirement = {"type": "transition", "to": "retired", "timestamp": NOW - 100}
+    invocation = {"type": "invocation", "timestamp": NOW - 50}
+    # Valid anomalies before AND after the corrupt row must not become a partial measured result.
+    for cap_id, history in (
+        ("a-running", [retirement, invocation]),
+        ("b-unreadable", broken_history),
+        ("z-running", [retirement, invocation]),
+    ):
+        row = capabilities._blank_capability(cap_id)
+        row.update(status="retired", event_history=history, kill_switch=f"disable {cap_id}")
+        rows[cap_id] = row
+    ledger = tmp_path / "capabilities.json"
+    capabilities.save(rows, ledger)
+    before = ledger.read_bytes()
+
+    rep = monitor.review(now=NOW, path=ledger)
+
+    assert rep["retired_but_invoked"] == []
+    assert rep["retired_but_invoked_count"] is None
+    assert "unmeasured" in rep["retired_but_invoked_measurement"]
+    assert "b-unreadable" in rep["retired_but_invoked_measurement"]
+    assert "retired_but_invoked: unmeasured" in monitor.format_report(rep)
+    assert rep[capabilities.FINDING_POPULATION_KEY] == monitor.finding_population()
+    assert rep["never_fired"] == ["live-silent"]
+    assert _ids(rep, "overdue") == {"live-stale"}
+    assert rep["not_monitored"] == {
+        "retired": ["a-running", "b-unreadable", "retired-silent", "retired-suite", "z-running"],
+        "superseded": ["superseded-stale"],
+    }
+    assert rep["total"] == len(LIVE)
+    assert rep["ledger_total"] == rep["total"] + rep["not_monitored_count"] == len(rows)
+    assert ledger.read_bytes() == before
+
+
 def _exempt_observer_eval(rep, *, report_changed):
     ev = rep["evaluated"][0]
     assert ev["graded"] is False and ev["reason"] == "verdict_exempt", ev

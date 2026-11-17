@@ -428,9 +428,20 @@ def review(
     retired_but_invoked: list[dict[str, Any]] = []
     for cap_id in sorted(ledger):
         cap = ledger[cap_id]
-        retirement = capabilities.invoked_after_retirement(cap)
-        if retirement:
-            retired_but_invoked.append({"capability_id": cap_id, **retirement})
+        if retired_measurement == "measured":
+            try:
+                retirement = capabilities.invoked_after_retirement(cap)
+            except (AttributeError, KeyError, OverflowError, TypeError, ValueError) as exc:
+                # An unreadable history cannot establish a complete anomaly count. Discard any
+                # partial evidence, but keep judging live rows and accounting for non-live rows.
+                retired_but_invoked.clear()
+                retired_measurement = (
+                    f"unmeasured: capability retirement history unreadable for {cap_id} "
+                    f"({type(exc).__name__}: {exc})"
+                )
+            else:
+                if retirement:
+                    retired_but_invoked.append({"capability_id": cap_id, **retirement})
         last = int(cap.get("last_invocation") or 0)
         silent_days = None if not last else round((now - last) / 86400, 1)
         observer = capabilities.is_observer(cap)
