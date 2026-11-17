@@ -793,7 +793,7 @@ def _cooldown_seconds(
             episodes, last = episodes + 1, ts
     if last is None or now - last >= base:
         episodes += 1  # this incident opens a new episode
-    return min(base * 2 ** min(episodes - 1, 32), max(base, MAX_COOLDOWN_S))
+    return min(base * 2 ** min(episodes - 1, 32), MAX_COOLDOWN_S)
 
 
 # All Gemini models draw ONE provider quota (checked 2026-11-15T22:44Z, agy 1.5.9,
