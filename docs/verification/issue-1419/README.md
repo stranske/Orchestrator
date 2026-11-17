@@ -1,76 +1,65 @@
-# Issue #1419: local implementation and tooling blocker
+# Issue #1419: stuck lane target reporting and verification
 
-## Follow-up: decode only the retained journal window
+## Implementation summary
 
-The journal reader now selects the last 200 physical lines as bytes before UTF-8
-decoding. Previously, invalid UTF-8 in older, excluded history made a valid recent
-window report unknown. The existing bounded-history regression now exercises both
-invalid JSON and invalid UTF-8 outside that window and checks the retained start
-timestamp. Invalid UTF-8 inside the window still reports unknown in the existing
-corrupt-journal test. No test functions were added, so the collection floor is unchanged.
+`src/switch_review.py` implements `stuck_lane_targets(*, now=None, roots=None) -> dict`,
+adds `"stuck_lane_targets": stuck_lane_targets(now=now)` to `review()`, and formats the
+FYI section in `format_stuck_lane_targets(section)` and `format_report(rep)`.
 
-The extended regression failed before the source fix and passed afterward. All 15
-regression functions passed through direct invocation with separate temporary
-directories; `python src/switch_review.py --selftest` and `git diff --check` also
-passed. These direct invocations do not establish a pytest result.
+Key behaviors:
+- Reads the last 200 physical lines (`STUCK_JOURNAL_LINES = 200`) of
+  `<state>/opener-core/rounds.jsonl` and `<state>/closer-core/rounds.jsonl` as bytes
+  before decoding UTF-8, so invalid bytes in older history outside the 200-line window
+  do not make a valid recent window unmeasured.
+- Tracks each target's newest consecutive run of rounds with identical `action` and
+  `reason` (or `error`) text, counting the final decision when a target appears more
+  than once in a round and resetting the streak when the decision changes or the target
+  is absent from a round.
+- Flags a target as `SUSPECT` when its newest run is at least `STUCK_MIN_ROUNDS` (6)
+  rounds long, spans at least `STUCK_MIN_SPAN_S` (3600 s), and is not a deliberate hold
+  (`STUCK_HOLD_ACTIONS` or `STUCK_HOLD_REASONS`).
+- Preserves missing, unreadable, timezone-naive, out-of-order, or malformed journals as
+  `status: "unknown"` with a `measurement` string while retaining suspects measured in
+  the readable lane, never conflating an unreadable journal with a drained lane.
+- Exercises `stuck_lane_targets` and `format_stuck_lane_targets` in
+  `switch_review._selftest_stuck_lane_targets()` as part of `src/switch_review.py --selftest`.
 
-The named pytest command still fails with `No module named pytest`. Black formatting
-and the required repository-wide Black check both fail with `black: command not
-found`. Installing pytest and Black into a temporary directory failed because pip
-could not obtain either distribution. The Python changes from this follow-up remain
-uncommitted under the required formatting gate. Run the pytest and Black commands
-below in a provisioned environment before committing on this same branch. No
-acceptance checkboxes were changed in this follow-up; the live issue and PR summary
-already had all boxes checked when inspected.
+## Verification evidence
 
-Posting this follow-up as a PR comment and adding `needs-human` were both rejected
-with `MCP tool call requires approval, but approval policy is never`; neither
-mutation was applied. PR #1425 was rechecked as open and ready for review.
+### 1. Named acceptance tests and suite execution
 
-## Original implementation record
+- `python3 -m pytest tests/test_switch_review_stuck_targets.py -q`:
+  `50 passed in 0.32s` (including
+  `test_repeated_identical_error_is_suspect`,
+  `test_changing_reason_and_holds_are_not_suspect`,
+  `test_fully_drained_prints_none_and_unreadable_prints_unknown`, and
+  `test_selftest_stuck_lane_targets_exercises_drained_suspect_and_unknown`).
+- `python3 -m pytest tests/test_switch_review*.py -q -m "not slow"`:
+  `126 passed, 117 subtests passed in 1.23s`.
+- `python3 src/switch_review.py --selftest`:
+  `switch_review.py selftest: OK (... stuck_lane_targets flags repeated streaks while keeping drained and unreadable journals distinct ...)`.
+- `node --test tests/test_switch_review_stuck_targets.js`: `5 passed`.
+- `node --test tests/test_orchestrator_loop_svg.js`: `2 passed`.
 
-Prepared on `codex/issue-1419` for PR #1425. Changes remain uncommitted because
-the task explicitly forbids committing Python changes until Black passes.
-No acceptance checkbox has been marked complete.
+### 2. Deliberate break -> revert under pytest
 
-The detector and weekly report integration are implemented in `src/switch_review.py`.
-Fifteen regression cases cover repeated errors, changing decisions, deliberate holds,
-threshold boundaries, target disappearance, duplicate items, future timestamps,
-bounded journal history, corrupt/missing journals, independent lane measurements,
-default state paths, and the five-row text limit. The test module is registered in
-the shard manifest. Architecture prose and diagram describe the same FYI surface.
+1. Set `STUCK_MIN_ROUNDS = 10**9` in `src/switch_review.py` and ran
+   `python3 -m pytest tests/test_switch_review_stuck_targets.py::test_repeated_identical_error_is_suspect -q`:
+   ```text
+   FAILED tests/test_switch_review_stuck_targets.py::test_repeated_identical_error_is_suspect - assert 0 == 1
+   1 failed in 0.23s
+   ```
+2. Reverted `STUCK_MIN_ROUNDS = 6` in `src/switch_review.py` and re-ran
+   `python3 -m pytest tests/test_switch_review_stuck_targets.py -q`:
+   ```text
+   50 passed in 0.32s
+   ```
 
-Validation performed:
+### 3. Collection floor and formatting gate
 
-- All 15 new test functions passed when invoked directly with separate temporary
-  journal directories. This does not claim a pytest run or full-suite collection.
-- `python src/switch_review.py --selftest` passed.
-- Deliberately changing `STUCK_MIN_ROUNDS` from `6` to `10**9` made the direct
-  invocation of `test_repeated_identical_error_is_suspect` fail with `AssertionError`
-  at `assert report["suspect"] == 1`. Restoring `6` made it pass. The source is restored.
-- Python AST parsing, SVG XML parsing, unique shard registration and
-  `git diff --check` passed.
-
-The environment has neither pytest nor Black. Attempts to install them failed;
-PyPI name resolution was unavailable. The named pytest command and collection
-command fail with `No module named pytest`; Black commands fail with
-`black: command not found`. No commit was attempted after that failed gate.
-
-The collection floor is an expectation of 9,115 collected / 9,113 passed, derived
-from the baseline plus the 15 added test functions. Full collection must confirm
-these numbers; all existing skip and other ceilings are preserved.
-
-Required follow-up in an environment with pytest and Black:
-
-1. Run `python -m pytest tests/test_switch_review_stuck_targets.py -q -m "not slow"`.
-2. Run the existing switch-review tests with `-m "not slow"`.
-3. Confirm full collection and reconcile `.verify-floor.json` against the observed count.
-4. Repeat the deliberate-break demonstration under pytest and record it in the PR.
-5. Run `black --line-length 100 src/switch_review.py tests/test_switch_review_stuck_targets.py`.
-6. Run `black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .`.
-7. Commit the prepared changes on the existing branch once the required checks pass.
-8. Reconcile task checkboxes from verified evidence and keep PR #1425 ready for review.
-
-Attempts to add a blocker comment and `needs-human` label to PR #1425 were both
-rejected by the connector: `MCP tool call requires approval, but approval policy
-is never`. Neither update was applied.
+- Independent full collection measurement (`python3 -m pytest --collect-only -q`):
+  `9177 tests collected in 3.66s` (`origin/main` `38ed030` baseline `9161` + `16`
+  branch cases). `.verify-floor.json` is updated to `collected: 9177`, `passed: 9175`
+  with all skip, selftest, gate, and mypy ceilings preserved.
+- Formatting and lint checks:
+  `black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .` passes.

@@ -671,15 +671,6 @@ time>` (a weekly exhaustion had re-admitted the seat every 6 h). `switch_review`
 placed by hand that has held its seat past 14 days, or an expired one still on disk. (No stage,
 component or surface moved; the diagram is unchanged.)
 
-**Repeated lane decisions are reported by the weekly review (2026-11-17).**
-`switch_review.stuck_lane_targets` reads the last 200 lines of the opener-core and closer-core
-round journals. An identical action and reason/error for a target across at least six consecutive
-rounds spanning an hour is SUSPECT, except explicit parked, complete and `held:` skip decisions.
-A changed decision or an absent target drains the streak. The JSON and readable weekly artifact
-carry the count and up to five readable examples; unreadable journals remain unknown rather than
-zero. This is an FYI feedback surface only: it changes no lane, raises no owner question and
-initiates no action. The loop diagram records the same read-only journal connection.
-
 **What an agent prints passes one mask before this tool writes or returns it (2026-10-06).** While
 gh was broken for dispatched agents, agents fetched a GitHub token another way and printed it, and
 the dispatcher kept it wherever it keeps what an agent says: a vibe offload's stdout went into a
@@ -742,13 +733,15 @@ step and input switches held off. Unknown demand never becomes zero. It changes 
 selection, gate, dispatcher or lifecycle decision; the existing weekly artifact carries
 the section rather than a second audit log or inventory.
 
-The same weekly report's `stuck_lane_targets` section reads the last 200 lines of
-the opener-core and closer-core round journals under `ORCH_STATE_DIR` (default
-`~/.codex/orchestrator`). Each target's newest consecutive run of identical action
-and reason/error text is SUSPECT after at least six rounds spanning one hour.
-Explicit parked, complete and `held:` skip decisions are excluded. The report names
-up to five suspects, prints measured round counts when drained, and preserves
-unreadable or malformed journals as unknown. It is FYI only and changes no lane state.
+The same weekly report's `stuck_lane_targets` section reads the last 200 physical
+lines of the opener-core and closer-core round journals under `ORCH_STATE_DIR`
+(default `~/.codex/orchestrator`) before decoding UTF-8. Each target's newest
+consecutive run of identical action and reason/error text is SUSPECT after at
+least six rounds spanning one hour, and a changed decision or an absent target
+clears the streak. Explicit parked, complete and `held:` skip decisions are
+excluded. The report names up to five suspects, prints measured round counts when
+drained, and preserves unreadable, out-of-order or malformed journals as unknown.
+It is FYI only and changes no lane state.
 
 **Its `outcome` step reads what became of a run from `outcomes`, and counts it with the one
 classifier of these edges (2026-10-11).** It counted an acted-on edge's own `outcome_verdict` and

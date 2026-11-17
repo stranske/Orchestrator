@@ -572,3 +572,7 @@ def test_an_item_without_a_target_is_skipped(journals):
     _journal(journals, "opener-core", [_indexed_round(0, [])])
     _journal(journals, "closer-core", [_indexed_round(0, [{"action": "summary"}])])
     assert switch_review.stuck_lane_targets(now=NOW)["status"] == "ok"
+
+
+def test_selftest_stuck_lane_targets_exercises_drained_suspect_and_unknown():
+    switch_review._selftest_stuck_lane_targets()

@@ -3720,6 +3720,7 @@ def _selftest() -> None:
         _GH_CALL_RUNNER = saved_runner
     _selftest_gate_expiry()
     _selftest_capacity_shed()
+    _selftest_stuck_lane_targets()
     _selftest_comparative_line()
     _selftest_worktree_git_refusals()
     proof: dict = {
@@ -3767,7 +3768,9 @@ def _selftest() -> None:
         "switch_states is the review's rows without the sweep, review writes no ledger, an idle "
         "bootstrap row carries its drain read from a sandbox, the expiry notice names soon/lapsed "
         "rows and states its drained and unmeasured states, the shed sweep names each marker's "
-        "drain and removes none, the worktree-git section prints its zero and counts both writers)"
+        "drain and removes none, stuck_lane_targets flags repeated streaks while keeping drained "
+        "and unreadable journals distinct, the worktree-git section prints its zero and counts "
+        "both writers)"
     )
 
 
@@ -3837,6 +3840,47 @@ def _selftest_capacity_shed() -> None:
         assert rows["claude_code"]["suspect"] is None and rep["suspect"] == 2, rep
         text = "\n".join(format_capacity_shed(rep))
         assert "2 SUSPECT" in text and "claude_code  inert" in text, text
+
+
+def _selftest_stuck_lane_targets() -> None:
+    """Repeated identical lane decisions flag SUSPECT; drained and unreadable stay distinct."""
+    import tempfile
+
+    now = 1_800_000_000.0
+    with tempfile.TemporaryDirectory(prefix="switch-review-stuck-") as td:
+        roots = {lane: Path(td) / lane for lane in ("opener-core", "closer-core")}
+        for root in roots.values():
+            root.mkdir()
+            (root / "rounds.jsonl").write_text("", encoding="utf-8")
+        drained = stuck_lane_targets(now=now, roots=roots)
+        assert drained["status"] == "ok" and drained["suspect"] == 0, drained
+        assert "stuck lane targets: none (opener 0 rounds, closer 0 rounds read)" in "\n".join(
+            format_stuck_lane_targets(drained)
+        )
+        rounds = [
+            json.dumps(
+                {
+                    "ts": datetime.fromtimestamp(now - (5 - idx) * 900, timezone.utc).isoformat(),
+                    "items": [
+                        {"target": "o/r#1", "action": "error", "error": "provision failed"},
+                        {"target": "o/r#2", "action": "already-parked", "reason": "paused"},
+                    ],
+                }
+            )
+            + "\n"
+            for idx in range(6)
+        ]
+        (roots["closer-core"] / "rounds.jsonl").write_text("".join(rounds), encoding="utf-8")
+        flagged = stuck_lane_targets(now=now, roots=roots)
+        assert flagged["status"] == "ok" and flagged["suspect"] == 1, flagged
+        assert flagged["rows"][0]["target"] == "o/r#1" and flagged["rows"][0]["rounds"] == 6
+        assert "stuck lane targets: 1 SUSPECT" in "\n".join(format_stuck_lane_targets(flagged))
+        (roots["opener-core"] / "rounds.jsonl").unlink()
+        unmeasured = stuck_lane_targets(now=now, roots=roots)
+        rendered = "\n".join(format_stuck_lane_targets(unmeasured))
+        assert unmeasured["status"] == "unknown" and unmeasured["suspect"] == 1, unmeasured
+        assert "stuck lane targets: unknown" in rendered and "1 SUSPECT" in rendered, rendered
+        assert "stuck lane targets: none" not in rendered, rendered
 
 
 def _selftest_worktree_git_refusals() -> None:
