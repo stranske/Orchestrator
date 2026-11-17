@@ -267,7 +267,10 @@ def journals(tmp_path, monkeypatch):
 
 def test_repeated_identical_error_is_suspect_from_state(journals):
     error = "repair dispatch: provision failed: cannot inspect holder"
-    rounds = [_indexed_round(i, [{"target": TARGET, "action": "error", "error": error}]) for i in range(21)]
+    rounds = [
+        _indexed_round(i, [{"target": TARGET, "action": "error", "error": error}])
+        for i in range(21)
+    ]
     _journal(journals, "closer-core", rounds)
 
     report = switch_review.stuck_lane_targets(now=NOW)
@@ -554,7 +557,11 @@ def test_nothing_due_depends_on_the_stuck_target_section(
 @pytest.mark.parametrize("bad_target", [123, "", ["o/r#1"]])
 def test_an_invalid_target_value_makes_the_lane_unknown(journals, bad_target):
     _journal(journals, "opener-core", [_indexed_round(0, [])])
-    _journal(journals, "closer-core", [_indexed_round(0, [{"target": bad_target, "action": "error"}])])
+    _journal(
+        journals,
+        "closer-core",
+        [_indexed_round(0, [{"target": bad_target, "action": "error"}])],
+    )
     report = switch_review.stuck_lane_targets(now=NOW)
     assert report["status"] == "unknown"
     assert report["rounds_read"]["closer-core"] is None

@@ -1817,7 +1817,12 @@ def stuck_lane_targets(
                     and not deliberate_hold
                 ):
                     report["rows"].append(
-                        {**row, "since": datetime.fromtimestamp(row["since"], timezone.utc).isoformat()}
+                        {
+                            **row,
+                            "since": datetime.fromtimestamp(
+                                row["since"], timezone.utc
+                            ).isoformat(),
+                        }
                     )
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
             errors.append(f"{lane}: {journal} unreadable ({type(exc).__name__}: {exc})")
