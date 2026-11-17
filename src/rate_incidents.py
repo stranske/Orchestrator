@@ -28,6 +28,11 @@ SHED_DIR = HANDOFF / "capacity-shed"
 SCHEMA = "rate-limit-incident/v1"
 MAX_EVIDENCE_EXCERPT = 500
 DEFAULT_COOLDOWN_S = 6 * 60 * 60
+# A refusal with no stated reset (a spent budget) is retried by the next real job when the bench
+# ends. Each earlier episode of the same agent and category inside this window doubles the bench;
+# one quiet window drains the count and the bench returns to the default (stranske/Orchestrator#1418).
+ESCALATION_WINDOW_S = 72 * 60 * 60
+MAX_COOLDOWN_S = 72 * 60 * 60
 MAX_DEDUP_SCAN_BYTES = 1024 * 1024
 
 # codex `exec --json` events that mean the run DID something. An item whose own type is `error` is the
@@ -697,11 +702,10 @@ def _idempotency_key(run_id: str, agent: str, category: str, surface: str) -> st
     return f"{run_id}|{agent}|{category}"
 
 
-def _existing_incident_context(
-    key: str,
-) -> tuple[dict[str, Any] | None, set[str], set[str]]:
+def _recent_rows() -> list[dict[str, Any]]:
+    """The ledger's rows within its bounded suffix, oldest first; unreadable rows are skipped."""
     if not INCIDENT_FILE.exists():
-        return None, set(), set()
+        return []
     try:
         with INCIDENT_FILE.open("rb") as handle:
             size = handle.seek(0, os.SEEK_END)
@@ -710,33 +714,38 @@ def _existing_incident_context(
             if start:
                 handle.readline()  # Drop the first partial row from the bounded suffix.
             lines = handle.read().decode("utf-8", errors="replace").splitlines()
-        parsed_rows: list[dict[str, Any]] = []
-        match_index: int | None = None
-        for line in lines:
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(row, dict):
-                continue
-            if row.get("idempotency_key") == key:
-                match_index = len(parsed_rows)
-            parsed_rows.append(row)
-        if match_index is None:
-            return None, set(), set()
-        matched = dict(parsed_rows[match_index])
-        earlier_ids = {
-            str(r["incident_id"]) for r in parsed_rows[:match_index] if r.get("incident_id")
-        }
-        later_rows = parsed_rows[match_index + 1 :]
-        later_ids = {str(r["incident_id"]) for r in later_rows if r.get("incident_id")}
-        if any(
-            r.get("agent") == matched.get("agent") and _is_incident_recovered(r) for r in later_rows
-        ):
-            matched["recovered"] = True
-        return matched, earlier_ids, later_ids
     except OSError:
+        return []
+    rows = []
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
+def _existing_incident_context(
+    key: str,
+) -> tuple[dict[str, Any] | None, set[str], set[str]]:
+    parsed_rows = _recent_rows()
+    match_index: int | None = None
+    for index, row in enumerate(parsed_rows):
+        if row.get("idempotency_key") == key:
+            match_index = index
+    if match_index is None:
         return None, set(), set()
+    matched = dict(parsed_rows[match_index])
+    earlier_ids = {
+        str(r["incident_id"]) for r in parsed_rows[:match_index] if r.get("incident_id")
+    }
+    later_rows = parsed_rows[match_index + 1 :]
+    later_ids = {str(r["incident_id"]) for r in later_rows if r.get("incident_id")}
+    if any(r.get("agent") == matched.get("agent") and _is_incident_recovered(r) for r in later_rows):
+        matched["recovered"] = True
+    return matched, earlier_ids, later_ids
 
 
 def _existing_idempotency_key(key: str) -> str | None:
@@ -744,13 +753,48 @@ def _existing_idempotency_key(key: str) -> str | None:
     return matched.get("incident_id") if matched else None
 
 
-def _cooldown_seconds(category: str) -> int | None:
+def _cooldown_seconds(
+    category: str,
+    agent: str | None = None,
+    timestamp: int | None = None,
+    incident_id: str | None = None,
+) -> int | None:
+    """The bench for one incident: the base doubled per earlier episode, capped at MAX_COOLDOWN_S.
+
+    Episodes are this agent's ledger rows in the same category from ESCALATION_WINDOW_S before
+    `timestamp` up to it, the incident itself (`incident_id`) excluded. A row less than one base
+    bench after the last counted one is the same exhaustion seen by another in-flight run, not a
+    re-entry: on the live ledger most same-agent incidents arrive under an hour apart, and counting
+    each would bench a seat for the cap on its first burst. No agent: the base alone.
+    """
     if category not in {"rate_limit", "quota", "capacity"}:
         return None
     try:
-        return max(0, int(os.environ.get("ORCH_PROVIDER_COOLDOWN_S", str(DEFAULT_COOLDOWN_S))))
+        base = max(0, int(os.environ.get("ORCH_PROVIDER_COOLDOWN_S", str(DEFAULT_COOLDOWN_S))))
     except ValueError:
-        return DEFAULT_COOLDOWN_S
+        base = DEFAULT_COOLDOWN_S
+    if agent is None:
+        return base
+    now = int(timestamp if timestamp is not None else time.time())
+    stamps = []
+    for row in _recent_rows():
+        if row.get("agent") != agent or row.get("category") != category:
+            continue
+        if incident_id is not None and row.get("incident_id") == incident_id:
+            continue
+        try:
+            ts = int(row["ts"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if now - ESCALATION_WINDOW_S <= ts <= now:
+            stamps.append(ts)
+    episodes, last = 0, None
+    for ts in sorted(stamps):
+        if last is None or ts - last >= base:
+            episodes, last = episodes + 1, ts
+    if last is None or now - last >= base:
+        episodes += 1  # this incident opens a new episode
+    return min(base * 2 ** min(episodes - 1, 32), max(base, MAX_COOLDOWN_S))
 
 
 # All Gemini models draw ONE provider quota (checked 2026-11-15T22:44Z, agy 1.5.9,
@@ -1099,10 +1143,6 @@ def record_incident(
     stable_run_id = run_id or f"sync:{_hash_evidence(str(target) + evidence)}"
     key = _idempotency_key(stable_run_id, agent, category, surface)
     incident_id = _hash_evidence(key)
-    cooldown = _cooldown_seconds(category)
-    expires_at = timestamp + cooldown if cooldown is not None else None
-    if reset_at is not None and expires_at is not None:
-        expires_at = max(expires_at, reset_at)
     model = failed_model(agent, evidence) or recorded_run_model(agent, run_id)
     tier_scope = tier_scope_for(agent, model) if category in ("quota", "rate_limit") else None
     shed_requested = bool(shed) and category != "model_rejected"
@@ -1120,7 +1160,6 @@ def record_incident(
         "status": status,
         "target": target,
         "shed_requested": shed_requested,
-        "expires_at": expires_at,
         "model": model,
         "tier_scope": tier_scope,
         "recovered": recovered,
@@ -1160,6 +1199,12 @@ def record_incident(
                 )
                 existing_row = {**existing_row, "recovered": True}
         else:
+            # Persist the escalated expiry before publication so dedup repair restores it exactly.
+            cooldown = _cooldown_seconds(category, agent, timestamp, incident_id)
+            expires_at = timestamp + cooldown if cooldown is not None else None
+            if reset_at is not None and expires_at is not None:
+                expires_at = max(expires_at, reset_at)
+            record["expires_at"] = expires_at
             if recovered:
                 _mark_incident_recovered_locked(
                     agent=agent,

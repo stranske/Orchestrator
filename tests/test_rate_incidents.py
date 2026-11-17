@@ -923,3 +923,164 @@ def test_callers_warn_and_surface_shed_unfulfilled(incident_paths, monkeypatch, 
     assert reconcile_res["incident_status"] == "shed_unfulfilled"
     assert reconcile_res["shed"] is False
     assert "rate-incident shed unfulfilled" in capsys.readouterr().err
+
+
+def _shed_expiry(agent):
+    return json.loads((rate_incidents.SHED_DIR / agent).read_text())["expires_at"]
+
+
+def test_repeated_quota_incidents_escalate_the_cooldown_and_cap(incident_paths, monkeypatch):
+    monkeypatch.delenv("ORCH_PROVIDER_COOLDOWN_S", raising=False)
+    hour = 3600
+    start = int(time.time())
+    # Each incident's shed is written from its own timestamp; only the latest marker survives.
+    expiries = []
+    for i in range(3):
+        ts = start + i * 6 * hour
+        rate_incidents.record_incident(
+            agent="vibe",
+            surface="dispatch",
+            category="quota",
+            run_id=f"run-{i}",
+            evidence="402 Payment Required: budget exhausted",
+            timestamp=ts,
+        )
+        expiries.append(_shed_expiry("vibe") - ts)
+    assert expiries == [6 * hour, 12 * hour, 24 * hour]
+
+    # Ten in a row never exceed the cap.
+    for i in range(3, 13):
+        ts = start + i * 6 * hour
+        rate_incidents.record_incident(
+            agent="vibe",
+            surface="dispatch",
+            category="quota",
+            run_id=f"run-{i}",
+            evidence="402 Payment Required: budget exhausted",
+            timestamp=ts,
+        )
+        assert _shed_expiry("vibe") - ts <= rate_incidents.MAX_COOLDOWN_S
+    assert _shed_expiry("vibe") - ts == rate_incidents.MAX_COOLDOWN_S
+
+    # In-flight runs failing minutes apart are one exhaustion, not repeated re-entries.
+    burst = ts + rate_incidents.ESCALATION_WINDOW_S + 1
+    for minute in range(4):
+        assert (
+            rate_incidents._cooldown_seconds("quota", "burst", burst + minute * 60, None)
+            == rate_incidents.DEFAULT_COOLDOWN_S
+        )
+        rate_incidents.record_incident(
+            agent="burst",
+            surface="dispatch",
+            category="quota",
+            run_id=f"burst-{minute}",
+            evidence="402 Payment Required: budget exhausted",
+            timestamp=burst + minute * 60,
+        )
+    assert _shed_expiry("burst") - burst - 3 * 60 == rate_incidents.DEFAULT_COOLDOWN_S
+
+    # One quiet window drains the count: the next incident benches for the default again.
+    quiet = ts + rate_incidents.ESCALATION_WINDOW_S + 1
+    rate_incidents.clear_shed("vibe")
+    rate_incidents.record_incident(
+        agent="vibe",
+        surface="dispatch",
+        category="quota",
+        run_id="after-quiet",
+        evidence="402 Payment Required: budget exhausted",
+        timestamp=quiet,
+    )
+    assert _shed_expiry("vibe") - quiet == rate_incidents.DEFAULT_COOLDOWN_S
+
+    # A provider's stated reset still wins when it is later than the escalated bench.
+    later = quiet + 6 * hour
+    reset = later + 5 * 24 * hour
+    rate_incidents.record_incident(
+        agent="vibe",
+        surface="dispatch",
+        category="quota",
+        run_id="with-reset",
+        evidence="402 Payment Required: budget exhausted",
+        timestamp=later,
+        reset_at=reset,
+    )
+    assert _shed_expiry("vibe") == reset
+
+
+    # A dedup retry restores the persisted escalated expiry without extending it.
+    monkeypatch.delenv("ORCH_PROVIDER_COOLDOWN_S", raising=False)
+    now = int(time.time())
+    base = rate_incidents.DEFAULT_COOLDOWN_S
+    rate_incidents.record_incident(
+        agent="muse",
+        surface="dispatch",
+        category="quota",
+        run_id="earlier-episode",
+        timestamp=now - base,
+    )
+    real_ensure_shed = rate_incidents.ensure_shed
+    monkeypatch.setattr(rate_incidents, "ensure_shed", lambda *args, **kwargs: False)
+    first = rate_incidents.record_incident(
+        agent="muse",
+        surface="dispatch",
+        category="quota",
+        run_id="escalated-episode",
+        timestamp=now,
+    )
+    assert first["status"] == "shed_unfulfilled"
+    rows = [json.loads(line) for line in rate_incidents.INCIDENT_FILE.read_text().splitlines()]
+    assert rows[-1]["expires_at"] == now + 2 * base
+
+    monkeypatch.setattr(rate_incidents, "ensure_shed", real_ensure_shed)
+    retry = rate_incidents.record_incident(
+        agent="muse",
+        surface="ledger_reconcile.completion",
+        category="quota",
+        run_id="escalated-episode",
+        timestamp=now + base,
+    )
+    assert retry == {
+        "status": "ok",
+        "deduped": True,
+        "incident_id": first["incident_id"],
+        "shed": True,
+    }
+    assert _shed_expiry("muse") == now + 2 * base
+    assert len(rate_incidents.INCIDENT_FILE.read_text().splitlines()) == 2
+
+
+def test_escalation_is_per_agent(incident_paths, monkeypatch):
+    monkeypatch.delenv("ORCH_PROVIDER_COOLDOWN_S", raising=False)
+    start = int(time.time())
+    for i in range(4):
+        rate_incidents.record_incident(
+            agent="vibe",
+            surface="dispatch",
+            category="quota",
+            run_id=f"vibe-{i}",
+            evidence="402 Payment Required",
+            timestamp=start + i * 3600,
+        )
+    ts = start + 5 * 3600
+    rate_incidents.record_incident(
+        agent="codex",
+        surface="dispatch",
+        category="quota",
+        run_id="codex-1",
+        evidence="quota exhausted",
+        timestamp=ts,
+    )
+    assert _shed_expiry("codex") - ts == rate_incidents.DEFAULT_COOLDOWN_S
+    # A different category for the same agent does not escalate either.
+    rate_incidents.record_incident(
+        agent="vibe",
+        surface="dispatch",
+        category="capacity",
+        run_id="vibe-capacity",
+        evidence="503 overloaded",
+        timestamp=ts,
+    )
+    assert (
+        rate_incidents._cooldown_seconds("capacity", "vibe", ts + 6 * 3600, None)
+        == 2 * rate_incidents.DEFAULT_COOLDOWN_S
+    )

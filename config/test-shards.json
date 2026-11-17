@@ -53,7 +53,9 @@
     "tests/test_gh_guard_two_guards_on_path.py",
     "tests/test_capacity_launch_gate.py",
     "tests/test_switch_review_ci_walltime.py",
-    "tests/test_gemini_full_split.py"
+    "tests/test_gemini_full_split.py",
+    "tests/test_gate_label_job.py",
+    "tests/test_runtime_ac_pr_body_spec.py"
   ],
   "shards": [
     [
@@ -437,7 +439,9 @@
       "tests/test_value_chain_local_loop_outcomes.py",
       "tests/test_gh_guard_two_guards_on_path.py",
       "tests/test_capacity_launch_gate.py",
-      "tests/test_switch_review_ci_walltime.py"
+      "tests/test_switch_review_ci_walltime.py",
+      "tests/test_gate_label_job.py",
+      "tests/test_runtime_ac_pr_body_spec.py"
     ],
     [
       "tests/test_activation_audit_source_memo.py",
