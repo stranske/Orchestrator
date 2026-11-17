@@ -15,6 +15,8 @@ import sqlite3
 import sys
 import tempfile
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -675,14 +677,20 @@ def get_structured_evidence(
 def _ensure_paths() -> None:
     HANDOFF.mkdir(parents=True, exist_ok=True)
     SHED_DIR.mkdir(parents=True, exist_ok=True)
+    LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
 
 
-def _acquire_lock() -> int:
+def _acquire_lock(blocking: bool = True) -> int:
     import fcntl
 
     _ensure_paths()
     fd = os.open(LOCK_FILE, os.O_CREAT | os.O_RDWR, 0o600)
-    fcntl.flock(fd, fcntl.LOCK_EX)
+    flags = fcntl.LOCK_EX if blocking else (fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        fcntl.flock(fd, flags)
+    except BaseException:
+        os.close(fd)
+        raise
     return fd
 
 
@@ -693,6 +701,16 @@ def _release_lock(fd: int) -> None:
         fcntl.flock(fd, fcntl.LOCK_UN)
     finally:
         os.close(fd)
+
+
+@contextmanager
+def incident_lock(blocking: bool = True) -> Iterator[int]:
+    """Hold the shared incident/shed fcntl lock with guaranteed descriptor cleanup."""
+    fd = _acquire_lock(blocking=blocking)
+    try:
+        yield fd
+    finally:
+        _release_lock(fd)
 
 
 def _idempotency_key(run_id: str, agent: str, category: str, surface: str) -> str:
@@ -738,12 +756,12 @@ def _existing_incident_context(
     if match_index is None:
         return None, set(), set()
     matched = dict(parsed_rows[match_index])
-    earlier_ids = {
-        str(r["incident_id"]) for r in parsed_rows[:match_index] if r.get("incident_id")
-    }
+    earlier_ids = {str(r["incident_id"]) for r in parsed_rows[:match_index] if r.get("incident_id")}
     later_rows = parsed_rows[match_index + 1 :]
     later_ids = {str(r["incident_id"]) for r in later_rows if r.get("incident_id")}
-    if any(r.get("agent") == matched.get("agent") and _is_incident_recovered(r) for r in later_rows):
+    if any(
+        r.get("agent") == matched.get("agent") and _is_incident_recovered(r) for r in later_rows
+    ):
         matched["recovered"] = True
     return matched, earlier_ids, later_ids
 
@@ -794,7 +812,7 @@ def _cooldown_seconds(
             episodes, last = episodes + 1, ts
     if last is None or now - last >= base:
         episodes += 1  # this incident opens a new episode
-    return min(base * 2 ** min(episodes - 1, 32), max(base, MAX_COOLDOWN_S))
+    return min(base * 2 ** min(episodes - 1, 32), MAX_COOLDOWN_S)
 
 
 # All Gemini models draw ONE provider quota (checked 2026-11-15T22:44Z, agy 1.5.9,
@@ -887,57 +905,60 @@ def ensure_shed(
         return False  # A rejected model says nothing about the seat's remaining capacity.
     _ensure_paths()
     marker = SHED_DIR / agent
-    lock_fd = _acquire_lock()
     temporary: Path | None = None
-    try:
-        if marker.exists():
-            try:
-                existing = json.loads(marker.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                # Legacy empty or malformed markers remain manual, authoritative sheds.
-                return True
-            existing_expiry = existing.get("expires_at") if isinstance(existing, dict) else None
-            if (
-                isinstance(existing_expiry, bool)
-                or not isinstance(existing_expiry, (int, float))
-                or not math.isfinite(existing_expiry)
-            ):
-                return True
-            existing_scope = existing.get("tier_scope") if isinstance(existing, dict) else None
-            if existing_expiry > time.time():
-                if existing_scope is None and tier_scope is not None:
-                    return True  # an active whole-seat shed is never narrowed
-                widening = existing_scope is not None and tier_scope is None
-                if not widening and (expires_at is None or expires_at <= existing_expiry):
-                    return True
-                if widening and (expires_at is None or expires_at < existing_expiry):
-                    expires_at = int(existing_expiry)
-        payload = {"created_at": int(time.time()), "category": category, "incident_id": incident_id}
-        if expires_at is not None:
-            payload["expires_at"] = expires_at
-        if reset_at is not None:
-            payload["reset_at"] = reset_at
-        if model is not None:
-            payload["model"] = model
-        if tier_scope is not None:
-            payload["tier_scope"] = tier_scope
+    with incident_lock():
         try:
-            with tempfile.NamedTemporaryFile(
-                mode="w", encoding="utf-8", dir=SHED_DIR, prefix=f".{agent}.", delete=False
-            ) as handle:
-                temporary = Path(handle.name)
-                handle.write(json.dumps(payload, sort_keys=True) + "\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, marker)
-            temporary = None
-            return True
-        except OSError:
-            return False
-    finally:
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)
-        _release_lock(lock_fd)
+            if marker.exists():
+                try:
+                    existing = json.loads(marker.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    # Legacy empty or malformed markers remain manual, authoritative sheds.
+                    return True
+                existing_expiry = existing.get("expires_at") if isinstance(existing, dict) else None
+                if (
+                    isinstance(existing_expiry, bool)
+                    or not isinstance(existing_expiry, (int, float))
+                    or not math.isfinite(existing_expiry)
+                ):
+                    return True
+                existing_scope = existing.get("tier_scope") if isinstance(existing, dict) else None
+                if existing_expiry > time.time():
+                    if existing_scope is None and tier_scope is not None:
+                        return True  # an active whole-seat shed is never narrowed
+                    widening = existing_scope is not None and tier_scope is None
+                    if not widening and (expires_at is None or expires_at <= existing_expiry):
+                        return True
+                    if widening and (expires_at is None or expires_at < existing_expiry):
+                        expires_at = int(existing_expiry)
+            payload = {
+                "created_at": int(time.time()),
+                "category": category,
+                "incident_id": incident_id,
+            }
+            if expires_at is not None:
+                payload["expires_at"] = expires_at
+            if reset_at is not None:
+                payload["reset_at"] = reset_at
+            if model is not None:
+                payload["model"] = model
+            if tier_scope is not None:
+                payload["tier_scope"] = tier_scope
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode="w", encoding="utf-8", dir=SHED_DIR, prefix=f".{agent}.", delete=False
+                ) as handle:
+                    temporary = Path(handle.name)
+                    handle.write(json.dumps(payload, sort_keys=True) + "\n")
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temporary, marker)
+                temporary = None
+                return True
+            except OSError:
+                return False
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
 
 
 _RECOVERED_STATUSES = frozenset({"recovered", "cleared", "resolved"})
@@ -1181,12 +1202,12 @@ def record_incident(
     )
     if extra:
         record["extra"] = {key: value for key, value in extra.items() if value is not None}
-    lock_fd = _acquire_lock()
     existing: str | None = None
     existing_row: dict[str, Any] | None = None
     earlier_incident_ids: set[str] = set()
     later_incident_ids: set[str] = set()
-    try:
+    expires_at: int | None = None
+    with incident_lock():
         existing_row, earlier_incident_ids, later_incident_ids = _existing_incident_context(key)
         existing = existing_row.get("incident_id") if existing_row else None
         if existing:
@@ -1219,8 +1240,6 @@ def record_incident(
                 handle.write(line)
                 handle.flush()
                 os.fsync(handle.fileno())
-    finally:
-        _release_lock(lock_fd)
     if existing:
         return _repair_dedup_incident(
             existing_id=existing,
@@ -1260,11 +1279,8 @@ def check_shed(agent: str) -> bool:
 
 
 def clear_shed(agent: str) -> bool:
-    lock_fd = _acquire_lock()
-    try:
+    with incident_lock():
         _mark_incident_recovered_locked(agent=agent)
-    finally:
-        _release_lock(lock_fd)
     try:
         (SHED_DIR / agent).unlink()
         return True
