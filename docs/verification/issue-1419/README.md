@@ -1,5 +1,34 @@
 # Issue #1419: local implementation and tooling blocker
 
+## Follow-up: decode only the retained journal window
+
+The journal reader now selects the last 200 physical lines as bytes before UTF-8
+decoding. Previously, invalid UTF-8 in older, excluded history made a valid recent
+window report unknown. The existing bounded-history regression now exercises both
+invalid JSON and invalid UTF-8 outside that window and checks the retained start
+timestamp. Invalid UTF-8 inside the window still reports unknown in the existing
+corrupt-journal test. No test functions were added, so the collection floor is unchanged.
+
+The extended regression failed before the source fix and passed afterward. All 15
+regression functions passed through direct invocation with separate temporary
+directories; `python src/switch_review.py --selftest` and `git diff --check` also
+passed. These direct invocations do not establish a pytest result.
+
+The named pytest command still fails with `No module named pytest`. Black formatting
+and the required repository-wide Black check both fail with `black: command not
+found`. Installing pytest and Black into a temporary directory failed because pip
+could not obtain either distribution. The Python changes from this follow-up remain
+uncommitted under the required formatting gate. Run the pytest and Black commands
+below in a provisioned environment before committing on this same branch. No
+acceptance checkboxes were changed in this follow-up; the live issue and PR summary
+already had all boxes checked when inspected.
+
+Posting this follow-up as a PR comment and adding `needs-human` were both rejected
+with `MCP tool call requires approval, but approval policy is never`; neither
+mutation was applied. PR #1425 was rechecked as open and ready for review.
+
+## Original implementation record
+
 Prepared on `codex/issue-1419` for PR #1425. Changes remain uncommitted because
 the task explicitly forbids committing Python changes until Black passes.
 No acceptance checkbox has been marked complete.

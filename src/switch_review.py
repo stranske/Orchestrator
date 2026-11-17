@@ -1732,7 +1732,9 @@ def stuck_lane_targets(
         try:
             if journal is None:
                 raise ValueError(f"no journal root configured for {lane}")
-            with journal.open(encoding="utf-8") as stream:
+            # Select the physical-line window before decoding; corrupt older bytes
+            # must not make an otherwise readable recent window unmeasured.
+            with journal.open("rb") as stream:
                 tail = deque(stream, maxlen=STUCK_JOURNAL_LINES)
             runs: dict[str, dict] = {}
             rounds_read = 0
@@ -1741,7 +1743,7 @@ def stuck_lane_targets(
             for line in tail:
                 if not line.strip():
                     continue
-                round_ = json.loads(line)
+                round_ = json.loads(line.decode("utf-8"))
                 parsed_stamp = datetime.fromisoformat(round_["ts"].replace("Z", "+00:00"))
                 if parsed_stamp.tzinfo is None:
                     raise ValueError("round timestamp has no timezone")

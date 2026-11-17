@@ -133,11 +133,15 @@ def test_only_last_200_physical_lines_are_measured(tmp_path):
     roots = _roots(tmp_path)
     _write(roots["closer-core"], _repeated(250))
     journal = roots["closer-core"] / "rounds.jsonl"
-    journal.write_text("invalid old line\n" + journal.read_text(), encoding="utf-8")
-    report = switch_review.stuck_lane_targets(now=NOW, roots=roots)
-    assert report["status"] == "ok"
-    assert report["rows"][0]["rounds"] == 200
-    assert report["rounds_read"]["closer-core"] == 200
+    recent = journal.read_bytes()
+    # Neither invalid JSON nor invalid UTF-8 outside the retained window matters.
+    for old_line in (b"invalid old line\n", b"\xff invalid old line\n"):
+        journal.write_bytes(old_line + recent)
+        report = switch_review.stuck_lane_targets(now=NOW, roots=roots)
+        assert report["status"] == "ok"
+        assert report["rows"][0]["rounds"] == 200
+        assert report["rows"][0]["since"] == NOW - 199 * 900
+        assert report["rounds_read"]["closer-core"] == 200
 
 
 def test_corrupt_or_missing_journal_is_unknown_with_known_suspects_retained(tmp_path):
