@@ -470,6 +470,13 @@ def observe_shadow_spec(
     return {"status": status, "blocks": False, "gate_event": event}
 
 
+# The extras CI installs (Workflows reusable-10-ci-python.yml installs `-e .[app,dev]`); test/tests kept
+# for repositories that name their test extra that way.
+CI_INSTALLED_EXTRAS = frozenset({"app", "dev", "test", "tests"})
+SETUP_TIMEOUT_S = 120
+SETUP_TIMEOUT_LOCK_S = 900
+
+
 def _worktree_interpreter(worktree: str | Path) -> str:
     """Use a repository venv, provisioning one from this checkout when absent.
 
@@ -496,12 +503,20 @@ def _worktree_interpreter(worktree: str | Path) -> str:
         (root / name).is_file() for name in ("setup.py", "setup.cfg")
     )
     requirements = ["pytest"]
+    # Install what the repository's CI installs (Workflows reusable-10-ci-python.yml: `-r requirements.lock`
+    # when present, then `-e .[app,dev]`), so a check fails only where CI would. 2026-11-17,
+    # Inv-Man-Intake#1083: this setup skipped requirements.lock (compiled with the extraction-doc-lineage
+    # extra), 69 of 93 acceptance tests failed on a missing optional package, and the post-merge check
+    # reopened an issue whose merge commit CI had passed with 1324 tests.
+    lock = (root / "requirements.lock").is_file()
+    if lock:
+        requirements.extend(["-r", str(root / "requirements.lock")])
     for name in ("requirements.txt", "requirements-dev.txt", "requirements-test.txt"):
         if (root / name).is_file():
             requirements.extend(["-r", str(root / name)])
     if distribution:
         extras = project.get("project", {}).get("optional-dependencies", {})
-        selected = sorted(set(extras) & {"dev", "test", "tests"})
+        selected = sorted(set(extras) & CI_INSTALLED_EXTRAS)
         requirements.append(".[" + ",".join(selected) + "]" if selected else ".")
     setup_env = os.environ.copy()
     # Scheduler install destinations can redirect pip outside this venv or force
@@ -529,7 +544,9 @@ def _worktree_interpreter(worktree: str | Path) -> str:
                 env=setup_env,
                 capture_output=True,
                 text=True,
-                timeout=120,
+                # A full CI lock (e.g. docling, torch) takes minutes to install; a timeout here is an
+                # unrunnable check (setup failed), never a delivery FAIL.
+                timeout=SETUP_TIMEOUT_LOCK_S if lock else SETUP_TIMEOUT_S,
                 check=False,
             )
             if completed.returncode:
