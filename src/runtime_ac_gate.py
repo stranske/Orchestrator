@@ -475,6 +475,20 @@ def observe_shadow_spec(
 CI_INSTALLED_EXTRAS = frozenset({"app", "dev", "test", "tests"})
 SETUP_TIMEOUT_S = 120
 SETUP_TIMEOUT_LOCK_S = 900
+# CI installs with `uv pip install`; pip cannot resolve some universal uv locks on this machine
+# (2026-11-17, Inv-Man-Intake requirements.lock: ResolutionImpossible on stranske-pdf-extract, while
+# `uv pip install -r requirements.lock` succeeds and the acceptance tests pass, 93/93).
+UV_SEARCH_DIRS = (
+    "/opt/homebrew/bin",
+    str(Path.home() / ".local/bin"),
+    str(Path.home() / ".cargo/bin"),
+    "/opt/anaconda3/bin",
+)
+
+
+def _uv() -> str | None:
+    """The uv binary CI's installer corresponds to: PATH first, then the usual install locations."""
+    return shutil.which("uv") or shutil.which("uv", path=os.pathsep.join(UV_SEARCH_DIRS))
 
 
 def _worktree_interpreter(worktree: str | Path) -> str:
@@ -527,17 +541,20 @@ def _worktree_interpreter(worktree: str | Path) -> str:
     # Keep their children in this venv, just like the subsequent command checks.
     setup_env["PATH"] = str(interpreter.parent) + os.pathsep + setup_env.get("PATH", "")
     try:
-        for command in (
-            [sys.executable, "-m", "venv", str(environment)],
-            [
+        uv = _uv() if lock else None
+        install = (
+            [uv, "pip", "install", "--python", str(interpreter), *requirements]
+            if uv
+            else [
                 str(interpreter),
                 "-m",
                 "pip",
                 "install",
                 "--disable-pip-version-check",
                 *requirements,
-            ],
-        ):
+            ]
+        )
+        for command in ([sys.executable, "-m", "venv", str(environment)], install):
             completed = subprocess.run(
                 command,
                 cwd=str(root),
