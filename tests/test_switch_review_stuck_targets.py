@@ -218,9 +218,7 @@ def test_render_limits_to_five_rows_and_keeps_lanes_separate(tmp_path):
     roots = _roots(tmp_path)
     rounds = _repeated()
     for row in rounds:
-        row["items"] = [
-            {"target": f"o/r#{n}", "action": "error", "error": ERROR} for n in range(6)
-        ]
+        row["items"] = [{"target": f"o/r#{n}", "action": "error", "error": ERROR} for n in range(6)]
     for root in roots.values():
         _write(root, rounds)
     report = switch_review.stuck_lane_targets(now=NOW, roots=roots)
