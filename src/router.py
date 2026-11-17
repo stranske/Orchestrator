@@ -47,6 +47,11 @@ HANDOFF = Path(os.environ.get("HANDOFF_DIR", Path.home() / ".codex" / "handoff")
 CAPACITY_JSON = HANDOFF / "capacity.json"
 BACKLOG_JSON = HANDOFF / "backlog.json"  # written by the (gh-backed) discovery step
 DECISION_JSON = HANDOFF / "routing-decision.json"
+_DEFAULT_STATE_DIR = Path.home() / ".codex" / "orchestrator"
+_DEFAULT_HANDOFF_DIR = Path.home() / ".codex" / "handoff"
+_DEFAULT_FEEDBACK_DB = feedback.DB_PATH
+ROUTE_WEIGHTS_EXPORT_NAME = "route-weights-export.json"
+_COMPARATIVE_EXPORT_CACHE: dict[Path, dict[str, Any] | None] = {}
 
 MAX_CONCURRENT_DEFAULT = 4  # tunable lane cap; LangSmith may adjust
 PER_AGENT_TICK_CAP = 1  # spread load: each agent takes ≤N/tick before doubling
@@ -369,6 +374,64 @@ def _learned_rank(learned: dict | None, agent: str, fallback: int) -> int:
     return int(value)
 
 
+def _local_comparative_enabled() -> bool:
+    raw = (os.environ.get("ORCH_LOCAL_COMPARATIVE") or "1").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _comparative_export_path() -> Path:
+    if os.environ.get("ORCH_STATE_DIR"):
+        state_dir = Path(os.environ["ORCH_STATE_DIR"]).expanduser()
+    elif (
+        os.environ.get("HANDOFF_DIR")
+        and Path(os.environ["HANDOFF_DIR"]).expanduser() != _DEFAULT_HANDOFF_DIR
+    ):
+        state_dir = Path(os.environ["HANDOFF_DIR"]).expanduser()
+    elif Path(feedback.DB_PATH) != _DEFAULT_FEEDBACK_DB:
+        state_dir = Path(feedback.DB_PATH).parent
+    else:
+        state_dir = Path(_DEFAULT_STATE_DIR).expanduser()
+    return state_dir / ROUTE_WEIGHTS_EXPORT_NAME
+
+
+def _comparative_rank(task_type: str, agent: str) -> int | None:
+    path = _comparative_export_path()
+    if path not in _COMPARATIVE_EXPORT_CACHE:
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            _COMPARATIVE_EXPORT_CACHE[path] = loaded if isinstance(loaded, dict) else None
+        except FileNotFoundError:
+            _COMPARATIVE_EXPORT_CACHE[path] = None
+        except (OSError, ValueError, TypeError) as exc:
+            print(f"[router] cannot load comparative export {path}: {exc}", file=sys.stderr)
+            _COMPARATIVE_EXPORT_CACHE[path] = None
+    doc = _COMPARATIVE_EXPORT_CACHE[path]
+    if not isinstance(doc, dict):
+        return None
+    comparative_block = doc.get("comparative")
+    if (
+        not isinstance(comparative_block, dict)
+        or comparative_block.get("route_enabled") is not True
+    ):
+        return None
+    rows: list[Any] = []
+    task_types = doc.get("task_types")
+    if isinstance(task_types, dict):
+        section = task_types.get(task_type)
+        if isinstance(section, dict) and isinstance(section.get("ranking"), list):
+            rows.extend(section["ranking"])
+    reserve = doc.get("reserve")
+    if isinstance(reserve, dict) and isinstance(reserve.get(task_type), list):
+        rows.extend(reserve[task_type])
+    for row in rows:
+        if isinstance(row, dict) and row.get("agent") == agent:
+            rank = row.get("comparative_rank")
+            if isinstance(rank, int) and not isinstance(rank, bool) and rank >= 0:
+                return rank
+            return None
+    return None
+
+
 def _learned_n_obs(learned: dict | None, agent: str) -> int:
     if not learned or agent not in learned:
         return 0
@@ -532,11 +595,11 @@ def _pacing_choice(scored, cap, learned, rng):
     # ok-before-warn ranking so measured warn seats can compete with neutral ones.
     def policy_tier(item):
         score = item[0][0]
-        return score[:2] + score[3:-1]
+        return score[:2] + score[3:5]
 
     def legacy_tier(item):
         # Full discrete+drain prefix (ok-before-warn included); learned rank excluded.
-        return item[0][0][:-1]
+        return item[0][0][:5]
 
     best_tier = min(policy_tier(r) for r in eligible)
     paced = [r for r in eligible if policy_tier(r) == best_tier]
@@ -605,10 +668,11 @@ def select_agent(
     fail-toward-motion for quota-only shed pools. Preserve tick load limits;
     retain every candidate's pacing numbers in the decision/dispatch metadata.
     Without pacing: state in {ok, warn(if allow_warn)}; shed/unknown skipped. Ranked by
-    (under-tick-cap first, then non-late, then ok-before-warn, then capacity policy, then LEARNED rank), with
-    ROUTE_TABLE order as a stable tiebreak. The under-cap key SPREADS concurrent work; the
-    learned key lets the feedback store REORDER agents within a capacity tier from observed
-    effectiveness — but only when `learned` is supplied (no data => identical to the prior).
+    (under-tick-cap first, then non-late, then ok-before-warn, then capacity policy, then
+    comparative rank when ORCH_LOCAL_COMPARATIVE!=0 and route_enabled is true, then LEARNED rank),
+    with ROUTE_TABLE order as a stable tiebreak. The under-cap key SPREADS concurrent work; the
+    comparative and learned keys reorder agents within a capacity tier, recording
+    `route_source="route_weights_comparative"` when the comparative term changed the pick.
     `learned` = {agent: rank} or {agent: {rank,n_obs,...}} for THIS task_type (0 = best); absent
     agents sort after known ones.
     `only` (optional) = restrict candidates to this set of agents (e.g. KEEPALIVE_AGENTS for remote).
@@ -628,6 +692,8 @@ def select_agent(
             for entry in spec["agents"]
         }
     scored: list[ScoredSelection] = []
+    base_scored: list[ScoredSelection] = []
+    comparative_on = profile_transport == "local" and _local_comparative_enabled()
     pacing_active = any(_measured_pacing(r) for r in cap.get("agents", {}).values())
     for idx, entry in enumerate(spec["agents"]):
         if only is not None and entry["agent"] not in only:
@@ -716,13 +782,22 @@ def select_agent(
             _drain_urgency(entry["agent"], cap),
         )  # 16(e): continuous pacing within the tier
         # Stable table rank is the legacy learned-rank fallback.
-        score = score + (
-            (_learned_rank(learned, entry["agent"], len(learned) + idx) if learned else idx),
+        learned_term = (
+            _learned_rank(learned, entry["agent"], len(learned) + idx) if learned else idx
         )
+        base_score: Score = score + (learned_term,)
+        if comparative_on:
+            comp_rank = _comparative_rank(task_type, entry["agent"])
+            comp_term: Score = (0, comp_rank) if comp_rank is not None else (1, 0)
+            score = score + comp_term + (learned_term,)
+        else:
+            score = base_score
         scored.append((score, entry, st, idx))
+        base_scored.append((base_score, entry, st, idx))
     if not scored:
         return None
     scored.sort(key=lambda x: x[0])  # stable -> preserves table order within a score
+    base_scored.sort(key=lambda x: x[0])
     picked = scored[0]
     explored = False
     rng = rng or random
@@ -732,17 +807,17 @@ def select_agent(
     if cold_start:
         # Sample only an equally admissible capacity tier. This is allocation of
         # an already-needed job, not extra comparison/benchmark dispatches.
-        tier = scored[0][0][:5]
-        picked = rng.choice([row for row in scored if row[0][:5] == tier])
+        tier = base_scored[0][0][:5]
+        picked = rng.choice([row for row in base_scored if row[0][:5] == tier])
     pacing_decision = None
     # Draw legacy exploration first so pacing cannot consume or suppress the
     # unrelated pools' exploration share. Pace only the exploitation choice.
     epsilon = _exploration_rate(exploration_rate)
     if epsilon > 0 and rng.random() < epsilon:
         mode = _exploration_mode(exploration_mode)
-        exploration_scored = scored
+        exploration_scored = base_scored
         if pacing_active:
-            exploration_scored = [r for r in scored if r[2] != "shed"]
+            exploration_scored = [r for r in base_scored if r[2] != "shed"]
         challenger = (
             _thompson_exploration_choice(exploration_scored, learned, rng)
             if mode == "thompson-hybrid"
@@ -760,13 +835,33 @@ def select_agent(
                     "invocation",
                     ref=f"{task_type}:{entry_agent(challenger)}",
                 )
+    baseline_picked = base_scored[0]
     if pacing_active and not explored and not cold_start:
-        picked, pacing_decision = _pacing_choice(scored, cap, learned, rng)
+        picked, pacing_decision = _pacing_choice(base_scored, cap, learned, rng)
+        if comparative_on and pacing_decision is None:
+            # Comparative keys follow the five capacity keys: the same candidates
+            # reach the same unmeasured fallback in either ordering. Replaying
+            # that deterministic path consumes no random draws. Weighted pacing
+            # retains its policy and is never attributed to comparative ranking.
+            baseline_picked = picked
+            picked, _ = _pacing_choice(scored, cap, learned, rng)
     _, entry, st, _idx = picked
+    route_source = (
+        "route_weights_comparative"
+        if (
+            comparative_on
+            and not explored
+            and not cold_start
+            and pacing_decision is None
+            and entry["agent"] != baseline_picked[1]["agent"]
+        )
+        else "route_weights"
+    )
     result = {
         **entry,
         "state": st,
         "capacity_policy": _policy(cap, entry["agent"]),
+        "route_source": route_source,
         **({"pacing_decision": pacing_decision} if pacing_decision else {}),
         "exploration": explored,
         "exploration_mode": _exploration_mode(exploration_mode) if explored else "",
@@ -1410,6 +1505,7 @@ def plan(
                     "target": tgt,
                     "task_type": b["task_type"],
                     "lane": b.get("lane"),
+                    "route_source": entry.get("route_source"),
                     "pacing_decision": entry.get("pacing_decision"),
                     "capacity_state": entry["state"],
                     "capacity_policy": policy,
@@ -1555,7 +1651,10 @@ def _selftest() -> None:
     execution_profiles._selftest()
 
     tmp = tempfile.mkdtemp(prefix="router-selftest-")
+    old_state_dir = os.environ.get("ORCH_STATE_DIR")
     os.environ["HANDOFF_DIR"] = tmp
+    os.environ["ORCH_STATE_DIR"] = tmp
+    _COMPARATIVE_EXPORT_CACHE.clear()
     old_exploration_rate = os.environ.get("ORCH_EXPLORATION_RATE")
     old_exploration_mode = os.environ.get("ORCH_EXPLORATION_MODE")
     os.environ["ORCH_EXPLORATION_RATE"] = "0"
@@ -2100,6 +2199,11 @@ def _selftest() -> None:
 
         shutil.rmtree(tmp, ignore_errors=True)
         os.environ.pop("HANDOFF_DIR", None)
+        _COMPARATIVE_EXPORT_CACHE.clear()
+        if old_state_dir is None:
+            os.environ.pop("ORCH_STATE_DIR", None)
+        else:
+            os.environ["ORCH_STATE_DIR"] = old_state_dir
         if old_exploration_rate is None:
             os.environ.pop("ORCH_EXPLORATION_RATE", None)
         else:

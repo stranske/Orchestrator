@@ -594,3 +594,26 @@ def _no_live_gemini_full_split(monkeypatch, tmp_path):
     monkeypatch.setattr(
         gemini_full_split, "STATE_PATH", tmp_path / "no-gemini-full-split-state.json"
     )
+
+
+@pytest.fixture(autouse=True)
+def _no_live_comparative_export(monkeypatch, tmp_path):
+    """Isolate unrelated tests from any live ~/.codex/orchestrator route-weights export."""
+    try:
+        import router
+    except ImportError:  # a scratch project that copied this conftest without src/
+        return
+
+    real_path = router._comparative_export_path
+    ambient_path = real_path()
+    isolated = tmp_path / "no-live-orchestrator-state"
+    monkeypatch.setattr(router, "_DEFAULT_STATE_DIR", isolated)
+
+    def isolated_export_path():
+        resolved = real_path()
+        if resolved == ambient_path:
+            return isolated / router.ROUTE_WEIGHTS_EXPORT_NAME
+        return resolved
+
+    monkeypatch.setattr(router, "_comparative_export_path", isolated_export_path)
+    monkeypatch.setattr(router, "_COMPARATIVE_EXPORT_CACHE", {})

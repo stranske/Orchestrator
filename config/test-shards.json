@@ -58,6 +58,7 @@
     "tests/test_gate_label_job.py",
     "tests/test_runtime_ac_pr_body_spec.py",
     "tests/test_switch_review_stuck_targets.py",
+    "tests/test_router_comparative.py",
     "tests/test_gemini_pacing_source.py"
   ],
   "shards": [
@@ -302,7 +303,8 @@
       "tests/test_worktree_git_guard.py",
       "tests/test_observability_dashboard.py",
       "tests/test_experiment_reservation.py",
-      "tests/test_gemini_full_split.py"
+      "tests/test_gemini_full_split.py",
+      "tests/test_router_comparative.py"
     ],
     [
       "tests/test_adjudicator_retry_history.py",
