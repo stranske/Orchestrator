@@ -380,3 +380,45 @@ After that gate passed, staging the two changed files failed with
 `Unable to create .git/index.lock: Read-only file system`; the commit command
 could not run. PR 1426 was re-read and remains open with `draft=false` at
 `f06f2243efeb102b62af57ff3f99b01a595d4213`.
+
+## Later fixture and independent clearing controls — 2026-11-17
+
+Extended the named acceptance test on `codex/issue-1414` at `6b6120b`.
+A fixture heartbeat appended after production activity cannot hide that activity
+or enter either reader's invocation evidence. Reviving one of two anomalous
+producers retains exactly the other producer's evidence and kill switch;
+reviving both renders a measured zero. Every read preserves the ledger bytes.
+This extends the existing test without changing collection counts.
+
+Using Python 3.14.10 and official upstream pytest 9.0.2 loaded into
+`/tmp/issue-1414-test-tools`, with `ORCH_STATE_DIR` in `/tmp`:
+
+- [x] Named acceptance test: `python3 -m pytest tests/test_firing_monitor_live_rows.py::test_invocation_after_retirement_is_named -q -m "not slow"` — **1 passed in 0.15s**.
+- [x] Whole file: `python3 -m pytest tests/test_firing_monitor_live_rows.py -q -m "not slow"` — **25 passed in 0.19s**.
+- [x] Six-file focused regression set listed above, with `-m "not slow"`: **104 passed in 2.00s**.
+- [x] Changed Python file formatted with CI-pinned Black 26.10.1, line length 100; unchanged.
+- [x] `git diff --check` passed.
+
+The already verified deliberate-break/restoration check above was not repeated.
+Automatic approval review rejected the verified named-test/whole-file checkbox
+update, evidence comment, and `needs-human` label, each with
+`MCP tool call requires approval, but approval policy is never`. Remote
+checkboxes remain unchanged. The reconciled body is retained at
+`/tmp/issue-1414-validation/pr-body.md`. Git metadata is mounted read-only,
+so committing remains blocked. No branch or pull request was created.
+
+The mandatory full formatting command passed (exit 0):
+
+```text
+black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .
+715 files would be left unchanged.
+```
+
+The temporary launcher dispatches CLI-discovered files through Black's ordinary
+single-file checker sequentially; formatter options, file discovery, and
+AST-equivalence checks remain enabled. No repository dependency or formatter
+configuration changed.
+
+After that gate passed, staging the exact test and verification files failed:
+`Unable to create .git/index.lock: Read-only file system`. The conditional
+commit command did not run. The verified test changes remain local.

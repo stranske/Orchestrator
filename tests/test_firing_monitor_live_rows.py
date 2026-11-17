@@ -408,6 +408,44 @@ def test_invocation_after_retirement_is_named(tmp_path, monkeypatch):
         for evidence in ("disable retired-running", "disable silent", "run:second-producer"):
             assert evidence in text
 
+    # A later fixture heartbeat must neither hide production evidence nor become evidence.
+    capabilities.heartbeat(
+        "silent",
+        "invocation",
+        timestamp=NOW + 9,
+        ref="run:later-fixture",
+        metadata={"source": "fixture"},
+        path=ledger,
+    )
+    for previous, current in zip(reports, reports_at(NOW + 9)):
+        assert current["retired_but_invoked_count"] == 2
+        assert current["retired_but_invoked"] == previous["retired_but_invoked"]
+
+    # Readers recompute each producer independently after a lifecycle decision. Clearing
+    # one anomaly must retain the other producer's evidence and declared kill switch.
+    capabilities.transition(
+        "retired-running", "observed", reason="revived again", timestamp=NOW + 10, path=ledger
+    )
+    for report in reports_at(NOW + 10):
+        assert report["retired_but_invoked_count"] == 1
+        assert report["retired_but_invoked"] == [second_expected]
+
+    capabilities.transition(
+        "silent", "observed", reason="revived second producer", timestamp=NOW + 11, path=ledger
+    )
+    cleared = reports_at(NOW + 11)
+    for report in cleared:
+        assert report["retired_but_invoked_count"] == 0
+        assert report["retired_but_invoked"] == []
+        assert report["retired_but_invoked_measurement"] == "measured"
+    for text in (
+        monitor.format_report(cleared[0]),
+        "\n".join(switch_review.format_gate_expiry(cleared[1])),
+    ):
+        assert "retired_but_invoked: 0" in text
+        assert "run:second-producer" not in text
+        assert "run:later-fixture" not in text
+
 
 def test_retirement_predicate_is_read_only_and_uses_latest_retirement():
     retirement = {"type": "transition", "to": "retired", "timestamp": NOW - 100}
