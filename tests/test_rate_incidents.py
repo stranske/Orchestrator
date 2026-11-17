@@ -657,3 +657,249 @@ def test_muse_reset_ignores_prose_and_past_times():
     assert rate_incidents.provider_reset_at("muse", [prose], now=now) is None
     assert rate_incidents.provider_reset_at("muse", [MUSE_QUOTA_LINE], now=MUSE_RESET + 1) is None
     assert rate_incidents.provider_reset_at("claude", [MUSE_QUOTA_LINE], now=now) is None
+
+
+def test_failed_marker_publication_is_repaired_on_dedup_retry(incident_paths, monkeypatch):
+    monkeypatch.setattr(capacity, "SHED_DIR", rate_incidents.SHED_DIR)
+    monkeypatch.setattr(rate_incidents, "GEMINI_SEPARATE_QUOTA_FAMILIES", ("argon",))
+    now = int(time.time())
+    reset_at = now + 10 * 3600
+    evidence = (
+        '{"event":"init","init":{"model":"gemini-4-argon-high"}}\n'
+        + GEMINI_INDIVIDUAL_QUOTA_LINE
+    )
+    real_replace = rate_incidents.os.replace
+    replace_calls = 0
+
+    def fail_first_replace(src, dst):
+        nonlocal replace_calls
+        replace_calls += 1
+        if replace_calls == 1:
+            raise OSError("simulated marker publication failure")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(rate_incidents.os, "replace", fail_first_replace)
+
+    first = rate_incidents.record_incident(
+        agent="gemini",
+        surface="dispatcher.offload",
+        category="quota",
+        run_id="run-dedup-repair",
+        evidence=evidence,
+        timestamp=now,
+        reset_at=reset_at,
+    )
+    assert first["status"] == "shed_unfulfilled"
+    assert first["deduped"] is False
+    assert first["shed"] is False
+    assert not (rate_incidents.SHED_DIR / "gemini").exists()
+
+    rows = [json.loads(line) for line in rate_incidents.INCIDENT_FILE.read_text().splitlines()]
+    assert len(rows) == 1
+    assert rows[0]["shed_requested"] is True
+    assert rows[0]["expires_at"] == reset_at
+    assert rows[0]["model"] == "gemini-4-argon-high"
+    assert rows[0]["tier_scope"] == "full"
+    assert rows[0]["recovered"] is False
+
+    second = rate_incidents.record_incident(
+        agent="gemini",
+        surface="ledger_reconcile.completion",
+        category="quota",
+        run_id="run-dedup-repair",
+        evidence="Individual quota reached.",
+        timestamp=now + 120,
+    )
+    assert second == {
+        "status": "ok",
+        "deduped": True,
+        "incident_id": first["incident_id"],
+        "shed": True,
+    }
+    rows_after = [json.loads(line) for line in rate_incidents.INCIDENT_FILE.read_text().splitlines()]
+    assert len(rows_after) == 1
+    marker = json.loads((rate_incidents.SHED_DIR / "gemini").read_text())
+    assert marker["incident_id"] == first["incident_id"]
+    assert marker["expires_at"] == reset_at
+    assert marker["reset_at"] == reset_at
+    assert marker["model"] == "gemini-4-argon-high"
+    assert marker["tier_scope"] == "full"
+
+
+def test_dedup_repair_negative_controls_expired_recovered_shed_false_and_newer_hold(
+    incident_paths, monkeypatch
+):
+    now = int(time.time())
+    real_ensure_shed = rate_incidents.ensure_shed
+
+    # 1. expired: unfulfilled shed whose original expires_at has passed is not re-shed on dedup
+    monkeypatch.setattr(rate_incidents, "ensure_shed", lambda *a, **k: False)
+    expired_first = rate_incidents.record_incident(
+        agent="codex",
+        surface="dispatcher.offload",
+        category="rate_limit",
+        run_id="run-expired",
+        evidence="HTTP 429 Too Many Requests",
+        timestamp=now - rate_incidents.DEFAULT_COOLDOWN_S - 60,
+    )
+    assert expired_first["status"] == "shed_unfulfilled"
+
+    def fail_if_called(*args, **kwargs):
+        pytest.fail("ensure_shed must not be called when negative control applies")
+
+    monkeypatch.setattr(rate_incidents, "ensure_shed", fail_if_called)
+    expired_retry = rate_incidents.record_incident(
+        agent="codex",
+        surface="ledger_reconcile.completion",
+        category="rate_limit",
+        run_id="run-expired",
+        evidence="HTTP 429 Too Many Requests",
+        timestamp=now,
+    )
+    assert expired_retry == {
+        "status": "ok",
+        "deduped": True,
+        "incident_id": expired_first["incident_id"],
+        "shed": False,
+    }
+    assert not (rate_incidents.SHED_DIR / "codex").exists()
+
+    # 2. recovered: explicitly cleared/recovered incident is not re-shed on dedup
+    monkeypatch.setattr(rate_incidents, "ensure_shed", lambda *a, **k: False)
+    rec_first = rate_incidents.record_incident(
+        agent="claude",
+        surface="dispatcher.offload",
+        category="quota",
+        run_id="run-recovered",
+        evidence="out of usage",
+        timestamp=now,
+    )
+    assert rec_first["status"] == "shed_unfulfilled"
+    rate_incidents.clear_shed("claude")
+    monkeypatch.setattr(rate_incidents, "ensure_shed", fail_if_called)
+    rec_retry = rate_incidents.record_incident(
+        agent="claude",
+        surface="ledger_reconcile.completion",
+        category="quota",
+        run_id="run-recovered",
+        evidence="out of usage",
+        timestamp=now + 10,
+    )
+    assert rec_retry == {
+        "status": "ok",
+        "deduped": True,
+        "incident_id": rec_first["incident_id"],
+        "shed": False,
+    }
+    assert not (rate_incidents.SHED_DIR / "claude").exists()
+
+    # 3. shed=False: incident recorded with shed=False never sheds on dedup
+    no_shed_first = rate_incidents.record_incident(
+        agent="cursor",
+        surface="ledger_reconcile.reconcile",
+        category="capacity",
+        run_id="run-no-shed",
+        evidence="resource_exhausted",
+        shed=False,
+        timestamp=now,
+    )
+    assert no_shed_first["status"] == "ok" and no_shed_first["shed"] is False
+    no_shed_retry = rate_incidents.record_incident(
+        agent="cursor",
+        surface="dispatcher.offload",
+        category="capacity",
+        run_id="run-no-shed",
+        evidence="resource_exhausted",
+        shed=True,
+        timestamp=now + 5,
+    )
+    assert no_shed_retry == {
+        "status": "ok",
+        "deduped": True,
+        "incident_id": no_shed_first["incident_id"],
+        "shed": False,
+    }
+    assert not (rate_incidents.SHED_DIR / "cursor").exists()
+
+    # 4. newer-hold / manual-hold: existing newer or manual hold is preserved on dedup retry
+    monkeypatch.setattr(rate_incidents, "ensure_shed", lambda *a, **k: False)
+    old_first = rate_incidents.record_incident(
+        agent="muse",
+        surface="dispatcher.offload",
+        category="quota",
+        run_id="run-older-unfulfilled",
+        evidence="quota exhausted",
+        timestamp=now,
+        reset_at=now + 50_000,
+    )
+    assert old_first["status"] == "shed_unfulfilled"
+    monkeypatch.setattr(rate_incidents, "ensure_shed", real_ensure_shed)
+    newer_expiry = now + 25_000
+    assert rate_incidents.ensure_shed(
+        "muse",
+        category="rate_limit",
+        incident_id="newer-incident-id",
+        expires_at=newer_expiry,
+    )
+    prior_bytes = (rate_incidents.SHED_DIR / "muse").read_bytes()
+    monkeypatch.setattr(rate_incidents, "ensure_shed", fail_if_called)
+    newer_hold_retry = rate_incidents.record_incident(
+        agent="muse",
+        surface="ledger_reconcile.completion",
+        category="quota",
+        run_id="run-older-unfulfilled",
+        evidence="quota exhausted",
+        timestamp=now + 10,
+    )
+    assert newer_hold_retry == {
+        "status": "ok",
+        "deduped": True,
+        "incident_id": old_first["incident_id"],
+        "shed": False,
+    }
+    assert (rate_incidents.SHED_DIR / "muse").read_bytes() == prior_bytes
+
+
+def test_callers_warn_and_surface_shed_unfulfilled(incident_paths, monkeypatch, capsys):
+    monkeypatch.setattr(rate_incidents, "ensure_shed", lambda *a, **k: False)
+    monkeypatch.setattr(dispatcher, "DISPATCH_LOG_DIR", incident_paths / "logs")
+    monkeypatch.setattr(dispatcher, "_capability_heartbeat", lambda *args, **kwargs: None)
+    monkeypatch.setattr(dispatcher, "_default_offload_timeout", lambda *args, **kwargs: 1)
+    monkeypatch.setattr(dispatcher, "_offload_prompt", lambda prompt, *args: prompt)
+    monkeypatch.setattr(dispatcher, "_select_offload_profile", lambda *args: None)
+    monkeypatch.setattr(
+        dispatcher.adapters, "can_report_cli_identity", lambda *args: (False, "test")
+    )
+    monkeypatch.setattr(dispatcher.adapters, "build_command", lambda *args, **kwargs: ["agent"])
+    monkeypatch.setattr(dispatcher.adapters, "model_identity", lambda *args, **kwargs: "test-model")
+    monkeypatch.setattr(dispatcher.adapters, "record_ledger", lambda *args, **kwargs: None)
+    monkeypatch.setattr(dispatcher.feedback, "record_run", lambda *args, **kwargs: None)
+    monkeypatch.setattr(dispatcher.feedback, "record_cost", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        dispatcher.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            ["agent"], 1, "", "HTTP 429 Too Many Requests"
+        ),
+    )
+    monkeypatch.setenv("ORCH_OFFLOAD_NETWORK_RETRIES", "0")
+
+    offload_res = dispatcher.offload("codex", "test", cwd=str(incident_paths))
+    assert offload_res["shed_unfulfilled"] is True
+    assert offload_res["rate_incident_evidence"]["shed_unfulfilled"] is True
+    assert offload_res["rate_incident_evidence"]["incident_status"] == "shed_unfulfilled"
+    assert offload_res["rate_incident_evidence"]["shed"] is False
+    assert "rate-incident shed unfulfilled" in capsys.readouterr().err
+
+    reconcile_res = ledger_reconcile._classify_run_log_segment(
+        ["HTTP 429 Too Many Requests"],
+        "codex",
+        offload_res["run_id"],
+        shed=True,
+        successful=False,
+    )
+    assert reconcile_res is not None
+    assert reconcile_res["shed_unfulfilled"] is True
+    assert reconcile_res["incident_status"] == "shed_unfulfilled"
+    assert reconcile_res["shed"] is False
+    assert "rate-incident shed unfulfilled" in capsys.readouterr().err
