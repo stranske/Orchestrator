@@ -764,8 +764,8 @@ def _cooldown_seconds(
         if incident_id is not None and row.get("incident_id") == incident_id:
             continue
         try:
-            ts = int(row.get("ts"))
-        except (TypeError, ValueError):
+            ts = int(row["ts"])
+        except (KeyError, TypeError, ValueError):
             continue
         if now - ESCALATION_WINDOW_S <= ts <= now:
             stamps.append(ts)
