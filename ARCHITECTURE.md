@@ -671,6 +671,15 @@ time>` (a weekly exhaustion had re-admitted the seat every 6 h). `switch_review`
 placed by hand that has held its seat past 14 days, or an expired one still on disk. (No stage,
 component or surface moved; the diagram is unchanged.)
 
+**Repeated lane decisions are reported by the weekly review (2026-11-17).**
+`switch_review.stuck_lane_targets` reads the last 200 lines of the opener-core and closer-core
+round journals. An identical action and reason/error for a target across at least six consecutive
+rounds spanning an hour is SUSPECT, except explicit parked, complete and `held:` skip decisions.
+A changed decision or an absent target drains the streak. The JSON and readable weekly artifact
+carry the count and up to five readable examples; unreadable journals remain unknown rather than
+zero. This is an FYI feedback surface only: it changes no lane, raises no owner question and
+initiates no action. The loop diagram records the same read-only journal connection.
+
 **What an agent prints passes one mask before this tool writes or returns it (2026-10-06).** While
 gh was broken for dispatched agents, agents fetched a GitHub token another way and printed it, and
 the dispatcher kept it wherever it keeps what an agent says: a vibe offload's stdout went into a
