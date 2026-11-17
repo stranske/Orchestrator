@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+from functools import partial
 
 import pytest
 
@@ -262,15 +263,24 @@ def test_invocation_after_retirement_is_named(tmp_path, monkeypatch):
         rows[cap_id] = row
     ledger = tmp_path / "capabilities.json"
     capabilities.save(rows, ledger)
-    # Exercise the real heartbeat writer: retired execution is observed, never blocked here.
-    capabilities.heartbeat(
-        "retired-running",
-        "invocation",
-        timestamp=invocation["timestamp"],
-        ref=invocation["ref"],
-        metadata=invocation["metadata"],
-        path=ledger,
-    )
+    # Exercise the production entry point with its real writer bound to this ledger.
+    # Its existing emission switch still applies, including for retired capabilities.
+    before = ledger.read_bytes()
+    with monkeypatch.context() as production:
+        production.setattr(
+            capabilities,
+            "heartbeat",
+            partial(capabilities.heartbeat, path=ledger, timestamp=invocation["timestamp"]),
+        )
+        assert not capabilities.production_heartbeat("retired-running", "invocation")
+        assert ledger.read_bytes() == before
+        production.setenv("ORCH_CAPABILITY_HEARTBEATS", "1")
+        assert capabilities.production_heartbeat(
+            "retired-running",
+            "invocation",
+            ref=invocation["ref"],
+            metadata=invocation["metadata"],
+        )
     before = ledger.read_bytes()
     rep = monitor.review(now=NOW, path=ledger)
     expiry = switch_review.gate_expiry(now=NOW, path=ledger)

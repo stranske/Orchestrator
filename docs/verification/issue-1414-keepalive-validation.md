@@ -451,3 +451,48 @@ and `needs-human` label with `MCP tool call requires approval, but approval poli
 is never`. Remote checkboxes remain unchanged. The prepared reconciled body is
 at `/tmp/issue-1414-pr-body.md`. PR 1426 remains open and ready (`draft=false`)
 at `69527e13fd58e2842f8712bee7685b4451a1f93c`.
+
+## Production entry-point regression — 2026-11-17
+
+Extended the named acceptance test at `fd1cc63` to exercise
+`production_heartbeat` through its real writer, bound to the temporary ledger.
+Disabled emission returns false without changing ledger bytes. Enabled emission
+records a retired invocation, and both readers retain the expected retirement,
+invocation and kill-switch evidence. The existing negative and lifecycle controls
+remain in the same test; collection counts are unchanged.
+
+Fresh verification with Python 3.14.10 and pytest 9.0.2 in
+`/tmp/issue-1414-tools`, with `ORCH_STATE_DIR=/tmp/issue-1414-state`:
+
+- [x] Named acceptance command with `-m "not slow"`: **1 passed in 0.52s**.
+- [x] Whole firing-monitor file with `-m "not slow"`: **25 passed in 0.21s**.
+- [x] Firing-monitor and gate-expiry files together with `-m "not slow"`: **52 passed in 1.61s**.
+- [x] Changed Python file formatted with Black 26.10.1 at line length 100; unchanged.
+- [x] Required full Black check: **715 files would be left unchanged**, exit 0.
+- [x] `git diff --check` passed.
+
+The full formatting command was:
+
+```text
+black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .
+```
+
+As in earlier rounds, a temporary launcher routes CLI-discovered files through
+Black's standard single-file checker because background-worker reporting stalls
+in this sandbox. Formatter options and AST-equivalence checks are preserved.
+Tools came from official upstream sources into `/tmp`; repository dependencies
+are unchanged. The already recorded deliberate-break/restoration check was not
+repeated.
+
+Git metadata remains read-only. Automatic approval review rejected the verified
+PR checkbox update and `needs-human` label with `MCP tool call requires approval,
+but approval policy is never`. The reconciled body is retained at
+`/tmp/issue-1414-pr-body.md`; remote checkboxes remain unchanged. PR 1426 was
+verified open and ready (`draft=false`) at
+`fd1cc63fb151ad7fb751a7b3c99210d1cd103e7e`.
+
+After the formatting gate passed, staging the exact test and verification files
+failed with `Unable to create .git/index.lock: Read-only file system`. The
+conditional commit did not run; the verified change remains uncommitted.
+Automatic approval review also rejected the PR evidence/blocker comment with
+the same approval-policy error, so these fresh results were not published.
