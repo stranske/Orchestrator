@@ -2057,7 +2057,9 @@ with a meaningful routing/capacity change or the 24 h refresh floor. Switch revi
 the same report from local snapshot/Brain inputs and prints one summary line.
 
 `comparative.route_enabled` (#1316, read by the hosted router in Workflows
-`agent_delegation_policy.js`, which then sorts by `comparative_rank`, unranked last) is true when
+`agent_delegation_policy.js` and locally by `router.select_agent` behind `ORCH_LOCAL_COMPARATIVE=1`
+(#1433), sorting by `comparative_rank`, unranked last, within a capacity tier and recording
+`route_source="route_weights_comparative"` when it changes the pick) is true when
 now >= `ROUTE_GO_LIVE`, the result is `optimal`, and incidents since go-live do not exceed the
 baseline rate (the 14 days BEFORE go-live) times elapsed days, floored at one day. That last test
 is a rollback after go-live, never a precondition: before go-live both windows predate any routing

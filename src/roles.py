@@ -3333,8 +3333,11 @@ def _selftest() -> None:
 
     fake_cap = {"agents": {a: {"state": "ok"} for a in ("gemini", "codex", "cursor", "vibe")}}
     old_db = feedback.DB_PATH
+    old_state_dir = os.environ.get("ORCH_STATE_DIR")
     tmp = tempfile.mkdtemp(prefix="roles-selftest-")
     feedback.DB_PATH = Path(tmp) / "roles.db"
+    os.environ["ORCH_STATE_DIR"] = tmp
+    router._COMPARATIVE_EXPORT_CACHE.clear()
 
     try:
         reset_role_invocation_counts()
@@ -4113,6 +4116,11 @@ def _selftest() -> None:
         )
     finally:
         feedback.DB_PATH = old_db
+        router._COMPARATIVE_EXPORT_CACHE.clear()
+        if old_state_dir is None:
+            os.environ.pop("ORCH_STATE_DIR", None)
+        else:
+            os.environ["ORCH_STATE_DIR"] = old_state_dir
         import shutil
 
         shutil.rmtree(tmp, ignore_errors=True)
