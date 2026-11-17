@@ -1675,110 +1675,6 @@ def weekly_pacing_check(*, now=None) -> str:
     return pacing_usage.report(capacity.HANDOFF, now=time.time() if now is None else now)
 
 
-def stuck_lane_targets(*, now=None, roots=None) -> dict:
-    """FYI: each target's newest identical decision run in the last 200 journal lines.
-
-    ``roots`` maps lane names to journal directories; defaults follow ORCH_STATE_DIR.
-    An absent target or a changed decision breaks consecutive rounds. If a target
-    occurs twice in a round, its final decision counts once. Unreadable or malformed
-    journals are unknown, while readable empty journals are measured zeroes.
-    """
-    now = time.time() if now is None else now
-    state = Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex" / "orchestrator"))
-    roots = (
-        roots
-        if roots is not None
-        else {lane: state / lane for lane in ("opener-core", "closer-core")}
-    )
-    report: dict = {"status": "ok", "rows": [], "suspect": 0, "rounds_read": {}}
-    errors = []
-    for lane in ("opener-core", "closer-core"):
-        journal = Path(roots[lane]) / "rounds.jsonl"
-        report["rounds_read"][lane] = None
-        try:
-            with journal.open(encoding="utf-8") as stream:
-                lines = deque(stream, maxlen=STUCK_JOURNAL_LINES)
-            runs: dict = {}
-            count = 0
-            for line in lines:
-                if not line.strip():
-                    continue
-                entry = json.loads(line)
-                stamp = datetime.fromisoformat(entry["ts"].replace("Z", "+00:00"))
-                if stamp.tzinfo is None:
-                    stamp = stamp.replace(tzinfo=timezone.utc)
-                timestamp = stamp.timestamp()
-                items = entry["items"]
-                if not isinstance(items, list) or any(not isinstance(i, dict) for i in items):
-                    raise ValueError("round items must be a list of objects")
-                if timestamp > now:
-                    continue
-                decisions = {}
-                for item in items:
-                    target = item.get("target")
-                    if target is None:
-                        continue  # a round-level item names no target
-                    if not isinstance(target, str) or not target:
-                        raise ValueError("target must be non-empty text")
-                    action = item.get("action")
-                    reason, error = item.get("reason"), item.get("error")
-                    if not isinstance(action, str) or any(
-                        value is not None and not isinstance(value, str)
-                        for value in (reason, error)
-                    ):
-                        raise ValueError("target action and reason must be text")
-                    decisions[target] = (action, reason or error or "")
-                for target, (action, reason) in decisions.items():
-                    previous = runs.get(target)
-                    if (
-                        previous is not None
-                        and previous["last_round"] == count - 1
-                        and (previous["action"], previous["reason"]) == (action, reason)
-                    ):
-                        previous["rounds"] += 1
-                        previous["last_round"] = count
-                        previous["until"] = timestamp
-                    else:
-                        runs[target] = {
-                            "lane": lane,
-                            "target": target,
-                            "action": action,
-                            "reason": reason,
-                            "rounds": 1,
-                            "since": stamp.isoformat(),
-                            "start": timestamp,
-                            "until": timestamp,
-                            "last_round": count,
-                        }
-                count += 1
-            rows = []
-            for row in runs.values():
-                deliberate_hold = row["action"] in STUCK_HOLD_ACTIONS or (
-                    row["reason"].startswith(STUCK_HOLD_REASONS)
-                )
-                if (
-                    row["last_round"] == count - 1  # still present in the newest round read
-                    and row["rounds"] >= STUCK_MIN_ROUNDS
-                    and row["until"] - row["start"] >= STUCK_MIN_SPAN_S
-                    and not deliberate_hold
-                ):
-                    rows.append(
-                        {
-                            key: row[key]
-                            for key in ("lane", "target", "action", "reason", "rounds", "since")
-                        }
-                    )
-            report["rows"].extend(rows)
-            report["rounds_read"][lane] = count
-        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
-            errors.append(f"{journal} unreadable ({type(exc).__name__}: {exc})")
-    report["rows"].sort(key=lambda row: (-row["rounds"], row["since"], row["lane"], row["target"]))
-    report["suspect"] = len(report["rows"])
-    if errors:
-        report.update(status="unknown", measurement="; ".join(errors))
-    return report
-
-
 def capacity_shed(*, now: float | None = None, shed_dir: Path | None = None) -> dict:
     """FYI: every capacity-shed marker, what holds its seat and what clears it. Removes nothing.
 
@@ -1829,6 +1725,118 @@ def capacity_shed(*, now: float | None = None, shed_dir: Path | None = None) -> 
         if marker is not None:  # None: removed between the listing and the read
             report["markers"].append(_shed_row(marker, entry, now=now))
     report["suspect"] = sum(1 for row in report["markers"] if row["suspect"] is not None)
+    return report
+
+
+def stuck_lane_targets(
+    *, now: float | None = None, roots: Mapping[str, Path] | None = None
+) -> dict:
+    """FYI: identical decisions persisting across consecutive lane rounds.
+
+    ``roots`` maps opener-core/closer-core to their journal directories; by default
+    both live under ORCH_STATE_DIR. Only the last 200 physical lines are examined.
+    A changed decision or a round without the target drains its streak. Count each
+    target once per round, using its last item (the round's final decision).
+    Missing, unreadable or malformed journals are unknown, never a measured zero.
+    """
+    now = time.time() if now is None else now
+    lanes = ("opener-core", "closer-core")
+    if roots is None:
+        state = Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex" / "orchestrator"))
+        roots = {lane: state / lane for lane in lanes}
+    report: dict = {
+        "status": "ok",
+        "rows": [],
+        "suspect": 0,
+        "rounds_read": dict.fromkeys(lanes),
+    }
+    errors = []
+    for lane in lanes:
+        journal = Path(roots[lane]) / "rounds.jsonl" if lane in roots else None
+        try:
+            if journal is None:
+                raise ValueError(f"no journal root configured for {lane}")
+            # Select the physical-line window before decoding; corrupt older bytes
+            # must not make an otherwise readable recent window unmeasured.
+            with journal.open("rb") as stream:
+                tail = deque(stream, maxlen=STUCK_JOURNAL_LINES)
+            runs: dict[str, dict] = {}
+            rounds_read = 0
+            previous_stamp = None
+            latest_stamp = 0.0
+            for line in tail:
+                if not line.strip():
+                    continue
+                round_ = json.loads(line.decode("utf-8"))
+                parsed_stamp = datetime.fromisoformat(round_["ts"].replace("Z", "+00:00"))
+                if parsed_stamp.tzinfo is None:
+                    raise ValueError("round timestamp has no timezone")
+                stamp = parsed_stamp.timestamp()
+                if previous_stamp is not None and stamp < previous_stamp:
+                    raise ValueError("round timestamps are out of order")
+                previous_stamp = stamp
+                items = round_["items"]
+                if not isinstance(items, list) or any(not isinstance(i, dict) for i in items):
+                    raise ValueError("round items must be a list of objects")
+                if stamp > now:
+                    continue
+                latest_stamp = stamp
+                decisions = {}
+                for item in items:
+                    target, action = item.get("target"), item.get("action")
+                    if target is None:
+                        continue  # a round-level summary names no target
+                    reason, error = item.get("reason"), item.get("error")
+                    if not all(isinstance(v, str) for v in (target, action)) or any(
+                        value is not None and not isinstance(value, str)
+                        for value in (reason, error)
+                    ):
+                        raise ValueError("item target, action and reason/error must be text")
+                    if not target or not action:
+                        raise ValueError("item target and action must not be empty")
+                    decisions[target] = (action, reason or error or "")
+                current = {}
+                for target, (action, reason) in decisions.items():
+                    prior = runs.get(target)
+                    if prior is not None and (prior["action"], prior["reason"]) == (
+                        action,
+                        reason,
+                    ):
+                        count, since = prior["rounds"] + 1, prior["since"]
+                    else:
+                        count, since = 1, stamp
+                    current[target] = {
+                        "lane": lane,
+                        "target": target,
+                        "action": action,
+                        "reason": reason,
+                        "rounds": count,
+                        "since": since,
+                    }
+                runs = current
+                rounds_read += 1
+            report["rounds_read"][lane] = rounds_read
+            for row in runs.values():
+                deliberate_hold = row["action"] in STUCK_HOLD_ACTIONS or (
+                    row["reason"].startswith(STUCK_HOLD_REASONS)
+                )
+                if (
+                    row["rounds"] >= STUCK_MIN_ROUNDS
+                    and latest_stamp - row["since"] >= STUCK_MIN_SPAN_S
+                    and not deliberate_hold
+                ):
+                    report["rows"].append(
+                        {
+                            **row,
+                            "since": datetime.fromtimestamp(row["since"], timezone.utc).isoformat(),
+                        }
+                    )
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            errors.append(f"{lane}: {journal} unreadable ({type(exc).__name__}: {exc})")
+    report["rows"].sort(key=lambda row: (-row["rounds"], row["since"], row["lane"], row["target"]))
+    report["suspect"] = len(report["rows"])
+    if errors:
+        report.update(status="unknown", measurement="unmeasured: " + "; ".join(errors))
     return report
 
 
@@ -3455,21 +3463,22 @@ def format_gate_expiry(section: dict) -> list[str]:
 
 
 def format_stuck_lane_targets(section: dict) -> list[str]:
-    """Render measured drains, unknown inputs and up to five repeated decisions."""
-    lines = []
+    """Always name the drained state; partial measurements retain known suspects."""
+    lines = ["## Stuck lane targets (FYI only)", ""]
     if section["status"] != "ok":
-        lines.append(f"stuck lane targets: unknown — {section['measurement']}")
+        lines.append(f"  stuck lane targets: unknown — {section['measurement']}")
     if section["suspect"]:
-        lines.append(f"stuck lane targets: {section['suspect']} SUSPECT")
+        lines.append(f"  stuck lane targets: {section['suspect']} SUSPECT")
         for row in section["rows"][:5]:
+            since = row["since"]
             lines.append(
-                f"  {row['lane']} {row['target']}: {row['action']} — {row['reason']} "
-                f"({row['rounds']} rounds, since {row['since']})"
+                f"    {row['lane']} {row['target']}: {row['action']} — {row['reason']} "
+                f"({row['rounds']} rounds, since {since})"
             )
     elif section["status"] == "ok":
         counts = section["rounds_read"]
         lines.append(
-            f"stuck lane targets: none (opener {counts['opener-core']} rounds, "
+            f"  stuck lane targets: none (opener {counts['opener-core']} rounds, "
             f"closer {counts['closer-core']} rounds read)"
         )
     return lines + [""]
