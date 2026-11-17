@@ -1675,6 +1675,7 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
                 prompt,
                 mode,
                 cwd=cwd,
+                transport="local",
                 reasoning_effort=assignment.get("reasoning_effort"),
                 requested_model=assignment.get("requested_model"),
                 commits_in_worktree=True,
@@ -1914,6 +1915,9 @@ def _spawn(d: dict) -> int:
     logf = DISPATCH_LOG_DIR / f"{safe}.{d['agent']}.log"
     run_id = d.get("run_id") or f"{safe}-{d['agent']}-{time.time_ns()}"
     d["run_id"] = run_id
+    cursor_json_output = (
+        d["agent"] == "cursor" and _argv_flag_value(d.get("argv", []), "--output-format") == "json"
+    )
     started_ts = int(time.time())
     d["started_ts"] = started_ts
     if d.get("review_loop"):
@@ -2083,6 +2087,7 @@ def _spawn(d: dict) -> int:
         task_type=d.get("task_type"),
         log_file=str(logf),
         started_ts=started_ts,
+        cursor_json_output=cursor_json_output or None,
         selected_profile_id=d.get("selected_profile_id"),
         requested_model=d.get("requested_model"),
         policy_version=d.get("profile_policy_version"),
@@ -2123,6 +2128,7 @@ def _spawn(d: dict) -> int:
             "--workspace",
             str(d.get("cwd") or ""),
         ]
+        + (["--cursor-json-output"] if cursor_json_output else [])
     )
     # Marker BEFORE the python completion: the python step was SIGKILLed in the wild (audit F2).
     # Here the cause, found 2026-10-05, was the PATH lookup `step_python` replaces. The marker stays
@@ -5569,12 +5575,11 @@ def _selftest() -> None:
         assert (
             offload_argv[offload_argv.index("--output-format") + 1] == "stream-json"
         ), offload_argv
-        # And the long-running dispatch path is deliberately UNCHANGED: its output is parsed
-        # elsewhere, so reshaping it is a separate and riskier change.
+        # Local dispatch uses the single terminal result for cost reconciliation.
         local_argv = adapters.build_command(
             "cursor", "p", "composer", cwd=str(nongit), transport="local"
         )
-        assert local_argv[local_argv.index("--output-format") + 1] == "text", local_argv
+        assert local_argv[local_argv.index("--output-format") + 1] == "json", local_argv
         import ledger_reconcile
 
         dry_cost = ledger_reconcile.reconcile(adapters.LEDGER, dry_run=True)
