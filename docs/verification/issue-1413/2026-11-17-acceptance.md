@@ -118,3 +118,51 @@ Each GitHub tool returned `MCP tool call requires approval, but approval policy
 is never`; neither mutation occurred. PR #1421 was last observed open and ready
 for review (`draft=false`) at `f5a9ba0`. Publishing this evidence and updating the
 PR checkboxes require an authorized run.
+
+## Revalidation from `f5f91ed` (2026-11-17)
+
+Reviewed the six commits since `263b8ef`: the implementation, eligibility and
+window-boundary controls, strengthened named regression, and isolation of live
+weekly-review probes are already present. No existing test was deleted; the
+positive-success fixture remains unchanged, and the measured-zero control
+explicitly declares `usable_signal="success"`.
+
+Strengthened the named regression further to verify that declaring the success
+signal preserves situation, offered, invocation, acted-on and outcome counts.
+It also checks that reporting the declared ledger leaves its bytes unchanged.
+
+Using pytest 8.4.2 with `-m "not slow"`:
+
+- Named regression before changes: `1 passed in 0.85s`.
+- Full file after the new assertions: `35 passed in 6.44s`.
+- Deliberate unconditional `usable = success_count`: exit 1,
+  `assert 0 is None` at `tests/test_value_chain_monitor.py:296`,
+  `1 failed in 0.19s`.
+- Exact source-byte restoration, then the same named command: exit 0,
+  `1 passed in 0.13s`. The restored source SHA-256 matches the value above.
+
+The PR body already describes the earlier deliberate break and restoration.
+Reconciliation of its unchecked named-test acceptance item was attempted after
+the current passing run. The GitHub update returned
+`MCP tool call requires approval, but approval policy is never`. Publishing the
+current evidence comment and adding `needs-human` each returned the same error;
+none of those remote changes occurred.
+
+Staging the test change was attempted with
+`git add -- tests/test_value_chain_monitor.py`; it exited 128 because
+`.git/index.lock` is on a read-only filesystem. No commit was created.
+
+The final formatting gate passed with Black 26.10.1 on CPython 3.13.18:
+
+```text
+black --line-length 100 tests/test_value_chain_monitor.py
+1 file left unchanged.
+black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .
+712 files would be left unchanged.
+```
+
+As above, the temporary launcher added an event-loop wake timer to accommodate
+the sandbox's socket restrictions. The first full check was interrupted by its
+55-second timeout; the completed run above exited 0. `git diff --check` passed.
+PR #1421 was re-read after the failed remote mutations: it remains open and ready
+for review (`draft=false`) at `f5f91ed`.

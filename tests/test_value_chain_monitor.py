@@ -291,6 +291,7 @@ def test_generic_row_without_success_signal_reports_usable_unmeasured(tmp_path):
     section = monitor.report(now=NOW, path=path, env={}, inputs=inputs)
     row = section["rows"][0]
     assert row["situation_count"] == 1
+    assert row["offered"] == 0
     assert row["invocation_count"] == 1
     assert row["usable"] is None
     assert row["acted_on"] == 0
@@ -308,11 +309,16 @@ def test_generic_row_without_success_signal_reports_usable_unmeasured(tmp_path):
     records = capabilities.load(path, create=False)
     records[capability]["usable_signal"] = "success"
     capabilities.save(records, path)
+    declared_before = path.read_bytes()
     declared = monitor.report(now=NOW, path=path, env={}, inputs=inputs)
-    assert declared["rows"][0]["usable"] == 0
-    assert declared["rows"][0]["first_break"] == "unusable"
-    assert "usable_reason" not in declared["rows"][0]
+    declared_row = declared["rows"][0]
+    assert declared_row["usable"] == 0
+    assert declared_row["first_break"] == "unusable"
+    assert "usable_reason" not in declared_row
+    for field in ("situation_count", "offered", "invocation_count", "acted_on", "outcome"):
+        assert declared_row[field] == row[field]
     assert "usable 0;" in "\n".join(monitor.format_lines(declared))
+    assert path.read_bytes() == declared_before
 
 
 @pytest.mark.parametrize("success_count", [0, 1])
