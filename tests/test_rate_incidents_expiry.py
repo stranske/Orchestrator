@@ -124,6 +124,60 @@ def test_shed_cleanup_preserves_manual_marker_replacement(tmp_path, monkeypatch)
     assert original_shed_marker("codex")["state"] == "manual"
 
 
+def test_shed_cleanup_revalidates_recovery_with_build_snapshot(tmp_path, monkeypatch):
+    import pacing_usage
+
+    marker = _isolate_incident_paths(tmp_path, monkeypatch)
+    now = 1_750_000_000
+    monkeypatch.setattr(capacity.time, "time", lambda: now)
+    monkeypatch.setattr(rate_incidents.time, "time", lambda: now)
+    monkeypatch.setattr(pacing_usage, "RESETS_FILE", tmp_path / "absent-resets.json")
+    monkeypatch.setattr(pacing_usage, "CALIBRATION_FILE", tmp_path / "absent-calibration.json")
+    monkeypatch.setattr(
+        pacing_usage,
+        "polled_usage",
+        lambda *args, **kwargs: {"poll": {"fresh": False}},
+    )
+
+    recoverable = {
+        "used_fraction": 0.2,
+        "short_used_fraction": 0.2,
+        "ts": now - 10,
+        "short_ts": now - 10,
+        "poll": {"fresh": False},
+    }
+    exhausted = {
+        "used_fraction": 1.0,
+        "short_used_fraction": 0.2,
+        "ts": now - 5,
+        "short_ts": now - 5,
+    }
+    monkeypatch.setattr(pacing_usage, "usage", lambda *args, **kwargs: exhausted)
+
+    same_expiry = now + 3600
+    rate_incidents.SHED_DIR.mkdir(parents=True, exist_ok=True)
+    marker.write_text(
+        json.dumps(
+            {
+                "created_at": now - 100,
+                "expires_at": same_expiry,
+                "category": "quota",
+                "incident_id": "before-build-snapshot",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    token = capacity._BUILD_PACING_USAGE.set({"codex": recoverable})
+    try:
+        assert capacity._shed("codex") is True
+        assert marker.exists()
+        saved = json.loads(marker.read_text())
+        assert saved["incident_id"] == "before-build-snapshot"
+    finally:
+        capacity._BUILD_PACING_USAGE.reset(token)
+
+
 def test_shed_cleanup_revalidates_sample_recovery_and_unchanged_expiry_replacement(
     tmp_path, monkeypatch
 ):
