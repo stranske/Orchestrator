@@ -13,6 +13,7 @@ import capability_admission
 import capability_advisor
 import feedback
 import switch_review
+import triage_shadow
 import value_chain_monitor as monitor
 
 NOW = 1791183600
@@ -37,6 +38,9 @@ def isolated_adversarial_population(monkeypatch):
         "adversarial_shape_population",
         lambda **kw: {"status": "unknown", "reason": "unit-test fixture"},
     )
+    # Weekly review also reads the live triage journal and launches opener health.
+    monkeypatch.setattr(triage_shadow, "summary_line", lambda: "")
+    monkeypatch.setattr(switch_review, "fleet_delivery_measures", lambda **kw: {})
 
 
 def ledger(tmp_path, names=("role-prompt",)):
