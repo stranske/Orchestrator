@@ -258,6 +258,7 @@ def test_comparative_rank_reads_export_once_per_process_and_handles_bad_files(
 def test_comparative_export_respects_transport(tmp_path, monkeypatch, transport):
     _write_export(tmp_path)
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ORCH_LOCAL_COMPARATIVE", "1")
     picked = router.select_agent(
         "review",
         {"agents": {"cursor": {"state": "ok"}, "codex": {"state": "ok"}}},

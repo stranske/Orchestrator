@@ -53,3 +53,14 @@ The five existing review findings are addressed by: once-per-path diagnostics;
 local-only transport gating; matched-fallback attribution; resolved ambient-path
 isolation; and enabled invalid-rank validation tests. Current-head CI and the
 post-push review remain authoritative for delivery. Full suite was not run locally.
+
+Post-push review: the transport regression now explicitly enables comparative
+routing, so an inherited ORCH_LOCAL_COMPARATIVE=0 cannot defeat its local case.
+With that inherited flag set, the acceptance module still passes all 22 cases.
+
+Follow-up outside this continuation: `_DEFAULT_FEEDBACK_DB` captures the database
+selected at router import. A startup-only ORCH_FEEDBACK_DB override is therefore
+not distinguished by the existing in-process DB_PATH-change fallback. Such a
+caller must explicitly set ORCH_STATE_DIR (or non-default HANDOFF_DIR) to choose
+its export directory. Changing that production resolver contract is deferred;
+the fixture isolates whichever ambient path the existing resolver selects.
