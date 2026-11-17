@@ -1177,8 +1177,9 @@ def test_argon_successor_tiers_reach_matching_offload_profiles(monkeypatch, tmp_
         ("runtime_ac", "full"),
     ),
 )
-def test_router_automatic_gemini_profile_matches_route_tier(task_type, mode):
+def test_router_automatic_gemini_profile_matches_route_tier(task_type, mode, monkeypatch):
     """Profile priors must not override the route's Gemini spend tier."""
+    _fake_catalog(monkeypatch, list(adapters.MODEL_TIERS["gemini"].values()))
     profiles = execution_profiles.profiles_for_agent("gemini")
     cap = {
         "agents": {"gemini": {"state": "ok"}},
