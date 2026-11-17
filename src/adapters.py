@@ -523,6 +523,58 @@ def observed_model_from_stream(text: str) -> dict[str, Any]:
     return out
 
 
+CURSOR_CLI_COST_SOURCE = "cursor-cli-json"
+CURSOR_CLI_NO_USAGE = "unmeasured: cursor CLI result has no usage"
+CURSOR_CLI_UNKNOWN_PRICE = "unmeasured: cursor CLI result model has no known price"
+CURSOR_CLI_COST_SOURCES = (CURSOR_CLI_COST_SOURCE, CURSOR_CLI_NO_USAGE, CURSOR_CLI_UNKNOWN_PRICE)
+
+
+def cursor_json_result(lines: Iterable[str]) -> dict[str, Any] | None:
+    """Find the single stdout object emitted by Cursor's JSON print mode in a lane log."""
+    for line in lines:
+        if not line.lstrip().startswith("{"):
+            continue
+        try:
+            result = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if (
+            isinstance(result, dict)
+            and result.get("type") == "result"
+            and isinstance(result.get("result"), str)
+        ):
+            return result
+    return None
+
+
+def cursor_result_cost(result: dict[str, Any]) -> tuple[int | None, int | None, float | None, str]:
+    """Price complete token counts using the model named in the CLI result."""
+    usage = result.get("usage")
+    if not isinstance(usage, dict):
+        return None, None, None, CURSOR_CLI_NO_USAGE
+    tokens_in = usage.get("input_tokens", usage.get("inputTokens", usage.get("prompt_tokens")))
+    tokens_out = usage.get(
+        "output_tokens", usage.get("outputTokens", usage.get("completion_tokens"))
+    )
+    if (
+        type(tokens_in) is not int
+        or type(tokens_out) is not int
+        or not 0 <= tokens_in < 2**63
+        or not 0 <= tokens_out < 2**63
+    ):
+        return None, None, None, CURSOR_CLI_NO_USAGE
+    model = result.get("model")
+    if not isinstance(model, str) or model.strip().lower() not in {
+        "composer-2.5",
+        "composer 2.5",
+        "composer pro 2.5",
+    }:
+        return tokens_in, tokens_out, None, CURSOR_CLI_UNKNOWN_PRICE
+    # Composer 2.5 list price, in USD per million tokens (capacity.py).
+    cost_usd = (tokens_in * 0.50 + tokens_out * 2.50) / 1_000_000
+    return tokens_in, tokens_out, cost_usd, CURSOR_CLI_COST_SOURCE
+
+
 parse_agy_models = parse_model_catalog  # back-compat alias
 
 
@@ -2300,9 +2352,9 @@ def build_command(
         # runs in the same directory: all 24 cursor offloads shared `/private/tmp`, so no session
         # was attributable to any of them.
         #
-        # Scoped to `transport="offload"` on purpose. The long-running dispatch path writes a log
-        # that other code parses, and reshaping that output is a separate, riskier change.
-        cursor_format = "stream-json" if transport == "offload" else "text"
+        # Lane dispatches retain the terminal JSON for cost reconciliation. Other callers still
+        # default to text, including the experiment runner.
+        cursor_format = {"offload": "stream-json", "local": "json"}.get(transport or "", "text")
         cmd = [
             "cursor-agent",
             "-p",

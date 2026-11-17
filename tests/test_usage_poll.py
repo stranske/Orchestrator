@@ -320,8 +320,13 @@ def test_no_guessed_claude_boundary(evidence):
 @pytest.mark.parametrize("pool", ["codex", "claude"])
 def test_poll_short_windows_clear_only_post_incident(evidence, monkeypatch, pool):
     monkeypatch.setattr(capacity.time, "time", lambda: NOW)
-    monkeypatch.setattr(capacity, "SHED_DIR", evidence)
-    marker = evidence / pool
+    shed_dir = evidence / "capacity-shed"
+    shed_dir.mkdir()
+    monkeypatch.setattr(capacity, "SHED_DIR", shed_dir)
+    monkeypatch.setattr(rate_incidents, "HANDOFF", evidence)
+    monkeypatch.setattr(rate_incidents, "SHED_DIR", shed_dir)
+    monkeypatch.setattr(rate_incidents, "LOCK_FILE", evidence / "incidents.lock")
+    marker = shed_dir / pool
     marker.write_text(json.dumps(dict(created_at=NOW - 1, expires_at=NOW + 3600, category="quota")))
     assert capacity._shed(pool) is False
     # A newer desktop/rollout weekly reading must not freshen older short-window data.
