@@ -464,6 +464,29 @@ def test_drained_unmeasured_and_empty_each_say_something_different(tmp_path):
     assert "NOT MEASURED" in texts["missing"] and "NOT MEASURED" in texts["broken"]
     assert "NOT MEASURED" not in texts["drained"] and "NOT MEASURED" not in texts["none"]
     assert len(set(texts.values())) == 4, "two different states rendered the same words"
+    for section in (missing, broken):
+        assert section["retired_but_invoked_count"] is None
+        assert section["retired_but_invoked"] == []
+        assert section["retired_but_invoked_measurement"] == "unmeasured"
+        assert "retired_but_invoked: unmeasured" in "\n".join(
+            switch_review.format_gate_expiry(section)
+        )
+
+
+def test_clean_retirement_is_a_measured_zero_and_invocation_is_not_expiry_limited(tmp_path):
+    ledger = _ledger(tmp_path, {"old": _expired("old", 90, "owner decision")})
+    clean = switch_review.gate_expiry(now=NOW, path=ledger)
+    assert clean["retired_but_invoked_count"] == 0
+    assert clean["retired_but_invoked_measurement"] == "measured"
+    assert "retired_but_invoked: 0" in "\n".join(switch_review.format_gate_expiry(clean))
+    capabilities.heartbeat("old", "invocation", timestamp=NOW - DAY, ref="run:late", path=ledger)
+    before = ledger.read_bytes()
+    invoked = switch_review.gate_expiry(now=NOW, path=ledger)
+    assert invoked["retired_but_invoked_count"] == 1
+    assert invoked["retired_but_invoked"][0]["capability_id"] == "old"
+    assert invoked["lapsed"] == [], "decisions and old retirements stay out of the expiry notice"
+    assert "Nothing due" not in _report(invoked)
+    assert ledger.read_bytes() == before
 
 
 def _report(gate_expiry: dict | None) -> str:

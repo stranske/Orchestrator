@@ -18,6 +18,7 @@ import capabilities
 import capability_advisor
 import capability_firing_monitor as monitor
 import capability_propensity as cp
+import switch_review
 
 NOW = 1_800_000_000
 CAP = "capability-firing-monitor"
@@ -81,6 +82,8 @@ def test_a_superseded_row_that_went_quiet_is_not_a_regression(tmp_path, monkeypa
 
 def test_the_whole_ledger_is_still_accounted_for(tmp_path, monkeypatch):
     rep = _review(tmp_path, monkeypatch)
+    assert rep["retired_but_invoked_count"] == 0
+    assert rep["retired_but_invoked_measurement"] == "measured"
     mine = set(LIVE) | set(NOT_LIVE)
     rows = {r["capability_id"]: r for r in rep["rows"] if r["capability_id"] in mine}
     assert set(rows) == mine
@@ -121,6 +124,135 @@ def test_the_report_declares_its_population_under_the_graders_key(tmp_path, monk
         "held_off_kinds": list(monitor.HOLD_KINDS),
         "held_off_excluded_from": list(monitor.SILENCE_FINDINGS),
     }
+
+
+def test_invocation_after_retirement_is_named(tmp_path, monkeypatch):
+    """Only execution after an unrenewed retirement belongs in this separate diagnostic."""
+    monkeypatch.setattr(monitor, "HISTORY", tmp_path / "history.json")
+    monkeypatch.delenv("ORCH_CAPABILITY_HEARTBEATS", raising=False)
+    monkeypatch.setattr(switch_review, "_acting_index", lambda *_: None)
+    retirement = {
+        "type": "transition",
+        "from": "wired",
+        "to": "retired",
+        "timestamp": NOW - 100,
+        "reason": "owner retired this capability",
+    }
+    invocation = {
+        "type": "invocation",
+        "timestamp": NOW - 50,
+        "ref": "run:production",
+        "metadata": {"source": "production"},
+    }
+    histories = {
+        "retired-running": [retirement],
+        "silent": [retirement],
+        "fixture": [retirement, {**invocation, "metadata": {"source": "fixture"}}],
+        "completion-only": [retirement, {**invocation, "type": "success"}],
+        "failure-only": [retirement, {**invocation, "type": "failure"}],
+        "outcome-only": [retirement, {**invocation, "type": "outcome"}],
+        "pre-retirement-completion": [
+            {**invocation, "timestamp": NOW - 200},
+            retirement,
+            {**invocation, "type": "success"},
+        ],
+        "renewed": [retirement, invocation, {"type": "renewed", "timestamp": NOW - 10}],
+        "live-again": [
+            retirement,
+            invocation,
+            {"type": "transition", "to": "observed", "timestamp": NOW - 10},
+        ],
+        "retired-again-clean": [
+            retirement,
+            invocation,
+            {"type": "renewed", "timestamp": NOW - 20},
+            {**retirement, "timestamp": NOW - 10},
+        ],
+        "no-transition": [invocation],
+        "backdated": [retirement, {**invocation, "timestamp": NOW - 200}],
+    }
+    rows = {}
+    for cap_id, history in histories.items():
+        row = capabilities._blank_capability(cap_id)
+        row.update(
+            status="retired",
+            event_history=history,
+            kill_switch=f"disable {cap_id}",
+            trigger_cadence="daily",
+            # A summary timestamp without an invocation event must not manufacture evidence.
+            last_invocation=NOW - 50,
+        )
+        rows[cap_id] = row
+    ledger = tmp_path / "capabilities.json"
+    capabilities.save(rows, ledger)
+    # Exercise the real heartbeat writer: retired execution is observed, never blocked here.
+    capabilities.heartbeat(
+        "retired-running",
+        "invocation",
+        timestamp=invocation["timestamp"],
+        ref=invocation["ref"],
+        metadata=invocation["metadata"],
+        path=ledger,
+    )
+    before = ledger.read_bytes()
+    rep = monitor.review(now=NOW, path=ledger)
+    expiry = switch_review.gate_expiry(now=NOW, path=ledger)
+    expected = {
+        "capability_id": "retired-running",
+        "retirement": retirement,
+        "invocations": [invocation],
+        "kill_switch": "disable retired-running",
+    }
+    for report in (rep, expiry):
+        assert report["retired_but_invoked_count"] == 1
+        assert report["retired_but_invoked"] == [expected]
+        assert report["retired_but_invoked_measurement"] == "measured"
+    assert rep["not_monitored"] == {"retired": sorted(rows)}
+    assert rep["total"] == 0 and rep["ledger_total"] == len(rows)
+    assert rep[capabilities.FINDING_POPULATION_KEY] == monitor.finding_population()
+    for key in (*monitor.SILENCE_FINDINGS, "no_cadence_declared", "not_tick_observable"):
+        assert rep[key] == []
+    for text in (monitor.format_report(rep), "\n".join(switch_review.format_gate_expiry(expiry))):
+        assert "retired_but_invoked: 1" in text
+        assert "disable retired-running" in text
+        assert "run:production" in text and retirement["reason"] in text
+    assert ledger.read_bytes() == before, "reports must not change the ledger"
+
+
+def test_retirement_predicate_is_read_only_and_uses_latest_retirement():
+    retirement = {"type": "transition", "to": "retired", "timestamp": NOW - 100}
+    invocation = {"type": "invocation", "timestamp": NOW - 100}
+    cap = {"status": "retired", "event_history": [retirement, invocation]}
+    before = json.dumps(cap)
+    assert capabilities.invoked_after_retirement(cap)["invocations"] == [invocation]
+    assert json.dumps(cap) == before
+    cap["event_history"] += [
+        {"type": "renewed", "timestamp": NOW - 80},
+        {**retirement, "timestamp": NOW - 50},
+        {**invocation, "timestamp": NOW - 25},
+    ]
+    found = capabilities.invoked_after_retirement(cap)
+    assert found["retirement"]["timestamp"] == NOW - 50
+    assert found["invocations"] == [{**invocation, "timestamp": NOW - 25}]
+    cap["status"] = "observed"
+    assert capabilities.invoked_after_retirement(cap) is None
+
+
+def test_retired_invocation_measurement_requires_a_readable_ledger(tmp_path, monkeypatch):
+    monkeypatch.setattr(monitor, "HISTORY", tmp_path / "history.json")
+    monkeypatch.delenv("ORCH_CAPABILITY_HEARTBEATS", raising=False)
+    for index, contents in enumerate([None, "{not json", '{"schema_version": -1}']):
+        ledger = tmp_path / f"capabilities-{index}.json"
+        if contents is not None:
+            ledger.write_text(contents)
+        rep = monitor.review(now=NOW, path=ledger)
+        assert rep["retired_but_invoked_count"] is None
+        assert rep["retired_but_invoked"] == []
+        assert "unmeasured" in rep["retired_but_invoked_measurement"]
+        assert "retired_but_invoked: unmeasured" in monitor.format_report(rep)
+        assert ledger.exists() is (contents is not None)
+        if contents is not None:
+            assert ledger.read_text() == contents
 
 
 def _exempt_observer_eval(rep, *, report_changed):

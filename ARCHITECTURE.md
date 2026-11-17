@@ -1841,6 +1841,14 @@ lists already is graded. The monitor's declared population names the hold kinds 
 silence findings they exclude a row from, so this edit re-baselined the grader, while a hold declared
 or lifted later moves a graded finding exactly as a retirement does.
 
+**Retired execution is a separate diagnostic.** `capabilities.invoked_after_retirement` reads the
+latest retirement with no later renewal or live transition and names subsequent non-fixture
+invocation events. The firing monitor and switch review's gate-expiry notice expose
+`retired_but_invoked` with retirement/invocation evidence and the declared kill switch, independently
+of the expiry notice window. Missing or unreadable ledgers are unmeasured, never a measured zero.
+This read-only diagnostic leaves live finding populations, silence findings, `not_monitored`,
+and heartbeat emission unchanged.
+
 **A silence the row's own history contradicts is named as one (2026-10-02).** Only an `invocation`
 event moves `last_invocation`, and two producers broke the reading "silent means it did not run": a
 heartbeat that records a run's `success` or `failure` and no invocation, and a consult trial

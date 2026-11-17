@@ -396,7 +396,17 @@ def review(
     # tick, the invocation heartbeat above (the kill switch stops the history write). `load_declared`
     # reconciles an in-memory copy and writes nothing. It seeds and expires nothing, even in memory:
     # until a writer does, the ledger is judged as it is.
-    ledger = capabilities.load_declared(path or capabilities.REG)
+    ledger_path = pathlib.Path(path or capabilities.REG)
+    retired_measurement = "measured"
+    try:
+        ledger = capabilities.load_declared(ledger_path)
+        if not ledger and not ledger_path.exists():
+            raise FileNotFoundError(f"no capability ledger at {ledger_path}")
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
+        ledger = {}
+        retired_measurement = (
+            f"unmeasured: capability ledger unreadable ({type(exc).__name__}: {exc})"
+        )
     history = _load_history()
     previous = {row["capability_id"]: row for row in (history[-1]["rows"] if history else [])}
     # ONE READ of the registry's retirements for the whole run. A malformed declaration holds
@@ -415,8 +425,12 @@ def review(
     found: dict[str, list[Any]] = {key: [] for key in SILENCE_FINDINGS}
     evidence: dict[str, dict[str, Any]] = {}
     not_monitored: dict[str, list[str]] = {}
+    retired_but_invoked: list[dict[str, Any]] = []
     for cap_id in sorted(ledger):
         cap = ledger[cap_id]
+        retirement = capabilities.invoked_after_retirement(cap)
+        if retirement:
+            retired_but_invoked.append({"capability_id": cap_id, **retirement})
         last = int(cap.get("last_invocation") or 0)
         silent_days = None if not last else round((now - last) / 86400, 1)
         observer = capabilities.is_observer(cap)
@@ -526,6 +540,11 @@ def review(
         "ledger_total": len(rows),
         "not_monitored": {status: sorted(ids) for status, ids in sorted(not_monitored.items())},
         "not_monitored_count": sum(len(ids) for ids in not_monitored.values()),
+        "retired_but_invoked": retired_but_invoked,
+        "retired_but_invoked_count": (
+            len(retired_but_invoked) if retired_measurement == "measured" else None
+        ),
+        "retired_but_invoked_measurement": retired_measurement,
         capabilities.FINDING_POPULATION_KEY: finding_population(),
         "fired_ever": sum(1 for r in live if r["ever_fired"]),
         "never_fired": found["never_fired"],
@@ -698,6 +717,24 @@ def format_report(rep: dict) -> str:
             "establishes the baseline"
         )
     out.append("")
+    measurement = rep.get("retired_but_invoked_measurement", "measured")
+    if measurement != "measured":
+        out += [f"  retired_but_invoked: {measurement}", ""]
+    else:
+        retired = rep.get("retired_but_invoked", [])
+        out.append(f"  retired_but_invoked: {len(retired)}")
+        for row in retired:
+            retirement = row["retirement"]
+            out.append(
+                f"    {row['capability_id']}  retired at {retirement['timestamp']} "
+                f"({retirement.get('reason') or 'no reason recorded'}); "
+                f"kill switch: {row['kill_switch'] or 'not declared'}"
+            )
+            for event in row["invocations"]:
+                out.append(
+                    f"        invocation at {event['timestamp']}  ref: {event.get('ref') or 'none'}"
+                )
+        out.append("")
     evidence = rep.get("silence_evidence") or {}
     shown: set[str] = set()
 
