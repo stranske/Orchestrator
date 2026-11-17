@@ -130,6 +130,30 @@ def test_fresh_gemini_poll_enters_the_comparative_solve(
     assert result["lambda"]["gemini"] is not None
     assert isinstance(result["lambda"]["gemini"], float)
 
+    # Historical poll rows in gemini-usage.ndjson feed short-window EWMA burn when present.
+    resets_at = NOW + 3 * 86400
+    ndjson_rows = [
+        {
+            "ts": NOW - 7200,
+            "source": "agy:/usage",
+            "weekly": {"id": "gemini-weekly", "used_percent": 50, "resets_at": resets_at},
+            "five_hour": {"id": "gemini-5h", "used_percent": 10, "resets_at": NOW + 3600},
+        },
+        {
+            "ts": NOW - 3600,
+            "source": "agy:/usage",
+            "weekly": {"id": "gemini-weekly", "used_percent": 54, "resets_at": resets_at},
+            "five_hour": {"id": "gemini-5h", "used_percent": 12, "resets_at": NOW + 3600},
+        },
+    ]
+    (poll_dir / "gemini-usage.ndjson").write_text(
+        "\n".join(json.dumps(r) for r in ndjson_rows) + "\n", encoding="utf-8"
+    )
+    with_history = comparative.measure(db, snapshot, now=NOW)
+    assert with_history["status"] == "optimal"
+    assert "gemini" not in with_history["excluded"]
+    assert isinstance(with_history["lambda"]["gemini"], float)
+
 
 def test_stale_or_missing_poll_keeps_todays_exclusion(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -200,12 +224,26 @@ def test_polled_usage_overrides_the_soft_estimate(
 
     # Same thresholds as Claude: >= 80% warns, >= 100% sheds.
     _write_gemini_poll(poll_dir, ts=NOW - 60, weekly_percent=85, five_hour_percent=15)
-    warn_state, warn_reason, _ = capacity.compute("gemini", capacity.AGENTS["gemini"], None)
+    warn_state, warn_reason, warn_meta = capacity.compute("gemini", capacity.AGENTS["gemini"], None)
     assert warn_state == capacity.WARN, (warn_state, warn_reason)
+    assert warn_meta["policy"] == "weekly-polled-warn"
+
+    _write_gemini_poll(poll_dir, ts=NOW - 60, weekly_percent=58, five_hour_percent=85)
+    window_warn_state, _, window_warn_meta = capacity.compute(
+        "gemini", capacity.AGENTS["gemini"], None
+    )
+    assert window_warn_state == capacity.WARN
+    assert window_warn_meta["policy"] == "window-polled-warn"
 
     _write_gemini_poll(poll_dir, ts=NOW - 60, weekly_percent=58, five_hour_percent=100)
-    shed_state, shed_reason, _ = capacity.compute("gemini", capacity.AGENTS["gemini"], None)
+    shed_state, shed_reason, shed_meta = capacity.compute("gemini", capacity.AGENTS["gemini"], None)
     assert shed_state == capacity.SHED, (shed_state, shed_reason)
+    assert shed_meta["policy"] == "window-polled-cap"
+
+    _write_gemini_poll(poll_dir, ts=NOW - 60, weekly_percent=100, five_hour_percent=15)
+    wk_shed_state, _, wk_shed_meta = capacity.compute("gemini", capacity.AGENTS["gemini"], None)
+    assert wk_shed_state == capacity.SHED
+    assert wk_shed_meta["policy"] == "weekly-polled-cap"
 
     # Stale poll falls back to the soft unit estimate (704 / 280 units -> warn).
     _write_gemini_poll(

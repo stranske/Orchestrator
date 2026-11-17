@@ -277,15 +277,30 @@ def _polled_pacing(agent: str, now: float, location: str) -> tuple[dict | None, 
     end = _timestamp(polled.get("period_end"))
     if end is None:
         return None, location
+    start = end - pacing_model.PERIOD_SECONDS
+    source = str(polled.get("source") or f"{agent}-poll")
+    history = [
+        pacing_usage.polled_usage(agent, float(now), data=item)
+        for item in pacing_usage.read_poll_tail(pacing_usage.POLL_DIR / f"{agent}-usage.ndjson")
+    ] + [polled]
+    samples = [
+        dict(ts=ts, used_fraction=item["used_fraction"], source=source)
+        for item in history
+        if item["poll"].get("valid")
+        and _timestamp(item.get("period_end")) == end
+        and (ts := _timestamp(item.get("ts"))) is not None
+        and start <= ts <= float(now)
+        and _number(item.get("used_fraction"))
+    ]
     row = pacing_model.evaluate(
         agent,
         now=float(now),
         used_fraction=polled.get("used_fraction"),
-        period_start=end - pacing_model.PERIOD_SECONDS,
+        period_start=start,
         period_end=end,
         resets=None,
-        samples=[],
-        source=str(polled.get("source") or f"{agent}-poll"),
+        samples=samples,
+        source=source,
         source_ts=_timestamp(polled.get("ts")),
     )
     return row, f"poll[{agent}]"
