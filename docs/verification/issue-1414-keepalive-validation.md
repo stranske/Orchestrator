@@ -242,3 +242,47 @@ and the `needs-human` label with `MCP tool call requires approval, but approval
 policy is never`. The source/test change and these results remain local, and
 remote task checkboxes remain unchanged. A writable Git mount and an approved
 GitHub mutation path are still needed to commit and publish the verified work.
+
+## Post-cancellation and legacy heartbeat controls — 2026-11-17
+
+Extended the named acceptance test without changing collection counts. Production
+invocations after a renewal or live transition remain excluded until another
+retirement. A heartbeat with no source metadata is retained beside explicitly
+production invocations in both reports, with the same capability count, kill
+switch and retirement evidence. Every report still preserves the ledger bytes.
+
+Using Python 3.14.10 and official upstream pytest 9.0.2 in
+`/tmp/issue-1414-test-tools`, with `ORCH_STATE_DIR` in `/tmp`:
+
+- [x] Named test: `python3 -m pytest tests/test_firing_monitor_live_rows.py::test_invocation_after_retirement_is_named -q -m "not slow"` — **1 passed in 0.15s**.
+- [x] Whole file: `python3 -m pytest tests/test_firing_monitor_live_rows.py -q -m "not slow"` — **25 passed in 0.25s**.
+- [x] Gate-expiry and the four related firing-monitor regression files listed above — **79 passed in 2.46s**.
+- [ ] Publish the deliberate-break/restoration evidence in the PR.
+- [ ] Commit the verified test change on the checked-out branch.
+
+The deliberate break inserted an unconditional `return None` immediately after
+the helper docstring. The named test failed with **`assert 0 == 1`** at
+`assert report["retired_but_invoked_count"] == 1` (**1 failed in 0.19s**, exit 1).
+A `finally` block restored the original source bytes; the identical named command
+then passed (**1 passed in 0.15s**, exit 0). Both complete-file regression commands
+above ran after restoration. `git diff -- src/capabilities.py` is empty.
+
+Black 26.10.1 formatted the changed test file at line length 100 and left it
+unchanged. The required repository-wide formatting check passed (exit 0):
+
+```text
+black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .
+715 files would be left unchanged.
+```
+
+The temporary CLI launcher routes all discovered files through Black's normal
+single-file checker because its background worker reporting stalls in this
+sandbox. Formatting rules and AST-equivalence checks remain enabled; no
+repository dependency or formatter configuration changed. `git diff --check`
+also passed.
+
+Staging failed with `Unable to create .git/index.lock: Read-only file system`.
+Automatic approval review rejected the PR evidence comment, the `needs-human`
+label, and the verified checkbox update: `MCP tool call requires approval, but
+approval policy is never`. No commit was possible and remote checkboxes remain
+unchanged. PR 1426 was verified open and ready (`draft=false`).

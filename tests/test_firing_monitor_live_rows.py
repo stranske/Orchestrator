@@ -224,11 +224,17 @@ def test_invocation_after_retirement_is_named(tmp_path, monkeypatch):
             retirement,
             {**invocation, "type": "success"},
         ],
-        "renewed": [retirement, invocation, {"type": "renewed", "timestamp": NOW - 10}],
+        "renewed": [
+            retirement,
+            invocation,
+            {"type": "renewed", "timestamp": NOW - 10},
+            {**invocation, "timestamp": NOW - 5, "ref": "run:after-renewal"},
+        ],
         "live-again": [
             retirement,
             invocation,
             {"type": "transition", "to": "observed", "timestamp": NOW - 10},
+            {**invocation, "timestamp": NOW - 5, "ref": "run:after-live-transition"},
         ],
         "retired-again-clean": [
             retirement,
@@ -344,6 +350,22 @@ def test_invocation_after_retirement_is_named(tmp_path, monkeypatch):
         assert report["retired_but_invoked_count"] == 1, "count capabilities, not invocations"
         assert report["retired_but_invoked"] == [
             {**expected, "retirement": new_retirement, "invocations": new_invocations}
+        ]
+
+    # Legacy producers omit source metadata. Only the fixture source is excluded, so
+    # their real heartbeat must be retained beside the explicitly production events.
+    capabilities.heartbeat(
+        "retired-running", "invocation", timestamp=NOW + 7, ref="run:legacy", path=ledger
+    )
+    legacy_invocation = {"type": "invocation", "timestamp": NOW + 7, "ref": "run:legacy"}
+    for report in reports_at(NOW + 7):
+        assert report["retired_but_invoked_count"] == 1
+        assert report["retired_but_invoked"] == [
+            {
+                **expected,
+                "retirement": new_retirement,
+                "invocations": [*new_invocations, legacy_invocation],
+            }
         ]
 
 
