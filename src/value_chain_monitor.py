@@ -1241,6 +1241,10 @@ def report(
             if not e.get("metadata", {}).get("experiment_id")
             and not str(e.get("ref") or "").startswith("advice:")
         ]
+        success_count = sum(e.get("type") == "success" for e in production)
+        # A legacy success proves usability, but an empty count needs a declared signal.
+        usable = success_count if cap.get("usable_signal") == "success" or success_count else None
+        usable_reason = "no usable_signal='success' declaration or eligible success heartbeats"
         offers = sum(
             e.get("type") == "match"
             and e.get("metadata", {}).get("source") == "capability_advisor"
@@ -1265,7 +1269,7 @@ def report(
             "situation_count": situation_count(cid, row_inputs),
             "offered": offers,
             "invocation_count": sum(e.get("type") == "invocation" for e in production),
-            "usable": sum(e.get("type") == "success" for e in production),
+            "usable": usable,
             # Every class set aside from `outcome` has its own count beside it.
             **outcome_counts(cid, own_edges),
         }
@@ -1273,6 +1277,7 @@ def report(
             rounds = inputs.get("closer_core") or {}
             counts["invocation_count"] = rounds.get("invocation_count")
             counts["usable"] = rounds.get("usable")
+            usable_reason = "closer-core round population unavailable"
             counts.update(
                 inputs.get("closer_core_outcomes")
                 or {
@@ -1284,6 +1289,7 @@ def report(
             loop = inputs.get("local_loop")
             counts["invocation_count"] = None if loop is None else len(loop["invoked"])
             counts["usable"] = None if loop is None else len(loop["done"])
+            usable_reason = "local-loop state unread"
             counts.update(
                 inputs.get("local_loop_outcomes")
                 or {
@@ -1295,6 +1301,7 @@ def report(
             opener = inputs.get("opener_core")
             counts["invocation_count"] = None if opener is None else len(opener["invoked"])
             counts["usable"] = None if opener is None else len(opener["usable"])
+            usable_reason = "opener-core round journal unread"
             counts.update(
                 inputs.get("opener_core_outcomes")
                 or {
@@ -1308,6 +1315,7 @@ def report(
             sync = inputs.get("sync_core")
             fields = ("invocation_count", "usable", "acted_on", *CLASS_FIELDS.values())
             counts.update({field: None if sync is None else sync.get(field, 0) for field in fields})
+            usable_reason = "sync-core round journal unread"
             counts["outcome_success"] = None if sync is None else sync["outcome_success"]
             counts["success_scope"] = "acted-on sync PRs merged with blobs verified on main" + (
                 ""
@@ -1315,8 +1323,9 @@ def report(
                 else f"; +{sync['delivered_unacted']} merged with no sync-core action, not counted"
             )
         if cid == feedback.RELAY_PACING_CAPABILITY:
-            usable = _relay_usable(inputs, now - WINDOW_DAYS * 86400, now)
-            counts["usable"] = None if usable is None else counts["usable"] + usable
+            relay_usable = _relay_usable(inputs, now - WINDOW_DAYS * 86400, now)
+            counts["usable"] = None if relay_usable is None else success_count + relay_usable
+            usable_reason = "relay decision events unavailable"
             # Relay exit=0 and durable-delivery edges both land in outcome_success;
             # the scope must name both so a mixed row is not misread as exit=0 alone.
             counts["success_scope"] = (
@@ -1336,6 +1345,8 @@ def report(
                 },
                 now=now,
             )
+        if counts["usable"] is None:
+            counts["usable_reason"] = usable_reason
         dependencies = set(INPUT_FLAGS.get(cid, ())) | set(cap.get("input_flags", []))
 
         # Declared defaults can be grouped by caller (module/orchestrate/commands).
@@ -1379,6 +1390,10 @@ def format_lines(section: dict) -> list[str]:
         )
         first = row["first_break"] or "unmeasured"
         success_scope = f" ({row['success_scope']})" if row.get("success_scope") else ""
+        usable = row["usable"]
+        if usable is None:
+            reason = row.get("usable_reason")
+            usable = f"unmeasured ({reason})" if reason else "unmeasured"
 
         def aside(step: str) -> str:
             parts = [
@@ -1387,7 +1402,7 @@ def format_lines(section: dict) -> list[str]:
             return f" ({', '.join(parts)})" if parts else ""
 
         lines.append(
-            f"  {row['capability']}: {demand}; invocation {row['invocation_count']}; usable {row['usable']}; "
+            f"  {row['capability']}: {demand}; invocation {row['invocation_count']}; usable {usable}; "
             f"acted_on {row['acted_on']}{aside('acted_on')}; "
             f"outcome {row['outcome']}{aside('outcome')}; success {row.get('outcome_success')}{success_scope}; "
             f"first_break {first}"
