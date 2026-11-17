@@ -286,3 +286,46 @@ Automatic approval review rejected the PR evidence comment, the `needs-human`
 label, and the verified checkbox update: `MCP tool call requires approval, but
 approval policy is never`. No commit was possible and remote checkboxes remain
 unchanged. PR 1426 was verified open and ready (`draft=false`).
+
+## Same-second heartbeat acceptance check — 2026-11-17
+
+The named acceptance test now writes its production heartbeat at the retirement's
+timestamp and adds a control whose production invocation precedes retirement at
+that same timestamp. Both report readers must use append order to distinguish
+them, preserving the exact evidence and kill switch. Collection counts are unchanged.
+
+With Python 3.14.10 and pytest 9.0.2 from official tagged upstream sources in
+`/tmp/issue-1414-test-tools`, all pytest commands select `-m "not slow"`:
+
+- [x] Named test after exact source restoration: **1 passed in 0.25s**.
+- [x] `python3 -m pytest tests/test_firing_monitor_live_rows.py -q -m "not slow"`:
+  **25 passed in 0.22s**.
+- [x] Gate-expiry and the four related firing-monitor regression files listed above:
+  **79 passed in 2.51s**.
+- [x] Deliberate break/restoration verified locally: unconditional `return None`
+  caused **1 failed in 0.20s**, with **`assert 0 == 1`** at the retired count.
+  Changing the timestamp comparison from `>=` to `>` also caused **1 failed in
+  0.22s** at the same assertion, proving the added boundary case detects a regression.
+  Each mutation was restored in a `finally` block and compared against the original
+  bytes. The restored named command passed; `git diff -- src/capabilities.py` is empty.
+- [ ] Publish this evidence in PR 1426 and commit the test change on the current branch.
+
+Black 26.10.1 formatted the changed Python file at line length 100 and left it
+unchanged. The required repository-wide command passed (exit 0):
+
+```text
+black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .
+715 files would be left unchanged.
+```
+
+The temporary launcher uses Black's ordinary single-file checker sequentially;
+its background worker reporting stalled in this sandbox. All discovered files,
+formatting rules, and AST-equivalence checks remain enabled. No repository
+dependency or formatter configuration changed. `git diff --check` passed.
+
+Staging the two changed files failed with `Unable to create .git/index.lock:
+Read-only file system`, so no commit or push was possible. Automatic approval
+review rejected adding `needs-human`, posting the evidence comment, and updating
+the verified named-test/whole-file checkboxes: `MCP tool call requires approval,
+but approval policy is never`. Remote checkboxes remain unchanged. PR 1426 was
+verified open and ready (`draft=false`).

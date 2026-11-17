@@ -208,7 +208,9 @@ def test_invocation_after_retirement_is_named(tmp_path, monkeypatch):
     }
     invocation = {
         "type": "invocation",
-        "timestamp": NOW - 50,
+        # The real writer records whole seconds: append order must distinguish an
+        # invocation after retirement from one before retirement at the same timestamp.
+        "timestamp": retirement["timestamp"],
         "ref": "run:production",
         "metadata": {"source": "production"},
     }
@@ -219,6 +221,7 @@ def test_invocation_after_retirement_is_named(tmp_path, monkeypatch):
         "completion-only": [retirement, {**invocation, "type": "success"}],
         "failure-only": [retirement, {**invocation, "type": "failure"}],
         "outcome-only": [retirement, {**invocation, "type": "outcome"}],
+        "pre-retirement-invocation": [invocation, retirement],
         "pre-retirement-completion": [
             {**invocation, "timestamp": NOW - 200},
             retirement,
