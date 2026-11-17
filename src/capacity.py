@@ -1257,9 +1257,7 @@ def _classify(agent: str, cfg: dict, ccusage_block):
                 state = WARN
                 policy = "weekly-polled-warn" if weekly_frac >= WARN_FRAC else "window-polled-warn"
                 availability = "usable_soft_constrained"
-                reason = (
-                    f"usable but near polled quota: {short_tag}{weekly_frac * 100:.0f}% weekly"
-                )
+                reason = f"usable but near polled quota: {short_tag}{weekly_frac * 100:.0f}% weekly"
                 next_action = (
                     "Prefer ok seats for marginal work; keep Gemini for substantial good-fit tasks."
                 )
