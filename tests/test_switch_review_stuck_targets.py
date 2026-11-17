@@ -317,3 +317,19 @@ def test_nothing_due_depends_on_the_stuck_target_section(
         feature_goals_fn=lambda stamp: {},
     )
     assert ("Nothing due." in switch_review.format_report(report)) is nothing_due
+
+
+@pytest.mark.parametrize("bad_target", [123, "", ["o/r#1"]])
+def test_an_invalid_target_value_makes_the_lane_unknown(journals, bad_target):
+    _journal(journals, "opener-core", [_round(0, [])])
+    _journal(journals, "closer-core", [_round(0, [{"target": bad_target, "action": "error"}])])
+    report = switch_review.stuck_lane_targets(now=NOW)
+    assert report["status"] == "unknown"
+    assert report["rounds_read"]["closer-core"] is None
+    assert "Nothing due" not in "\n".join(switch_review.format_stuck_lane_targets(report))
+
+
+def test_an_item_without_a_target_is_skipped(journals):
+    _journal(journals, "opener-core", [_round(0, [])])
+    _journal(journals, "closer-core", [_round(0, [{"action": "summary"}])])
+    assert switch_review.stuck_lane_targets(now=NOW)["status"] == "ok"

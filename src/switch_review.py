@@ -1707,8 +1707,10 @@ def stuck_lane_targets(*, now=None, roots=None) -> dict:
                 decisions = {}
                 for item in items:
                     target = item.get("target")
+                    if target is None:
+                        continue  # a round-level item names no target
                     if not isinstance(target, str) or not target:
-                        continue
+                        raise ValueError("target must be non-empty text")
                     action = item.get("action")
                     reason, error = item.get("reason"), item.get("error")
                     if not isinstance(action, str) or any(
