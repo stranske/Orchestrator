@@ -422,3 +422,32 @@ configuration changed.
 After that gate passed, staging the exact test and verification files failed:
 `Unable to create .git/index.lock: Read-only file system`. The conditional
 commit command did not run. The verified test changes remain local.
+
+## Transient ledger corruption and recovery — 2026-11-17
+
+Reviewed recent commits through `69527e1`. The named acceptance test now also
+corrupts a previously measured ledger containing two anomalous capabilities.
+Both readers discard the counts and evidence, render `unmeasured`, and preserve
+the corrupt bytes. Restoring the exact ledger bytes restores both capabilities'
+current retirement/invocation evidence. Collection counts remain unchanged.
+
+Fresh verification with Python 3.14.10, official upstream pytest 9.0.2 and Black
+26.10.1 in `/tmp/issue-1414-tools`, and `ORCH_STATE_DIR` in `/tmp`:
+
+- [x] Named acceptance test, with `-m "not slow"`: **1 passed in 0.15s**.
+- [x] Whole firing-monitor file, with `-m "not slow"`: **25 passed in 0.21s**.
+- [x] Both firing-monitor and gate-expiry files, with `-m "not slow"`: **52 passed in 1.34s**.
+- [x] Required full Black command above: **715 files unchanged**, exit 0.
+- [x] Changed Python file formatted at line length 100; `git diff --check` passed.
+
+The Black launcher uses the same ordinary single-file checks described above;
+the background-worker invocation stalled and was interrupted. The existing
+recorded deliberate-break/restoration verification was not repeated.
+
+Staging `tests/test_firing_monitor_live_rows.py` failed with
+`Unable to create .git/index.lock: Read-only file system`; no commit was possible.
+Automatic approval review rejected the PR-body reconciliation, evidence comment,
+and `needs-human` label with `MCP tool call requires approval, but approval policy
+is never`. Remote checkboxes remain unchanged. The prepared reconciled body is
+at `/tmp/issue-1414-pr-body.md`. PR 1426 remains open and ready (`draft=false`)
+at `69527e13fd58e2842f8712bee7685b4451a1f93c`.

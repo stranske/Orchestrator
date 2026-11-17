@@ -408,6 +408,29 @@ def test_invocation_after_retirement_is_named(tmp_path, monkeypatch):
         for evidence in ("disable retired-running", "disable silent", "run:second-producer"):
             assert evidence in text
 
+    # An unreadable ledger invalidates previously measured anomalies. Repairing the same
+    # path restores the current evidence, rather than retaining an unknown or stale count.
+    readable_ledger = ledger.read_bytes()
+    try:
+        ledger.write_text("{not json", encoding="utf-8")
+        unreadable = reports_at(NOW + 8)
+        for report in unreadable:
+            assert report["retired_but_invoked_count"] is None
+            assert report["retired_but_invoked"] == []
+            assert report["retired_but_invoked_measurement"].startswith("unmeasured")
+        for text in (
+            monitor.format_report(unreadable[0]),
+            "\n".join(switch_review.format_gate_expiry(unreadable[1])),
+        ):
+            assert "retired_but_invoked: unmeasured" in text
+            assert "run:second-producer" not in text
+    finally:
+        ledger.write_bytes(readable_ledger)
+    for previous, recovered in zip(reports, reports_at(NOW + 8)):
+        assert recovered["retired_but_invoked_count"] == 2
+        assert recovered["retired_but_invoked"] == previous["retired_but_invoked"]
+        assert recovered["retired_but_invoked_measurement"] == "measured"
+
     # A later fixture heartbeat must neither hide production evidence nor become evidence.
     capabilities.heartbeat(
         "silent",
