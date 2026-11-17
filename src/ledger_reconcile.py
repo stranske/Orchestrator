@@ -4,8 +4,8 @@
 LangSmith artifacts and ccusage sessions cover richer execution telemetry. Local CLI
 delegates sometimes do not emit either, so dispatcher writes start/complete rows into
 the capacity ledger. This command turns those rows plus any JSON usage events in the
-delegate log into `costs(source="ledger")`, without overwriting richer
-`source="langsmith"` or `source="ccusage"` rows.
+delegate log into `costs(source="ledger")`, or uses the Cursor lane's terminal JSON
+result as its cost source, without overwriting richer telemetry.
 
 Usage:
   python3 ledger_reconcile.py complete --run-id ... --agent codex --log-file ...
@@ -73,7 +73,7 @@ def provider_limit_before_work(lines: list[str]) -> dict | None:
     codex ones, 15 carried the refusal event and 91 had the phrase only in prose or command output.
 
     Only codex's `exec --json` stream can say that nothing ran, so this reads that schema and no
-    other. claude (`-p`), cursor and vibe log only their final text, and gemini records its tool
+    other. claude (`-p`), cursor and vibe log only their final result, and gemini records its tool
     steps in a separate per-run agy log. For those the answer is None, which means UNKNOWN, not "did
     work": two of eight gemini runs that printed "Individual quota reached" with no output had run
     tools for six minutes first.
@@ -744,6 +744,7 @@ def record_completion(
     arm_id: str | None = None,
     exit_code: int | None = None,
     workspace: str | None = None,
+    cursor_json_output: bool = False,
 ) -> None:
     # FIRST, before anything below reads the log: the incident classifier, the reconcile pass and
     # anyone who opens the file all see the masked segment.
@@ -799,6 +800,10 @@ def record_completion(
                 log_path,
                 successful=(exit_code == 0 if exit_code is not None else None),
             )
+            if agent == "cursor" and cursor_json_output:
+                result = adapters.cursor_json_result(seg)
+                if result is not None:
+                    print("\n" + credential_redaction.redact(result["result"]))
     adapters.record_ledger(
         agent,
         count=0,
@@ -868,6 +873,7 @@ def reconcile(
 
     known = _known_runs()
     sources = _cost_sources()
+    protected_sources = {"ccusage", "imputed:subscription", *adapters.CURSOR_CLI_COST_SOURCES}
     writers_by_log = _writers_by_log(rows)
     written = 0
     marker_backfills = 0
@@ -923,7 +929,13 @@ def reconcile(
                 bucket = _settle_provider_limit_death(run_id, refusal, dry_run=dry_run)
                 provider_limit_deaths[bucket] += 1
         existing_source = sources.get(run_id)
-        if existing_source in {"langsmith", "ccusage", "imputed:subscription"}:
+        cursor_json_output = any(
+            row.get("agent") == "cursor" and row.get("cursor_json_output") is True
+            for row in run_rows
+        )
+        if existing_source in protected_sources or (
+            existing_source == "langsmith" and not cursor_json_output
+        ):
             skipped[f"{existing_source}_cost_exists"] += 1
             continue
         # 16f/16h harvest from the run's log segment (same segment _log_usage scans).
@@ -969,12 +981,25 @@ def reconcile(
                         owner_questions_recorded += 1
                 except Exception:
                     pass
-        tokens_in, tokens_out = _log_usage(log_file, run_id, writers)
-        cost_usd = sum(float(_number(r.get("cost_usd")) or 0.0) for r in run_rows)
-        log_cost = _log_cost_usd(log_file, run_id, writers)
-        if log_cost > cost_usd:  # 16(j): the agent's own reported dollars beat ledger zeros
-            cost_usd = log_cost
-            log_costs_harvested += 1
+        source = "ledger"
+        if cursor_json_output:
+            seg = _log_segment(log_file, run_id, writers) if log_file is not None else []
+            result = adapters.cursor_json_result(seg)
+            if result is None and existing_source == "langsmith":
+                skipped["langsmith_cost_exists"] += 1
+                continue
+            tokens_in, tokens_out, cost_usd = None, None, None
+            if result is not None:
+                tokens_in, tokens_out, cost_usd, source = adapters.cursor_result_cost(result)
+                if cost_usd is not None:
+                    log_costs_harvested += 1
+        else:
+            tokens_in, tokens_out = _log_usage(log_file, run_id, writers)
+            cost_usd = sum(float(_number(r.get("cost_usd")) or 0.0) for r in run_rows)
+            log_cost = _log_cost_usd(log_file, run_id, writers)
+            if log_cost > cost_usd:  # 16(j): the agent's own reported dollars beat ledger zeros
+                cost_usd = log_cost
+                log_costs_harvested += 1
         latency_s = _latency_s(run_rows)
         marker = _done_marker(log_file, run_id)
         marker_rc = marker.get("rc") if marker is not None else None
@@ -1049,16 +1074,16 @@ def reconcile(
         elif signal_rc is not None and not dry_run:
             if feedback.mark_transient_infra(run_id, reason=f"marker rc={signal_rc}"):
                 infra_classified += 1
-        if not (tokens_in or tokens_out or cost_usd or latency_s):
+        if source == "ledger" and not (tokens_in or tokens_out or cost_usd or latency_s):
             skipped["no_measurement"] += 1
             continue
         record = {
             "run_id": run_id,
             "tokens_in": tokens_in,
             "tokens_out": tokens_out,
-            "cost_usd": round(cost_usd, 6),
+            "cost_usd": round(cost_usd, 6) if cost_usd is not None else None,
             "latency_s": latency_s,
-            "source": "ledger",
+            "source": source,
             "marker_rc": marker_rc,
             "log_file": str(log_file) if log_file else None,
         }
@@ -1070,7 +1095,7 @@ def reconcile(
                 tokens_out=tokens_out,
                 cost_usd=cost_usd,
                 latency_s=latency_s,
-                source="ledger",
+                source=source,
             )
             written += 1
 
@@ -1434,6 +1459,7 @@ def main(argv: list[str]) -> int:
     complete.add_argument("--subject-id")
     complete.add_argument("--arm-id")
     complete.add_argument("--exit-code", type=int)
+    complete.add_argument("--cursor-json-output", action="store_true")
     complete.add_argument("--workspace", help="the run's worktree; its pushes are recorded")
 
     rec = sub.add_parser(
@@ -1479,6 +1505,7 @@ def main(argv: list[str]) -> int:
             arm_id=args.arm_id,
             exit_code=args.exit_code,
             workspace=args.workspace,
+            cursor_json_output=args.cursor_json_output,
         )
         return 0
     if args.cmd == "reconcile":
