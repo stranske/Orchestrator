@@ -174,6 +174,53 @@ def test_protected_cursor_cost_recovers_late_latency(tmp_path, brain, completion
     assert ledger_reconcile.reconcile(adapters.LEDGER)["written_cost_rows"] == 0
 
 
+def test_protected_cursor_cost_harvests_late_owner_question(tmp_path, brain):
+    run_id = "lane-run"
+    target = "example/repo#1"
+    log = tmp_path / "example__repo_1.cursor.log"
+    question = {"question": "Enable the export?", "default": "Leave it disabled"}
+    log.write_text(
+        json.dumps(
+            {
+                "type": "result",
+                "result": "Completed\nOWNER_QUESTION: " + json.dumps(question),
+                "model": "Composer 2.5",
+                "usage": {"input_tokens": 1000, "output_tokens": 200},
+            }
+        )
+        + "\n"
+    )
+    feedback.record_run(run_id, target, "implement", "cursor")
+    adapters.record_ledger(
+        "cursor",
+        run_id=run_id,
+        target=target,
+        log_file=str(log),
+        event="start",
+        cursor_json_output=True,
+    )
+    first = ledger_reconcile.reconcile(adapters.LEDGER)
+    assert first["log_costs_harvested"] == 1
+    assert first["owner_questions_recorded"] == 0
+
+    with log.open("a") as stream, redirect_stdout(stream):
+        ledger_reconcile.record_completion(
+            run_id=run_id, agent="cursor", log_file=str(log), exit_code=0, cursor_json_output=True
+        )
+
+    dry_run = ledger_reconcile.reconcile(adapters.LEDGER, dry_run=True)
+    assert dry_run["owner_questions_recorded"] == 0
+    assert feedback.open_owner_questions() == []
+    assert ledger_reconcile.reconcile(adapters.LEDGER)["owner_questions_recorded"] == 1
+    assert ledger_reconcile.reconcile(adapters.LEDGER)["owner_questions_recorded"] == 0
+    (recorded,) = feedback.open_owner_questions()
+    assert (recorded["question"], recorded["default_action"], recorded["target"]) == (
+        question["question"],
+        question["default"],
+        target,
+    )
+
+
 @pytest.mark.parametrize("output_format", ["json", "stream-json"])
 def test_cursor_dispatch_completion_flag_matches_transport(
     tmp_path, brain, monkeypatch, output_format

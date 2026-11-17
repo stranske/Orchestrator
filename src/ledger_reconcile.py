@@ -939,34 +939,36 @@ def reconcile(
         ):
             skipped[f"{existing_source}_cost_exists"] += 1
             continue
-        # 16f/16h harvest from the run's log segment (same segment _log_usage scans).
-        if log_file is not None and not dry_run and not protected_cursor_cost:
+        if log_file is not None and not dry_run:
             seg = _log_segment(log_file, run_id, writers)
-            agent = next((str(r.get("agent")) for r in run_rows if r.get("agent")), "")
             target = next((str(r.get("target")) for r in run_rows if r.get("target")), "")
-            completion_exit = next(
-                (r.get("exit") for r in reversed(run_rows) if r.get("event") == "complete"), None
-            )
-            try:
-                successful = int(completion_exit) == 0 if completion_exit is not None else None
-            except (TypeError, ValueError):
-                successful = None
-            # Hook: Classify log segment for rate-limit/capacity incidents
-            rate_evidence = _classify_run_log_segment(
-                seg, agent, run_id, target, log_file, shed=False, successful=successful
-            )
-            if rate_evidence:
-                rate_incident_classified += 1
-            tok = _resume_token_from_segment(seg)
-            if tok is not None:
-                kind, token = tok
+            if not protected_cursor_cost:
+                agent = next((str(r.get("agent")) for r in run_rows if r.get("agent")), "")
+                completion_exit = next(
+                    (r.get("exit") for r in reversed(run_rows) if r.get("event") == "complete"),
+                    None,
+                )
                 try:
-                    feedback.record_resume_token(
-                        run_id, agent, kind, token, cwd=str(log_file.parent)
-                    )
-                    resume_tokens_captured += 1
-                except Exception:
-                    pass
+                    successful = int(completion_exit) == 0 if completion_exit is not None else None
+                except (TypeError, ValueError):
+                    successful = None
+                # Hook: Classify log segment for rate-limit/capacity incidents
+                rate_evidence = _classify_run_log_segment(
+                    seg, agent, run_id, target, log_file, shed=False, successful=successful
+                )
+                if rate_evidence:
+                    rate_incident_classified += 1
+                tok = _resume_token_from_segment(seg)
+                if tok is not None:
+                    kind, token = tok
+                    try:
+                        feedback.record_resume_token(
+                            run_id, agent, kind, token, cwd=str(log_file.parent)
+                        )
+                        resume_tokens_captured += 1
+                    except Exception:
+                        pass
+            # The decoded Cursor message can reach the log after the result has been priced.
             for q in _owner_questions_from_segment(seg):
                 try:
                     res = feedback.record_owner_question(
