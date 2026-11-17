@@ -140,6 +140,16 @@ def test_tail_limit_and_duplicate_items_count_rounds_once(journals):
         "{}",
         '{"ts":"bad","items":[]}',
         '{"ts":"2026-01-01T00:00:00Z","items":{}}',
+        *[
+            json.dumps(
+                {
+                    "ts": "2026-01-01T00:00:00Z",
+                    "items": [{"target": TARGET, "action": "error", field: value}],
+                }
+            )
+            for field in ("reason", "error")
+            for value in (0, False, [], {})
+        ],
     ],
 )
 def test_malformed_journal_is_unknown_but_other_lane_is_reported(journals, bad):

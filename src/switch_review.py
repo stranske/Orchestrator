@@ -1710,10 +1710,12 @@ def stuck_lane_targets(*, now=None, roots=None) -> dict:
                     if not isinstance(target, str) or not target:
                         continue
                     action = item.get("action")
-                    reason = item.get("reason") or item.get("error") or ""
-                    if not isinstance(action, str) or not isinstance(reason, str):
+                    reason, error = item.get("reason"), item.get("error")
+                    if not isinstance(action, str) or any(
+                        value is not None and not isinstance(value, str) for value in (reason, error)
+                    ):
                         raise ValueError("target action and reason must be text")
-                    decisions[target] = (action, reason)
+                    decisions[target] = (action, reason or error or "")
                 for target, (action, reason) in decisions.items():
                     previous = runs.get(target)
                     if (
