@@ -190,6 +190,24 @@ def test_stale_or_missing_poll_keeps_todays_exclusion(
         in stale_result["inputs"]["cost_source_by_agent"]["gemini"]["reason"]
     )
 
+    _write_gemini_poll(
+        poll_dir,
+        ts=NOW - 60,
+        weekly_percent=58,
+        five_hour_percent=15,
+        resets_at=NOW - 1,
+    )
+    expired_polled = pacing_usage.polled_usage("gemini", NOW)
+    assert expired_polled["poll"]["valid"] is True
+    assert expired_polled["poll"]["fresh"] is False
+    assert expired_polled["used_fraction"] is None
+    assert expired_polled["poll"]["rolled_period_end"] == NOW - 1 + pacing.PERIOD_SECONDS
+
+    expired_result = comparative.measure(db, snapshot, now=NOW)
+    assert expired_result["status"] == "optimal"
+    assert expired_result["excluded"] == ["gemini"]
+    assert expired_result["lambda"]["gemini"] is None
+
 
 def test_polled_usage_overrides_the_soft_estimate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
