@@ -89,8 +89,17 @@ STUCK_JOURNAL_LINES = 200
 # Decisions that are a deliberate, bounded hold rather than a stall, in each lane's own words (read from the
 # live journals 2026-11-17: 44 of 45 first-run "suspects" were these). already-pr_linked: the opener handed the
 # issue to the closer; probe / skip-held / wait-hold: the closer's hold labels and paused probes.
-STUCK_HOLD_ACTIONS = frozenset({"already-parked", "already-pr_linked", "already-reserved", "complete",
-                                "probe", "skip-held", "wait-hold"})
+STUCK_HOLD_ACTIONS = frozenset(
+    {
+        "already-parked",
+        "already-pr_linked",
+        "already-reserved",
+        "complete",
+        "probe",
+        "skip-held",
+        "wait-hold",
+    }
+)
 STUCK_HOLD_REASONS = ("held:", "dependency-bot PR opened under")
 
 # Fleet template-delivery gates (Maint 68 promote + sync-branch canaries). Same horizon as switch

@@ -35,9 +35,7 @@ def journals(tmp_path, monkeypatch):
 
 def test_repeated_identical_error_is_suspect(journals):
     error = "repair dispatch: provision failed: cannot inspect holder"
-    rounds = [
-        _round(i, [{"target": TARGET, "action": "error", "error": error}]) for i in range(21)
-    ]
+    rounds = [_round(i, [{"target": TARGET, "action": "error", "error": error}]) for i in range(21)]
     _journal(journals, "closer-core", rounds)
 
     report = switch_review.stuck_lane_targets(now=NOW)
@@ -214,17 +212,37 @@ def test_live_hold_wording_is_not_suspect_but_a_repeating_failure_is(journals):
     """2026-11-17 live journals: 44 of 45 first-run suspects were each lane's own deliberate holds."""
     opener, closer = [], []
     for i in range(21):
-        opener.append(_round(i, [
-            {"target": "o/r#1", "action": "already-pr_linked"},
-            {"target": "o/r#2", "action": "format-unfixed",
-             "reason": "rewrite did not pass the validator; next round"},
-        ]))
-        closer.append(_round(i, [
-            {"target": "o/r#3", "action": "probe"},
-            {"target": "o/r#4", "action": "skip-held", "reason": "hold label agents:paused"},
-            {"target": "o/r#5", "action": "wait-unmerged",
-             "reason": "dependency-bot PR opened under 3 days ago: its own automerge has it"},
-        ]))
+        opener.append(
+            _round(
+                i,
+                [
+                    {"target": "o/r#1", "action": "already-pr_linked"},
+                    {
+                        "target": "o/r#2",
+                        "action": "format-unfixed",
+                        "reason": "rewrite did not pass the validator; next round",
+                    },
+                ],
+            )
+        )
+        closer.append(
+            _round(
+                i,
+                [
+                    {"target": "o/r#3", "action": "probe"},
+                    {
+                        "target": "o/r#4",
+                        "action": "skip-held",
+                        "reason": "hold label agents:paused",
+                    },
+                    {
+                        "target": "o/r#5",
+                        "action": "wait-unmerged",
+                        "reason": "dependency-bot PR opened under 3 days ago: its own automerge has it",
+                    },
+                ],
+            )
+        )
     _journal(journals, "opener-core", opener)
     _journal(journals, "closer-core", closer)
     report = switch_review.stuck_lane_targets(now=NOW)
@@ -238,16 +256,42 @@ def test_a_run_broken_by_the_targets_absence_is_not_suspect(journals):
     assert switch_review.stuck_lane_targets(now=NOW)["suspect"] == 0
 
 
-@pytest.mark.parametrize("closer_rounds,nothing_due", [("clean", True), ("suspect", False), ("missing", False)])
-def test_nothing_due_depends_on_the_stuck_target_section(journals, monkeypatch, closer_rounds, nothing_due):
-    for name in ("_capability_heartbeat", "stale_runners", "adversarial_shape_population", "fleet_gates",
-                 "firing_regressions", "_exploration_gate", "worktree_git_refusals"):
+@pytest.mark.parametrize(
+    "closer_rounds,nothing_due", [("clean", True), ("suspect", False), ("missing", False)]
+)
+def test_nothing_due_depends_on_the_stuck_target_section(
+    journals, monkeypatch, closer_rounds, nothing_due
+):
+    for name in (
+        "_capability_heartbeat",
+        "stale_runners",
+        "adversarial_shape_population",
+        "fleet_gates",
+        "firing_regressions",
+        "_exploration_gate",
+        "worktree_git_refusals",
+    ):
         monkeypatch.setattr(switch_review, name, lambda *a, **kw: {})
     monkeypatch.setattr(switch_review, "mirror_drift", lambda *a, **kw: {"status": "ok"})
-    monkeypatch.setattr(switch_review, "gate_expiry",
-                        lambda *a, **kw: {"status": "ok", "expiring": [], "lapsed": [], "window_days": 14})
-    monkeypatch.setattr(switch_review, "capacity_shed", lambda *a, **kw: {"status": "ok", "suspect": 0, "markers": [], "dir": "shed", "horizon_days": 14})
-    monkeypatch.setattr(switch_review, "switch_states", lambda **kw: {"held_off": [], "on_but_idle": []})
+    monkeypatch.setattr(
+        switch_review,
+        "gate_expiry",
+        lambda *a, **kw: {"status": "ok", "expiring": [], "lapsed": [], "window_days": 14},
+    )
+    monkeypatch.setattr(
+        switch_review,
+        "capacity_shed",
+        lambda *a, **kw: {
+            "status": "ok",
+            "suspect": 0,
+            "markers": [],
+            "dir": "shed",
+            "horizon_days": 14,
+        },
+    )
+    monkeypatch.setattr(
+        switch_review, "switch_states", lambda **kw: {"held_off": [], "on_but_idle": []}
+    )
     _journal(journals, "opener-core", [_round(0, [])])
     item = {"target": TARGET, "action": "error", "reason": "same"}
     if closer_rounds == "clean":
@@ -256,6 +300,10 @@ def test_nothing_due_depends_on_the_stuck_target_section(journals, monkeypatch, 
         _journal(journals, "closer-core", [_round(i, [item]) for i in range(6)])
     else:
         (journals / "closer-core" / "rounds.jsonl").unlink(missing_ok=True)
-    report = switch_review.review(now=NOW, sources={}, env={"ORCH_VALUE_CHAIN_MONITOR": "0"},
-                                  feature_goals_fn=lambda stamp: {})
+    report = switch_review.review(
+        now=NOW,
+        sources={},
+        env={"ORCH_VALUE_CHAIN_MONITOR": "0"},
+        feature_goals_fn=lambda stamp: {},
+    )
     assert ("Nothing due." in switch_review.format_report(report)) is nothing_due
