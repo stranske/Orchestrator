@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import sqlite3
 import subprocess
@@ -152,24 +153,8 @@ def author_keepalive_spec(
         spec = runtime_ac.author_issue_spec(issue, body, target=target)
         spec["verification"]["repo"] = repo
         spec["verification"]["observed_head_sha"] = pr.get("headRefOid")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        stream = tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", dir=path.parent, delete=False
-        )
-        staged = Path(stream.name)
-        try:
-            with stream:
-                json.dump(spec, stream, indent=2)
-                stream.flush()
-                os.fsync(stream.fileno())
-            try:
-                os.link(
-                    staged, path
-                )  # Exclusive, atomic publication; never overwrite an operator spec.
-            except FileExistsError:
-                return {"status": "existing", "spec_authored": False, "spec_path": str(path)}
-        finally:
-            staged.unlink(missing_ok=True)
+        if not _publish_spec(path, spec):
+            return {"status": "existing", "spec_authored": False, "spec_path": str(path)}
         event = feedback.record_runtime_ac_gate_event(
             target=target,
             gate_status="materialized",
@@ -197,6 +182,96 @@ def author_keepalive_spec(
         }
     except Exception as exc:
         return {"status": "error", "spec_authored": False, "error": str(exc)}
+
+
+def _publish_spec(path: Path, spec: dict) -> bool:
+    """Write `spec` at `path` atomically and exclusively; False when a spec is already there."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    stream = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False)
+    staged = Path(stream.name)
+    try:
+        with stream:
+            json.dump(spec, stream, indent=2)
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            os.link(
+                staged, path
+            )  # Exclusive, atomic publication; never overwrite an operator spec.
+        except FileExistsError:
+            return False
+        return True
+    finally:
+        staged.unlink(missing_ok=True)
+
+
+# A PR that closes no issue still states its own acceptance claim: an "Acceptance Criteria" section, or
+# the Gate's explicit deliberate-break marker (the same key=value form check_deliberate_break.py reads).
+_ACCEPTANCE_SECTION = re.compile(r"(?ims)^#{1,6}\s+Acceptance Criteria\s*\n(.*?)(?=^#{1,6}\s|\Z)")
+_DELIBERATE_BREAK_MARKER = re.compile(
+    r"<!--\s*deliberate-break:\s*(?P<body>.*?)\s*-->", re.I | re.S
+)
+
+
+def pr_body_acceptance(body: str | None) -> str | None:
+    """The acceptance claim an unlinked PR makes about itself, as an Acceptance Criteria section.
+
+    stranske/Orchestrator#1415 (2026-11-17): once the Gate's acceptance-criteria label worked, a PR with
+    an explicit deliberate-break marker but no closing issue was labelled, merge_guard required runtime
+    AC, and nothing could author a spec (specs came only from a closing issue): merge_guard refused it
+    until a person wrote one from the PR's own claim. This is that claim, read mechanically.
+    """
+    text = str(body or "")
+    section = _ACCEPTANCE_SECTION.search(text)
+    if section and section.group(1).strip():
+        return "## Acceptance Criteria\n" + section.group(1)
+    for marker in _DELIBERATE_BREAK_MARKER.finditer(text):
+        try:
+            tokens = shlex.split(marker.group("body"))
+        except ValueError:
+            continue
+        values = {}
+        for token in tokens:
+            if "=" in token:
+                key, value = token.split("=", 1)
+                values[key.strip().replace("_", "-").lower()] = value.strip()
+        test = values.get("test") or values.get("test-id")
+        break_file = values.get("break-file") or values.get("revert-file")
+        if test and break_file:
+            return (
+                "## Acceptance Criteria\n"
+                f"- [x] Named test `{test}` passes: `python -m pytest {test} -q`\n"
+                f"- [x] Deliberate break → revert, shown in the PR: restore the base version of "
+                f"`{break_file}` → `{test}` fails → revert and it passes.\n"
+            )
+    return None
+
+
+def author_pr_body_spec(
+    target: str, body: str | None, head_sha: str | None, *, spec_dir=None, env=None
+) -> dict:
+    """Materialize a spec from an unlinked PR's own acceptance claim; never overwrite one."""
+    path = spec_path(target, spec_dir=spec_dir, env=env)
+    if path.exists():
+        return {"status": "existing", "spec_authored": False, "spec_path": str(path)}
+    acceptance = pr_body_acceptance(body)
+    if acceptance is None:
+        return {"status": "no_acceptance_claim", "spec_authored": False, "spec_path": str(path)}
+    try:
+        spec = runtime_ac.author_issue_spec(target, acceptance, target=target)
+        spec["verification"]["repo"] = target.split("#", 1)[0]
+        spec["verification"]["observed_head_sha"] = head_sha
+        spec["verification"]["source"] = "pr_body"
+        if not _publish_spec(path, spec):
+            return {"status": "existing", "spec_authored": False, "spec_path": str(path)}
+        return {"status": "authored", "spec_authored": True, "spec_path": str(path)}
+    except Exception as exc:
+        return {
+            "status": "error",
+            "spec_authored": False,
+            "error": str(exc),
+            "spec_path": str(path),
+        }
 
 
 SHADOW_BUDGET_FLAG = "ORCH_RUNTIME_AC_SHADOW_BUDGET"
