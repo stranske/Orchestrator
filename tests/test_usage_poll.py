@@ -61,6 +61,10 @@ def evidence(tmp_path, monkeypatch, pollers):
     monkeypatch.setattr(pacing_usage, "CODEX_SESSIONS", tmp_path / "sessions")
     monkeypatch.setattr(pacing_usage, "SNAPSHOTS", tmp_path / "snapshots")
     monkeypatch.setattr(pacing_usage, "CLAUDE_USAGE", tmp_path / "desktop.json")
+    monkeypatch.setattr(rate_incidents, "HANDOFF", tmp_path)
+    monkeypatch.setattr(rate_incidents, "INCIDENT_FILE", tmp_path / "rate-limit-incidents.ndjson")
+    monkeypatch.setattr(rate_incidents, "LOCK_FILE", tmp_path / "rate-limit-incidents.ndjson.lock")
+    monkeypatch.setattr(rate_incidents, "SHED_DIR", tmp_path)
     pacing_usage.POLL_DIR.mkdir()
     for pool, module in pollers.items():
         row = (

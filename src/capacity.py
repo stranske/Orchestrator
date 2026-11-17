@@ -1234,6 +1234,43 @@ def _classify(agent: str, cfg: dict, ccusage_block):
                 f"{used_weekly:.1f}/{wk_cap:.0f} weekly; {suffix}"
             )
 
+        import pacing_usage
+
+        polled = pacing_usage.polled_usage(agent, now) if agent == "gemini" else {"poll": {}}
+        poll = polled.get("poll") or {}
+        if poll.get("fresh") and polled.get("used_fraction") is not None:
+            weekly_frac = float(polled["used_fraction"])
+            short_raw = polled.get("short_used_fraction")
+            short_frac = float(short_raw) if isinstance(short_raw, (int, float)) else 0.0
+            short_tag = (
+                f"{short_frac * 100:.0f}% 5h, " if isinstance(short_raw, (int, float)) else ""
+            )
+            if weekly_frac >= 1.0 or short_frac >= 1.0:
+                state = SHED
+                policy = "weekly-polled-cap" if weekly_frac >= 1.0 else "window-polled-cap"
+                availability = "unavailable_quota_exhausted"
+                reason = f"agy /usage poll exhausted: {short_tag}{weekly_frac * 100:.0f}% weekly"
+                next_action = (
+                    "Wait for the polled Gemini quota window to reset before routing work here."
+                )
+            elif weekly_frac >= WARN_FRAC or short_frac >= WARN_FRAC:
+                state = WARN
+                policy = "weekly-polled-warn" if weekly_frac >= WARN_FRAC else "window-polled-warn"
+                availability = "usable_soft_constrained"
+                reason = f"usable but near polled quota: {short_tag}{weekly_frac * 100:.0f}% weekly"
+                next_action = (
+                    "Prefer ok seats for marginal work; keep Gemini for substantial good-fit tasks."
+                )
+            else:
+                state = OK
+                policy = "steady"
+                availability = "usable"
+                reason = f"agy /usage poll: {short_tag}{weekly_frac * 100:.0f}% weekly"
+                next_action = (
+                    "Use Gemini for substantial, self-contained reasoning work when it is the "
+                    "best fit."
+                )
+
         return (
             state,
             reason,
@@ -1351,9 +1388,11 @@ def build(ccusage_block=None, *, record_pacing: bool = False) -> dict:
 
 def _selftest():
     global SHED_DIR
+    import pacing_usage
     import rate_incidents
 
     original_shed_dir = SHED_DIR
+    original_poll_dir = pacing_usage.POLL_DIR
     original_incident_paths = (
         rate_incidents.HANDOFF,
         rate_incidents.INCIDENT_FILE,
@@ -1362,6 +1401,7 @@ def _selftest():
     )
     selftest_shed_dir = Path(tempfile.mkdtemp(prefix="capacity-shed-selftest-"))
     SHED_DIR = selftest_shed_dir
+    pacing_usage.POLL_DIR = selftest_shed_dir / "usage-poll"
     # `_shed` serializes cleanup through the incident writer's lock.  Keep that lock and the
     # marker under the disposable self-test directory too; otherwise this isolated check reaches
     # a real (and, in CI, read-only) handoff directory.
@@ -1384,6 +1424,7 @@ def _selftest():
         _selftest_body(blk)
     finally:
         SHED_DIR = original_shed_dir
+        pacing_usage.POLL_DIR = original_poll_dir
         (
             rate_incidents.HANDOFF,
             rate_incidents.INCIDENT_FILE,
