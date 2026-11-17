@@ -1148,9 +1148,9 @@ def record_incident(
     earlier_incident_ids: set[str] = set()
     later_incident_ids: set[str] = set()
     try:
-        existing = _existing_idempotency_key(key)
+        existing_row, earlier_incident_ids, later_incident_ids = _existing_incident_context(key)
+        existing = existing_row.get("incident_id") if existing_row else None
         if existing:
-            existing_row, earlier_incident_ids, later_incident_ids = _existing_incident_context(key)
             if recovered and existing_row is not None and not _is_incident_recovered(existing_row):
                 _mark_incident_recovered_locked(
                     agent=agent,
