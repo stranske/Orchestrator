@@ -16,6 +16,8 @@ import os
 from copy import deepcopy
 from functools import partial
 
+import pytest
+
 import capabilities
 import capability_advisor
 import capability_firing_monitor as monitor
@@ -127,7 +129,10 @@ def test_the_report_declares_its_population_under_the_graders_key(tmp_path, monk
     }
 
 
-def test_invocation_after_retirement_is_named(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "invocation_timestamp", [NOW - 100, NOW - 50], ids=["same-second", "later"]
+)
+def test_invocation_after_retirement_is_named(tmp_path, monkeypatch, invocation_timestamp):
     """A retired row can still run; keep that evidence outside the live silence findings."""
     ledger = _ledger(tmp_path)
     rows = capabilities.load(ledger, create=False)
@@ -172,8 +177,12 @@ def test_invocation_after_retirement_is_named(tmp_path, monkeypatch):
 
     # Exercise the existing production emitter against this temporary ledger. Retirement
     # must not suppress evidence at the writer; the report is responsible for naming it.
+    # A heartbeat appended after retirement still counts within the same timestamp second;
+    # the same-second invocation appended before retirement above remains excluded.
     monkeypatch.setattr(
-        capabilities, "heartbeat", partial(capabilities.heartbeat, path=ledger, timestamp=NOW - 50)
+        capabilities,
+        "heartbeat",
+        partial(capabilities.heartbeat, path=ledger, timestamp=invocation_timestamp),
     )
     monkeypatch.setenv("ORCH_CAPABILITY_HEARTBEATS", "1")
     assert capabilities.production_heartbeat(
@@ -226,13 +235,13 @@ def test_invocation_after_retirement_is_named(tmp_path, monkeypatch):
         assert entry["invocations"] == [
             {
                 "type": "invocation",
-                "timestamp": NOW - 50,
+                "timestamp": invocation_timestamp,
                 "ref": "tick:production",
                 "metadata": {"source": "tick"},
             },
             {
                 "type": "invocation",
-                "timestamp": NOW - 50,
+                "timestamp": invocation_timestamp,
                 "ref": "tick:production-without-source",
             },
         ]

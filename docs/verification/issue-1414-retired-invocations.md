@@ -187,3 +187,64 @@ Both checks used Black 26.10.1, `BLACK_NUM_WORKERS=1` and
 `BLACK_CACHE_DIR=/tmp/issue-1414-black-cache`. The individual-check transcript is at
 `/tmp/issue-1414-black-individual-current.log`; `git diff --check` also passes.
 PR #1416 remains open and ready for review (`draft=false`).
+
+## Same-second production heartbeat acceptance verification
+
+The named test now runs with production invocations both in the retirement second and later.
+It checks both reports using the real heartbeat emitter. An invocation appended before retirement
+in that same second remains excluded, while subsequent non-fixture invocations must retain the
+retirement evidence and kill switch. All existing controls and read-only assertions run in both
+cases.
+
+Fresh verification on 2026-11-17 used CPython 3.12.16 and pytest 8.3.5. Every pytest command used
+`-m "not slow"`:
+
+```text
+python3 -m pytest tests/test_firing_monitor_live_rows.py::test_invocation_after_retirement_is_named -q -m "not slow"
+baseline: 2 passed in 0.21s
+
+Temporarily inserted unconditional return None inside invoked_after_retirement:
+2 failed in 0.35s
+Both same-second and later cases: AssertionError: []; assert 0 == 1
+
+Restored exact original source bytes in finally and cleared compiled bytecode:
+2 passed in 0.19s
+
+python3 -m pytest tests/test_firing_monitor_live_rows.py -q -m "not slow"
+9 passed in 0.30s
+
+python3 -m pytest tests/test_firing_monitor_live_rows.py tests/test_gate_expiry_renewal.py -q -m "not slow"
+56 passed in 1.22s
+```
+
+The restored `src/capabilities.py` SHA256 is still
+`fe2f50db027529e8abdd1690050cc786a8aa91d19dcfbc235b27e59775c3f8c3`.
+The complete mutation transcript is `/tmp/issue-1414-break-revert-same-second.txt`.
+Official upstream test and formatter sources were staged only under `/tmp/issue-1414-tools`
+because PyPI DNS resolution failed. No repository dependencies changed.
+
+- [x] Strengthened named test passes for both invocation timestamps.
+- [x] Whole firing-monitor test file passes.
+- [ ] Deliberate break/restoration evidence posted on PR #1416.
+
+Posting the verification comment and adding `needs-human` were both rejected by the GitHub
+connector with `MCP tool call requires approval, but approval policy is never`. The PR acceptance
+checkboxes have therefore not been changed.
+
+Black 26.10.1 formatted the changed test (`1 file left unchanged`). After checking all 853 tracked
+Python files individually with zero failures, the required repository-wide command passed:
+
+```text
+black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .
+712 files would be left unchanged.
+```
+
+Both checks used `PYTHONPATH=/tmp/issue-1414-tools:/usr/lib/python3/dist-packages`,
+`BLACK_NUM_WORKERS=1`, and `BLACK_CACHE_DIR=/tmp/issue-1414-black-cache`.
+`git diff --check` passed as well.
+
+The commit attempt (`git add` followed by `git commit`) stopped at staging because Git cannot
+create `.git/index.lock`: `Read-only file system`. The same-second test and this verification
+note remain uncommitted on the existing `claude/issue-1414` checkout. Final GitHub read confirmed
+PR #1416 remains open with `draft=false`. Committing requires a writable Git directory; publishing
+the mutation evidence and reconciling the PR checkboxes require an approved GitHub write capability.
