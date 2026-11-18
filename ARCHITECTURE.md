@@ -680,6 +680,24 @@ carry the count and up to five readable examples; unreadable journals remain unk
 zero. This is an FYI feedback surface only: it changes no lane, raises no owner question and
 initiates no action. The loop diagram records the same read-only journal connection.
 
+**Open PRs no lane has named are reported by the weekly review (2026-11-18).** The stuck-target
+check above only sees what a lane already decided about. Four PRs sat idle 4 to 23 days because no
+lane ever adopted them: an `automation_run` branch no lane owns, a keepalive PR left after
+keepalive stood down, a Template PR (Template is outside `backlog.SUPPORTED_REPOS`) whose issue
+link is cross-repo, and a PR whose issue is paused. None of them entered a journal, so nothing
+reported them. `switch_review.unowned_open_prs` collects every target the opener-core and
+closer-core journals named in the last 72 hours, lists open PRs in each supported repo, and flags
+a non-draft PR when neither its number nor any issue it closes was named and it has had no commit
+for 24 hours. `sync/workflows*` branches (Maint 71, already in the canary section) and dependabot
+PRs younger than three days (their own automerge) are skipped; PRs with a closer hold label are
+listed apart and not counted; `automerge`, `agents:local-loop` and `agents:keepalive` labels are
+shown on the row, since an idle day on those routes is a stall too. Unreadable journals make the
+section unknown before any GitHub read, because without them every PR would look unowned; a repo
+whose list fails is named as unmeasured. The weekly CLI computes it (not `review()`, which stays
+offline), and `ORCH_UNOWNED_PR_SCAN=0` turns it off, as the test suite does. Like the stuck-target
+section it is FYI only: it changes no lane, labels nothing and raises no owner question. The loop
+diagram records the connection.
+
 **What an agent prints passes one mask before this tool writes or returns it (2026-10-06).** While
 gh was broken for dispatched agents, agents fetched a GitHub token another way and printed it, and
 the dispatcher kept it wherever it keeps what an agent says: a vibe offload's stdout went into a

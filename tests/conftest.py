@@ -85,6 +85,13 @@ def default_launch_check_off(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def default_unowned_pr_scan_off(monkeypatch):
+    """The weekly unowned-PR scan reads this machine's lane journals and live GitHub; tests that
+    exercise it call `switch_review.unowned_open_prs` with injected journals and a fake gh."""
+    monkeypatch.setenv("ORCH_UNOWNED_PR_SCAN", "0")
+
+
+@pytest.fixture(autouse=True)
 def isolate_provision_events(tmp_path, monkeypatch):
     """Provision tests and their subprocesses must never append to the production ledger."""
     path = tmp_path / "provision-events.ndjson"
