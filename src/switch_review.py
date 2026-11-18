@@ -93,11 +93,10 @@ STUCK_HOLD_ACTIONS = frozenset({"already-parked", "complete"})
 UNOWNED_WINDOW_S = 72 * 3600
 UNOWNED_IDLE_S = 24 * 3600
 UNOWNED_JOURNAL_LINES = 5000
-UNOWNED_PR_LIMIT = 100  # a listing that fills the limit may omit PRs, so it reads as incomplete
-# gh fills `commits` from `commits(first: 100)`; a list that long may end before the newest push.
-# Idleness is read only when the last listed commit is the PR's head (`headRefOid`), so a list cut
-# short by any gh version reads as unmeasured rather than idle.
-UNOWNED_COMMIT_CAP = 100
+# The scan uses its own bounded GraphQL pagination rather than `gh pr list`: asking gh to expand
+# 100 PRs with nested commit-author data exceeded GitHub's GraphQL node limit in production.
+UNOWNED_PR_PAGE_SIZE = 25
+UNOWNED_PR_MAX_PAGES = 40  # explicit incomplete coverage after 1,000 open PRs in one repo
 UNOWNED_DEPENDABOT_GRACE_S = 3 * 86400  # dependabot keeps its own automerge for three days
 # The closer's hold labels (Workflows docs/ops/LOCAL_LANES.md). A held PR is listed, not counted.
 UNOWNED_HOLD_LABELS = frozenset(
@@ -114,6 +113,15 @@ UNOWNED_HOLD_LABELS = frozenset(
 )
 # Labels that name another route; the row says so, because an idle day there is still a stall.
 UNOWNED_ROUTE_LABELS = ("automerge", "agents:local-loop", "agents:keepalive")
+
+_UNOWNED_OPEN_PRS_QUERY = (
+    "query($owner:String!,$name:String!,$pageSize:Int!,$after:String){"
+    "repository(owner:$owner,name:$name){pullRequests(first:$pageSize,after:$after,states:OPEN,"
+    "orderBy:{field:CREATED_AT,direction:ASC}){nodes{number headRefName headRefOid isDraft createdAt "
+    "labels(first:100){nodes{name}pageInfo{hasNextPage}} "
+    "closingIssuesReferences(first:100){nodes{number repository{nameWithOwner}}pageInfo{hasNextPage}} "
+    "commits(last:1){nodes{commit{oid committedDate}}}}pageInfo{hasNextPage endCursor}}}}"
+)
 
 # Fleet template-delivery gates (Maint 68 promote + sync-branch canaries). Same horizon as switch
 # review: a chain latched for a week with open canaries is the failure mode observed 2026-09-02.
@@ -1906,6 +1914,104 @@ def _lane_targets_in_window(
     return targets, counts, oldest, errors
 
 
+def _unowned_open_pr_page(repo: str, cursor: str | None, *, gh_fn) -> tuple[list[dict], bool, str | None]:
+    """Read one deliberately small page of open PRs and normalize it for `_unowned_row`.
+
+    `gh pr list` asks GitHub to synthesize nested commit data for every requested PR.  Its hidden
+    query crossed the GraphQL node limit on Workflows.  This direct query needs only the PR head's
+    one final commit, its labels, and closing-issue identities; nested connections that do not fit
+    in their requested pages are retained as explicit per-PR incompleteness.
+    """
+    try:
+        owner, name = repo.split("/", 1)
+        if not owner or not name:
+            raise ValueError("invalid repo slug")
+    except ValueError as exc:
+        raise ValueError("invalid repo slug") from exc
+    args = [
+        "api",
+        "graphql",
+        "-f",
+        "query=" + _UNOWNED_OPEN_PRS_QUERY,
+        "-f",
+        "owner=" + owner,
+        "-f",
+        "name=" + name,
+        "-F",
+        f"pageSize={UNOWNED_PR_PAGE_SIZE}",
+    ]
+    if cursor is not None:
+        args.extend(["-f", "after=" + cursor])
+    ok, out, reason = gh_fn(args)
+    if not ok:
+        raise ValueError(reason or "GitHub GraphQL request failed")
+    try:
+        payload = json.loads(out or "{}")
+        connection = payload["data"]["repository"]["pullRequests"]
+        nodes = connection["nodes"]
+        page_info = connection["pageInfo"]
+        has_next = page_info["hasNextPage"]
+    except (KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("GitHub GraphQL PR page unreadable") from exc
+    if not isinstance(nodes, list) or not isinstance(has_next, bool):
+        raise ValueError("GitHub GraphQL PR page has invalid pagination")
+    next_cursor = page_info.get("endCursor")
+    if has_next and (not isinstance(next_cursor, str) or not next_cursor):
+        raise ValueError("GitHub GraphQL PR page has no next cursor")
+
+    rows: list[dict] = []
+    for node in nodes:
+        if not isinstance(node, dict):
+            rows.append({"_unowned_error": "PR node is not an object"})
+            continue
+        row = dict(node)
+        errors: list[str] = []
+        for field in ("labels", "closingIssuesReferences"):
+            connection = row.get(field)
+            if not isinstance(connection, dict) or not isinstance(connection.get("nodes"), list):
+                errors.append(f"{field} missing")
+                row[field] = []
+                continue
+            row[field] = connection["nodes"]
+            page_info = connection.get("pageInfo")
+            if not isinstance(page_info, dict) or page_info.get("hasNextPage") is not False:
+                errors.append(f"{field} pagination incomplete")
+        refs = row["closingIssuesReferences"]
+        normalized_refs = []
+        for ref in refs:
+            identity = (
+                ref.get("repository", {}).get("nameWithOwner") if isinstance(ref, dict) else None
+            )
+            if not isinstance(identity, str) or identity.count("/") != 1:
+                errors.append("closingIssuesReferences repository identity missing")
+                continue
+            owner, ref_name = identity.split("/", 1)
+            normalized_refs.append(
+                {
+                    "number": ref.get("number"),
+                    "repository": {"name": ref_name, "owner": {"login": owner}},
+                }
+            )
+        row["closingIssuesReferences"] = normalized_refs
+        commits = row.get("commits")
+        if not isinstance(commits, dict) or not isinstance(commits.get("nodes"), list):
+            errors.append("head commit missing")
+            row["commits"] = []
+        else:
+            normalized_commits = []
+            for node in commits["nodes"]:
+                commit = node.get("commit") if isinstance(node, dict) else None
+                if not isinstance(commit, dict):
+                    errors.append("head commit payload missing")
+                    continue
+                normalized_commits.append(commit)
+            row["commits"] = normalized_commits
+        if errors:
+            row["_unowned_error"] = "; ".join(errors)
+        rows.append(row)
+    return rows, has_next, next_cursor if has_next else None
+
+
 def unowned_open_prs(
     *,
     now: float | None = None,
@@ -1959,51 +2065,42 @@ def unowned_open_prs(
             f"journal tails reach back {report['window_hours']}h, "
             f"less than {UNOWNED_WINDOW_S // 3600}h"
         )
-    # The commit cap above is gh's (`commits(first: 100)`); the report names the gh it ran.
     ok, out, _reason = gh_fn(["--version"])
     report["gh_version"] = (out.splitlines() or ["unknown"])[0].strip() if ok else "unknown"
     repo_errors: list[str] = []
     for repo in repos:
-        ok, out, reason = gh_fn(
-            [
-                "pr",
-                "list",
-                "--repo",
-                repo,
-                "--state",
-                "open",
-                "--limit",
-                str(UNOWNED_PR_LIMIT),
-                "--json",
-                "number,headRefName,headRefOid,isDraft,createdAt,labels,commits,"
-                "closingIssuesReferences",
-            ]
-        )
-        if not ok:
-            repo_errors.append(f"{repo}: {reason}")
-            continue
-        try:
-            prs = json.loads(out or "[]")
-            if not isinstance(prs, list):
-                raise ValueError("pr list is not a list")
-        except ValueError as exc:
-            repo_errors.append(f"{repo}: pr list unreadable ({type(exc).__name__}: {exc})")
-            continue
-        if len(prs) >= UNOWNED_PR_LIMIT:
-            repo_errors.append(
-                f"{repo}: listing reached the {UNOWNED_PR_LIMIT}-PR limit, so some open PRs "
-                "were not read"
-            )
-        for pr in prs:
+        cursor = None
+        seen_numbers: set[int] = set()
+        repo_read = False
+        for _page in range(UNOWNED_PR_MAX_PAGES):
             try:
-                row = _unowned_row(repo, pr, targets=targets, now=now)
-            except (ValueError, KeyError, TypeError, AttributeError) as exc:
-                label = f"#{pr.get('number')}" if isinstance(pr, dict) else "entry"
-                repo_errors.append(f"{repo}{label}: unreadable ({type(exc).__name__}: {exc})")
-                continue
-            if row is not None:
-                (report["held"] if row["held_by"] else report["rows"]).append(row)
-        report["repos_checked"] += 1
+                prs, has_next, cursor = _unowned_open_pr_page(repo, cursor, gh_fn=gh_fn)
+            except ValueError as exc:
+                repo_errors.append(f"{repo}: pr listing unreadable ({exc})")
+                break
+            repo_read = True
+            for pr in prs:
+                try:
+                    number = int(pr["number"])
+                    if number in seen_numbers:
+                        raise ValueError("PR appeared on multiple pagination pages")
+                    seen_numbers.add(number)
+                    row = _unowned_row(repo, pr, targets=targets, now=now)
+                except (ValueError, KeyError, TypeError, AttributeError) as exc:
+                    label = f"#{pr.get('number')}" if isinstance(pr, dict) else "entry"
+                    repo_errors.append(f"{repo}{label}: unreadable ({type(exc).__name__}: {exc})")
+                    continue
+                if row is not None:
+                    (report["held"] if row["held_by"] else report["rows"]).append(row)
+            if not has_next:
+                break
+        else:
+            repo_errors.append(
+                f"{repo}: listing exceeded {UNOWNED_PR_MAX_PAGES} pages of "
+                f"{UNOWNED_PR_PAGE_SIZE} PRs, so coverage is incomplete"
+            )
+        if repo_read:
+            report["repos_checked"] += 1
     for key in ("rows", "held"):
         report[key].sort(key=lambda row: (-row["idle_days"], row["repo"], row["number"]))
     report["suspect"] = len(report["rows"])
@@ -2021,6 +2118,8 @@ def _unowned_row(repo: str, pr: dict, *, targets: set[str], now: float) -> dict 
     """
     if not isinstance(pr, dict):
         raise TypeError("pr entry is not an object")
+    if error := pr.get("_unowned_error"):
+        raise ValueError(str(error))
     number = int(pr["number"])
     branch = str(pr.get("headRefName") or "")
     if pr.get("isDraft") or branch.startswith("sync/workflows"):
@@ -2050,8 +2149,6 @@ def _unowned_row(repo: str, pr: dict, *, targets: set[str], now: float) -> dict 
         return None
     if not commits:
         raise ValueError("no commits listed")
-    if len(commits) >= UNOWNED_COMMIT_CAP:
-        raise ValueError(f"{len(commits)} commits listed; the newest push may be past the cap")
     head = str(pr.get("headRefOid") or "")
     if not head or str(commits[-1].get("oid") or "") != head:
         raise ValueError("the last listed commit is not the PR head, so the newest push is unknown")

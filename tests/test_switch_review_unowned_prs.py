@@ -57,11 +57,62 @@ def _gh(prs_by_repo, calls=None):
             return True, "gh version 2.89.0 (2026-03-26)\n", ""
         if calls is not None:
             calls.append(args)
-        repo = args[args.index("--repo") + 1]
+        assert args[:2] == ["api", "graphql"]
+        owner = next(arg[6:] for arg in args if arg.startswith("owner="))
+        name = next(arg[5:] for arg in args if arg.startswith("name="))
+        repo = f"{owner}/{name}"
         value = prs_by_repo[repo]
         if isinstance(value, str):
             return False, "", value
-        return True, json.dumps(value), ""
+        cursor_args = [arg for arg in args if arg.startswith("after=")]
+        page = int(cursor_args[0].split("=", 1)[1]) if cursor_args else 0
+        start = page * switch_review.UNOWNED_PR_PAGE_SIZE
+        batch = value[start : start + switch_review.UNOWNED_PR_PAGE_SIZE]
+
+        def node(pr):
+            refs = []
+            for ref in pr.get("closingIssuesReferences") or []:
+                repository = ref["repository"]
+                refs.append(
+                    {
+                        "number": ref["number"],
+                        "repository": {
+                            "nameWithOwner": f"{repository['owner']['login']}/{repository['name']}"
+                        },
+                    }
+                )
+            result = {**pr}
+            if "labels" in pr:
+                result["labels"] = {
+                    "nodes": pr["labels"], "pageInfo": {"hasNextPage": False}
+                }
+            if "closingIssuesReferences" in pr:
+                result["closingIssuesReferences"] = {
+                    "nodes": refs,
+                    "pageInfo": {"hasNextPage": False},
+                }
+            if "commits" in pr:
+                result["commits"] = {
+                    "nodes": [{"commit": commit} for commit in pr["commits"]]
+                }
+            return result
+
+        has_next = start + len(batch) < len(value)
+        return True, json.dumps(
+            {
+                "data": {
+                    "repository": {
+                        "pullRequests": {
+                            "nodes": [node(pr) for pr in batch],
+                            "pageInfo": {
+                                "hasNextPage": has_next,
+                                "endCursor": str(page + 1) if has_next else None,
+                            },
+                        }
+                    }
+                }
+            }
+        ), ""
 
     return fake
 
@@ -168,7 +219,7 @@ def test_a_failed_repo_is_unmeasured_and_known_suspects_stay(tmp_path):
         now=NOW, roots=_roots(tmp_path), gh_fn=gh, repos=[REPO, "stranske/Template"]
     )
     assert section["status"] == "unknown" and section["repos_checked"] == 1
-    assert "stranske/Template: HTTP 502" in section["measurement"]
+    assert "stranske/Template: pr listing unreadable (HTTP 502)" in section["measurement"]
     assert section["suspect"] == 1
 
 
@@ -182,23 +233,43 @@ def test_a_list_that_is_not_json_is_unmeasured_not_a_crash(tmp_path):
         now=NOW, roots=_roots(tmp_path), gh_fn=gh, repos=[REPO]
     )
     assert section["status"] == "unknown" and section["repos_checked"] == 0
-    assert "pr list unreadable" in section["measurement"]
+    assert "pr listing unreadable" in section["measurement"]
     assert section["gh_version"] == "unknown"
 
 
-def test_a_listing_that_fills_the_limit_is_incomplete_and_keeps_known_rows(tmp_path):
-    named = [f"{REPO}#{n}" for n in range(1, switch_review.UNOWNED_PR_LIMIT)]
-    roots = _roots(tmp_path, closer=named)
-    prs = [_pr(n) for n in range(1, switch_review.UNOWNED_PR_LIMIT + 1)]
+def test_paginated_listing_reads_complete_results(tmp_path):
+    prs = [_pr(n) for n in range(1, switch_review.UNOWNED_PR_PAGE_SIZE + 2)]
     section = switch_review.unowned_open_prs(
-        now=NOW, roots=roots, gh_fn=_gh({REPO: prs}), repos=[REPO]
+        now=NOW, roots=_roots(tmp_path), gh_fn=_gh({REPO: prs}), repos=[REPO]
     )
-    # Every listed PR but the last is owned; an unread 101st could be unowned.
-    assert [row["number"] for row in section["rows"]] == [switch_review.UNOWNED_PR_LIMIT]
-    assert section["status"] == "unknown"
-    assert "100-PR limit" in section["measurement"]
+    assert [row["number"] for row in section["rows"]] == list(range(1, len(prs) + 1))
+    assert section["status"] == "ok" and section["repos_checked"] == 1
     text = "\n".join(switch_review.format_unowned_open_prs(section))
-    assert "none in" not in text and "unknown" in text
+    assert "unknown" not in text
+
+
+def test_node_limit_regression_uses_a_small_direct_graphql_page(tmp_path):
+    calls = []
+    section = switch_review.unowned_open_prs(
+        now=NOW, roots=_roots(tmp_path), gh_fn=_gh({REPO: [_pr(1)]}, calls), repos=[REPO]
+    )
+    query = next(arg for arg in calls[0] if arg.startswith("query="))
+    assert section["repos_checked"] == 1 and section["status"] == "ok"
+    assert "pullRequests(first:$pageSize" in query
+    assert "commits(last:1){nodes{commit{oid committedDate}}}" in query
+    assert "author" not in query
+    assert f"pageSize={switch_review.UNOWNED_PR_PAGE_SIZE}" in calls[0]
+
+
+def test_listing_past_the_bounded_page_cap_is_explicitly_incomplete(tmp_path, monkeypatch):
+    monkeypatch.setattr(switch_review, "UNOWNED_PR_PAGE_SIZE", 2)
+    monkeypatch.setattr(switch_review, "UNOWNED_PR_MAX_PAGES", 2)
+    prs = [_pr(n) for n in range(1, 6)]
+    section = switch_review.unowned_open_prs(
+        now=NOW, roots=_roots(tmp_path), gh_fn=_gh({REPO: prs}), repos=[REPO]
+    )
+    assert section["repos_checked"] == 1 and section["status"] == "unknown"
+    assert "coverage is incomplete" in section["measurement"]
 
 
 @pytest.mark.parametrize(
@@ -234,16 +305,6 @@ def test_a_pr_missing_evidence_is_unmeasured_and_others_still_count(tmp_path, dr
     assert [row["number"] for row in section["rows"]] == [2]
     assert section["status"] == "unknown"
     assert f"{REPO}#1: unreadable" in section["measurement"]
-
-
-def test_a_commit_list_at_the_cap_is_unmeasured_not_idle(tmp_path):
-    capped = _pr(1)
-    capped["commits"] = capped["commits"] * switch_review.UNOWNED_COMMIT_CAP
-    section = switch_review.unowned_open_prs(
-        now=NOW, roots=_roots(tmp_path), gh_fn=_gh({REPO: [capped]}), repos=[REPO]
-    )
-    assert section["rows"] == [] and section["status"] == "unknown"
-    assert "newest push may be past the cap" in section["measurement"]
 
 
 def _write_rounds(root, stamps):
