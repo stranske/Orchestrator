@@ -1193,6 +1193,43 @@ def _shorten_long_lines(patch_text: str) -> tuple[str, list[dict]]:
     return "\n".join(lines), shortened
 
 
+def _terminal_finding_comment(repo: str, pr: dict, decision: dict) -> dict | None:
+    """The trusted comment whose verifier-corpus-decision record IS ``decision``'s terminal record.
+
+    Since the verification_event protocol a PR's decision spans a state-marker comment and a terminal
+    comment, and ``decision_from_pr`` folds both into ``_lifecycle_history``. Re-deriving the decision from
+    one comment alone therefore never equals it, so every dispute since 2026-11-03 was refused here as
+    "finding comment unavailable" (57 of 90 live cases, 0 certified; Orchestrator#1377 stuck at graded 4).
+    The terminal comment is matched on its own record instead: same exact identity, run_id, run_attempt and
+    verdict (the attempt match refuses a stale record from another attempt)."""
+    number = pr.get("number")
+    if not isinstance(number, int):
+        return None
+    head = pr.get("headRefOid")
+    merge = (pr.get("mergeCommit") or {}).get("oid")
+    prefix = f"https://github.com/{repo.lower()}/pull/{number}#issuecomment-"
+    for comment in reversed((pr.get("comments") or {}).get("nodes") or []):
+        if not isinstance(comment, dict):
+            continue
+        if (comment.get("author") or {}).get("login") not in verifier_evidence.TRUSTED_AUTHORS:
+            continue
+        if not str(comment.get("url") or "").lower().startswith(prefix):
+            continue
+        for raw in verifier_evidence.MARKER_RE.findall(str(comment.get("body") or "")):
+            try:
+                record = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if (
+                verifier_evidence.decision_matches_identity(record, repo, number, head, merge)
+                and str(record.get("run_id")) == str(decision.get("run_id"))
+                and str(record.get("run_attempt")) == str(decision.get("run_attempt"))
+                and record.get("verdict") == decision.get("verdict")
+            ):
+                return comment
+    return None
+
+
 def fetch_evidence(row: dict) -> dict:
     repo, sep, number = str(row.get("target") or "").partition("#")
     if not sep or not number.isdigit() or repo.count("/") != 1:
@@ -1243,6 +1280,8 @@ def fetch_evidence(row: dict) -> dict:
         ),
         None,
     )
+    if finding is None:
+        finding = _terminal_finding_comment(repo, pr, decision)
     if finding is None:
         raise ValueError("merge-bound verifier finding comment unavailable")
     rollup = _gate_rollup(pr)

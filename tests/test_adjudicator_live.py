@@ -1089,3 +1089,51 @@ def test_legacy_backfill_keys_on_case_receipt_for_same_target_and_survives_repor
         1,
         1,
     )
+
+
+def test_a_case_refused_by_the_finding_lookup_defect_is_retried_then_certified(world):
+    """Orchestrator#1377: 57 cases were refused as "finding comment unavailable" by a lookup defect (fixed
+    in adjudicator_retro). Such a refusal is not final, so the fixed lookup reaches them; others stay final.
+    """
+    defect = "merge-bound verifier finding comment unavailable"
+
+    def refused(_row):
+        raise ValueError(defect)
+
+    first = live.run_live(**{**world["common"], "evidence_reader": refused})
+    row = first["rows"][0]
+    assert row["certification"] == {"status": "uncertified", "reason": defect}
+    assert not live._final(row)
+    assert json.loads(world["path"].read_text())["summary"]["refusals_retryable"] == 1
+    second = live.run_live(**world["common"])
+    assert (second["attempted"], second["advised"]) == (1, 1)
+    assert second["rows"][0]["certification"]["status"] == "certified"
+    assert second["rows"][0]["attempts"] == 2
+    other = {"certification": {"status": "uncertified", "reason": "no criteria"}, "attempts": 1}
+    assert live._final(other) is True
+    assert live._final({**row, "attempts": live.MAX_ATTEMPTS}) is True
+
+
+def test_cases_with_known_durability_are_attempted_first(world):
+    """Only a case with later truth can be graded now; the daily cap goes to those first."""
+    now = world["now"]
+    with feedback._conn() as conn:
+        conn.execute(
+            "INSERT INTO runs(run_id,ts,target) VALUES ('live-2',?,'owner/repo#2')", (now + 5,)
+        )
+        conn.execute(
+            "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged,durability,"
+            "durability_checked_ts) VALUES ('live-2','NON_PASS','PASS',1,NULL,NULL)"
+        )
+        conn.execute(
+            "UPDATE outcomes SET durability='durable', durability_checked_ts=? WHERE run_id='live-1'",
+            (feedback.DURABILITY_DETECTION_SINCE + 10,),
+        )
+    seen = []
+
+    def reader(dispute):
+        seen.append(dispute["target"])
+        raise ValueError("no criteria")
+
+    live.run_live(**{**world["common"], "evidence_reader": reader, "limit": 1})
+    assert seen == ["owner/repo#1"]  # the older, durable case before the newer unknown one
