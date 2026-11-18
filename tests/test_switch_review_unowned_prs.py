@@ -83,36 +83,36 @@ def _gh(prs_by_repo, calls=None):
                 )
             result = {**pr}
             if "labels" in pr:
-                result["labels"] = {
-                    "nodes": pr["labels"], "pageInfo": {"hasNextPage": False}
-                }
+                result["labels"] = {"nodes": pr["labels"], "pageInfo": {"hasNextPage": False}}
             if "closingIssuesReferences" in pr:
                 result["closingIssuesReferences"] = {
                     "nodes": refs,
                     "pageInfo": {"hasNextPage": False},
                 }
             if "commits" in pr:
-                result["commits"] = {
-                    "nodes": [{"commit": commit} for commit in pr["commits"]]
-                }
+                result["commits"] = {"nodes": [{"commit": commit} for commit in pr["commits"]]}
             return result
 
         has_next = start + len(batch) < len(value)
-        return True, json.dumps(
-            {
-                "data": {
-                    "repository": {
-                        "pullRequests": {
-                            "nodes": [node(pr) for pr in batch],
-                            "pageInfo": {
-                                "hasNextPage": has_next,
-                                "endCursor": str(page + 1) if has_next else None,
-                            },
+        return (
+            True,
+            json.dumps(
+                {
+                    "data": {
+                        "repository": {
+                            "pullRequests": {
+                                "nodes": [node(pr) for pr in batch],
+                                "pageInfo": {
+                                    "hasNextPage": has_next,
+                                    "endCursor": str(page + 1) if has_next else None,
+                                },
+                            }
                         }
                     }
                 }
-            }
-        ), ""
+            ),
+            "",
+        )
 
     return fake
 

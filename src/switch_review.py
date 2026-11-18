@@ -1914,7 +1914,9 @@ def _lane_targets_in_window(
     return targets, counts, oldest, errors
 
 
-def _unowned_open_pr_page(repo: str, cursor: str | None, *, gh_fn) -> tuple[list[dict], bool, str | None]:
+def _unowned_open_pr_page(
+    repo: str, cursor: str | None, *, gh_fn
+) -> tuple[list[dict], bool, str | None]:
     """Read one deliberately small page of open PRs and normalize it for `_unowned_row`.
 
     `gh pr list` asks GitHub to synthesize nested commit data for every requested PR.  Its hidden
