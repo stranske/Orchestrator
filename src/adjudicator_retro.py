@@ -1203,6 +1203,8 @@ def _terminal_finding_comment(repo: str, pr: dict, decision: dict) -> dict | Non
     The terminal comment is matched on its own record instead: same exact identity, run_id, run_attempt and
     verdict (the attempt match refuses a stale record from another attempt)."""
     number = pr.get("number")
+    if not isinstance(number, int):
+        return None
     head = pr.get("headRefOid")
     merge = (pr.get("mergeCommit") or {}).get("oid")
     prefix = f"https://github.com/{repo.lower()}/pull/{number}#issuecomment-"
