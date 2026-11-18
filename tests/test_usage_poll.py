@@ -852,3 +852,18 @@ def test_appended_history_covers_period_ended_one_day_earlier(evidence, pollers)
     stats = {}
     assert pacing_usage.poll_coverage(start, end, now=NOW, stats=stats) == (1008, 1008)
     assert stats["longest_gap"] == 600
+
+
+def test_codex_poll_failure_names_a_safe_reason(pollers):
+    """2026-11-18: the codex poller logged 303 failures with no reason. It now names its own fixed reasons,
+    or only the exception class for anything else, so no message carrying an identifier is logged.
+    """
+    module = pollers["codex"]
+    assert module.failure_reason(RuntimeError("app-server response timeout")) == (
+        "app-server response timeout"
+    )
+    assert module.failure_reason(RuntimeError("app-server RPC failed (code -32001)")) == (
+        "app-server RPC failed (code -32001)"
+    )
+    assert module.failure_reason(FileNotFoundError("/usr/local/bin/codex")) == "FileNotFoundError"
+    assert module.failure_reason(ValueError("account acct_123 invalid")) == "ValueError"
