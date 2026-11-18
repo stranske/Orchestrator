@@ -59,7 +59,8 @@
     "tests/test_runtime_ac_pr_body_spec.py",
     "tests/test_switch_review_stuck_targets.py",
     "tests/test_router_comparative.py",
-    "tests/test_gemini_pacing_source.py"
+    "tests/test_gemini_pacing_source.py",
+    "tests/test_switch_review_unowned_prs.py"
   ],
   "shards": [
     [
@@ -447,7 +448,8 @@
       "tests/test_switch_review_ci_walltime.py",
       "tests/test_gate_label_job.py",
       "tests/test_runtime_ac_pr_body_spec.py",
-      "tests/test_switch_review_stuck_targets.py"
+      "tests/test_switch_review_stuck_targets.py",
+      "tests/test_switch_review_unowned_prs.py"
     ],
     [
       "tests/test_activation_audit_source_memo.py",
