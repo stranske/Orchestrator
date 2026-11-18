@@ -52,6 +52,8 @@ def _pr(number, *, idle_days=5, branch="codex/issue-1", labels=(), closes=(), dr
 
 def _gh(prs_by_repo, calls=None):
     def fake(args, **_kwargs):
+        if args == ["--version"]:
+            return True, "gh version 2.89.0 (2026-03-26)\n", ""
         if calls is not None:
             calls.append(args)
         repo = args[args.index("--repo") + 1]
@@ -72,6 +74,7 @@ def test_an_idle_pr_no_lane_named_is_flagged(tmp_path):
     )
     assert section["status"] == "ok"
     assert section["suspect"] == 1
+    assert section["gh_version"] == "gh version 2.89.0 (2026-03-26)"
     row = section["rows"][0]
     assert (row["repo"], row["number"], row["idle_days"], row["closes"]) == (REPO, 4714, 5.0, [])
     text = "\n".join(switch_review.format_unowned_open_prs(section))
@@ -169,7 +172,9 @@ def test_a_failed_repo_is_unmeasured_and_known_suspects_stay(tmp_path):
 
 
 def test_a_list_that_is_not_json_is_unmeasured_not_a_crash(tmp_path):
-    def gh(_args, **_k):
+    def gh(args, **_k):
+        if args == ["--version"]:
+            return False, "", "gh missing"
         return True, "not json", ""
 
     section = switch_review.unowned_open_prs(
@@ -177,6 +182,7 @@ def test_a_list_that_is_not_json_is_unmeasured_not_a_crash(tmp_path):
     )
     assert section["status"] == "unknown" and section["repos_checked"] == 0
     assert "pr list unreadable" in section["measurement"]
+    assert section["gh_version"] == "unknown"
 
 
 def test_a_listing_that_fills_the_limit_is_incomplete_and_keeps_known_rows(tmp_path):

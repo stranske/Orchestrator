@@ -1957,6 +1957,9 @@ def unowned_open_prs(
             f"journal tails reach back {report['window_hours']}h, "
             f"less than {UNOWNED_WINDOW_S // 3600}h"
         )
+    # The commit cap above is gh's (`commits(first: 100)`), so the report names the gh it ran.
+    ok, out, _reason = gh_fn(["--version"])
+    report["gh_version"] = (out.splitlines() or ["unknown"])[0].strip() if ok else "unknown"
     repo_errors: list[str] = []
     for repo in repos:
         ok, out, reason = gh_fn(
