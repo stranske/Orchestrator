@@ -693,10 +693,11 @@ PRs younger than three days (their own automerge) are skipped; PRs with a closer
 listed apart and not counted; `automerge`, `agents:local-loop` and `agents:keepalive` labels are
 shown on the row, since an idle day on those routes is a stall too. Unreadable journals make the
 section unknown before any GitHub read, because without them every PR would look unowned; a repo
-whose list fails is named as unmeasured. The weekly CLI computes it (not `review()`, which stays
-offline), and `ORCH_UNOWNED_PR_SCAN=0` turns it off, as the test suite does. Like the stuck-target
-section it is FYI only: it changes no lane, labels nothing and raises no owner question. The loop
-diagram records the connection.
+whose list fails, or fills the 100-PR listing limit, is named as unmeasured, and so is a PR whose
+record lacks labels, closing links or a complete commit list (gh caps that list at 100). The
+weekly CLI computes it and `review()` does not run it; `ORCH_UNOWNED_PR_SCAN=0` turns it off, as
+the test suite does. Like the stuck-target section it is FYI only: it changes no lane, labels
+nothing and raises no owner question. The loop diagram records the connection.
 
 **What an agent prints passes one mask before this tool writes or returns it (2026-10-06).** While
 gh was broken for dispatched agents, agents fetched a GitHub token another way and printed it, and

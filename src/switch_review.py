@@ -93,7 +93,9 @@ STUCK_HOLD_ACTIONS = frozenset({"already-parked", "complete"})
 UNOWNED_WINDOW_S = 72 * 3600
 UNOWNED_IDLE_S = 24 * 3600
 UNOWNED_JOURNAL_LINES = 5000
-UNOWNED_PR_LIMIT = 50
+UNOWNED_PR_LIMIT = 100  # a listing that fills the limit may omit PRs, so it reads as incomplete
+# gh fills `commits` from `commits(first: 100)`; a list that long may end before the newest push.
+UNOWNED_COMMIT_CAP = 100
 UNOWNED_DEPENDABOT_GRACE_S = 3 * 86400  # dependabot keeps its own automerge for three days
 # The closer's hold labels (Workflows docs/ops/LOCAL_LANES.md). A held PR is listed, not counted.
 UNOWNED_HOLD_LABELS = frozenset(
@@ -1978,14 +1980,23 @@ def unowned_open_prs(
             prs = json.loads(out or "[]")
             if not isinstance(prs, list):
                 raise ValueError("pr list is not a list")
-            for pr in prs:
-                row = _unowned_row(repo, pr, targets=targets, now=now)
-                if row is None:
-                    continue
-                (report["held"] if row["held_by"] else report["rows"]).append(row)
-        except (ValueError, KeyError, TypeError, AttributeError) as exc:
+        except ValueError as exc:
             repo_errors.append(f"{repo}: pr list unreadable ({type(exc).__name__}: {exc})")
             continue
+        if len(prs) >= UNOWNED_PR_LIMIT:
+            repo_errors.append(
+                f"{repo}: listing reached the {UNOWNED_PR_LIMIT}-PR limit, so some open PRs "
+                "were not read"
+            )
+        for pr in prs:
+            try:
+                row = _unowned_row(repo, pr, targets=targets, now=now)
+            except (ValueError, KeyError, TypeError, AttributeError) as exc:
+                label = f"#{pr.get('number')}" if isinstance(pr, dict) else "entry"
+                repo_errors.append(f"{repo}{label}: unreadable ({type(exc).__name__}: {exc})")
+                continue
+            if row is not None:
+                (report["held"] if row["held_by"] else report["rows"]).append(row)
         report["repos_checked"] += 1
     for key in ("rows", "held"):
         report[key].sort(key=lambda row: (-row["idle_days"], row["repo"], row["number"]))
@@ -1996,7 +2007,12 @@ def unowned_open_prs(
 
 
 def _unowned_row(repo: str, pr: dict, *, targets: set[str], now: float) -> dict | None:
-    """One open PR as a row, or None when a lane owns it, it is a draft, or it is not idle."""
+    """One open PR as a row, or None when a lane owns it, it is a draft, or it is not idle.
+
+    Raises for a record that lacks the evidence a verdict needs (labels, closing links, a
+    complete commit list with a readable newest date), so the caller reports it unmeasured
+    instead of reading missing evidence as idle and unheld.
+    """
     if not isinstance(pr, dict):
         raise TypeError("pr entry is not an object")
     number = int(pr["number"])
@@ -2008,8 +2024,15 @@ def _unowned_row(repo: str, pr: dict, *, targets: set[str], now: float) -> dict 
         raise ValueError(f"#{number} has no readable createdAt")
     if branch.startswith("dependabot/") and now - created < UNOWNED_DEPENDABOT_GRACE_S:
         return None
+    refs, labels_raw, commits = (
+        pr["closingIssuesReferences"],
+        pr["labels"],
+        pr["commits"],
+    )
+    if not all(isinstance(value, list) for value in (refs, labels_raw, commits)):
+        raise TypeError("closingIssuesReferences, labels and commits must be lists")
     linked = [f"{repo}#{number}"]
-    for ref in pr.get("closingIssuesReferences") or []:
+    for ref in refs:
         owner_repo = repo
         repository = ref.get("repository") or {}
         name = repository.get("name")
@@ -2019,12 +2042,17 @@ def _unowned_row(repo: str, pr: dict, *, targets: set[str], now: float) -> dict 
         linked.append(f"{owner_repo}#{int(ref['number'])}")
     if any(target in targets for target in linked):
         return None
-    commits = pr.get("commits") or []
-    last_push = _parse_iso_ts(str(commits[-1].get("committedDate") or "")) if commits else None
-    idle_since = max(created, last_push or created)
+    if not commits:
+        raise ValueError("no commits listed")
+    if len(commits) >= UNOWNED_COMMIT_CAP:
+        raise ValueError(f"{len(commits)} commits listed; the newest push may be past the cap")
+    last_push = _parse_iso_ts(str(commits[-1].get("committedDate") or ""))
+    if last_push is None:
+        raise ValueError("newest commit has no readable committedDate")
+    idle_since = max(created, last_push)
     if now - idle_since < UNOWNED_IDLE_S:
         return None
-    labels = {str(label.get("name")) for label in pr.get("labels") or []}
+    labels = {str(label["name"]) for label in labels_raw}
     return {
         "repo": repo,
         "number": number,
