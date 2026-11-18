@@ -426,3 +426,15 @@ def test_invalid_review_round_refuses_before_claiming(monkeypatch, review_round)
     )
     assert result == {"error": "review round outside bounded review loop"}
     claim.assert_not_called()
+
+
+def test_code_task_prompts_carry_the_delivery_rules_and_reviews_do_not():
+    """Owner decision 2026-11-18: a local agent that pushes code runs the repo's checks first and keeps the
+    delivery to code and tests; a review prompt carries neither rule."""
+    implement = dispatcher.build_prompt("implement", "owner/repo#1", "detail")
+    assert dispatcher.DELIVERY_RULES in implement
+    assert "never push a commit you know is red" in implement and "docs/evidence/" in implement
+    assert implement.endswith(dispatcher.OWNER_QUESTION_PROTOCOL)
+    assert dispatcher.DELIVERY_RULES not in dispatcher.build_prompt(
+        "review", "owner/repo#1", "detail"
+    )

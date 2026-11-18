@@ -1269,7 +1269,11 @@ def choose_mode(
     needs_local: str = "",
     local: dict | None = None,
 ) -> dict:
-    """Where the next start runs: {agent, mode: 'local'|'remote'|None, reason, local}.
+    """Where the next start runs: {agent, mode: 'local'|'remote'|None, reason, local, route_source}.
+
+    `route_source` is select_agent's own attribution ("route_weights_comparative" when the comparative
+    ranking changed the pick), passed through so a caller that starts the work can record it: without it
+    opener-core starts could not show whether comparative routing ever chose an agent (2026-11-18).
 
     Local first while `local_capacity` is ok (the local keepalive loop, local_loop.py, gives it the same
     CI-feedback rounds hosted keepalive has). Offload to hosted keepalive when local capacity is out, the
@@ -1297,6 +1301,7 @@ def choose_mode(
                 "mode": "local",
                 "reason": f"{why}: {local['reason']}",
                 "local": local,
+                "route_source": pick.get("route_source"),
             }
         if needs_local:
             return {
@@ -1322,6 +1327,7 @@ def choose_mode(
             "mode": "remote",
             "reason": f"offload to hosted: {local_miss}",
             "local": local,
+            "route_source": remote.get("route_source"),
         }
     return {
         "agent": None,
