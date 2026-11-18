@@ -380,6 +380,25 @@ def _lane_capability_match(task_type: str) -> None:
         pass
 
 
+# Owner decision 2026-11-18 (wave-2 lane review): 28 of 59 agent PRs were red at some commit, about 15 on
+# lint/format/type checks the agent could have run first, and delivered PRs carried 500-600 line
+# verification documents. The hosted keepalive prompt carries the same two rules (Workflows#4736).
+DELIVERY_RULES = (
+    "Before every push: run the lint, format and type checks this repository's CI runs (read "
+    ".github/workflows/ or the Makefile for the exact commands) on the files you changed, and the "
+    "acceptance criteria's named test(s). Fix what fails before pushing; never push a commit you know is "
+    "red. If a failure is outside your change, say so in the PR body.\n"
+    "Keep the delivery to code and tests: do not add verification, evidence or acceptance documents "
+    "(docs/evidence/, docs/verification/, docs/acceptance/) or tests that assert on a source file's "
+    "bytes, unless a task names that file. Put the test commands you ran and the deliberate-break "
+    "result in the PR body."
+)
+# Task types whose agent pushes code; review and epic planning do not.
+DELIVERY_TASK_TYPES = frozenset(
+    {"implement", "codemod", "mechanical", "polish", "testgen", "cross_repo", "runtime_ac"}
+)
+
+
 def build_prompt(
     task_type: str, target: str, target_detail: str = "", lane: str | None = None
 ) -> str:
@@ -398,7 +417,8 @@ def build_prompt(
         body = f"Work {target} ({task_type}). {target_detail}".strip()
     else:
         body = tmpl.format(target=target, target_detail=target_detail).strip()
-    return f"{body}\n\n{OWNER_QUESTION_PROTOCOL}"
+    rules = f"{DELIVERY_RULES}\n\n" if task_type in DELIVERY_TASK_TYPES else ""
+    return f"{body}\n\n{rules}{OWNER_QUESTION_PROTOCOL}"
 
 
 def _is_git_worktree(cwd: str | Path, *, timeout: float | None = None) -> bool:
