@@ -106,3 +106,24 @@ def test_tried_agents_are_skipped_on_both_sides(monkeypatch):
     fake_select(monkeypatch, local_pick="codex", remote_pick="codex")
     pick = router.choose_mode("implement", {}, local=FULL, tried={"codex"})
     assert pick["mode"] == "remote" and pick["agent"] != "codex"
+
+
+def test_route_source_is_passed_through_on_both_sides(monkeypatch):
+    """A start records which ranking chose its agent; choose_mode used to drop select_agent's attribution."""
+    monkeypatch.setattr(
+        router,
+        "select_agent",
+        lambda task_type, cap, **kw: {
+            "agent": "codex",
+            "route_source": "route_weights_comparative",
+        },
+    )
+    monkeypatch.setattr(
+        router,
+        "select_remote_agent",
+        lambda *a, **k: {"agent": "cursor", "route_source": "route_weights"},
+    )
+    local = router.choose_mode("implement", {}, local=OK)
+    assert (local["mode"], local["route_source"]) == ("local", "route_weights_comparative")
+    remote = router.choose_mode("implement", {}, local=FULL)
+    assert (remote["mode"], remote["route_source"]) == ("remote", "route_weights")
