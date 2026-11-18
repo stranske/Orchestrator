@@ -272,6 +272,82 @@ def test_listing_past_the_bounded_page_cap_is_explicitly_incomplete(tmp_path, mo
     assert "coverage is incomplete" in section["measurement"]
 
 
+def _mutating_gh(base, mutate):
+    """Wrap the fake so a test can edit the GraphQL payload before the scan reads it."""
+
+    def fake(args, **kwargs):
+        ok, out, reason = base(args, **kwargs)
+        if not ok or args == ["--version"]:
+            return ok, out, reason
+        payload = json.loads(out)
+        mutate(payload, args)
+        return ok, json.dumps(payload), reason
+
+    return fake
+
+
+def _nodes(payload):
+    return payload["data"]["repository"]["pullRequests"]["nodes"]
+
+
+def _edit_pr_one(edit):
+    def mutate(payload, _args):
+        for node in _nodes(payload):
+            if node["number"] == 1:
+                edit(node)
+
+    return mutate
+
+
+@pytest.mark.parametrize("field", ["labels", "closingIssuesReferences"])
+def test_a_connection_with_more_pages_is_unmeasured_and_others_still_count(tmp_path, field):
+    def edit(node):
+        node[field]["pageInfo"]["hasNextPage"] = True
+
+    gh_fn = _mutating_gh(_gh({REPO: [_pr(1), _pr(2)]}), _edit_pr_one(edit))
+    section = switch_review.unowned_open_prs(
+        now=NOW, roots=_roots(tmp_path), gh_fn=gh_fn, repos=[REPO]
+    )
+    assert [row["number"] for row in section["rows"]] == [2]
+    assert section["status"] == "unknown"
+    assert f"{REPO}#1: unreadable" in section["measurement"]
+    assert f"{field} pagination incomplete" in section["measurement"]
+
+
+def test_a_closing_reference_with_no_repository_is_unmeasured_not_a_crash(tmp_path):
+    def edit(node):
+        node["closingIssuesReferences"]["nodes"] = [{"number": 7, "repository": None}]
+
+    gh_fn = _mutating_gh(_gh({REPO: [_pr(1), _pr(2)]}), _edit_pr_one(edit))
+    section = switch_review.unowned_open_prs(
+        now=NOW, roots=_roots(tmp_path), gh_fn=gh_fn, repos=[REPO]
+    )
+    assert [row["number"] for row in section["rows"]] == [2]
+    assert section["status"] == "unknown"
+    assert "closingIssuesReferences repository identity missing" in section["measurement"]
+
+
+def test_a_cursor_that_does_not_advance_stops_the_listing_as_incomplete(tmp_path, monkeypatch):
+    monkeypatch.setattr(switch_review, "UNOWNED_PR_PAGE_SIZE", 2)
+    calls = []
+
+    def repeat_cursor(payload, args):
+        page_info = payload["data"]["repository"]["pullRequests"]["pageInfo"]
+        cursor_args = [arg for arg in args if arg.startswith("after=")]
+        if cursor_args and page_info["hasNextPage"]:
+            page_info["endCursor"] = cursor_args[0].split("=", 1)[1]
+
+    prs = [_pr(n) for n in range(1, 8)]
+    gh_fn = _mutating_gh(_gh({REPO: prs}, calls), repeat_cursor)
+    section = switch_review.unowned_open_prs(
+        now=NOW, roots=_roots(tmp_path), gh_fn=gh_fn, repos=[REPO]
+    )
+    assert len(calls) == 2
+    assert [row["number"] for row in section["rows"]] == [1, 2]
+    assert section["status"] == "unknown"
+    assert "cursor did not advance" in section["measurement"]
+
+
 @pytest.mark.parametrize(
     "drop, value",
     [

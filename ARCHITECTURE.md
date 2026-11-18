@@ -693,9 +693,10 @@ PRs younger than three days (their own automerge) are skipped; PRs with a closer
 listed apart and not counted; `automerge`, `agents:local-loop` and `agents:keepalive` labels are
 shown on the row, since an idle day on those routes is a stall too. Unreadable journals make the
 section unknown before any GitHub read, because without them every PR would look unowned; a repo
-whose list fails, or fills the 100-PR listing limit, is named as unmeasured, and so is a PR whose
-record lacks labels or closing links, or whose listed commits stop short of its head commit (gh
-caps that list at 100, so idleness is read only when the last listed commit is the head). The
+whose list fails, or still has pages left after 40 pages of 25 PRs, or returns a page cursor that
+does not advance, is named as unmeasured. So is a PR whose labels or closing links are missing or
+run past one page, or whose one requested commit (`commits(last:1)`) is not its `headRefOid`,
+since idleness is read only from the head commit. The
 weekly CLI computes it and `review()` does not run it; `ORCH_UNOWNED_PR_SCAN=0` turns it off, as
 the test suite does. Like the stuck-target section it is FYI only: it changes no lane, labels
 nothing and raises no owner question. The loop diagram records the connection.

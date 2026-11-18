@@ -1960,6 +1960,8 @@ def _unowned_open_pr_page(
     next_cursor = page_info.get("endCursor")
     if has_next and (not isinstance(next_cursor, str) or not next_cursor):
         raise ValueError("GitHub GraphQL PR page has no next cursor")
+    if has_next and next_cursor == cursor:
+        raise ValueError("GitHub GraphQL PR page cursor did not advance")
 
     rows: list[dict] = []
     for node in nodes:
@@ -1981,9 +1983,8 @@ def _unowned_open_pr_page(
         refs = row["closingIssuesReferences"]
         normalized_refs = []
         for ref in refs:
-            identity = (
-                ref.get("repository", {}).get("nameWithOwner") if isinstance(ref, dict) else None
-            )
+            repository = ref.get("repository") if isinstance(ref, dict) else None
+            identity = repository.get("nameWithOwner") if isinstance(repository, dict) else None
             if not isinstance(identity, str) or identity.count("/") != 1:
                 errors.append("closingIssuesReferences repository identity missing")
                 continue
