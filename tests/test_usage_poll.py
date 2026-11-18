@@ -470,7 +470,7 @@ def test_stale_poll_prevents_redebiting_before_inventory_observation(evidence):
     assert bank["codex"] == [dict(expires=NOW + 10000)]
 
 
-def test_full_poll_coverage_without_capacity_baseline_cannot_pass(evidence):
+def test_full_poll_coverage_without_incidents_is_a_measured_zero(evidence):
     start = NOW - 600
     for pool in ("codex", "claude"):
         row = json.loads((pacing_usage.POLL_DIR / f"{pool}-usage.json").read_text())
@@ -491,7 +491,10 @@ def test_full_poll_coverage_without_capacity_baseline_cannot_pass(evidence):
     (evidence / "rate-limit-incidents.ndjson").write_text("")
     text = pacing_usage.report(evidence, now=NOW)
     line = next(item for item in text.splitlines() if item.startswith("2:"))
-    assert "unmeasured" in line and "coverage=0/1 ticks" in line
+    # Owner 2026-11-18 (judge each incident): with no incident in the period there is nothing to judge, so
+    # G2 is a measured zero; the coverage it had is still printed. An incident in a gap stays unmeasured
+    # (tests/test_pacing_pass_numbers.py).
+    assert line.count("2: 0 incidents while another pool ok") == 1 and "coverage=0/1 ticks" in line
 
 
 def test_fallback_snapshot_rotation_cannot_crash_usage(evidence, monkeypatch, capsys):
@@ -575,9 +578,14 @@ def test_coverage_gap_between_slot_ticks_is_uncovered(evidence, phase):
     (evidence / "rate-limit-incidents.ndjson").write_text("")
     for line in pacing_usage.report(evidence, now=NOW).splitlines():
         if line.startswith(("2:", "3:")):
-            assert "unmeasured" in line and "PASS" not in line
             assert "coverage=4/5 ticks" in line
             assert "longest poll gap=1900s/1800s allowance; uncovered=1 slots" in line
+        if line.startswith("3:"):  # the dispatch share still needs the whole period covered
+            assert "unmeasured" in line and "PASS" not in line
+        if line.startswith(
+            "2:"
+        ):  # owner 2026-11-18: judged per incident; a gap with none in it is no gap
+            assert line.count("2: 0 incidents while another pool ok; incidents judged 0/0") == 1
 
 
 @pytest.mark.parametrize("first", ["hang", "cost"])
