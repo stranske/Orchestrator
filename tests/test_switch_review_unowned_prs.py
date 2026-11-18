@@ -36,10 +36,11 @@ def _pr(number, *, idle_days=5, branch="codex/issue-1", labels=(), closes=(), dr
     return {
         "number": number,
         "headRefName": branch,
+        "headRefOid": f"head{number}",
         "isDraft": draft,
         "createdAt": _iso(stamp - DAY),
         "labels": [{"name": name} for name in labels],
-        "commits": [{"committedDate": _iso(stamp)}],
+        "commits": [{"oid": f"head{number}", "committedDate": _iso(stamp)}],
         "closingIssuesReferences": [
             {
                 "number": n,
@@ -207,9 +208,19 @@ def test_a_listing_that_fills_the_limit_is_incomplete_and_keeps_known_rows(tmp_p
         ("labels", None),
         ("closingIssuesReferences", None),
         ("commits", []),
-        ("commits", [{"committedDate": "not a date"}]),
+        ("commits", [{"oid": "head1", "committedDate": "not a date"}]),
+        ("headRefOid", None),
+        ("commits", [{"oid": "older", "committedDate": "2026-11-01T00:00:00Z"}]),
     ],
-    ids=["no-commits-key", "no-labels-key", "no-links-key", "empty-commits", "bad-date"],
+    ids=[
+        "no-commits-key",
+        "no-labels-key",
+        "no-links-key",
+        "empty-commits",
+        "bad-date",
+        "no-head",
+        "last-listed-not-head",
+    ],
 )
 def test_a_pr_missing_evidence_is_unmeasured_and_others_still_count(tmp_path, drop, value):
     broken = _pr(1)

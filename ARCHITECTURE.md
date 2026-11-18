@@ -694,7 +694,8 @@ listed apart and not counted; `automerge`, `agents:local-loop` and `agents:keepa
 shown on the row, since an idle day on those routes is a stall too. Unreadable journals make the
 section unknown before any GitHub read, because without them every PR would look unowned; a repo
 whose list fails, or fills the 100-PR listing limit, is named as unmeasured, and so is a PR whose
-record lacks labels, closing links or a complete commit list (gh caps that list at 100). The
+record lacks labels or closing links, or whose listed commits stop short of its head commit (gh
+caps that list at 100, so idleness is read only when the last listed commit is the head). The
 weekly CLI computes it and `review()` does not run it; `ORCH_UNOWNED_PR_SCAN=0` turns it off, as
 the test suite does. Like the stuck-target section it is FYI only: it changes no lane, labels
 nothing and raises no owner question. The loop diagram records the connection.

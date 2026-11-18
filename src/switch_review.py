@@ -95,6 +95,8 @@ UNOWNED_IDLE_S = 24 * 3600
 UNOWNED_JOURNAL_LINES = 5000
 UNOWNED_PR_LIMIT = 100  # a listing that fills the limit may omit PRs, so it reads as incomplete
 # gh fills `commits` from `commits(first: 100)`; a list that long may end before the newest push.
+# Idleness is read only when the last listed commit is the PR's head (`headRefOid`), so a list cut
+# short by any gh version reads as unmeasured rather than idle.
 UNOWNED_COMMIT_CAP = 100
 UNOWNED_DEPENDABOT_GRACE_S = 3 * 86400  # dependabot keeps its own automerge for three days
 # The closer's hold labels (Workflows docs/ops/LOCAL_LANES.md). A held PR is listed, not counted.
@@ -1957,7 +1959,7 @@ def unowned_open_prs(
             f"journal tails reach back {report['window_hours']}h, "
             f"less than {UNOWNED_WINDOW_S // 3600}h"
         )
-    # The commit cap above is gh's (`commits(first: 100)`), so the report names the gh it ran.
+    # The commit cap above is gh's (`commits(first: 100)`); the report names the gh it ran.
     ok, out, _reason = gh_fn(["--version"])
     report["gh_version"] = (out.splitlines() or ["unknown"])[0].strip() if ok else "unknown"
     repo_errors: list[str] = []
@@ -1973,7 +1975,8 @@ def unowned_open_prs(
                 "--limit",
                 str(UNOWNED_PR_LIMIT),
                 "--json",
-                "number,headRefName,isDraft,createdAt,labels,commits,closingIssuesReferences",
+                "number,headRefName,headRefOid,isDraft,createdAt,labels,commits,"
+                "closingIssuesReferences",
             ]
         )
         if not ok:
@@ -2049,6 +2052,9 @@ def _unowned_row(repo: str, pr: dict, *, targets: set[str], now: float) -> dict 
         raise ValueError("no commits listed")
     if len(commits) >= UNOWNED_COMMIT_CAP:
         raise ValueError(f"{len(commits)} commits listed; the newest push may be past the cap")
+    head = str(pr.get("headRefOid") or "")
+    if not head or str(commits[-1].get("oid") or "") != head:
+        raise ValueError("the last listed commit is not the PR head, so the newest push is unknown")
     last_push = _parse_iso_ts(str(commits[-1].get("committedDate") or ""))
     if last_push is None:
         raise ValueError("newest commit has no readable committedDate")
