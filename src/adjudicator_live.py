@@ -21,7 +21,7 @@ of "advised", so a target carrying one is never selected again) and beside the d
 its reason and never adjudicated from metadata.
 
 SHADOW ONLY. Nothing here writes an outcome, a label, a merge input or a close. Kill switch:
-`ORCH_ADJUDICATOR_LIVE_SHADOW=0`. Per-run cap: `ORCH_ADJUDICATOR_LIVE_LIMIT` (default 3), reusing
+`ORCH_ADJUDICATOR_LIVE_SHADOW=0`. Per-run cap: `ORCH_ADJUDICATOR_LIVE_LIMIT` (default 10), reusing
 the retrospective's 600 s dispatch budget. Dedup (CLAUDE.md §0): `roles.run_adjudicator_agent` had
 one caller, the retrospective; the collector, the packet builder, the reconciler and the weekly
 line are reused, not rebuilt; only the live caller and its report are new.
@@ -53,7 +53,9 @@ import roles
 
 LIVE_SWITCH = "ORCH_ADJUDICATOR_LIVE_SHADOW"
 LIVE_LIMIT = "ORCH_ADJUDICATOR_LIVE_LIMIT"
-DEFAULT_LIMIT = 3
+DEFAULT_LIMIT = (
+    10  # 2026-11-18: 3/day left ~45 days to 20 graded; uncertified cases cost reads only
+)
 OFF_WORDS = frozenset({"0", "false", "no", "off"})
 CHECK_RUN_PAGE_SIZE = 100
 CHECK_RUN_LOG_TAIL_BYTES = 4_096
@@ -524,11 +526,22 @@ MAX_ATTEMPTS = (
 )
 
 
+# A refusal caused by the lookup defect fixed 2026-11-18 (adjudicator_retro._terminal_finding_comment), not
+# by the case: 57 of 90 cases carried it, 29 of them already with a durability truth. Such a row is retried
+# (within MAX_ATTEMPTS) instead of being final, or the fix could never reach the cases it was made for.
+RETRYABLE_REFUSALS = frozenset({"merge-bound verifier finding comment unavailable"})
+
+
 def _final(row: dict) -> bool:
     """A row later runs must not retry: advised, refused at certification, or out of attempts."""
-    if "proposal" in row or (row.get("certification") or {}).get("status") == "uncertified":
+    if int(row.get("attempts") or 1) >= MAX_ATTEMPTS:
         return True
-    return int(row.get("attempts") or 1) >= MAX_ATTEMPTS
+    cert = row.get("certification") or {}
+    if "proposal" in row:
+        return True
+    if cert.get("status") == "uncertified":
+        return str(cert.get("reason") or "") not in RETRYABLE_REFUSALS
+    return False
 
 
 def run_live(
@@ -606,6 +619,9 @@ def run_live(
             for dispute in retro.live_disputes(limit=None, db=db, now=now, exclude_case_ids=settled)
             if dispute["target"] not in advised_targets
         ]
+        # Cases whose durability is already known first (stable within each group): only they can be graded
+        # now. Newest-first spent the daily cap on cases that could not be graded yet (Orchestrator#1377).
+        candidates.sort(key=lambda dispute: retro.later_truth(dispute) not in {"PASS", "FAIL"})
         for dispute in candidates[:limit]:
             case_id = retro._case_id(dispute)
             attempted += 1
@@ -902,6 +918,7 @@ def live_summary(rows: list[dict]) -> dict:
         "advised": len(decided),
         "failed": len(failed),
         "retrying": sum(1 for r in failed if not _final(r)),
+        "refusals_retryable": sum(1 for r in refused if not _final(r)),
         "graded": len(graded),
         "agree": agree,
         "disagree": len(graded) - agree,

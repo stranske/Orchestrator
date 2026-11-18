@@ -480,6 +480,95 @@ class RetrospectiveEvidenceTests(unittest.TestCase):
             )
         return evidence["ground_truth_evidence"], read.call_args_list
 
+    def test_a_two_comment_verification_event_still_yields_its_terminal_finding(self):
+        """Orchestrator#1377: since the verification_event protocol the PR decision folds a state comment
+        and a terminal comment into ``_lifecycle_history``; no single comment re-derives it, so every dispute
+        since 2026-11-03 was refused as "finding comment unavailable". The terminal record is matched
+        directly, and a stale record from another attempt is never taken."""
+        decision = {
+            "schema": verifier_evidence.MARKER,
+            "repo": "owner/repo",
+            "pr": 1,
+            "head_sha": "a" * 40,
+            "evaluated_sha": "b" * 40,
+            "run_id": "123",
+            "run_attempt": "2",
+            "provider_verdicts": ["FAIL"],
+            "ci_failed": False,
+            "verdict": "NON_PASS",
+        }
+        stale = {**decision, "run_attempt": "1"}
+        terminal = {
+            "body": f"Missing acceptance test\n<!-- {verifier_evidence.MARKER} {json.dumps(decision)} -->",
+            "url": "https://github.com/owner/repo/pull/1#issuecomment-2",
+            "author": {"login": "github-actions[bot]"},
+        }
+        state = {**terminal, "body": "Verification started", "url": terminal["url"][:-1] + "1"}
+        old_attempt = {
+            **terminal,
+            "body": f"Old attempt\n<!-- {verifier_evidence.MARKER} {json.dumps(stale)} -->",
+            "url": terminal["url"][:-1] + "3",
+        }
+        pr = {
+            "number": 1,
+            "state": "MERGED",
+            "headRefOid": decision["head_sha"],
+            "mergeCommit": {"oid": decision["evaluated_sha"]},
+            "comments": {
+                "pageInfo": {"hasPreviousPage": False},
+                "nodes": [state, terminal, old_attempt],
+            },
+            "files": {"pageInfo": {"hasNextPage": False}, "nodes": []},
+            "commits": {
+                "nodes": [
+                    {
+                        "commit": {
+                            "statusCheckRollup": {
+                                "contexts": {
+                                    "pageInfo": {"hasNextPage": False},
+                                    "nodes": [
+                                        {"name": "Gate", "conclusion": "SUCCESS", "detailsUrl": "g"}
+                                    ],
+                                }
+                            }
+                        }
+                    }
+                ]
+            },
+        }
+        whole = {**decision, "_lifecycle_history": [{"state": "started"}, decision]}
+
+        def folded(
+            repo, given, **kw
+        ):  # the whole PR folds both events; one comment alone never does
+            nodes = given["comments"]["nodes"]
+            return (
+                whole
+                if len(nodes) > 1
+                else ({**decision, "_lifecycle_history": [decision]} if nodes else None)
+            )
+
+        for target, value in ((retro, "_gh_json"), (verifier_evidence, "decision_from_pr")):
+            p = patch.object(
+                target,
+                value,
+                **(
+                    {"return_value": {"data": {"repository": {"pullRequest": pr}}}}
+                    if value == "_gh_json"
+                    else {"side_effect": folded}
+                ),
+            )
+            p.start()
+            self.addCleanup(p.stop)
+        p = patch.object(
+            retro.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "", "")
+        )
+        p.start()
+        self.addCleanup(p.stop)
+        evidence = retro.fetch_evidence({"target": "owner/repo#1", "verifier_verdict": "NON_PASS"})
+        assert evidence["disputed_finding"]["ref"] == terminal["url"]
+        assert evidence["disputed_finding"]["body"] == terminal["body"]
+
     def test_post_merge_activity_alone_does_not_refuse_the_criteria(self):
         merged = "2026-10-01T00:00:00Z"
         after = "2026-10-02T00:00:00Z"
