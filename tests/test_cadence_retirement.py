@@ -361,12 +361,12 @@ def test_langsmith_wrapper_result_isolated(tmp_path, outcome, gate):
             "cadence_stamp() { echo .last-langsmith-direct; }",
             "_cadence_due() { return " + ("1" if gate == "not_due" else "0") + "; }",
             *[_definition(n) for n in ["_attempt_ok", "_mark_ok", "_mark_success", "_mark_fail"]],
-            '''python3() {
+            """python3() {
               if [[ "$#" != 3 || "$1" != /synthetic-only/langsmith_direct.py ||
                     "$2" != --ingest || "$3" != --summary-only ]]; then
                 touch "$STAMP_DIR/bad-argv"; return 97;
               fi
-              echo called > "$STAMP_DIR/called"; echo "opaque-key TRACE_INPUT" >&2; '''
+              echo called > "$STAMP_DIR/called"; echo "opaque-key TRACE_INPUT" >&2; """
             + 'echo \'{"status":"'
             + outcome
             + "\"}'; return "
@@ -383,7 +383,9 @@ def test_langsmith_wrapper_result_isolated(tmp_path, outcome, gate):
     assert not (tmp_path / "bad-argv").exists()
     if gate == "run":
         assert (tmp_path / "called").exists()
-        assert json.loads(next(line for line in result.stdout.splitlines() if line.startswith("{"))) == {"status": outcome}
+        assert json.loads(
+            next(line for line in result.stdout.splitlines() if line.startswith("{"))
+        ) == {"status": outcome}
     if gate != "run":
         assert not (tmp_path / "called").exists()
         assert success.stat().st_mtime_ns == before

@@ -615,6 +615,7 @@ def main(argv: list[str]) -> int:
             "operation_errors": 1,
             "ingest_counts": _safe_ingest_counts({}),
         }
+    safe["dry_run"] = args.dry_run
     if args.json or args.summary_only:
         print(json.dumps(safe, sort_keys=True))
     else:
