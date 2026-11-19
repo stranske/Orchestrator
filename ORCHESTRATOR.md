@@ -410,6 +410,13 @@ cursor-agent live outside the default PATH):
   stdlib HTTP (`/sessions` + `/api/v2/runs/query`) regardless of installed SDK version, so the
   daily cadence does not depend on a global package install. The API key comes from `LANGSMITH_API_KEY`,
   `LANGCHAIN_API_KEY`, or `~/.codex/credentials/langsmith_api_key`.
+  CLI exits nonzero for any failed project/page or setup/ingestion failure, including partial pulls;
+  valid empty results succeed. Useful partial records still use the existing idempotent ingestion.
+  Text and JSON output contain only bounded aggregate status/counts, never remote exceptions or trace
+  payloads. `--summary-only` selects this JSON evidence for the cadence wrapper. Its stdout is retained
+  by the existing launchd `orchestrator-cron.log` sink; this adds no new log or retention policy.
+  Failure updates only the existing failure/retry marker, not the success stamp; later steps continue.
+  Success means the configured bounded pull completed, not that every historical run was enumerated.
 - **Fetch LangSmith fleet artifacts (NEW)** — `python3 src/langsmith_fetch.py --ingest [--json]` reads the
   Workflows fleet registry, downloads each repo's latest `langsmith-fleet.ndjson` GitHub Actions artifact,
   writes `~/.codex/orchestrator/langsmith-artifacts/combined-fleet.ndjson`, then calls `langsmith_pull.py`.

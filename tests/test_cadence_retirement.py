@@ -327,3 +327,61 @@ def test_the_live_retirement_holds_its_capability_until_a_flag_lifts_it() -> Non
         assert STEP not in cadence_registry.retirement_holds(environ={name: value}), name
     # An empty registry is empty: it must never fall back to the live one.
     assert cadence_registry.retirement_holds(environ={}, registry=()) == {}
+
+
+@pytest.mark.parametrize("outcome", ["empty", "full", "partial", "failed"])
+@pytest.mark.parametrize("gate", ["run", "not_due", "backoff", "no_key"])
+def test_langsmith_wrapper_result_isolated(tmp_path, outcome, gate):
+    """Replay only telemetry block, never source or execute the live controller."""
+    text = ORCHESTRATE.read_text()
+    block = text.split("if _cadence_due langsmith-direct &&", 1)[1]
+    block = (
+        "if _cadence_due langsmith-direct &&"
+        + block.split("if _cadence_due ledger-reconcile", 1)[0]
+    )
+    success = tmp_path / ".last-langsmith-direct"
+    failure = tmp_path / ".fail-langsmith-direct"
+    success.touch()
+    old = time.time() - 8 * 3600
+    os.utime(success, (old, old))
+    failure.write_text("2")
+    os.utime(failure, (old, old))
+    if gate == "backoff":
+        failure.touch()
+    before = success.stat().st_mtime_ns
+    fail_before = failure.stat().st_mtime_ns
+    code = 0 if outcome in ("empty", "full") else 1
+    script = "\n".join(
+        [
+            "set -e",
+            f"STAMP_DIR={shlex.quote(str(tmp_path))}",
+            "ORCH=/synthetic-only",
+            "LANGSMITH_API_KEY=" + ('""' if gate == "no_key" else "synthetic"),
+            "cadence_known() { return 0; }",
+            "cadence_stamp() { echo .last-langsmith-direct; }",
+            "_cadence_due() { return " + ("1" if gate == "not_due" else "0") + "; }",
+            *[_definition(n) for n in ["_attempt_ok", "_mark_ok", "_mark_success", "_mark_fail"]],
+            'python3() { echo called > "$STAMP_DIR/called"; echo "opaque-key TRACE_INPUT" >&2; '
+            + 'echo \'{"status":"'
+            + outcome
+            + "\"}'; return "
+            + str(code)
+            + "; }",
+            block,
+            "echo later-sibling",
+        ]
+    )
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path)}
+    result = subprocess.run(["/bin/bash", "-c", script], env=env, capture_output=True, text=True)
+    assert result.returncode == 0 and "later-sibling" in result.stdout
+    assert not result.stderr and "opaque-key" not in result.stdout
+    if gate != "run":
+        assert not (tmp_path / "called").exists()
+        assert success.stat().st_mtime_ns == before
+        assert failure.stat().st_mtime_ns == fail_before
+    elif code == 0:
+        assert success.stat().st_mtime_ns > before and not failure.exists()
+    else:
+        assert success.stat().st_mtime_ns == before
+        assert failure.read_text().strip() == "3"
+        assert "retry in 6h" in result.stdout
