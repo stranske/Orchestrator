@@ -1126,7 +1126,15 @@ fi
 if _cadence_due langsmith-direct && _attempt_ok langsmith-direct; then
   if [[ -n "${LANGSMITH_API_KEY:-}" ]]; then
     echo "  [cadence] LangSmith direct cost/trace pull (daily; source=langsmith into the Brain)"
-    if python3 "$ORCH/langsmith_direct.py" --ingest >/dev/null 2>&1; then _mark_success langsmith-direct; else _mark_fail langsmith-direct; fi
+    # stdout is an allowlisted aggregate, never raw exceptions or trace payloads.
+    # Suppress interpreter/argparse stderr too; the branch records even a startup failure.
+    if python3 "$ORCH/langsmith_direct.py" --ingest --summary-only 2>/dev/null; then
+      echo '  [cadence] langsmith-direct result=ok'
+      _mark_success langsmith-direct
+    else
+      echo '  [cadence] langsmith-direct result=failed'
+      _mark_fail langsmith-direct
+    fi
   else echo "  [cadence] LangSmith direct pull SKIPPED — no LANGSMITH_API_KEY"; fi
 fi
 if _cadence_due ledger-reconcile && _attempt_ok ledger-reconcile; then

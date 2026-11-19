@@ -26,6 +26,7 @@ import json
 import os
 import sys
 from collections.abc import Iterable
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta, timezone
 from itertools import islice
 from pathlib import Path
@@ -544,6 +545,38 @@ def _print(summary: dict[str, Any], *, as_json: bool):
         print(f"- error: {e}")
 
 
+def _safe_ingest_counts(ingest: dict[str, Any]) -> dict[str, int | None]:
+    """Null means unavailable, not zero; never include arbitrary bucket names or values."""
+    counts = {}
+    for key in ("matched_records", "written_cost_records", "written_trace_records"):
+        value = ingest.get(key)
+        counts[key] = value if type(value) is int and value >= 0 else None
+    skipped = ingest.get("skipped")
+    counts["skipped_records"] = (
+        sum(skipped.values())
+        if isinstance(skipped, dict)
+        and all(type(value) is int and value >= 0 for value in skipped.values())
+        else None
+    )
+    return counts
+
+
+def _safe_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    """Bounded allowlist for CLI evidence; never serialize remote text or trace data."""
+    errors = len(summary.get("errors", []))
+    ingest_errors = len(summary.get("ingest", {}).get("errors", []))
+    records = summary.get("records_built", 0)
+    failed = errors + ingest_errors
+    return {
+        "schema": "langsmith-pull-status/v1",
+        "status": "partial" if failed and records else "failed" if failed else "ok",
+        "records_built": records,
+        "fetch_errors": errors,
+        "ingest_errors": ingest_errors,
+        "ingest_counts": _safe_ingest_counts(summary.get("ingest", {})),
+    }
+
+
 def main(argv: list[str]) -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--project", action="append", default=[], help="LangSmith project (repeatable)")
@@ -553,6 +586,7 @@ def main(argv: list[str]) -> int:
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--ingest", action="store_true")
     p.add_argument("--json", action="store_true")
+    p.add_argument("--summary-only", action="store_true", help="emit bounded safe cadence evidence")
     p.add_argument("--selftest", action="store_true")
     args = p.parse_args(argv)
 
@@ -562,14 +596,31 @@ def main(argv: list[str]) -> int:
     if not (args.dry_run or args.ingest):
         p.error("pass --dry-run or --ingest")
 
-    summary = fetch_and_ingest(
-        projects=args.project or DEFAULT_PROJECTS,
-        limit=args.limit,
-        since_hours=None if args.all_time else args.since_hours,
-        dry_run=args.dry_run,
-    )
-    _print(summary, as_json=args.json)
-    return 0
+    try:
+        with open(os.devnull, "w") as sink, redirect_stdout(sink), redirect_stderr(sink):
+            summary = fetch_and_ingest(
+                projects=args.project or DEFAULT_PROJECTS,
+                limit=args.limit,
+                since_hours=None if args.all_time else args.since_hours,
+                dry_run=args.dry_run,
+            )
+        safe = _safe_summary(summary)
+    except Exception:
+        # Auth/client setup, artifact writes, and ingestion can fail outside fetch_records.
+        # Exception messages may contain credentials, HTTP bodies, or trace payloads.
+        safe = {
+            "schema": "langsmith-pull-status/v1",
+            "status": "failed",
+            "records_built": None,
+            "operation_errors": 1,
+            "ingest_counts": _safe_ingest_counts({}),
+        }
+    safe["dry_run"] = args.dry_run
+    if args.json or args.summary_only:
+        print(json.dumps(safe, sort_keys=True))
+    else:
+        print("langsmith_direct: " + ", ".join(f"{k}={v}" for k, v in safe.items()))
+    return 0 if safe["status"] == "ok" else 1
 
 
 if __name__ == "__main__":

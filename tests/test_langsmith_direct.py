@@ -216,3 +216,181 @@ def test_false_cursor_is_malformed(monkeypatch, cursor):
     )
     with pytest.raises(RuntimeError, match="invalid or repeated cursor"):
         list(client.list_runs(project_name="project"))
+
+
+@pytest.mark.parametrize(
+    "records,errors,expected", [(0, [], 0), (2, [], 0), (0, ["secret"], 1), (2, ["secret"], 1)]
+)
+@pytest.mark.parametrize("mode", [[], ["--json"], ["--summary-only"]])
+def test_cli_result_and_allowlist(monkeypatch, capsys, records, errors, expected, mode):
+    poison = "opaque-password x-api-key: secret ?token=secret TRACE_INPUT TRACE_OUTPUT"
+
+    def fetch(**kwargs):
+        print(poison)
+        print(poison, file=sys.stderr)
+        return {
+            "records_built": records,
+            "errors": errors,
+            "projects": [poison],
+            "ingest": {"payload": poison},
+        }
+
+    monkeypatch.setattr(ld, "fetch_and_ingest", fetch)
+    monkeypatch.setenv("ORCH_CREDENTIAL_REDACTION_DISABLED", "1")
+    assert ld.main(["--ingest", *mode]) == expected
+    out = capsys.readouterr()
+    assert not out.err and len(out.out) < 600
+    for marker in ["secret", "opaque-password", "TRACE_INPUT", "TRACE_OUTPUT"]:
+        assert marker not in out.out
+
+
+@pytest.mark.parametrize("mode", [[], ["--json"], ["--summary-only"]])
+def test_cli_unexpected_exception_is_safe(monkeypatch, capsys, mode):
+    def fail(**kwargs):
+        raise RuntimeError("opaque-key x-api-key: private TRACE_INPUT")
+
+    monkeypatch.setattr(ld, "fetch_and_ingest", fail)
+    assert ld.main(["--ingest", *mode]) == 1
+    out = capsys.readouterr()
+    assert not out.err and "opaque-key" not in out.out and "TRACE_INPUT" not in out.out
+
+
+@pytest.mark.parametrize("failure", ["network", "malformed", "repeat", "false"])
+def test_partial_pagination_keeps_ingest_but_fails_cli(monkeypatch, tmp_path, capsys, failure):
+    client = ld._StdlibLangSmithClient(api_key="opaque-key")
+    monkeypatch.setattr(client, "_project_id", lambda name: "pid")
+    calls = []
+
+    def request(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            return {
+                "items": [
+                    {
+                        "id": "r",
+                        "run_type": "llm",
+                        "total_cost": 1,
+                        "extra": {"metadata": {"repo": "o/r", "issue_number": "1"}},
+                    }
+                ],
+                "next_cursor": "next",
+            }
+        if failure == "network":
+            raise RuntimeError("opaque-key TRACE_OUTPUT")
+        if failure == "malformed":
+            return {"items": "opaque-key"}
+        return {"items": [], "next_cursor": "next" if failure == "repeat" else False}
+
+    monkeypatch.setattr(client, "_request_json", request)
+    monkeypatch.setattr(ld, "_make_client", lambda: client)
+    ingested = []
+    monkeypatch.setattr(
+        ld.langsmith_pull, "ingest_files", lambda files, **kw: ingested.extend(files) or {}
+    )
+    fetch = ld.fetch_and_ingest
+    monkeypatch.setattr(ld, "fetch_and_ingest", lambda **kw: fetch(**kw, output_dir=tmp_path))
+    assert ld.main(["--ingest", "--summary-only"]) == 1
+    assert len(ingested) == 1
+    assert '"status": "partial"' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("mode", [[], ["--json"], ["--summary-only"]])
+def test_http_body_secret_not_in_cli(monkeypatch, tmp_path, capsys, mode):
+    import io
+    from urllib.error import HTTPError
+
+    poison = b"opaque-password x-api-key: private ?token=private TRACE_INPUT TRACE_OUTPUT"
+
+    def request(*args, **kwargs):
+        raise HTTPError("https://example.test", 403, "Forbidden", {}, io.BytesIO(poison))
+
+    monkeypatch.setattr(ld.urlrequest, "urlopen", request)
+    client = ld._StdlibLangSmithClient(api_key="opaque-password")
+    monkeypatch.setattr(client, "_project_id", lambda name: "pid")
+    monkeypatch.setattr(ld, "_make_client", lambda: client)
+    assert ld.main(["--ingest", *mode]) == 1
+    out = capsys.readouterr()
+    assert not out.err
+    assert all(
+        x not in out.out for x in ["opaque-password", "private", "TRACE_INPUT", "TRACE_OUTPUT"]
+    )
+
+
+def test_cli_ingestion_reported_errors_fail(monkeypatch, capsys):
+    monkeypatch.setattr(
+        ld,
+        "fetch_and_ingest",
+        lambda **kw: {"records_built": 1, "errors": [], "ingest": {"errors": ["opaque-key"]}},
+    )
+    assert ld.main(["--ingest", "--json"]) == 1
+    out = capsys.readouterr().out
+    assert '"ingest_errors": 1' in out and "opaque-key" not in out
+
+
+def test_safe_ingest_counts_available_and_unavailable():
+    assert ld._safe_ingest_counts({}) == {
+        "matched_records": None,
+        "written_cost_records": None,
+        "written_trace_records": None,
+        "skipped_records": None,
+    }
+    assert ld._safe_ingest_counts(
+        {
+            "matched_records": 3,
+            "written_cost_records": 2,
+            "written_trace_records": 1,
+            "skipped": {"secret bucket": 2, "other": 1},
+            "errors": ["secret"],
+        }
+    ) == {
+        "matched_records": 3,
+        "written_cost_records": 2,
+        "written_trace_records": 1,
+        "skipped_records": 3,
+    }
+    assert ld._safe_ingest_counts(
+        {
+            "matched_records": "secret",
+            "written_cost_records": True,
+            "written_trace_records": -1,
+            "skipped": {"x": "secret"},
+        }
+    ) == ld._safe_ingest_counts({})
+    assert ld._safe_ingest_counts({"skipped": {}})["skipped_records"] == 0
+
+
+@pytest.mark.parametrize("dry_run", [True, False])
+@pytest.mark.parametrize("fails", [True, False])
+def test_cli_dry_run_is_strict_argument_boolean(monkeypatch, capsys, dry_run, fails):
+    import json
+
+    def fetch(**kwargs):
+        if fails:
+            raise RuntimeError("private")
+        return {"records_built": 0, "errors": [], "dry_run": "private"}
+
+    monkeypatch.setattr(ld, "fetch_and_ingest", fetch)
+    assert ld.main(["--dry-run" if dry_run else "--ingest", "--json"]) == int(fails)
+    output = json.loads(capsys.readouterr().out)
+    assert output["dry_run"] is dry_run
+
+
+def test_ingest_exception_does_not_report_zero_built(monkeypatch, tmp_path, capsys):
+    import json
+
+    monkeypatch.setattr(ld, "fetch_records", lambda **kwargs: ([{"run_id": "synthetic"}], []))
+
+    def fail_ingest(*args, **kwargs):
+        raise RuntimeError("opaque-key TRACE_OUTPUT")
+
+    monkeypatch.setattr(ld.langsmith_pull, "ingest_files", fail_ingest)
+    original = ld.fetch_and_ingest
+    monkeypatch.setattr(ld, "fetch_and_ingest", lambda **kw: original(**kw, output_dir=tmp_path))
+    assert ld.main(["--ingest", "--json"]) == 1
+    out = capsys.readouterr()
+    result = json.loads(out.out)
+    assert result["records_built"] is None
+    assert result["ingest_counts"] == ld._safe_ingest_counts({})
+    assert result["operation_errors"] == 1
+    assert not out.err and "opaque-key" not in out.out and "TRACE_OUTPUT" not in out.out
+    assert (tmp_path / "langsmith-direct.ndjson").exists()
