@@ -43,14 +43,21 @@ def graph_page(numbers=(734,), refs=(731,), more=False, cursor=None):
 @pytest.fixture
 def world(monkeypatch, tmp_path):
     calls = []
-    answers = {"rest": [[rest_pr()]], "graph": [graph_page()]}
+    answers = {"rest": [[rest_pr()]], "graph": [graph_page()], "target": None}
 
     def run(argv, **kwargs):
         assert argv[:2] == ["gh", "api"]
-        assert "--paginate" in argv and "--slurp" in argv
         assert kwargs["timeout"] == dispatcher.LINKED_PR_READ_TIMEOUT_S
         calls.append(argv)
-        answer = answers["graph" if argv[2] == "graphql" else "rest"]
+        if argv[2] == "graphql":
+            assert "--paginate" in argv and "--slurp" in argv
+            answer = answers["graph"]
+        elif argv[2].endswith("/issues/731"):
+            assert "--paginate" not in argv and "--slurp" not in argv
+            answer = answers["target"]
+        else:
+            assert "--paginate" in argv and "--slurp" in argv
+            answer = answers["rest"]
         if isinstance(answer, Exception):
             raise answer
         if isinstance(answer, subprocess.CompletedProcess):
@@ -107,6 +114,52 @@ def test_continue_pr_allows_exactly_the_named_linked_pr(world):
     spawn.reset_mock()
     assert "linked: open PR #734" in delegate(continue_pr=736)["error"]
     claim.assert_not_called()
+    spawn.assert_not_called()
+
+
+def test_continue_target_number_when_it_is_an_open_orphan_pr(world):
+    answers, calls, claim, _, spawn = world
+    answers["rest"] = [[]]
+    answers["graph"] = [graph_page((), ())]
+    answers["target"] = {"number": 731, "state": "open", "pull_request": {}}
+
+    assert delegate(continue_pr=731)["pid"] == 42
+    claim.assert_called_once_with(TARGET, "cursor")
+    spawn.assert_called_once()
+    assert calls[-1][2] == "repos/o/r/issues/731"
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        {"number": 731, "state": "open"},
+        {"number": 731, "state": "closed", "pull_request": {}},
+    ],
+    ids=["issue", "closed-pr"],
+)
+def test_continue_target_number_refuses_issue_or_closed_pr(world, target):
+    answers, _, claim, _, spawn = world
+    answers["rest"] = [[]]
+    answers["graph"] = [graph_page((), ())]
+    answers["target"] = target
+
+    assert delegate(continue_pr=731) == {
+        "error": "linked: continue_pr=731 is not an open PR linked to o/r#731"
+    }
+    claim.assert_not_called()
+    spawn.assert_not_called()
+
+
+def test_target_pr_state_read_failure_fails_closed(world):
+    answers, _, claim, reap, spawn = world
+    answers["rest"] = [[]]
+    answers["graph"] = [graph_page((), ())]
+    answers["target"] = subprocess.CompletedProcess([], 1, "", "HTTP 502")
+
+    error = delegate(continue_pr=731)["error"]
+    assert error == "linked: unknown (gh exit 1: HTTP 502); retry when GitHub access recovers"
+    claim.assert_not_called()
+    reap.assert_not_called()
     spawn.assert_not_called()
 
 

@@ -2413,6 +2413,48 @@ def linked_open_prs(target: str) -> list[int] | None:
         return None
 
 
+def target_is_open_pr(target: str) -> bool | None:
+    """Return whether the target itself is an open PR; unreadable state is unknown."""
+    _linked_pr_read_error.set("")
+    match = re.fullmatch(r"([^/\s]+)/([^/#\s]+)#([1-9][0-9]*)", target)
+    if not match:
+        _linked_pr_read_error.set("expected owner/repo#N")
+        return None
+    owner, name, number = match.groups()
+    repo = f"{owner}/{name}"
+    try:
+        result = subprocess.run(
+            ["gh", "api", f"repos/{repo}/issues/{number}"],
+            capture_output=True,
+            text=True,
+            timeout=LINKED_PR_READ_TIMEOUT_S,
+            check=False,
+        )
+        if result.returncode:
+            raise ValueError(f"gh exit {result.returncode}: {result.stderr.strip()}")
+        issue = json.loads(result.stdout)
+        if not isinstance(issue, dict) or issue.get("number") != int(number):
+            raise ValueError("invalid GitHub issue/PR response")
+        pull_request = issue.get("pull_request")
+        if pull_request is None:
+            return False
+        if not isinstance(pull_request, dict):
+            raise ValueError("invalid GitHub pull_request marker")
+        state = issue.get("state")
+        if state not in {"open", "closed"}:
+            raise ValueError("invalid GitHub issue/PR state")
+        return state == "open"
+    except (
+        OSError,
+        subprocess.SubprocessError,
+        ValueError,
+        TypeError,
+        AttributeError,
+    ) as exc:
+        _linked_pr_read_error.set(str(exc))
+        return None
+
+
 def delegate(
     agent: str,
     target: str,
@@ -2478,8 +2520,16 @@ def delegate(
     if linked is None:
         reason = _linked_pr_read_error.get() or "GitHub linked-PR read failed"
         return {"error": f"linked: unknown ({reason}); retry when GitHub access recovers"}
+    target_number = int(target.rsplit("#", 1)[1])
+    continuing_target_pr = False
+    if type(continue_pr) is int and continue_pr == target_number:
+        target_open_pr = target_is_open_pr(target)
+        if target_open_pr is None:
+            reason = _linked_pr_read_error.get() or "GitHub linked-PR read failed"
+            return {"error": f"linked: unknown ({reason}); retry when GitHub access recovers"}
+        continuing_target_pr = target_open_pr
     if (linked or continue_pr is not None) and (
-        type(continue_pr) is not int or continue_pr not in linked
+        type(continue_pr) is not int or (continue_pr not in linked and not continuing_target_pr)
     ):
         if not linked:
             return {
