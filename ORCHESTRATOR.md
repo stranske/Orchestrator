@@ -413,7 +413,8 @@ cursor-agent live outside the default PATH):
   CLI exits nonzero for any failed project/page or setup/ingestion failure, including partial pulls;
   valid empty results succeed. Useful partial records still use the existing idempotent ingestion.
   Text and JSON output contain only bounded aggregate status/counts, never remote exceptions or trace
-  payloads. `--summary-only` selects this JSON evidence for the cadence wrapper. Its stdout is retained
+  payloads. Ingestion evidence includes matched/written/skipped counts; null means unavailable,
+  distinct from zero, and skipped bucket names are never retained. `--summary-only` selects this JSON evidence for the cadence wrapper. Its stdout is retained
   by the existing launchd `orchestrator-cron.log` sink; this adds no new log or retention policy.
   Failure updates only the existing failure/retry marker, not the success stamp; later steps continue.
   Success means the configured bounded pull completed, not that every historical run was enumerated.

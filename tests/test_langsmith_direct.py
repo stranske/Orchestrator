@@ -239,7 +239,7 @@ def test_cli_result_and_allowlist(monkeypatch, capsys, records, errors, expected
     monkeypatch.setenv("ORCH_CREDENTIAL_REDACTION_DISABLED", "1")
     assert ld.main(["--ingest", *mode]) == expected
     out = capsys.readouterr()
-    assert not out.err and len(out.out) < 300
+    assert not out.err and len(out.out) < 600
     for marker in ["secret", "opaque-password", "TRACE_INPUT", "TRACE_OUTPUT"]:
         assert marker not in out.out
 
@@ -318,3 +318,18 @@ def test_cli_ingestion_reported_errors_fail(monkeypatch, capsys):
     assert ld.main(["--ingest", "--json"]) == 1
     out = capsys.readouterr().out
     assert '"ingest_errors": 1' in out and "opaque-key" not in out
+
+
+def test_safe_ingest_counts_available_and_unavailable():
+    assert ld._safe_ingest_counts({}) == {
+        "matched_records": None, "written_cost_records": None,
+        "written_trace_records": None, "skipped_records": None,
+    }
+    assert ld._safe_ingest_counts({
+        "matched_records": 3, "written_cost_records": 2, "written_trace_records": 1,
+        "skipped": {"secret bucket": 2, "other": 1}, "errors": ["secret"],
+    }) == {"matched_records": 3, "written_cost_records": 2,
+           "written_trace_records": 1, "skipped_records": 3}
+    assert ld._safe_ingest_counts({"matched_records": "secret", "written_cost_records": True,
+        "written_trace_records": -1, "skipped": {"x": "secret"}}) == ld._safe_ingest_counts({})
+    assert ld._safe_ingest_counts({"skipped": {}})["skipped_records"] == 0

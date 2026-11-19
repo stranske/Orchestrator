@@ -545,6 +545,22 @@ def _print(summary: dict[str, Any], *, as_json: bool):
         print(f"- error: {e}")
 
 
+def _safe_ingest_counts(ingest: dict[str, Any]) -> dict[str, int | None]:
+    """Null means unavailable, not zero; never include arbitrary bucket names or values."""
+    counts = {}
+    for key in ("matched_records", "written_cost_records", "written_trace_records"):
+        value = ingest.get(key)
+        counts[key] = value if type(value) is int and value >= 0 else None
+    skipped = ingest.get("skipped")
+    counts["skipped_records"] = (
+        sum(skipped.values())
+        if isinstance(skipped, dict)
+        and all(type(value) is int and value >= 0 for value in skipped.values())
+        else None
+    )
+    return counts
+
+
 def _safe_summary(summary: dict[str, Any]) -> dict[str, Any]:
     """Bounded allowlist for CLI evidence; never serialize remote text or trace data."""
     errors = len(summary.get("errors", []))
@@ -557,6 +573,7 @@ def _safe_summary(summary: dict[str, Any]) -> dict[str, Any]:
         "records_built": records,
         "fetch_errors": errors,
         "ingest_errors": ingest_errors,
+        "ingest_counts": _safe_ingest_counts(summary.get("ingest", {})),
     }
 
 
@@ -596,6 +613,7 @@ def main(argv: list[str]) -> int:
             "status": "failed",
             "records_built": 0,
             "operation_errors": 1,
+            "ingest_counts": _safe_ingest_counts({}),
         }
     if args.json or args.summary_only:
         print(json.dumps(safe, sort_keys=True))
