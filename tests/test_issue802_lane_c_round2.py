@@ -707,9 +707,9 @@ def test_execution_profiles_retirement_cycle_and_empty_eligible(monkeypatch) -> 
     env = ep.select_profile(
         "implement",
         "o/r#1",
-        ["codex-6.1-sol-medium"],
+        ["codex-6.2-sol-medium"],
         rng_seed=1,
-        gate_results={"codex-6.1-sol-medium": {"eligible": False}},
+        gate_results={"codex-6.2-sol-medium": {"eligible": False}},
     )
     assert env["selected_profile_id"] is None
     assert env["assignment_probability"] == 0.0
@@ -722,13 +722,13 @@ def test_execution_profiles_retirement_cycle_and_empty_eligible(monkeypatch) -> 
     explored = ep.select_profile(
         "implement",
         None,
-        ["codex-6.1-sol-medium", "codex-6.1-sol-high"],
+        ["codex-6.2-sol-medium", "codex-6.2-sol-high"],
         rng_seed=3,
         exploration=True,
     )
     assert explored["selected_profile_id"] in {
-        "codex-6.1-sol-medium",
-        "codex-6.1-sol-high",
+        "codex-6.2-sol-medium",
+        "codex-6.2-sol-high",
     }
     assert explored["assignment_probability"] == 0.5
 

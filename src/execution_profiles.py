@@ -82,7 +82,7 @@ CAPACITY_POOLS = {
 def _profile(
     profile_id: str,
     model: str,
-    reasoning: str,
+    reasoning: str | None,
     *,
     prior_offset: float = 0.0,
     agent: str = "codex",
@@ -134,6 +134,11 @@ PROFILE_REGISTRY: dict[str, dict[str, Any]] = {
         _profile("codex-6.1-sol-low", "gpt-6.1-sol", "low"),
         _profile("codex-6.1-sol-medium", "gpt-6.1-sol", "medium"),
         _profile("codex-6.1-sol-high", "gpt-6.1-sol", "high", prior_offset=0.05),
+        _profile("codex-6.2-sol-low", "gpt-6.2-sol", "low"),
+        _profile("codex-6.2-sol-medium", "gpt-6.2-sol", "medium"),
+        _profile("codex-6.2-sol-high", "gpt-6.2-sol", "high", prior_offset=0.05),
+        _profile("codex-6.2-astra-medium", "gpt-6.2-astra", "medium"),
+        _profile("codex-6.2-astra-high", "gpt-6.2-astra", "high", prior_offset=0.05),
         _profile("codex-5.6-terra-high", "gpt-5.6-terra", "high"),
         _profile("codex-5.6-terra-medium", "gpt-5.6-terra", "medium"),
         _profile("codex-5.6-luna-high", "gpt-5.6-luna", "high", prior_offset=-0.02),
@@ -321,6 +326,37 @@ PROFILE_REGISTRY: dict[str, dict[str, Any]] = {
             pool="gemini-prepaid",
             adapter_version="agy-cli-profile-v1",
         ),
+        # Neon High is the normal full pin. Extra High and the planner/executor
+        # route need a named selection; the provider owns the latter's effort.
+        _profile(
+            "gemini-4-neon-high",
+            "gemini-4-neon-high",
+            "high",
+            agent="gemini",
+            provider="google",
+            pool="gemini-prepaid",
+            adapter_version="agy-cli-profile-v1",
+        ),
+        _profile(
+            "gemini-4-neon-xhigh",
+            "gemini-4-neon-xhigh",
+            "xhigh",
+            agent="gemini",
+            provider="google",
+            pool="gemini-prepaid",
+            adapter_version="agy-cli-profile-v1",
+            requires_explicit_selection=True,
+        ),
+        _profile(
+            "gemini-pro-orchestrator-neon",
+            "gemini-pro-orchestrator-neon",
+            None,
+            agent="gemini",
+            provider="google",
+            pool="gemini-prepaid",
+            adapter_version="agy-cli-profile-v1",
+            requires_explicit_selection=True,
+        ),
         # Gemini 4 Carbon, the local frontier model (model table, 2026-11-10). Registered for the
         # owner's live full-tier split against Argon (gemini_full_split.py, 2026-11-11). Automatic
         # routing never picks it: router._automatic_profiles keeps only the tier's own model.
@@ -454,6 +490,11 @@ PROFILE_RETIREMENTS: dict[str, str] = {
     "gemini-3.1-pro-high": "gemini-4-argon-high",
     "codex-5.6-sol-high": "codex-6.1-sol-high",
     "codex-5.6-sol-medium": "codex-6.1-sol-medium",
+    "codex-6.1-sol-low": "codex-6.2-sol-low",
+    "codex-6.1-sol-medium": "codex-6.2-sol-medium",
+    "codex-6.1-sol-high": "codex-6.2-sol-high",
+    "codex-6-astra-medium": "codex-6.2-astra-medium",
+    "codex-6-astra-high": "codex-6.2-astra-high",
     "codex-5.6-luna-high": "codex-6-luna-high",
     "codex-5.6-luna-low": "codex-6-luna-low",
 }
@@ -491,8 +532,8 @@ def _closer_candidate(agent: str, label: str, model: str | None) -> dict[str, An
 # The rows are never consumed by profiles_for_agent or automatic dispatch.
 CLOSER_CANDIDATE_MODELS = (
     _closer_candidate("codex", "Codex Luna", "gpt-6-luna"),
-    _closer_candidate("codex", "Codex Sol", "gpt-6.1-sol"),
-    _closer_candidate("codex", "Codex Astra", "gpt-6-astra"),
+    _closer_candidate("codex", "Codex Sol", "gpt-6.2-sol"),
+    _closer_candidate("codex", "Codex Astra", "gpt-6.2-astra"),
     _closer_candidate("claude", "Claude Haiku", "claude-haiku-4-5"),
     _closer_candidate("claude", "Claude Sonnet", "claude-sonnet-5-5"),
     _closer_candidate("claude", "Claude Opus", "claude-opus-5-5"),

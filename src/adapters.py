@@ -1015,8 +1015,17 @@ def _auto_resolve(agent: str, tier: str, pinned: str, advertised: list[str]) -> 
     """
     if agent != "gemini":
         return None
-    family = next((name for name in ("argon", "hydrogen", "pro", "flash") if name in pinned), None)
-    candidates = [m for m in advertised if m.startswith("gemini-")]
+    family = next(
+        (name for name in ("neon", "argon", "hydrogen", "pro", "flash") if name in pinned), None
+    )
+    # The planner/executor routes and Neon Extra High require explicit selection.
+    candidates = [
+        model
+        for model in advertised
+        if model.startswith("gemini-")
+        and not model.startswith("gemini-pro-orchestrator")
+        and not model.endswith("-neon-xhigh")
+    ]
     if not candidates:
         return None
     same_family = [m for m in candidates if family and family in m]
@@ -3169,7 +3178,7 @@ def _selftest_inner(*, gaps: list[str] | None = None):
     for tier, expected in (
         ("cheap", "gpt-6-luna"),
         ("mid", "gpt-5.6-terra"),
-        ("full", "gpt-6.1-sol"),
+        ("full", "gpt-6.2-sol"),
     ):
         cc = build_command("codex", "x", mode=tier)
         assert cc[cc.index("--model") + 1] == expected, (tier, cc)
@@ -3307,7 +3316,7 @@ def _selftest_inner(*, gaps: list[str] | None = None):
         for tier, expected in (
             ("cheap", "gemini-4-hydrogen-low"),
             ("mid", "gemini-4-hydrogen-high"),
-            ("full", "gemini-4-argon-high"),
+            ("full", "gemini-4-neon-high"),
         ):
             gt = build_command("gemini", "x", mode=tier, cwd=gemini_cwd)
             assert gt[gt.index("--model") + 1] == expected, (tier, gt)
