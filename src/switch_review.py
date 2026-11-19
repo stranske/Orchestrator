@@ -88,6 +88,40 @@ STUCK_MIN_SPAN_S = 3600
 STUCK_JOURNAL_LINES = 200
 STUCK_HOLD_ACTIONS = frozenset({"already-parked", "complete"})
 
+# An open PR that no lane journal has named for UNOWNED_WINDOW_S and that has had no push for
+# UNOWNED_IDLE_S has no owner the system can see (2026-11-18: four such PRs sat idle 4-23 days).
+UNOWNED_WINDOW_S = 72 * 3600
+UNOWNED_IDLE_S = 24 * 3600
+# The scan uses its own bounded GraphQL pagination rather than `gh pr list`: asking gh to expand
+# 100 PRs with nested commit-author data exceeded GitHub's GraphQL node limit in production.
+UNOWNED_PR_PAGE_SIZE = 25
+UNOWNED_PR_MAX_PAGES = 40  # explicit incomplete coverage after 1,000 open PRs in one repo
+UNOWNED_DEPENDABOT_GRACE_S = 3 * 86400  # dependabot keeps its own automerge for three days
+# The closer's hold labels (Workflows docs/ops/LOCAL_LANES.md). A held PR is listed, not counted.
+UNOWNED_HOLD_LABELS = frozenset(
+    {
+        "agents:paused",
+        "agent:paused",
+        "needs-human",
+        "do-not-merge",
+        "hold",
+        "agents:auto-pilot-pause",
+        "goal-drift",
+        "tracker:durable",
+    }
+)
+# Labels that name another route; the row says so, because an idle day there is still a stall.
+UNOWNED_ROUTE_LABELS = ("automerge", "agents:local-loop", "agents:keepalive")
+
+_UNOWNED_OPEN_PRS_QUERY = (
+    "query($owner:String!,$name:String!,$pageSize:Int!,$after:String){"
+    "repository(owner:$owner,name:$name){pullRequests(first:$pageSize,after:$after,states:OPEN,"
+    "orderBy:{field:CREATED_AT,direction:ASC}){nodes{number headRefName headRefOid isDraft createdAt "
+    "labels(first:100){nodes{name}pageInfo{hasNextPage}} "
+    "closingIssuesReferences(first:100){nodes{number repository{nameWithOwner}}pageInfo{hasNextPage}} "
+    "commits(last:1){nodes{commit{oid committedDate}}}}pageInfo{hasNextPage endCursor}}}}"
+)
+
 # Fleet template-delivery gates (Maint 68 promote + sync-branch canaries). Same horizon as switch
 # review: a chain latched for a week with open canaries is the failure mode observed 2026-09-02.
 FLEET_GATE_DAYS = REVIEW_DAYS
@@ -1826,6 +1860,304 @@ def stuck_lane_targets(
     return report
 
 
+def _lane_targets_in_window(
+    roots: Mapping[str, Path], lanes: tuple[str, ...], *, since: float, now: float
+) -> tuple[set[str], dict[str, int], list[str]]:
+    """Stream complete journals and collect targets stamped in [since, now].
+
+    Any unreadable row makes coverage unknown, including rows outside the window whose
+    timestamps or contents cannot be established. No journal lines are retained.
+    """
+    targets: set[str] = set()
+    counts: dict[str, int] = {}
+    errors: list[str] = []
+    for lane in lanes:
+        journal = Path(roots[lane]) / "rounds.jsonl" if lane in roots else None
+        try:
+            if journal is None:
+                raise ValueError(f"no journal root configured for {lane}")
+            in_window = 0
+            with journal.open("rb") as stream:
+                for line in stream:
+                    if not line.strip():
+                        continue
+                    round_ = json.loads(line.decode("utf-8"))
+                    parsed = datetime.fromisoformat(round_["ts"].replace("Z", "+00:00"))
+                    if parsed.tzinfo is None:
+                        raise ValueError("round timestamp has no timezone")
+                    stamp = parsed.timestamp()
+                    items = round_["items"]
+                    if not isinstance(items, list) or any(not isinstance(i, dict) for i in items):
+                        raise ValueError("round items must be a list of objects")
+                    if stamp < since or stamp > now:
+                        continue
+                    in_window += 1
+                    for item in items:
+                        target = item.get("target")
+                        if target is None:
+                            continue
+                        if not isinstance(target, str) or not target:
+                            raise ValueError("item target must be non-empty text")
+                        targets.add(target)
+            counts[lane] = in_window
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            errors.append(f"{lane}: {journal} unreadable ({type(exc).__name__}: {exc})")
+    return targets, counts, errors
+
+
+def _unowned_open_pr_page(
+    repo: str, cursor: str | None, *, gh_fn
+) -> tuple[list[dict], bool, str | None]:
+    """Read one deliberately small page of open PRs and normalize it for `_unowned_row`.
+
+    `gh pr list` asks GitHub to synthesize nested commit data for every requested PR.  Its hidden
+    query crossed the GraphQL node limit on Workflows.  This direct query needs only the PR head's
+    one final commit, its labels, and closing-issue identities; nested connections that do not fit
+    in their requested pages are retained as explicit per-PR incompleteness.
+    """
+    try:
+        owner, name = repo.split("/", 1)
+        if not owner or not name:
+            raise ValueError("invalid repo slug")
+    except ValueError as exc:
+        raise ValueError("invalid repo slug") from exc
+    args = [
+        "api",
+        "graphql",
+        "-f",
+        "query=" + _UNOWNED_OPEN_PRS_QUERY,
+        "-f",
+        "owner=" + owner,
+        "-f",
+        "name=" + name,
+        "-F",
+        f"pageSize={UNOWNED_PR_PAGE_SIZE}",
+    ]
+    if cursor is not None:
+        args.extend(["-f", "after=" + cursor])
+    ok, out, reason = gh_fn(args)
+    if not ok:
+        raise ValueError(reason or "GitHub GraphQL request failed")
+    try:
+        payload = json.loads(out or "{}")
+        connection = payload["data"]["repository"]["pullRequests"]
+        nodes = connection["nodes"]
+        page_info = connection["pageInfo"]
+        has_next = page_info["hasNextPage"]
+    except (KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("GitHub GraphQL PR page unreadable") from exc
+    if not isinstance(nodes, list) or not isinstance(has_next, bool):
+        raise ValueError("GitHub GraphQL PR page has invalid pagination")
+    next_cursor = page_info.get("endCursor")
+    if has_next and (not isinstance(next_cursor, str) or not next_cursor):
+        raise ValueError("GitHub GraphQL PR page has no next cursor")
+    if has_next and next_cursor == cursor:
+        raise ValueError("GitHub GraphQL PR page cursor did not advance")
+
+    rows: list[dict] = []
+    for node in nodes:
+        if not isinstance(node, dict):
+            rows.append({"_unowned_error": "PR node is not an object"})
+            continue
+        row = dict(node)
+        errors: list[str] = []
+        for field in ("labels", "closingIssuesReferences"):
+            connection = row.get(field)
+            if not isinstance(connection, dict) or not isinstance(connection.get("nodes"), list):
+                errors.append(f"{field} missing")
+                row[field] = []
+                continue
+            row[field] = connection["nodes"]
+            page_info = connection.get("pageInfo")
+            if not isinstance(page_info, dict) or page_info.get("hasNextPage") is not False:
+                errors.append(f"{field} pagination incomplete")
+        refs = row["closingIssuesReferences"]
+        normalized_refs = []
+        for ref in refs:
+            repository = ref.get("repository") if isinstance(ref, dict) else None
+            identity = repository.get("nameWithOwner") if isinstance(repository, dict) else None
+            if not isinstance(identity, str) or identity.count("/") != 1:
+                errors.append("closingIssuesReferences repository identity missing")
+                continue
+            owner, ref_name = identity.split("/", 1)
+            normalized_refs.append(
+                {
+                    "number": ref.get("number"),
+                    "repository": {"name": ref_name, "owner": {"login": owner}},
+                }
+            )
+        row["closingIssuesReferences"] = normalized_refs
+        commits = row.get("commits")
+        if not isinstance(commits, dict) or not isinstance(commits.get("nodes"), list):
+            errors.append("head commit missing")
+            row["commits"] = []
+        else:
+            normalized_commits = []
+            for node in commits["nodes"]:
+                commit = node.get("commit") if isinstance(node, dict) else None
+                if not isinstance(commit, dict):
+                    errors.append("head commit payload missing")
+                    continue
+                normalized_commits.append(commit)
+            row["commits"] = normalized_commits
+        if errors:
+            row["_unowned_error"] = "; ".join(errors)
+        rows.append(row)
+    return rows, has_next, next_cursor if has_next else None
+
+
+def unowned_open_prs(
+    *,
+    now: float | None = None,
+    roots: Mapping[str, Path] | None = None,
+    gh_fn: Callable[..., tuple[bool, str, str]] | None = None,
+    repos: list[str] | None = None,
+) -> dict:
+    """FYI: open PRs that no lane journal has named lately and that nobody has pushed to.
+
+    `stuck_lane_targets` sees only what a lane already decided about. A PR that no lane ever
+    adopts (no issue link the closer reads, a repo outside the fleet list, a keepalive that
+    stood down) never enters a journal, so it can sit for weeks with nothing reporting it.
+    This section reads the same opener-core/closer-core journals for every target named in the
+    last UNOWNED_WINDOW_S, lists open PRs per repo, and flags a non-draft PR when neither its
+    own number nor any issue it closes was named and it has had no commit for UNOWNED_IDLE_S.
+
+    Unreadable journals are unknown and stop the scan before any GitHub read: with no journal,
+    every PR would look unowned. A repo whose list fails is named as unmeasured.
+    """
+    now = time.time() if now is None else now
+    gh_fn = _gh_call if gh_fn is None else gh_fn
+    lanes = ("opener-core", "closer-core")
+    if roots is None:
+        state = Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex" / "orchestrator"))
+        roots = {lane: state / lane for lane in lanes}
+    if repos is None:
+        from backlog import SUPPORTED_REPOS
+
+        repos = list(dict.fromkeys(SUPPORTED_REPOS))
+    since = now - UNOWNED_WINDOW_S
+    report: dict = {
+        "status": "ok",
+        "rows": [],
+        "held": [],
+        "suspect": 0,
+        "repos_checked": 0,
+        "window_hours": UNOWNED_WINDOW_S // 3600,
+        "rounds_in_window": dict.fromkeys(lanes),
+    }
+    targets, counts, errors = _lane_targets_in_window(roots, lanes, since=since, now=now)
+    if errors:
+        report.update(
+            status="unknown",
+            measurement="unmeasured: " + "; ".join(errors) + " (no PR read without journals)",
+        )
+        return report
+    report["rounds_in_window"].update(counts)
+    ok, out, _reason = gh_fn(["--version"])
+    report["gh_version"] = (out.splitlines() or ["unknown"])[0].strip() if ok else "unknown"
+    repo_errors: list[str] = []
+    for repo in repos:
+        cursor = None
+        seen_numbers: set[int] = set()
+        repo_read = False
+        for _page in range(UNOWNED_PR_MAX_PAGES):
+            try:
+                prs, has_next, cursor = _unowned_open_pr_page(repo, cursor, gh_fn=gh_fn)
+            except ValueError as exc:
+                repo_errors.append(f"{repo}: pr listing unreadable ({exc})")
+                break
+            repo_read = True
+            for pr in prs:
+                try:
+                    number = int(pr["number"])
+                    if number in seen_numbers:
+                        raise ValueError("PR appeared on multiple pagination pages")
+                    seen_numbers.add(number)
+                    row = _unowned_row(repo, pr, targets=targets, now=now)
+                except (ValueError, KeyError, TypeError, AttributeError) as exc:
+                    label = f"#{pr.get('number')}" if isinstance(pr, dict) else "entry"
+                    repo_errors.append(f"{repo}{label}: unreadable ({type(exc).__name__}: {exc})")
+                    continue
+                if row is not None:
+                    (report["held"] if row["held_by"] else report["rows"]).append(row)
+            if not has_next:
+                break
+        else:
+            repo_errors.append(
+                f"{repo}: listing exceeded {UNOWNED_PR_MAX_PAGES} pages of "
+                f"{UNOWNED_PR_PAGE_SIZE} PRs, so coverage is incomplete"
+            )
+        if repo_read:
+            report["repos_checked"] += 1
+    for key in ("rows", "held"):
+        report[key].sort(key=lambda row: (-row["idle_days"], row["repo"], row["number"]))
+    report["suspect"] = len(report["rows"])
+    if repo_errors:
+        report.update(status="unknown", measurement="unmeasured: " + "; ".join(repo_errors))
+    return report
+
+
+def _unowned_row(repo: str, pr: dict, *, targets: set[str], now: float) -> dict | None:
+    """One open PR as a row, or None when a lane owns it, it is a draft, or it is not idle.
+
+    Raises for a record that lacks the evidence a verdict needs (labels, closing links, a
+    complete commit list with a readable newest date), so the caller reports it unmeasured
+    instead of reading missing evidence as idle and unheld.
+    """
+    if not isinstance(pr, dict):
+        raise TypeError("pr entry is not an object")
+    if error := pr.get("_unowned_error"):
+        raise ValueError(str(error))
+    number = int(pr["number"])
+    branch = str(pr.get("headRefName") or "")
+    if pr.get("isDraft") or branch.startswith("sync/workflows"):
+        return None  # drafts are not ready; sync branches are Maint 71's (canary section)
+    created = _parse_iso_ts(str(pr.get("createdAt") or ""))
+    if created is None:
+        raise ValueError(f"#{number} has no readable createdAt")
+    if branch.startswith("dependabot/") and now - created < UNOWNED_DEPENDABOT_GRACE_S:
+        return None
+    refs, labels_raw, commits = (
+        pr["closingIssuesReferences"],
+        pr["labels"],
+        pr["commits"],
+    )
+    if not all(isinstance(value, list) for value in (refs, labels_raw, commits)):
+        raise TypeError("closingIssuesReferences, labels and commits must be lists")
+    linked = [f"{repo}#{number}"]
+    for ref in refs:
+        owner_repo = repo
+        repository = ref.get("repository") or {}
+        name = repository.get("name")
+        login = (repository.get("owner") or {}).get("login")
+        if name and login:
+            owner_repo = f"{login}/{name}"
+        linked.append(f"{owner_repo}#{int(ref['number'])}")
+    if any(target in targets for target in linked):
+        return None
+    if not commits:
+        raise ValueError("no commits listed")
+    head = str(pr.get("headRefOid") or "")
+    if not head or str(commits[-1].get("oid") or "") != head:
+        raise ValueError("the last listed commit is not the PR head, so the newest push is unknown")
+    last_push = _parse_iso_ts(str(commits[-1].get("committedDate") or ""))
+    if last_push is None:
+        raise ValueError("newest commit has no readable committedDate")
+    idle_since = max(created, last_push)
+    if now - idle_since < UNOWNED_IDLE_S:
+        return None
+    labels = {str(label["name"]) for label in labels_raw}
+    return {
+        "repo": repo,
+        "number": number,
+        "branch": branch,
+        "idle_days": round((now - idle_since) / 86400, 1),
+        "closes": linked[1:],
+        "route_labels": [label for label in UNOWNED_ROUTE_LABELS if label in labels],
+        "held_by": sorted(labels & UNOWNED_HOLD_LABELS),
+    }
+
+
 def _shed_row(marker: dict, entry: Path, *, now: float) -> dict:
     import capacity
 
@@ -3334,6 +3666,9 @@ def format_report(rep: dict) -> str:
     stuck = rep.get("stuck_lane_targets")
     if stuck is not None:
         lines += format_stuck_lane_targets(stuck)
+    unowned = rep.get("unowned_open_prs")
+    if unowned is not None:
+        lines += format_unowned_open_prs(unowned)
     refusals = rep.get("worktree_git_refusals")
     if refusals is not None:
         lines += format_worktree_git_refusals(refusals)
@@ -3467,6 +3802,50 @@ def format_stuck_lane_targets(section: dict) -> list[str]:
             f"  stuck lane targets: none (opener {counts['opener-core']} rounds, "
             f"closer {counts['closer-core']} rounds read)"
         )
+    return lines + [""]
+
+
+def format_unowned_open_prs(section: dict) -> list[str]:
+    """Always name the state: no unowned PR is a statement too, and unknown is never zero."""
+    lines = ["## Open PRs no lane has named (FYI only)", ""]
+    if section.get("status") == "disabled":
+        return lines + [f"  not run — {section.get('reason', 'disabled')}", ""]
+    if section["status"] != "ok":
+        lines.append(f"  unowned open PRs: unknown — {section['measurement']}")
+    hours = section["window_hours"]
+    if section["suspect"]:
+        lines.append(
+            f"  unowned open PRs: {section['suspect']} SUSPECT "
+            f"(no lane round named them in {hours}h; idle a day or more)"
+        )
+        for row in section["rows"][:10]:
+            notes = []
+            if row["closes"]:
+                notes.append("closes " + ", ".join(row["closes"]))
+            else:
+                notes.append("closes no issue")
+            if row["route_labels"]:
+                notes.append("labels " + ", ".join(row["route_labels"]))
+            lines.append(
+                f"    {row['repo']}#{row['number']} ({row['branch']}): idle "
+                f"{row['idle_days']}d; " + "; ".join(notes)
+            )
+        if section["suspect"] > 10:
+            lines.append(f"    ... and {section['suspect'] - 10} more in the JSON report")
+    elif section["status"] == "ok":
+        lines.append(
+            f"  unowned open PRs: none in {section['repos_checked']} repos "
+            f"(lane rounds read over {hours}h)"
+        )
+    if section.get("held"):
+        lines.append(f"  held by a hold label, not counted: {len(section['held'])}")
+        for row in section["held"][:5]:
+            lines.append(
+                f"    {row['repo']}#{row['number']}: {', '.join(row['held_by'])}; "
+                f"idle {row['idle_days']}d"
+            )
+    if section.get("window_note"):
+        lines.append(f"  note: {section['window_note']}")
     return lines + [""]
 
 
@@ -4233,6 +4612,25 @@ def main(argv: list[str]) -> int:
     # Like the interpreter audit, host-dependent fleet reads belong to the production
     # CLI, not isolated callers of review(). Both JSON and text carry this same snapshot.
     rep["fleet_delivery_measures"] = fleet_delivery_measures(now=rep.get("generated_at"))
+    # The unowned-PR scan reads live GitHub, so like the measures above it belongs to the weekly
+    # CLI and not to review(); ORCH_UNOWNED_PR_SCAN=0 turns it off (the test suite does).
+    if os.environ.get("ORCH_UNOWNED_PR_SCAN", "1") == "0":
+        rep["unowned_open_prs"] = {"status": "disabled", "reason": "ORCH_UNOWNED_PR_SCAN=0"}
+    else:
+        try:
+            rep["unowned_open_prs"] = unowned_open_prs(now=rep.get("generated_at"))
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 — preserve the weekly report on unavailable evidence
+            rep["unowned_open_prs"] = {
+                "status": "unknown",
+                "rows": [],
+                "held": [],
+                "suspect": 0,
+                "repos_checked": 0,
+                "window_hours": UNOWNED_WINDOW_S // 3600,
+                "measurement": f"unmeasured: scan failed ({type(exc).__name__}: {exc})",
+            }
     # The production weekly caller collects the curve, rather than leaving a CLI-only instrument.
     # Pure report/selftest readers keep their no-network and no-state-write contract.
     if (
