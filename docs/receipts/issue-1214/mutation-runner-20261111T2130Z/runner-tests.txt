@@ -1,0 +1,16 @@
+✔ mutation inserts availability before the body and preserves LF and CRLF syntax (4.585195ms)
+✔ valid evidence includes sandbox parameter IDs containing spaces (2.205012ms)
+✔ empty, skipped, slow, duplicate and unrelated results cannot establish acceptance (4.464026ms)
+✔ baseline, isolated mutation and original rerun retain commands and source bindings (5.462566ms)
+✔ a blocked baseline stops immediately and retains its failing output (3.082144ms)
+✔ failed mutation validation cleans temporary sources and never edits the checkout (3.21809ms)
+✔ real child execution reports exit status and missing interpreters (31.24679ms)
+✔ CLI retains an unverified manifest for missing tools and refuses evidence overwrite (10.276932ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 8
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 92.074183

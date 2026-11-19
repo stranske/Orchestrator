@@ -747,18 +747,34 @@ def test_native_clean_idle_holder_is_reclaimed(layout, lane, capsys):
 
 @pytest.mark.parametrize("lane", ["closer", "opener"])
 def test_native_reclaim_disabled_exit_128_names_holder(layout, lane, monkeypatch):
-    """Capture git exit 128 when reclaim is disabled and holder path is visible."""
+    """Disable reclaim, then restore it and reclaim the same holder using native probes."""
     canon, _ = layout
     branch = "pr-head" if lane == "closer" else OPENER_BRANCH
     if lane == "opener":
         git(canon, "branch", branch)
     holder = hold(layout, branch)
-    monkeypatch.setattr(provision, "_reclaim_branch_holder", lambda *args, **kwargs: None)
-    with pytest.raises(subprocess.CalledProcessError) as caught:
-        provision.provision(TARGET, lane)
+    holder_inode = holder.stat().st_ino
+    holder_head = git(holder, "rev-parse", "HEAD")
+    with monkeypatch.context() as disabled:
+        disabled.setattr(provision, "_reclaim_branch_holder", lambda *args, **kwargs: None)
+        with pytest.raises(subprocess.CalledProcessError) as caught:
+            provision.provision(TARGET, lane)
     assert caught.value.returncode == 128
     assert str(holder) in (caught.value.stderr or "")
-    assert holder.exists()
+    assert holder.stat().st_ino == holder_inode
+    assert git(holder, "rev-parse", "HEAD") == holder_head
+    assert git(holder, "branch", "--show-current") == branch
+    print(f"provision: disabled reclaim: git exit 128: {caught.value.stderr.strip()}")
+
+    wt = provision.provision(TARGET, lane)
+    assert not holder.exists()
+    assert git(wt, "branch", "--show-current") == branch
+    assert git(wt, "rev-parse", "HEAD") == holder_head
+    refused, reclaimed = events()
+    assert refused["outcome"] == "failed"
+    assert reclaimed["outcome"] == "reclaimed"
+    assert reclaimed["cause"] == "branch-held"
+    assert reclaimed["holder_path"] == str(holder)
 
 
 @pytest.mark.parametrize(

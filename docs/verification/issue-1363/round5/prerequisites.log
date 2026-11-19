@@ -1,0 +1,23 @@
+{"executable": "/opt/hostedtoolcache/Python/3.11.18/x64/bin/python3", "pytest": false, "black": false}
+{"executable": "/opt/hostedtoolcache/Python/3.12.16/x64/bin/python3", "pytest": false, "black": false}
+{"executable": "/opt/hostedtoolcache/Python/3.13.18/x64/bin/python3", "pytest": false, "black": false}
+{"executable": "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3", "pytest": false, "black": false}
+{"executable": "/opt/hostedtoolcache/Python/3.15.2/x64/bin/python3", "pytest": false, "black": false}
+{"executable": "/usr/bin/python3", "pytest": false, "black": false}
+
+Command: ['/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3', '-m', 'pytest', 'tests/test_provision_reclaim.py', '-m', 'not slow']
+/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3: No module named pytest
+Exit: 1
+
+Command: ['/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3', 'tests/test_capability_admission.py']
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_capability_admission.py", line 1111, in <module>
+    raise SystemExit(main())
+                     ~~~~^^
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_capability_admission.py", line 905, in main
+    _run_standalone_check(fn, verdicts)
+    ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_capability_admission.py", line 882, in _run_standalone_check
+    import pytest
+ModuleNotFoundError: No module named 'pytest'
+Exit: 1

@@ -1,0 +1,18 @@
+✔ retains complete real Python streams, selected revision and both floor blobs (81.42965ms)
+✔ retains the missing-pytest failure without mistaking matching floors for acceptance (78.137925ms)
+✔ runs the verifier and retains differing floor bytes without changing either floor (67.57072ms)
+✔ rejects a successful command as delivered evidence if source changes during the run (66.404976ms)
+✔ retains partial output and signal on timeout (1044.145884ms)
+✔ retains interpreter launch failure as a failed receipt (42.137033ms)
+✔ inherited explicit runtime paths and live-state opt-in stay outside this run (67.505835ms)
+✔ uncommitted test inputs cannot yield delivered-checkout acceptance (56.345601ms)
+✔ Git-ignored Python inputs cannot masquerade as committed delivery (52.378361ms)
+✔ refuses wrong revisions and output within the checkout before invoking Python (20.568557ms)
+ℹ tests 10
+ℹ suites 0
+ℹ pass 10
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1583.564853

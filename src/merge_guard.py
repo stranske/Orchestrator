@@ -90,7 +90,7 @@ def pr_metadata(target: str, *, run_fn=subprocess.run) -> dict[str, Any]:
         "-R",
         repo,
         "--json",
-        "title,labels,state,isDraft,mergeStateStatus,closingIssuesReferences,headRefName",
+        "title,labels,state,isDraft,mergeStateStatus,closingIssuesReferences,headRefName,body",
     ]
     res = run_fn(cmd, capture_output=True, text=True)
     if res.returncode != 0:
@@ -117,6 +117,7 @@ def pr_metadata(target: str, *, run_fn=subprocess.run) -> dict[str, Any]:
         "merge_state_status": doc.get("mergeStateStatus"),
         "closing_issues": closing,
         "head_branch": doc.get("headRefName") or "",
+        "body": doc.get("body") or "",
     }
 
 
@@ -190,6 +191,7 @@ def evaluate_merge_gate(
     remote_only: bool = False,
     metadata_fn=pr_metadata,
     gate_fn=runtime_ac_gate.gate_status,
+    expected_head: str | None = None,
 ) -> dict[str, Any]:
     meta = metadata_fn(target)
     base = {
@@ -216,6 +218,8 @@ def evaluate_merge_gate(
         "lane": "closer",
         "labels": labels,
         "title": meta.get("title") or "",
+        # The runtime-AC gate runs the PR's checks in a checkout of exactly this commit.
+        "head": expected_head or "",
     }
     footprint = None
     if remote_only:
@@ -233,7 +237,18 @@ def evaluate_merge_gate(
         # A concurrently appearing required spec is refused at final revalidation.
         gate = None
     else:
+        pr_body_spec = None
+        if not meta.get("closing_issues"):
+            # No closing issue, so no issue spec will ever be authored: a required gate would refuse
+            # forever. Author the spec from the PR's own acceptance claim (see author_pr_body_spec).
+            path = runtime_ac_gate.spec_path(target, spec_dir=spec_dir, env=env)
+            if runtime_ac_gate.required(item, path) and not path.exists():
+                pr_body_spec = runtime_ac_gate.author_pr_body_spec(
+                    target, meta.get("body"), expected_head, spec_dir=spec_dir, env=env
+                )
         gate = gate_fn(item, dry_run=dry_run, env=env, spec_dir=spec_dir)
+        if pr_body_spec is not None:
+            base = {**base, "pr_body_spec": pr_body_spec}
     result = {**base, "gate": gate}
     if footprint is not None:
         result["remote_only_guard"] = footprint
@@ -595,6 +610,7 @@ def guarded_merge(
         remote_only=remote_only,
         metadata_fn=metadata_fn,
         gate_fn=gate_fn,
+        expected_head=expected_head,
     )
     result = {
         **gate_result,

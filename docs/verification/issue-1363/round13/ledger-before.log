@@ -1,0 +1,115 @@
+✔ recounts active and archived failures with multiplicity and exact seven-day boundaries (101.48656ms)
+✔ an archived-only ledger is measured; absent ledger stays unmeasured (147.745568ms)
+✔ empty intact observed week can qualify only ledger evidence (76.29977ms)
+✔ preserves the existing collector owner exclusion before parsing and hashing (78.28762ms)
+✔ malformed torn data cannot become an intact zero (76.024125ms)
+✔ malformed broken data cannot become an intact zero (76.625621ms)
+✔ malformed null data cannot become an intact zero (74.924141ms)
+✔ malformed array data cannot become an intact zero (76.301162ms)
+✔ malformed naive data cannot become an intact zero (75.95403ms)
+✔ malformed outcome data cannot become an intact zero (76.774344ms)
+✔ segment delete after observation requires a fresh collector receipt (77.684102ms)
+✔ segment rewrite after observation requires a fresh collector receipt (76.312029ms)
+✔ segment append after observation requires a fresh collector receipt (79.964773ms)
+✔ segment duplicate after observation requires a fresh collector receipt (78.76596ms)
+✔ segment rotate after observation requires a fresh collector receipt (75.220237ms)
+✔ inconsistent collector baseline fails closed (78.223965ms)
+✔ inconsistent collector coverage fails closed (76.016994ms)
+✔ inconsistent collector continuity fails closed (75.840339ms)
+✔ inconsistent collector gap fails closed (78.099588ms)
+✔ inconsistent collector counts fails closed (75.90066ms)
+✔ inconsistent collector timestamp fails closed (78.398978ms)
+✔ inconsistent collector window fails closed (77.9219ms)
+✔ inconsistent collector source fails closed (93.61577ms)
+✔ inconsistent collector collector fails closed (75.580418ms)
+✔ inconsistent collector readiness fails closed (77.215248ms)
+✔ missing or malformed receipt cannot infer continuity from old events (86.134675ms)
+✔ a stale or future receipt cannot qualify and timestamps retain microseconds (75.615451ms)
+✖ post-deployment auditing requires a strictly later collector observation (75.337863ms)
+✖ CLI observation boundary waits for the collector and retains the zero count (113.580553ms)
+✖ CLI observation boundary waits for the collector and retains legitimate refusals (115.535584ms)
+✔ reads all inputs without writing and CLI status distinguishes unmet evidence (170.954402ms)
+✔ fresh observed legitimate refusals remain unmet after successful retries in both lanes (132.9624ms)
+✔ a refusal ages out only after a fresh observation with every archive retained (137.926267ms)
+✔ fresh observations after deploying changed provision.py cannot inherit the previous seven-day baseline (198.583987ms)
+✔ fresh observations after deploying changed followup_evidence.py cannot inherit the previous seven-day baseline (570.070147ms)
+✔ fresh zero-refusal observation preserves the baseline at the two-hour collector limit (141.597457ms)
+✔ fresh zero-refusal observation resets the baseline at the two-hour collector limit (195.321559ms)
+✔ a fresh collector observation after archive loss cannot qualify a zero-refusal window (195.641862ms)
+✔ fresh observation preserves rotated archives with an empty active segment (180.897077ms)
+✔ fresh observation preserves rotated archives with repeated refusals (177.060618ms)
+✔ source absence and nonregular segments are UNKNOWN without following symlinks (76.243516ms)
+✔ an archive replaced by a directory retains every readable refusal in CLI output (170.638887ms)
+✔ an archive replaced by a symlink retains every readable refusal in CLI output (131.007619ms)
+✔ malformed receipt segment retains an unmet zero in CLI output (111.29154ms)
+✔ malformed receipt segment retains all refusals in CLI output (113.501714ms)
+✔ rejects malformed empty counts [] (75.360318ms)
+✔ rejects malformed empty counts "" (75.094196ms)
+✔ rejects malformed empty counts 0 (74.987686ms)
+✔ rejects malformed empty counts null (88.267995ms)
+✔ compares relative collector segment paths by their filesystem identity (75.329741ms)
+✔ runtime directory aliases retain a qualifying observation (220.53589ms)
+✔ runtime directory aliases retain every refusal (256.706632ms)
+✔ rejects an unrelated zero ledger when the writer is outside (77.261066ms)
+✔ rejects an unrelated zero ledger when the writer is renamed (75.788281ms)
+✔ rejects an unrelated zero ledger with a separate writer configured runtime (102.915308ms)
+✔ rejects an unrelated zero ledger with a separate writer home runtime (103.721902ms)
+✔ explicit writer path overrides the runtime directory when unobserved (324.624573ms)
+✔ explicit writer path overrides the runtime directory when observed (325.228752ms)
+ℹ tests 58
+ℹ suites 0
+ℹ pass 55
+ℹ fail 3
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 7092.292354
+
+✖ failing tests:
+
+test at ../../../../../tmp/provision-boundary-before.SgxHPN/tests/test_audit_provision_ledger.js:194:1
+✖ post-deployment auditing requires a strictly later collector observation (75.337863ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  true !== false
+  
+      at TestContext.<anonymous> (/tmp/provision-boundary-before.SgxHPN/tests/test_audit_provision_ledger.js:202:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at ../../../../../tmp/provision-boundary-before.SgxHPN/tests/test_audit_provision_ledger.js:216:3
+✖ CLI observation boundary waits for the collector and retains the zero count (113.580553ms)
+  SyntaxError: Unexpected end of JSON input
+      at JSON.parse (<anonymous>)
+      at run (/tmp/provision-boundary-before.SgxHPN/tests/test_audit_provision_ledger.js:240:27)
+      at TestContext.<anonymous> (/tmp/provision-boundary-before.SgxHPN/tests/test_audit_provision_ledger.js:247:20)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+
+test at ../../../../../tmp/provision-boundary-before.SgxHPN/tests/test_audit_provision_ledger.js:216:3
+✖ CLI observation boundary waits for the collector and retains legitimate refusals (115.535584ms)
+  SyntaxError: Unexpected end of JSON input
+      at JSON.parse (<anonymous>)
+      at run (/tmp/provision-boundary-before.SgxHPN/tests/test_audit_provision_ledger.js:240:27)
+      at TestContext.<anonymous> (/tmp/provision-boundary-before.SgxHPN/tests/test_audit_provision_ledger.js:247:20)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7)

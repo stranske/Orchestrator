@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 LABEL = "agents:local-loop"
-KNOWN_AGENTS = {"codex", "claude", "cursor", "gemini", "muse", "vibe", "aider"}
+KNOWN_AGENTS = {"codex", "claude", "cursor", "gemini", "muse", "vibe"}
 BRANCH_AGENT = {"claude-code": "claude"}  # branch prefixes that name an agent differently
 HOSTED_LABELS = ("agents:keepalive", "autofix")
 MARKER = "<!-- local-loop/v1 -->"
@@ -89,6 +89,7 @@ SEARCH = """query($q:String!,$after:String){search(query:$q,type:ISSUE,first:40,
 pageInfo{hasNextPage endCursor} nodes{... on PullRequest{number state isDraft headRefName headRefOid
 body repository{nameWithOwner} labels(first:40){nodes{name}}
 closingIssuesReferences(first:3){nodes{number title state body}}
+reviewThreads(first:50){nodes{isResolved isOutdated path line comments(first:1){nodes{databaseId author{login} body}}}}
 commits(last:1){nodes{commit{oid committedDate statusCheckRollup{state contexts(first:80){nodes{__typename
 ... on CheckRun{name status conclusion detailsUrl}
 ... on StatusContext{context state targetUrl}}}}}}}}}}}"""
@@ -266,6 +267,26 @@ def rollup(pr: dict) -> dict:
     return {"state": roll.get("state"), "head": pr.get("headRefOid"), "failing": failing}
 
 
+def active_review_threads(pr: dict) -> list[dict]:
+    """Unresolved, non-outdated review threads as {path, line, author, comment_id, body}."""
+    out: list[dict] = []
+    for t in ((pr.get("reviewThreads") or {}).get("nodes")) or []:
+        if not t or t.get("isResolved") or t.get("isOutdated"):
+            continue
+        comments = [c for c in ((t.get("comments") or {}).get("nodes") or []) if c]
+        first = comments[0] if comments else {}
+        out.append(
+            {
+                "path": t.get("path") or "",
+                "line": t.get("line"),
+                "author": ((first.get("author") or {}).get("login")) or "",
+                "comment_id": first.get("databaseId"),
+                "body": str(first.get("body") or "")[:1500],
+            }
+        )
+    return out
+
+
 ERROR_LINE = re.compile(
     r"(error|fail|traceback|assert|exception|^E\s|would reformat|not found|denied|exit code [1-9])",
     re.I,
@@ -315,6 +336,7 @@ def build_prompt(
     cause: str,
     failures: list[dict],
     acceptance: dict | None,
+    review_threads: list[dict] | None = None,
 ) -> str:
     body = (issue or {}).get("body") or pr.get("body") or ""
     items = checklist(body)
@@ -342,6 +364,25 @@ def build_prompt(
             str(acceptance.get("detail") or "")[-3000:],
             "```",
         ]
+    if review_threads:
+        repo = (pr.get("repository") or {}).get("nameWithOwner") or st["target"].split("#", 1)[0]
+        pr_num = pr.get("number") or st["target"].split("#", 1)[-1]
+        lines += [
+            "",
+            "## Unanswered review threads",
+            "Fix the code each thread names, or, when a thread does not apply, reply on it with "
+            f"the reason via `gh api -X POST repos/{repo}/pulls/{pr_num}/comments/"
+            "<comment_id>/replies -f body=...`. Never resolve threads yourself.",
+        ]
+        for t in review_threads:
+            loc = (
+                f"{t['path']}:{t['line']}"
+                if t.get("line") is not None
+                else (t.get("path") or "(file)")
+            )
+            who = f"@{t['author']}" if t.get("author") else "reviewer"
+            cid = f" (comment_id: {t['comment_id']})" if t.get("comment_id") is not None else ""
+            lines += ["", f"### `{loc}` — {who}{cid}", t.get("body") or ""]
     lines += [
         "",
         "---",
@@ -368,7 +409,8 @@ def build_prompt(
         "---",
         "",
         "Rules:",
-        "- Change only what the remaining tasks and the failures above need. No cleanup or refactor.",
+        "- Change only what the remaining tasks, the failures, and any unanswered review threads "
+        "above need. No cleanup or refactor.",
         f"- {PIN_RULE}",
         "- Run only the focused tests for the files you change and the commands the acceptance criteria "
         "name. Never run the full test suite locally: CI runs it on your push.",
@@ -424,7 +466,7 @@ def default_acceptance(pr_target: str, issue_target: str | None, body: str, head
 
     try:
         gate = keepalive_supervisor._closure_gate(
-            pr_target, {"target": issue_target or pr_target, "body": body}, head
+            pr_target, {"target": issue_target or pr_target, "body": body}, head, unmerged_head=True
         )
     except Exception as exc:  # noqa: BLE001 — an unrunnable gate is reported, never a pass
         return {"result": "UNRUNNABLE", "detail": f"gate error: {str(exc)[:300]}"}
@@ -650,6 +692,7 @@ class Tick:
         body = issue.get("body") or ""
         failures: list[dict] = []
         acceptance = None
+        threads = active_review_threads(pr)
         if ci["state"] == "SUCCESS":
             acceptance = self.evidence(st, target, body, ci["head"])
             if acceptance["result"] == "PASS":
@@ -662,8 +705,13 @@ class Tick:
                 acceptance["result"] == "UNRUNNABLE" and "no gate commands" in acceptance["detail"]
             )
             if (acceptance["result"] == "PASS" or no_commands) and not remaining:
-                return self.done(st, pr, repo, acceptance)
-            if acceptance["result"] == "FAIL":
+                if not threads:
+                    return self.done(st, pr, repo, acceptance)
+                cause = (
+                    f"CI is green and the tasks are done, but {len(threads)} "
+                    "review thread(s) are unanswered (below)."
+                )
+            elif acceptance["result"] == "FAIL":
                 cause = "CI is green but the issue's acceptance commands fail on this head (output below)."
             elif acceptance["result"] == "UNRUNNABLE" and not no_commands:
                 cause = f"CI is green; the acceptance commands could not run ({acceptance['detail'][:200]})."
@@ -678,7 +726,7 @@ class Tick:
             cause = f"CI {ci['state']} on head {str(ci['head'])[:8]}: " + (
                 ", ".join(f["name"] for f in ci["failing"][:8]) or "no failing check named"
             )
-        return self.next_round(st, pr, issue, repo, labels, cause, failures, acceptance)
+        return self.next_round(st, pr, issue, repo, labels, cause, failures, acceptance, threads)
 
     def close_round(self, st: dict, last: dict, pr: dict, issue: dict, repo: str, ci: dict) -> None:
         """The last round's agent has exited and CI reported on what it left: measure it once."""
@@ -752,6 +800,7 @@ class Tick:
         cause: str,
         failures: list[dict],
         acceptance: dict | None,
+        review_threads: list[dict] | None = None,
     ) -> dict:
         if len(st["rounds"]) >= ROUND_CAP:
             return self.handoff(st, pr, repo, labels, f"round cap {ROUND_CAP} reached")
@@ -785,7 +834,7 @@ class Tick:
                 "reason": f"{cap['reason']}; hands off to hosted after {CAPACITY_WAIT // 60} min",
             }
         n = len(st["rounds"]) + 1
-        prompt = build_prompt(st, pr, issue, cause, failures, acceptance)
+        prompt = build_prompt(st, pr, issue, cause, failures, acceptance, review_threads)
         rationale = f"local-loop round {n}/{ROUND_CAP}: {cause[:160]}; {cap['reason']}"
         if not self.apply:
             return {"action": "would-round", "reason": cause[:200]}

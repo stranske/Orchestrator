@@ -71,3 +71,43 @@ def test_two_generations_reuse_operational_registry_and_preserve_operator_data(t
         assert not (module_dir / "experiments").exists()
     assert results[0]["path"] == results[1]["path"]
     assert results[1]["note"] == "preserve across generations"
+
+
+@pytest.mark.parametrize("with_metadata", [False, True])
+def test_workflows_catalog_export_upgrades_only_the_old_rule(tmp_path, with_metadata):
+    repo = "stranske/Workflows"
+    old = (
+        "Workflow additions or renames must update docs/ci/WORKFLOWS.md, "
+        "docs/ci/WORKFLOW_SYSTEM.md, and the workflow naming tests."
+    )
+    original = {"text": old, "task_types": ["docs"]} if with_metadata else old
+    custom = {"text": old + " Local exception.", "owner": "operator"}
+    other = {"definition_of_done": [old]}
+    registry = tmp_path / "existing.json"
+    registry.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "repos": {repo: {"definition_of_done": [original, custom]}, "test/other": other},
+            }
+        )
+    )
+
+    fresh = repo_knowledge.export_agents_md(repo, path=tmp_path / "fresh.json")
+    exported = repo_knowledge.export_agents_md(repo, path=registry)
+    saved = registry.read_bytes()
+    migrated = json.loads(saved)
+    rule, preserved = migrated["repos"][repo]["definition_of_done"][:2]
+    text = rule["text"] if with_metadata else rule
+    assert "authoritative roster in docs/ci/WORKFLOWS.md" in text
+    assert "expected name in the workflow naming tests" in text
+    assert "Update docs/ci/WORKFLOW_SYSTEM.md only when" in text
+    assert text in fresh and text in exported
+    for scope in ("(tasks: codemod)", "(tasks: epic, cross_repo)", "(tasks: testgen)"):
+        assert fresh.count(scope) == exported.count(scope) == 1
+    if with_metadata:
+        assert rule == {**original, "text": text}
+    assert preserved == custom
+    assert migrated["repos"]["test/other"] == other
+    assert repo_knowledge.export_agents_md(repo, path=registry) == exported
+    assert registry.read_bytes() == saved

@@ -82,7 +82,7 @@ def test_langsmith_direct_http_fallback_and_record_edges(monkeypatch: pytest.Mon
             return _Response([{"id": "project-id"}])
         return _Response(
             {
-                "runs": [
+                "items": [
                     {
                         "id": "r1",
                         "trace_id": "t1",
@@ -91,7 +91,7 @@ def test_langsmith_direct_http_fallback_and_record_edges(monkeypatch: pytest.Mon
                         "end_time": "2026-01-01T00:00:01Z",
                     }
                 ],
-                "cursors": {},
+                "next_cursor": None,
             }
         )
 
@@ -207,8 +207,8 @@ def test_langsmith_key_client_host_parse_and_print(
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr("builtins.__import__", other_missing)
-    with pytest.raises(ModuleNotFoundError, match="langsmith._internal"):
-        langsmith_direct._make_client()
+    # The read transport does not depend on any installed SDK version.
+    assert isinstance(langsmith_direct._make_client(), langsmith_direct._StdlibLangSmithClient)
 
     run = langsmith_direct._StdlibRun({"id": "only-id", "app_path": ""}, host_url="https://h")
     assert run.trace_id == "only-id" and run.url is None
@@ -241,12 +241,12 @@ def test_langsmith_stdlib_pagination_empty_and_project_miss(
         body = json.loads(request.data) if request.data else {}
         if "cursor" in body:
             assert body["cursor"] == "page-2"
-            return _Response({"runs": [{"id": "r2"}], "cursors": {}})
+            return _Response({"items": [{"id": "r2"}], "next_cursor": None})
         if request.full_url.endswith("/runs/query"):
             return _Response(
                 {
-                    "runs": [{"id": "r1", "app_path": "/o/r1"}],
-                    "cursors": {"next": "page-2"},
+                    "items": [{"id": "r1", "app_path": "/o/r1"}],
+                    "next_cursor": "page-2",
                 }
             )
         return _Response(b"")
@@ -266,7 +266,8 @@ def test_langsmith_stdlib_pagination_empty_and_project_miss(
         "_request_json",
         lambda *a, **k: ["not-a-dict"],
     )
-    assert list(client.list_runs(project_name="ok")) == []
+    with pytest.raises(RuntimeError, match="invalid items"):
+        list(client.list_runs(project_name="ok"))
 
 
 def test_langsmith_run_to_record_and_fetch_and_ingest(

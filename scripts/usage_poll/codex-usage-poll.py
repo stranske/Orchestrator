@@ -115,7 +115,11 @@ def read_response():
                 continue
             if message.get("id") == wanted:
                 if "error" in message:
-                    raise RuntimeError("app-server RPC failed")
+                    code = (message.get("error") or {}).get("code")
+                    raise RuntimeError(
+                        "app-server RPC failed"
+                        + (f" (code {code})" if isinstance(code, int) else "")
+                    )
                 return message.get("result")
         raise RuntimeError("app-server response timeout")
 
@@ -167,9 +171,22 @@ def main(destination=OUT):
     )
 
 
+# Reasons this script raises itself; anything else is logged by exception class only, so a message that might
+# carry an account identifier never reaches the log (2026-11-18: 303 failures logged with no reason at all,
+# including a 22 h outage on 11-09 that could not be diagnosed afterwards).
+OWN_REASONS = ("app-server closed stdout", "app-server RPC failed", "app-server response timeout")
+
+
+def failure_reason(exc: BaseException) -> str:
+    text = str(exc)
+    if isinstance(exc, RuntimeError) and text.startswith(OWN_REASONS):
+        return text
+    return type(exc).__name__
+
+
 if __name__ == "__main__":
     try:
         main()
-    except Exception:
-        print("codex usage poll FAILED; latest unchanged", file=sys.stderr)
+    except Exception as exc:
+        print(f"codex usage poll FAILED ({failure_reason(exc)}); latest unchanged", file=sys.stderr)
         sys.exit(1)

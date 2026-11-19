@@ -539,6 +539,7 @@ MAX_COMPLETION_LIST_ITEMS = 32
 MAX_COMPLETION_STRING_CHARS = 256
 MAX_COMPLETION_ARTIFACTS = 16
 COMPLETION_PAYLOAD_FIELDS = {
+    "live_shadow",
     "closer_stage",
     "relay_pacing",
     "changed_path_classes",
@@ -595,6 +596,7 @@ VALID_COMPLETION_EVENT_TYPES = {
     "panel",
 }
 VALID_COMPLETION_PHASES = {
+    "live_shadow_advice",
     "post_merge_recheck",
     "trigger",
     "decision",
@@ -606,6 +608,7 @@ VALID_COMPLETION_PHASES = {
     "durability",
 }
 VALID_COMPLETION_PRODUCERS = {
+    "role-adjudicator",
     "verifier_evidence",
     "closer_disposition.integrate_ordinary",
     "closer_dispatcher.response_binding",
@@ -660,6 +663,19 @@ VALID_COMPLETION_STATUSES = {
     "unknown",
 }
 COMPLETION_NESTED_FIELDS = {
+    # The adjudicator's live shadow advice (#643): shadow only, never an outcome or merge input.
+    "live_shadow": {
+        "case_id",
+        "run_id",
+        "target",
+        "decision",
+        "disposition",
+        "backend",
+        "backend_run_id",
+        "cost_usd",
+        "merge_rule_verdict",
+        "evaluated_sha",
+    },
     "relay_pacing": {
         "source",
         "chosen",
@@ -1920,6 +1936,7 @@ def _sanitize_completion_payload(payload: dict | None) -> tuple[dict, str, int]:
 def _normalize_completion_producer(producer: str) -> str:
     value = str(producer or "").strip().lower().replace("-", "_")
     aliases = {
+        "role_adjudicator": "role-adjudicator",
         "feedback.execution_attempt": "feedback.execution_attempt",
         "feedback.record_run": "feedback.record_run",
         "feedback.record_outcome": "feedback.record_outcome",
@@ -5339,10 +5356,21 @@ def completion_event_episodes(
 
 
 def record_cost(run_id, tokens_in=0, tokens_out=0, cost_usd=0.0, latency_s=0.0, source="ledger"):
+    from adapters import CURSOR_CLI_COST_SOURCE, CURSOR_CLI_COST_SOURCES
+
     with _conn() as c:
+        # Preserve the run's terminal Cursor result when trace import or ledger reconciliation
+        # writes later. A priced terminal measurement may replace an unpriced one.
+        # An overlapping reconcile may still have a pre-completion latency of zero.
         c.execute(
-            "INSERT OR REPLACE INTO costs "
-            "(run_id,tokens_in,tokens_out,cost_usd,latency_s,source,pulled_ts) VALUES (?,?,?,?,?,?,?)",
+            "INSERT INTO costs "
+            "(run_id,tokens_in,tokens_out,cost_usd,latency_s,source,pulled_ts) VALUES (?,?,?,?,?,?,?) "
+            "ON CONFLICT(run_id) DO UPDATE SET tokens_in=excluded.tokens_in, "
+            "tokens_out=excluded.tokens_out, cost_usd=excluded.cost_usd, "
+            "latency_s=CASE WHEN costs.source IN (?,?,?) "
+            "THEN MAX(COALESCE(costs.latency_s,0),excluded.latency_s) ELSE excluded.latency_s END, "
+            "source=excluded.source, pulled_ts=excluded.pulled_ts "
+            "WHERE COALESCE(costs.source,'') NOT IN (?,?,?) OR excluded.source=?",
             (
                 run_id,
                 tokens_in,
@@ -5351,6 +5379,9 @@ def record_cost(run_id, tokens_in=0, tokens_out=0, cost_usd=0.0, latency_s=0.0, 
                 latency_s,
                 source,
                 int(time.time()),
+                *CURSOR_CLI_COST_SOURCES,
+                *CURSOR_CLI_COST_SOURCES,
+                CURSOR_CLI_COST_SOURCE,
             ),
         )
 

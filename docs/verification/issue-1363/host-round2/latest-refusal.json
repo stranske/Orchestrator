@@ -1,0 +1,9 @@
+{
+  "cause": "branch-held",
+  "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989",
+  "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+  "lane": "closer",
+  "outcome": "failed",
+  "target": "stranske/Workflows#4637",
+  "ts": "2026-11-11T16:59:47.763115+00:00"
+}

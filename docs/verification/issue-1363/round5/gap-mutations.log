@@ -1,0 +1,76 @@
+
+Mutation: collector ignores a gap just beyond two hours
+Command: ['node', '--test-name-pattern=fresh zero-refusal observation', 'tests/test_audit_provision_ledger.js']
+✔ fresh zero-refusal observation preserves the baseline at the two-hour collector limit (114.259935ms)
+✖ fresh zero-refusal observation resets the baseline at the two-hour collector limit (101.772553ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 1
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 222.03139
+
+✖ failing tests:
+
+test at tests/test_audit_provision_ledger.js:290:3
+✖ fresh zero-refusal observation resets the baseline at the two-hour collector limit (101.772553ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'continuous'
+  - 'UNKNOWN'
+  
+      at TestContext.<anonymous> (/tmp/orch1365-gap-mutation-nky98ecr/tests/test_audit_provision_ledger.js:307:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'continuous',
+    expected: 'UNKNOWN',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+Exit: 1
+
+Mutation: auditor accepts zero refusals without continuous coverage
+Command: ['node', '--test-name-pattern=fresh zero-refusal observation', 'tests/test_audit_provision_ledger.js']
+✔ fresh zero-refusal observation preserves the baseline at the two-hour collector limit (107.896167ms)
+✖ fresh zero-refusal observation resets the baseline at the two-hour collector limit (100.012084ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 1
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 214.460517
+
+✖ failing tests:
+
+test at tests/test_audit_provision_ledger.js:290:3
+✖ fresh zero-refusal observation resets the baseline at the two-hour collector limit (100.012084ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  true !== false
+  
+      at TestContext.<anonymous> (/tmp/orch1365-gap-mutation-1u2n1w75/tests/test_audit_provision_ledger.js:318:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+Exit: 1

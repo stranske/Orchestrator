@@ -29,17 +29,28 @@ function runPytest(root) {
   });
 }
 
-function requireVerdict(result, failed) {
+function requireVerdict(result, failed, {
+  testNode = node,
+  failurePattern = /AssertionError: assert \{['"]broken['"]: True\} == \{\}/,
+} = {}) {
   const output = (result.stdout || '') + (result.stderr || '');
   assert.ok(!result.error, `${result.error?.message}\n${output}`);
   assert.equal(result.status, failed ? 1 : 0, output);
-  const rows = output.split('\n').filter((line) => line.startsWith(`${testFile}::`));
+  const lines = output.split('\n');
+  const rows = lines.filter((line) => /^[^\s]+\.py::/.test(line));
   assert.equal(rows.length, 1, output);
-  assert.ok(rows[0].startsWith(`${node} ${failed ? 'FAILED' : 'PASSED'} `), output);
-  assert.match(output, failed ? /\b1 failed\b/ : /\b1 passed\b/);
+  assert.ok(rows[0].startsWith(`${testNode} ${failed ? 'FAILED' : 'PASSED'} `), output);
+  // The summary must describe just this test. Matching "1 failed" anywhere
+  // also accepts "1 failed, 1 passed", hiding an unintended additional test.
+  const summaries = lines.map((line) => line.trim().replace(/^=+\s*|\s*=+$/g, ''))
+    .filter((line) => /^\d+ (?:passed|failed|errors?|skipped|xfailed|xpassed|deselected)\b/.test(line));
+  assert.equal(summaries.length, 1, output);
+  assert.match(summaries[0], new RegExp(
+    `^1 ${failed ? 'failed' : 'passed'}(?:, \\d+ warnings?)? in \\d+(?:\\.\\d+)?s(?: \\([\\d:]+\\))?$`,
+  ));
   assert.doesNotMatch(output, /\b\d+ (?:errors?|skipped|xfailed|xpassed|deselected)\b/i);
   if (failed) {
-    assert.match(output, /AssertionError: assert \{['"]broken['"]: True\} == \{\}/);
+    assert.match(output, failurePattern);
   }
   return output;
 }
@@ -48,20 +59,39 @@ function verify(root, run = runPytest) {
   const source = path.join(root, edit.file);
   const original = fs.readFileSync(source);
   const testSource = fs.readFileSync(path.join(root, testFile));
-  const baseline = requireVerdict(run(root), false);
-  const red = withMutation(root, { edits: [edit] }, () => requireVerdict(run(root), true));
-  assert.deepEqual(fs.readFileSync(source), original, 'production source was not restored');
-  const green = requireVerdict(run(root), false);
-  assert.deepEqual(fs.readFileSync(source), original, 'restored test changed production source');
-  assert.deepEqual(fs.readFileSync(path.join(root, testFile)), testSource, 'test source changed');
-  return {
-    test, file: edit.file, before: edit.before, broken: edit.after,
-    command: [process.env.PYTHON || 'python3', ...args],
-    source_sha256: digest(original), restored_source_sha256: digest(fs.readFileSync(source)),
-    test_sha256: digest(testSource),
-    baseline_exit: 0, baseline_output: baseline,
-    red_exit: 1, red_output: red, green_exit: 0, green_output: green,
-  };
+  try {
+    const baseline = requireVerdict(run(root), false);
+    assert.deepEqual(fs.readFileSync(source), original, 'baseline changed production source');
+    assert.deepEqual(fs.readFileSync(path.join(root, testFile)), testSource,
+      'baseline changed test source');
+    let brokenSource;
+    const red = withMutation(root, { edits: [edit] }, () => {
+      brokenSource = fs.readFileSync(source);
+      const output = requireVerdict(run(root), true);
+      assert.deepEqual(fs.readFileSync(source), brokenSource,
+        'mutation run changed production source');
+      assert.deepEqual(fs.readFileSync(path.join(root, testFile)), testSource,
+        'mutation run changed test source');
+      return output;
+    });
+    assert.deepEqual(fs.readFileSync(source), original, 'production source was not restored');
+    const green = requireVerdict(run(root), false);
+    assert.deepEqual(fs.readFileSync(source), original, 'restored test changed production source');
+    assert.deepEqual(fs.readFileSync(path.join(root, testFile)), testSource, 'test source changed');
+    return {
+      test, file: edit.file, before: edit.before, broken: edit.after,
+      command: [process.env.PYTHON || 'python3', ...args],
+      source_sha256: digest(original), restored_source_sha256: digest(fs.readFileSync(source)),
+      broken_source_sha256: digest(brokenSource),
+      test_sha256: digest(testSource),
+      baseline_exit: 0, baseline_output: baseline,
+      red_exit: 1, red_output: red, green_exit: 0, green_output: green,
+    };
+  } finally {
+    // A runner can rewrite source even during baseline or restored pytest.
+    // Preserve the original production bytes on every exit, including errors.
+    fs.writeFileSync(source, original);
+  }
 }
 
 function main() {

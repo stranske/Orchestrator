@@ -18,6 +18,7 @@ import exploration_backfill as eb
 import feedback
 import redirect_apply as ra
 import research_subjects
+import router
 import ux_review as ur
 
 
@@ -706,9 +707,9 @@ def test_execution_profiles_retirement_cycle_and_empty_eligible(monkeypatch) -> 
     env = ep.select_profile(
         "implement",
         "o/r#1",
-        ["codex-6.1-sol-medium"],
+        ["codex-6.2-sol-medium"],
         rng_seed=1,
-        gate_results={"codex-6.1-sol-medium": {"eligible": False}},
+        gate_results={"codex-6.2-sol-medium": {"eligible": False}},
     )
     assert env["selected_profile_id"] is None
     assert env["assignment_probability"] == 0.0
@@ -721,13 +722,13 @@ def test_execution_profiles_retirement_cycle_and_empty_eligible(monkeypatch) -> 
     explored = ep.select_profile(
         "implement",
         None,
-        ["codex-6.1-sol-medium", "codex-6.1-sol-high"],
+        ["codex-6.2-sol-medium", "codex-6.2-sol-high"],
         rng_seed=3,
         exploration=True,
     )
     assert explored["selected_profile_id"] in {
-        "codex-6.1-sol-medium",
-        "codex-6.1-sol-high",
+        "codex-6.2-sol-medium",
+        "codex-6.2-sol-high",
     }
     assert explored["assignment_probability"] == 0.5
 
@@ -802,7 +803,8 @@ def test_exploration_backfill_evaluated_targets_from_feedback(monkeypatch, tmp_p
 
 
 def test_exploration_backfill_missing_cells_and_target_parsers(tmp_path, monkeypatch) -> None:
-    route = {"implement": {"agents": [{"agent": "codex"}, {"agent": "claude"}, {"agent": "aider"}]}}
+    monkeypatch.setattr(router, "BACKUP_AGENTS", {"spare"})  # no real backup seat since 2026-11-11
+    route = {"implement": {"agents": [{"agent": "codex"}, {"agent": "claude"}, {"agent": "spare"}]}}
     coverage = {
         "tasks": [
             {"task_type": None},
@@ -819,7 +821,7 @@ def test_exploration_backfill_missing_cells_and_target_parsers(tmp_path, monkeyp
         ]
     }
     cells = eb._missing_cells(coverage, route_table=route)
-    assert cells and all(c["agent"] != "aider" for c in cells)
+    assert cells and all(c["agent"] != "spare" for c in cells)
 
     spec = tmp_path / "spec.md"
     spec.write_text("Title\nTarget: owner/repo#9\n", encoding="utf-8")

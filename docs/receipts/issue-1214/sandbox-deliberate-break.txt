@@ -1,0 +1,596 @@
+check_date=2026-11-11T19:07:24.713355+00:00
+command=/opt/anaconda3/bin/python3 -m pytest tests/test_dispatcher_offload.py -k sandbox
+exit=1
+elapsed_s=2.272
+============================= test session starts ==============================
+platform darwin -- Python 3.12.2, pytest-9.2.0, pluggy-1.6.0
+rootdir: /Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__1214__opener
+configfile: pyproject.toml
+plugins: hypothesis-6.161.5, cov-7.1.0, xdist-3.8.0, rerunfailures-16.3, datadir-1.8.0, typeguard-4.5.1, langsmith-0.10.10, pytest_httpserver-1.1.3, anyio-4.16.0, regressions-2.11.0, asyncio-1.4.1.post1, Faker-40.39.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 30 items
+
+tests/test_dispatcher_offload.py .....FFFFFFFFFFFFFFFFFFFFF....          [100%]
+
+=================================== FAILURES ===================================
+___________ test_sandbox_probe_command_is_inside_the_assess_sandbox ____________
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2429/test_sandbox_probe_command_is_0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1079b0d70>
+
+    def test_sandbox_probe_command_is_inside_the_assess_sandbox(tmp_path, monkeypatch):
+        seen = {}
+    
+        def run(cmd, cwd=None, **kwargs):
+            seen["cmd"] = list(cmd)
+            seen["timeout"] = kwargs.get("timeout")
+            return _completed(cmd, 1, "", "dial tcp: lookup api.github.com: no such host")
+    
+        monkeypatch.setattr(dispatcher.subprocess, "run", run)
+        assess_argv = ["codex", "exec", "--sandbox", "read-only", "--cd", str(tmp_path), "brief"]
+        verdict = dispatcher._sandbox_has_network(assess_argv, cwd=str(tmp_path))
+        expected = dispatcher._sandbox_probe_command(assess_argv)
+>       assert seen["cmd"] == expected
+               ^^^^^^^^^^^
+E       KeyError: 'cmd'
+
+tests/test_dispatcher_offload.py:149: KeyError
+____________ test_sandbox_probe_timeout_is_bounded_by_five_seconds _____________
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2429/test_sandbox_probe_timeout_is_0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1079b0ce0>
+
+    def test_sandbox_probe_timeout_is_bounded_by_five_seconds(tmp_path, monkeypatch):
+        def run(cmd, cwd=None, **kwargs):
+            assert kwargs["timeout"] <= 5.0
+            raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+    
+        monkeypatch.setattr(dispatcher.subprocess, "run", run)
+        verdict = dispatcher._sandbox_has_network(
+            ["codex", "exec", "--sandbox", "read-only", "--cd", str(tmp_path), "brief"],
+            cwd=str(tmp_path),
+        )
+>       assert verdict["classification"] == "timeout" and verdict["has_network"] is False
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: 'bool' object is not subscriptable
+
+tests/test_dispatcher_offload.py:173: TypeError
+___________ test_sandbox_auth_and_rate_json_are_not_network_failures ___________
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2429/test_sandbox_auth_and_rate_jso0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1079b0bc0>
+
+    def test_sandbox_auth_and_rate_json_are_not_network_failures(tmp_path, monkeypatch):
+        answers = iter(
+            [
+                _completed(
+                    ["gh"], 1, "", "HTTP 401: Bad credentials (https://api.github.com/rate_limit)"
+                ),
+                _completed(
+                    ["gh"],
+                    0,
+                    json.dumps({"resources": {"core": {"limit": 5000}}, "rate": {"remaining": 401}}),
+                    "",
+                ),
+                _completed(["gh"], 1, "", "connect: connection refused"),
+            ]
+        )
+    
+        def run(cmd, cwd=None, **kwargs):
+            return next(answers)
+    
+        monkeypatch.setattr(dispatcher.subprocess, "run", run)
+        argv = ["codex", "exec", "--sandbox", "read-only", "--cd", str(tmp_path), "brief"]
+        auth = dispatcher._sandbox_has_network(argv, cwd=str(tmp_path))
+        rate = dispatcher._sandbox_has_network(argv, cwd=str(tmp_path))
+        connection = dispatcher._sandbox_has_network(argv, cwd=str(tmp_path))
+>       assert auth["classification"] == "auth_or_api" and auth["has_network"] is True
+               ^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: 'bool' object is not subscriptable
+
+tests/test_dispatcher_offload.py:201: TypeError
+__________ test_sandbox_network_failure_falls_back_to_workspace_write __________
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2429/test_sandbox_network_failure_f0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1079b1370>
+capsys = <_pytest.capture.CaptureFixture object at 0x1079b30b0>
+
+    def test_sandbox_network_failure_falls_back_to_workspace_write(tmp_path, monkeypatch, capsys):
+        """Deliberate-break target: availability skips workspace-write and the preamble."""
+        _isolate(tmp_path, monkeypatch)
+        calls = _install_run(
+            monkeypatch,
+            lambda cmd, kwargs: _completed(cmd, 1, "", "dial tcp: lookup api.github.com: no such host"),
+        )
+        result = dispatcher.offload(
+            "codex",
+            "Run gh api rate_limit and print the JSON.",
+            cwd=str(tmp_path),
+            mode="assess",
+        )
+        shell = _shell(calls)
+>       assert "workspace-write" in shell and PREAMBLE in shell, (
+            "workspace-write and the fallback preamble are absent\n" + shell
+        )
+E       AssertionError: workspace-write and the fallback preamble are absent
+E         export PATH="/opt/homebrew/bin:/Users/teacher/.local/bin:/Users/teacher/.cursor/bin:$PATH"; unset HTTP_PROXY HTTPS_PROXY ALL_PROXY FTP_PROXY NO_PROXY http_proxy https_proxy all_proxy ftp_proxy no_proxy; export ORCH_REAL_HOME=/Users/teacher; export ORCH_AGENT_RUNTIME=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2429/test_sandbox_network_failure_f0/agent-runtime/codex; export XDG_CACHE_HOME=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2429/test_sandbox_network_failure_f0/agent-runtime/codex/.cache; export XDG_CONFIG_HOME=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2429/test_sandbox_network_failure_f0/agent-runtime/codex/.config; export XDG_DATA_HOME=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2429/test_sandbox_network_failure_f0/agent-runtime/codex/.local/share; export TMPDIR=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2429/test_sandbox_network_failure_f0/agent-runtime/codex/tmp; export GH_CONFIG_DIR=/Users/teacher/.config/gh; export ORCH_GH_GUARD_REAL_ZDOTDIR=/Users/teacher/.codex/orchestrator/agent-runtime/gh-guard/zdotdir; export ZDOTDIR=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2429/test_sandbox_network_failure_f0/agent-runtime/gh-guard/zdotdir; export ORCH_GH_GUARD_PREV_BASH_ENV=/Users/teacher/.codex/orchestrator/agent-runtime/gh-guard/bashenv.sh; export BASH_ENV=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2429/test_sandbox_network_failure_f0/agent-runtime/gh-guard/bashenv.sh; export PATH=/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2429/test_sandbox_network_failure_f0/agent-runtime/gh-guard/bin:"$PATH"; codex exec --skip-git-repo-check --cd /Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2429/test_sandbox_network_failure_f0 --sandbox read-only -c 'model_reasoning_effort="medium"' 'You are Codex, a reasoning + implementation seat. Verify before claiming done; surface risks and unknowns rather than papering over them.
+E         
+E         CRITICAL-EVALUATOR STANCE (non-negotiable): Your job is correct judgment, not agreement. Evaluate
+E         claims, designs, and instructions on the merits before agreeing — including the orchestrator'"'"'s and the
+E         user'"'"'s. When something is wrong, weaker than an alternative, or missing, say so plainly and lead with the
+E         strongest objection. Separate "this is correct" from "I'"'"'ll do as asked." State your confidence and what
+E         would change your mind; flag what you are unsure of. Do not soften a real problem to be agreeable, and do
+E         not manufacture disagreement to seem rigorous — calibrated dissent, not maximal.
+E         
+E         Run gh api rate_limit and print the JSON.
+E         
+E         OFFLOAD WORKSPACE RULES:
+E         - Non-git workspace: do not try to create commits, branches, pushes, or PRs.
+E         - This is a synchronous offload; return the useful result to the orchestrator in stdout.
+E         - Do not return progress updates, future-tense promises, or '"'"'I will inspect later'"'"' status. Finish the requested deliverable before exiting.
+E         - If you cannot complete the offload in this invocation, print exactly OFFLOAD_INCOMPLETE: <reason> and stop.
+E         - Do not run git commit or git push from an offload. On GitHub, do not open, merge or close pull requests, close issues, edit labels, or post comments or reviews. Reading with gh is fine.
+E         - If you edit files, keep changes inside the current workspace and report changed paths.
+E         - Product-level owner decision needed? Print one line OWNER_QUESTION: {"question": "...", "default": "...", "expires_days": 7} and PROCEED with your default — never wait.'
+E       assert ('workspace-write' in 'export PATH="/opt/homebrew/bin:/Users/teacher/.local/bin:/Users/teacher/.cursor/bin:$PATH"; unset HTTP_PROXY HTTPS_PR...OWNER_QUESTION: {"question": "...", "default": "...", "expires_days": 7} and PROCEED with your default — never wait.\'')
+
+tests/test_dispatcher_offload.py:220: AssertionError
+______________ test_sandbox_connection_and_timeout_also_fall_back ______________
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2429/test_sandbox_connection_and_ti0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1079c4110>
+
+    def test_sandbox_connection_and_timeout_also_fall_back(tmp_path, monkeypatch):
+        _isolate(tmp_path, monkeypatch)
+        connection_calls = _install_run(
+            monkeypatch, lambda cmd, kwargs: _completed(cmd, 1, "", "connect: connection refused")
+        )
+        connection = dispatcher.offload("codex", "probe", cwd=str(tmp_path), mode="assess")
+>       assert connection["sandbox_network"]["classification"] == "connection"
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'sandbox_network'
+
+tests/test_dispatcher_offload.py:244: KeyError
+_________________ test_sandbox_auth_rejection_keeps_read_only __________________
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2429/test_sandbox_auth_rejection_ke0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1079c62d0>
+capsys = <_pytest.capture.CaptureFixture object at 0x1079c7b60>
+
+    def test_sandbox_auth_rejection_keeps_read_only(tmp_path, monkeypatch, capsys):
+        _isolate(tmp_path, monkeypatch)
+        calls = _install_run(
+            monkeypatch,
+            lambda cmd, kwargs: _completed(cmd, 1, "", "HTTP 403: Requires authentication"),
+        )
+        result = dispatcher.offload("codex", "Run gh api rate_limit", cwd=str(tmp_path), mode="assess")
+        shell = _shell(calls)
+        assert "read-only" in shell and "workspace-write" not in shell
+        assert PREAMBLE not in shell
+        assert result["sandbox"] == "read-only" and result["sandbox_fallback"] is False
+>       assert result["sandbox_network"]["classification"] == "auth_or_api"
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'sandbox_network'
+
+tests/test_dispatcher_offload.py:270: KeyError
+__________ test_sandbox_network_success_leaves_the_command_unchanged ___________
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2429/test_sandbox_network_success_l0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1079c4a70>
+
+    def test_sandbox_network_success_leaves_the_command_unchanged(tmp_path, monkeypatch):
+        _isolate(tmp_path, monkeypatch)
+        body = json.dumps({"rate": {"limit": 5000, "remaining": 4733}})
+        calls = _install_run(monkeypatch, lambda cmd, kwargs: _completed(cmd, 0, body, ""))
+        result = dispatcher.offload("codex", "Run gh api rate_limit", cwd=str(tmp_path), mode="assess")
+        shell = _shell(calls)
+        assert "read-only" in shell and "workspace-write" not in shell and PREAMBLE not in shell
+>       assert result["sandbox_network"]["classification"] == "available"
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'sandbox_network'
+
+tests/test_dispatcher_offload.py:282: KeyError
+_________ test_sandbox_failed_fallback_still_persists_the_ledger_flag __________
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2429/test_sandbox_failed_fallback_s0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1079c9700>
+
+    def test_sandbox_failed_fallback_still_persists_the_ledger_flag(tmp_path, monkeypatch):
+        _isolate(tmp_path, monkeypatch)
+        _install_run(
+            monkeypatch,
+            lambda cmd, kwargs: _completed(cmd, 1, "", "curl: (6) Could not resolve host"),
+            agent_exit=1,
+            agent_stdout="OFFLOAD_INCOMPLETE: could not resolve host\n",
+        )
+        result = dispatcher.offload("codex", "Run gh api rate_limit", cwd=str(tmp_path), mode="assess")
+>       assert result["exit"] != 0 and result["sandbox_fallback"] is True
+E       assert (1 != 0 and False is True)
+
+tests/test_dispatcher_offload.py:295: AssertionError
+___________ test_sandbox_restricted_profile_refuses_without_fallback ___________
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2429/test_sandbox_restricted_profil1')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1079c8950>
+capsys = <_pytest.capture.CaptureFixture object at 0x1079c81d0>
+
+    def test_sandbox_restricted_profile_refuses_without_fallback(tmp_path, monkeypatch, capsys):
+        _isolate(tmp_path, monkeypatch)
+        profile = _readonly_profile()
+        real_get = execution_profiles.get_profile
+    
+        def fake_get(item):
+            if item == profile["profile_id"] or (
+                isinstance(item, dict) and item.get("profile_id") == profile["profile_id"]
+            ):
+                return execution_profiles.validate_profile(profile)
+            return real_get(item)
+    
+        monkeypatch.setattr(execution_profiles, "get_profile", fake_get)
+        calls = _install_run(
+            monkeypatch,
+            lambda cmd, kwargs: _completed(cmd, 1, "", "no such host"),
+        )
+        result = dispatcher.offload(
+            "codex",
+            "Run gh api rate_limit",
+            cwd=str(tmp_path),
+            mode="assess",
+            profile_id=profile["profile_id"],
+        )
+>       assert result["exit"] == 2 and result["process_started"] is False
+E       assert (0 == 2)
+
+tests/test_dispatcher_offload.py:325: AssertionError
+----------------------------- Captured stderr call -----------------------------
+note: codex offload keeps its profile but records no worker attempt (test; not bound to a research round)
+_______________ test_sandbox_probe_does_not_force_network_access _______________
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2429/test_sandbox_probe_does_not_fo0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1079ca090>
+
+    def test_sandbox_probe_does_not_force_network_access(tmp_path, monkeypatch):
+        """Regression: the probe must not independently enable network access.
+    
+        A networkless assess policy must not be overridden by the probe adding
+        network={access="allow"} permissions. The probe uses the same resolved
+        policy as the assess child.
+        """
+        _isolate(tmp_path, monkeypatch)
+        calls = _install_run(
+            monkeypatch,
+            lambda cmd, kwargs: _completed(cmd, 1, "", "dial tcp: lookup api.github.com: no such host"),
+        )
+        result = dispatcher.offload(
+            "codex",
+            "Run gh api rate_limit",
+            cwd=str(tmp_path),
+            mode="assess",
+        )
+>       probe = _probe_call(calls)
+                ^^^^^^^^^^^^^^^^^^
+
+tests/test_dispatcher_offload.py:352: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+calls = [{'cmd': ['git', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-C', ...], 'timeout': None, 'cwd': N...rs/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2429/test_sandbox_probe_does_not_fo0'}]
+
+    def _probe_call(calls: list[dict]) -> dict:
+>       return next(
+            call
+            for call in calls
+            if call["cmd"][:2] == ["codex", "sandbox"]
+            and any(isinstance(a, str) and "rate_limit" in a for a in call["cmd"])
+        )
+E       StopIteration
+
+tests/test_dispatcher_offload.py:79: StopIteration
+__________ test_sandbox_probe_timeout_accounts_for_elapsed_time[1.25] __________
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2429/test_sandbox_probe_timeout_acc0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1079cbf80>
+setup_elapsed = 1.25
+
+    @pytest.mark.parametrize("setup_elapsed", [1.25, 5.0])
+    def test_sandbox_probe_timeout_accounts_for_elapsed_time(tmp_path, monkeypatch, setup_elapsed):
+        """Setup consumes the same five-second allowance as the subprocess."""
+        from types import SimpleNamespace
+    
+        clock = iter([100.0, 100.0 + setup_elapsed, 100.0 + setup_elapsed])
+        monkeypatch.setattr(dispatcher, "time", SimpleNamespace(monotonic=lambda: next(clock)))
+        calls = []
+    
+        def run(cmd, **kwargs):
+            calls.append(kwargs["timeout"])
+            assert kwargs["timeout"] == 5.0 - setup_elapsed
+            raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+    
+        monkeypatch.setattr(dispatcher.subprocess, "run", run)
+        verdict = dispatcher._sandbox_has_network(["codex", "exec"], cwd=str(tmp_path))
+>       assert calls == ([3.75] if setup_elapsed < 5.0 else [])
+E       assert [] == [3.75]
+E         
+E         Right contains one more item: 3.75
+E         Use -v to get more diff
+
+tests/test_dispatcher_offload.py:376: AssertionError
+__________ test_sandbox_probe_timeout_accounts_for_elapsed_time[5.0] ___________
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2429/test_sandbox_probe_timeout_acc1')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1079c68d0>
+setup_elapsed = 5.0
+
+    @pytest.mark.parametrize("setup_elapsed", [1.25, 5.0])
+    def test_sandbox_probe_timeout_accounts_for_elapsed_time(tmp_path, monkeypatch, setup_elapsed):
+        """Setup consumes the same five-second allowance as the subprocess."""
+        from types import SimpleNamespace
+    
+        clock = iter([100.0, 100.0 + setup_elapsed, 100.0 + setup_elapsed])
+        monkeypatch.setattr(dispatcher, "time", SimpleNamespace(monotonic=lambda: next(clock)))
+        calls = []
+    
+        def run(cmd, **kwargs):
+            calls.append(kwargs["timeout"])
+            assert kwargs["timeout"] == 5.0 - setup_elapsed
+            raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+    
+        monkeypatch.setattr(dispatcher.subprocess, "run", run)
+        verdict = dispatcher._sandbox_has_network(["codex", "exec"], cwd=str(tmp_path))
+        assert calls == ([3.75] if setup_elapsed < 5.0 else [])
+>       assert verdict["classification"] == "timeout" and verdict["has_network"] is False
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: 'bool' object is not subscriptable
+
+tests/test_dispatcher_offload.py:377: TypeError
+________________ test_sandbox_probe_late_return_is_not_success _________________
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2429/test_sandbox_probe_late_return0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1079d52e0>
+
+    def test_sandbox_probe_late_return_is_not_success(tmp_path, monkeypatch):
+        from types import SimpleNamespace
+    
+        clock = iter([100.0, 100.0, 105.1, 105.1])
+        monkeypatch.setattr(dispatcher, "time", SimpleNamespace(monotonic=lambda: next(clock)))
+        monkeypatch.setattr(
+            dispatcher.subprocess, "run", lambda *a, **k: _completed(a[0], 0, '{"rate": {}}')
+        )
+        verdict = dispatcher._sandbox_has_network(["codex", "exec"], cwd=str(tmp_path))
+>       assert verdict["classification"] == "timeout" and verdict["has_network"] is False
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: 'bool' object is not subscriptable
+
+tests/test_dispatcher_offload.py:390: TypeError
+_ test_sandbox_non_network_rejections_never_widen[HTTP 401: Bad credentials-auth_or_api] _
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2429/test_sandbox_non_network_rejec0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1079d7950>
+capsys = <_pytest.capture.CaptureFixture object at 0x1079d4200>
+error = 'HTTP 401: Bad credentials', classification = 'auth_or_api'
+
+    @pytest.mark.parametrize(
+        "error,classification",
+        [
+            ("HTTP 401: Bad credentials", "auth_or_api"),
+            ("HTTP 403: API rate limit exceeded", "auth_or_api"),
+            ("HTTP 500: Internal Server Error", "auth_or_api"),
+            ("gh auth login", "auth_or_api"),
+            ("unrecognized option --permission-profile", "unclassified"),
+            ("sandbox-exec: sandbox_apply: Operation not permitted", "unclassified"),
+        ],
+    )
+    def test_sandbox_non_network_rejections_never_widen(tmp_path, monkeypatch, capsys, error, classification):
+        _isolate(tmp_path, monkeypatch)
+        calls = _install_run(monkeypatch, lambda cmd, kwargs: _completed(cmd, 1, "", error))
+        result = dispatcher.offload("codex", "Run gh api rate_limit", cwd=str(tmp_path), mode="assess")
+>       assert result["sandbox_network"]["classification"] == classification
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'sandbox_network'
+
+tests/test_dispatcher_offload.py:408: KeyError
+_ test_sandbox_non_network_rejections_never_widen[HTTP 403: API rate limit exceeded-auth_or_api] _
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2429/test_sandbox_non_network_rejec1')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1079d79b0>
+capsys = <_pytest.capture.CaptureFixture object at 0x1079d5eb0>
+error = 'HTTP 403: API rate limit exceeded', classification = 'auth_or_api'
+
+    @pytest.mark.parametrize(
+        "error,classification",
+        [
+            ("HTTP 401: Bad credentials", "auth_or_api"),
+            ("HTTP 403: API rate limit exceeded", "auth_or_api"),
+            ("HTTP 500: Internal Server Error", "auth_or_api"),
+            ("gh auth login", "auth_or_api"),
+            ("unrecognized option --permission-profile", "unclassified"),
+            ("sandbox-exec: sandbox_apply: Operation not permitted", "unclassified"),
+        ],
+    )
+    def test_sandbox_non_network_rejections_never_widen(tmp_path, monkeypatch, capsys, error, classification):
+        _isolate(tmp_path, monkeypatch)
+        calls = _install_run(monkeypatch, lambda cmd, kwargs: _completed(cmd, 1, "", error))
+        result = dispatcher.offload("codex", "Run gh api rate_limit", cwd=str(tmp_path), mode="assess")
+>       assert result["sandbox_network"]["classification"] == classification
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'sandbox_network'
+
+tests/test_dispatcher_offload.py:408: KeyError
+_ test_sandbox_non_network_rejections_never_widen[HTTP 500: Internal Server Error-auth_or_api] _
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2429/test_sandbox_non_network_rejec2')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1079d4b30>
+capsys = <_pytest.capture.CaptureFixture object at 0x1079d6600>
+error = 'HTTP 500: Internal Server Error', classification = 'auth_or_api'
+
+    @pytest.mark.parametrize(
+        "error,classification",
+        [
+            ("HTTP 401: Bad credentials", "auth_or_api"),
+            ("HTTP 403: API rate limit exceeded", "auth_or_api"),
+            ("HTTP 500: Internal Server Error", "auth_or_api"),
+            ("gh auth login", "auth_or_api"),
+            ("unrecognized option --permission-profile", "unclassified"),
+            ("sandbox-exec: sandbox_apply: Operation not permitted", "unclassified"),
+        ],
+    )
+    def test_sandbox_non_network_rejections_never_widen(tmp_path, monkeypatch, capsys, error, classification):
+        _isolate(tmp_path, monkeypatch)
+        calls = _install_run(monkeypatch, lambda cmd, kwargs: _completed(cmd, 1, "", error))
+        result = dispatcher.offload("codex", "Run gh api rate_limit", cwd=str(tmp_path), mode="assess")
+>       assert result["sandbox_network"]["classification"] == classification
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'sandbox_network'
+
+tests/test_dispatcher_offload.py:408: KeyError
+__ test_sandbox_non_network_rejections_never_widen[gh auth login-auth_or_api] __
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2429/test_sandbox_non_network_rejec3')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1079d5f10>
+capsys = <_pytest.capture.CaptureFixture object at 0x107960230>
+error = 'gh auth login', classification = 'auth_or_api'
+
+    @pytest.mark.parametrize(
+        "error,classification",
+        [
+            ("HTTP 401: Bad credentials", "auth_or_api"),
+            ("HTTP 403: API rate limit exceeded", "auth_or_api"),
+            ("HTTP 500: Internal Server Error", "auth_or_api"),
+            ("gh auth login", "auth_or_api"),
+            ("unrecognized option --permission-profile", "unclassified"),
+            ("sandbox-exec: sandbox_apply: Operation not permitted", "unclassified"),
+        ],
+    )
+    def test_sandbox_non_network_rejections_never_widen(tmp_path, monkeypatch, capsys, error, classification):
+        _isolate(tmp_path, monkeypatch)
+        calls = _install_run(monkeypatch, lambda cmd, kwargs: _completed(cmd, 1, "", error))
+        result = dispatcher.offload("codex", "Run gh api rate_limit", cwd=str(tmp_path), mode="assess")
+>       assert result["sandbox_network"]["classification"] == classification
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'sandbox_network'
+
+tests/test_dispatcher_offload.py:408: KeyError
+_ test_sandbox_non_network_rejections_never_widen[unrecognized option --permission-profile-unclassified] _
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2429/test_sandbox_non_network_rejec4')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x107960e30>
+capsys = <_pytest.capture.CaptureFixture object at 0x1079624e0>
+error = 'unrecognized option --permission-profile'
+classification = 'unclassified'
+
+    @pytest.mark.parametrize(
+        "error,classification",
+        [
+            ("HTTP 401: Bad credentials", "auth_or_api"),
+            ("HTTP 403: API rate limit exceeded", "auth_or_api"),
+            ("HTTP 500: Internal Server Error", "auth_or_api"),
+            ("gh auth login", "auth_or_api"),
+            ("unrecognized option --permission-profile", "unclassified"),
+            ("sandbox-exec: sandbox_apply: Operation not permitted", "unclassified"),
+        ],
+    )
+    def test_sandbox_non_network_rejections_never_widen(tmp_path, monkeypatch, capsys, error, classification):
+        _isolate(tmp_path, monkeypatch)
+        calls = _install_run(monkeypatch, lambda cmd, kwargs: _completed(cmd, 1, "", error))
+        result = dispatcher.offload("codex", "Run gh api rate_limit", cwd=str(tmp_path), mode="assess")
+>       assert result["sandbox_network"]["classification"] == classification
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'sandbox_network'
+
+tests/test_dispatcher_offload.py:408: KeyError
+_ test_sandbox_non_network_rejections_never_widen[sandbox-exec: sandbox_apply: Operation not permitted-unclassified] _
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2429/test_sandbox_non_network_rejec5')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x107962c00>
+capsys = <_pytest.capture.CaptureFixture object at 0x107963e90>
+error = 'sandbox-exec: sandbox_apply: Operation not permitted'
+classification = 'unclassified'
+
+    @pytest.mark.parametrize(
+        "error,classification",
+        [
+            ("HTTP 401: Bad credentials", "auth_or_api"),
+            ("HTTP 403: API rate limit exceeded", "auth_or_api"),
+            ("HTTP 500: Internal Server Error", "auth_or_api"),
+            ("gh auth login", "auth_or_api"),
+            ("unrecognized option --permission-profile", "unclassified"),
+            ("sandbox-exec: sandbox_apply: Operation not permitted", "unclassified"),
+        ],
+    )
+    def test_sandbox_non_network_rejections_never_widen(tmp_path, monkeypatch, capsys, error, classification):
+        _isolate(tmp_path, monkeypatch)
+        calls = _install_run(monkeypatch, lambda cmd, kwargs: _completed(cmd, 1, "", error))
+        result = dispatcher.offload("codex", "Run gh api rate_limit", cwd=str(tmp_path), mode="assess")
+>       assert result["sandbox_network"]["classification"] == classification
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'sandbox_network'
+
+tests/test_dispatcher_offload.py:408: KeyError
+___________ test_sandbox_unstarted_probe_does_not_authorize_fallback ___________
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2429/test_sandbox_unstarted_probe_d0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x107963b60>
+
+    def test_sandbox_unstarted_probe_does_not_authorize_fallback(tmp_path, monkeypatch):
+        def fail(*args, **kwargs):
+            raise FileNotFoundError("codex")
+    
+        monkeypatch.setattr(dispatcher.subprocess, "run", fail)
+        verdict = dispatcher._sandbox_has_network(["codex", "exec"], cwd=str(tmp_path))
+>       assert verdict["classification"] == "probe_unstarted"
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: 'bool' object is not subscriptable
+
+tests/test_dispatcher_offload.py:421: TypeError
+___________ test_sandbox_fallback_preserves_write_roots_and_profile ____________
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2429/test_sandbox_fallback_preserve0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x107963b90>
+
+    def test_sandbox_fallback_preserves_write_roots_and_profile(tmp_path, monkeypatch):
+        import shlex
+    
+        _isolate(tmp_path, monkeypatch)
+        monkeypatch.setattr(adapters, "codex_bypass_inner_sandbox", lambda: False)
+        allowed = tmp_path / "allowed"
+        allowed.mkdir()
+        calls = _install_run(monkeypatch, lambda cmd, kwargs: _completed(cmd, 1, "", "no such host"))
+        result = dispatcher.offload(
+            "codex", "Run gh api rate_limit", cwd=str(tmp_path), mode="assess",
+            profile_id="codex-6.1-sol-medium",
+            write_boundary={"protect": [str(tmp_path)], "allow": [str(allowed)]},
+        )
+        argv = shlex.split(_shell(calls))
+>       assert result["sandbox_fallback"] is True
+E       assert False is True
+
+tests/test_dispatcher_offload.py:440: AssertionError
+----------------------------- Captured stderr call -----------------------------
+note: codex offload keeps its profile but records no worker attempt (test; not bound to a research round)
+=========================== short test summary info ============================
+FAILED tests/test_dispatcher_offload.py::test_sandbox_probe_command_is_inside_the_assess_sandbox
+FAILED tests/test_dispatcher_offload.py::test_sandbox_probe_timeout_is_bounded_by_five_seconds
+FAILED tests/test_dispatcher_offload.py::test_sandbox_auth_and_rate_json_are_not_network_failures
+FAILED tests/test_dispatcher_offload.py::test_sandbox_network_failure_falls_back_to_workspace_write
+FAILED tests/test_dispatcher_offload.py::test_sandbox_connection_and_timeout_also_fall_back
+FAILED tests/test_dispatcher_offload.py::test_sandbox_auth_rejection_keeps_read_only
+FAILED tests/test_dispatcher_offload.py::test_sandbox_network_success_leaves_the_command_unchanged
+FAILED tests/test_dispatcher_offload.py::test_sandbox_failed_fallback_still_persists_the_ledger_flag
+FAILED tests/test_dispatcher_offload.py::test_sandbox_restricted_profile_refuses_without_fallback
+FAILED tests/test_dispatcher_offload.py::test_sandbox_probe_does_not_force_network_access
+FAILED tests/test_dispatcher_offload.py::test_sandbox_probe_timeout_accounts_for_elapsed_time[1.25]
+FAILED tests/test_dispatcher_offload.py::test_sandbox_probe_timeout_accounts_for_elapsed_time[5.0]
+FAILED tests/test_dispatcher_offload.py::test_sandbox_probe_late_return_is_not_success
+FAILED tests/test_dispatcher_offload.py::test_sandbox_non_network_rejections_never_widen[HTTP 401: Bad credentials-auth_or_api]
+FAILED tests/test_dispatcher_offload.py::test_sandbox_non_network_rejections_never_widen[HTTP 403: API rate limit exceeded-auth_or_api]
+FAILED tests/test_dispatcher_offload.py::test_sandbox_non_network_rejections_never_widen[HTTP 500: Internal Server Error-auth_or_api]
+FAILED tests/test_dispatcher_offload.py::test_sandbox_non_network_rejections_never_widen[gh auth login-auth_or_api]
+FAILED tests/test_dispatcher_offload.py::test_sandbox_non_network_rejections_never_widen[unrecognized option --permission-profile-unclassified]
+FAILED tests/test_dispatcher_offload.py::test_sandbox_non_network_rejections_never_widen[sandbox-exec: sandbox_apply: Operation not permitted-unclassified]
+FAILED tests/test_dispatcher_offload.py::test_sandbox_unstarted_probe_does_not_authorize_fallback
+FAILED tests/test_dispatcher_offload.py::test_sandbox_fallback_preserves_write_roots_and_profile
+========================= 21 failed, 9 passed in 1.17s =========================
+
+/opt/anaconda3/lib/python3.12/site-packages/pytest_asyncio/plugin.py:300: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the "fixture" caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to "function" scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))

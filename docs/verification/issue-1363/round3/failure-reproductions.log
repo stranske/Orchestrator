@@ -1,0 +1,48 @@
+ORCH_STATE_DIR=/tmp/orch-1363-round3/state ORCH_LOCAL_RUNTIME=/tmp/orch-1363-round3/runtime python3 src/ccusage_reconcile.py --selftest
+Exit: 1
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/src/ccusage_reconcile.py", line 553, in <module>
+    raise SystemExit(main(sys.argv[1:]))
+                     ~~~~^^^^^^^^^^^^^^
+  File "/home/runner/work/Orchestrator/Orchestrator/src/ccusage_reconcile.py", line 537, in main
+    _selftest()
+    ~~~~~~~~~^^
+  File "/home/runner/work/Orchestrator/Orchestrator/src/ccusage_reconcile.py", line 382, in _selftest
+    adapters.record_ledger("codex", event="start", run_id="run-codex", ts=base, started_ts=base)
+    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/runner/work/Orchestrator/Orchestrator/src/adapters.py", line 2486, in record_ledger
+    HANDOFF.mkdir(parents=True, exist_ok=True)
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/hostedtoolcache/Python/3.14.10/x64/lib/python3.14/pathlib/__init__.py", line 1011, in mkdir
+    os.mkdir(self, mode)
+    ~~~~~~~~^^^^^^^^^^^^
+OSError: [Errno 30] Read-only file system: '/home/runner/.codex/handoff'
+
+HANDOFF_DIR=/tmp/orch-1363-round3/handoff ORCH_STATE_DIR=/tmp/orch-1363-round3/state ORCH_LOCAL_RUNTIME=/tmp/orch-1363-round3/runtime python3 src/ccusage_reconcile.py --selftest
+Exit: 0
+ccusage_reconcile.py selftest: OK (unique window attribution, aggregation, source precedence, dry-run, idempotent re-ingest)
+
+HANDOFF_DIR=/tmp/orch-1363-round3/handoff-capacity ORCH_STATE_DIR=/tmp/orch-1363-round3/state ORCH_LOCAL_RUNTIME=/tmp/orch-1363-round3/runtime python3 src/gh_capacity.py --selftest
+Exit: 0
+gh_capacity gate[graphql]: unknown — no rate data; proceed (fail-open); this gate's real call was unavailable: gh exited 1 with no HTTP response
+gh_capacity gate[search]: shed — 1/30 remaining (<= reserve 3 or 5%); defer ~60s to reset (measured by the rate_limit probe 0s ago); this gate's probe was unavailable: rate_limit did not answer
+gh_capacity gate[search]: ok — 25/30 remaining (83%); ok (measured by the rate_limit probe 0s ago); this gate's probe was unavailable: rate_limit did not answer
+gh_capacity gate[search]: ok — 30/30 remaining (100%); ok (measured by the rate_limit probe 0s ago)
+gh_capacity gate[core]: shed — 0/5000 remaining; refused (HTTP 403: API rate limit exceeded for user ID 1.) until 1970-01-21T20:05:00Z; defer ~300s (measured by a real call 0s ago)
+gh_capacity gate[graphql]: shed — 0/5000 remaining; refused (HTTP 200: API rate limit exceeded) until 1970-01-21T20:05:00Z; defer ~300s (measured by a real call 0s ago)
+gh_capacity gate[core]: shed — refused (HTTP 403: You have exceeded a secondary rate limit.) until 1970-01-21T20:01:00Z; defer ~60s (measured by a real call 0s ago)
+gh_capacity gate[core]: unknown — no rate data; proceed (fail-open); this gate's real call was unauthenticated: HTTP 401: Bad credentials
+gh_capacity.py selftest: OK (4-state per resource, read-time ledger, probe/gh_run header feed, pace/defer throttle, env-gated throttle_if_enabled, fail-open gate, auth preflight: rate-limited/unavailable defer, only refused credentials abort, real-call gate reading, a blind probe row never supersedes a real one)
+
+ORCH_STATE_DIR=/tmp/orch-1363-round3/state ORCH_LOCAL_RUNTIME=/tmp/orch-1363-round3/runtime PYTHONPATH=src python3 tests/test_capability_admission.py
+Exit: 1
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_capability_admission.py", line 1111, in <module>
+    raise SystemExit(main())
+                     ~~~~^^
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_capability_admission.py", line 905, in main
+    _run_standalone_check(fn, verdicts)
+    ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_capability_admission.py", line 882, in _run_standalone_check
+    import pytest
+ModuleNotFoundError: No module named 'pytest'

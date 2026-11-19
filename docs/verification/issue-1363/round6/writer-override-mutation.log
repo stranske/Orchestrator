@@ -1,0 +1,99 @@
+✔ recounts active and archived failures with multiplicity and exact seven-day boundaries (133.080631ms)
+✔ an archived-only ledger is measured; absent ledger stays unmeasured (198.266158ms)
+✔ empty intact observed week can qualify only ledger evidence (97.510301ms)
+✔ preserves the existing collector owner exclusion before parsing and hashing (114.886167ms)
+✔ malformed torn data cannot become an intact zero (97.899708ms)
+✔ malformed broken data cannot become an intact zero (98.256139ms)
+✔ malformed null data cannot become an intact zero (95.956531ms)
+✔ malformed array data cannot become an intact zero (97.511603ms)
+✔ malformed naive data cannot become an intact zero (97.663908ms)
+✔ malformed outcome data cannot become an intact zero (112.10096ms)
+✔ segment delete after observation requires a fresh collector receipt (103.047864ms)
+✔ segment rewrite after observation requires a fresh collector receipt (103.285057ms)
+✔ segment append after observation requires a fresh collector receipt (101.520462ms)
+✔ segment duplicate after observation requires a fresh collector receipt (100.977691ms)
+✔ segment rotate after observation requires a fresh collector receipt (101.97355ms)
+✔ inconsistent collector baseline fails closed (102.920026ms)
+✔ inconsistent collector coverage fails closed (104.21874ms)
+✔ inconsistent collector continuity fails closed (102.151953ms)
+✔ inconsistent collector gap fails closed (98.911305ms)
+✔ inconsistent collector counts fails closed (99.591335ms)
+✔ inconsistent collector timestamp fails closed (99.629075ms)
+✔ inconsistent collector window fails closed (100.492627ms)
+✔ inconsistent collector source fails closed (101.21767ms)
+✔ inconsistent collector collector fails closed (99.762814ms)
+✔ inconsistent collector readiness fails closed (98.220926ms)
+✔ missing or malformed receipt cannot infer continuity from old events (111.302399ms)
+✔ a stale or future receipt cannot qualify and timestamps retain microseconds (95.002481ms)
+✔ reads all inputs without writing and CLI status distinguishes unmet evidence (202.557466ms)
+✔ fresh observed legitimate refusals remain unmet after successful retries in both lanes (168.455707ms)
+✔ a refusal ages out only after a fresh observation with every archive retained (177.964782ms)
+✔ fresh zero-refusal observation preserves the baseline at the two-hour collector limit (182.051579ms)
+✔ fresh zero-refusal observation resets the baseline at the two-hour collector limit (243.337569ms)
+✔ a fresh collector observation after archive loss cannot qualify a zero-refusal window (176.1968ms)
+✔ fresh observation preserves rotated archives with an empty active segment (218.249452ms)
+✔ fresh observation preserves rotated archives with repeated refusals (223.448795ms)
+✔ source absence and nonregular segments are UNKNOWN without following symlinks (94.684694ms)
+✔ rejects malformed empty counts [] (95.948282ms)
+✔ rejects malformed empty counts "" (94.227932ms)
+✔ rejects malformed empty counts 0 (96.974658ms)
+✔ rejects malformed empty counts null (94.904304ms)
+✔ compares relative collector segment paths by their filesystem identity (97.107345ms)
+✔ rejects an unrelated zero ledger when the writer is outside (96.280793ms)
+✔ rejects an unrelated zero ledger when the writer is renamed (98.754729ms)
+✔ rejects an unrelated zero ledger with a separate writer configured runtime (135.128357ms)
+✔ rejects an unrelated zero ledger with a separate writer home runtime (131.594974ms)
+✖ explicit writer path overrides the runtime directory when unobserved (400.220454ms)
+✖ explicit writer path overrides the runtime directory when observed (403.807718ms)
+ℹ tests 47
+ℹ suites 0
+ℹ pass 45
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 6313.151673
+
+✖ failing tests:
+
+test at ../../../../../tmp/orch1363-writer-mutation-h__y33tr/tests/test_audit_provision_ledger.js:494:3
+✖ explicit writer path overrides the runtime directory when unobserved (400.220454ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  0 !== 1
+  
+      at TestContext.<anonymous> (/tmp/orch1363-writer-mutation-h__y33tr/tests/test_audit_provision_ledger.js:521:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at ../../../../../tmp/orch1363-writer-mutation-h__y33tr/tests/test_audit_provision_ledger.js:494:3
+✖ explicit writer path overrides the runtime directory when observed (403.807718ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  1 !== 0
+  
+      at TestContext.<anonymous> (/tmp/orch1363-writer-mutation-h__y33tr/tests/test_audit_provision_ledger.js:521:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

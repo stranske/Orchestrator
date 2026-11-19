@@ -404,9 +404,12 @@ def polled_usage(pool: str, now: float, directory: Path | None = None, *, data=N
     valid = used is not None and end is not None
     if pool == "codex":
         valid = valid and window.get("window_minutes") == 10080
+    elif pool == "gemini":
+        valid = valid and window.get("id") == "gemini-weekly"
     else:
         valid = valid and str(window.get("label", "")).lower() == "all models"
-    short = data.get("secondary" if pool == "codex" else "session") or {}
+    short_key = "secondary" if pool == "codex" else "five_hour" if pool == "gemini" else "session"
+    short = data.get(short_key) or {}
     if not isinstance(short, dict):
         short = {}
     age = now - ts if ts is not None else None
@@ -418,7 +421,7 @@ def polled_usage(pool: str, now: float, directory: Path | None = None, *, data=N
         valid=valid,
         ticks_missed=max(0, int(age // pacing.POLL_TICK_SECONDS) - 1) if age is not None else None,
     )
-    if pool == "claude" and valid and end is not None and end <= now:
+    if pool in ("claude", "gemini") and valid and end is not None and end <= now:
         old_end = end
         end += (int((now - end) // pacing.PERIOD_SECONDS) + 1) * pacing.PERIOD_SECONDS
         poll.update(observed_period_end=old_end, rolled_period_end=end)
@@ -459,11 +462,13 @@ def polled_usage(pool: str, now: float, directory: Path | None = None, *, data=N
         period_end=end,
         short_used_fraction=(
             fraction(short.get("used_percent"))
-            if pool == "claude" or short.get("window_minutes") == 300
+            if pool in ("claude", "gemini") or short.get("window_minutes") == 300
             else None
         ),
         source=(
-            "codex-app-server:account/rateLimits/read" if pool == "codex" else "claude-cli:/usage"
+            "codex-app-server:account/rateLimits/read"
+            if pool == "codex"
+            else "agy:/usage" if pool == "gemini" else "claude-cli:/usage"
         ),
         poll=poll,
     )
@@ -1576,6 +1581,48 @@ def final_usage(snapshots: list[dict], pool: str, now: float) -> dict | None:
     return {"u": u, "lo": lo, "hi": hi, "passed": lo <= u <= hi, "period_end": final["period_end"]}
 
 
+SHORT_WINDOW_SECONDS = (
+    5 * 3600
+)  # a codex/claude session window; an exhausted one is carried at most this long
+
+
+def valid_polls(pool: str, now: float) -> list[dict]:
+    """Every valid usage poll of POOL (history plus latest), oldest first, as `polled_usage` reads it."""
+    rows = read_rows(POLL_DIR / f"{pool}-usage.ndjson")
+    latest = read_json(POLL_DIR / f"{pool}-usage.json")
+    if isinstance(latest, dict):
+        rows.append(latest)
+    data = [polled_usage(pool, now, data=row) for row in rows]
+    unique = {d["ts"]: d for d in data if d["poll"]["valid"] and d["ts"] is not None}
+    return [unique[t] for t in sorted(unique)]
+
+
+def pool_state_at(pool: str, ts: float, snapshots: list[dict], polls: list[dict]) -> str | None:
+    """POOL's state at an incident: measured, carried as exhausted, or None (cannot be judged).
+
+    Measured ('ok' | 'warn' | 'shed'): a valid poll within the stale allowance and a fresh snapshot say so.
+    'exhausted': the last valid poll before TS showed the pool at capacity (weekly window used up and not reset
+    by TS, or the session window used up within its length). A poll gap then hides nothing: the pool could not
+    have been ok. Owner 2026-11-18: an account out of capacity is often left closed until it resets, so its
+    poll stops; both long codex gaps in 11-06..11-13 began and ended at 100% with rate_limit_reached.
+    None: the poll was missing or stale while the pool was NOT known to be exhausted (e.g. 11-09: the codex poll
+    failed for 22 h at 63% used); an incident there cannot be judged and keeps the period unmeasured.
+    """
+    index = bisect_right([d["ts"] for d in polls], ts) - 1
+    last = polls[index] if index >= 0 else None
+    if last is None:
+        return None
+    if ts - last["ts"] <= pacing.STALE_AFTER_SECONDS:
+        state = ((observed_agents(snapshots, ts) or {}).get(pool) or {}).get("state")
+        if state in ("ok", "warn", "shed"):
+            return state
+    weekly = (last.get("used_fraction") or 0) >= 1.0 and (last.get("period_end") or 0) > ts
+    session = (last.get("short_used_fraction") or 0) >= 1.0 and ts - last[
+        "ts"
+    ] <= SHORT_WINDOW_SECONDS
+    return "exhausted" if weekly or session else None
+
+
 def period_results(handoff: Path, snapshots: list[dict], now: float) -> dict:
     """Pass numbers 2 and 3 over the latest completed pool period, with their report lines.
 
@@ -1619,26 +1666,44 @@ def period_results(handoff: Path, snapshots: list[dict], now: float) -> dict:
         f"{pacing.STALE_AFTER_SECONDS}s allowance; uncovered={expected - covered} slots; "
         "drain: valid polls and fresh capacity snapshots throughout a completed period"
     )
-    classified = [r for r in relevant if observed(pacing.timestamp(r["ts"])) is not None]
-    violations = sum(
-        any(
-            a != r.get("agent") and v.get("state") == "ok"
-            for a, v in observed(pacing.timestamp(r["ts"])).items()
-        )
-        for r in classified
-    )
-    if (
-        coverage
-        and len(classified) == len(relevant)
-        and (handoff / "rate-limit-incidents.ndjson").exists()
-    ):
+    # Judge each incident (owner 2026-11-18): a poll gap matters only if an incident falls in it. Before, one
+    # 37-minute codex gap (11-17) voided the whole week, and G2 read "unmeasured" for 31 days.
+    polls = {pool: valid_polls(pool, now) for pool in ("codex", "claude")}
+    judged: list[dict] = []
+    unjudged: list[dict] = []
+    for r in relevant:
+        at = pacing.timestamp(r["ts"])
+        if at is None:  # `relevant` already holds only timestamped rows; kept for the type checker
+            continue
+        states = {
+            pool: pool_state_at(pool, at, snapshots, polls[pool])
+            for pool in ("codex", "claude")
+            if pool != r.get("agent")
+        }
+        (unjudged if any(v is None for v in states.values()) else judged).append(states)
+    violations = sum(any(v == "ok" for v in states.values()) for states in judged)
+    carried = sum(any(v == "exhausted" for v in states.values()) for states in judged)
+    judged_text = f"incidents judged {len(judged)}/{len(relevant)} (other pool carried as exhausted in {carried})"
+    ledger = (handoff / "rate-limit-incidents.ndjson").exists()
+    if ledger and not unjudged:
         out["incidents"] = violations
         lines.append(
-            f"2: {violations} incidents while another pool ok; {coverage_text}; {'PASS' if violations == 0 else 'FAIL'} [usage store + rate-limit ledger]"
+            f"2: {violations} incidents while another pool ok; {judged_text}; {coverage_text}; "
+            f"{'PASS' if violations == 0 else 'FAIL'} [usage store + rate-limit ledger]"
+        )
+    elif ledger and violations:
+        # The target is zero: judged violations already fail it, whatever the unjudged incidents were.
+        # Reporting "unmeasured" here would hide a known FAIL (latched-gate check, question 4).
+        out["incidents"] = violations
+        lines.append(
+            f"2: at least {violations} incidents while another pool ok ({len(unjudged)} more could not be "
+            f"judged); {judged_text}; {coverage_text}; FAIL [usage store + rate-limit ledger]"
         )
     else:
         lines.append(
-            f"2: unmeasured — would need full-period ledger/snapshot coverage; {coverage_text}; observed violations={violations}; incidents={len(classified)}/{len(relevant)} [usage store + rate-limit ledger]"
+            f"2: unmeasured — {len(unjudged)} incident(s) fell where another pool's state is unknown "
+            f"(poll missing while not exhausted); {judged_text}; observed violations={violations}; "
+            f"{coverage_text} [usage store + rate-limit ledger]"
         )
     groups = {"ok": [0, 0], "constrained": [0, 0]}
     omitted = 0

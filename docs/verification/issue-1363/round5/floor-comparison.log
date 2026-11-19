@@ -1,0 +1,3 @@
+delivered_sha=9a208ad26e3119b89162aaf6d0baa409bdcf7452
+origin_main=2c945fa9d0340f9352c4f0efa7ccf1fab139fd75
+git show "$delivered_sha:.verify-floor.json" | cmp - <(git show origin/main:.verify-floor.json)

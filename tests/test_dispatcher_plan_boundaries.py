@@ -100,6 +100,7 @@ class DispatchPlanBoundaries(unittest.TestCase):
             "persona\n\n" + fallback_prompt,
             None,
             cwd=self.cwd,
+            transport="local",
             reasoning_effort=None,
             requested_model=None,
             commits_in_worktree=True,

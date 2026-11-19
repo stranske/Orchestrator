@@ -85,6 +85,13 @@ def default_launch_check_off(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def default_unowned_pr_scan_off(monkeypatch):
+    """The weekly unowned-PR scan reads this machine's lane journals and live GitHub; tests that
+    exercise it call `switch_review.unowned_open_prs` with injected journals and a fake gh."""
+    monkeypatch.setenv("ORCH_UNOWNED_PR_SCAN", "0")
+
+
+@pytest.fixture(autouse=True)
 def isolate_provision_events(tmp_path, monkeypatch):
     """Provision tests and their subprocesses must never append to the production ledger."""
     path = tmp_path / "provision-events.ndjson"
@@ -579,3 +586,41 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
     if os.environ.get("ORCH_REQUIRE_COVERAGE") == "1":
         pytest.fail("ORCH_REQUIRE_COVERAGE=1 but the coverage module is not installed")
     pytest.skip("coverage is not installed in this environment (coverage-off shard)")
+
+
+@pytest.fixture(autouse=True)
+def _no_live_gemini_full_split(monkeypatch, tmp_path):
+    """The owner's live Gemini full-tier split reads a spec under ~/.codex/orchestrator/trials.
+    A machine with that spec active must not assign arms inside unrelated dispatch tests."""
+    try:
+        import gemini_full_split
+    except ImportError:  # a scratch project that copied this conftest without src/
+        return
+
+    monkeypatch.setattr(gemini_full_split, "SPEC_PATH", tmp_path / "no-gemini-full-split.json")
+    monkeypatch.setattr(
+        gemini_full_split, "STATE_PATH", tmp_path / "no-gemini-full-split-state.json"
+    )
+
+
+@pytest.fixture(autouse=True)
+def _no_live_comparative_export(monkeypatch, tmp_path):
+    """Isolate unrelated tests from any live ~/.codex/orchestrator route-weights export."""
+    try:
+        import router
+    except ImportError:  # a scratch project that copied this conftest without src/
+        return
+
+    real_path = router._comparative_export_path
+    ambient_path = real_path()
+    isolated = tmp_path / "no-live-orchestrator-state"
+    monkeypatch.setattr(router, "_DEFAULT_STATE_DIR", isolated)
+
+    def isolated_export_path():
+        resolved = real_path()
+        if resolved == ambient_path:
+            return isolated / router.ROUTE_WEIGHTS_EXPORT_NAME
+        return resolved
+
+    monkeypatch.setattr(router, "_comparative_export_path", isolated_export_path)
+    monkeypatch.setattr(router, "_COMPARATIVE_EXPORT_CACHE", {})

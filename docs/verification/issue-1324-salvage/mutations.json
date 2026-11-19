@@ -1,0 +1,520 @@
+[
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_panel_adjudication_recording_and_cli_paths",
+    "description": "Exact outcome tuple assertion with runtime_ac_panel prefix",
+    "module": "src/runtime_ac_panel.py",
+    "mutation": [
+      "f\"runtime_ac_panel: {panel['verifier_verdict']} - {panel['reason']}\"",
+      "f\"WRONG_PREFIX: {panel['verifier_verdict']} - {panel['reason']}\""
+    ],
+    "occurrence": 0,
+    "source_sha256": "feb72536e8f97e9a5a8c72fd6a01fc668d043fa7156512a8974cd7f9e849f7c9",
+    "command": [
+      "/opt/anaconda3/bin/python3",
+      "-m",
+      "pytest",
+      "tests/test_issue1232_ranked_coverage.py::test_panel_adjudication_recording_and_cli_paths",
+      "-q",
+      "--no-cov"
+    ],
+    "red": 1,
+    "restored": 0,
+    "failure_lines": [
+      "E       AssertionError: assert ('record_outc...reshold 0.67') == ('record_outc...reshold 0.67')",
+      "E         ",
+      "E         At index 3 diff: 'WRONG_PREFIX: PASS_RUNTIME_AC - pass ratio 2/2 met threshold 0.67' != 'runtime_ac_panel: PASS_RUNTIME_AC - pass ratio 2/2 met threshold 0.67'",
+      "E         Use -v to get more diff",
+      "FAILED tests/test_issue1232_ranked_coverage.py::test_panel_adjudication_recording_and_cli_paths"
+    ],
+    "restored_summary": [
+      "1 passed in 0.50s"
+    ]
+  },
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_panel_adjudication_recording_and_cli_paths",
+    "description": "Ordered gap tuples with runtime_ac_panel reviewer prefixes",
+    "module": "src/runtime_ac_panel.py",
+    "mutation": [
+      "f\"runtime_ac_panel:{gap.get('reviewer') or 'reviewer'}\"",
+      "f\"WRONG_PREFIX:{gap.get('reviewer') or 'reviewer'}\""
+    ],
+    "occurrence": 0,
+    "source_sha256": "feb72536e8f97e9a5a8c72fd6a01fc668d043fa7156512a8974cd7f9e849f7c9",
+    "command": [
+      "/opt/anaconda3/bin/python3",
+      "-m",
+      "pytest",
+      "tests/test_issue1232_ranked_coverage.py::test_panel_adjudication_recording_and_cli_paths",
+      "-q",
+      "--no-cov"
+    ],
+    "red": 1,
+    "restored": 0,
+    "failure_lines": [
+      "E       AssertionError: assert ('record_evid...issing trace') == ('record_evid...issing trace')",
+      "E         ",
+      "E         At index 2 diff: 'WRONG_PREFIX:vibe' != 'runtime_ac_panel:vibe'",
+      "E         Use -v to get more diff",
+      "FAILED tests/test_issue1232_ranked_coverage.py::test_panel_adjudication_recording_and_cli_paths"
+    ],
+    "restored_summary": [
+      "1 passed in 0.46s"
+    ]
+  },
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_panel_adjudication_recording_and_cli_paths",
+    "description": "Exact citation names assertion",
+    "module": "src/runtime_ac_panel.py",
+    "mutation": [
+      "[row.get(\"name\") for row in panel.get(\"evidence_type_citations\") or []]",
+      "[]"
+    ],
+    "occurrence": 0,
+    "source_sha256": "feb72536e8f97e9a5a8c72fd6a01fc668d043fa7156512a8974cd7f9e849f7c9",
+    "command": [
+      "/opt/anaconda3/bin/python3",
+      "-m",
+      "pytest",
+      "tests/test_issue1232_ranked_coverage.py::test_panel_adjudication_recording_and_cli_paths",
+      "-q",
+      "--no-cov"
+    ],
+    "red": 1,
+    "restored": 0,
+    "failure_lines": [
+      "E       AssertionError: assert [] == ['trace', 'log']",
+      "E         ",
+      "E         Right contains 2 more items, first extra item: 'trace'",
+      "E         Use -v to get more diff",
+      "FAILED tests/test_issue1232_ranked_coverage.py::test_panel_adjudication_recording_and_cli_paths"
+    ],
+    "restored_summary": [
+      "1 passed in 0.46s"
+    ]
+  },
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_panel_adjudication_recording_and_cli_paths",
+    "description": "Dispatch independently records an outcome (earlier recording phases remain unchanged)",
+    "module": "src/runtime_ac_panel.py",
+    "mutation": [
+      "            panel[\"feedback\"] = record_panel_verdict(args.record_run_id, panel)",
+      "            panel[\"feedback\"] = {}"
+    ],
+    "occurrence": 0,
+    "source_sha256": "feb72536e8f97e9a5a8c72fd6a01fc668d043fa7156512a8974cd7f9e849f7c9",
+    "command": [
+      "/opt/anaconda3/bin/python3",
+      "-m",
+      "pytest",
+      "tests/test_issue1232_ranked_coverage.py::test_panel_adjudication_recording_and_cli_paths",
+      "-q",
+      "--no-cov"
+    ],
+    "red": 1,
+    "restored": 0,
+    "failure_lines": [
+      "E       AssertionError: assert [] == [('record_out...eshold 0.67')]",
+      "E         ",
+      "E         Right contains one more item: ('record_outcome', 'test-run-1232-adjudication', 'PASS_RUNTIME_AC', 'runtime_ac_panel: PASS_RUNTIME_AC - pass ratio 2/2 met threshold 0.67')",
+      "E         Use -v to get more diff",
+      "FAILED tests/test_issue1232_ranked_coverage.py::test_panel_adjudication_recording_and_cli_paths"
+    ],
+    "restored_summary": [
+      "1 passed in 0.47s"
+    ]
+  },
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_runtime_ac_panel_coerce_reviews_and_edge_cases",
+    "description": "Malformed reviews fail adjudication with ValueError 'must be an object'",
+    "module": "src/runtime_ac_panel.py",
+    "mutation": [
+      "raise ValueError(f\"review[{idx}] must be an object\")",
+      "pass"
+    ],
+    "occurrence": 0,
+    "source_sha256": "feb72536e8f97e9a5a8c72fd6a01fc668d043fa7156512a8974cd7f9e849f7c9",
+    "command": [
+      "/opt/anaconda3/bin/python3",
+      "-m",
+      "pytest",
+      "tests/test_issue1232_ranked_coverage.py::test_runtime_ac_panel_coerce_reviews_and_edge_cases",
+      "-q",
+      "--no-cov"
+    ],
+    "red": 1,
+    "restored": 0,
+    "failure_lines": [
+      "E       AttributeError: 'NoneType' object has no attribute 'get'",
+      "FAILED tests/test_issue1232_ranked_coverage.py::test_runtime_ac_panel_coerce_reviews_and_edge_cases"
+    ],
+    "restored_summary": [
+      "1 passed in 0.44s"
+    ]
+  },
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_relearn_report_build_report_and_ordering",
+    "description": "Equal-score rows follow prior rank ordering",
+    "module": "src/relearn_report.py",
+    "mutation": [
+      "prior_rank.get(r[\"agent\"], len(prior_rank))",
+      "0"
+    ],
+    "occurrence": 0,
+    "source_sha256": "efcbbf2747ac7b76bfd2694294ea9bfbe73a33ad292356ca5a53e0ab7f19031a",
+    "command": [
+      "/opt/anaconda3/bin/python3",
+      "-m",
+      "pytest",
+      "tests/test_issue1232_ranked_coverage.py::test_relearn_report_build_report_and_ordering",
+      "-q",
+      "--no-cov"
+    ],
+    "red": 1,
+    "restored": 0,
+    "failure_lines": [
+      "E       AssertionError: assert ['alpha', 'zebra'] == ['zebra', 'alpha']",
+      "E         ",
+      "E         At index 0 diff: 'alpha' != 'zebra'",
+      "E         Use -v to get more diff",
+      "FAILED tests/test_issue1232_ranked_coverage.py::test_relearn_report_build_report_and_ordering"
+    ],
+    "restored_summary": [
+      "1 passed in 0.53s"
+    ]
+  },
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_relearn_report_build_report_and_ordering",
+    "description": "Alphabetical tiebreaker for equal scores",
+    "module": "src/relearn_report.py",
+    "mutation": [
+      "            r[\"agent\"],",
+      "            0,"
+    ],
+    "occurrence": 0,
+    "source_sha256": "efcbbf2747ac7b76bfd2694294ea9bfbe73a33ad292356ca5a53e0ab7f19031a",
+    "command": [
+      "/opt/anaconda3/bin/python3",
+      "-m",
+      "pytest",
+      "tests/test_issue1232_ranked_coverage.py::test_relearn_report_build_report_and_ordering",
+      "-q",
+      "--no-cov"
+    ],
+    "red": 1,
+    "restored": 0,
+    "failure_lines": [
+      "E       AssertionError: assert 'zebra' == 'alpha'",
+      "E         ",
+      "E         - alpha",
+      "E         + zebra",
+      "FAILED tests/test_issue1232_ranked_coverage.py::test_relearn_report_build_report_and_ordering"
+    ],
+    "restored_summary": [
+      "1 passed in 0.46s"
+    ]
+  },
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure",
+    "description": "operator_inspect next_step",
+    "module": "src/keepalive_supervisor.py",
+    "mutation": [
+      "next_step = \"operator_inspect\"",
+      "next_step = \"broken_inspect\""
+    ],
+    "occurrence": 0,
+    "source_sha256": "5665dc30e0790cfa6a27b9e4e27669f7e2109185be6af9cfdcdd97098e31cc35",
+    "command": [
+      "/opt/anaconda3/bin/python3",
+      "-m",
+      "pytest",
+      "tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure",
+      "-q",
+      "--no-cov"
+    ],
+    "red": 1,
+    "restored": 0,
+    "failure_lines": [
+      "E       AssertionError: assert 'broken_inspect' == 'operator_inspect'",
+      "E         ",
+      "E         - operator_inspect",
+      "E         + broken_inspect",
+      "FAILED tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure"
+    ],
+    "restored_summary": [
+      "1 passed in 0.43s"
+    ]
+  },
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure",
+    "description": "eligible=True assertion",
+    "module": "src/keepalive_supervisor.py",
+    "mutation": [
+      "        \"eligible\": gate[\"eligible\"],",
+      "        \"eligible\": False,"
+    ],
+    "occurrence": 0,
+    "source_sha256": "5665dc30e0790cfa6a27b9e4e27669f7e2109185be6af9cfdcdd97098e31cc35",
+    "command": [
+      "/opt/anaconda3/bin/python3",
+      "-m",
+      "pytest",
+      "tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure",
+      "-q",
+      "--no-cov"
+    ],
+    "red": 1,
+    "restored": 0,
+    "failure_lines": [
+      "E       assert False is True",
+      "FAILED tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure"
+    ],
+    "restored_summary": [
+      "1 passed in 0.44s"
+    ]
+  },
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure",
+    "description": "blockers=[] assertion",
+    "module": "src/keepalive_supervisor.py",
+    "mutation": [
+      "        \"eligibility\": gate,",
+      "        \"eligibility\": {**gate, \"blockers\": [\"injected\"]},"
+    ],
+    "occurrence": 0,
+    "source_sha256": "5665dc30e0790cfa6a27b9e4e27669f7e2109185be6af9cfdcdd97098e31cc35",
+    "command": [
+      "/opt/anaconda3/bin/python3",
+      "-m",
+      "pytest",
+      "tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure",
+      "-q",
+      "--no-cov"
+    ],
+    "red": 1,
+    "restored": 0,
+    "failure_lines": [
+      "E       AssertionError: assert ['injected'] == []",
+      "E         ",
+      "E         Left contains one more item: 'injected'",
+      "E         Use -v to get more diff",
+      "FAILED tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure"
+    ],
+    "restored_summary": [
+      "1 passed in 0.44s"
+    ]
+  },
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_proposal_backend",
+    "description": "Exact backend argument suffix",
+    "module": "src/keepalive_supervisor.py",
+    "mutation": [
+      "proposal_command.extend([\"--backend\", proposal_backend])",
+      "proposal_command.extend([\"--wrong\", proposal_backend])"
+    ],
+    "occurrence": 0,
+    "source_sha256": "5665dc30e0790cfa6a27b9e4e27669f7e2109185be6af9cfdcdd97098e31cc35",
+    "command": [
+      "/opt/anaconda3/bin/python3",
+      "-m",
+      "pytest",
+      "tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_proposal_backend",
+      "-q",
+      "--no-cov"
+    ],
+    "red": 1,
+    "restored": 0,
+    "failure_lines": [
+      "E       AssertionError: assert ['--wrong', '... '--dispatch'] == ['--backend',... '--dispatch']",
+      "E         ",
+      "E         At index 0 diff: '--wrong' != '--backend'",
+      "E         Use -v to get more diff",
+      "FAILED tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_proposal_backend"
+    ],
+    "restored_summary": [
+      "1 passed in 0.44s"
+    ]
+  },
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure",
+    "description": "Exact report/AC/dispatch suffix",
+    "module": "src/keepalive_supervisor.py",
+    "mutation": [
+      "            acceptance_criteria,",
+      "            \"WRONG_AC\","
+    ],
+    "occurrence": 0,
+    "source_sha256": "5665dc30e0790cfa6a27b9e4e27669f7e2109185be6af9cfdcdd97098e31cc35",
+    "command": [
+      "/opt/anaconda3/bin/python3",
+      "-m",
+      "pytest",
+      "tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure",
+      "-q",
+      "--no-cov"
+    ],
+    "red": 1,
+    "restored": 0,
+    "failure_lines": [
+      "E       AssertionError: assert ['--report-js... '--dispatch'] == ['--report-js... '--dispatch']",
+      "E         ",
+      "E         At index 3 diff: 'WRONG_AC' != 'Post-escalation keepalive recovery only: inspect the PR after keepalive has escalated, preserve the original PR acceptance criteria, and do not act if the escalation label is gone.'",
+      "E         Use -v to get more diff",
+      "FAILED tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure"
+    ],
+    "restored_summary": [
+      "1 passed in 0.44s"
+    ]
+  },
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_relearn_report_priors_and_blend",
+    "description": "Blended task1/agent2 prior value",
+    "module": "src/relearn_report.py",
+    "mutation": [
+      "bt_prior = max(0.45, 0.70 - 0.05 * rank)",
+      "bt_prior = max(0.45, 0.71 - 0.05 * rank)"
+    ],
+    "occurrence": 0,
+    "source_sha256": "efcbbf2747ac7b76bfd2694294ea9bfbe73a33ad292356ca5a53e0ab7f19031a",
+    "command": [
+      "/opt/anaconda3/bin/python3",
+      "-m",
+      "pytest",
+      "tests/test_issue1232_ranked_coverage.py::test_relearn_report_priors_and_blend",
+      "-q",
+      "--no-cov"
+    ],
+    "red": 1,
+    "restored": 0,
+    "failure_lines": [
+      "E       assert 0.68 == 0.675 \u00b1 6.7e-07",
+      "E         ",
+      "E         comparison failed",
+      "E         Obtained: 0.68",
+      "E         Expected: 0.675 \u00b1 6.7e-07",
+      "FAILED tests/test_issue1232_ranked_coverage.py::test_relearn_report_priors_and_blend"
+    ],
+    "restored_summary": [
+      "1 passed in 0.44s"
+    ]
+  },
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure",
+    "description": "plan_target forwards exact target to gather_signals",
+    "module": "src/keepalive_supervisor.py",
+    "mutation": [
+      "signals = keepalive_shadow.gather_signals(target)",
+      "signals = keepalive_shadow.gather_signals(\"stranske/Orchestrator#9999\")"
+    ],
+    "occurrence": 0,
+    "source_sha256": "5665dc30e0790cfa6a27b9e4e27669f7e2109185be6af9cfdcdd97098e31cc35",
+    "command": [
+      "/opt/anaconda3/bin/python3",
+      "-m",
+      "pytest",
+      "tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure",
+      "-q",
+      "--no-cov"
+    ],
+    "red": 1,
+    "restored": 0,
+    "failure_lines": [
+      "E       AssertionError: assert ['stranske/Orchestrator#9999'] == ['stranske/Orchestrator#1234']",
+      "E         ",
+      "E         At index 0 diff: 'stranske/Orchestrator#9999' != 'stranske/Orchestrator#1234'",
+      "E         Use -v to get more diff",
+      "FAILED tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_plan_target_and_closure"
+    ],
+    "restored_summary": [
+      "1 passed in 0.43s"
+    ]
+  },
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_panel_adjudication_recording_and_cli_paths",
+    "description": "Only dispatch recording receives the wrong reason",
+    "module": "src/runtime_ac_panel.py",
+    "mutation": [
+      "panel[\"feedback\"] = record_panel_verdict(args.record_run_id, panel)",
+      "panel[\"feedback\"] = record_panel_verdict(\n                args.record_run_id, {**panel, \"reason\": \"wrong dispatch notes\"}\n            )"
+    ],
+    "occurrence": 0,
+    "source_sha256": "feb72536e8f97e9a5a8c72fd6a01fc668d043fa7156512a8974cd7f9e849f7c9",
+    "command": [
+      "/opt/anaconda3/bin/python3",
+      "-m",
+      "pytest",
+      "tests/test_issue1232_ranked_coverage.py::test_panel_adjudication_recording_and_cli_paths",
+      "-q",
+      "--no-cov"
+    ],
+    "red": 1,
+    "restored": 0,
+    "failure_lines": [
+      "E       AssertionError: assert [('record_out...patch notes')] == [('record_out...eshold 0.67')]",
+      "E         ",
+      "E         At index 0 diff: ('record_outcome', 'test-run-1232-adjudication', 'PASS_RUNTIME_AC', 'runtime_ac_panel: PASS_RUNTIME_AC - wrong dispatch notes') != ('record_outcome', 'test-run-1232-adjudication', 'PASS_RUNTIME_AC', 'runtime_ac_panel: PASS_RUNTIME_AC - pass ratio 2/2 met threshold 0.67')",
+      "E         Use -v to get more diff",
+      "FAILED tests/test_issue1232_ranked_coverage.py::test_panel_adjudication_recording_and_cli_paths"
+    ],
+    "restored_summary": [
+      "1 passed in 0.48s"
+    ]
+  },
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_runtime_ac_panel_substantiated_veto_and_normalize",
+    "description": "High severity FAIL review vetoes the panel",
+    "module": "src/runtime_ac_panel.py",
+    "mutation": [
+      "if blocker[\"severity\"] in VETO_SEVERITIES:",
+      "if False:"
+    ],
+    "occurrence": 0,
+    "source_sha256": "feb72536e8f97e9a5a8c72fd6a01fc668d043fa7156512a8974cd7f9e849f7c9",
+    "command": [
+      "/opt/anaconda3/bin/python3",
+      "-m",
+      "pytest",
+      "tests/test_issue1232_ranked_coverage.py::test_runtime_ac_panel_substantiated_veto_and_normalize",
+      "-q",
+      "--no-cov"
+    ],
+    "red": 1,
+    "restored": 0,
+    "failure_lines": [
+      "E       AssertionError: assert False is True",
+      "E        +  where False = <function _substantiated_veto at 0x10c8a2200>({'reviewer': 'test', 'verdict': 'FAIL', 'confidence': 0.8, 'rationale': '', ...})",
+      "E        +    where <function _substantiated_veto at 0x10c8a2200> = panel._substantiated_veto",
+      "FAILED tests/test_issue1232_ranked_coverage.py::test_runtime_ac_panel_substantiated_veto_and_normalize"
+    ],
+    "restored_summary": [
+      "1 passed in 0.44s"
+    ]
+  },
+  {
+    "test": "tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_repo_num_and_eligibility",
+    "description": "Closed PR produces the exact pr_not_open blocker",
+    "module": "src/keepalive_supervisor.py",
+    "mutation": [
+      "blockers.append(\"pr_not_open\")",
+      "blockers.append(\"wrong_state\")"
+    ],
+    "occurrence": 0,
+    "source_sha256": "5665dc30e0790cfa6a27b9e4e27669f7e2109185be6af9cfdcdd97098e31cc35",
+    "command": [
+      "/opt/anaconda3/bin/python3",
+      "-m",
+      "pytest",
+      "tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_repo_num_and_eligibility",
+      "-q",
+      "--no-cov"
+    ],
+    "red": 1,
+    "restored": 0,
+    "failure_lines": [
+      "E       AssertionError: assert 'pr_not_open' in ['wrong_state']",
+      "FAILED tests/test_issue1232_ranked_coverage.py::test_keepalive_supervisor_repo_num_and_eligibility"
+    ],
+    "restored_summary": [
+      "1 passed in 0.44s"
+    ]
+  }
+]

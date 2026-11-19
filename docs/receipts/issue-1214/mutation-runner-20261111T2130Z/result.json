@@ -1,0 +1,35 @@
+{
+  "recorded_at": "2026-11-11T21:27:57.888Z",
+  "status": "unverified",
+  "runs": [
+    {
+      "phase": "baseline",
+      "recorded_at": "2026-11-11T21:27:57.920Z",
+      "command": [
+        "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+        "-B",
+        "-m",
+        "pytest",
+        "tests/test_dispatcher_offload.py",
+        "-k",
+        "sandbox",
+        "-m",
+        "not slow",
+        "-v",
+        "--tb=short",
+        "--color=no",
+        "-p",
+        "no:cacheprovider"
+      ],
+      "source_sha256": "e2dee35d1eca81a3f53440e78519c68bb7d057d9ea8a0b889ef166d849ae8f7a",
+      "test_sha256": "2a0340b0009dd3722314efea28831c17cb7ffb8cb7c333904a7cf4c123a37d65",
+      "status": 1,
+      "signal": null,
+      "error": null,
+      "elapsed_ms": 24.391756,
+      "stdout": "",
+      "stderr": "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3: No module named pytest\n"
+    }
+  ],
+  "reason": "\n/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3: No module named pytest\n\n\n1 !== 0\n"
+}

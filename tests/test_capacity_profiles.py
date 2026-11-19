@@ -145,7 +145,7 @@ def test_exact_codex_profile_commands_preserve_permission_rails(monkeypatch):
         )
         assert assess[assess.index("--sandbox") + 1] == "read-only"
         assert "--json" not in assess
-    assert models == {"gpt-6-astra", "gpt-6.1-sol", "gpt-5.6-terra", "gpt-6-luna"}
+    assert models == {"gpt-6.2-astra", "gpt-6.2-sol", "gpt-5.6-terra", "gpt-6-luna"}
 
 
 def test_nested_sandbox_never_widens_read_only_profile(monkeypatch):
@@ -166,19 +166,20 @@ def test_nested_sandbox_never_widens_read_only_profile(monkeypatch):
 
 
 def test_full_tier_selects_sol_and_keeps_explicit_astra_lookup():
-    assert adapters.resolve_model("codex", "full") == "gpt-6.1-sol"
+    assert adapters.resolve_model("codex", "full") == "gpt-6.2-sol"
     active = execution_profiles.profiles_for_agent("codex")
     full = [p for p in active if p["requested_model"] == adapters.resolve_model("codex", "full")]
     assert {p["profile_id"] for p in full} == {
-        "codex-6.1-sol-high",
-        "codex-6.1-sol-medium",
-        "codex-6.1-sol-low",
+        "codex-6.2-sol-high",
+        "codex-6.2-sol-medium",
+        "codex-6.2-sol-low",
     }
-    assert "codex-6-astra-high" in {p["profile_id"] for p in active}
+    assert "codex-6.2-astra-high" in {p["profile_id"] for p in active}
     selected = execution_profiles.select_profile(
-        "implement", "o/r#full-tier", ["codex-6.1-sol-high"], rng_seed=0
+        "implement", "o/r#full-tier", ["codex-6.2-sol-high"], rng_seed=0
     )
-    assert selected["selected_profile_id"] == "codex-6.1-sol-high"
+    assert selected["selected_profile_id"] == "codex-6.2-sol-high"
+    assert execution_profiles.get_profile("codex-6.2-sol-high")["requested_model"] == "gpt-6.2-sol"
     assert execution_profiles.get_profile("codex-6.1-sol-high")["requested_model"] == "gpt-6.1-sol"
 
 
@@ -191,7 +192,7 @@ def test_router_profile_envelope_replays_exact_choice():
                 "cursor": {"state": "shed"},
                 "gemini": {"state": "shed"},
                 "vibe": {"state": "shed"},
-                "aider": {"state": "shed"},
+                "muse": {"state": "shed"},
             }
         }
     )
@@ -201,7 +202,7 @@ def test_router_profile_envelope_replays_exact_choice():
         "cursor": {"state": "shed"},
         "gemini": {"state": "shed"},
         "vibe": {"state": "shed"},
-        "aider": {"state": "shed"},
+        "muse": {"state": "shed"},
     }
     assignment = router.plan(
         [{"target": "owner/repo#5", "task_type": "implement", "lane": "opener"}],
@@ -581,6 +582,8 @@ def test_profile_report_surfaces_cold_starts_propensity_and_shared_pool(tmp_path
     assert {row["requested_model"] for row in summary["profiles"]} == {
         "gpt-6-astra",
         "gpt-6.1-sol",
+        "gpt-6.2-astra",
+        "gpt-6.2-sol",
         "gpt-5.6-terra",
         "gpt-6-luna",
         "gpt-5.6-sol",
@@ -623,13 +626,9 @@ def test_registry_models_match_adapters():
 
     def bare(model: str) -> str:
         # Strip a leading `<seat>:` router prefix. Only these seats route through a wrapper; a
-        # vendor id containing a slash (`mistral/codestral-latest`) is untouched.
+        # vendor id containing a slash is untouched.
         head, _, tail = str(model).partition(":")
-        return (
-            tail
-            if tail and head in {"agy", "cursor", "claude", "codex", "vibe", "aider"}
-            else str(model)
-        )
+        return tail if tail and head in {"agy", "cursor", "claude", "codex", "vibe"} else str(model)
 
     # PIN THE PROBE OFF. `model_identity("gemini", ...)` resolves through `resolve_model`, which
     # shells out to `agy models` when its disk cache is cold -- so this drift assertion could fail
@@ -717,14 +716,12 @@ def test_named_models_are_not_adapter_tags():
         target.add(profile["agent"])
     # NO seat may request a routing tag. Each model is named from that seat's own authority --
     # codex/claude from tier research, gemini from agy's advertised-models probe, cursor from its
-    # known default, vibe from its CLI config, aider from its floating alias. A tag here would mean
+    # known default, vibe from its CLI config. A tag here would mean
     # a seat had been quietly reclassified as unidentifiable when it is merely unconfirmed.
     # No PROFILE may request a routing tag -- that is the field compared against a resolved model.
     # `model_identity` legitimately still carries the router prefix; these are different fields.
     assert tag_seats == set(), sorted(tag_seats)
-    assert {"codex", "claude", "aider", "vibe", "gemini", "cursor"} <= named_seats, sorted(
-        named_seats
-    )
+    assert {"codex", "claude", "vibe", "gemini", "cursor"} <= named_seats, sorted(named_seats)
 
 
 def test_gemini_model_is_one_the_seat_advertises():

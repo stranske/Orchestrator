@@ -1,0 +1,22 @@
+2026-11-11 keepalive validation; checked-out baseline f410e500
+
+$ /opt/hostedtoolcache/Python/3.14.10/x64/bin/python3 -m pytest tests/test_dispatcher_offload.py -k sandbox -m "not slow"
+/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3: No module named pytest
+exit=1
+
+$ /opt/hostedtoolcache/Python/3.14.10/x64/bin/python3 -m black --line-length 100 tests/test_dispatcher_offload.py
+/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3: No module named black
+exit=1
+
+$ /opt/hostedtoolcache/Python/3.14.10/x64/bin/python3 -m black --check --line-length 100 --exclude "(\.workflows-lib|node_modules)" .
+/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3: No module named black
+exit=1
+
+Python syntax compilation and git diff --check: exit=0.
+Direct standard-library smoke check (not a pytest run): exit=0.
+PASS: real adapter refuses a newly protected write root after a DNS probe failure
+PASS: no provider launch, run ID, dispatch log, ledger row or fallback-success diagnostic
+
+$ /opt/hostedtoolcache/Python/3.14.10/x64/bin/python3 src/verify.py
+Interrupted after more than six minutes without a result; exit=130.
+(No output captured before interruption.)

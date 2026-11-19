@@ -1,0 +1,153 @@
+/opt/anaconda3/lib/python3.12/site-packages/pytest_asyncio/plugin.py:300: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the "fixture" caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to "function" scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+__________ test_native_reclaim_disabled_exit_128_names_holder[closer] __________
+
+layout = (PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2550/test_native_recla...chestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2550/test_native_reclaim_disabled_e0/holder [old]+ round'))
+lane = 'closer'
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b34d220>
+
+    @pytest.mark.parametrize("lane", ["closer", "opener"])
+    def test_native_reclaim_disabled_exit_128_names_holder(layout, lane, monkeypatch):
+        """Disable reclaim, then restore it and reclaim the same holder using native probes."""
+        canon, _ = layout
+        branch = "pr-head" if lane == "closer" else OPENER_BRANCH
+        if lane == "opener":
+            git(canon, "branch", branch)
+        holder = hold(layout, branch)
+        holder_inode = holder.stat().st_ino
+        holder_head = git(holder, "rev-parse", "HEAD")
+        with monkeypatch.context() as disabled:
+            disabled.setattr(provision, "_reclaim_branch_holder", lambda *args, **kwargs: None)
+            with pytest.raises(subprocess.CalledProcessError) as caught:
+                provision.provision(TARGET, lane)
+        assert caught.value.returncode == 128
+        assert str(holder) in (caught.value.stderr or "")
+        assert holder.stat().st_ino == holder_inode
+        assert git(holder, "rev-parse", "HEAD") == holder_head
+        assert git(holder, "branch", "--show-current") == branch
+        print(f"provision: disabled reclaim: git exit 128: {caught.value.stderr.strip()}")
+    
+>       wt = provision.provision(TARGET, lane)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_provision_reclaim.py:769: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/provision.py:807: in provision
+    else _provision(target, lane, event)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/provision.py:709: in _provision
+    _reclaim_branch_holder(canon, head, wt, event)
+src/provision.py:635: in _reclaim_branch_holder
+    live = _live_holder_pids(holder)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+src/provision.py:410: in _live_holder_pids
+    probe([*_pgrep_base(), "-f", re.escape(str(spelling))], no_matches=True)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+args = ['pgrep', '-a', '-f', '/Users/teacher/\\.codex/orchestrator/agent\\-runtime/codex/tmp/pytest\\-of\\-teacher/pytest\\-2550/test_native_reclaim_disabled_e0/holder\\ \\[old\\]\\+\\ round']
+no_matches = True
+
+    def probe(args: list[str], *, no_matches: bool = False) -> str:
+        try:
+            result = _run(args, check=False)
+        except OSError as exc:
+            raise RuntimeError(
+                f"cannot check live processes for {holder}: {args[0]}: {exc}"
+            ) from exc
+        # lsof/pgrep use 1 for no matches; diagnostics make that an inspection failure.
+        if result.returncode != 0 and not (
+            no_matches
+            and result.returncode == 1
+            and not result.stdout.strip()
+            and not result.stderr.strip()
+        ):
+>           raise RuntimeError(
+                f"cannot check live processes for {holder}: {args[0]} "
+                f"exited {result.returncode}: {result.stderr.strip()}"
+            )
+E           RuntimeError: cannot check live processes for /Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2550/test_native_reclaim_disabled_e0/holder [old]+ round: pgrep exited 3: sysmon request failed with error: sysmond service not found
+E           pgrep: Cannot get process list
+
+src/provision.py:378: RuntimeError
+----------------------------- Captured stdout call -----------------------------
+provision: disabled reclaim: git exit 128: fatal: 'pr-head' is already used by worktree at '/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2550/test_native_reclaim_disabled_e0/holder [old]+ round'
+__________ test_native_reclaim_disabled_exit_128_names_holder[opener] __________
+
+layout = (PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2550/test_native_recla...chestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2550/test_native_reclaim_disabled_e1/holder [old]+ round'))
+lane = 'opener'
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b34d6a0>
+
+    @pytest.mark.parametrize("lane", ["closer", "opener"])
+    def test_native_reclaim_disabled_exit_128_names_holder(layout, lane, monkeypatch):
+        """Disable reclaim, then restore it and reclaim the same holder using native probes."""
+        canon, _ = layout
+        branch = "pr-head" if lane == "closer" else OPENER_BRANCH
+        if lane == "opener":
+            git(canon, "branch", branch)
+        holder = hold(layout, branch)
+        holder_inode = holder.stat().st_ino
+        holder_head = git(holder, "rev-parse", "HEAD")
+        with monkeypatch.context() as disabled:
+            disabled.setattr(provision, "_reclaim_branch_holder", lambda *args, **kwargs: None)
+            with pytest.raises(subprocess.CalledProcessError) as caught:
+                provision.provision(TARGET, lane)
+        assert caught.value.returncode == 128
+        assert str(holder) in (caught.value.stderr or "")
+        assert holder.stat().st_ino == holder_inode
+        assert git(holder, "rev-parse", "HEAD") == holder_head
+        assert git(holder, "branch", "--show-current") == branch
+        print(f"provision: disabled reclaim: git exit 128: {caught.value.stderr.strip()}")
+    
+>       wt = provision.provision(TARGET, lane)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_provision_reclaim.py:769: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/provision.py:807: in provision
+    else _provision(target, lane, event)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/provision.py:731: in _provision
+    _reclaim_branch_holder(canon, branch, wt, event)
+src/provision.py:635: in _reclaim_branch_holder
+    live = _live_holder_pids(holder)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+src/provision.py:410: in _live_holder_pids
+    probe([*_pgrep_base(), "-f", re.escape(str(spelling))], no_matches=True)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+args = ['pgrep', '-a', '-f', '/Users/teacher/\\.codex/orchestrator/agent\\-runtime/codex/tmp/pytest\\-of\\-teacher/pytest\\-2550/test_native_reclaim_disabled_e1/holder\\ \\[old\\]\\+\\ round']
+no_matches = True
+
+    def probe(args: list[str], *, no_matches: bool = False) -> str:
+        try:
+            result = _run(args, check=False)
+        except OSError as exc:
+            raise RuntimeError(
+                f"cannot check live processes for {holder}: {args[0]}: {exc}"
+            ) from exc
+        # lsof/pgrep use 1 for no matches; diagnostics make that an inspection failure.
+        if result.returncode != 0 and not (
+            no_matches
+            and result.returncode == 1
+            and not result.stdout.strip()
+            and not result.stderr.strip()
+        ):
+>           raise RuntimeError(
+                f"cannot check live processes for {holder}: {args[0]} "
+                f"exited {result.returncode}: {result.stderr.strip()}"
+            )
+E           RuntimeError: cannot check live processes for /Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2550/test_native_reclaim_disabled_e1/holder [old]+ round: pgrep exited 3: sysmon request failed with error: sysmond service not found
+E           pgrep: Cannot get process list
+
+src/provision.py:378: RuntimeError
+----------------------------- Captured stdout call -----------------------------
+provision: disabled reclaim: git exit 128: Preparing worktree (checking out 'orchestrator/issue-718')
+fatal: 'orchestrator/issue-718' is already used by worktree at '/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2550/test_native_reclaim_disabled_e1/holder [old]+ round'
+=========================== short test summary info ============================
+FAILED tests/test_provision_reclaim.py::test_native_reclaim_disabled_exit_128_names_holder[closer]
+FAILED tests/test_provision_reclaim.py::test_native_reclaim_disabled_exit_128_names_holder[opener]
+2 failed, 56 deselected in 1.95s

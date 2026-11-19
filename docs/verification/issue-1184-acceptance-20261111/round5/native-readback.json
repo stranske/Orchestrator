@@ -1,0 +1,677 @@
+{
+  "source": "GitHub plugin native readback on 2026-11-11; no terminal decisions or custody generated",
+  "pull_requests": [
+    {
+      "number": 1168,
+      "state": "closed",
+      "merged": true,
+      "head_sha": "01e86ae7e4ef0e6a06193c916c8c780ca5cab052",
+      "merge_commit_sha": "a30b34ada04a30d04360867e14097a8c5b6d731c"
+    },
+    {
+      "number": 989,
+      "state": "closed",
+      "merged": true,
+      "head_sha": "85adde2614db7118d6e6d28dd11e5bc4c7611319",
+      "merge_commit_sha": "97647baf97085724af7cb8f684af2331f73fb612"
+    }
+  ],
+  "pr1168_comment_count": 51,
+  "pr1168_native_event_comments": [
+    {
+      "url": "https://github.com/stranske/Orchestrator/pull/1168#issuecomment-6673798353",
+      "author": "github-actions[bot]",
+      "body": "<!-- verifier-event-state/v1 {\"schema\":\"verifier-event-state/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"1168\",\"head_sha\":\"01e86ae7e4ef0e6a06193c916c8c780ca5cab052\",\"evaluated_sha\":\"a30b34ada04a30d04360867e14097a8c5b6d731c\",\"run_id\":\"42141057834\",\"run_attempt\":\"1\",\"status\":\"pending\",\"verification_event\":{\"schema\":\"verification-event/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"1168\",\"head_sha\":\"01e86ae7e4ef0e6a06193c916c8c780ca5cab052\",\"evaluated_sha\":\"a30b34ada04a30d04360867e14097a8c5b6d731c\",\"request_sha256\":\"65c87a493c35cc5c448fdc6ede6020633a89d9ab8e78fd2b23575661ee67760f\",\"material_sha256\":\"b1c469527d717ff997624642492f1ea92986f60786815cc2996cc62d7fbebafd\",\"event_id\":\"2e1928066ac3b01f9d19c425fe29844062d54c335f922144a7b4e23511619b8d\"},\"assessment_identity\":{\"mode\":\"evaluate\",\"provider\":\"\",\"model\":\"\",\"model2\":\"\",\"canonical\":true},\"execution_binding\":{\"schema\":\"verifier-execution-binding/v1\",\"workflow_path\":\".github/workflows/agents-verifier.yml\",\"job_name\":\"Run post-merge verifier\",\"pending_step\":\"Record verification event pending\",\"evaluator_step\":\"Run LLM evaluation\"}} -->"
+    },
+    {
+      "url": "https://github.com/stranske/Orchestrator/pull/1168#issuecomment-6673821163",
+      "author": "github-actions[bot]",
+      "body": "<!-- verifier-event-state/v1 {\"schema\":\"verifier-event-state/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"1168\",\"head_sha\":\"01e86ae7e4ef0e6a06193c916c8c780ca5cab052\",\"evaluated_sha\":\"a30b34ada04a30d04360867e14097a8c5b6d731c\",\"run_id\":\"42141057834\",\"run_attempt\":\"1\",\"status\":\"incomplete\",\"failure_cause\":\"retained_provider_evaluation\",\"retry_kind\":\"recover_existing_evaluation\",\"retryable\":false,\"verification_event\":{\"schema\":\"verification-event/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"1168\",\"head_sha\":\"01e86ae7e4ef0e6a06193c916c8c780ca5cab052\",\"evaluated_sha\":\"a30b34ada04a30d04360867e14097a8c5b6d731c\",\"request_sha256\":\"65c87a493c35cc5c448fdc6ede6020633a89d9ab8e78fd2b23575661ee67760f\",\"material_sha256\":\"b1c469527d717ff997624642492f1ea92986f60786815cc2996cc62d7fbebafd\",\"event_id\":\"2e1928066ac3b01f9d19c425fe29844062d54c335f922144a7b4e23511619b8d\"},\"assessment_identity\":{\"mode\":\"evaluate\",\"provider\":\"\",\"model\":\"\",\"model2\":\"\",\"canonical\":true}} -->"
+    },
+    {
+      "url": "https://github.com/stranske/Orchestrator/pull/1168#issuecomment-6673960665",
+      "author": "github-actions[bot]",
+      "body": "<!-- verifier-event-state/v1 {\"schema\":\"verifier-event-state/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"1168\",\"head_sha\":\"01e86ae7e4ef0e6a06193c916c8c780ca5cab052\",\"evaluated_sha\":\"a30b34ada04a30d04360867e14097a8c5b6d731c\",\"run_id\":\"42142328293\",\"run_attempt\":\"1\",\"status\":\"pending\",\"verification_event\":{\"schema\":\"verification-event/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"1168\",\"head_sha\":\"01e86ae7e4ef0e6a06193c916c8c780ca5cab052\",\"evaluated_sha\":\"a30b34ada04a30d04360867e14097a8c5b6d731c\",\"request_sha256\":\"65c87a493c35cc5c448fdc6ede6020633a89d9ab8e78fd2b23575661ee67760f\",\"material_sha256\":\"b1c469527d717ff997624642492f1ea92986f60786815cc2996cc62d7fbebafd\",\"event_id\":\"2e1928066ac3b01f9d19c425fe29844062d54c335f922144a7b4e23511619b8d\"},\"assessment_identity\":{\"mode\":\"evaluate\",\"provider\":\"\",\"model\":\"\",\"model2\":\"\",\"canonical\":true},\"execution_binding\":{\"schema\":\"verifier-execution-binding/v1\",\"workflow_path\":\".github/workflows/agents-verifier.yml\",\"job_name\":\"Run post-merge verifier\",\"pending_step\":\"Record verification event pending\",\"evaluator_step\":\"Run LLM evaluation\",\"retained_revalidation\":true},\"retained_revalidation\":{\"schema\":\"retained-revalidation/v1\",\"recovery_key\":\"d2ea76b6d6cc135a6f91a5b763629e038bf2cd9e398ca704d26d011ed1d02053\",\"source_run_id\":\"42141057834\",\"source_run_attempt\":\"1\",\"artifact_id\":13468410186}} -->"
+    },
+    {
+      "url": "https://github.com/stranske/Orchestrator/pull/1168#issuecomment-6673968504",
+      "author": "github-actions[bot]",
+      "body": "<!-- verifier-event-state/v1 {\"schema\":\"verifier-event-state/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"1168\",\"head_sha\":\"01e86ae7e4ef0e6a06193c916c8c780ca5cab052\",\"evaluated_sha\":\"a30b34ada04a30d04360867e14097a8c5b6d731c\",\"run_id\":\"42142328293\",\"run_attempt\":\"1\",\"status\":\"incomplete\",\"failure_cause\":\"retained_revalidation_before_publication\",\"retained_revalidation\":{\"artifact_id\":13468410186,\"provider_generation_performed\":false,\"publication_effect\":\"none\",\"recovery_key\":\"d2ea76b6d6cc135a6f91a5b763629e038bf2cd9e398ca704d26d011ed1d02053\",\"schema\":\"retained-revalidation/v1\",\"source_run_attempt\":\"1\",\"source_run_id\":\"42141057834\"},\"retry_kind\":\"known_no_evaluation\",\"retryable\":true,\"verification_event\":{\"schema\":\"verification-event/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"1168\",\"head_sha\":\"01e86ae7e4ef0e6a06193c916c8c780ca5cab052\",\"evaluated_sha\":\"a30b34ada04a30d04360867e14097a8c5b6d731c\",\"request_sha256\":\"65c87a493c35cc5c448fdc6ede6020633a89d9ab8e78fd2b23575661ee67760f\",\"material_sha256\":\"b1c469527d717ff997624642492f1ea92986f60786815cc2996cc62d7fbebafd\",\"event_id\":\"2e1928066ac3b01f9d19c425fe29844062d54c335f922144a7b4e23511619b8d\"},\"assessment_identity\":{\"mode\":\"evaluate\",\"provider\":\"\",\"model\":\"\",\"model2\":\"\",\"canonical\":true}} -->"
+    },
+    {
+      "url": "https://github.com/stranske/Orchestrator/pull/1168#issuecomment-6674004607",
+      "author": "github-actions[bot]",
+      "body": "<!-- verifier-event-state/v1 {\"schema\":\"verifier-event-state/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"1168\",\"head_sha\":\"01e86ae7e4ef0e6a06193c916c8c780ca5cab052\",\"evaluated_sha\":\"a30b34ada04a30d04360867e14097a8c5b6d731c\",\"run_id\":\"42142641060\",\"run_attempt\":\"1\",\"status\":\"pending\",\"verification_event\":{\"schema\":\"verification-event/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"1168\",\"head_sha\":\"01e86ae7e4ef0e6a06193c916c8c780ca5cab052\",\"evaluated_sha\":\"a30b34ada04a30d04360867e14097a8c5b6d731c\",\"request_sha256\":\"65c87a493c35cc5c448fdc6ede6020633a89d9ab8e78fd2b23575661ee67760f\",\"material_sha256\":\"b1c469527d717ff997624642492f1ea92986f60786815cc2996cc62d7fbebafd\",\"event_id\":\"2e1928066ac3b01f9d19c425fe29844062d54c335f922144a7b4e23511619b8d\"},\"assessment_identity\":{\"mode\":\"compare\",\"provider\":\"\",\"model\":\"\",\"model2\":\"\",\"canonical\":true},\"execution_binding\":{\"schema\":\"verifier-execution-binding/v1\",\"workflow_path\":\".github/workflows/agents-verifier.yml\",\"job_name\":\"Run post-merge verifier\",\"pending_step\":\"Record verification event pending\",\"evaluator_step\":\"Run multi-provider comparison\"}} -->"
+    },
+    {
+      "url": "https://github.com/stranske/Orchestrator/pull/1168#issuecomment-6674054696",
+      "author": "github-actions[bot]",
+      "body": "<!-- verifier-event-state/v1 {\"schema\":\"verifier-event-state/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"1168\",\"head_sha\":\"01e86ae7e4ef0e6a06193c916c8c780ca5cab052\",\"evaluated_sha\":\"a30b34ada04a30d04360867e14097a8c5b6d731c\",\"run_id\":\"42142641060\",\"run_attempt\":\"1\",\"status\":\"incomplete\",\"failure_cause\":\"retained_provider_evaluation\",\"retry_kind\":\"recover_existing_evaluation\",\"retryable\":false,\"verification_event\":{\"schema\":\"verification-event/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"1168\",\"head_sha\":\"01e86ae7e4ef0e6a06193c916c8c780ca5cab052\",\"evaluated_sha\":\"a30b34ada04a30d04360867e14097a8c5b6d731c\",\"request_sha256\":\"65c87a493c35cc5c448fdc6ede6020633a89d9ab8e78fd2b23575661ee67760f\",\"material_sha256\":\"b1c469527d717ff997624642492f1ea92986f60786815cc2996cc62d7fbebafd\",\"event_id\":\"2e1928066ac3b01f9d19c425fe29844062d54c335f922144a7b4e23511619b8d\"},\"assessment_identity\":{\"mode\":\"compare\",\"provider\":\"\",\"model\":\"\",\"model2\":\"\",\"canonical\":true}} -->"
+    }
+  ],
+  "pr1168_corpus_marker_comments": [],
+  "pr984_corpus_comment_urls": [
+    "https://github.com/stranske/Orchestrator/pull/984#issuecomment-6458980062"
+  ],
+  "recovery_run_id": 42142328293,
+  "recovery_jobs": [
+    {
+      "id": 127645419286,
+      "name": "check",
+      "status": "completed",
+      "conclusion": "success",
+      "run_id": 42142328293,
+      "logs_url": null,
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1
+        },
+        {
+          "name": "Checkout retry helpers",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2
+        },
+        {
+          "name": "Setup API client",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3
+        },
+        {
+          "name": "Check trigger conditions",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4
+        },
+        {
+          "name": "Compute state fingerprint",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 5
+        },
+        {
+          "name": "Report unchanged state skip",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 6
+        },
+        {
+          "name": "Post Checkout retry helpers",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13
+        }
+      ]
+    },
+    {
+      "id": 127645488334,
+      "name": "verifier / Run post-merge verifier",
+      "status": "completed",
+      "conclusion": "failure",
+      "run_id": 42142328293,
+      "logs_url": null,
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1
+        },
+        {
+          "name": "Select bounded verifier evidence profile",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2
+        },
+        {
+          "name": "Mint GitHub App token",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3
+        },
+        {
+          "name": "Checkout caller repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4
+        },
+        {
+          "name": "Setup API client",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5
+        },
+        {
+          "name": "Resolve Workflows ref",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6
+        },
+        {
+          "name": "Checkout Workflows scripts",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7
+        },
+        {
+          "name": "Link node_modules for Workflows scripts",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8
+        },
+        {
+          "name": "Wait for CI workflows to complete",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9
+        },
+        {
+          "name": "Build verifier context",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10
+        },
+        {
+          "name": "Correlate an already completed verification event",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 11
+        },
+        {
+          "name": "Record verification event pending",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12
+        },
+        {
+          "name": "Prepare source closure plans",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13
+        },
+        {
+          "name": "Extract exact acceptance command sets",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 14
+        },
+        {
+          "name": "Upload source closure plans",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 15
+        },
+        {
+          "name": "Record verifier input identity for model evaluation",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 16
+        },
+        {
+          "name": "Resolve agent key from PR labels",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 17
+        },
+        {
+          "name": "Stop when verifier is skipped",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 18
+        },
+        {
+          "name": "Prepare verifier prompt",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 19
+        },
+        {
+          "name": "Validate Codex auth for checkbox/compare modes",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 20
+        },
+        {
+          "name": "Setup Codex auth",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 21
+        },
+        {
+          "name": "Install Codex CLI",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 22
+        },
+        {
+          "name": "Resolve Codex verifier model",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 23
+        },
+        {
+          "name": "Run verifier (checkbox mode)",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 24
+        },
+        {
+          "name": "Parse verifier verdict (checkbox mode)",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 25
+        },
+        {
+          "name": "Setup Python for LLM evaluation",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 26
+        },
+        {
+          "name": "Cache pip (LLM evaluation requirements)",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 27
+        },
+        {
+          "name": "Install LLM evaluation dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 28
+        },
+        {
+          "name": "Check provider secrets",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 29
+        },
+        {
+          "name": "Run LLM evaluation",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 30
+        },
+        {
+          "name": "Apply CI failure hard gate to LLM evaluation comment",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 31
+        },
+        {
+          "name": "Post LLM evaluation comment",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 32
+        },
+        {
+          "name": "Setup Python for comparison",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 33
+        },
+        {
+          "name": "Cache pip (LLM comparison requirements)",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 34
+        },
+        {
+          "name": "Install comparison dependencies",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 35
+        },
+        {
+          "name": "Run multi-provider comparison",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 36
+        },
+        {
+          "name": "Apply CI failure hard gate to comparison comment",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 37
+        },
+        {
+          "name": "Post comparison report comment",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 38
+        },
+        {
+          "name": "Revalidate authenticated retained output",
+          "status": "completed",
+          "conclusion": "failure",
+          "number": 39
+        },
+        {
+          "name": "Publish retained revalidation through verifier lifecycle",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 40
+        },
+        {
+          "name": "Record verification event terminal",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 41
+        },
+        {
+          "name": "Retain original correction finding seeds",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 42
+        },
+        {
+          "name": "Shadow candidate verifier judges (recorded only; never posted, never counted)",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 43
+        },
+        {
+          "name": "Upload comparison artifacts",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 44
+        },
+        {
+          "name": "Retain complete verifier input transport",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 45
+        },
+        {
+          "name": "Retain evaluation execution evidence",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 46
+        },
+        {
+          "name": "Upload evaluation capacity receipts",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 47
+        },
+        {
+          "name": "Set unified verdict",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 48
+        },
+        {
+          "name": "Open follow-up issue on verifier failure",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 49
+        },
+        {
+          "name": "Collect verifier metrics",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 50
+        },
+        {
+          "name": "Write verifier terminal disposition",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 51
+        },
+        {
+          "name": "Post verifier terminal disposition summary",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 52
+        },
+        {
+          "name": "Upload verifier terminal disposition",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 53
+        },
+        {
+          "name": "Write verifier summary",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 54
+        },
+        {
+          "name": "Upload verifier metrics",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 55
+        },
+        {
+          "name": "Post Cache pip (LLM evaluation requirements)",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 106
+        },
+        {
+          "name": "Post Setup Python for LLM evaluation",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 107
+        },
+        {
+          "name": "Post Checkout Workflows scripts",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 108
+        },
+        {
+          "name": "Post Checkout caller repository",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 109
+        },
+        {
+          "name": "Post Mint GitHub App token",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 110
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 111
+        }
+      ]
+    },
+    {
+      "id": 127645490555,
+      "name": "verifier / Publish input-repair provenance",
+      "status": "completed",
+      "conclusion": "skipped",
+      "run_id": 42142328293,
+      "logs_url": null,
+      "steps": null
+    },
+    {
+      "id": 127645927589,
+      "name": "Prepare acceptance commands or required merge CI gate",
+      "status": "completed",
+      "conclusion": "skipped",
+      "run_id": 42142328293,
+      "logs_url": null,
+      "steps": null
+    },
+    {
+      "id": 127645927887,
+      "name": "Apply verified source issue closure rule",
+      "status": "completed",
+      "conclusion": "skipped",
+      "run_id": 42142328293,
+      "logs_url": null,
+      "steps": null
+    },
+    {
+      "id": 127645927907,
+      "name": "Persist verifier state fingerprint",
+      "status": "completed",
+      "conclusion": "skipped",
+      "run_id": 42142328293,
+      "logs_url": null,
+      "steps": null
+    }
+  ],
+  "evaluation_artifacts": [
+    {
+      "id": 13468410186,
+      "name": "evaluation-results-42141057834",
+      "size_in_bytes": 73523,
+      "url": "https://api.github.com/repos/stranske/Orchestrator/actions/artifacts/13468410186",
+      "archive_download_url": "https://api.github.com/repos/stranske/Orchestrator/actions/artifacts/13468410186/zip",
+      "expired": false,
+      "created_at": "2026-11-06T01:04:54Z",
+      "expires_at": "2026-11-13T01:04:54Z",
+      "updated_at": "2026-11-06T01:04:54Z",
+      "digest": "sha256:c82d28c792185972e8897e057b0398e7ddb0a73ea0ecc95c96306ecd01b4ae82",
+      "workflow_run": {
+        "id": 42141057834,
+        "repository_id": 1342306972,
+        "head_repository_id": 1342306972,
+        "head_branch": "main",
+        "head_sha": "93154fe94e4cdf5198697a244da1312765e91649"
+      }
+    },
+    {
+      "id": 13468223264,
+      "name": "verifier-terminal-disposition-42141057834",
+      "size_in_bytes": 1518,
+      "url": "https://api.github.com/repos/stranske/Orchestrator/actions/artifacts/13468223264",
+      "archive_download_url": "https://api.github.com/repos/stranske/Orchestrator/actions/artifacts/13468223264/zip",
+      "expired": false,
+      "created_at": "2026-11-06T01:04:56Z",
+      "expires_at": "2026-11-20T01:04:56Z",
+      "updated_at": "2026-11-06T01:04:56Z",
+      "digest": "sha256:993d4f74e5fdfd905768361d926c0c1482d4f1d886c446dc6368518e5a2861be",
+      "workflow_run": {
+        "id": 42141057834,
+        "repository_id": 1342306972,
+        "head_repository_id": 1342306972,
+        "head_branch": "main",
+        "head_sha": "93154fe94e4cdf5198697a244da1312765e91649"
+      }
+    },
+    {
+      "id": 13467792331,
+      "name": "verifier-closure-plans-42141057834",
+      "size_in_bytes": 2155,
+      "url": "https://api.github.com/repos/stranske/Orchestrator/actions/artifacts/13467792331",
+      "archive_download_url": "https://api.github.com/repos/stranske/Orchestrator/actions/artifacts/13467792331/zip",
+      "expired": false,
+      "created_at": "2026-11-06T01:03:23Z",
+      "expires_at": "2026-11-20T01:03:23Z",
+      "updated_at": "2026-11-06T01:03:23Z",
+      "digest": "sha256:8b443d381fa35e19fe2d96e14217e9eda792be9f7e4894f73a87c747cdc7a7d9",
+      "workflow_run": {
+        "id": 42141057834,
+        "repository_id": 1342306972,
+        "head_repository_id": 1342306972,
+        "head_branch": "main",
+        "head_sha": "93154fe94e4cdf5198697a244da1312765e91649"
+      }
+    },
+    {
+      "id": 13467713867,
+      "name": "agents-verifier-metrics",
+      "size_in_bytes": 421,
+      "url": "https://api.github.com/repos/stranske/Orchestrator/actions/artifacts/13467713867",
+      "archive_download_url": "https://api.github.com/repos/stranske/Orchestrator/actions/artifacts/13467713867/zip",
+      "expired": false,
+      "created_at": "2026-11-06T01:04:57Z",
+      "expires_at": "2026-12-06T01:04:57Z",
+      "updated_at": "2026-11-06T01:04:57Z",
+      "digest": "sha256:6d79f6adc27c9ab636197a5804b917b3fc4d00c25088ea6cd747bd0c3b3b2873",
+      "workflow_run": {
+        "id": 42141057834,
+        "repository_id": 1342306972,
+        "head_repository_id": 1342306972,
+        "head_branch": "main",
+        "head_sha": "93154fe94e4cdf5198697a244da1312765e91649"
+      }
+    },
+    {
+      "id": 13467669154,
+      "name": "evaluation-capacity-42141057834",
+      "size_in_bytes": 581,
+      "url": "https://api.github.com/repos/stranske/Orchestrator/actions/artifacts/13467669154",
+      "archive_download_url": "https://api.github.com/repos/stranske/Orchestrator/actions/artifacts/13467669154/zip",
+      "expired": false,
+      "created_at": "2026-11-06T01:04:55Z",
+      "expires_at": "2026-11-13T01:04:55Z",
+      "updated_at": "2026-11-06T01:04:55Z",
+      "digest": "sha256:e10d4f2293b47b84f6b1d23ba982bf35f6b09ce0b6ec5721ed6a1f6f026955c6",
+      "workflow_run": {
+        "id": 42141057834,
+        "repository_id": 1342306972,
+        "head_repository_id": 1342306972,
+        "head_branch": "main",
+        "head_sha": "93154fe94e4cdf5198697a244da1312765e91649"
+      }
+    },
+    {
+      "id": 13467033293,
+      "name": "verifier-closure-results-42141057834",
+      "size_in_bytes": 2180,
+      "url": "https://api.github.com/repos/stranske/Orchestrator/actions/artifacts/13467033293",
+      "archive_download_url": "https://api.github.com/repos/stranske/Orchestrator/actions/artifacts/13467033293/zip",
+      "expired": false,
+      "created_at": "2026-11-06T01:05:37Z",
+      "expires_at": "2026-11-20T01:05:37Z",
+      "updated_at": "2026-11-06T01:05:37Z",
+      "digest": "sha256:8163be707b507a8aaf686853002a45dbe6a04919628edfe697bdb9e2b89e4894",
+      "workflow_run": {
+        "id": 42141057834,
+        "repository_id": 1342306972,
+        "head_repository_id": 1342306972,
+        "head_branch": "main",
+        "head_sha": "93154fe94e4cdf5198697a244da1312765e91649"
+      }
+    }
+  ],
+  "rejection": {
+    "function": "original_final_projection",
+    "line": 282,
+    "caller": "revalidate_retained",
+    "caller_line": 485,
+    "message": "Original final producer provenance is not audited",
+    "source": "https://github.com/stranske/Orchestrator/actions/runs/42142328293/job/127645488334",
+    "traceback": [
+      "2026-11-06T01:14:19.4964717Z Traceback (most recent call last):",
+      "2026-11-06T01:14:19.4976424Z   File \"/home/runner/work/Orchestrator/Orchestrator/.workflows-lib/tools/verifier_event_recovery.py\", line 736, in <module>",
+      "2026-11-06T01:14:19.4977672Z     raise SystemExit(main())",
+      "2026-11-06T01:14:19.4978271Z                      ~~~~^^",
+      "2026-11-06T01:14:19.4979623Z   File \"/home/runner/work/Orchestrator/Orchestrator/.workflows-lib/tools/verifier_event_recovery.py\", line 708, in main",
+      "2026-11-06T01:14:19.4980794Z     result = revalidate_retained(directory=Path.cwd())",
+      "2026-11-06T01:14:19.4982512Z   File \"/home/runner/work/Orchestrator/Orchestrator/.workflows-lib/tools/verifier_event_recovery.py\", line 485, in revalidate_retained",
+      "2026-11-06T01:14:19.4983780Z     payload, projection = original_final_projection(",
+      "2026-11-06T01:14:19.4984517Z                           ~~~~~~~~~~~~~~~~~~~~~~~~~^",
+      "2026-11-06T01:14:19.4985428Z         payload, mode=mode, validator_sha256=origin[\"validator_sha256\"], assessment=assessment",
+      "2026-11-06T01:14:19.4986425Z         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+      "2026-11-06T01:14:19.4987105Z     )",
+      "2026-11-06T01:14:19.4987563Z     ^",
+      "2026-11-06T01:14:19.4988661Z   File \"/home/runner/work/Orchestrator/Orchestrator/.workflows-lib/tools/verifier_event_recovery.py\", line 282, in original_final_projection",
+      "2026-11-06T01:14:19.4990320Z     raise ValueError(\"Original final producer provenance is not audited\")",
+      "2026-11-06T01:14:19.4991291Z ValueError: Original final producer provenance is not audited"
+    ]
+  },
+  "workflow_dispatch": {
+    "command": "gh workflow run agents-verifier.yml --repo stranske/Orchestrator --ref main -f pr_number=1168 -f pr_head_sha=01e86ae7e4ef0e6a06193c916c8c780ca5cab052 -f mode=evaluate -f 'verification_recovery={\"run_id\":\"42141057834\",\"run_attempt\":\"1\",\"artifact_id\":13468410186}'",
+    "exit_status": 1,
+    "stderr": "error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com\n",
+    "new_execution_claimed": false
+  }
+}

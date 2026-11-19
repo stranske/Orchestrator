@@ -76,20 +76,13 @@ CAPACITY_POOLS = {
         "tier": "flat",
         "agent": "muse",
     },
-    "aider-paygo": {
-        "provider": "mistral",
-        "account": "mistral-codestral",
-        "window": "daily",
-        "tier": "paygo",
-        "agent": "aider",
-    },
 }
 
 
 def _profile(
     profile_id: str,
     model: str,
-    reasoning: str,
+    reasoning: str | None,
     *,
     prior_offset: float = 0.0,
     agent: str = "codex",
@@ -141,6 +134,11 @@ PROFILE_REGISTRY: dict[str, dict[str, Any]] = {
         _profile("codex-6.1-sol-low", "gpt-6.1-sol", "low"),
         _profile("codex-6.1-sol-medium", "gpt-6.1-sol", "medium"),
         _profile("codex-6.1-sol-high", "gpt-6.1-sol", "high", prior_offset=0.05),
+        _profile("codex-6.2-sol-low", "gpt-6.2-sol", "low"),
+        _profile("codex-6.2-sol-medium", "gpt-6.2-sol", "medium"),
+        _profile("codex-6.2-sol-high", "gpt-6.2-sol", "high", prior_offset=0.05),
+        _profile("codex-6.2-astra-medium", "gpt-6.2-astra", "medium"),
+        _profile("codex-6.2-astra-high", "gpt-6.2-astra", "high", prior_offset=0.05),
         _profile("codex-5.6-terra-high", "gpt-5.6-terra", "high"),
         _profile("codex-5.6-terra-medium", "gpt-5.6-terra", "medium"),
         _profile("codex-5.6-luna-high", "gpt-5.6-luna", "high", prior_offset=-0.02),
@@ -208,17 +206,8 @@ PROFILE_REGISTRY: dict[str, dict[str, Any]] = {
             pool="claude-subscription",
             adapter_version="claude-cli-profile-v2",
         ),
-        _profile(
-            "aider-codestral-high",
-            "mistral/codestral-latest",
-            "high",
-            agent="aider",
-            provider="mistral",
-            pool="aider-paygo",
-            adapter_version="aider-cli-profile-v1",
-        ),
         # Every seat's model is NAMED, each from the seat's own authority: codex/claude from the
-        # tier research, vibe from its CLI config, aider from its floating alias, gemini from agy's
+        # tier research, vibe from its CLI config, gemini from agy's
         # advertised-models probe, cursor from its known default. None is a routing tag, so no seat
         # is unidentifiable -- what they all still need is worker TRACING to confirm what served.
         # GEMINI HAS TWO LINES, AND THEY ARE NOT A VERSION SEQUENCE. Flash (3.7/3.6/3.5, each with
@@ -279,6 +268,27 @@ PROFILE_REGISTRY: dict[str, dict[str, Any]] = {
             pool="gemini-prepaid",
             adapter_version="agy-cli-profile-v1",
         ),
+        # 2026-11-15 (owner decision): Gemini 4 Hydrogen replaces 3.8 Flash for cheap/mid after a
+        # fixture trial (judge replay MAE 1.182 vs 1.705; testgen 28/28 vs 17/28). Flash stays
+        # registered and addressable; PROFILE_RETIREMENTS sends automatic selection to Hydrogen.
+        _profile(
+            "gemini-4-hydrogen-high",
+            "gemini-4-hydrogen-high",
+            "high",
+            agent="gemini",
+            provider="google",
+            pool="gemini-prepaid",
+            adapter_version="agy-cli-profile-v1",
+        ),
+        _profile(
+            "gemini-4-hydrogen-low",
+            "gemini-4-hydrogen-low",
+            "low",
+            agent="gemini",
+            provider="google",
+            pool="gemini-prepaid",
+            adapter_version="agy-cli-profile-v1",
+        ),
         _profile(
             "gemini-3.1-pro-high",
             "gemini-3.1-pro-high",
@@ -310,6 +320,49 @@ PROFILE_REGISTRY: dict[str, dict[str, Any]] = {
         _profile(
             "gemini-4-argon-high",
             "gemini-4-argon-high",
+            "high",
+            agent="gemini",
+            provider="google",
+            pool="gemini-prepaid",
+            adapter_version="agy-cli-profile-v1",
+        ),
+        # Neon High is the normal full pin. Extra High and the planner/executor
+        # route need a named selection; the provider owns the latter's effort.
+        _profile(
+            "gemini-4-neon-high",
+            "gemini-4-neon-high",
+            "high",
+            agent="gemini",
+            provider="google",
+            pool="gemini-prepaid",
+            adapter_version="agy-cli-profile-v1",
+        ),
+        _profile(
+            "gemini-4-neon-xhigh",
+            "gemini-4-neon-xhigh",
+            "xhigh",
+            agent="gemini",
+            provider="google",
+            pool="gemini-prepaid",
+            adapter_version="agy-cli-profile-v1",
+            requires_explicit_selection=True,
+        ),
+        _profile(
+            "gemini-pro-orchestrator-neon",
+            "gemini-pro-orchestrator-neon",
+            None,
+            agent="gemini",
+            provider="google",
+            pool="gemini-prepaid",
+            adapter_version="agy-cli-profile-v1",
+            requires_explicit_selection=True,
+        ),
+        # Gemini 4 Carbon, the local frontier model (model table, 2026-11-10). Registered for the
+        # owner's live full-tier split against Argon (gemini_full_split.py, 2026-11-11). Automatic
+        # routing never picks it: router._automatic_profiles keeps only the tier's own model.
+        _profile(
+            "gemini-4-carbon-high",
+            "gemini-4-carbon-high",
             "high",
             agent="gemini",
             provider="google",
@@ -432,9 +485,16 @@ CREATE TABLE IF NOT EXISTS route_weights_v2 (
 PROFILE_RETIREMENTS: dict[str, str] = {
     "gemini-3.7-flash-high": "gemini-3.8-flash-high",
     "gemini-3.7-flash-low": "gemini-3.8-flash-low",
+    "gemini-3.8-flash-high": "gemini-4-hydrogen-high",
+    "gemini-3.8-flash-low": "gemini-4-hydrogen-low",
     "gemini-3.1-pro-high": "gemini-4-argon-high",
     "codex-5.6-sol-high": "codex-6.1-sol-high",
     "codex-5.6-sol-medium": "codex-6.1-sol-medium",
+    "codex-6.1-sol-low": "codex-6.2-sol-low",
+    "codex-6.1-sol-medium": "codex-6.2-sol-medium",
+    "codex-6.1-sol-high": "codex-6.2-sol-high",
+    "codex-6-astra-medium": "codex-6.2-astra-medium",
+    "codex-6-astra-high": "codex-6.2-astra-high",
     "codex-5.6-luna-high": "codex-6-luna-high",
     "codex-5.6-luna-low": "codex-6-luna-low",
 }
@@ -472,13 +532,13 @@ def _closer_candidate(agent: str, label: str, model: str | None) -> dict[str, An
 # The rows are never consumed by profiles_for_agent or automatic dispatch.
 CLOSER_CANDIDATE_MODELS = (
     _closer_candidate("codex", "Codex Luna", "gpt-6-luna"),
-    _closer_candidate("codex", "Codex Sol", "gpt-6.1-sol"),
-    _closer_candidate("codex", "Codex Astra", "gpt-6-astra"),
+    _closer_candidate("codex", "Codex Sol", "gpt-6.2-sol"),
+    _closer_candidate("codex", "Codex Astra", "gpt-6.2-astra"),
     _closer_candidate("claude", "Claude Haiku", "claude-haiku-4-5"),
     _closer_candidate("claude", "Claude Sonnet", "claude-sonnet-5-5"),
     _closer_candidate("claude", "Claude Opus", "claude-opus-5-5"),
-    _closer_candidate("gemini", "Gemini Flash low", "gemini-3.8-flash-low"),
-    _closer_candidate("gemini", "Gemini Flash high", "gemini-3.8-flash-high"),
+    _closer_candidate("gemini", "Gemini Hydrogen low", "gemini-4-hydrogen-low"),
+    _closer_candidate("gemini", "Gemini Hydrogen high", "gemini-4-hydrogen-high"),
     _closer_candidate("gemini", "Gemini Argon", "gemini-4-argon-high"),
     _closer_candidate("cursor", "Cursor Composer", "composer-2.5"),
     _closer_candidate("vibe", "Vibe Medium 3.5", "mistral-medium-3.5"),
@@ -588,14 +648,15 @@ def validate_profile(profile: dict[str, Any]) -> dict[str, Any]:
 
 def _selftest() -> None:
     for effort in ("low", "high"):
-        old = f"gemini-3.7-flash-{effort}"
-        current = f"gemini-3.8-flash-{effort}"
-        assert get_profile(old)["requested_model"] == old, "historical profiles stay immutable"
-        assert (
-            resolve_production_profile_id(old) == current
-        ), "historical Flash must resolve to Flash"
+        current = f"gemini-4-hydrogen-{effort}"
         routable = {p["profile_id"] for p in profiles_for_agent("gemini")}
-        assert current in routable and old not in routable, "current Flash must remain routable"
+        for old in (f"gemini-3.7-flash-{effort}", f"gemini-3.8-flash-{effort}"):
+            assert get_profile(old)["requested_model"] == old, "historical profiles stay immutable"
+            assert (
+                resolve_production_profile_id(old) == current
+            ), "historical Flash must resolve to Hydrogen"
+            assert old not in routable, "retired Flash must not be selected automatically"
+        assert current in routable, "current Hydrogen must remain routable"
     # Muse high/low share one existing subscription allowance pool.
     _mp = profiles_for_agent("muse", transport="offload")
     assert [p["profile_id"] for p in _mp] == ["muse-wonder-1.0", "muse-wonder-1.0-low"], _mp

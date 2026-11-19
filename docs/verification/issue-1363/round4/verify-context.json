@@ -1,0 +1,18 @@
+{
+  "revision": "790efac1cbf37f659c9e9dab8036c9fb29170369",
+  "origin_main": "2c945fa9d0340f9352c4f0efa7ccf1fab139fd75",
+  "python": "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+  "version": "3.14.10 (main, Oct 26 2026, 14:17:03) [GCC 15.2.0]",
+  "command": [
+    "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+    "src/verify.py"
+  ],
+  "overrides": {
+    "ORCH_STATE_DIR": "/tmp/orch-1365-verify-q81c7bg6/state",
+    "ORCH_LOCAL_RUNTIME": "/tmp/orch-1365-verify-q81c7bg6/runtime",
+    "HANDOFF_DIR": "/tmp/orch-1365-verify-q81c7bg6/handoff",
+    "PYTEST_ADDOPTS": "-m \"not slow\"",
+    "ORCH_VERIFY_JOBS": "8",
+    "PYTHONDONTWRITEBYTECODE": "1"
+  }
+}

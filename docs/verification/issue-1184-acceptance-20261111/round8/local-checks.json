@@ -1,0 +1,58 @@
+{
+  "checks": [
+    {
+      "name": "native recovery selector regression and existing JavaScript suite",
+      "chunk_id": "ea98e2",
+      "wall_time_seconds": 0.623567039,
+      "exit_code": 0,
+      "original_token_count": 337,
+      "output": "✔ actual exported initial builder forwards model mode and preserves full authentic request (28.572033ms)\n✔ freeform model requests are authentic while default checkbox admission remains structured (11.548428ms)\n✔ actual repeat builder retains original verdict and admits fresh required material once (12.426278ms)\n✔ actual pending builder retains uncertain effects and reenters only with skipped-step proof (113.878275ms)\n✔ invalid requests and unavailable diff evidence cannot start evaluation (3.258774ms)\n✔ actual builder preserves linked original requirements and refuses malformed linked source (3.329607ms)\n✔ CSV canary native verifier attempts require retained recovery, not another evaluation (2.324691ms)\n✔ CSV retained recovery command uses integer selectors bound to native source execution (1.071584ms)\n✔ native CSV verifier states require both the corrective head and published merge (95.36825ms)\n✔ native PR 984 corpus decision and successful workflows cannot complete PR 1168 (98.166543ms)\n✔ native unavailable CSV reports cannot turn provider concerns into a corpus decision (96.472281ms)\n✔ merged CSV canary acknowledgment does not substitute for stored corrective custody (96.415899ms)\nℹ tests 12\nℹ suites 0\nℹ pass 12\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 571.594416\n"
+    },
+    {
+      "name": "corrected CSV contract",
+      "chunk_id": "b14121",
+      "wall_time_seconds": 0.100458576,
+      "exit_code": 0,
+      "original_token_count": 3,
+      "output": "contract ok\n"
+    },
+    {
+      "name": "chain evidence",
+      "chunk_id": "837466",
+      "wall_time_seconds": 0.130791308,
+      "exit_code": 2,
+      "original_token_count": 44,
+      "output": "{\"completion\": \"incomplete\", \"reason\": \"[Errno 2] No such file or directory: '/home/runner/.codex/orchestrator/closer-core/completions/stranske_orchestrator_988_989.json'\"}\n"
+    },
+    {
+      "name": "JavaScript syntax",
+      "chunk_id": "2a8352",
+      "wall_time_seconds": 0.017360206,
+      "exit_code": 0,
+      "original_token_count": 0,
+      "output": ""
+    },
+    {
+      "name": "git diff --check",
+      "chunk_id": "f4d0ec",
+      "wall_time_seconds": 0.000002243,
+      "exit_code": 0,
+      "original_token_count": 0,
+      "output": ""
+    },
+    {
+      "name": "focused pytest",
+      "chunk_id": "d1e537",
+      "wall_time_seconds": 0.208639503,
+      "exit_code": 1,
+      "original_token_count": 66,
+      "output": "contract ok\n{\"completion\": \"incomplete\", \"reason\": \"[Errno 2] No such file or directory: '/home/runner/.codex/orchestrator/closer-core/completions/stranske_orchestrator_988_989.json'\"}\n/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3: No module named pytest\n",
+      "note": "Last command was python3 -m pytest tests/test_closer_csv_canary_contract.py -m 'not slow'; pytest is unavailable."
+    }
+  ],
+  "blocked_mutations": {
+    "pr_body": "MCP tool call requires approval, but approval policy is never",
+    "label": "MCP tool call requires approval, but approval policy is never",
+    "comment": "MCP tool call requires approval, but approval policy is never"
+  }
+}

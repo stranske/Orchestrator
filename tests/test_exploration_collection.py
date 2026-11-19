@@ -161,7 +161,7 @@ def test_filter_backlog_low_risk_and_sanitize_paths(monkeypatch):
         "assignments": [
             {"lane": "closer", "task_type": "implement", "agent": "codex", "exploration": True},
             {"lane": "opener", "task_type": "epic", "agent": "codex", "exploration": True},
-            {"lane": "opener", "task_type": "implement", "agent": "aider", "exploration": True},
+            {"lane": "opener", "task_type": "implement", "agent": "spare", "exploration": True},
             {
                 "lane": "opener",
                 "task_type": "implement",
@@ -172,7 +172,7 @@ def test_filter_backlog_low_risk_and_sanitize_paths(monkeypatch):
             {"lane": "opener", "task_type": "implement", "agent": "codex", "exploration": False},
         ]
     }
-    monkeypatch.setattr(router, "BACKUP_AGENTS", {"aider"})
+    monkeypatch.setattr(router, "BACKUP_AGENTS", {"spare"})
     clean, rejected = ec._sanitize_decision(decision, require_exploration=True)
     assert [row["reason"] for row in rejected] == [
         "not opener lane",

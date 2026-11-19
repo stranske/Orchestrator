@@ -1,0 +1,4 @@
+/opt/anaconda3/bin/python3: exists=False
+/Users/teacher/.codex/orchestrator: exists=False
+/Users/teacher/.codex/orchestrator-mirror: exists=False
+/home/runner/.codex/orchestrator: exists=False

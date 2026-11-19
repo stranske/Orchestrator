@@ -18,14 +18,15 @@ when any instance has no token count. ``run-current`` is the live read-only
 execution of that plan: six ``codex exec --sandbox read-only`` arms on the
 frozen spec. Transport acknowledgement requires four binding lines in the final
 message; recurring-work quality is scored separately from a read-only rubric
-on the frozen specification text. The prompt names the line to quote and does
-not include the completed ``work_evidence=`` answer. Cost is token counts from
-the session stream. Provider identity is taken from a ``response.completed``
-OpenAI response object, or from ``turn.completed``'s ``server_model`` field
-when the CLI copied it from provider response metadata. ``--model``, argv,
-``turn_context``, and a generic ``model`` field on ``turn.completed`` are not
-that witness. Current subscription sessions omit both, and ``run-current``
-then refuses and writes nothing. ``--selftest`` exercises
+on the frozen specification text. The rubric checks the positions and word
+counts of up to two specification lines. Cost is token counts from
+the session stream. ``response.completed`` and ``turn.completed.server_model``
+provide unverified model claims. Verified ingestion additionally requires a
+provider response retrieved through an independently trusted runtime lookup;
+session fields and artifact digests cannot establish that provenance. The CLI
+has no trusted provider collector and records session measurements as unverified
+without a verified-ingest marker. Sessions without model claims are refused.
+``--selftest`` exercises
 prepare, validation, and reporting fully offline.
 """
 
@@ -164,9 +165,12 @@ FROZEN_PACKET = {
 }
 IDENTITY_EVIDENCE_SCHEMA = "orchestrator.model-identity-evidence"
 IDENTITY_EVIDENCE_VERSION = 1
+UNVERIFIED_SESSION_AUTHORITY = "codex-session-unverified/v1"
+# Accepted evidence formats, not a source of provider trust.
 IDENTITY_AUTHORITIES = {
     "workflows-read-only-trial-artifact/v1",
     "openai-response-metadata/v1",
+    UNVERIFIED_SESSION_AUTHORITY,
 }
 IDENTITY_EVIDENCE_FIELDS = {
     "schema",
@@ -763,7 +767,7 @@ def _validate_results(manifest: dict[str, Any], results: dict[str, Any]) -> list
         ):
             raise ValueError("trial attempt identity evidence schema is unsupported")
         if evidence.get("authority") not in IDENTITY_AUTHORITIES:
-            raise ValueError("trial attempt identity authority is not trusted")
+            raise ValueError("trial attempt identity authority is unsupported")
         if not str(evidence.get("artifact_ref") or "").strip():
             raise ValueError("trial attempt identity evidence has no artifact reference")
         artifact_hash = str(evidence.get("artifact_sha256") or "")
@@ -847,7 +851,21 @@ def _require_consistent_source_seal(manifest: dict[str, Any]) -> None:
             raise ValueError(f"trial source manifest aggregate does not match its entries:{name}")
 
 
-def _authoritative_identity_verified(attempts: list[dict[str, Any]]) -> bool:
+def _authoritative_identity_verified(
+    attempts: list[dict[str, Any]],
+    *,
+    provider_response_lookup: Callable[[str], dict[str, Any] | None] | None = None,
+) -> bool:
+    """Bind local measurements to a response obtained through a trusted channel.
+
+    The lookup is supplied by trusted application code, never by the result JSON.
+    It must authenticate provider provenance independently of the session and its
+    artifacts. There is currently no such collector in the CLI, so it fails closed.
+    A response-shaped object, authority label, or digest is not provenance.
+    """
+    if not attempts or provider_response_lookup is None:
+        return False
+    response_ids: set[str] = set()
     for attempt in attempts:
         evidence = attempt.get("identity_evidence")
         if not isinstance(evidence, dict):
@@ -862,7 +880,10 @@ def _authoritative_identity_verified(attempts: list[dict[str, Any]]) -> bool:
         if not re.fullmatch(r"sha256:[0-9a-f]{64}", expected_hash):
             return False
         try:
-            raw = artifact_path.read_bytes()
+            # Read one byte beyond the limit to detect oversized evidence without
+            # loading the rest of an untrusted artifact into memory.
+            with artifact_path.open("rb") as artifact_stream:
+                raw = artifact_stream.read(64 * 1024 + 1)
             if len(raw) > 64 * 1024:
                 return False
             actual_hash = "sha256:" + hashlib.sha256(raw).hexdigest()
@@ -878,15 +899,64 @@ def _authoritative_identity_verified(attempts: list[dict[str, Any]]) -> bool:
         for field in ("profile_id", "provider_resolved_provider", "provider_resolved_model"):
             if not attempt.get(field) or artifact.get(field) != attempt[field]:
                 return False
+        # Older artifacts omit these bindings. When present, they must agree
+        # exactly, including count types; a recomputed digest authenticates none
+        # of them. Independent provider confirmation is still required below.
+        for field in ("run_id", "packet_hash", "tokens_in", "tokens_out"):
+            if field in artifact and (
+                type(artifact[field]) is not type(attempt.get(field))
+                or artifact[field] != attempt.get(field)
+            ):
+                return False
+        response_id = artifact.get("response_id")
+        if (
+            artifact.get("object") != "response"
+            or not isinstance(response_id, str)
+            or not re.fullmatch(r"resp_[A-Za-z0-9]+", response_id)
+            or response_id in response_ids
+            or attempt.get("provider_resolved_provider") != "openai"
+        ):
+            return False
+        response_ids.add(response_id)
+        response = provider_response_lookup(response_id)
+        if not isinstance(response, dict):
+            return False
+        if any(
+            response.get(field) != expected
+            for field, expected in {
+                "object": "response",
+                "id": response_id,
+                "status": "completed",
+                "model": attempt["provider_resolved_model"],
+                "metadata": {
+                    "run_id": attempt.get("run_id"),
+                    "profile_id": attempt["profile_id"],
+                    "packet_hash": attempt.get("packet_hash"),
+                },
+            }.items()
+        ):
+            return False
+        usage = response.get("usage")
+        if not isinstance(usage, dict):
+            return False
+        for attempt_field, usage_field in (
+            ("tokens_in", "input_tokens"),
+            ("tokens_out", "output_tokens"),
+        ):
+            value = usage.get(usage_field)
+            if type(value) is not int or value < 0 or value != attempt.get(attempt_field):
+                return False
     return True
 
 
 def _require_verified_identity_for_ingest(
-    results: dict[str, Any], attempts: list[dict[str, Any]]
+    results: dict[str, Any],
+    *,
+    identity_verified: bool,
 ) -> None:
     if results.get("identity_verified") is not True:
         raise ValueError("trial ingest refused: worker identity is unverified")
-    if not _authoritative_identity_verified(attempts):
+    if not identity_verified:
         raise ValueError("trial ingest refused: identity evidence is not authoritative")
 
 
@@ -1011,9 +1081,17 @@ def recurring_trial_prompt(manifest: dict[str, Any], request: dict[str, Any]) ->
         + "\nDo not edit, create, commit, or push files.\n"
         + "First, return exactly these four lines (transport acknowledgement), then a blank line, "
         "then one line of recurring-work evidence.\n"
-        + "The evidence line must be `work_evidence=` followed by one line copied verbatim "
-        'from the frozen specification below: the line that begins with "Acceptance criteria:" '
-        "if there is one; otherwise the first non-empty line of the specification.\n"
+        + "Number the frozen specification's physical lines starting at 1, including blanks. "
+        'Find the first line starting with "Acceptance criteria:" (case-insensitive, '
+        "ignoring indentation). Select its text after the colon if nonempty, then successive "
+        "nonblank lines below it up to a hash-style Markdown heading (one to six # "
+        "characters followed by whitespace or end of line), for at most two selections. "
+        "Skip blank lines before the first selection and stop at a blank after it. "
+        "If the criteria block supplies no text or there is no label, select the first "
+        "two nonblank lines other than the empty label. Count whitespace-separated tokens "
+        "in each selection, including any standalone list markers. Return "
+        "`work_evidence=` followed by comma-separated `line_number:word_count` pairs "
+        "in source order, with no spaces.\n"
         + "Do not add any other text.\n"
         + "\n".join(lines)
         + "\n\nFrozen specification:\n"
@@ -1021,39 +1099,47 @@ def recurring_trial_prompt(manifest: dict[str, Any], request: dict[str, Any]) ->
     )
 
 
-def _recurring_work_rubric_line(spec: str) -> str:
-    """One spec line that read-only work quality must quote verbatim."""
-    for line in spec.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("Acceptance criteria:"):
-            return stripped
-    for line in spec.splitlines():
-        stripped = line.strip()
-        if stripped:
-            return stripped
-    raise ValueError("frozen specification has no line for the work-quality rubric")
+def _recurring_work_rubric(spec: str) -> str:
+    """Expected line-number and word-count pairs for the bounded spec task."""
+    lines = [(number, line.strip()) for number, line in enumerate(spec.splitlines(), 1)]
+    label = "acceptance criteria:"
+    criteria = []
+    for index, (number, line) in enumerate(lines):
+        if not line.lower().startswith(label):
+            continue
+        inline = line[len(label) :].strip()
+        if inline:
+            criteria.append((number, inline))
+        for next_number, continuation in lines[index + 1 :]:
+            if len(criteria) == 2 or re.match(r"#{1,6}(?:\s|$)", continuation):
+                break
+            if continuation:
+                criteria.append((next_number, continuation))
+            elif criteria:
+                break
+        break
+    selected = (
+        criteria or [(number, line) for number, line in lines if line and line.lower() != label][:2]
+    )
+    return ",".join(f"{number}:{len(line.split())}" for number, line in selected)
 
 
 def _work_quality_score(manifest: dict[str, Any], final_text: str) -> float:
-    """1.0 when the final message proves the rubric line; identifier echo alone scores 0."""
+    """Score a single evidence line against the exact computed answer."""
     packet = manifest.get("frozen_packet")
     if not isinstance(packet, dict):
         return 0.0
     spec = packet.get("frozen_spec")
     if not isinstance(spec, str) or not spec.strip():
         return 0.0
-    try:
-        rubric = _recurring_work_rubric_line(spec)
-    except ValueError:
-        return 0.0
-    text = final_text or ""
+    rubric = _recurring_work_rubric(spec)
     prefix = "work_evidence="
-    for raw in text.splitlines():
-        line = raw.strip()
-        if line.startswith(prefix):
-            quoted = line[len(prefix) :].strip()
-            return 1.0 if quoted == rubric else 0.0
-    return 0.0
+    answers = [
+        line[len(prefix) :]
+        for raw in (final_text or "").splitlines()
+        if (line := raw.strip()).startswith(prefix)
+    ]
+    return float(bool(rubric) and answers == [rubric])
 
 
 def _acknowledgement_score(
@@ -1061,9 +1147,8 @@ def _acknowledgement_score(
 ) -> tuple[bool, float]:
     """Transport acknowledgement (four lines) and recurring-work quality (rubric), separately.
 
-    All four binding lines must appear for acknowledgement. Work quality does not
-    use identifier-echo density: it is 1.0 only when ``work_evidence=`` carries the
-    rubric line verbatim.
+    All four binding lines must appear for acknowledgement. Work quality is 1.0
+    only when ``work_evidence=`` supplies the computed line-number and word-count pairs.
     """
     packet = manifest["frozen_packet"]
     required = (
@@ -1257,16 +1342,20 @@ def measure_codex_session(
 
 def _identity_artifact(directory: Path, request: dict[str, Any], measured: dict[str, Any]) -> dict:
     payload: dict[str, Any] = {
+        "provenance": UNVERIFIED_SESSION_AUTHORITY,
+        "run_id": request["run_id"],
+        "packet_hash": request["packet_hash"],
         "profile_id": request["profile_id"],
         "provider_resolved_model": measured["model"],
         "provider_resolved_provider": measured["provider"],
+        "tokens_in": measured["tokens_in"],
+        "tokens_out": measured["tokens_out"],
     }
     if measured.get("response_id"):
         payload["object"] = "response"
         payload["response_id"] = measured["response_id"]
     else:
-        # server_model is the provider id on turn.completed. It is not an
-        # OpenAI response id, so the artifact must not invent a resp_ value.
+        # This is a session claim, not an independently authenticated response.
         payload["object"] = "turn.completed"
         payload["server_model"] = measured["model"]
     path = directory / f"identity-{int(request['launch_ordinal'])}.json"
@@ -1275,7 +1364,7 @@ def _identity_artifact(directory: Path, request: dict[str, Any], measured: dict[
     return {
         "schema": IDENTITY_EVIDENCE_SCHEMA,
         "version": IDENTITY_EVIDENCE_VERSION,
-        "authority": "openai-response-metadata/v1",
+        "authority": UNVERIFIED_SESSION_AUTHORITY,
         "artifact_ref": str(path),
         "artifact_sha256": digest,
     }
@@ -1289,7 +1378,11 @@ def results_from_codex_sessions(
     cli_version: str,
     runner_version: str,
 ) -> dict[str, Any]:
-    """Build trial results from six session transcripts. Writes nothing on refusal."""
+    """Build explicitly unverified measurements from session transcripts.
+
+    Session fields are useful measurements, but cannot authenticate their own
+    provider provenance. Writes nothing when measurement validation refuses.
+    """
     by_run = {row.get("run_id"): row for row in sessions}
     requests = list(manifest.get("requests") or [])
     if set(by_run) != {row["run_id"] for row in requests} or len(sessions) != len(requests):
@@ -1338,7 +1431,7 @@ def results_from_codex_sessions(
         "trial_id": manifest["trial_id"],
         "packet_hash": manifest["packet_hash"],
         "acknowledged": True,
-        "identity_verified": True,
+        "identity_verified": False,
         "attempts": attempts,
         "quality_by_profile": {
             profile_id: sum(scores) / len(scores) for profile_id, scores in qualities.items()
@@ -1500,13 +1593,16 @@ def publish_measured_recurring_trial(
     *,
     state_path: Path | None = None,
     now: int | None = None,
+    provider_response_lookup: Callable[[str], dict[str, Any] | None] | None = None,
 ) -> dict[str, Any]:
     """Record one measured two-profile, three-instance trial of the sealed spec.
 
     This does not execute a worker. The attempts must already carry provider-resolved
     identity and a nonnegative token count in both directions. A missing count is
     refused before any feedback row or program summary is written, so an unmeasured
-    arm cannot be stored as zero.
+    arm cannot be stored as zero. Explicitly unverified measurements are recorded
+    without a verified-ingest marker. A claimed verified result must pass the
+    independent provider lookup before any writes.
     """
     packet = manifest.get("frozen_packet")
     if (
@@ -1546,8 +1642,10 @@ def publish_measured_recurring_trial(
         manifest,
         results,
         state_path=state_path,
-        ingest_brain=True,
+        record_feedback=True,
+        ingest_brain=results.get("identity_verified") is True,
         now=now,
+        provider_response_lookup=provider_response_lookup,
     )
 
 
@@ -1559,6 +1657,7 @@ def finalize_trial(
     record_feedback: bool = False,
     ingest_brain: bool = False,
     now: int | None = None,
+    provider_response_lookup: Callable[[str], dict[str, Any] | None] | None = None,
 ) -> dict[str, Any]:
     """Validate source integrity, record instrumentation, and prove no learning writes."""
     validate_trial_manifest(manifest)
@@ -1579,18 +1678,29 @@ def finalize_trial(
     if not source_unchanged:
         raise ValueError("source integrity changed during read-only trial")
 
-    if ingest_brain:
-        _require_verified_identity_for_ingest(results, attempts)
     identity_verified = results.get(
         "identity_verified"
-    ) is True and _authoritative_identity_verified(attempts)
+    ) is True and _authoritative_identity_verified(
+        attempts, provider_response_lookup=provider_response_lookup
+    )
+    if ingest_brain:
+        _require_verified_identity_for_ingest(results, identity_verified=identity_verified)
     quality_by_profile = _validated_quality_by_profile(results, attempts)
+
+    # Sanitize every output, including runs that do not record feedback.
+    if not identity_verified:
+        attempts = [
+            {**attempt, "provider_resolved_provider": None, "provider_resolved_model": None}
+            for attempt in attempts
+        ]
 
     write_feedback = record_feedback or ingest_brain
     weights_before = _weight_snapshot() if write_feedback else {}
     recorded_attempt_ids: list[str] = []
     brain_ingest_enabled = False
+    ingest_status = None
     if write_feedback:
+        # Session identity is a claim until the independent lookup confirms it.
         ingest_payload = feedback.ingest_profile_trial(
             results,
             manifest=manifest,
@@ -1612,7 +1722,12 @@ def finalize_trial(
                 and existing_summary is not None
                 and existing_summary.get("trial_id") == manifest.get("trial_id")
             )
-            if not ingest_brain and same_trial_measured:
+            replacement_measured = any(
+                attempt.get(field) is not None
+                for attempt in attempts
+                for field in ("tokens_in", "tokens_out")
+            )
+            if not ingest_brain and same_trial_measured and not replacement_measured:
                 preserved = existing_summary or {}
                 preserved_quality = preserved.get("quality_by_profile")
                 if not isinstance(preserved_quality, dict):
@@ -1637,6 +1752,20 @@ def finalize_trial(
     weights_after = _weight_snapshot() if write_feedback else {}
     if weights_after != weights_before:
         raise AssertionError("instrumentation trial altered route weights")
+
+    if ingest_status == "already_ingested":
+        # A retry wrote no rows; do not replace the committed trial state.
+        if state_path:
+            committed = build_report(state_path)
+            if committed.get("trial_id") == manifest["trial_id"]:
+                return {key: value for key, value in committed.items() if key != "path"}
+        # The marker certifies the prior ingest, not this retry's measurements.
+        identity_verified = False
+        brain_ingest_enabled = False
+        attempts = [
+            {**attempt, "provider_resolved_provider": None, "provider_resolved_model": None}
+            for attempt in attempts
+        ]
 
     debit = capacity.debit_profile_pools(
         [
@@ -1680,9 +1809,10 @@ def finalize_trial(
             "after": weights_after,
         },
         "brain_ingest_enabled": brain_ingest_enabled,
+        "identity_verified": identity_verified,
         "next_action": "retain_shadow_and_collect_only_productive_outcomes",
     }
-    if state_path:
+    if state_path and ingest_status != "already_ingested":
         roots = [Path(value["root"]) for value in manifest["source_before"].values()]
         ensure_artifact_outside_sources(state_path, roots)
         _atomic_json(state_path, state)
@@ -2047,7 +2177,7 @@ def _selftest() -> None:
         "(prepare/source proof, accept/reject validation, shadow report/no promotion, "
         "forged source seal refuses ingest, frozen spec binds the two-by-three plan "
         "and its published summary, CLI turn_context and turn.completed model are "
-        "not provider identity, server_model is)"
+        "not provider identity; session model claims need independent provenance)"
     )
 
 

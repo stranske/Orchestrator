@@ -46,7 +46,7 @@ cursor-agent live outside the default PATH):
 `export PATH="/opt/homebrew/bin:$HOME/.local/bin:$HOME/.cursor/bin:$PATH"`
 
 - **Assess capacity** — `python3 src/capacity.py` → per-agent `{ok|warn|shed}`. Who has headroom right
-  now? (codex/claude default OK + 429-shed; cursor=free/unlimited; vibe=subscription; aider=paygo (LOCAL_POLICY.md).)
+  now? (codex/claude default OK + 429-shed; cursor=free/unlimited; vibe=subscription; muse=subscription, late seat.)
   A shed seat's reason says what clears it: the expiry (UTC), incident and category of a cooldown or
   a provider's stated reset, or, for a marker with no readable expiry, that it is manual and the path
   to remove. The weekly `switch_review` names every marker the same way.
@@ -78,7 +78,7 @@ cursor-agent live outside the default PATH):
   (ready issues + in-flight agent PRs across the fleet; scope-blocked excluded). `--live` refreshes.
 - **Consult the rule-based prior (OPTIONAL)** — `python3 src/router.py --dry-run` → what a deterministic
   planner *would* do. A second opinion to weigh, not an instruction. Ignore it when your read differs.
-- **Delegate one task** — `python3 src/dispatcher.py delegate --agent <cursor|vibe|codex|claude|aider>
+- **Delegate one task** — `python3 src/dispatcher.py delegate --agent <cursor|vibe|codex|claude|gemini|muse>
   --target <owner/repo#N> --lane <opener|closer> (--prompt "<text>" | --prompt-file <file>)`
   → `{pid, log, worktree}`.
   This claims the target, provisions a LOCAL-disk worktree, and spawns the agent **detached** with
@@ -103,7 +103,7 @@ cursor-agent live outside the default PATH):
   but its gh keeps the config the dispatcher's gh reads (`GH_CONFIG_DIR`, `dispatcher.gh_config_dir`), so
   `gh` uses the same credential source when its credential store is accessible. Relative config
   paths are anchored to the dispatcher's cwd, and the prelude exports only that path. Gemini/AGY print mode passes an explicit requested model
-  (`ORCH_GEMINI_MODEL`, default the shared model table's `full` tier, `gemini-4-argon-high`) because Antigravity 1.0.10 can otherwise exit 0 with no
+  (`ORCH_GEMINI_MODEL`, default the shared model table's `full` tier, `gemini-4-neon-high`) because Antigravity 1.0.10 can otherwise exit 0 with no
   stdout and only log "neither PlanModel nor RequestedModel specified". Gemini offloads also fail closed
   when stdout is only a progress/deferred-status update (for example, "waiting for pytest; I will inspect
   later" or "waiting for task-85 to finish"); the CLI exits nonzero, records the error in the dispatch
@@ -307,7 +307,16 @@ cursor-agent live outside the default PATH):
   `merge_guard.py` treats those same labels on the PR, or a spec at
   `~/.codex/orchestrator/runtime-ac/<target-slug>.json`, as a required runtime-AC gate: a dry run
   reports it; an active merge blocks until a spec exists, `ORCH_RUN_RUNTIME_AC=1` is set, and the gate
-  returns `PASS`. (`tick.py` ran the same gate before a remote delegation no closer item can reach,
+  returns `PASS`. Gate's `pr-00-gate.yml` applies the `acceptance-criteria` label when a PR carries a
+  deliberate-break marker, so the question is whether the PR's own executable proof holds on the code
+  that will merge. Given the exact head (merge_guard passes `--expected-head`), the gate runs the spec in
+  a disposable checkout of that commit, measures each deliberate break against the merge base with
+  `origin/main`, and returns `PASS` only when every executable check passes. Manual criteria are
+  reported for the closer's judge and never block; a manual-only spec returns `MANUAL_ONLY`. The checks
+  run state-free, as CI runs the suite (`ORCH_STATE_DIR` and `ORCH_LOCAL_RUNTIME` pointed at empty
+  directories), so a test that reads this machine's live ledger skips here exactly as in CI. A check
+  whose tests skip that way returns `UNVERIFIABLE_BEFORE_MERGE` with the skip reasons for the judge, never
+  a block; real failures and hollow breaks whose tests ran still block. (`tick.py` ran the same gate before a remote delegation no closer item can reach,
   until 2026-10-05; it no longer examines closer items.) Command/non-regression
   checks still require `ORCH_RUNTIME_AC_ALLOW_COMMANDS=1`; `ORCH_RUNTIME_AC_TIMEOUT` sets the per-check
   timeout. This is a **hard opt-in machine gate**, not an advisory review: only explicitly labeled or
@@ -397,8 +406,8 @@ cursor-agent live outside the default PATH):
   by default so fleet artifacts cannot pollute the learner.
 - **Pull direct LangSmith API telemetry (NEW)** — `python3 src/langsmith_direct.py --dry-run --json`
   previews, and `python3 src/langsmith_direct.py --ingest [--json]` writes, `workflows-agents` telemetry from
-  LangSmith's API into the same `langsmith-fleet/v1` join path used by `langsmith_pull.py`. It uses the
-  official SDK when installed and otherwise falls back to stdlib HTTP (`/sessions` + `/runs/query`), so the
+  LangSmith's API into the same `langsmith-fleet/v1` join path used by `langsmith_pull.py`. It uses
+  stdlib HTTP (`/sessions` + `/api/v2/runs/query`) regardless of installed SDK version, so the
   daily cadence does not depend on a global package install. The API key comes from `LANGSMITH_API_KEY`,
   `LANGCHAIN_API_KEY`, or `~/.codex/credentials/langsmith_api_key`.
 - **Fetch LangSmith fleet artifacts (NEW)** — `python3 src/langsmith_fetch.py --ingest [--json]` reads the
@@ -627,7 +636,7 @@ The older high-effort trial IDs remain available explicitly.
 **Gemini / Antigravity — read before routing to it (this is the economics, your job):** it's a *reasoning* seat (≈ second tier; not for the hardest problems), but it is **compute-metered** (cost scales with complexity/history length) and runs on a **prepaid-compute model**: a 5-hour refresh window plus a broader weekly soft budget. `capacity.py` has no provider usage API, so it estimates units from the local ledger, exposes `steady` / `reserve` / `drain` policy metadata, and treats an observed 429/rate-limit shed flag as authoritative. Therefore:
 - **Never give it small/mechanical/polish work** — free seats (composer/vibe) do those.
 - **Give it substantial, self-contained reasoning tasks** that justify a unit, keeping context tight.
-- `ORCH_GEMINI_MODEL` controls the requested AGY model; the default is the shared model table's `full` tier (`src/model_table.py`, currently `gemini-4-argon-high`).
+- `ORCH_GEMINI_MODEL` controls the requested AGY model; the default is the shared model table's `full` tier (`src/model_table.py`, currently `gemini-4-neon-high`). Name `gemini-4-argon-high`, `gemini-4-neon-xhigh`, or `gemini-pro-orchestrator-neon` with `--profile` to select one explicitly.
 - **Under the drain policy**, it is promoted for good-fit `implement`, `testgen`, `epic`, `cross_repo`, `runtime_ac`, and reasoning `review` work so prepaid window headroom is not wasted.
 - **Under the reserve policy**, it is demoted behind normal `ok` seats but remains available before late/pay-go fallback lanes when the task is a good fit.
 - Soft caps are `warn`, not hard unavailability. When Gemini is `warn` for `window-soft-cap`,

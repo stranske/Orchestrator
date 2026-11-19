@@ -1,0 +1,191 @@
+PYTHON=/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3 node tests/test_audit_provision_ledger.js
+Exit: 0
+✔ recounts active and archived failures with multiplicity and exact seven-day boundaries (74.554692ms)
+✔ an archived-only ledger is measured; absent ledger stays unmeasured (109.971903ms)
+✔ empty intact observed week can qualify only ledger evidence (54.560995ms)
+✔ preserves the existing collector owner exclusion before parsing and hashing (57.621852ms)
+✔ malformed torn data cannot become an intact zero (57.748443ms)
+✔ malformed broken data cannot become an intact zero (56.898961ms)
+✔ malformed null data cannot become an intact zero (56.780884ms)
+✔ malformed array data cannot become an intact zero (58.279624ms)
+✔ malformed naive data cannot become an intact zero (57.044432ms)
+✔ malformed outcome data cannot become an intact zero (56.763647ms)
+✔ segment delete after observation requires a fresh collector receipt (57.238724ms)
+✔ segment rewrite after observation requires a fresh collector receipt (57.370783ms)
+✔ segment append after observation requires a fresh collector receipt (58.058245ms)
+✔ segment duplicate after observation requires a fresh collector receipt (57.551236ms)
+✔ segment rotate after observation requires a fresh collector receipt (58.059753ms)
+✔ inconsistent collector baseline fails closed (57.728693ms)
+✔ inconsistent collector coverage fails closed (56.916919ms)
+✔ inconsistent collector continuity fails closed (58.454789ms)
+✔ inconsistent collector gap fails closed (64.245268ms)
+✔ inconsistent collector counts fails closed (58.808257ms)
+✔ inconsistent collector timestamp fails closed (57.073014ms)
+✔ inconsistent collector window fails closed (59.148876ms)
+✔ inconsistent collector source fails closed (57.325455ms)
+✔ inconsistent collector collector fails closed (58.649973ms)
+✔ inconsistent collector readiness fails closed (58.700929ms)
+✔ missing or malformed receipt cannot infer continuity from old events (65.230589ms)
+✔ a stale or future receipt cannot qualify and timestamps retain microseconds (56.994596ms)
+✔ reads all inputs without writing and CLI status distinguishes unmet evidence (130.425909ms)
+✔ fresh observed legitimate refusals remain unmet after successful retries in both lanes (104.861479ms)
+✔ a refusal ages out only after a fresh observation with every archive retained (104.230232ms)
+✔ a fresh collector observation after archive loss cannot qualify a zero-refusal window (106.26737ms)
+✔ source absence and nonregular segments are UNKNOWN without following symlinks (56.901856ms)
+✔ rejects malformed empty counts [] (61.588415ms)
+✔ rejects malformed empty counts "" (65.233653ms)
+✔ rejects malformed empty counts 0 (62.836523ms)
+✔ rejects malformed empty counts null (55.84378ms)
+✔ compares relative collector segment paths by their filesystem identity (54.997183ms)
+✔ rejects an unrelated zero ledger when the writer is outside (55.199278ms)
+✔ rejects an unrelated zero ledger when the writer is renamed (54.768068ms)
+✔ rejects an unrelated zero ledger with a separate writer configured runtime (78.587175ms)
+✔ rejects an unrelated zero ledger with a separate writer home runtime (77.761028ms)
+ℹ tests 41
+ℹ suites 0
+ℹ pass 41
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2715.083012
+
+PYTHON=/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3 node tests/test_provision_native_witnesses.js
+Exit: 0
+✔ binds named native verdicts, commit, mirror manifest, commands and unchanged floor (133.821053ms)
+✔ full suites bind independent default/native collections to all executed JUnit verdicts (292.315639ms)
+✔ named witnesses cannot mask an incomplete full suite: {"suiteFailure":"default"} (297.876396ms)
+✔ named witnesses cannot mask an incomplete full suite: {"suiteFailure":"native"} (306.24905ms)
+✔ named witnesses cannot mask an incomplete full suite: {"suiteFailure":"native","failureTag":"failure"} (304.628906ms)
+✔ named witnesses cannot mask an incomplete full suite: {"suiteFailure":"native","failureTag":"error"} (312.728613ms)
+✔ named witnesses cannot mask an incomplete full suite: {"suiteOmission":true} (286.808036ms)
+✔ named witnesses cannot mask an incomplete full suite: {"suiteExtra":true} (302.020948ms)
+✔ named witnesses cannot mask an incomplete full suite: {"suiteWrongClass":true} (280.508486ms)
+✔ named witnesses cannot mask an incomplete full suite: {"emptyCollection":true} (283.355534ms)
+✔ named witnesses cannot mask an incomplete full suite: {"duplicateCollection":true} (282.131046ms)
+✔ named witnesses cannot mask an incomplete full suite: {"collectionExit":1} (288.644076ms)
+✔ named witnesses cannot mask an incomplete full suite: {"collectionWrongFile":true} (283.433616ms)
+✔ changed inputs invalidate both full suites as well as named witnesses (279.395782ms)
+✔ full-suites CLI exits nonzero when the witnesses pass but a full suite fails (635.171072ms)
+✔ cannot credit an incomplete or changed run: {"missing":true} (54.657204ms)
+✔ cannot credit an incomplete or changed run: {"noXml":true} (53.419652ms)
+✔ cannot credit an incomplete or changed run: {"malformed":true} (114.443605ms)
+✔ cannot credit an incomplete or changed run: {"skip":true} (105.35009ms)
+✔ cannot credit an incomplete or changed run: {"omit":true} (107.50856ms)
+✔ cannot credit an incomplete or changed run: {"duplicate":true} (105.280775ms)
+✔ cannot credit an incomplete or changed run: {"exit":1} (108.916709ms)
+✔ cannot credit an incomplete or changed run: {"mutate":true} (105.929313ms)
+✔ cannot credit an incomplete or changed run: {"extra":true} (102.989544ms)
+✔ refuses drift, missing inputs, symlinks and a floor unequal to origin/main before testing (111.773823ms)
+✔ unrelated, duplicate, skipped or vacuous verdicts do not prove the witnesses (0.177277ms)
+✔ refuses extra importable modules and test inputs before executing pytest (414.852666ms)
+✔ copies only bound inputs from a published layout with retained runtime links (286.957596ms)
+✔ omits documented runtime output and regular bytecode from the manifest and private tree (44.303477ms)
+✔ runtime exclusions do not admit importable inputs at similar or nested paths (207.10836ms)
+✔ uses an external interpreter backing a retained mirror virtual environment (282.701653ms)
+✔ rejects an interpreter directory alias resolving inside the mirror (21.549778ms)
+✔ rejects symlinks in code, tests and configuration, including cache lookalikes (161.287009ms)
+✔ requires explicit interpreter, revision and receipt location outside the mirror (20.810108ms)
+✔ inherited PYTHONPATH cannot substitute an imported module (123.582159ms)
+✔ retains JUnit reader failure diagnostics: {"readerExit":37} (200.516704ms)
+✔ retains JUnit reader failure diagnostics: {"readerInvalidJson":true} (198.341757ms)
+✔ retains JUnit reader failure diagnostics: {"malformed":true} (325.351259ms)
+✔ a missing JUnit file retains the pytest failure without inventing a reader command (61.247839ms)
+ℹ tests 39
+ℹ suites 0
+ℹ pass 39
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 7896.078246
+
+Isolated unmodified auditor, only the fresh-observation regression registered
+Exit: 0
+✔ a refusal ages out only after a fresh observation with every archive retained (105.679266ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 108.709907
+
+Isolated auditor mutation: use instant(now) instead of observedEnd for the count window
+Exit: 1
+✖ a refusal ages out only after a fresh observation with every archive retained (72.57805ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 75.602401
+
+✖ failing tests:
+
+test at tests/test_audit_provision_ledger.js:8:104
+✖ a refusal ages out only after a fresh observation with every archive retained (72.57805ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  0 !== 1
+  
+      at TestContext.<anonymous> (/tmp/orch-1363-round3/receipt-window-mutation/tests/test_audit_provision_ledger.js:272:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+Isolated unmodified collector, only the archive-loss regression registered
+Exit: 0
+✔ a fresh collector observation after archive loss cannot qualify a zero-refusal window (108.18142ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 111.216017
+
+Isolated collector mutation: omit available.remove when matching prior segment prefixes
+Exit: 1
+✖ a fresh collector observation after archive loss cannot qualify a zero-refusal window (106.993579ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 109.999794
+
+✖ failing tests:
+
+test at tests/test_audit_provision_ledger.js:8:103
+✖ a fresh collector observation after archive loss cannot qualify a zero-refusal window (106.993579ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /previous ledger prefix missing or rewritten/. Input:
+  
+  ''
+  
+      at TestContext.<anonymous> (/tmp/orch-1363-round3/archive-multiplicity-mutation/tests/test_audit_provision_ledger.js:299:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: '',
+    expected: /previous ledger prefix missing or rewritten/,
+    operator: 'match',
+    diff: 'simple'
+  }

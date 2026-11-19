@@ -1,0 +1,4 @@
+Command: ['node', '--check', 'tests/test_audit_provision_ledger.js']
+Exit: 0
+Command: ['git', 'diff', '--check']
+Exit: 0

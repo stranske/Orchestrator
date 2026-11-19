@@ -131,7 +131,6 @@ def test_ingest_is_one_transaction_and_a_mid_write_failure_leaves_nothing(
     tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture, writer, fail_on
 ):
     _use_temp_feedback(tmp_path, monkeypatch)
-    attempts = model_profile_trial._validate_results(trial_manifest, trial_attempt_fixture)
     calls = {"n": 0}
     original = getattr(feedback, writer)
 
@@ -144,12 +143,8 @@ def test_ingest_is_one_transaction_and_a_mid_write_failure_leaves_nothing(
 
     monkeypatch.setattr(feedback, writer, flaky)
     with pytest.raises(RuntimeError, match="simulated mid-write"):
-        feedback.ingest_profile_trial(
-            trial_attempt_fixture,
-            manifest=trial_manifest,
-            attempts=attempts,
-            auxiliary_traces=trial_attempt_fixture["auxiliary_traces"],
-            ts=2_000,
+        model_profile_trial.finalize_trial(
+            trial_manifest, trial_attempt_fixture, record_feedback=True, now=2_000
         )
     assert calls["n"] == fail_on
     with feedback._conn() as conn:
@@ -373,13 +368,26 @@ def test_finalize_refuses_ingest_when_identity_verified_is_omitted(
 
 
 def _bind_authoritative_identity(tmp_path, trial_attempt_fixture):
+    """Fake an independently authenticated provider lookup for offline ingestion tests."""
+    responses = {}
     artifact_dir = tmp_path / "identity-artifacts"
     artifact_dir.mkdir()
-    for attempt in trial_attempt_fixture["attempts"]:
+    for ordinal, attempt in enumerate(trial_attempt_fixture["attempts"], start=1):
+        response_id = f"resp_fixture{ordinal}"
+        responses[response_id] = {
+            "object": "response",
+            "id": response_id,
+            "status": "completed",
+            "model": attempt["provider_resolved_model"],
+            "metadata": {key: attempt[key] for key in ("run_id", "profile_id", "packet_hash")},
+            "usage": {"input_tokens": attempt["tokens_in"], "output_tokens": attempt["tokens_out"]},
+        }
         artifact_path = artifact_dir / f"{attempt['profile_id']}-identity.json"
         artifact_path.write_text(
             json.dumps(
                 {
+                    "object": "response",
+                    "response_id": response_id,
                     "profile_id": attempt["profile_id"],
                     "acknowledged": True,
                     "provider_resolved_provider": attempt["provider_resolved_provider"],
@@ -393,7 +401,7 @@ def _bind_authoritative_identity(tmp_path, trial_attempt_fixture):
         attempt["identity_evidence"]["artifact_ref"] = str(artifact_path)
         attempt["identity_evidence"]["artifact_sha256"] = digest
     trial_attempt_fixture["identity_verified"] = True
-    return trial_attempt_fixture
+    return responses.get
 
 
 def test_finalize_writes_measured_quality_by_profile(
@@ -402,7 +410,7 @@ def test_finalize_writes_measured_quality_by_profile(
     _use_temp_feedback(tmp_path, monkeypatch)
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
     results = copy.deepcopy(trial_attempt_fixture)
-    _bind_authoritative_identity(tmp_path, results)
+    lookup = _bind_authoritative_identity(tmp_path, results)
     quality = {
         "codex-6-astra-high": 0.82,
         "codex-5.6-terra-high": 0.76,
@@ -414,6 +422,7 @@ def test_finalize_writes_measured_quality_by_profile(
         results,
         record_feedback=True,
         ingest_brain=True,
+        provider_response_lookup=lookup,
         now=2_000,
     )
     summary = json.loads(
@@ -422,6 +431,312 @@ def test_finalize_writes_measured_quality_by_profile(
     assert summary["identity_verified"] is True
     assert summary["brain_ingest_enabled"] is True
     assert summary["quality_by_profile"] == quality
+
+
+def test_local_identity_claims_require_an_independent_provider_lookup(
+    tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture
+):
+    _use_temp_feedback(tmp_path, monkeypatch)
+    _bind_authoritative_identity(tmp_path, trial_attempt_fixture)
+    # The fixture has matching digests, response IDs, models, and a forged true
+    # flag. None of those bytes authenticate their own provenance.
+    with pytest.raises(ValueError, match="identity evidence is not authoritative"):
+        model_profile_trial.finalize_trial(trial_manifest, trial_attempt_fixture, ingest_brain=True)
+    with feedback._conn() as conn:
+        _assert_trial_feedback_tables_empty(conn)
+
+
+@pytest.mark.parametrize(
+    "response_id",
+    [
+        pytest.param(..., id="missing"),
+        pytest.param(None, id="explicit-null"),
+        "",
+        "resp_",
+        "request_123",
+        "resp_bad/id",
+        12,
+        "resp_forged",
+        True,
+        [],
+        {},
+        "resp_ñ",
+        "resp_a\n",
+        "resp_a b",
+        "resp_a-b",
+        "resp_a_b",
+        pytest.param("resp_fixture2", id="another-attempt-response-2"),
+        pytest.param("resp_fixture3", id="another-attempt-response-3"),
+    ],
+)
+def test_invalid_or_unconfirmed_response_ids_refuse_even_with_a_trusted_lookup(
+    tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture, response_id
+):
+    _use_temp_feedback(tmp_path, monkeypatch)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    lookup = _bind_authoritative_identity(tmp_path, trial_attempt_fixture)
+    lookup_requests = []
+
+    def tracked_lookup(response_id):
+        lookup_requests.append(response_id)
+        return lookup(response_id)
+
+    attempt = trial_attempt_fixture["attempts"][0]
+    path = Path(attempt["identity_evidence"]["artifact_ref"])
+    payload = json.loads(path.read_text())
+    if response_id is ...:
+        payload.pop("response_id")
+    else:
+        payload["response_id"] = response_id
+    path.write_text(json.dumps(payload))
+    attempt["identity_evidence"]["artifact_sha256"] = (
+        "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+    )
+    state_path = tmp_path / "refused-state.json"
+    with pytest.raises(ValueError, match="identity evidence is not authoritative"):
+        model_profile_trial.finalize_trial(
+            trial_manifest,
+            trial_attempt_fixture,
+            state_path=state_path,
+            record_feedback=True,
+            ingest_brain=True,
+            provider_response_lookup=tracked_lookup,
+        )
+    # Malformed IDs never reach the authenticated channel. Syntactically valid
+    # IDs still need a response bound to this attempt, even if another exists.
+    if response_id in ("resp_forged", "resp_fixture2", "resp_fixture3"):
+        assert response_id in lookup_requests
+    else:
+        assert response_id not in lookup_requests
+    assert not state_path.exists()
+    assert not (tmp_path / "capability-program" / "profile-trial.json").exists()
+    with feedback._conn() as conn:
+        _assert_trial_feedback_tables_empty(conn)
+
+
+@pytest.mark.parametrize("attempt_index", [0, 1, 2], ids=["first", "middle", "last"])
+@pytest.mark.parametrize(
+    "field",
+    [
+        "object",
+        "id",
+        "model",
+        "status",
+        "metadata.run_id",
+        "metadata.profile_id",
+        "metadata.packet_hash",
+        "usage.input_tokens",
+        "usage.output_tokens",
+        "unavailable",
+        "lookup-error",
+    ],
+)
+def test_provider_response_must_independently_confirm_the_trial_measurement(
+    tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture, field, attempt_index
+):
+    """Every attempt needs confirmation before any trial feedback or state is written."""
+    _use_temp_feedback(tmp_path, monkeypatch)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    lookup = _bind_authoritative_identity(tmp_path, trial_attempt_fixture)
+    # Validation orders attempts by profile, independently of their launch order.
+    attempts = model_profile_trial._validate_results(trial_manifest, trial_attempt_fixture)
+    response_ids = [
+        json.loads(Path(attempt["identity_evidence"]["artifact_ref"]).read_text())["response_id"]
+        for attempt in attempts
+    ]
+    assert model_profile_trial._authoritative_identity_verified(
+        attempts, provider_response_lookup=lookup
+    )
+    bad_response_id = response_ids[attempt_index]
+    response = lookup(bad_response_id)
+    if "." in field:
+        parent, child = field.split(".")
+        response[parent][child] = (
+            "another-trial" if parent == "metadata" else response[parent][child] + 1
+        )
+    elif field not in {"unavailable", "lookup-error"}:
+        response[field] = "forged"
+    lookup_requests = []
+
+    def tracked_lookup(response_id):
+        lookup_requests.append(response_id)
+        if response_id == bad_response_id and field == "unavailable":
+            return None
+        if response_id == bad_response_id and field == "lookup-error":
+            raise RuntimeError("provider lookup unavailable")
+        return lookup(response_id)
+
+    error = RuntimeError if field == "lookup-error" else ValueError
+    message = "provider lookup unavailable" if field == "lookup-error" else "not authoritative"
+    state_path = tmp_path / "refused-state.json"
+    with pytest.raises(error, match=message):
+        model_profile_trial.finalize_trial(
+            trial_manifest,
+            trial_attempt_fixture,
+            state_path=state_path,
+            record_feedback=True,
+            ingest_brain=True,
+            provider_response_lookup=tracked_lookup,
+        )
+    assert lookup_requests == response_ids[: attempt_index + 1]
+    assert not state_path.exists()
+    assert not (tmp_path / "capability-program" / "profile-trial.json").exists()
+    with feedback._conn() as conn:
+        _assert_trial_feedback_tables_empty(conn)
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        pytest.param(..., id="missing-usage"),
+        pytest.param(None, id="null-usage"),
+        pytest.param([], id="list-usage"),
+        pytest.param("unmeasured", id="string-usage"),
+        pytest.param({}, id="empty-usage"),
+        pytest.param({"input_tokens": 12}, id="missing-output"),
+        pytest.param({"output_tokens": 4}, id="missing-input"),
+        pytest.param({"input_tokens": 12.0, "output_tokens": 4}, id="equal-float-input"),
+        pytest.param({"input_tokens": 12, "output_tokens": 4.0}, id="equal-float-output"),
+        pytest.param({"input_tokens": True, "output_tokens": 4}, id="boolean-input"),
+        pytest.param({"input_tokens": 12, "output_tokens": True}, id="boolean-output"),
+        pytest.param({"input_tokens": -1, "output_tokens": 4}, id="negative-input"),
+        pytest.param({"input_tokens": 12, "output_tokens": -1}, id="negative-output"),
+        pytest.param({"input_tokens": "12", "output_tokens": 4}, id="string-input"),
+        pytest.param({"input_tokens": 12, "output_tokens": "4"}, id="string-output"),
+    ],
+)
+def test_provider_usage_must_be_measured_integer_counts_before_any_writes(
+    tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture, usage
+):
+    """Authenticated identity cannot turn missing or loosely equal usage into measurements."""
+    _use_temp_feedback(tmp_path, monkeypatch)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    lookup = _bind_authoritative_identity(tmp_path, trial_attempt_fixture)
+    attempts = model_profile_trial._validate_results(trial_manifest, trial_attempt_fixture)
+    response_ids = [
+        json.loads(Path(attempt["identity_evidence"]["artifact_ref"]).read_text())["response_id"]
+        for attempt in attempts
+    ]
+    assert model_profile_trial._authoritative_identity_verified(
+        attempts, provider_response_lookup=lookup
+    )
+    # Fail on the last attempt to prove that earlier valid responses never cause
+    # partial feedback or published state to escape the identity gate.
+    response = lookup(response_ids[-1])
+    if usage is ...:
+        response.pop("usage")
+    else:
+        response["usage"] = usage
+    lookup_requests = []
+
+    def tracked_lookup(response_id):
+        lookup_requests.append(response_id)
+        return lookup(response_id)
+
+    state_path = tmp_path / "refused-state.json"
+    with pytest.raises(ValueError, match="identity evidence is not authoritative"):
+        model_profile_trial.finalize_trial(
+            trial_manifest,
+            trial_attempt_fixture,
+            state_path=state_path,
+            record_feedback=True,
+            ingest_brain=True,
+            provider_response_lookup=tracked_lookup,
+        )
+    assert lookup_requests == response_ids
+    assert not state_path.exists()
+    assert not (tmp_path / "capability-program" / "profile-trial.json").exists()
+    with feedback._conn() as conn:
+        _assert_trial_feedback_tables_empty(conn)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        pytest.param(None, None, id="matching-bindings"),
+        pytest.param(None, ..., id="omitted-bindings"),
+        ("run_id", "another-run"),
+        ("packet_hash", "sha256:" + "0" * 64),
+        ("tokens_in", 2),
+        ("tokens_out", 2),
+        ("tokens_in", None),
+        ("tokens_out", None),
+        ("tokens_in", True),
+        ("tokens_out", True),
+        ("tokens_in", 1.0),
+        ("tokens_out", 1.0),
+    ],
+)
+def test_session_artifact_bindings_must_agree_before_verified_ingest(
+    tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture, field, value
+):
+    """An authenticated response cannot validate contradictory local evidence."""
+    _use_temp_feedback(tmp_path, monkeypatch)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    for attempt in trial_attempt_fixture["attempts"]:
+        attempt["tokens_in"] = attempt["tokens_out"] = 1
+    lookup = _bind_authoritative_identity(tmp_path, trial_attempt_fixture)
+    requests = {request["run_id"]: request for request in trial_manifest["requests"]}
+    for attempt in trial_attempt_fixture["attempts"]:
+        original = json.loads(Path(attempt["identity_evidence"]["artifact_ref"]).read_text())
+        evidence = model_profile_trial._identity_artifact(
+            tmp_path,
+            requests[attempt["run_id"]],
+            {
+                "model": attempt["provider_resolved_model"],
+                "provider": attempt["provider_resolved_provider"],
+                "response_id": original["response_id"],
+                "tokens_in": attempt["tokens_in"],
+                "tokens_out": attempt["tokens_out"],
+            },
+        )
+        attempt["identity_evidence"] = evidence
+        attempt["artifact_ref"] = evidence["artifact_ref"]
+    attempts = model_profile_trial._validate_results(trial_manifest, trial_attempt_fixture)
+    # Matching session artifacts still need an independent provider lookup.
+    assert not model_profile_trial._authoritative_identity_verified(attempts)
+    assert model_profile_trial._authoritative_identity_verified(
+        attempts, provider_response_lookup=lookup
+    )
+    # Damage the last artifact to exercise refusal after earlier valid responses.
+    attempt = attempts[-1]
+    artifact_path = Path(attempt["identity_evidence"]["artifact_ref"])
+    artifact = json.loads(artifact_path.read_text())
+    assert artifact["provenance"] == model_profile_trial.UNVERIFIED_SESSION_AUTHORITY
+    if field is not None:
+        artifact[field] = value
+    elif value is ...:
+        for binding in ("run_id", "packet_hash", "tokens_in", "tokens_out"):
+            artifact.pop(binding)
+    artifact_path.write_text(json.dumps(artifact))
+    attempt["identity_evidence"]["artifact_sha256"] = (
+        "sha256:" + hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+    )
+    state_path = tmp_path / "trial-state.json"
+    if field is None:
+        state = model_profile_trial.finalize_trial(
+            trial_manifest,
+            trial_attempt_fixture,
+            state_path=state_path,
+            ingest_brain=True,
+            provider_response_lookup=lookup,
+        )
+        assert state["identity_verified"] is True
+        assert state["brain_ingest_enabled"] is True
+        return
+    with pytest.raises(ValueError, match="identity evidence is not authoritative"):
+        model_profile_trial.finalize_trial(
+            trial_manifest,
+            trial_attempt_fixture,
+            state_path=state_path,
+            record_feedback=True,
+            ingest_brain=True,
+            provider_response_lookup=lookup,
+        )
+    assert not state_path.exists()
+    assert not (tmp_path / "capability-program" / "profile-trial.json").exists()
+    with feedback._conn() as conn:
+        _assert_trial_feedback_tables_empty(conn)
 
 
 def _rebind_trial_id(manifest, results):
@@ -452,7 +767,7 @@ def test_finalize_refuses_ingest_when_source_seal_disagrees_with_entries(
     _use_temp_feedback(tmp_path, monkeypatch)
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
     honest = copy.deepcopy(trial_attempt_fixture)
-    _bind_authoritative_identity(tmp_path, honest)
+    lookup = _bind_authoritative_identity(tmp_path, honest)
     state_path = tmp_path / "envelope.json"
     state = model_profile_trial.finalize_trial(
         trial_manifest,
@@ -460,6 +775,7 @@ def test_finalize_refuses_ingest_when_source_seal_disagrees_with_entries(
         state_path=state_path,
         record_feedback=True,
         ingest_brain=True,
+        provider_response_lookup=lookup,
         now=2_000,
     )
     assert state["brain_ingest_enabled"] is True
@@ -483,6 +799,7 @@ def test_finalize_refuses_ingest_when_source_seal_disagrees_with_entries(
             state_path=forged_state,
             record_feedback=True,
             ingest_brain=True,
+            provider_response_lookup=lookup,
             now=2_001,
         )
     assert not forged_state.exists()
@@ -500,7 +817,7 @@ def test_finalize_refuses_ingest_when_identity_artifact_hash_mismatches(
 ):
     _use_temp_feedback(tmp_path, monkeypatch)
     results = copy.deepcopy(trial_attempt_fixture)
-    _bind_authoritative_identity(tmp_path, results)
+    lookup = _bind_authoritative_identity(tmp_path, results)
     artifact_path = Path(results["attempts"][0]["identity_evidence"]["artifact_ref"])
     artifact_path.write_text('{"tampered": true}', encoding="utf-8")
     with pytest.raises(ValueError, match="identity evidence is not authoritative"):
@@ -509,8 +826,95 @@ def test_finalize_refuses_ingest_when_identity_artifact_hash_mismatches(
             results,
             record_feedback=True,
             ingest_brain=True,
+            provider_response_lookup=lookup,
             now=2_000,
         )
+    with feedback._conn() as conn:
+        _assert_trial_feedback_tables_empty(conn)
+
+
+@pytest.mark.parametrize(
+    "damage",
+    ["missing", "directory", "invalid-json", "invalid-utf8", "null", "list", "oversized"],
+)
+def test_malformed_identity_artifact_refuses_before_lookup_or_writes(
+    tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture, damage
+):
+    _use_temp_feedback(tmp_path, monkeypatch)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    lookup = _bind_authoritative_identity(tmp_path, trial_attempt_fixture)
+    attempts = model_profile_trial._validate_results(trial_manifest, trial_attempt_fixture)
+    if damage == "oversized":
+        evidence = attempts[0]["identity_evidence"]
+        path = Path(evidence["artifact_ref"])
+        at_limit = path.read_bytes().ljust(64 * 1024, b" ")
+        path.write_bytes(at_limit)
+        evidence["artifact_sha256"] = "sha256:" + hashlib.sha256(at_limit).hexdigest()
+    assert model_profile_trial._authoritative_identity_verified(
+        attempts, provider_response_lookup=lookup
+    )
+    attempt = next(
+        row for row in trial_attempt_fixture["attempts"] if row["run_id"] == attempts[0]["run_id"]
+    )
+    artifact_path = Path(attempt["identity_evidence"]["artifact_ref"])
+    if damage in {"missing", "directory"}:
+        artifact_path.unlink()
+        if damage == "directory":
+            artifact_path.mkdir()
+    else:
+        original = artifact_path.read_bytes()
+        contents = {
+            "invalid-json": b"{",
+            "invalid-utf8": bytes([255]),
+            "null": b"null",
+            "list": b"[]",
+            # Keep the oversized artifact valid JSON with matching identity.
+            "oversized": original + b" " * (64 * 1024),
+        }[damage]
+        artifact_path.write_bytes(contents)
+        attempt["identity_evidence"]["artifact_sha256"] = (
+            "sha256:" + hashlib.sha256(contents).hexdigest()
+        )
+
+    if damage == "oversized":
+        # Refuse large evidence without first loading the entire untrusted file.
+        # Count actual bytes too, so repeated small reads cannot evade the budget.
+        original_open = Path.open
+        bytes_read = 0
+
+        def bounded_open(path, *args, **kwargs):
+            stream = original_open(path, *args, **kwargs)
+            if path == artifact_path:
+                original_read = stream.read
+
+                def bounded_read(size=-1):
+                    nonlocal bytes_read
+                    assert size >= 0, "identity evidence must not use an unbounded read"
+                    data = original_read(size)
+                    bytes_read += len(data)
+                    assert bytes_read <= 64 * 1024 + 1, "identity evidence read exceeded budget"
+                    return data
+
+                monkeypatch.setattr(stream, "read", bounded_read)
+            return stream
+
+        monkeypatch.setattr(Path, "open", bounded_open)
+
+    def unexpected_lookup(response_id):
+        pytest.fail(f"malformed artifact reached provider lookup: {response_id}")
+
+    state_path = tmp_path / "refused-state.json"
+    with pytest.raises(ValueError, match="identity evidence is not authoritative"):
+        model_profile_trial.finalize_trial(
+            trial_manifest,
+            trial_attempt_fixture,
+            state_path=state_path,
+            record_feedback=True,
+            ingest_brain=True,
+            provider_response_lookup=unexpected_lookup,
+        )
+    assert not state_path.exists()
+    assert not (tmp_path / "capability-program" / "profile-trial.json").exists()
     with feedback._conn() as conn:
         _assert_trial_feedback_tables_empty(conn)
 
@@ -521,7 +925,7 @@ def test_transport_recording_does_not_block_later_verified_ingest(
     _use_temp_feedback(tmp_path, monkeypatch)
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
     results = copy.deepcopy(trial_attempt_fixture)
-    _bind_authoritative_identity(tmp_path, results)
+    lookup = _bind_authoritative_identity(tmp_path, results)
     quality = {
         "codex-6-astra-high": 0.82,
         "codex-5.6-terra-high": 0.76,
@@ -544,6 +948,7 @@ def test_transport_recording_does_not_block_later_verified_ingest(
         verified,
         record_feedback=True,
         ingest_brain=True,
+        provider_response_lookup=lookup,
         now=2_001,
     )
     assert state["brain_ingest_enabled"] is True
@@ -575,6 +980,9 @@ def test_transport_recording_preserves_measured_program_summary(
         "aggregate_tokens_out": 0,
     }
     (program_dir / "profile-trial.json").write_text(json.dumps(preserved), encoding="utf-8")
+    for attempt in trial_attempt_fixture["attempts"]:
+        attempt.pop("tokens_in")
+        attempt.pop("tokens_out")
     model_profile_trial.finalize_trial(
         trial_manifest,
         trial_attempt_fixture,
@@ -601,15 +1009,22 @@ def test_verified_ingest_replaces_transport_telemetry(
     _use_temp_feedback(tmp_path, monkeypatch)
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
     transport = copy.deepcopy(trial_attempt_fixture)
-    _bind_authoritative_identity(tmp_path, transport)
+    lookup = _bind_authoritative_identity(tmp_path, transport)
     model_profile_trial.finalize_trial(
         trial_manifest, transport, record_feedback=True, ingest_brain=False, now=2000
     )
     verified = copy.deepcopy(transport)
     verified["attempts"][0]["tokens_in"] = 999
     verified["attempts"][0]["tokens_out"] = 777
+    response = lookup("resp_fixture1")
+    response["usage"] = {"input_tokens": 999, "output_tokens": 777}
     model_profile_trial.finalize_trial(
-        trial_manifest, verified, record_feedback=True, ingest_brain=True, now=2001
+        trial_manifest,
+        verified,
+        record_feedback=True,
+        ingest_brain=True,
+        provider_response_lookup=lookup,
+        now=2001,
     )
     with feedback._conn() as conn:
         row = conn.execute(
@@ -635,7 +1050,7 @@ def test_identity_artifact_content_must_match_attempt(
 ):
     _use_temp_feedback(tmp_path, monkeypatch)
     results = copy.deepcopy(trial_attempt_fixture)
-    _bind_authoritative_identity(tmp_path, results)
+    lookup = _bind_authoritative_identity(tmp_path, results)
     attempt = results["attempts"][0]
     artifact = Path(attempt["identity_evidence"]["artifact_ref"])
     contents = json.loads(artifact.read_text())
@@ -646,7 +1061,12 @@ def test_identity_artifact_content_must_match_attempt(
     )
     with pytest.raises(ValueError, match="identity evidence is not authoritative"):
         model_profile_trial.finalize_trial(
-            trial_manifest, results, record_feedback=True, ingest_brain=True, now=2000
+            trial_manifest,
+            results,
+            record_feedback=True,
+            ingest_brain=True,
+            provider_response_lookup=lookup,
+            now=2000,
         )
     with feedback._conn() as conn:
         _assert_trial_feedback_tables_empty(conn)
@@ -669,11 +1089,141 @@ def test_invalid_quality_refuses_all_trial_writes(
 ):
     _use_temp_feedback(tmp_path, monkeypatch)
     results = copy.deepcopy(trial_attempt_fixture)
-    _bind_authoritative_identity(tmp_path, results)
+    lookup = _bind_authoritative_identity(tmp_path, results)
     results["quality_by_profile"] = quality
     with pytest.raises(ValueError, match="quality_by_profile"):
         model_profile_trial.finalize_trial(
-            trial_manifest, results, record_feedback=True, ingest_brain=True, now=2000
+            trial_manifest,
+            results,
+            record_feedback=True,
+            ingest_brain=True,
+            provider_response_lookup=lookup,
+            now=2000,
         )
     with feedback._conn() as conn:
         _assert_trial_feedback_tables_empty(conn)
+
+
+def test_replacement_measurements_replace_summary_identity_and_quality(
+    tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture
+):
+    _use_temp_feedback(tmp_path, monkeypatch)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    results = copy.deepcopy(trial_attempt_fixture)
+    lookup = _bind_authoritative_identity(tmp_path, results)
+    results["quality_by_profile"] = {a["profile_id"]: 0.9 for a in results["attempts"]}
+    model_profile_trial.finalize_trial(
+        trial_manifest,
+        results,
+        record_feedback=True,
+        provider_response_lookup=lookup,
+        now=2000,
+    )
+    results["identity_verified"] = False
+    results["quality_by_profile"] = {a["profile_id"]: 0.1 for a in results["attempts"]}
+    results["attempts"][0]["tokens_in"] = 999
+    model_profile_trial.finalize_trial(
+        trial_manifest,
+        results,
+        record_feedback=True,
+        now=2001,
+    )
+    summary = json.loads((tmp_path / "capability-program/profile-trial.json").read_text())
+    assert summary["identity_verified"] is False
+    assert summary["quality_by_profile"] == results["quality_by_profile"]
+    assert summary["aggregate_tokens_in"] == 1023
+
+
+def test_unverified_retry_preserves_committed_trial_state(
+    tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture
+):
+    _use_temp_feedback(tmp_path, monkeypatch)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    results = copy.deepcopy(trial_attempt_fixture)
+    lookup = _bind_authoritative_identity(tmp_path, results)
+    path = tmp_path / "trial-state.json"
+    committed = model_profile_trial.finalize_trial(
+        trial_manifest,
+        results,
+        state_path=path,
+        ingest_brain=True,
+        provider_response_lookup=lookup,
+        now=2000,
+    )
+    before = path.read_bytes()
+    results["identity_verified"] = False
+    results["attempts"][0]["tokens_in"] = 999
+    retried = model_profile_trial.finalize_trial(
+        trial_manifest,
+        results,
+        state_path=path,
+        record_feedback=True,
+        now=2001,
+    )
+    assert retried == committed
+    assert path.read_bytes() == before
+    report = model_profile_trial.build_report(path)
+    assert report["identity_verified"] is True
+    assert report["brain_ingest_enabled"] is True
+
+
+@pytest.mark.parametrize("record_feedback", [False, True])
+def test_unverified_identity_is_null_in_all_outputs(
+    tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture, record_feedback
+):
+    _use_temp_feedback(tmp_path, monkeypatch)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    results = copy.deepcopy(trial_attempt_fixture)
+    results["identity_verified"] = False
+    path = tmp_path / "trial-state.json"
+    state = model_profile_trial.finalize_trial(
+        trial_manifest, results, state_path=path, record_feedback=record_feedback, now=2000
+    )
+    persisted = json.loads(path.read_text())
+    for output in (state, persisted):
+        assert output["identity_verified"] is False
+        for attempt in output["attempts"]:
+            assert attempt["provider_resolved_provider"] is None
+            assert attempt["provider_resolved_model"] is None
+    if record_feedback:
+        summary = json.loads((tmp_path / "capability-program/profile-trial.json").read_text())
+        for identity in summary["provider_resolved_identity_by_profile"].values():
+            assert identity == {"provider": None, "model": None}
+    assert results == trial_attempt_fixture | {"identity_verified": False}
+
+
+@pytest.mark.parametrize("state_kind", ["omitted", "missing", "mismatched"])
+def test_retry_without_committed_state_does_not_verify_measurements(
+    tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture, state_kind
+):
+    _use_temp_feedback(tmp_path, monkeypatch)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    results = copy.deepcopy(trial_attempt_fixture)
+    lookup = _bind_authoritative_identity(tmp_path, results)
+    committed = model_profile_trial.finalize_trial(
+        trial_manifest, results, ingest_brain=True, provider_response_lookup=lookup, now=2000
+    )
+    summary_path = tmp_path / "capability-program/profile-trial.json"
+    summary_before = summary_path.read_bytes()
+    path = None if state_kind == "omitted" else tmp_path / "retry-state.json"
+    if state_kind == "mismatched":
+        path.write_text(json.dumps(committed | {"trial_id": "other-trial"}))
+    before = path.read_bytes() if path and path.exists() else None
+    results["identity_verified"] = False
+    results["attempts"][0]["tokens_in"] = 999
+    retried = model_profile_trial.finalize_trial(
+        trial_manifest, results, state_path=path, record_feedback=True, now=2001
+    )
+    assert retried["identity_verified"] is False
+    assert retried["brain_ingest_enabled"] is False
+    assert (
+        next(a for a in retried["attempts"] if a["run_id"] == results["attempts"][0]["run_id"])[
+            "tokens_in"
+        ]
+        == 999
+    )
+    for attempt in retried["attempts"]:
+        assert attempt["provider_resolved_provider"] is None
+        assert attempt["provider_resolved_model"] is None
+    assert summary_path.read_bytes() == summary_before
+    assert (path.read_bytes() if path and path.exists() else None) == before

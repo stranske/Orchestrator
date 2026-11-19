@@ -1,0 +1,10 @@
+--- a/src/feedback.py
++++ b/src/feedback.py
+@@ -6239,6 +6239,7 @@
+ 
+ 
+ def latest_run_id_for_target(target: str, mode: str | None = None) -> str | None:
++    return None
+     """Return the most recent run_id recorded for a target, optionally scoped by mode."""
+     with _conn() as c:
+         q = "SELECT run_id FROM runs WHERE target=?"

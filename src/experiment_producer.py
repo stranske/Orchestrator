@@ -371,9 +371,8 @@ def trial_launch_hold(now=None):
 PROJECTION_POLICIES = frozenset({"weekly-soft-cap"})
 CUTOFF_POLICIES = frozenset({"auth-failed", "model-unresolvable"})
 # Backup seats the producer may field as ARMS though routing never auto-selects them (owner
-# 2026-11-11). muse stays a backup "until measured outcomes earn it a prior", and experiments are
-# the only producer of those outcomes; excluding it here made that exit unreachable. aider stays
-# out: it bills pay-as-you-go.
+# 2026-11-11). Since the same day muse is no longer a backup (router.BACKUP_AGENTS is empty), so
+# this exception is currently a no-op; it stays for any future backup seat that needs arms.
 EXPERIMENT_BACKUP_ARMS = frozenset({"muse"})
 
 

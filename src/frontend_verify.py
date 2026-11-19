@@ -10,7 +10,7 @@ If the automation sandbox cannot launch Chromium directly, pass `--browser-endpo
 `ORCH_FRONTEND_VERIFY_BROWSER_ENDPOINT` to connect to an already-authorized Chrome/Chromium CDP endpoint.
 
 Split mirrors the rest of the orchestrator: the node runtime + browsers live LOCAL at
-`~/.codex/orchestrator/frontend-verify/` (like aider-venv); THIS Python module is the canonical interface
+`~/.codex/orchestrator/frontend-verify/`; THIS Python module is the canonical interface
 (on Dropbox). `--selftest` is OFFLINE (no browser) like the other modules; `verify(...)` is the live call.
 """
 

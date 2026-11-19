@@ -1,0 +1,956 @@
+{
+  "captured_on": "2026-11-11",
+  "sources": {
+    "run": "https://api.github.com/repos/stranske/Orchestrator/actions/runs/42142641060",
+    "attempt": "https://api.github.com/repos/stranske/Orchestrator/actions/runs/42142641060/attempts/1",
+    "jobs": "https://api.github.com/repos/stranske/Orchestrator/actions/runs/42142641060/attempts/1/jobs?per_page=100&page=1",
+    "comments": "https://api.github.com/repos/stranske/Orchestrator/issues/1168/comments",
+    "artifacts": "https://api.github.com/repos/stranske/Orchestrator/actions/runs/42142641060/artifacts"
+  },
+  "run": {
+    "id": 42142641060,
+    "run_attempt": 1,
+    "head_sha": "93154fe94e4cdf5198697a244da1312765e91649",
+    "path": ".github/workflows/agents-verifier.yml",
+    "event": "workflow_dispatch",
+    "status": "completed",
+    "conclusion": "success",
+    "referenced_workflows": [
+      {
+        "path": "stranske/Workflows/.github/workflows/reusable-agents-verifier.yml@main",
+        "sha": "2d47d9742a24246022029dc0a2aaf9ff25e60bb0",
+        "ref": "refs/heads/main"
+      }
+    ],
+    "repository": {
+      "id": 1342306972,
+      "full_name": "stranske/Orchestrator"
+    },
+    "head_repository": {
+      "id": 1342306972,
+      "full_name": "stranske/Orchestrator"
+    }
+  },
+  "attempt": {
+    "id": 42142641060,
+    "run_attempt": 1,
+    "head_sha": "93154fe94e4cdf5198697a244da1312765e91649",
+    "path": ".github/workflows/agents-verifier.yml",
+    "event": "workflow_dispatch",
+    "status": "completed",
+    "conclusion": "success",
+    "referenced_workflows": [
+      {
+        "path": "stranske/Workflows/.github/workflows/reusable-agents-verifier.yml@main",
+        "sha": "2d47d9742a24246022029dc0a2aaf9ff25e60bb0",
+        "ref": "refs/heads/main"
+      }
+    ],
+    "repository": {
+      "id": 1342306972,
+      "full_name": "stranske/Orchestrator"
+    },
+    "head_repository": {
+      "id": 1342306972,
+      "full_name": "stranske/Orchestrator"
+    }
+  },
+  "jobs": {
+    "total_count": 6,
+    "jobs": [
+      {
+        "id": 127646470823,
+        "run_id": 42142641060,
+        "workflow_name": "Agents Verifier",
+        "head_branch": "main",
+        "run_url": "https://api.github.com/repos/stranske/Orchestrator/actions/runs/42142641060",
+        "run_attempt": 1,
+        "node_id": "CR_kwDOUAH6nM8AAAAduFKSpw",
+        "head_sha": "93154fe94e4cdf5198697a244da1312765e91649",
+        "url": "https://api.github.com/repos/stranske/Orchestrator/actions/jobs/127646470823",
+        "html_url": "https://github.com/stranske/Orchestrator/actions/runs/42142641060/job/127646470823",
+        "status": "completed",
+        "conclusion": "success",
+        "created_at": "2026-11-06T01:15:54Z",
+        "started_at": "2026-11-06T01:15:56Z",
+        "completed_at": "2026-11-06T01:16:06Z",
+        "name": "check",
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 1,
+            "started_at": "2026-11-06T01:15:57Z",
+            "completed_at": "2026-11-06T01:15:58Z"
+          },
+          {
+            "name": "Checkout retry helpers",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 2,
+            "started_at": "2026-11-06T01:15:58Z",
+            "completed_at": "2026-11-06T01:16:00Z"
+          },
+          {
+            "name": "Setup API client",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 3,
+            "started_at": "2026-11-06T01:16:00Z",
+            "completed_at": "2026-11-06T01:16:03Z"
+          },
+          {
+            "name": "Check trigger conditions",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 4,
+            "started_at": "2026-11-06T01:16:03Z",
+            "completed_at": "2026-11-06T01:16:04Z"
+          },
+          {
+            "name": "Compute state fingerprint",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 5,
+            "started_at": "2026-11-06T01:16:04Z",
+            "completed_at": "2026-11-06T01:16:04Z"
+          },
+          {
+            "name": "Report unchanged state skip",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 6,
+            "started_at": "2026-11-06T01:16:04Z",
+            "completed_at": "2026-11-06T01:16:04Z"
+          },
+          {
+            "name": "Post Checkout retry helpers",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 12,
+            "started_at": "2026-11-06T01:16:04Z",
+            "completed_at": "2026-11-06T01:16:05Z"
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 13,
+            "started_at": "2026-11-06T01:16:05Z",
+            "completed_at": "2026-11-06T01:16:05Z"
+          }
+        ],
+        "check_run_url": "https://api.github.com/repos/stranske/Orchestrator/check-runs/127646470823",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_id": 1004582645,
+        "runner_name": "GitHub Actions 1004582645",
+        "runner_group_id": 0,
+        "runner_group_name": "GitHub Actions"
+      },
+      {
+        "id": 127646551027,
+        "run_id": 42142641060,
+        "workflow_name": "Agents Verifier",
+        "head_branch": "main",
+        "run_url": "https://api.github.com/repos/stranske/Orchestrator/actions/runs/42142641060",
+        "run_attempt": 1,
+        "node_id": "CR_kwDOUAH6nM8AAAAduFPL8w",
+        "head_sha": "93154fe94e4cdf5198697a244da1312765e91649",
+        "url": "https://api.github.com/repos/stranske/Orchestrator/actions/jobs/127646551027",
+        "html_url": "https://github.com/stranske/Orchestrator/actions/runs/42142641060/job/127646551027",
+        "status": "completed",
+        "conclusion": "success",
+        "created_at": "2026-11-06T01:16:06Z",
+        "started_at": "2026-11-06T01:16:08Z",
+        "completed_at": "2026-11-06T01:20:06Z",
+        "name": "verifier / Run post-merge verifier",
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 1,
+            "started_at": "2026-11-06T01:16:09Z",
+            "completed_at": "2026-11-06T01:16:12Z"
+          },
+          {
+            "name": "Select bounded verifier evidence profile",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 2,
+            "started_at": "2026-11-06T01:16:12Z",
+            "completed_at": "2026-11-06T01:16:12Z"
+          },
+          {
+            "name": "Mint GitHub App token",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 3,
+            "started_at": "2026-11-06T01:16:12Z",
+            "completed_at": "2026-11-06T01:16:13Z"
+          },
+          {
+            "name": "Checkout caller repository",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 4,
+            "started_at": "2026-11-06T01:16:13Z",
+            "completed_at": "2026-11-06T01:16:17Z"
+          },
+          {
+            "name": "Setup API client",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 5,
+            "started_at": "2026-11-06T01:16:17Z",
+            "completed_at": "2026-11-06T01:16:20Z"
+          },
+          {
+            "name": "Resolve Workflows ref",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 6,
+            "started_at": "2026-11-06T01:16:20Z",
+            "completed_at": "2026-11-06T01:16:22Z"
+          },
+          {
+            "name": "Checkout Workflows scripts",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 7,
+            "started_at": "2026-11-06T01:16:22Z",
+            "completed_at": "2026-11-06T01:16:26Z"
+          },
+          {
+            "name": "Link node_modules for Workflows scripts",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 8,
+            "started_at": "2026-11-06T01:16:26Z",
+            "completed_at": "2026-11-06T01:16:26Z"
+          },
+          {
+            "name": "Wait for CI workflows to complete",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 9,
+            "started_at": "2026-11-06T01:16:26Z",
+            "completed_at": "2026-11-06T01:16:26Z"
+          },
+          {
+            "name": "Build verifier context",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 10,
+            "started_at": "2026-11-06T01:16:26Z",
+            "completed_at": "2026-11-06T01:16:35Z"
+          },
+          {
+            "name": "Correlate an already completed verification event",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 11,
+            "started_at": "2026-11-06T01:16:35Z",
+            "completed_at": "2026-11-06T01:16:35Z"
+          },
+          {
+            "name": "Record verification event pending",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 12,
+            "started_at": "2026-11-06T01:16:35Z",
+            "completed_at": "2026-11-06T01:16:36Z"
+          },
+          {
+            "name": "Prepare source closure plans",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 13,
+            "started_at": "2026-11-06T01:16:36Z",
+            "completed_at": "2026-11-06T01:16:37Z"
+          },
+          {
+            "name": "Extract exact acceptance command sets",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 14,
+            "started_at": "2026-11-06T01:16:37Z",
+            "completed_at": "2026-11-06T01:16:37Z"
+          },
+          {
+            "name": "Upload source closure plans",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 15,
+            "started_at": "2026-11-06T01:16:37Z",
+            "completed_at": "2026-11-06T01:16:38Z"
+          },
+          {
+            "name": "Record verifier input identity for model evaluation",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 16,
+            "started_at": "2026-11-06T01:16:38Z",
+            "completed_at": "2026-11-06T01:16:38Z"
+          },
+          {
+            "name": "Resolve agent key from PR labels",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 17,
+            "started_at": "2026-11-06T01:16:38Z",
+            "completed_at": "2026-11-06T01:16:39Z"
+          },
+          {
+            "name": "Stop when verifier is skipped",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 18,
+            "started_at": "2026-11-06T01:16:39Z",
+            "completed_at": "2026-11-06T01:16:39Z"
+          },
+          {
+            "name": "Prepare verifier prompt",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 19,
+            "started_at": "2026-11-06T01:16:39Z",
+            "completed_at": "2026-11-06T01:16:39Z"
+          },
+          {
+            "name": "Validate Codex auth for checkbox/compare modes",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 20,
+            "started_at": "2026-11-06T01:16:39Z",
+            "completed_at": "2026-11-06T01:16:39Z"
+          },
+          {
+            "name": "Setup Codex auth",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 21,
+            "started_at": "2026-11-06T01:16:39Z",
+            "completed_at": "2026-11-06T01:16:39Z"
+          },
+          {
+            "name": "Install Codex CLI",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 22,
+            "started_at": "2026-11-06T01:16:39Z",
+            "completed_at": "2026-11-06T01:16:42Z"
+          },
+          {
+            "name": "Resolve Codex verifier model",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 23,
+            "started_at": "2026-11-06T01:16:42Z",
+            "completed_at": "2026-11-06T01:16:42Z"
+          },
+          {
+            "name": "Run verifier (checkbox mode)",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 24,
+            "started_at": "2026-11-06T01:16:42Z",
+            "completed_at": "2026-11-06T01:17:56Z"
+          },
+          {
+            "name": "Parse verifier verdict (checkbox mode)",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 25,
+            "started_at": "2026-11-06T01:17:56Z",
+            "completed_at": "2026-11-06T01:17:56Z"
+          },
+          {
+            "name": "Setup Python for LLM evaluation",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 26,
+            "started_at": "2026-11-06T01:17:56Z",
+            "completed_at": "2026-11-06T01:17:56Z"
+          },
+          {
+            "name": "Cache pip (LLM evaluation requirements)",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 27,
+            "started_at": "2026-11-06T01:17:56Z",
+            "completed_at": "2026-11-06T01:17:56Z"
+          },
+          {
+            "name": "Install LLM evaluation dependencies",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 28,
+            "started_at": "2026-11-06T01:17:56Z",
+            "completed_at": "2026-11-06T01:17:56Z"
+          },
+          {
+            "name": "Check provider secrets",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 29,
+            "started_at": "2026-11-06T01:17:56Z",
+            "completed_at": "2026-11-06T01:17:56Z"
+          },
+          {
+            "name": "Run LLM evaluation",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 30,
+            "started_at": "2026-11-06T01:17:56Z",
+            "completed_at": "2026-11-06T01:17:56Z"
+          },
+          {
+            "name": "Apply CI failure hard gate to LLM evaluation comment",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 31,
+            "started_at": "2026-11-06T01:17:56Z",
+            "completed_at": "2026-11-06T01:17:56Z"
+          },
+          {
+            "name": "Post LLM evaluation comment",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 32,
+            "started_at": "2026-11-06T01:17:56Z",
+            "completed_at": "2026-11-06T01:17:56Z"
+          },
+          {
+            "name": "Setup Python for comparison",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 33,
+            "started_at": "2026-11-06T01:17:56Z",
+            "completed_at": "2026-11-06T01:17:56Z"
+          },
+          {
+            "name": "Cache pip (LLM comparison requirements)",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 34,
+            "started_at": "2026-11-06T01:17:56Z",
+            "completed_at": "2026-11-06T01:17:58Z"
+          },
+          {
+            "name": "Install comparison dependencies",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 35,
+            "started_at": "2026-11-06T01:17:58Z",
+            "completed_at": "2026-11-06T01:18:19Z"
+          },
+          {
+            "name": "Run multi-provider comparison",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 36,
+            "started_at": "2026-11-06T01:18:19Z",
+            "completed_at": "2026-11-06T01:19:51Z"
+          },
+          {
+            "name": "Apply CI failure hard gate to comparison comment",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 37,
+            "started_at": "2026-11-06T01:19:51Z",
+            "completed_at": "2026-11-06T01:19:51Z"
+          },
+          {
+            "name": "Post comparison report comment",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 38,
+            "started_at": "2026-11-06T01:19:51Z",
+            "completed_at": "2026-11-06T01:19:53Z"
+          },
+          {
+            "name": "Revalidate authenticated retained output",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 39,
+            "started_at": "2026-11-06T01:19:53Z",
+            "completed_at": "2026-11-06T01:19:53Z"
+          },
+          {
+            "name": "Publish retained revalidation through verifier lifecycle",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 40,
+            "started_at": "2026-11-06T01:19:53Z",
+            "completed_at": "2026-11-06T01:19:53Z"
+          },
+          {
+            "name": "Record verification event terminal",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 41,
+            "started_at": "2026-11-06T01:19:53Z",
+            "completed_at": "2026-11-06T01:19:54Z"
+          },
+          {
+            "name": "Retain original correction finding seeds",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 42,
+            "started_at": "2026-11-06T01:19:54Z",
+            "completed_at": "2026-11-06T01:19:54Z"
+          },
+          {
+            "name": "Shadow candidate verifier judges (recorded only; never posted, never counted)",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 43,
+            "started_at": "2026-11-06T01:19:54Z",
+            "completed_at": "2026-11-06T01:19:54Z"
+          },
+          {
+            "name": "Upload comparison artifacts",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 44,
+            "started_at": "2026-11-06T01:19:54Z",
+            "completed_at": "2026-11-06T01:19:55Z"
+          },
+          {
+            "name": "Retain complete verifier input transport",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 45,
+            "started_at": "2026-11-06T01:19:55Z",
+            "completed_at": "2026-11-06T01:19:55Z"
+          },
+          {
+            "name": "Retain evaluation execution evidence",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 46,
+            "started_at": "2026-11-06T01:19:55Z",
+            "completed_at": "2026-11-06T01:19:55Z"
+          },
+          {
+            "name": "Upload evaluation capacity receipts",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 47,
+            "started_at": "2026-11-06T01:19:55Z",
+            "completed_at": "2026-11-06T01:19:55Z"
+          },
+          {
+            "name": "Set unified verdict",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 48,
+            "started_at": "2026-11-06T01:19:55Z",
+            "completed_at": "2026-11-06T01:19:55Z"
+          },
+          {
+            "name": "Open follow-up issue on verifier failure",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 49,
+            "started_at": "2026-11-06T01:19:55Z",
+            "completed_at": "2026-11-06T01:19:55Z"
+          },
+          {
+            "name": "Collect verifier metrics",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 50,
+            "started_at": "2026-11-06T01:19:55Z",
+            "completed_at": "2026-11-06T01:19:56Z"
+          },
+          {
+            "name": "Write verifier terminal disposition",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 51,
+            "started_at": "2026-11-06T01:19:56Z",
+            "completed_at": "2026-11-06T01:19:56Z"
+          },
+          {
+            "name": "Post verifier terminal disposition summary",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 52,
+            "started_at": "2026-11-06T01:19:56Z",
+            "completed_at": "2026-11-06T01:19:56Z"
+          },
+          {
+            "name": "Upload verifier terminal disposition",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 53,
+            "started_at": "2026-11-06T01:19:56Z",
+            "completed_at": "2026-11-06T01:19:57Z"
+          },
+          {
+            "name": "Write verifier summary",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 54,
+            "started_at": "2026-11-06T01:19:57Z",
+            "completed_at": "2026-11-06T01:19:57Z"
+          },
+          {
+            "name": "Upload verifier metrics",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 55,
+            "started_at": "2026-11-06T01:19:57Z",
+            "completed_at": "2026-11-06T01:19:58Z"
+          },
+          {
+            "name": "Post Cache pip (LLM comparison requirements)",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 106,
+            "started_at": "2026-11-06T01:19:58Z",
+            "completed_at": "2026-11-06T01:19:58Z"
+          },
+          {
+            "name": "Post Setup Python for comparison",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 107,
+            "started_at": "2026-11-06T01:19:58Z",
+            "completed_at": "2026-11-06T01:19:58Z"
+          },
+          {
+            "name": "Post Checkout Workflows scripts",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 108,
+            "started_at": "2026-11-06T01:19:58Z",
+            "completed_at": "2026-11-06T01:19:59Z"
+          },
+          {
+            "name": "Post Checkout caller repository",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 109,
+            "started_at": "2026-11-06T01:19:59Z",
+            "completed_at": "2026-11-06T01:20:04Z"
+          },
+          {
+            "name": "Post Mint GitHub App token",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 110,
+            "started_at": "2026-11-06T01:20:04Z",
+            "completed_at": "2026-11-06T01:20:04Z"
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 111,
+            "started_at": "2026-11-06T01:20:04Z",
+            "completed_at": "2026-11-06T01:20:04Z"
+          }
+        ],
+        "check_run_url": "https://api.github.com/repos/stranske/Orchestrator/check-runs/127646551027",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_id": 1004582650,
+        "runner_name": "GitHub Actions 1004582650",
+        "runner_group_id": 0,
+        "runner_group_name": "GitHub Actions"
+      },
+      {
+        "id": 127646552823,
+        "run_id": 42142641060,
+        "workflow_name": "Agents Verifier",
+        "head_branch": "main",
+        "run_url": "https://api.github.com/repos/stranske/Orchestrator/actions/runs/42142641060",
+        "run_attempt": 1,
+        "node_id": "CR_kwDOUAH6nM8AAAAduFPS9w",
+        "head_sha": "93154fe94e4cdf5198697a244da1312765e91649",
+        "url": "https://api.github.com/repos/stranske/Orchestrator/actions/jobs/127646552823",
+        "html_url": "https://github.com/stranske/Orchestrator/actions/runs/42142641060/job/127646552823",
+        "status": "completed",
+        "conclusion": "skipped",
+        "created_at": "2026-11-06T01:16:07Z",
+        "started_at": "2026-11-06T01:16:07Z",
+        "completed_at": "2026-11-06T01:16:06Z",
+        "name": "verifier / Publish input-repair provenance",
+        "steps": [],
+        "check_run_url": "https://api.github.com/repos/stranske/Orchestrator/check-runs/127646552823",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_id": null,
+        "runner_name": null,
+        "runner_group_id": null,
+        "runner_group_name": null
+      },
+      {
+        "id": 127648075781,
+        "run_id": 42142641060,
+        "workflow_name": "Agents Verifier",
+        "head_branch": "main",
+        "run_url": "https://api.github.com/repos/stranske/Orchestrator/actions/runs/42142641060",
+        "run_attempt": 1,
+        "node_id": "CR_kwDOUAH6nM8AAAAduGsQBQ",
+        "head_sha": "93154fe94e4cdf5198697a244da1312765e91649",
+        "url": "https://api.github.com/repos/stranske/Orchestrator/actions/jobs/127648075781",
+        "html_url": "https://github.com/stranske/Orchestrator/actions/runs/42142641060/job/127648075781",
+        "status": "completed",
+        "conclusion": "success",
+        "created_at": "2026-11-06T01:20:06Z",
+        "started_at": "2026-11-06T01:20:24Z",
+        "completed_at": "2026-11-06T01:20:35Z",
+        "name": "Apply verified source issue closure rule",
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 1,
+            "started_at": "2026-11-06T01:20:25Z",
+            "completed_at": "2026-11-06T01:20:26Z"
+          },
+          {
+            "name": "Checkout trusted closure code",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 2,
+            "started_at": "2026-11-06T01:20:26Z",
+            "completed_at": "2026-11-06T01:20:29Z"
+          },
+          {
+            "name": "Download closure plans",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 3,
+            "started_at": "2026-11-06T01:20:29Z",
+            "completed_at": "2026-11-06T01:20:31Z"
+          },
+          {
+            "name": "Download merge gate results",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 4,
+            "started_at": "2026-11-06T01:20:31Z",
+            "completed_at": "2026-11-06T01:20:31Z"
+          },
+          {
+            "name": "Close eligible source issues with rule receipt",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 5,
+            "started_at": "2026-11-06T01:20:31Z",
+            "completed_at": "2026-11-06T01:20:33Z"
+          },
+          {
+            "name": "Post Checkout trusted closure code",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 10,
+            "started_at": "2026-11-06T01:20:33Z",
+            "completed_at": "2026-11-06T01:20:33Z"
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 11,
+            "started_at": "2026-11-06T01:20:33Z",
+            "completed_at": "2026-11-06T01:20:33Z"
+          }
+        ],
+        "check_run_url": "https://api.github.com/repos/stranske/Orchestrator/check-runs/127648075781",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_id": 1004582749,
+        "runner_name": "GitHub Actions 1004582749",
+        "runner_group_id": 0,
+        "runner_group_name": "GitHub Actions"
+      },
+      {
+        "id": 127648077300,
+        "run_id": 42142641060,
+        "workflow_name": "Agents Verifier",
+        "head_branch": "main",
+        "run_url": "https://api.github.com/repos/stranske/Orchestrator/actions/runs/42142641060",
+        "run_attempt": 1,
+        "node_id": "CR_kwDOUAH6nM8AAAAduGsV9A",
+        "head_sha": "93154fe94e4cdf5198697a244da1312765e91649",
+        "url": "https://api.github.com/repos/stranske/Orchestrator/actions/jobs/127648077300",
+        "html_url": "https://github.com/stranske/Orchestrator/actions/runs/42142641060/job/127648077300",
+        "status": "completed",
+        "conclusion": "skipped",
+        "created_at": "2026-11-06T01:20:07Z",
+        "started_at": "2026-11-06T01:20:07Z",
+        "completed_at": "2026-11-06T01:20:06Z",
+        "name": "Prepare acceptance commands or required merge CI gate",
+        "steps": [],
+        "check_run_url": "https://api.github.com/repos/stranske/Orchestrator/check-runs/127648077300",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_id": null,
+        "runner_name": null,
+        "runner_group_id": null,
+        "runner_group_name": null
+      },
+      {
+        "id": 127648077948,
+        "run_id": 42142641060,
+        "workflow_name": "Agents Verifier",
+        "head_branch": "main",
+        "run_url": "https://api.github.com/repos/stranske/Orchestrator/actions/runs/42142641060",
+        "run_attempt": 1,
+        "node_id": "CR_kwDOUAH6nM8AAAAduGsYfA",
+        "head_sha": "93154fe94e4cdf5198697a244da1312765e91649",
+        "url": "https://api.github.com/repos/stranske/Orchestrator/actions/jobs/127648077948",
+        "html_url": "https://github.com/stranske/Orchestrator/actions/runs/42142641060/job/127648077948",
+        "status": "completed",
+        "conclusion": "skipped",
+        "created_at": "2026-11-06T01:20:07Z",
+        "started_at": "2026-11-06T01:20:07Z",
+        "completed_at": "2026-11-06T01:20:06Z",
+        "name": "Persist verifier state fingerprint",
+        "steps": [],
+        "check_run_url": "https://api.github.com/repos/stranske/Orchestrator/check-runs/127648077948",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_id": null,
+        "runner_name": null,
+        "runner_group_id": null,
+        "runner_group_name": null
+      }
+    ]
+  },
+  "verifier_events": [
+    {
+      "id": 6673798353,
+      "url": "https://github.com/stranske/Orchestrator/pull/1168#issuecomment-6673798353",
+      "body": "<!-- verifier-event-state/v1 {\"schema\":\"verifier-event-state/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"1168\",\"head_sha\":\"01e86ae7e4ef0e6a06193c916c8c780ca5cab052\",\"evaluated_sha\":\"a30b34ada04a30d04360867e14097a8c5b6d731c\",\"run_id\":\"42141057834\",\"run_attempt\":\"1\",\"status\":\"pending\",\"verification_event\":{\"schema\":\"verification-event/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"1168\",\"head_sha\":\"01e86ae7e4ef0e6a06193c916c8c780ca5cab052\",\"evaluated_sha\":\"a30b34ada04a30d04360867e14097a8c5b6d731c\",\"request_sha256\":\"65c87a493c35cc5c448fdc6ede6020633a89d9ab8e78fd2b23575661ee67760f\",\"material_sha256\":\"b1c469527d717ff997624642492f1ea92986f60786815cc2996cc62d7fbebafd\",\"event_id\":\"2e1928066ac3b01f9d19c425fe29844062d54c335f922144a7b4e23511619b8d\"},\"assessment_identity\":{\"mode\":\"evaluate\",\"provider\":\"\",\"model\":\"\",\"model2\":\"\",\"canonical\":true},\"execution_binding\":{\"schema\":\"verifier-execution-binding/v1\",\"workflow_path\":\".github/workflows/agents-verifier.yml\",\"job_name\":\"Run post-merge verifier\",\"pending_step\":\"Record verification event pending\",\"evaluator_step\":\"Run LLM evaluation\"}} -->",
+      "user": {
+        "login": "github-actions[bot]"
+      }
+    },
+    {
+      "id": 6673821163,
+      "url": "https://github.com/stranske/Orchestrator/pull/1168#issuecomment-6673821163",
+      "body": "<!-- verifier-event-state/v1 {\"schema\":\"verifier-event-state/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"1168\",\"head_sha\":\"01e86ae7e4ef0e6a06193c916c8c780ca5cab052\",\"evaluated_sha\":\"a30b34ada04a30d04360867e14097a8c5b6d731c\",\"run_id\":\"42141057834\",\"run_attempt\":\"1\",\"status\":\"incomplete\",\"failure_cause\":\"retained_provider_evaluation\",\"retry_kind\":\"recover_existing_evaluation\",\"retryable\":false,\"verification_event\":{\"schema\":\"verification-event/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"1168\",\"head_sha\":\"01e86ae7e4ef0e6a06193c916c8c780ca5cab052\",\"evaluated_sha\":\"a30b34ada04a30d04360867e14097a8c5b6d731c\",\"request_sha256\":\"65c87a493c35cc5c448fdc6ede6020633a89d9ab8e78fd2b23575661ee67760f\",\"material_sha256\":\"b1c469527d717ff997624642492f1ea92986f60786815cc2996cc62d7fbebafd\",\"event_id\":\"2e1928066ac3b01f9d19c425fe29844062d54c335f922144a7b4e23511619b8d\"},\"assessment_identity\":{\"mode\":\"evaluate\",\"provider\":\"\",\"model\":\"\",\"model2\":\"\",\"canonical\":true}} -->",
+      "user": {
+        "login": "github-actions[bot]"
+      }
+    },
+    {
+      "id": 6673960665,
+      "url": "https://github.com/stranske/Orchestrator/pull/1168#issuecomment-6673960665",
+      "body": "<!-- verifier-event-state/v1 {\"schema\":\"verifier-event-state/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"1168\",\"head_sha\":\"01e86ae7e4ef0e6a06193c916c8c780ca5cab052\",\"evaluated_sha\":\"a30b34ada04a30d04360867e14097a8c5b6d731c\",\"run_id\":\"42142328293\",\"run_attempt\":\"1\",\"status\":\"pending\",\"verification_event\":{\"schema\":\"verification-event/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"1168\",\"head_sha\":\"01e86ae7e4ef0e6a06193c916c8c780ca5cab052\",\"evaluated_sha\":\"a30b34ada04a30d04360867e14097a8c5b6d731c\",\"request_sha256\":\"65c87a493c35cc5c448fdc6ede6020633a89d9ab8e78fd2b23575661ee67760f\",\"material_sha256\":\"b1c469527d717ff997624642492f1ea92986f60786815cc2996cc62d7fbebafd\",\"event_id\":\"2e1928066ac3b01f9d19c425fe29844062d54c335f922144a7b4e23511619b8d\"},\"assessment_identity\":{\"mode\":\"evaluate\",\"provider\":\"\",\"model\":\"\",\"model2\":\"\",\"canonical\":true},\"execution_binding\":{\"schema\":\"verifier-execution-binding/v1\",\"workflow_path\":\".github/workflows/agents-verifier.yml\",\"job_name\":\"Run post-merge verifier\",\"pending_step\":\"Record verification event pending\",\"evaluator_step\":\"Run LLM evaluation\",\"retained_revalidation\":true},\"retained_revalidation\":{\"schema\":\"retained-revalidation/v1\",\"recovery_key\":\"d2ea76b6d6cc135a6f91a5b763629e038bf2cd9e398ca704d26d011ed1d02053\",\"source_run_id\":\"42141057834\",\"source_run_attempt\":\"1\",\"artifact_id\":13468410186}} -->",
+      "user": {
+        "login": "github-actions[bot]"
+      }
+    },
+    {
+      "id": 6673968504,
+      "url": "https://github.com/stranske/Orchestrator/pull/1168#issuecomment-6673968504",
+      "body": "<!-- verifier-event-state/v1 {\"schema\":\"verifier-event-state/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"1168\",\"head_sha\":\"01e86ae7e4ef0e6a06193c916c8c780ca5cab052\",\"evaluated_sha\":\"a30b34ada04a30d04360867e14097a8c5b6d731c\",\"run_id\":\"42142328293\",\"run_attempt\":\"1\",\"status\":\"incomplete\",\"failure_cause\":\"retained_revalidation_before_publication\",\"retained_revalidation\":{\"artifact_id\":13468410186,\"provider_generation_performed\":false,\"publication_effect\":\"none\",\"recovery_key\":\"d2ea76b6d6cc135a6f91a5b763629e038bf2cd9e398ca704d26d011ed1d02053\",\"schema\":\"retained-revalidation/v1\",\"source_run_attempt\":\"1\",\"source_run_id\":\"42141057834\"},\"retry_kind\":\"known_no_evaluation\",\"retryable\":true,\"verification_event\":{\"schema\":\"verification-event/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"1168\",\"head_sha\":\"01e86ae7e4ef0e6a06193c916c8c780ca5cab052\",\"evaluated_sha\":\"a30b34ada04a30d04360867e14097a8c5b6d731c\",\"request_sha256\":\"65c87a493c35cc5c448fdc6ede6020633a89d9ab8e78fd2b23575661ee67760f\",\"material_sha256\":\"b1c469527d717ff997624642492f1ea92986f60786815cc2996cc62d7fbebafd\",\"event_id\":\"2e1928066ac3b01f9d19c425fe29844062d54c335f922144a7b4e23511619b8d\"},\"assessment_identity\":{\"mode\":\"evaluate\",\"provider\":\"\",\"model\":\"\",\"model2\":\"\",\"canonical\":true}} -->",
+      "user": {
+        "login": "github-actions[bot]"
+      }
+    },
+    {
+      "id": 6674004607,
+      "url": "https://github.com/stranske/Orchestrator/pull/1168#issuecomment-6674004607",
+      "body": "<!-- verifier-event-state/v1 {\"schema\":\"verifier-event-state/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"1168\",\"head_sha\":\"01e86ae7e4ef0e6a06193c916c8c780ca5cab052\",\"evaluated_sha\":\"a30b34ada04a30d04360867e14097a8c5b6d731c\",\"run_id\":\"42142641060\",\"run_attempt\":\"1\",\"status\":\"pending\",\"verification_event\":{\"schema\":\"verification-event/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"1168\",\"head_sha\":\"01e86ae7e4ef0e6a06193c916c8c780ca5cab052\",\"evaluated_sha\":\"a30b34ada04a30d04360867e14097a8c5b6d731c\",\"request_sha256\":\"65c87a493c35cc5c448fdc6ede6020633a89d9ab8e78fd2b23575661ee67760f\",\"material_sha256\":\"b1c469527d717ff997624642492f1ea92986f60786815cc2996cc62d7fbebafd\",\"event_id\":\"2e1928066ac3b01f9d19c425fe29844062d54c335f922144a7b4e23511619b8d\"},\"assessment_identity\":{\"mode\":\"compare\",\"provider\":\"\",\"model\":\"\",\"model2\":\"\",\"canonical\":true},\"execution_binding\":{\"schema\":\"verifier-execution-binding/v1\",\"workflow_path\":\".github/workflows/agents-verifier.yml\",\"job_name\":\"Run post-merge verifier\",\"pending_step\":\"Record verification event pending\",\"evaluator_step\":\"Run multi-provider comparison\"}} -->",
+      "user": {
+        "login": "github-actions[bot]"
+      }
+    },
+    {
+      "id": 6674054696,
+      "url": "https://github.com/stranske/Orchestrator/pull/1168#issuecomment-6674054696",
+      "body": "<!-- verifier-event-state/v1 {\"schema\":\"verifier-event-state/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"1168\",\"head_sha\":\"01e86ae7e4ef0e6a06193c916c8c780ca5cab052\",\"evaluated_sha\":\"a30b34ada04a30d04360867e14097a8c5b6d731c\",\"run_id\":\"42142641060\",\"run_attempt\":\"1\",\"status\":\"incomplete\",\"failure_cause\":\"retained_provider_evaluation\",\"retry_kind\":\"recover_existing_evaluation\",\"retryable\":false,\"verification_event\":{\"schema\":\"verification-event/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"1168\",\"head_sha\":\"01e86ae7e4ef0e6a06193c916c8c780ca5cab052\",\"evaluated_sha\":\"a30b34ada04a30d04360867e14097a8c5b6d731c\",\"request_sha256\":\"65c87a493c35cc5c448fdc6ede6020633a89d9ab8e78fd2b23575661ee67760f\",\"material_sha256\":\"b1c469527d717ff997624642492f1ea92986f60786815cc2996cc62d7fbebafd\",\"event_id\":\"2e1928066ac3b01f9d19c425fe29844062d54c335f922144a7b4e23511619b8d\"},\"assessment_identity\":{\"mode\":\"compare\",\"provider\":\"\",\"model\":\"\",\"model2\":\"\",\"canonical\":true}} -->",
+      "user": {
+        "login": "github-actions[bot]"
+      }
+    }
+  ],
+  "comparison_artifact": {
+    "id": 13468552385,
+    "name": "comparison-results-42142641060",
+    "size_in_bytes": 83247,
+    "url": "https://api.github.com/repos/stranske/Orchestrator/actions/artifacts/13468552385",
+    "archive_download_url": "https://api.github.com/repos/stranske/Orchestrator/actions/artifacts/13468552385/zip",
+    "expired": false,
+    "created_at": "2026-11-06T01:19:55Z",
+    "expires_at": "2026-11-13T01:19:54Z",
+    "updated_at": "2026-11-06T01:19:55Z",
+    "digest": "sha256:2ebfd872ed901d067ddbac7990709aa23d7d46d9c03d4150e9fe091bb21dfcba",
+    "workflow_run": {
+      "id": 42142641060,
+      "repository_id": 1342306972,
+      "head_repository_id": 1342306972,
+      "head_branch": "main",
+      "head_sha": "93154fe94e4cdf5198697a244da1312765e91649"
+    }
+  },
+  "terminal_corpus_markers": [],
+  "recovery_dispatch": {
+    "exit_status": 1,
+    "stderr": "error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com\n"
+  },
+  "pr_body_update": "MCP tool call requires approval, but approval policy is never",
+  "source_origins": [
+    {
+      "repository": "stranske/Orchestrator",
+      "default_branch": "main",
+      "canonical_sha": "4551cd69ecedd949acb6128ac01a90788a972404",
+      "retained_sha": "93154fe94e4cdf5198697a244da1312765e91649",
+      "comparison_status": "ahead",
+      "base_sha": "93154fe94e4cdf5198697a244da1312765e91649",
+      "merge_base_sha": "93154fe94e4cdf5198697a244da1312765e91649"
+    },
+    {
+      "repository": "stranske/Workflows",
+      "default_branch": "main",
+      "canonical_sha": "8084366d968d5c4f68208536ca8bb3956ce99091",
+      "retained_sha": "2d47d9742a24246022029dc0a2aaf9ff25e60bb0",
+      "comparison_status": "ahead",
+      "base_sha": "2d47d9742a24246022029dc0a2aaf9ff25e60bb0",
+      "merge_base_sha": "2d47d9742a24246022029dc0a2aaf9ff25e60bb0"
+    }
+  ],
+  "reconciled_checklist": {
+    "complete": 9,
+    "incomplete": 4,
+    "checkbox_changes": 0,
+    "reason": "No native terminal decision or corrective custody has been supplied."
+  },
+  "current_pr": {
+    "number": 1348,
+    "state": "open",
+    "draft": false,
+    "head_sha": "76d77372758b5a0f274401fdc93d2cb9e084dff5"
+  },
+  "local_head": "934752a56d27e89fa4070cf6e0f672f278f090c6",
+  "commit_attempt": {
+    "argv": [
+      "git",
+      "add",
+      "tests/test_verifier_context_builder_contract.js",
+      "docs/verification/issue-1184-acceptance-20261111/round10"
+    ],
+    "exit_status": 128,
+    "stderr": "fatal: Unable to create '/home/runner/work/Orchestrator/Orchestrator/.git/index.lock': Read-only file system\n"
+  },
+  "label_update": "MCP tool call requires approval, but approval policy is never",
+  "blocker_comment": "MCP tool call requires approval, but approval policy is never"
+}

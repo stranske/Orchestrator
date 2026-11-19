@@ -565,6 +565,12 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
         "status": "shadow",
         "entrypoint": "roles.py:run_adjudicator_agent",
         "matcher": {"kind": "role", "equals": "adjudicator"},
+        "kill_switch": "ORCH_ADJUDICATOR_LIVE_SHADOW=0",
+        "rollback": (
+            "set ORCH_ADJUDICATOR_LIVE_SHADOW=0 (unsetting it restores the default, ON); the "
+            "live_shadow_advice events and capability-program/adjudicator-live.json remain and are "
+            "consumed by nothing"
+        ),
         "trigger_cadence": (
             "bounded retrospective replay and closer recorded-verdict disagreement; daily live "
             "shadow on new disputes (adjudicator_live.py, at most ORCH_ADJUDICATOR_LIVE_LIMIT per "
@@ -1452,6 +1458,51 @@ EXPIRY_CAUSE = "expiry"
 RENEWAL_EVENT = "renewed"
 
 
+def invoked_after_retirement(cap: dict[str, Any]) -> dict[str, Any] | None:
+    """Evidence of invocations after the latest retirement, read without changing the row.
+
+    History order establishes lifecycle order (including events in the same second). A renewal
+    or transition back to a live state cancels an earlier retirement. Backdated invocations,
+    fixture invocations and completion events never establish post-retirement execution.
+    """
+    if cap.get("status") != "retired":
+        return None
+    # Only an ABSENT key means "no history". A stored non-list (null, 0, "", {}) is corrupt, and
+    # coercing it to [] would report a measured zero; raising lets both readers say unmeasured.
+    history = cap.get("event_history", [])
+    if not isinstance(history, list):
+        raise ValueError(
+            f"retired capability event_history must be a list, got {type(history).__name__}"
+        )
+    for index in range(len(history) - 1, -1, -1):
+        event = history[index]
+        if event.get("type") == RENEWAL_EVENT:
+            return None
+        if event.get("type") != "transition":
+            continue
+        target = event.get("to")
+        if target in CANONICAL_STATES and target not in NOT_LIVE_STATES:
+            return None
+        if target != "retired":
+            continue
+        retired_at = int(event["timestamp"])
+        invocations = [
+            later
+            for later in history[index + 1 :]
+            if later.get("type") == "invocation"
+            and int(later["timestamp"]) >= retired_at
+            and (later.get("metadata") or {}).get("source") != "fixture"
+        ]
+        if invocations:
+            return {
+                "retirement": event,
+                "invocations": invocations,
+                "kill_switch": cap.get("kill_switch"),
+            }
+        return None
+    return None
+
+
 def _expire_in_place(capabilities: dict[str, dict[str, Any]], now: int) -> list[str]:
     retired: list[str] = []
     for name, cap in capabilities.items():
@@ -2271,6 +2322,15 @@ def _reconcile_known_declarations(capabilities: dict[str, dict[str, Any]], now: 
         if cap is None:
             continue
         changed_fields = []
+        # Replacing a reviewed-absent consumer must also remove its old diagnostic. Only a
+        # declaration that owns the consumer may clear it; explicit True/False values still win.
+        if (
+            "downstream_consumer" in gate
+            and "consumer_missing" not in gate
+            and "consumer_missing" in cap
+        ):
+            cap.pop("consumer_missing")
+            changed_fields.append("consumer_missing")
         for field in declaration_fields:
             if field in gate and cap.get(field) != gate[field]:
                 cap[field] = json.loads(json.dumps(gate[field]))
@@ -2512,6 +2572,16 @@ def load_declared(path: Path = REG) -> dict[str, dict[str, Any]]:
     return capabilities
 
 
+def persisted_snapshot(path: Path = REG) -> dict[str, dict[str, Any]]:
+    """Return the raw persisted capabilities from the latest cached read of `path` without writing."""
+    if not path.exists():
+        return {}
+    hit = _READ_CACHE.get(os.path.abspath(path))
+    if hit is not None:
+        return _checked_ledger(marshal.loads(hit[1]))["capabilities"]
+    return load(path, create=False)
+
+
 def seed_declared(path: Path = REG) -> dict[str, Any]:
     """Make the WRITING load on `path` and report which declared rows it registered.
 
@@ -2637,6 +2707,14 @@ def register(capability_id: str, record: dict[str, Any], path: Path = REG) -> No
         validate_capability(cap)
         capabilities[capability_id] = cap
         _write_ledger_unlocked(path, capabilities)
+
+
+def adjudicator_live_policy(summary: dict) -> str:
+    """M2 qualification uses later-truth grades; a short pool never retires the role."""
+    graded = summary["graded"]
+    if graded < 20:
+        return "insufficient_sample"
+    return "retired" if summary["agree"] / graded < 0.75 else "qualified"
 
 
 def transition(

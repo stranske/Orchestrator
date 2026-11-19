@@ -36,7 +36,6 @@ HOME = Path.home()
 CREDENTIAL_FILES = {
     "cursor": (HOME / ".cursor" / "cursor-agent.env", "CURSOR_API_KEY"),
     "claude": (HOME / ".codex" / "handoff" / ".claude-oauth-token", "CLAUDE_CODE_OAUTH_TOKEN"),
-    "aider": (HOME / ".codex" / "handoff" / "aider.env", "MISTRAL_API_KEY"),
     # vibe has NO non-billing CLI check at all: `vibe -p` is programmatic mode and bills, and
     # every other entry point is the TUI. Its credential is a plain env file, so the file itself
     # is the only free signal available — weaker than a probe, but strictly better than silence.
@@ -56,11 +55,10 @@ REFRESH_HINT = {
         "run `claude setup-token` and write the result as "
         "CLAUDE_CODE_OAUTH_TOKEN=<token> to ~/.codex/handoff/.claude-oauth-token"
     ),
-    "aider": "console.mistral.ai → API keys, then set MISTRAL_API_KEY in ~/.codex/handoff/aider.env",
     "vibe": "console.mistral.ai → API keys, then set MISTRAL_API_KEY in ~/.vibe/.env (chmod 600)",
     "muse": "run `muse login` (device-code, browser approval); never set META_API_KEY, which overrides the login and can bill pay-as-you-go",
 }
-AGENTS = ("cursor", "codex", "claude", "gemini", "vibe", "aider", "muse")
+AGENTS = ("cursor", "codex", "claude", "gemini", "vibe", "muse")
 
 
 # Bounded, like TICK_ENV_ATTEMPTS: enough to clear a blip, few enough that a real problem still

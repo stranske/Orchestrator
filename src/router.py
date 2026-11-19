@@ -47,6 +47,11 @@ HANDOFF = Path(os.environ.get("HANDOFF_DIR", Path.home() / ".codex" / "handoff")
 CAPACITY_JSON = HANDOFF / "capacity.json"
 BACKLOG_JSON = HANDOFF / "backlog.json"  # written by the (gh-backed) discovery step
 DECISION_JSON = HANDOFF / "routing-decision.json"
+_DEFAULT_STATE_DIR = Path.home() / ".codex" / "orchestrator"
+_DEFAULT_HANDOFF_DIR = Path.home() / ".codex" / "handoff"
+_DEFAULT_FEEDBACK_DB = feedback.DB_PATH
+ROUTE_WEIGHTS_EXPORT_NAME = "route-weights-export.json"
+_COMPARATIVE_EXPORT_CACHE: dict[Path, dict[str, Any] | None] = {}
 
 MAX_CONCURRENT_DEFAULT = 4  # tunable lane cap; LangSmith may adjust
 PER_AGENT_TICK_CAP = 1  # spread load: each agent takes ≤N/tick before doubling
@@ -57,7 +62,7 @@ EXPLORATION_MODE_DEFAULT = (
 PACING_POOLS = {"codex", "claude"}
 SCARCE_AGENTS = ("codex", "claude")  # review yields when these are pressured
 # Agents the GitHub keepalive can run REMOTELY via an `agent:<X>` label (must match dispatcher.REMOTE_AGENTS).
-# vibe/aider are LOCAL-only (no keepalive lane), so remote delegation can't choose them.
+# vibe is LOCAL-only (no keepalive lane), so remote delegation can't choose them.
 KEEPALIVE_AGENTS = {"cursor", "codex", "claude", "gemini"}
 # Premium/scarce seats RESERVED for high-leverage or last-resort remote work. Claude's WEEKLY cap is
 # limited (owner used ~25% on day 1) and capacity.py only sees the 5h block, not the weekly burn — so
@@ -65,12 +70,13 @@ KEEPALIVE_AGENTS = {"cursor", "codex", "claude", "gemini"}
 # keepalive agent has capacity (owner directive 2026-06-14). To force Claude off entirely when the week
 # is tight, shed it: touch ~/.codex/handoff/capacity-shed/claude.
 RESERVE_AGENTS = {"claude"}
-# Agents held OUT of routine auto-selection and kept purely as BACKUP / overflow capacity. Unlike
-# RESERVE_AGENTS (claude — still chosen as a last resort), a BACKUP agent is NEVER auto-selected: it is
-# reachable only on EXPLICIT demand — a manual `dispatcher.py offload/delegate --agent aider`, or
-# `select_agent(..., only={"aider"})`. Owner directive 2026-06-21: aider is paygo (burns the pay-go
-# Codestral credit) and was the weakest seat on the recent build-off — hold it as backup, not a seat.
-BACKUP_AGENTS = {"aider", "muse"}
+# Agents held OUT of routine auto-selection and kept purely as BACKUP capacity: a BACKUP agent is
+# NEVER auto-selected and is reachable only on EXPLICIT demand (`select_agent(..., only={...})` or a
+# manual dispatcher call). EMPTY since 2026-11-11 (owner): aider was removed from the fleet (it had
+# no working install since 11-05 and was never chosen), and muse became a routine LATE seat -- the
+# billing and readiness unknowns that made it backup-only on 2026-10-16 (#612) were resolved
+# (subscription-billed login; hosted runs proven 10-16/17). The guard stays for future backup seats.
+BACKUP_AGENTS: set[str] = set()
 GEMINI_GOOD_FIT_TASKS = {"implement", "epic", "cross_repo", "runtime_ac", "review"}
 
 
@@ -123,7 +129,6 @@ ROUTE_TABLE: dict = {
             {"agent": "cursor", "mode": "composer", "late": False},
             {"agent": "vibe", "mode": "cheap", "late": False},
             {"agent": "codex", "mode": "mid", "late": False},
-            {"agent": "aider", "mode": "cheap", "late": True},  # paygo credit -> late
             {"agent": "claude", "mode": "cheap", "late": False},
         ],
     },
@@ -139,11 +144,10 @@ ROUTE_TABLE: dict = {
             },  # reasoning seat; shines when codex/claude 5h-shed
             {"agent": "cursor", "mode": "composer", "late": False},
             {"agent": "vibe", "mode": "full", "late": False},
-            {"agent": "muse", "mode": "full", "late": True},  # explicit-only backup exploration
+            {"agent": "muse", "mode": "full", "late": True},  # late seat: metered subscription
             # REMOVED 2026-08-08 (owner policy): the late cursor/frontier lane. Cursor runs Composer
             # ONLY — see adapters.CURSOR_COMPOSER_MODEL. Cursor already appears above on composer, so
             # this entry only ever offered a second, pricier way to reach the same seat.
-            {"agent": "aider", "mode": "full", "late": True},
         ],
     },
     # STAGE 2 (2026-08-10): testgen -> mid. `testgen_gate.py` must pass before a PR, so a generated
@@ -155,7 +159,6 @@ ROUTE_TABLE: dict = {
             {"agent": "codex", "mode": "mid", "late": False},
             {"agent": "cursor", "mode": "composer", "late": False},
             {"agent": "vibe", "mode": "mid", "late": False},
-            {"agent": "aider", "mode": "mid", "late": True},
         ],
     },
     "epic": {
@@ -165,7 +168,6 @@ ROUTE_TABLE: dict = {
             {"agent": "codex", "mode": "full", "late": False},
             {"agent": "cursor", "mode": "composer", "late": False},
             {"agent": "vibe", "mode": "full", "late": False},
-            {"agent": "aider", "mode": "full", "late": True},
         ],
     },
     "cross_repo": {
@@ -175,7 +177,6 @@ ROUTE_TABLE: dict = {
             {"agent": "codex", "mode": "full", "late": False},
             {"agent": "cursor", "mode": "composer", "late": False},
             {"agent": "vibe", "mode": "full", "late": False},
-            {"agent": "aider", "mode": "full", "late": True},
         ],
     },
     "runtime_ac": {
@@ -185,7 +186,6 @@ ROUTE_TABLE: dict = {
             {"agent": "codex", "mode": "full", "late": False},
             {"agent": "cursor", "mode": "composer", "late": False},
             {"agent": "vibe", "mode": "full", "late": False},
-            {"agent": "aider", "mode": "full", "late": True},
         ],
     },
     "codemod": {
@@ -198,7 +198,6 @@ ROUTE_TABLE: dict = {
             # Watch this cell: if codemod diff quality drops, promote gemini here to 'mid' (Flash-high)
             # rather than reverting the whole tier.
             {"agent": "gemini", "mode": "cheap", "late": False},
-            {"agent": "aider", "mode": "cheap", "late": True},
         ],
     },
     "polish": {
@@ -207,7 +206,6 @@ ROUTE_TABLE: dict = {
             {"agent": "cursor", "mode": "composer", "late": False},
             {"agent": "vibe", "mode": "cheap", "late": False},
             {"agent": "codex", "mode": "mid", "late": False},
-            {"agent": "aider", "mode": "cheap", "late": True},
         ],
     },
     # STAGE 2 (2026-08-10): review -> mid, deliberately in BOTH directions. gemini drops Pro ->
@@ -217,7 +215,7 @@ ROUTE_TABLE: dict = {
     "review": {
         "role": "review",
         "agents": [
-            {"agent": "muse", "mode": "mid", "late": True},  # explicit-only backup exploration
+            {"agent": "muse", "mode": "mid", "late": True},  # late seat: metered subscription
             {"agent": "cursor", "mode": "composer", "late": False},
             {"agent": "vibe", "mode": "mid", "late": False},
             {
@@ -374,6 +372,64 @@ def _learned_rank(learned: dict | None, agent: str, fallback: int) -> int:
     if isinstance(value, dict):
         return int(value.get("rank", fallback))
     return int(value)
+
+
+def _local_comparative_enabled() -> bool:
+    raw = (os.environ.get("ORCH_LOCAL_COMPARATIVE") or "1").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _comparative_export_path() -> Path:
+    if os.environ.get("ORCH_STATE_DIR"):
+        state_dir = Path(os.environ["ORCH_STATE_DIR"]).expanduser()
+    elif (
+        os.environ.get("HANDOFF_DIR")
+        and Path(os.environ["HANDOFF_DIR"]).expanduser() != _DEFAULT_HANDOFF_DIR
+    ):
+        state_dir = Path(os.environ["HANDOFF_DIR"]).expanduser()
+    elif Path(feedback.DB_PATH) != _DEFAULT_FEEDBACK_DB:
+        state_dir = Path(feedback.DB_PATH).parent
+    else:
+        state_dir = Path(_DEFAULT_STATE_DIR).expanduser()
+    return state_dir / ROUTE_WEIGHTS_EXPORT_NAME
+
+
+def _comparative_rank(task_type: str, agent: str) -> int | None:
+    path = _comparative_export_path()
+    if path not in _COMPARATIVE_EXPORT_CACHE:
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            _COMPARATIVE_EXPORT_CACHE[path] = loaded if isinstance(loaded, dict) else None
+        except FileNotFoundError:
+            _COMPARATIVE_EXPORT_CACHE[path] = None
+        except (OSError, ValueError, TypeError) as exc:
+            print(f"[router] cannot load comparative export {path}: {exc}", file=sys.stderr)
+            _COMPARATIVE_EXPORT_CACHE[path] = None
+    doc = _COMPARATIVE_EXPORT_CACHE[path]
+    if not isinstance(doc, dict):
+        return None
+    comparative_block = doc.get("comparative")
+    if (
+        not isinstance(comparative_block, dict)
+        or comparative_block.get("route_enabled") is not True
+    ):
+        return None
+    rows: list[Any] = []
+    task_types = doc.get("task_types")
+    if isinstance(task_types, dict):
+        section = task_types.get(task_type)
+        if isinstance(section, dict) and isinstance(section.get("ranking"), list):
+            rows.extend(section["ranking"])
+    reserve = doc.get("reserve")
+    if isinstance(reserve, dict) and isinstance(reserve.get(task_type), list):
+        rows.extend(reserve[task_type])
+    for row in rows:
+        if isinstance(row, dict) and row.get("agent") == agent:
+            rank = row.get("comparative_rank")
+            if isinstance(rank, int) and not isinstance(rank, bool) and rank >= 0:
+                return rank
+            return None
+    return None
 
 
 def _learned_n_obs(learned: dict | None, agent: str) -> int:
@@ -539,11 +595,11 @@ def _pacing_choice(scored, cap, learned, rng):
     # ok-before-warn ranking so measured warn seats can compete with neutral ones.
     def policy_tier(item):
         score = item[0][0]
-        return score[:2] + score[3:-1]
+        return score[:2] + score[3:5]
 
     def legacy_tier(item):
         # Full discrete+drain prefix (ok-before-warn included); learned rank excluded.
-        return item[0][0][:-1]
+        return item[0][0][:5]
 
     best_tier = min(policy_tier(r) for r in eligible)
     paced = [r for r in eligible if policy_tier(r) == best_tier]
@@ -612,10 +668,11 @@ def select_agent(
     fail-toward-motion for quota-only shed pools. Preserve tick load limits;
     retain every candidate's pacing numbers in the decision/dispatch metadata.
     Without pacing: state in {ok, warn(if allow_warn)}; shed/unknown skipped. Ranked by
-    (under-tick-cap first, then non-late, then ok-before-warn, then capacity policy, then LEARNED rank), with
-    ROUTE_TABLE order as a stable tiebreak. The under-cap key SPREADS concurrent work; the
-    learned key lets the feedback store REORDER agents within a capacity tier from observed
-    effectiveness — but only when `learned` is supplied (no data => identical to the prior).
+    (under-tick-cap first, then non-late, then ok-before-warn, then capacity policy, then
+    comparative rank when ORCH_LOCAL_COMPARATIVE!=0 and route_enabled is true, then LEARNED rank),
+    with ROUTE_TABLE order as a stable tiebreak. The under-cap key SPREADS concurrent work; the
+    comparative and learned keys reorder agents within a capacity tier, recording
+    `route_source="route_weights_comparative"` when the comparative term changed the pick.
     `learned` = {agent: rank} or {agent: {rank,n_obs,...}} for THIS task_type (0 = best); absent
     agents sort after known ones.
     `only` (optional) = restrict candidates to this set of agents (e.g. KEEPALIVE_AGENTS for remote).
@@ -635,12 +692,14 @@ def select_agent(
             for entry in spec["agents"]
         }
     scored: list[ScoredSelection] = []
+    base_scored: list[ScoredSelection] = []
+    comparative_on = profile_transport == "local" and _local_comparative_enabled()
     pacing_active = any(_measured_pacing(r) for r in cap.get("agents", {}).values())
     for idx, entry in enumerate(spec["agents"]):
         if only is not None and entry["agent"] not in only:
             continue
-        # backup-only seats (aider): never auto-selected; reachable only when a caller explicitly
-        # restricts to them via `only` (e.g. only={"aider"}). Keeps them as on-demand overflow capacity.
+        # backup-only seats (BACKUP_AGENTS, empty since 2026-11-11): never auto-selected; reachable
+        # only when a caller explicitly restricts to them via `only`.
         if (
             not neutral
             and entry["agent"] in BACKUP_AGENTS
@@ -723,13 +782,22 @@ def select_agent(
             _drain_urgency(entry["agent"], cap),
         )  # 16(e): continuous pacing within the tier
         # Stable table rank is the legacy learned-rank fallback.
-        score = score + (
-            (_learned_rank(learned, entry["agent"], len(learned) + idx) if learned else idx),
+        learned_term = (
+            _learned_rank(learned, entry["agent"], len(learned) + idx) if learned else idx
         )
+        base_score: Score = score + (learned_term,)
+        if comparative_on:
+            comp_rank = _comparative_rank(task_type, entry["agent"])
+            comp_term: Score = (0, comp_rank) if comp_rank is not None else (1, 0)
+            score = score + comp_term + (learned_term,)
+        else:
+            score = base_score
         scored.append((score, entry, st, idx))
+        base_scored.append((base_score, entry, st, idx))
     if not scored:
         return None
     scored.sort(key=lambda x: x[0])  # stable -> preserves table order within a score
+    base_scored.sort(key=lambda x: x[0])
     picked = scored[0]
     explored = False
     rng = rng or random
@@ -739,17 +807,17 @@ def select_agent(
     if cold_start:
         # Sample only an equally admissible capacity tier. This is allocation of
         # an already-needed job, not extra comparison/benchmark dispatches.
-        tier = scored[0][0][:5]
-        picked = rng.choice([row for row in scored if row[0][:5] == tier])
+        tier = base_scored[0][0][:5]
+        picked = rng.choice([row for row in base_scored if row[0][:5] == tier])
     pacing_decision = None
     # Draw legacy exploration first so pacing cannot consume or suppress the
     # unrelated pools' exploration share. Pace only the exploitation choice.
     epsilon = _exploration_rate(exploration_rate)
     if epsilon > 0 and rng.random() < epsilon:
         mode = _exploration_mode(exploration_mode)
-        exploration_scored = scored
+        exploration_scored = base_scored
         if pacing_active:
-            exploration_scored = [r for r in scored if r[2] != "shed"]
+            exploration_scored = [r for r in base_scored if r[2] != "shed"]
         challenger = (
             _thompson_exploration_choice(exploration_scored, learned, rng)
             if mode == "thompson-hybrid"
@@ -767,13 +835,33 @@ def select_agent(
                     "invocation",
                     ref=f"{task_type}:{entry_agent(challenger)}",
                 )
+    baseline_picked = base_scored[0]
     if pacing_active and not explored and not cold_start:
-        picked, pacing_decision = _pacing_choice(scored, cap, learned, rng)
+        picked, pacing_decision = _pacing_choice(base_scored, cap, learned, rng)
+        if comparative_on and pacing_decision is None:
+            # Comparative keys follow the five capacity keys: the same candidates
+            # reach the same unmeasured fallback in either ordering. Replaying
+            # that deterministic path consumes no random draws. Weighted pacing
+            # retains its policy and is never attributed to comparative ranking.
+            baseline_picked = picked
+            picked, _ = _pacing_choice(scored, cap, learned, rng)
     _, entry, st, _idx = picked
+    route_source = (
+        "route_weights_comparative"
+        if (
+            comparative_on
+            and not explored
+            and not cold_start
+            and pacing_decision is None
+            and entry["agent"] != baseline_picked[1]["agent"]
+        )
+        else "route_weights"
+    )
     result = {
         **entry,
         "state": st,
         "capacity_policy": _policy(cap, entry["agent"]),
+        "route_source": route_source,
         **({"pacing_decision": pacing_decision} if pacing_decision else {}),
         "exploration": explored,
         "exploration_mode": _exploration_mode(exploration_mode) if explored else "",
@@ -1078,7 +1166,7 @@ def select_remote_agent(
 ):
     """Gate #2: choose which `agent:<X>` label to apply for REMOTE keepalive delegation. Route-table +
     learned-weights + capacity ranking, restricted to keepalive-runnable lanes (KEEPALIVE_AGENTS;
-    vibe/aider have no remote lane). RESERVE_AGENTS (claude) are EXCLUDED for routine work — Claude's
+    vibe has no remote lane). RESERVE_AGENTS (claude) are EXCLUDED for routine work — Claude's
     weekly cap is scarce — and used ONLY when `high_leverage=True` or no cheaper keepalive agent has
     capacity (last-resort). Returns the chosen entry {agent, mode, state} or None. The caller hands the
     agent to dispatcher.delegate_remote()."""
@@ -1181,7 +1269,11 @@ def choose_mode(
     needs_local: str = "",
     local: dict | None = None,
 ) -> dict:
-    """Where the next start runs: {agent, mode: 'local'|'remote'|None, reason, local}.
+    """Where the next start runs: {agent, mode: 'local'|'remote'|None, reason, local, route_source}.
+
+    `route_source` is select_agent's own attribution ("route_weights_comparative" when the comparative
+    ranking changed the pick), passed through so a caller that starts the work can record it: without it
+    opener-core starts could not show whether comparative routing ever chose an agent (2026-11-18).
 
     Local first while `local_capacity` is ok (the local keepalive loop, local_loop.py, gives it the same
     CI-feedback rounds hosted keepalive has). Offload to hosted keepalive when local capacity is out, the
@@ -1191,7 +1283,7 @@ def choose_mode(
     tried = set(tried)
     local = local or local_capacity()
     route_agents = {e["agent"] for spec in _ROUTE_TABLE_TYPED.values() for e in spec["agents"]}
-    # backup seats (paygo aider, explicit-only muse) are never auto-selected, local or hosted
+    # backup seats (BACKUP_AGENTS; none since 2026-11-11) are never auto-selected, local or hosted
     untried = route_agents - tried - BACKUP_AGENTS
     if not local["ok"] and needs_local:
         return {
@@ -1209,6 +1301,7 @@ def choose_mode(
                 "mode": "local",
                 "reason": f"{why}: {local['reason']}",
                 "local": local,
+                "route_source": pick.get("route_source"),
             }
         if needs_local:
             return {
@@ -1234,6 +1327,7 @@ def choose_mode(
             "mode": "remote",
             "reason": f"offload to hosted: {local_miss}",
             "local": local,
+            "route_source": remote.get("route_source"),
         }
     return {
         "agent": None,
@@ -1417,6 +1511,7 @@ def plan(
                     "target": tgt,
                     "task_type": b["task_type"],
                     "lane": b.get("lane"),
+                    "route_source": entry.get("route_source"),
                     "pacing_decision": entry.get("pacing_decision"),
                     "capacity_state": entry["state"],
                     "capacity_policy": policy,
@@ -1548,7 +1643,7 @@ def _selftest_gemini_policy() -> None:
         adapters, "advertised_models", return_value=list(adapters.MODEL_TIERS["gemini"].values())
     ):
         assert {p["requested_model"] for p in _automatic_profiles(entry, transport="local")} == {
-            "gemini-3.8-flash-high"
+            "gemini-4-hydrogen-high"
         }, "automatic profiles must obey the effective ceiling"
     with patch.object(adapters, "model_health", return_value={"resolvable": False, "model": None}):
         assert not _automatic_profiles(entry, transport="local"), "unresolved models must refuse"
@@ -1562,7 +1657,10 @@ def _selftest() -> None:
     execution_profiles._selftest()
 
     tmp = tempfile.mkdtemp(prefix="router-selftest-")
+    old_state_dir = os.environ.get("ORCH_STATE_DIR")
     os.environ["HANDOFF_DIR"] = tmp
+    os.environ["ORCH_STATE_DIR"] = tmp
+    _COMPARATIVE_EXPORT_CACHE.clear()
     old_exploration_rate = os.environ.get("ORCH_EXPLORATION_RATE")
     old_exploration_mode = os.environ.get("ORCH_EXPLORATION_MODE")
     os.environ["ORCH_EXPLORATION_RATE"] = "0"
@@ -1580,7 +1678,6 @@ def _selftest() -> None:
                 "codex": "ok",
                 "claude": "ok",
                 "gemini": "ok",
-                "aider": "ok",
             }
         )
         bk = [
@@ -1700,7 +1797,7 @@ def _selftest() -> None:
             "gemini": {"rank": 2, "n_obs": 4},
             "cursor": {"rank": 3, "n_obs": 2},
             "vibe": {"rank": 4, "n_obs": 1},
-            "aider": {"rank": 5, "n_obs": 0},
+            "muse": {"rank": 5, "n_obs": 0},
         }
         explore = select_agent(
             "implement", all_ok, learned=learned_meta, exploration_rate=1.0, rng=random.Random(7)
@@ -1709,7 +1806,7 @@ def _selftest() -> None:
         assert explore["exploration_mode"] == "epsilon-greedy", explore
         assert explore["agent"] == "codex", explore
         assert (
-            explore["agent"] != "aider"
+            explore["agent"] != "muse"
         ), "exploration must not jump to a late/paygo tier while non-late is available"
         epsilon_explore = select_agent(
             "implement",
@@ -1750,7 +1847,7 @@ def _selftest() -> None:
             "gemini": {"rank": 2, "n_obs": 1, "posterior": 0.40, "score": 0.40},
             "cursor": {"rank": 3, "n_obs": 1, "posterior": 0.35, "score": 0.35},
             "vibe": {"rank": 4, "n_obs": 1, "posterior": 0.30, "score": 0.30},
-            "aider": {"rank": 5, "n_obs": 0, "posterior": 0.95, "score": 0.95},
+            "muse": {"rank": 5, "n_obs": 0, "posterior": 0.95, "score": 0.95},
         }
         th = select_agent(
             "implement",
@@ -1763,7 +1860,7 @@ def _selftest() -> None:
         assert th["exploration"] is True and th["exploration_mode"] == "thompson-hybrid", th
         assert th["agent"] in {"codex", "gemini", "cursor", "vibe"}, th
         assert (
-            th["agent"] != "aider"
+            th["agent"] != "muse"
         ), "Thompson hybrid must stay in the winner's non-late policy tier"
 
         # gate #2: select_remote_agent restricts to keepalive lanes AND reserves claude (weekly-cap scarce)
@@ -1820,34 +1917,25 @@ def _selftest() -> None:
         assert replayed["rng_seed"] == profile_assignment["profile_rng_seed"]
         assert replayed["policy_version"] == profile_assignment["profile_policy_version"]
 
-        # mechanical with composer+vibe shed → codex (mid) BEFORE aider (paygo/late)
+        # mechanical with composer+vibe shed → codex (mid)
         p3 = plan(
             [bk[0]],
-            cap({"cursor": "shed", "vibe": "shed", "codex": "ok", "aider": "ok"}),
+            cap({"cursor": "shed", "vibe": "shed", "codex": "ok"}),
             dry_run=True,
         )
         assert (
             p3["assignments"][0]["agent"] == "codex" and p3["assignments"][0]["mode"] == "mid"
         ), p3["assignments"]
 
-        # backup-only (owner 2026-06-21): everything non-late shed → aider is NOT auto-selected; it is
-        # held as explicit backup capacity, reachable only via `only={"aider"}`, never routine routing.
-        cap_all_shed = cap(
-            {"cursor": "shed", "vibe": "shed", "codex": "shed", "claude": "shed", "aider": "ok"}
-        )
+        # everything shed for mechanical -> nothing auto-fills (no late or backup seat remains there)
+        cap_all_shed = cap({"cursor": "shed", "vibe": "shed", "codex": "shed", "claude": "shed"})
         p3b = plan([bk[0]], cap_all_shed, dry_run=True)
-        assert not p3b["assignments"], (
-            "aider must not auto-fill as last resort",
-            p3b["assignments"],
-        )
-        assert (
-            select_agent("mechanical", cap_all_shed, only={"aider"})["agent"] == "aider"
-        ), "aider stays reachable as explicit backup capacity"
+        assert not p3b["assignments"], p3b["assignments"]
 
         # priority: scarce seat (codex) warn → review dropped, code still runs
         p4 = plan(
             bk,
-            cap({"cursor": "ok", "vibe": "ok", "codex": "warn", "claude": "ok", "aider": "ok"}),
+            cap({"cursor": "ok", "vibe": "ok", "codex": "warn", "claude": "ok"}),
             dry_run=True,
         )
         assert p4["pressure"] is True
@@ -1881,9 +1969,7 @@ def _selftest() -> None:
         # ONE runs this tick (claude), the other waits — no two concurrent claude rounds.
         ps2 = plan(
             four_impl[:2],
-            cap(
-                {"claude": "ok", "codex": "shed", "cursor": "shed", "vibe": "shed", "aider": "shed"}
-            ),
+            cap({"claude": "ok", "codex": "shed", "cursor": "shed", "vibe": "shed"}),
             dry_run=True,
         )
         assert [a["agent"] for a in ps2["assignments"]] == ["claude"] and ps2["lane_cap"] == 1, ps2[
@@ -1939,7 +2025,6 @@ def _selftest() -> None:
                 "codex": "shed",
                 "claude": "shed",
                 "gemini": "ok",
-                "aider": "shed",
             }
         )
         pg = plan(
@@ -1956,7 +2041,6 @@ def _selftest() -> None:
                 "gemini": {"state": "ok", "policy": "drain"},
                 "cursor": {"state": "ok"},
                 "vibe": {"state": "ok"},
-                "aider": {"state": "ok"},
             }
         }
         pg_prom = plan(
@@ -1983,7 +2067,6 @@ def _selftest() -> None:
                 "gemini": {"state": "ok", "policy": "reserve"},
                 "cursor": {"state": "ok"},
                 "vibe": {"state": "ok"},
-                "aider": {"state": "ok"},
             }
         }
         pg_dem = plan(
@@ -2004,7 +2087,6 @@ def _selftest() -> None:
                 "gemini": {"state": "ok", "policy": "reserve"},
                 "cursor": {"state": "ok"},
                 "vibe": {"state": "shed"},
-                "aider": {"state": "ok"},
             }
         }
         pick_last = select_agent("implement", cap_reserve_late, load={"cursor": 1})
@@ -2025,7 +2107,6 @@ def _selftest() -> None:
                     "vibe": "shed",
                     "codex": "shed",
                     "claude": "shed",
-                    "aider": "shed",
                 }
             ),
             dry_run=True,
@@ -2099,20 +2180,20 @@ def _selftest() -> None:
         finally:
             globals()["BACKLOG_JSON"] = old_backlog
 
-        # muse (#612): listed for declared implement/review exploration, but BACKUP_AGENTS keeps
-        # it out of automatic selection. It is reachable only with an explicit only={"muse"}.
+        # muse (#612; un-backed 2026-11-11): a routine LATE seat. With the non-late implement lanes up
+        # it is not chosen; with them all shed it fills the implement slot. No backup seats remain.
         all_ok_muse = cap(
-            {
-                **{a: "ok" for a in ("cursor", "vibe", "codex", "claude", "gemini", "aider")},
-                "muse": "ok",
-            }
+            {**{a: "ok" for a in ("cursor", "vibe", "codex", "claude", "gemini")}, "muse": "ok"}
         )
-        for _tt in ("implement", "mechanical", "review", "epic", "testgen", "codemod"):
+        for _tt in ("implement", "review"):
             _pick = select_agent(_tt, all_ok_muse)
-            assert _pick is None or _pick["agent"] != "muse", (_tt, _pick)
-        _only = select_agent("implement", all_ok_muse, only={"muse"})
-        assert _only and _only["agent"] == "muse", _only
-        assert "muse" in BACKUP_AGENTS
+            assert _pick is not None and _pick["agent"] != "muse", (_tt, _pick)
+        only_muse_up = cap(
+            {**{a: "shed" for a in ("cursor", "vibe", "codex", "claude", "gemini")}, "muse": "ok"}
+        )
+        _late = select_agent("implement", only_muse_up)
+        assert _late and _late["agent"] == "muse", _late
+        assert not BACKUP_AGENTS
 
         print(
             "router.py selftest: OK (route-table prior, capacity sequencing, code>review "
@@ -2124,6 +2205,11 @@ def _selftest() -> None:
 
         shutil.rmtree(tmp, ignore_errors=True)
         os.environ.pop("HANDOFF_DIR", None)
+        _COMPARATIVE_EXPORT_CACHE.clear()
+        if old_state_dir is None:
+            os.environ.pop("ORCH_STATE_DIR", None)
+        else:
+            os.environ["ORCH_STATE_DIR"] = old_state_dir
         if old_exploration_rate is None:
             os.environ.pop("ORCH_EXPLORATION_RATE", None)
         else:

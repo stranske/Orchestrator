@@ -55,7 +55,7 @@ PRIORITY: dict[str, int] = {
 STABLE_SYNC_BRANCHES = {"sync/workflows-candidate", "sync/workflows-delivery"}
 DELIVERY_RECORD_PATTERN = re.compile(r"<!--\s*sync-pr-delivery-record:v1\s+([\s\S]*?)\s*-->")
 PYTHON_SHARD_COUNT = 6
-PYTHON_SHARD_RUNTIMES = ("3.13", "3.14")
+PYTHON_SHARD_RUNTIMES = ("3.14",)  # 3.13 runs in CI's flat exec-mirror shards (2026-11-11)
 PYTHON_SHARD_ARTIFACT = re.compile(
     r"^gate-shard-(?P<shard>[1-9]\d*)-coverage-" r"(?P<runtime>3\.13|3\.14)-(?P<attempt>[1-9]\d*)$"
 )
@@ -482,7 +482,7 @@ def summarize(context: SummaryContext) -> SummaryResult:
     if missing_shards:
         lines.append("- Python shard artifacts: ❌ missing " + ", ".join(missing_shards) + ".")
     elif context.python_required:
-        lines.append("- Python shard artifacts: ✅ all 6 shards reported for Python 3.13 and 3.14.")
+        lines.append("- Python shard artifacts: ✅ all 6 shards reported for Python 3.14.")
     if context.combined_coverage_status == "complete" and isinstance(
         context.combined_coverage_percent, (int, float)
     ):

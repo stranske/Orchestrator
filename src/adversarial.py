@@ -1550,7 +1550,9 @@ def _selftest_one_reviewer() -> None:
 
     def select(task, cap, *, only, learned):
         offered.append(set(only))
-        live = sorted(only - {"cursor", "gemini", "codex", "claude"} if dead_primary else only)
+        live = sorted(
+            only - {"cursor", "gemini", "codex", "claude", "muse"} if dead_primary else only
+        )
         return {"agent": live[0]} if live else None
 
     dead_primary = False
@@ -1568,7 +1570,9 @@ def _selftest_one_reviewer() -> None:
         select_fn=lambda *a, **k: None,
     )
     assert blind["agent"] == "claude" and "capacity unknown" in blind["reason"], blind
-    everything_shed = {"agents": {a: {"state": "shed"} for a in ("cursor", "gemini", "claude")}}
+    everything_shed = {
+        "agents": {a: {"state": "shed"} for a in ("cursor", "gemini", "claude", "muse")}
+    }
     assert (
         choose_reviewer(
             {"vibe", "codex"}, cap=everything_shed, learned={}, select_fn=lambda *a, **k: None

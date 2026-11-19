@@ -131,7 +131,6 @@ def test_testgen_never_routes_to_gemini_even_when_draining_agy():
             "gemini": {"state": "ok", "policy": "drain"},
             "cursor": {"state": "ok"},
             "vibe": {"state": "ok"},
-            "aider": {"state": "ok"},
         }
     }
     selected = router.select_agent("testgen", cap_drain)

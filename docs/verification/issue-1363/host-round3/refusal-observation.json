@@ -1,0 +1,118 @@
+{
+  "observed_at": "2026-11-12T00:32:24.934296+00:00",
+  "source": "/Users/teacher/.codex/orchestrator/followup-evidence/latest.json",
+  "provision": {
+    "blocking": 1,
+    "branch_refusals": 188,
+    "checked_at": "2026-11-11T23:40:07.702839+00:00",
+    "collection_max_gap_seconds": 7200.0,
+    "collector_sha256": "65fa782ef1899c4105110ea9b19654a62dd4d643a8d63512d93be2d9bc1bfe0b",
+    "continuation": {
+      "action": "retain_incomplete",
+      "network_calls": 0
+    },
+    "continuity_failures": [],
+    "continuous_since": "2026-11-11T18:40:07.286665+00:00",
+    "counts": {
+      "failed/branch-exists": 41,
+      "failed/branch-held": 147,
+      "failed/provision-error": 253,
+      "failed/set-aside": 30,
+      "ok/dirty-holder-preserved": 2,
+      "ok/new-worktree": 258,
+      "ok/set-aside": 5,
+      "reclaimed/branch-held": 80,
+      "reclaimed/branch-reset": 9,
+      "reused/branch-resume": 2,
+      "reused/existing-worktree": 339,
+      "reused/fast-forwarded": 102
+    },
+    "coverage": "UNKNOWN",
+    "drain": "existing hourly collector retains intact segments; existing opener verifies full acceptance after a genuine seven-day zero-refusal window",
+    "drainable": 1,
+    "evidence_ready": false,
+    "instrument_sha256": "0b9eb004a9fc8c162a595098bfbdf3c1a1c4f8a33ee6757b0257f407031d9de9",
+    "issue": 1098,
+    "latest_refusals": [
+      {
+        "cause": "branch-held",
+        "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__1211__closer",
+        "lane": "opener",
+        "outcome": "failed",
+        "target": "stranske/Orchestrator#1210",
+        "ts": "2026-11-07T06:13:33.359024+00:00"
+      },
+      {
+        "cause": "branch-held",
+        "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__1228__closer",
+        "lane": "opener",
+        "outcome": "failed",
+        "target": "stranske/Orchestrator#1227",
+        "ts": "2026-11-08T16:04:53.865551+00:00"
+      },
+      {
+        "cause": "branch-held",
+        "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Trend_Model_Project__6190__opener",
+        "lane": "closer",
+        "outcome": "failed",
+        "target": "stranske/Trend_Model_Project#6201",
+        "ts": "2026-11-08T20:17:23.093699+00:00"
+      },
+      {
+        "cause": "branch-held",
+        "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4568__opener",
+        "lane": "closer",
+        "outcome": "failed",
+        "target": "stranske/Workflows#4574",
+        "ts": "2026-11-09T05:01:09.770140+00:00"
+      },
+      {
+        "cause": "branch-exists",
+        "holder_path": null,
+        "lane": "opener",
+        "outcome": "failed",
+        "target": "stranske/Workflows#4612",
+        "ts": "2026-11-10T15:14:19.564055+00:00"
+      },
+      {
+        "cause": "branch-held",
+        "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__trip-planner__2019__opener",
+        "lane": "closer",
+        "outcome": "failed",
+        "target": "stranske/trip-planner#2027",
+        "ts": "2026-11-10T15:14:17.325633+00:00"
+      },
+      {
+        "cause": "branch-held",
+        "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__1332__opener: live pid 13011, 78791",
+        "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__1332__opener",
+        "lane": "closer",
+        "outcome": "failed",
+        "target": "stranske/Orchestrator#1336",
+        "ts": "2026-11-11T00:31:59.407013+00:00"
+      },
+      {
+        "cause": "branch-held",
+        "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989",
+        "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+        "lane": "closer",
+        "outcome": "failed",
+        "target": "stranske/Workflows#4637",
+        "ts": "2026-11-11T16:59:47.763115+00:00"
+      }
+    ],
+    "segments": [
+      {
+        "lines": 1777,
+        "path": "/Users/teacher/.codex/orchestrator/provision-events.ndjson",
+        "sha256": "18a0a7362f6b125d227b622c3bb56fba5b7ce870fc298d204b43f5012d8a46bc"
+      },
+      {
+        "lines": 335,
+        "path": "/Users/teacher/.codex/orchestrator/provision-events.ndjson.pre-718-repair-2026-11-03",
+        "sha256": "ccad083cf41cd3b6b839a8dd49fd6d1c651ce44458e364bf6e96ffb0a2ad1a76"
+      }
+    ],
+    "window_start": "2026-11-04T23:40:07.702839+00:00"
+  }
+}

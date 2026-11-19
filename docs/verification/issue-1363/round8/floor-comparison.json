@@ -1,0 +1,8 @@
+{
+  "revision": "86b3ce23622653bc138ccc4e9d5c06e5cbb9fc28",
+  "origin_main": "5c413d73136185c1fd88a92e2763ba7d271d27ae",
+  "exit_code": 1,
+  "output": "- /dev/fd/63 differ: byte 19, line 2\n",
+  "identical": false,
+  "sha256": "2b0df1cb5b074ffb3cebb3187fc8b092095f1ebf193917d91b9fa82e0a881580"
+}

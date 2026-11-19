@@ -1,0 +1,103 @@
+{
+  "recorded_at": "2026-11-12T03:02:16.693226+00:00",
+  "source_sha256": "eeeaf69a3d194d2b88a6e6b5f5f4f0e11a08916242a64ecc6dbecc34d24acd07",
+  "test_sha256": "427daf1a422e381107526d0fd897b09822a6e7a6acc958bde1a162baef18b8b4",
+  "mutations": {
+    "early-commit": {
+      "baseline": {
+        "command": [
+          "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_profile_trial_ingest.py::test_ingest_is_one_transaction_and_a_mid_write_failure_leaves_nothing[_record_run_in_conn-2]",
+          "-m",
+          "not slow",
+          "--tb=short",
+          "--junitxml=/home/runner/work/Orchestrator/Orchestrator/docs/verification/issue-1216-mutations-20261112/early-commit-baseline.xml"
+        ],
+        "exit_status": 0,
+        "test_id": "test_ingest_is_one_transaction_and_a_mid_write_failure_leaves_nothing[_record_run_in_conn-2]"
+      },
+      "failure": {
+        "command": [
+          "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_profile_trial_ingest.py::test_ingest_is_one_transaction_and_a_mid_write_failure_leaves_nothing[_record_run_in_conn-2]",
+          "-m",
+          "not slow",
+          "--tb=short",
+          "--junitxml=/home/runner/work/Orchestrator/Orchestrator/docs/verification/issue-1216-mutations-20261112/early-commit-failure.xml"
+        ],
+        "exit_status": 1,
+        "test_id": "test_ingest_is_one_transaction_and_a_mid_write_failure_leaves_nothing[_record_run_in_conn-2]"
+      },
+      "restored": {
+        "command": [
+          "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_profile_trial_ingest.py::test_ingest_is_one_transaction_and_a_mid_write_failure_leaves_nothing[_record_run_in_conn-2]",
+          "-m",
+          "not slow",
+          "--tb=short",
+          "--junitxml=/home/runner/work/Orchestrator/Orchestrator/docs/verification/issue-1216-mutations-20261112/early-commit-restored.xml"
+        ],
+        "exit_status": 0,
+        "test_id": "test_ingest_is_one_transaction_and_a_mid_write_failure_leaves_nothing[_record_run_in_conn-2]"
+      },
+      "restored_source_sha256": "eeeaf69a3d194d2b88a6e6b5f5f4f0e11a08916242a64ecc6dbecc34d24acd07"
+    },
+    "identity-gate-removed": {
+      "baseline": {
+        "command": [
+          "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_profile_trial_ingest.py::test_local_identity_claims_require_an_independent_provider_lookup",
+          "-m",
+          "not slow",
+          "--tb=short",
+          "--junitxml=/home/runner/work/Orchestrator/Orchestrator/docs/verification/issue-1216-mutations-20261112/identity-gate-removed-baseline.xml"
+        ],
+        "exit_status": 0,
+        "test_id": "test_local_identity_claims_require_an_independent_provider_lookup"
+      },
+      "failure": {
+        "command": [
+          "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_profile_trial_ingest.py::test_local_identity_claims_require_an_independent_provider_lookup",
+          "-m",
+          "not slow",
+          "--tb=short",
+          "--junitxml=/home/runner/work/Orchestrator/Orchestrator/docs/verification/issue-1216-mutations-20261112/identity-gate-removed-failure.xml"
+        ],
+        "exit_status": 1,
+        "test_id": "test_local_identity_claims_require_an_independent_provider_lookup"
+      },
+      "restored": {
+        "command": [
+          "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+          "-m",
+          "pytest",
+          "-q",
+          "tests/test_profile_trial_ingest.py::test_local_identity_claims_require_an_independent_provider_lookup",
+          "-m",
+          "not slow",
+          "--tb=short",
+          "--junitxml=/home/runner/work/Orchestrator/Orchestrator/docs/verification/issue-1216-mutations-20261112/identity-gate-removed-restored.xml"
+        ],
+        "exit_status": 0,
+        "test_id": "test_local_identity_claims_require_an_independent_provider_lookup"
+      },
+      "restored_source_sha256": "eeeaf69a3d194d2b88a6e6b5f5f4f0e11a08916242a64ecc6dbecc34d24acd07"
+    }
+  }
+}

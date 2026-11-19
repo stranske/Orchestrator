@@ -56,6 +56,7 @@ import statistics
 import subprocess
 import sys
 import time
+from collections import deque
 from collections.abc import Callable, Mapping
 from contextlib import closing
 from datetime import datetime, timezone
@@ -81,6 +82,45 @@ SHED_MANUAL_HORIZON_DAYS = 2 * REVIEW_DAYS
 # An expired marker leaves at the first capacity read after its expiry, and the tick reads capacity
 # on every run, before this step (orchestrate.sh). One still on disk a day later is not leaving.
 SHED_EXPIRED_GRACE_S = 86400
+
+STUCK_MIN_ROUNDS = 6
+STUCK_MIN_SPAN_S = 3600
+STUCK_JOURNAL_LINES = 200
+STUCK_HOLD_ACTIONS = frozenset({"already-parked", "complete"})
+
+# An open PR that no lane journal has named for UNOWNED_WINDOW_S and that has had no push for
+# UNOWNED_IDLE_S has no owner the system can see (2026-11-18: four such PRs sat idle 4-23 days).
+UNOWNED_WINDOW_S = 72 * 3600
+UNOWNED_IDLE_S = 24 * 3600
+# The scan uses its own bounded GraphQL pagination rather than `gh pr list`: asking gh to expand
+# 100 PRs with nested commit-author data exceeded GitHub's GraphQL node limit in production.
+UNOWNED_PR_PAGE_SIZE = 25
+UNOWNED_PR_MAX_PAGES = 40  # explicit incomplete coverage after 1,000 open PRs in one repo
+UNOWNED_DEPENDABOT_GRACE_S = 3 * 86400  # dependabot keeps its own automerge for three days
+# The closer's hold labels (Workflows docs/ops/LOCAL_LANES.md). A held PR is listed, not counted.
+UNOWNED_HOLD_LABELS = frozenset(
+    {
+        "agents:paused",
+        "agent:paused",
+        "needs-human",
+        "do-not-merge",
+        "hold",
+        "agents:auto-pilot-pause",
+        "goal-drift",
+        "tracker:durable",
+    }
+)
+# Labels that name another route; the row says so, because an idle day there is still a stall.
+UNOWNED_ROUTE_LABELS = ("automerge", "agents:local-loop", "agents:keepalive")
+
+_UNOWNED_OPEN_PRS_QUERY = (
+    "query($owner:String!,$name:String!,$pageSize:Int!,$after:String){"
+    "repository(owner:$owner,name:$name){pullRequests(first:$pageSize,after:$after,states:OPEN,"
+    "orderBy:{field:CREATED_AT,direction:ASC}){nodes{number headRefName headRefOid isDraft createdAt "
+    "labels(first:100){nodes{name}pageInfo{hasNextPage}} "
+    "closingIssuesReferences(first:100){nodes{number repository{nameWithOwner}}pageInfo{hasNextPage}} "
+    "commits(last:1){nodes{commit{oid committedDate}}}}pageInfo{hasNextPage endCursor}}}}"
+)
 
 # Fleet template-delivery gates (Maint 68 promote + sync-branch canaries). Same horizon as switch
 # review: a chain latched for a week with open canaries is the failure mode observed 2026-09-02.
@@ -798,7 +838,167 @@ def _fleet_opener_cap(runner) -> dict:
     )
 
 
-def fleet_delivery_measures(*, now: int | None = None, gh_fn=None, opener_runner=None) -> dict:
+CI_WALLTIME_LIMIT_S = 600  # the owner's ten-minute rule (2026-11-08)
+CI_WALLTIME_WORKFLOWS = ("Gate", "CI")
+CI_WALLTIME_DETAIL_RUNS = 5
+
+
+def _ci_stamp(value) -> int | None:
+    """A job or step timestamp, or None while it has not happened (queued, skipped)."""
+    try:
+        return _fleet_stamp(value)
+    except _FleetReadError:
+        return None
+
+
+def ci_job_phases(jobs: list[dict]) -> dict | None:
+    """Where the slowest job's time went: queue (created to started), tests, upload, other.
+
+    A step counts as upload when its name says upload, as tests when it names a test, shard or
+    verify step; the rest of the job's running time is other."""
+    best: tuple[int, dict] | None = None
+    for job in jobs:
+        created = _ci_stamp(job.get("created_at"))
+        started = _ci_stamp(job.get("started_at"))
+        done = _ci_stamp(job.get("completed_at"))
+        if created is None or started is None or done is None:
+            continue
+        upload = tests = 0
+        for step in job.get("steps") or []:
+            a, b = _ci_stamp(step.get("started_at")), _ci_stamp(step.get("completed_at"))
+            if a is None or b is None:
+                continue
+            name = str(step.get("name") or "").lower()
+            if "upload" in name:
+                upload += b - a
+            elif any(word in name for word in ("pytest", "test", "shard", "verify")):
+                tests += b - a
+        phases = {
+            "queue": max(0, started - created),
+            "tests": tests,
+            "upload": upload,
+            "other": max(0, (done - started) - tests - upload),
+        }
+        total = done - created
+        if best is None or total > best[0]:
+            dominant = max(phases, key=lambda key: phases[key])
+            best = (total, {"job": job.get("name"), "total": total, "dominant": dominant, **phases})
+    return best[1] if best else None
+
+
+def ci_walltime(*, now: int | None = None, gh_fn=None, repos: list[str] | None = None) -> dict:
+    """FYI only: completed Gate/CI runs in the last 24 h that ran past ten minutes, per repo,
+    with the slowest job's time split into queue, tests, upload and other.
+
+    Added 2026-11-11 after the owner asked why Orchestrator PR CI took half an hour: the tests
+    ran ~1 minute while shard artifact uploads stalled 9-10.5 minutes and aggregate jobs queued
+    12+ minutes, and nothing measured CI wall time, only local verify time. A repo whose runs
+    cannot be read prints unmeasured, never zero."""
+    from backlog import SUPPORTED_REPOS
+
+    now = int(time.time()) if now is None else int(now)
+    gh = gh_fn or _gh_call
+    repos = list(repos or dict.fromkeys(r for r in SUPPORTED_REPOS if r != "stranske/Collab-Admin"))
+    since = datetime.fromtimestamp(now - 24 * 3600, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    total = 0
+    slow: list[tuple[int, str, dict]] = []
+    unreadable: dict[str, str] = {}
+    for repo in repos:
+        try:
+            listing = _fleet_json(gh, ["api", f"repos/{repo}/actions/workflows?per_page=100"])
+            ids = [
+                w["id"]
+                for w in (listing or {}).get("workflows", [])
+                if w.get("name") in CI_WALLTIME_WORKFLOWS
+            ]
+            for workflow_id in ids:
+                runs = _fleet_json(
+                    gh,
+                    [
+                        "api",
+                        f"repos/{repo}/actions/workflows/{workflow_id}/runs"
+                        f"?per_page=100&status=completed&created=>={since}",
+                    ],
+                )
+                for run in (runs or {}).get("workflow_runs", []):
+                    start = _ci_stamp(run.get("run_started_at")) or _ci_stamp(run.get("created_at"))
+                    end = _ci_stamp(run.get("updated_at"))
+                    if start is None or end is None:
+                        continue
+                    total += 1
+                    if end - start > CI_WALLTIME_LIMIT_S:
+                        slow.append((end - start, repo, run))
+        except _FleetReadError as exc:
+            unreadable[repo] = str(exc)
+    details = []
+    for wall, repo, run in sorted(slow, key=lambda item: -item[0])[:CI_WALLTIME_DETAIL_RUNS]:
+        try:
+            jobs = _fleet_json(
+                gh,
+                [
+                    "api",
+                    f"repos/{repo}/actions/runs/{run['id']}/attempts/"
+                    f"{run.get('run_attempt') or 1}/jobs?per_page=100",
+                ],
+            )
+            phases = ci_job_phases((jobs or {}).get("jobs", []))
+        except _FleetReadError:
+            phases = None
+        details.append(
+            {
+                "repo": repo,
+                "workflow": run.get("name"),
+                "run_id": run.get("id"),
+                "minutes": round(wall / 60, 1),
+                "phases": phases,
+            }
+        )
+    return {
+        "as_of": now,
+        "window_hours": 24,
+        "limit_minutes": CI_WALLTIME_LIMIT_S // 60,
+        "runs": total,
+        "over_limit": len(slow),
+        "slowest": details,
+        "unreadable": unreadable,
+    }
+
+
+def render_ci_walltime(data: dict) -> list[str]:
+    if not data:
+        return []
+    lines = ["## CI wall time (24 h, Gate and CI, FYI only)", ""]
+    lines.append(
+        f"  {data['over_limit']} of {data['runs']} completed runs over {data['limit_minutes']} min"
+        + (
+            f"; unmeasured repos: {', '.join(sorted(data['unreadable']))}"
+            if data["unreadable"]
+            else ""
+        )
+    )
+    for row in data["slowest"]:
+        ph = row["phases"]
+        if ph:
+            split = ", ".join(
+                f"{k} {round(ph[k] / 60, 1)}" for k in ("queue", "tests", "upload", "other")
+            )
+            where = f"slowest job '{ph['job']}' {round(ph['total'] / 60, 1)} min, mostly {ph['dominant']} ({split})"
+        else:
+            where = "job phases unmeasured"
+        lines.append(
+            f"  {row['repo']} {row['workflow']} run {row['run_id']}: {row['minutes']} min -- {where}"
+        )
+    lines.append("")
+    return lines
+
+
+def fleet_delivery_measures(
+    *,
+    now: int | None = None,
+    gh_fn=None,
+    opener_runner=None,
+    include_ci_walltime: bool | None = None,
+) -> dict:
     """Five independent report-only rows. Missing facts never become invented numbers.
 
     Agent ownership follows backlog's explicit agent-label rule. GitHub run action and
@@ -840,7 +1040,16 @@ def fleet_delivery_measures(*, now: int | None = None, gh_fn=None, opener_runner
                 "reason": f"would need valid {key} response ({type(exc).__name__})",
             }
         rows[key] = {"name": FLEET_DELIVERY_NAMES[key], **row}
-    return {"as_of": now, "window_hours": 48, "rows": rows}
+    out = {"as_of": now, "window_hours": 48, "rows": rows}
+    # The CI wall-time read rides with the fleet reads (one kill switch, one stub point) but is a
+    # separate key, so the five-row contract above is unchanged. A caller that injects its own
+    # gh_fn (a replay) does not get live CI reads unless it asks for them.
+    if include_ci_walltime if include_ci_walltime is not None else gh_fn is None:
+        try:
+            out["ci_walltime"] = ci_walltime(now=now, gh_fn=gh_fn)
+        except Exception as exc:  # noqa: BLE001 -- an FYI section never stops the review
+            out["ci_walltime"] = {"error": f"unmeasured ({type(exc).__name__})"}
+    return out
 
 
 def _parse_maint_68_registry_yaml(content: str) -> list[str]:
@@ -1411,6 +1620,9 @@ def gate_expiry(*, now: int | None = None, path=None) -> dict:
         "rows_with_expiry": 0,
         "expiring": [],
         "lapsed": [],
+        "retired_but_invoked": [],
+        "retired_but_invoked_count": None,
+        "retired_but_invoked_measurement": "unmeasured",
         "renewable": 0,
         "next_expiry": None,
     }
@@ -1429,6 +1641,9 @@ def gate_expiry(*, now: int | None = None, path=None) -> dict:
         for cap_id, cap in sorted(rows_all.items()):
             if not isinstance(cap, dict):
                 continue
+            retirement = capabilities.invoked_after_retirement(cap)
+            if retirement:
+                report["retired_but_invoked"].append({"capability_id": cap_id, **retirement})
             if cap.get("status") not in capabilities.NOT_LIVE_STATES:
                 if cap.get("expiry") is None:
                     continue
@@ -1454,8 +1669,11 @@ def gate_expiry(*, now: int | None = None, path=None) -> dict:
             "measurement": f"unmeasured: capability ledger unreadable ({type(exc).__name__}: {exc})",
             "expiring": [],
             "lapsed": [],
+            "retired_but_invoked": [],
             "rows_with_expiry": 0,
         }
+    report["retired_but_invoked_count"] = len(report["retired_but_invoked"])
+    report["retired_but_invoked_measurement"] = "measured"
     report["expiring"].sort(key=lambda row: (row["expiry"], row["capability_id"]))
     report["renewable"] = sum(
         1 for row in report["expiring"] + report["lapsed"] if row["renewable"]
@@ -1528,6 +1746,416 @@ def capacity_shed(*, now: float | None = None, shed_dir: Path | None = None) -> 
             report["markers"].append(_shed_row(marker, entry, now=now))
     report["suspect"] = sum(1 for row in report["markers"] if row["suspect"] is not None)
     return report
+
+
+def stuck_lane_targets(
+    *, now: float | None = None, roots: Mapping[str, Path] | None = None
+) -> dict:
+    """FYI: identical decisions persisting across consecutive lane rounds.
+
+    ``roots`` maps opener-core/closer-core to their journal directories; by default
+    both live under ORCH_STATE_DIR. Only the last 200 physical lines are examined.
+    A changed decision or a round without the target drains its streak. Count each
+    target once per round, using its last item (the round's final decision).
+    Missing, unreadable or malformed journals are unknown, never a measured zero.
+    """
+    now = time.time() if now is None else now
+    lanes = ("opener-core", "closer-core")
+    if roots is None:
+        state = Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex" / "orchestrator"))
+        roots = {lane: state / lane for lane in lanes}
+    report: dict = {
+        "status": "ok",
+        "rows": [],
+        "suspect": 0,
+        "rounds_read": dict.fromkeys(lanes),
+    }
+    errors = []
+    for lane in lanes:
+        journal = Path(roots[lane]) / "rounds.jsonl" if lane in roots else None
+        try:
+            if journal is None:
+                raise ValueError(f"no journal root configured for {lane}")
+            # Select the physical-line window before decoding; corrupt older bytes
+            # must not make an otherwise readable recent window unmeasured.
+            with journal.open("rb") as stream:
+                tail = deque(stream, maxlen=STUCK_JOURNAL_LINES)
+            runs: dict[str, dict] = {}
+            rounds_read = 0
+            previous_stamp = None
+            latest_stamp = 0.0
+            for line in tail:
+                if not line.strip():
+                    continue
+                round_ = json.loads(line.decode("utf-8"))
+                parsed_stamp = datetime.fromisoformat(round_["ts"].replace("Z", "+00:00"))
+                if parsed_stamp.tzinfo is None:
+                    raise ValueError("round timestamp has no timezone")
+                stamp = parsed_stamp.timestamp()
+                if previous_stamp is not None and stamp < previous_stamp:
+                    raise ValueError("round timestamps are out of order")
+                previous_stamp = stamp
+                items = round_["items"]
+                if not isinstance(items, list) or any(not isinstance(i, dict) for i in items):
+                    raise ValueError("round items must be a list of objects")
+                if stamp > now:
+                    continue
+                latest_stamp = stamp
+                decisions = {}
+                for item in items:
+                    target, action = item.get("target"), item.get("action")
+                    if target is None:
+                        continue  # a round-level summary names no target
+                    reason, error = item.get("reason"), item.get("error")
+                    if not all(isinstance(v, str) for v in (target, action)) or any(
+                        value is not None and not isinstance(value, str)
+                        for value in (reason, error)
+                    ):
+                        raise ValueError("item target, action and reason/error must be text")
+                    if not target or not action:
+                        raise ValueError("item target and action must not be empty")
+                    decisions[target] = (action, reason or error or "")
+                current = {}
+                for target, (action, reason) in decisions.items():
+                    prior = runs.get(target)
+                    if prior is not None and (prior["action"], prior["reason"]) == (
+                        action,
+                        reason,
+                    ):
+                        count, since = prior["rounds"] + 1, prior["since"]
+                    else:
+                        count, since = 1, stamp
+                    current[target] = {
+                        "lane": lane,
+                        "target": target,
+                        "action": action,
+                        "reason": reason,
+                        "rounds": count,
+                        "since": since,
+                    }
+                runs = current
+                rounds_read += 1
+            report["rounds_read"][lane] = rounds_read
+            for row in runs.values():
+                deliberate_hold = row["action"] in STUCK_HOLD_ACTIONS or (
+                    row["action"] in ("skip", "skip-held") and row["reason"].startswith("held:")
+                )
+                if (
+                    row["rounds"] >= STUCK_MIN_ROUNDS
+                    and latest_stamp - row["since"] >= STUCK_MIN_SPAN_S
+                    and not deliberate_hold
+                ):
+                    report["rows"].append(
+                        {
+                            **row,
+                            "since": datetime.fromtimestamp(row["since"], timezone.utc).isoformat(),
+                        }
+                    )
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            errors.append(f"{lane}: {journal} unreadable ({type(exc).__name__}: {exc})")
+    report["rows"].sort(key=lambda row: (-row["rounds"], row["since"], row["lane"], row["target"]))
+    report["suspect"] = len(report["rows"])
+    if errors:
+        report.update(status="unknown", measurement="unmeasured: " + "; ".join(errors))
+    return report
+
+
+def _lane_targets_in_window(
+    roots: Mapping[str, Path], lanes: tuple[str, ...], *, since: float, now: float
+) -> tuple[set[str], dict[str, int], list[str]]:
+    """Stream complete journals and collect targets stamped in [since, now].
+
+    Any unreadable row makes coverage unknown, including rows outside the window whose
+    timestamps or contents cannot be established. No journal lines are retained.
+    """
+    targets: set[str] = set()
+    counts: dict[str, int] = {}
+    errors: list[str] = []
+    for lane in lanes:
+        journal = Path(roots[lane]) / "rounds.jsonl" if lane in roots else None
+        try:
+            if journal is None:
+                raise ValueError(f"no journal root configured for {lane}")
+            in_window = 0
+            with journal.open("rb") as stream:
+                for line in stream:
+                    if not line.strip():
+                        continue
+                    round_ = json.loads(line.decode("utf-8"))
+                    parsed = datetime.fromisoformat(round_["ts"].replace("Z", "+00:00"))
+                    if parsed.tzinfo is None:
+                        raise ValueError("round timestamp has no timezone")
+                    stamp = parsed.timestamp()
+                    items = round_["items"]
+                    if not isinstance(items, list) or any(not isinstance(i, dict) for i in items):
+                        raise ValueError("round items must be a list of objects")
+                    if stamp < since or stamp > now:
+                        continue
+                    in_window += 1
+                    for item in items:
+                        target = item.get("target")
+                        if target is None:
+                            continue
+                        if not isinstance(target, str) or not target:
+                            raise ValueError("item target must be non-empty text")
+                        targets.add(target)
+            counts[lane] = in_window
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            errors.append(f"{lane}: {journal} unreadable ({type(exc).__name__}: {exc})")
+    return targets, counts, errors
+
+
+def _unowned_open_pr_page(
+    repo: str, cursor: str | None, *, gh_fn
+) -> tuple[list[dict], bool, str | None]:
+    """Read one deliberately small page of open PRs and normalize it for `_unowned_row`.
+
+    `gh pr list` asks GitHub to synthesize nested commit data for every requested PR.  Its hidden
+    query crossed the GraphQL node limit on Workflows.  This direct query needs only the PR head's
+    one final commit, its labels, and closing-issue identities; nested connections that do not fit
+    in their requested pages are retained as explicit per-PR incompleteness.
+    """
+    try:
+        owner, name = repo.split("/", 1)
+        if not owner or not name:
+            raise ValueError("invalid repo slug")
+    except ValueError as exc:
+        raise ValueError("invalid repo slug") from exc
+    args = [
+        "api",
+        "graphql",
+        "-f",
+        "query=" + _UNOWNED_OPEN_PRS_QUERY,
+        "-f",
+        "owner=" + owner,
+        "-f",
+        "name=" + name,
+        "-F",
+        f"pageSize={UNOWNED_PR_PAGE_SIZE}",
+    ]
+    if cursor is not None:
+        args.extend(["-f", "after=" + cursor])
+    ok, out, reason = gh_fn(args)
+    if not ok:
+        raise ValueError(reason or "GitHub GraphQL request failed")
+    try:
+        payload = json.loads(out or "{}")
+        connection = payload["data"]["repository"]["pullRequests"]
+        nodes = connection["nodes"]
+        page_info = connection["pageInfo"]
+        has_next = page_info["hasNextPage"]
+    except (KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("GitHub GraphQL PR page unreadable") from exc
+    if not isinstance(nodes, list) or not isinstance(has_next, bool):
+        raise ValueError("GitHub GraphQL PR page has invalid pagination")
+    next_cursor = page_info.get("endCursor")
+    if has_next and (not isinstance(next_cursor, str) or not next_cursor):
+        raise ValueError("GitHub GraphQL PR page has no next cursor")
+    if has_next and next_cursor == cursor:
+        raise ValueError("GitHub GraphQL PR page cursor did not advance")
+
+    rows: list[dict] = []
+    for node in nodes:
+        if not isinstance(node, dict):
+            rows.append({"_unowned_error": "PR node is not an object"})
+            continue
+        row = dict(node)
+        errors: list[str] = []
+        for field in ("labels", "closingIssuesReferences"):
+            connection = row.get(field)
+            if not isinstance(connection, dict) or not isinstance(connection.get("nodes"), list):
+                errors.append(f"{field} missing")
+                row[field] = []
+                continue
+            row[field] = connection["nodes"]
+            page_info = connection.get("pageInfo")
+            if not isinstance(page_info, dict) or page_info.get("hasNextPage") is not False:
+                errors.append(f"{field} pagination incomplete")
+        refs = row["closingIssuesReferences"]
+        normalized_refs = []
+        for ref in refs:
+            repository = ref.get("repository") if isinstance(ref, dict) else None
+            identity = repository.get("nameWithOwner") if isinstance(repository, dict) else None
+            if not isinstance(identity, str) or identity.count("/") != 1:
+                errors.append("closingIssuesReferences repository identity missing")
+                continue
+            owner, ref_name = identity.split("/", 1)
+            normalized_refs.append(
+                {
+                    "number": ref.get("number"),
+                    "repository": {"name": ref_name, "owner": {"login": owner}},
+                }
+            )
+        row["closingIssuesReferences"] = normalized_refs
+        commits = row.get("commits")
+        if not isinstance(commits, dict) or not isinstance(commits.get("nodes"), list):
+            errors.append("head commit missing")
+            row["commits"] = []
+        else:
+            normalized_commits = []
+            for node in commits["nodes"]:
+                commit = node.get("commit") if isinstance(node, dict) else None
+                if not isinstance(commit, dict):
+                    errors.append("head commit payload missing")
+                    continue
+                normalized_commits.append(commit)
+            row["commits"] = normalized_commits
+        if errors:
+            row["_unowned_error"] = "; ".join(errors)
+        rows.append(row)
+    return rows, has_next, next_cursor if has_next else None
+
+
+def unowned_open_prs(
+    *,
+    now: float | None = None,
+    roots: Mapping[str, Path] | None = None,
+    gh_fn: Callable[..., tuple[bool, str, str]] | None = None,
+    repos: list[str] | None = None,
+) -> dict:
+    """FYI: open PRs that no lane journal has named lately and that nobody has pushed to.
+
+    `stuck_lane_targets` sees only what a lane already decided about. A PR that no lane ever
+    adopts (no issue link the closer reads, a repo outside the fleet list, a keepalive that
+    stood down) never enters a journal, so it can sit for weeks with nothing reporting it.
+    This section reads the same opener-core/closer-core journals for every target named in the
+    last UNOWNED_WINDOW_S, lists open PRs per repo, and flags a non-draft PR when neither its
+    own number nor any issue it closes was named and it has had no commit for UNOWNED_IDLE_S.
+
+    Unreadable journals are unknown and stop the scan before any GitHub read: with no journal,
+    every PR would look unowned. A repo whose list fails is named as unmeasured.
+    """
+    now = time.time() if now is None else now
+    gh_fn = _gh_call if gh_fn is None else gh_fn
+    lanes = ("opener-core", "closer-core")
+    if roots is None:
+        state = Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex" / "orchestrator"))
+        roots = {lane: state / lane for lane in lanes}
+    if repos is None:
+        from backlog import SUPPORTED_REPOS
+
+        repos = list(dict.fromkeys(SUPPORTED_REPOS))
+    since = now - UNOWNED_WINDOW_S
+    report: dict = {
+        "status": "ok",
+        "rows": [],
+        "held": [],
+        "suspect": 0,
+        "repos_checked": 0,
+        "window_hours": UNOWNED_WINDOW_S // 3600,
+        "rounds_in_window": dict.fromkeys(lanes),
+    }
+    targets, counts, errors = _lane_targets_in_window(roots, lanes, since=since, now=now)
+    if errors:
+        report.update(
+            status="unknown",
+            measurement="unmeasured: " + "; ".join(errors) + " (no PR read without journals)",
+        )
+        return report
+    report["rounds_in_window"].update(counts)
+    ok, out, _reason = gh_fn(["--version"])
+    report["gh_version"] = (out.splitlines() or ["unknown"])[0].strip() if ok else "unknown"
+    repo_errors: list[str] = []
+    for repo in repos:
+        cursor = None
+        seen_numbers: set[int] = set()
+        repo_read = False
+        for _page in range(UNOWNED_PR_MAX_PAGES):
+            try:
+                prs, has_next, cursor = _unowned_open_pr_page(repo, cursor, gh_fn=gh_fn)
+            except ValueError as exc:
+                repo_errors.append(f"{repo}: pr listing unreadable ({exc})")
+                break
+            repo_read = True
+            for pr in prs:
+                try:
+                    number = int(pr["number"])
+                    if number in seen_numbers:
+                        raise ValueError("PR appeared on multiple pagination pages")
+                    seen_numbers.add(number)
+                    row = _unowned_row(repo, pr, targets=targets, now=now)
+                except (ValueError, KeyError, TypeError, AttributeError) as exc:
+                    label = f"#{pr.get('number')}" if isinstance(pr, dict) else "entry"
+                    repo_errors.append(f"{repo}{label}: unreadable ({type(exc).__name__}: {exc})")
+                    continue
+                if row is not None:
+                    (report["held"] if row["held_by"] else report["rows"]).append(row)
+            if not has_next:
+                break
+        else:
+            repo_errors.append(
+                f"{repo}: listing exceeded {UNOWNED_PR_MAX_PAGES} pages of "
+                f"{UNOWNED_PR_PAGE_SIZE} PRs, so coverage is incomplete"
+            )
+        if repo_read:
+            report["repos_checked"] += 1
+    for key in ("rows", "held"):
+        report[key].sort(key=lambda row: (-row["idle_days"], row["repo"], row["number"]))
+    report["suspect"] = len(report["rows"])
+    if repo_errors:
+        report.update(status="unknown", measurement="unmeasured: " + "; ".join(repo_errors))
+    return report
+
+
+def _unowned_row(repo: str, pr: dict, *, targets: set[str], now: float) -> dict | None:
+    """One open PR as a row, or None when a lane owns it, it is a draft, or it is not idle.
+
+    Raises for a record that lacks the evidence a verdict needs (labels, closing links, a
+    complete commit list with a readable newest date), so the caller reports it unmeasured
+    instead of reading missing evidence as idle and unheld.
+    """
+    if not isinstance(pr, dict):
+        raise TypeError("pr entry is not an object")
+    if error := pr.get("_unowned_error"):
+        raise ValueError(str(error))
+    number = int(pr["number"])
+    branch = str(pr.get("headRefName") or "")
+    if pr.get("isDraft") or branch.startswith("sync/workflows"):
+        return None  # drafts are not ready; sync branches are Maint 71's (canary section)
+    created = _parse_iso_ts(str(pr.get("createdAt") or ""))
+    if created is None:
+        raise ValueError(f"#{number} has no readable createdAt")
+    if branch.startswith("dependabot/") and now - created < UNOWNED_DEPENDABOT_GRACE_S:
+        return None
+    refs, labels_raw, commits = (
+        pr["closingIssuesReferences"],
+        pr["labels"],
+        pr["commits"],
+    )
+    if not all(isinstance(value, list) for value in (refs, labels_raw, commits)):
+        raise TypeError("closingIssuesReferences, labels and commits must be lists")
+    linked = [f"{repo}#{number}"]
+    for ref in refs:
+        owner_repo = repo
+        repository = ref.get("repository") or {}
+        name = repository.get("name")
+        login = (repository.get("owner") or {}).get("login")
+        if name and login:
+            owner_repo = f"{login}/{name}"
+        linked.append(f"{owner_repo}#{int(ref['number'])}")
+    if any(target in targets for target in linked):
+        return None
+    if not commits:
+        raise ValueError("no commits listed")
+    head = str(pr.get("headRefOid") or "")
+    if not head or str(commits[-1].get("oid") or "") != head:
+        raise ValueError("the last listed commit is not the PR head, so the newest push is unknown")
+    last_push = _parse_iso_ts(str(commits[-1].get("committedDate") or ""))
+    if last_push is None:
+        raise ValueError("newest commit has no readable committedDate")
+    idle_since = max(created, last_push)
+    if now - idle_since < UNOWNED_IDLE_S:
+        return None
+    labels = {str(label["name"]) for label in labels_raw}
+    return {
+        "repo": repo,
+        "number": number,
+        "branch": branch,
+        "idle_days": round((now - idle_since) / 86400, 1),
+        "closes": linked[1:],
+        "route_labels": [label for label in UNOWNED_ROUTE_LABELS if label in labels],
+        "held_by": sorted(labels & UNOWNED_HOLD_LABELS),
+    }
 
 
 def _shed_row(marker: dict, entry: Path, *, now: float) -> dict:
@@ -2257,6 +2885,7 @@ def review(
         "gate_expiry": gate_expiry(now=now, path=path),
         # And a seat stood down by hand is a switch held off. FYI only, on the real clock.
         "capacity_shed": capacity_shed(),
+        "stuck_lane_targets": stuck_lane_targets(now=now),
         "weekly_pacing": weekly_pacing_check(now=now),
         # Collected by the CLI, so pure readers/selftests never probe the host's interpreters.
         "python_standard": python_standard_report,
@@ -2623,23 +3252,32 @@ def assess_sandbox_fallback_report(
     ledger_path: Path | str | None = None,
     now: int | None = None,
     since: int | None = None,
+    until: int | None = None,
 ) -> dict:
-    """Count fallback runs and network-caused assess incompletions over seven days.
+    """Count fallback runs and network-caused assess incompletions in an interval.
 
     A missing ledger is unmeasured, never zero. An assess failure whose log cannot
     be read, and a window that has not elapsed, stay unverified: neither is a
     success. `since` is the implementation-merge instant; without it the window
-    is the seven days ending at `now`, which has elapsed.
+    is the seven days ending at `now`, which has elapsed. An explicit `until`
+    requires `since` and replaces the default seven-day end. The start is inclusive
+    and the end exclusive, so adjacent intervals never count the same event twice.
     """
-    window_days = ASSESS_SANDBOX_WINDOW_DAYS
+    window_days: int | float = ASSESS_SANDBOX_WINDOW_DAYS
+    default_window_seconds = ASSESS_SANDBOX_WINDOW_DAYS * 86400
     now_ts = int(time.time()) if now is None else int(now)
+    if until is not None and since is None:
+        raise ValueError("until requires since")
     if since is None:
-        start = now_ts - window_days * 86400
+        start = now_ts - default_window_seconds
         end = now_ts
         window_complete = True
     else:
         start = int(since)
-        end = start + window_days * 86400
+        end = int(until) if until is not None else start + default_window_seconds
+        if end <= start:
+            raise ValueError("window end must be after window start")
+        window_days = (end - start) / 86400
         window_complete = now_ts >= end
     if ledger_path is None:
         import adapters
@@ -2669,7 +3307,6 @@ def assess_sandbox_fallback_report(
     network = 0
     unclassifiable = 0
     malformed = 0
-    limit = min(now_ts, end)
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         if not line.strip():
             continue
@@ -2682,7 +3319,7 @@ def assess_sandbox_fallback_report(
             malformed += 1
             continue
         stamp = row.get("ts")
-        if type(stamp) is not int or not start <= stamp <= limit:
+        if type(stamp) is not int or not (start <= stamp < end and stamp <= now_ts):
             continue
         if row.get("sandbox_fallback") is True and isinstance(row.get("run_id"), str):
             fallback_ids.add(row["run_id"])
@@ -2715,7 +3352,11 @@ def assess_sandbox_fallback_report(
     if unclassifiable:
         reasons.append(f"{unclassifiable} assess incompletion(s) lack classifiable evidence")
     if not window_complete:
-        reasons.append("seven-day window has not elapsed")
+        reasons.append(
+            "seven-day window has not elapsed"
+            if window_days == ASSESS_SANDBOX_WINDOW_DAYS
+            else "observation window has not elapsed"
+        )
     if reasons:
         status = "unverified"
         reason = "; ".join(reasons)
@@ -2734,15 +3375,22 @@ def assess_sandbox_fallback_report(
 
 
 def format_assess_sandbox_fallback(section: dict) -> str:
-    """One line: the seven-day counts, and unverified/unmeasured when that is the truth."""
+    """One line: interval bounds, counts, and any evidence limitations."""
     days = section.get("window_days", ASSESS_SANDBOX_WINDOW_DAYS)
+    interval = ""
+    if "window_start" in section and "window_end" in section:
+        start, end = (
+            datetime.fromtimestamp(section[key], timezone.utc).isoformat().replace("+00:00", "Z")
+            for key in ("window_start", "window_end")
+        )
+        interval = f" [{start}, {end})"
 
     def _num(key: str) -> str:
         value = section.get(key)
         return str(value) if type(value) is int else "unmeasured"
 
     line = (
-        f"  assess sandbox fallback ({days}d): fallback_runs {_num('fallback_runs')}; "
+        f"  assess sandbox fallback ({days:g}d){interval}: fallback_runs {_num('fallback_runs')}; "
         f"network-caused assess incompletions {_num('network_caused_assess_incompletions')}"
     )
     status = section.get("status") or "unmeasured"
@@ -2796,10 +3444,9 @@ def format_report(rep: dict) -> str:
     except (OSError, ValueError, TypeError):
         lines += ["  strategy experiment: UNKNOWN — no completed scored evaluation", ""]
     lines += [experiment_producer_line(), ""]
-    if rep.get("adjudicator_shadow"):
-        lines += [rep["adjudicator_shadow"], ""]
-    if rep.get("adjudicator_live"):
-        lines += [rep["adjudicator_live"], ""]
+    adjudicator = [rep[key] for key in ("adjudicator_shadow", "adjudicator_live") if rep.get(key)]
+    if adjudicator:
+        lines += ["; ".join(adjudicator), ""]
     lines += [adversarial_shape_line(rep.get("adversarial_shape", {})), ""]
     trial_line = profile_trial_summary_line()
     if trial_line:
@@ -2901,6 +3548,11 @@ def format_report(rep: dict) -> str:
                 value = f"{row['value']} [{row['evidence_class']}]"
             lines.append(f"  {row['name']}: {value}")
         lines.append("")
+    walltime = (rep.get("fleet_delivery_measures") or {}).get("ci_walltime") or {}
+    if walltime.get("error"):
+        lines += ["## CI wall time (24 h, Gate and CI, FYI only)", "", f"  {walltime['error']}", ""]
+    else:
+        lines += render_ci_walltime(walltime)
     fleet = rep.get("fleet_gates") or {}
     if fleet:
         lines += ["## Fleet template-delivery gates (Maint 68 promote + sync canaries)", ""]
@@ -3011,6 +3663,12 @@ def format_report(rep: dict) -> str:
     shed = rep.get("capacity_shed")
     if shed is not None:
         lines += format_capacity_shed(shed)
+    stuck = rep.get("stuck_lane_targets")
+    if stuck is not None:
+        lines += format_stuck_lane_targets(stuck)
+    unowned = rep.get("unowned_open_prs")
+    if unowned is not None:
+        lines += format_unowned_open_prs(unowned)
     refusals = rep.get("worktree_git_refusals")
     if refusals is not None:
         lines += format_worktree_git_refusals(refusals)
@@ -3029,9 +3687,15 @@ def format_report(rep: dict) -> str:
         and not exploration_gate.get("suspect")
         and (
             expiry is None
-            or (expiry.get("status") == "ok" and not expiry["expiring"] and not expiry["lapsed"])
+            or (
+                expiry.get("status") == "ok"
+                and not expiry["expiring"]
+                and not expiry["lapsed"]
+                and not expiry.get("retired_but_invoked")
+            )
         )
         and (shed is None or (shed.get("status") == "ok" and shed.get("suspect") == 0))
+        and (stuck is None or (stuck.get("status") == "ok" and stuck.get("suspect") == 0))
     ):
         lines += ["  Nothing due. Every switch is either triggering or has a fresh decision.", ""]
     return "\n".join(lines)
@@ -3041,7 +3705,24 @@ def format_gate_expiry(section: dict) -> list[str]:
     """The notice in words. It ALWAYS prints, because the drained state is a statement too."""
     lines = ["## Gate expiry (FYI only; nothing here renews anything)", ""]
     if section.get("status") != "ok":
-        return lines + [f"  NOT MEASURED — {section.get('measurement', 'no reason recorded')}", ""]
+        return lines + [
+            f"  NOT MEASURED — {section.get('measurement', 'no reason recorded')}",
+            "  retired_but_invoked: unmeasured",
+            "",
+        ]
+    retired = section.get("retired_but_invoked", [])
+    lines.append(f"  retired_but_invoked: {len(retired)}")
+    for row in retired:
+        retirement = row["retirement"]
+        lines.append(
+            f"    {row['capability_id']}  retired at {retirement['timestamp']} "
+            f"({retirement.get('reason') or 'no reason recorded'}); "
+            f"kill switch: {row['kill_switch'] or 'not declared'}"
+        )
+        for event in row["invocations"]:
+            lines.append(
+                f"        invocation at {event['timestamp']}  ref: {event.get('ref') or 'none'}"
+            )
     window = section["window_days"]
     expiring, lapsed = section["expiring"], section["lapsed"]
     if not expiring and not lapsed:
@@ -3100,6 +3781,72 @@ def format_gate_expiry(section: dict) -> list[str]:
         "",
     ]
     return lines
+
+
+def format_stuck_lane_targets(section: dict) -> list[str]:
+    """Always name the drained state; partial measurements retain known suspects."""
+    lines = ["## Stuck lane targets (FYI only)", ""]
+    if section["status"] != "ok":
+        lines.append(f"  stuck lane targets: unknown — {section['measurement']}")
+    if section["suspect"]:
+        lines.append(f"  stuck lane targets: {section['suspect']} SUSPECT")
+        for row in section["rows"][:5]:
+            since = row["since"]
+            lines.append(
+                f"    {row['lane']} {row['target']}: {row['action']} — {row['reason']} "
+                f"({row['rounds']} rounds, since {since})"
+            )
+    elif section["status"] == "ok":
+        counts = section["rounds_read"]
+        lines.append(
+            f"  stuck lane targets: none (opener {counts['opener-core']} rounds, "
+            f"closer {counts['closer-core']} rounds read)"
+        )
+    return lines + [""]
+
+
+def format_unowned_open_prs(section: dict) -> list[str]:
+    """Always name the state: no unowned PR is a statement too, and unknown is never zero."""
+    lines = ["## Open PRs no lane has named (FYI only)", ""]
+    if section.get("status") == "disabled":
+        return lines + [f"  not run — {section.get('reason', 'disabled')}", ""]
+    if section["status"] != "ok":
+        lines.append(f"  unowned open PRs: unknown — {section['measurement']}")
+    hours = section["window_hours"]
+    if section["suspect"]:
+        lines.append(
+            f"  unowned open PRs: {section['suspect']} SUSPECT "
+            f"(no lane round named them in {hours}h; idle a day or more)"
+        )
+        for row in section["rows"][:10]:
+            notes = []
+            if row["closes"]:
+                notes.append("closes " + ", ".join(row["closes"]))
+            else:
+                notes.append("closes no issue")
+            if row["route_labels"]:
+                notes.append("labels " + ", ".join(row["route_labels"]))
+            lines.append(
+                f"    {row['repo']}#{row['number']} ({row['branch']}): idle "
+                f"{row['idle_days']}d; " + "; ".join(notes)
+            )
+        if section["suspect"] > 10:
+            lines.append(f"    ... and {section['suspect'] - 10} more in the JSON report")
+    elif section["status"] == "ok":
+        lines.append(
+            f"  unowned open PRs: none in {section['repos_checked']} repos "
+            f"(lane rounds read over {hours}h)"
+        )
+    if section.get("held"):
+        lines.append(f"  held by a hold label, not counted: {len(section['held'])}")
+        for row in section["held"][:5]:
+            lines.append(
+                f"    {row['repo']}#{row['number']}: {', '.join(row['held_by'])}; "
+                f"idle {row['idle_days']}d"
+            )
+    if section.get("window_note"):
+        lines.append(f"  note: {section['window_note']}")
+    return lines + [""]
 
 
 def format_capacity_shed(section: dict) -> list[str]:
@@ -3777,17 +4524,29 @@ def main(argv: list[str]) -> int:
     )
     ap.add_argument(
         "--since",
+        type=_parse_window_start,
         help="window start as unix seconds or ISO-8601 (the implementation merge instant)",
+    )
+    ap.add_argument(
+        "--until",
+        type=_parse_window_start,
+        help="exclusive window end as unix seconds or ISO-8601 (requires --since)",
     )
     ap.add_argument("--ledger", help="capacity-ledger.ndjson to read")
     ap.add_argument("--now", type=int, help="unix seconds the window clock uses")
     args = ap.parse_args(argv)
+    if (args.since is not None or args.until is not None) and not args.assess_sandbox_fallback:
+        ap.error("--since and --until require --assess-sandbox-fallback")
     if args.selftest:
         _selftest()
         return 0
     if args.assess_sandbox_fallback:
-        since = _parse_window_start(args.since) if args.since else None
-        section = assess_sandbox_fallback_report(ledger_path=args.ledger, now=args.now, since=since)
+        try:
+            section = assess_sandbox_fallback_report(
+                ledger_path=args.ledger, now=args.now, since=args.since, until=args.until
+            )
+        except ValueError as exc:
+            ap.error(str(exc))
         print(
             json.dumps(section, indent=2) if args.json else format_assess_sandbox_fallback(section)
         )
@@ -3853,6 +4612,25 @@ def main(argv: list[str]) -> int:
     # Like the interpreter audit, host-dependent fleet reads belong to the production
     # CLI, not isolated callers of review(). Both JSON and text carry this same snapshot.
     rep["fleet_delivery_measures"] = fleet_delivery_measures(now=rep.get("generated_at"))
+    # The unowned-PR scan reads live GitHub, so like the measures above it belongs to the weekly
+    # CLI and not to review(); ORCH_UNOWNED_PR_SCAN=0 turns it off (the test suite does).
+    if os.environ.get("ORCH_UNOWNED_PR_SCAN", "1") == "0":
+        rep["unowned_open_prs"] = {"status": "disabled", "reason": "ORCH_UNOWNED_PR_SCAN=0"}
+    else:
+        try:
+            rep["unowned_open_prs"] = unowned_open_prs(now=rep.get("generated_at"))
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 — preserve the weekly report on unavailable evidence
+            rep["unowned_open_prs"] = {
+                "status": "unknown",
+                "rows": [],
+                "held": [],
+                "suspect": 0,
+                "repos_checked": 0,
+                "window_hours": UNOWNED_WINDOW_S // 3600,
+                "measurement": f"unmeasured: scan failed ({type(exc).__name__}: {exc})",
+            }
     # The production weekly caller collects the curve, rather than leaving a CLI-only instrument.
     # Pure report/selftest readers keep their no-network and no-state-write contract.
     if (

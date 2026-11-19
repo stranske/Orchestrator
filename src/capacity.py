@@ -18,11 +18,9 @@ Corrections baked in:
     for GPT-5.5 via codex, so cursor is DEPRIORITIZED in the route table, never the default lane.
   - gemini/Antigravity AI Pro == prepaid/windowed compute: local 5h and weekly
     soft budgets, with actual 429-shed as the authoritative limiter
-  - aider/Codestral == TWO-TIER (plan_then_credit): a flat Mistral plan is the
-    PRIMARY pool (use-it-or-lose-it), the pay-go API credit is the BACKSTOP (amounts in LOCAL_POLICY.md)
-    used only after the plan is exhausted. NB: Mistral's docs say Le Chat Pro
-    does NOT cover API calls (aider uses the API) — if the user's paid tier is
-    the chat-only Pro, set plan_limit=0 and aider degrades to pure-credit.
+  - plan_then_credit == TWO-TIER: a flat plan is the PRIMARY pool (use-it-or-lose-it) and a
+    pay-go credit is the BACKSTOP. No current seat uses it; aider, its only user, was removed
+    from the fleet on 2026-11-11.
 
 Pacing sources: freshest weekly observation wins. Codex uses the scheduled
 ~/.codex/orchestrator/usage-poll/codex-usage.json app-server account/rateLimits/read
@@ -176,6 +174,9 @@ def _env_float_or_none(name: str):
 #              drains a weekly-only bucket, so an Argon 429 sheds the whole seat for up to 7 days
 #              while the Flash rungs' 5h bucket may be untouched. PROPOSAL (not applied): shed per
 #              bucket (argon vs flash) so cheap/mid stay routable through an Argon weekly lockout.
+#              CORRECTED 2026-11-15 (#1387): agy `/usage` shows ONE "Gemini Models" quota group
+#              (one weekly + one 5h bucket) for Carbon, Argon, Hydrogen and Flash, so a gemini
+#              quota incident sheds the whole seat (rate_incidents.GEMINI_SEPARATE_QUOTA_FAMILIES).
 #              AI credits remain overage-only (Never/Always setting). Paid tiers are now named
 #              Pro $19.99 / Ultra 5x $99.99 / Ultra 20x $199.99 (same multiples, cosmetic).
 #              [antigravity.google/docs/plans; 429-shed authoritative]
@@ -272,25 +273,11 @@ AGENTS = {
     "vibe": {"account": "mistral-vibe-sub", "model": "flat", "window": "subscription"},
     # muse (Meta Muse Code) — the owner's SUBSCRIPTION login (Power Usage plan, 5h + weekly allowance
     # per Meta's console), never an API key. No usage API (no token/usage/quota field in `--json`;
-    # the console lags up to an hour), so 429-shed is authoritative, like vibe. BACKUP-ONLY via
-    # router.BACKUP_AGENTS until measured outcomes earn it a prior. A call authenticated with a
+    # the console lags up to an hour), so 429-shed is authoritative, like vibe. A routine LATE seat
+    # since 2026-11-11 (was BACKUP-ONLY via router.BACKUP_AGENTS from 2026-10-16). A call authenticated with a
     # Default-Project API key metered PAY-AS-YOU-GO (tested 2026-10-15; the key the login itself mints in
     # the `Muse Code` project is untested), which is why this seat is the login and the wrapper scrubs META_API_KEY.
     "muse": {"account": "meta-muse-code-sub", "model": "metered", "window": "5h+weekly"},
-    # aider — BACKUP-ONLY as of 2026-06-21 (owner directive): router.BACKUP_AGENTS holds it OUT of
-    # routine auto-selection; reachable only on explicit demand (`--agent aider` / `only={"aider"}`).
-    # Capacity is still tracked so backup use respects the credit. Optional API fallback (Codestral API
-    # burns the pay-go credit; the Vibe sub does NOT cover API calls). Two-tier: flat plan (count/day) then $25.
-    # plan_limit PLACEHOLDER pending the real Mistral API tier cap; 0 => pure-credit.
-    "aider": {
-        "account": "mistral-codestral",
-        "model": "plan_then_credit",
-        "plan_limit": 2000,
-        "plan_window": "daily",
-        "credit_usd": 25.0,
-        "credit_window": "monthly",
-        "window": "daily",
-    },
 }
 WARN_FRAC = 0.8
 _WINDOW_SECONDS = {"daily": 86400, "monthly": 30 * 86400, "5h": 5 * 3600, "weekly": 7 * 86400}
@@ -305,7 +292,6 @@ def agent_tiers() -> dict[str, str]:
         "gemini": "metered",
         "vibe": "flat",
         "muse": "flat",
-        "aider": "paygo",
     }
     for pool in execution_profiles.CAPACITY_POOLS.values():
         if pool.get("agent"):
@@ -543,6 +529,19 @@ def shed_marker(
             found[key] = str(payload[key])
     # Only a recognised scope narrows a shed; anything else stays a whole-seat shed.
     found["tier_scope"] = payload.get("tier_scope") if payload.get("tier_scope") == "full" else None
+    if found["tier_scope"] and agent == "gemini":
+        # A stored scope is honoured only while the writer's policy would still produce it, so a
+        # marker written under a retired premise (Argon and Flash on separate quotas, before
+        # #1387) sheds the whole seat once the policy changes, instead of capping at mid until
+        # it expires. If the policy cannot be read, the stored scope stands.
+        try:
+            import rate_incidents
+
+            if rate_incidents.tier_scope_for(agent, found.get("model")) is None:
+                found["tier_scope"] = None
+                found["why"] = "stored tier scope no longer matches the quota policy"
+        except Exception:
+            pass
     found["reset_at"] = _finite_number(payload.get("reset_at"))
     found["created_at"] = _finite_number(payload.get("created_at"))
     expires_at = _finite_number(payload.get("expires_at"))
@@ -607,6 +606,117 @@ def tier_ceiling_exports(environ=None, **kwargs) -> list[str]:
 
 _BUILD_PACING_USAGE: ContextVar[dict | None] = ContextVar("build_pacing_usage", default=None)
 
+_MARKER_IDENTITY_KEYS = (
+    "agent",
+    "path",
+    "why",
+    "incident_id",
+    "category",
+    "created_at",
+    "expires_at",
+    "reset_at",
+    "model",
+    "tier_scope",
+)
+
+
+def _marker_identity(marker: dict) -> tuple:
+    return tuple(marker.get(key) for key in _MARKER_IDENTITY_KEYS)
+
+
+def _recovery_clears_marker(
+    agent: str, marker: dict, *, emit_fyi: bool = True, prefer_live_recovery: bool = False
+) -> bool:
+    """Return whether confirmed reset or fresh post-incident usage clears an active quota marker."""
+    if marker["state"] != "active":
+        return False
+    # A confirmed banked reset clears only a dated provider quota incident.
+    # Continue through ordinary auth/model checks after removal. Manual and
+    # unreadable markers are never reset by an allowance inventory change.
+    import pacing
+    import pacing_usage
+
+    inventory = pacing_usage.read_json(pacing_usage.RESETS_FILE) or {}
+    entries = inventory.get(agent, []) if isinstance(inventory, dict) else []
+    created = marker.get("created_at")
+    reset_events = (
+        [
+            stamp
+            for entry in entries
+            if isinstance(entry, dict)
+            and (stamp := pacing.timestamp(entry.get("consumed_at"))) is not None
+            and stamp <= time.time()
+        ]
+        if isinstance(entries, list)
+        else []
+    )
+    if agent == "codex":
+        if prefer_live_recovery:
+            poll = pacing_usage.polled_usage(agent, time.time())["poll"] or {}
+        else:
+            snapshot = _BUILD_PACING_USAGE.get()
+            poll = (
+                (snapshot.get(agent) or {}).get("poll")
+                if snapshot is not None
+                else pacing_usage.polled_usage(agent, time.time())["poll"]
+            ) or {}
+        if poll.get("fresh"):
+            # The hand inventory may contain a false rollover debit. Fresh
+            # provider inventory cannot establish that consumption timestamp.
+            reset_events = []
+    reset_clears = (
+        marker["state"] == "active"
+        and marker.get("category") in ("quota", "rate_limit", "capacity")
+        and created is not None
+        and any(stamp > created for stamp in reset_events)
+    )
+    sample_clears = False
+    if (
+        agent in ("codex", "claude")
+        and marker["state"] == "active"
+        and marker.get("category") in ("quota", "rate_limit", "capacity")
+        and created is not None
+        and not reset_clears
+    ):
+        now = time.time()
+        if prefer_live_recovery:
+            datum = pacing_usage.usage(
+                agent, now, pacing_usage.read_json(pacing_usage.CALIBRATION_FILE) or {}
+            )
+        else:
+            snapshot = _BUILD_PACING_USAGE.get()
+            datum = (
+                snapshot[agent]
+                if snapshot is not None
+                else pacing_usage.usage(
+                    agent, now, pacing_usage.read_json(pacing_usage.CALIBRATION_FILE) or {}
+                )
+            )
+        used, observed = datum.get("used_fraction"), datum.get("ts")
+        short = datum.get("short_used_fraction")
+        short_ts = datum.get("short_ts", observed)
+        sample_clears = (
+            used is not None
+            and 0 <= used < 1
+            and short is not None
+            and 0 <= short < 1
+            and observed is not None
+            and short_ts is not None
+            and created < short_ts <= now
+            and now - short_ts <= pacing.STALE_AFTER_SECONDS
+            and created < observed <= now
+            and now - observed <= pacing.usage_max_age(agent)
+        )
+        if not sample_clears and emit_fyi:
+            print(
+                f"pool {agent}: quota marker age={now - created:.0f}s; weekly u={used}; "
+                f"short-window u={short if short is not None else 'unmeasured'}; "
+                f"drain: fresh post-incident weekly AND short-window u<1, confirmed reset, "
+                f"or cooldown in {marker['expires_at'] - now:.0f}s",
+                file=sys.stderr,
+            )
+    return reset_clears or sample_clears
+
 
 def _shed(agent: str) -> bool:
     """Honor legacy empty flags; expire only well-formed JSON cooldown flags.
@@ -622,88 +732,24 @@ def _shed(agent: str) -> bool:
         # Only the seat's top tier is exhausted: the seat stays routable and `tier_ceilings`
         # caps it below that tier until the marker expires (then the branch below removes it).
         return False
-    if marker["state"] != "expired":
-        # A confirmed banked reset clears only a dated provider quota incident.
-        # Continue through ordinary auth/model checks after removal. Manual and
-        # unreadable markers are never reset by an allowance inventory change.
-        import pacing
-        import pacing_usage
+    if marker["state"] != "expired" and not _recovery_clears_marker(agent, marker):
+        return True
+    import rate_incidents
 
-        inventory = pacing_usage.read_json(pacing_usage.RESETS_FILE) or {}
-        entries = inventory.get(agent, []) if isinstance(inventory, dict) else []
-        created = marker.get("created_at")
-        reset_events = (
-            [
-                stamp
-                for entry in entries
-                if isinstance(entry, dict)
-                and (stamp := pacing.timestamp(entry.get("consumed_at"))) is not None
-                and stamp <= time.time()
-            ]
-            if isinstance(entries, list)
-            else []
-        )
-        if agent == "codex":
-            snapshot = _BUILD_PACING_USAGE.get()
-            poll = (
-                (snapshot.get(agent) or {}).get("poll")
-                if snapshot is not None
-                else pacing_usage.polled_usage(agent, time.time())["poll"]
-            ) or {}
-            if poll.get("fresh"):
-                # The hand inventory may contain a false rollover debit. Fresh
-                # provider inventory cannot establish that consumption timestamp.
-                reset_events = []
-        reset_clears = (
-            marker["state"] == "active"
-            and marker.get("category") in ("quota", "rate_limit", "capacity")
-            and created is not None
-            and any(stamp > created for stamp in reset_events)
-        )
-        sample_clears = False
-        if (
-            agent in ("codex", "claude")
-            and marker["state"] == "active"
-            and marker.get("category") in ("quota", "rate_limit", "capacity")
-            and created is not None
-            and not reset_clears
-        ):
-            now = time.time()
-            snapshot = _BUILD_PACING_USAGE.get()
-            datum = (
-                snapshot[agent]
-                if snapshot is not None
-                else pacing_usage.usage(
-                    agent, now, pacing_usage.read_json(pacing_usage.CALIBRATION_FILE) or {}
-                )
-            )
-            used, observed = datum.get("used_fraction"), datum.get("ts")
-            short = datum.get("short_used_fraction")
-            short_ts = datum.get("short_ts", observed)
-            sample_clears = (
-                used is not None
-                and 0 <= used < 1
-                and short is not None
-                and 0 <= short < 1
-                and observed is not None
-                and short_ts is not None
-                and created < short_ts <= now
-                and now - short_ts <= pacing.STALE_AFTER_SECONDS
-                and created < observed <= now
-                and now - observed <= pacing.usage_max_age(agent)
-            )
-            if not sample_clears:
-                print(
-                    f"pool {agent}: quota marker age={now - created:.0f}s; weekly u={used}; "
-                    f"short-window u={short if short is not None else 'unmeasured'}; "
-                    f"drain: fresh post-incident weekly AND short-window u<1, confirmed reset, "
-                    f"or cooldown in {marker['expires_at'] - now:.0f}s",
-                    file=sys.stderr,
-                )
-        if not (reset_clears or sample_clears):
-            return True
     try:
-        Path(marker["path"]).unlink()
+        with rate_incidents.incident_lock(blocking=False):
+            current = shed_marker(agent)
+            if current is None:
+                return False
+            if current["state"] == "active" and current.get("tier_scope"):
+                return False
+            if _marker_identity(current) != _marker_identity(marker):
+                return True
+            if current["state"] != "expired" and not _recovery_clears_marker(
+                agent, current, emit_fyi=False, prefer_live_recovery=True
+            ):
+                return True
+            Path(current["path"]).unlink()
     except OSError:
         return True
     return False
@@ -1188,6 +1234,43 @@ def _classify(agent: str, cfg: dict, ccusage_block):
                 f"{used_weekly:.1f}/{wk_cap:.0f} weekly; {suffix}"
             )
 
+        import pacing_usage
+
+        polled = pacing_usage.polled_usage(agent, now) if agent == "gemini" else {"poll": {}}
+        poll = polled.get("poll") or {}
+        if poll.get("fresh") and polled.get("used_fraction") is not None:
+            weekly_frac = float(polled["used_fraction"])
+            short_raw = polled.get("short_used_fraction")
+            short_frac = float(short_raw) if isinstance(short_raw, (int, float)) else 0.0
+            short_tag = (
+                f"{short_frac * 100:.0f}% 5h, " if isinstance(short_raw, (int, float)) else ""
+            )
+            if weekly_frac >= 1.0 or short_frac >= 1.0:
+                state = SHED
+                policy = "weekly-polled-cap" if weekly_frac >= 1.0 else "window-polled-cap"
+                availability = "unavailable_quota_exhausted"
+                reason = f"agy /usage poll exhausted: {short_tag}{weekly_frac * 100:.0f}% weekly"
+                next_action = (
+                    "Wait for the polled Gemini quota window to reset before routing work here."
+                )
+            elif weekly_frac >= WARN_FRAC or short_frac >= WARN_FRAC:
+                state = WARN
+                policy = "weekly-polled-warn" if weekly_frac >= WARN_FRAC else "window-polled-warn"
+                availability = "usable_soft_constrained"
+                reason = f"usable but near polled quota: {short_tag}{weekly_frac * 100:.0f}% weekly"
+                next_action = (
+                    "Prefer ok seats for marginal work; keep Gemini for substantial good-fit tasks."
+                )
+            else:
+                state = OK
+                policy = "steady"
+                availability = "usable"
+                reason = f"agy /usage poll: {short_tag}{weekly_frac * 100:.0f}% weekly"
+                next_action = (
+                    "Use Gemini for substantial, self-contained reasoning work when it is the "
+                    "best fit."
+                )
+
         return (
             state,
             reason,
@@ -1305,11 +1388,29 @@ def build(ccusage_block=None, *, record_pacing: bool = False) -> dict:
 
 def _selftest():
     global SHED_DIR
+    import pacing_usage
+    import rate_incidents
+
     original_shed_dir = SHED_DIR
+    original_poll_dir = pacing_usage.POLL_DIR
+    original_incident_paths = (
+        rate_incidents.HANDOFF,
+        rate_incidents.INCIDENT_FILE,
+        rate_incidents.LOCK_FILE,
+        rate_incidents.SHED_DIR,
+    )
     selftest_shed_dir = Path(tempfile.mkdtemp(prefix="capacity-shed-selftest-"))
     SHED_DIR = selftest_shed_dir
+    pacing_usage.POLL_DIR = selftest_shed_dir / "usage-poll"
+    # `_shed` serializes cleanup through the incident writer's lock.  Keep that lock and the
+    # marker under the disposable self-test directory too; otherwise this isolated check reaches
+    # a real (and, in CI, read-only) handoff directory.
+    rate_incidents.HANDOFF = selftest_shed_dir
+    rate_incidents.INCIDENT_FILE = selftest_shed_dir / "rate-limit-incidents.ndjson"
+    rate_incidents.LOCK_FILE = selftest_shed_dir / "rate-limit-incidents.ndjson.lock"
+    rate_incidents.SHED_DIR = selftest_shed_dir
     # The self-test's seats are fixtures: the launch-binary gate reads this machine's filesystem
-    # (CI has no vibe/aider binary), so it is off here exactly as tests/conftest.py turns it off.
+    # (CI has no vibe binary), so it is off here exactly as tests/conftest.py turns it off.
     original_launch_check = os.environ.get("ORCH_LAUNCH_CHECK")
     os.environ["ORCH_LAUNCH_CHECK"] = "0"
 
@@ -1323,6 +1424,13 @@ def _selftest():
         _selftest_body(blk)
     finally:
         SHED_DIR = original_shed_dir
+        pacing_usage.POLL_DIR = original_poll_dir
+        (
+            rate_incidents.HANDOFF,
+            rate_incidents.INCIDENT_FILE,
+            rate_incidents.LOCK_FILE,
+            rate_incidents.SHED_DIR,
+        ) = original_incident_paths
         shutil.rmtree(selftest_shed_dir, ignore_errors=True)
         if original_launch_check is None:
             os.environ.pop("ORCH_LAUNCH_CHECK", None)
@@ -1513,15 +1621,23 @@ def _selftest_body(blk):
         import shutil
 
         shutil.rmtree(tmp, ignore_errors=True)
-    # aider two-tier: empty ledger => plan headroom => OK
-    assert compute("aider", AGENTS["aider"], None)[0] == OK
-    # chat-only Pro (plan_limit=0) with credit left => WARN (pay-go backstop only)
-    chat_only = dict(AGENTS["aider"], plan_limit=0)
-    assert compute("aider", chat_only, None)[0] == WARN, compute("aider", chat_only, None)
-    # plan exhausted + credit exhausted => SHED (simulate via plan_limit=0 + a spent ledger
-    # is integration-tested; here assert the all-spent branch with a zero credit budget)
-    broke = dict(AGENTS["aider"], plan_limit=0, credit_usd=0.0)
-    assert compute("aider", broke, None)[0] == SHED, compute("aider", broke, None)
+    # plan_then_credit (generic two-tier seat; no fleet agent uses it since aider's removal 2026-11-11)
+    two_tier = {
+        "account": "example-plan",
+        "model": "plan_then_credit",
+        "plan_limit": 2000,
+        "plan_window": "daily",
+        "credit_usd": 25.0,
+        "credit_window": "monthly",
+        "window": "daily",
+    }
+    assert compute("example", two_tier, None)[0] == OK
+    # chat-only plan (plan_limit=0) with credit left => WARN (pay-go backstop only)
+    chat_only = dict(two_tier, plan_limit=0)
+    assert compute("example", chat_only, None)[0] == WARN, compute("example", chat_only, None)
+    # plan exhausted + credit exhausted => SHED
+    broke = dict(two_tier, plan_limit=0, credit_usd=0.0)
+    assert compute("example", broke, None)[0] == SHED, compute("example", broke, None)
     # A legacy empty marker remains authoritative, while an expired JSON cooldown does not.
     flag = SHED_DIR / "codex"
     flag.touch()

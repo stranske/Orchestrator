@@ -1088,7 +1088,14 @@ if _cadence_due adjudicator-live && _attempt_ok adjudicator-live; then
   # The kill switch is read by the module (`--enabled`), so the shell and Python agree on what counts as off.
   if python3 "$ORCH/adjudicator_live.py" --enabled && _gh_gate search; then
     echo "  [cadence] adjudicator live shadow (daily; new disputes, certified, at most ${ORCH_ADJUDICATOR_LIVE_LIMIT:-3})"
-    if python3 "$ORCH/adjudicator_live.py" >> "$STAMP_DIR/adjudicator-live.log" 2>&1; then _mark_success adjudicator-live; else _mark_fail adjudicator-live "see $STAMP_DIR/adjudicator-live.log"; fi
+    python3 "$ORCH/adjudicator_live.py" >> "$STAMP_DIR/adjudicator-live.log" 2>&1 && rc=0 || rc=$?
+    if (( rc == 0 )); then
+      _mark_success adjudicator-live
+    elif (( rc == 75 )); then
+      echo "  [cadence] adjudicator live busy — another pass holds the lock; stamp untouched, retry next tick"
+    else
+      _mark_fail adjudicator-live "see $STAMP_DIR/adjudicator-live.log"
+    fi
   else echo "  [cadence] adjudicator live SKIPPED — switched off, gh budget shed or gh deferred (stamp untouched; retry next tick)"; fi
 fi
 # Refresh promotion readiness and active priors only after late outcomes and

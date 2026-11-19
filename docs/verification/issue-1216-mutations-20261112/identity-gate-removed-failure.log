@@ -1,0 +1,12 @@
+F                                                                        [100%]CI_STORAGE_DIAGNOSTIC {"exitstatus": 1, "finish": {"reason": "helper_or_base_unavailable", "status": "unavailable"}, "start": {"reason": "helper_or_base_unavailable", "status": "unavailable"}}
+
+=================================== FAILURES ===================================
+______ test_local_identity_claims_require_an_independent_provider_lookup _______
+tests/test_profile_trial_ingest.py:443: in test_local_identity_claims_require_an_independent_provider_lookup
+    with pytest.raises(ValueError, match="identity evidence is not authoritative"):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   Failed: DID NOT RAISE ValueError
+tracked test inputs: NOT CHECKED -- /tmp/profile-trial-mutations-sx77ig5e is not a git checkout. In the exec mirror that loses nothing: its tests/ IS `git archive HEAD tests`, so every file in it was tracked
+=========================== short test summary info ============================
+FAILED tests/test_profile_trial_ingest.py::test_local_identity_claims_require_an_independent_provider_lookup - Failed: DID NOT RAISE ValueError
+1 failed in 0.43s

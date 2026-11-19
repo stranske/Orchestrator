@@ -1,0 +1,24 @@
+✔ actual exported initial builder forwards model mode and preserves full authentic request (11.546874ms)
+✔ freeform model requests are authentic while default checkbox admission remains structured (5.98058ms)
+✔ actual repeat builder retains original verdict and admits fresh required material once (6.004005ms)
+✔ actual pending builder retains uncertain effects and reenters only with skipped-step proof (62.395466ms)
+✔ invalid requests and unavailable diff evidence cannot start evaluation (2.089809ms)
+✔ actual builder preserves linked original requirements and refuses malformed linked source (2.200997ms)
+✔ CSV canary native verifier attempts require retained recovery, not another evaluation (1.403902ms)
+✔ CSV retained recovery command uses integer selectors bound to native source execution (0.676723ms)
+✔ CSV recovery follows the latest native comparison instead of the superseded evaluation (1.678087ms)
+✔ CSV recovery rechecks native revisions and supersession at the publication boundary (2.519238ms)
+✔ native CSV comparison reconciles to existing outputs even when its evaluation step was skipped (0.797796ms)
+✔ CSV recovery authenticates the comparison artifact before retaining any origin proof (1.72671ms)
+✔ native CSV verifier states require both the corrective head and published merge (60.319648ms)
+✔ native PR 984 corpus decision and successful workflows cannot complete PR 1168 (55.579073ms)
+✔ native unavailable CSV reports cannot turn provider concerns into a corpus decision (54.573192ms)
+✔ merged CSV canary acknowledgment does not substitute for stored corrective custody (54.57226ms)
+ℹ tests 16
+ℹ suites 0
+ℹ pass 16
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 328.010386

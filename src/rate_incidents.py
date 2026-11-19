@@ -15,6 +15,8 @@ import sqlite3
 import sys
 import tempfile
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -28,6 +30,11 @@ SHED_DIR = HANDOFF / "capacity-shed"
 SCHEMA = "rate-limit-incident/v1"
 MAX_EVIDENCE_EXCERPT = 500
 DEFAULT_COOLDOWN_S = 6 * 60 * 60
+# A refusal with no stated reset (a spent budget) is retried by the next real job when the bench
+# ends. Each earlier episode of the same agent and category inside this window doubles the bench;
+# one quiet window drains the count and the bench returns to the default (stranske/Orchestrator#1418).
+ESCALATION_WINDOW_S = 72 * 60 * 60
+MAX_COOLDOWN_S = 72 * 60 * 60
 MAX_DEDUP_SCAN_BYTES = 1024 * 1024
 
 # codex `exec --json` events that mean the run DID something. An item whose own type is `error` is the
@@ -103,10 +110,38 @@ def _contains_billing_refusal(text: str) -> bool:
     )
 
 
+def _contains_model_rejection(text: str) -> bool:
+    """Require HTTP 400 and the provider's JSON error message in the same envelope."""
+    for match in re.finditer(
+        r"(?im)^[ \t]*(?:(?:provider[ \t]+)?error:[ \t]*)?"
+        r"(?:unexpected[ \t]+status|http(?:[ \t]+status)?|status(?:[ \t]+code)?)"
+        r"[ \t]*[:=]?[ \t]*400(?:[ \t]+Bad[ \t]+Request)?[ \t]*:?[ \t]*"
+        r"(?:\r?\n[ \t]*)?(?=\{)",
+        text,
+    ):
+        try:
+            body, _ = json.JSONDecoder().raw_decode(text[match.end() :].lstrip())
+        except json.JSONDecodeError:
+            continue
+        error = body.get("error") if isinstance(body, dict) else None
+        message = error.get("message") if isinstance(error, dict) else None
+        if isinstance(message, str) and re.search(
+            r"\bmodel(?:\s+[`'\"]?[\w./:-]+[`'\"]?)?\s+(?:is\s+)?"
+            r"(?:not\s+supported|does\s+not\s+exist)\b"
+            r"|\bunsupported\s+model\b|\binvalid\s+model\s+selection\b",
+            message,
+            re.I,
+        ):
+            return True
+    return False
+
+
 def classify_provider_failure(text: str) -> tuple[str, str, str]:
-    """Return an authoritative category only for explicit capacity evidence."""
+    """Return an authoritative category only for explicit provider refusal evidence."""
     if not isinstance(text, str) or not text:
         return "unknown", "non_authoritative", "none"
+    if _contains_model_rejection(text):
+        return "model_rejected", "http_400_model_rejected", "high"
     if re.search(
         r"(?:out of usage|usage exhausted|quota exhausted|capacity exhausted)"
         r"|(?:you(?:'|’)ve hit your usage limit)"
@@ -515,18 +550,53 @@ def _harness_error_messages(event: dict) -> list[str]:
     return [message] if isinstance(message, str) else []
 
 
+_RESETS_IN = re.compile(
+    r"Resets\s+in\s+((?:\d+d)?(?:\d+h)?(?:\d+m)?(?:\d+(?:\.\d+)?s)?)(?!\w)", re.I
+)
+_DURATION_UNITS = {"d": 86400, "h": 3600, "m": 60, "s": 1}
+
+
 def parse_resets_in_duration(text: str, *, now: int | None = None) -> int | None:
-    """Parse provider copy like ``Resets in 140h5m6s`` into an absolute unix time."""
-    match = re.search(
-        r"Resets\s+in\s+(\d+)h(\d+)m(\d+)s",
-        text,
-        re.I,
-    )
+    """Parse provider copy like ``Resets in 140h5m6s`` into an absolute unix time.
+
+    agy prints a Go ``time.Duration``, which drops leading zero units: ``Resets in 45m0s`` and
+    ``Resets in 30s`` under an hour. Until 2026-11-12 only the full ``NhNmNs`` form matched, so a
+    gemini refusal due inside the hour fell back to DEFAULT_COOLDOWN_S. A day unit is accepted too.
+    """
+    match = _RESETS_IN.search(text)
+    if not match or not match.group(1):
+        return None
+    parts = re.findall(r"(\d+(?:\.\d+)?)([dhms])", match.group(1).lower())
+    if not parts:
+        return None
+    seconds = sum(float(value) * _DURATION_UNITS[unit] for value, unit in parts)
+    base = now if now is not None else int(time.time())
+    return base + int(math.ceil(seconds))
+
+
+_USAGE_WINDOW_RESET = re.compile(
+    r"usage\s+window\s+resets\s+at\s+"
+    r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2}))",
+    re.I,
+)
+
+
+def parse_usage_window_reset_at(text: str, *, now: int | None = None) -> int | None:
+    """Parse muse's ``Your usage window resets at 2026-11-16T00:00:00Z`` into a unix time.
+
+    Only a reset still in the future counts; a stale stated time is no reason to hold the seat.
+    """
+    match = _USAGE_WINDOW_RESET.search(text)
     if not match:
         return None
-    hours, minutes, seconds = (int(match.group(i)) for i in range(1, 4))
-    base = now if now is not None else int(time.time())
-    return base + hours * 3600 + minutes * 60 + seconds
+    stamp = match.group(1)
+    if stamp.endswith(("Z", "z")):
+        stamp = stamp[:-1] + "+00:00"
+    try:
+        reset_at = int(datetime.fromisoformat(stamp).timestamp())
+    except ValueError:
+        return None
+    return reset_at if reset_at > int(now if now is not None else time.time()) else None
 
 
 def provider_reset_at(agent: str, lines: list[str], *, now: int | None = None) -> int | None:
@@ -539,8 +609,14 @@ def provider_reset_at(agent: str, lines: list[str], *, now: int | None = None) -
     commands too, so a plain line may be the agent's own work, and a reset read from it would hold
     the seat until whatever date that work happened to mention.
 
-    Gemini: output is plain text (glog-prefixed agent-executor lines). Parse ``Resets in NhNmNs``
-    from those lines so shed lasts until the provider's stated window rather than DEFAULT_COOLDOWN_S.
+    Gemini: output is plain text (glog-prefixed agent-executor lines). Parse ``Resets in <Go
+    duration>`` from those lines so shed lasts until the provider's stated window rather than
+    DEFAULT_COOLDOWN_S.
+
+    Muse: the run's terminal failure states an ISO time ("Subscription quota exhausted. Your usage
+    window resets at 2026-11-16T00:00:00Z."), read only from a line that is itself an authoritative
+    provider refusal. Before 2026-11-12 muse fell to the 6 h cooldown, so a weekly exhaustion
+    re-admitted the seat every 6 h to fail again (trip-planner#2029 repair, 07:03Z).
     Every other agent's answer is None, and the seat sheds for the cooldown.
 
     One reading for every observer of a run: the synchronous offload, `adapters.dispatch` and the
@@ -556,6 +632,15 @@ def provider_reset_at(agent: str, lines: list[str], *, now: int | None = None) -
             if not _has_provider_error_context(line) or not is_authoritative_error(line):
                 continue
             reset = parse_resets_in_duration(line, now=now)
+            if reset is not None:
+                resets.append(reset)
+        return max(resets) if resets else None
+    if agent == "muse":
+        resets = []
+        for line in failure_evidence(lines):
+            if not is_authoritative_error(line):
+                continue
+            reset = parse_usage_window_reset_at(line, now=now)
             if reset is not None:
                 resets.append(reset)
         return max(resets) if resets else None
@@ -583,7 +668,7 @@ def get_structured_evidence(
         "subcategory": subcategory,
         "confidence": confidence,
         "is_authoritative": confidence == "high",
-        "should_shed": confidence == "high",
+        "should_shed": confidence == "high" and category != "model_rejected",
         "evidence_excerpt": _redact_bounded(error_text),
         "evidence_hash": _hash_evidence(error_text),
     }
@@ -592,14 +677,20 @@ def get_structured_evidence(
 def _ensure_paths() -> None:
     HANDOFF.mkdir(parents=True, exist_ok=True)
     SHED_DIR.mkdir(parents=True, exist_ok=True)
+    LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
 
 
-def _acquire_lock() -> int:
+def _acquire_lock(blocking: bool = True) -> int:
     import fcntl
 
     _ensure_paths()
     fd = os.open(LOCK_FILE, os.O_CREAT | os.O_RDWR, 0o600)
-    fcntl.flock(fd, fcntl.LOCK_EX)
+    flags = fcntl.LOCK_EX if blocking else (fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        fcntl.flock(fd, flags)
+    except BaseException:
+        os.close(fd)
+        raise
     return fd
 
 
@@ -612,6 +703,16 @@ def _release_lock(fd: int) -> None:
         os.close(fd)
 
 
+@contextmanager
+def incident_lock(blocking: bool = True) -> Iterator[int]:
+    """Hold the shared incident/shed fcntl lock with guaranteed descriptor cleanup."""
+    fd = _acquire_lock(blocking=blocking)
+    try:
+        yield fd
+    finally:
+        _release_lock(fd)
+
+
 def _idempotency_key(run_id: str, agent: str, category: str, surface: str) -> str:
     del surface
     # The same failed run can be observed by both the synchronous dispatcher and
@@ -619,9 +720,10 @@ def _idempotency_key(run_id: str, agent: str, category: str, surface: str) -> st
     return f"{run_id}|{agent}|{category}"
 
 
-def _existing_idempotency_key(key: str) -> str | None:
+def _recent_rows() -> list[dict[str, Any]]:
+    """The ledger's rows within its bounded suffix, oldest first; unreadable rows are skipped."""
     if not INCIDENT_FILE.exists():
-        return None
+        return []
     try:
         with INCIDENT_FILE.open("rb") as handle:
             size = handle.seek(0, os.SEEK_END)
@@ -630,30 +732,100 @@ def _existing_idempotency_key(key: str) -> str | None:
             if start:
                 handle.readline()  # Drop the first partial row from the bounded suffix.
             lines = handle.read().decode("utf-8", errors="replace").splitlines()
-        for line in reversed(lines):
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if row.get("idempotency_key") == key:
-                return row.get("incident_id")
     except OSError:
-        return None
-    return None
+        return []
+    rows = []
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
 
 
-def _cooldown_seconds(category: str) -> int | None:
+def _existing_incident_context(
+    key: str,
+) -> tuple[dict[str, Any] | None, set[str], set[str]]:
+    parsed_rows = _recent_rows()
+    match_index: int | None = None
+    for index, row in enumerate(parsed_rows):
+        if row.get("idempotency_key") == key:
+            match_index = index
+    if match_index is None:
+        return None, set(), set()
+    matched = dict(parsed_rows[match_index])
+    earlier_ids = {str(r["incident_id"]) for r in parsed_rows[:match_index] if r.get("incident_id")}
+    later_rows = parsed_rows[match_index + 1 :]
+    later_ids = {str(r["incident_id"]) for r in later_rows if r.get("incident_id")}
+    if any(
+        r.get("agent") == matched.get("agent") and _is_incident_recovered(r) for r in later_rows
+    ):
+        matched["recovered"] = True
+    return matched, earlier_ids, later_ids
+
+
+def _existing_idempotency_key(key: str) -> str | None:
+    matched, _, _ = _existing_incident_context(key)
+    return matched.get("incident_id") if matched else None
+
+
+def _cooldown_seconds(
+    category: str,
+    agent: str | None = None,
+    timestamp: int | None = None,
+    incident_id: str | None = None,
+) -> int | None:
+    """The bench for one incident: the base doubled per earlier episode, capped at MAX_COOLDOWN_S.
+
+    Episodes are this agent's ledger rows in the same category from ESCALATION_WINDOW_S before
+    `timestamp` up to it, the incident itself (`incident_id`) excluded. A row less than one base
+    bench after the last counted one is the same exhaustion seen by another in-flight run, not a
+    re-entry: on the live ledger most same-agent incidents arrive under an hour apart, and counting
+    each would bench a seat for the cap on its first burst. No agent: the base alone.
+    """
     if category not in {"rate_limit", "quota", "capacity"}:
         return None
     try:
-        return max(0, int(os.environ.get("ORCH_PROVIDER_COOLDOWN_S", str(DEFAULT_COOLDOWN_S))))
+        base = max(0, int(os.environ.get("ORCH_PROVIDER_COOLDOWN_S", str(DEFAULT_COOLDOWN_S))))
     except ValueError:
-        return DEFAULT_COOLDOWN_S
+        base = DEFAULT_COOLDOWN_S
+    if agent is None:
+        return base
+    now = int(timestamp if timestamp is not None else time.time())
+    stamps = []
+    for row in _recent_rows():
+        if row.get("agent") != agent or row.get("category") != category:
+            continue
+        if incident_id is not None and row.get("incident_id") == incident_id:
+            continue
+        try:
+            ts = int(row["ts"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if now - ESCALATION_WINDOW_S <= ts <= now:
+            stamps.append(ts)
+    episodes, last = 0, None
+    for ts in sorted(stamps):
+        if last is None or ts - last >= base:
+            episodes, last = episodes + 1, ts
+    if last is None or now - last >= base:
+        episodes += 1  # this incident opens a new episode
+    return min(base * 2 ** min(episodes - 1, 32), MAX_COOLDOWN_S)
 
 
-# Gemini's tiers draw two separate provider quotas: `full` runs the Argon family, cheap/mid run
-# Flash (adapters.MODEL_TIERS). An exhausted Argon quota must not stand Flash down with it: on
-# 2026-11-07 one Argon quota incident shed all of gemini for a week while Flash still answered.
+# All Gemini models draw ONE provider quota (checked 2026-11-15T22:44Z, agy 1.5.9,
+# `agy -p "/usage" --output-format json`): group "Gemini Models" lists Gemini 4 Carbon, Argon,
+# Hydrogen, the Orchestrator variants and Gemini 3.8 Flash under one `gemini-weekly` and one
+# `gemini-5h` bucket; the only other group is "Claude and GPT models". So a gemini quota incident
+# sheds the whole seat: cheap/mid dispatches would go into the same exhausted pool and fail
+# (stranske/Orchestrator#1387). The earlier premise, that Argon and Flash were separate quotas,
+# came from 2026-11-07, when one Argon incident shed gemini for a week while Flash still answered.
+# Model families that DO have their own quota group, as `/usage` reports it. A quota incident on
+# one of them sheds only gemini's `full` tier. Empty while the pool is shared: a future split is
+# this one edit, and the tier-scope machinery in ensure_shed/capacity stays in place for it.
+GEMINI_SEPARATE_QUOTA_FAMILIES: tuple[str, ...] = ()
 _INIT_MODEL = re.compile(r'"init"\s*:\s*\{[^{}]*?"model"\s*:\s*"([A-Za-z0-9._:-]+)"')
 
 
@@ -689,9 +861,29 @@ def recorded_run_model(agent: str, run_id: str | None) -> str | None:
     return model.split(":", 1)[-1] or None
 
 
+_MODEL_TOKEN = re.compile(r"[^a-z0-9]+")
+
+
+def _model_tokens(text: str) -> set[str]:
+    return {token for token in _MODEL_TOKEN.split(text.lower()) if token}
+
+
 def tier_scope_for(agent: str, model: str | None) -> str | None:
-    """`full` when only gemini's top tier (the Argon family) is exhausted; None sheds the whole seat."""
-    return "full" if agent == "gemini" and model and "argon" in model.lower() else None
+    """`full` only when the failed gemini model's family has its own quota group
+    (GEMINI_SEPARATE_QUOTA_FAMILIES); otherwise None, which sheds the whole seat.
+
+    One policy for writing a marker and for honouring one already on disk (capacity.shed_marker).
+    A family matches on whole name tokens, case-insensitively ("Argon" or "gemini 4 argon" match
+    `gemini-4-argon-high`); a blank entry matches nothing, so a typo cannot scope every model.
+    """
+    if agent != "gemini" or not model:
+        return None
+    tokens = _model_tokens(model)
+    for family in GEMINI_SEPARATE_QUOTA_FAMILIES:
+        wanted = _model_tokens(family)
+        if wanted and wanted <= tokens:
+            return "full"
+    return None
 
 
 def ensure_shed(
@@ -709,59 +901,240 @@ def ensure_shed(
     A whole-seat marker (no `tier_scope`) is never narrowed to one tier while it is active; a
     tier-scoped marker is widened to the whole seat when a whole-seat incident arrives.
     """
+    if category == "model_rejected":
+        return False  # A rejected model says nothing about the seat's remaining capacity.
     _ensure_paths()
     marker = SHED_DIR / agent
-    lock_fd = _acquire_lock()
     temporary: Path | None = None
-    try:
-        if marker.exists():
-            try:
-                existing = json.loads(marker.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                # Legacy empty or malformed markers remain manual, authoritative sheds.
-                return True
-            existing_expiry = existing.get("expires_at") if isinstance(existing, dict) else None
-            if (
-                isinstance(existing_expiry, bool)
-                or not isinstance(existing_expiry, (int, float))
-                or not math.isfinite(existing_expiry)
-            ):
-                return True
-            existing_scope = existing.get("tier_scope") if isinstance(existing, dict) else None
-            if existing_expiry > time.time():
-                if existing_scope is None and tier_scope is not None:
-                    return True  # an active whole-seat shed is never narrowed
-                widening = existing_scope is not None and tier_scope is None
-                if not widening and (expires_at is None or expires_at <= existing_expiry):
-                    return True
-                if widening and (expires_at is None or expires_at < existing_expiry):
-                    expires_at = int(existing_expiry)
-        payload = {"created_at": int(time.time()), "category": category, "incident_id": incident_id}
-        if expires_at is not None:
-            payload["expires_at"] = expires_at
-        if reset_at is not None:
-            payload["reset_at"] = reset_at
-        if model is not None:
-            payload["model"] = model
-        if tier_scope is not None:
-            payload["tier_scope"] = tier_scope
+    with incident_lock():
         try:
-            with tempfile.NamedTemporaryFile(
-                mode="w", encoding="utf-8", dir=SHED_DIR, prefix=f".{agent}.", delete=False
-            ) as handle:
-                temporary = Path(handle.name)
-                handle.write(json.dumps(payload, sort_keys=True) + "\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, marker)
-            temporary = None
-            return True
-        except OSError:
-            return False
-    finally:
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)
-        _release_lock(lock_fd)
+            if marker.exists():
+                try:
+                    existing = json.loads(marker.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    # Legacy empty or malformed markers remain manual, authoritative sheds.
+                    return True
+                existing_expiry = existing.get("expires_at") if isinstance(existing, dict) else None
+                if (
+                    isinstance(existing_expiry, bool)
+                    or not isinstance(existing_expiry, (int, float))
+                    or not math.isfinite(existing_expiry)
+                ):
+                    return True
+                existing_scope = existing.get("tier_scope") if isinstance(existing, dict) else None
+                if existing_expiry > time.time():
+                    if existing_scope is None and tier_scope is not None:
+                        return True  # an active whole-seat shed is never narrowed
+                    widening = existing_scope is not None and tier_scope is None
+                    if not widening and (expires_at is None or expires_at <= existing_expiry):
+                        return True
+                    if widening and (expires_at is None or expires_at < existing_expiry):
+                        expires_at = int(existing_expiry)
+            payload = {
+                "created_at": int(time.time()),
+                "category": category,
+                "incident_id": incident_id,
+            }
+            if expires_at is not None:
+                payload["expires_at"] = expires_at
+            if reset_at is not None:
+                payload["reset_at"] = reset_at
+            if model is not None:
+                payload["model"] = model
+            if tier_scope is not None:
+                payload["tier_scope"] = tier_scope
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode="w", encoding="utf-8", dir=SHED_DIR, prefix=f".{agent}.", delete=False
+                ) as handle:
+                    temporary = Path(handle.name)
+                    handle.write(json.dumps(payload, sort_keys=True) + "\n")
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temporary, marker)
+                temporary = None
+                return True
+            except OSError:
+                return False
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+
+
+_RECOVERED_STATUSES = frozenset({"recovered", "cleared", "resolved"})
+
+
+def _is_recovered_fields(
+    *,
+    status: str | None = None,
+    next_success_at: int | None = None,
+    extra: Mapping[str, Any] | None = None,
+) -> bool:
+    if next_success_at is not None:
+        return True
+    if isinstance(status, str) and status.strip().lower() in _RECOVERED_STATUSES:
+        return True
+    if isinstance(extra, Mapping) and bool(extra.get("recovered") or extra.get("cleared")):
+        return True
+    return False
+
+
+def _is_incident_recovered(row: Mapping[str, Any]) -> bool:
+    if bool(row.get("recovered") or row.get("cleared")):
+        return True
+    if row.get("recovered_at") is not None or row.get("cleared_at") is not None:
+        return True
+    extra = row.get("extra") if isinstance(row.get("extra"), Mapping) else None
+    return _is_recovered_fields(
+        status=row.get("status") if isinstance(row.get("status"), str) else None,
+        next_success_at=row.get("next_success_at"),
+        extra=extra,
+    )
+
+
+def _mark_incident_recovered_locked(
+    *,
+    agent: str,
+    incident_id: str | None = None,
+    cleared_at: int | None = None,
+    next_success_at: int | None = None,
+) -> None:
+    if not INCIDENT_FILE.exists() or not INCIDENT_FILE.is_file():
+        return
+    try:
+        lines = INCIDENT_FILE.read_text(encoding="utf-8", errors="replace").splitlines()
+        updated = False
+        new_lines: list[str] = []
+        stamp = int(cleared_at if cleared_at is not None else time.time())
+        for line in lines:
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                new_lines.append(line)
+                continue
+            if not isinstance(row, dict):
+                new_lines.append(line)
+                continue
+            matches = (
+                row.get("incident_id") == incident_id
+                if incident_id is not None
+                else row.get("agent") == agent
+            )
+            if matches and not _is_incident_recovered(row):
+                row["recovered"] = True
+                row["cleared_at"] = stamp
+                if next_success_at is not None:
+                    row["next_success_at"] = next_success_at
+                new_lines.append(json.dumps(row, sort_keys=True, separators=(",", ":")))
+                updated = True
+            else:
+                new_lines.append(line)
+        if updated:
+            INCIDENT_FILE.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    except OSError:
+        return
+
+
+def _inspect_existing_hold(
+    agent: str,
+    existing_row: Mapping[str, Any],
+    *,
+    orig_expires_at: int,
+    now: int,
+    earlier_incident_ids: set[str],
+    later_incident_ids: set[str],
+) -> str:
+    """Return 'none', 'own_active', or 'newer_or_manual'."""
+    marker = SHED_DIR / agent
+    if not marker.exists():
+        return "none"
+    try:
+        payload = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return "newer_or_manual"
+    if not isinstance(payload, dict):
+        return "newer_or_manual"
+    marker_expiry = payload.get("expires_at")
+    if (
+        isinstance(marker_expiry, bool)
+        or not isinstance(marker_expiry, (int, float))
+        or not math.isfinite(marker_expiry)
+    ):
+        return "newer_or_manual"
+    if marker_expiry <= now:
+        return "none"
+    existing_id = existing_row.get("incident_id")
+    marker_incident_id = payload.get("incident_id")
+    if not isinstance(marker_incident_id, str) or not marker_incident_id:
+        return "newer_or_manual"
+    if marker_incident_id in later_incident_ids:
+        return "newer_or_manual"
+    if marker_incident_id != existing_id and marker_incident_id not in earlier_incident_ids:
+        return "newer_or_manual"
+    marker_scope = payload.get("tier_scope")
+    row_scope = existing_row.get("tier_scope")
+    widening = marker_scope is not None and row_scope is None
+    if not widening and marker_expiry >= orig_expires_at:
+        return "own_active" if marker_incident_id == existing_id else "newer_or_manual"
+    return "none"
+
+
+def _repair_dedup_incident(
+    *,
+    existing_id: str,
+    existing_row: Mapping[str, Any] | None,
+    earlier_incident_ids: set[str],
+    later_incident_ids: set[str],
+    agent: str,
+    category: str,
+    now: int,
+    recovered: bool,
+) -> dict[str, Any]:
+    if existing_row is None:
+        return {"status": "ok", "deduped": True, "incident_id": existing_id, "shed": False}
+    row_category = str(existing_row.get("category") or category)
+    row_shed_requested = (
+        bool(existing_row.get("shed_requested")) and row_category != "model_rejected"
+    )
+    if not row_shed_requested or recovered or _is_incident_recovered(existing_row):
+        return {"status": "ok", "deduped": True, "incident_id": existing_id, "shed": False}
+    row_expires_at = existing_row.get("expires_at")
+    if (
+        isinstance(row_expires_at, bool)
+        or not isinstance(row_expires_at, (int, float))
+        or not math.isfinite(row_expires_at)
+    ):
+        return {"status": "ok", "deduped": True, "incident_id": existing_id, "shed": False}
+    orig_expires_at = int(row_expires_at)
+    if now >= orig_expires_at:
+        return {"status": "ok", "deduped": True, "incident_id": existing_id, "shed": False}
+    hold_state = _inspect_existing_hold(
+        agent,
+        existing_row,
+        orig_expires_at=orig_expires_at,
+        now=now,
+        earlier_incident_ids=earlier_incident_ids,
+        later_incident_ids=later_incident_ids,
+    )
+    if hold_state == "own_active":
+        return {"status": "ok", "deduped": True, "incident_id": existing_id, "shed": True}
+    if hold_state == "newer_or_manual":
+        return {"status": "ok", "deduped": True, "incident_id": existing_id, "shed": False}
+    shed_created = ensure_shed(
+        agent,
+        category=row_category,
+        incident_id=existing_id,
+        expires_at=orig_expires_at,
+        reset_at=existing_row.get("reset_at"),
+        model=existing_row.get("model"),
+        tier_scope=existing_row.get("tier_scope"),
+    )
+    return {
+        "status": "ok" if shed_created else "shed_unfulfilled",
+        "deduped": True,
+        "incident_id": existing_id,
+        "shed": shed_created,
+    }
 
 
 def record_incident(
@@ -786,10 +1159,15 @@ def record_incident(
     """Append exactly one incident line while holding an exclusive fcntl lock."""
     if not agent or not surface or not category:
         raise ValueError("agent, surface, and category are required")
-    timestamp = int(timestamp or time.time())
+    now = int(timestamp if timestamp is not None else time.time())
+    timestamp = now
     stable_run_id = run_id or f"sync:{_hash_evidence(str(target) + evidence)}"
     key = _idempotency_key(stable_run_id, agent, category, surface)
     incident_id = _hash_evidence(key)
+    model = failed_model(agent, evidence) or recorded_run_model(agent, run_id)
+    tier_scope = tier_scope_for(agent, model) if category in ("quota", "rate_limit") else None
+    shed_requested = bool(shed) and category != "model_rejected"
+    recovered = _is_recovered_fields(status=status, next_success_at=next_success_at, extra=extra)
     record: dict[str, Any] = {
         "schema": SCHEMA,
         "incident_id": incident_id,
@@ -802,6 +1180,10 @@ def record_incident(
         "category": category,
         "status": status,
         "target": target,
+        "shed_requested": shed_requested,
+        "model": model,
+        "tier_scope": tier_scope,
+        "recovered": recovered,
         "evidence_hash": _hash_evidence(evidence),
         "evidence_excerpt": _redact_bounded(evidence),
     }
@@ -820,24 +1202,55 @@ def record_incident(
     )
     if extra:
         record["extra"] = {key: value for key, value in extra.items() if value is not None}
-    lock_fd = _acquire_lock()
-    try:
-        existing = _existing_idempotency_key(key)
+    existing: str | None = None
+    existing_row: dict[str, Any] | None = None
+    earlier_incident_ids: set[str] = set()
+    later_incident_ids: set[str] = set()
+    expires_at: int | None = None
+    with incident_lock():
+        existing_row, earlier_incident_ids, later_incident_ids = _existing_incident_context(key)
+        existing = existing_row.get("incident_id") if existing_row else None
         if existing:
-            return {"status": "ok", "deduped": True, "incident_id": existing}
-        line = (json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
-        ledger_fd = os.open(INCIDENT_FILE, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
-        with os.fdopen(ledger_fd, "wb") as handle:
-            handle.write(line)
-            handle.flush()
-            os.fsync(handle.fileno())
-    finally:
-        _release_lock(lock_fd)
-    cooldown = _cooldown_seconds(category)
-    expires_at = timestamp + cooldown if cooldown is not None else None
-    if reset_at is not None and expires_at is not None:
-        expires_at = max(expires_at, reset_at)
-    model = failed_model(agent, evidence) or recorded_run_model(agent, run_id)
+            if recovered and existing_row is not None and not _is_incident_recovered(existing_row):
+                _mark_incident_recovered_locked(
+                    agent=agent,
+                    incident_id=existing,
+                    cleared_at=now,
+                    next_success_at=next_success_at,
+                )
+                existing_row = {**existing_row, "recovered": True}
+        else:
+            # Persist the escalated expiry before publication so dedup repair restores it exactly.
+            cooldown = _cooldown_seconds(category, agent, timestamp, incident_id)
+            expires_at = timestamp + cooldown if cooldown is not None else None
+            if reset_at is not None and expires_at is not None:
+                expires_at = max(expires_at, reset_at)
+            record["expires_at"] = expires_at
+            if recovered:
+                _mark_incident_recovered_locked(
+                    agent=agent,
+                    cleared_at=now,
+                    next_success_at=next_success_at,
+                )
+            line = (json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n").encode(
+                "utf-8"
+            )
+            ledger_fd = os.open(INCIDENT_FILE, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
+            with os.fdopen(ledger_fd, "wb") as handle:
+                handle.write(line)
+                handle.flush()
+                os.fsync(handle.fileno())
+    if existing:
+        return _repair_dedup_incident(
+            existing_id=existing,
+            existing_row=existing_row,
+            earlier_incident_ids=earlier_incident_ids,
+            later_incident_ids=later_incident_ids,
+            agent=agent,
+            category=category,
+            now=now,
+            recovered=recovered,
+        )
     shed_created = (
         ensure_shed(
             agent,
@@ -846,14 +1259,19 @@ def record_incident(
             expires_at=expires_at,
             reset_at=reset_at,
             model=model,
-            tier_scope=(
-                tier_scope_for(agent, model) if category in ("quota", "rate_limit") else None
-            ),
+            tier_scope=tier_scope,
         )
-        if shed
+        if shed_requested and not recovered
         else False
     )
-    return {"status": "ok", "deduped": False, "incident_id": incident_id, "shed": shed_created}
+    return {
+        "status": (
+            "shed_unfulfilled" if (shed_requested and not recovered and not shed_created) else "ok"
+        ),
+        "deduped": False,
+        "incident_id": incident_id,
+        "shed": shed_created,
+    }
 
 
 def check_shed(agent: str) -> bool:
@@ -861,6 +1279,8 @@ def check_shed(agent: str) -> bool:
 
 
 def clear_shed(agent: str) -> bool:
+    with incident_lock():
+        _mark_incident_recovered_locked(agent=agent)
     try:
         (SHED_DIR / agent).unlink()
         return True

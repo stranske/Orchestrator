@@ -1,0 +1,73 @@
+provision: baseline = 2026-11-11T18:40:07.286665+00:00
+provision: checked_at = 2026-11-12T01:40:05.069168+00:00
+provision: counted_through = 2026-11-12T01:40:05.069168+00:00
+provision: coverage = UNKNOWN
+provision: segments = 2; malformed_lines=0
+provision: failed/branch-exists = 41
+provision: failed/branch-held = 147
+provision: failed/provision-error = 232
+provision: failed/set-aside = 30
+provision: ok/dirty-holder-preserved = 2
+provision: ok/new-worktree = 254
+provision: ok/set-aside = 5
+provision: reclaimed/branch-held = 81
+provision: reclaimed/branch-reset = 9
+provision: reused/branch-resume = 2
+provision: reused/existing-worktree = 349
+provision: reused/fast-forwarded = 109
+provision: failed(branch-held|branch-exists) = 188 over 7d
+provision: ledger evidence = unmet acceptance
+provision: UNKNOWN: seven continuous observed days not established
+provision: UNKNOWN: collector has not established intact continuous coverage
+provision: UNKNOWN: active/archive segments differ from the collector observation
+provision: native/full-verifier/mirror acceptance requires separate receipts
+{
+  "schema_version": 1,
+  "deployment_acceptance_verified": false,
+  "reporter_sha256": "cce7d18d678ee6882785158ccf7e57d594329fb9b64da6f998fd17d67ed2d90e",
+  "coverage": "UNKNOWN",
+  "continuous_since": "2026-11-11T18:40:07.286665+00:00",
+  "checked_at": "2026-11-12T01:40:05.069168+00:00",
+  "counts": {
+    "failed/branch-exists": 41,
+    "failed/branch-held": 147,
+    "failed/provision-error": 232,
+    "failed/set-aside": 30,
+    "ok/dirty-holder-preserved": 2,
+    "ok/new-worktree": 254,
+    "ok/set-aside": 5,
+    "reclaimed/branch-held": 81,
+    "reclaimed/branch-reset": 9,
+    "reused/branch-resume": 2,
+    "reused/existing-worktree": 349,
+    "reused/fast-forwarded": 109
+  },
+  "branch_refusals": 188,
+  "malformed_lines": 0,
+  "segments": [
+    {
+      "path": "/Users/teacher/.codex/orchestrator/provision-events.ndjson",
+      "lines": 1805,
+      "sha256": "443b45ac293b99b6bf1e158f3edbc47e2b840acdf56c65eab9616d877a9dea8c",
+      "bytes": 363779,
+      "raw_sha256": "443b45ac293b99b6bf1e158f3edbc47e2b840acdf56c65eab9616d877a9dea8c"
+    },
+    {
+      "path": "/Users/teacher/.codex/orchestrator/provision-events.ndjson.pre-718-repair-2026-11-03",
+      "lines": 335,
+      "sha256": "ccad083cf41cd3b6b839a8dd49fd6d1c651ce44458e364bf6e96ffb0a2ad1a76",
+      "bytes": 58217,
+      "raw_sha256": "ccad083cf41cd3b6b839a8dd49fd6d1c651ce44458e364bf6e96ffb0a2ad1a76"
+    }
+  ],
+  "continuity_failures": [
+    "seven continuous observed days not established",
+    "collector has not established intact continuous coverage",
+    "active/archive segments differ from the collector observation"
+  ],
+  "evidence_ready": false,
+  "receipt_sha256": "e4c516ce2cd86979b05b57fcb234bfd338d64aea91cff871c31e8fd2818099b9",
+  "counted_through": "2026-11-12T01:40:05.069168+00:00",
+  "instrument_sha256": "0b9eb004a9fc8c162a595098bfbdf3c1a1c4f8a33ee6757b0257f407031d9de9",
+  "collector_sha256": "65fa782ef1899c4105110ea9b19654a62dd4d643a8d63512d93be2d9bc1bfe0b"
+}

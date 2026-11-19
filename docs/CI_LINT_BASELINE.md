@@ -1,5 +1,23 @@
 # Gate python-ci baseline — what is checked, what is deferred, and what would clear it
 
+## Measured pending dev-tool PR #1403 toolchain — 2026-11-16
+
+<!-- measured-with: black=26.10.1 ruff=0.17.5 isort=9.0.2 docformatter=1.7.8 mypy=2.4.1 pytest=9.2.0 pytest-cov=7.1.0 pytest-xdist=3.8.0 coverage=7.17.3 -->
+
+The nine pins from #1403 head `125965ca868ceb44aff1b6fb5123ffe302d7b3da`
+were measured in a temporary Python 3.12.2 environment against Orchestrator
+source `d43b18be394cb0e113b1e3c79b5ee6016169a115` using the strict
+`scripts/ci_lint_baseline.py --json` collector. Each check reported zero
+blocking and zero drainable findings. Ruff passed, Black left 712 files
+unchanged, mypy found no issues in 150 source files, and the Coverage startup
+probe collected 9,018 tests and exited zero.
+
+The [measurement record](evidence/issue-1404/measurement.json) retains the
+source revision, collector and pin digests, installed versions, command exit codes, and output
+including the coverage collection summary. The existing bundle is still
+recorded below for current main pins. The regenerated PR's aggregate and
+combined coverage are verified separately in hosted CI.
+
 ## Measured pending dev-tool PR #1289 toolchain — 2026-11-09
 
 <!-- measured-with: black=26.10.1 ruff=0.17.4 isort=9.0.2 docformatter=1.7.8 mypy=2.4.1 pytest=9.2.0 pytest-cov=7.1.0 pytest-xdist=3.8.0 coverage=7.17.2 -->

@@ -1,0 +1,33 @@
+# verify.py
+
+  tree:       checkout
+  state:      private copy, deleted after the run — ledger absent at the source, so it bootstraps privately; Brain absent at the source, so it bootstraps privately
+  time:       pytest 0s, selftests 6m06s (8 at a time (ORCH_VERIFY_JOBS=8)), gates 40s
+  pytest:     0 passed, 0 failed, 0/31 max (0 collected; floor 8636 — NOT MET)
+  selftests:  105 of 111 modules ran, 5/7 max skipped
+  activation audit   ok  CAN FIRE:   30 of 39 live  (77%)
+  recurrence replay  ok  WOULD FIRE:  32 of 57
+  set coverage       SKIP 9 of 10 capability-set coverage checks passed over 39 ledger capabilities, 1 skipped: test_no_fixtur
+  admission          FAIL ModuleNotFoundError: No module named 'pytest'
+  ledger validate    ok  "valid": true
+  gates:      1/2 max skipped
+  declared:   no ledger when the run began, so none of the 22 rows this tree declares was registered; the first writing load creates it holding all of them
+  mypy ratchet: 0/0 max of 149 module(s) exempt, 149 checked — fully drained
+
+  SKIPPED (prerequisite absent on this machine — nothing here was checked):
+    selftest capability_admission: section skipped — capability ledger holds no pre-admission-gate (legacy) capability — legacy debt accrues from this instance's registration history, and a ledger bootstrapped from the committed tree has none
+    selftest capability_advisor: section skipped — capability ledger has no row for codemod-campaign, offload, testgen-lane — the ledger is machine-local state (/tmp/verify-state-z2b6xnh8/capabilities.json); it holds 0 row(s) here, and these are registered by running the system, not by checking out the tree
+    selftest capability_outcome_bridge: section skipped — capability ledger carries no version lineage for agy-runtime-isolation, offload (capability_version_id is unset) — lineage is established by real registration on the running instance, so a fresh bootstrap has none
+    selftest capability_recurrence_check: section skipped — capability ledger has no row for docs-drift-fix-agent — the ledger is machine-local state (/tmp/verify-state-z2b6xnh8/capabilities.json); it holds 39 row(s) here, and these are registered by running the system, not by checking out the tree
+    selftest feedback: section skipped — capability ledger has no row for offload — the ledger is machine-local state (/tmp/verify-state-z2b6xnh8/capabilities.json); it holds 0 row(s) here, and these are registered by running the system, not by checking out the tree; role-redirect is declared by this tree too, but registering it alone would not clear this
+    selftest feedback: section skipped — capability ledger has no row for role-triage: declared by this tree, not yet registered here — the ledger is machine-local state (/tmp/verify-state-z2b6xnh8/capabilities.json); it holds 0 row(s) here, and the deployed code registers these on its first writing load (`capabilities.py --json validate`, an active tick's first command; `capabilities.py seed-declared` makes the same load on a copy)
+    gate     set coverage: capability ledger has no row for capability-activation-audit, capability-admission-gate, capability-firing-monitor, capability-propensity, capability:reference-sync-hygiene-test-gate, coverage-testgen-trigger, docs-drift-fix-agent, evidence-acquisition, feature-reflection-cli, feature-scan, issue-readiness, partitioned-review, switch-review — the ledger is machine-local state (/tmp/verify-state-z2
+
+  PROBLEMS:
+    - pytest testcase inventory unavailable: FileNotFoundError: [Errno 2] No such file or directory: '/tmp/verify-run-jqom3vzk/pytest.xml'
+    - pytest collected ZERO tests — the suite did not run
+    - collection DROPPED: 0 < floor 8636 — tests stopped running, which looks identical to tests passing
+    - executed-or-skipped count dropped: 0 passed + 0 skipped < floor 8634 — a test stopped being run without becoming a named skip
+    - 1 module selftest(s) failed: local_verify
+    - gate failed: admission
+    selftest local_verify: rr_tail': '/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3: No module named pytest\n'}, 'nodes': [], 'hollow_nodes':

@@ -93,3 +93,104 @@ def test_one_pool_in_band_and_one_unmeasured_reads_half(tmp_path):
     usage = pacing_usage.pass_numbers(tmp_path, NOW)["usage_in_target_band"]
     assert usage["value"] == 0.5
     assert "codex unmeasured" in usage["reason"]
+
+
+def _poll_row(pool, ts, used_percent, resets_at):
+    window = {"used_percent": used_percent, "resets_at": resets_at}
+    if pool == "codex":
+        return {"ts": ts, "primary": {**window, "window_minutes": 10080}}
+    return {"ts": ts, "weekly": {**window, "label": "All models"}}
+
+
+def _judging_world(tmp_path, monkeypatch, codex_polls, incidents, codex_state="shed"):
+    """A completed 4-hour period; claude polled every 10 min; codex polls as given; one snapshot per tick."""
+    polls = tmp_path / "polls"
+    polls.mkdir()
+    monkeypatch.setattr(pacing_usage, "POLL_DIR", polls)
+    start, end = NOW - 5 * 3600, NOW - 3600
+    tick = pacing.POLL_TICK_SECONDS
+    claude = [_poll_row("claude", t, 40, NOW + 86400) for t in range(int(start), int(end), tick)]
+    (polls / "claude-usage.ndjson").write_text("\n".join(json.dumps(r) for r in claude) + "\n")
+    (polls / "codex-usage.ndjson").write_text(
+        "\n".join(json.dumps(_poll_row("codex", *p)) for p in codex_polls) + "\n"
+    )
+    snaps = [
+        {
+            "event": "pacing_snapshot",
+            "ts": t,
+            "agents": {
+                "claude": {
+                    "state": "warn",
+                    "pacing": {"period_start": start, "period_end": end},
+                },
+                "codex": {"state": codex_state},
+            },
+        }
+        for t in range(int(start), int(end), tick)
+    ]
+    _write(tmp_path, snaps)
+    (tmp_path / "rate-limit-incidents.ndjson").write_text(
+        "".join(json.dumps({"ts": t, "agent": "claude"}) + "\n" for t in incidents)
+    )
+    return start, end
+
+
+def test_an_incident_while_the_other_pool_is_exhausted_is_judged_through_its_poll_gap(
+    tmp_path, monkeypatch
+):
+    """Owner 2026-11-18: an exhausted account is often closed until it resets, so its poll stops.
+    The last poll said 'at capacity until reset', so the gap hides nothing."""
+    start = NOW - 5 * 3600
+    codex = [(start + 60, 100, NOW + 86400)]  # exhausted, then no poll for the rest of the period
+    _judging_world(tmp_path, monkeypatch, codex, incidents=[start + 2 * 3600])
+    result = pacing_usage.pass_numbers(tmp_path, NOW)["quota_incidents_while_other_ok"]
+    assert result["value"] == 0
+    assert (
+        result["reason"].count("incidents judged 1/1 (other pool carried as exhausted in 1)") == 1
+    )
+
+
+def test_an_incident_in_a_gap_while_the_other_pool_was_not_exhausted_stays_unmeasured(
+    tmp_path, monkeypatch
+):
+    """11-09: the codex poll failed for 22 h at 63% used; an incident there cannot be judged."""
+    start = NOW - 5 * 3600
+    codex = [(start + 60, 63, NOW + 86400)]
+    _judging_world(tmp_path, monkeypatch, codex, incidents=[start + 2 * 3600])
+    result = pacing_usage.pass_numbers(tmp_path, NOW)["quota_incidents_while_other_ok"]
+    assert result["value"] is None
+    assert result["reason"].count("1 incident(s) fell where another pool's state is unknown") == 1
+
+
+def test_an_incident_while_the_other_pool_is_measured_ok_is_a_violation(tmp_path, monkeypatch):
+    start, end = NOW - 5 * 3600, NOW - 3600
+    tick = pacing.POLL_TICK_SECONDS
+    codex = [(t, 30, NOW + 86400) for t in range(int(start), int(end), tick)]
+    _judging_world(
+        tmp_path, monkeypatch, codex, incidents=[start + 2 * 3600 + 30], codex_state="ok"
+    )
+    result = pacing_usage.pass_numbers(tmp_path, NOW)["quota_incidents_while_other_ok"]
+    assert result["value"] == 1
+
+
+def test_a_period_with_gaps_but_no_incidents_is_measured_zero(tmp_path, monkeypatch):
+    start = NOW - 5 * 3600
+    _judging_world(tmp_path, monkeypatch, [(start + 60, 63, NOW + 86400)], incidents=[])
+    result = pacing_usage.pass_numbers(tmp_path, NOW)["quota_incidents_while_other_ok"]
+    assert result["value"] == 0
+
+
+def test_judged_violations_fail_the_zero_target_even_with_unjudged_incidents(tmp_path, monkeypatch):
+    """A zero target fails on the first judged violation; unjudged incidents cannot rescue it."""
+    start = NOW - 5 * 3600
+    tick = pacing.POLL_TICK_SECONDS
+    codex = [(t, 30, NOW + 86400) for t in range(int(start), int(start + 7200), tick)]
+    _judging_world(
+        tmp_path, monkeypatch, codex, incidents=[start + 1830, start + 3 * 3600], codex_state="ok"
+    )
+    result = pacing_usage.pass_numbers(tmp_path, NOW)["quota_incidents_while_other_ok"]
+    assert result["value"] == 1
+    assert (
+        result["reason"].count("2: at least 1 incidents while another pool ok (1 more could not")
+        == 1
+    )

@@ -295,13 +295,13 @@ def test_exploration_backfill_pure_helpers() -> None:
 def test_execution_profiles_validate_and_resolve() -> None:
     profile = ep.get_profile("codex-6.1-sol-medium")
     assert profile["profile_id"] == "codex-6.1-sol-medium"
-    assert ep.resolve_production_profile_id("codex-6.1-sol-medium") == "codex-6.1-sol-medium"
+    assert ep.resolve_production_profile_id("codex-6.1-sol-medium") == "codex-6.2-sol-medium"
     assert ep.default_codex_profile("implement") in ep.PROFILE_REGISTRY
     assert (
         ep.replay_decision(
-            ep.select_profile("implement", None, ["codex-6.1-sol-medium"], rng_seed=1)
+            ep.select_profile("implement", None, ["codex-6.2-sol-medium"], rng_seed=1)
         )["selected_profile_id"]
-        == "codex-6.1-sol-medium"
+        == "codex-6.2-sol-medium"
     )
 
 

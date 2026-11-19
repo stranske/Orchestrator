@@ -1,0 +1,56 @@
+[
+  {
+    "name": "javascript",
+    "cmd": "node tests/test_verifier_context_builder_contract.js",
+    "chunk_id": "d9bbea",
+    "wall_time_seconds": 0.621424112,
+    "exit_code": 0,
+    "original_token_count": 390,
+    "output": "✔ actual exported initial builder forwards model mode and preserves full authentic request (30.549739ms)\n✔ freeform model requests are authentic while default checkbox admission remains structured (11.612226ms)\n✔ actual repeat builder retains original verdict and admits fresh required material once (11.984907ms)\n✔ actual pending builder retains uncertain effects and reenters only with skipped-step proof (107.175272ms)\n✔ invalid requests and unavailable diff evidence cannot start evaluation (3.290394ms)\n✔ actual builder preserves linked original requirements and refuses malformed linked source (3.229472ms)\n✔ CSV canary native verifier attempts require retained recovery, not another evaluation (2.284852ms)\n✔ CSV retained recovery command uses integer selectors bound to native source execution (1.060474ms)\n✔ CSV recovery follows the latest native comparison instead of the superseded evaluation (2.6889ms)\n✔ native CSV comparison reconciles to existing outputs even when its evaluation step was skipped (2.518795ms)\n✔ native CSV verifier states require both the corrective head and published merge (88.667095ms)\n✔ native PR 984 corpus decision and successful workflows cannot complete PR 1168 (89.599281ms)\n✔ native unavailable CSV reports cannot turn provider concerns into a corpus decision (86.146566ms)\n✔ merged CSV canary acknowledgment does not substitute for stored corrective custody (89.189562ms)\nℹ tests 14\nℹ suites 0\nℹ pass 14\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 538.855871\n"
+  },
+  {
+    "name": "syntax",
+    "cmd": "node --check tests/test_verifier_context_builder_contract.js",
+    "chunk_id": "104772",
+    "wall_time_seconds": 0.038766196,
+    "exit_code": 0,
+    "original_token_count": 0,
+    "output": ""
+  },
+  {
+    "name": "contract",
+    "cmd": "python3 tests/fixtures/closer_real_csv_canary/v1/verify_csv_contract.py",
+    "chunk_id": "87f2c5",
+    "wall_time_seconds": 0.138062907,
+    "exit_code": 0,
+    "original_token_count": 3,
+    "output": "contract ok\n"
+  },
+  {
+    "name": "chain_evidence",
+    "cmd": "python3 tests/fixtures/closer_real_csv_canary/v1/verify_csv_contract.py --chain-evidence",
+    "chunk_id": "ee8aad",
+    "wall_time_seconds": 0.121178679,
+    "exit_code": 2,
+    "original_token_count": 44,
+    "output": "{\"completion\": \"incomplete\", \"reason\": \"[Errno 2] No such file or directory: '/home/runner/.codex/orchestrator/closer-core/completions/stranske_orchestrator_988_989.json'\"}\n"
+  },
+  {
+    "name": "pytest",
+    "cmd": "python3 -m pytest tests/test_verifier_context_builder_wiring.py -m 'not slow' -q",
+    "chunk_id": "97c37e",
+    "wall_time_seconds": 0.027663003,
+    "exit_code": 1,
+    "original_token_count": 19,
+    "output": "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3: No module named pytest\n"
+  },
+  {
+    "name": "diff_check",
+    "cmd": "git diff --check",
+    "chunk_id": "108026",
+    "wall_time_seconds": 0.013482814,
+    "exit_code": 0,
+    "original_token_count": 0,
+    "output": ""
+  }
+]

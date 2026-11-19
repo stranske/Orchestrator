@@ -1,0 +1,14 @@
+{
+  "collector_checked_at": "2026-11-11T23:40:07.702839+00:00",
+  "mirror": "/Users/teacher/.codex/orchestrator-mirror.generation-7a941ab4329345c4a1945ee3bb6a20fb",
+  "segments_before": {
+    "/Users/teacher/.codex/orchestrator/provision-events.ndjson": "fece55e55b747645be8c9e2acf83b43fb534176a68b2c25e8e353df707d01b14",
+    "/Users/teacher/.codex/orchestrator/provision-events.ndjson.pre-718-repair-2026-11-03": "ccad083cf41cd3b6b839a8dd49fd6d1c651ce44458e364bf6e96ffb0a2ad1a76"
+  },
+  "segments_after": {
+    "/Users/teacher/.codex/orchestrator/provision-events.ndjson": "fece55e55b747645be8c9e2acf83b43fb534176a68b2c25e8e353df707d01b14",
+    "/Users/teacher/.codex/orchestrator/provision-events.ndjson.pre-718-repair-2026-11-03": "ccad083cf41cd3b6b839a8dd49fd6d1c651ce44458e364bf6e96ffb0a2ad1a76"
+  },
+  "unchanged": true,
+  "deployment_performed": false
+}

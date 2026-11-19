@@ -227,7 +227,6 @@ AUTH_FILES = {
     "claude": str(
         REAL_HOME / ".codex" / "handoff" / ".claude-oauth-token"
     ),  # exports CLAUDE_CODE_OAUTH_TOKEN
-    "aider": str(REAL_HOME / ".codex" / "handoff" / "aider.env"),  # exports MISTRAL_API_KEY
 }
 
 CRITICAL_EVALUATOR_DIRECTIVE = """CRITICAL-EVALUATOR STANCE (non-negotiable): Your job is correct judgment, not agreement. Evaluate
@@ -242,7 +241,6 @@ AGENT_PERSONAS = {
     "vibe": "You are Vibe (Devstral/Mistral), a flat-rate implementer lane. State your assumptions explicitly, prefer the smallest change that satisfies the spec, and report what you did NOT do.",
     "gemini": "You are Gemini via Antigravity (agy): large-context reasoning and big reads. CRITICAL: return the full deliverable in STDOUT — do NOT write it only to an artifact file the orchestrator cannot read. Don't spend this metered seat on trivial mechanical work.",
     "codex": "You are Codex, a reasoning + implementation seat. Verify before claiming done; surface risks and unknowns rather than papering over them.",
-    "aider": "You are Aider, running from an isolated venv. Make focused, test-backed edits; report exactly what changed.",
     "muse": "You are Muse Code (Meta), running headless in a sandbox on a subscription seat with a limited rolling allowance. Make focused, test-backed edits, spend few steps, and report exactly what changed and what you did NOT do.",
 }
 
@@ -382,6 +380,25 @@ def _lane_capability_match(task_type: str) -> None:
         pass
 
 
+# Owner decision 2026-11-18 (wave-2 lane review): 28 of 59 agent PRs were red at some commit, about 15 on
+# lint/format/type checks the agent could have run first, and delivered PRs carried 500-600 line
+# verification documents. The hosted keepalive prompt carries the same two rules (Workflows#4736).
+DELIVERY_RULES = (
+    "Before every push: run the lint, format and type checks this repository's CI runs (read "
+    ".github/workflows/ or the Makefile for the exact commands) on the files you changed, and the "
+    "acceptance criteria's named test(s). Fix what fails before pushing; never push a commit you know is "
+    "red. If a failure is outside your change, say so in the PR body.\n"
+    "Keep the delivery to code and tests: do not add verification, evidence or acceptance documents "
+    "(docs/evidence/, docs/verification/, docs/acceptance/) or tests that assert on a source file's "
+    "bytes, unless a task names that file. Put the test commands you ran and the deliberate-break "
+    "result in the PR body."
+)
+# Task types whose agent pushes code; review and epic planning do not.
+DELIVERY_TASK_TYPES = frozenset(
+    {"implement", "codemod", "mechanical", "polish", "testgen", "cross_repo", "runtime_ac"}
+)
+
+
 def build_prompt(
     task_type: str, target: str, target_detail: str = "", lane: str | None = None
 ) -> str:
@@ -400,7 +417,8 @@ def build_prompt(
         body = f"Work {target} ({task_type}). {target_detail}".strip()
     else:
         body = tmpl.format(target=target, target_detail=target_detail).strip()
-    return f"{body}\n\n{OWNER_QUESTION_PROTOCOL}"
+    rules = f"{DELIVERY_RULES}\n\n" if task_type in DELIVERY_TASK_TYPES else ""
+    return f"{body}\n\n{rules}{OWNER_QUESTION_PROTOCOL}"
 
 
 def _is_git_worktree(cwd: str | Path, *, timeout: float | None = None) -> bool:
@@ -690,6 +708,177 @@ def _is_transient_network_failure(
     if any(re.search(pattern, text, re.IGNORECASE) for pattern in _AUTH_USAGE_PATTERNS):
         return False
     return any(re.search(pattern, text, re.IGNORECASE) for pattern in _TRANSIENT_NETWORK_PATTERNS)
+
+
+SANDBOX_NETWORK_PROBE_TIMEOUT_S = 5.0
+ASSESS_FALLBACK_PREAMBLE = "Do not create, modify or delete any file; print your answer to stdout"
+ASSESS_FALLBACK_DIAGNOSTIC = (
+    "offload: assess sandbox has no network; running read-only brief in workspace-write sandbox"
+)
+_PROBE_DNS_PATTERNS = (
+    r"could not resolve host",
+    r"no such host",
+    r"name or service not known",
+    r"temporary failure in name resolution",
+    r"nodename nor servname",
+    r"curl: \(6\)",
+    r"lookup api\.github\.com",
+)
+_PROBE_CONNECTION_PATTERNS = (
+    r"connection refused",
+    r"connection reset",
+    r"network is unreachable",
+    r"no route to host",
+    r"failed to connect",
+    r"error connecting to api\.github\.com",
+    r"i/o timeout",
+    r"connection timed out",
+    r"tls handshake",
+    r"curl: \(7\)",
+    r"curl: \(28\)",
+    r"dial tcp",
+)
+_PROBE_AUTH_API_PATTERNS = (
+    r"\bHTTP(?:/\d+(?:\.\d+)?)?[ \t]+[45]\d{2}\b",
+    r"bad credentials",
+    r"requires authentication",
+    r"gh auth login",
+    r"authentication failed",
+    r"unauthorized",
+)
+
+
+def _sandbox_probe_command(offload_argv: list[str]) -> list[str]:
+    """Probe the built-in read-only policy without overriding permissions.
+
+    ``exec --sandbox read-only`` uses the legacy spelling; the sandbox helper
+    names that built-in ``:read-only``. Include managed restrictions just as the
+    eventual exec does. Never invent an empty permission profile or grant the
+    probe network/disk access the assess child would not have.
+    """
+    binary = offload_argv[0] if offload_argv else "codex"
+    command = [
+        str(binary),
+        "sandbox",
+        "--permission-profile",
+        ":read-only",
+        "--include-managed-config",
+    ]
+    if "--cd" in offload_argv:
+        index = offload_argv.index("--cd")
+        command += ["--cd", offload_argv[index + 1]]
+    return command + ["--", "bash", "-lc", "gh api rate_limit"]
+
+
+def _probe_json_has_rate(text: str) -> bool:
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    candidates = [raw]
+    start, end = raw.find("{"), raw.rfind("}")
+    if start >= 0 and end > start:
+        candidates.append(raw[start : end + 1])
+    for candidate in candidates:
+        try:
+            payload = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict) and (
+            isinstance(payload.get("rate"), dict) or isinstance(payload.get("resources"), dict)
+        ):
+            return True
+    return False
+
+
+def _classify_sandbox_probe(returncode: int, stdout: str, stderr: str) -> dict:
+    """Timeout is decided by the caller. DNS and connection are networkless.
+
+    An authentication or API rejection means the sandbox reached GitHub, so it
+    must not select the workspace-write fallback. A numeric code alone could
+    be a port in a DNS or connection diagnostic; require HTTP status context.
+    """
+    text = f"{stdout}\n{stderr}"
+    detail = text.strip()[:300]
+    if _probe_json_has_rate(stdout) or _probe_json_has_rate(text):
+        return {"has_network": True, "classification": "available", "detail": "gh api rate_limit"}
+    if any(re.search(pattern, text, re.IGNORECASE) for pattern in _PROBE_AUTH_API_PATTERNS):
+        return {"has_network": True, "classification": "auth_or_api", "detail": detail}
+    if any(re.search(pattern, text, re.IGNORECASE) for pattern in _PROBE_DNS_PATTERNS):
+        return {"has_network": False, "classification": "dns", "detail": detail}
+    if any(re.search(pattern, text, re.IGNORECASE) for pattern in _PROBE_CONNECTION_PATTERNS):
+        return {"has_network": False, "classification": "connection", "detail": detail}
+    if returncode == 0:
+        return {"has_network": True, "classification": "available", "detail": "probe exit 0"}
+    return {"has_network": True, "classification": "unclassified", "detail": detail}
+
+
+def _sandbox_network_available(verdict) -> bool:
+    """True when the probe says the sandbox can reach the network.
+
+    A boolean `True` is treated as availability so a deliberate break that
+    returns True skips the fallback. Only an explicit network failure falls back.
+    """
+    if isinstance(verdict, dict):
+        return verdict.get("has_network") is not False
+    return bool(verdict)
+
+
+def _sandbox_has_network(offload_argv: list[str], *, cwd: str) -> dict:
+    """Probe GitHub from inside the sandbox selected for this offload.
+
+    One attempt. The subprocess timeout is whatever remains of a five-second
+    total clock measured from entry. Timeout, DNS failure, and connection
+    failure are networkless. Authentication and API rejection are not. A probe
+    that cannot start is not evidence of a networkless sandbox.
+    """
+    started = time.monotonic()
+    command = _sandbox_probe_command(offload_argv)
+
+    def _timeout(detail: str) -> dict:
+        return {
+            "has_network": False,
+            "classification": "timeout",
+            "detail": detail,
+            "command": command,
+            "elapsed_s": time.monotonic() - started,
+        }
+
+    remaining = SANDBOX_NETWORK_PROBE_TIMEOUT_S - (time.monotonic() - started)
+    if remaining <= 0:
+        return _timeout("probe clock exhausted before start")
+    try:
+        proc = subprocess.run(
+            command,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=remaining,
+            stdin=subprocess.DEVNULL,
+        )
+    except subprocess.TimeoutExpired:
+        return _timeout(f"probe exceeded {SANDBOX_NETWORK_PROBE_TIMEOUT_S:.0f}s")
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {
+            "has_network": True,
+            "classification": "probe_unstarted",
+            "detail": f"{type(exc).__name__}: {exc}"[:300],
+            "command": command,
+            "elapsed_s": time.monotonic() - started,
+        }
+    elapsed = time.monotonic() - started
+    if elapsed > SANDBOX_NETWORK_PROBE_TIMEOUT_S:
+        return _timeout(f"probe returned after {elapsed:.3f}s")
+    verdict = _classify_sandbox_probe(proc.returncode, proc.stdout or "", proc.stderr or "")
+    verdict["command"] = command
+    verdict["elapsed_s"] = elapsed
+    return verdict
+
+
+def _assess_fallback_refusal(profile: dict | None) -> str | None:
+    """Why workspace-write is forbidden, or None when the profile permits it."""
+    if profile and profile.get("permission_mode") == "read-only":
+        return f"restricted profile {profile.get('profile_id')}"
+    return None
 
 
 def _offload_incomplete_reason(
@@ -1320,6 +1509,7 @@ def _routing_metadata(assignment: dict) -> dict | None:
         "profile_assignment_probability": assignment.get("profile_assignment_probability"),
         "profile_rng_seed": assignment.get("profile_rng_seed"),
         "profile_decision_id": (assignment.get("profile_decision") or {}).get("decision_id"),
+        "split_skip_reason": assignment.get("split_skip_reason"),
         "profile_attempt_ids": assignment.get("profile_attempt_ids") or [],
         "capability_decision": assignment.get("capability_decision"),
         "eligible_capability_ids": assignment.get("eligible_capability_ids") or [],
@@ -1392,6 +1582,19 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
             "if adding a descriptive slug. This dispatch policy overrides branch naming in "
             "the task brief. Do not switch to another agent prefix."
         )
+    # Owner's live full-tier split (gemini_full_split.py, 2026-11-11): a local opener implement
+    # run on gemini with no model chosen gets an arm. It returns None for every other run, and
+    # any failure leaves the run on its normal path (fail toward motion, never a stall).
+    try:
+        import gemini_full_split
+
+        split, split_reason = gemini_full_split.assign(assignment)
+    except Exception as exc:  # the split must never stop a dispatch
+        split, split_reason = None, f"split error: {type(exc).__name__}"
+    if split:
+        assignment = {**assignment, **split}
+    elif agent == "gemini" and task_type == "implement":
+        assignment = {**assignment, "split_skip_reason": split_reason}
     profile_id = assignment.get("selected_profile_id")
     selected_profile = execution_profiles.get_profile(profile_id) if profile_id else None
     model = adapters.model_identity(agent, mode, selected_profile)
@@ -1492,6 +1695,7 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
                 prompt,
                 mode,
                 cwd=cwd,
+                transport="local",
                 reasoning_effort=assignment.get("reasoning_effort"),
                 requested_model=assignment.get("requested_model"),
                 commits_in_worktree=True,
@@ -1731,6 +1935,9 @@ def _spawn(d: dict) -> int:
     logf = DISPATCH_LOG_DIR / f"{safe}.{d['agent']}.log"
     run_id = d.get("run_id") or f"{safe}-{d['agent']}-{time.time_ns()}"
     d["run_id"] = run_id
+    cursor_json_output = (
+        d["agent"] == "cursor" and _argv_flag_value(d.get("argv", []), "--output-format") == "json"
+    )
     started_ts = int(time.time())
     d["started_ts"] = started_ts
     if d.get("review_loop"):
@@ -1900,6 +2107,7 @@ def _spawn(d: dict) -> int:
         task_type=d.get("task_type"),
         log_file=str(logf),
         started_ts=started_ts,
+        cursor_json_output=cursor_json_output or None,
         selected_profile_id=d.get("selected_profile_id"),
         requested_model=d.get("requested_model"),
         policy_version=d.get("profile_policy_version"),
@@ -1940,6 +2148,7 @@ def _spawn(d: dict) -> int:
             "--workspace",
             str(d.get("cwd") or ""),
         ]
+        + (["--cursor-json-output"] if cursor_json_output else [])
     )
     # Marker BEFORE the python completion: the python step was SIGKILLed in the wild (audit F2).
     # Here the cause, found 2026-10-05, was the PATH lookup `step_python` replaces. The marker stays
@@ -2204,6 +2413,48 @@ def linked_open_prs(target: str) -> list[int] | None:
         return None
 
 
+def target_is_open_pr(target: str) -> bool | None:
+    """Return whether the target itself is an open PR; unreadable state is unknown."""
+    _linked_pr_read_error.set("")
+    match = re.fullmatch(r"([^/\s]+)/([^/#\s]+)#([1-9][0-9]*)", target)
+    if not match:
+        _linked_pr_read_error.set("expected owner/repo#N")
+        return None
+    owner, name, number = match.groups()
+    repo = f"{owner}/{name}"
+    try:
+        result = subprocess.run(
+            ["gh", "api", f"repos/{repo}/issues/{number}"],
+            capture_output=True,
+            text=True,
+            timeout=LINKED_PR_READ_TIMEOUT_S,
+            check=False,
+        )
+        if result.returncode:
+            raise ValueError(f"gh exit {result.returncode}: {result.stderr.strip()}")
+        issue = json.loads(result.stdout)
+        if not isinstance(issue, dict) or issue.get("number") != int(number):
+            raise ValueError("invalid GitHub issue/PR response")
+        pull_request = issue.get("pull_request")
+        if pull_request is None:
+            return False
+        if not isinstance(pull_request, dict):
+            raise ValueError("invalid GitHub pull_request marker")
+        state = issue.get("state")
+        if state not in {"open", "closed"}:
+            raise ValueError("invalid GitHub issue/PR state")
+        return state == "open"
+    except (
+        OSError,
+        subprocess.SubprocessError,
+        ValueError,
+        TypeError,
+        AttributeError,
+    ) as exc:
+        _linked_pr_read_error.set(str(exc))
+        return None
+
+
 def delegate(
     agent: str,
     target: str,
@@ -2269,8 +2520,16 @@ def delegate(
     if linked is None:
         reason = _linked_pr_read_error.get() or "GitHub linked-PR read failed"
         return {"error": f"linked: unknown ({reason}); retry when GitHub access recovers"}
+    target_number = int(target.rsplit("#", 1)[1])
+    continuing_target_pr = False
+    if type(continue_pr) is int and continue_pr == target_number:
+        target_open_pr = target_is_open_pr(target)
+        if target_open_pr is None:
+            reason = _linked_pr_read_error.get() or "GitHub linked-PR read failed"
+            return {"error": f"linked: unknown ({reason}); retry when GitHub access recovers"}
+        continuing_target_pr = target_open_pr
     if (linked or continue_pr is not None) and (
-        type(continue_pr) is not int or continue_pr not in linked
+        type(continue_pr) is not int or (continue_pr not in linked and not continuing_target_pr)
     ):
         if not linked:
             return {
@@ -3077,7 +3336,8 @@ def offload(
     and reads their exit codes, iterates until something passes, debugs, refactors, reviews,
     researches. Big-context reading (summarize 200 pages -> gemini) is ONE use, and naming only
     that use in this docstring is part of how callers came to believe it was the only one.
-    `mode="assess"` narrows to a no-write sandbox when that is what you want; the default does not.
+    `mode="assess"` starts read-only. Codex may fall back to workspace-write with a no-write
+    brief when its sandbox cannot reach the network and its profile permits workspace-write.
 
     Exactly two things do not transfer, and neither is about how big or code-shaped the task is:
     FLEET ACTIONS (claim/PR/label — that is `delegate`, below), and FIRST-PERSON OBSERVATION,
@@ -3091,7 +3351,7 @@ def offload(
 
     `write_boundary` = {"protect": [dirs], "allow": [dirs]} bounds where the agent may write: nowhere
     under `protect` except the run's own cwd and the `allow` roots (never a `.git` beneath one).
-    codex is held by its own sandbox (`--add-dir` per root); cursor, agy, vibe, aider and claude run
+    codex is held by its own sandbox (`--add-dir` per root); cursor, agy, vibe and claude run
     under a seatbelt profile (`adapters.apply_write_boundary`). A boundary that cannot be enforced
     refuses the run (exit 2) rather than running it unbounded. None changes nothing.
 
@@ -3266,39 +3526,82 @@ def offload(
         }
     muse_prompt = adapters.muse_prompt_file(command_prompt) if agent == "muse" else None
     data_only_options: _DataOnlyCommandOptions = {}
-    argv = (
-        adapters.build_command(
+
+    def _offload_argv(prompt_text: str, *, sandbox_mode: str | None = None) -> list:
+        return adapters.build_command(
             agent,
-            command_prompt,
+            prompt_text,
             mode,
             cwd=run_cwd,
-            profile=profile,
             transport="offload",
+            profile=profile,
             prompt_via_stdin=prompt_via_stdin,
-            **data_only_options,
             prompt_file=muse_prompt,
             write_roots=boundary[1][1:] if boundary and agent == "codex" else None,
-        )
-        if profile
-        else adapters.build_command(
-            agent,
-            command_prompt,
-            mode,
-            cwd=run_cwd,
-            transport="offload",
+            sandbox_mode=sandbox_mode,
             reasoning_effort=(
                 execution_profiles.get_profile(
                     execution_profiles.default_codex_profile("offload", mode)
                 )["reasoning_effort"]
-                if agent == "codex"
+                if agent == "codex" and not profile
                 else None
             ),
-            prompt_via_stdin=prompt_via_stdin,
             **data_only_options,
-            prompt_file=muse_prompt,
-            write_roots=boundary[1][1:] if boundary and agent == "codex" else None,
         )
-    )
+
+    argv = _offload_argv(command_prompt)  # raises ValueError on unknown agent
+    sandbox_network = None
+    sandbox_fallback = False
+    # Codex assess only. Other agents have no read-only sandbox whose network differs
+    # from workspace-write, and a host-side probe would not be this child's network.
+    if agent == "codex" and mode == "assess" and not data_only and controlled is None:
+        sandbox_network = _sandbox_has_network(argv, cwd=str(run_cwd))
+        if not _sandbox_network_available(sandbox_network):
+            refusal = _assess_fallback_refusal(profile)
+            if refusal:
+                message = (
+                    "offload: assess sandbox has no network; workspace-write fallback "
+                    f"refused by {refusal}"
+                )
+                print(message, file=sys.stderr)
+                return {
+                    "agent": agent,
+                    "exit": 2,
+                    "output": "",
+                    "run_id": None,
+                    "error": message,
+                    "sandbox": "read-only",
+                    "sandbox_fallback": False,
+                    "sandbox_network": (
+                        sandbox_network
+                        if isinstance(sandbox_network, dict)
+                        else {"has_network": False}
+                    ),
+                    "process_started": False,
+                }
+            prepared_prompt = f"{ASSESS_FALLBACK_PREAMBLE}\n\n{prepared_prompt}"
+            command_prompt = "" if prompt_via_stdin else prepared_prompt
+            try:
+                argv = _offload_argv(command_prompt, sandbox_mode="workspace-write")
+            except (adapters.WorkspaceRefused, ValueError) as exc:
+                message = (
+                    "offload: assess sandbox has no network; workspace-write fallback "
+                    f"refused by restricted profile: {exc}"
+                )
+                print(message, file=sys.stderr)
+                return {
+                    "agent": agent,
+                    "exit": 2,
+                    "output": "",
+                    "run_id": None,
+                    "error": message,
+                    "sandbox": "read-only",
+                    "sandbox_fallback": False,
+                    "sandbox_network": sandbox_network,
+                    "process_started": False,
+                }
+            sandbox_fallback = True
+            print(ASSESS_FALLBACK_DIAGNOSTIC, file=sys.stderr)
     if agent == "gemini" and "--add-dir" in argv:
         argv[argv.index("--add-dir") + 1] = str(run_cwd)
         _align_gemini_print_timeout(argv, timeout)
@@ -3382,6 +3685,7 @@ def offload(
         policy_version=execution_profiles.PROFILE_POLICY_VERSION if profile else None,
         propensity=1.0 if profile else None,
         workspace_relocated_from=relocated["requested"] if relocated else None,
+        sandbox_fallback=True if sandbox_fallback else None,
     )
 
     def _record_offload_run() -> None:
@@ -3445,6 +3749,11 @@ def offload(
         fh.write(
             f"=== {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} offload {agent}/{mode} cwd={run_cwd} process_cwd={proc_cwd} timeout={timeout}s run_id={run_id} ===\n"
         )
+        if agent == "codex" and mode == "assess":
+            fh.write(
+                f"[orchestrator] sandbox={'workspace-write' if sandbox_fallback else 'read-only'} "
+                f"sandbox_fallback={str(sandbox_fallback).lower()}\n"
+            )
         if relocated:
             fh.write(
                 f"[orchestrator] WORKSPACE RELOCATED: {relocated['reason']}; this run writes only in its own scratch workspace {relocated['workspace']}\n"
@@ -3490,6 +3799,7 @@ def offload(
             policy_version=execution_profiles.PROFILE_POLICY_VERSION if profile else None,
             propensity=1.0 if profile else None,
             credentials_redacted=sum(redaction_counts.values()) or None,
+            sandbox_fallback=True if sandbox_fallback else None,
         )
         if profile and record_worker_attempt:
             probe: dict[str, str | None] = (
@@ -4131,7 +4441,7 @@ def offload(
         print(f"warn: rate-incident classification failed for {agent}: {exc}", file=sys.stderr)
     if evidence_result and evidence_result.get("is_authoritative"):
         try:
-            rate_incidents.record_incident(
+            incident_result = rate_incidents.record_incident(
                 agent=agent,
                 surface="dispatcher.offload",
                 category=evidence_result["category"],
@@ -4146,8 +4456,27 @@ def offload(
                     "attempts": attempts,
                 },
             )
+            if isinstance(incident_result, dict):
+                evidence_result["incident_status"] = incident_result.get("status")
+                evidence_result["shed"] = bool(incident_result.get("shed"))
+                if incident_result.get("status") == "shed_unfulfilled":
+                    evidence_result["shed_unfulfilled"] = True
+                    out["shed_unfulfilled"] = True
+                    print(
+                        f"warn: rate-incident shed unfulfilled for {agent}: "
+                        f"incident_id={incident_result.get('incident_id')}",
+                        file=sys.stderr,
+                    )
         except Exception as exc:
             print(f"warn: rate-incident recording failed for {agent}: {exc}", file=sys.stderr)
+    if agent == "codex" and mode == "assess":
+        out["sandbox_fallback"] = sandbox_fallback
+        out["sandbox"] = "workspace-write" if sandbox_fallback else "read-only"
+        if isinstance(sandbox_network, dict):
+            out["sandbox_network"] = {
+                "classification": sandbox_network.get("classification"),
+                "has_network": sandbox_network.get("has_network"),
+            }
     return out
 
 
@@ -4243,6 +4572,7 @@ def delegate_remote(
     rationale: str = "",
     dry_run: bool = False,
     labels: set | None = None,
+    routing: dict | None = None,
     influenced_by_role_run_ids=None,
     influenced_by_skill_event_ids=None,
     influenced_by_workflow_ids=None,
@@ -4293,6 +4623,7 @@ def delegate_remote(
     res = subprocess.run(cmd, capture_output=True, text=True)
     applied = res.returncode == 0
     try:  # decision capture — keepalive outcomes (merge/durability) join this by PR later
+        routing_metadata = _routing_metadata(dict(routing or {})) if routing else None
         feedback.record_run(
             f"remote:{repo}#{num}:{agent}",
             target,
@@ -4302,6 +4633,7 @@ def delegate_remote(
             rationale=rationale or "remote keepalive delegation via agent label",
             pr_number=num,
             model=adapters.model_identity(agent, None),
+            routing_metadata=routing_metadata,
             influenced_by_role_run_ids=influenced_by_role_run_ids,
             influenced_by_skill_event_ids=influenced_by_skill_event_ids,
             influenced_by_workflow_ids=influenced_by_workflow_ids,
@@ -5145,7 +5477,7 @@ def _selftest() -> None:
 
         # A SEAT THAT CANNOT REPORT PROVENANCE RECORDS NO WORKER ATTEMPT. This assertion used to
         # demand the opposite -- "a profiled seat must record a worker attempt" -- and that was the
-        # bug: gemini, cursor, vibe and aider keep no per-session model log, so every attempt they
+        # bug: gemini, cursor and vibe kept no per-session model log, so every attempt they
         # wrote completed `unresolved` and could never become anything else. Cursor produced 23 in
         # five hours at ~230 offloads per two days, each re-caching the same prose reason, dragging
         # the profile's resolved-model coverage to a permanent 0.00 over a denominator that only
@@ -5167,45 +5499,44 @@ def _selftest() -> None:
             ),
             None,
         )
-        assert (
-            mute_seat
-        ), "no seat lacks a reader any more -- delete this case rather than faking one"
-        try:
-            adapter_module.build_command = fake_build_command
-            subprocess_module.run = fake_run
-            gem_off = offload(mute_seat, "Summarize this file.", cwd=str(nongit), timeout=1)
-        finally:
-            adapter_module.build_command = old_build_command
-            subprocess_module.run = old_subprocess_run
-        with feedback._conn() as c:
-            gem_rows = c.execute(
-                "SELECT resolved_model FROM execution_attempts "
-                "WHERE run_id=? AND operation_role='worker'",
-                (gem_off["run_id"],),
-            ).fetchall()
-        assert gem_rows == [], (
-            "a seat that can never resolve a model must not write a worker attempt",
-            mute_seat,
-            gem_rows,
-        )
-        assert (
-            feedback.resolved_worker_identity_for_run(gem_off["run_id"]) is None
-        ), "no attempt means no worker identity, which is the honest answer here"
-        # The profile is still in force and still recorded, so withholding the claim has not cost
-        # the audit trail: the run still says which profile ran.
-        with feedback._conn() as c:
-            gem_meta = c.execute(
-                "SELECT routing_metadata FROM runs WHERE run_id=?", (gem_off["run_id"],)
-            ).fetchone()
-        gem_routed = json.loads(gem_meta[0]) if gem_meta and gem_meta[0] else {}
-        assert gem_routed.get("selected_profile_id"), (
-            "the profile must still be recorded even when no worker attempt is",
-            gem_routed,
-        )
-        # And the reason is a STATIC property of the seat, from one authority -- never prose
-        # re-cached on thousands of rows.
-        ok, why = adapters.can_report_cli_identity(mute_seat)
-        assert ok is False and why and "no_cli_session_log" in why, (mute_seat, ok, why)
+        # Nobody lacks a reader since aider's removal (2026-11-11): the case runs only when one does.
+        if mute_seat is not None:
+            try:
+                adapter_module.build_command = fake_build_command
+                subprocess_module.run = fake_run
+                gem_off = offload(mute_seat, "Summarize this file.", cwd=str(nongit), timeout=1)
+            finally:
+                adapter_module.build_command = old_build_command
+                subprocess_module.run = old_subprocess_run
+            with feedback._conn() as c:
+                gem_rows = c.execute(
+                    "SELECT resolved_model FROM execution_attempts "
+                    "WHERE run_id=? AND operation_role='worker'",
+                    (gem_off["run_id"],),
+                ).fetchall()
+            assert gem_rows == [], (
+                "a seat that can never resolve a model must not write a worker attempt",
+                mute_seat,
+                gem_rows,
+            )
+            assert (
+                feedback.resolved_worker_identity_for_run(gem_off["run_id"]) is None
+            ), "no attempt means no worker identity, which is the honest answer here"
+            # The profile is still in force and still recorded, so withholding the claim has not cost
+            # the audit trail: the run still says which profile ran.
+            with feedback._conn() as c:
+                gem_meta = c.execute(
+                    "SELECT routing_metadata FROM runs WHERE run_id=?", (gem_off["run_id"],)
+                ).fetchone()
+            gem_routed = json.loads(gem_meta[0]) if gem_meta and gem_meta[0] else {}
+            assert gem_routed.get("selected_profile_id"), (
+                "the profile must still be recorded even when no worker attempt is",
+                gem_routed,
+            )
+            # And the reason is a STATIC property of the seat, from one authority -- never prose
+            # re-cached on thousands of rows.
+            ok, why = adapters.can_report_cli_identity(mute_seat)
+            assert ok is False and why and "no_cli_session_log" in why, (mute_seat, ok, why)
         for seat in adapters.CLI_IDENTITY_READERS:
             assert adapters.can_report_cli_identity(seat)[0] is True, seat
 
@@ -5242,15 +5573,19 @@ def _selftest() -> None:
             ),
             None,
         )
-        assert mute, "no seat lacks a reader any more -- delete this case rather than faking one"
-        # unreportable + evidence -> RECORDED, because the round needs the join to mine at all.
-        assert _attempts_for(mute, round_id="domain/audit-x:review-corpus:2026-08-22"), (
-            "a round-bound offload must record the attempt its episode joins on",
-            mute,
-        )
-        # unreportable + no evidence -> nothing. This is the only silent cell, and the only one
-        # where the row could never be used for anything.
-        assert _attempts_for(mute, round_id=None) == [], ("the junk case must stay silent", mute)
+        # Runs only while some seat genuinely lacks a reader (none since aider's removal, 2026-11-11).
+        if mute is not None:
+            # unreportable + evidence -> RECORDED, because the round needs the join to mine at all.
+            assert _attempts_for(mute, round_id="domain/audit-x:review-corpus:2026-08-22"), (
+                "a round-bound offload must record the attempt its episode joins on",
+                mute,
+            )
+            # unreportable + no evidence -> nothing. This is the only silent cell, and the only one
+            # where the row could never be used for anything.
+            assert _attempts_for(mute, round_id=None) == [], (
+                "the junk case must stay silent",
+                mute,
+            )
         # reportable + no evidence -> RECORDED, because it resolves and feeds drift detection.
         assert _attempts_for(
             "codex", round_id=None
@@ -5310,12 +5645,11 @@ def _selftest() -> None:
         assert (
             offload_argv[offload_argv.index("--output-format") + 1] == "stream-json"
         ), offload_argv
-        # And the long-running dispatch path is deliberately UNCHANGED: its output is parsed
-        # elsewhere, so reshaping it is a separate and riskier change.
+        # Local dispatch uses the single terminal result for cost reconciliation.
         local_argv = adapters.build_command(
             "cursor", "p", "composer", cwd=str(nongit), transport="local"
         )
-        assert local_argv[local_argv.index("--output-format") + 1] == "text", local_argv
+        assert local_argv[local_argv.index("--output-format") + 1] == "json", local_argv
         import ledger_reconcile
 
         dry_cost = ledger_reconcile.reconcile(adapters.LEDGER, dry_run=True)
@@ -5736,7 +6070,7 @@ def _selftest() -> None:
         assert repeated_codex_profile["profile_id"] == codex_profile["profile_id"]
         # Every real seat now has a registered profile, so every seat can record a worker attempt.
         # (Before this, only codex could, which is why provenance covered one agent of six.)
-        for seat in ("claude", "gemini", "cursor", "vibe", "aider"):
+        for seat in ("claude", "gemini", "cursor", "vibe"):
             assert _select_offload_profile(seat, "mid"), f"{seat} must select a profile"
         # An agent with NO registered profile still selects nothing -- selection may not invent one.
         assert _select_offload_profile("definitely-not-an-agent", "mid") is None
@@ -5747,7 +6081,7 @@ def _selftest() -> None:
         # registering one top-tier profile per seat silently overrode it: every gemini read was
         # routed to Pro.
         #
-        # Gemini cheap/mid ride 3.8 Flash and only full is Argon High. An advisory read takes
+        # Gemini cheap/mid ride 4 Hydrogen (3.8 Flash until 2026-11-15) and only full is Argon High. An advisory read takes
         # mid; explicit cheap/full requests retain their tier.
         for seat in ("codex", "claude", "gemini"):
             wanted = adapters.resolve_model(seat, adapters.DEFAULT_OFFLOAD_TIER)
@@ -5758,9 +6092,9 @@ def _selftest() -> None:
         # fix is choosing per task, not deleting the expensive rung.
         gemini_ids = {p["profile_id"] for p in execution_profiles.profiles_for_agent("gemini")}
         assert "gemini-4-argon-high" in gemini_ids, gemini_ids
-        assert "gemini-3.8-flash-high" in gemini_ids, gemini_ids
+        assert "gemini-4-hydrogen-high" in gemini_ids, gemini_ids
         # The cheap rung is registered too, so the ladder the router names is fully reachable.
-        assert "gemini-3.8-flash-low" in gemini_ids, gemini_ids
+        assert "gemini-4-hydrogen-low" in gemini_ids, gemini_ids
 
         # AGY REPORTS IN ITS LOG, and the log must be PER RUN. agy's structured output carries only
         # conversation_id/cwd/usage; its log carries

@@ -1,0 +1,89 @@
+✔ recounts active and archived failures with multiplicity and exact seven-day boundaries (99.432665ms)
+✔ an archived-only ledger is measured; absent ledger stays unmeasured (143.885604ms)
+✔ empty intact observed week can qualify only ledger evidence (74.082722ms)
+✔ preserves the existing collector owner exclusion before parsing and hashing (76.146403ms)
+✔ malformed torn data cannot become an intact zero (73.354324ms)
+✔ malformed broken data cannot become an intact zero (76.854434ms)
+✔ malformed null data cannot become an intact zero (73.329047ms)
+✔ malformed array data cannot become an intact zero (73.934518ms)
+✔ malformed naive data cannot become an intact zero (73.959394ms)
+✔ malformed outcome data cannot become an intact zero (74.438529ms)
+✔ segment delete after observation requires a fresh collector receipt (75.45153ms)
+✔ segment rewrite after observation requires a fresh collector receipt (76.057161ms)
+✔ segment append after observation requires a fresh collector receipt (73.770907ms)
+✔ segment duplicate after observation requires a fresh collector receipt (80.315307ms)
+✔ segment rotate after observation requires a fresh collector receipt (79.294224ms)
+✔ inconsistent collector baseline fails closed (74.858818ms)
+✔ inconsistent collector coverage fails closed (75.307778ms)
+✔ inconsistent collector continuity fails closed (75.231866ms)
+✔ inconsistent collector gap fails closed (75.405232ms)
+✔ inconsistent collector counts fails closed (74.883144ms)
+✔ inconsistent collector timestamp fails closed (74.983841ms)
+✔ inconsistent collector window fails closed (77.3414ms)
+✔ inconsistent collector source fails closed (74.148082ms)
+✔ inconsistent collector collector fails closed (74.554991ms)
+✔ inconsistent collector readiness fails closed (76.516597ms)
+✔ missing or malformed receipt cannot infer continuity from old events (82.410619ms)
+✔ a stale or future receipt cannot qualify and timestamps retain microseconds (73.855602ms)
+✔ reads all inputs without writing and CLI status distinguishes unmet evidence (159.60293ms)
+✔ fresh observed legitimate refusals remain unmet after successful retries in both lanes (128.868598ms)
+✔ a refusal ages out only after a fresh observation with every archive retained (133.976414ms)
+✔ fresh observations after deploying changed provision.py cannot inherit the previous seven-day baseline (193.101881ms)
+✔ fresh observations after deploying changed followup_evidence.py cannot inherit the previous seven-day baseline (190.589504ms)
+✔ fresh zero-refusal observation preserves the baseline at the two-hour collector limit (136.648074ms)
+✔ fresh zero-refusal observation resets the baseline at the two-hour collector limit (188.669009ms)
+✔ a fresh collector observation after archive loss cannot qualify a zero-refusal window (137.730487ms)
+✔ fresh observation preserves rotated archives with an empty active segment (170.094628ms)
+✔ fresh observation preserves rotated archives with repeated refusals (175.406755ms)
+✔ source absence and nonregular segments are UNKNOWN without following symlinks (72.59039ms)
+✖ malformed receipt segment retains an unmet zero in CLI output (92.555056ms)
+✖ malformed receipt segment retains all refusals in CLI output (144.981998ms)
+✔ rejects malformed empty counts [] (74.681937ms)
+✔ rejects malformed empty counts "" (72.979271ms)
+✔ rejects malformed empty counts 0 (75.26854ms)
+✔ rejects malformed empty counts null (75.980548ms)
+✔ compares relative collector segment paths by their filesystem identity (75.375238ms)
+✔ rejects an unrelated zero ledger when the writer is outside (81.073903ms)
+✔ rejects an unrelated zero ledger when the writer is renamed (88.465789ms)
+✔ rejects an unrelated zero ledger with a separate writer configured runtime (106.93188ms)
+✔ rejects an unrelated zero ledger with a separate writer home runtime (109.216913ms)
+✔ explicit writer path overrides the runtime directory when unobserved (319.636885ms)
+✔ explicit writer path overrides the runtime directory when observed (320.779106ms)
+ℹ tests 51
+ℹ suites 0
+ℹ pass 49
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 5469.477568
+
+✖ failing tests:
+
+test at tests/test_audit_provision_ledger.js:504:3
+✖ malformed receipt segment retains an unmet zero in CLI output (92.555056ms)
+  TypeError: Cannot read properties of null (reading 'path')
+      at /home/runner/work/Orchestrator/Orchestrator/scripts/audit_provision_ledger.js:136:75
+      at Array.some (<anonymous>)
+      at /home/runner/work/Orchestrator/Orchestrator/scripts/audit_provision_ledger.js:136:50
+      at Array.some (<anonymous>)
+      at auditProvisionLedger (/home/runner/work/Orchestrator/Orchestrator/scripts/audit_provision_ledger.js:136:19)
+      at Object.audit (/home/runner/work/Orchestrator/Orchestrator/tests/test_audit_provision_ledger.js:51:31)
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_audit_provision_ledger.js:514:22)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+
+test at tests/test_audit_provision_ledger.js:504:3
+✖ malformed receipt segment retains all refusals in CLI output (144.981998ms)
+  TypeError: Cannot read properties of null (reading 'path')
+      at /home/runner/work/Orchestrator/Orchestrator/scripts/audit_provision_ledger.js:136:75
+      at Array.some (<anonymous>)
+      at /home/runner/work/Orchestrator/Orchestrator/scripts/audit_provision_ledger.js:136:50
+      at Array.some (<anonymous>)
+      at auditProvisionLedger (/home/runner/work/Orchestrator/Orchestrator/scripts/audit_provision_ledger.js:136:19)
+      at Object.audit (/home/runner/work/Orchestrator/Orchestrator/tests/test_audit_provision_ledger.js:51:31)
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_audit_provision_ledger.js:514:22)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)

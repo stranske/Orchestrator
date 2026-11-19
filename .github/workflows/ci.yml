@@ -87,8 +87,14 @@ jobs:
           else
             echo "::warning::No worker coverage data; shard verdict is unchanged."
           fi
+      # Upload stall guard (2026-11-11): on PR #1357 this upload took 9-10.5 minutes on 3 of 12
+      # shards while the same upload took 12 s elsewhere and the tests took ~1 minute. A stalled
+      # first attempt now stops at 3 minutes and is retried once; only a failed retry fails the job.
       - name: Upload printed summary, gate verdicts and worker coverage
+        id: upload_shard
         if: always()
+        continue-on-error: true
+        timeout-minutes: 3
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: pytest-shard-${{ matrix.shard }}
@@ -96,6 +102,17 @@ jobs:
           path: shard-results/
           if-no-files-found: error
           retention-days: 7
+      - name: Retry the shard upload once (first attempt failed or stalled)
+        if: always() && steps.upload_shard.outcome == 'failure'
+        timeout-minutes: 5
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: pytest-shard-${{ matrix.shard }}
+          include-hidden-files: true
+          path: shard-results/
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
 
   # Unlike main's coverage-only job, this job owns the verification verdict.
   # verify.py keeps coverage reporting out of its exit code; only publishing is soft.
@@ -214,7 +231,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
-          python-version: '3.14'
+          python-version: '3.13'  # 3.13 compatibility for the whole suite (Gate runs 3.14 only, 2026-11-11)
       - name: Install native shell test prerequisite
         uses: ./.github/actions/ci-zsh
       - name: Install dependencies
@@ -235,14 +252,28 @@ jobs:
         run: |
           mkdir -p "$ORCH_STATE_DIR" "$ORCH_LOCAL_RUNTIME"
           bash scripts/verify_before_sync.sh "$GITHUB_WORKSPACE"
+      # Same upload stall guard as the pytest shards (2026-11-11, PR #1357: 9-10 minute stalls).
       - name: Upload flat-copy shard evidence
+        id: upload_mirror_shard
         if: always()
+        continue-on-error: true
+        timeout-minutes: 3
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: mirror-shard-${{ matrix.shard }}
           path: ${{ runner.temp }}/mirror-results/shard-${{ matrix.shard }}.json
           if-no-files-found: error
           retention-days: 7
+      - name: Retry the flat-copy shard upload once (first attempt failed or stalled)
+        if: always() && steps.upload_mirror_shard.outcome == 'failure'
+        timeout-minutes: 5
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: mirror-shard-${{ matrix.shard }}
+          path: ${{ runner.temp }}/mirror-results/shard-${{ matrix.shard }}.json
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
 
   exec-mirror:
     name: verify.py aggregate in the flat exec-mirror shape

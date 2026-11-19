@@ -396,7 +396,20 @@ def review(
     # tick, the invocation heartbeat above (the kill switch stops the history write). `load_declared`
     # reconciles an in-memory copy and writes nothing. It seeds and expires nothing, even in memory:
     # until a writer does, the ledger is judged as it is.
-    ledger = capabilities.load_declared(path or capabilities.REG)
+    ledger_path = pathlib.Path(path or capabilities.REG)
+    # Two measurements, carried separately: an unreadable LEDGER leaves every live finding
+    # unmeasured, while one retired row's malformed history leaves only the retirement count so.
+    ledger_measurement = "measured"
+    try:
+        ledger = capabilities.load_declared(ledger_path)
+        if not ledger and not ledger_path.exists():
+            raise FileNotFoundError(f"no capability ledger at {ledger_path}")
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
+        ledger = {}
+        ledger_measurement = (
+            f"unmeasured: capability ledger unreadable ({type(exc).__name__}: {exc})"
+        )
+    retired_measurement = ledger_measurement
     history = _load_history()
     previous = {row["capability_id"]: row for row in (history[-1]["rows"] if history else [])}
     # ONE READ of the registry's retirements for the whole run. A malformed declaration holds
@@ -415,8 +428,23 @@ def review(
     found: dict[str, list[Any]] = {key: [] for key in SILENCE_FINDINGS}
     evidence: dict[str, dict[str, Any]] = {}
     not_monitored: dict[str, list[str]] = {}
+    retired_but_invoked: list[dict[str, Any]] = []
     for cap_id in sorted(ledger):
         cap = ledger[cap_id]
+        if retired_measurement == "measured":
+            try:
+                retirement = capabilities.invoked_after_retirement(cap)
+            except (AttributeError, KeyError, OverflowError, TypeError, ValueError) as exc:
+                # An unreadable history cannot establish a complete anomaly count. Discard any
+                # partial evidence, but keep judging live rows and accounting for non-live rows.
+                retired_but_invoked.clear()
+                retired_measurement = (
+                    f"unmeasured: capability retirement history unreadable for {cap_id} "
+                    f"({type(exc).__name__}: {exc})"
+                )
+            else:
+                if retirement:
+                    retired_but_invoked.append({"capability_id": cap_id, **retirement})
         last = int(cap.get("last_invocation") or 0)
         silent_days = None if not last else round((now - last) / 86400, 1)
         observer = capabilities.is_observer(cap)
@@ -526,6 +554,12 @@ def review(
         "ledger_total": len(rows),
         "not_monitored": {status: sorted(ids) for status, ids in sorted(not_monitored.items())},
         "not_monitored_count": sum(len(ids) for ids in not_monitored.values()),
+        "retired_but_invoked": retired_but_invoked,
+        "retired_but_invoked_count": (
+            len(retired_but_invoked) if retired_measurement == "measured" else None
+        ),
+        "retired_but_invoked_measurement": retired_measurement,
+        "ledger_measurement": ledger_measurement,
         capabilities.FINDING_POPULATION_KEY: finding_population(),
         "fired_ever": sum(1 for r in live if r["ever_fired"]),
         "never_fired": found["never_fired"],
@@ -669,6 +703,22 @@ def _evidence_lines(found: dict[str, Any] | None) -> list[str]:
 
 
 def format_report(rep: dict) -> str:
+    ledger_measurement = rep.get("ledger_measurement", "measured")
+    if ledger_measurement != "measured":
+        # No ledger was read, so the empty finding lists are not a measured zero: print no count
+        # and no all-clear sentence, only what could not be measured and why.
+        return (
+            "\n".join(
+                [
+                    "# Capability firing monitor",
+                    "",
+                    f"  live findings: {ledger_measurement}",
+                    f"  retired_but_invoked: {rep.get('retired_but_invoked_measurement')}",
+                    "",
+                ]
+            )
+            + "\n"
+        )
     out = [
         "# Capability firing monitor",
         "",
@@ -698,6 +748,24 @@ def format_report(rep: dict) -> str:
             "establishes the baseline"
         )
     out.append("")
+    measurement = rep.get("retired_but_invoked_measurement", "measured")
+    if measurement != "measured":
+        out += [f"  retired_but_invoked: {measurement}", ""]
+    else:
+        retired = rep.get("retired_but_invoked", [])
+        out.append(f"  retired_but_invoked: {len(retired)}")
+        for row in retired:
+            retirement = row["retirement"]
+            out.append(
+                f"    {row['capability_id']}  retired at {retirement['timestamp']} "
+                f"({retirement.get('reason') or 'no reason recorded'}); "
+                f"kill switch: {row['kill_switch'] or 'not declared'}"
+            )
+            for event in row["invocations"]:
+                out.append(
+                    f"        invocation at {event['timestamp']}  ref: {event.get('ref') or 'none'}"
+                )
+        out.append("")
     evidence = rep.get("silence_evidence") or {}
     shown: set[str] = set()
 

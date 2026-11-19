@@ -1,6 +1,6 @@
 # Issue 1138 continuation acceptance
 
-Current issue #1156 repair evidence is in the final section below. Earlier sections
+Current issue #1156 repair evidence is in the sections below. Earlier sections
 are historical reports at their named commits and runner environments; their pending
 statements do not describe this repair. Final-head CI is recorded in the repair PR
 acceptance record after the evidence commit, avoiding a self-referential SHA claim.
@@ -583,3 +583,351 @@ Final-head pytest shards and aggregate results belong in the repair PR acceptanc
 record, keyed to its exact commit SHA and workflow/job URLs. They are pending at
 the time this evidence is committed; the PR record must be updated from real CI
 before the fourth criterion can be claimed complete.
+
+## Issue 1156 keepalive: repeatable artifact-lock verification (2026-11-15 UTC)
+
+Checked-out head: `4bcc4a6d2e21abd31f28703a7d22d89a68270a9b`, branch
+`codex/issue-1156`, PR #1380. PR #1151's removal of catalog-traffic assertions
+and the unused adapters stub is already present, as is the temporary
+`capabilities_path` correction. The corrupt inputs, subprocess stub, and all four
+pattern-miner result assertions remain. No Python or production files changed
+in this run. The new JavaScript changes described here are **uncommitted**:
+the attempted `git add` failed before staging because `.git` is read-only.
+These results do not establish acceptance at a new follow-up head.
+
+Added `scripts/verify_issue_1138_artifacts.js` for the fourth task. It independently
+changes the first record's `gain` and the second record's `gain_vs_base` from
+296 to 297. Each experiment requires a passing baseline, the named test's
+specific gain assertion failure, byte-for-byte record restoration, and a
+passing restored test. Infrastructure errors, unrelated failures, surviving
+corruptions, and skips block evidence generation. The runner emits JSON only
+after both experiments succeed; it includes the measured commit, commands,
+test/record hashes, and complete pytest output. It does not overwrite historical
+evidence. The existing production mutation runner's verdict helper now accepts
+the artifact test node and expected assertion while retaining its original defaults.
+
+Run on a writable checkout with the required interpreter and pytest installed:
+
+```sh
+PYTHON=/opt/anaconda3/bin/python3 node scripts/verify_issue_1138_artifacts.js > /tmp/issue-1138-artifact-locks.json
+```
+
+Append successful experiment evidence here before completing the fourth task.
+The runner refuses uncommitted changes to production source, the Python test
+module, or either coverage record.
+
+Observed local checks against the working tree:
+
+| Command | Result |
+|---|---|
+| `node tests/test_issue_1138_artifacts.js` | Exit 0; 20 passed. Private JSON inputs and injected runner results exercise independent corruption, restoration, and rejection paths. These are verifier unit tests, not the actual Python artifact-lock experiments. |
+| `node tests/test_issue_1138_mutation.js` | Exit 0; 12 passed. Existing production mutation verifier regression tests. |
+| `/opt/anaconda3/bin/python3 -m pytest -q tests/test_coverage_round_1138.py -m 'not slow'` | Exit 127; `/opt/anaconda3/bin/python3: No such file or directory`. |
+| `/opt/anaconda3/bin/python3 -m pytest -q tests/test_verify_sharding.py::test_shard_lists_partition_every_collected_test_exactly_once -m 'not slow'` | Exit 127; same missing interpreter. |
+| `python3 -m pytest -q tests/test_coverage_round_1138.py -m 'not slow'` | Exit 1; Python 3.14.10 reports `No module named pytest`. |
+| `python3 -m pytest -q tests/test_verify_sharding.py::test_shard_lists_partition_every_collected_test_exactly_once -m 'not slow'` | Exit 1; same missing pytest. |
+| `python3 -m pytest tests/test_coverage_round_1138.py --cov=src/periodic_report --cov-report=term-missing -m 'not slow'` | Exit 1; same missing pytest. No coverage table or percentage was produced. |
+| `node scripts/verify_issue_1138_artifacts.js > /tmp/issue-1156-artifact-evidence.json` | Exit 1; baseline blocked. stderr reports `spawnSync python3 EPERM` and `No module named pytest`; stdout file is empty. |
+| `node scripts/verify_issue_1138_mutation.js` | Exit 1; same baseline blocker. Historical evidence was not modified. |
+| `git diff --exit-code HEAD -- src tests/test_coverage_round_1138.py docs/verification/issue-1138/head-ea6255b-combined.json docs/verification/issue-1138/head-ecb0707-combined.json docs/verification/issue-1138/mutation-proof-pass3.json` | Exit 0 after both blocked experiments. |
+
+Dependency recovery was attempted in `/tmp/issue-1156-venv`. Installing pytest,
+pytest-cov, Black, PyYAML, and httpx failed because `pypi.org` DNS resolution is
+unavailable. No dependency pins were changed. No `.py` edits were made, so the
+Python pre-commit formatting gate was not applicable.
+
+Commit attempt:
+
+```text
+git add scripts/verify_issue_1138_artifacts.js scripts/verify_issue_1138_mutation.js tests/test_issue_1138_artifacts.js
+fatal: Unable to create '/home/runner/work/Orchestrator/Orchestrator/.git/index.lock': Read-only file system
+```
+
+No acceptance checkbox was completed. A writable Git checkout and the specified
+Python runtime with pytest are needed to commit and run the real acceptance
+checks and deliberate-break experiments. Final-head CI and review/merge gates
+remain pending; this run did not push or merge.
+
+Attempts to add `needs-human` and post the blocker comment on PR #1380 were both
+rejected by the GitHub tool: `MCP tool call requires approval, but approval
+policy is never`. No remote task status or comment was changed.
+
+## Issue 1156 keepalive: mutation source integrity (2026-11-15 UTC)
+
+Measured checkout: `9130fbc78491b05248d805991cff11338462e754`, branch
+`codex/issue-1156`, PR #1380. The isolation correction is already present in
+`tests/test_coverage_round_1138.py`; its actual pytest verification remains
+blocked in this environment. No task or acceptance checkbox was completed.
+
+The working-tree mutation verifier now checks that baseline execution leaves
+production and test inputs unchanged, checks both inputs again during the
+deliberate break, and records the SHA-256 of the actual mutated production
+source. Five new regression cases cover baseline and mutation input changes
+and a failed restored run. These changes are **uncommitted** because Git's
+metadata directory is read-only.
+
+| Command | Observed result |
+|---|---|
+| `node tests/test_issue_1138_mutation.js` | Exit 0; 17 passed. These exercise the verifier with private fixtures and injected pytest results, not the production Python mutation. |
+| `node tests/test_issue_1138_artifacts.js` | Exit 0; 20 passed. Verifier regression tests only. |
+| `/opt/anaconda3/bin/python3 -m pytest -q tests/test_coverage_round_1138.py -m 'not slow'` | Exit 127; the requested interpreter does not exist. |
+| `/opt/anaconda3/bin/python3 -m pytest -q tests/test_verify_sharding.py::test_shard_lists_partition_every_collected_test_exactly_once -m 'not slow'` | Exit 127; the requested interpreter does not exist. |
+| `python3 -m pytest tests/test_coverage_round_1138.py --cov=src/periodic_report --cov-report=term-missing -m 'not slow'` | Exit 1; `No module named pytest`. No coverage table was produced; no new coverage target is claimed. |
+| `node scripts/verify_issue_1138_mutation.js` | Exit 1 at baseline; `spawnSync python3 EPERM` and `No module named pytest`. No production mutation or evidence append occurred. |
+| `node scripts/verify_issue_1138_artifacts.js > /tmp/issue-1156-artifact-evidence.json` | Exit 1 at baseline with the same errors; no artifact corruption occurred and the output file is empty. |
+| `git diff --check` | Exit 0. |
+| `git diff --exit-code HEAD -- src tests/test_coverage_round_1138.py docs/verification/issue-1138/head-ea6255b-combined.json docs/verification/issue-1138/head-ecb0707-combined.json docs/verification/issue-1138/mutation-proof-pass3.json` | Exit 0; production source, Python tests, coverage records, and historical mutation evidence remain unchanged. |
+| `git add scripts/verify_issue_1138_mutation.js tests/test_issue_1138_mutation.js` | Exit 128; cannot create `.git/index.lock`: read-only file system. The subsequent commit could not run. |
+
+Recovery in `/tmp/issue-1156-runtime` also failed: pip could not obtain pytest
+(`No matching distribution found for pytest`). Python 3.14.10 has neither pytest
+nor Black installed. No Python files or dependency pins changed, so the Python
+formatting gate does not apply to this JavaScript-only implementation.
+
+GitHub metadata confirmed PR #1380 was open with `draft=false` at measured head
+`9130fbc78491b05248d805991cff11338462e754`. A writable Git metadata directory and
+a working pytest runtime are required to commit and perform the real mutation,
+coverage, and shard checks. Final-head CI and guarded merge remain unverified.
+
+The requested blocker comment and `needs-human` label were attempted on PR #1380;
+both GitHub calls returned `MCP tool call requires approval, but approval policy
+is never`. Neither remote action completed.
+
+## Issue 1156 keepalive: artifact experiment input integrity (2026-11-15 UTC)
+
+Measured checkout: `af45b0abe4c279bb906986124ea396e1fa03f133`,
+branch `codex/issue-1156`, PR #1380. The first task's catalog-traffic and
+unused-adapter removals are already present, together with malformed pattern
+artifacts, subprocess isolation, the temporary capabilities path, and all four
+pattern-miner result assertions. Local Python execution is still blocked, so
+this run does not complete that task or any other acceptance checkbox.
+
+The working-tree change to `scripts/verify_issue_1138_artifacts.js` advances the
+artifact-lock verification task: it checks both coverage records and the test
+source immediately after the baseline and while the intended corruption is
+still applied. Previously, a runner could rewrite the active corrupted record
+during the deliberate break and have that rewrite silently removed by restoration,
+allowing the verifier to return evidence for changed inputs. Now any such change
+rejects evidence; the intentional corruption is still restored in `finally`.
+
+Eighteen regression cases exercise changes to the active record, the other record,
+and the test source in each phase of both experiments. Against the committed
+verifier copied to a private temporary tree, the expanded suite exits 1 with
+30 passed and 8 failed. With the fix it exits 0 with all 38 passed. The existing
+production-mutation verifier suite also exits 0 with all 17 passed. These are
+JavaScript verifier tests with injected runner results; they do not substitute
+for the real Python deliberate-break experiments.
+
+| Local command | Observed result |
+|---|---|
+| `node tests/test_issue_1138_artifacts.js` | Exit 0; 38 passed. |
+| `node tests/test_issue_1138_mutation.js` | Exit 0; 17 passed. |
+| `/opt/anaconda3/bin/python3 -m pytest -q tests/test_coverage_round_1138.py -m 'not slow'` | Exit 127; required interpreter does not exist. |
+| `/opt/anaconda3/bin/python3 -m pytest -q tests/test_verify_sharding.py::test_shard_lists_partition_every_collected_test_exactly_once -m 'not slow'` | Exit 127; required interpreter does not exist. |
+| `python3 -m pytest tests/test_coverage_round_1138.py --cov=src/periodic_report --cov-report=term-missing -m 'not slow'` | Exit 1; no module named pytest. No coverage table or percentage produced. |
+| `node scripts/verify_issue_1138_mutation.js` | Exit 1 at baseline; reports `spawnSync python3 EPERM` and no module named pytest. Historical mutation evidence unchanged. |
+| `node scripts/verify_issue_1138_artifacts.js > /tmp/issue-1156-artifact-locks.json` | Exit 1 at baseline with the same errors; output file empty, no record corruption applied. |
+| `git diff --check` | Exit 0. |
+
+Python 3.11.18, 3.12.16, 3.13.18, 3.14.10, and 3.15.2 all lack pytest.
+An install attempt targeting `/tmp/issue-1156-deps`, including an explicit
+`https://pypi.org/simple` attempt, failed with no matching distribution for pytest.
+The local pip cache contains no pytest or Black wheel. No Python file was changed.
+
+### Observed CI for the existing committed head
+
+GitHub's commit workflow-run query for
+`af45b0abe4c279bb906986124ea396e1fa03f133` reports successful
+[CI run 43688492376](https://github.com/stranske/Orchestrator/actions/runs/43688492376)
+and [Gate run 43688492872](https://github.com/stranske/Orchestrator/actions/runs/43688492872).
+Their job queries report:
+
+| CI job | Conclusion |
+|---|---|
+| [pytest + coverage shard 1/6](https://github.com/stranske/Orchestrator/actions/runs/43688492376/job/132733901809) | success |
+| [pytest + coverage shard 3/6](https://github.com/stranske/Orchestrator/actions/runs/43688492376/job/132733901936) | success |
+| [flat exec-mirror shard 1/6](https://github.com/stranske/Orchestrator/actions/runs/43688492376/job/132733901957) | success |
+| [pytest + coverage shard 2/6](https://github.com/stranske/Orchestrator/actions/runs/43688492376/job/132733901975) | success |
+| [flat exec-mirror shard 2/6](https://github.com/stranske/Orchestrator/actions/runs/43688492376/job/132733901978) | success |
+| [pytest + coverage shard 5/6](https://github.com/stranske/Orchestrator/actions/runs/43688492376/job/132733902001) | success |
+| [flat exec-mirror shard 5/6](https://github.com/stranske/Orchestrator/actions/runs/43688492376/job/132733902012) | success |
+| [flat exec-mirror shard 3/6](https://github.com/stranske/Orchestrator/actions/runs/43688492376/job/132733902016) | success |
+| [flat exec-mirror shard 4/6](https://github.com/stranske/Orchestrator/actions/runs/43688492376/job/132733902035) | success |
+| [flat exec-mirror shard 6/6](https://github.com/stranske/Orchestrator/actions/runs/43688492376/job/132733902042) | success |
+| [pytest + coverage shard 4/6](https://github.com/stranske/Orchestrator/actions/runs/43688492376/job/132733902043) | success |
+| [pytest + coverage shard 6/6](https://github.com/stranske/Orchestrator/actions/runs/43688492376/job/132733902077) | success |
+| [verify.py aggregate + combined coverage](https://github.com/stranske/Orchestrator/actions/runs/43688492376/job/132734258001) | success |
+| [verify.py aggregate in the flat exec-mirror shape](https://github.com/stranske/Orchestrator/actions/runs/43688492376/job/132734424923) | success |
+| [Gate summary](https://github.com/stranske/Orchestrator/actions/runs/43688492872/job/132734338776) | success |
+
+These CI results apply to the named committed head, before this run's working-tree
+changes. They do not establish final-head acceptance for those changes, the
+specified local-interpreter commands, or the real mutation experiments.
+The final review and guarded merge remain pending.
+
+The commit preparation attempt failed:
+
+```text
+git add scripts/verify_issue_1138_artifacts.js tests/test_issue_1138_artifacts.js
+fatal: Unable to create '/home/runner/work/Orchestrator/Orchestrator/.git/index.lock': Read-only file system
+```
+
+The source/test changes and this log remain uncommitted. A writable Git checkout
+and a Python environment with pytest are required to complete delivery. No
+production source, Python tests, frozen coverage records, or historical
+`mutation-proof-pass3.json` data changed. PR #1380 was verified open and ready
+for review (`draft=false`).
+
+GitHub rejected both the blocker comment and the `needs-human` label request
+with `MCP tool call requires approval, but approval policy is never`. Neither
+remote mutation occurred; this local record preserves the blocker details.
+
+## Issue 1156 keepalive: single-test experiment results (2026-11-15 UTC)
+
+Measured checkout: `04c694ca7be9e4eec058398ed215984f53683ce3`, branch
+`codex/issue-1156`. The first task's test correction is already present. Its
+required Python verification remains blocked; no acceptance checkbox is completed.
+
+The shared mutation-result validator previously accepted `1 failed, 1 passed`
+as a single-test failure, including an additional test from another Python module.
+It now checks all Python test-result rows and requires one single-test summary.
+Warnings, pytest's summary separators, and elapsed-time annotations remain valid.
+This applies to both the production mutation and the independent artifact-lock
+experiments. New artifact regressions use each lock's actual assertion order.
+
+The expanded mutation suite failed against the previous validator (19 passed,
+2 failed before the final baseline-summary case was added). The final artifact
+suite failed against the previous validator in a private temporary tree
+(38 passed, 4 failed). With the fix, `node tests/test_issue_1138_mutation.js`
+passes all 22 tests and `node tests/test_issue_1138_artifacts.js` passes all 42.
+The validator also accepts all three real pytest transcripts from the existing
+`mutation-proof-pass3.json` follow-up run. These checks exercise result validation;
+they do not constitute fresh Python mutation or coverage evidence.
+
+Both required `/opt/anaconda3/bin/python3 -m pytest` commands, with
+`-m 'not slow'`, exit 127 because the interpreter does not exist.
+`python3 -m pytest tests/test_coverage_round_1138.py --cov=src/periodic_report
+--cov-report=term-missing -m 'not slow'` exits 1: no module named pytest.
+No coverage table or percentage is available. Installing pytest, pytest-cov,
+and Black under `/tmp` failed because PyPI DNS resolution is unavailable.
+Black is also unavailable; this run changes no Python files.
+
+Both actual verification scripts stop at baseline with `spawnSync python3 EPERM`
+and `No module named pytest`. The artifact script emits no evidence. Production
+source, the corrected Python test, both coverage records, and historical mutation
+evidence remain identical to HEAD (`git diff --exit-code HEAD --` on those paths
+exits 0). `git diff --check` passes.
+
+Git staging is blocked by the read-only `.git/index.lock` location, so the
+source/test changes cannot be committed here. GitHub CLI requests cannot connect
+to `api.github.com`; current PR readiness, final-head CI, and review/merge gates
+remain unverified. Attempts to post the blocker comment and add `needs-human`
+to PR #1380 also failed to connect; neither remote action completed.
+A writable Git checkout, a working pytest runtime, and GitHub connectivity
+are needed to finish delivery.
+
+## Issue 1156 reconciliation and observed CI (2026-11-15 UTC)
+
+Measured checkout: `4a764241ff8fbdeff2d1df95e6e38b518561b262`, PR #1380,
+branch `codex/issue-1156`. Reviewed the four keepalive commits after bootstrap:
+they change JavaScript experiment verifiers/tests and this evidence log. The
+Python isolation correction was already merged by PR #1164 (`e78794e4`).
+The current test SHA-256 is still
+`f7cd686974888ac8ddb8e312e7913f608fdb9425784812d00949c50c47a96161`, exactly
+matching the real corrected-test follow-up experiment at `d068c59` above.
+
+Proposed checklist reconciliation, based on the committed real evidence:
+
+- [x] Carry forward the test correction: verified at `d068c59`; test bytes match.
+- [x] Run the required Python command pair and record results: recorded at `d068c59`.
+- [x] Repeat the corrected-test mutation: real baseline/red/green outputs are in
+  `mutation-proof-pass3.json` for `d068c59`.
+- [x] Demonstrate both artifact-lock failures and restored passes: real independent
+  experiments are recorded above for `d068c59`.
+- [ ] Complete final delivery: fresh-head review and merge gates remain pending.
+
+These historical results do not claim fresh local Python execution or completion
+of the final-head acceptance criterion. The attempted PR-body reconciliation was
+rejected with `MCP tool call requires approval, but approval policy is never`;
+the remote checklist remains unchanged.
+
+The GitHub connector returned successful CI jobs for this exact measured head:
+
+| Check | Observed result |
+|---|---|
+| [CI run 43690462174](https://github.com/stranske/Orchestrator/actions/runs/43690462174) | All six `pytest + coverage shard N/6` and six `flat exec-mirror shard N/6` jobs succeeded. |
+| [Combined coverage aggregate](https://github.com/stranske/Orchestrator/actions/runs/43690462174/job/132740197170) | `verify.py aggregate + combined coverage` succeeded. |
+| [Flat-copy aggregate](https://github.com/stranske/Orchestrator/actions/runs/43690462174/job/132740259689) | `verify.py aggregate in the flat exec-mirror shape` succeeded. |
+| [Gate run 43690462412](https://github.com/stranske/Orchestrator/actions/runs/43690462412) | Workflow succeeded. |
+
+Added a regression in `tests/test_issue_1138_mutation.js` that runs the result
+validator against the committed real baseline, mutation, and restored pytest
+transcripts, and rejects each transcript with the opposite expected verdict.
+This prevents the verifier's synthetic fixtures from being its only compatibility
+check. It does not rerun the production mutation or generate new Python evidence.
+Local commands pass: `node tests/test_issue_1138_mutation.js` (23 tests),
+`node tests/test_issue_1138_artifacts.js` (42), and
+`node tests/test_redirect_routing_mutations.js` (11).
+
+Both requested Anaconda pytest commands with `-m 'not slow'` exit 127 because
+the interpreter is absent. The targeted coverage command with `python3` exits 1
+(`No module named pytest`), producing no coverage table. Installing pytest,
+pytest-cov, Black, PyYAML, and httpx under `/tmp` failed (`No matching distribution
+found for pytest`). The real mutation script stops at baseline (`spawnSync
+python3 EPERM` and missing pytest), leaving production and historical evidence
+unchanged. No Python files changed, so the Python formatting gate does not apply.
+
+`git add tests/test_issue_1138_mutation.js` failed with exit 128: cannot create
+`.git/index.lock` on a read-only filesystem. The test and this log remain
+uncommitted. The merge guard dry-run for the measured head exits 1 with
+`review-thread GraphQL query failed`, `blocked=true`, and `merge_executed=false`.
+No merge was attempted after that blocker. PR #1380 was observed open with
+`draft=false`. Blocker-comment and `needs-human` label requests were also rejected
+by the GitHub tool's approval policy; neither remote action completed.
+
+## Issue 1156: restore production after runner rewrites (2026-11-15 UTC)
+
+Measured checkout: `45983477ff81f8b8681d7d5137f6a9d7ca73250a`, branch
+`codex/issue-1156`. Reviewed the five keepalive commits since bootstrap and the
+original correction in PR #1164 (`e78794e4`). The first task is already implemented.
+The reconciliation above remains supported by the committed `d068c59` Python
+results and mutation/artifact experiments. The final delivery task should remain
+unchecked because review and merge gates have not completed. The attempted PR-body
+update, blocker comment, and `needs-human` label were each rejected with
+`MCP tool call requires approval, but approval policy is never`.
+
+The mutation verifier detected production rewrites during baseline and restored
+runs but left the changed bytes in place when it rejected those runs. An outer
+`finally` now restores the original production bytes on both success and failure.
+Six new tests use private source copies to reproduce a rewrite during either
+phase, followed by a passing result, failing result, or runner exception. These
+are verifier regressions, not fresh production-mutation acceptance evidence.
+
+| Local check | Result |
+|---|---|
+| New regressions against the previous verifier | Exit 1; 23 passed, 6 failed, each at the original-byte restoration assertion. |
+| `node tests/test_issue_1138_mutation.js` after cleanup fix | Exit 0; 29 passed. |
+| `node tests/test_issue_1138_artifacts.js` | Exit 0; 42 passed. |
+| `node tests/test_redirect_routing_mutations.js` | Exit 0; 11 passed. |
+| Both requested Anaconda pytest commands, with `-m 'not slow'` | Exit 127; `/opt/anaconda3/bin/python3` does not exist. |
+| `python3 -m pytest tests/test_coverage_round_1138.py --cov=src/periodic_report --cov-report=term-missing -m 'not slow'` | Exit 1; no module named pytest; no coverage table produced. |
+| Install pytest, pytest-cov, Black, PyYAML, and httpx under `/tmp` | Exit 1; no matching distribution found for pytest. |
+| Actual mutation and artifact verification scripts | Each exits 1 at baseline with `spawnSync python3 EPERM` and missing pytest; no evidence generated. |
+| `git diff --exit-code HEAD -- src tests/test_coverage_round_1138.py docs/verification/issue-1138/head-ea6255b-combined.json docs/verification/issue-1138/head-ecb0707-combined.json docs/verification/issue-1138/mutation-proof-pass3.json` | Exit 0; production, corrected Python test, coverage records, and historical mutation evidence unchanged. |
+| `git diff --check` | Exit 0. No Python files changed. |
+
+GitHub returned successful CI for the measured committed head:
+[run 43690967600](https://github.com/stranske/Orchestrator/actions/runs/43690967600)
+has all six pytest/coverage shards and all six flat-copy shards successful, plus
+the [combined coverage aggregate](https://github.com/stranske/Orchestrator/actions/runs/43690967600/job/132741702890)
+and [flat-copy aggregate](https://github.com/stranske/Orchestrator/actions/runs/43690967600/job/132741827995).
+[Gate run 43690967789](https://github.com/stranske/Orchestrator/actions/runs/43690967789)
+also succeeded. These results precede the local cleanup change.
+
+`git add scripts/verify_issue_1138_mutation.js tests/test_issue_1138_mutation.js`
+exits 128: `.git/index.lock` cannot be created on a read-only filesystem. Changes
+remain uncommitted. The merge guard dry-run for the measured head exits 1 with
+`blocked=true`, `reason="review-thread GraphQL query failed"`, and
+`merge_executed=false`; no terminal merge was attempted. PR #1380 was observed
+open with `draft=false`. A writable checkout, working Python test tools, and
+access to update the PR and read review threads remain required for delivery.

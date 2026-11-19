@@ -1,0 +1,24 @@
+[
+  {
+    "type": "item.completed",
+    "item": {
+      "id": "item_26",
+      "type": "command_execution",
+      "command": "/bin/zsh -lc \"git diff --check; git fetch origin cursor/issue-983; git status -sb; git diff --stat; git add tests/fixtures/closer_real_csv_canary/v1/verify_csv_contract.py; git commit -m 'test: authenticate CSV canary evidence and reject malformed heads'; git push origin cursor/issue-983; gh pr diff 1168 --repo stranske/Orchestrator --name-only; gh pr view 1168 --repo stranske/Orchestrator --json headRefOid,isDraft,state; date -u +%FT%TZ\"",
+      "aggregated_output": "From https://github.com/stranske/Orchestrator\n * branch              cursor/issue-983 -> FETCH_HEAD\n## cursor/issue-983...origin/cursor/issue-983\n M tests/fixtures/closer_real_csv_canary/v1/verify_csv_contract.py\n .../v1/verify_csv_contract.py                      | 353 ++++++++++++++++++---\n 1 file changed, 313 insertions(+), 40 deletions(-)\nerror: Unable to create '/Users/teacher/.codex/orchestrator/repos/stranske__Orchestrator/.git/packed-refs.lock': Operation not permitted\n[cursor/issue-983 d7502402] test: authenticate CSV canary evidence and reject malformed heads\n 1 file changed, 313 insertions(+), 40 deletions(-)\nTo https://github.com/stranske/Orchestrator.git\n   28240e9d..d7502402  cursor/issue-983 -> cursor/issue-983\ntests/fixtures/closer_real_csv_canary/v1/csv_export.py\ntests/fixtures/closer_real_csv_canary/v1/verify_csv_contract.py\n{\"headRefOid\":\"d750240291d2b5c455d64258e011d6f4fd68a7b3\",\"isDraft\":false,\"state\":\"OPEN\"}\n2026-11-05T20:25:31Z\n",
+      "exit_code": 0,
+      "status": "completed"
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "id": "item_49",
+      "type": "command_execution",
+      "command": "/bin/zsh -lc \"git diff --check; git fetch origin cursor/issue-983; git status -sb; git add tests/fixtures/closer_real_csv_canary/v1/verify_csv_contract.py; git commit -m 'test: require native corpus decisions for canary completion'; git push origin cursor/issue-983; gh pr diff 1168 --repo stranske/Orchestrator --name-only; gh pr view 1168 --repo stranske/Orchestrator --json headRefOid,isDraft,state; date -u +%FT%TZ\"",
+      "aggregated_output": "From https://github.com/stranske/Orchestrator\n * branch              cursor/issue-983 -> FETCH_HEAD\n## cursor/issue-983...origin/cursor/issue-983\n M tests/fixtures/closer_real_csv_canary/v1/verify_csv_contract.py\nerror: Unable to create '/Users/teacher/.codex/orchestrator/repos/stranske__Orchestrator/.git/packed-refs.lock': Operation not permitted\n[cursor/issue-983 860c9125] test: require native corpus decisions for canary completion\n 1 file changed, 94 insertions(+), 40 deletions(-)\nTo https://github.com/stranske/Orchestrator.git\n   d7502402..860c9125  cursor/issue-983 -> cursor/issue-983\ntests/fixtures/closer_real_csv_canary/v1/csv_export.py\ntests/fixtures/closer_real_csv_canary/v1/verify_csv_contract.py\n{\"headRefOid\":\"860c9125a1f0e6a467c806a092951f3952219bcb\",\"isDraft\":false,\"state\":\"OPEN\"}\n2026-11-05T20:36:49Z\n",
+      "exit_code": 0,
+      "status": "completed"
+    }
+  }
+]

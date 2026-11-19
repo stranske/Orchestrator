@@ -1,0 +1,16 @@
+✔ actual exported initial builder forwards model mode and preserves full authentic request (19.181881ms)
+✔ freeform model requests are authentic while default checkbox admission remains structured (7.828107ms)
+✔ actual repeat builder retains original verdict and admits fresh required material once (8.342162ms)
+✔ actual pending builder retains uncertain effects and reenters only with skipped-step proof (100.825613ms)
+✔ invalid requests and unavailable diff evidence cannot start evaluation (3.104522ms)
+✔ actual builder preserves linked original requirements and refuses malformed linked source (3.266877ms)
+✔ CSV canary native verifier attempts require retained recovery, not another evaluation (2.236293ms)
+✔ merged CSV canary acknowledgment does not substitute for stored corrective custody (93.530019ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 8
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 243.276548

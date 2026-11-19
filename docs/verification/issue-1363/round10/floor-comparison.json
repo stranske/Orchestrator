@@ -1,0 +1,17 @@
+{
+  "revision": "db3072ee8e6f5a5ab36d4df6d27e55293951b1d0",
+  "origin_main": "2d6788c112b824dcb818bade30794fde064ed550",
+  "matches": true,
+  "delivered_sha256": "54f041a67b260dcbb3dd84fa607748747e6f5896ad0919fb1274284042bea6fe",
+  "origin_main_sha256": "54f041a67b260dcbb3dd84fa607748747e6f5896ad0919fb1274284042bea6fe",
+  "delivered_bytes": 95188,
+  "origin_main_bytes": 95188,
+  "comparison_command": [
+    "cmp",
+    "delivered-floor.json",
+    "origin-main-floor.json"
+  ],
+  "comparison_exit_code": 0,
+  "comparison_error_code": null,
+  "compared_bytes_match_git": true
+}

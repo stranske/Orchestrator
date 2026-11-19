@@ -406,7 +406,7 @@ def test_a_text_only_failure_is_still_read_whole(monkeypatch, stores, agent):
     assert [r["agent"] for r in _incidents()] == [agent] and _shed(agent)
 
 
-@pytest.mark.parametrize("agent", ["claude", "cursor", "gemini", "vibe", "aider"])
+@pytest.mark.parametrize("agent", ["claude", "cursor", "gemini", "vibe"])
 def test_only_codex_stdout_is_read_less_its_work(agent):
     """By design the filter reads codex's schema on codex's stdout only. 0 of 4,706 non-codex
     dispatch logs on 2026-10-05 held a codex work-event line, so the reconcile pass, which filters

@@ -1,0 +1,74 @@
+{
+  "checked_at": "2026-11-12T01:02:48.131313+00:00",
+  "head": "20de36e54271300f17b018c0c33103e47f9002a3",
+  "mirror": "/Users/teacher/.codex/orchestrator-mirror.generation-7a941ab4329345c4a1945ee3bb6a20fb",
+  "newest": {
+    "cause": "branch-held",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "lane": "closer",
+    "outcome": "failed",
+    "target": "stranske/Workflows#4637",
+    "ts": "2026-11-11T16:59:47.763115+00:00"
+  },
+  "holder_exists": false,
+  "refusal_time_ownership": "UNKNOWN; present absence cannot establish historical reservation or writer lock",
+  "closer-dispatcher.json_target_records": [],
+  "closer-dispatcher.json.pipeline.json_target_records": [],
+  "stranske__workflows_4635_claim_exists": false,
+  "stranske__workflows_4637_claim_exists": false,
+  "local_loop_target": {
+    "agent": "vibe",
+    "created": 1794364325.7572532,
+    "failures": {
+      "head": "1a30aa9260628f4024afb51afbdd40f269d150b1",
+      "items": [
+        {
+          "lines": [
+            "(log unavailable: gh api repos/stranske/Workflows/actions/jobs/130280608714/logs: gh: HTTP 404; open the URL above)"
+          ],
+          "name": "Resolve Context",
+          "url": "https://github.com/stranske/Workflows/actions/runs/42946540243/job/130280608714"
+        },
+        {
+          "lines": [
+            "(log unavailable: gh api repos/stranske/Workflows/actions/jobs/130280617880/logs: gh: HTTP 404; open the URL above)"
+          ],
+          "name": "Record autofix dispatch completion",
+          "url": "https://github.com/stranske/Workflows/actions/runs/42946540243/job/130280617880"
+        }
+      ]
+    },
+    "handoff_reason": "3 round starts failed: provision failed: refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989",
+    "issue": "stranske/Workflows#4635",
+    "last": {
+      "action": "handed-off",
+      "reason": "3 round starts failed: provision failed: refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989"
+    },
+    "last_ci": "FAILURE",
+    "rounds": [
+      {
+        "agent": "vibe",
+        "cause": "start",
+        "ci": "FAILURE",
+        "closed": true,
+        "head_after": "1a30aa9260628f4024afb51afbdd40f269d150b1",
+        "head_before": null,
+        "log": "/Users/teacher/.codex/handoff/dispatch-logs/stranske__Workflows_4635.vibe.log",
+        "n": 1,
+        "productive": true,
+        "pushed": true,
+        "started": null,
+        "ticked": []
+      }
+    ],
+    "start_errors": 3,
+    "status": "handed-off",
+    "target": "stranske/Workflows#4637",
+    "tried": [
+      "vibe"
+    ],
+    "unproductive": 0,
+    "updated": 1794366054.630651
+  }
+}

@@ -72,7 +72,7 @@ def _neutralise_host_shed_state(monkeypatch):
         `test_capacity_sheds_on_auth_failure` (cursor) unpack three, so a shed seat crashed them.
       * `test_capacity_ignores_unknown_auth` asserts OK, so a shed cursor failed it outright — its
         unpack reads `[0]` and was never at risk.
-      * `test_aider_is_backup_only_and_vibe_is_a_real_lane` calls `capacity.build()` and routes off
+      * `test_aider_is_backup_only_and_vibe_is_a_real_lane` (removed 2026-11-11 with aider) called `capacity.build()` and routes off
         the result, never touching `compute` by name; a shed aider makes `select_agent(..., only=
         {"aider"})` return None and the escape-hatch assertion fails. A guard scoped to "tests that
         call compute" would have missed it. Found by the break demo, not by reading the file.
@@ -176,9 +176,9 @@ def test_tiered_agents_pin_every_tier():
 
 
 def test_single_model_agents_pin_nothing():
-    """vibe/aider/cursor carry no TIER map: one merged model, a floating alias, and a
-    Composer-only policy lane. Tiering them would imply choices they do not have."""
-    for agent in ("vibe", "aider", "cursor"):
+    """vibe/cursor carry no TIER map: one merged model and a Composer-only policy lane.
+    Tiering them would imply choices they do not have."""
+    for agent in ("vibe", "cursor"):
         assert adapters.MODEL_TIERS[agent] == {}, agent
         for tier in adapters.MODEL_TIER_NAMES:
             assert adapters.resolve_model(agent, tier) is None, (agent, tier)
@@ -310,9 +310,9 @@ def test_build_command_honours_every_tier(tmp_path, monkeypatch):
     for agent in ("CODEX", "CLAUDE", "GEMINI"):
         monkeypatch.delenv("ORCH_" + agent + "_MAX_TIER", raising=False)
     expected = {
-        "codex": ("gpt-6-luna", "gpt-5.6-terra", "gpt-6.1-sol"),
+        "codex": ("gpt-6-luna", "gpt-5.6-terra", "gpt-6.2-sol"),
         "claude": ("claude-haiku-4-5", "claude-sonnet-5-5", "claude-opus-5-5"),
-        "gemini": ("gemini-3.8-flash-low", "gemini-3.8-flash-high", "gemini-4-argon-high"),
+        "gemini": ("gemini-4-hydrogen-low", "gemini-4-hydrogen-high", "gemini-4-neon-high"),
     }
     for agent, models in expected.items():
         for tier, model in zip(adapters.MODEL_TIER_NAMES, models):
@@ -322,11 +322,11 @@ def test_build_command_honours_every_tier(tmp_path, monkeypatch):
             assert model == adapters.MODEL_TIERS[agent][expected_tier], (agent, tier)
 
 
-def test_gemini_cheap_and_mid_are_flash_and_only_full_is_argon():
+def test_gemini_cheap_and_mid_are_hydrogen_and_only_full_is_neon():
     """Same shape as codex/claude: routine tiers run the cheaper model, only full the frontier one."""
     for tier in ("cheap", "mid"):
-        assert "flash" in adapters.MODEL_TIERS["gemini"][tier], tier
-    assert adapters.MODEL_TIERS["gemini"]["full"] == "gemini-4-argon-high"
+        assert "hydrogen" in adapters.MODEL_TIERS["gemini"][tier], tier
+    assert adapters.MODEL_TIERS["gemini"]["full"] == "gemini-4-neon-high"
 
 
 def test_offload_defaults_to_the_mid_tier():
@@ -574,7 +574,7 @@ TIER_POLICY = {
     "runtime_ac": "full",
 }
 STAGE_2_APPLIED = True
-_UNPINNED = ("cursor", "vibe", "aider")  # single-lane agents; tier token is documentation only
+_UNPINNED = ("cursor", "vibe")  # single-lane agents; tier token is documentation only
 
 
 def _tiered_entries(task_type):
@@ -703,7 +703,7 @@ def test_nonauth_failure_is_unknown_not_unauthenticated(monkeypatch):
 
 def test_agents_without_a_probe_are_never_condemned():
     """Seats with no free check must read as unchecked-OK, never as broken."""
-    for agent in ("vibe", "aider"):
+    for agent in ("vibe",):
         health = adapters.auth_health(agent)
         assert health["authenticated"] and not health["checked"], (agent, health)
         assert health["strength"] is None, (agent, health)
@@ -751,10 +751,10 @@ def test_file_only_seats_are_labelled_configured_not_ok():
     """A file check must never be sold as a working credential."""
     # CONFIGURED is the verdict for "the credential file is there and holds the key". With the
     # file absent the correct verdict is BROKEN, which the sibling test asserts directly.
-    env_prereq.require(env_prereq.credential_file_absent("vibe", "aider"))
+    env_prereq.require(env_prereq.credential_file_absent("vibe"))
     import agent_auth_check
 
-    for agent in ("vibe", "aider"):
+    for agent in ("vibe",):
         assert agent not in adapters.AUTH_PROBES, agent
         assert agent_auth_check.check(agent)["verdict"] == "CONFIGURED", agent
 
@@ -1095,40 +1095,19 @@ def test_expiry_raises_an_owner_question_once(monkeypatch, tmp_path):
         feedback.DB_PATH = old
 
 
-def test_aider_is_backup_only_and_vibe_is_a_real_lane():
-    """Lane membership is a POLICY, and it was only ever a comment.
-
-    Owner directive 2026-06-21 made aider backup-only, and `capacity.py` says so in prose while
-    `router.BACKUP_AGENTS` enforces it — but nothing asserted the pair stayed in agreement, and
-    aider still appears in 8 of 9 `ROUTE_TABLE` entries. That gap is not theoretical: reading the
-    route table alone, one concludes epsilon-greedy would preferentially explore aider as the
-    least-observed agent. It cannot — `router.py` skips backup agents unless explicitly demanded —
-    but the table LOOKS like it can, and a policy you can misread from the source is one nobody can
-    rely on. Reaffirmed 2026-08-21 (owner): aider is not a lane, vibe is. Pins both directions.
+def test_no_backup_seats_remain_and_vibe_is_a_real_lane():
+    """Lane membership is a POLICY. aider (backup-only since 2026-06-21) was removed from the fleet on
+    2026-11-11, and muse became a routine late seat the same day, so no backup seat remains and no
+    route entry names aider. vibe must stay eligible in EVERY task type: a table edit that drops it
+    looks like nothing until that lane's evidence stops.
     """
-    import capacity
     import router
 
-    assert router.BACKUP_AGENTS == {"aider", "muse"}, router.BACKUP_AGENTS  # muse: #612, 2026-10-15
-
-    cap = capacity.build()
-    # NOT A LANE: aider must never be the routine choice for any task type.
-    for task_type in router.ROUTE_TABLE:
-        chosen = router.select_agent(task_type, cap)
-        if chosen:
-            assert chosen["agent"] != "aider", (task_type, chosen)
-
-    # A LANE: vibe must be eligible in EVERY task type. The failure this catches is silent removal —
-    # a table edit that drops vibe from a lane looks like nothing until that lane's evidence stops.
+    assert router.BACKUP_AGENTS == set(), router.BACKUP_AGENTS
     for task_type, spec in router.ROUTE_TABLE.items():
         agents = [entry["agent"] for entry in spec["agents"]]
+        assert "aider" not in agents, (task_type, agents)
         assert "vibe" in agents, (task_type, agents)
-
-    # THE ESCAPE HATCH SURVIVES, and it is why aider's route entries are NOT deleted. The directive
-    # kept aider "reachable only on explicit demand", and that path resolves THROUGH the route
-    # table — remove the entries and `--agent aider` silently stops routing.
-    explicit = router.select_agent("implement", cap, only={"aider"})
-    assert explicit and explicit["agent"] == "aider", explicit
 
 
 @pytest.mark.parametrize("effort", ["low", "medium", "high"])
@@ -1149,7 +1128,7 @@ def test_gemini_rename_preserves_advertised_effort(monkeypatch, effort):
     assert health["model"] == f"gemini-3.8-flash-{effort}"
 
 
-def test_argon_successor_tiers_reach_matching_offload_profiles(monkeypatch, tmp_path):
+def test_gemini_tiers_reach_matching_offload_profiles(monkeypatch, tmp_path):
     import dispatcher
     import execution_profiles
 
@@ -1163,9 +1142,9 @@ def test_argon_successor_tiers_reach_matching_offload_profiles(monkeypatch, tmp_
     ):
         monkeypatch.delenv(name, raising=False)
     expected = {
-        "cheap": "gemini-3.8-flash-low",
-        "mid": "gemini-3.8-flash-high",
-        "full": "gemini-4-argon-high",
+        "cheap": "gemini-4-hydrogen-low",
+        "mid": "gemini-4-hydrogen-high",
+        "full": "gemini-4-neon-high",
     }
     assert adapters.MODEL_TIERS["gemini"] == expected
     assert adapters.DEFAULT_GEMINI_MODEL == expected["full"]
@@ -1198,8 +1177,9 @@ def test_argon_successor_tiers_reach_matching_offload_profiles(monkeypatch, tmp_
         ("runtime_ac", "full"),
     ),
 )
-def test_router_automatic_gemini_profile_matches_route_tier(task_type, mode):
+def test_router_automatic_gemini_profile_matches_route_tier(task_type, mode, monkeypatch):
     """Profile priors must not override the route's Gemini spend tier."""
+    _fake_catalog(monkeypatch, list(adapters.MODEL_TIERS["gemini"].values()))
     profiles = execution_profiles.profiles_for_agent("gemini")
     cap = {
         "agents": {"gemini": {"state": "ok"}},
@@ -1339,43 +1319,54 @@ def test_argon_retirement_preserves_historical_profile_identity():
     import execution_profiles
 
     expected = {
-        "gemini-3.7-flash-low": "gemini-3.8-flash-low",
-        "gemini-3.7-flash-high": "gemini-3.8-flash-high",
+        "gemini-3.7-flash-low": "gemini-4-hydrogen-low",
+        "gemini-3.7-flash-high": "gemini-4-hydrogen-high",
+        "gemini-3.8-flash-low": "gemini-4-hydrogen-low",
+        "gemini-3.8-flash-high": "gemini-4-hydrogen-high",
         "gemini-3.1-pro-high": "gemini-4-argon-high",
     }
     for old, successor in expected.items():
         assert execution_profiles.get_profile(old)["requested_model"] == old
         assert execution_profiles.resolve_production_profile_id(old) == successor
-    # Current Flash is NOT retired: its identity resolves to itself.
-    for flash in ("gemini-3.8-flash-low", "gemini-3.8-flash-high"):
-        assert execution_profiles.resolve_production_profile_id(flash) == flash
+    # Current Hydrogen is NOT retired: its identity resolves to itself.
+    for current in ("gemini-4-hydrogen-low", "gemini-4-hydrogen-high"):
+        assert execution_profiles.resolve_production_profile_id(current) == current
     active = {
         p["requested_model"]
         for p in execution_profiles.profiles_for_agent("gemini", transport="offload")
     }
-    assert {"gemini-3.8-flash-low", "gemini-3.8-flash-high", "gemini-4-argon-high"} <= active
+    assert {"gemini-4-hydrogen-low", "gemini-4-hydrogen-high", "gemini-4-argon-high"} <= active
+    assert not {"gemini-3.8-flash-low", "gemini-3.8-flash-high"} & active
 
 
-def test_argon_rename_preserves_family_and_effort(monkeypatch):
-    """Only the full tier is Argon; a missing Argon family must not fall back to Pro or Flash."""
+def test_neon_rename_preserves_family_and_effort(monkeypatch):
+    """A missing standalone Neon pin must never select another family or the opt-in route."""
     for tier, effort in (("full", "high"),):
         monkeypatch.delenv(f"ORCH_GEMINI_MODEL_{tier.upper()}", raising=False)
         monkeypatch.delenv("ORCH_GEMINI_MODEL", raising=False)
-        _fake_catalog(monkeypatch, ["gemini-3.8-flash-high", "gemini-3.1-pro-high"])
+        _fake_catalog(
+            monkeypatch,
+            [
+                "gemini-4-argon-high",
+                "gemini-4-hydrogen-high",
+                "gemini-4-neon-xhigh",
+                "gemini-pro-orchestrator-neon",
+            ],
+        )
         absent = adapters.model_health("gemini", tier)
         assert absent["resolvable"] is False
-        assert absent["model"] == f"gemini-4-argon-{effort}"
+        assert absent["model"] == f"gemini-4-neon-{effort}"
         for generations, newest in (((5, 6), 6), ((9, 10), 10)):
             _fake_catalog(
                 monkeypatch,
                 [
-                    f"gemini-{generation}-argon-{e}"
+                    f"gemini-{generation}-neon-{e}"
                     for generation in generations
                     for e in ("low", "medium", "high")
                 ],
             )
             renamed = adapters.model_health("gemini", tier)
-            assert renamed["model"] == f"gemini-{newest}-argon-{effort}"
+            assert renamed["model"] == f"gemini-{newest}-neon-{effort}"
 
 
 @pytest.mark.parametrize("scenario", ["ceiling", "override", "unresolvable"])
@@ -1388,13 +1379,13 @@ def test_automatic_gemini_respects_effective_model_policy(monkeypatch, scenario,
     if scenario == "ceiling":
         monkeypatch.setenv("ORCH_GEMINI_MAX_TIER", "mid")
         _fake_catalog(monkeypatch, list(adapters.MODEL_TIERS["gemini"].values()))
-        expected = "gemini-3.8-flash-high"
+        expected = "gemini-4-hydrogen-high"
     elif scenario == "override":
         monkeypatch.setenv("ORCH_GEMINI_MODEL_FULL", "gemini-4-argon-medium")
         _fake_catalog(monkeypatch, ["gemini-4-argon-medium", "gemini-4-argon-high"])
         expected = "gemini-4-argon-medium"
     else:
-        _fake_catalog(monkeypatch, ["gemini-3.8-flash-high"])
+        _fake_catalog(monkeypatch, ["gemini-4-hydrogen-high"])
         expected = None
     if surface == "router":
         selected = router._automatic_profiles(

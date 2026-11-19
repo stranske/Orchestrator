@@ -195,3 +195,71 @@ def test_dispatch_status_and_experiment_collect_route_through_the_guard():
     collect_src = inspect.getsource(exp_abcd.collect)
     assert collect_src.count('"merge-base", "HEAD", base_ref], repo' + "=repo") == 1
     assert '"git", "-C", str(wt)' not in collect_src
+
+
+def _clone_with_worktree(
+    repos: Path, clone_name: str, wts: Path, wt_name: str
+) -> tuple[Path, Path]:
+    clone = repos / clone_name
+    if not clone.exists():
+        _git("init", "-q", str(clone))
+        _git(
+            "-C",
+            str(clone),
+            "-c",
+            "user.email=t@example.test",
+            "-c",
+            "user.name=T",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "base",
+        )
+    wt = wts / wt_name
+    _git("-C", str(clone), "worktree", "add", "-q", "-b", wt_name, str(wt))
+    return clone, wt
+
+
+def test_a_clone_spelled_in_another_case_is_the_same_clone(tmp_path, monkeypatch):
+    """Manager-Mosaic#156 (2026-11-16): the clone sits at `stranske__manager-mosaic` while the
+    worktree and `canonical_path` spell it `stranske__Manager-Mosaic`. One directory, two
+    spellings: the guard compares identity. A case-sensitive volume gets the alias as a symlink,
+    so the test means the same thing on Linux CI and on macOS."""
+    monkeypatch.delenv(worktree_git.DISABLE_ENV, raising=False)
+    root = Path(os.path.realpath(tmp_path))
+    repos, wts = root / "repos", root / "worktrees"
+    repos.mkdir()
+    wts.mkdir()
+    clone, wt = _clone_with_worktree(repos, "o__mixed-case", wts, "o__Mixed-Case__7__opener")
+    alias = repos / "o__Mixed-Case"
+    if not alias.exists():  # case-sensitive volume: emulate the case-insensitive alias
+        alias.symlink_to(clone.name)
+    monkeypatch.setattr(provision, "REPOS_DIR", repos)
+    monkeypatch.setattr(provision, "WORKTREES_DIR", wts)
+    monkeypatch.setattr(provision, "canonical_path", lambda _repo: repos / "o__Mixed-Case")
+
+    by_name = worktree_git.run(wt, ["rev-parse", "HEAD"])
+    assert by_name.returncode == 0, by_name.stderr
+    by_repo = worktree_git.run(wt, ["rev-parse", "HEAD"], repo="o/Mixed-Case")
+    assert by_repo.returncode == 0, by_repo.stderr
+
+
+def test_a_worktree_named_for_another_clone_is_still_refused(tmp_path, monkeypatch):
+    """Identity, not a looser spelling match: a worktree whose name claims clone `o__other` but
+    whose git dir lives in `o__mixed` is refused even though both clones exist."""
+    monkeypatch.delenv(worktree_git.DISABLE_ENV, raising=False)
+    root = Path(os.path.realpath(tmp_path))
+    repos, wts = root / "repos", root / "worktrees"
+    repos.mkdir()
+    wts.mkdir()
+    _clone_with_worktree(repos, "o__other", wts, "o__other__1__opener")
+    _, wt = _clone_with_worktree(repos, "o__mixed", wts, "o__other__2__opener")
+    monkeypatch.setattr(provision, "REPOS_DIR", repos)
+    monkeypatch.setattr(provision, "WORKTREES_DIR", wts)
+    calls = []
+    monkeypatch.setattr(worktree_git.subprocess, "run", lambda *a, **k: calls.append(a))
+    result = worktree_git.run(wt, ["status"])
+    assert result.returncode == worktree_git.REFUSED_RC
+    assert "not under" in result.stderr, result.stderr
+    assert calls == []

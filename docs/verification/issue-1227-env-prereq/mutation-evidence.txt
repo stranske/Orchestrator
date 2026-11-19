@@ -1,0 +1,1031 @@
+=== selftest_bare_machine-broken ===
+
+Traceback (most recent call last):
+  File "/tmp/orch-1256-evidence/selftest.py", line 24, in <module>
+    tests.test_env_prereq_selftest_runs_with_an_isolated_runtime(Patches(), root)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 66, in test_env_prereq_selftest_runs_with_an_isolated_runtime
+    env_prereq._selftest()
+    ~~~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/orch-1256-original-mutations-gf7pg1jn/src/env_prereq.py", line 923, in _selftest
+    assert bool(got_bare) is _want_bare, (_seat, _skill_gone, _codex_gone, got_bare)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (True, True, True, "this machine has none of this instance's local prerequisites: no agent seat has a CLI or a credential file, no reference skill resource is installed, and no version-capable Codex binary exists")
+
+=== selftest_bare_machine-restored ===
+
+env_prereq.py selftest: OK (skip-is-a-skip, every detector names the missing thing, marked selftest skip speaks, vibe readers, exec-mirror shape needs BOTH marks, a bare machine needs EVERY prerequisite absent, not-live rows named with their status, a recorded pytest verdict replays as the check would have and an unreadable record replays nothing, a declared row's absence is named drainable only when every absent row is declared)
+Both original pytest-style test functions: PASS (standard-library fixture adapter)
+
+=== test_codex_profile_detector_reports_resolver_verdict_without_launching-broken ===
+
+test_codex_profile_detector_reports_resolver_verdict_without_launching (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_codex_profile_detector_reports_resolver_verdict_without_launching) ... FAIL
+
+======================================================================
+FAIL: test_codex_profile_detector_reports_resolver_verdict_without_launching (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_codex_profile_detector_reports_resolver_verdict_without_launching)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 153, in test_codex_profile_detector_reports_resolver_verdict_without_launching
+    self.assertIsNone(env_prereq.codex_profile_binary_absent())
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'broken lookup' is not None
+
+----------------------------------------------------------------------
+Ran 1 test in 0.003s
+
+FAILED (failures=1)
+
+=== test_codex_profile_detector_reports_resolver_verdict_without_launching-restored ===
+
+test_codex_profile_detector_reports_resolver_verdict_without_launching (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_codex_profile_detector_reports_resolver_verdict_without_launching) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.003s
+
+OK
+
+=== test_core_sibling_override_presence_and_checkout_default-broken ===
+
+test_core_sibling_override_presence_and_checkout_default (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_core_sibling_override_presence_and_checkout_default) ... FAIL
+
+======================================================================
+FAIL: test_core_sibling_override_presence_and_checkout_default (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_core_sibling_override_presence_and_checkout_default)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 120, in test_core_sibling_override_presence_and_checkout_default
+    self.assertIsNone(env_prereq.core_sibling_absent())
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /tmp/issue1227-51jhci8j/independent — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py' is not None
+
+----------------------------------------------------------------------
+Ran 1 test in 0.004s
+
+FAILED (failures=1)
+
+=== test_core_sibling_override_presence_and_checkout_default-restored ===
+
+test_core_sibling_override_presence_and_checkout_default (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_core_sibling_override_presence_and_checkout_default) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.004s
+
+OK
+
+=== test_git_detector_checks_exit_status_and_names_launch_errors-broken ===
+
+test_git_detector_checks_exit_status_and_names_launch_errors (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_git_detector_checks_exit_status_and_names_launch_errors) ... FAIL
+
+======================================================================
+FAIL: test_git_detector_checks_exit_status_and_names_launch_errors (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_git_detector_checks_exit_status_and_names_launch_errors)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 177, in test_git_detector_checks_exit_status_and_names_launch_errors
+    self.assertIsNone(env_prereq.git_repo_absent())
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: '/tmp/issue1227-jalmohhl is not a git repository (git rev-parse --git-dir failed), so git cannot be asked whether a path is ignored or tracked — the exec mirror is a file copy, not a checkout. Run this check from the repo, where it is not skipped.' is not None
+
+----------------------------------------------------------------------
+Ran 1 test in 0.003s
+
+FAILED (failures=1)
+
+=== test_git_detector_checks_exit_status_and_names_launch_errors-restored ===
+
+test_git_detector_checks_exit_status_and_names_launch_errors (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_git_detector_checks_exit_status_and_names_launch_errors) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.003s
+
+OK
+
+=== test_legacy_detector_names_report_errors_and_accepts_legacy_rows-broken ===
+
+test_legacy_detector_names_report_errors_and_accepts_legacy_rows (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_legacy_detector_names_report_errors_and_accepts_legacy_rows) ... FAIL
+
+======================================================================
+FAIL: test_legacy_detector_names_report_errors_and_accepts_legacy_rows (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_legacy_detector_names_report_errors_and_accepts_legacy_rows)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 170, in test_legacy_detector_names_report_errors_and_accepts_legacy_rows
+    self.assertIsNone(env_prereq.ledger_legacy_rows_absent())
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: "capability ledger holds no pre-admission-gate (legacy) capability — legacy debt accrues from this instance's registration history, and a ledger bootstrapped from the committed tree has none" is not None
+
+----------------------------------------------------------------------
+Ran 1 test in 0.003s
+
+FAILED (failures=1)
+
+=== test_legacy_detector_names_report_errors_and_accepts_legacy_rows-restored ===
+
+test_legacy_detector_names_report_errors_and_accepts_legacy_rows (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_legacy_detector_names_report_errors_and_accepts_legacy_rows) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.003s
+
+OK
+
+=== test_main_reports_both_shapes_and_named_prerequisites-broken ===
+
+test_main_reports_both_shapes_and_named_prerequisites (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_main_reports_both_shapes_and_named_prerequisites) ...
+  test_main_reports_both_shapes_and_named_prerequisites (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_main_reports_both_shapes_and_named_prerequisites) (missing=False) ... FAIL
+  test_main_reports_both_shapes_and_named_prerequisites (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_main_reports_both_shapes_and_named_prerequisites) (missing=True) ... FAIL
+
+======================================================================
+FAIL: test_main_reports_both_shapes_and_named_prerequisites (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_main_reports_both_shapes_and_named_prerequisites) (missing=False)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 286, in test_main_reports_both_shapes_and_named_prerequisites
+    self.assertIn(
+    ~~~~~~~~~~~~~^
+        "tree shape: EXEC MIRROR" if missing else "tree shape: checkout", text
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+AssertionError: 'tree shape: checkout' not found in 'tree shape: BROKEN\nmachine:    provisioned\npresent reference skill resource\npresent exact-profile Codex binary\npresent seat auth signal\npresent vibe credential file\npresent ledger legacy rows\n'
+
+======================================================================
+FAIL: test_main_reports_both_shapes_and_named_prerequisites (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_main_reports_both_shapes_and_named_prerequisites) (missing=True)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 286, in test_main_reports_both_shapes_and_named_prerequisites
+    self.assertIn(
+    ~~~~~~~~~~~~~^
+        "tree shape: EXEC MIRROR" if missing else "tree shape: checkout", text
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+AssertionError: 'tree shape: EXEC MIRROR' not found in 'tree shape: BROKEN\n    fixture absent\nmachine:    BARE\n    fixture absent\nABSENT  reference skill resource\n    fixture absent\nABSENT  exact-profile Codex binary\n    fixture absent\nABSENT  seat auth signal\n    fixture absent\nABSENT  vibe credential file\n    fixture absent\nABSENT  ledger legacy rows\n    fixture absent\n'
+
+----------------------------------------------------------------------
+Ran 1 test in 0.004s
+
+FAILED (failures=2)
+
+=== test_main_reports_both_shapes_and_named_prerequisites-restored ===
+
+test_main_reports_both_shapes_and_named_prerequisites (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_main_reports_both_shapes_and_named_prerequisites) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.004s
+
+OK
+
+=== test_populated_rows_satisfy_lineage_and_invocation_prerequisites-broken ===
+
+test_populated_rows_satisfy_lineage_and_invocation_prerequisites (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_populated_rows_satisfy_lineage_and_invocation_prerequisites) ... FAIL
+
+======================================================================
+FAIL: test_populated_rows_satisfy_lineage_and_invocation_prerequisites (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_populated_rows_satisfy_lineage_and_invocation_prerequisites)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 129, in test_populated_rows_satisfy_lineage_and_invocation_prerequisites
+    self.assertIsNone(env_prereq.ledger_version_lineage_absent("ready"))
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'capability ledger carries no version lineage for  (capability_version_id is unset) — lineage is established by real registration on the running instance, so a fresh bootstrap has none' is not None
+
+----------------------------------------------------------------------
+Ran 1 test in 0.003s
+
+FAILED (failures=1)
+
+=== test_populated_rows_satisfy_lineage_and_invocation_prerequisites-restored ===
+
+test_populated_rows_satisfy_lineage_and_invocation_prerequisites (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_populated_rows_satisfy_lineage_and_invocation_prerequisites) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.002s
+
+OK
+
+=== test_recorded_verdicts_reject_unusable_reports_and_filter_unknown_outcomes-broken ===
+
+test_recorded_verdicts_reject_unusable_reports_and_filter_unknown_outcomes (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_recorded_verdicts_reject_unusable_reports_and_filter_unknown_outcomes) ... FAIL
+
+======================================================================
+FAIL: test_recorded_verdicts_reject_unusable_reports_and_filter_unknown_outcomes (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_recorded_verdicts_reject_unusable_reports_and_filter_unknown_outcomes)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 244, in test_recorded_verdicts_reject_unusable_reports_and_filter_unknown_outcomes
+    self.assertEqual(
+    ~~~~~~~~~~~~~~~~^
+        env_prereq.recorded_verdicts([flag, str(record)], "tests/test_gate.py"),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        {"ok": {"outcome": "passed"}},
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+AssertionError: {} != {'ok': {'outcome': 'passed'}}
+- {}
++ {'ok': {'outcome': 'passed'}}
+
+----------------------------------------------------------------------
+Ran 1 test in 0.004s
+
+FAILED (failures=1)
+
+=== test_recorded_verdicts_reject_unusable_reports_and_filter_unknown_outcomes-restored ===
+
+test_recorded_verdicts_reject_unusable_reports_and_filter_unknown_outcomes (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_recorded_verdicts_reject_unusable_reports_and_filter_unknown_outcomes) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.004s
+
+OK
+
+=== test_replayed_failure_preserves_message_and_supplies_fallback-broken ===
+
+test_replayed_failure_preserves_message_and_supplies_fallback (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replayed_failure_preserves_message_and_supplies_fallback) ... FAIL
+
+======================================================================
+FAIL: test_replayed_failure_preserves_message_and_supplies_fallback (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replayed_failure_preserves_message_and_supplies_fallback)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 261, in test_replayed_failure_preserves_message_and_supplies_fallback
+    self.assertEqual(str(raised.exception), expected)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'broken replay' != 'differing values'
+- broken replay
++ differing values
+
+
+----------------------------------------------------------------------
+Ran 1 test in 0.003s
+
+FAILED (failures=1)
+
+=== test_replayed_failure_preserves_message_and_supplies_fallback-restored ===
+
+test_replayed_failure_preserves_message_and_supplies_fallback (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replayed_failure_preserves_message_and_supplies_fallback) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.002s
+
+OK
+
+=== test_seats_accept_cli_or_file_and_name_missing_signals-broken ===
+
+test_seats_accept_cli_or_file_and_name_missing_signals (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_seats_accept_cli_or_file_and_name_missing_signals) ... FAIL
+
+======================================================================
+FAIL: test_seats_accept_cli_or_file_and_name_missing_signals (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_seats_accept_cli_or_file_and_name_missing_signals)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 205, in test_seats_accept_cli_or_file_and_name_missing_signals
+    self.assertEqual(
+    ~~~~~~~~~~~~~~~~^
+        env_prereq._seat_signals(), {"cli": True, "file": True, "blind": False}
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+AssertionError: {'cli': False, 'file': False, 'blind': False} != {'cli': True, 'file': True, 'blind': False}
+- {'blind': False, 'cli': False, 'file': False}
+?                         ^^^^           ^^^^
+
++ {'blind': False, 'cli': True, 'file': True}
+?                         ^^^           ^^^
+
+
+----------------------------------------------------------------------
+Ran 1 test in 0.003s
+
+FAILED (failures=1)
+
+=== test_seats_accept_cli_or_file_and_name_missing_signals-restored ===
+
+test_seats_accept_cli_or_file_and_name_missing_signals (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_seats_accept_cli_or_file_and_name_missing_signals) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.003s
+
+OK
+
+=== test_skill_resource_accepts_installed_file_and_names_missing_fallback-broken ===
+
+test_skill_resource_accepts_installed_file_and_names_missing_fallback (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_skill_resource_accepts_installed_file_and_names_missing_fallback) ... FAIL
+
+======================================================================
+FAIL: test_skill_resource_accepts_installed_file_and_names_missing_fallback (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_skill_resource_accepts_installed_file_and_names_missing_fallback)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 139, in test_skill_resource_accepts_installed_file_and_names_missing_fallback
+    self.assertIsNone(env_prereq.skill_resource_absent())
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'reference skill resource not installed: /tmp/issue1227-kpci2uy8/reference.sh — the skill compiler is deliberately exercised against a real installed skill, not a fixture' is not None
+
+----------------------------------------------------------------------
+Ran 1 test in 0.003s
+
+FAILED (failures=1)
+
+=== test_skill_resource_accepts_installed_file_and_names_missing_fallback-restored ===
+
+test_skill_resource_accepts_installed_file_and_names_missing_fallback (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_skill_resource_accepts_installed_file_and_names_missing_fallback) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.003s
+
+OK
+
+=== unreadable_ledger-broken ===
+
+env_prereq.py selftest: OK (skip-is-a-skip, every detector names the missing thing, marked selftest skip speaks, vibe readers, exec-mirror shape needs BOTH marks, a bare machine needs EVERY prerequisite absent, not-live rows named with their status, a recorded pytest verdict replays as the check would have and an unreadable record replays nothing, a declared row's absence is named drainable only when every absent row is declared)
+Traceback (most recent call last):
+  File "/tmp/orch-1256-evidence/selftest.py", line 25, in <module>
+    tests.test_ledger_detectors_name_an_unreadable_ledger(Patches(), root)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 91, in test_ledger_detectors_name_an_unreadable_ledger
+    assert reason == "capability ledger unreadable (OSError: fixture ledger unavailable)"
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+=== unreadable_ledger-restored ===
+
+env_prereq.py selftest: OK (skip-is-a-skip, every detector names the missing thing, marked selftest skip speaks, vibe readers, exec-mirror shape needs BOTH marks, a bare machine needs EVERY prerequisite absent, not-live rows named with their status, a recorded pytest verdict replays as the check would have and an unreadable record replays nothing, a declared row's absence is named drainable only when every absent row is declared)
+Both original pytest-style test functions: PASS (standard-library fixture adapter)
+
+=== Current iteration: real layout detector ===
+=== flat-layout-missing-reason: BROKEN exit 1 ===
+test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror) ... FAIL
+
+======================================================================
+FAIL: test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 150, in test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror
+    self.assertEqual(
+    ~~~~~~~~~~~~~~~~^
+        reason, f"{self.root} holds the modules at its root, not under src/"
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+AssertionError: None != '/tmp/issue1227-dvfbbe4r holds the modules at its root, not under src/'
+
+----------------------------------------------------------------------
+Ran 1 test in 0.002s
+
+FAILED (failures=1)
+
+=== flat-layout-missing-reason: RESTORED exit 0 ===
+test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.003s
+
+OK
+=== mirror-any-mark: BROKEN exit 1 ===
+test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror) ...
+  test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror) (flat=False, git_absent=True) ... FAIL
+  test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror) (flat=True, git_absent=False) ... FAIL
+
+======================================================================
+FAIL: test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror) (flat=False, git_absent=True)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 170, in test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror
+    self.assertIsNone(shape)
+    ~~~~~~~~~~~~~~~~~^^^^^^^
+AssertionError: '/tmp/issue1227-lsxrtjix is the exec mirror, not a checkout: its modules sit at the root rather than under src/, and git reports no repository here. orch-sync-mirror.sh copies files, flat, not a checkout, so the tests that ask git a question cannot run in this tree' is not None
+
+======================================================================
+FAIL: test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror) (flat=True, git_absent=False)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 170, in test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror
+    self.assertIsNone(shape)
+    ~~~~~~~~~~~~~~~~~^^^^^^^
+AssertionError: '/tmp/issue1227-lsxrtjix is the exec mirror, not a checkout: its modules sit at the root rather than under src/, and git reports no repository here. orch-sync-mirror.sh copies files, flat, not a checkout, so the tests that ask git a question cannot run in this tree' is not None
+
+----------------------------------------------------------------------
+Ran 1 test in 0.003s
+
+FAILED (failures=2)
+
+=== mirror-any-mark: RESTORED exit 0 ===
+test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.002s
+
+OK
+
+=== 2026-11-11 direct bare-machine contract follow-up ===
+env_prereq.py selftest: OK (skip-is-a-skip, every detector names the missing thing, marked selftest skip speaks, vibe readers, exec-mirror shape needs BOTH marks, a bare machine needs EVERY prerequisite absent, not-live rows named with their status, a recorded pytest verdict replays as the check would have and an unreadable record replays nothing, a declared row's absence is named drainable only when every absent row is declared)
+test_env_prereq_selftest_runs_with_an_isolated_runtime: PASS (standard-library fixture adapter)
+test_ledger_detectors_name_an_unreadable_ledger: PASS (standard-library fixture adapter)
+
+=== test_bare_machine_requires_every_local_prerequisite_to_be_absent: broken ===
+exit=1
+test_bare_machine_requires_every_local_prerequisite_to_be_absent (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_bare_machine_requires_every_local_prerequisite_to_be_absent) ...
+  test_bare_machine_requires_every_local_prerequisite_to_be_absent (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_bare_machine_requires_every_local_prerequisite_to_be_absent) (seat=False, skill=False, codex=True) ... FAIL
+  test_bare_machine_requires_every_local_prerequisite_to_be_absent (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_bare_machine_requires_every_local_prerequisite_to_be_absent) (seat=False, skill=True, codex=False) ... FAIL
+  test_bare_machine_requires_every_local_prerequisite_to_be_absent (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_bare_machine_requires_every_local_prerequisite_to_be_absent) (seat=False, skill=True, codex=True) ... FAIL
+  test_bare_machine_requires_every_local_prerequisite_to_be_absent (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_bare_machine_requires_every_local_prerequisite_to_be_absent) (seat=True, skill=False, codex=False) ... FAIL
+  test_bare_machine_requires_every_local_prerequisite_to_be_absent (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_bare_machine_requires_every_local_prerequisite_to_be_absent) (seat=True, skill=False, codex=True) ... FAIL
+  test_bare_machine_requires_every_local_prerequisite_to_be_absent (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_bare_machine_requires_every_local_prerequisite_to_be_absent) (seat=True, skill=True, codex=False) ... FAIL
+
+======================================================================
+FAIL: test_bare_machine_requires_every_local_prerequisite_to_be_absent (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_bare_machine_requires_every_local_prerequisite_to_be_absent) (seat=False, skill=False, codex=True)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 216, in test_bare_machine_requires_every_local_prerequisite_to_be_absent
+    self.assertIsNone(reason)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^
+AssertionError: "this machine has none of this instance's local prerequisites: no agent seat has a CLI or a credential file, no reference skill resource is installed, and no version-capable Codex binary exists" is not None
+
+======================================================================
+FAIL: test_bare_machine_requires_every_local_prerequisite_to_be_absent (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_bare_machine_requires_every_local_prerequisite_to_be_absent) (seat=False, skill=True, codex=False)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 216, in test_bare_machine_requires_every_local_prerequisite_to_be_absent
+    self.assertIsNone(reason)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^
+AssertionError: "this machine has none of this instance's local prerequisites: no agent seat has a CLI or a credential file, no reference skill resource is installed, and no version-capable Codex binary exists" is not None
+
+======================================================================
+FAIL: test_bare_machine_requires_every_local_prerequisite_to_be_absent (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_bare_machine_requires_every_local_prerequisite_to_be_absent) (seat=False, skill=True, codex=True)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 216, in test_bare_machine_requires_every_local_prerequisite_to_be_absent
+    self.assertIsNone(reason)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^
+AssertionError: "this machine has none of this instance's local prerequisites: no agent seat has a CLI or a credential file, no reference skill resource is installed, and no version-capable Codex binary exists" is not None
+
+======================================================================
+FAIL: test_bare_machine_requires_every_local_prerequisite_to_be_absent (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_bare_machine_requires_every_local_prerequisite_to_be_absent) (seat=True, skill=False, codex=False)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 216, in test_bare_machine_requires_every_local_prerequisite_to_be_absent
+    self.assertIsNone(reason)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^
+AssertionError: "this machine has none of this instance's local prerequisites: no agent seat has a CLI or a credential file, no reference skill resource is installed, and no version-capable Codex binary exists" is not None
+
+======================================================================
+FAIL: test_bare_machine_requires_every_local_prerequisite_to_be_absent (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_bare_machine_requires_every_local_prerequisite_to_be_absent) (seat=True, skill=False, codex=True)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 216, in test_bare_machine_requires_every_local_prerequisite_to_be_absent
+    self.assertIsNone(reason)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^
+AssertionError: "this machine has none of this instance's local prerequisites: no agent seat has a CLI or a credential file, no reference skill resource is installed, and no version-capable Codex binary exists" is not None
+
+======================================================================
+FAIL: test_bare_machine_requires_every_local_prerequisite_to_be_absent (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_bare_machine_requires_every_local_prerequisite_to_be_absent) (seat=True, skill=True, codex=False)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 216, in test_bare_machine_requires_every_local_prerequisite_to_be_absent
+    self.assertIsNone(reason)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^
+AssertionError: "this machine has none of this instance's local prerequisites: no agent seat has a CLI or a credential file, no reference skill resource is installed, and no version-capable Codex binary exists" is not None
+
+----------------------------------------------------------------------
+Ran 1 test in 0.006s
+
+FAILED (failures=6)
+
+
+=== test_bare_machine_requires_every_local_prerequisite_to_be_absent: restored ===
+exit=0
+test_bare_machine_requires_every_local_prerequisite_to_be_absent (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_bare_machine_requires_every_local_prerequisite_to_be_absent) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.005s
+
+OK
+
+
+=== test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance: broken ===
+exit=1
+test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance) ...
+  test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance) (unreadable='_seat_signals') ... FAIL
+  test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance) (unreadable='skill_resource_absent') ... FAIL
+  test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance) (unreadable='codex_profile_binary_absent') ... FAIL
+
+======================================================================
+FAIL: test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance) (unreadable='_seat_signals')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 236, in test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance
+    self.assertIsNone(env_prereq.bare_machine())
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'incorrect bare-machine allowance' is not None
+
+======================================================================
+FAIL: test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance) (unreadable='skill_resource_absent')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 236, in test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance
+    self.assertIsNone(env_prereq.bare_machine())
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'incorrect bare-machine allowance' is not None
+
+======================================================================
+FAIL: test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance) (unreadable='codex_profile_binary_absent')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 236, in test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance
+    self.assertIsNone(env_prereq.bare_machine())
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'incorrect bare-machine allowance' is not None
+
+----------------------------------------------------------------------
+Ran 1 test in 0.004s
+
+FAILED (failures=3)
+
+
+=== test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance: restored ===
+exit=0
+test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.003s
+
+OK
+
+=== 2026-11-11: section skip helpers (standard-library runners; NOT pytest) ===
+Reviewed commits through 463c504c. Repository production source remained unchanged.
+Mutation runner: /tmp/orch-1256-section-mutations.py
+Each run loaded a temporary copy of env_prereq.py first on PYTHONPATH.
+The tests set BOTH runtime paths to a temporary root, stub ledger access,
+and deny subprocess/network calls with an assert_not_called cleanup.
+
+runnable test: return False after gaps.append(reason) changed to return True.
+Broken: unittest exit 1, AssertionError: True is not false.
+Restored: unittest exit 0, Ran 1 test, OK.
+
+report_gaps test: for reason in dict.fromkeys(gaps) changed to for reason in gaps.
+Broken: unittest exit 1, duplicate 'ledger is absent' output line.
+Restored: unittest exit 0, Ran 1 test, OK.
+
+PYTHONPATH=src:tests PYTHONDONTWRITEBYTECODE=1 python3 -m unittest
+  test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests -v
+Result: Ran 15 tests, OK.
+Both original pytest-style functions also passed via a standard-library fixture adapter;
+that run executed env_prereq._selftest(), which printed OK.
+
+Required tooling attempts:
+python3 -m pytest tests/test_issue1227_env_prereq_coverage.py --cov=env_prereq
+  --cov-branch --cov-report=term-missing -m 'not slow'
+Result: exit 1, No module named pytest. Coverage remains UNKNOWN.
+python3 -m black --line-length 100 tests/test_issue1227_env_prereq_coverage.py
+Result: exit 1, No module named black.
+black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .
+Result: exit 127, black: command not found.
+ruff check --extend-exclude .workflows-lib tests/test_issue1227_env_prereq_coverage.py
+Result: exit 127, ruff: command not found.
+Trusted-tool installation into /tmp failed: PyPI DNS NameResolutionError.
+No Python changes committed because the mandatory Black gate could not pass.
+PR body reconciliation rejected by tool approval: approval policy is never.
+No pytest, coverage, CI, formatting, or remote checklist success is claimed.
+
+=== CLI selftest dispatch follow-up (2026-11-11; unittest, not pytest) ===
+
+=== main_selftest_missing_dispatch-broken ===
+test_main_selftest_dispatches_once_without_reporting_machine (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_main_selftest_dispatches_once_without_reporting_machine) ... FAIL
+
+======================================================================
+FAIL: test_main_selftest_dispatches_once_without_reporting_machine (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_main_selftest_dispatches_once_without_reporting_machine)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 439, in test_main_selftest_dispatches_once_without_reporting_machine
+    self.assertEqual(env_prereq.main(["--selftest"]), 0)
+                     ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+  File "/tmp/orch-1256-dispatch-6vo70gpm/env_prereq.py", line 1090, in main
+    shape = exec_mirror_shape()
+  File "/opt/hostedtoolcache/Python/3.14.10/x64/lib/python3.14/unittest/mock.py", line 1176, in __call__
+    return self._mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/hostedtoolcache/Python/3.14.10/x64/lib/python3.14/unittest/mock.py", line 1180, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/hostedtoolcache/Python/3.14.10/x64/lib/python3.14/unittest/mock.py", line 1241, in _execute_mock_call
+    raise effect
+AssertionError: selftest mode must not report machine inventory
+
+----------------------------------------------------------------------
+Ran 1 test in 0.003s
+
+FAILED (failures=1)
+
+exit: 1
+
+=== main_selftest_missing_dispatch-restored ===
+test_main_selftest_dispatches_once_without_reporting_machine (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_main_selftest_dispatches_once_without_reporting_machine) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.002s
+
+OK
+
+exit: 0
+
+=== main_selftest_duplicate_dispatch-broken ===
+test_main_selftest_dispatches_once_without_reporting_machine (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_main_selftest_dispatches_once_without_reporting_machine) ... FAIL
+
+======================================================================
+FAIL: test_main_selftest_dispatches_once_without_reporting_machine (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_main_selftest_dispatches_once_without_reporting_machine)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 440, in test_main_selftest_dispatches_once_without_reporting_machine
+    selftest.assert_called_once_with()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/opt/hostedtoolcache/Python/3.14.10/x64/lib/python3.14/unittest/mock.py", line 997, in assert_called_once_with
+    raise AssertionError(msg)
+AssertionError: Expected '_selftest' to be called once. Called 2 times.
+Calls: [call(), call()].
+
+----------------------------------------------------------------------
+Ran 1 test in 0.002s
+
+FAILED (failures=1)
+
+exit: 1
+
+=== main_selftest_duplicate_dispatch-restored ===
+test_main_selftest_dispatches_once_without_reporting_machine (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_main_selftest_dispatches_once_without_reporting_machine) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.002s
+
+OK
+
+exit: 0
+
+=== main_selftest_wrong_exit-broken ===
+test_main_selftest_dispatches_once_without_reporting_machine (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_main_selftest_dispatches_once_without_reporting_machine) ... FAIL
+
+======================================================================
+FAIL: test_main_selftest_dispatches_once_without_reporting_machine (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_main_selftest_dispatches_once_without_reporting_machine)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 439, in test_main_selftest_dispatches_once_without_reporting_machine
+    self.assertEqual(env_prereq.main(["--selftest"]), 0)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 1 != 0
+
+----------------------------------------------------------------------
+Ran 1 test in 0.002s
+
+FAILED (failures=1)
+
+exit: 1
+
+=== main_selftest_wrong_exit-restored ===
+test_main_selftest_dispatches_once_without_reporting_machine (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_main_selftest_dispatches_once_without_reporting_machine) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.002s
+
+OK
+
+exit: 0
+
+=== 2026-11-11 verdict replay follow-up: unittest, not pytest ===
+
+=== unrecorded_check_not_executed: broken, exit 1 ===
+test_replay_executes_only_checks_without_a_recorded_verdict (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replay_executes_only_checks_without_a_recorded_verdict) ...
+  test_replay_executes_only_checks_without_a_recorded_verdict (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replay_executes_only_checks_without_a_recorded_verdict) (verdicts={}) ... FAIL
+  test_replay_executes_only_checks_without_a_recorded_verdict (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replay_executes_only_checks_without_a_recorded_verdict) (verdicts={'another_check': {'outcome': 'passed'}}) ... FAIL
+
+======================================================================
+FAIL: test_replay_executes_only_checks_without_a_recorded_verdict (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replay_executes_only_checks_without_a_recorded_verdict) (verdicts={})
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 377, in test_replay_executes_only_checks_without_a_recorded_verdict
+    check.assert_called_once_with()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/opt/hostedtoolcache/Python/3.14.10/x64/lib/python3.14/unittest/mock.py", line 997, in assert_called_once_with
+    raise AssertionError(msg)
+AssertionError: Expected 'mock' to be called once. Called 0 times.
+
+======================================================================
+FAIL: test_replay_executes_only_checks_without_a_recorded_verdict (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replay_executes_only_checks_without_a_recorded_verdict) (verdicts={'another_check': {'outcome': 'passed'}})
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 377, in test_replay_executes_only_checks_without_a_recorded_verdict
+    check.assert_called_once_with()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/opt/hostedtoolcache/Python/3.14.10/x64/lib/python3.14/unittest/mock.py", line 997, in assert_called_once_with
+    raise AssertionError(msg)
+AssertionError: Expected 'mock' to be called once. Called 0 times.
+
+----------------------------------------------------------------------
+Ran 1 test in 0.003s
+
+FAILED (failures=2)
+
+=== unrecorded_check_not_executed: restored, exit 0 ===
+test_replay_executes_only_checks_without_a_recorded_verdict (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replay_executes_only_checks_without_a_recorded_verdict) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.002s
+
+OK
+
+=== recorded_pass_executed_again: broken, exit 1 ===
+test_replay_executes_only_checks_without_a_recorded_verdict (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replay_executes_only_checks_without_a_recorded_verdict) ... FAIL
+
+======================================================================
+FAIL: test_replay_executes_only_checks_without_a_recorded_verdict (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replay_executes_only_checks_without_a_recorded_verdict)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 382, in test_replay_executes_only_checks_without_a_recorded_verdict
+    check.assert_not_called()
+    ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/opt/hostedtoolcache/Python/3.14.10/x64/lib/python3.14/unittest/mock.py", line 947, in assert_not_called
+    raise AssertionError(msg)
+AssertionError: Expected 'mock' to not have been called. Called 1 times.
+Calls: [call()].
+
+----------------------------------------------------------------------
+Ran 1 test in 0.002s
+
+FAILED (failures=1)
+
+=== recorded_pass_executed_again: restored, exit 0 ===
+test_replay_executes_only_checks_without_a_recorded_verdict (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replay_executes_only_checks_without_a_recorded_verdict) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.002s
+
+OK
+
+=== recorded_skip_not_raised: broken, exit 1 ===
+test_replayed_skip_preserves_the_reason_without_executing_the_check (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replayed_skip_preserves_the_reason_without_executing_the_check) ...
+  test_replayed_skip_preserves_the_reason_without_executing_the_check (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replayed_skip_preserves_the_reason_without_executing_the_check) (verdict={'outcome': 'skipped', 'message': 'fixture prerequisite is absent'}) ... FAIL
+  test_replayed_skip_preserves_the_reason_without_executing_the_check (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replayed_skip_preserves_the_reason_without_executing_the_check) (verdict={'outcome': 'skipped'}) ... FAIL
+
+======================================================================
+FAIL: test_replayed_skip_preserves_the_reason_without_executing_the_check (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replayed_skip_preserves_the_reason_without_executing_the_check) (verdict={'outcome': 'skipped', 'message': 'fixture prerequisite is absent'})
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 391, in test_replayed_skip_preserves_the_reason_without_executing_the_check
+    with self.assertRaises(env_prereq.MissingPrerequisite) as raised:
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: MissingPrerequisite not raised
+
+======================================================================
+FAIL: test_replayed_skip_preserves_the_reason_without_executing_the_check (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replayed_skip_preserves_the_reason_without_executing_the_check) (verdict={'outcome': 'skipped'})
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 391, in test_replayed_skip_preserves_the_reason_without_executing_the_check
+    with self.assertRaises(env_prereq.MissingPrerequisite) as raised:
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: MissingPrerequisite not raised
+
+----------------------------------------------------------------------
+Ran 1 test in 0.002s
+
+FAILED (failures=2)
+
+=== recorded_skip_not_raised: restored, exit 0 ===
+test_replayed_skip_preserves_the_reason_without_executing_the_check (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replayed_skip_preserves_the_reason_without_executing_the_check) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.002s
+
+OK
+
+=== recorded_skip_reason_lost: broken, exit 1 ===
+test_replayed_skip_preserves_the_reason_without_executing_the_check (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replayed_skip_preserves_the_reason_without_executing_the_check) ...
+  test_replayed_skip_preserves_the_reason_without_executing_the_check (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replayed_skip_preserves_the_reason_without_executing_the_check) (verdict={'outcome': 'skipped', 'message': 'fixture prerequisite is absent'}) ... FAIL
+
+======================================================================
+FAIL: test_replayed_skip_preserves_the_reason_without_executing_the_check (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replayed_skip_preserves_the_reason_without_executing_the_check) (verdict={'outcome': 'skipped', 'message': 'fixture prerequisite is absent'})
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_issue1227_env_prereq_coverage.py", line 393, in test_replayed_skip_preserves_the_reason_without_executing_the_check
+    self.assertEqual(str(raised.exception), verdict.get("message", ""))
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: '' != 'fixture prerequisite is absent'
++ fixture prerequisite is absent
+
+
+----------------------------------------------------------------------
+Ran 1 test in 0.002s
+
+FAILED (failures=1)
+
+=== recorded_skip_reason_lost: restored, exit 0 ===
+test_replayed_skip_preserves_the_reason_without_executing_the_check (test_issue1227_env_prereq_coverage.PrerequisiteBoundaryTests.test_replayed_skip_preserves_the_reason_without_executing_the_check) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.002s
+
+OK
+
+=== 2026-11-11 closer repair: focused pytest on disposable source ===
+
+Tested main commit: bd4bea9c3a6da247082a2dc36f65a4ec7597e5be
+Interpreter: /opt/anaconda3/bin/python3 (Python 3.12), pytest 9.2.0.
+Source: /private/tmp/orch-1227-repair.xZpmwH/snapshot/src/env_prereq.py
+Pristine source SHA-256: 976775f3cda425667069e85f16e22693d283b486565c2a92f68da302ceeeb7bc
+The source, tests and pytest config came from git archive at the tested SHA.
+A temporary pytest collection hook checked the selected tests' env_prereq
+module identity, __file__, import origin, main code filename and source hash.
+The restored runs all reported the pristine hash above after byte comparison.
+Bytecode writes were disabled. The runtime and state paths were temporary.
+The archived tree has no .git, so pytest's tracked-input guard reported
+NOT CHECKED. Source and test bytes were compared against the worktree.
+Each command below was run in a fresh pytest process for each source state.
+One documented mutation was selected per method. Repeated identical subtest
+traceback lines are shown once, with the original pytest summary retained.
+
+$ /opt/anaconda3/bin/python3 -m pytest -q tests/test_issue1227_env_prereq_coverage.py::PrerequisiteBoundaryTests::test_core_sibling_override_presence_and_checkout_default
+  Mutation in core_sibling_absent: 'if runtime.is_file():' -> 'if False:'
+  pytest imported /private/tmp/orch-1227-repair.xZpmwH/snapshot/src/env_prereq.py (SHA-256 ad063ab67342942fda89c1ed9fda13be43a6771de6ea21c2e076e70abb89777a)
+  tests/test_issue1227_env_prereq_coverage.py:150: self.assertIsNone(env_prereq.core_sibling_absent())
+  AssertionError: 'CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /private/tmp/orch-1227-repair.xZpmwH/tmp/issue1227-dedcl7tg/independent — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py' is not None
+  Mutated (exit 1): 1 failed in 0.50s
+  Restored (exit 0): 1 passed in 0.46s
+
+$ /opt/anaconda3/bin/python3 -m pytest -q tests/test_issue1227_env_prereq_coverage.py::PrerequisiteBoundaryTests::test_real_layout_detector_requires_flat_modules_and_git_absence_for_mirror
+  Mutation in _flat_layout: 'return f"{module_dir} holds the modules at its root, not under src/"' -> 'return None'
+  pytest imported /private/tmp/orch-1227-repair.xZpmwH/snapshot/src/env_prereq.py (SHA-256 898f425a46359ea38678f946d3164d564919fd242d690728912892915aadcfed)
+  tests/test_issue1227_env_prereq_coverage.py:161: self.assertEqual(
+  AssertionError: None != '/private/tmp/orch-1227-repair.xZpmwH/tmp[61 chars]src/'
+  Mutated (exit 1): 1 failed, 2 subtests passed in 0.52s
+  Restored (exit 0): 1 passed, 4 subtests passed in 0.47s
+
+$ /opt/anaconda3/bin/python3 -m pytest -q tests/test_issue1227_env_prereq_coverage.py::PrerequisiteBoundaryTests::test_populated_rows_satisfy_lineage_and_invocation_prerequisites
+  Mutation in ledger_version_lineage_absent: 'if not unversioned:' -> 'if False:'
+  pytest imported /private/tmp/orch-1227-repair.xZpmwH/snapshot/src/env_prereq.py (SHA-256 9fd920a09fbf6341dd8f9d1ca4ebe131772000e5c52a6934de6cbfbd367104fe)
+  tests/test_issue1227_env_prereq_coverage.py:187: self.assertIsNone(env_prereq.ledger_version_lineage_absent("ready"))
+  AssertionError: 'capability ledger carries no version lineage for  (capability_version_id is unset) — lineage is established by real registration on the running instance, so a fresh bootstrap has none' is not None
+  Mutated (exit 1): 1 failed in 0.51s
+  Restored (exit 0): 1 passed in 0.46s
+
+$ /opt/anaconda3/bin/python3 -m pytest -q tests/test_issue1227_env_prereq_coverage.py::PrerequisiteBoundaryTests::test_bare_machine_requires_every_local_prerequisite_to_be_absent
+  Mutation in bare_machine: 'any(seats.values()) or skill is None or codex is None' -> 'any(seats.values()) and skill is None and codex is None'
+  pytest imported /private/tmp/orch-1227-repair.xZpmwH/snapshot/src/env_prereq.py (SHA-256 b821d71ac9e883d5eeb2afc694e620c475d858328271baaebf15807c9195eaa7)
+  tests/test_issue1227_env_prereq_coverage.py:214: self.assertIsNone(reason)
+  AssertionError: "this machine has none of this instance's local prerequisites: no agent seat has a CLI or a credential file, no reference skill resource is installed, and no version-capable Codex binary exists" is not None
+  SUBFAILED(seat=False, skill=False, codex=True)
+  SUBFAILED(seat=False, skill=True, codex=False)
+  SUBFAILED(seat=False, skill=True, codex=True)
+  SUBFAILED(seat=True, skill=False, codex=False)
+  SUBFAILED(seat=True, skill=False, codex=True)
+  SUBFAILED(seat=True, skill=True, codex=False)
+  Mutated (exit 1): 6 failed, 1 passed, 2 subtests passed in 0.53s
+  Restored (exit 0): 1 passed, 8 subtests passed in 0.49s
+
+$ /opt/anaconda3/bin/python3 -m pytest -q tests/test_issue1227_env_prereq_coverage.py::PrerequisiteBoundaryTests::test_unreadable_machine_marks_cannot_select_the_bare_machine_allowance
+  Mutation in bare_machine: 'cannot tell is not bare; see the docstring\n        return None' -> 'cannot tell is not bare; see the docstring\n        return "incorrect bare-machine allowance"'
+  pytest imported /private/tmp/orch-1227-repair.xZpmwH/snapshot/src/env_prereq.py (SHA-256 3b72931ff71a95ab29d28cd50bbfe777175225a77f79febba376ee61c5777097)
+  tests/test_issue1227_env_prereq_coverage.py:236: self.assertIsNone(env_prereq.bare_machine())
+  AssertionError: 'incorrect bare-machine allowance' is not None
+  SUBFAILED(unreadable='_seat_signals')
+  SUBFAILED(unreadable='skill_resource_absent')
+  SUBFAILED(unreadable='codex_profile_binary_absent')
+  Mutated (exit 1): 3 failed, 1 passed in 0.53s
+  Restored (exit 0): 1 passed, 3 subtests passed in 0.48s
+
+$ /opt/anaconda3/bin/python3 -m pytest -q tests/test_issue1227_env_prereq_coverage.py::PrerequisiteBoundaryTests::test_skill_resource_accepts_installed_file_and_names_missing_fallback
+  Mutation in skill_resource_absent: 'if resource.is_file():' -> 'if False:'
+  pytest imported /private/tmp/orch-1227-repair.xZpmwH/snapshot/src/env_prereq.py (SHA-256 0d43f36fc5ba9ee402bb0f69d30aa7ca924128739952e99f7e6fd72625319627)
+  tests/test_issue1227_env_prereq_coverage.py:244: self.assertIsNone(env_prereq.skill_resource_absent())
+  AssertionError: 'reference skill resource not installed: /private/tmp/orch-1227-repair.xZpmwH/tmp/issue1227-sr81fvhv/reference.sh — the skill compiler is deliberately exercised against a real installed skill, not a fixture' is not None
+  Mutated (exit 1): 1 failed in 0.53s
+  Restored (exit 0): 1 passed, 3 subtests passed in 0.49s
+
+$ /opt/anaconda3/bin/python3 -m pytest -q tests/test_issue1227_env_prereq_coverage.py::PrerequisiteBoundaryTests::test_codex_profile_detector_reports_resolver_verdict_without_launching
+  Mutation in codex_profile_binary_absent: 'adapters.profile_codex_binary()\n        return None' -> 'adapters.profile_codex_binary()\n        return "broken lookup"'
+  pytest imported /private/tmp/orch-1227-repair.xZpmwH/snapshot/src/env_prereq.py (SHA-256 c72339b48549291172f9a83f4fd5f042cd30ca69df6c888bc9c8e6bc6c0284d0)
+  tests/test_issue1227_env_prereq_coverage.py:260: self.assertIsNone(env_prereq.codex_profile_binary_absent())
+  AssertionError: 'broken lookup' is not None
+  Mutated (exit 1): 1 failed in 0.54s
+  Restored (exit 0): 1 passed in 0.46s
+
+$ /opt/anaconda3/bin/python3 -m pytest -q tests/test_issue1227_env_prereq_coverage.py::PrerequisiteBoundaryTests::test_legacy_detector_names_report_errors_and_accepts_legacy_rows
+  Mutation in ledger_legacy_rows_absent: 'if any(r.get("legacy") for r in rows):' -> 'if False:'
+  pytest imported /private/tmp/orch-1227-repair.xZpmwH/snapshot/src/env_prereq.py (SHA-256 c7e2ab5bac891356417ce1d5ae69d2e7c4cd82cad1b51d00c7c524847aad2e4d)
+  tests/test_issue1227_env_prereq_coverage.py:277: self.assertIsNone(env_prereq.ledger_legacy_rows_absent())
+  AssertionError: "capability ledger holds no pre-admission-gate (legacy) capability — legacy debt accrues from this instance's registration history, and a ledger bootstrapped from the committed tree has none" is not None
+  Mutated (exit 1): 1 failed in 0.50s
+  Restored (exit 0): 1 passed in 0.47s
+
+$ /opt/anaconda3/bin/python3 -m pytest -q tests/test_issue1227_env_prereq_coverage.py::PrerequisiteBoundaryTests::test_git_detector_checks_exit_status_and_names_launch_errors
+  Mutation in git_repo_absent: 'if proc.returncode != 0:' -> 'if True:'
+  pytest imported /private/tmp/orch-1227-repair.xZpmwH/snapshot/src/env_prereq.py (SHA-256 616cf5d92c3dafb9bf5aadaf093ad3f9822dfbe0f2dda37140ff6043d538d8bd)
+  tests/test_issue1227_env_prereq_coverage.py:284: self.assertIsNone(env_prereq.git_repo_absent())
+  AssertionError: '/private/tmp/orch-1227-repair.xZpmwH/tmp/issue1227-o6qkmdpv is not a git repository (git rev-parse --git-dir failed), so git cannot be asked whether a path is ignored or tracked — the exec mirror is a file copy, not a checkout. Run this check from the repo, where it is not skipped.' is not None
+  Mutated (exit 1): 1 failed in 0.51s
+  Restored (exit 0): 1 passed, 2 subtests passed in 0.49s
+
+$ /opt/anaconda3/bin/python3 -m pytest -q tests/test_issue1227_env_prereq_coverage.py::PrerequisiteBoundaryTests::test_seats_accept_cli_or_file_and_name_missing_signals
+  Mutation in _seat_signals: 'has_cli or has_file' -> 'has_cli and has_file'
+  pytest imported /private/tmp/orch-1227-repair.xZpmwH/snapshot/src/env_prereq.py (SHA-256 3bf4d940d44faad451cc277fe9f6e3b606a7728632ba2432700f0157f57dc6f2)
+  tests/test_issue1227_env_prereq_coverage.py:312: self.assertEqual(
+  AssertionError: {'cli': False, 'file': False, 'blind': False} != {'cli': True, 'file': True, 'blind': False}
+  Mutated (exit 1): 1 failed in 0.50s
+  Restored (exit 0): 1 passed in 0.46s
+
+$ /opt/anaconda3/bin/python3 -m pytest -q tests/test_issue1227_env_prereq_coverage.py::PrerequisiteBoundaryTests::test_recorded_verdicts_reject_unusable_reports_and_filter_unknown_outcomes
+  Mutation in recorded_verdicts: 'in REPLAYABLE_OUTCOMES' -> 'in ()'
+  pytest imported /private/tmp/orch-1227-repair.xZpmwH/snapshot/src/env_prereq.py (SHA-256 c19e180d5eaa1d831138c17b059b483b70c6135817ab2ce0809ea9a4d5090896)
+  tests/test_issue1227_env_prereq_coverage.py:351: self.assertEqual(
+  AssertionError: {} != {'ok': {'outcome': 'passed'}}
+  Mutated (exit 1): 1 failed, 7 subtests passed in 0.50s
+  Restored (exit 0): 1 passed, 7 subtests passed in 0.46s
+
+$ /opt/anaconda3/bin/python3 -m pytest -q tests/test_issue1227_env_prereq_coverage.py::PrerequisiteBoundaryTests::test_replayed_failure_preserves_message_and_supplies_fallback
+  Mutation in run_or_replay: 'raise AssertionError(message.removeprefix("AssertionError: ") or "failed under pytest")' -> 'raise AssertionError("broken replay")'
+  pytest imported /private/tmp/orch-1227-repair.xZpmwH/snapshot/src/env_prereq.py (SHA-256 490e0388812ec96ed9f28537e0eb8d96f81356d5aa691a5b640a45c27bfb9e91)
+  tests/test_issue1227_env_prereq_coverage.py:368: self.assertEqual(str(raised.exception), expected)
+  AssertionError: 'broken replay' != 'differing values'
+  Mutated (exit 1): 1 failed, 1 subtests passed in 0.49s
+  Restored (exit 0): 1 passed, 4 subtests passed in 0.45s
+
+$ /opt/anaconda3/bin/python3 -m pytest -q tests/test_issue1227_env_prereq_coverage.py::PrerequisiteBoundaryTests::test_replay_executes_only_checks_without_a_recorded_verdict
+  Mutation in run_or_replay: 'if verdict is None:\n        check()\n        return' -> 'if verdict is None:\n        return'
+  pytest imported /private/tmp/orch-1227-repair.xZpmwH/snapshot/src/env_prereq.py (SHA-256 1325a54577731bd6d9e0e2e955b5047fffdf90766dba170995facc0e9db5f8df)
+  tests/test_issue1227_env_prereq_coverage.py:377: check.assert_called_once_with()
+  AssertionError: Expected 'mock' to be called once. Called 0 times.
+  SUBFAILED(verdicts={})
+  SUBFAILED(verdicts={'another_check': {'outcome': 'passed'}})
+  Mutated (exit 1): 2 failed, 1 passed in 0.54s
+  Restored (exit 0): 1 passed, 2 subtests passed in 0.48s
+
+$ /opt/anaconda3/bin/python3 -m pytest -q tests/test_issue1227_env_prereq_coverage.py::PrerequisiteBoundaryTests::test_replayed_skip_preserves_the_reason_without_executing_the_check
+  Mutation in run_or_replay: 'raise MissingPrerequisite(message)' -> 'return'
+  pytest imported /private/tmp/orch-1227-repair.xZpmwH/snapshot/src/env_prereq.py (SHA-256 6a8fb6d1de897cb055d46f0104a79726d632d7f3d62afe8fe057b06805386a83)
+  tests/test_issue1227_env_prereq_coverage.py:389: with self.assertRaises(env_prereq.MissingPrerequisite) as raised:
+  AssertionError: MissingPrerequisite not raised
+  SUBFAILED(verdict={'outcome': 'skipped', 'message': 'fixture prerequisite is absent'})
+  SUBFAILED(verdict={'outcome': 'skipped'})
+  Mutated (exit 1): 2 failed, 1 passed in 0.52s
+  Restored (exit 0): 1 passed, 2 subtests passed in 0.47s
+
+$ /opt/anaconda3/bin/python3 -m pytest -q tests/test_issue1227_env_prereq_coverage.py::PrerequisiteBoundaryTests::test_runnable_records_only_the_first_absent_prerequisite
+  Mutation in runnable: 'gaps.append(reason)\n            return False' -> 'gaps.append(reason)\n            return True'
+  pytest imported /private/tmp/orch-1227-repair.xZpmwH/snapshot/src/env_prereq.py (SHA-256 ee4b2d1b0e451cc0dc940f2ba678cbc89962cc8c161e5da8b8439b1f71935f87)
+  tests/test_issue1227_env_prereq_coverage.py:398: self.assertFalse(env_prereq.runnable(gaps, None, "ledger row is absent", "CLI is absent"))
+  AssertionError: True is not false
+  Mutated (exit 1): 1 failed in 0.51s
+  Restored (exit 0): 1 passed in 0.47s
+
+$ /opt/anaconda3/bin/python3 -m pytest -q tests/test_issue1227_env_prereq_coverage.py::PrerequisiteBoundaryTests::test_report_gaps_prints_each_reason_once_in_first_seen_order
+  Mutation in report_gaps: 'for reason in dict.fromkeys(gaps):' -> 'for reason in gaps:'
+  pytest imported /private/tmp/orch-1227-repair.xZpmwH/snapshot/src/env_prereq.py (SHA-256 360e9f38f7148d766979615b74cf48b30b0266a751b1871b74e6e483f5097183)
+  tests/test_issue1227_env_prereq_coverage.py:410: self.assertEqual(
+  AssertionError: Lists differ: ['fix[140 chars]sent', 'fixture selftest: PREREQUISITE ABSENT:[32 chars]ent'] != ['fix[140 chars]sent']
+  Mutated (exit 1): 1 failed in 0.51s
+  Restored (exit 0): 1 passed in 0.47s
+
+$ /opt/anaconda3/bin/python3 -m pytest -q tests/test_issue1227_env_prereq_coverage.py::PrerequisiteBoundaryTests::test_main_reports_both_shapes_and_named_prerequisites
+  Mutation in main: "{'EXEC MIRROR' if shape else 'checkout'}" -> 'BROKEN'
+  pytest imported /private/tmp/orch-1227-repair.xZpmwH/snapshot/src/env_prereq.py (SHA-256 bd00569eaac2d4aeb7b193473ddbce0dbac0c6b51981156fc38403ba9b0ab3b9)
+  tests/test_issue1227_env_prereq_coverage.py:440: self.assertIn(
+  AssertionError: 'tree shape: checkout' not found in 'tree shape: BROKEN\nmachine:    provisioned\npresent reference skill resource\npresent exact-profile Codex binary\npresent seat auth signal\npresent vibe credential file\npresent ledger legacy rows\n'
+  AssertionError: 'tree shape: EXEC MIRROR' not found in 'tree shape: BROKEN\n    fixture absent\nmachine:    BARE\n    fixture absent\nABSENT  reference skill resource\n    fixture absent\nABSENT  exact-profile Codex binary\n    fixture absent\nABSENT  seat auth signal\n    fixture absent\nABSENT  vibe credential file\n    fixture absent\nABSENT  ledger legacy rows\n    fixture absent\n'
+  SUBFAILED(missing=False)
+  SUBFAILED(missing=True)
+  Mutated (exit 1): 2 failed, 1 passed in 0.52s
+  Restored (exit 0): 1 passed, 2 subtests passed in 0.48s
+
+$ /opt/anaconda3/bin/python3 -m pytest -q tests/test_issue1227_env_prereq_coverage.py::PrerequisiteBoundaryTests::test_main_selftest_dispatches_once_without_reporting_machine
+  Mutation in main: '_selftest()\n        return 0' -> '_selftest()\n        _selftest()\n        return 0'
+  pytest imported /private/tmp/orch-1227-repair.xZpmwH/snapshot/src/env_prereq.py (SHA-256 0492a58e9bb3dc974524024cc1aeccf97f182b5bdc0c26286f7258bac6de09ff)
+  tests/test_issue1227_env_prereq_coverage.py:465: selftest.assert_called_once_with()
+  AssertionError: Expected '_selftest' to be called once. Called 2 times.
+  Mutated (exit 1): 1 failed in 0.54s
+  Restored (exit 0): 1 passed in 0.48s
+
+$ /opt/anaconda3/bin/python3 -m pytest -q tests/test_issue1227_env_prereq_coverage.py
+  Restored (exit 0): 20 passed, 37 subtests passed in 0.90s
+
+Combined coverage for src/env_prereq.py
+
+The exact base of #1256 is 4ed6ca01ccb2d0f65e1bb3d9f42d4ec552720ed8.
+Its push CI run (43093860520) published no combined coverage payload. The #1358
+CI head 911353a0fbd6c1f9664300142100861b1991eb02 has the identical Git tree
+(22d96e3d353a91e7cfacf5f73fcb5c18f5d1c926) and supplies the before measurement.
+The after measurement is from the exact #1256 PR head. The producer workflow,
+coverage configuration, verify.py, and env_prereq.py source are byte-identical
+across those two trees. Both reports combine CI pytest with the verify selftests.
+
+Before: 377/417 covered statements, 40 missing (90.4%).
+https://github.com/stranske/Orchestrator/actions/runs/43092209118/artifacts/13889457290
+After: 410/417 covered statements, 7 missing (98.3%), at
+ac86fc120f44b3044c8a3f581dc09dc4be64aebb.
+https://github.com/stranske/Orchestrator/actions/runs/43102614995/artifacts/13891943449
+Remaining statement lines: 768, 883, 934, 984, 1046, 1060, 1068.
+They are selftest failure arms, real-environment arms, and VIBE_HOME restoration.
+Both coverage.json files have meta.branch_coverage=false, so both missing
+branch counts are unmeasured. The measured gain is 33 statements, 147 below
+the nominal 180-unit round target on statements alone. The blended shortfall
+is unmeasured.
+
+Issue #1227 narrowed the retry to its first-ranked file after #1228. #1256
+delivered that file's tests. The six issue-listed gaps below were outside
+the narrowed scope and require their own fixtures or a refreshed baseline.
+
+  src/ledger_reconcile.py (74): ledger/log reconciliation fixtures.
+  src/consumer_sync_shadow.py (1): refresh the historical gap after intervening
+    changes invalidated its line list, then exercise drift classification.
+  src/improvement_log.py (5): refresh the historical gap for the same reason,
+    then exercise log search/append with an isolated log.
+  src/spec_provenance.py (2): focused recovered-spec provenance cases.
+  src/testgen_lane.py (18): generated-test prompt and gate-wiring fixtures.
+  src/redirect_plan.py (70): redirect/decompose planning and guarded-apply fixtures.

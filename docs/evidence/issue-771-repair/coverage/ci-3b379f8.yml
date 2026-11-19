@@ -1,0 +1,435 @@
+name: CI
+
+# WHY THIS EXISTS. Until 2026-08-21 this tool's suite ran on exactly one machine, on a
+# Dropbox-synced volume that makes pytest 10-50x slower — so in practice it ran rarely. It was red
+# for weeks without anyone knowing: 9 pytest failures plus a module selftest broken since
+# 2026-06-18. A clean-machine CI run is the single strongest reason this code is in a repo at all.
+#
+# CORRECTED 2026-08-21 after the first run came back red. The claim here was that the suite is
+# STATE-INDEPENDENT, "verified by running it with ORCH_STATE_DIR pointed at an empty directory —
+# 330 passed". That verification moved the WRONG KNOB. There are two: ORCH_STATE_DIR (the audit
+# cache, firing monitor, redirect sweep) and ORCH_LOCAL_RUNTIME (the capability LEDGER and the
+# Brain). Only the second one holds the state those checks read, so the experiment left the
+# owner's populated 40-row ledger in place and proved nothing about a fresh machine. On a real
+# runner the ledger bootstraps to the 14 rows the code declares, and 21 checks that read the
+# other 26 failed.
+#
+# Both knobs are now set, so the run really is state-free, and the checks that need this
+# instance's registration history SKIP with the missing row named instead of failing. verify.py
+# bounds that skipping with a ceiling — see .verify-floor.json.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # THIS REPO'S COVERAGE NUMBER HAS BEEN WRONG BY 48 POINTS, AND NOTHING SAID SO.
+  #
+  # pr-00-gate.yml measures coverage with pytest alone and reports 34.11%. This job, run here on
+  # 2026-08-30: 80.3%, over 44,741 statements with 8,828 missed, combined from 94 instrumented
+  # processes.
+  #
+  # THE AUTHORITATIVE NUMBER IS THE ONE FROM THIS RUNNER, NOT FROM A DEVELOPER MACHINE, and the
+  # difference is real rather than noise. The same command on the owner's machine reports 82.1%
+  # with 8,026 missed -- 802 statements that execute only where this instance's prerequisites
+  # exist (agent CLIs, ~/.codex, a populated ledger) and are missed on a bare runner. Those are
+  # exactly the paths env_prereq guards. CLAUDE.md already says to take coverage from CI rather
+  # than a local run; this job is why that rule has teeth, and quoting the local figure would
+  # overstate the repo by nearly two points.
+  #
+  # The gap against the Gate exists because
+  # 79 of 102 modules are exercised by a `--selftest` entry point rather
+  # than a pytest file -- the original design, from the initial commit -- and a selftest runs as a
+  # SUBPROCESS that pytest-cov cannot see. So the Gate has been measuring the instrument's blind
+  # spot and calling it a score, which is the same defect stranske/Workflows#3251 drained out of
+  # the fleet reporter: a number nobody could measure rendered as a number that was measured.
+  #
+  # That mattered beyond cosmetics. Every other repo in the fleet now carries a
+  # config/coverage-baseline.json set at measured current, and this one was deliberately SKIPPED,
+  # because a baseline against the wrong instrument would bake the blind spot in permanently.
+  #
+  # A SEPARATE JOB, NOT A FLAG ON THE VERDICT, and the reasons are both real:
+  #   * verify.py --coverage wraps ~90 child processes in `coverage run --parallel-mode`, so it is
+  #     materially slower than the verdict. Measured in CI: the verify job is ~1m30s, and the
+  #     verdict is on the critical path for every PR. This runs beside it, not in front of it.
+  #   * `--coverage` deliberately never touches the exit code (verify.py pins that in a test),
+  #     precisely so measuring cannot change a verdict. Keeping it in its own job keeps that true
+  #     by construction rather than by promise.
+  #
+  # continue-on-error: a coverage MEASUREMENT that fails must never redden a green verdict. If it
+  # cannot run, the summary says so and the verdict is untouched -- but the failure is visible in
+  # the job list rather than swallowed.
+  #
+  # NOT YET WIRED TO THE GUARD, and saying so is the point. Maint Coverage Guard reads
+  # pr-00-gate.yml runs by a hardcoded workflowId, so it cannot see this job's number. Publishing
+  # the honest figure is step one; making the guard able to read it is a separate change, and
+  # until then this repo still has no baseline. The summary states that rather than implying the
+  # number is being enforced.
+  combined-coverage:
+    name: combined coverage (pytest + selftests, the honest number)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.14'
+
+      # Run native shell guard regressions instead of spending the skip budget.
+      - name: Install native shell test prerequisite
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends zsh
+          command -v zsh
+
+      - name: Install dependencies
+        run: python -m pip install --quiet pytest pyyaml coverage
+
+      - name: Measure combined coverage
+        shell: bash
+        env:
+          ORCH_STATE_DIR: ${{ runner.temp }}/orch-state
+          ORCH_LOCAL_RUNTIME: ${{ runner.temp }}/orch-runtime
+        run: |
+          mkdir -p "$ORCH_STATE_DIR" "$ORCH_LOCAL_RUNTIME"
+          # --floor-may-lag unconditionally: this job is a MEASUREMENT, and a lagging floor is the
+          # verify job's business to report. Duplicating that failure here would mean one drift
+          # reddening two jobs and telling you nothing extra.
+          python3 src/verify.py --coverage --floor-may-lag 2>&1 | tee /tmp/combined.txt
+
+      - name: Build the trend record the coverage guard reads
+        if: always()
+        run: |
+          # tools/coverage_trend.py is synced from Workflows and is the SAME producer every other
+          # repo in the fleet uses, so this repo's number is comparable rather than bespoke.
+          # --soft: this job measures, it does not gate. The guard decides what a drop means.
+          if [ -f coverage.json ]; then
+            python3 tools/coverage_trend.py \
+              --coverage-json coverage.json \
+              --baseline config/coverage-baseline.json \
+              --project-root "${GITHUB_WORKSPACE}" \
+              --artifact-path coverage-trend.json \
+              --job-summary "$GITHUB_STEP_SUMMARY" \
+              --minimum 75 \
+              --soft
+          else
+            # NAMED, never silent. An absent payload that publishes nothing is correct; an absent
+            # payload that publishes an EMPTY artifact would be read by the guard as a real
+            # measurement, which is the failure this repo keeps finding in other people's gates.
+            echo "::warning::verify.py --coverage wrote no coverage.json — publishing no coverage artifacts, which the guard reports as a missing measurement rather than a low one."
+          fi
+
+      # The guard needs BOTH, and skips a run carrying only one. Named exactly `gate-coverage`
+      # and `gate-coverage-trend`: those are the names Maint Coverage Guard resolves, and after
+      # Workflows #3272 it also accepts matrix-suffixed payloads -- but the exact name is
+      # preferred first, so using it keeps this job's payload unambiguous on a run that may also
+      # carry the Gate's.
+      - name: Publish the payload the coverage guard reads
+        if: always() && hashFiles('coverage.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: gate-coverage
+          path: coverage.json
+          if-no-files-found: error
+
+      - name: Publish the coverage trend
+        if: always() && hashFiles('coverage-trend.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: gate-coverage-trend
+          path: coverage-trend.json
+          if-no-files-found: error
+
+      - name: Publish the figure
+        if: always()
+        run: |
+          {
+            echo "## Combined coverage — pytest AND selftests"
+            echo
+            if grep -q "^coverage:" /tmp/combined.txt 2>/dev/null; then
+              grep -E '^(coverage:|TOTAL[[:space:]])' /tmp/combined.txt
+            else
+              echo "NOT MEASURED — verify.py --coverage produced no coverage block."
+              echo "Treat that as a missing measurement, not as a low one."
+            fi
+            echo
+            echo "The Gate's own coverage number is pytest-only and reads far lower, because 79 of"
+            echo "102 modules are exercised by a \`--selftest\` subprocess that pytest-cov cannot"
+            echo "see. The figure above is the one comparable to the rest of the fleet."
+            echo
+            echo "ENFORCED as of 2026-08-30. Maint Coverage Guard reads this job, because"
+            echo "\`config/coverage-baseline.json\` names it in \`source_workflows\` (Workflows"
+            echo "#3270) and this job publishes the \`gate-coverage\` payload and"
+            echo "\`gate-coverage-trend\` record the guard requires. A drop past the baseline"
+            echo "opens an issue; it does not block a merge."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the coverage data
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: combined-coverage
+          path: |
+            .coverage
+            /tmp/combined.txt
+          if-no-files-found: warn
+          retention-days: 7
+
+  verify:
+    name: verify.py (real pytest counts + selftests + capability gates)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+
+      # Run native shell guard regressions instead of spending the skip budget.
+      - name: Install native shell test prerequisite
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends zsh
+          command -v zsh
+
+      - name: Install dependencies
+        run: python -m pip install --quiet pytest pyyaml coverage
+
+      - name: Verify
+        env:
+          # State is machine-local by design, and it lives behind TWO variables. Setting only one
+          # is what made the "state-independent" claim above wrong for two months of one day.
+          ORCH_STATE_DIR: ${{ runner.temp }}/orch-state
+          ORCH_LOCAL_RUNTIME: ${{ runner.temp }}/orch-runtime
+        run: |
+          mkdir -p "$ORCH_STATE_DIR" "$ORCH_LOCAL_RUNTIME"
+          # `--floor-may-lag` ON PULL REQUESTS ONLY, and the asymmetry is the whole point.
+          #
+          # `.verify-floor.json`'s `collected` is an EQUALITY, which is right: a floor behind
+          # reality is permissive by exactly the gap. But the correct number is only knowable on
+          # the MERGE RESULT, and this repo merges fast — one one-line change needed SIX
+          # re-measurements in two hours while main moved eight times, and that file's own note
+          # records the floor being found behind reality four separate times before that. Demanding
+          # the exact number from a branch author is demanding something no amount of care delivers.
+          #
+          # So on a PR a LAGGING floor is reported and not fatal, while a collection DROP stays
+          # fatal (see `_blocks_floor_update`). On main the equality is enforced by this same job
+          # WITHOUT the flag, and the reconcile-floor job below heals a lag within one run — so the
+          # invariant "main's floor equals main's reality" is unchanged. Nothing is skipped and
+          # nothing is silenced: the lag still prints.
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            python3 src/verify.py --floor-may-lag
+          else
+            python3 src/verify.py
+          fi
+
+      # verify.py already fails on: any pytest failure, ZERO tests collected, a collection count
+      # below the recorded floor, passed+skipped dropping below the floor, MORE SKIPS THAN THE
+      # AGREED CEILING, a module selftest that exits 0 without saying anything, a selftest or gate
+      # that exits 0 having skipped without naming what is missing, and any of the five capability
+      # gates. Deliberately no `|| true` anywhere — an exit code that cannot fail is the defect
+      # this repo exists to stop repeating.
+      #
+      # It also prints every skip and its reason, so a green run here always states what it did
+      # not check. If that list grows, the ceiling turns it into a red rather than a footnote.
+
+  # ---------------------------------------------------------------------------------------------
+  # THE FLAT EXEC-MIRROR SHAPE, VERIFIED ON EVERY PR (2026-10-04).
+  #
+  # WHAT THIS FIXES. The `verify` job above judges a CHECKOUT. launchd runs a different tree: the
+  # exec mirror, a FLAT copy (modules at the root, no .git). On 2026-10-04 the owner's verified sync
+  # was refused for three independent defects that existed only in that shape, each green here on
+  # its own PR (#408): tests that read `src/<module>` by path, loaders seeding deployment-owned
+  # registries, and a test child that seeded one into the deployable tree. The only detector was
+  # scripts/verify_before_sync.sh, which runs when the owner syncs, i.e. after merge.
+  #
+  # WHAT IT RUNS: that same script, not a second procedure. ORCH_SYNC_SCRIPT points it at
+  # scripts/build_exec_mirror.sh, which is the copy contract the owner's copier calls
+  # (docs/MIRROR_SYNC_PATCH.md, "One copy contract"), so this verifies the tree a sync ships. It
+  # builds a scratch flat copy, hashes the deployment-owned bytes, runs verify.py there with every
+  # registry and state path in scratch, and fails if verification changed a deployed byte (the VOID
+  # that caught two of the three causes) or if the source moved.
+  #
+  # ITS OWN CEILINGS. On a runner the flat copy lacks the git family (like the owner's mirror) AND
+  # every local prerequisite (like this runner's checkout), so it is a third shape. verify.py
+  # detects it (env_prereq.exec_mirror_shape AND env_prereq.bare_machine, never $CI) and bounds it
+  # by `bare_mirror_*` in .verify-floor.json, measured here. VERIFY_BEFORE_SYNC_TREE makes the
+  # script refuse any other classification, so a mislabelled tree is a red, not a looser number.
+  #
+  # LATCHED-GATE ANSWERS. 1: a red here is cleared by the PR that fixes the mirror-only defect (or
+  # ships the missing file from the builder), or by a deliberate, named ceiling raise. 2: both run
+  # while the job is red, since nothing here blocks a push or a re-run. 3: the bare ceilings are
+  # measured in this job, the only place that shape is detected, and the digest is the installer's
+  # one function before and after. 4: drained, it prints `tree: BARE EXEC MIRROR`, `N/N max
+  # [bare_mirror_skipped_max]` and `== verify-before-sync: VERIFIED`, and every green run of this
+  # job is an input that produced it.
+  #
+  # --floor-may-lag on every event: a lagging floor is the `verify` job's business, and a collection
+  # DROP still fails here. Runs beside `verify`, so a PR waits no longer than before.
+  exec-mirror:
+    name: verify.py in the flat exec-mirror shape (the tree a sync ships)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+
+      # Run native shell guard regressions instead of spending the skip budget.
+      - name: Install native shell test prerequisite
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends zsh
+          command -v zsh
+
+      - name: Install dependencies
+        run: python -m pip install --quiet pytest pyyaml coverage
+
+      - name: Build the flat copy with the sync's copy contract and verify it there
+        env:
+          ORCH_STATE_DIR: ${{ runner.temp }}/orch-state
+          ORCH_LOCAL_RUNTIME: ${{ runner.temp }}/orch-runtime
+          ORCH_SYNC_SCRIPT: ${{ github.workspace }}/scripts/build_exec_mirror.sh
+          VERIFY_BEFORE_SYNC_TREE: BARE EXEC MIRROR
+          VERIFY_BEFORE_SYNC_FLOOR_MAY_LAG: '1'
+        run: |
+          mkdir -p "$ORCH_STATE_DIR" "$ORCH_LOCAL_RUNTIME"
+          bash scripts/verify_before_sync.sh "$GITHUB_WORKSPACE"
+
+  # ---------------------------------------------------------------------------------------------
+  # THE FLOOR'S DRAIN, RUN AUTOMATICALLY — main only.
+  #
+  # WHAT THIS FIXES. `collected` in .verify-floor.json is an EQUALITY (2026-08-23), and correctly
+  # so: a floor left BEHIND reality is permissive by exactly the gap, and that direction was
+  # silent for as long as it existed. But the correct number is only knowable on the MERGE
+  # RESULT, and this repo merges fast — so the value a branch records is invalidated by the next
+  # unrelated merge. That file's own note records the floor being found behind reality FOUR
+  # separate times (366 vs 368, 391 vs 402, and twice more), every one of them a later
+  # hand-correction. The drain was always one command; nothing ran it.
+  #
+  # WHAT IT DOES NOT FIX, stated so nobody expects it to: this does NOT remove the rebase step on
+  # a PR. A PR's CI still measures the merge result and still goes red when the branch's number
+  # lags, because that number is the author's claim about their own delta. What it removes is the
+  # case where a lagging floor reaches main and STAYS there until somebody notices — which is the
+  # dangerous one, since a floor N tests permissive lets N tests silently stop being collected.
+  #
+  # THE THREE QUESTIONS (house rule for anything gate-shaped):
+  #   1. What decrements it?  This job: `verify.py --reconcile-floor` writes the measured integers.
+  #      Not "time passes", not "someone notices" — both of which is what it replaces.
+  #   2. Can that mechanism run while the gate is CLOSED?  Yes, and that property is already
+  #      tested: `_blocks_floor_update` deliberately does NOT count drift as blocking, so the one
+  #      command that clears a drift is not refused for the existence of the drift.
+  #   3. Does the measuring window equal the draining window?  Exactly — the number written is the
+  #      number measured in the same process, in the same tree, in this run. There is no second
+  #      literal to drift.
+  #
+  # WHY IT CANNOT WEAKEN THE GATE. It can only ever RAISE the floor to observed reality, which
+  # makes the gate stricter. A collection DROP keeps blocking the write (`_blocks_floor_update`),
+  # so the file is never rewritten downward and `_failing_problems` has nothing to forgive: it
+  # forgives only a drift THIS RUN HEALED, never an unwritten one. Both properties have
+  # deliberate-break demos in `verify.py --selftest`.
+  #
+  # FAILS TOWARD NOISE, NOT SILENCE. No `|| true` anywhere. If the reconcile run finds anything
+  # real, it exits non-zero and this job is red. If the push is refused (branch protection, token
+  # scope), the push step fails and this job is red — because a drain that quietly stops draining
+  # is how the floor fell behind in the first place. The `verify` job above still runs on main
+  # unchanged, so a drift is still REPORTED red there on the commit that introduced it; this job
+  # heals it for the next one rather than hiding it.
+  #
+  # WHY THERE IS NO LOOP, and the first version of this comment got the reason WRONG. It claimed
+  # "the commit it pushes re-triggers this workflow, that run finds no drift, and pushes nothing".
+  # It does not re-trigger anything: a push made with the default GITHUB_TOKEN does not start a
+  # workflow run at all. Measured on the first real reconcile (2026-08-23): the pushed commit
+  # 349cb1c6 has ZERO workflow runs. So the loop is impossible, but for a stronger reason than
+  # convergence.
+  #
+  # TWO CONSEQUENCES, both of which the wrong reason hid:
+  #   * the reconcile commit is never verified by ci.yml. Harmless as written -- it changes only
+  #     the two integers this run just measured -- but it does mean main carries a commit CI never
+  #     saw, so keep this job's write narrow enough that that is obviously safe.
+  #   * IF ANYONE SWAPS THIS FOR A PAT OR AN APP TOKEN to get CI on the commit, the loop becomes
+  #     REAL and this job needs an explicit guard. That is the change to be careful about, and the
+  #     old comment would have told you it was already handled.
+  reconcile-floor:
+    name: reconcile the collection floor (main only)
+    # Never on a pull_request: a PR's floor is the author's claim about their own delta, and
+    # auto-writing it would delete the claim instead of checking it.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        # Credentials ARE persisted here, unlike the verify job — this is the one step that needs
+        # to push. Scope is bounded by `permissions:` above and by the single path in `git add`.
+        with:
+          persist-credentials: true
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+
+      # Run native shell guard regressions instead of spending the skip budget.
+      - name: Install native shell test prerequisite
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends zsh
+          command -v zsh
+
+      - name: Install dependencies
+        run: python -m pip install --quiet pytest pyyaml coverage
+
+      - name: Reconcile
+        env:
+          ORCH_STATE_DIR: ${{ runner.temp }}/orch-state
+          ORCH_LOCAL_RUNTIME: ${{ runner.temp }}/orch-runtime
+        run: |
+          mkdir -p "$ORCH_STATE_DIR" "$ORCH_LOCAL_RUNTIME"
+          python3 src/verify.py --reconcile-floor
+
+      - name: Commit the reconciled floor
+        run: |
+          set -euo pipefail
+          # ONLY this path. If the reconcile run somehow touched anything else, that is a bug and
+          # this job must not carry it to main.
+          if git diff --quiet -- .verify-floor.json; then
+            echo "floor already matches reality; nothing to reconcile."
+            exit 0
+          fi
+          if ! git diff --quiet -- . ':!.verify-floor.json'; then
+            echo "::error::the reconcile run modified files other than .verify-floor.json:"
+            git diff --name-only -- . ':!.verify-floor.json'
+            exit 1
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .verify-floor.json
+          git commit -m "chore(floor): reconcile the collection floor on main
+
+          verify.py --reconcile-floor measured the counts on this commit and wrote them. The
+          floor is an equality, so a value left behind reality is permissive by exactly the gap;
+          the number is only knowable on the merge result, which is why this is automated rather
+          than asked of each author. Raising it can only make the gate stricter -- a collection
+          DROP still blocks the write and fails the run."
+          git push

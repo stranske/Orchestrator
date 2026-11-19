@@ -1,0 +1,705 @@
+/opt/anaconda3/lib/python3.12/site-packages/pytest_asyncio/plugin.py:300: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the "fixture" caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to "function" scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+........FF......................................FFFF......               [100%]
+=================================== FAILURES ===================================
+___________ test_f_cwd_only_live_holder_is_refused_naming_pid[False] ___________
+
+layout = (PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2542/test_f_cwd_only_l...chestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2542/test_f_cwd_only_live_holder_is0/holder [old]+ round'))
+nested = False
+
+    @pytest.mark.parametrize("nested", [False, True])
+    def test_f_cwd_only_live_holder_is_refused_naming_pid(layout, nested):
+        holder = hold(layout)
+        cwd = holder
+        if nested:
+            # Git ignores empty directories, so the holder remains clean.
+            cwd = holder / "nested"
+            cwd.mkdir()
+        proc = subprocess.Popen(["sleep", "300"], cwd=cwd, start_new_session=True)
+        try:
+            with pytest.raises(RuntimeError) as caught:
+>               provision.provision(TARGET, "closer")
+
+tests/test_provision_reclaim.py:237: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/provision.py:807: in provision
+    else _provision(target, lane, event)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/provision.py:709: in _provision
+    _reclaim_branch_holder(canon, head, wt, event)
+src/provision.py:639: in _reclaim_branch_holder
+    stale = _stale_orphans(live, holder) if live else {}
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/provision.py:561: in _stale_orphans
+    proc = _holder_process(pid, holder)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/provision.py:535: in _holder_process
+    shown = _run(["ps", "-o", "ppid=,etime=,time=,comm=", "-p", pid], check=False)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/provision.py:93: in _run
+    return subprocess.run(
+/opt/anaconda3/lib/python3.12/subprocess.py:548: in run
+    with Popen(*popenargs, **kwargs) as process:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/anaconda3/lib/python3.12/subprocess.py:1026: in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <Popen: returncode: 255 args: ['ps', '-o', 'ppid=,etime=,time=,comm=', '-p',...>
+args = ['ps', '-o', 'ppid=,etime=,time=,comm=', '-p', '81061']
+executable = b'ps', preexec_fn = None, close_fds = True, pass_fds = ()
+cwd = None, env = None, startupinfo = None, creationflags = 0, shell = False
+p2cread = -1, p2cwrite = -1, c2pread = 12, c2pwrite = 13, errread = 14
+errwrite = 15, restore_signals = True, gid = None, gids = None, uid = None
+umask = -1, start_new_session = False, process_group = -1
+
+    def _execute_child(self, args, executable, preexec_fn, close_fds,
+                       pass_fds, cwd, env,
+                       startupinfo, creationflags, shell,
+                       p2cread, p2cwrite,
+                       c2pread, c2pwrite,
+                       errread, errwrite,
+                       restore_signals,
+                       gid, gids, uid, umask,
+                       start_new_session, process_group):
+        """Execute program (POSIX version)"""
+    
+        if isinstance(args, (str, bytes)):
+            args = [args]
+        elif isinstance(args, os.PathLike):
+            if shell:
+                raise TypeError('path-like args is not allowed when '
+                                'shell is true')
+            args = [args]
+        else:
+            args = list(args)
+    
+        if shell:
+            # On Android the default shell is at '/system/bin/sh'.
+            unix_shell = ('/system/bin/sh' if
+                      hasattr(sys, 'getandroidapilevel') else '/bin/sh')
+            args = [unix_shell, "-c"] + args
+            if executable:
+                args[0] = executable
+    
+        if executable is None:
+            executable = args[0]
+    
+        sys.audit("subprocess.Popen", executable, args, cwd, env)
+    
+        if (_USE_POSIX_SPAWN
+                and os.path.dirname(executable)
+                and preexec_fn is None
+                and not close_fds
+                and not pass_fds
+                and cwd is None
+                and (p2cread == -1 or p2cread > 2)
+                and (c2pwrite == -1 or c2pwrite > 2)
+                and (errwrite == -1 or errwrite > 2)
+                and not start_new_session
+                and process_group == -1
+                and gid is None
+                and gids is None
+                and uid is None
+                and umask < 0):
+            self._posix_spawn(args, executable, env, restore_signals,
+                              p2cread, p2cwrite,
+                              c2pread, c2pwrite,
+                              errread, errwrite)
+            return
+    
+        orig_executable = executable
+    
+        # For transferring possible exec failure from child to parent.
+        # Data format: "exception name:hex errno:description"
+        # Pickle is not used; it is complex and involves memory allocation.
+        errpipe_read, errpipe_write = os.pipe()
+        # errpipe_write must not be in the standard io 0, 1, or 2 fd range.
+        low_fds_to_close = []
+        while errpipe_write < 3:
+            low_fds_to_close.append(errpipe_write)
+            errpipe_write = os.dup(errpipe_write)
+        for low_fd in low_fds_to_close:
+            os.close(low_fd)
+        try:
+            try:
+                # We must avoid complex work that could involve
+                # malloc or free in the child process to avoid
+                # potential deadlocks, thus we do all this here.
+                # and pass it to fork_exec()
+    
+                if env is not None:
+                    env_list = []
+                    for k, v in env.items():
+                        k = os.fsencode(k)
+                        if b'=' in k:
+                            raise ValueError("illegal environment variable name")
+                        env_list.append(k + b'=' + os.fsencode(v))
+                else:
+                    env_list = None  # Use execv instead of execve.
+                executable = os.fsencode(executable)
+                if os.path.dirname(executable):
+                    executable_list = (executable,)
+                else:
+                    # This matches the behavior of os._execvpe().
+                    executable_list = tuple(
+                        os.path.join(os.fsencode(dir), executable)
+                        for dir in os.get_exec_path(env))
+                fds_to_keep = set(pass_fds)
+                fds_to_keep.add(errpipe_write)
+                self.pid = _fork_exec(
+                        args, executable_list,
+                        close_fds, tuple(sorted(map(int, fds_to_keep))),
+                        cwd, env_list,
+                        p2cread, p2cwrite, c2pread, c2pwrite,
+                        errread, errwrite,
+                        errpipe_read, errpipe_write,
+                        restore_signals, start_new_session,
+                        process_group, gid, gids, uid, umask,
+                        preexec_fn, _USE_VFORK)
+                self._child_created = True
+            finally:
+                # be sure the FD is closed no matter what
+                os.close(errpipe_write)
+    
+            self._close_pipe_fds(p2cread, p2cwrite,
+                                 c2pread, c2pwrite,
+                                 errread, errwrite)
+    
+            # Wait for exec to fail or succeed; possibly raising an
+            # exception (limited in size)
+            errpipe_data = bytearray()
+            while True:
+                part = os.read(errpipe_read, 50000)
+                errpipe_data += part
+                if not part or len(errpipe_data) > 50000:
+                    break
+        finally:
+            # be sure the FD is closed no matter what
+            os.close(errpipe_read)
+    
+        if errpipe_data:
+            try:
+                pid, sts = os.waitpid(self.pid, 0)
+                if pid == self.pid:
+                    self._handle_exitstatus(sts)
+                else:
+                    self.returncode = sys.maxsize
+            except ChildProcessError:
+                pass
+    
+            try:
+                exception_name, hex_errno, err_msg = (
+                        errpipe_data.split(b':', 2))
+                # The encoding here should match the encoding
+                # written in by the subprocess implementations
+                # like _posixsubprocess
+                err_msg = err_msg.decode()
+            except ValueError:
+                exception_name = b'SubprocessError'
+                hex_errno = b'0'
+                err_msg = 'Bad exception data from child: {!r}'.format(
+                              bytes(errpipe_data))
+            child_exception_type = getattr(
+                    builtins, exception_name.decode('ascii'),
+                    SubprocessError)
+            if issubclass(child_exception_type, OSError) and hex_errno:
+                errno_num = int(hex_errno, 16)
+                if err_msg == "noexec:chdir":
+                    err_msg = ""
+                    # The error must be from chdir(cwd).
+                    err_filename = cwd
+                elif err_msg == "noexec":
+                    err_msg = ""
+                    err_filename = None
+                else:
+                    err_filename = orig_executable
+                if errno_num != 0:
+                    err_msg = os.strerror(errno_num)
+                if err_filename is not None:
+>                   raise child_exception_type(errno_num, err_msg, err_filename)
+E                   PermissionError: [Errno 1] Operation not permitted: 'ps'
+
+/opt/anaconda3/lib/python3.12/subprocess.py:1953: PermissionError
+___________ test_f_cwd_only_live_holder_is_refused_naming_pid[True] ____________
+
+layout = (PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2542/test_f_cwd_only_l...chestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2542/test_f_cwd_only_live_holder_is1/holder [old]+ round'))
+nested = True
+
+    @pytest.mark.parametrize("nested", [False, True])
+    def test_f_cwd_only_live_holder_is_refused_naming_pid(layout, nested):
+        holder = hold(layout)
+        cwd = holder
+        if nested:
+            # Git ignores empty directories, so the holder remains clean.
+            cwd = holder / "nested"
+            cwd.mkdir()
+        proc = subprocess.Popen(["sleep", "300"], cwd=cwd, start_new_session=True)
+        try:
+            with pytest.raises(RuntimeError) as caught:
+>               provision.provision(TARGET, "closer")
+
+tests/test_provision_reclaim.py:237: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/provision.py:807: in provision
+    else _provision(target, lane, event)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/provision.py:709: in _provision
+    _reclaim_branch_holder(canon, head, wt, event)
+src/provision.py:639: in _reclaim_branch_holder
+    stale = _stale_orphans(live, holder) if live else {}
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/provision.py:561: in _stale_orphans
+    proc = _holder_process(pid, holder)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/provision.py:535: in _holder_process
+    shown = _run(["ps", "-o", "ppid=,etime=,time=,comm=", "-p", pid], check=False)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/provision.py:93: in _run
+    return subprocess.run(
+/opt/anaconda3/lib/python3.12/subprocess.py:548: in run
+    with Popen(*popenargs, **kwargs) as process:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/anaconda3/lib/python3.12/subprocess.py:1026: in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <Popen: returncode: 255 args: ['ps', '-o', 'ppid=,etime=,time=,comm=', '-p',...>
+args = ['ps', '-o', 'ppid=,etime=,time=,comm=', '-p', '81196']
+executable = b'ps', preexec_fn = None, close_fds = True, pass_fds = ()
+cwd = None, env = None, startupinfo = None, creationflags = 0, shell = False
+p2cread = -1, p2cwrite = -1, c2pread = 12, c2pwrite = 13, errread = 14
+errwrite = 15, restore_signals = True, gid = None, gids = None, uid = None
+umask = -1, start_new_session = False, process_group = -1
+
+    def _execute_child(self, args, executable, preexec_fn, close_fds,
+                       pass_fds, cwd, env,
+                       startupinfo, creationflags, shell,
+                       p2cread, p2cwrite,
+                       c2pread, c2pwrite,
+                       errread, errwrite,
+                       restore_signals,
+                       gid, gids, uid, umask,
+                       start_new_session, process_group):
+        """Execute program (POSIX version)"""
+    
+        if isinstance(args, (str, bytes)):
+            args = [args]
+        elif isinstance(args, os.PathLike):
+            if shell:
+                raise TypeError('path-like args is not allowed when '
+                                'shell is true')
+            args = [args]
+        else:
+            args = list(args)
+    
+        if shell:
+            # On Android the default shell is at '/system/bin/sh'.
+            unix_shell = ('/system/bin/sh' if
+                      hasattr(sys, 'getandroidapilevel') else '/bin/sh')
+            args = [unix_shell, "-c"] + args
+            if executable:
+                args[0] = executable
+    
+        if executable is None:
+            executable = args[0]
+    
+        sys.audit("subprocess.Popen", executable, args, cwd, env)
+    
+        if (_USE_POSIX_SPAWN
+                and os.path.dirname(executable)
+                and preexec_fn is None
+                and not close_fds
+                and not pass_fds
+                and cwd is None
+                and (p2cread == -1 or p2cread > 2)
+                and (c2pwrite == -1 or c2pwrite > 2)
+                and (errwrite == -1 or errwrite > 2)
+                and not start_new_session
+                and process_group == -1
+                and gid is None
+                and gids is None
+                and uid is None
+                and umask < 0):
+            self._posix_spawn(args, executable, env, restore_signals,
+                              p2cread, p2cwrite,
+                              c2pread, c2pwrite,
+                              errread, errwrite)
+            return
+    
+        orig_executable = executable
+    
+        # For transferring possible exec failure from child to parent.
+        # Data format: "exception name:hex errno:description"
+        # Pickle is not used; it is complex and involves memory allocation.
+        errpipe_read, errpipe_write = os.pipe()
+        # errpipe_write must not be in the standard io 0, 1, or 2 fd range.
+        low_fds_to_close = []
+        while errpipe_write < 3:
+            low_fds_to_close.append(errpipe_write)
+            errpipe_write = os.dup(errpipe_write)
+        for low_fd in low_fds_to_close:
+            os.close(low_fd)
+        try:
+            try:
+                # We must avoid complex work that could involve
+                # malloc or free in the child process to avoid
+                # potential deadlocks, thus we do all this here.
+                # and pass it to fork_exec()
+    
+                if env is not None:
+                    env_list = []
+                    for k, v in env.items():
+                        k = os.fsencode(k)
+                        if b'=' in k:
+                            raise ValueError("illegal environment variable name")
+                        env_list.append(k + b'=' + os.fsencode(v))
+                else:
+                    env_list = None  # Use execv instead of execve.
+                executable = os.fsencode(executable)
+                if os.path.dirname(executable):
+                    executable_list = (executable,)
+                else:
+                    # This matches the behavior of os._execvpe().
+                    executable_list = tuple(
+                        os.path.join(os.fsencode(dir), executable)
+                        for dir in os.get_exec_path(env))
+                fds_to_keep = set(pass_fds)
+                fds_to_keep.add(errpipe_write)
+                self.pid = _fork_exec(
+                        args, executable_list,
+                        close_fds, tuple(sorted(map(int, fds_to_keep))),
+                        cwd, env_list,
+                        p2cread, p2cwrite, c2pread, c2pwrite,
+                        errread, errwrite,
+                        errpipe_read, errpipe_write,
+                        restore_signals, start_new_session,
+                        process_group, gid, gids, uid, umask,
+                        preexec_fn, _USE_VFORK)
+                self._child_created = True
+            finally:
+                # be sure the FD is closed no matter what
+                os.close(errpipe_write)
+    
+            self._close_pipe_fds(p2cread, p2cwrite,
+                                 c2pread, c2pwrite,
+                                 errread, errwrite)
+    
+            # Wait for exec to fail or succeed; possibly raising an
+            # exception (limited in size)
+            errpipe_data = bytearray()
+            while True:
+                part = os.read(errpipe_read, 50000)
+                errpipe_data += part
+                if not part or len(errpipe_data) > 50000:
+                    break
+        finally:
+            # be sure the FD is closed no matter what
+            os.close(errpipe_read)
+    
+        if errpipe_data:
+            try:
+                pid, sts = os.waitpid(self.pid, 0)
+                if pid == self.pid:
+                    self._handle_exitstatus(sts)
+                else:
+                    self.returncode = sys.maxsize
+            except ChildProcessError:
+                pass
+    
+            try:
+                exception_name, hex_errno, err_msg = (
+                        errpipe_data.split(b':', 2))
+                # The encoding here should match the encoding
+                # written in by the subprocess implementations
+                # like _posixsubprocess
+                err_msg = err_msg.decode()
+            except ValueError:
+                exception_name = b'SubprocessError'
+                hex_errno = b'0'
+                err_msg = 'Bad exception data from child: {!r}'.format(
+                              bytes(errpipe_data))
+            child_exception_type = getattr(
+                    builtins, exception_name.decode('ascii'),
+                    SubprocessError)
+            if issubclass(child_exception_type, OSError) and hex_errno:
+                errno_num = int(hex_errno, 16)
+                if err_msg == "noexec:chdir":
+                    err_msg = ""
+                    # The error must be from chdir(cwd).
+                    err_filename = cwd
+                elif err_msg == "noexec":
+                    err_msg = ""
+                    err_filename = None
+                else:
+                    err_filename = orig_executable
+                if errno_num != 0:
+                    err_msg = os.strerror(errno_num)
+                if err_filename is not None:
+>                   raise child_exception_type(errno_num, err_msg, err_filename)
+E                   PermissionError: [Errno 1] Operation not permitted: 'ps'
+
+/opt/anaconda3/lib/python3.12/subprocess.py:1953: PermissionError
+______________ test_native_clean_idle_holder_is_reclaimed[closer] ______________
+
+layout = (PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2542/test_native_clean...chestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2542/test_native_clean_idle_holder_0/holder [old]+ round'))
+lane = 'closer', capsys = <_pytest.capture.CaptureFixture object at 0x107e6f770>
+
+    @pytest.mark.parametrize("lane", ["closer", "opener"])
+    def test_native_clean_idle_holder_is_reclaimed(layout, lane, capsys):
+        """Unmocked process probes on the dispatcher host; ledger isolated by conftest."""
+        canon, _ = layout
+        branch = "pr-head" if lane == "closer" else OPENER_BRANCH
+        if lane == "opener":
+            git(canon, "branch", branch)
+        holder = hold(layout, branch)
+>       wt = provision.provision(TARGET, lane)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_provision_reclaim.py:734: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/provision.py:807: in provision
+    else _provision(target, lane, event)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/provision.py:709: in _provision
+    _reclaim_branch_holder(canon, head, wt, event)
+src/provision.py:635: in _reclaim_branch_holder
+    live = _live_holder_pids(holder)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+src/provision.py:410: in _live_holder_pids
+    probe([*_pgrep_base(), "-f", re.escape(str(spelling))], no_matches=True)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+args = ['pgrep', '-a', '-f', '/Users/teacher/\\.codex/orchestrator/agent\\-runtime/codex/tmp/pytest\\-of\\-teacher/pytest\\-2542/test_native_clean_idle_holder_0/holder\\ \\[old\\]\\+\\ round']
+no_matches = True
+
+    def probe(args: list[str], *, no_matches: bool = False) -> str:
+        try:
+            result = _run(args, check=False)
+        except OSError as exc:
+            raise RuntimeError(
+                f"cannot check live processes for {holder}: {args[0]}: {exc}"
+            ) from exc
+        # lsof/pgrep use 1 for no matches; diagnostics make that an inspection failure.
+        if result.returncode != 0 and not (
+            no_matches
+            and result.returncode == 1
+            and not result.stdout.strip()
+            and not result.stderr.strip()
+        ):
+>           raise RuntimeError(
+                f"cannot check live processes for {holder}: {args[0]} "
+                f"exited {result.returncode}: {result.stderr.strip()}"
+            )
+E           RuntimeError: cannot check live processes for /Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2542/test_native_clean_idle_holder_0/holder [old]+ round: pgrep exited 3: sysmon request failed with error: sysmond service not found
+E           pgrep: Cannot get process list
+
+src/provision.py:378: RuntimeError
+______________ test_native_clean_idle_holder_is_reclaimed[opener] ______________
+
+layout = (PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2542/test_native_clean...chestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2542/test_native_clean_idle_holder_1/holder [old]+ round'))
+lane = 'opener', capsys = <_pytest.capture.CaptureFixture object at 0x107e6e720>
+
+    @pytest.mark.parametrize("lane", ["closer", "opener"])
+    def test_native_clean_idle_holder_is_reclaimed(layout, lane, capsys):
+        """Unmocked process probes on the dispatcher host; ledger isolated by conftest."""
+        canon, _ = layout
+        branch = "pr-head" if lane == "closer" else OPENER_BRANCH
+        if lane == "opener":
+            git(canon, "branch", branch)
+        holder = hold(layout, branch)
+>       wt = provision.provision(TARGET, lane)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_provision_reclaim.py:734: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/provision.py:807: in provision
+    else _provision(target, lane, event)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/provision.py:731: in _provision
+    _reclaim_branch_holder(canon, branch, wt, event)
+src/provision.py:635: in _reclaim_branch_holder
+    live = _live_holder_pids(holder)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+src/provision.py:410: in _live_holder_pids
+    probe([*_pgrep_base(), "-f", re.escape(str(spelling))], no_matches=True)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+args = ['pgrep', '-a', '-f', '/Users/teacher/\\.codex/orchestrator/agent\\-runtime/codex/tmp/pytest\\-of\\-teacher/pytest\\-2542/test_native_clean_idle_holder_1/holder\\ \\[old\\]\\+\\ round']
+no_matches = True
+
+    def probe(args: list[str], *, no_matches: bool = False) -> str:
+        try:
+            result = _run(args, check=False)
+        except OSError as exc:
+            raise RuntimeError(
+                f"cannot check live processes for {holder}: {args[0]}: {exc}"
+            ) from exc
+        # lsof/pgrep use 1 for no matches; diagnostics make that an inspection failure.
+        if result.returncode != 0 and not (
+            no_matches
+            and result.returncode == 1
+            and not result.stdout.strip()
+            and not result.stderr.strip()
+        ):
+>           raise RuntimeError(
+                f"cannot check live processes for {holder}: {args[0]} "
+                f"exited {result.returncode}: {result.stderr.strip()}"
+            )
+E           RuntimeError: cannot check live processes for /Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2542/test_native_clean_idle_holder_1/holder [old]+ round: pgrep exited 3: sysmon request failed with error: sysmond service not found
+E           pgrep: Cannot get process list
+
+src/provision.py:378: RuntimeError
+__________ test_native_reclaim_disabled_exit_128_names_holder[closer] __________
+
+layout = (PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2542/test_native_recla...chestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2542/test_native_reclaim_disabled_e0/holder [old]+ round'))
+lane = 'closer'
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x107e6cec0>
+
+    @pytest.mark.parametrize("lane", ["closer", "opener"])
+    def test_native_reclaim_disabled_exit_128_names_holder(layout, lane, monkeypatch):
+        """Disable reclaim, then restore it and reclaim the same holder using native probes."""
+        canon, _ = layout
+        branch = "pr-head" if lane == "closer" else OPENER_BRANCH
+        if lane == "opener":
+            git(canon, "branch", branch)
+        holder = hold(layout, branch)
+        holder_inode = holder.stat().st_ino
+        holder_head = git(holder, "rev-parse", "HEAD")
+        with monkeypatch.context() as disabled:
+            disabled.setattr(provision, "_reclaim_branch_holder", lambda *args, **kwargs: None)
+            with pytest.raises(subprocess.CalledProcessError) as caught:
+                provision.provision(TARGET, lane)
+        assert caught.value.returncode == 128
+        assert str(holder) in (caught.value.stderr or "")
+        assert holder.stat().st_ino == holder_inode
+        assert git(holder, "rev-parse", "HEAD") == holder_head
+        assert git(holder, "branch", "--show-current") == branch
+        print(f"provision: disabled reclaim: git exit 128: {caught.value.stderr.strip()}")
+    
+>       wt = provision.provision(TARGET, lane)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_provision_reclaim.py:769: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/provision.py:807: in provision
+    else _provision(target, lane, event)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/provision.py:709: in _provision
+    _reclaim_branch_holder(canon, head, wt, event)
+src/provision.py:635: in _reclaim_branch_holder
+    live = _live_holder_pids(holder)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+src/provision.py:410: in _live_holder_pids
+    probe([*_pgrep_base(), "-f", re.escape(str(spelling))], no_matches=True)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+args = ['pgrep', '-a', '-f', '/Users/teacher/\\.codex/orchestrator/agent\\-runtime/codex/tmp/pytest\\-of\\-teacher/pytest\\-2542/test_native_reclaim_disabled_e0/holder\\ \\[old\\]\\+\\ round']
+no_matches = True
+
+    def probe(args: list[str], *, no_matches: bool = False) -> str:
+        try:
+            result = _run(args, check=False)
+        except OSError as exc:
+            raise RuntimeError(
+                f"cannot check live processes for {holder}: {args[0]}: {exc}"
+            ) from exc
+        # lsof/pgrep use 1 for no matches; diagnostics make that an inspection failure.
+        if result.returncode != 0 and not (
+            no_matches
+            and result.returncode == 1
+            and not result.stdout.strip()
+            and not result.stderr.strip()
+        ):
+>           raise RuntimeError(
+                f"cannot check live processes for {holder}: {args[0]} "
+                f"exited {result.returncode}: {result.stderr.strip()}"
+            )
+E           RuntimeError: cannot check live processes for /Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2542/test_native_reclaim_disabled_e0/holder [old]+ round: pgrep exited 3: sysmon request failed with error: sysmond service not found
+E           pgrep: Cannot get process list
+
+src/provision.py:378: RuntimeError
+----------------------------- Captured stdout call -----------------------------
+provision: disabled reclaim: git exit 128: fatal: 'pr-head' is already used by worktree at '/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2542/test_native_reclaim_disabled_e0/holder [old]+ round'
+__________ test_native_reclaim_disabled_exit_128_names_holder[opener] __________
+
+layout = (PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2542/test_native_recla...chestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2542/test_native_reclaim_disabled_e1/holder [old]+ round'))
+lane = 'opener'
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x107e75340>
+
+    @pytest.mark.parametrize("lane", ["closer", "opener"])
+    def test_native_reclaim_disabled_exit_128_names_holder(layout, lane, monkeypatch):
+        """Disable reclaim, then restore it and reclaim the same holder using native probes."""
+        canon, _ = layout
+        branch = "pr-head" if lane == "closer" else OPENER_BRANCH
+        if lane == "opener":
+            git(canon, "branch", branch)
+        holder = hold(layout, branch)
+        holder_inode = holder.stat().st_ino
+        holder_head = git(holder, "rev-parse", "HEAD")
+        with monkeypatch.context() as disabled:
+            disabled.setattr(provision, "_reclaim_branch_holder", lambda *args, **kwargs: None)
+            with pytest.raises(subprocess.CalledProcessError) as caught:
+                provision.provision(TARGET, lane)
+        assert caught.value.returncode == 128
+        assert str(holder) in (caught.value.stderr or "")
+        assert holder.stat().st_ino == holder_inode
+        assert git(holder, "rev-parse", "HEAD") == holder_head
+        assert git(holder, "branch", "--show-current") == branch
+        print(f"provision: disabled reclaim: git exit 128: {caught.value.stderr.strip()}")
+    
+>       wt = provision.provision(TARGET, lane)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_provision_reclaim.py:769: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/provision.py:807: in provision
+    else _provision(target, lane, event)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/provision.py:731: in _provision
+    _reclaim_branch_holder(canon, branch, wt, event)
+src/provision.py:635: in _reclaim_branch_holder
+    live = _live_holder_pids(holder)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+src/provision.py:410: in _live_holder_pids
+    probe([*_pgrep_base(), "-f", re.escape(str(spelling))], no_matches=True)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+args = ['pgrep', '-a', '-f', '/Users/teacher/\\.codex/orchestrator/agent\\-runtime/codex/tmp/pytest\\-of\\-teacher/pytest\\-2542/test_native_reclaim_disabled_e1/holder\\ \\[old\\]\\+\\ round']
+no_matches = True
+
+    def probe(args: list[str], *, no_matches: bool = False) -> str:
+        try:
+            result = _run(args, check=False)
+        except OSError as exc:
+            raise RuntimeError(
+                f"cannot check live processes for {holder}: {args[0]}: {exc}"
+            ) from exc
+        # lsof/pgrep use 1 for no matches; diagnostics make that an inspection failure.
+        if result.returncode != 0 and not (
+            no_matches
+            and result.returncode == 1
+            and not result.stdout.strip()
+            and not result.stderr.strip()
+        ):
+>           raise RuntimeError(
+                f"cannot check live processes for {holder}: {args[0]} "
+                f"exited {result.returncode}: {result.stderr.strip()}"
+            )
+E           RuntimeError: cannot check live processes for /Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2542/test_native_reclaim_disabled_e1/holder [old]+ round: pgrep exited 3: sysmon request failed with error: sysmond service not found
+E           pgrep: Cannot get process list
+
+src/provision.py:378: RuntimeError
+----------------------------- Captured stdout call -----------------------------
+provision: disabled reclaim: git exit 128: Preparing worktree (checking out 'orchestrator/issue-718')
+fatal: 'orchestrator/issue-718' is already used by worktree at '/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2542/test_native_reclaim_disabled_e1/holder [old]+ round'
+=========================== short test summary info ============================
+FAILED tests/test_provision_reclaim.py::test_f_cwd_only_live_holder_is_refused_naming_pid[False]
+FAILED tests/test_provision_reclaim.py::test_f_cwd_only_live_holder_is_refused_naming_pid[True]
+FAILED tests/test_provision_reclaim.py::test_native_clean_idle_holder_is_reclaimed[closer]
+FAILED tests/test_provision_reclaim.py::test_native_clean_idle_holder_is_reclaimed[opener]
+FAILED tests/test_provision_reclaim.py::test_native_reclaim_disabled_exit_128_names_holder[closer]
+FAILED tests/test_provision_reclaim.py::test_native_reclaim_disabled_exit_128_names_holder[opener]
+6 failed, 52 passed in 24.58s

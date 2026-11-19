@@ -1,0 +1,8 @@
+{
+  "revision": "9003c23061b6b43e1874d4b030e57584d1847344",
+  "origin_main": "da7e3da9cc7ae40e4c1ccdef0867ed6ea2e346c6",
+  "comparison_exit_code": 1,
+  "delivered_sha256": "5f22aedf5f12b0e7dc65309d471f6ac6bb6d05aa93af40344e4a3f945ae2df83",
+  "origin_main_sha256": "be59179385922a0f18c8df4997732547dba1d3a2fcefa3b0c9406f8772befc01",
+  "comparison_output": "- /tmp/orch1363-round9-verifier/origin-main-floor.json differ: byte 19, line 2\n"
+}

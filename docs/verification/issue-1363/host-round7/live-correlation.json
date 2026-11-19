@@ -1,0 +1,35 @@
+{
+  "checked_at": "2026-11-12T01:40:05.069168+00:00",
+  "newest_refusal": {
+    "cause": "branch-held",
+    "error": "refusing to reclaim worktree /Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener: live pid 49989",
+    "holder_path": "/Users/teacher/.codex/orchestrator/worktrees/stranske__Workflows__4635__opener",
+    "lane": "closer",
+    "outcome": "failed",
+    "target": "stranske/Workflows#4637",
+    "ts": "2026-11-11T16:59:47.763115+00:00"
+  },
+  "holder_exists": false,
+  "mirror": "/Users/teacher/.codex/orchestrator-mirror.generation-bc5bc0470cd54f4799d3ade875070d1d",
+  "head": "452952fb8e913c632d88f5c7a9d51490d429722f",
+  "claims": {
+    "stranske/Workflows#4637": {
+      "path": "/Users/teacher/.codex/handoff/claims/stranske__workflows_4637",
+      "exists": false
+    },
+    "stranske/Workflows#4635": {
+      "path": "/Users/teacher/.codex/handoff/claims/stranske__workflows_4635",
+      "exists": false
+    }
+  },
+  "provision.py": {
+    "delivery": "0b9eb004a9fc8c162a595098bfbdf3c1a1c4f8a33ee6757b0257f407031d9de9",
+    "installed": "0b9eb004a9fc8c162a595098bfbdf3c1a1c4f8a33ee6757b0257f407031d9de9"
+  },
+  "followup_evidence.py": {
+    "delivery": "65fa782ef1899c4105110ea9b19654a62dd4d643a8d63512d93be2d9bc1bfe0b",
+    "installed": "65fa782ef1899c4105110ea9b19654a62dd4d643a8d63512d93be2d9bc1bfe0b"
+  },
+  "exact_dispatch_reservations": {},
+  "historical_reservation_and_writer_lock": "UNKNOWN"
+}

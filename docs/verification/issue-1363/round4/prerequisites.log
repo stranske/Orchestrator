@@ -1,0 +1,21 @@
+Command: ['/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3', '-m', 'pytest', 'tests/test_provision_reclaim.py', '-q', '-m', 'not slow']
+Exit: 1
+/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3: No module named pytest
+
+Command: ['/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3', 'tests/test_capability_admission.py']
+Exit: 1
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_capability_admission.py", line 1111, in <module>
+    raise SystemExit(main())
+                     ~~~~^^
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_capability_admission.py", line 905, in main
+    _run_standalone_check(fn, verdicts)
+    ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_capability_admission.py", line 882, in _run_standalone_check
+    import pytest
+ModuleNotFoundError: No module named 'pytest'
+
+Command: ['/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3', '-m', 'black', '--version']
+Exit: 1
+/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3: No module named black
+

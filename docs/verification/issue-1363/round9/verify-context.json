@@ -1,0 +1,37 @@
+{
+  "schema": "provision-verify/v1",
+  "revision": "9003c23061b6b43e1874d4b030e57584d1847344",
+  "origin_main": "da7e3da9cc7ae40e4c1ccdef0867ed6ea2e346c6",
+  "interpreter": "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+  "command": [
+    "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+    "src/verify.py"
+  ],
+  "started_at": "2026-11-12T01:33:33.922Z",
+  "checkout_status_before": "?? scripts/run_provision_verify.js\n",
+  "floor": {
+    "matches": false,
+    "comparison_exit_code": 1,
+    "delivered_sha256": "5f22aedf5f12b0e7dc65309d471f6ac6bb6d05aa93af40344e4a3f945ae2df83",
+    "origin_main_sha256": "be59179385922a0f18c8df4997732547dba1d3a2fcefa3b0c9406f8772befc01"
+  },
+  "passed": false,
+  "deployment_acceptance_verified": false,
+  "runtime_overrides": {
+    "ORCH_STATE_DIR": "/tmp/provision-verify-J8p8bt/state",
+    "ORCH_LOCAL_RUNTIME": "/tmp/provision-verify-J8p8bt/runtime",
+    "HANDOFF_DIR": "/tmp/provision-verify-J8p8bt/handoff",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "PYTEST_ADDOPTS": "-m \"not slow\""
+  },
+  "execution": {
+    "exit_code": 1,
+    "error_code": null,
+    "signal": null,
+    "stdout_sha256": "0e9155971ef5d1f0e633bdc6bd13d74e9bd2c88fba298bc6e32ba4efa128dd94",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "checkout_status_after": "?? scripts/run_provision_verify.js\n?? tests/test_provision_verify.js\n",
+  "head_after": "9003c23061b6b43e1874d4b030e57584d1847344",
+  "finished_at": "2026-11-12T01:40:25.362Z"
+}

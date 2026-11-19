@@ -1,0 +1,34 @@
+[
+  {
+    "source_path": "/Users/teacher/.codex/orchestrator/closer-core/completions/stranske_orchestrator_988_989.json",
+    "sha256": "747bc492e3de6010ca695b5a71962ad7e00406fd0a48ff27dc6462f9bbc4d7e6",
+    "retained_as": "pr-989-completion.json"
+  },
+  {
+    "source_path": "/Users/teacher/.codex/orchestrator/closer-core/completions/stranske_orchestrator_988_989.publication.json",
+    "sha256": "07ced6b561e21bc5c025cec5aa2eedd5fbd8ae5b28af2843c025b3ea9aeff8d5",
+    "retained_as": "pr-989-publication.json"
+  },
+  {
+    "git_source": "bc077c6f27efc4ddd46a922bf4361bd7ae61b4df^:src/closer_coding_publication_io.py",
+    "sha256": "b640cf6f510fce58f804537217abc8326da52ac530e8ce6263fae3a56033b73a",
+    "retained_lines": [
+      1415,
+      1523
+    ]
+  },
+  {
+    "source_path": "/Users/teacher/.codex/handoff/dispatch-logs/stranske__Orchestrator_1168.codex.log",
+    "sha256": "0838fbd2d054a74173206d16e41ffe0ee791aa95b02bda310be706e33dcfae65",
+    "bytes": 1819992,
+    "final_head_occurrences": 0,
+    "terminal_line": "{\"released\": true, \"target\": \"stranske/Orchestrator#1168\"}"
+  },
+  {
+    "source_path": "/Users/teacher/.codex/handoff/dispatch-logs/stranske__Orchestrator_983.cursor.log",
+    "sha256": "a4a597cd68521e2373b8b6d434e423c5976627d86eafa15762ac27a636667b06",
+    "bytes": 3907,
+    "final_head_occurrences": 2,
+    "terminal_line": "{\"released\": true, \"target\": \"stranske/Orchestrator#983\"}"
+  }
+]

@@ -1,0 +1,41 @@
+[
+  {
+    "check": "corrected-contract",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+      "/home/runner/work/Orchestrator/Orchestrator/tests/fixtures/closer_real_csv_canary/v1/verify_csv_contract.py"
+    ],
+    "exit_status": 0
+  },
+  {
+    "check": "partial-contract",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+      "/tmp/closer-partial-oysq8rk4/verify_csv_contract.py"
+    ],
+    "exit_status": 1
+  },
+  {
+    "check": "chain-evidence",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+      "/home/runner/work/Orchestrator/Orchestrator/tests/fixtures/closer_real_csv_canary/v1/verify_csv_contract.py",
+      "--chain-evidence"
+    ],
+    "exit_status": 2
+  },
+  {
+    "check": "evidence-self-check",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+      "/home/runner/work/Orchestrator/Orchestrator/tests/fixtures/closer_real_csv_canary/v1/verify_csv_contract.py",
+      "--self-check"
+    ],
+    "exit_status": 0
+  },
+  {
+    "check": "both focused regression functions, direct standard-library invocation",
+    "result": "passed",
+    "pytest_run": false
+  }
+]

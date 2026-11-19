@@ -671,7 +671,7 @@ def _selftest() -> None:
     bad_dispatched = dispatch_reviewers(
         spec,
         gate_pass,
-        ["cursor", "aider"],
+        ["cursor", "vibe"],
         offload_fn=fake_bad_offload,
     )
     assert bad_dispatched["dispatches"][0]["parsed"] is False, bad_dispatched

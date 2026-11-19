@@ -1,0 +1,18 @@
+{
+  "command": [
+    "node",
+    "scripts/audit_provision_ledger.js",
+    "/Users/teacher/.codex/orchestrator",
+    "/Users/teacher/.codex/orchestrator-mirror.generation-7a941ab4329345c4a1945ee3bb6a20fb"
+  ],
+  "segments_before": {
+    "/Users/teacher/.codex/orchestrator/provision-events.ndjson": "824a515c23ab4aa9c6d7882b5033fe81127e4e61b8948713bc0ea022959b94c9",
+    "/Users/teacher/.codex/orchestrator/provision-events.ndjson.pre-718-repair-2026-11-03": "ccad083cf41cd3b6b839a8dd49fd6d1c651ce44458e364bf6e96ffb0a2ad1a76"
+  },
+  "segments_after": {
+    "/Users/teacher/.codex/orchestrator/provision-events.ndjson": "824a515c23ab4aa9c6d7882b5033fe81127e4e61b8948713bc0ea022959b94c9",
+    "/Users/teacher/.codex/orchestrator/provision-events.ndjson.pre-718-repair-2026-11-03": "ccad083cf41cd3b6b839a8dd49fd6d1c651ce44458e364bf6e96ffb0a2ad1a76"
+  },
+  "unchanged": true,
+  "deployment_performed": false
+}

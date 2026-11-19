@@ -1,0 +1,17 @@
+{
+  "head": "20de36e54271300f17b018c0c33103e47f9002a3",
+  "python": "/opt/anaconda3/bin/python3",
+  "command": [
+    "/opt/anaconda3/bin/python3",
+    "src/verify.py"
+  ],
+  "overrides": {
+    "ORCH_STATE_DIR": "/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/orch1363-host-round5-t7b4uh3b/state",
+    "ORCH_LOCAL_RUNTIME": "/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/orch1363-host-round5-t7b4uh3b/runtime",
+    "HANDOFF_DIR": "/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/orch1363-host-round5-t7b4uh3b/handoff",
+    "PYTHONUNBUFFERED": "1",
+    "PYTHONDONTWRITEBYTECODE": "1"
+  },
+  "timeout_seconds": 120,
+  "check_date": "2026-11-12T01:02:48.332493+00:00"
+}

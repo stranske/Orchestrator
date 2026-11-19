@@ -62,7 +62,7 @@ def test_infra_prefix(dispatch_world, monkeypatch, repo, agent, dry_run):
     assert calls == ([] if dry_run else [(f"{repo}#7", "opener", "orch/issue-7")])
 
 
-@pytest.mark.parametrize("agent", ["codex", "gemini", "cursor", "claude", "vibe", "aider"])
+@pytest.mark.parametrize("agent", ["codex", "gemini", "cursor", "claude", "vibe"])
 def test_product_prefix(dispatch_world, monkeypatch, agent):
     calls = []
     monkeypatch.setattr(provision, "provision", lambda *a: calls.append(a) or dispatch_world)

@@ -525,6 +525,57 @@ def test_close_gate_uses_real_exact_merge_checkout_and_existing_runner(tmp_path,
     assert supervisor._closure_gate(TARGET, issue, sha)["result"] == "FAIL"
 
 
+@pytest.mark.parametrize("unmerged", [False, True])
+def test_close_gate_measures_a_break_against_the_merge_base_for_an_unmerged_head(
+    tmp_path, monkeypatch, unmerged
+):
+    """An unmerged PR head's parent is the PR's own previous commit, which already has the fix: a break
+    measured there reads hollow on every round (stranske/Pension-Data#1033, 2026-11-16). A merged squash
+    commit keeps `HEAD^`, its pre-delivery parent."""
+    import subprocess
+
+    import provision
+    import runtime_ac_gate
+
+    @contextmanager
+    def exact(target, requested):
+        yield tmp_path
+
+    seen = {}
+
+    def recheck(spec, worktree, **kwargs):
+        seen.update(kwargs)
+        return {"result": "PASS"}
+
+    monkeypatch.setattr(provision, "temporary_exact_head_worktree", exact)
+    monkeypatch.setattr(
+        supervisor.subprocess,
+        "run",
+        lambda *a, **k: subprocess.CompletedProcess(a, 0, stdout=SHA + "\n", stderr=""),
+    )
+    monkeypatch.setattr(runtime_ac_gate, "_merge_base", lambda worktree: "b" * 40)
+    monkeypatch.setattr(runtime_ac_gate, "recheck_merged", recheck)
+    issue = {
+        "target": REPO + "#7",
+        "body": "## Acceptance Criteria\n- `pytest tests/test_contract.py` passes.",
+    }
+    supervisor._closure_gate(TARGET, issue, SHA, unmerged_head=unmerged)
+    assert seen == ({"base_ref": "b" * 40} if unmerged else {})
+
+
+def test_local_loop_acceptance_reads_an_unmerged_head(monkeypatch):
+    import local_loop
+
+    calls = []
+    monkeypatch.setattr(
+        supervisor,
+        "_closure_gate",
+        lambda *a, **k: calls.append(k) or {"result": "PASS"},
+    )
+    assert local_loop.default_acceptance(TARGET, REPO + "#7", "body", SHA)["result"] == "PASS"
+    assert calls == [{"unmerged_head": True}]
+
+
 def test_close_gate_without_command_refuses_before_checkout(tmp_path, monkeypatch):
     import provision
 

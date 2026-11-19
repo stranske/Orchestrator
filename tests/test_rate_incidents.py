@@ -133,6 +133,122 @@ def test_success_stdout_capacity_gate_rejects_review_prose():
     assert rate_incidents.is_authoritative_error(review) is False
 
 
+@pytest.mark.parametrize(
+    "message",
+    [
+        "The model is not supported.",
+        "The 'test-model' model is not supported with this account.",
+        "The model `test-model` is not supported.",
+        "The model test-model does not exist or you do not have access to it.",
+        "Unsupported model: test-model",
+        "Invalid model selection: test-model",
+    ],
+)
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        "unexpected status 400 Bad Request: ",
+        "Provider error: HTTP 400: ",
+        "error: status code = 400 Bad Request:\n",
+        "HTTP status: 400 ",
+        "status=400:\r\n",
+    ],
+)
+def test_model_rejection_is_authoritative_without_shedding(message, prefix):
+    text = prefix + json.dumps({"error": {"message": message, "type": "invalid_request_error"}})
+    assert rate_incidents.classify_provider_failure(text) == (
+        "model_rejected",
+        "http_400_model_rejected",
+        "high",
+    )
+    evidence = rate_incidents.get_structured_evidence(text, "codex", "test", "rejected")
+    assert evidence["category"] == "model_rejected"
+    assert evidence["subcategory"] == "http_400_model_rejected"
+    assert evidence["confidence"] == "high"
+    assert evidence["is_authoritative"] is True
+    assert evidence["should_shed"] is False
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Document HTTP 400 when the model is not supported.",
+        "The model test-model does not exist.",
+        'Added handling for HTTP 400: {"error": {"message": "The model is not supported."}}',
+        'unexpected status 404 Not Found: {"error": {"message": "The model does not exist."}}',
+        'HTTP 400: {"message": "The model is not supported."}',
+        'HTTP 400: {"error": "The model is not supported."}',
+        'HTTP 400: {"error": {"message": "Your input exceeds the context window of this model."}}',
+        'HTTP 400: {"error": {"message": "The model is supported; this option is not supported."}}',
+        'HTTP 400: {"error": {"message": "The model configuration file does not exist."}}',
+        'HTTP 400: {"error": {"message": null}}',
+        'HTTP 400: {"error": {"message": ["model not supported"]}}',
+        'HTTP 400: {"error": {"message": "model not supported"}',
+        "HTTP 400: []\nThe model is not supported.",
+        'HTTP 400: {"error": {"message": "Invalid request"}}\nThe model does not exist.',
+        'HTTP 400: invalid request\nHTTP 404: {"error": {"message": "model not supported"}}',
+        'HTTP 400 handling example: {"error": {"message": "model not supported"}}',
+        'HTTP 400; HTTP 404: {"error": {"message": "model does not exist"}}',
+        'HTTP 400.5: {"error": {"message": "model not supported"}}',
+        'HTTP\n400: {"error": {"message": "model not supported"}}',
+    ],
+)
+def test_model_rejection_requires_http_400_and_its_own_provider_message(text):
+    assert rate_incidents.classify_provider_failure(text) == (
+        "unknown",
+        "non_authoritative",
+        "none",
+    )
+
+
+def test_model_rejection_accepts_a_multiline_provider_error_body():
+    text = "unexpected status 400 Bad Request:\n" + json.dumps(
+        {"error": {"message": "The model does not exist."}}, indent=2
+    )
+    assert rate_incidents.classify_provider_failure(text)[0] == "model_rejected"
+
+
+def test_model_rejection_incident_skips_the_shed_writer(incident_paths, monkeypatch):
+    def unexpected_shed(*args, **kwargs):
+        pytest.fail("a model rejection must not call the shed writer")
+
+    monkeypatch.setattr(rate_incidents, "ensure_shed", unexpected_shed)
+    result = rate_incidents.record_incident(
+        agent="codex",
+        surface="test",
+        category="model_rejected",
+        run_id="rejected",
+        evidence="model not supported",
+    )
+    assert result["shed"] is False
+    assert json.loads(rate_incidents.INCIDENT_FILE.read_text())["category"] == "model_rejected"
+    assert not (rate_incidents.SHED_DIR / "codex").exists()
+    assert rate_incidents._cooldown_seconds("model_rejected") is None
+
+
+@pytest.mark.parametrize("existing_shed", [False, True])
+def test_direct_model_rejection_shed_request_leaves_markers_untouched(
+    incident_paths, existing_shed
+):
+    marker = rate_incidents.SHED_DIR / "codex"
+    prior = b""
+    if existing_shed:
+        assert rate_incidents.ensure_shed(
+            "codex", category="quota", incident_id="prior", expires_at=int(time.time()) + 3600
+        )
+        prior = marker.read_bytes()
+    assert not rate_incidents.ensure_shed(
+        "codex",
+        category="model_rejected",
+        incident_id="rejected",
+        expires_at=int(time.time()) + 7200,
+    )
+    if existing_shed:
+        assert marker.read_bytes() == prior
+    else:
+        assert not marker.exists()
+
+
 def test_json_shed_marker_expiry_and_legacy_marker(incident_paths, monkeypatch):
     monkeypatch.setattr(capacity, "SHED_DIR", rate_incidents.SHED_DIR)
     assert rate_incidents.ensure_shed(
@@ -494,3 +610,499 @@ def test_unknown_exit_vibe_billing_refusal_sheds_the_seat(incident_paths, monkey
     assert marker["category"] == "quota"
     assert "tier_scope" not in marker  # the whole seat: the budget covers every vibe model
     assert marker["expires_at"] > marker["created_at"]  # expires on its own; the next run re-tests
+
+
+# agy prints a Go time.Duration, which drops leading zero units (2026-11-12).
+@pytest.mark.parametrize(
+    ("copy", "seconds"),
+    [
+        ("Resets in 3h8m36s.", 3 * 3600 + 8 * 60 + 36),
+        ("Resets in 45m0s.", 45 * 60),
+        ("Resets in 30s.", 30),
+        ("Resets in 1.5s.", 2),
+        ("Resets in 140h5m6s.", 140 * 3600 + 5 * 60 + 6),
+        ("Resets in 4d2h3m.", 4 * 86400 + 2 * 3600 + 3 * 60),
+    ],
+)
+def test_gemini_reset_reads_every_go_duration_form(copy, seconds):
+    line = (
+        "E1111 12:32:54.598632     462 errorreport.go:273] agent executor error: generating and "
+        "executing: RESOURCE_EXHAUSTED (code 429): Individual quota reached. Please upgrade your "
+        f"subscription to increase your limits. {copy}"
+    )
+    assert rate_incidents.provider_reset_at("gemini", [line], now=1000) == 1000 + seconds
+
+
+def test_resets_in_without_a_duration_is_not_a_reset():
+    assert rate_incidents.parse_resets_in_duration("Resets in a while", now=1000) is None
+
+
+# The verbatim muse terminal failure of the 2026-11-12 07:03Z trip-planner#2029 repair.
+MUSE_QUOTA_LINE = (
+    "run ended with Failed: API error 429 [request_id=8c08d686-ef50-42df-9e92-7bbd2b1842f0]: "
+    "Subscription quota exhausted. Your usage window resets at 2026-11-16T00:00:00Z. (rate_limit_error)"
+)
+MUSE_RESET = 1794787200  # 2026-11-16T00:00:00Z
+
+
+def test_muse_quota_refusal_sheds_until_its_stated_reset():
+    now = 1794467000  # 2026-11-12T07:03Z
+    assert rate_incidents.is_authoritative_error(MUSE_QUOTA_LINE)
+    assert rate_incidents.provider_reset_at("muse", [MUSE_QUOTA_LINE], now=now) == MUSE_RESET
+
+
+def test_muse_reset_ignores_prose_and_past_times():
+    now = 1794467000
+    prose = "Docs: your usage window resets at 2027-01-01T00:00:00Z"
+    assert rate_incidents.provider_reset_at("muse", [prose], now=now) is None
+    assert rate_incidents.provider_reset_at("muse", [MUSE_QUOTA_LINE], now=MUSE_RESET + 1) is None
+    assert rate_incidents.provider_reset_at("claude", [MUSE_QUOTA_LINE], now=now) is None
+
+
+def test_failed_marker_publication_is_repaired_on_dedup_retry(incident_paths, monkeypatch):
+    monkeypatch.setattr(capacity, "SHED_DIR", rate_incidents.SHED_DIR)
+    monkeypatch.setattr(rate_incidents, "GEMINI_SEPARATE_QUOTA_FAMILIES", ("argon",))
+    now = int(time.time())
+    reset_at = now + 10 * 3600
+    evidence = (
+        '{"event":"init","init":{"model":"gemini-4-argon-high"}}\n' + GEMINI_INDIVIDUAL_QUOTA_LINE
+    )
+    real_replace = rate_incidents.os.replace
+    replace_calls = 0
+
+    def fail_first_replace(src, dst):
+        nonlocal replace_calls
+        replace_calls += 1
+        if replace_calls == 1:
+            raise OSError("simulated marker publication failure")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(rate_incidents.os, "replace", fail_first_replace)
+
+    first = rate_incidents.record_incident(
+        agent="gemini",
+        surface="dispatcher.offload",
+        category="quota",
+        run_id="run-dedup-repair",
+        evidence=evidence,
+        timestamp=now,
+        reset_at=reset_at,
+    )
+    assert first["status"] == "shed_unfulfilled"
+    assert first["deduped"] is False
+    assert first["shed"] is False
+    assert not (rate_incidents.SHED_DIR / "gemini").exists()
+
+    rows = [json.loads(line) for line in rate_incidents.INCIDENT_FILE.read_text().splitlines()]
+    assert len(rows) == 1
+    assert rows[0]["shed_requested"] is True
+    assert rows[0]["expires_at"] == reset_at
+    assert rows[0]["model"] == "gemini-4-argon-high"
+    assert rows[0]["tier_scope"] == "full"
+    assert rows[0]["recovered"] is False
+
+    second = rate_incidents.record_incident(
+        agent="gemini",
+        surface="ledger_reconcile.completion",
+        category="quota",
+        run_id="run-dedup-repair",
+        evidence="Individual quota reached.",
+        timestamp=now + 120,
+    )
+    assert second == {
+        "status": "ok",
+        "deduped": True,
+        "incident_id": first["incident_id"],
+        "shed": True,
+    }
+    rows_after = [
+        json.loads(line) for line in rate_incidents.INCIDENT_FILE.read_text().splitlines()
+    ]
+    assert len(rows_after) == 1
+    marker = json.loads((rate_incidents.SHED_DIR / "gemini").read_text())
+    assert marker["incident_id"] == first["incident_id"]
+    assert marker["expires_at"] == reset_at
+    assert marker["reset_at"] == reset_at
+    assert marker["model"] == "gemini-4-argon-high"
+    assert marker["tier_scope"] == "full"
+
+
+def test_dedup_repair_negative_controls_expired_recovered_shed_false_and_newer_hold(
+    incident_paths, monkeypatch
+):
+    now = int(time.time())
+    real_ensure_shed = rate_incidents.ensure_shed
+
+    # 1. expired: unfulfilled shed whose original expires_at has passed is not re-shed on dedup
+    monkeypatch.setattr(rate_incidents, "ensure_shed", lambda *a, **k: False)
+    expired_first = rate_incidents.record_incident(
+        agent="codex",
+        surface="dispatcher.offload",
+        category="rate_limit",
+        run_id="run-expired",
+        evidence="HTTP 429 Too Many Requests",
+        timestamp=now - rate_incidents.DEFAULT_COOLDOWN_S - 60,
+    )
+    assert expired_first["status"] == "shed_unfulfilled"
+
+    def fail_if_called(*args, **kwargs):
+        pytest.fail("ensure_shed must not be called when negative control applies")
+
+    monkeypatch.setattr(rate_incidents, "ensure_shed", fail_if_called)
+    expired_retry = rate_incidents.record_incident(
+        agent="codex",
+        surface="ledger_reconcile.completion",
+        category="rate_limit",
+        run_id="run-expired",
+        evidence="HTTP 429 Too Many Requests",
+        timestamp=now,
+    )
+    assert expired_retry == {
+        "status": "ok",
+        "deduped": True,
+        "incident_id": expired_first["incident_id"],
+        "shed": False,
+    }
+    assert not (rate_incidents.SHED_DIR / "codex").exists()
+
+    # 2. recovered: explicitly cleared/recovered incident is not re-shed on dedup
+    monkeypatch.setattr(rate_incidents, "ensure_shed", lambda *a, **k: False)
+    rec_first = rate_incidents.record_incident(
+        agent="claude",
+        surface="dispatcher.offload",
+        category="quota",
+        run_id="run-recovered",
+        evidence="out of usage",
+        timestamp=now,
+    )
+    assert rec_first["status"] == "shed_unfulfilled"
+    rate_incidents.clear_shed("claude")
+    monkeypatch.setattr(rate_incidents, "ensure_shed", fail_if_called)
+    rec_retry = rate_incidents.record_incident(
+        agent="claude",
+        surface="ledger_reconcile.completion",
+        category="quota",
+        run_id="run-recovered",
+        evidence="out of usage",
+        timestamp=now + 10,
+    )
+    assert rec_retry == {
+        "status": "ok",
+        "deduped": True,
+        "incident_id": rec_first["incident_id"],
+        "shed": False,
+    }
+    assert not (rate_incidents.SHED_DIR / "claude").exists()
+
+    # 3. shed=False: incident recorded with shed=False never sheds on dedup
+    no_shed_first = rate_incidents.record_incident(
+        agent="cursor",
+        surface="ledger_reconcile.reconcile",
+        category="capacity",
+        run_id="run-no-shed",
+        evidence="resource_exhausted",
+        shed=False,
+        timestamp=now,
+    )
+    assert no_shed_first["status"] == "ok" and no_shed_first["shed"] is False
+    no_shed_retry = rate_incidents.record_incident(
+        agent="cursor",
+        surface="dispatcher.offload",
+        category="capacity",
+        run_id="run-no-shed",
+        evidence="resource_exhausted",
+        shed=True,
+        timestamp=now + 5,
+    )
+    assert no_shed_retry == {
+        "status": "ok",
+        "deduped": True,
+        "incident_id": no_shed_first["incident_id"],
+        "shed": False,
+    }
+    assert not (rate_incidents.SHED_DIR / "cursor").exists()
+
+    # 4. newer-hold / manual-hold: existing newer or manual hold is preserved on dedup retry
+    monkeypatch.setattr(rate_incidents, "ensure_shed", lambda *a, **k: False)
+    old_first = rate_incidents.record_incident(
+        agent="muse",
+        surface="dispatcher.offload",
+        category="quota",
+        run_id="run-older-unfulfilled",
+        evidence="quota exhausted",
+        timestamp=now,
+        reset_at=now + 50_000,
+    )
+    assert old_first["status"] == "shed_unfulfilled"
+    monkeypatch.setattr(rate_incidents, "ensure_shed", real_ensure_shed)
+    newer_expiry = now + 25_000
+    assert rate_incidents.ensure_shed(
+        "muse",
+        category="rate_limit",
+        incident_id="newer-incident-id",
+        expires_at=newer_expiry,
+    )
+    prior_bytes = (rate_incidents.SHED_DIR / "muse").read_bytes()
+    monkeypatch.setattr(rate_incidents, "ensure_shed", fail_if_called)
+    newer_hold_retry = rate_incidents.record_incident(
+        agent="muse",
+        surface="ledger_reconcile.completion",
+        category="quota",
+        run_id="run-older-unfulfilled",
+        evidence="quota exhausted",
+        timestamp=now + 10,
+    )
+    assert newer_hold_retry == {
+        "status": "ok",
+        "deduped": True,
+        "incident_id": old_first["incident_id"],
+        "shed": False,
+    }
+    assert (rate_incidents.SHED_DIR / "muse").read_bytes() == prior_bytes
+
+    manual_marker = rate_incidents.SHED_DIR / "muse"
+    manual_marker.write_text(json.dumps({"created_at": 1, "expires_at": now + 10_000}) + "\n")
+    manual_bytes = manual_marker.read_bytes()
+    manual_hold_retry = rate_incidents.record_incident(
+        agent="muse",
+        surface="ledger_reconcile.completion",
+        category="quota",
+        run_id="run-older-unfulfilled",
+        evidence="quota exhausted",
+        timestamp=now + 20,
+    )
+    assert manual_hold_retry == {
+        "status": "ok",
+        "deduped": True,
+        "incident_id": old_first["incident_id"],
+        "shed": False,
+    }
+    assert manual_marker.read_bytes() == manual_bytes
+
+
+def test_callers_warn_and_surface_shed_unfulfilled(incident_paths, monkeypatch, capsys):
+    monkeypatch.setattr(rate_incidents, "ensure_shed", lambda *a, **k: False)
+    monkeypatch.setattr(dispatcher, "DISPATCH_LOG_DIR", incident_paths / "logs")
+    monkeypatch.setattr(dispatcher, "_capability_heartbeat", lambda *args, **kwargs: None)
+    monkeypatch.setattr(dispatcher, "_default_offload_timeout", lambda *args, **kwargs: 1)
+    monkeypatch.setattr(dispatcher, "_offload_prompt", lambda prompt, *args: prompt)
+    monkeypatch.setattr(dispatcher, "_select_offload_profile", lambda *args: None)
+    monkeypatch.setattr(
+        dispatcher.adapters, "can_report_cli_identity", lambda *args: (False, "test")
+    )
+    monkeypatch.setattr(dispatcher.adapters, "build_command", lambda *args, **kwargs: ["agent"])
+    monkeypatch.setattr(dispatcher.adapters, "model_identity", lambda *args, **kwargs: "test-model")
+    monkeypatch.setattr(dispatcher.adapters, "record_ledger", lambda *args, **kwargs: None)
+    monkeypatch.setattr(dispatcher.feedback, "record_run", lambda *args, **kwargs: None)
+    monkeypatch.setattr(dispatcher.feedback, "record_cost", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        dispatcher.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            ["agent"], 1, "", "HTTP 429 Too Many Requests"
+        ),
+    )
+    monkeypatch.setenv("ORCH_OFFLOAD_NETWORK_RETRIES", "0")
+
+    offload_res = dispatcher.offload("codex", "test", cwd=str(incident_paths))
+    assert offload_res["shed_unfulfilled"] is True
+    assert offload_res["rate_incident_evidence"]["shed_unfulfilled"] is True
+    assert offload_res["rate_incident_evidence"]["incident_status"] == "shed_unfulfilled"
+    assert offload_res["rate_incident_evidence"]["shed"] is False
+    assert "rate-incident shed unfulfilled" in capsys.readouterr().err
+
+    reconcile_res = ledger_reconcile._classify_run_log_segment(
+        ["HTTP 429 Too Many Requests"],
+        "codex",
+        offload_res["run_id"],
+        shed=True,
+        successful=False,
+    )
+    assert reconcile_res is not None
+    assert reconcile_res["shed_unfulfilled"] is True
+    assert reconcile_res["incident_status"] == "shed_unfulfilled"
+    assert reconcile_res["shed"] is False
+    assert "rate-incident shed unfulfilled" in capsys.readouterr().err
+
+
+def _shed_expiry(agent):
+    return json.loads((rate_incidents.SHED_DIR / agent).read_text())["expires_at"]
+
+
+def test_repeated_quota_incidents_escalate_the_cooldown_and_cap(incident_paths, monkeypatch):
+    monkeypatch.delenv("ORCH_PROVIDER_COOLDOWN_S", raising=False)
+    hour = 3600
+    start = int(time.time())
+    # Each incident's shed is written from its own timestamp; only the latest marker survives.
+    expiries = []
+    for i in range(3):
+        ts = start + i * 6 * hour
+        rate_incidents.record_incident(
+            agent="vibe",
+            surface="dispatch",
+            category="quota",
+            run_id=f"run-{i}",
+            evidence="402 Payment Required: budget exhausted",
+            timestamp=ts,
+        )
+        expiries.append(_shed_expiry("vibe") - ts)
+    assert expiries == [6 * hour, 12 * hour, 24 * hour]
+
+    # Ten in a row never exceed the cap.
+    for i in range(3, 13):
+        ts = start + i * 6 * hour
+        rate_incidents.record_incident(
+            agent="vibe",
+            surface="dispatch",
+            category="quota",
+            run_id=f"run-{i}",
+            evidence="402 Payment Required: budget exhausted",
+            timestamp=ts,
+        )
+        assert _shed_expiry("vibe") - ts <= rate_incidents.MAX_COOLDOWN_S
+    assert _shed_expiry("vibe") - ts == rate_incidents.MAX_COOLDOWN_S
+
+    # In-flight runs failing minutes apart are one exhaustion, not repeated re-entries.
+    burst = ts + rate_incidents.ESCALATION_WINDOW_S + 1
+    for minute in range(4):
+        assert (
+            rate_incidents._cooldown_seconds("quota", "burst", burst + minute * 60, None)
+            == rate_incidents.DEFAULT_COOLDOWN_S
+        )
+        rate_incidents.record_incident(
+            agent="burst",
+            surface="dispatch",
+            category="quota",
+            run_id=f"burst-{minute}",
+            evidence="402 Payment Required: budget exhausted",
+            timestamp=burst + minute * 60,
+        )
+    assert _shed_expiry("burst") - burst - 3 * 60 == rate_incidents.DEFAULT_COOLDOWN_S
+
+    # One quiet window drains the count: the next incident benches for the default again.
+    quiet = ts + rate_incidents.ESCALATION_WINDOW_S + 1
+    rate_incidents.clear_shed("vibe")
+    rate_incidents.record_incident(
+        agent="vibe",
+        surface="dispatch",
+        category="quota",
+        run_id="after-quiet",
+        evidence="402 Payment Required: budget exhausted",
+        timestamp=quiet,
+    )
+    assert _shed_expiry("vibe") - quiet == rate_incidents.DEFAULT_COOLDOWN_S
+
+    # A provider's stated reset still wins when it is later than the escalated bench.
+    later = quiet + 6 * hour
+    reset = later + 5 * 24 * hour
+    rate_incidents.record_incident(
+        agent="vibe",
+        surface="dispatch",
+        category="quota",
+        run_id="with-reset",
+        evidence="402 Payment Required: budget exhausted",
+        timestamp=later,
+        reset_at=reset,
+    )
+    assert _shed_expiry("vibe") == reset
+
+    monkeypatch.setenv("ORCH_PROVIDER_COOLDOWN_S", "259201")
+    cap_ts = reset + 1
+    rate_incidents.record_incident(
+        agent="override-cap",
+        surface="dispatch",
+        category="quota",
+        run_id="override-1",
+        evidence="402 Payment Required: budget exhausted",
+        timestamp=cap_ts,
+    )
+    assert _shed_expiry("override-cap") - cap_ts == rate_incidents.MAX_COOLDOWN_S
+
+
+def test_dedup_retry_restores_persisted_escalated_expiry(incident_paths, monkeypatch):
+    # A dedup retry restores the persisted escalated expiry without extending it.
+    monkeypatch.delenv("ORCH_PROVIDER_COOLDOWN_S", raising=False)
+    now = int(time.time())
+    base = rate_incidents.DEFAULT_COOLDOWN_S
+    rate_incidents.record_incident(
+        agent="muse",
+        surface="dispatch",
+        category="quota",
+        run_id="earlier-episode",
+        timestamp=now - base,
+    )
+    real_ensure_shed = rate_incidents.ensure_shed
+    monkeypatch.setattr(rate_incidents, "ensure_shed", lambda *args, **kwargs: False)
+    first = rate_incidents.record_incident(
+        agent="muse",
+        surface="dispatch",
+        category="quota",
+        run_id="escalated-episode",
+        timestamp=now,
+    )
+    assert first["status"] == "shed_unfulfilled"
+    rows = [json.loads(line) for line in rate_incidents.INCIDENT_FILE.read_text().splitlines()]
+    assert rows[-1]["expires_at"] == now + 2 * base
+
+    monkeypatch.setattr(rate_incidents, "ensure_shed", real_ensure_shed)
+    retry = rate_incidents.record_incident(
+        agent="muse",
+        surface="ledger_reconcile.completion",
+        category="quota",
+        run_id="escalated-episode",
+        timestamp=now + base,
+    )
+    assert retry == {
+        "status": "ok",
+        "deduped": True,
+        "incident_id": first["incident_id"],
+        "shed": True,
+    }
+    assert _shed_expiry("muse") == now + 2 * base
+    assert len(rate_incidents.INCIDENT_FILE.read_text().splitlines()) == 2
+
+
+def test_escalation_is_per_agent(incident_paths, monkeypatch):
+    monkeypatch.delenv("ORCH_PROVIDER_COOLDOWN_S", raising=False)
+    start = int(time.time())
+    hour = 3600
+    rate_incidents.record_incident(
+        agent="vibe",
+        surface="dispatch",
+        category="quota",
+        run_id="vibe-0",
+        evidence="402 Payment Required",
+        timestamp=start,
+    )
+    ts2 = start + 6 * hour
+    rate_incidents.record_incident(
+        agent="vibe",
+        surface="dispatch",
+        category="quota",
+        run_id="vibe-1",
+        evidence="402 Payment Required",
+        timestamp=ts2,
+    )
+    assert _shed_expiry("vibe") - ts2 == 12 * hour
+    rate_incidents.record_incident(
+        agent="codex",
+        surface="dispatch",
+        category="quota",
+        run_id="codex-1",
+        evidence="quota exhausted",
+        timestamp=ts2,
+    )
+    assert _shed_expiry("codex") - ts2 == rate_incidents.DEFAULT_COOLDOWN_S
+    # A different category for the same agent does not escalate either.
+    rate_incidents.record_incident(
+        agent="vibe",
+        surface="dispatch",
+        category="capacity",
+        run_id="vibe-capacity",
+        evidence="503 overloaded",
+        timestamp=ts2 + 6 * hour,
+    )
+    assert (
+        rate_incidents._cooldown_seconds("capacity", "vibe", ts2 + 12 * hour, None)
+        == 2 * rate_incidents.DEFAULT_COOLDOWN_S
+    )

@@ -1,0 +1,96 @@
+{
+  "source": "Native GitHub connector readback, 2026-11-11; no decisions or publication custody generated",
+  "pull_requests": [
+    {
+      "url": "https://github.com/stranske/Orchestrator/pull/1168",
+      "number": 1168,
+      "state": "closed",
+      "merged": true,
+      "draft": false,
+      "head_sha": "01e86ae7e4ef0e6a06193c916c8c780ca5cab052",
+      "merge_commit_sha": "a30b34ada04a30d04360867e14097a8c5b6d731c"
+    },
+    {
+      "url": "https://github.com/stranske/Orchestrator/pull/989",
+      "number": 989,
+      "state": "closed",
+      "merged": true,
+      "draft": false,
+      "head_sha": "85adde2614db7118d6e6d28dd11e5bc4c7611319",
+      "merge_commit_sha": "97647baf97085724af7cb8f684af2331f73fb612"
+    }
+  ],
+  "comment_count": 119,
+  "trusted_corpus_markers": [],
+  "evaluation_artifact": {
+    "id": 13468410186,
+    "name": "evaluation-results-42141057834",
+    "size_in_bytes": 73523,
+    "url": "https://api.github.com/repos/stranske/Orchestrator/actions/artifacts/13468410186",
+    "archive_download_url": "https://api.github.com/repos/stranske/Orchestrator/actions/artifacts/13468410186/zip",
+    "expired": false,
+    "created_at": "2026-11-06T01:04:54Z",
+    "expires_at": "2026-11-13T01:04:54Z",
+    "updated_at": "2026-11-06T01:04:54Z",
+    "digest": "sha256:c82d28c792185972e8897e057b0398e7ddb0a73ea0ecc95c96306ecd01b4ae82",
+    "workflow_run": {
+      "id": 42141057834,
+      "repository_id": 1342306972,
+      "head_repository_id": 1342306972,
+      "head_branch": "main",
+      "head_sha": "93154fe94e4cdf5198697a244da1312765e91649"
+    }
+  },
+  "recovery_state": {
+    "url": "https://github.com/stranske/Orchestrator/pull/1168#issuecomment-6673960665",
+    "body": "<!-- verifier-event-state/v1 {\"schema\":\"verifier-event-state/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"1168\",\"head_sha\":\"01e86ae7e4ef0e6a06193c916c8c780ca5cab052\",\"evaluated_sha\":\"a30b34ada04a30d04360867e14097a8c5b6d731c\",\"run_id\":\"42142328293\",\"run_attempt\":\"1\",\"status\":\"pending\",\"verification_event\":{\"schema\":\"verification-event/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"1168\",\"head_sha\":\"01e86ae7e4ef0e6a06193c916c8c780ca5cab052\",\"evaluated_sha\":\"a30b34ada04a30d04360867e14097a8c5b6d731c\",\"request_sha256\":\"65c87a493c35cc5c448fdc6ede6020633a89d9ab8e78fd2b23575661ee67760f\",\"material_sha256\":\"b1c469527d717ff997624642492f1ea92986f60786815cc2996cc62d7fbebafd\",\"event_id\":\"2e1928066ac3b01f9d19c425fe29844062d54c335f922144a7b4e23511619b8d\"},\"assessment_identity\":{\"mode\":\"evaluate\",\"provider\":\"\",\"model\":\"\",\"model2\":\"\",\"canonical\":true},\"execution_binding\":{\"schema\":\"verifier-execution-binding/v1\",\"workflow_path\":\".github/workflows/agents-verifier.yml\",\"job_name\":\"Run post-merge verifier\",\"pending_step\":\"Record verification event pending\",\"evaluator_step\":\"Run LLM evaluation\",\"retained_revalidation\":true},\"retained_revalidation\":{\"schema\":\"retained-revalidation/v1\",\"recovery_key\":\"d2ea76b6d6cc135a6f91a5b763629e038bf2cd9e398ca704d26d011ed1d02053\",\"source_run_id\":\"42141057834\",\"source_run_attempt\":\"1\",\"artifact_id\":13468410186}} -->",
+    "user": {
+      "login": "github-actions[bot]",
+      "name": "github-actions[bot]",
+      "email": null,
+      "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+      "id": 41898282
+    },
+    "id": 6673960665,
+    "pull_request_review_id": null,
+    "in_reply_to_id": null,
+    "created_at": "2026-11-06T01:13:49Z",
+    "updated_at": "2026-11-06T01:13:49Z",
+    "review": null,
+    "side": null,
+    "line": null,
+    "start_line": null,
+    "path": null,
+    "body_html": ""
+  },
+  "recovery_failure": {
+    "run_id": 42142328293,
+    "job_id": 127645488334,
+    "url": "https://github.com/stranske/Orchestrator/actions/runs/42142328293/job/127645488334",
+    "traceback": "2026-11-06T01:14:19.4979623Z   File \"/home/runner/work/Orchestrator/Orchestrator/.workflows-lib/tools/verifier_event_recovery.py\", line 708, in main\n2026-11-06T01:14:19.4980794Z     result = revalidate_retained(directory=Path.cwd())\n2026-11-06T01:14:19.4982512Z   File \"/home/runner/work/Orchestrator/Orchestrator/.workflows-lib/tools/verifier_event_recovery.py\", line 485, in revalidate_retained\n2026-11-06T01:14:19.4983780Z     payload, projection = original_final_projection(\n2026-11-06T01:14:19.4984517Z                           ~~~~~~~~~~~~~~~~~~~~~~~~~^\n2026-11-06T01:14:19.4985428Z         payload, mode=mode, validator_sha256=origin[\"validator_sha256\"], assessment=assessment\n2026-11-06T01:14:19.4986425Z         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n2026-11-06T01:14:19.4987105Z     )\n2026-11-06T01:14:19.4987563Z     ^\n2026-11-06T01:14:19.4988661Z   File \"/home/runner/work/Orchestrator/Orchestrator/.workflows-lib/tools/verifier_event_recovery.py\", line 282, in original_final_projection\n2026-11-06T01:14:19.4990320Z     raise ValueError(\"Original final producer provenance is not audited\")\n2026-11-06T01:14:19.4991291Z ValueError: Original final producer provenance is not audited\n2026-11-06T01:14:19.5407040Z ##[error]Process completed with exit code 1.\n2026-11-06T01:14:19.5520383Z ##[group]Run actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3"
+  },
+  "recovery_dispatch": {
+    "argv": [
+      "gh",
+      "workflow",
+      "run",
+      "agents-verifier.yml",
+      "--repo",
+      "stranske/Orchestrator",
+      "--ref",
+      "main",
+      "-f",
+      "pr_number=1168",
+      "-f",
+      "pr_head_sha=01e86ae7e4ef0e6a06193c916c8c780ca5cab052",
+      "-f",
+      "mode=evaluate",
+      "-f",
+      "verification_recovery={\"run_id\":42141057834,\"run_attempt\":1,\"artifact_id\":13468410186}"
+    ],
+    "exit_status": 1,
+    "stdout": "",
+    "stderr": "error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com\n"
+  },
+  "pr_body_update": "MCP tool call requires approval, but approval policy is never"
+}

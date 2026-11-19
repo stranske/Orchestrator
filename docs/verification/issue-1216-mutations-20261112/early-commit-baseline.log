@@ -1,0 +1,4 @@
+.                                                                        [100%]CI_STORAGE_DIAGNOSTIC {"exitstatus": 0, "finish": {"reason": "helper_or_base_unavailable", "status": "unavailable"}, "start": {"reason": "helper_or_base_unavailable", "status": "unavailable"}}
+
+tracked test inputs: NOT CHECKED -- /tmp/profile-trial-mutations-sx77ig5e is not a git checkout. In the exec mirror that loses nothing: its tests/ IS `git archive HEAD tests`, so every file in it was tracked
+1 passed in 0.39s

@@ -1,0 +1,20 @@
+{
+  "id": 12156286098,
+  "node_id": "MDg6QXJ0aWZhY3QxMjE1NjI4NjA5OA==",
+  "name": "gate-coverage",
+  "size_in_bytes": 340963,
+  "url": "https://api.github.com/repos/stranske/Orchestrator/actions/artifacts/12156286098",
+  "archive_download_url": "https://api.github.com/repos/stranske/Orchestrator/actions/artifacts/12156286098/zip",
+  "expired": false,
+  "digest": "sha256:72c32017a2259a6402ec6a9673501ccb7fa4419155ad256b60cdf26814795e3d",
+  "created_at": "2026-10-19T00:32:00Z",
+  "updated_at": "2026-10-19T00:32:00Z",
+  "expires_at": "2027-01-17T00:24:33Z",
+  "workflow_run": {
+    "id": 39180639406,
+    "repository_id": 1342306972,
+    "head_repository_id": 1342306972,
+    "head_branch": "orchestrator/issue-771",
+    "head_sha": "18ad97a054dab7f6039dd42c8131bee04267748b"
+  }
+}

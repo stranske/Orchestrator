@@ -737,6 +737,19 @@ def remote_tick(
         delegate_kwargs = {"task_type": tt, "dry_run": dry_run}
         if accepted_role_ids:
             delegate_kwargs["influenced_by_role_run_ids"] = accepted_role_ids
+        routing = {
+            key: pick[key]
+            for key in (
+                "exploration",
+                "exploration_mode",
+                "reason",
+                "capacity_state",
+                "capacity_policy",
+            )
+            if key in pick
+        }
+        if routing:
+            delegate_kwargs["routing"] = routing
         res = dispatcher.delegate_remote(pick["agent"], item["target"], **delegate_kwargs)
         row = {
             "target": item.get("target"),

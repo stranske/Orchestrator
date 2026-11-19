@@ -43,4 +43,5 @@ def test_retired_only_selection_is_explicitly_unassigned_and_tampering_is_reject
     tampered = dict(envelope, replay_hash="not-the-real-hash")
     with pytest.raises(ValueError, match="not replayable"):
         ep.replay_decision(tampered)
-    assert ep.resolve_production_profile_id(retired) == successor
+    # Successors chain (3.7 Flash -> 3.8 Flash -> 4 Hydrogen); the retired id follows to the end.
+    assert ep.resolve_production_profile_id(retired) == ep.resolve_production_profile_id(successor)

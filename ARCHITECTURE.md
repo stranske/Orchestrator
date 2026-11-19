@@ -151,10 +151,11 @@ internal to the Orchestrator. The pipeline it participates in has its **system-o
 this document has already produced confidently wrong fleet-level conclusions.
 
 ```
-  repo review (Workflows)  ->  human-decision packet  ->  APPROVED-ISSUE QUEUE (steward repo)
+  issue producers: repo-review uploader (Workflows), closer-core follow-ups, health jobs, sessions
                                                                     |
-                                                     opener lane (local, outside this tree)
-                                                     creates issues + ready PRs, own PR cap
+                                                     opener-core (local, outside this tree)
+                                                     judges + starts existing issues, own PR cap;
+                                                     opens the bootstrap PR in invite-mode repos
                                                                     |
                                         KEEPALIVE (Workflows GitHub Actions) drives each PR:
                                         agent:* label + green Gate + unchecked tasks -> rounds,
@@ -163,8 +164,17 @@ this document has already produced confidently wrong fleet-level conclusions.
                                         first), local_loop.py drives it: agents:local-loop,
                                         CI-feedback rounds on this machine (see below)
                                                                     |
-                                                     closer lane (local) merge -> verify -> close
+                                                     closer-core (local) merge -> verify -> close,
+                                                     or follow-up issue, or park
+  session PRs (Claude Code, cloud or local; no issue) -> closer-core orphan path: judged, then
+                                                     merge_guard (cloud after 30 quiet min, local after 7 d)
+  sync-core (local) classifies generated sync PRs and hands findings to their owners;
+  Maint 71 (Workflows Actions) is the only merger of sync PRs.
 ```
+
+The whole lane design (controller seats, opener-core, closer-core, sync-core, the local loop, holds, and the
+model families) is described for the owner in `Audits/closer-lane-2026-11/design/lane-design.html` (and `.pdf`)
+in the owner's workspace, updated 2026-11-16. Change it with this diagram when a lane's design changes.
 
 **The Orchestrator's four real interfaces to that pipeline:**
 
@@ -332,10 +342,26 @@ bounded offload or delegation chooses that exact profile; it does not create a n
 change the feedback loop. Operator `ORCH_CODEX_MODEL_*` pins and `ORCH_CODEX_MAX_TIER` ceilings
 continue through the tier adapter for automatic routes; the explicit profile stays exact.
 Gemini catalog renames retain the pinned effort when the newest available family offers it.
-Gemini tiers follow the other families' shape (2026-10-15): cheap/mid run 3.8 Flash low/high and only
+Gemini tiers follow the other families' shape (2026-10-15): cheap/mid run 4 Hydrogen low/high (3.8 Flash
+until the owner's 2026-11-15 decision; the Flash profiles follow `PROFILE_RETIREMENTS` to Hydrogen) and only
 `full` runs the frontier model, Argon High, which replaced the Pro slot (agy no longer serves Pro 3.1;
 the retired 3.1 profile follows `PROFILE_RETIREMENTS` to Argon High). Argon low/medium stay registered
-and explicitly requestable, because Argon has its own weekly-only quota and bills ~2.7x Flash per token.
+and explicitly requestable. Argon bills ~1.3x Hydrogen per token (~2.7x after 2026-11-30), and since agy
+1.5.9 every Gemini model draws one shared quota group (Orchestrator#1387), so routine tiers stay off it.
+
+**A live full-tier Gemini split, Argon vs Carbon (owner, 2026-11-11).** `gemini_full_split.py` is
+data inside the dispatch rail, not a new stage or role: `dispatcher.plan_dispatch` asks it for an arm
+when a local opener `implement` run on the gemini seat has no model chosen and the tier ceiling still
+allows `full`. The arm is drawn from a SHA-256 of the policy and the target (a retry keeps its arm) and
+travels as `selected_profile_id`/`requested_model` with `profile_policy_version=gemini-full-split-v1`
+and probability 0.5 on the run row; every other gemini implement run records `split_skip_reason`.
+`gemini-4-carbon-high` is registered as an execution profile for this; automatic routing still keeps
+only the tier's own model. Assignment stops at the spec's PR target (counted on GitHub by the
+readout, `python3 src/gemini_full_split.py --readout`, which writes the count it reads), at a
+`max_assignments` backstop if the readout stops, or at `end_ts`. A missing, malformed or expired
+spec assigns nothing, so routing falls back to its normal path. The readout reports per arm the PRs,
+merged, durable and broke-later counts and the pre-registered verdict; the cost leg is reported as
+UNMEASURED because lane implement dispatches record no token usage.
 
 **An offload run records which work it was for (2026-10-12).** Both capability readers key a run's
 subject by a `subject_id` in its routing metadata, else by `runs.target`, and an offload's target is
@@ -486,7 +512,7 @@ feedback surface on an existing sweep, so the diagram is still unchanged.
 **An offload's caller can bound where it writes, whichever agent runs it (2026-10-11).**
 `dispatcher.offload(write_boundary={"protect": [...], "allow": [...]})` lets the run write nowhere
 under `protect` except its own cwd and the `allow` roots, and never in a `.git` beneath them. codex
-is held by its own sandbox, with one `--add-dir` per root. cursor, agy, vibe, aider and claude have
+is held by its own sandbox, with one `--add-dir` per root. cursor, agy, vibe and claude have
 no sandbox, so they run under a `sandbox-exec` profile (`adapters.seatbelt_write_profile`); cursor
 and agy also get the roots as `--add-dir`, because their file tools keep to a workspace. A boundary
 that cannot hold (an empty `protect`, a broad root, codex's seat bypass, no `sandbox-exec`, or a
@@ -496,12 +522,19 @@ boundary every argv is unchanged. The research program's driver is its first cal
 program's own code directory writable. No stage, component or surface moved, so the diagram is
 unchanged.
 
-**Muse Code is a backup-only, subscription-login backend (2026-10-15, issue #612).** Meta's `muse`
-CLI joins the delegated sub-agent band as a seat that routine selection NEVER picks: it is in
-`router.BACKUP_AGENTS` with aider. It has explicit-only entries in the `implement` and `review` route
-tables and in the corresponding role eligibility sets, but the backup guard filters those entries from
-ordinary selection; only `select_agent(..., only={"muse"})` or an explicit dispatcher call can reach it.
-This preserves deterministic selection and priors while making the declared exploration surfaces honest.
+**Muse Code is a subscription-login backend and a routine LATE seat (owner, 2026-11-11).** Meta's
+`muse` CLI joined the delegated sub-agent band on 2026-10-15 (issue #612) as a backup-only seat in
+`router.BACKUP_AGENTS`, held out while its billing and readiness were unknown. Both were since resolved
+(the login bills the subscription; hosted runs were proven 2026-10-16/17), so it now sits in the
+`implement` and `review` route tables as a `late` entry, chosen after the non-late lanes, and is an
+ordinary candidate for its declared roles and for the adversarial reviewer pool.
+**aider was removed from the fleet on 2026-11-11 (owner).** It had been backup-only since 2026-06-21,
+no working install existed after 2026-11-05 (47 of 47 starts failed), and it was never auto-selected.
+Its route entries, capacity seat, profile and pool, adapter, credentials and labels are gone, so
+`router.BACKUP_AGENTS` is empty; the guard stays for any future backup seat. Read-side parsers that
+attribute HISTORICAL runs and branches (`keepalive_outcomes`, `feedback`) still recognise the name, and
+`execution_profiles.profile_identity` keeps its one-line Closer-worker refusal, which the hosted
+verifier's correction reader mirrors.
 Its capacity seat is `metered` (`capacity.AGENTS["muse"]`) because the subscription is a constrained
 allowance, while its immutable execution-profile pool remains `flat`; the latter is a pool classification,
 not a price claim. There is no usage API, so observed local accounting never claims Meta's reset epoch and
@@ -631,9 +664,43 @@ after the expiry clears the seat. A marker with no readable expiry says it is ma
 path to remove, and an unreadable one still holds. A codex refusal's stated reset sets the expiry,
 read only from codex's harness error events (`rate_incidents.provider_reset_at`, used by every
 recorder of a run). Until then the offload recorded no reset, and two refusals of 2026-09-25 that
-named Sep 28 shed for the 6 h cooldown. `switch_review` names every marker, FYI only, and flags one
+named Sep 28 shed for the 6 h cooldown. Since 2026-11-12 gemini (agy) and muse refusals set it
+too, each read only from an authoritative refusal line: agy's Go-duration `Resets in …` (any of
+h/m/s, plus days; `45m0s` had fallen to the cooldown) and muse's `usage window resets at <ISO
+time>` (a weekly exhaustion had re-admitted the seat every 6 h). `switch_review` names every marker, FYI only, and flags one
 placed by hand that has held its seat past 14 days, or an expired one still on disk. (No stage,
 component or surface moved; the diagram is unchanged.)
+
+**Repeated lane decisions are reported by the weekly review (2026-11-17).**
+`switch_review.stuck_lane_targets` reads the last 200 lines of the opener-core and closer-core
+round journals. An identical action and reason/error for a target across at least six consecutive
+rounds spanning an hour is SUSPECT, except explicit parked, complete and `held:` skip decisions.
+A changed decision or an absent target drains the streak. The JSON and readable weekly artifact
+carry the count and up to five readable examples; unreadable journals remain unknown rather than
+zero. This is an FYI feedback surface only: it changes no lane, raises no owner question and
+initiates no action. The loop diagram records the same read-only journal connection.
+
+**Open PRs no lane has named are reported by the weekly review (2026-11-18).** The stuck-target
+check above only sees what a lane already decided about. Four PRs sat idle 4 to 23 days because no
+lane ever adopted them: an `automation_run` branch no lane owns, a keepalive PR left after
+keepalive stood down, a Template PR (Template is outside `backlog.SUPPORTED_REPOS`) whose issue
+link is cross-repo, and a PR whose issue is paused. None of them entered a journal, so nothing
+reported them. `switch_review.unowned_open_prs` collects every target the opener-core and
+closer-core journals named in the last 72 hours by streaming each complete journal without a line
+limit, lists open PRs in each supported repo, and flags
+a non-draft PR when neither its number nor any issue it closes was named and it has had no commit
+for 24 hours. `sync/workflows*` branches (Maint 71, already in the canary section) and dependabot
+PRs younger than three days (their own automerge) are skipped; PRs with a closer hold label are
+listed apart and not counted; `automerge`, `agents:local-loop` and `agents:keepalive` labels are
+shown on the row, since an idle day on those routes is a stall too. Unreadable or malformed journals make the
+section unknown before any GitHub read, because without them every PR would look unowned; a repo
+whose list fails, or still has pages left after 40 pages of 25 PRs, or returns a page cursor that
+does not advance, is named as unmeasured. So is a PR whose labels or closing links are missing or
+run past one page, or whose one requested commit (`commits(last:1)`) is not its `headRefOid`,
+since idleness is read only from the head commit. The
+weekly CLI computes it and `review()` does not run it; `ORCH_UNOWNED_PR_SCAN=0` turns it off, as
+the test suite does. Like the stuck-target section it is FYI only: it changes no lane, labels
+nothing and raises no owner question. The loop diagram records the connection.
 
 **What an agent prints passes one mask before this tool writes or returns it (2026-10-06).** While
 gh was broken for dispatched agents, agents fetched a GitHub token another way and printed it, and
@@ -696,6 +763,14 @@ with ledger invocations and existing Brain influence edges, naming the earliest 
 step and input switches held off. Unknown demand never becomes zero. It changes no
 selection, gate, dispatcher or lifecycle decision; the existing weekly artifact carries
 the section rather than a second audit log or inventory.
+
+The same weekly report's `stuck_lane_targets` section reads the last 200 lines of
+the opener-core and closer-core round journals under `ORCH_STATE_DIR` (default
+`~/.codex/orchestrator`). Each target's newest consecutive run of identical action
+and reason/error text is SUSPECT after at least six rounds spanning one hour.
+Explicit parked, complete and `held:` skip decisions are excluded. The report names
+up to five suspects, prints measured round counts when drained, and preserves
+unreadable or malformed journals as unknown. It is FYI only and changes no lane state.
 
 **Its `outcome` step reads what became of a run from `outcomes`, and counts it with the one
 classifier of these edges (2026-10-11).** It counted an acted-on edge's own `outcome_verdict` and
@@ -836,8 +911,8 @@ with the incumbent agent and a test-first brief. Every arm's seat must be arm-el
 pacing model's warn/shed, or gemini's local weekly soft budget). A real cutoff (an active,
 manual or unreadable 429/cooldown marker, failed auth, an unresolvable model, or a non-ok
 state with no projection behind it) keeps the seat out (owner, 2026-11-11). Of the router's
-backup seats only muse may field an arm (`EXPERIMENT_BACKUP_ARMS`), since its backup status
-waits on outcomes only experiments produce; aider, which bills pay-as-you-go, stays out. Only comparative evaluation evidence refreshes route-table coverage; ordinary merges
+backup seats only those in `EXPERIMENT_BACKUP_ARMS` may field an arm; the router has no backup
+seats since 2026-11-11 (aider removed, muse a routine late seat), so that exemption is currently a no-op. Only comparative evaluation evidence refreshes route-table coverage; ordinary merges
 do not. Model-version canaries remain follow-up work.
 
 The frozen issue body and its hash are written before member launch. Missing or changed
@@ -1805,6 +1880,14 @@ lists already is graded. The monitor's declared population names the hold kinds 
 silence findings they exclude a row from, so this edit re-baselined the grader, while a hold declared
 or lifted later moves a graded finding exactly as a retirement does.
 
+**Retired execution is a separate diagnostic.** `capabilities.invoked_after_retirement` reads the
+latest retirement with no later renewal or live transition and names subsequent non-fixture
+invocation events. The firing monitor and switch review's gate-expiry notice expose
+`retired_but_invoked` with retirement/invocation evidence and the declared kill switch, independently
+of the expiry notice window. Missing or unreadable ledgers are unmeasured, never a measured zero.
+This read-only diagnostic leaves live finding populations, silence findings, `not_monitored`,
+and heartbeat emission unchanged.
+
 **A silence the row's own history contradicts is named as one (2026-10-02).** Only an `invocation`
 event moves `last_invocation`, and two producers broke the reading "silent means it did not run": a
 heartbeat that records a run's `success` or `failure` and no invocation, and a consult trial
@@ -1973,10 +2056,18 @@ count times seconds remaining divided by window seconds. The common horizon is t
 period_end of fully measured agents. Only latest-version quality cells with n_obs >= 20 count,
 including classes outside the hosted export. Measured agents alone enter the LP; excluded
 agents retain null lambda/rank and reasons, with status `partial` when some are measured.
-An agent whose capacity model has no pacing contract by design (every model except `ccusage`:
-cursor, vibe, gemini, muse, aider, where 429-shed is the authoritative limiter) is listed in
+An agent whose capacity model has no pacing contract by design (every model except `ccusage`,
+where 429-shed is the authoritative limiter for the other models) is ordinarily listed in
 `excluded` with reason `excluded: no pacing source` and does not make the result `partial`
 (owner 2026-11-11: cursor and vibe held it at `partial`, so routing could never go live).
+Cursor lane dispatches capture the CLI's terminal JSON and print its decoded message in the
+run log. Ledger reconciliation records Composer 2.5 list-price dollars from the result's
+model and token counts, or a per-run reason when usage or pricing is unavailable. Later ledger
+completion or done-marker evidence can recover latency while preserving that cost. With at least
+20 `cursor-cli-json` prices in the window, Cursor enters the LP at its mean dollars per run,
+subject to task demand. It has no modeled pool cap or capacity dual. If all Cursor runs in the
+window reported absent usage, the exclusion names that reason. A cost-only solve uses the
+observation-window duration to project demand when there is no measured pacing horizon.
 Other statuses are `optimal`, `infeasible_inputs`, and `inputs_unmeasured`. Subscription price
 is zero; Muse or explicitly metered pools require complete list-price observations. Reads
 never create or migrate the Brain.
@@ -1996,7 +2087,9 @@ with a meaningful routing/capacity change or the 24 h refresh floor. Switch revi
 the same report from local snapshot/Brain inputs and prints one summary line.
 
 `comparative.route_enabled` (#1316, read by the hosted router in Workflows
-`agent_delegation_policy.js`, which then sorts by `comparative_rank`, unranked last) is true when
+`agent_delegation_policy.js` and locally by `router.select_agent` behind `ORCH_LOCAL_COMPARATIVE=1`
+(#1433), sorting by `comparative_rank`, unranked last, within a capacity tier and recording
+`route_source="route_weights_comparative"` when it changes the pick) is true when
 now >= `ROUTE_GO_LIVE`, the result is `optimal`, and incidents since go-live do not exceed the
 baseline rate (the 14 days BEFORE go-live) times elapsed days, floored at one day. That last test
 is a rollback after go-live, never a precondition: before go-live both windows predate any routing

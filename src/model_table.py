@@ -5,7 +5,7 @@ local (this Orchestrator). Its source is stranske/Workflows `.github/agents/mode
 `TABLE_JSON` below is a byte-identical copy of that file. It lives inside this module, not in a
 config file, so it ships wherever the code ships: the launchd mirror and the flat closer runtime
 package copy Python modules only. `adapters.MODEL_TIERS`, the named single-model seats (vibe, muse,
-cursor, aider) and the Codex task/offload profiles are DERIVED from it, so nothing in this
+cursor) and the Codex task/offload profiles are DERIVED from it, so nothing in this
 repository keeps its own model list.
 
 Change the table in Workflows first, then copy it here with
@@ -163,7 +163,7 @@ def _sync(source: Path) -> int:
 # BEGIN AGENT MODEL TABLE: byte-identical copy of stranske/Workflows .github/agents/model-table.json
 TABLE_JSON = r"""{
   "schema": "agent-model-table/v1",
-  "as_of": "2026-11-10",
+  "as_of": "2026-11-18",
   "purpose": "The ONE agent model table for hosted (GitHub Actions) and local (Orchestrator) agent runs: per provider, a pinned model per tier, a reasoning level per kind of work, the surfaces each agent runs on, and one fallback. Hosted runners read this file at run time from .workflows-lib (stranske/Workflows@workflows_ref). Orchestrator carries a byte-identical copy as TABLE_JSON in src/model_table.py; scripts/check_model_tables.py fails when the two disagree.",
   "change_rule": "Edit this file and merge it first, then copy it to stranske/Orchestrator in a paired PR with `python3 src/model_table.py --sync <this file>`. Codex execution_profiles in .github/agents/registry.yml must agree with work_kinds below (the drift check counts every disagreement).",
   "tiers": ["cheap", "mid", "full", "frontier"],
@@ -197,8 +197,8 @@ TABLE_JSON = r"""{
       "models": {
         "cheap": "gpt-6-luna",
         "mid": "gpt-5.6-terra",
-        "full": "gpt-6.1-sol",
-        "frontier": "gpt-6-astra"
+        "full": "gpt-6.2-sol",
+        "frontier": "gpt-6.2-astra"
       },
       "fallback": "gpt-5.6-terra",
       "effort": {"flag": "-c model_reasoning_effort", "levels": ["low", "medium", "high", "xhigh"]}
@@ -223,25 +223,25 @@ TABLE_JSON = r"""{
       "surfaces": ["hosted", "local"],
       "role": "primary",
       "models": {
-        "cheap": "gemini-3.8-flash-low",
-        "mid": "gemini-3.8-flash-high",
-        "full": "gemini-4-argon-high",
+        "cheap": "gemini-4-hydrogen-low",
+        "mid": "gemini-4-hydrogen-high",
+        "full": "gemini-4-neon-high",
         "frontier": "gemini-4-carbon-high"
       },
       "surface_models": {
         "hosted": {
-          "cheap": "gemini-3.8-flash",
-          "mid": "gemini-3.8-flash",
+          "cheap": "gemini-4-hydrogen",
+          "mid": "gemini-4-hydrogen",
           "full": "gemini-4-argon",
           "frontier": "gemini-4-argon"
         }
       },
       "surface_model_evidence": {
-        "hosted": "Gemini API ids for the models the fleet runs and evaluates (Gemini 3.8 Flash, Gemini 4 Argon), the same ids config/verifier_shadow.json calls on GEMINI_API_KEY. The API id carries no effort rung; local agy ids do. Corrected 2026-11-09: the first hosted ids (gemini-3.5-flash, gemini-2.5-pro) were copied from the gemini-cli built-in model list, which lags the fleet.",
-        "local": "Gemini 4 Carbon (announced 2026-10-28, Google's frontier model above Argon) is the local frontier tier from 2026-11-10: agy 1.5.5 advertises gemini-4-carbon-{low,medium,high} and the Orchestrator's agy answered a live call on each. full stays Argon until Carbon has its own pilot record. Hosted keeps Argon: Carbon is not reported on the public Gemini API."
+        "hosted": "Gemini API ids for the models the fleet runs and evaluates (Gemini 4 Hydrogen, Gemini 4 Argon), the same ids config/verifier_shadow.json calls on GEMINI_API_KEY. gemini-4-hydrogen is the model code Google lists for Gemini 4 Hydrogen on aistudio.google.com/docs/models (checked 2026-11-15); it replaced gemini-3.8-flash for cheap/mid on 2026-11-15. The API id carries no effort rung; local agy ids do. Corrected 2026-11-09: the first hosted ids (gemini-3.5-flash, gemini-2.5-pro) were copied from the gemini-cli built-in model list, which lags the fleet.",
+        "local": "Gemini 4 Carbon (announced 2026-10-28, Google's frontier model above Argon) is the local frontier tier from 2026-11-10: agy 1.5.5 advertises gemini-4-carbon-{low,medium,high} and the Orchestrator's agy answered a live call on each. Neon High takes the Antigravity full tier on 2026-11-18 after passing five of six primary local checks, including two reviewed implementation fixtures. Both local and GitHub Actions Antigravity runs use these CLI IDs. Argon High stays selectable explicitly, Neon Extra High is available for deeper work, and Orchestrator (Neon) is opt-in. The separate Gemini API pins remain on Argon for full/frontier. cheap/mid moved from Gemini 3.8 Flash to Gemini 4 Hydrogen (low/high) on 2026-11-15 (owner decision) after a fixture trial on the 11-11 harness: judge replay MAE 1.182 vs 1.705 with 32/32 vs 29/32 usable, testgen 28/28 single and 22/28 batched vs 17/28; agy 1.5.9 still serves Flash, so a revert needs no catalog change."
       },
-      "fallback": "gemini-3.8-flash-high",
-      "surface_fallbacks": {"hosted": "gemini-3.8-flash"},
+      "fallback": "gemini-4-hydrogen-high",
+      "surface_fallbacks": {"hosted": "gemini-4-hydrogen"},
       "effort": {"flag": "", "levels": [], "note": "local agy ids carry the effort rung in the model id; hosted gemini-cli has no effort flag"}
     },
     "cursor": {

@@ -1021,9 +1021,7 @@ def _validate_transport_results(
             if field not in id_art:
                 continue
             bound = id_art[field]
-            if bound is None:
-                continue
-            if type(bound) is not int or bound < 0:
+            if bound is not None and (type(bound) is not int or bound < 0):
                 raise ValueError(
                     f"transport identity artifact {field} is not a nonnegative integer:"
                     f"{request['profile_id']}"

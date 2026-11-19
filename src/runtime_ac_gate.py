@@ -9,11 +9,13 @@ default so the Dropbox code checkout never holds runtime state.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import copy
 import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import sqlite3
 import subprocess
@@ -151,24 +153,8 @@ def author_keepalive_spec(
         spec = runtime_ac.author_issue_spec(issue, body, target=target)
         spec["verification"]["repo"] = repo
         spec["verification"]["observed_head_sha"] = pr.get("headRefOid")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        stream = tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", dir=path.parent, delete=False
-        )
-        staged = Path(stream.name)
-        try:
-            with stream:
-                json.dump(spec, stream, indent=2)
-                stream.flush()
-                os.fsync(stream.fileno())
-            try:
-                os.link(
-                    staged, path
-                )  # Exclusive, atomic publication; never overwrite an operator spec.
-            except FileExistsError:
-                return {"status": "existing", "spec_authored": False, "spec_path": str(path)}
-        finally:
-            staged.unlink(missing_ok=True)
+        if not _publish_spec(path, spec):
+            return {"status": "existing", "spec_authored": False, "spec_path": str(path)}
         event = feedback.record_runtime_ac_gate_event(
             target=target,
             gate_status="materialized",
@@ -196,6 +182,96 @@ def author_keepalive_spec(
         }
     except Exception as exc:
         return {"status": "error", "spec_authored": False, "error": str(exc)}
+
+
+def _publish_spec(path: Path, spec: dict) -> bool:
+    """Write `spec` at `path` atomically and exclusively; False when a spec is already there."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    stream = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False)
+    staged = Path(stream.name)
+    try:
+        with stream:
+            json.dump(spec, stream, indent=2)
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            os.link(
+                staged, path
+            )  # Exclusive, atomic publication; never overwrite an operator spec.
+        except FileExistsError:
+            return False
+        return True
+    finally:
+        staged.unlink(missing_ok=True)
+
+
+# A PR that closes no issue still states its own acceptance claim: an "Acceptance Criteria" section, or
+# the Gate's explicit deliberate-break marker (the same key=value form check_deliberate_break.py reads).
+_ACCEPTANCE_SECTION = re.compile(r"(?ims)^#{1,6}\s+Acceptance Criteria\s*\n(.*?)(?=^#{1,6}\s|\Z)")
+_DELIBERATE_BREAK_MARKER = re.compile(
+    r"<!--\s*deliberate-break:\s*(?P<body>.*?)\s*-->", re.I | re.S
+)
+
+
+def pr_body_acceptance(body: str | None) -> str | None:
+    """The acceptance claim an unlinked PR makes about itself, as an Acceptance Criteria section.
+
+    stranske/Orchestrator#1415 (2026-11-17): once the Gate's acceptance-criteria label worked, a PR with
+    an explicit deliberate-break marker but no closing issue was labelled, merge_guard required runtime
+    AC, and nothing could author a spec (specs came only from a closing issue): merge_guard refused it
+    until a person wrote one from the PR's own claim. This is that claim, read mechanically.
+    """
+    text = str(body or "")
+    section = _ACCEPTANCE_SECTION.search(text)
+    if section and section.group(1).strip():
+        return "## Acceptance Criteria\n" + section.group(1)
+    for marker in _DELIBERATE_BREAK_MARKER.finditer(text):
+        try:
+            tokens = shlex.split(marker.group("body"))
+        except ValueError:
+            continue
+        values = {}
+        for token in tokens:
+            if "=" in token:
+                key, value = token.split("=", 1)
+                values[key.strip().replace("_", "-").lower()] = value.strip()
+        test = values.get("test") or values.get("test-id")
+        break_file = values.get("break-file") or values.get("revert-file")
+        if test and break_file:
+            return (
+                "## Acceptance Criteria\n"
+                f"- [x] Named test `{test}` passes: `python -m pytest {test} -q`\n"
+                f"- [x] Deliberate break → revert, shown in the PR: restore the base version of "
+                f"`{break_file}` → `{test}` fails → revert and it passes.\n"
+            )
+    return None
+
+
+def author_pr_body_spec(
+    target: str, body: str | None, head_sha: str | None, *, spec_dir=None, env=None
+) -> dict:
+    """Materialize a spec from an unlinked PR's own acceptance claim; never overwrite one."""
+    path = spec_path(target, spec_dir=spec_dir, env=env)
+    if path.exists():
+        return {"status": "existing", "spec_authored": False, "spec_path": str(path)}
+    acceptance = pr_body_acceptance(body)
+    if acceptance is None:
+        return {"status": "no_acceptance_claim", "spec_authored": False, "spec_path": str(path)}
+    try:
+        spec = runtime_ac.author_issue_spec(target, acceptance, target=target)
+        spec["verification"]["repo"] = target.split("#", 1)[0]
+        spec["verification"]["observed_head_sha"] = head_sha
+        spec["verification"]["source"] = "pr_body"
+        if not _publish_spec(path, spec):
+            return {"status": "existing", "spec_authored": False, "spec_path": str(path)}
+        return {"status": "authored", "spec_authored": True, "spec_path": str(path)}
+    except Exception as exc:
+        return {
+            "status": "error",
+            "spec_authored": False,
+            "error": str(exc),
+            "spec_path": str(path),
+        }
 
 
 SHADOW_BUDGET_FLAG = "ORCH_RUNTIME_AC_SHADOW_BUDGET"
@@ -394,6 +470,27 @@ def observe_shadow_spec(
     return {"status": status, "blocks": False, "gate_event": event}
 
 
+# The extras CI installs (Workflows reusable-10-ci-python.yml installs `-e .[app,dev]`); test/tests kept
+# for repositories that name their test extra that way.
+CI_INSTALLED_EXTRAS = frozenset({"app", "dev", "test", "tests"})
+SETUP_TIMEOUT_S = 120
+SETUP_TIMEOUT_LOCK_S = 900
+# CI installs with `uv pip install`; pip cannot resolve some universal uv locks on this machine
+# (2026-11-17, Inv-Man-Intake requirements.lock: ResolutionImpossible on stranske-pdf-extract, while
+# `uv pip install -r requirements.lock` succeeds and the acceptance tests pass, 93/93).
+UV_SEARCH_DIRS = (
+    "/opt/homebrew/bin",
+    str(Path.home() / ".local/bin"),
+    str(Path.home() / ".cargo/bin"),
+    "/opt/anaconda3/bin",
+)
+
+
+def _uv() -> str | None:
+    """The uv binary CI's installer corresponds to: PATH first, then the usual install locations."""
+    return shutil.which("uv") or shutil.which("uv", path=os.pathsep.join(UV_SEARCH_DIRS))
+
+
 def _worktree_interpreter(worktree: str | Path) -> str:
     """Use a repository venv, provisioning one from this checkout when absent.
 
@@ -420,12 +517,20 @@ def _worktree_interpreter(worktree: str | Path) -> str:
         (root / name).is_file() for name in ("setup.py", "setup.cfg")
     )
     requirements = ["pytest"]
+    # Install what the repository's CI installs (Workflows reusable-10-ci-python.yml: `-r requirements.lock`
+    # when present, then `-e .[app,dev]`), so a check fails only where CI would. 2026-11-17,
+    # Inv-Man-Intake#1083: this setup skipped requirements.lock (compiled with the extraction-doc-lineage
+    # extra), 69 of 93 acceptance tests failed on a missing optional package, and the post-merge check
+    # reopened an issue whose merge commit CI had passed with 1324 tests.
+    lock = (root / "requirements.lock").is_file()
+    if lock:
+        requirements.extend(["-r", str(root / "requirements.lock")])
     for name in ("requirements.txt", "requirements-dev.txt", "requirements-test.txt"):
         if (root / name).is_file():
             requirements.extend(["-r", str(root / name)])
     if distribution:
         extras = project.get("project", {}).get("optional-dependencies", {})
-        selected = sorted(set(extras) & {"dev", "test", "tests"})
+        selected = sorted(set(extras) & CI_INSTALLED_EXTRAS)
         requirements.append(".[" + ",".join(selected) + "]" if selected else ".")
     setup_env = os.environ.copy()
     # Scheduler install destinations can redirect pip outside this venv or force
@@ -436,24 +541,29 @@ def _worktree_interpreter(worktree: str | Path) -> str:
     # Keep their children in this venv, just like the subsequent command checks.
     setup_env["PATH"] = str(interpreter.parent) + os.pathsep + setup_env.get("PATH", "")
     try:
-        for command in (
-            [sys.executable, "-m", "venv", str(environment)],
-            [
+        uv = _uv() if lock else None
+        install = (
+            [uv, "pip", "install", "--python", str(interpreter), *requirements]
+            if uv
+            else [
                 str(interpreter),
                 "-m",
                 "pip",
                 "install",
                 "--disable-pip-version-check",
                 *requirements,
-            ],
-        ):
+            ]
+        )
+        for command in ([sys.executable, "-m", "venv", str(environment)], install):
             completed = subprocess.run(
                 command,
                 cwd=str(root),
                 env=setup_env,
                 capture_output=True,
                 text=True,
-                timeout=120,
+                # A full CI lock (e.g. docling, torch) takes minutes to install; a timeout here is an
+                # unrunnable check (setup failed), never a delivery FAIL.
+                timeout=SETUP_TIMEOUT_LOCK_S if lock else SETUP_TIMEOUT_S,
                 check=False,
             )
             if completed.returncode:
@@ -487,8 +597,13 @@ def recheck_merged(
     *,
     allow_command_checks: bool | None = None,
     merge_ci_green: bool = False,
+    base_ref: str = "HEAD^",
 ) -> dict:
     """Run the existing named-check/break runner; manual or missing evidence is unknown.
+
+    `base_ref` is the pre-delivery code a deliberate break is measured against: the merge
+    parent (`HEAD^`) for a merged commit, the merge base with the default branch for an
+    unmerged PR head (`gate_status`).
 
     The caller provisions and pins the merge commit. Never mutate the authored spec
     or consume this observation as merge authority. An UNRUNNABLE result carries its
@@ -512,7 +627,7 @@ def recheck_merged(
                 if check.get("type") == "deliberate_break":
                     # The merge parent is the pre-delivery implementation. origin/main
                     # can already equal the merge tip or advance while this runs.
-                    check["base_ref"] = "HEAD^"
+                    check["base_ref"] = base_ref
                     check["worktree"] = str(merged_worktree)
         run = runtime_ac.run_verification(
             current,
@@ -877,6 +992,150 @@ def post_merge_commands_allowed(env: Mapping[str, Any]) -> bool:
     }
 
 
+# A closer PR is armed for this gate when Gate finds a deliberate-break marker in it
+# (pr-00-gate.yml "Apply runtime acceptance-criteria label"). The question it must answer is
+# whether the PR's own executable proof holds on the code that will merge: its named commands
+# pass and its deliberate break fails against the pre-change code and passes once restored.
+# Until 2026-11-12 the gate ran the spec outside any checkout (the break failed "not a git
+# repository") and required a 100% pass ratio over manual items it can never grade, so a
+# labelled PR could not pass (stranske/Orchestrator#1356: 1 of 12, FAIL). Manual criteria are
+# graded by the closer's judge; a manual-only spec is reported, never a block.
+#
+# The checks run state-free, exactly as CI runs the suite (ORCH_STATE_DIR and ORCH_LOCAL_RUNTIME
+# pointed at empty directories; .github/workflows/ci.yml explains why both knobs). Run against
+# this machine's live ledger, a test that CI passes failed on every commit, main included
+# (stranske/Orchestrator#1354, 2026-11-12: test_new_capabilities_carry_all_required_parts). Run
+# state-free, such a test skips exactly as it does in CI, so a skip here is a CI-documented
+# machine-state skip: its proof cannot be shown before merge. Owner decision 2026-11-15: that is
+# reported as UNVERIFIABLE_BEFORE_MERGE for the closer's judge, never a block. Real failures, and
+# hollow breaks whose tests did run, still block.
+NON_BLOCKING_VERDICTS = frozenset({"PASS", "MANUAL_ONLY", "UNVERIFIABLE_BEFORE_MERGE"})
+
+
+@contextlib.contextmanager
+def _state_free_environment():
+    """CI's state-free run for the checks: empty state dirs, skip reasons in the transcript."""
+    keys = ("ORCH_STATE_DIR", "ORCH_LOCAL_RUNTIME", "PYTEST_ADDOPTS")
+    saved = {key: os.environ.get(key) for key in keys}
+    with tempfile.TemporaryDirectory(prefix="runtime-ac-state-free-") as root:
+        os.environ["ORCH_STATE_DIR"] = str(Path(root) / "state")
+        os.environ["ORCH_LOCAL_RUNTIME"] = str(Path(root) / "runtime")
+        os.environ["PYTEST_ADDOPTS"] = " ".join(filter(None, [saved["PYTEST_ADDOPTS"], "-rs"]))
+        try:
+            yield
+        finally:
+            for key, value in saved.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+
+def _skipped_rows(transcript: str | None) -> list[dict]:
+    """Executable check rows whose test run (a break's green half included) reported skips."""
+    try:
+        rows = json.loads(transcript or "{}").get("check_results") or []
+    except (TypeError, ValueError):
+        return []
+    skipped = []
+    for row in rows:
+        if row.get("type") == "command":
+            source = row
+        elif row.get("type") == "deliberate_break":
+            source = (_deliberate_break_proof(row) or {}).get("green") or {}
+        else:
+            continue
+        text = "\n".join(str(source.get(key) or "") for key in ("stdout_tail", "stderr_tail"))
+        if SKIPPED_TESTS.search(text):
+            skipped.append(
+                {
+                    "check_id": row.get("check_id"),
+                    "type": row.get("type"),
+                    "skips": [ln for ln in text.splitlines() if ln.startswith("SKIPPED")][:10],
+                }
+            )
+    return skipped
+
+
+def _merge_base(worktree: str | Path) -> str:
+    for ref in ("origin/main", "origin/HEAD"):
+        out = subprocess.run(
+            ["git", "-C", str(worktree), "merge-base", ref, "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        if out.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", out.stdout.strip()):
+            return out.stdout.strip()
+    raise RuntimeError("cannot resolve the merge base of the PR head with origin/main")
+
+
+def _exact_head_gate(
+    spec: dict,
+    target: str,
+    head: str,
+    *,
+    allow_command_checks: bool,
+    worktree_fn=None,
+    recheck_fn=None,
+) -> dict:
+    """Run `spec` in a disposable checkout of exactly `head`, grade only executable checks."""
+    if worktree_fn is None:
+        import provision
+
+        worktree_fn = provision.temporary_exact_head_worktree
+    recheck_fn = recheck_fn or recheck_merged
+    with worktree_fn(target, head) as worktree:
+        actual = subprocess.run(
+            ["git", "-C", str(worktree), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        if actual.returncode or actual.stdout.strip() != head:
+            raise RuntimeError("runtime-AC checkout does not match the PR head")
+        base = _merge_base(worktree)
+        with _state_free_environment():
+            checked = recheck_fn(
+                spec, worktree, allow_command_checks=allow_command_checks, base_ref=base
+            )
+    try:
+        gate = dict(json.loads(checked.get("transcript") or "{}").get("gate") or {})
+    except (TypeError, ValueError):
+        gate = {}
+    result = str(checked.get("result") or "UNRUNNABLE").upper()
+    reason = checked.get("reason")
+    if result == "PASS":
+        verdict = "PASS"
+    elif result == "UNRUNNABLE" and reason == "manual_only":
+        verdict = "MANUAL_ONLY"
+    elif result == "FAIL":
+        verdict = "FAIL"
+    elif result == "UNRUNNABLE" and (skipped := _skipped_rows(checked.get("transcript"))):
+        verdict = "UNVERIFIABLE_BEFORE_MERGE"
+        gate["unverifiable_before_merge"] = skipped
+    else:
+        verdict = "UNRUNNABLE"
+    gate.update(
+        verdict=verdict,
+        executable_result=result,
+        executable_reason=reason,
+        head=head,
+        base_ref=base,
+    )
+    if verdict not in NON_BLOCKING_VERDICTS:
+        gate.setdefault("blocking", [])
+        gate["blocking"] = [
+            {
+                "status": result,
+                "reason": f"executable checks {result.lower()}: {reason or 'failed'}",
+            }
+        ]
+    return gate
+
+
 def gate_status(
     item: dict,
     *,
@@ -886,6 +1145,8 @@ def gate_status(
     run_fn=None,
     latest_run_fn=None,
     record_fn=None,
+    worktree_fn=None,
+    recheck_fn=None,
 ) -> dict | None:
     """Return and persist runtime-AC gate truth for closer PRs.
 
@@ -1009,7 +1270,6 @@ def gate_status(
         )
         return result
 
-    run_fn = run_fn or runtime_ac.run_verification
     record_fn = record_fn or runtime_ac.record_gate_verdict
     try:
         spec = runtime_ac.parse_spec_json(path.read_text(encoding="utf-8"))
@@ -1024,18 +1284,30 @@ def gate_status(
             ref=target,
             metadata={"spec_path": str(path), "spec_hash": spec_sha256(path)},
         )
-        run = run_fn(
-            spec,
-            confirm_run=True,
-            allow_command_checks=env_flag(resolved_env, "ORCH_RUNTIME_AC_ALLOW_COMMANDS"),
-            timeout=env_int(resolved_env, "ORCH_RUNTIME_AC_TIMEOUT", 120),
-        )
-        gate = run["gate"]
+        head = str(item.get("head") or "")
+        if run_fn is None and re.fullmatch(r"[0-9a-f]{40}", head):
+            gate = _exact_head_gate(
+                spec,
+                target,
+                head,
+                allow_command_checks=env_flag(resolved_env, "ORCH_RUNTIME_AC_ALLOW_COMMANDS"),
+                worktree_fn=worktree_fn,
+                recheck_fn=recheck_fn,
+            )
+        else:
+            run_fn = run_fn or runtime_ac.run_verification
+            run = run_fn(
+                spec,
+                confirm_run=True,
+                allow_command_checks=env_flag(resolved_env, "ORCH_RUNTIME_AC_ALLOW_COMMANDS"),
+                timeout=env_int(resolved_env, "ORCH_RUNTIME_AC_TIMEOUT", 120),
+            )
+            gate = run["gate"]
         verdict = gate.get("verdict")
         result = {
             **base,
             "status": "executed",
-            "blocks": verdict != "PASS",
+            "blocks": verdict not in NON_BLOCKING_VERDICTS,
             "verdict": verdict,
             "verifier_verdict": gate.get("verifier_verdict"),
             "pass_ratio": gate.get("pass_ratio"),
@@ -1080,12 +1352,14 @@ def gate_status(
             dry_run=False,
             eligibility_info=eligibility_info,
             path=path,
-            blocks=verdict != "PASS",
+            blocks=verdict not in NON_BLOCKING_VERDICTS,
             closer_run_id=run_id,
             verifier_run_id=gate.get("verification_id"),
             verifier_verdict=verdict,
             terminal_reason=(
-                None if verdict == "PASS" else f"verifier_{str(verdict or 'unknown').lower()}"
+                None
+                if verdict in NON_BLOCKING_VERDICTS
+                else f"verifier_{str(verdict or 'unknown').lower()}"
             ),
         )
         return result

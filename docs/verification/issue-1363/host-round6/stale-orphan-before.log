@@ -1,0 +1,87 @@
+/opt/anaconda3/lib/python3.12/site-packages/pytest_asyncio/plugin.py:300: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the "fixture" caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to "function" scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__ test_a_stale_orphan_holding_the_worktree_is_ended_and_the_holder_reclaimed __
+
+layout = (PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2566/test_a_stale_orph...chestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2566/test_a_stale_orphan_holding_th0/holder [old]+ round'))
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x108c01580>
+
+    def test_a_stale_orphan_holding_the_worktree_is_ended_and_the_holder_reclaimed(layout, monkeypatch):
+        """2026-11-11: an orphaned `unzip` (11 h, 0.00 s CPU, parent pid 1) made every reclaim of
+        stranske__Workflows__4635__opener refuse "live pid" for 36 of 60 closer rounds."""
+        holder = hold(layout)
+        proc = _child_in(holder)
+        try:
+            _faked_probes(monkeypatch, proc, cpu_s=0.0)
+>           wt = provision.provision(TARGET, "closer")
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_provision_reclaim.py:821:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src/provision.py:807: in provision
+    else _provision(target, lane, event)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/provision.py:709: in _provision
+    _reclaim_branch_holder(canon, head, wt, event)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+canon = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2566/test_a_stale_orphan_holding_th0/repos/example__repo')
+branch = 'pr-head'
+wt = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2566/test_a_stale_orphan_holding_th0/worktrees/example__repo__718__closer')
+event = {'ts': '2026-11-12T01:16:16.988881+00:00', 'target': 'example/repo#718', 'lane': 'closer', 'outcome': 'failed', ...}
+
+    def _reclaim_branch_holder(canon: Path, branch: str, wt: Path, event: dict) -> None:
+        """Remove only a clean, idle holder of this branch, never the requested checkout."""
+        _run(["git", "-C", str(canon), "worktree", "prune", "--expire", "now"])
+        listed = _run(["git", "-C", str(canon), "worktree", "list", "--porcelain"])
+        for record in listed.stdout.strip().split("\n\n"):
+            fields = {}
+            for line in record.split("\n"):
+                parts = line.split(None, 1)
+                if len(parts) == 2:
+                    fields[parts[0]] = parts[1]
+            if fields.get("branch") != f"refs/heads/{branch}":
+                continue
+            holder = Path(fields["worktree"])
+            if holder.resolve() == wt.resolve():
+                continue
+            event.update(cause="branch-held", holder_path=str(holder))
+            status = _wt_git(
+                holder, ["--no-optional-locks", "status", "--porcelain", "--untracked-files=all"]
+            )
+            if status.returncode != 0:
+                raise RuntimeError(f"cannot inspect holder {holder}: {status.stderr.strip()}")
+            if status.stdout.strip():
+                if (
+                    event.get("lane") == "closer"
+                    and os.environ.get("ORCH_PRESERVE_IDLE_DIRTY_HOLDER") == "1"
+                ):
+                    _preserve_dirty_holder(holder, branch, event)
+                    continue
+                raise RuntimeError(
+                    f"refusing to reclaim dirty worktree {holder}: {status.stdout.strip()}"
+                )
+            try:
+                live = _live_holder_pids(holder)
+            except ProbeBlindError:
+                event.update(outcome="failed", cause="probe-blind")
+                raise
+            stale = _stale_orphans(live, holder) if live else {}
+            if live and set(stale) == live:
+                event["stale_orphans_ended"] = _end_stale_orphans(stale)
+                print(f"provision: ended {len(stale)} stale orphan(s) in {holder}: {sorted(stale)}")
+                live = _live_holder_pids(holder)
+            if live:
+>               raise RuntimeError(
+                    f"refusing to reclaim worktree {holder}: live pid {', '.join(sorted(live))} "
+                    f"(stale orphans {len(set(stale) & live)} of {len(live)})"
+                )
+E               RuntimeError: refusing to reclaim worktree /Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2566/test_a_stale_orphan_holding_th0/holder [old]+ round: live pid 68222 (stale orphans 0 of 1)
+
+src/provision.py:645: RuntimeError
+=========================== short test summary info ============================
+FAILED tests/test_provision_reclaim.py::test_a_stale_orphan_holding_the_worktree_is_ended_and_the_holder_reclaimed
+1 failed, 57 deselected in 0.83s

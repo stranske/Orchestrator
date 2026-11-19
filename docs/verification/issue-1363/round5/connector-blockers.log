@@ -1,0 +1,2 @@
+github_label_pr(label=needs-human, pr_number=1365): MCP tool call requires approval, but approval policy is never
+github_add_comment_to_issue(pr_number=1365, verification and commit blockers): MCP tool call requires approval, but approval policy is never

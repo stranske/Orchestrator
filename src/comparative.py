@@ -28,10 +28,9 @@ _SIMPLEX_EPS = 1e-12
 # Route decision constants for hosted router
 ROUTE_GO_LIVE = "2026-11-17T00:00:00Z"
 ROUTE_INCIDENT_WINDOW_DAYS = 14
-# Capacity models that carry a pacing contract (capacity.AGENTS[agent]["model"]). Every other model
-# (metered, flat, windowed_prepaid, plan_then_credit) has no usage API: 429-shed is its authoritative
-# limiter and it never has pacing. Owner 2026-11-11: such agents are EXCLUDED from the solve and named,
-# instead of holding status at "partial" forever (cursor and vibe did, so route_enabled could never be true).
+# Capacity models that always carry a pacing contract (capacity.AGENTS[agent]["model"]). Other models
+# enter the solve when their usage poll is fresh and valid, and are excluded and named when stale/absent.
+# A dedicated measured-cost path can also admit an agent without a pool cap.
 PACED_CAPACITY_MODELS = frozenset({"ccusage"})
 # Owner 2026-11-11: a "partial" result (a paced agent's reading stale or missing, e.g. codex burn with an
 # anchor older than 8 h) reuses the last optimal result for up to this long, so a stale reading cannot
@@ -126,12 +125,23 @@ def _dense_simplex(matrix, rhs, objective):
     return primal, dual, iterations
 
 
-def shadow_prices(q, demand, cost, budget, price, *, value=None, minimum=MIN_OBS) -> dict:
+def shadow_prices(
+    q,
+    demand,
+    cost,
+    budget,
+    price,
+    *,
+    value=None,
+    minimum=MIN_OBS,
+    cost_only_agents: frozenset[str] = frozenset(),
+) -> dict:
     """Solve max sum x*(q*V-p*c), capacity <= B and class volume <= D.
 
     Assignment is task -> {agent: fractional runs}, so split/unmet demand is
     represented honestly. V defaults to one. Negative RHS/cost/price is invalid;
-    missing/nonfinite inputs remain unmeasured, distinct from measured zero.
+    missing/nonfinite inputs remain unmeasured, distinct from measured zero. Cost-only agents
+    participate in the objective and demand constraints with no modeled capacity constraint.
     """
     value = value or {}
     tasks = sorted({task for cells in q.values() for task in cells})
@@ -149,7 +159,8 @@ def shadow_prices(q, demand, cost, budget, price, *, value=None, minimum=MIN_OBS
         check(f"demand[{task}]", demand.get(task))
         check(f"value[{task}]", value.get(task, 1.0))
     for agent, cells in q.items():
-        check(f"budget[{agent}]", budget.get(agent))
+        if agent not in cost_only_agents:
+            check(f"budget[{agent}]", budget.get(agent))
         check(f"price[{agent}]", price.get(agent))
         for task, quality in cells.items():
             check(f"quality[{agent},{task}]", quality, hi=1)
@@ -164,20 +175,22 @@ def shadow_prices(q, demand, cost, budget, price, *, value=None, minimum=MIN_OBS
             "reasons": sorted(reasons + invalid),
         }
     agents = sorted(q)
+    constrained = [a for a in agents if a not in cost_only_agents]
     variables = [(a, k) for a in agents for k in sorted(q[a])]
-    matrix = [[cost[a][k] if a == agent else 0.0 for a, k in variables] for agent in agents]
+    matrix = [[cost[a][k] if a == agent else 0.0 for a, k in variables] for agent in constrained]
     matrix += [[float(k == task) for a, k in variables] for task in tasks]
-    rhs = [budget[a] for a in agents] + [demand[k] for k in tasks]
+    rhs = [budget[a] for a in constrained] + [demand[k] for k in tasks]
     objective = [q[a][k] * value.get(k, 1.0) - price[a] * cost[a][k] for a, k in variables]
     primal, dual, iterations = _dense_simplex(matrix, rhs, objective)
-    lam = dict(zip(agents, dual[: len(agents)]))
+    lam = dict.fromkeys(agents, 0.0)
+    lam.update(zip(constrained, dual[: len(constrained)]))
     assignment: dict = {k: {} for k in tasks}
     for (a, k), x in zip(variables, primal):
         if x > 0:
             assignment[k][a] = x
     return {
         "lambda": lam,
-        "mu": dict(zip(tasks, dual[len(agents) :])),
+        "mu": dict(zip(tasks, dual[len(constrained) :])),
         "assignment": assignment,
         "iterations": iterations,
         "status": "optimal",
@@ -248,13 +261,64 @@ def _pacing(snapshot, agent):
     return None, None, f"agents[{agent}].pacing missing; pools mapping absent or ambiguous"
 
 
-def _no_pacing_source(agent: str) -> str | None:
-    """The capacity model of an agent that has no pacing contract by design, else None."""
+def _no_pacing_source(agent: str, now: float | None = None) -> str | None:
+    """The capacity model of an agent that has no pacing contract or fresh poll, else None."""
     import capacity  # lazy: capacity is heavy and must not load at module import
+    import pacing_usage
 
     meta = capacity.AGENTS.get(agent)
     model = meta.get("model") if isinstance(meta, dict) else None
-    return model if model and model not in PACED_CAPACITY_MODELS else None
+    if not model or model in PACED_CAPACITY_MODELS:
+        return None
+    clock = time.time() if now is None else float(now)
+    if pacing_usage.polled_usage(agent, clock)["poll"]["fresh"]:
+        return None
+    return model
+
+
+def _polled_pacing(agent: str, now: float, location: str) -> tuple[dict | None, str]:
+    """Build a pacing row from a fresh valid usage poll when the snapshot omits one."""
+    import capacity  # lazy: capacity is heavy and must not load at module import
+    import pacing as pacing_model
+    import pacing_usage
+
+    meta = capacity.AGENTS.get(agent)
+    model = meta.get("model") if isinstance(meta, dict) else None
+    if not model or model in PACED_CAPACITY_MODELS:
+        return None, location
+    polled = pacing_usage.polled_usage(agent, float(now))
+    if not polled["poll"].get("fresh"):
+        return None, location
+    end = _timestamp(polled.get("period_end"))
+    if end is None:
+        return None, location
+    start = end - pacing_model.PERIOD_SECONDS
+    source = str(polled.get("source") or f"{agent}-poll")
+    history = [
+        pacing_usage.polled_usage(agent, float(now), data=item)
+        for item in pacing_usage.read_poll_tail(pacing_usage.POLL_DIR / f"{agent}-usage.ndjson")
+    ] + [polled]
+    samples = [
+        dict(ts=ts, used_fraction=item["used_fraction"], source=source)
+        for item in history
+        if item["poll"].get("valid")
+        and _timestamp(item.get("period_end")) == end
+        and (ts := _timestamp(item.get("ts"))) is not None
+        and start <= ts <= float(now)
+        and _number(item.get("used_fraction"))
+    ]
+    row = pacing_model.evaluate(
+        agent,
+        now=float(now),
+        used_fraction=polled.get("used_fraction"),
+        period_start=start,
+        period_end=end,
+        resets=None,
+        samples=samples,
+        source=source,
+        source_ts=_timestamp(polled.get("ts")),
+    )
+    return row, f"poll[{agent}]"
 
 
 def measure(
@@ -268,9 +332,11 @@ def measure(
 ) -> dict:
     """D is remaining-period runs; c is period fraction/run; B is remaining fraction.
 
-    The earliest period_end among fully measured agents is the common horizon.
+    The earliest measured pacing period_end is the common horizon. With only measured
+    dollar costs, project demand for the same duration as the observation window.
     Unmeasured agents are excluded from the LP and retain null prices/ranks.
     """
+    from adapters import CURSOR_CLI_COST_SOURCE, CURSOR_CLI_NO_USAGE
     from feedback import COMPLETE_COST_SOURCES, MIN_COST_COVERAGE, TOKEN_SOURCES
 
     if window_days < 1:
@@ -294,6 +360,7 @@ def measure(
     ends: dict = {}
     measured_q: dict = {}
     excluded: set[str] = set()
+    cost_only_agents: set[str] = set()
     for agent, cells in q.items():
         budget[agent], price[agent] = None, None
         cost[agent] = dict.fromkeys(cells)
@@ -304,10 +371,41 @@ def measure(
         def missing(reason):
             sources[agent]["reason"] = f"{location}: {reason}"
 
-        if pacing is None and (model := _no_pacing_source(agent)):
+        agent_runs = [row for row in runs if row["agent"] == agent]
+        if agent == "cursor":
+            priced = [
+                row["cost_usd"]
+                for row in agent_runs
+                if row["cost_source"] == CURSOR_CLI_COST_SOURCE
+                and _number(row["cost_usd"])
+                and row["cost_usd"] >= 0
+            ]
+            if len(priced) < MIN_OBS:
+                reason = "excluded: no pacing source (capacity model metered)"
+                if agent_runs and all(
+                    row["cost_source"] == CURSOR_CLI_NO_USAGE for row in agent_runs
+                ):
+                    reason = f"excluded: {CURSOR_CLI_NO_USAGE}"
+                missing(reason)
+                excluded.add(agent)
+                continue
+            if not cells or any(not _number(v) or not 0 <= v <= 1 for v in cells.values()):
+                missing(f"{db_path}: posterior[{agent}] unmeasured or invalid")
+                continue
+            cost[agent] = dict.fromkeys(cells, sum(priced) / len(priced))
+            price[agent] = 1.0  # c is already in dollars per run.
+            sources[agent]["source"] = CURSOR_CLI_COST_SOURCE
+            measured_q[agent] = cells
+            cost_only_agents.add(agent)
+            continue
+        if pacing is None and (model := _no_pacing_source(agent, now)):
             missing(f"excluded: no pacing source (capacity model {model})")
             excluded.add(agent)
             continue
+        if pacing is None:
+            pacing, location = _polled_pacing(agent, now, location)
+            if pacing is not None and pool_id is None:
+                pool_id = pool_ids[agent] = agent
         if pacing is None:
             missing("pacing unmeasured")
             continue
@@ -360,7 +458,6 @@ def measure(
             ),
             None,
         )
-        agent_runs = [row for row in runs if row["agent"] == agent]
         if burn_key is None or pacing[burn_key] < 0:
             missing("burn_effective_per_hour/burn_rate_per_day/burn_per_day unmeasured or invalid")
             continue
@@ -420,6 +517,10 @@ def measure(
         measured_q[agent] = cells
         ends[agent] = end
     horizon = min(ends.values()) if ends else None
+    horizon_source = "earliest fully measured agent period_end"
+    if horizon is None and cost_only_agents:
+        horizon = now + window_days * 86400
+        horizon_source = "cost-only solve projected over the observation-window duration"
     seconds_left = horizon - now if horizon is not None else None
     demand = {
         task: (
@@ -429,7 +530,15 @@ def measure(
         )
         for task in tasks
     }
-    result = shadow_prices(measured_q, demand, cost, budget, price, minimum=minimum)
+    result = shadow_prices(
+        measured_q,
+        demand,
+        cost,
+        budget,
+        price,
+        minimum=minimum,
+        cost_only_agents=frozenset(cost_only_agents),
+    )
     if result["status"] == "optimal" and len(measured_q) < len(q) - len(excluded):
         result["status"] = "partial"
     result["excluded"] = sorted(excluded)
@@ -455,7 +564,7 @@ def measure(
             "budget": budget,
             "price": price,
             "period_end": horizon,
-            "period_end_source": "earliest fully measured agent period_end",
+            "period_end_source": horizon_source,
             "seconds_left": seconds_left,
         },
     )

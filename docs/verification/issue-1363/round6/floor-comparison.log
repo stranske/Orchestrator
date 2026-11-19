@@ -1,0 +1,4 @@
+delivered_sha=5756ff2649d9d6008f17fc8f98df4cf2cd88e47b
+origin/main=2c945fa9d0340f9352c4f0efa7ccf1fab139fd75
+git show "5756ff2649d9d6008f17fc8f98df4cf2cd88e47b:.verify-floor.json" | cmp - <(git show origin/main:.verify-floor.json)
+byte_identical=True

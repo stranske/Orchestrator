@@ -368,7 +368,8 @@ def summary(path: Path | None = None) -> dict:
             except (ValueError, TypeError):
                 malformed += 1
     totals = {
-        arm: {"judged": 0, "merged_durable": 0, "no_delivery": 0} for arm in ("triage", "rule")
+        arm: {"judged": 0, "merged_durable": 0, "no_delivery": 0, "unresolved": 0}
+        for arm in ("triage", "rule")
     }
     live_rows = [row for row in rows if row.get("triage_valid") and row.get("live_proposal")]
     if not live_rows:
@@ -404,26 +405,18 @@ def summary(path: Path | None = None) -> dict:
             totals[arm]["judged"] += 1
             totals[arm]["merged_durable"] += int(found[0] == 1 and found[1] == "durable")
 
-    def rule_run_id(conn, target: str, since_ts: float) -> str | None:
-        repo, _, issue = target.rpartition("#")
-        if not repo or not issue.isdigit():
-            return None
-        covers = [
-            cover
-            for cover in outcomes._read_pr_covers().values()
-            if cover.get("repo") == repo and int(issue) in cover.get("covers", [])
-        ]
-        if not covers:
-            return None
-        for cover in sorted(covers, key=lambda row: (row.get("ts", 0), row["pr"]), reverse=True):
-            found = conn.execute(
-                "SELECT run_id FROM runs WHERE target=? AND mode != 'role' AND ts > ? "
-                "ORDER BY ts DESC,run_id DESC LIMIT 1",
-                (f"{repo}#{cover['pr']}", since_ts),
-            ).fetchone()
-            if found:
-                return found[0]
-        return None
+    pr_covers = outcomes._read_pr_covers()
+
+    def grade_rule_pick(conn, rule_pick: str, since_ts: float) -> None:
+        # The drain's own predicate: "no delivery" only once every candidate pull request of THIS
+        # cycle has a final read and none covers the pick; anything still to read is unresolved.
+        state, run_id = outcomes.rule_pick_cover_state(conn, rule_pick, since_ts, pr_covers)
+        if state == "covered":
+            grade_run(conn, "rule", run_id, since_ts)
+        elif state == "none":
+            totals["rule"]["no_delivery"] += 1
+        else:
+            totals["rule"]["unresolved"] += 1
 
     # Reports must not run schema migrations or compete for the Brain's write lock.
     db_path = Path(feedback.DB_PATH).resolve()
@@ -450,12 +443,7 @@ def summary(path: Path | None = None) -> dict:
                         )
             rule_pick = row.get("rule_pick")
             if rule_pick:
-                grade_run(
-                    conn,
-                    "rule",
-                    rule_run_id(conn, rule_pick, row["ts"] / 1_000_000_000),
-                    row["ts"] / 1_000_000_000,
-                )
+                grade_rule_pick(conn, rule_pick, row["ts"] / 1_000_000_000)
     return {
         "cycles": len(rows),
         "malformed_rows": malformed,
@@ -518,6 +506,8 @@ def summary_line(path: Path | None = None) -> str:
         unresolved = sum(
             linked.get(consumption_key(row), {}).get("status") == "unresolved" for row in consumed
         )
+        drainable = outcomes.rule_picks_drainable_next_call() if data["valid_cycles"] else 0
+        drainable_text = "unknown" if drainable is None else drainable
     except (OSError, UnicodeError, ValueError, KeyError, sqlite3.Error) as exc:
         return f"triage shadow: UNKNOWN — outcome evidence unreadable ({type(exc).__name__})"
     if data["malformed_rows"]:
@@ -528,11 +518,16 @@ def summary_line(path: Path | None = None) -> str:
 
     def percent(arm):
         count = data[arm]["judged"]
+        tail = f"[{data[arm]['no_delivery']} no delivery]"
+        if arm == "rule":
+            tail = (
+                f"[{data[arm]['no_delivery']} no delivery, "
+                f"{data[arm]['unresolved']} unresolved, drainable {drainable_text}]"
+            )
         return (
-            f"{100 * data[arm]['merged_durable'] / count:.1f}% ({count} judged) "
-            f"[{data[arm]['no_delivery']} no delivery]"
+            f"{100 * data[arm]['merged_durable'] / count:.1f}% ({count} judged) {tail}"
             if count
-            else f"n/a (0 judged) [{data[arm]['no_delivery']} no delivery]"
+            else f"n/a (0 judged) {tail}"
         )
 
     return (

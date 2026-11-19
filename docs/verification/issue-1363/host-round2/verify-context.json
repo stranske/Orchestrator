@@ -1,0 +1,14 @@
+{
+  "command": [
+    "/opt/anaconda3/bin/python3",
+    "src/verify.py"
+  ],
+  "head": "28291fa750499615ab1489ad8f828a618218ea7b",
+  "origin_main": "2c945fa9d0340f9352c4f0efa7ccf1fab139fd75",
+  "overrides": {
+    "ORCH_STATE_DIR": "/tmp/orch1363-host-round2/state",
+    "ORCH_LOCAL_RUNTIME": "/tmp/orch1363-host-round2/runtime",
+    "HANDOFF_DIR": "/tmp/orch1363-host-round2/handoff"
+  },
+  "timeout_seconds": 120
+}

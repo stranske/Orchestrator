@@ -1,0 +1,12 @@
+{
+  "before": {
+    "/Users/teacher/.codex/orchestrator/provision-events.ndjson": "3d9467a4da0c7acd4f6c486ba4e33510c6ceac68c27cd622f8b19fc7b9677bdc",
+    "/Users/teacher/.codex/orchestrator/provision-events.ndjson.pre-718-repair-2026-11-03": "ccad083cf41cd3b6b839a8dd49fd6d1c651ce44458e364bf6e96ffb0a2ad1a76"
+  },
+  "after": {
+    "/Users/teacher/.codex/orchestrator/provision-events.ndjson": "3d9467a4da0c7acd4f6c486ba4e33510c6ceac68c27cd622f8b19fc7b9677bdc",
+    "/Users/teacher/.codex/orchestrator/provision-events.ndjson.pre-718-repair-2026-11-03": "ccad083cf41cd3b6b839a8dd49fd6d1c651ce44458e364bf6e96ffb0a2ad1a76"
+  },
+  "mirror": "/Users/teacher/.codex/orchestrator-mirror.generation-7a941ab4329345c4a1945ee3bb6a20fb",
+  "deployment_performed": false
+}

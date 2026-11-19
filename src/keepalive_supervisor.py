@@ -143,7 +143,16 @@ def _closure_ci_green(repo: str, sha: str) -> bool:
     )
 
 
-def _closure_gate(target: str, issue: dict, sha: str) -> dict:
+def _closure_gate(target: str, issue: dict, sha: str, *, unmerged_head: bool = False) -> dict:
+    """Run the issue's acceptance commands on exactly `sha`.
+
+    A deliberate break is measured against the code before the delivery. For a merged squash commit that
+    is its parent (`recheck_merged`'s default `HEAD^`). For an UNMERGED PR head (`unmerged_head=True`, the
+    local loop) it is the merge base with main: the head's parent is the PR's own previous commit, which
+    already carries the fix, so every candidate test "passes against the base" and the break reads
+    `hollow_break` on every round however good the test is (stranske/Pension-Data#1033 and
+    Manager-Database#1921, 2026-11-16: 5 rounds each on a 9- and 11-commit PR, measured against `HEAD^`).
+    """
     import provision
     import runtime_ac
     import runtime_ac_gate
@@ -169,6 +178,10 @@ def _closure_gate(target: str, issue: dict, sha: str) -> dict:
         )
         if actual.returncode or actual.stdout.strip() != sha:
             raise RuntimeError("acceptance checkout does not match merge commit")
+        if unmerged_head:
+            return runtime_ac_gate.recheck_merged(
+                spec, worktree, base_ref=runtime_ac_gate._merge_base(worktree)
+            )
         return runtime_ac_gate.recheck_merged(spec, worktree)
 
 
@@ -394,11 +407,10 @@ def _close_verified_target(
     sha = (pr.get("mergeCommit") or {}).get("oid", "")
     labels = {row["name"] for row in pr["labels"]["nodes"]}
     agent_pr = bool(
-        labels
-        & {"agent:" + name for name in ("codex", "claude", "cursor", "gemini", "aider", "muse")}
+        labels & {"agent:" + name for name in ("codex", "claude", "cursor", "gemini", "muse")}
     ) or bool(
         re.match(
-            r"(?:codex|claude|claude-code|cursor|gemini|aider|muse|orch|orchestrator)/issue-\d",
+            r"(?:codex|claude|claude-code|cursor|gemini|muse|orch|orchestrator)/issue-\d",
             pr["headRefName"],
         )
     )

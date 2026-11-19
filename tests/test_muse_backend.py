@@ -93,9 +93,8 @@ def test_muse_seat_is_reported_and_never_reads_as_free(tmp_path, monkeypatch, ca
     # The immutable execution pool retains its paid subscription pricing tier. The capacity
     # model describes allowance metering; neither field claims an unlimited/free seat.
     assert capacity.agent_tiers()["muse"] == "flat"
-    # Backup-only: reachable on explicit demand (`--agent muse`) and never by routine selection,
-    # until measured outcomes earn it a prior. The same mechanism aider uses.
-    assert "muse" in router.BACKUP_AGENTS, router.BACKUP_AGENTS
+    # A routine LATE seat since 2026-11-11 (owner): no longer held out by BACKUP_AGENTS.
+    assert "muse" not in router.BACKUP_AGENTS, router.BACKUP_AGENTS
 
     # Exercise the JSON entry point offline, with an authenticated seat and private state.
     # Checking AGENTS alone misses a model omitted from the snapshot consumed by callers.
@@ -628,14 +627,14 @@ def test_muse_usage_log_failure_is_reported_not_swallowed(tmp_path, monkeypatch,
     assert "muse usage" in err and "not recorded" in err, err
 
 
-def test_muse_is_eligible_for_declared_roles_but_never_auto_selected(monkeypatch):
-    """Muse is declared for implement/review role exploration, while BACKUP_AGENTS keeps it out of
-    ordinary deterministic selection. Explicit `only={"muse"}` is the deliberate entry point."""
+def test_muse_is_a_routine_late_seat(monkeypatch):
+    """Since 2026-11-11 (owner) muse is no longer backup-only: it is a LATE seat, chosen after the
+    non-late lanes for implement/review and auto-eligible for its declared roles."""
     monkeypatch.setattr(router, "learned_ranks", lambda: {})
     monkeypatch.setattr(feedback, "current_weights", lambda *args, **kwargs: [])
     in_table = {e["agent"] for entries in router.ROUTE_TABLE.values() for e in _entries(entries)}
     assert "muse" in in_table
-    assert "muse" in router.BACKUP_AGENTS
+    assert "muse" not in router.BACKUP_AGENTS
     assert "muse" in roles.ROLE_REGISTRY["prompt"].eligible_backends
     for role_name in ("redirect", "triage", "adjudicator"):
         assert "muse" in roles.ROLE_REGISTRY[role_name].eligible_backends
@@ -648,7 +647,11 @@ def test_muse_is_eligible_for_declared_roles_but_never_auto_selected(monkeypatch
     muse_only_capacity = {"agents": {agent: {"state": "shed"} for agent in in_table}}
     muse_only_capacity["agents"]["muse"] = {"state": "ok"}
     learned_muse_first = {"implement": {"muse": {"rank": 0}}}
-    assert roles.route_role("prompt", muse_only_capacity, learned=learned_muse_first) is None
+    assert (
+        roles.route_role("prompt", muse_only_capacity, learned=learned_muse_first)["agent"]
+        == "muse"
+    )
+    assert router.select_agent("implement", muse_only_capacity)["agent"] == "muse"
     assert roles.route_role("prompt", muse_only_capacity, only={"muse"})["agent"] == "muse"
 
 
@@ -790,7 +793,8 @@ def test_muse_subscription_receipt_survives_actual_ledger_reconciliation(tmp_pat
         ).fetchone() == (20, 5, 1.25, "ccusage")
 
 
-def test_muse_is_not_implicitly_offered_to_the_adversarial_reviewer():
+def test_muse_is_offered_to_the_adversarial_reviewer_now_that_it_is_not_a_backup():
+    """Until 2026-11-11 BACKUP_AGENTS kept muse out of this pool; it is now an ordinary candidate."""
     import adversarial
 
     offered = []
@@ -799,9 +803,8 @@ def test_muse_is_not_implicitly_offered_to_the_adversarial_reviewer():
         offered.append(only)
         return {"agent": "muse"} if "muse" in only else None
 
-    result = adversarial.choose_reviewer(cap={}, learned={}, select_fn=select)
-    assert all("muse" not in pool for pool in offered)
-    assert result.get("agent") != "muse"
+    adversarial.choose_reviewer(cap={}, learned={}, select_fn=select)
+    assert any("muse" in pool for pool in offered)
 
 
 def test_muse_stale_auth_alias_repairs_are_serialized(tmp_path, monkeypatch):
