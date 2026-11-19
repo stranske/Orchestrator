@@ -1020,7 +1020,8 @@ def _auto_resolve(agent: str, tier: str, pinned: str, advertised: list[str]) -> 
     )
     # The planner/executor routes require an explicit model selection.
     candidates = [
-        model for model in advertised
+        model
+        for model in advertised
         if model.startswith("gemini-") and not model.startswith("gemini-pro-orchestrator")
     ]
     if not candidates:
