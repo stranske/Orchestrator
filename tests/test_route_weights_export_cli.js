@@ -960,53 +960,75 @@ raise SystemExit(export.main())
   await refuseDeletedExportBranch();
 
   async function refuseRewrittenExportHistory() {
-    const retained = fs.existsSync(receipt) ? fs.readFileSync(receipt) : null;
-    const modified = retained === null ? null : fs.statSync(receipt, { bigint: true }).mtimeNs;
+    const hasReceipt = fs.existsSync(receipt);
     const first = provenance.published_commit;
-    const tree = await git(remote, 'rev-parse', `${first}^{tree}`);
-    // Same valid artifact, but a different first marked commit on a rewritten
-    // branch. Both objects stay available locally throughout verification.
-    const replacement = await git(remote, 'commit-tree', tree, '-p', initial,
-      '-m', 'replacement publication fixture');
-    assert.notEqual(replacement, first);
-    for (const [name, tip] of [['rewound', initial], ['rewritten', replacement]]) {
-      await t.test(`refuses ${name} export history ${retained === null ? 'without' : 'with'} receipt`, async () => {
-        await git(remote, 'update-ref', `refs/heads/${branch}`, tip, first);
+    for (const name of ['rewound', 'rewritten']) {
+      await t.test(`refuses ${name} export history ${hasReceipt ? 'with' : 'without'} receipt`, async () => {
+        // Copy the checkout too so each verifier starts with the original cached ref.
+        const caseRoot = fs.mkdtempSync(path.join(root, `${name}-`));
+        const caseRemote = path.join(caseRoot, 'remote.git');
+        const caseRepositories = path.join(caseRoot, 'repos');
+        const caseCheckout = path.join(caseRepositories, path.basename(checkout));
+        const caseState = path.join(caseRoot, 'state');
+        const caseAudit = path.join(caseRoot, 'audit.json');
+        const caseReceipt = path.join(caseState, path.basename(receipt));
+        fs.cpSync(remote, caseRemote, { recursive: true });
+        fs.cpSync(checkout, caseCheckout, { recursive: true });
+        await git(caseCheckout, 'remote', 'set-url', 'origin', caseRemote);
+        fs.mkdirSync(caseState);
+        fs.copyFileSync(audit, caseAudit);
+        if (hasReceipt) fs.copyFileSync(receipt, caseReceipt);
+        const retained = hasReceipt ? fs.readFileSync(caseReceipt) : null;
+        const modified = retained === null ? null : fs.statSync(caseReceipt, { bigint: true }).mtimeNs;
+        const recordCase = () => run(python, [
+          path.join(modules, 'route_weights_export.py'),
+          '--record-challenger-deployment', caseAudit, '--state-dir', caseState,
+        ], { cwd: caseRoot, env: { ...env, ORCH_REPOS_DIR: caseRepositories, ORCH_STATE_DIR: caseState } });
+
+        let tip = initial;
+        if (name === 'rewritten') {
+          // Keep the valid artifact but give the first marked commit a different SHA.
+          const tree = await git(caseRemote, 'rev-parse', `${first}^{tree}`);
+          tip = await git(caseRemote, 'commit-tree', tree, '-p', initial,
+            '-m', 'replacement publication fixture');
+          assert.notEqual(tip, first);
+        }
+        await git(caseRemote, 'update-ref', `refs/heads/${branch}`, tip, first);
         try {
-          assert.equal(await git(checkout, 'rev-parse', `origin/${branch}`), first);
-          const refused = await record();
+          assert.equal(await git(caseCheckout, 'rev-parse', `origin/${branch}`), first);
+          const refused = await recordCase();
           assert.equal(refused.status, 1, refused.stderr);
           assert.equal(refused.stdout, '');
           assert.match(refused.stderr, /not the first verified challenger-filter publication/);
           assert.doesNotMatch(refused.stderr, /Traceback/);
-          assert.equal(await git(checkout, 'rev-parse', `origin/${branch}`), tip,
+          assert.equal(await git(caseCheckout, 'rev-parse', `origin/${branch}`), tip,
             'verification must use fetched history rather than the cached branch');
-          assert.equal(await git(checkout, 'cat-file', '-t', first), 'commit');
+          assert.equal(await git(caseCheckout, 'cat-file', '-t', first), 'commit');
           if (retained === null) {
-            assert.equal(fs.existsSync(receipt), false);
+            assert.equal(fs.existsSync(caseReceipt), false);
           } else {
-            assert.deepEqual(fs.readFileSync(receipt), retained);
-            assert.equal(fs.statSync(receipt, { bigint: true }).mtimeNs, modified);
+            assert.deepEqual(fs.readFileSync(caseReceipt), retained);
+            assert.equal(fs.statSync(caseReceipt, { bigint: true }).mtimeNs, modified);
             if (name === 'rewritten') {
               // A new valid first artifact cannot replace an already retained
               // deployment boundary, even with an audit naming its exact SHA.
-              fs.writeFileSync(audit, JSON.stringify({ ...provenance, published_commit: tip }));
-              const conflicting = await record();
+              fs.writeFileSync(caseAudit, JSON.stringify({ ...provenance, published_commit: tip }));
+              const conflicting = await recordCase();
               assert.equal(conflicting.status, 1, conflicting.stderr);
               assert.equal(conflicting.stdout, '');
               assert.match(conflicting.stderr, /refusing to replace the first recorded deployment/);
               assert.doesNotMatch(conflicting.stderr, /Traceback/);
-              assert.deepEqual(fs.readFileSync(receipt), retained);
-              assert.equal(fs.statSync(receipt, { bigint: true }).mtimeNs, modified);
+              assert.deepEqual(fs.readFileSync(caseReceipt), retained);
+              assert.equal(fs.statSync(caseReceipt, { bigint: true }).mtimeNs, modified);
             }
           }
-          assert.equal(fs.existsSync(path.join(state, `.${path.basename(receipt)}.tmp`)), false);
-          assert.equal(await git(remote, 'rev-parse', branch), tip);
+          assert.equal(fs.existsSync(path.join(caseState, `.${path.basename(caseReceipt)}.tmp`)), false);
+          assert.equal(await git(caseRemote, 'rev-parse', branch), tip);
         } finally {
-          fs.writeFileSync(audit, JSON.stringify(provenance));
-          await git(remote, 'update-ref', `refs/heads/${branch}`, first, tip);
+          fs.writeFileSync(caseAudit, JSON.stringify(provenance));
+          await git(caseRemote, 'update-ref', `refs/heads/${branch}`, first, tip);
         }
-        const recovered = await record();
+        const recovered = await recordCase();
         assert.equal(recovered.status, 0, recovered.stderr);
         const recoveredReceipt = JSON.parse(recovered.stdout);
         assert.equal(recoveredReceipt.published_commit, first);
@@ -1014,13 +1036,13 @@ raise SystemExit(export.main())
         assert.equal(recoveredReceipt.deployed_epoch, Date.parse(provenance.deployed_at) / 1000);
         assert.equal(recoveredReceipt.deployment_evidence, provenance.deployment_evidence);
         if (retained === null) {
-          assert.deepEqual(JSON.parse(fs.readFileSync(receipt, 'utf8')), recoveredReceipt);
-          fs.unlinkSync(receipt);
+          assert.deepEqual(JSON.parse(fs.readFileSync(caseReceipt, 'utf8')), recoveredReceipt);
+          fs.unlinkSync(caseReceipt);
         } else {
-          assert.deepEqual(fs.readFileSync(receipt), retained);
-          assert.equal(fs.statSync(receipt, { bigint: true }).mtimeNs, modified);
+          assert.deepEqual(fs.readFileSync(caseReceipt), retained);
+          assert.equal(fs.statSync(caseReceipt, { bigint: true }).mtimeNs, modified);
         }
-        assert.equal(await git(remote, 'rev-parse', branch), first);
+        assert.equal(await git(caseRemote, 'rev-parse', branch), first);
         assert.equal(fs.existsSync(database), false);
         assert.deepEqual(fs.readdirSync(home), []);
       });
