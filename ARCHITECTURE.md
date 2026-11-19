@@ -686,12 +686,13 @@ lane ever adopted them: an `automation_run` branch no lane owns, a keepalive PR 
 keepalive stood down, a Template PR (Template is outside `backlog.SUPPORTED_REPOS`) whose issue
 link is cross-repo, and a PR whose issue is paused. None of them entered a journal, so nothing
 reported them. `switch_review.unowned_open_prs` collects every target the opener-core and
-closer-core journals named in the last 72 hours, lists open PRs in each supported repo, and flags
+closer-core journals named in the last 72 hours by streaming each complete journal without a line
+limit, lists open PRs in each supported repo, and flags
 a non-draft PR when neither its number nor any issue it closes was named and it has had no commit
 for 24 hours. `sync/workflows*` branches (Maint 71, already in the canary section) and dependabot
 PRs younger than three days (their own automerge) are skipped; PRs with a closer hold label are
 listed apart and not counted; `automerge`, `agents:local-loop` and `agents:keepalive` labels are
-shown on the row, since an idle day on those routes is a stall too. Unreadable journals make the
+shown on the row, since an idle day on those routes is a stall too. Unreadable or malformed journals make the
 section unknown before any GitHub read, because without them every PR would look unowned; a repo
 whose list fails, or still has pages left after 40 pages of 25 PRs, or returns a page cursor that
 does not advance, is named as unmeasured. So is a PR whose labels or closing links are missing or

@@ -393,23 +393,45 @@ def _write_rounds(root, stamps):
     )
 
 
-def test_a_full_tail_that_misses_the_window_narrows_it_and_says_so(tmp_path, monkeypatch):
-    monkeypatch.setattr(switch_review, "UNOWNED_JOURNAL_LINES", 3)
+@pytest.mark.parametrize("lane", ["opener-core", "closer-core"])
+def test_a_target_48_hours_ago_stays_owned_after_5000_later_rounds(tmp_path, lane):
     roots = _roots(tmp_path)
-    # Opener's three-line tail reaches back 10 h, closer's 30 h: the shorter one bounds the window.
-    _write_rounds(roots["opener-core"], [NOW - 10 * 3600, NOW - 5 * 3600, NOW - 3600])
-    _write_rounds(roots["closer-core"], [NOW - 30 * 3600, NOW - 20 * 3600, NOW - 3600])
-    section = switch_review.unowned_open_prs(
-        now=NOW, roots=roots, gh_fn=_gh({REPO: []}), repos=[REPO]
+    journal = roots[lane] / "rounds.jsonl"
+    journal.write_text(
+        json.dumps({"ts": _iso(NOW - 2 * DAY), "items": [{"target": f"{REPO}#1"}]}) + "\n",
+        encoding="utf-8",
     )
-    assert section["window_hours"] == 10.0
-    assert section["window_note"] == "journal tails reach back 10.0h, less than 72h"
-    text = "\n".join(switch_review.format_unowned_open_prs(section))
-    assert "note: journal tails reach back 10.0h" in text
+    with journal.open("a", encoding="utf-8") as stream:
+        for _ in range(5001):
+            stream.write(json.dumps({"ts": _iso(NOW - 3600), "items": []}) + "\n")
+    section = switch_review.unowned_open_prs(
+        now=NOW, roots=roots, gh_fn=_gh({REPO: [_pr(1), _pr(2)]}), repos=[REPO]
+    )
+    assert section["status"] == "ok"
+    assert [row["number"] for row in section["rows"]] == [2]
+    assert section["window_hours"] == 72 and "window_note" not in section
+    assert section["rounds_in_window"][lane] == 5002
 
 
-def test_a_full_tail_that_reaches_the_window_edge_adds_no_note(tmp_path, monkeypatch):
-    monkeypatch.setattr(switch_review, "UNOWNED_JOURNAL_LINES", 2)
+@pytest.mark.parametrize("malformed", ["not json", '{"ts": "invalid", "items": []}'])
+def test_malformed_coverage_before_5000_recent_rounds_reads_no_pr(tmp_path, malformed):
+    roots = _roots(tmp_path)
+    journal = roots["opener-core"] / "rounds.jsonl"
+    _write_rounds(roots["opener-core"], [NOW - 3600] * 5001)
+    journal.write_text(malformed + "\n" + journal.read_text(encoding="utf-8"), encoding="utf-8")
+    calls = []
+
+    def gh(args, **kwargs):
+        calls.append(args)
+        raise AssertionError("incomplete journal coverage must prevent every GitHub read")
+
+    section = switch_review.unowned_open_prs(now=NOW, roots=roots, gh_fn=gh, repos=[REPO])
+    assert calls == []
+    assert section["status"] == "unknown" and section["rows"] == []
+    assert section["suspect"] == 0 and "opener-core" in section["measurement"]
+
+
+def test_rounds_at_the_window_edge_are_included(tmp_path):
     roots = _roots(tmp_path)
     edge = NOW - switch_review.UNOWNED_WINDOW_S
     _write_rounds(roots["opener-core"], [edge, NOW - 3600])

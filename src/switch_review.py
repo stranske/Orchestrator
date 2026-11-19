@@ -92,7 +92,6 @@ STUCK_HOLD_ACTIONS = frozenset({"already-parked", "complete"})
 # UNOWNED_IDLE_S has no owner the system can see (2026-11-18: four such PRs sat idle 4-23 days).
 UNOWNED_WINDOW_S = 72 * 3600
 UNOWNED_IDLE_S = 24 * 3600
-UNOWNED_JOURNAL_LINES = 5000
 # The scan uses its own bounded GraphQL pagination rather than `gh pr list`: asking gh to expand
 # 100 PRs with nested commit-author data exceeded GitHub's GraphQL node limit in production.
 UNOWNED_PR_PAGE_SIZE = 25
@@ -1863,55 +1862,47 @@ def stuck_lane_targets(
 
 def _lane_targets_in_window(
     roots: Mapping[str, Path], lanes: tuple[str, ...], *, since: float, now: float
-) -> tuple[set[str], dict[str, int], float | None, list[str]]:
-    """Targets named by any lane round stamped in [since, now], from each journal's tail.
+) -> tuple[set[str], dict[str, int], list[str]]:
+    """Stream complete journals and collect targets stamped in [since, now].
 
-    Returns (targets, rounds_in_window per lane, oldest stamp read across lanes, errors). The
-    oldest stamp lets the caller say when a full tail covers less than the requested window.
+    Any unreadable row makes coverage unknown, including rows outside the window whose
+    timestamps or contents cannot be established. No journal lines are retained.
     """
     targets: set[str] = set()
     counts: dict[str, int] = {}
-    oldest: float | None = None
     errors: list[str] = []
     for lane in lanes:
         journal = Path(roots[lane]) / "rounds.jsonl" if lane in roots else None
         try:
             if journal is None:
                 raise ValueError(f"no journal root configured for {lane}")
-            with journal.open("rb") as stream:
-                tail = deque(stream, maxlen=UNOWNED_JOURNAL_LINES)
-            full_tail = len(tail) == UNOWNED_JOURNAL_LINES
             in_window = 0
-            first_stamp = None
-            for line in tail:
-                if not line.strip():
-                    continue
-                round_ = json.loads(line.decode("utf-8"))
-                parsed = datetime.fromisoformat(round_["ts"].replace("Z", "+00:00"))
-                if parsed.tzinfo is None:
-                    raise ValueError("round timestamp has no timezone")
-                stamp = parsed.timestamp()
-                if first_stamp is None:
-                    first_stamp = stamp
-                items = round_["items"]
-                if not isinstance(items, list) or any(not isinstance(i, dict) for i in items):
-                    raise ValueError("round items must be a list of objects")
-                if stamp < since or stamp > now:
-                    continue
-                in_window += 1
-                for item in items:
-                    target = item.get("target")
-                    if target is None:
+            with journal.open("rb") as stream:
+                for line in stream:
+                    if not line.strip():
                         continue
-                    if not isinstance(target, str) or not target:
-                        raise ValueError("item target must be non-empty text")
-                    targets.add(target)
+                    round_ = json.loads(line.decode("utf-8"))
+                    parsed = datetime.fromisoformat(round_["ts"].replace("Z", "+00:00"))
+                    if parsed.tzinfo is None:
+                        raise ValueError("round timestamp has no timezone")
+                    stamp = parsed.timestamp()
+                    items = round_["items"]
+                    if not isinstance(items, list) or any(not isinstance(i, dict) for i in items):
+                        raise ValueError("round items must be a list of objects")
+                    if stamp < since or stamp > now:
+                        continue
+                    in_window += 1
+                    for item in items:
+                        target = item.get("target")
+                        if target is None:
+                            continue
+                        if not isinstance(target, str) or not target:
+                            raise ValueError("item target must be non-empty text")
+                        targets.add(target)
             counts[lane] = in_window
-            if full_tail and first_stamp is not None and first_stamp > since:
-                oldest = first_stamp if oldest is None else max(oldest, first_stamp)
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
             errors.append(f"{lane}: {journal} unreadable ({type(exc).__name__}: {exc})")
-    return targets, counts, oldest, errors
+    return targets, counts, errors
 
 
 def _unowned_open_pr_page(
@@ -2054,7 +2045,7 @@ def unowned_open_prs(
         "window_hours": UNOWNED_WINDOW_S // 3600,
         "rounds_in_window": dict.fromkeys(lanes),
     }
-    targets, counts, oldest, errors = _lane_targets_in_window(roots, lanes, since=since, now=now)
+    targets, counts, errors = _lane_targets_in_window(roots, lanes, since=since, now=now)
     if errors:
         report.update(
             status="unknown",
@@ -2062,12 +2053,6 @@ def unowned_open_prs(
         )
         return report
     report["rounds_in_window"].update(counts)
-    if oldest is not None:
-        report["window_hours"] = round((now - oldest) / 3600, 1)
-        report["window_note"] = (
-            f"journal tails reach back {report['window_hours']}h, "
-            f"less than {UNOWNED_WINDOW_S // 3600}h"
-        )
     ok, out, _reason = gh_fn(["--version"])
     report["gh_version"] = (out.splitlines() or ["unknown"])[0].strip() if ok else "unknown"
     repo_errors: list[str] = []
