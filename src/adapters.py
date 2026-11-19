@@ -1018,11 +1018,13 @@ def _auto_resolve(agent: str, tier: str, pinned: str, advertised: list[str]) -> 
     family = next(
         (name for name in ("neon", "argon", "hydrogen", "pro", "flash") if name in pinned), None
     )
-    # The planner/executor routes require an explicit model selection.
+    # The planner/executor routes and Neon Extra High require explicit selection.
     candidates = [
         model
         for model in advertised
-        if model.startswith("gemini-") and not model.startswith("gemini-pro-orchestrator")
+        if model.startswith("gemini-")
+        and not model.startswith("gemini-pro-orchestrator")
+        and not model.endswith("-neon-xhigh")
     ]
     if not candidates:
         return None

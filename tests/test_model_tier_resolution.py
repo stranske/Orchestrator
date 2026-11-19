@@ -1346,7 +1346,12 @@ def test_neon_rename_preserves_family_and_effort(monkeypatch):
         monkeypatch.delenv("ORCH_GEMINI_MODEL", raising=False)
         _fake_catalog(
             monkeypatch,
-            ["gemini-4-argon-high", "gemini-4-hydrogen-high", "gemini-pro-orchestrator-neon"],
+            [
+                "gemini-4-argon-high",
+                "gemini-4-hydrogen-high",
+                "gemini-4-neon-xhigh",
+                "gemini-pro-orchestrator-neon",
+            ],
         )
         absent = adapters.model_health("gemini", tier)
         assert absent["resolvable"] is False
