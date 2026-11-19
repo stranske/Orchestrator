@@ -611,7 +611,7 @@ def main(argv: list[str]) -> int:
         safe = {
             "schema": "langsmith-pull-status/v1",
             "status": "failed",
-            "records_built": 0,
+            "records_built": None,
             "operation_errors": 1,
             "ingest_counts": _safe_ingest_counts({}),
         }

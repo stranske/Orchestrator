@@ -373,3 +373,24 @@ def test_cli_dry_run_is_strict_argument_boolean(monkeypatch, capsys, dry_run, fa
     assert ld.main(["--dry-run" if dry_run else "--ingest", "--json"]) == int(fails)
     output = json.loads(capsys.readouterr().out)
     assert output["dry_run"] is dry_run
+
+
+def test_ingest_exception_does_not_report_zero_built(monkeypatch, tmp_path, capsys):
+    import json
+
+    monkeypatch.setattr(ld, "fetch_records", lambda **kwargs: ([{"run_id": "synthetic"}], []))
+
+    def fail_ingest(*args, **kwargs):
+        raise RuntimeError("opaque-key TRACE_OUTPUT")
+
+    monkeypatch.setattr(ld.langsmith_pull, "ingest_files", fail_ingest)
+    original = ld.fetch_and_ingest
+    monkeypatch.setattr(ld, "fetch_and_ingest", lambda **kw: original(**kw, output_dir=tmp_path))
+    assert ld.main(["--ingest", "--json"]) == 1
+    out = capsys.readouterr()
+    result = json.loads(out.out)
+    assert result["records_built"] is None
+    assert result["ingest_counts"] == ld._safe_ingest_counts({})
+    assert result["operation_errors"] == 1
+    assert not out.err and "opaque-key" not in out.out and "TRACE_OUTPUT" not in out.out
+    assert (tmp_path / "langsmith-direct.ndjson").exists()
