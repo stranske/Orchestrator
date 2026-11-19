@@ -1943,6 +1943,23 @@ _MEASURED_MODULES = {
 }
 
 
+def _ranked_source_line(module, source_lines, item):
+    measured_line = item["line"]
+    if module is repo_knowledge:
+        # Both artifacts predate the Workflows registry migration. Bind the historical
+        # position to its measured statement before locating that statement in today's file.
+        measured_statements = {
+            1994: '            seeded = (SEED["repos"].get(repo) or {}).get("base_branch")',
+            1995: "            assert seeded in (None, base), (repo, seeded, base)",
+            2490: '            raise AssertionError("expected gh failure to be surfaced")',
+        }
+        assert measured_statements[measured_line] == item["text"]
+        assert source_lines.count(item["text"]) == 1
+        return source_lines.index(item["text"]) + 1
+    assert source_lines[measured_line - 1] == item["text"]
+    return measured_line
+
+
 def test_published_head_measurement_matches_ranked_source_lines():
     """The ea6255b combined artifact's six-target gain is 296, and the 21 lines it still misses are these source lines."""
     record_path = (
@@ -1969,7 +1986,7 @@ def test_published_head_measurement_matches_ranked_source_lines():
         base_missing += row["base_missing"]
         source = Path(module.__file__).read_text().splitlines()
         for item in row["still_missing"]:
-            assert source[item["line"] - 1] == item["text"]
+            _ranked_source_line(module, source, item)
     assert base_missing == record["base_missing"] == 317
     assert still == record["head_missing"] == 21
     assert gain == record["gain"] == 296
@@ -2025,8 +2042,8 @@ def test_current_head_remeasurement_keeps_ranked_gaps_inside_selftests():
         source = Path(module.__file__).read_text()
         source_lines = source.splitlines()
         for item in prior_row["still_missing"]:
-            assert source_lines[item["line"] - 1] == item["text"]
-            enclosing = _enclosing_function_names(source, item["line"])
+            current_line = _ranked_source_line(module, source_lines, item)
+            enclosing = _enclosing_function_names(source, current_line)
             assert any(fn.startswith("_selftest") for fn in enclosing), (
                 name,
                 item["line"],

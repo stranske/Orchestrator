@@ -16,6 +16,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -164,10 +165,19 @@ DOC_SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "dist", "build", ".nex
 DOC_SKIP_FILE_PREFIXES = ("BRIEF_",)
 DOC_SKIP_FILE_NAMES = {"docs/briefs/CODEX_BRIEF.md"}
 
-# v3 corrects Trend's retired phase-3 branch in both fresh seeds and existing v2 registries. Bumping
-# this runs `_migrate()` once against an existing registry; changing SEED alone would leave deployed
-# copies serving the stale branch instructions indefinitely.
-SEED_SCHEMA_VERSION = 3
+# v3 corrected Trend's branch. v4 moves the Workflows filename roster to one catalog.
+SEED_SCHEMA_VERSION = 4
+
+_OLD_WORKFLOWS_CATALOG_RULE = (
+    "Workflow additions or renames must update docs/ci/WORKFLOWS.md, "
+    "docs/ci/WORKFLOW_SYSTEM.md, and the workflow naming tests."
+)
+_WORKFLOWS_CATALOG_RULE = (
+    "For a workflow addition or rename, update the authoritative roster in docs/ci/WORKFLOWS.md "
+    "and the expected name in the workflow naming tests. Run the naming and catalog tests. "
+    "Update docs/ci/WORKFLOW_SYSTEM.md only when workflow relationships, operator procedures, "
+    "or guardrails change."
+)
 
 # The corrected Trend lines are named once and consumed by the SEED and migration table. A migration
 # that wrote different words than the SEED would leave two
@@ -214,14 +224,39 @@ SEED: dict[str, Any] = {
             "summary": "Shared automation source for the fleet; workflow changes usually need docs and registry surfaces.",
             "definition_of_done": [
                 {
-                    "text": "Workflow additions or renames must update docs/ci/WORKFLOWS.md, docs/ci/WORKFLOW_SYSTEM.md, and the workflow naming tests.",
+                    "text": _WORKFLOWS_CATALOG_RULE,
                 },
                 {
                     "text": "Consumer-facing files usually need sync-manifest/template coverage, not just the root copy.",
                 },
+                # Scoped rules already published in Workflows' managed AGENTS.md (PR #3186).
+                {
+                    "text": (
+                        "Route-weight codemod/refactor issues must produce the requested code or test "
+                        "change for the closer lane to validate; campaign plans, backfill plans, or "
+                        "analysis artifacts are not completion unless the issue explicitly asks for them."
+                    ),
+                    "task_types": ["codemod"],
+                },
+                {
+                    "text": (
+                        "Epic or cross-repo documentation issues must create the named Markdown artifact "
+                        "at the requested path; dry-run rollout JSON or execution plans alone do not "
+                        "satisfy documentation acceptance criteria."
+                    ),
+                    "task_types": ["epic", "cross_repo"],
+                },
             ],
             "validation": [
                 "Run the narrow workflow/template tests named by the touched surface; include the command/result in the PR body.",
+                {
+                    "text": (
+                        "For testgen issues, target the issue's named test file and source surface first; "
+                        "adjacent helper tests or generated gate artifacts are not a substitute for the "
+                        "requested coverage."
+                    ),
+                    "task_types": ["testgen"],
+                },
             ],
         },
         "stranske/Trend_Model_Project": {
@@ -351,9 +386,33 @@ def _migrate(reg: dict) -> bool:
     and idempotent: it corrects seeded text by exact match, reasserts seeded items and their scope,
     and never removes an instance-added entry.
     """
-    if int(reg.get("schema_version") or 1) >= SEED_SCHEMA_VERSION:
+    version = int(reg.get("schema_version") or 1)
+    if version >= SEED_SCHEMA_VERSION:
         return False
     repos = reg.setdefault("repos", {})
+    seed = SEED["repos"]["stranske/Workflows"]
+    workflows = repos.setdefault("stranske/Workflows", deepcopy(seed))
+    rules = workflows.get("definition_of_done", [])
+    for index, rule in enumerate(rules):
+        if rule == _OLD_WORKFLOWS_CATALOG_RULE:
+            rules[index] = _WORKFLOWS_CATALOG_RULE
+        elif isinstance(rule, dict) and rule.get("text") == _OLD_WORKFLOWS_CATALOG_RULE:
+            rule["text"] = _WORKFLOWS_CATALOG_RULE
+    if version < 3:
+        _reseed_legacy_repos(repos)
+    else:
+        # Fill gaps between the old registry and the published block without resetting
+        # existing per-instance scope, provenance, or managed-rule metadata.
+        for section in ("definition_of_done", "validation"):
+            live = workflows.setdefault(section, [])
+            present = {_text(item) for item in live}
+            live.extend(deepcopy(item) for item in seed[section] if _text(item) not in present)
+    reg["schema_version"] = SEED_SCHEMA_VERSION
+    return True
+
+
+def _reseed_legacy_repos(repos: dict) -> None:
+    """Apply the v3 branch and scope corrections to pre-v3 registries."""
     for repo, seed_entry in SEED["repos"].items():
         entry = repos.setdefault(repo, {})
         replacements = SUPERSEDED_TEXT.get(repo, {})
@@ -383,8 +442,6 @@ def _migrate(reg: dict) -> bool:
             # dispatcher independently resolves non-overridden repos through GitHub, so this
             # knowledge value can never pin provisioning to a retired branch.
             entry["base_branch"] = seed_entry["base_branch"]
-    reg["schema_version"] = SEED_SCHEMA_VERSION
-    return True
 
 
 def load(path: Path = REG) -> dict:
@@ -2063,6 +2120,7 @@ def _selftest() -> None:
         assert "PostgreSQL-compatible" in lms_impl, lms_impl
         # Scoping still WORKS -- it is only wrong on invariants. An instance-added, work-kind-specific
         # rule must still be filtered, or the fix above would have removed the feature, not the misuse.
+        scoped_before = scope_audit(path=p)["scoped_items"]
         scoped_reg = load(p)
         scoped_reg["repos"]["stranske/learning-management-system"]["validation"] = [
             {"text": "Name the seeded fixture the issue asks for.", "task_types": ["testgen"]},
@@ -2071,7 +2129,7 @@ def _selftest() -> None:
         lms = "stranske/learning-management-system#7"
         assert "seeded fixture" in context_for(lms, task_type="testgen", path=p)
         assert "seeded fixture" not in context_for(lms, task_type="review", path=p)
-        assert scope_audit(path=p)["scoped_items"] == 1, scope_audit(path=p)
+        assert scope_audit(path=p)["scoped_items"] == scoped_before + 1, scope_audit(path=p)
         assert scope_audit(path=p)["clean"], scope_audit(path=p)
         scoped_reg["repos"]["stranske/learning-management-system"].pop("validation")
         save(scoped_reg, p)
