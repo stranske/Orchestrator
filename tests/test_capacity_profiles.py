@@ -145,7 +145,7 @@ def test_exact_codex_profile_commands_preserve_permission_rails(monkeypatch):
         )
         assert assess[assess.index("--sandbox") + 1] == "read-only"
         assert "--json" not in assess
-    assert models == {"gpt-6-astra", "gpt-6.1-sol", "gpt-5.6-terra", "gpt-6-luna"}
+    assert models == {"gpt-6.2-astra", "gpt-6.2-sol", "gpt-5.6-terra", "gpt-6-luna"}
 
 
 def test_nested_sandbox_never_widens_read_only_profile(monkeypatch):
@@ -166,19 +166,20 @@ def test_nested_sandbox_never_widens_read_only_profile(monkeypatch):
 
 
 def test_full_tier_selects_sol_and_keeps_explicit_astra_lookup():
-    assert adapters.resolve_model("codex", "full") == "gpt-6.1-sol"
+    assert adapters.resolve_model("codex", "full") == "gpt-6.2-sol"
     active = execution_profiles.profiles_for_agent("codex")
     full = [p for p in active if p["requested_model"] == adapters.resolve_model("codex", "full")]
     assert {p["profile_id"] for p in full} == {
-        "codex-6.1-sol-high",
-        "codex-6.1-sol-medium",
-        "codex-6.1-sol-low",
+        "codex-6.2-sol-high",
+        "codex-6.2-sol-medium",
+        "codex-6.2-sol-low",
     }
-    assert "codex-6-astra-high" in {p["profile_id"] for p in active}
+    assert "codex-6.2-astra-high" in {p["profile_id"] for p in active}
     selected = execution_profiles.select_profile(
-        "implement", "o/r#full-tier", ["codex-6.1-sol-high"], rng_seed=0
+        "implement", "o/r#full-tier", ["codex-6.2-sol-high"], rng_seed=0
     )
-    assert selected["selected_profile_id"] == "codex-6.1-sol-high"
+    assert selected["selected_profile_id"] == "codex-6.2-sol-high"
+    assert execution_profiles.get_profile("codex-6.2-sol-high")["requested_model"] == "gpt-6.2-sol"
     assert execution_profiles.get_profile("codex-6.1-sol-high")["requested_model"] == "gpt-6.1-sol"
 
 
@@ -581,6 +582,8 @@ def test_profile_report_surfaces_cold_starts_propensity_and_shared_pool(tmp_path
     assert {row["requested_model"] for row in summary["profiles"]} == {
         "gpt-6-astra",
         "gpt-6.1-sol",
+        "gpt-6.2-astra",
+        "gpt-6.2-sol",
         "gpt-5.6-terra",
         "gpt-6-luna",
         "gpt-5.6-sol",

@@ -310,9 +310,9 @@ def test_build_command_honours_every_tier(tmp_path, monkeypatch):
     for agent in ("CODEX", "CLAUDE", "GEMINI"):
         monkeypatch.delenv("ORCH_" + agent + "_MAX_TIER", raising=False)
     expected = {
-        "codex": ("gpt-6-luna", "gpt-5.6-terra", "gpt-6.1-sol"),
+        "codex": ("gpt-6-luna", "gpt-5.6-terra", "gpt-6.2-sol"),
         "claude": ("claude-haiku-4-5", "claude-sonnet-5-5", "claude-opus-5-5"),
-        "gemini": ("gemini-4-hydrogen-low", "gemini-4-hydrogen-high", "gemini-4-argon-high"),
+        "gemini": ("gemini-4-hydrogen-low", "gemini-4-hydrogen-high", "gemini-4-neon-high"),
     }
     for agent, models in expected.items():
         for tier, model in zip(adapters.MODEL_TIER_NAMES, models):
@@ -322,11 +322,11 @@ def test_build_command_honours_every_tier(tmp_path, monkeypatch):
             assert model == adapters.MODEL_TIERS[agent][expected_tier], (agent, tier)
 
 
-def test_gemini_cheap_and_mid_are_hydrogen_and_only_full_is_argon():
+def test_gemini_cheap_and_mid_are_hydrogen_and_only_full_is_neon():
     """Same shape as codex/claude: routine tiers run the cheaper model, only full the frontier one."""
     for tier in ("cheap", "mid"):
         assert "hydrogen" in adapters.MODEL_TIERS["gemini"][tier], tier
-    assert adapters.MODEL_TIERS["gemini"]["full"] == "gemini-4-argon-high"
+    assert adapters.MODEL_TIERS["gemini"]["full"] == "gemini-4-neon-high"
 
 
 def test_offload_defaults_to_the_mid_tier():
@@ -1128,7 +1128,7 @@ def test_gemini_rename_preserves_advertised_effort(monkeypatch, effort):
     assert health["model"] == f"gemini-3.8-flash-{effort}"
 
 
-def test_argon_successor_tiers_reach_matching_offload_profiles(monkeypatch, tmp_path):
+def test_gemini_tiers_reach_matching_offload_profiles(monkeypatch, tmp_path):
     import dispatcher
     import execution_profiles
 
@@ -1144,7 +1144,7 @@ def test_argon_successor_tiers_reach_matching_offload_profiles(monkeypatch, tmp_
     expected = {
         "cheap": "gemini-4-hydrogen-low",
         "mid": "gemini-4-hydrogen-high",
-        "full": "gemini-4-argon-high",
+        "full": "gemini-4-neon-high",
     }
     assert adapters.MODEL_TIERS["gemini"] == expected
     assert adapters.DEFAULT_GEMINI_MODEL == expected["full"]
@@ -1339,26 +1339,26 @@ def test_argon_retirement_preserves_historical_profile_identity():
     assert not {"gemini-3.8-flash-low", "gemini-3.8-flash-high"} & active
 
 
-def test_argon_rename_preserves_family_and_effort(monkeypatch):
-    """Only the full tier is Argon; a missing Argon family must not fall back to Pro or Flash."""
+def test_neon_rename_preserves_family_and_effort(monkeypatch):
+    """A missing standalone Neon pin must never select another family or the opt-in route."""
     for tier, effort in (("full", "high"),):
         monkeypatch.delenv(f"ORCH_GEMINI_MODEL_{tier.upper()}", raising=False)
         monkeypatch.delenv("ORCH_GEMINI_MODEL", raising=False)
-        _fake_catalog(monkeypatch, ["gemini-3.8-flash-high", "gemini-3.1-pro-high"])
+        _fake_catalog(monkeypatch, ["gemini-4-argon-high", "gemini-4-hydrogen-high", "gemini-pro-orchestrator-neon"])
         absent = adapters.model_health("gemini", tier)
         assert absent["resolvable"] is False
-        assert absent["model"] == f"gemini-4-argon-{effort}"
+        assert absent["model"] == f"gemini-4-neon-{effort}"
         for generations, newest in (((5, 6), 6), ((9, 10), 10)):
             _fake_catalog(
                 monkeypatch,
                 [
-                    f"gemini-{generation}-argon-{e}"
+                    f"gemini-{generation}-neon-{e}"
                     for generation in generations
                     for e in ("low", "medium", "high")
                 ],
             )
             renamed = adapters.model_health("gemini", tier)
-            assert renamed["model"] == f"gemini-{newest}-argon-{effort}"
+            assert renamed["model"] == f"gemini-{newest}-neon-{effort}"
 
 
 @pytest.mark.parametrize("scenario", ["ceiling", "override", "unresolvable"])
