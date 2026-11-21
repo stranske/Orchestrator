@@ -23,7 +23,7 @@ What it runs:
   3. the capability gates: activation audit, recurrence replay, set coverage, admission. The two
      that are test files report the verdicts pytest just reached on the same checks instead of
      executing them a second time, and execute any check pytest left no verdict for.
-  4. the supported Node suites, including suites already executed by a pytest bridge.
+  4. Node suites with existing automatic callers, including pytest bridges.
 All of it runs against ONE private copy of the capability ledger and the Brain, taken when the run
 starts and deleted when it ends (see `private_state`): no read waits on the tick's lock, and nothing
 the code under test writes can reach production state. `ORCH_VERIFY_LIVE_STATE=1` turns that off.
@@ -2036,7 +2036,7 @@ def verify(
         started = time.monotonic()
         if aggregate is None:
             try:
-                suites = node_test_inventory.supported_suites()
+                suites = node_test_inventory.automated_suites(include_gate=True)
             except ValueError as exc:
                 return 1, f"Node suite inventory FAILED: {exc}\n"
             py = run_pytest(
@@ -2193,6 +2193,16 @@ def verify(
         f"{_cap('selftest_skipped_max')} skipped"
     )
     lines.extend(node_suite_lines(node_suites))
+    all_node_suites = node_test_inventory.supported_suites()
+    if all_node_suites:
+        gate_suites = sum(suite.gate_job is not None for suite in all_node_suites)
+        standalone_suites = sum(
+            suite.gate_job is None and suite.pytest_nodeid is None for suite in all_node_suites
+        )
+        lines.append(
+            f"  node inventory: {len(all_node_suites)} suites; "
+            f"{standalone_suites} standalone; {gate_suites} dedicated Gate"
+        )
     for name, res in gates.items():
         state = "SKIP" if res["skipped"] else ("ok " if res["ok"] else "FAIL")
         lines.append(f"  {name:<18} {state} {res['line']}")

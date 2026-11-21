@@ -23,7 +23,7 @@ class NodeSuite:
     gate_job: str | None = None
 
 
-# Each entry here runs directly with `node --test <path>`.
+# These standalone witnesses retain their file-level `node --test <path>` entry point.
 DIRECT_SUITES = (
     "adjudicator_acceptance_runner",
     "adjudicator_case_gaps",
@@ -133,28 +133,30 @@ def supported_suites() -> tuple[NodeSuite, ...]:
     return tuple(sorted(SUPPORTED_NODE_SUITES, key=lambda suite: suite.path))
 
 
+def automated_suites(*, include_gate: bool = False) -> tuple[NodeSuite, ...]:
+    """Select suites owned by pytest or the dedicated GitHub Gate jobs."""
+    return tuple(
+        suite
+        for suite in supported_suites()
+        if suite.pytest_nodeid or (include_gate and suite.gate_job)
+    )
+
+
 def assign_shards(
     shards: list[list[str]], *, collected_nodeids: list[str] | None = None
 ) -> list[list[NodeSuite]]:
-    """Keep bridge suites with their pytest module and distribute direct suites across shards."""
+    """Keep each existing bridge with its collected pytest module."""
     assignments: list[list[NodeSuite]] = [[] for _ in shards]
     modules = {module: index for index, shard in enumerate(shards) for module in shard}
     collected = Counter(collected_nodeids or [])
-    direct_index = 0
-    for suite in supported_suites():
-        if suite.pytest_nodeid is None:
-            index = direct_index % len(shards)
-            direct_index += 1
-        else:
-            module = suite.pytest_nodeid.split("::", 1)[0]
-            if module not in modules or (
-                collected_nodeids is not None and collected[suite.pytest_nodeid] != 1
-            ):
-                raise ValueError(
-                    f"{suite.path}: missing or duplicate pytest bridge {suite.pytest_nodeid}"
-                )
-            index = modules[module]
-        assignments[index].append(suite)
+    for suite in automated_suites():
+        nodeid = suite.pytest_nodeid
+        if nodeid is None:
+            raise ValueError(f"{suite.path}: shard entry lacks a pytest bridge")
+        module = nodeid.split("::", 1)[0]
+        if module not in modules or (collected_nodeids is not None and collected[nodeid] != 1):
+            raise ValueError(f"{suite.path}: missing or duplicate pytest bridge {nodeid}")
+        assignments[modules[module]].append(suite)
     return assignments
 
 

@@ -51,7 +51,7 @@ def test_shard_lists_partition_every_collected_test_exactly_once():
     if verify.tree_shape()[0] == verify.CHECKOUT:
         node_test_inventory.check_tracked_inventory(verify.ROOT)
     node_plan = node_test_inventory.assign_shards(plan, collected_nodeids=assigned)
-    expected_suites = Counter(suite.path for suite in node_test_inventory.SUPPORTED_NODE_SUITES)
+    expected_suites = Counter(suite.path for suite in node_test_inventory.automated_suites())
     assert Counter(suite.path for shard in node_plan for suite in shard) == expected_suites
     for suite in (suite for shard in node_plan for suite in shard):
         assert (verify.ROOT / suite.path).is_file(), suite.path
@@ -487,11 +487,15 @@ def test_generated_shard_runs_python_and_its_node_bridge(
         "});\n"
     )
     direct.write_text(direct_source)
+    (tests / "test_standalone.js").write_text(
+        "throw new Error('standalone witness must retain its file-level entry point');\n"
+    )
     monkeypatch.setattr(
         node_test_inventory,
         "SUPPORTED_NODE_SUITES",
         (
-            node_test_inventory.NodeSuite("tests/test_direct.js"),
+            node_test_inventory.NodeSuite("tests/test_direct.js", gate_job="fixture-node-gate"),
+            node_test_inventory.NodeSuite("tests/test_standalone.js"),
             node_test_inventory.NodeSuite(
                 "tests/test_bridged.js", pytest_nodeid="tests/test_bridge.py::test_node_bridge"
             ),
@@ -531,6 +535,17 @@ def test_generated_shard_runs_python_and_its_node_bridge(
 
     plan = shard_planner.make_plan(junit, tmp_path, 2)
     assert plan["shards"] == [["tests/test_bridge.py"], ["tests/test_python.py"]]
+    nodeid = "tests/test_bridge.py::test_node_bridge"
+    with pytest.raises(ValueError, match="missing or duplicate pytest bridge"):
+        node_test_inventory.assign_shards([["tests/test_python.py"]])
+    for bad_collection in ([], [nodeid, nodeid]):
+        with pytest.raises(ValueError, match="missing or duplicate pytest bridge"):
+            node_test_inventory.assign_shards(plan["shards"], collected_nodeids=bad_collection)
+    with monkeypatch.context() as patch:
+        suites = node_test_inventory.SUPPORTED_NODE_SUITES
+        patch.setattr(node_test_inventory, "SUPPORTED_NODE_SUITES", (*suites, suites[0]))
+        with pytest.raises(ValueError, match="duplicate paths"):
+            node_test_inventory.supported_suites()
     config = tmp_path / "config"
     config.mkdir()
     (config / "test-shards.json").write_text(json.dumps(plan))
@@ -541,13 +556,16 @@ def test_generated_shard_runs_python_and_its_node_bridge(
         code = verify.main()
         return code, capsys.readouterr().out
 
-    def assert_inventory(summary):
-        assert "2 suite(s), " in summary, summary
+    def assert_inventory(summary, *, direct_ran=True):
+        expected = ["tests/test_bridged.js"]
+        if direct_ran:
+            expected.append("tests/test_direct.js")
+        assert f"{len(expected)} suite(s), " in summary, summary
         assert [
             line.split()[3].rstrip(":")
             for line in summary.splitlines()
             if line.startswith("    Node suite ")
-        ] == ["tests/test_bridged.js", "tests/test_direct.js"]
+        ] == expected
 
     code, summary = invoke()
     assert code == 0 and "2 passed" in summary, summary
@@ -556,7 +574,7 @@ def test_generated_shard_runs_python_and_its_node_bridge(
     assert_inventory(summary)
 
     code, summary = invoke("--pytest-shard", "1/2", "--shard-output", str(output))
-    assert code == 0 and "2 suite(s), 2 passed" in summary, summary
+    assert code == 0 and "1 suite(s), 1 passed" in summary, summary
     receipt = json.loads((output / "shard-1.json").read_text())
     assert receipt["test_inventory"] == [["tests.test_bridge", "test_node_bridge"]]
     code, summary = invoke("--pytest-shard", "2/2", "--shard-output", str(output))
@@ -566,7 +584,7 @@ def test_generated_shard_runs_python_and_its_node_bridge(
     code, summary = invoke("--aggregate", str(output))
     assert code == 0 and "2 passed" in summary, summary
     assert "approved-scope control ok  approved-scope Python check passed" in summary
-    assert_inventory(summary)
+    assert_inventory(summary, direct_ran=False)
 
     record_path = output / "shard-2.json"
     control["node_suites"] = [["tests/test_bridged.js", ""]]
@@ -594,7 +612,7 @@ def test_generated_shard_runs_python_and_its_node_bridge(
     assert_inventory(summary)
 
     runs = [json.loads(line) for line in observed.read_text().splitlines()]
-    assert len(runs) == 4
+    assert len(runs) == 3
     assert len({directory for directory, _ in runs}) == len(runs)
     assert all(not pathlib.Path(path).exists() for run in runs for path in run)
     assert ledger.read_text() == "{}\n"

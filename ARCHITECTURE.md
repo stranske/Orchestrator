@@ -2788,6 +2788,12 @@ result to current status. Pending, incomplete, conflicting or malformed events c
 restore an older PASS. The existing acceptance and revision-bound closure guards
 remain authoritative.
 
+The Node test inventory retains the existing execution owners. Verification
+shards record each pytest bridge once. The dedicated GitHub Gate jobs execute
+their Node suites, and the standalone local verifier also runs those suites.
+Standalone witnesses remain available by file through `node --test`; they keep
+their independent prerequisites and do not run automatically in pytest shards.
+
 Registered deterministic native merge/verification callbacks use IO capacity in both
 schedulers and scoped resource admission. Verification dispatch collects bound core
 information and preserves valid retained progress without downloading optional
