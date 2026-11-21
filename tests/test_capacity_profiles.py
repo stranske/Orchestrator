@@ -50,7 +50,9 @@ def test_codex_profiles_share_one_pool(codex_profile_registry):
         by_agent.setdefault(profile["agent"], set()).update(profile["capacity_pool_ids"])
     for agent, pools in by_agent.items():
         expected = {"gemini-prepaid", "antigravity-third-party"} if agent == "gemini" else None
-        assert pools == expected if expected else len(pools) == 1, f"{agent} profiles span {sorted(pools)}"
+        assert (
+            pools == expected if expected else len(pools) == 1
+        ), f"{agent} profiles span {sorted(pools)}"
     # The burn-once property is about ONE agent's profiles sharing ONE real balance, so the events
     # and registry are scoped to codex. Feeding every seat's profile in would test arithmetic across
     # unrelated accounts, not the shared-subscription invariant.

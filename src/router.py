@@ -91,6 +91,7 @@ class RouteEntry(RouteEntryRef):
 
     mode: str
     late: bool
+    agy_fallback_profile: NotRequired[str]
 
 
 class RouteSpec(TypedDict):
@@ -693,17 +694,37 @@ def select_agent(
     # explicit shed, model-health, or other non-quota decisions.
     if profile_transport == "local":
         gem = cap.get("agents", {}).get("gemini", {})
-        if isinstance(gem, dict) and gem.get("policy") in {"weekly-polled-cap", "window-polled-cap"}:
+        if isinstance(gem, dict) and gem.get("policy") in {
+            "weekly-polled-cap",
+            "window-polled-cap",
+        }:
             import agy_fallback
+
             fallback = agy_fallback.select()
             if fallback:
-                cap = {**cap, "agents": {**cap.get("agents", {}), "gemini": {
-                    **gem, "state": "ok", "policy": "agy-third-party-fallback",
-                    "reason": "Gemini quota exhausted; independent Antigravity third-party quota available",
-                }}, "profiles": {**cap.get("profiles", {}), fallback: {"state": "ok"}}}
-                if not spec.get("neutral_prior") and not any(e["agent"] == "gemini" for e in spec["agents"]):
-                    spec = {**spec, "agents": [*spec["agents"],
-                            {"agent": "gemini", "mode": "mid", "late": True}]}
+                cap = {
+                    **cap,
+                    "agents": {
+                        **cap.get("agents", {}),
+                        "gemini": {
+                            **gem,
+                            "state": "ok",
+                            "policy": "agy-third-party-fallback",
+                            "reason": "Gemini quota exhausted; independent Antigravity third-party quota available",
+                        },
+                    },
+                    "profiles": {**cap.get("profiles", {}), fallback: {"state": "ok"}},
+                }
+                if not spec.get("neutral_prior") and not any(
+                    e["agent"] == "gemini" for e in spec["agents"]
+                ):
+                    spec = {
+                        **spec,
+                        "agents": [
+                            *spec["agents"],
+                            {"agent": "gemini", "mode": "mid", "late": True},
+                        ],
+                    }
     load = load or {}
     neutral = bool(spec.get("neutral_prior"))
     if neutral and learned is None:
@@ -718,6 +739,7 @@ def select_agent(
     for idx, entry in enumerate(spec["agents"]):
         if entry["agent"] == "gemini" and _policy(cap, "gemini") == "agy-third-party-fallback":
             import agy_fallback
+
             fallback = agy_fallback.select()
             if not fallback:
                 continue

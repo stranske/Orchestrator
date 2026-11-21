@@ -134,8 +134,13 @@ PROFILE_REGISTRY: dict[str, dict[str, Any]] = {
     for p in (
         *(
             _profile(
-                f"agy-{model}", model, effort, agent="gemini", provider="google",
-                pool="antigravity-third-party", adapter_version="agy-cli-profile-v1",
+                f"agy-{model}",
+                model,
+                effort,
+                agent="gemini",
+                provider="google",
+                pool="antigravity-third-party",
+                adapter_version="agy-cli-profile-v1",
                 requires_explicit_selection=True,
             )
             for model, effort in (

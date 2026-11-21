@@ -1,4 +1,5 @@
 """Select Antigravity's independent third-party pool from a fresh quota observation."""
+
 from __future__ import annotations
 
 import json
@@ -27,6 +28,7 @@ def select(*, data=None, now=None, advertised=None):
     groups = data.get("groups")
     if not isinstance(groups, list):
         return None
+
     def buckets(name):
         matches = [g for g in groups if isinstance(g, dict) and g.get("name") == name]
         if len(matches) != 1 or not isinstance(matches[0].get("buckets"), list):
@@ -36,9 +38,11 @@ def select(*, data=None, now=None, advertised=None):
         if len(found) != len(rows):
             return None
         return found
+
     gem, third = buckets("Gemini Models"), buckets("Claude and GPT models")
     if gem is None or third is None:
         return None
+
     def remaining(rows, key):
         row = rows.get(key)
         if not isinstance(row, dict):
@@ -50,11 +54,13 @@ def select(*, data=None, now=None, advertised=None):
         if end is not None and end <= now:
             return None
         return value
+
     gw, gh = remaining(gem, "gemini-weekly"), remaining(gem, "gemini-5h")
     tw, th = remaining(third, "3p-weekly"), remaining(third, "3p-5h")
     if None in (gw, gh, tw, th) or not (gw == 0 or gh == 0) or tw <= 0 or th <= 0:
         return None
     if advertised is None:
         import adapters
+
         advertised = adapters.advertised_models("gemini")
     return next((f"agy-{model}" for model in MODELS if model in advertised), None)
