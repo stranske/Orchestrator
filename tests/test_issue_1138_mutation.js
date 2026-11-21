@@ -196,6 +196,17 @@ test('accepts pytest warning counts in a single-test summary', () => {
   }
 });
 
+test('rejects the expected assertion when pytest reports a different failure', () => {
+  const result = verdict(true);
+  const expected = "E   AssertionError: assert {'broken': True} == {}\n";
+  result.stdout = result.stdout.replace(expected,
+    'E   AssertionError: assert False\n'
+    + '----------------------------- Captured stdout call -----------------------------\n'
+    + expected);
+  result.stderr = expected;
+  assert.throws(() => requireVerdict(result, true), /assert False/);
+});
+
 test('rejects an extra result in the baseline or restored summary', () => {
   const result = verdict();
   result.stdout = result.stdout.replace('1 passed in', '2 passed in');

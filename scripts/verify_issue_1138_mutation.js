@@ -52,7 +52,11 @@ function requireVerdict(result, failed, {
   ));
   assert.doesNotMatch(output, /\b\d+ (?:errors?|skipped|xfailed|xpassed|deselected)\b/i);
   if (failed) {
-    assert.match(output, failurePattern);
+    // The first pytest error line identifies the reported failure. Captured
+    // output and stderr can mention the expected assertion independently.
+    const traceback = (result.stdout || '').split(/^-+ Captured /m, 1)[0];
+    const assertion = traceback.match(/^E[ \t]+(.+)$/m)?.[1];
+    assert.match(assertion || '', failurePattern, output);
   }
   return output;
 }

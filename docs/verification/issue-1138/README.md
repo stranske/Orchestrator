@@ -1035,3 +1035,18 @@ above cover the committed head. GitHub approval policy rejected the PR checklist
 edit, blocker comment, and `needs-human` label. The exact-head merge guard
 blocked at the review-thread GraphQL query. Fresh Anaconda verification and
 the terminal merge remain pending.
+
+### Verification at `694883fbc2b43e13f939c2400cfd1d9181ef6f26`
+
+PR #1457 was open and ready for review. All six pytest/coverage shards, all six
+flat exec-mirror shards, both aggregates, and Gate passed.
+[CI run](https://github.com/stranske/Orchestrator/actions/runs/44909539595),
+[coverage aggregate](https://github.com/stranske/Orchestrator/actions/runs/44909539595/job/136862818639),
+[flat exec-mirror aggregate](https://github.com/stranske/Orchestrator/actions/runs/44909539595/job/136862720368),
+[Gate run](https://github.com/stranske/Orchestrator/actions/runs/44909539979)
+
+Both named Anaconda pytest commands exited 127 on this runner because the
+interpreter was absent. The installed Python lacked pytest, so both deliberate-break
+scripts stopped at baseline. The recorded experiment at `d068c59` remains the
+latest real pytest transcript. The merge guard dry run for `694883f` blocked at the
+review-thread GraphQL query.
