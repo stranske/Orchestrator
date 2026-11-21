@@ -475,6 +475,130 @@ def test_generated_shard_runs_python_and_its_node_bridge(shard_planner, tmp_path
 
 
 @pytest.fixture
+def focused_node_shard(shard_planner, tmp_path, monkeypatch):
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    (tests / "test_python.py").write_text(
+        "from pathlib import Path\n"
+        "def test_python():\n"
+        "    with Path('visits').open('a') as out:\n"
+        "        out.write('python\\n')\n"
+    )
+    (tests / "test_bridge.py").write_text(
+        "import subprocess\n"
+        "def test_node_bridge():\n"
+        "    subprocess.run(['node', '--test', '--test-isolation=none',"
+        " 'tests/test_bridged.js'], check=True, timeout=30)\n"
+    )
+    (tests / "test_bridged.js").write_text(
+        "require('node:test')('bridge', () => {\n"
+        "  require('node:fs').appendFileSync('visits', 'bridge\\n');\n"
+        "});\n"
+    )
+    junit = tmp_path / "timings.xml"
+    junit.write_text('<testsuite><testcase classname="tests.test_python" time="1"/></testsuite>')
+    monkeypatch.delenv("PYTEST_ADDOPTS", raising=False)
+    monkeypatch.setenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
+    monkeypatch.setenv("VERIFY_PYTEST_WORKERS", "0")
+    config = tmp_path / "config"
+    config.mkdir()
+    plan = shard_planner.make_plan(junit, tmp_path, 1)
+    assert plan["shards"] == [["tests/test_bridge.py", "tests/test_python.py"]]
+    (config / "test-shards.json").write_text(json.dumps(plan))
+    return tests
+
+
+def test_supported_node_collection_from_verifier_entrypoint(
+    focused_node_shard, tmp_path, monkeypatch, capsys
+):
+    tests = focused_node_shard
+    direct = tests / "test_supported.js"
+    source = (
+        "const fs = require('node:fs');\n"
+        "const path = require('node:path');\n"
+        "const assert = require('node:assert/strict');\n"
+        "require('node:test')('supported scope arithmetic', () => {\n"
+        "  const env = process.env;\n"
+        "  const runtime = env.ORCH_LOCAL_RUNTIME;\n"
+        "  assert.notEqual(runtime, env.FIXTURE_LIVE_RUNTIME);\n"
+        "  assert.equal(path.dirname(runtime), path.dirname(env.ORCH_STATE_DIR));\n"
+        "  assert.equal(path.dirname(runtime), path.dirname(env.HANDOFF_DIR));\n"
+        "  assert.equal(env.ORCH_CAPABILITIES_PATH, undefined);\n"
+        "  assert.equal(env.ORCH_FEEDBACK_DB, undefined);\n"
+        "  fs.mkdirSync(runtime, { recursive: true });\n"
+        "  fs.writeFileSync(path.join(runtime, 'node-state'), 'private');\n"
+        "  fs.appendFileSync('visits', runtime + '\\n');\n"
+        "  assert.equal(6 * 7, 42);\n"
+        "});\n"
+    )
+    direct.write_text(source)
+    for name in ("test_deferred.js", "test_untracked.js"):
+        (tests / name).write_text("throw new Error('outside approved scope');\n")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "add", "tests/test_supported.js", "tests/test_bridged.js", "tests/test_deferred.js"],
+        cwd=tmp_path,
+        check=True,
+    )
+
+    live = tmp_path / "live"
+    monkeypatch.setenv("FIXTURE_LIVE_RUNTIME", str(live))
+    monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(live))
+    monkeypatch.setenv("ORCH_STATE_DIR", str(live / "state"))
+    monkeypatch.setenv("HANDOFF_DIR", str(live / "handoff"))
+    monkeypatch.delenv(verify.LIVE_STATE_ENV, raising=False)
+    monkeypatch.setattr(
+        verify,
+        "_state_sources",
+        lambda: (
+            "ORCH_CAPABILITIES_PATH",
+            live / "capabilities.json",
+            "ORCH_FEEDBACK_DB",
+            live / "orchestrator.db",
+        ),
+    )
+    monkeypatch.setattr(verify, "ROOT", tmp_path)
+    monkeypatch.setattr(verify, "COVERAGE", False)
+    monkeypatch.setattr(verify, "SUPPORTED_NODE_SUITES", ("tests/test_supported.js",))
+    monkeypatch.setattr(
+        verify, "NODE_PYTEST_BRIDGES", {"tests/test_bridged.js": "tests/test_bridge.py"}
+    )
+    monkeypatch.setattr(verify, "NODE_PR_GATE_SUITES", set())
+    monkeypatch.setattr(verify, "NODE_PR_GATE_WRAPPERS", set())
+    monkeypatch.setattr(verify, "GATES", ())
+    monkeypatch.setattr(verify, "selftest_modules", lambda: [])
+    monkeypatch.setattr(verify, "load_floor", lambda: {"collected": 2, "passed": 2})
+    shard_output = tmp_path / "shard-results"
+    monkeypatch.setattr(sys, "argv", ["verify.py", "--aggregate", str(shard_output)])
+    visits = tmp_path / "visits"
+    runtimes = set()
+
+    broken = source.replace("6 * 7, 42", "6 * 7, 41")
+    for contents, expected in ((source, 0), (broken, 1), (source, 0)):
+        visits.unlink(missing_ok=True)
+        direct.write_text(contents)
+        shard_code, shard_summary = verify.run_pytest_shard("1/1", shard_output)
+        assert shard_code == 0, shard_summary
+        code = verify.main()
+        output = capsys.readouterr().out
+        assert "2 passed" in output, output
+        assert "1 via pytest, 0 via PR Gate, 1 unadmitted (3 paths inventoried" in output, output
+        assert code == expected, output
+        if expected:
+            assert "0/1 direct suites passed" in output
+            assert "tests/test_supported.js" in output and "supported scope arithmetic" in output
+        else:
+            assert "1/1 direct suites passed" in output
+        lines = visits.read_text().splitlines()
+        assert lines[:2] == ["bridge", "python"] and len(lines) == 3, lines
+        runtime = pathlib.Path(lines[2])
+        assert not runtime.parent.exists()
+        assert not live.exists()
+        runtimes.add(runtime)
+    assert len(runtimes) == 3
+
+
+@pytest.fixture
 def planner_junit(shard_planner, tmp_path, monkeypatch):
     (tmp_path / "tests").mkdir()
     for name in ("a", "b", "c", "untimed"):

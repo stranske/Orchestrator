@@ -23,6 +23,8 @@ What it runs:
   3. the capability gates: activation audit, recurrence replay, set coverage, admission. The two
      that are test files report the verdicts pytest just reached on the same checks instead of
      executing them a second time, and execute any check pytest left no verdict for.
+  4. supported standalone Node suites, each with its own temporary runtime. Existing pytest
+     bridges and dedicated PR Gate jobs keep their Node suites.
 All of it runs against ONE private copy of the capability ledger and the Brain, taken when the run
 starts and deleted when it ends (see `private_state`): no read waits on the tick's lock, and nothing
 the code under test writes can reach production state. `ORCH_VERIFY_LIVE_STATE=1` turns that off.
@@ -1065,6 +1067,161 @@ def _results_flag() -> str | None:
     return PYTEST_RESULTS_FLAG
 
 
+# These suites already have a caller in normal pytest or the consumer's PR Gate.
+# Keep the pytest bridges in the shard plan and do not run their JS files a second time here.
+NODE_PYTEST_BRIDGES = {
+    "tests/test_capture_mirror_deployment_evidence.js": "tests/test_mirror_product_witnesses.py",
+    "tests/test_orchestrator_loop_svg.js": "tests/test_orchestrator_loop_svg_wiring.py",
+    "tests/test_verifier_context_builder_contract.js": "tests/test_verifier_context_builder_wiring.py",
+}
+NODE_PR_GATE_SUITES = {
+    "tests/test_capability_invocation_deadlines.js",
+    "tests/test_route_weights_export_cli.js",
+    "tests/test_switch_review_exploration.js",
+}
+NODE_PR_GATE_WRAPPERS = {".github/scripts/__tests__/capability_invocation_deadlines.test.js"}
+NODE_SUITE_PATTERNS = ("tests/test_*.js", ".github/scripts/__tests__/*.test.js")
+
+# Admission requires standalone verification in both the checkout and flat exec mirror.
+SUPPORTED_NODE_SUITES = (
+    "tests/test_adjudicator_completion.js",
+    "tests/test_adjudicator_evidence_ledger.js",
+    "tests/test_adjudicator_inventory.js",
+    "tests/test_agent_gh_guard_bash.js",
+    "tests/test_audit_pacing_ledger.js",
+    "tests/test_capture_review_source_evidence.js",
+    "tests/test_codemod_campaign_receipts.js",
+    "tests/test_discover_seatbelt_ci.js",
+    "tests/test_install_verified_snapshot_reader.js",
+    "tests/test_muse_offload_witness.js",
+    "tests/test_observer_verdict_cli.js",
+    "tests/test_recover_seatbelt_artifact.js",
+    "tests/test_recover_seatbelt_ci.js",
+    "tests/test_redirect_completion_tracking.js",
+    "tests/test_redirect_stall_fixtures.js",
+    "tests/test_redirect_stall_provenance.js",
+    "tests/test_redirect_sweep_shell_backend.js",
+    "tests/test_review_contract_inputs.js",
+    "tests/test_role_prompt_offering_cli.js",
+    "tests/test_seatbelt_discovered_ci.js",
+    "tests/test_seatbelt_hosted_ci.js",
+    "tests/test_seatbelt_measurement_producer.js",
+    "tests/test_seatbelt_original_ci.js",
+    "tests/test_switch_review_stuck_targets.js",
+    "tests/test_verify_redirect_merged_revision.js",
+)
+
+
+def node_suite_inventory() -> tuple[set[str], set[str], set[str], set[str]]:
+    """Reconcile checkout paths against the index and the mirror against its shipped files."""
+    if (ROOT / ".git").exists():
+        indexed = subprocess.run(
+            ["git", "ls-files", "-z", "--", *(f":(glob){pattern}" for pattern in NODE_SUITE_PATTERNS)],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=15,
+        )
+        tracked = set(indexed.stdout.split("\0")) - {""}
+    else:
+        tracked = {
+            path.relative_to(ROOT).as_posix()
+            for pattern in NODE_SUITE_PATTERNS
+            for path in ROOT.glob(pattern)
+        }
+    supported = set(SUPPORTED_NODE_SUITES)
+    bridged = set(NODE_PYTEST_BRIDGES)
+    script_suites = {suite for suite in tracked if suite.startswith(".github/scripts/__tests__/")}
+    pr_gate = NODE_PR_GATE_SUITES | (script_suites - NODE_PR_GATE_WRAPPERS)
+    return tracked, supported, bridged, pr_gate
+
+
+def _run_node_suite(suite: str) -> str | None:
+    from capabilities import LEDGER_PATH_ENV
+    from feedback import DB_PATH_ENV
+    from paths import SEEDED_REGISTRY_ENV
+
+    with tempfile.TemporaryDirectory(prefix="verify-node-") as directory:
+        scratch = pathlib.Path(directory)
+        env = _child_env()
+        env.update(
+            PYTHON=sys.executable,
+            PATH=os.pathsep.join(
+                (str(pathlib.Path(sys.executable).parent), env.get("PATH", os.defpath))
+            ),
+            ORCH_STATE_DIR=str(scratch / "state"),
+            ORCH_LOCAL_RUNTIME=str(scratch / "runtime"),
+            HANDOFF_DIR=str(scratch / "handoff"),
+        )
+        for key in (LEDGER_PATH_ENV, DB_PATH_ENV, LIVE_STATE_ENV, "ORCH_CAPABILITY_HEARTBEATS"):
+            env.pop(key, None)
+        for key in SEEDED_REGISTRY_ENV:
+            env.pop(key, None)
+        try:
+            result = subprocess.run(
+                ["node", "--test", "--test-isolation=none", "--test-reporter=tap", suite],
+                cwd=ROOT,
+                env=env,
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=120,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return str(exc)
+    if result.returncode == 0 and re.search(r"^# pass [1-9]\d*$", result.stdout, re.MULTILINE):
+        return None
+    output = (result.stdout or "") + (result.stderr or "")
+    detail = "\n".join(line for line in output.splitlines() if line.startswith("not ok"))
+    try:
+        diagnostic, _, _ = _bounded_redacted(detail or output, 1200)
+    except ValueError:
+        diagnostic = "diagnostic unavailable"
+    return f"exit {result.returncode}, expected passing Node tests\n{diagnostic.strip()}"
+
+
+def run_node_suite_gate() -> dict:
+    """Run directly supported suites once, alongside the Python verification entries."""
+    try:
+        tracked, supported, bridged, pr_gate = node_suite_inventory()
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"ok": False, "skipped": [], "line": f"could not read Node suite inventory ({exc})"}
+
+    external = pr_gate | NODE_PR_GATE_WRAPPERS
+    assigned = supported | bridged | external
+    missing = (assigned - tracked) | {suite for suite in assigned if not (ROOT / suite).is_file()}
+    missing |= {bridge for bridge in NODE_PYTEST_BRIDGES.values() if not (ROOT / bridge).is_file()}
+    overlap = (supported & bridged) | (supported & external) | (bridged & external)
+    errors = []
+    if missing:
+        errors.append(f"missing suites or bridges: {', '.join(sorted(missing))}")
+    if overlap or len(supported) != len(SUPPORTED_NODE_SUITES):
+        errors.append(f"duplicate verification entries: {', '.join(sorted(overlap))}")
+    if not supported:
+        errors.append("zero directly supported Node suites")
+    passed = 0
+    if not errors:
+        suites = sorted(supported)
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results = list(pool.map(_run_node_suite, suites))
+        for suite, problem in zip(suites, results, strict=True):
+            if problem is None:
+                passed += 1
+            else:
+                errors.append(f"{suite}: {problem}")
+    summary = (
+        f"{passed}/{len(supported)} direct suites passed, {len(bridged)} via pytest, "
+        f"{len(pr_gate)} via PR Gate, {len(tracked - assigned)} unadmitted "
+        f"({len(tracked)} paths inventoried, {len(tracked & NODE_PR_GATE_WRAPPERS)} forwarding)"
+    )
+    if errors:
+        summary += "\n" + "\n".join(
+            f"    {line}" for error in errors for line in error.splitlines()
+        )
+    return {"ok": not errors, "skipped": [], "line": summary}
+
+
 def run_gates(*, pytest_results: pathlib.Path | None = None) -> dict:
     """Run every gate. The two that are TEST FILES get this run's pytest verdicts when there are some.
 
@@ -1073,7 +1230,7 @@ def run_gates(*, pytest_results: pathlib.Path | None = None) -> dict:
     execute only a check pytest left no verdict for (see `env_prereq.recorded_verdicts`). Each gate
     still prints its own line and headline here.
     """
-    out = {}
+    out = {"supported Node suites": run_node_suite_gate()}
     flag = _results_flag() if pytest_results is not None else None
     for name, argv in GATES:
         if flag and argv[0].startswith("test_"):
