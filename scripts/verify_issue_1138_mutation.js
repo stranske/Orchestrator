@@ -31,9 +31,17 @@ function pytestCommand(testNode = node) {
 
 function runPytest(root, testNode) {
   const [python, ...args] = pytestCommand(testNode);
+  const env = {
+    ...process.env,
+    PYTHONDONTWRITEBYTECODE: '1',
+    PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1',
+  };
+  // Use the archived pytest configuration and the explicit reproduction flags.
+  delete env.PYTEST_ADDOPTS;
+  delete env.PYTEST_PLUGINS;
   return spawnSync(python, args, {
     cwd: root,
-    env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
+    env,
     stdio: ['ignore', 'pipe', 'pipe'],
     encoding: 'utf8', timeout: 60000, maxBuffer: 4 * 1024 * 1024,
   });

@@ -1086,3 +1086,35 @@ The merge guard dry run stopped at its review-thread GraphQL query.
 [coverage aggregate](https://github.com/stranske/Orchestrator/actions/runs/44910550712/job/136865821210),
 [flat exec-mirror aggregate](https://github.com/stranske/Orchestrator/actions/runs/44910550712/job/136865782922),
 [Gate run](https://github.com/stranske/Orchestrator/actions/runs/44910551112)
+
+### Verification at `2868fcedb33fb90f2335adb277d29b1c62d6abcf`
+
+The runner lacked `/opt/anaconda3/bin/python3`. Both named Anaconda commands
+exited 127. With Python 3.14.10, pytest 9.1.1 from upstream source, and temporary
+state, runtime, and handoff directories, both test selections passed.
+
+| Command | Result |
+| --- | --- |
+| `python3 -B -m pytest -q tests/test_coverage_round_1138.py -m 'not slow' -p no:cacheprovider` | 79 passed in 17.53s, exit 0 |
+| `python3 -B -m pytest -q tests/test_verify_sharding.py::test_shard_lists_partition_every_collected_test_exactly_once -m 'not slow' -p no:cacheprovider` | 1 passed in 40.24s, exit 0 |
+
+`node scripts/verify_issue_1138_mutation.js` ran against an archive of this head.
+The baseline passed, the modified status fallback failed at `assert
+miner["status"] == {}`, and the restored test passed. The result and matching
+source hashes are in [mutation-proof-pass3.json](mutation-proof-pass3.json).
+The verifier regression also reproduced the effect of inherited pytest options
+and plugins before the fix, then passed once the verifier isolated those inputs.
+
+`node scripts/verify_issue_1138_artifacts.js` reproduced both artifact-lock
+failures. The `gain` change from 296 to 297 failed at `assert 296 == 297`.
+The `gain_vs_base` change from 296 to 297 failed at `assert 297 == 296`.
+Each baseline and restored run passed, and both restored records matched their
+original hashes.
+
+PR #1457 was open and ready for review. All six pytest/coverage shards, all six
+flat exec-mirror shards, both aggregates, and Gate passed for this commit. The
+merge guard dry run stopped at its review-thread GraphQL query.
+[CI run](https://github.com/stranske/Orchestrator/actions/runs/44911893488),
+[coverage aggregate](https://github.com/stranske/Orchestrator/actions/runs/44911893488/job/136869864830),
+[flat exec-mirror aggregate](https://github.com/stranske/Orchestrator/actions/runs/44911893488/job/136869757968),
+[Gate run](https://github.com/stranske/Orchestrator/actions/runs/44911893748)

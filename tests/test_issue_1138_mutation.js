@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { test } = require('node:test');
-const { edit, node, pytestCommand, requireVerdict, verify, verifyAtHead } =
+const { edit, node, pytestCommand, requireVerdict, runPytest, verify, verifyAtHead } =
   require('../scripts/verify_issue_1138_mutation');
 
 function verdict(failed = false) {
@@ -39,6 +39,36 @@ test('anchors a relative Python executable to the invocation directory', (t) => 
   assert.equal(pytestCommand()[0], path.resolve(relative));
   process.env.PYTHON = 'python3.14';
   assert.equal(pytestCommand()[0], 'python3.14');
+});
+
+test('keeps host pytest options and plugins out of the mutation run', (t) => {
+  const root = sources(t);
+  const interpreter = path.join(root, 'inspect-pytest-env');
+  const envRecord = path.join(root, 'pytest-env.json');
+  const inspector = '#!/usr/bin/env node\n'
+    + 'const { PYTEST_ADDOPTS, PYTEST_PLUGINS, PYTEST_DISABLE_PLUGIN_AUTOLOAD } = process.env;\n'
+    + "require('node:fs').writeFileSync('pytest-env.json', "
+    + 'JSON.stringify({ PYTEST_ADDOPTS, PYTEST_PLUGINS, PYTEST_DISABLE_PLUGIN_AUTOLOAD }));\n';
+  fs.writeFileSync(interpreter, inspector, { mode: 0o755 });
+  const hostEnv = {
+    PYTHON: interpreter,
+    PYTEST_ADDOPTS: '--tb=no',
+    PYTEST_PLUGINS: 'local_plugin',
+    PYTEST_DISABLE_PLUGIN_AUTOLOAD: '0',
+  };
+  for (const [key, value] of Object.entries(hostEnv)) {
+    const previous = process.env[key];
+    t.after(() => {
+      if (previous === undefined) delete process.env[key];
+      else process.env[key] = previous;
+    });
+    process.env[key] = value;
+  }
+  const result = runPytest(root, node);
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(fs.readFileSync(envRecord, 'utf8')),
+    { PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1' });
 });
 
 test('records a baseline, the intended assertion failure, and a restored pass', (t) => {
