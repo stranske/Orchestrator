@@ -346,6 +346,12 @@ When a fresh Antigravity quota poll reports the Gemini group exhausted and the s
 Claude/GPT group available, local routing can select an advertised third-party model through
 the existing agy adapter. This fallback disables AI-credit overages and preserves explicit
 authentication and shed decisions. Stale or incomplete quota data does not enable fallback.
+The separate Antigravity partner pool is also a local routing candidate for suitable coding
+work when a fresh Claude Code usage poll shows its weekly or five-hour quota exhausted, or
+during the final 24 hours before the partner pool's weekly reset. The latter favors real queued
+work without creating jobs just to consume quota. The route is distinct from Gemini and retains
+both model-tier ceilings; an explicitly pinned offload is not redirected. The opener and
+closer pass the `agy` route to the dispatcher, which rechecks availability before claiming.
 Gemini tiers follow the other families' shape (2026-10-15): cheap/mid run 4 Hydrogen low/high (3.8 Flash
 until the owner's 2026-11-15 decision; the Flash profiles follow `PROFILE_RETIREMENTS` to Hydrogen) and only
 `full` runs the frontier model, Argon High, which replaced the Pro slot (agy no longer serves Pro 3.1;

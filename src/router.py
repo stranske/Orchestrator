@@ -242,6 +242,9 @@ def _automatic_profiles(entry: RouteEntry, *, transport: str) -> list[dict]:
     exact model pinned for the entry's mode.  Historical/replay callers use
     ``execution_profiles`` directly and remain able to name every profile.
     """
+    if entry["agent"] == "agy" and transport == "local":
+        fallback = entry.get("agy_fallback_profile")
+        return [execution_profiles.get_profile(fallback)] if fallback else []
     if entry["agent"] == "gemini" and transport == "local":
         fallback = entry.get("agy_fallback_profile")
         if fallback:
@@ -306,7 +309,7 @@ def _capacity_policy_bias(task_type: str, agent: str, cap: dict) -> int:
     boundary. Gemini drain should spend suitable prepaid window headroom; reserve should hold it behind
     normal ok seats without making it unavailable for worthwhile fallback work.
     """
-    if agent != "gemini":
+    if agent not in {"gemini", "agy"}:
         return 0
     policy = _policy(cap, agent)
     if policy == "drain" and task_type in GEMINI_GOOD_FIT_TASKS:
@@ -694,6 +697,44 @@ def select_agent(
     # explicit shed, model-health, or other non-quota decisions.
     if profile_transport == "local":
         gem = cap.get("agents", {}).get("gemini", {})
+        if (
+            isinstance(gem, dict)
+            and (
+                gem.get("state") in {"ok", "warn"}
+                or gem.get("policy") in {"weekly-polled-cap", "window-polled-cap"}
+            )
+            and (gem.get("auth") or {}).get("authenticated") is not False
+            and task_type in {"implement", "mechanical", "testgen", "codemod"}
+            and not spec.get("neutral_prior")
+        ):
+            import agy_fallback
+
+            partner = agy_fallback.select(purpose="claude")
+            if partner:
+                draining = agy_fallback.weekly_drain()
+                cap = {
+                    **cap,
+                    "agents": {
+                        **cap.get("agents", {}),
+                        "agy": {
+                            "state": "ok",
+                            "policy": "drain" if draining else "partner-backup",
+                            "reason": "Antigravity partner capacity available for Claude backup or weekly drain",
+                        },
+                    },
+                    "profiles": {**cap.get("profiles", {}), partner: {"state": "ok"}},
+                }
+                entries = list(spec["agents"])
+                insertion = next(
+                    (i for i, item in enumerate(entries) if item["agent"] == "claude"), len(entries)
+                )
+                entries.insert(
+                    insertion,
+                    {"agent": "agy", "mode": "mid", "late": False, "agy_fallback_profile": partner},
+                )
+                spec = {**spec, "agents": entries}
+                if learned and "agy" not in learned and "claude" in learned:
+                    learned = {**learned, "agy": learned["claude"]}
         if isinstance(gem, dict) and gem.get("policy") in {
             "weekly-polled-cap",
             "window-polled-cap",
@@ -1330,7 +1371,9 @@ def choose_mode(
     on every start so durability can be compared by mode and by why."""
     tried = set(tried)
     local = local or local_capacity()
-    route_agents = {e["agent"] for spec in _ROUTE_TABLE_TYPED.values() for e in spec["agents"]}
+    route_agents = {e["agent"] for spec in _ROUTE_TABLE_TYPED.values() for e in spec["agents"]} | {
+        "agy"
+    }
     # backup seats (BACKUP_AGENTS; none since 2026-11-11) are never auto-selected, local or hosted
     untried = route_agents - tried - BACKUP_AGENTS
     if not local["ok"] and needs_local:
@@ -1399,6 +1442,17 @@ def _lane_cap(cap: dict, max_concurrent: int) -> int:
         for e in spec["agents"]
     }
     available = sum(1 for a in code_agents if _state(cap, a) not in ("shed", "unknown"))
+    if available == 0:
+        gem = cap.get("agents", {}).get("gemini", {})
+        if (
+            isinstance(gem, dict)
+            and gem.get("policy") in {"weekly-polled-cap", "window-polled-cap"}
+            and (gem.get("auth") or {}).get("authenticated") is not False
+        ):
+            import agy_fallback
+
+            if agy_fallback.select() or agy_fallback.select(purpose="claude"):
+                available = 1
     if available == 0 and any(_pacing_shed_fallback(cap, a) for a in code_agents):
         available = 1
     return max(1, min(max_concurrent, available)) if available else 0
@@ -1517,6 +1571,8 @@ def plan(
                 capacity_rejections.append(row)
                 rejections.append(row)
                 continue
+            if entry["agent"] == "agy":
+                entry = {**entry, "agent": "gemini", "routing_alias": "agy"}
             got = True if dry_run else claims.claim(tgt, entry["agent"])
             if not got:
                 race_holder = claims.holder(tgt) or {}

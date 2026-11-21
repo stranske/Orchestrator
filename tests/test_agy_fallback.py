@@ -3,6 +3,7 @@ import time
 
 import adapters
 import agy_fallback
+import dispatcher
 import execution_profiles
 import router
 
@@ -67,7 +68,9 @@ def test_independent_quota_and_fail_closed(monkeypatch):
 
 
 def test_router_preserves_nonquota_shed_and_selects_independent_profile(monkeypatch):
-    monkeypatch.setattr(agy_fallback, "select", lambda: "agy-claude-sonnet-5-5-low")
+    monkeypatch.setattr(
+        agy_fallback, "select", lambda **kwargs: "agy-claude-sonnet-5-5-low" if not kwargs else None
+    )
     cap = {"agents": {"gemini": {"state": "shed", "policy": "weekly-polled-cap"}}}
     picked = router.select_agent(
         "implement", cap, only={"gemini"}, exploration_rate=0, simulate=True
@@ -96,3 +99,77 @@ def test_fallback_never_enables_paid_overages(tmp_path):
         )
         == cmd
     )
+
+
+def test_partner_backup_and_weekly_drain_are_independent_from_gemini(monkeypatch):
+    now = time.time()
+    data = sample(now)
+    data["groups"][0]["buckets"][0]["remaining_fraction"] = 0.8
+    data["groups"][1]["buckets"][0]["reset_time"] = time.strftime(
+        "%Y-%m-%dT%H:%M:%SZ", time.gmtime(now + 2 * 86400)
+    )
+    claude = {
+        "ts": now,
+        "weekly": {"label": "all models", "used_percent": 100, "resets_at": now + 86400},
+        "session": {"used_percent": 0, "resets_at": now + 3600},
+    }
+
+    def choose(d, c):
+        return agy_fallback.select(
+            data=d, claude_data=c, now=now, advertised=["claude-sonnet-5-5-low"], purpose="claude"
+        )
+
+    assert choose(data, claude) == "agy-claude-sonnet-5-5-low"
+    monkeypatch.setattr(
+        adapters, "tier_ceiling", lambda agent: "cheap" if agent == "claude" else None
+    )
+    assert choose(data, claude) is None
+    monkeypatch.setattr(adapters, "tier_ceiling", lambda agent: None)
+    assert agy_fallback.select(data=data, now=now, advertised=["claude-sonnet-5-5-low"]) is None
+    claude["weekly"]["used_percent"] = 0
+    assert choose(data, claude) is None
+    claude["session"]["used_percent"] = 100
+    assert choose(data, claude) == "agy-claude-sonnet-5-5-low"
+    claude["session"]["used_percent"] = 0
+    data["groups"][1]["buckets"][0]["reset_time"] = time.strftime(
+        "%Y-%m-%dT%H:%M:%SZ", time.gmtime(now + 3600)
+    )
+    assert choose(data, claude) == "agy-claude-sonnet-5-5-low"
+    data["groups"][1]["buckets"][0]["remaining_fraction"] = 0
+    assert choose(data, claude) is None
+
+
+def test_partner_is_a_distinct_lane_and_delegate_rechecks_it(monkeypatch):
+    monkeypatch.setattr(
+        agy_fallback,
+        "select",
+        lambda **kwargs: "agy-claude-sonnet-5-5-low" if kwargs.get("purpose") == "claude" else None,
+    )
+    monkeypatch.setattr(agy_fallback, "weekly_drain", lambda: False)
+    monkeypatch.setattr(router, "_local_comparative_enabled", lambda: False)
+    cap = {"agents": {"gemini": {"state": "ok", "policy": "steady"}, "claude": {"state": "shed"}}}
+    partner = router.select_agent("implement", cap, only={"agy"}, exploration_rate=0, simulate=True)
+    assert partner["agent"] == "agy"
+    assert partner["selected_profile_id"] == "agy-claude-sonnet-5-5-low"
+    gemini = router.select_agent(
+        "implement", cap, only={"gemini"}, exploration_rate=0, simulate=True
+    )
+    assert gemini["agent"] == "gemini"
+    assert gemini["selected_profile_id"].startswith("gemini-")
+    monkeypatch.setattr(
+        agy_fallback, "claude_backup_for_dispatch", lambda: "agy-claude-sonnet-5-5-low"
+    )
+    monkeypatch.setattr(dispatcher, "linked_open_prs", lambda target: [])
+    monkeypatch.setattr(dispatcher.claims, "reap_stale", lambda: None)
+    monkeypatch.setattr(dispatcher.claims, "claim", lambda target, agent: True)
+    monkeypatch.setattr(dispatcher.claims, "release", lambda target, agent: True)
+    seen = {}
+
+    def stop_after_plan(assignment, **kwargs):
+        seen.update(assignment)
+        return {"error": "test stops before spawn"}
+
+    monkeypatch.setattr(dispatcher, "plan_dispatch", stop_after_plan)
+    dispatcher.delegate("agy", "stranske/Orchestrator#1", "opener", "test")
+    assert seen["agent"] == "gemini"
+    assert seen["selected_profile_id"] == "agy-claude-sonnet-5-5-low"
