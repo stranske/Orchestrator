@@ -30,12 +30,12 @@ def sample(now):
 def test_independent_quota_and_fail_closed(monkeypatch):
     now = time.time()
     data = sample(now)
-    ids = ["claude-sonnet-5-5-low", "gpt-oss-120b-medium"]
+    ids = ["claude-sonnet-5-5-high", "gpt-oss-120b-medium"]
 
     def choose(d, t=now):
         return agy_fallback.select(data=d, now=t, advertised=ids)
 
-    assert choose(data) == "agy-claude-sonnet-5-5-low"
+    assert choose(data) == "agy-claude-sonnet-5-5-high"
     for group, bucket, value in [(0, 0, 0.1), (1, 0, 0), (1, 1, 0)]:
         other = copy.deepcopy(data)
         other["groups"][group]["buckets"][bucket]["remaining_fraction"] = value
@@ -62,8 +62,8 @@ def test_independent_quota_and_fail_closed(monkeypatch):
         == "agy-gpt-oss-120b-medium"
     )
     assert (
-        agy_fallback.select(data=data, now=now, advertised=["claude-opus-5-5-low"])
-        == "agy-claude-opus-5-5-low"
+        agy_fallback.select(data=data, now=now, advertised=["claude-opus-5-5-medium"])
+        == "agy-claude-opus-5-5-medium"
     )
     assert agy_fallback.select(now=now) is None
     monkeypatch.setenv("ORCH_GEMINI_MAX_TIER", "cheap")
@@ -72,17 +72,19 @@ def test_independent_quota_and_fail_closed(monkeypatch):
 
 def test_router_preserves_nonquota_shed_and_selects_independent_profile(monkeypatch):
     monkeypatch.setattr(
-        agy_fallback, "select", lambda **kwargs: "agy-claude-sonnet-5-5-low" if not kwargs else None
+        agy_fallback,
+        "select",
+        lambda **kwargs: "agy-claude-sonnet-5-5-high" if not kwargs else None,
     )
     cap = {"agents": {"gemini": {"state": "shed", "policy": "weekly-polled-cap"}}}
     picked = router.select_agent(
         "implement", cap, only={"gemini"}, exploration_rate=0, simulate=True
     )
-    assert picked["selected_profile_id"] == "agy-claude-sonnet-5-5-low"
+    assert picked["selected_profile_id"] == "agy-claude-sonnet-5-5-high"
     picked = router.select_agent(
         "mechanical", cap, only={"gemini"}, exploration_rate=0, simulate=True
     )
-    assert picked["selected_profile_id"] == "agy-claude-sonnet-5-5-low"
+    assert picked["selected_profile_id"] == "agy-claude-sonnet-5-5-high"
     assert picked["late"]
     cap["agents"]["gemini"]["policy"] = "auth-failed"
     assert (
@@ -92,9 +94,9 @@ def test_router_preserves_nonquota_shed_and_selects_independent_profile(monkeypa
 
 
 def test_fallback_never_enables_paid_overages(tmp_path):
-    profile = execution_profiles.get_profile("agy-claude-sonnet-5-5-low")
+    profile = execution_profiles.get_profile("agy-claude-sonnet-5-5-high")
     cmd = adapters.build_command("gemini", "hello", "full", cwd=tmp_path, profile=profile)
-    assert cmd[cmd.index("--model") + 1] == "claude-sonnet-5-5-low"
+    assert cmd[cmd.index("--model") + 1] == "claude-sonnet-5-5-high"
     assert cmd[cmd.index("--settings") + 1] == '{"useG1Credits":false}'
     assert (
         adapters.build_command(
@@ -119,25 +121,25 @@ def test_partner_backup_and_weekly_drain_are_independent_from_gemini(monkeypatch
 
     def choose(d, c):
         return agy_fallback.select(
-            data=d, claude_data=c, now=now, advertised=["claude-sonnet-5-5-low"], purpose="partner"
+            data=d, claude_data=c, now=now, advertised=["claude-sonnet-5-5-high"], purpose="partner"
         )
 
-    assert choose(data, claude) == "agy-claude-sonnet-5-5-low"
+    assert choose(data, claude) == "agy-claude-sonnet-5-5-high"
     monkeypatch.setattr(
         adapters, "tier_ceiling", lambda agent: "cheap" if agent == "claude" else None
     )
     assert choose(data, claude) is None
     monkeypatch.setattr(adapters, "tier_ceiling", lambda agent: None)
-    assert agy_fallback.select(data=data, now=now, advertised=["claude-sonnet-5-5-low"]) is None
+    assert agy_fallback.select(data=data, now=now, advertised=["claude-sonnet-5-5-high"]) is None
     claude["weekly"]["used_percent"] = 0
     assert choose(data, claude) is None
     claude["session"]["used_percent"] = 100
-    assert choose(data, claude) == "agy-claude-sonnet-5-5-low"
+    assert choose(data, claude) == "agy-claude-sonnet-5-5-high"
     claude["session"]["used_percent"] = 0
     data["groups"][1]["buckets"][0]["reset_time"] = time.strftime(
         "%Y-%m-%dT%H:%M:%SZ", time.gmtime(now + 3600)
     )
-    assert choose(data, claude) == "agy-claude-sonnet-5-5-low"
+    assert choose(data, claude) == "agy-claude-sonnet-5-5-high"
     data["groups"][1]["buckets"][0]["remaining_fraction"] = 0
     assert choose(data, claude) is None
 
@@ -147,7 +149,7 @@ def test_partner_is_a_distinct_lane_and_delegate_rechecks_it(monkeypatch):
         agy_fallback,
         "select",
         lambda **kwargs: (
-            "agy-claude-sonnet-5-5-low" if kwargs.get("purpose") == "partner" else None
+            "agy-claude-sonnet-5-5-high" if kwargs.get("purpose") == "partner" else None
         ),
     )
     monkeypatch.setattr(agy_fallback, "weekly_drain", lambda: False)
@@ -155,7 +157,7 @@ def test_partner_is_a_distinct_lane_and_delegate_rechecks_it(monkeypatch):
     cap = {"agents": {"gemini": {"state": "ok", "policy": "steady"}, "claude": {"state": "shed"}}}
     partner = router.select_agent("implement", cap, only={"agy"}, exploration_rate=0, simulate=True)
     assert partner["agent"] == "agy"
-    assert partner["selected_profile_id"] == "agy-claude-sonnet-5-5-low"
+    assert partner["selected_profile_id"] == "agy-claude-sonnet-5-5-high"
     gemini = router.select_agent(
         "implement", cap, only={"gemini"}, exploration_rate=0, simulate=True
     )
@@ -172,7 +174,7 @@ def test_partner_is_a_distinct_lane_and_delegate_rechecks_it(monkeypatch):
         == -1
     )
     monkeypatch.setattr(
-        agy_fallback, "claude_backup_for_dispatch", lambda: "agy-claude-sonnet-5-5-low"
+        agy_fallback, "claude_backup_for_dispatch", lambda: "agy-claude-sonnet-5-5-high"
     )
     monkeypatch.setattr(dispatcher, "linked_open_prs", lambda target: [])
     monkeypatch.setattr(dispatcher.claims, "reap_stale", lambda: None)
@@ -187,9 +189,9 @@ def test_partner_is_a_distinct_lane_and_delegate_rechecks_it(monkeypatch):
     monkeypatch.setattr(dispatcher, "plan_dispatch", stop_after_plan)
     dispatcher.delegate("agy", "stranske/Orchestrator#1", "opener", "test")
     assert seen["agent"] == "gemini"
-    assert seen["selected_profile_id"] == "agy-claude-sonnet-5-5-low"
+    assert seen["selected_profile_id"] == "agy-claude-sonnet-5-5-high"
     cap["agents"]["gemini"] = {"state": "shed", "policy": "weekly-polled-cap"}
-    monkeypatch.setattr(agy_fallback, "select", lambda **kwargs: "agy-claude-sonnet-5-5-low")
+    monkeypatch.setattr(agy_fallback, "select", lambda **kwargs: "agy-claude-sonnet-5-5-high")
     assert (
         router.select_agent("implement", cap, only={"agy"}, exploration_rate=0, simulate=True)
         is None
@@ -198,7 +200,7 @@ def test_partner_is_a_distinct_lane_and_delegate_rechecks_it(monkeypatch):
         router.select_agent("implement", cap, only={"gemini"}, exploration_rate=0, simulate=True)[
             "selected_profile_id"
         ]
-        == "agy-claude-sonnet-5-5-low"
+        == "agy-claude-sonnet-5-5-high"
     )
 
     def stop_storage(agent):
@@ -228,7 +230,7 @@ def test_partner_is_a_distinct_lane_and_delegate_rechecks_it(monkeypatch):
             "agent": "agy",
             "mode": "mid",
             "state": "ok",
-            "selected_profile_id": "agy-claude-sonnet-5-5-low",
+            "selected_profile_id": "agy-claude-sonnet-5-5-high",
         }
 
     monkeypatch.setattr(router, "select_agent", pick_queued)
