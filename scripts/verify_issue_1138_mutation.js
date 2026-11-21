@@ -31,20 +31,29 @@ function pytestCommand(testNode = node) {
 
 function runPytest(root, testNode) {
   const [python, ...args] = pytestCommand(testNode);
+  // Imports can resolve runtime paths before the pytest fixtures take effect.
+  const runtime = fs.mkdtempSync(path.join(os.tmpdir(), 'issue-1138-pytest-'));
   const env = {
     ...process.env,
+    ORCH_STATE_DIR: path.join(runtime, 'state'),
+    ORCH_LOCAL_RUNTIME: path.join(runtime, 'runtime'),
+    HANDOFF_DIR: path.join(runtime, 'handoff'),
     PYTHONDONTWRITEBYTECODE: '1',
     PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1',
   };
   // Use the archived pytest configuration and the explicit reproduction flags.
   delete env.PYTEST_ADDOPTS;
   delete env.PYTEST_PLUGINS;
-  return spawnSync(python, args, {
-    cwd: root,
-    env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    encoding: 'utf8', timeout: 60000, maxBuffer: 4 * 1024 * 1024,
-  });
+  try {
+    return spawnSync(python, args, {
+      cwd: root,
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      encoding: 'utf8', timeout: 60000, maxBuffer: 4 * 1024 * 1024,
+    });
+  } finally {
+    fs.rmSync(runtime, { recursive: true, force: true });
+  }
 }
 
 function requireVerdict(result, failed, {

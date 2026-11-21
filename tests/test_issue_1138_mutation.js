@@ -41,14 +41,20 @@ test('anchors a relative Python executable to the invocation directory', (t) => 
   assert.equal(pytestCommand()[0], 'python3.14');
 });
 
-test('keeps host pytest options and plugins out of the mutation run', (t) => {
+test('keeps host pytest configuration and runtime out of the mutation run', (t) => {
   const root = sources(t);
   const interpreter = path.join(root, 'inspect-pytest-env');
   const envRecord = path.join(root, 'pytest-env.json');
+  const runtimeKeys = ['ORCH_STATE_DIR', 'ORCH_LOCAL_RUNTIME', 'HANDOFF_DIR'];
+  const environmentKeys = [
+    'PYTEST_ADDOPTS', 'PYTEST_PLUGINS', 'PYTEST_DISABLE_PLUGIN_AUTOLOAD', ...runtimeKeys,
+  ];
   const inspector = '#!/usr/bin/env node\n'
-    + 'const { PYTEST_ADDOPTS, PYTEST_PLUGINS, PYTEST_DISABLE_PLUGIN_AUTOLOAD } = process.env;\n'
-    + "require('node:fs').writeFileSync('pytest-env.json', "
-    + 'JSON.stringify({ PYTEST_ADDOPTS, PYTEST_PLUGINS, PYTEST_DISABLE_PLUGIN_AUTOLOAD }));\n';
+    + "const fs = require('node:fs');\n"
+    + `const keys = ${JSON.stringify(environmentKeys)};\n`
+    + 'const env = Object.fromEntries(keys.map((key) => [key, process.env[key]]));\n'
+    + 'fs.mkdirSync(env.ORCH_STATE_DIR, { recursive: true });\n'
+    + "fs.writeFileSync('pytest-env.json', JSON.stringify(env));\n";
   fs.writeFileSync(interpreter, inspector, { mode: 0o755 });
   const hostEnv = {
     PYTHON: interpreter,
@@ -56,6 +62,7 @@ test('keeps host pytest options and plugins out of the mutation run', (t) => {
     PYTEST_PLUGINS: 'local_plugin',
     PYTEST_DISABLE_PLUGIN_AUTOLOAD: '0',
   };
+  for (const key of runtimeKeys) hostEnv[key] = path.join(root, key);
   for (const [key, value] of Object.entries(hostEnv)) {
     const previous = process.env[key];
     t.after(() => {
@@ -64,11 +71,29 @@ test('keeps host pytest options and plugins out of the mutation run', (t) => {
     });
     process.env[key] = value;
   }
-  const result = runPytest(root, node);
-  assert.ifError(result.error);
-  assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(JSON.parse(fs.readFileSync(envRecord, 'utf8')),
-    { PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1' });
+  function inspectRun() {
+    const result = runPytest(root, node);
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr);
+    return JSON.parse(fs.readFileSync(envRecord, 'utf8'));
+  }
+
+  const first = inspectRun();
+  const second = inspectRun();
+  for (const env of [first, second]) {
+    assert.equal(env.PYTEST_DISABLE_PLUGIN_AUTOLOAD, '1');
+    assert.equal(env.PYTEST_ADDOPTS, undefined);
+    assert.equal(env.PYTEST_PLUGINS, undefined);
+    const runtimeRoot = path.dirname(env.ORCH_STATE_DIR);
+    for (const key of runtimeKeys) {
+      assert.equal(path.dirname(env[key]), runtimeRoot);
+      assert.notEqual(env[key], hostEnv[key]);
+      assert.equal(process.env[key], hostEnv[key]);
+    }
+    assert.equal(new Set(runtimeKeys.map((key) => env[key])).size, runtimeKeys.length);
+    assert.equal(fs.existsSync(runtimeRoot), false);
+  }
+  assert.notEqual(first.ORCH_STATE_DIR, second.ORCH_STATE_DIR);
 });
 
 test('records a baseline, the intended assertion failure, and a restored pass', (t) => {
