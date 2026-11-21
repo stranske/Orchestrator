@@ -342,6 +342,10 @@ bounded offload or delegation chooses that exact profile; it does not create a n
 change the feedback loop. Operator `ORCH_CODEX_MODEL_*` pins and `ORCH_CODEX_MAX_TIER` ceilings
 continue through the tier adapter for automatic routes; the explicit profile stays exact.
 Gemini catalog renames retain the pinned effort when the newest available family offers it.
+When a fresh Antigravity quota poll reports the Gemini group exhausted and the separate
+Claude/GPT group available, local routing can select an advertised third-party model through
+the existing agy adapter. This fallback disables AI-credit overages and preserves explicit
+authentication and shed decisions. Stale or incomplete quota data does not enable fallback.
 Gemini tiers follow the other families' shape (2026-10-15): cheap/mid run 4 Hydrogen low/high (3.8 Flash
 until the owner's 2026-11-15 decision; the Flash profiles follow `PROFILE_RETIREMENTS` to Hydrogen) and only
 `full` runs the frontier model, Argon High, which replaced the Pro slot (agy no longer serves Pro 3.1;

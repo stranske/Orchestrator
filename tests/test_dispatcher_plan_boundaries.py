@@ -15,6 +15,7 @@ import roles
 
 class DispatchPlanBoundaries(unittest.TestCase):
     def setUp(self):
+        self.enterContext(patch("agy_fallback.select", return_value=None))
         temporary = self.enterContext(tempfile.TemporaryDirectory(prefix="dispatcher-plan-"))
         self.root = Path(temporary).resolve()
         self.enterContext(
