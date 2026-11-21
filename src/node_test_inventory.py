@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -94,8 +95,7 @@ SUPPORTED_NODE_SUITES = (
     NodeSuite(
         "tests/test_capture_mirror_deployment_evidence.js",
         pytest_nodeid=(
-            "tests/test_mirror_product_witnesses.py::"
-            "test_deployment_evidence_collector_acceptance"
+            "tests/test_mirror_product_witnesses.py::test_deployment_evidence_collector_acceptance"
         ),
     ),
     NodeSuite(
@@ -124,6 +124,38 @@ EXCLUDED_NODE_PATHS = {
         "tests/test_seatbelt_measurement_producer.js. It defines no tests."
     ),
 }
+
+
+def supported_suites() -> tuple[NodeSuite, ...]:
+    paths = [suite.path for suite in SUPPORTED_NODE_SUITES]
+    if len(set(paths)) != len(paths):
+        raise ValueError("duplicate paths in the supported Node suite inventory")
+    return tuple(sorted(SUPPORTED_NODE_SUITES, key=lambda suite: suite.path))
+
+
+def assign_shards(
+    shards: list[list[str]], *, collected_nodeids: list[str] | None = None
+) -> list[list[NodeSuite]]:
+    """Keep bridge suites with their pytest module and distribute direct suites across shards."""
+    assignments: list[list[NodeSuite]] = [[] for _ in shards]
+    modules = {module: index for index, shard in enumerate(shards) for module in shard}
+    collected = Counter(collected_nodeids or [])
+    direct_index = 0
+    for suite in supported_suites():
+        if suite.pytest_nodeid is None:
+            index = direct_index % len(shards)
+            direct_index += 1
+        else:
+            module = suite.pytest_nodeid.split("::", 1)[0]
+            if module not in modules or (
+                collected_nodeids is not None and collected[suite.pytest_nodeid] != 1
+            ):
+                raise ValueError(
+                    f"{suite.path}: missing or duplicate pytest bridge {suite.pytest_nodeid}"
+                )
+            index = modules[module]
+        assignments[index].append(suite)
+    return assignments
 
 
 def check_tracked_inventory(root: Path) -> None:
