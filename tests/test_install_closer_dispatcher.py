@@ -394,9 +394,48 @@ def test_deferred_apply_missing_prerequisite_fails_before_lock_write(tmp_path, m
     assert not (home / ".codex/bin/.install-closer-dispatcher.lock").exists()
 
 
+@pytest.mark.parametrize(
+    ("target_name", "payload"),
+    [
+        ("opener", "version = 1\n"),
+        ("opener", "prompt = 123\n"),
+        ("closer", "version = 1\n"),
+        ("closer", "prompt = 123\n"),
+    ],
+)
+def test_deferred_apply_invalid_prompt_toml_fails_before_lock_write(tmp_path, target_name, payload):
+    """Malformed or non-string prompt TOML fails cleanly before lock-file creation."""
+    home, prompt, _, _ = fake_home(tmp_path)
+    target = (
+        prompt
+        if target_name == "closer"
+        else home / ".codex/automations/pd-workloop-resume/automation.toml"
+    )
+    target.write_text(payload)
+    before = _snapshot_tree(home)
+
+    with pytest.raises(ValueError, match="missing string prompt"):
+        installer.install(home, apply=True)
+    assert _snapshot_tree(home) == before
+    assert not (home / ".codex/bin/.install-closer-dispatcher.lock").exists()
+
+    proc = subprocess.run(
+        [sys.executable, str(SPEC.origin), "--home", str(home), "--apply"],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert proc.returncode == 1
+    assert "missing string prompt" in proc.stderr
+    assert "Traceback" not in proc.stderr
+    assert _snapshot_tree(home) == before
+    assert not (home / ".codex/bin/.install-closer-dispatcher.lock").exists()
+
+
 def test_retired_caller_free_closer_scripts_removed_and_retained_scripts_start():
     """Caller-free retired closer scripts are removed; retained entry points pass --help."""
-    scripts_dir = Path(__file__).resolve().parents[1] / "scripts"
+    repo_root = Path(__file__).resolve().parents[1]
+    scripts_dir = repo_root / "scripts"
     retired = (
         "closer_host_restore.py",
         "closer_publisher_package.py",
@@ -409,6 +448,11 @@ def test_retired_caller_free_closer_scripts_removed_and_retained_scripts_start()
         assert not (
             scripts_dir / name
         ).exists(), f"caller-free retired script still tracked: {name}"
+
+    assert sorted(p.name for p in scripts_dir.glob("*closer*.py")) == [
+        "install_closer_campaign_hook.py",
+        "install_closer_dispatcher.py",
+    ]
 
     retained = (
         "install_closer_dispatcher.py",
@@ -426,3 +470,12 @@ def test_retired_caller_free_closer_scripts_removed_and_retained_scripts_start()
             timeout=15,
         )
         assert proc.returncode == 0, f"{name} --help failed: {proc.stderr}"
+
+    architecture = repo_root / "ARCHITECTURE.md"
+    if architecture.is_file():
+        text = architecture.read_text(encoding="utf-8")
+        assert "### Retired closer entry-point caller inventory" in text
+        for name in retired:
+            assert f"`scripts/{name}`" in text, f"missing retired entry in ARCHITECTURE.md: {name}"
+        for name in retained:
+            assert f"`scripts/{name}`" in text, f"missing retained entry in ARCHITECTURE.md: {name}"

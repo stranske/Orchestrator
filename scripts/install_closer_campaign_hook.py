@@ -159,10 +159,13 @@ def check_manifest(path: str) -> None:
     try:
         closer_campaign = importlib.import_module("closer_campaign")
     except ModuleNotFoundError as exc:
-        raise SystemExit(
-            "missing retired dependency closer_campaign; "
-            "src/closer_campaign.py was removed from this repository"
-        ) from exc
+        missing = exc.name or "closer_campaign"
+        if missing == "closer_campaign":
+            raise SystemExit(
+                "missing retired dependency closer_campaign; "
+                "src/closer_campaign.py was removed from this repository"
+            ) from exc
+        raise SystemExit(f"missing closer_campaign dependency: {missing}") from exc
 
     manifest = json.loads(manifest_path.read_text())
     problems = closer_campaign.validate_manifest(manifest) + closer_campaign.verify_modules(
@@ -193,9 +196,11 @@ def main(argv=None) -> int:
     if not manifest_path.is_file():
         raise SystemExit(f"missing manifest: {manifest_path}")
     try:
-        json.loads(manifest_path.read_text())
+        manifest_doc = json.loads(manifest_path.read_text())
     except ValueError as exc:
         raise SystemExit(f"invalid manifest JSON: {exc}") from exc
+    if not isinstance(manifest_doc, dict):
+        raise SystemExit("invalid manifest JSON: expected top-level object")
     source = controller_path.read_text()
     rendered = render(source, args.manifest)
     if args.dry_run:

@@ -78,7 +78,9 @@ fi
 def updated_prompt(original: bytes, policy: str) -> bytes:
     text = original.decode("utf-8")
     before = tomllib.loads(text)
-    prompt = before["prompt"]
+    prompt = before.get("prompt")
+    if not isinstance(prompt, str):
+        raise ValueError("closer automation source missing string prompt")
     if POLICY_START in prompt:
         start = prompt.index(POLICY_START)
         end = prompt.index(POLICY_END, start) + len(POLICY_END)
@@ -186,7 +188,9 @@ def _validate_apply_prerequisites(home: Path, renderers: dict[str, Path]) -> Non
     opener = home / ".codex/automations/pd-workloop-resume/automation.toml"
     if not opener.is_file():
         raise FileNotFoundError(f"missing opener automation source: {opener}")
-    tomllib.loads(opener.read_text(encoding="utf-8"))
+    opener_doc = tomllib.loads(opener.read_text(encoding="utf-8"))
+    if not isinstance(opener_doc.get("prompt"), str):
+        raise ValueError(f"opener automation source missing string prompt: {opener}")
 
 
 def _install(home: Path, *, apply: bool = False, enforce: bool = False) -> dict:
@@ -307,7 +311,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         receipt = install(args.home, apply=args.apply, enforce=args.enforce_stop)
-    except (FileNotFoundError, ValueError, RuntimeError) as exc:
+    except (OSError, ValueError, RuntimeError) as exc:
         print(f"install_closer_dispatcher: {exc}", file=sys.stderr)
         return 1
     print(json.dumps(receipt, indent=2))

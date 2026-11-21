@@ -206,3 +206,88 @@ def test_cli_startup_dry_run_and_deferred_missing_dependency_before_write(tmp_pa
     assert ok_proc.returncode == 0, ok_proc.stderr
     assert out.is_file()
     assert out.read_text() == hook.render(CONTROLLER, str(manifest))
+
+
+def test_deferred_failure_preserves_existing_out_and_distinguishes_missing_dependency(tmp_path):
+    """Dry-run, malformed manifest, and deferred dependency failures never overwrite --out."""
+    import os
+    from pathlib import Path
+
+    _base, _rendered = fixture(tmp_path)
+    raw_controller = tmp_path / "raw_controller.py"
+    raw_controller.write_text(CONTROLLER)
+    manifest = tmp_path / "manifest.json"
+    out = tmp_path / "out_controller.py"
+    sentinel = "# existing controller bytes\n"
+    out.write_text(sentinel)
+    script_path = Path(hook.__file__).resolve()
+
+    # Non-object JSON manifest fails before any write in both dry-run and non-dry-run
+    bad_manifest = tmp_path / "bad_manifest.json"
+    bad_manifest.write_text("[]")
+    for extra in (["--dry-run"], []):
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(script_path),
+                "--controller",
+                str(raw_controller),
+                "--manifest",
+                str(bad_manifest),
+                "--out",
+                str(out),
+                *extra,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        assert proc.returncode != 0
+        assert "expected top-level object" in proc.stderr
+        assert out.read_text() == sentinel
+
+    # Missing retired closer_campaign leaves pre-existing --out intact
+    missing_proc = subprocess.run(
+        [
+            sys.executable,
+            str(script_path),
+            "--controller",
+            str(raw_controller),
+            "--manifest",
+            str(manifest),
+            "--out",
+            str(out),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert missing_proc.returncode != 0
+    assert "missing retired dependency closer_campaign" in missing_proc.stderr
+    assert "Traceback" not in missing_proc.stderr
+    assert out.read_text() == sentinel
+
+    # Transitive missing dependency inside a supplied closer_campaign is reported accurately
+    broken_stub = tmp_path / "broken_stub"
+    broken_stub.mkdir()
+    (broken_stub / "closer_campaign.py").write_text("import nonexistent_closer_dep\n")
+    transitive_proc = subprocess.run(
+        [
+            sys.executable,
+            str(script_path),
+            "--controller",
+            str(raw_controller),
+            "--manifest",
+            str(manifest),
+            "--out",
+            str(out),
+        ],
+        capture_output=True,
+        text=True,
+        env=dict(os.environ, PYTHONPATH=str(broken_stub)),
+        timeout=15,
+    )
+    assert transitive_proc.returncode != 0
+    assert "missing closer_campaign dependency: nonexistent_closer_dep" in transitive_proc.stderr
+    assert "retired dependency closer_campaign" not in transitive_proc.stderr
+    assert out.read_text() == sentinel
