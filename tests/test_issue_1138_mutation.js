@@ -6,7 +6,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { test } = require('node:test');
-const { edit, node, requireVerdict, verify } = require('../scripts/verify_issue_1138_mutation');
+const { edit, node, pytestCommand, requireVerdict, runPytest, verify, verifyAtHead } =
+  require('../scripts/verify_issue_1138_mutation');
 
 function verdict(failed = false) {
   return {
@@ -26,6 +27,74 @@ function sources(t) {
   fs.writeFileSync(path.join(root, 'tests/test_coverage_round_1138.py'), '# private test input\n');
   return root;
 }
+
+test('anchors a relative Python executable to the invocation directory', (t) => {
+  const previous = process.env.PYTHON;
+  t.after(() => {
+    if (previous === undefined) delete process.env.PYTHON;
+    else process.env.PYTHON = previous;
+  });
+  const relative = path.join('.venv', 'bin', 'python');
+  process.env.PYTHON = relative;
+  assert.equal(pytestCommand()[0], path.resolve(relative));
+  process.env.PYTHON = 'python3.14';
+  assert.equal(pytestCommand()[0], 'python3.14');
+});
+
+test('keeps host pytest configuration and runtime out of the mutation run', (t) => {
+  const root = sources(t);
+  const interpreter = path.join(root, 'inspect-pytest-env');
+  const envRecord = path.join(root, 'pytest-env.json');
+  const runtimeKeys = ['ORCH_STATE_DIR', 'ORCH_LOCAL_RUNTIME', 'HANDOFF_DIR'];
+  const environmentKeys = [
+    'PYTEST_ADDOPTS', 'PYTEST_PLUGINS', 'PYTEST_DISABLE_PLUGIN_AUTOLOAD', ...runtimeKeys,
+  ];
+  const inspector = '#!/usr/bin/env node\n'
+    + "const fs = require('node:fs');\n"
+    + `const keys = ${JSON.stringify(environmentKeys)};\n`
+    + 'const env = Object.fromEntries(keys.map((key) => [key, process.env[key]]));\n'
+    + 'fs.mkdirSync(env.ORCH_STATE_DIR, { recursive: true });\n'
+    + "fs.writeFileSync('pytest-env.json', JSON.stringify(env));\n";
+  fs.writeFileSync(interpreter, inspector, { mode: 0o755 });
+  const hostEnv = {
+    PYTHON: interpreter,
+    PYTEST_ADDOPTS: '--tb=no',
+    PYTEST_PLUGINS: 'local_plugin',
+    PYTEST_DISABLE_PLUGIN_AUTOLOAD: '0',
+  };
+  for (const key of runtimeKeys) hostEnv[key] = path.join(root, key);
+  for (const [key, value] of Object.entries(hostEnv)) {
+    const previous = process.env[key];
+    t.after(() => {
+      if (previous === undefined) delete process.env[key];
+      else process.env[key] = previous;
+    });
+    process.env[key] = value;
+  }
+  function inspectRun() {
+    const result = runPytest(root, node);
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr);
+    return JSON.parse(fs.readFileSync(envRecord, 'utf8'));
+  }
+
+  const first = inspectRun();
+  const second = inspectRun();
+  for (const env of [first, second]) {
+    assert.equal(env.PYTEST_DISABLE_PLUGIN_AUTOLOAD, '1');
+    assert.equal(env.PYTEST_ADDOPTS, undefined);
+    assert.equal(env.PYTEST_PLUGINS, undefined);
+    const runtimeRoot = path.dirname(env.ORCH_STATE_DIR);
+    for (const key of runtimeKeys) {
+      assert.equal(path.dirname(env[key]), runtimeRoot);
+      assert.notEqual(env[key], hostEnv[key]);
+      assert.equal(process.env[key], hostEnv[key]);
+    }
+    assert.equal(new Set(runtimeKeys.map((key) => env[key])).size, runtimeKeys.length);
+    assert.equal(fs.existsSync(runtimeRoot), false);
+  }
+  assert.notEqual(first.ORCH_STATE_DIR, second.ORCH_STATE_DIR);
+});
 
 test('records a baseline, the intended assertion failure, and a restored pass', (t) => {
   const root = sources(t);
@@ -48,6 +117,27 @@ test('records a baseline, the intended assertion failure, and a restored pass', 
   assert.deepEqual([record.baseline_exit, record.red_exit, record.green_exit], [0, 1, 0]);
   assert.match(record.red_output, /AssertionError/);
   assert.ok(record.command.includes('not slow'));
+});
+
+test('runs the committed mutation input in a disposable tree and removes it on failure', () => {
+  const root = path.resolve(__dirname, '..');
+  const source = path.join(root, edit.file);
+  const original = fs.readFileSync(source);
+  let checkout;
+  let calls = 0;
+  assert.throws(() => verifyAtHead(root, 'HEAD', (cwd) => {
+    calls += 1;
+    checkout = cwd;
+    assert.notEqual(cwd, root);
+    assert.deepEqual(fs.readFileSync(source), original);
+    const input = fs.readFileSync(path.join(cwd, edit.file), 'utf8');
+    assert.ok(input.includes(calls === 2 ? edit.after : edit.before));
+    if (calls === 2) throw new Error('interrupted mutation run');
+    return verdict();
+  }), /interrupted mutation run/);
+  assert.equal(calls, 2);
+  assert.equal(fs.existsSync(checkout), false);
+  assert.deepEqual(fs.readFileSync(source), original);
 });
 
 test('missing pytest blocks before any production edit', (t) => {
@@ -173,6 +263,17 @@ test('accepts pytest warning counts in a single-test summary', () => {
       assert.equal(requireVerdict(result, failed), result.stdout);
     }
   }
+});
+
+test('rejects the expected assertion when pytest reports a different failure', () => {
+  const result = verdict(true);
+  const expected = "E   AssertionError: assert {'broken': True} == {}\n";
+  result.stdout = result.stdout.replace(expected,
+    'E   AssertionError: assert False\n'
+    + '----------------------------- Captured stdout call -----------------------------\n'
+    + expected);
+  result.stderr = expected;
+  assert.throws(() => requireVerdict(result, true), /assert False/);
 });
 
 test('rejects an extra result in the baseline or restored summary', () => {

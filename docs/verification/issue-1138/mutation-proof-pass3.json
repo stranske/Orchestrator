@@ -136,6 +136,78 @@
           "green_output": "============================= test session starts ==============================\nplatform darwin -- Python 3.12.2, pytest-9.1.1, pluggy-1.6.0 -- /opt/anaconda3/bin/python3\nhypothesis profile 'default'\nrootdir: /Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__1156__closer-repair-1\nconfigfile: pyproject.toml\nplugins: hypothesis-6.161.5, cov-7.1.0, xdist-3.8.0, rerunfailures-16.3, anyio-4.14.2, datadir-1.8.0, typeguard-4.5.1, asyncio-1.3.0, langsmith-0.10.10, pytest_httpserver-1.1.3, regressions-2.11.0, Faker-40.39.0\nasyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function\ncollecting ... collected 1 item\n\ntests/test_coverage_round_1138.py::test_build_report_treats_corrupt_pattern_artifacts_as_empty PASSED [100%]\n\n============================== 1 passed in 2.03s ===============================\n"
         }
       ]
+    },
+    {
+      "measured_head_sha": "120ff451cc01b9c3c62ecf761fb86cfa4dcf5e1f",
+      "recorded_at": "2026-11-21T13:56:58.845Z",
+      "cases": [
+        {
+          "test": "test_build_report_treats_corrupt_pattern_artifacts_as_empty",
+          "file": "src/periodic_report.py",
+          "before": "        pattern_status = {}",
+          "broken": "        pattern_status = {\"broken\": True}",
+          "command": [
+            "python3",
+            "-B",
+            "-m",
+            "pytest",
+            "-v",
+            "--tb=short",
+            "--color=no",
+            "tests/test_coverage_round_1138.py::test_build_report_treats_corrupt_pattern_artifacts_as_empty",
+            "-m",
+            "not slow",
+            "-p",
+            "no:cacheprovider"
+          ],
+          "source_sha256": "390ac4ff8f73da9304fee9922a2583bed6b08ed7ca0929994957a24e13aaa480",
+          "restored_source_sha256": "390ac4ff8f73da9304fee9922a2583bed6b08ed7ca0929994957a24e13aaa480",
+          "broken_source_sha256": "47b10478216d8f4ad29fdc60e23a58f59ade892f108585ac470216b968465d48",
+          "test_sha256": "7a9acce1d351d7cb833d2c8892051f5b2e5f1274904b5f411752e4a612ce8cfc",
+          "baseline_exit": 0,
+          "baseline_output": "============================= test session starts ==============================\nplatform linux -- Python 3.14.10, pytest-9.1.1, pluggy-1.6.0 -- /opt/hostedtoolcache/Python/3.14.10/x64/bin/python3\nrootdir: /tmp/issue-1138-verification-ItCmYA/checkout\nconfigfile: pyproject.toml\ncollecting ... collected 1 item\n\ntests/test_coverage_round_1138.py::test_build_report_treats_corrupt_pattern_artifacts_as_empty PASSED [100%]\nCI_STORAGE_DIAGNOSTIC {\"exitstatus\": 0, \"finish\": {\"reason\": \"helper_or_base_unavailable\", \"status\": \"unavailable\"}, \"start\": {\"reason\": \"helper_or_base_unavailable\", \"status\": \"unavailable\"}}\n\ntracked test inputs: NOT CHECKED -- /tmp/issue-1138-verification-ItCmYA/checkout is not a git checkout. In the exec mirror that loses nothing: its tests/ IS `git archive HEAD tests`, so every file in it was tracked\n============================== 1 passed in 10.40s ==============================\n",
+          "red_exit": 1,
+          "red_output": "============================= test session starts ==============================\nplatform linux -- Python 3.14.10, pytest-9.1.1, pluggy-1.6.0 -- /opt/hostedtoolcache/Python/3.14.10/x64/bin/python3\nrootdir: /tmp/issue-1138-verification-ItCmYA/checkout\nconfigfile: pyproject.toml\ncollecting ... collected 1 item\n\ntests/test_coverage_round_1138.py::test_build_report_treats_corrupt_pattern_artifacts_as_empty FAILED [100%]\nCI_STORAGE_DIAGNOSTIC {\"exitstatus\": 1, \"finish\": {\"reason\": \"helper_or_base_unavailable\", \"status\": \"unavailable\"}, \"start\": {\"reason\": \"helper_or_base_unavailable\", \"status\": \"unavailable\"}}\n\n=================================== FAILURES ===================================\n_________ test_build_report_treats_corrupt_pattern_artifacts_as_empty __________\ntests/test_coverage_round_1138.py:1680: in test_build_report_treats_corrupt_pattern_artifacts_as_empty\n    assert miner[\"status\"] == {}\nE   AssertionError: assert {'broken': True} == {}\nE     \nE     Left contains 1 more item:\nE     {'broken': True}\nE     \nE     Full diff:\nE     - {}\nE     + {\nE     +     'broken': True,\nE     + }\n----------------------------- Captured stderr call -----------------------------\nFYI codex rollout scan: duration_seconds=0.0009, files_read=0, files_cached=0, bytes_read=0, total_files=0, omitted=0, malformed=0, unreadable_files=0, vanished_files=0\nFYI codex rollout scan: duration_seconds=0.0006, files_read=0, files_cached=0, bytes_read=0, total_files=0, omitted=0, malformed=0, unreadable_files=0, vanished_files=0\nFYI codex rollout scan: duration_seconds=0.0007, files_read=0, files_cached=0, bytes_read=0, total_files=0, omitted=0, malformed=0, unreadable_files=0, vanished_files=0\ntracked test inputs: NOT CHECKED -- /tmp/issue-1138-verification-ItCmYA/checkout is not a git checkout. In the exec mirror that loses nothing: its tests/ IS `git archive HEAD tests`, so every file in it was tracked\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_build_report_treats_corrupt_pattern_artifacts_as_empty - AssertionError: assert {'broken': True} == {}\n  \n  Left contains 1 more item:\n  {'broken': True}\n  \n  Full diff:\n  - {}\n  + {\n  +     'broken': True,\n  + }\n============================== 1 failed in 7.17s ===============================\n",
+          "green_exit": 0,
+          "green_output": "============================= test session starts ==============================\nplatform linux -- Python 3.14.10, pytest-9.1.1, pluggy-1.6.0 -- /opt/hostedtoolcache/Python/3.14.10/x64/bin/python3\nrootdir: /tmp/issue-1138-verification-ItCmYA/checkout\nconfigfile: pyproject.toml\ncollecting ... collected 1 item\n\ntests/test_coverage_round_1138.py::test_build_report_treats_corrupt_pattern_artifacts_as_empty PASSED [100%]\nCI_STORAGE_DIAGNOSTIC {\"exitstatus\": 0, \"finish\": {\"reason\": \"helper_or_base_unavailable\", \"status\": \"unavailable\"}, \"start\": {\"reason\": \"helper_or_base_unavailable\", \"status\": \"unavailable\"}}\n\ntracked test inputs: NOT CHECKED -- /tmp/issue-1138-verification-ItCmYA/checkout is not a git checkout. In the exec mirror that loses nothing: its tests/ IS `git archive HEAD tests`, so every file in it was tracked\n============================== 1 passed in 10.63s ==============================\n"
+        }
+      ]
+    },
+    {
+      "measured_head_sha": "2868fcedb33fb90f2335adb277d29b1c62d6abcf",
+      "recorded_at": "2026-11-21T14:15:01.129Z",
+      "cases": [
+        {
+          "test": "test_build_report_treats_corrupt_pattern_artifacts_as_empty",
+          "file": "src/periodic_report.py",
+          "before": "        pattern_status = {}",
+          "broken": "        pattern_status = {\"broken\": True}",
+          "command": [
+            "python3",
+            "-B",
+            "-m",
+            "pytest",
+            "-v",
+            "--tb=short",
+            "--color=no",
+            "tests/test_coverage_round_1138.py::test_build_report_treats_corrupt_pattern_artifacts_as_empty",
+            "-m",
+            "not slow",
+            "-p",
+            "no:cacheprovider"
+          ],
+          "source_sha256": "390ac4ff8f73da9304fee9922a2583bed6b08ed7ca0929994957a24e13aaa480",
+          "restored_source_sha256": "390ac4ff8f73da9304fee9922a2583bed6b08ed7ca0929994957a24e13aaa480",
+          "broken_source_sha256": "47b10478216d8f4ad29fdc60e23a58f59ade892f108585ac470216b968465d48",
+          "test_sha256": "7a9acce1d351d7cb833d2c8892051f5b2e5f1274904b5f411752e4a612ce8cfc",
+          "baseline_exit": 0,
+          "baseline_output": "============================= test session starts ==============================\nplatform linux -- Python 3.14.10, pytest-9.1.1, pluggy-1.6.0 -- /opt/hostedtoolcache/Python/3.14.10/x64/bin/python3\nrootdir: /tmp/issue-1138-verification-avFv2R/checkout\nconfigfile: pyproject.toml\ncollecting ... collected 1 item\n\ntests/test_coverage_round_1138.py::test_build_report_treats_corrupt_pattern_artifacts_as_empty PASSED [100%]\nCI_STORAGE_DIAGNOSTIC {\"exitstatus\": 0, \"finish\": {\"reason\": \"helper_or_base_unavailable\", \"status\": \"unavailable\"}, \"start\": {\"reason\": \"helper_or_base_unavailable\", \"status\": \"unavailable\"}}\n\ntracked test inputs: NOT CHECKED -- /tmp/issue-1138-verification-avFv2R/checkout is not a git checkout. In the exec mirror that loses nothing: its tests/ IS `git archive HEAD tests`, so every file in it was tracked\n============================== 1 passed in 16.32s ==============================\n",
+          "red_exit": 1,
+          "red_output": "============================= test session starts ==============================\nplatform linux -- Python 3.14.10, pytest-9.1.1, pluggy-1.6.0 -- /opt/hostedtoolcache/Python/3.14.10/x64/bin/python3\nrootdir: /tmp/issue-1138-verification-avFv2R/checkout\nconfigfile: pyproject.toml\ncollecting ... collected 1 item\n\ntests/test_coverage_round_1138.py::test_build_report_treats_corrupt_pattern_artifacts_as_empty FAILED [100%]\nCI_STORAGE_DIAGNOSTIC {\"exitstatus\": 1, \"finish\": {\"reason\": \"helper_or_base_unavailable\", \"status\": \"unavailable\"}, \"start\": {\"reason\": \"helper_or_base_unavailable\", \"status\": \"unavailable\"}}\n\n=================================== FAILURES ===================================\n_________ test_build_report_treats_corrupt_pattern_artifacts_as_empty __________\ntests/test_coverage_round_1138.py:1680: in test_build_report_treats_corrupt_pattern_artifacts_as_empty\n    assert miner[\"status\"] == {}\nE   AssertionError: assert {'broken': True} == {}\nE     \nE     Left contains 1 more item:\nE     {'broken': True}\nE     \nE     Full diff:\nE     - {}\nE     + {\nE     +     'broken': True,\nE     + }\n----------------------------- Captured stderr call -----------------------------\nFYI codex rollout scan: duration_seconds=0.0011, files_read=0, files_cached=0, bytes_read=0, total_files=0, omitted=0, malformed=0, unreadable_files=0, vanished_files=0\nFYI codex rollout scan: duration_seconds=0.0007, files_read=0, files_cached=0, bytes_read=0, total_files=0, omitted=0, malformed=0, unreadable_files=0, vanished_files=0\nFYI codex rollout scan: duration_seconds=0.0007, files_read=0, files_cached=0, bytes_read=0, total_files=0, omitted=0, malformed=0, unreadable_files=0, vanished_files=0\ntracked test inputs: NOT CHECKED -- /tmp/issue-1138-verification-avFv2R/checkout is not a git checkout. In the exec mirror that loses nothing: its tests/ IS `git archive HEAD tests`, so every file in it was tracked\n=========================== short test summary info ============================\nFAILED tests/test_coverage_round_1138.py::test_build_report_treats_corrupt_pattern_artifacts_as_empty - AssertionError: assert {'broken': True} == {}\n  \n  Left contains 1 more item:\n  {'broken': True}\n  \n  Full diff:\n  - {}\n  + {\n  +     'broken': True,\n  + }\n============================== 1 failed in 10.78s ==============================\n",
+          "green_exit": 0,
+          "green_output": "============================= test session starts ==============================\nplatform linux -- Python 3.14.10, pytest-9.1.1, pluggy-1.6.0 -- /opt/hostedtoolcache/Python/3.14.10/x64/bin/python3\nrootdir: /tmp/issue-1138-verification-avFv2R/checkout\nconfigfile: pyproject.toml\ncollecting ... collected 1 item\n\ntests/test_coverage_round_1138.py::test_build_report_treats_corrupt_pattern_artifacts_as_empty PASSED [100%]\nCI_STORAGE_DIAGNOSTIC {\"exitstatus\": 0, \"finish\": {\"reason\": \"helper_or_base_unavailable\", \"status\": \"unavailable\"}, \"start\": {\"reason\": \"helper_or_base_unavailable\", \"status\": \"unavailable\"}}\n\ntracked test inputs: NOT CHECKED -- /tmp/issue-1138-verification-avFv2R/checkout is not a git checkout. In the exec mirror that loses nothing: its tests/ IS `git archive HEAD tests`, so every file in it was tracked\n============================== 1 passed in 9.21s ===============================\n"
+        }
+      ]
     }
   ]
 }

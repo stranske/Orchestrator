@@ -5,6 +5,7 @@
 const assert = require('node:assert/strict');
 const { createHash } = require('node:crypto');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { withMutation } = require('./verify_redirect_routing_mutations');
@@ -17,16 +18,42 @@ const edit = {
   before: '        pattern_status = {}',
   after: '        pattern_status = {"broken": True}',
 };
-const args = ['-B', '-m', 'pytest', '-v', '--tb=short', '--color=no', node,
-  '-m', 'not slow', '-p', 'no:cacheprovider'];
 const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
-function runPytest(root) {
-  return spawnSync(process.env.PYTHON || 'python3', args, {
-    cwd: root,
-    env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
-    encoding: 'utf8', timeout: 60000, maxBuffer: 4 * 1024 * 1024,
-  });
+function pytestCommand(testNode = node) {
+  const python = process.env.PYTHON || 'python3';
+  // Keep relative virtualenv paths anchored to the invocation directory when
+  // pytest runs from the disposable checkout.
+  const interpreter = path.basename(python) === python ? python : path.resolve(python);
+  return [interpreter, '-B', '-m', 'pytest', '-v', '--tb=short', '--color=no', testNode,
+    '-m', 'not slow', '-p', 'no:cacheprovider'];
+}
+
+function runPytest(root, testNode) {
+  const [python, ...args] = pytestCommand(testNode);
+  // Imports can resolve runtime paths before the pytest fixtures take effect.
+  const runtime = fs.mkdtempSync(path.join(os.tmpdir(), 'issue-1138-pytest-'));
+  const env = {
+    ...process.env,
+    ORCH_STATE_DIR: path.join(runtime, 'state'),
+    ORCH_LOCAL_RUNTIME: path.join(runtime, 'runtime'),
+    HANDOFF_DIR: path.join(runtime, 'handoff'),
+    PYTHONDONTWRITEBYTECODE: '1',
+    PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1',
+  };
+  // Use the archived pytest configuration and the explicit reproduction flags.
+  delete env.PYTEST_ADDOPTS;
+  delete env.PYTEST_PLUGINS;
+  try {
+    return spawnSync(python, args, {
+      cwd: root,
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      encoding: 'utf8', timeout: 60000, maxBuffer: 4 * 1024 * 1024,
+    });
+  } finally {
+    fs.rmSync(runtime, { recursive: true, force: true });
+  }
 }
 
 function requireVerdict(result, failed, {
@@ -50,7 +77,11 @@ function requireVerdict(result, failed, {
   ));
   assert.doesNotMatch(output, /\b\d+ (?:errors?|skipped|xfailed|xpassed|deselected)\b/i);
   if (failed) {
-    assert.match(output, failurePattern);
+    // The first pytest error line identifies the reported failure. Captured
+    // output and stderr can mention the expected assertion independently.
+    const traceback = (result.stdout || '').split(/^-+ Captured /m, 1)[0];
+    const assertion = traceback.match(/^E[ \t]+(.+)$/m)?.[1];
+    assert.match(assertion || '', failurePattern, output);
   }
   return output;
 }
@@ -80,7 +111,7 @@ function verify(root, run = runPytest) {
     assert.deepEqual(fs.readFileSync(path.join(root, testFile)), testSource, 'test source changed');
     return {
       test, file: edit.file, before: edit.before, broken: edit.after,
-      command: [process.env.PYTHON || 'python3', ...args],
+      command: pytestCommand(),
       source_sha256: digest(original), restored_source_sha256: digest(fs.readFileSync(source)),
       broken_source_sha256: digest(brokenSource),
       test_sha256: digest(testSource),
@@ -94,20 +125,47 @@ function verify(root, run = runPytest) {
   }
 }
 
+function withArchivedInputs(root, head, extraFiles, run) {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'issue-1138-verification-'));
+  const archive = path.join(temp, 'source.tar');
+  const checkout = path.join(temp, 'checkout');
+  const options = { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] };
+  try {
+    const archived = spawnSync('git', ['archive', '--format=tar', `--output=${archive}`, head, '--',
+      'src', 'config', 'pyproject.toml', 'tests/conftest.py', testFile, ...extraFiles], options);
+    assert.ifError(archived.error);
+    assert.equal(archived.status, 0, archived.stderr);
+    fs.mkdirSync(checkout);
+    const extracted = spawnSync('tar', ['-xf', archive, '-C', checkout], options);
+    assert.ifError(extracted.error);
+    assert.equal(extracted.status, 0, extracted.stderr);
+    return run(checkout);
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+}
+
+function verifyAtHead(root, head, run = runPytest) {
+  return withArchivedInputs(root, head, [], (checkout) => verify(checkout, run));
+}
+
 function main() {
   const root = path.resolve(__dirname, '..');
-  const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' });
+  const options = { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] };
+  const head = spawnSync('git', ['rev-parse', 'HEAD'], options);
+  assert.ifError(head.error);
   assert.equal(head.status, 0, head.stderr);
-  const clean = spawnSync('git', ['diff', 'HEAD', '--exit-code', '--', edit.file, testFile], {
-    cwd: root, encoding: 'utf8',
-  });
+  const measuredHead = head.stdout.trim();
+  const clean = spawnSync('git', ['diff', measuredHead, '--exit-code', '--', edit.file, testFile],
+    options);
+  assert.ifError(clean.error);
   assert.equal(clean.status, 0, 'commit source/test changes before recording exact-head evidence');
   const evidence = path.join(root, 'docs/verification/issue-1138/mutation-proof-pass3.json');
   const record = JSON.parse(fs.readFileSync(evidence, 'utf8'));
   assert.ok(record.followup_runs === undefined || Array.isArray(record.followup_runs));
-  const result = verify(root);
+  const result = verifyAtHead(root, measuredHead);
   record.followup_runs = [...(record.followup_runs || []), {
-    measured_head_sha: head.stdout.trim(), recorded_at: new Date().toISOString(), cases: [result],
+    measured_head_sha: measuredHead, recorded_at: new Date().toISOString(), cases: [result],
   }];
   fs.writeFileSync(evidence, `${JSON.stringify(record, null, 2)}\n`);
   console.log(`${node}: baseline passed; mutation failed; restored passed; evidence appended`);
@@ -122,4 +180,6 @@ if (require.main === module) {
   }
 }
 
-module.exports = { edit, node, requireVerdict, verify };
+module.exports = {
+  edit, node, pytestCommand, requireVerdict, runPytest, verify, verifyAtHead, withArchivedInputs,
+};
