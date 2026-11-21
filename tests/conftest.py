@@ -61,6 +61,14 @@ from pathlib import Path
 
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def isolate_agy_quota_poll(tmp_path, monkeypatch):
+    import agy_fallback
+
+    monkeypatch.setattr(agy_fallback, "POLL", tmp_path / "agy-usage.json")
+
+
 TESTS_DIR = Path(__file__).parent
 
 

@@ -2482,7 +2482,9 @@ def build_command(
                 pass
         cmd = ["agy", "--gemini_dir", gemini_dir]
         model = requested_model or _tier_model("gemini", mode) or gemini_model()
-        if profile and "antigravity-third-party" in profile.get("capacity_pool_ids", []):
+        if selected_profile and "antigravity-third-party" in selected_profile.get(
+            "capacity_pool_ids", []
+        ):
             # Automatic fallback uses included capacity only, never paid overages.
             cmd += ["--settings", '{"useG1Credits":false}']
         if model:

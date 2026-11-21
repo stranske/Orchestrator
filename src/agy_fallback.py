@@ -34,7 +34,9 @@ def select(*, data=None, now=None, advertised=None):
         if len(matches) != 1 or not isinstance(matches[0].get("buckets"), list):
             return None
         rows = matches[0]["buckets"]
-        found = {b.get("id"): b for b in rows if isinstance(b, dict)}
+        if any(not isinstance(b, dict) or not isinstance(b.get("id"), str) for b in rows):
+            return None
+        found = {b["id"]: b for b in rows}
         if len(found) != len(rows):
             return None
         return found
@@ -59,8 +61,14 @@ def select(*, data=None, now=None, advertised=None):
     tw, th = remaining(third, "3p-weekly"), remaining(third, "3p-5h")
     if None in (gw, gh, tw, th) or not (gw == 0 or gh == 0) or tw <= 0 or th <= 0:
         return None
-    if advertised is None:
-        import adapters
+    import adapters
+    import execution_profiles
 
+    if advertised is None:
         advertised = adapters.advertised_models("gemini")
-    return next((f"agy-{model}" for model in MODELS if model in advertised), None)
+    for model in MODELS:
+        if model in advertised:
+            profile = execution_profiles.get_profile(f"agy-{model}")
+            if adapters.automatic_profile_within_cap(profile):
+                return profile["profile_id"]
+    return None

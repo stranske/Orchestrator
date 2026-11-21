@@ -23,7 +23,7 @@ def sample(now):
     }
 
 
-def test_independent_quota_and_fail_closed():
+def test_independent_quota_and_fail_closed(monkeypatch):
     now = time.time()
     data = sample(now)
     ids = ["claude-sonnet-5-5-low", "gpt-oss-120b-medium"]
@@ -41,6 +41,11 @@ def test_independent_quota_and_fail_closed():
     malformed = copy.deepcopy(data)
     malformed["groups"][1]["buckets"][0]["remaining_fraction"] = True
     assert choose(malformed) is None
+    malformed = copy.deepcopy(data)
+    malformed["groups"][1]["buckets"][0]["id"] = []
+    assert choose(malformed) is None
+    monkeypatch.setenv("ORCH_GEMINI_MAX_TIER", "cheap")
+    assert choose(data) is None
 
 
 def test_router_preserves_nonquota_shed_and_selects_independent_profile(monkeypatch):
@@ -67,3 +72,9 @@ def test_fallback_never_enables_paid_overages(tmp_path):
     cmd = adapters.build_command("gemini", "hello", "full", cwd=tmp_path, profile=profile)
     assert cmd[cmd.index("--model") + 1] == "claude-sonnet-5-5-low"
     assert cmd[cmd.index("--settings") + 1] == '{"useG1Credits":false}'
+    assert (
+        adapters.build_command(
+            "gemini", "hello", "full", cwd=tmp_path, profile=profile["profile_id"]
+        )
+        == cmd
+    )
