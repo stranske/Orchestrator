@@ -156,6 +156,12 @@ def test_partner_is_a_distinct_lane_and_delegate_rechecks_it(monkeypatch):
     )
     assert gemini["agent"] == "gemini"
     assert gemini["selected_profile_id"].startswith("gemini-")
+    monkeypatch.setattr(agy_fallback, "weekly_drain", lambda: True)
+    drain = router.select_agent(
+        "implement", cap, only={"agy", "gemini"}, exploration_rate=0, simulate=True
+    )
+    assert drain["agent"] == "agy"
+    assert drain["capacity_policy"] == "drain"
     monkeypatch.setattr(
         agy_fallback, "claude_backup_for_dispatch", lambda: "agy-claude-sonnet-5-5-low"
     )

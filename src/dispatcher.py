@@ -3416,7 +3416,7 @@ def offload(
         import agy_fallback
 
         fallback = agy_fallback.claude_backup_for_dispatch()
-        if fallback:
+        if fallback and fallback.startswith("agy-claude-"):
             agent, profile_id = "gemini", fallback
     from storage_lifecycle import StorageBlocked, owned_agent_tmpdir
 
