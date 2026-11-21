@@ -3,15 +3,19 @@
 import contextlib
 import importlib.util
 import json
+import os
 import pathlib
+import sqlite3
 import subprocess
 import sys
 from collections import Counter
 
 import pytest
 
+import capabilities
+import feedback
+import node_test_inventory
 import verify
-from node_test_inventory import SUPPORTED_NODE_SUITES, check_tracked_inventory
 
 
 def test_shard_lists_partition_every_collected_test_exactly_once():
@@ -45,11 +49,12 @@ def test_shard_lists_partition_every_collected_test_exactly_once():
     assert Counter(assigned) == Counter(ids)
     assert len(modules) == len(set(modules))
     if verify.tree_shape()[0] == verify.CHECKOUT:
-        check_tracked_inventory(verify.ROOT)
-    for suite in SUPPORTED_NODE_SUITES:
+        node_test_inventory.check_tracked_inventory(verify.ROOT)
+    node_plan = node_test_inventory.assign_shards(plan, collected_nodeids=assigned)
+    expected_suites = Counter(suite.path for suite in node_test_inventory.automated_suites())
+    assert Counter(suite.path for shard in node_plan for suite in shard) == expected_suites
+    for suite in (suite for shard in node_plan for suite in shard):
         assert (verify.ROOT / suite.path).is_file(), suite.path
-        if suite.pytest_nodeid is not None:
-            assert assigned.count(suite.pytest_nodeid) == 1, suite.path
 
 
 def test_shard_plan_rejects_duplicate_modules(tmp_path, monkeypatch):
@@ -76,6 +81,7 @@ def test_shard_plan_rejects_parent_path_components(tmp_path, monkeypatch):
 
 @pytest.fixture
 def summaries(tmp_path, monkeypatch):
+    monkeypatch.setattr(node_test_inventory, "SUPPORTED_NODE_SUITES", ())
     monkeypatch.setattr(verify, "shard_plan", lambda: [["a.py"], ["b.py"], ["c.py"]])
     monkeypatch.setattr(verify, "shard_identity", lambda: "plan")
     shape, _ = verify.tree_shape()
@@ -324,6 +330,7 @@ def test_only_final_printed_summary_supplies_counts(tmp_path, monkeypatch):
     missing = verify.parse_pytest_output("1 passed in 1s", junit=xml)
     monkeypatch.setattr(verify, "shard_plan", lambda: [["inert.py"]])
     monkeypatch.setattr(verify, "run_pytest", lambda **kwargs: missing)
+    monkeypatch.setattr(node_test_inventory, "SUPPORTED_NODE_SUITES", ())
     monkeypatch.setattr(verify, "private_state", lambda: contextlib.nullcontext({}))
     monkeypatch.setattr(verify, "COVERAGE", False)
     code, _ = verify.run_pytest_shard("1/1", tmp_path / "shard")
@@ -344,6 +351,7 @@ def test_xdist_shard_coverage_measures_worker_execution(tmp_path, monkeypatch):
         '[tool.coverage.run]\nparallel = true\nsource = ["src"]\n'
     )
     monkeypatch.setattr(verify, "ROOT", tmp_path)
+    monkeypatch.setattr(node_test_inventory, "SUPPORTED_NODE_SUITES", ())
     monkeypatch.setattr(verify, "COVERAGE", True)
     monkeypatch.setenv("COVERAGE_FILE", str(tmp_path / ".coverage.shard-1"))
     monkeypatch.setenv("VERIFY_PYTEST_WORKERS", "2")
@@ -427,10 +435,23 @@ def shard_planner():
     return make_test_shards
 
 
-def test_generated_shard_runs_python_and_its_node_bridge(shard_planner, tmp_path, monkeypatch):
+def test_generated_shard_runs_python_and_its_node_bridge(
+    shard_planner, tmp_path, monkeypatch, capsys
+):
     tests = tmp_path / "tests"
     tests.mkdir()
-    (tests / "test_python.py").write_text("def test_python():\n    assert 6 * 7 == 42\n")
+    (tests / "test_python.py").write_text(
+        "import json\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        "def test_python():\n"
+        "    assert 6 * 7 == 42\n"
+        "if __name__ == '__main__':\n"
+        "    assert sys.argv[1] == '--pytest-results'\n"
+        "    verdicts = json.loads(Path(sys.argv[2]).read_text())\n"
+        "    assert verdicts['test_python']['test_python']['outcome'] == 'passed'\n"
+        "    print('approved-scope Python check passed')\n"
+    )
     (tests / "test_bridge.py").write_text(
         "import subprocess\n"
         "def test_node_bridge():\n"
@@ -447,6 +468,59 @@ def test_generated_shard_runs_python_and_its_node_bridge(shard_planner, tmp_path
         "test('bridged arithmetic', () => assert.equal(6 * 7, 42));\n"
     )
     suite.write_text(suite_source)
+    direct = tests / "test_direct.js"
+    direct_source = (
+        "const { test } = require('node:test');\n"
+        "const assert = require('node:assert/strict');\n"
+        "const fs = require('node:fs');\n"
+        "test('private state', () => {\n"
+        "  const ledger = process.env.ORCH_CAPABILITIES_PATH;\n"
+        "  const brain = process.env.ORCH_FEEDBACK_DB;\n"
+        "  assert.notEqual(ledger, process.env.FIXTURE_SOURCE_LEDGER);\n"
+        "  assert.notEqual(brain, process.env.FIXTURE_SOURCE_BRAIN);\n"
+        "  assert.equal(fs.readFileSync(ledger, 'utf8'), '{}\\n');\n"
+        "  assert.ok(fs.readFileSync(brain).includes('approved-scope'));\n"
+        "  fs.appendFileSync(ledger, 'private write');\n"
+        "  fs.appendFileSync(brain, 'private write');\n"
+        "  fs.appendFileSync(process.env.FIXTURE_OBSERVED, JSON.stringify([ledger, brain])"
+        " + '\\n');\n"
+        "});\n"
+    )
+    direct.write_text(direct_source)
+    (tests / "test_standalone.js").write_text(
+        "throw new Error('standalone witness must retain its file-level entry point');\n"
+    )
+    monkeypatch.setattr(
+        node_test_inventory,
+        "SUPPORTED_NODE_SUITES",
+        (
+            node_test_inventory.NodeSuite("tests/test_direct.js", gate_job="fixture-node-gate"),
+            node_test_inventory.NodeSuite("tests/test_standalone.js"),
+            node_test_inventory.NodeSuite(
+                "tests/test_bridged.js", pytest_nodeid="tests/test_bridge.py::test_node_bridge"
+            ),
+        ),
+    )
+    ledger = tmp_path / "source-ledger.json"
+    ledger.write_text("{}\n")
+    brain = tmp_path / "source-brain.db"
+    with contextlib.closing(sqlite3.connect(brain)) as db:
+        db.execute("CREATE TABLE control (value TEXT)")
+        db.execute("INSERT INTO control VALUES ('approved-scope')")
+        db.commit()
+    original_brain = brain.read_bytes()
+    observed = tmp_path / "observed.jsonl"
+    monkeypatch.setattr(capabilities, "REG", ledger)
+    monkeypatch.setattr(feedback, "DB_PATH", brain)
+    for key, value in {
+        capabilities.LEDGER_PATH_ENV: ledger,
+        feedback.DB_PATH_ENV: brain,
+        "FIXTURE_SOURCE_LEDGER": ledger,
+        "FIXTURE_SOURCE_BRAIN": brain,
+        "FIXTURE_OBSERVED": observed,
+    }.items():
+        monkeypatch.setenv(key, str(value))
+    monkeypatch.delenv(verify.LIVE_STATE_ENV, raising=False)
     junit = tmp_path / "timings.xml"
     junit.write_text('<testsuite><testcase classname="tests.test_python" time="1"/></testsuite>')
     monkeypatch.delenv("PYTEST_ADDOPTS", raising=False)
@@ -454,35 +528,102 @@ def test_generated_shard_runs_python_and_its_node_bridge(shard_planner, tmp_path
     monkeypatch.setenv("VERIFY_PYTEST_WORKERS", "0")
     monkeypatch.setattr(verify, "ROOT", tmp_path)
     monkeypatch.setattr(verify, "COVERAGE", False)
-    monkeypatch.setattr(verify, "private_state", lambda: contextlib.nullcontext({}))
+    monkeypatch.setattr(verify, "FLOOR", tmp_path / ".verify-floor.json")
+    verify.FLOOR.write_text(json.dumps({"collected": 2, "passed": 2}))
+    monkeypatch.setattr(verify, "MODULES", tmp_path)
+    monkeypatch.setattr(verify, "GATES", (("approved-scope control", ["test_python.py"]),))
 
-    plan = shard_planner.make_plan(junit, tmp_path, 1)
-    assert plan["shards"] == [["tests/test_bridge.py", "tests/test_python.py"]]
+    plan = shard_planner.make_plan(junit, tmp_path, 2)
+    assert plan["shards"] == [["tests/test_bridge.py"], ["tests/test_python.py"]]
+    nodeid = "tests/test_bridge.py::test_node_bridge"
+    with pytest.raises(ValueError, match="missing or duplicate pytest bridge"):
+        node_test_inventory.assign_shards([["tests/test_python.py"]])
+    for bad_collection in ([], [nodeid, nodeid]):
+        with pytest.raises(ValueError, match="missing or duplicate pytest bridge"):
+            node_test_inventory.assign_shards(plan["shards"], collected_nodeids=bad_collection)
+    with monkeypatch.context() as patch:
+        suites = node_test_inventory.SUPPORTED_NODE_SUITES
+        patch.setattr(node_test_inventory, "SUPPORTED_NODE_SUITES", (*suites, suites[0]))
+        with pytest.raises(ValueError, match="duplicate paths"):
+            node_test_inventory.supported_suites()
     config = tmp_path / "config"
     config.mkdir()
     (config / "test-shards.json").write_text(json.dumps(plan))
     output = tmp_path / "shard-results"
 
-    code, summary = verify.run_pytest_shard("1/1", output)
+    def invoke(*args):
+        monkeypatch.setattr(sys, "argv", ["verify.py", *args])
+        code = verify.main()
+        return code, capsys.readouterr().out
+
+    def assert_inventory(summary, *, direct_ran=True):
+        expected = ["tests/test_bridged.js"]
+        if direct_ran:
+            expected.append("tests/test_direct.js")
+        assert f"{len(expected)} suite(s), " in summary, summary
+        assert [
+            line.split()[3].rstrip(":")
+            for line in summary.splitlines()
+            if line.startswith("    Node suite ")
+        ] == expected
+
+    code, summary = invoke()
     assert code == 0 and "2 passed" in summary, summary
+    assert "private copy, deleted after the run" in summary
+    assert "approved-scope control ok  approved-scope Python check passed" in summary
+    assert_inventory(summary)
+
+    code, summary = invoke("--pytest-shard", "1/2", "--shard-output", str(output))
+    assert code == 0 and "1 suite(s), 1 passed" in summary, summary
     receipt = json.loads((output / "shard-1.json").read_text())
-    assert receipt["test_inventory"] == [
-        ["tests.test_bridge", "test_node_bridge"],
-        ["tests.test_python", "test_python"],
-    ]
+    assert receipt["test_inventory"] == [["tests.test_bridge", "test_node_bridge"]]
+    code, summary = invoke("--pytest-shard", "2/2", "--shard-output", str(output))
+    assert code == 0 and "0 suite(s)" in summary, summary
+    control = json.loads((output / "shard-2.json").read_text())
+    assert control["verdicts"]["test_python"]["test_python"]["outcome"] == "passed"
+    code, summary = invoke("--aggregate", str(output))
+    assert code == 0 and "2 passed" in summary, summary
+    assert "approved-scope control ok  approved-scope Python check passed" in summary
+    assert_inventory(summary, direct_ran=False)
+
+    record_path = output / "shard-2.json"
+    control["node_suites"] = [["tests/test_bridged.js", ""]]
+    record_path.write_text(json.dumps(control))
+    code, summary = invoke("--aggregate", str(output))
+    assert code == 1 and "Node suite inventory differs from plan" in summary, summary
 
     suite.write_text(suite_source.replace("6 * 7, 42", "6 * 7, 41"))
-    code, summary = verify.run_pytest_shard("1/1", output)
-    assert code == 1 and "1 failed, 1 passed" in summary, summary
-    assert "bridged arithmetic" in summary
+    code, summary = invoke()
+    assert code == 1 and "Node suite FAIL tests/test_bridged.js" in summary, summary
+    assert "Node suite PASS tests/test_direct.js" in summary
+    assert_inventory(summary)
 
     suite.write_text(suite_source)
-    code, summary = verify.run_pytest_shard("1/1", output)
+    direct.write_text(direct_source.replace("includes('approved-scope')", "includes('broken')"))
+    code, summary = invoke()
+    assert code == 1 and "Node suite FAIL tests/test_direct.js" in summary, summary
+    assert "Node suite PASS tests/test_bridged.js" in summary
+    assert "2 passed, 0 failed" in summary
+    assert_inventory(summary)
+
+    direct.write_text(direct_source)
+    code, summary = invoke()
     assert code == 0 and "2 passed" in summary, summary
+    assert_inventory(summary)
+
+    runs = [json.loads(line) for line in observed.read_text().splitlines()]
+    assert len(runs) == 3
+    assert len({directory for directory, _ in runs}) == len(runs)
+    assert all(not pathlib.Path(path).exists() for run in runs for path in run)
+    assert ledger.read_text() == "{}\n"
+    assert brain.read_bytes() == original_brain
+    assert os.environ[capabilities.LEDGER_PATH_ENV] == str(ledger)
+    assert os.environ[feedback.DB_PATH_ENV] == str(brain)
 
 
 @pytest.fixture
 def planner_junit(shard_planner, tmp_path, monkeypatch):
+    monkeypatch.setattr(node_test_inventory, "SUPPORTED_NODE_SUITES", ())
     (tmp_path / "tests").mkdir()
     for name in ("a", "b", "c", "untimed"):
         (tmp_path / f"tests/test_{name}.py").touch()

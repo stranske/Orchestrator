@@ -23,6 +23,7 @@ What it runs:
   3. the capability gates: activation audit, recurrence replay, set coverage, admission. The two
      that are test files report the verdicts pytest just reached on the same checks instead of
      executing them a second time, and execute any check pytest left no verdict for.
+  4. Node suites with existing automatic callers, including pytest bridges.
 All of it runs against ONE private copy of the capability ledger and the Brain, taken when the run
 starts and deleted when it ends (see `private_state`): no read waits on the tick's lock, and nothing
 the code under test writes can reach production state. `ORCH_VERIFY_LIVE_STATE=1` turns that off.
@@ -81,6 +82,8 @@ import time
 import xml.etree.ElementTree as ET
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+
+import node_test_inventory
 
 # TWO ROOTS, and verify.py is the module that most needs them separated: it DISCOVERS modules
 # (beside itself) and it READS repo files — the floor, the coverage artifacts — and RUNS pytest,
@@ -400,12 +403,18 @@ def private_state(
 COUNT_RE = re.compile(r"(\d+) (passed|failed|error|errors|skipped|xfailed|xpassed)")
 
 
-def run_pytest(*, extra: list[str] | None = None, junit: pathlib.Path | None = None) -> dict:
+def run_pytest(
+    *,
+    extra: list[str] | None = None,
+    junit: pathlib.Path | None = None,
+    node_suites: tuple[node_test_inventory.NodeSuite, ...] = (),
+) -> dict:
     """Execute the suite and read the COUNTS, not the exit code.
 
     With `junit`, pytest also writes its per-test XML there, and the verdicts in it come back as
     `verdicts` — which is how the two gates that are test files report them instead of executing
-    every check a second time (see `run_gates`). Outcome counts remain from the summary; collected identities come from its testcase records.
+    every check a second time (see `run_gates`). Outcome counts remain from the summary; collected
+    identities come from its testcase records. Node results use their own inventory.
     """
     # `-rfEs`: failures, errors AND skip reasons in the short summary. Skip reasons are why this
     # flag is here at all — a skip count with no story is the shape a silent narrowing hides in.
@@ -428,7 +437,9 @@ def run_pytest(*, extra: list[str] | None = None, junit: pathlib.Path | None = N
     cmd += extra or []
     proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
     tail = (proc.stdout or "") + (proc.stderr or "")
-    return parse_pytest_output(tail, returncode=proc.returncode, junit=junit)
+    result = parse_pytest_output(tail, returncode=proc.returncode, junit=junit)
+    result["node_suites"] = run_node_suites(node_suites, junit)
+    return result
 
 
 def parse_pytest_output(
@@ -685,6 +696,85 @@ def shard_identity() -> str:
     return hashlib.sha256((ROOT / "config/test-shards.json").read_bytes()).hexdigest()
 
 
+def _bridge_identity(nodeid: str) -> tuple[str, str]:
+    module, *classes, name = nodeid.split("::")
+    return ".".join([module.removesuffix(".py").replace("/", "."), *classes]), name
+
+
+def run_node_suites(
+    suites: tuple[node_test_inventory.NodeSuite, ...], junit: pathlib.Path | None
+) -> list[list[str]]:
+    """Run each direct file once and read existing bridge outcomes from pytest's JUnit."""
+    if not suites:
+        return []
+    bridges = read_junit(junit, full_classnames=True) if junit is not None else {}
+    env = _child_env()
+    env["PYTHON"] = sys.executable
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+
+    def run(suite: node_test_inventory.NodeSuite) -> list[str]:
+        if not (ROOT / suite.path).is_file():
+            return [suite.path, "suite file is missing"]
+        if suite.pytest_nodeid is not None:
+            classname, name = _bridge_identity(suite.pytest_nodeid)
+            verdict = bridges.get(classname, {}).get(name)
+            if verdict is None:
+                return [suite.path, f"no outcome for pytest bridge {suite.pytest_nodeid}"]
+            if verdict["outcome"] != "passed":
+                return [suite.path, f"pytest bridge {suite.pytest_nodeid} {verdict['outcome']}"]
+            return [suite.path, ""]
+        try:
+            proc = subprocess.run(
+                [
+                    "node",
+                    "--test",
+                    "--test-isolation=none",
+                    "--test-reporter=tap",
+                    "--test-timeout=120000",
+                    suite.path,
+                ],
+                cwd=ROOT,
+                env=env,
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=130,
+            )
+        except OSError as exc:
+            return [suite.path, f"could not start Node: {exc.strerror}"]
+        except subprocess.TimeoutExpired:
+            return [suite.path, "Node exceeded the suite timeout"]
+        if proc.returncode == 0:
+            passed = re.findall(r"^# pass (\d+)$", proc.stdout, re.MULTILINE)
+            return [suite.path, "" if passed and int(passed[-1]) else "Node passed zero tests"]
+        lines = (proc.stdout + proc.stderr).strip().splitlines()
+        first_failure = next(
+            (index for index, line in enumerate(lines) if line.lstrip().startswith("not ok ")),
+            max(0, len(lines) - 20),
+        )
+        try:
+            detail, _, _ = _bounded_redacted(
+                "\n".join(lines[first_failure : first_failure + 20]), 2048
+            )
+        except ValueError:
+            detail = "failure output unavailable"
+        return [suite.path, f"Node exited {proc.returncode}: {detail}"]
+
+    with ThreadPoolExecutor(max_workers=min(4, len(suites))) as pool:
+        return list(pool.map(run, suites))
+
+
+def node_suite_lines(results: list[list[str]]) -> list[str]:
+    failed = sum(bool(error) for _, error in results)
+    return [
+        f"  node:       {len(results)} suite(s), {len(results) - failed} passed, {failed} failed",
+        *[
+            f"    Node suite FAIL {path}: {error}" if error else f"    Node suite PASS {path}"
+            for path, error in results
+        ],
+    ]
+
+
 def run_pytest_shard(spec: str, output: pathlib.Path) -> tuple[int, str]:
     plan = shard_plan()
     match = re.fullmatch(r"([1-9]\d*)/([1-9]\d*)", spec)
@@ -693,6 +783,7 @@ def run_pytest_shard(spec: str, output: pathlib.Path) -> tuple[int, str]:
             f"invalid pytest shard {spec!r}; expected 1/{len(plan)}..{len(plan)}/{len(plan)}"
         )
     index = int(match[1])
+    suites = node_test_inventory.assign_shards(plan)[index - 1]
     output.mkdir(parents=True, exist_ok=True)
     extra = list(plan[index - 1])
     if COVERAGE:
@@ -702,7 +793,8 @@ def run_pytest_shard(spec: str, output: pathlib.Path) -> tuple[int, str]:
     with private_state() as state:
         if state.get("refused"):
             return 1, _not_run_summary(state)
-        py = run_pytest(extra=extra, junit=output / f"shard-{index}.xml")
+        py = run_pytest(extra=extra, junit=output / f"shard-{index}.xml", node_suites=tuple(suites))
+    node_suites = py.get("node_suites", [])
     shape, reason = tree_shape()
     record = {
         "shard": spec,
@@ -715,6 +807,7 @@ def run_pytest_shard(spec: str, output: pathlib.Path) -> tuple[int, str]:
         "test_inventory": py["test_inventory"],
         "collection_skip_records": py["collection_skip_records"],
         "inventory_error": py["inventory_error"],
+        "node_suites": node_suites,
     }
     (output / f"shard-{index}.json").write_text(json.dumps(record), encoding="utf-8")
     # pytest-cov combines its workers into COVERAGE_FILE (without a parallel suffix).
@@ -730,17 +823,21 @@ def run_pytest_shard(spec: str, output: pathlib.Path) -> tuple[int, str]:
             or py["usage_error"]
             or py.get("inventory_error")
             or not py["collected"]
+            or any(error for _, error in node_suites)
         )
     )
     return (
         code,
-        f"  tree:       {TREE_LABELS[shape]} {reason or ''}\npytest shard {spec}\n{py['output']}",
+        f"  tree:       {TREE_LABELS[shape]} {reason or ''}\npytest shard {spec}\n{py['output']}"
+        + "\n".join(node_suite_lines(node_suites))
+        + "\n",
     )
 
 
 def aggregate_pytest(directory: pathlib.Path) -> dict:
     """Require every shard, reparse printed counts, retain gate verdicts and skip reasons."""
     plan = shard_plan()
+    node_plan = node_test_inventory.assign_shards(plan)
     shape, _ = tree_shape()
     parts = []
     seen_identities: set[tuple[str, str]] = set()
@@ -808,14 +905,43 @@ def aggregate_pytest(directory: pathlib.Path) -> dict:
         py["collection_skip_records"] = collection_skips
         py["verdicts"] = record["verdicts"]
         py["skip_records"] = record["skip_records"]
+        node_suites = record.get("node_suites", [])
+        expected = [suite.path for suite in node_plan[index - 1]]
+        if (
+            not isinstance(node_suites, list)
+            or any(
+                not isinstance(row, list)
+                or len(row) != 2
+                or not all(isinstance(value, str) for value in row)
+                for row in node_suites
+            )
+            or [path for path, _ in node_suites] != expected
+        ):
+            raise ValueError(f"shard {spec}: Node suite inventory differs from plan {expected}")
+        for suite, (_, error) in zip(node_plan[index - 1], node_suites, strict=True):
+            if (
+                suite.pytest_nodeid is not None
+                and not error
+                and _bridge_identity(suite.pytest_nodeid) not in identities
+            ):
+                raise ValueError(f"shard {spec}: missing testcase for Node suite {suite.path}")
+        py["node_suites"] = node_suites
         parts.append(py)
     summed = parse_pytest_output("")
+    summed["node_suites"] = []
     for part in parts:
         for key in ("collected", "passed", "skipped", "failed"):
             summed[key] += part[key]
         for key, count in part["counts"].items():
             summed["counts"][key] = summed["counts"].get(key, 0) + count
-        for key in ("failures", "skips", "tail", "skip_records", "collection_skip_records"):
+        for key in (
+            "failures",
+            "skips",
+            "tail",
+            "skip_records",
+            "collection_skip_records",
+            "node_suites",
+        ):
             summed[key].extend(part[key])
         for module, verdicts in part["verdicts"].items():
             target = summed["verdicts"].setdefault(module, {})
@@ -865,7 +991,10 @@ def read_junit_inventory(path):
 
 
 def read_junit(
-    path: pathlib.Path, *, skip_records: list[dict[str, str]] | None = None
+    path: pathlib.Path,
+    *,
+    skip_records: list[dict[str, str]] | None = None,
+    full_classnames: bool = False,
 ) -> dict[str, dict[str, dict[str, str]]]:
     """pytest's verdict on each test: {module stem: {test name: {"outcome", "message"}}}.
 
@@ -897,7 +1026,9 @@ def read_junit(
                             "message": child.get("message") or "",
                         }
                     )
-        module = (case.get("classname") or "").rsplit(".", 1)[-1]
+        module = case.get("classname") or ""
+        if not full_classnames:
+            module = module.rsplit(".", 1)[-1]
         name = case.get("name") or ""
         if not module or not name:
             continue
@@ -1904,7 +2035,14 @@ def verify(
         declared_rows = declared_rows_at_start(run_state["ledger"])
         started = time.monotonic()
         if aggregate is None:
-            py = run_pytest(junit=pathlib.Path(run_dir) / "pytest.xml")
+            try:
+                suites = node_test_inventory.automated_suites(include_gate=True)
+            except ValueError as exc:
+                return 1, f"Node suite inventory FAILED: {exc}\n"
+            py = run_pytest(
+                junit=pathlib.Path(run_dir) / "pytest.xml",
+                node_suites=suites,
+            )
             if failure_evidence_out is not None and (py["failed"] or py["usage_error"]):
                 try:
                     evidence = write_failure_evidence(
@@ -1934,6 +2072,10 @@ def verify(
         entrypoints = absent_entrypoint_line(run_state["ledger"])
 
     problems = []
+    node_suites = py.get("node_suites", [])
+    node_failed = sum(bool(error) for _, error in node_suites)
+    if node_failed:
+        problems.append(f"{node_failed} Node suite(s) failed")
     if py.get("inventory_error"):
         problems.append("pytest testcase inventory unavailable: " + py["inventory_error"])
     if py["usage_error"]:
@@ -2030,8 +2172,9 @@ def verify(
     )
     # ALWAYS printed, like `tree:`. Which state the run judged is never something to infer.
     lines.append(f"  state:      {run_state['line']}")
+    test_phase = "pytest + Node" if aggregate is None and node_suites else "pytest"
     lines.append(
-        f"  time:       pytest {_duration(took['pytest'])}, selftests "
+        f"  time:       {test_phase} {_duration(took['pytest'])}, selftests "
         f"{_duration(took['selftests'])} ({jobs_said}), gates {_duration(took['gates'])}"
     )
     skip_detail = _cap("skipped_max")
@@ -2049,6 +2192,17 @@ def verify(
         f"  selftests:  {len(st['ok'])} of {len(mods)} modules ran, "
         f"{_cap('selftest_skipped_max')} skipped"
     )
+    lines.extend(node_suite_lines(node_suites))
+    all_node_suites = node_test_inventory.supported_suites()
+    if all_node_suites:
+        gate_suites = sum(suite.gate_job is not None for suite in all_node_suites)
+        standalone_suites = sum(
+            suite.gate_job is None and suite.pytest_nodeid is None for suite in all_node_suites
+        )
+        lines.append(
+            f"  node inventory: {len(all_node_suites)} suites; "
+            f"{standalone_suites} standalone; {gate_suites} dedicated Gate"
+        )
     for name, res in gates.items():
         state = "SKIP" if res["skipped"] else ("ok " if res["ok"] else "FAIL")
         lines.append(f"  {name:<18} {state} {res['line']}")

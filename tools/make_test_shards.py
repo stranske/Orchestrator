@@ -18,6 +18,12 @@ import sys
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 
+if __name__ == "__main__":
+    root = pathlib.Path(__file__).resolve().parents[1]
+    sys.path[:0] = [str(root / "src"), str(root)]
+
+import node_test_inventory  # noqa: E402
+
 
 def make_plan(junit: pathlib.Path, root: pathlib.Path, count: int) -> dict:
     if count < 1:
@@ -47,13 +53,12 @@ def make_plan(junit: pathlib.Path, root: pathlib.Path, count: int) -> dict:
         text=True,
         check=True,
     )
-    modules = sorted(
-        {
-            line.split("::", 1)[0]
-            for line in proc.stdout.splitlines()
-            if "::" in line and line.split("::", 1)[0].endswith(".py")
-        }
-    )
+    nodeids = [
+        line
+        for line in proc.stdout.splitlines()
+        if "::" in line and line.split("::", 1)[0].endswith(".py")
+    ]
+    modules = sorted({nodeid.split("::", 1)[0] for nodeid in nodeids})
     if len(modules) < count:
         raise ValueError("not enough collected modules for requested shards")
     default = statistics.median(seconds.values())
@@ -63,6 +68,9 @@ def make_plan(junit: pathlib.Path, root: pathlib.Path, count: int) -> dict:
         index = min(range(count), key=lambda i: (loads[i], i))
         shards[index].append(module)
         loads[index] += seconds.get(module, default)
+    # Runtime derives the same assignments from the Python module partition and inventory.
+    # Check exact bridge collection while the planner has pytest's node IDs available.
+    node_test_inventory.assign_shards(shards, collected_nodeids=nodeids)
     return {
         "timing_source": junit.name,
         "estimated_test_seconds": [round(load, 3) for load in loads],

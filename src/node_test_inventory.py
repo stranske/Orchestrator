@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,7 +23,7 @@ class NodeSuite:
     gate_job: str | None = None
 
 
-# Each entry here runs directly with `node --test <path>`.
+# These standalone witnesses retain their file-level `node --test <path>` entry point.
 DIRECT_SUITES = (
     "adjudicator_acceptance_runner",
     "adjudicator_case_gaps",
@@ -94,8 +95,7 @@ SUPPORTED_NODE_SUITES = (
     NodeSuite(
         "tests/test_capture_mirror_deployment_evidence.js",
         pytest_nodeid=(
-            "tests/test_mirror_product_witnesses.py::"
-            "test_deployment_evidence_collector_acceptance"
+            "tests/test_mirror_product_witnesses.py::test_deployment_evidence_collector_acceptance"
         ),
     ),
     NodeSuite(
@@ -124,6 +124,40 @@ EXCLUDED_NODE_PATHS = {
         "tests/test_seatbelt_measurement_producer.js. It defines no tests."
     ),
 }
+
+
+def supported_suites() -> tuple[NodeSuite, ...]:
+    paths = [suite.path for suite in SUPPORTED_NODE_SUITES]
+    if len(set(paths)) != len(paths):
+        raise ValueError("duplicate paths in the supported Node suite inventory")
+    return tuple(sorted(SUPPORTED_NODE_SUITES, key=lambda suite: suite.path))
+
+
+def automated_suites(*, include_gate: bool = False) -> tuple[NodeSuite, ...]:
+    """Select suites owned by pytest or the dedicated GitHub Gate jobs."""
+    return tuple(
+        suite
+        for suite in supported_suites()
+        if suite.pytest_nodeid or (include_gate and suite.gate_job)
+    )
+
+
+def assign_shards(
+    shards: list[list[str]], *, collected_nodeids: list[str] | None = None
+) -> list[list[NodeSuite]]:
+    """Keep each existing bridge with its collected pytest module."""
+    assignments: list[list[NodeSuite]] = [[] for _ in shards]
+    modules = {module: index for index, shard in enumerate(shards) for module in shard}
+    collected = Counter(collected_nodeids or [])
+    for suite in automated_suites():
+        nodeid = suite.pytest_nodeid
+        if nodeid is None:
+            raise ValueError(f"{suite.path}: shard entry lacks a pytest bridge")
+        module = nodeid.split("::", 1)[0]
+        if module not in modules or (collected_nodeids is not None and collected[nodeid] != 1):
+            raise ValueError(f"{suite.path}: missing or duplicate pytest bridge {nodeid}")
+        assignments[modules[module]].append(suite)
+    return assignments
 
 
 def check_tracked_inventory(root: Path) -> None:
