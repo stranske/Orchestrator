@@ -6,7 +6,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { test } = require('node:test');
-const { edit, node, requireVerdict, verify, verifyAtHead } = require('../scripts/verify_issue_1138_mutation');
+const { edit, node, pytestCommand, requireVerdict, verify, verifyAtHead } =
+  require('../scripts/verify_issue_1138_mutation');
 
 function verdict(failed = false) {
   return {
@@ -26,6 +27,19 @@ function sources(t) {
   fs.writeFileSync(path.join(root, 'tests/test_coverage_round_1138.py'), '# private test input\n');
   return root;
 }
+
+test('anchors a relative Python executable to the invocation directory', (t) => {
+  const previous = process.env.PYTHON;
+  t.after(() => {
+    if (previous === undefined) delete process.env.PYTHON;
+    else process.env.PYTHON = previous;
+  });
+  const relative = path.join('.venv', 'bin', 'python');
+  process.env.PYTHON = relative;
+  assert.equal(pytestCommand()[0], path.resolve(relative));
+  process.env.PYTHON = 'python3.14';
+  assert.equal(pytestCommand()[0], 'python3.14');
+});
 
 test('records a baseline, the intended assertion failure, and a restored pass', (t) => {
   const root = sources(t);

@@ -8,7 +8,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { withMutation } = require('./verify_redirect_routing_mutations');
-const { requireVerdict, withArchivedInputs } = require('./verify_issue_1138_mutation');
+const { pytestCommand, requireVerdict, runPytest, withArchivedInputs } =
+  require('./verify_issue_1138_mutation');
 
 const testFile = 'tests/test_coverage_round_1138.py';
 const directory = 'docs/verification/issue-1138';
@@ -27,18 +28,11 @@ const experiments = [
   },
 ];
 const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
-const args = (test) => ['-B', '-m', 'pytest', '-v', '--tb=short', '--color=no',
-  `${testFile}::${test}`, '-m', 'not slow', '-p', 'no:cacheprovider'];
-
-function runPytest(root, test) {
-  return spawnSync(process.env.PYTHON || 'python3', args(test), {
-    cwd: root,
-    env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
-    encoding: 'utf8', timeout: 60000, maxBuffer: 4 * 1024 * 1024,
-  });
+function runArtifactPytest(root, test) {
+  return runPytest(root, `${testFile}::${test}`);
 }
 
-function verify(root, run = runPytest) {
+function verify(root, run = runArtifactPytest) {
   const originals = new Map(experiments.map(({ file }) => [
     file, fs.readFileSync(path.join(root, file)),
   ]));
@@ -74,7 +68,7 @@ function verify(root, run = runPytest) {
       requireInputs();
       return {
         test, file, field, before: 296, broken: 297,
-        command: [process.env.PYTHON || 'python3', ...args(test)],
+        command: pytestCommand(options.testNode),
         record_sha256: digest(original), broken_record_sha256: digest(broken),
         restored_record_sha256: digest(fs.readFileSync(path.join(root, file))),
         test_sha256: digest(testSource),
@@ -93,7 +87,7 @@ function verify(root, run = runPytest) {
   }
 }
 
-function verifyAtHead(root, head, run = runPytest) {
+function verifyAtHead(root, head, run = runArtifactPytest) {
   const files = experiments.map(({ file }) => file);
   return withArchivedInputs(root, head, files, (checkout) => verify(checkout, run));
 }

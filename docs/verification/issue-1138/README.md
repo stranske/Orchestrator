@@ -1050,3 +1050,39 @@ interpreter was absent. The installed Python lacked pytest, so both deliberate-b
 scripts stopped at baseline. The recorded experiment at `d068c59` remains the
 latest real pytest transcript. The merge guard dry run for `694883f` blocked at the
 review-thread GraphQL query.
+
+### Verification at `120ff451cc01b9c3c62ecf761fb86cfa4dcf5e1f`
+
+The two named `/opt/anaconda3/bin/python3` commands exited 127 because this
+runner lacked that interpreter. With Python 3.14.10 and pytest from the upstream
+9.1.1 source, using disposable state, runtime and handoff directories, the same
+test selections passed.
+
+| Command | Result |
+| --- | --- |
+| `python3 -m pytest -q tests/test_coverage_round_1138.py` | 79 passed in 14.48s, exit 0 |
+| `python3 -m pytest -q tests/test_verify_sharding.py::test_shard_lists_partition_every_collected_test_exactly_once` | 1 passed in 39.58s, exit 0 |
+
+`node scripts/verify_issue_1138_mutation.js` ran the corrected test in an archive
+of the measured commit with pytest plugin autoload disabled. The baseline
+passed, the changed status fallback failed at `assert miner["status"] == {}`,
+and the restored run passed. The measured head, command, output and matching
+production source hashes are in [mutation-proof-pass3.json](mutation-proof-pass3.json).
+
+`node scripts/verify_issue_1138_artifacts.js` ran both archived coverage locks
+with plugin autoload disabled and a relative `PYTHON` path. Each named test used
+`-m pytest -v --tb=short --color=no -m "not slow" -p no:cacheprovider`. Each
+record was restored byte for byte before its final run.
+
+| Changed field | Baseline | Deliberate break | Restored |
+| --- | --- | --- | --- |
+| `head-ea6255b-combined.json` → `gain`, 296 → 297 | 1 passed, exit 0 | `assert 296 == 297`, exit 1 | 1 passed, exit 0 |
+| `head-ecb0707-combined.json` → `gain_vs_base`, 296 → 297 | 1 passed, exit 0 | `assert 297 == 296`, exit 1 | 1 passed, exit 0 |
+
+PR #1457 was open and ready for review at the measured head. All six pytest
+shards, all six flat exec-mirror shards, both aggregates and Gate passed.
+The merge guard dry run stopped at its review-thread GraphQL query.
+[CI run](https://github.com/stranske/Orchestrator/actions/runs/44910550712),
+[coverage aggregate](https://github.com/stranske/Orchestrator/actions/runs/44910550712/job/136865821210),
+[flat exec-mirror aggregate](https://github.com/stranske/Orchestrator/actions/runs/44910550712/job/136865782922),
+[Gate run](https://github.com/stranske/Orchestrator/actions/runs/44910551112)

@@ -18,12 +18,20 @@ const edit = {
   before: '        pattern_status = {}',
   after: '        pattern_status = {"broken": True}',
 };
-const args = ['-B', '-m', 'pytest', '-v', '--tb=short', '--color=no', node,
-  '-m', 'not slow', '-p', 'no:cacheprovider'];
 const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
-function runPytest(root) {
-  return spawnSync(process.env.PYTHON || 'python3', args, {
+function pytestCommand(testNode = node) {
+  const python = process.env.PYTHON || 'python3';
+  // Keep relative virtualenv paths anchored to the invocation directory when
+  // pytest runs from the disposable checkout.
+  const interpreter = path.basename(python) === python ? python : path.resolve(python);
+  return [interpreter, '-B', '-m', 'pytest', '-v', '--tb=short', '--color=no', testNode,
+    '-m', 'not slow', '-p', 'no:cacheprovider'];
+}
+
+function runPytest(root, testNode) {
+  const [python, ...args] = pytestCommand(testNode);
+  return spawnSync(python, args, {
     cwd: root,
     env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -86,7 +94,7 @@ function verify(root, run = runPytest) {
     assert.deepEqual(fs.readFileSync(path.join(root, testFile)), testSource, 'test source changed');
     return {
       test, file: edit.file, before: edit.before, broken: edit.after,
-      command: [process.env.PYTHON || 'python3', ...args],
+      command: pytestCommand(),
       source_sha256: digest(original), restored_source_sha256: digest(fs.readFileSync(source)),
       broken_source_sha256: digest(brokenSource),
       test_sha256: digest(testSource),
@@ -155,4 +163,6 @@ if (require.main === module) {
   }
 }
 
-module.exports = { edit, node, requireVerdict, verify, verifyAtHead, withArchivedInputs };
+module.exports = {
+  edit, node, pytestCommand, requireVerdict, runPytest, verify, verifyAtHead, withArchivedInputs,
+};
