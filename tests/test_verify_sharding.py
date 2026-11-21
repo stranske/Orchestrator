@@ -11,6 +11,7 @@ from collections import Counter
 import pytest
 
 import verify
+from node_test_inventory import SUPPORTED_NODE_SUITES, check_tracked_inventory
 
 
 def test_shard_lists_partition_every_collected_test_exactly_once():
@@ -43,6 +44,12 @@ def test_shard_lists_partition_every_collected_test_exactly_once():
     ]
     assert Counter(assigned) == Counter(ids)
     assert len(modules) == len(set(modules))
+    if verify.tree_shape()[0] == verify.CHECKOUT:
+        check_tracked_inventory(verify.ROOT)
+    for suite in SUPPORTED_NODE_SUITES:
+        assert (verify.ROOT / suite.path).is_file(), suite.path
+        if suite.pytest_nodeid is not None:
+            assert assigned.count(suite.pytest_nodeid) == 1, suite.path
 
 
 def test_shard_plan_rejects_duplicate_modules(tmp_path, monkeypatch):
