@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -39,7 +40,6 @@ DIRECT_SUITES = (
     "audit_provision_ledger",
     "capture_review_source_evidence",
     "ci_toolchain_mirror",
-    "closer_pipeline_capacity_clock",
     "codemod_campaign_cli",
     "codemod_campaign_receipts",
     "codemod_campaign_recipe",
@@ -71,7 +71,6 @@ DIRECT_SUITES = (
     "seatbelt_hosted_ci",
     "seatbelt_measurement_producer",
     "seatbelt_original_ci",
-    "seatbelt_receipts",
     "seatbelt_regex_profile_contract",
     "switch_review_stuck_targets",
     "value_chain_preflight_cli",
@@ -123,7 +122,48 @@ EXCLUDED_NODE_PATHS = {
         "tests/test_seatbelt_discovered_ci.js, tests/test_seatbelt_hosted_ci.js and "
         "tests/test_seatbelt_measurement_producer.js. It defines no tests."
     ),
+    "tests/test_closer_pipeline_capacity_clock.js": (
+        "The historical reproduction in docs/verification/issue-1250-capacity-clock.md "
+        "imports src/closer_pipeline.py, removed in bc077c6f. No current automated caller."
+    ),
+    "tests/test_seatbelt_receipts.js": (
+        "The manual reproduction in docs/verification/issue-532-seatbelt-regex/README.md "
+        "validates the October 11 proof archive against its original src/adapters.py and "
+        "tests/test_seatbelt_regex_quoting.py bytes. No current automated caller."
+    ),
 }
+
+
+def supported_suites() -> tuple[NodeSuite, ...]:
+    paths = [suite.path for suite in SUPPORTED_NODE_SUITES]
+    if len(set(paths)) != len(paths):
+        raise ValueError("duplicate paths in the supported Node suite inventory")
+    return tuple(sorted(SUPPORTED_NODE_SUITES, key=lambda suite: suite.path))
+
+
+def assign_shards(
+    shards: list[list[str]], *, collected_nodeids: list[str] | None = None
+) -> list[list[NodeSuite]]:
+    """Keep bridge suites with their pytest module and distribute direct suites across shards."""
+    assignments: list[list[NodeSuite]] = [[] for _ in shards]
+    modules = {module: index for index, shard in enumerate(shards) for module in shard}
+    collected = Counter(collected_nodeids or [])
+    direct_index = 0
+    for suite in supported_suites():
+        if suite.pytest_nodeid is None:
+            index = direct_index % len(shards)
+            direct_index += 1
+        else:
+            module = suite.pytest_nodeid.split("::", 1)[0]
+            if module not in modules or (
+                collected_nodeids is not None and collected[suite.pytest_nodeid] != 1
+            ):
+                raise ValueError(
+                    f"{suite.path}: missing or duplicate pytest bridge {suite.pytest_nodeid}"
+                )
+            index = modules[module]
+        assignments[index].append(suite)
+    return assignments
 
 
 def check_tracked_inventory(root: Path) -> None:
