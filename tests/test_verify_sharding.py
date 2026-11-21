@@ -411,13 +411,71 @@ def test_aggregate_coverage_requires_every_shard_without_changing_verdict(
 
 
 @pytest.fixture
-def planner_junit(tmp_path, monkeypatch):
+def shard_planner():
     planner_path = pathlib.Path(__file__).resolve().parents[1] / "tools" / "make_test_shards.py"
     spec = importlib.util.spec_from_file_location("make_test_shards", planner_path)
     assert spec is not None and spec.loader is not None
     make_test_shards = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(make_test_shards)
+    return make_test_shards
 
+
+def test_generated_shard_runs_python_and_its_node_bridge(shard_planner, tmp_path, monkeypatch):
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    (tests / "test_python.py").write_text("def test_python():\n    assert 6 * 7 == 42\n")
+    (tests / "test_bridge.py").write_text(
+        "import subprocess\n"
+        "def test_node_bridge():\n"
+        "    result = subprocess.run(\n"
+        "        ['node', '--test', '--test-isolation=none', 'tests/test_bridged.js'],\n"
+        "        capture_output=True, text=True, timeout=30,\n"
+        "    )\n"
+        "    assert result.returncode == 0, result.stdout + result.stderr\n"
+    )
+    suite = tests / "test_bridged.js"
+    suite_source = (
+        "const test = require('node:test');\n"
+        "const assert = require('node:assert/strict');\n"
+        "test('bridged arithmetic', () => assert.equal(6 * 7, 42));\n"
+    )
+    suite.write_text(suite_source)
+    junit = tmp_path / "timings.xml"
+    junit.write_text('<testsuite><testcase classname="tests.test_python" time="1"/></testsuite>')
+    monkeypatch.delenv("PYTEST_ADDOPTS", raising=False)
+    monkeypatch.setenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
+    monkeypatch.setenv("VERIFY_PYTEST_WORKERS", "0")
+    monkeypatch.setattr(verify, "ROOT", tmp_path)
+    monkeypatch.setattr(verify, "COVERAGE", False)
+    monkeypatch.setattr(verify, "private_state", lambda: contextlib.nullcontext({}))
+
+    plan = shard_planner.make_plan(junit, tmp_path, 1)
+    assert plan["shards"] == [["tests/test_bridge.py", "tests/test_python.py"]]
+    config = tmp_path / "config"
+    config.mkdir()
+    (config / "test-shards.json").write_text(json.dumps(plan))
+    output = tmp_path / "shard-results"
+
+    code, summary = verify.run_pytest_shard("1/1", output)
+    assert code == 0 and "2 passed" in summary, summary
+    receipt = json.loads((output / "shard-1.json").read_text())
+    assert receipt["test_inventory"] == [
+        ["tests.test_bridge", "test_node_bridge"],
+        ["tests.test_python", "test_python"],
+    ]
+
+    suite.write_text(suite_source.replace("6 * 7, 42", "6 * 7, 41"))
+    code, summary = verify.run_pytest_shard("1/1", output)
+    assert code == 1 and "1 failed, 1 passed" in summary, summary
+    assert "bridged arithmetic" in summary
+
+    suite.write_text(suite_source)
+    code, summary = verify.run_pytest_shard("1/1", output)
+    assert code == 0 and "2 passed" in summary, summary
+
+
+@pytest.fixture
+def planner_junit(shard_planner, tmp_path, monkeypatch):
     (tmp_path / "tests").mkdir()
     for name in ("a", "b", "c", "untimed"):
         (tmp_path / f"tests/test_{name}.py").touch()
@@ -434,11 +492,11 @@ def planner_junit(tmp_path, monkeypatch):
         f"tests/test_{name}.py::test_example" for name in ("a", "b", "c", "untimed")
     )
     monkeypatch.setattr(
-        make_test_shards.subprocess,
+        shard_planner.subprocess,
         "run",
         lambda *a, **kw: subprocess.CompletedProcess(a, 0, collected, ""),
     )
-    return make_test_shards, junit, tmp_path
+    return shard_planner, junit, tmp_path
 
 
 def test_make_plan_aggregates_module_timings_and_defaults_to_median(planner_junit):
