@@ -502,8 +502,8 @@ def focused_node_shard(shard_planner, tmp_path, monkeypatch):
     monkeypatch.setenv("VERIFY_PYTEST_WORKERS", "0")
     config = tmp_path / "config"
     config.mkdir()
-    plan = shard_planner.make_plan(junit, tmp_path, 1)
-    assert plan["shards"] == [["tests/test_bridge.py", "tests/test_python.py"]]
+    plan = shard_planner.make_plan(junit, tmp_path, 2)
+    assert plan["shards"] == [["tests/test_bridge.py"], ["tests/test_python.py"]]
     (config / "test-shards.json").write_text(json.dumps(plan))
     return tests
 
@@ -513,6 +513,7 @@ def test_supported_node_collection_from_verifier_entrypoint(
 ):
     tests = focused_node_shard
     direct = tests / "test_supported.js"
+    other = tests / "test_other_supported.js"
     source = (
         "const fs = require('node:fs');\n"
         "const path = require('node:path');\n"
@@ -527,16 +528,24 @@ def test_supported_node_collection_from_verifier_entrypoint(
         "  assert.equal(env.ORCH_FEEDBACK_DB, undefined);\n"
         "  fs.mkdirSync(runtime, { recursive: true });\n"
         "  fs.writeFileSync(path.join(runtime, 'node-state'), 'private');\n"
-        "  fs.appendFileSync('visits', runtime + '\\n');\n"
+        "  fs.appendFileSync('visits', path.basename(__filename) + ' ' + runtime + '\\n');\n"
         "  assert.equal(6 * 7, 42);\n"
         "});\n"
     )
     direct.write_text(source)
+    other.write_text(source)
     for name in ("test_deferred.js", "test_untracked.js"):
         (tests / name).write_text("throw new Error('outside approved scope');\n")
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     subprocess.run(
-        ["git", "add", "tests/test_supported.js", "tests/test_bridged.js", "tests/test_deferred.js"],
+        [
+            "git",
+            "add",
+            "tests/test_supported.js",
+            "tests/test_other_supported.js",
+            "tests/test_bridged.js",
+            "tests/test_deferred.js",
+        ],
         cwd=tmp_path,
         check=True,
     )
@@ -559,12 +568,20 @@ def test_supported_node_collection_from_verifier_entrypoint(
     )
     monkeypatch.setattr(verify, "ROOT", tmp_path)
     monkeypatch.setattr(verify, "COVERAGE", False)
-    monkeypatch.setattr(verify, "SUPPORTED_NODE_SUITES", ("tests/test_supported.js",))
     monkeypatch.setattr(
-        verify, "NODE_PYTEST_BRIDGES", {"tests/test_bridged.js": "tests/test_bridge.py"}
+        verify,
+        "SUPPORTED_NODE_SUITES",
+        ("tests/test_supported.js", "tests/test_other_supported.js"),
+        raising=False,
     )
-    monkeypatch.setattr(verify, "NODE_PR_GATE_SUITES", set())
-    monkeypatch.setattr(verify, "NODE_PR_GATE_WRAPPERS", set())
+    monkeypatch.setattr(
+        verify,
+        "NODE_PYTEST_BRIDGES",
+        {"tests/test_bridged.js": "tests/test_bridge.py"},
+        raising=False,
+    )
+    monkeypatch.setattr(verify, "NODE_PR_GATE_SUITES", set(), raising=False)
+    monkeypatch.setattr(verify, "NODE_PR_GATE_WRAPPERS", set(), raising=False)
     monkeypatch.setattr(verify, "GATES", ())
     monkeypatch.setattr(verify, "selftest_modules", lambda: [])
     monkeypatch.setattr(verify, "load_floor", lambda: {"collected": 2, "passed": 2})
@@ -577,25 +594,29 @@ def test_supported_node_collection_from_verifier_entrypoint(
     for contents, expected in ((source, 0), (broken, 1), (source, 0)):
         visits.unlink(missing_ok=True)
         direct.write_text(contents)
-        shard_code, shard_summary = verify.run_pytest_shard("1/1", shard_output)
-        assert shard_code == 0, shard_summary
+        for shard in ("1/2", "2/2"):
+            shard_code, shard_summary = verify.run_pytest_shard(shard, shard_output)
+            assert shard_code == 0 and "1 passed" in shard_summary, shard_summary
+        assert visits.read_text().splitlines() == ["bridge", "python"]
         code = verify.main()
         output = capsys.readouterr().out
         assert "2 passed" in output, output
-        assert "1 via pytest, 0 via PR Gate, 1 unadmitted (3 paths inventoried" in output, output
+        assert "1 via pytest, 0 via PR Gate, 1 unadmitted (4 paths inventoried" in output, output
         assert code == expected, output
         if expected:
-            assert "0/1 direct suites passed" in output
+            assert "1/2 direct suites passed" in output
             assert "tests/test_supported.js" in output and "supported scope arithmetic" in output
         else:
-            assert "1/1 direct suites passed" in output
+            assert "2/2 direct suites passed" in output
         lines = visits.read_text().splitlines()
-        assert lines[:2] == ["bridge", "python"] and len(lines) == 3, lines
-        runtime = pathlib.Path(lines[2])
-        assert not runtime.parent.exists()
+        assert lines[:2] == ["bridge", "python"]
+        direct_visits = [line.split(" ", 1) for line in lines[2:]]
+        assert Counter(name for name, _ in direct_visits) == {direct.name: 1, other.name: 1}
+        for _, path in direct_visits:
+            runtime = pathlib.Path(path)
+            assert runtime not in runtimes and not runtime.parent.exists()
+            runtimes.add(runtime)
         assert not live.exists()
-        runtimes.add(runtime)
-    assert len(runtimes) == 3
 
 
 @pytest.fixture
