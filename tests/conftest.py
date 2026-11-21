@@ -64,7 +64,12 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def isolate_agy_quota_poll(tmp_path, monkeypatch):
-    import agy_fallback
+    try:
+        import agy_fallback
+    except ModuleNotFoundError as exc:
+        if exc.name != "agy_fallback":
+            raise
+        return
 
     monkeypatch.setattr(agy_fallback, "POLL", tmp_path / "agy-usage.json")
 
