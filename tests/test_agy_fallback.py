@@ -44,6 +44,24 @@ def test_independent_quota_and_fail_closed(monkeypatch):
     malformed = copy.deepcopy(data)
     malformed["groups"][1]["buckets"][0]["id"] = []
     assert choose(malformed) is None
+    duplicate = copy.deepcopy(data)
+    duplicate["groups"].append(copy.deepcopy(duplicate["groups"][0]))
+    assert choose(duplicate) is None
+    duplicate = copy.deepcopy(data)
+    duplicate["groups"][1]["buckets"].append(copy.deepcopy(duplicate["groups"][1]["buckets"][0]))
+    assert choose(duplicate) is None
+    expired = copy.deepcopy(data)
+    expired["groups"][1]["buckets"][0]["reset_time"] = "2020-01-01T00:00:00Z"
+    assert choose(expired) is None
+    assert (
+        agy_fallback.select(data=data, now=now, advertised=["gpt-oss-120b-medium"])
+        == "agy-gpt-oss-120b-medium"
+    )
+    assert (
+        agy_fallback.select(data=data, now=now, advertised=["claude-opus-5-5-low"])
+        == "agy-claude-opus-5-5-low"
+    )
+    assert agy_fallback.select(now=now) is None
     monkeypatch.setenv("ORCH_GEMINI_MAX_TIER", "cheap")
     assert choose(data) is None
 
