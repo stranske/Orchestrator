@@ -158,12 +158,7 @@ for (const index of [0, 1]) {
             Math.floor(call / 3) === 0 ? '296 == 297' : '297 == 296');
         }), /coverage record (?:changed|was not restored)|test source changed/);
         assert.equal(calls, index * 3 + phaseCall + 1);
-        // The intended corruption is always restored, including when the runner
-        // rewrites that record during the deliberately failing test.
-        if (phase === 'mutation') {
-          const active = experiments[index].file;
-          assert.deepEqual(fs.readFileSync(path.join(root, active)), originals.get(active));
-        }
+        assertRestored(root, originals);
       });
     }
   }

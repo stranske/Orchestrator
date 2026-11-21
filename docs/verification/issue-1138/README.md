@@ -931,3 +931,46 @@ remain uncommitted. The merge guard dry-run for the measured head exits 1 with
 `merge_executed=false`; no terminal merge was attempted. PR #1380 was observed
 open with `draft=false`. A writable checkout, working Python test tools, and
 access to update the PR and read review threads remain required for delivery.
+
+## Issue 1156 verification on 2026-11-21 UTC
+
+PR #1457 was open and ready for review at `fe9c094f516fdfdf5e4026abc06de6bc8ab5861f`.
+The corrupt-artifact test on that head retains the malformed inputs, subprocess
+stub, and pattern-miner assertions. CI succeeded in all six pytest/coverage
+shards and all six flat-copy shards, including shard 1, which runs both required
+test modules. [CI run 44906140295](https://github.com/stranske/Orchestrator/actions/runs/44906140295)
+
+- Both aggregate checks succeeded. [Combined coverage](https://github.com/stranske/Orchestrator/actions/runs/44906140295/job/136852609553), [flat-copy aggregate](https://github.com/stranske/Orchestrator/actions/runs/44906140295/job/136852438707)
+- Gate succeeded. [Gate run 44906140516](https://github.com/stranske/Orchestrator/actions/runs/44906140516)
+
+Both requested local commands exited 127 because `/opt/anaconda3/bin/python3`
+is absent. The runner's Python 3.14.10 lacks pytest, and dependency installation
+failed. Both experiment scripts stopped at baseline. The recorded pytest
+mutation and artifact-lock experiments for `d068c59` remain the latest local
+pytest evidence.
+
+```bash
+/opt/anaconda3/bin/python3 -m pytest -q tests/test_coverage_round_1138.py -m 'not slow'
+/opt/anaconda3/bin/python3 -m pytest -q tests/test_verify_sharding.py::test_shard_lists_partition_every_collected_test_exactly_once -m 'not slow'
+```
+
+A direct Python smoke check called `build_report` with malformed artifacts and
+stubbed subprocess and network access. In a temporary copy of `periodic_report.py`
+it passed at baseline, failed at the empty-status assertion after changing the
+fallback to `{"broken": True}`, and passed again after restoration. The checkout's
+production file and committed mutation proof were unchanged.
+
+The artifact verifier in the working tree now restores both coverage records if
+the runner rewrites either record at any stage. `node tests/test_issue_1138_artifacts.js`
+reported 32 passes and 10 restoration failures before the fix, then 42 passes
+afterward. `node tests/test_issue_1138_mutation.js` passed 29 tests and
+`node tests/test_redirect_routing_mutations.js` passed 11 tests. Gate's Node
+command also passed with `PYTHONPATH` including `src`.
+
+```bash
+node --test tests/test_route_weights_export_cli.js tests/test_switch_review_exploration.js
+```
+
+The CI results above predate this verifier change. Git staging failed because
+`.git/index.lock` could not be created on the read-only filesystem. The merge
+guard dry run for `fe9c094` blocked at the review-thread GraphQL query.

@@ -52,35 +52,45 @@ function verify(root, run = runPytest) {
     assert.deepEqual(fs.readFileSync(path.join(root, testFile)), testSource,
       'test source changed');
   }
-  return experiments.map(({ test, file, field, failurePattern }) => {
-    requireInputs();
-    const original = originals.get(file);
-    const record = JSON.parse(original.toString('utf8'));
-    assert.equal(record[field], 296, `unexpected starting value: ${file}:${field}`);
-    const options = { testNode: `${testFile}::${test}`, failurePattern };
-    const baseline = requireVerdict(run(root, test), false, options);
-    requireInputs();
-    const broken = `${JSON.stringify({ ...record, [field]: 297 }, null, 2)}\n`;
-    const red = withMutation(root, { edits: [{
-      file, before: original.toString('utf8'), after: broken,
-    }] }, () => {
-      const output = requireVerdict(run(root, test), true, options);
-      requireInputs(file, Buffer.from(broken));
-      return output;
+  try {
+    return experiments.map(({ test, file, field, failurePattern }) => {
+      requireInputs();
+      const original = originals.get(file);
+      const record = JSON.parse(original.toString('utf8'));
+      assert.equal(record[field], 296, `unexpected starting value: ${file}:${field}`);
+      const options = { testNode: `${testFile}::${test}`, failurePattern };
+      const baseline = requireVerdict(run(root, test), false, options);
+      requireInputs();
+      const broken = `${JSON.stringify({ ...record, [field]: 297 }, null, 2)}\n`;
+      const red = withMutation(root, { edits: [{
+        file, before: original.toString('utf8'), after: broken,
+      }] }, () => {
+        const output = requireVerdict(run(root, test), true, options);
+        requireInputs(file, Buffer.from(broken));
+        return output;
+      });
+      requireInputs();
+      const green = requireVerdict(run(root, test), false, options);
+      requireInputs();
+      return {
+        test, file, field, before: 296, broken: 297,
+        command: [process.env.PYTHON || 'python3', ...args(test)],
+        record_sha256: digest(original), broken_record_sha256: digest(broken),
+        restored_record_sha256: digest(fs.readFileSync(path.join(root, file))),
+        test_sha256: digest(testSource),
+        baseline_exit: 0, baseline_output: baseline,
+        red_exit: 1, red_output: red, green_exit: 0, green_output: green,
+      };
     });
-    requireInputs();
-    const green = requireVerdict(run(root, test), false, options);
-    requireInputs();
-    return {
-      test, file, field, before: 296, broken: 297,
-      command: [process.env.PYTHON || 'python3', ...args(test)],
-      record_sha256: digest(original), broken_record_sha256: digest(broken),
-      restored_record_sha256: digest(fs.readFileSync(path.join(root, file))),
-      test_sha256: digest(testSource),
-      baseline_exit: 0, baseline_output: baseline,
-      red_exit: 1, red_output: red, green_exit: 0, green_output: green,
-    };
-  });
+  } finally {
+    // The runner can change either record, even outside the deliberate mutation.
+    for (const [file, original] of originals) {
+      const recordPath = path.join(root, file);
+      if (!fs.existsSync(recordPath) || !fs.readFileSync(recordPath).equals(original)) {
+        fs.writeFileSync(recordPath, original);
+      }
+    }
+  }
 }
 
 function main() {
