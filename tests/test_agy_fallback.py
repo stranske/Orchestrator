@@ -173,3 +173,15 @@ def test_partner_is_a_distinct_lane_and_delegate_rechecks_it(monkeypatch):
     dispatcher.delegate("agy", "stranske/Orchestrator#1", "opener", "test")
     assert seen["agent"] == "gemini"
     assert seen["selected_profile_id"] == "agy-claude-sonnet-5-5-low"
+    cap["agents"]["gemini"] = {"state": "shed", "policy": "weekly-polled-cap"}
+    monkeypatch.setattr(agy_fallback, "select", lambda **kwargs: "agy-claude-sonnet-5-5-low")
+    assert (
+        router.select_agent("implement", cap, only={"agy"}, exploration_rate=0, simulate=True)
+        is None
+    )
+    assert (
+        router.select_agent("implement", cap, only={"gemini"}, exploration_rate=0, simulate=True)[
+            "selected_profile_id"
+        ]
+        == "agy-claude-sonnet-5-5-low"
+    )

@@ -699,10 +699,7 @@ def select_agent(
         gem = cap.get("agents", {}).get("gemini", {})
         if (
             isinstance(gem, dict)
-            and (
-                gem.get("state") in {"ok", "warn"}
-                or gem.get("policy") in {"weekly-polled-cap", "window-polled-cap"}
-            )
+            and gem.get("state") in {"ok", "warn"}
             and (gem.get("auth") or {}).get("authenticated") is not False
             and task_type in {"implement", "mechanical", "testgen", "codemod"}
             and not spec.get("neutral_prior")
