@@ -64,6 +64,7 @@
   ],
   "shards": [
     [
+      "tests/test_agy_fallback.py",
       "tests/test_issue771_mutation_runner.py",
       "tests/test_issue_771_evidence.py",
       "tests/test_issue1253_ranked_coverage.py",

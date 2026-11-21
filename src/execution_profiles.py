@@ -62,6 +62,13 @@ CAPACITY_POOLS = {
         "tier": "metered",
         "agent": "gemini",
     },
+    "antigravity-third-party": {
+        "provider": "google",
+        "account": "antigravity-ai-pro",
+        "window": "5h+weekly",
+        "tier": "metered",
+        "agent": "gemini",
+    },
     "vibe-subscription": {
         "provider": "mistral",
         "account": "mistral-vibe-sub",
@@ -125,6 +132,27 @@ def _profile(
 PROFILE_REGISTRY: dict[str, dict[str, Any]] = {
     p["profile_id"]: p
     for p in (
+        *(
+            _profile(
+                f"agy-{model}",
+                model,
+                effort,
+                agent="gemini",
+                provider="google",
+                pool="antigravity-third-party",
+                adapter_version="agy-cli-profile-v1",
+                requires_explicit_selection=True,
+            )
+            for model, effort in (
+                ("claude-sonnet-5-5-low", "low"),
+                ("claude-sonnet-5-5-medium", "medium"),
+                ("claude-sonnet-5-5-high", "high"),
+                ("claude-opus-5-5-low", "low"),
+                ("claude-opus-5-5-medium", "medium"),
+                ("claude-opus-5-5-high", "high"),
+                ("gpt-oss-120b-medium", "medium"),
+            )
+        ),
         # Keep existing definitions immutable: historical trials and outcomes still refer to them.
         # New model/effort combinations receive new profile IDs.
         _profile("codex-6-astra-high", "gpt-6-astra", "high", prior_offset=0.05),

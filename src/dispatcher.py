@@ -1582,6 +1582,24 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
             "if adding a descriptive slug. This dispatch policy overrides branch naming in "
             "the task brief. Do not switch to another agent prefix."
         )
+    if (
+        agent == "gemini"
+        and not assignment.get("selected_profile_id")
+        and not assignment.get("requested_model")
+    ):
+        import agy_fallback
+
+        fallback = agy_fallback.select()
+        if fallback:
+            profile = execution_profiles.get_profile(fallback)
+            assignment = {
+                **assignment,
+                "selected_profile_id": fallback,
+                "requested_model": profile["requested_model"],
+                "reasoning_effort": profile["reasoning_effort"],
+                "profile_policy_version": "agy-third-party-fallback-v1",
+                "profile_assignment_probability": 1.0,
+            }
     # Owner's live full-tier split (gemini_full_split.py, 2026-11-11): a local opener implement
     # run on gemini with no model chosen gets an arm. It returns None for every other run, and
     # any failure leaves the run on its normal path (fail toward motion, never a stall).
@@ -3401,7 +3419,14 @@ def offload(
         mode = "composer" if agent == "cursor" else adapters.DEFAULT_OFFLOAD_TIER
     automatic_profile = None
     if agent == "gemini" and (not profile_id):
-        automatic_profile = _select_offload_profile(agent, mode)
+        import agy_fallback
+
+        fallback = agy_fallback.select()
+        automatic_profile = (
+            execution_profiles.get_profile(fallback)
+            if fallback
+            else _select_offload_profile(agent, mode)
+        )
         if automatic_profile is None:
             return {
                 "agent": agent,
