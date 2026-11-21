@@ -974,3 +974,28 @@ node --test tests/test_route_weights_export_cli.js tests/test_switch_review_expl
 The CI results above predate this verifier change. Git staging failed because
 `.git/index.lock` could not be created on the read-only filesystem. The merge
 guard dry run for `fe9c094` blocked at the review-thread GraphQL query.
+
+### Verification at `7a65224e9d3c5f10525d8c60cbf6d5e279cffb40`
+
+PR #1457 was open and ready for review at this head. All six pytest/coverage
+shards, all six flat exec-mirror shards, and both aggregates passed.
+[CI run](https://github.com/stranske/Orchestrator/actions/runs/44907329735)
+[Gate run](https://github.com/stranske/Orchestrator/actions/runs/44907329978)
+
+Both Anaconda commands above again exited 127. The missing interpreter also
+blocked `PYTHON=/opt/anaconda3/bin/python3 node scripts/verify_issue_1138_artifacts.js`.
+`node scripts/verify_issue_1138_mutation.js` reached baseline with the available
+Python, which lacks pytest. The production source, both coverage records, and
+the historical mutation evidence are byte-identical to the committed head.
+A direct `build_report` smoke check in a disposable copy of this head passed,
+failed at the empty-status assertion with `{"broken": True}`, and passed after
+restoration. The pytest mutation record still requires the requested runtime.
+
+The local mutation verifier runs from a temporary archive of the measured head.
+Its new test failed when the verifier was deliberately pointed at the working
+tree, then passed when the archive was restored. `node tests/test_issue_1138_mutation.js`
+passed 30 tests, `node tests/test_issue_1138_artifacts.js` passed 42, and
+`node tests/test_redirect_routing_mutations.js` passed 11. Gate's Node command
+above also passed locally with `PYTHONPATH` including `src`. CI above covers the
+committed head. Staging the local change failed because `.git` is read-only. The
+exact-head merge guard dry run blocked at the review-thread GraphQL query.

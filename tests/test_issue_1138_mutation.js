@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { test } = require('node:test');
-const { edit, node, requireVerdict, verify } = require('../scripts/verify_issue_1138_mutation');
+const { edit, node, requireVerdict, verify, verifyAtHead } = require('../scripts/verify_issue_1138_mutation');
 
 function verdict(failed = false) {
   return {
@@ -48,6 +48,27 @@ test('records a baseline, the intended assertion failure, and a restored pass', 
   assert.deepEqual([record.baseline_exit, record.red_exit, record.green_exit], [0, 1, 0]);
   assert.match(record.red_output, /AssertionError/);
   assert.ok(record.command.includes('not slow'));
+});
+
+test('runs the committed mutation input in a disposable tree and removes it on failure', () => {
+  const root = path.resolve(__dirname, '..');
+  const source = path.join(root, edit.file);
+  const original = fs.readFileSync(source);
+  let checkout;
+  let calls = 0;
+  assert.throws(() => verifyAtHead(root, 'HEAD', (cwd) => {
+    calls += 1;
+    checkout = cwd;
+    assert.notEqual(cwd, root);
+    assert.deepEqual(fs.readFileSync(source), original);
+    const input = fs.readFileSync(path.join(cwd, edit.file), 'utf8');
+    assert.ok(input.includes(calls === 2 ? edit.after : edit.before));
+    if (calls === 2) throw new Error('interrupted mutation run');
+    return verdict();
+  }), /interrupted mutation run/);
+  assert.equal(calls, 2);
+  assert.equal(fs.existsSync(checkout), false);
+  assert.deepEqual(fs.readFileSync(source), original);
 });
 
 test('missing pytest blocks before any production edit', (t) => {
