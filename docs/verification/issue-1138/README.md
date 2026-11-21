@@ -931,3 +931,122 @@ remain uncommitted. The merge guard dry-run for the measured head exits 1 with
 `merge_executed=false`; no terminal merge was attempted. PR #1380 was observed
 open with `draft=false`. A writable checkout, working Python test tools, and
 access to update the PR and read review threads remain required for delivery.
+
+## Issue 1156 verification on 2026-11-21 UTC
+
+PR #1457 was open and ready for review at `fe9c094f516fdfdf5e4026abc06de6bc8ab5861f`.
+The corrupt-artifact test on that head retains the malformed inputs, subprocess
+stub, and pattern-miner assertions. CI succeeded in all six pytest/coverage
+shards and all six flat-copy shards, including shard 1, which runs both required
+test modules. [CI run 44906140295](https://github.com/stranske/Orchestrator/actions/runs/44906140295)
+
+- Both aggregate checks succeeded. [Combined coverage](https://github.com/stranske/Orchestrator/actions/runs/44906140295/job/136852609553), [flat-copy aggregate](https://github.com/stranske/Orchestrator/actions/runs/44906140295/job/136852438707)
+- Gate succeeded. [Gate run 44906140516](https://github.com/stranske/Orchestrator/actions/runs/44906140516)
+
+Both requested local commands exited 127 because `/opt/anaconda3/bin/python3`
+is absent. The runner's Python 3.14.10 lacks pytest, and dependency installation
+failed. Both experiment scripts stopped at baseline. The recorded pytest
+mutation and artifact-lock experiments for `d068c59` remain the latest local
+pytest evidence.
+
+```bash
+/opt/anaconda3/bin/python3 -m pytest -q tests/test_coverage_round_1138.py -m 'not slow'
+/opt/anaconda3/bin/python3 -m pytest -q tests/test_verify_sharding.py::test_shard_lists_partition_every_collected_test_exactly_once -m 'not slow'
+```
+
+A direct Python smoke check called `build_report` with malformed artifacts and
+stubbed subprocess and network access. In a temporary copy of `periodic_report.py`
+it passed at baseline, failed at the empty-status assertion after changing the
+fallback to `{"broken": True}`, and passed again after restoration. The checkout's
+production file and committed mutation proof were unchanged.
+
+The artifact verifier in the working tree now restores both coverage records if
+the runner rewrites either record at any stage. `node tests/test_issue_1138_artifacts.js`
+reported 32 passes and 10 restoration failures before the fix, then 42 passes
+afterward. `node tests/test_issue_1138_mutation.js` passed 29 tests and
+`node tests/test_redirect_routing_mutations.js` passed 11 tests. Gate's Node
+command also passed with `PYTHONPATH` including `src`.
+
+```bash
+node --test tests/test_route_weights_export_cli.js tests/test_switch_review_exploration.js
+```
+
+The CI results above predate this verifier change. Git staging failed because
+`.git/index.lock` could not be created on the read-only filesystem. The merge
+guard dry run for `fe9c094` blocked at the review-thread GraphQL query.
+
+### Verification at `7a65224e9d3c5f10525d8c60cbf6d5e279cffb40`
+
+PR #1457 was open and ready for review at this head. All six pytest/coverage
+shards, all six flat exec-mirror shards, and both aggregates passed.
+[CI run](https://github.com/stranske/Orchestrator/actions/runs/44907329735)
+[Gate run](https://github.com/stranske/Orchestrator/actions/runs/44907329978)
+
+Both Anaconda commands above again exited 127. The missing interpreter also
+blocked `PYTHON=/opt/anaconda3/bin/python3 node scripts/verify_issue_1138_artifacts.js`.
+`node scripts/verify_issue_1138_mutation.js` reached baseline with the available
+Python, which lacks pytest. The production source, both coverage records, and
+the historical mutation evidence are byte-identical to the committed head.
+A direct `build_report` smoke check in a disposable copy of this head passed,
+failed at the empty-status assertion with `{"broken": True}`, and passed after
+restoration. The pytest mutation record still requires the requested runtime.
+
+The local mutation verifier runs from a temporary archive of the measured head.
+Its new test failed when the verifier was deliberately pointed at the working
+tree, then passed when the archive was restored. `node tests/test_issue_1138_mutation.js`
+passed 30 tests, `node tests/test_issue_1138_artifacts.js` passed 42, and
+`node tests/test_redirect_routing_mutations.js` passed 11. Gate's Node command
+above also passed locally with `PYTHONPATH` including `src`. CI above covers the
+committed head. Staging the local change failed because `.git` is read-only. The
+exact-head merge guard dry run blocked at the review-thread GraphQL query.
+
+### Verification at `65e5294a77c1c507c3687379a9276b1f3b218285`
+
+PR #1457 was open and ready for review at this head. All six pytest/coverage
+shards, all six flat exec-mirror shards, and both aggregates passed. Shard 1
+includes `tests/test_coverage_round_1138.py` and `tests/test_verify_sharding.py`.
+[CI run](https://github.com/stranske/Orchestrator/actions/runs/44908486284),
+[coverage aggregate](https://github.com/stranske/Orchestrator/actions/runs/44908486284/job/136859558011),
+[flat exec-mirror aggregate](https://github.com/stranske/Orchestrator/actions/runs/44908486284/job/136859568588),
+[Gate run](https://github.com/stranske/Orchestrator/actions/runs/44908486507)
+
+PR #1164 delivered the isolation correction. The two named Anaconda commands
+and all three deliberate-break experiments are recorded above for `d068c59`.
+Both Anaconda commands exited 127 on this runner because
+`/opt/anaconda3/bin/python3` is absent. With the available Python 3.14.10,
+both verification scripts stopped at baseline because pytest is unavailable.
+The production source, coverage records, and historical mutation evidence
+match the committed head.
+
+The local artifact verifier now runs against a temporary archive of the
+measured commit. In a disposable copy, redirecting the verifier to the working
+tree made the new archive regression fail. Restoring the archive path made it
+pass. The local Node suites passed with `node tests/test_issue_1138_artifacts.js`
+(43 tests), `node tests/test_issue_1138_mutation.js` (30 tests), and
+`node tests/test_redirect_routing_mutations.js` (11 tests). Gate's Node command
+also passed locally with `PYTHONPATH` including `src`.
+
+```bash
+node --test tests/test_route_weights_export_cli.js tests/test_switch_review_exploration.js
+```
+
+Staging the verifier change failed because `.git` is read-only. The CI results
+above cover the committed head. GitHub approval policy rejected the PR checklist
+edit, blocker comment, and `needs-human` label. The exact-head merge guard
+blocked at the review-thread GraphQL query. Fresh Anaconda verification and
+the terminal merge remain pending.
+
+### Verification at `694883fbc2b43e13f939c2400cfd1d9181ef6f26`
+
+PR #1457 was open and ready for review. All six pytest/coverage shards, all six
+flat exec-mirror shards, both aggregates, and Gate passed.
+[CI run](https://github.com/stranske/Orchestrator/actions/runs/44909539595),
+[coverage aggregate](https://github.com/stranske/Orchestrator/actions/runs/44909539595/job/136862818639),
+[flat exec-mirror aggregate](https://github.com/stranske/Orchestrator/actions/runs/44909539595/job/136862720368),
+[Gate run](https://github.com/stranske/Orchestrator/actions/runs/44909539979)
+
+Both named Anaconda pytest commands exited 127 on this runner because the
+interpreter was absent. The installed Python lacked pytest, so both deliberate-break
+scripts stopped at baseline. The recorded experiment at `d068c59` remains the
+latest real pytest transcript. The merge guard dry run for `694883f` blocked at the
+review-thread GraphQL query.
