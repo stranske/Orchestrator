@@ -78,6 +78,7 @@ RESERVE_AGENTS = {"claude"}
 # (subscription-billed login; hosted runs proven 10-16/17). The guard stays for future backup seats.
 BACKUP_AGENTS: set[str] = set()
 GEMINI_GOOD_FIT_TASKS = {"implement", "epic", "cross_repo", "runtime_ac", "review"}
+AGY_GOOD_FIT_TASKS = {"implement", "mechanical", "testgen", "codemod"}
 
 
 class RouteEntryRef(TypedDict):
@@ -312,7 +313,9 @@ def _capacity_policy_bias(task_type: str, agent: str, cap: dict) -> int:
     if agent not in {"gemini", "agy"}:
         return 0
     policy = _policy(cap, agent)
-    if policy == "drain" and task_type in GEMINI_GOOD_FIT_TASKS:
+    if policy == "drain" and task_type in (
+        AGY_GOOD_FIT_TASKS if agent == "agy" else GEMINI_GOOD_FIT_TASKS
+    ):
         return -1
     if policy == "reserve":
         return 1
@@ -701,12 +704,12 @@ def select_agent(
             isinstance(gem, dict)
             and gem.get("state") in {"ok", "warn"}
             and (gem.get("auth") or {}).get("authenticated") is not False
-            and task_type in {"implement", "mechanical", "testgen", "codemod"}
+            and task_type in AGY_GOOD_FIT_TASKS
             and not spec.get("neutral_prior")
         ):
             import agy_fallback
 
-            partner = agy_fallback.select(purpose="claude")
+            partner = agy_fallback.select(purpose="partner")
             if partner:
                 draining = agy_fallback.weekly_drain()
                 cap = {
@@ -1448,7 +1451,7 @@ def _lane_cap(cap: dict, max_concurrent: int) -> int:
         ):
             import agy_fallback
 
-            if agy_fallback.select() or agy_fallback.select(purpose="claude"):
+            if agy_fallback.select() or agy_fallback.select(purpose="partner"):
                 available = 1
     if available == 0 and any(_pacing_shed_fallback(cap, a) for a in code_agents):
         available = 1
@@ -1568,6 +1571,7 @@ def plan(
                 capacity_rejections.append(row)
                 rejections.append(row)
                 continue
+            route_agent = entry["agent"]
             if entry["agent"] == "agy":
                 entry = {**entry, "agent": "gemini", "routing_alias": "agy"}
             got = True if dry_run else claims.claim(tgt, entry["agent"])
@@ -1585,7 +1589,7 @@ def plan(
                 )
                 continue
             in_flight.add(tgt)
-            load[entry["agent"]] = load.get(entry["agent"], 0) + 1
+            load[route_agent] = load.get(route_agent, 0) + 1
             policy = entry.get("capacity_policy") or ""
             capacity_tag = f"{entry['state']}/{policy}" if policy else entry["state"]
             capability_seed = int.from_bytes(

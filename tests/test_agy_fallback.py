@@ -1,11 +1,14 @@
 import copy
 import time
 
+import pytest
+
 import adapters
 import agy_fallback
 import dispatcher
 import execution_profiles
 import router
+import storage_lifecycle
 
 
 def sample(now):
@@ -116,7 +119,7 @@ def test_partner_backup_and_weekly_drain_are_independent_from_gemini(monkeypatch
 
     def choose(d, c):
         return agy_fallback.select(
-            data=d, claude_data=c, now=now, advertised=["claude-sonnet-5-5-low"], purpose="claude"
+            data=d, claude_data=c, now=now, advertised=["claude-sonnet-5-5-low"], purpose="partner"
         )
 
     assert choose(data, claude) == "agy-claude-sonnet-5-5-low"
@@ -143,7 +146,9 @@ def test_partner_is_a_distinct_lane_and_delegate_rechecks_it(monkeypatch):
     monkeypatch.setattr(
         agy_fallback,
         "select",
-        lambda **kwargs: "agy-claude-sonnet-5-5-low" if kwargs.get("purpose") == "claude" else None,
+        lambda **kwargs: (
+            "agy-claude-sonnet-5-5-low" if kwargs.get("purpose") == "partner" else None
+        ),
     )
     monkeypatch.setattr(agy_fallback, "weekly_drain", lambda: False)
     monkeypatch.setattr(router, "_local_comparative_enabled", lambda: False)
@@ -162,6 +167,10 @@ def test_partner_is_a_distinct_lane_and_delegate_rechecks_it(monkeypatch):
     )
     assert drain["agent"] == "agy"
     assert drain["capacity_policy"] == "drain"
+    assert (
+        router._capacity_policy_bias("testgen", "agy", {"agents": {"agy": {"policy": "drain"}}})
+        == -1
+    )
     monkeypatch.setattr(
         agy_fallback, "claude_backup_for_dispatch", lambda: "agy-claude-sonnet-5-5-low"
     )
@@ -191,3 +200,44 @@ def test_partner_is_a_distinct_lane_and_delegate_rechecks_it(monkeypatch):
         ]
         == "agy-claude-sonnet-5-5-low"
     )
+
+    def stop_storage(agent):
+        raise RuntimeError("selected:" + agent)
+
+    monkeypatch.setattr(storage_lifecycle, "owned_agent_tmpdir", stop_storage)
+    with pytest.raises(RuntimeError, match="selected:gemini"):
+        dispatcher.offload.__wrapped__("claude", "test")
+    for opts in (
+        {"mode": "mid"},
+        {"profile_id": "claude-sonnet-5-5-high-v2"},
+        {"research_round": "r"},
+    ):
+        with pytest.raises(RuntimeError, match="selected:claude"):
+            dispatcher.offload.__wrapped__("claude", "test", **opts)
+    monkeypatch.setattr(
+        agy_fallback, "claude_backup_for_dispatch", lambda: "agy-gpt-oss-120b-medium"
+    )
+    with pytest.raises(RuntimeError, match="selected:claude"):
+        dispatcher.offload.__wrapped__("claude", "test")
+
+    seen_load = []
+
+    def pick_queued(task_type, cap, **kwargs):
+        seen_load.append(dict(kwargs["load"]))
+        return {
+            "agent": "agy",
+            "mode": "mid",
+            "state": "ok",
+            "selected_profile_id": "agy-claude-sonnet-5-5-low",
+        }
+
+    monkeypatch.setattr(router, "select_agent", pick_queued)
+    monkeypatch.setattr(router.claims, "active_claims", lambda: {})
+    queued_cap = {"agents": {"gemini": {"state": "ok"}, "codex": {"state": "ok"}}}
+    tasks = [
+        {"target": f"stranske/Orchestrator#{n}", "task_type": "implement", "lane": "opener"}
+        for n in (1, 2)
+    ]
+    result = router.plan(tasks, queued_cap, dry_run=True, capability_records={})
+    assert len(result["assignments"]) == 2
+    assert seen_load[1].get("agy") == 1 and "gemini" not in seen_load[1]

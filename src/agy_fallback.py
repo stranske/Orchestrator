@@ -89,7 +89,7 @@ def select(*, data=None, now=None, advertised=None, purpose="gemini", claude_dat
     if purpose == "gemini":
         if not (gw == 0 or gh == 0):
             return None
-    elif purpose == "claude":
+    elif purpose == "partner":
         import pacing_usage
 
         if claude_data is None:
@@ -120,7 +120,7 @@ def select(*, data=None, now=None, advertised=None, purpose="gemini", claude_dat
 
     if advertised is None:
         advertised = adapters.advertised_models("gemini")
-    claude_cap = adapters.tier_ceiling("claude") if purpose == "claude" else None
+    claude_cap = adapters.tier_ceiling("claude") if purpose == "partner" else None
     for model in MODELS:
         if model in advertised:
             if claude_cap is not None:
@@ -147,4 +147,4 @@ def claude_backup_for_dispatch():
         "window-polled-cap",
     }:
         return None
-    return select(purpose="claude")
+    return select(purpose="partner")
