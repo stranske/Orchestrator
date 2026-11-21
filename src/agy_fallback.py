@@ -9,7 +9,7 @@ from pathlib import Path
 import pacing
 
 POLL = Path.home() / ".codex/orchestrator/usage-poll/gemini-usage.json"
-MODELS = ("claude-sonnet-5-5-low", "claude-opus-5-5-low", "gpt-oss-120b-medium")
+MODELS = ("claude-sonnet-5-5-high", "claude-opus-5-5-medium", "gpt-oss-120b-medium")
 
 
 def weekly_drain(*, data=None, now=None):
