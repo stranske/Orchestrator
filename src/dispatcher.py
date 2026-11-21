@@ -2500,6 +2500,13 @@ def delegate(
     wrapper). Returns {pid, log, worktree} to monitor, or {error}. This is the seat's hand —
     it decides WHO/WHAT/HOW (the prompt); this just executes safely. `task_type` is recorded for
     the feedback loop (the REAL kind of work, not a generic 'delegated')."""
+    if agent == "agy":
+        import agy_fallback
+
+        fallback = agy_fallback.claude_backup_for_dispatch()
+        if not fallback or profile_id is not None:
+            return {"error": "Antigravity Claude backup is unavailable or explicitly pinned"}
+        agent, profile_id = "gemini", fallback
     if review_loop:
         from review_loop import REVIEW_LOOP_MAX_ROUNDS
 
@@ -3399,6 +3406,18 @@ def offload(
             "exit": None,
             "run_id": None,
         }
+    if (
+        agent == "claude"
+        and profile_id is None
+        and not data_only
+        and not research_round
+        and mode is None
+    ):
+        import agy_fallback
+
+        fallback = agy_fallback.claude_backup_for_dispatch()
+        if fallback and fallback.startswith("agy-claude-"):
+            agent, profile_id = "gemini", fallback
     from storage_lifecycle import StorageBlocked, owned_agent_tmpdir
 
     try:
