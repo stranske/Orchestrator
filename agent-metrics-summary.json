@@ -1,0 +1,108 @@
+{
+  "generated_at": "2026-11-21T19:30:13Z",
+  "metric_sources": {
+    "by_artifact": {},
+    "by_artifact_family": {},
+    "by_file": {}
+  },
+  "parse_errors": {
+    "by_artifact": {},
+    "by_artifact_family": {},
+    "by_reason": {},
+    "count": 0,
+    "details": [],
+    "details_truncated": false,
+    "omitted_count": 0,
+    "stored_detail_count": 0
+  },
+  "record_buckets": {},
+  "record_count": 0,
+  "schema": "workflows-agent-metrics-summary/v1",
+  "summaries": {
+    "autofix": {
+      "attempts": 0,
+      "fixes_applied": 0,
+      "gate_results": {},
+      "prs": 0,
+      "triggers": {}
+    },
+    "autopilot": {
+      "cycle_counts": {},
+      "cycle_records": 0,
+      "cycle_steps_attempted": 0,
+      "cycle_steps_completed": 0,
+      "escalation_count": 0,
+      "escalation_reasons": {},
+      "failure_reasons": {},
+      "issues": 0,
+      "langsmith_trace_count": 0,
+      "langsmith_trace_records": 0,
+      "needs_human_count": 0,
+      "records": 0,
+      "step_avg_duration_ms": {},
+      "step_failures": {},
+      "step_successes": {},
+      "total_steps": 0
+    },
+    "codex_cli_freshness": {
+      "latest_unavailable_records": 0,
+      "latest_versions": {},
+      "max_version_delta": {
+        "major": 0,
+        "minor": 0,
+        "patch": 0
+      },
+      "outdated_records": 0,
+      "packages": {},
+      "pinned_versions": {},
+      "records": 0,
+      "statuses": {},
+      "update_targets": {}
+    },
+    "keepalive": {
+      "actions": {},
+      "avg_iterations": 0.0,
+      "gate_results": {},
+      "prs": 0,
+      "runs": 0,
+      "stop_reasons": {},
+      "tasks_complete": 0
+    },
+    "unknown": {
+      "records": 0
+    },
+    "verifier": {
+      "avg_acceptance": 0.0,
+      "cost_per_verified_success": {},
+      "issues_created": 0,
+      "langsmith_trace_count": 0,
+      "langsmith_trace_records": 0,
+      "ledger_avg_chain_depth": 0.0,
+      "ledger_dispositions": {},
+      "ledger_followup_issues": 0,
+      "ledger_max_chain_depth": 0,
+      "ledger_needs_human": 0,
+      "ledger_policy_actions": {},
+      "ledger_policy_depth_limit_exceeded": 0,
+      "ledger_policy_records": 0,
+      "ledger_policy_triggers": {},
+      "ledger_prs": 0,
+      "ledger_records": 0,
+      "legacy_missing_verifier_model_metadata": {},
+      "missing_verifier_model_metadata": {},
+      "model_selection_reasons": {},
+      "prs": 0,
+      "runs": 0,
+      "terminal_dispositions": {},
+      "terminal_records": 0,
+      "terminal_sources": {},
+      "unknown_verifier_modes": {},
+      "unsupported_model_dispositions": {},
+      "unsupported_verifier_models": {},
+      "verdicts": {},
+      "verifier_cli_versions": {},
+      "verifier_models": {},
+      "verifier_modes": {}
+    }
+  }
+}

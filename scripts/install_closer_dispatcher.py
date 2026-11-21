@@ -14,6 +14,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import time
 import tomllib
@@ -77,7 +78,9 @@ fi
 def updated_prompt(original: bytes, policy: str) -> bytes:
     text = original.decode("utf-8")
     before = tomllib.loads(text)
-    prompt = before["prompt"]
+    prompt = before.get("prompt")
+    if not isinstance(prompt, str):
+        raise ValueError("closer automation source missing string prompt")
     if POLICY_START in prompt:
         start = prompt.index(POLICY_START)
         end = prompt.index(POLICY_END, start) + len(POLICY_END)
@@ -136,8 +139,16 @@ def atomic_write(path: Path, content: bytes, expected: bytes | None) -> None:
             os.unlink(name)
 
 
-def _install(home: Path, *, apply: bool = False, enforce: bool = False) -> dict:
-    """Apply only explicit source changes, restoring our writes on rendering failure."""
+def _prepare(home: Path, *, enforce: bool = False) -> tuple[
+    Path,
+    Path,
+    dict[str, Path],
+    dict[Path, bytes],
+    dict[Path, bytes],
+    list[Path],
+    dict,
+]:
+    """Read and validate source inputs without mutating any file on disk."""
     prompt = home / ".codex/automations/imi-merge-verify-closer/automation.toml"
     postrun = home / ".codex/bin/handoff-postrun.sh"
     renderer = home / ".codex/bin/render-claude-prompts.sh"
@@ -155,21 +166,42 @@ def _install(home: Path, *, apply: bool = False, enforce: bool = False) -> dict:
     changed = [path for path in replacements if replacements[path] != snapshots[path]]
     effective_enforce = 'elif [[ "1" == "1" ]]' in replacements[postrun].decode()
     receipt = {
-        "mode": "apply" if apply else "dry-run",
+        "mode": "dry-run",
         "stop_enforcement": "required" if effective_enforce else "migration",
         "changes": [str(path) for path in changed],
         "original_sha256": {str(p): hashlib.sha256(b).hexdigest() for p, b in snapshots.items()},
     }
-    if not apply:
-        return receipt
+    return prompt, postrun, renderers, snapshots, replacements, changed, receipt
+
+
+def _validate_apply_prerequisites(home: Path, renderers: dict[str, Path]) -> None:
+    """Refuse missing apply-time dependencies before creating any lock file or backup."""
     for family, script in renderers.items():
         if not script.is_file() or not os.access(script, os.X_OK):
             raise ValueError(f"normal {family} prompt renderer unavailable")
     dispatcher = home / ".codex/orchestrator-mirror/closer_dispatcher.py"
     if not dispatcher.is_file():
         raise ValueError(
-            "deploy repository src/closer_dispatcher.py through normal mirror sync first"
+            f"missing closer dispatcher dependency: {dispatcher} "
+            "(src/closer_dispatcher.py was retired from this repository)"
         )
+    opener = home / ".codex/automations/pd-workloop-resume/automation.toml"
+    if not opener.is_file():
+        raise FileNotFoundError(f"missing opener automation source: {opener}")
+    opener_doc = tomllib.loads(opener.read_text(encoding="utf-8"))
+    if not isinstance(opener_doc.get("prompt"), str):
+        raise ValueError(f"opener automation source missing string prompt: {opener}")
+
+
+def _install(home: Path, *, apply: bool = False, enforce: bool = False) -> dict:
+    """Apply only explicit source changes, restoring our writes on rendering failure."""
+    prompt, postrun, renderers, snapshots, replacements, changed, receipt = _prepare(
+        home, enforce=enforce
+    )
+    if not apply:
+        return receipt
+    receipt["mode"] = "apply"
+    _validate_apply_prerequisites(home, renderers)
     stamp = f"{time.time_ns()}-{os.getpid()}"
     caches = [
         home / f".codex/handoff/prompts/{family}-{lane}.md"
@@ -255,6 +287,9 @@ def install(home: Path, *, apply: bool = False, enforce: bool = False) -> dict:
     """Serialize cooperating installers; ordinary source edits are also compared before replace."""
     if not apply:
         return _install(home, enforce=enforce)
+    # Fail before the first write (including lock-file creation) when any prerequisite is missing.
+    _, _, renderers, _, _, _, _ = _prepare(home, enforce=enforce)
+    _validate_apply_prerequisites(home, renderers)
     lock_path = home / ".codex/bin/.install-closer-dispatcher.lock"
     with lock_path.open("a") as lock:
         try:
@@ -274,7 +309,12 @@ def main() -> int:
         help="Require state only after old rounds are terminal",
     )
     args = parser.parse_args()
-    print(json.dumps(install(args.home, apply=args.apply, enforce=args.enforce_stop), indent=2))
+    try:
+        receipt = install(args.home, apply=args.apply, enforce=args.enforce_stop)
+    except (OSError, ValueError, RuntimeError) as exc:
+        print(f"install_closer_dispatcher: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(receipt, indent=2))
     return 0
 
 

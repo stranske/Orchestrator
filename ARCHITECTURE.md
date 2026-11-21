@@ -143,6 +143,28 @@ Source/schema pins and relocatable package checks prove packaging, not desktop a
 See [the operating contract](docs/CLOSER_DISPATCHER.md) for trusted disposition input,
 resource bounds, recovery and separate operational acceptance.
 
+### Retired closer entry-point caller inventory (2026-11-21)
+
+The legacy `src/closer_*.py` modules were retired in `0ff92fe3` (#1114) and `bc077c6f`, leaving
+`closer-core` outside this tree and `src/closer_csv_completion.py` as the only remaining
+`src/closer_*.py` module (active `feature_goals.py` completion reader). Historical prose above
+and under `docs/CLOSER_*.md` is preserved unchanged; the tracked script dispositions after
+inventorying all repository callers (`src/`, `scripts/`, `tests/`, `.github/`, `config/`) are:
+
+| Entry point | Callers in repo | Dependency status after `src/closer_*.py` removal | Disposition |
+|---|---|---|---|
+| `scripts/install_closer_dispatcher.py` | `tests/test_install_closer_dispatcher.py` (sharded), operator dry-run/apply CLI | Reads `docs/closer-dispatcher-policy.md`; `--apply` requires host mirror `closer_dispatcher.py` (retired from `src/`) | **Retained & repaired:** reaches `--help` and default dry-run with zero writes; `--apply` validates every prerequisite (sources, renderers, opener TOML, mirror `closer_dispatcher.py`) and fails cleanly **before** creating `.install-closer-dispatcher.lock` or any backup. |
+| `scripts/install_closer_campaign_hook.py` | `tests/test_closer_campaign_hook_loader.py` (sharded), `ARCHITECTURE.md` | Deferred `check_manifest()` imports removed `closer_campaign` | **Retained & repaired:** reaches `--help` and `--dry-run` with zero writes; non-dry-run CLI catches missing retired `closer_campaign` and exits cleanly **before** writing `--out` while preserving compatibility when a validator module is supplied. |
+| `scripts/stage_reviewed_repo_publisher_exclusion.py`, `scripts/apply_reviewed_repo_publisher_exclusion_stage.py` | `tests/test_reviewed_repo_publisher_exclusion_stage.py` (sharded) | Self-contained stdlib; no `src/closer_*.py` dependency | **Active delivery continuity — retained unchanged.** |
+| `scripts/closer_host_restore.py` | None (historical doc/fixtures only) | Imported deleted `src/closer_host_restore_contract.py` (`bc077c6f`) | **Retired & removed** (caller-free). |
+| `scripts/closer_publisher_package.py` | None (historical doc only) | Imported deleted `src/closer_publisher_closure.py` (`bc077c6f`) | **Retired & removed** (caller-free). |
+| `scripts/measure_closer_acceptance.py` | None (historical `artifacts/category46/` only) | Imported deleted `src/closer_stage_feedback.py` (`bc077c6f`) | **Retired & removed** (caller-free). |
+| `scripts/render_closer_admission_hook.py` | None (historical `docs/closer-delivery-continuity.md` only; active publisher exclusion does not call it) | Companion renderer for deleted `src/closer_admission_continuity.py` (`0ff92fe3`) | **Retired & removed** (caller-free). |
+| `scripts/render_closer_native_entry.py` | None (historical doc only) | Imported deleted `src/closer_native_observer.py` (`bc077c6f`) | **Retired & removed** (caller-free). |
+| `scripts/render_closer_native_hooks.py` | None (historical docs only) | Required deleted `src/closer_native_lease.py` and `closer_dispatcher.py` (`bc077c6f`) | **Retired & removed** (caller-free). |
+
+No stage, component, rail/role classification, or feedback surface moved; `orchestrator-loop.svg` is unchanged.
+
 ## Where this sits in the larger pipeline (READ FIRST)
 
 **This document describes ONE COMPONENT.** Everything below — rails, roles, the feedback loop — is
