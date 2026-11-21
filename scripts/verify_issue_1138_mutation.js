@@ -96,24 +96,28 @@ function verify(root, run = runPytest) {
   }
 }
 
-function verifyAtHead(root, head, run = runPytest) {
-  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'issue-1138-mutation-'));
+function withArchivedInputs(root, head, extraFiles, run) {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'issue-1138-verification-'));
   const archive = path.join(temp, 'source.tar');
   const checkout = path.join(temp, 'checkout');
   const options = { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] };
   try {
     const archived = spawnSync('git', ['archive', '--format=tar', `--output=${archive}`, head, '--',
-      'src', 'config', 'pyproject.toml', 'tests/conftest.py', testFile], options);
+      'src', 'config', 'pyproject.toml', 'tests/conftest.py', testFile, ...extraFiles], options);
     assert.ifError(archived.error);
     assert.equal(archived.status, 0, archived.stderr);
     fs.mkdirSync(checkout);
     const extracted = spawnSync('tar', ['-xf', archive, '-C', checkout], options);
     assert.ifError(extracted.error);
     assert.equal(extracted.status, 0, extracted.stderr);
-    return verify(checkout, run);
+    return run(checkout);
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
   }
+}
+
+function verifyAtHead(root, head, run = runPytest) {
+  return withArchivedInputs(root, head, [], (checkout) => verify(checkout, run));
 }
 
 function main() {
@@ -147,4 +151,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { edit, node, requireVerdict, verify, verifyAtHead };
+module.exports = { edit, node, requireVerdict, verify, verifyAtHead, withArchivedInputs };

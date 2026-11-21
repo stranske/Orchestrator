@@ -8,7 +8,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { withMutation } = require('./verify_redirect_routing_mutations');
-const { requireVerdict } = require('./verify_issue_1138_mutation');
+const { requireVerdict, withArchivedInputs } = require('./verify_issue_1138_mutation');
 
 const testFile = 'tests/test_coverage_round_1138.py';
 const directory = 'docs/verification/issue-1138';
@@ -93,18 +93,24 @@ function verify(root, run = runPytest) {
   }
 }
 
+function verifyAtHead(root, head, run = runPytest) {
+  const files = experiments.map(({ file }) => file);
+  return withArchivedInputs(root, head, files, (checkout) => verify(checkout, run));
+}
+
 function main() {
   const root = path.resolve(__dirname, '..');
   const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' });
   assert.equal(head.status, 0, head.stderr);
-  const clean = spawnSync('git', ['diff', 'HEAD', '--exit-code', '--', 'src',
+  const measuredHead = head.stdout.trim();
+  const clean = spawnSync('git', ['diff', measuredHead, '--exit-code', '--', 'src',
     testFile, ...experiments.map(({ file }) => file)], { cwd: root, encoding: 'utf8' });
   assert.equal(clean.status, 0, 'commit source/test/record changes before recording exact-head evidence');
-  const cases = verify(root);
+  const cases = verifyAtHead(root, measuredHead);
   // Print only after both experiments finish, so partial runs cannot masquerade
   // as a complete acceptance record. Redirect stdout to a disposable evidence file.
   process.stdout.write(`${JSON.stringify({
-    measured_head_sha: head.stdout.trim(), recorded_at: new Date().toISOString(), cases,
+    measured_head_sha: measuredHead, recorded_at: new Date().toISOString(), cases,
   }, null, 2)}\n`);
 }
 
@@ -117,4 +123,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { experiments, verify };
+module.exports = { experiments, verify, verifyAtHead };

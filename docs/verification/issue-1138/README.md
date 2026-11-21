@@ -999,3 +999,39 @@ passed 30 tests, `node tests/test_issue_1138_artifacts.js` passed 42, and
 above also passed locally with `PYTHONPATH` including `src`. CI above covers the
 committed head. Staging the local change failed because `.git` is read-only. The
 exact-head merge guard dry run blocked at the review-thread GraphQL query.
+
+### Verification at `65e5294a77c1c507c3687379a9276b1f3b218285`
+
+PR #1457 was open and ready for review at this head. All six pytest/coverage
+shards, all six flat exec-mirror shards, and both aggregates passed. Shard 1
+includes `tests/test_coverage_round_1138.py` and `tests/test_verify_sharding.py`.
+[CI run](https://github.com/stranske/Orchestrator/actions/runs/44908486284),
+[coverage aggregate](https://github.com/stranske/Orchestrator/actions/runs/44908486284/job/136859558011),
+[flat exec-mirror aggregate](https://github.com/stranske/Orchestrator/actions/runs/44908486284/job/136859568588),
+[Gate run](https://github.com/stranske/Orchestrator/actions/runs/44908486507)
+
+PR #1164 delivered the isolation correction. The two named Anaconda commands
+and all three deliberate-break experiments are recorded above for `d068c59`.
+Both Anaconda commands exited 127 on this runner because
+`/opt/anaconda3/bin/python3` is absent. With the available Python 3.14.10,
+both verification scripts stopped at baseline because pytest is unavailable.
+The production source, coverage records, and historical mutation evidence
+match the committed head.
+
+The local artifact verifier now runs against a temporary archive of the
+measured commit. In a disposable copy, redirecting the verifier to the working
+tree made the new archive regression fail. Restoring the archive path made it
+pass. The local Node suites passed with `node tests/test_issue_1138_artifacts.js`
+(43 tests), `node tests/test_issue_1138_mutation.js` (30 tests), and
+`node tests/test_redirect_routing_mutations.js` (11 tests). Gate's Node command
+also passed locally with `PYTHONPATH` including `src`.
+
+```bash
+node --test tests/test_route_weights_export_cli.js tests/test_switch_review_exploration.js
+```
+
+Staging the verifier change failed because `.git` is read-only. The CI results
+above cover the committed head. GitHub approval policy rejected the PR checklist
+edit, blocker comment, and `needs-human` label. The exact-head merge guard
+blocked at the review-thread GraphQL query. Fresh Anaconda verification and
+the terminal merge remain pending.

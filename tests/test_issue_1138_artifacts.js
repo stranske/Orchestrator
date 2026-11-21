@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { test } = require('node:test');
-const { experiments, verify } = require('../scripts/verify_issue_1138_artifacts');
+const { experiments, verify, verifyAtHead } = require('../scripts/verify_issue_1138_artifacts');
 
 function inputs(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'issue-1138-artifacts-test-'));
@@ -71,6 +71,30 @@ test('independently breaks each gain lock and restores both original records', (
     assert.deepEqual([result.baseline_exit, result.red_exit, result.green_exit], [0, 1, 0]);
     assert.ok(result.command.includes('not slow'));
   }
+  assertRestored(root, originals);
+});
+
+test('runs both artifact mutations in a disposable archive of the measured head', () => {
+  const root = path.resolve(__dirname, '..');
+  const originals = new Map(experiments.map(({ file }) => [
+    file, fs.readFileSync(path.join(root, file)),
+  ]));
+  let checkout;
+  let calls = 0;
+  const results = verifyAtHead(root, 'HEAD', (cwd, name) => {
+    assert.notEqual(cwd, root);
+    checkout = cwd;
+    assertRestored(root, originals);
+    const index = Math.floor(calls / 3);
+    const failed = calls++ % 3 === 1;
+    const { file, field, test: expectedName } = experiments[index];
+    assert.equal(name, expectedName);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(cwd, file)))[field], failed ? 297 : 296);
+    return verdict(name, failed, index === 0 ? '296 == 297' : '297 == 296');
+  });
+  assert.equal(calls, 6);
+  assert.equal(results.length, 2);
+  assert.equal(fs.existsSync(checkout), false);
   assertRestored(root, originals);
 });
 
