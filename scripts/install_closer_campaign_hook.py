@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import importlib
 import json
 import sys
 from pathlib import Path
@@ -147,10 +148,23 @@ def render(source: str, manifest_path: str) -> str:
 
 def check_manifest(path: str) -> None:
     """Refuse to render a pin whose modules do not match their recorded digests."""
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-    import closer_campaign
+    manifest_path = Path(path)
+    if not manifest_path.is_file():
+        raise SystemExit(f"missing manifest: {manifest_path}")
+    root = Path(__file__).resolve().parents[1]
+    for candidate in (root / "src", root):
+        text = str(candidate)
+        if candidate.is_dir() and text not in sys.path:
+            sys.path.insert(0, text)
+    try:
+        closer_campaign = importlib.import_module("closer_campaign")
+    except ModuleNotFoundError as exc:
+        raise SystemExit(
+            "missing retired dependency closer_campaign; "
+            "src/closer_campaign.py was removed from this repository"
+        ) from exc
 
-    manifest = json.loads(Path(path).read_text())
+    manifest = json.loads(manifest_path.read_text())
     problems = closer_campaign.validate_manifest(manifest) + closer_campaign.verify_modules(
         manifest
     )
@@ -163,11 +177,43 @@ def main(argv=None) -> int:
     p.add_argument("--controller", required=True)
     p.add_argument("--manifest", required=True)
     p.add_argument("--out", required=True)
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate controller/manifest rendering without writing --out",
+    )
     args = p.parse_args(argv)
-    if Path(args.out).resolve() == Path(args.controller).resolve():
+    controller_path = Path(args.controller)
+    manifest_path = Path(args.manifest)
+    out_path = Path(args.out)
+    if out_path.resolve() == controller_path.resolve():
         p.error("--out must differ from --controller")
+    if not controller_path.is_file():
+        raise SystemExit(f"missing controller source: {controller_path}")
+    if not manifest_path.is_file():
+        raise SystemExit(f"missing manifest: {manifest_path}")
+    try:
+        json.loads(manifest_path.read_text())
+    except ValueError as exc:
+        raise SystemExit(f"invalid manifest JSON: {exc}") from exc
+    source = controller_path.read_text()
+    rendered = render(source, args.manifest)
+    if args.dry_run:
+        print(
+            json.dumps(
+                {
+                    "mode": "dry-run",
+                    "controller": str(controller_path.resolve()),
+                    "manifest": str(manifest_path.resolve()),
+                    "out": str(out_path.resolve()),
+                    "would_write": rendered != source,
+                },
+                indent=2,
+            )
+        )
+        return 0
     check_manifest(args.manifest)
-    Path(args.out).write_text(render(Path(args.controller).read_text(), args.manifest))
+    out_path.write_text(rendered)
     return 0
 
 

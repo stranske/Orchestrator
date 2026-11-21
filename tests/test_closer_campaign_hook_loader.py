@@ -112,3 +112,97 @@ def test_missing_lazy_dependency_pin_holds_instead_of_resolving_host(tmp_path, n
     manifest.write_text(json.dumps(doc))
     script = "import runpy,sys,json;print(json.dumps(runpy.run_path(sys.argv[1])['_load_pinned_closer_campaign']() is None))"
     assert invoke(controller, script) is True
+
+
+def test_cli_startup_dry_run_and_deferred_missing_dependency_before_write(tmp_path):
+    """CLI reaches --help and --dry-run, fails cleanly before write when closer_campaign is absent,
+    and writes cleanly when a compatible validator module is supplied."""
+    import os
+    from pathlib import Path
+
+    _base, _rendered = fixture(tmp_path)
+    raw_controller = tmp_path / "raw_controller.py"
+    raw_controller.write_text(CONTROLLER)
+    manifest = tmp_path / "manifest.json"
+    out = tmp_path / "out_controller.py"
+    script_path = Path(hook.__file__).resolve()
+
+    # 1. Startup (--help)
+    help_proc = subprocess.run(
+        [sys.executable, str(script_path), "--help"],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert help_proc.returncode == 0, help_proc.stderr
+    assert "--dry-run" in help_proc.stdout
+
+    # 2. Dry-run reaches preview without writing --out
+    dry_proc = subprocess.run(
+        [
+            sys.executable,
+            str(script_path),
+            "--controller",
+            str(raw_controller),
+            "--manifest",
+            str(manifest),
+            "--out",
+            str(out),
+            "--dry-run",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert dry_proc.returncode == 0, dry_proc.stderr
+    dry_payload = json.loads(dry_proc.stdout)
+    assert dry_payload["mode"] == "dry-run"
+    assert not out.exists()
+
+    # 3. Deferred write path fails cleanly before any write when closer_campaign is absent
+    missing_proc = subprocess.run(
+        [
+            sys.executable,
+            str(script_path),
+            "--controller",
+            str(raw_controller),
+            "--manifest",
+            str(manifest),
+            "--out",
+            str(out),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert missing_proc.returncode != 0
+    assert "closer_campaign" in missing_proc.stderr
+    assert "Traceback" not in missing_proc.stderr
+    assert not out.exists()
+
+    # 4. Compatibility control: when a compatible closer_campaign validator is provided, write succeeds
+    stub_dir = tmp_path / "compat_stub"
+    stub_dir.mkdir()
+    (stub_dir / "closer_campaign.py").write_text(
+        "def validate_manifest(m): return []\ndef verify_modules(m): return []\n"
+    )
+    env = dict(os.environ, PYTHONPATH=str(stub_dir))
+    ok_proc = subprocess.run(
+        [
+            sys.executable,
+            str(script_path),
+            "--controller",
+            str(raw_controller),
+            "--manifest",
+            str(manifest),
+            "--out",
+            str(out),
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=15,
+    )
+    assert ok_proc.returncode == 0, ok_proc.stderr
+    assert out.is_file()
+    assert out.read_text() == hook.render(CONTROLLER, str(manifest))

@@ -323,3 +323,106 @@ def test_unchanged_sources_still_repair_a_stale_optional_cache(tmp_path):
     assert cache.read_text() == tomllib.loads(source.decode())["prompt"].replace(
         "HANDOFF_AGENT=codex", "HANDOFF_AGENT=cursor"
     )
+
+
+def _snapshot_tree(root: Path) -> dict[str, bytes]:
+    return {
+        str(path.relative_to(root)): path.read_bytes()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
+def test_deferred_apply_missing_dispatcher_fails_before_any_write(tmp_path):
+    """Startup and dry-run succeed, and deferred --apply fails before any write (including lock)."""
+    home, _, _, _ = fake_home(tmp_path)
+    dispatcher = home / ".codex/orchestrator-mirror/closer_dispatcher.py"
+    dispatcher.unlink()
+    before = _snapshot_tree(home)
+
+    help_proc = subprocess.run(
+        [sys.executable, str(SPEC.origin), "--help"],
+        capture_output=True,
+        text=True,
+    )
+    assert help_proc.returncode == 0, help_proc.stderr
+    assert "--apply" in help_proc.stdout
+
+    dry_proc = subprocess.run(
+        [sys.executable, str(SPEC.origin), "--home", str(home)],
+        capture_output=True,
+        text=True,
+    )
+    assert dry_proc.returncode == 0, dry_proc.stderr
+    assert json.loads(dry_proc.stdout)["mode"] == "dry-run"
+    assert _snapshot_tree(home) == before
+
+    with pytest.raises(ValueError, match="closer_dispatcher.py"):
+        installer.install(home, apply=True)
+    assert _snapshot_tree(home) == before
+    assert not (home / ".codex/bin/.install-closer-dispatcher.lock").exists()
+
+    apply_proc = subprocess.run(
+        [sys.executable, str(SPEC.origin), "--home", str(home), "--apply"],
+        capture_output=True,
+        text=True,
+    )
+    assert apply_proc.returncode != 0
+    assert "closer_dispatcher.py" in apply_proc.stderr
+    assert "deploy repository src/closer_dispatcher.py" not in apply_proc.stderr
+    assert _snapshot_tree(home) == before
+    assert not (home / ".codex/bin/.install-closer-dispatcher.lock").exists()
+
+
+@pytest.mark.parametrize("missing_target", ["renderer", "opener", "prompt", "postrun"])
+def test_deferred_apply_missing_prerequisite_fails_before_lock_write(tmp_path, missing_target):
+    """Any missing apply dependency must refuse before creating the installer lock or backups."""
+    home, prompt, postrun, renderer = fake_home(tmp_path)
+    targets = {
+        "renderer": renderer,
+        "opener": home / ".codex/automations/pd-workloop-resume/automation.toml",
+        "prompt": prompt,
+        "postrun": postrun,
+    }
+    targets[missing_target].unlink()
+    before = _snapshot_tree(home)
+
+    with pytest.raises((FileNotFoundError, ValueError)):
+        installer.install(home, apply=True)
+
+    assert _snapshot_tree(home) == before
+    assert not (home / ".codex/bin/.install-closer-dispatcher.lock").exists()
+
+
+def test_retired_caller_free_closer_scripts_removed_and_retained_scripts_start():
+    """Caller-free retired closer scripts are removed; retained entry points pass --help."""
+    scripts_dir = Path(__file__).resolve().parents[1] / "scripts"
+    retired = (
+        "closer_host_restore.py",
+        "closer_publisher_package.py",
+        "measure_closer_acceptance.py",
+        "render_closer_admission_hook.py",
+        "render_closer_native_entry.py",
+        "render_closer_native_hooks.py",
+    )
+    for name in retired:
+        assert not (
+            scripts_dir / name
+        ).exists(), f"caller-free retired script still tracked: {name}"
+
+    retained = (
+        "install_closer_dispatcher.py",
+        "install_closer_campaign_hook.py",
+        "stage_reviewed_repo_publisher_exclusion.py",
+        "apply_reviewed_repo_publisher_exclusion_stage.py",
+    )
+    for name in retained:
+        script = scripts_dir / name
+        assert script.is_file(), f"retained script missing: {name}"
+        proc = subprocess.run(
+            [sys.executable, str(script), "--help"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        assert proc.returncode == 0, f"{name} --help failed: {proc.stderr}"
