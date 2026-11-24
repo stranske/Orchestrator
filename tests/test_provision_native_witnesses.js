@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { test } = require('node:test');
 const { execute } = require('../scripts/run_adjudicator_acceptance');
-const { complete, expected, runWitnesses, snapshot } = require('../scripts/run_provision_native_witnesses');
+const { complete, expected, manifest, runWitnesses, snapshot } = require('../scripts/run_provision_native_witnesses');
 
 const selectedPython = process.env.PYTHON;
 assert.ok(path.isAbsolute(selectedPython || ''), 'Set PYTHON to an absolute repository or CI interpreter');
@@ -441,4 +441,27 @@ test('a missing JUnit file retains the pytest failure without inventing a reader
   assert.equal(receipt.checks[0].exit_code, 1);
   assert.equal(receipt.checks[0].junit_reader, null);
   assert.equal(fs.existsSync(path.join(options.output, 'native-junit-reader.log')), false);
+});
+
+// A retained campaigns link written through an alias of the generations
+// directory (macOS /var -> /private/var) is the same location; a link into
+// any other directory is still refused.
+test('a campaigns backing link is compared by location, not by alias spelling', (t) => {
+  const options = fixture(t);
+  const generations = path.dirname(options.mirror);
+  const alias = fs.mkdtempSync(path.join(os.tmpdir(), 'generations-alias-')) + '/same';
+  t.after(() => fs.rmSync(path.dirname(alias), { recursive: true, force: true }));
+  fs.symlinkSync(generations, alias);
+  const retired = `orchestrator-mirror.retired-${'2'.repeat(32)}`;
+  fs.mkdirSync(path.join(generations, retired, 'campaigns'), { recursive: true });
+  const link = path.join(options.mirror, 'campaigns');
+  fs.symlinkSync(path.join(alias, retired, 'campaigns'), link);
+  const before = manifest(fs.realpathSync(options.mirror));
+  assert.equal(Object.keys(before).some((file) => file.startsWith('campaigns')), false);
+  fs.unlinkSync(link);
+  const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'elsewhere-'));
+  t.after(() => fs.rmSync(elsewhere, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(elsewhere, retired, 'campaigns'), { recursive: true });
+  fs.symlinkSync(path.join(elsewhere, retired, 'campaigns'), link);
+  assert.throws(() => manifest(fs.realpathSync(options.mirror)), /Mirror contains a symlink: campaigns/);
 });
