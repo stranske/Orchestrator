@@ -2718,6 +2718,50 @@ def muse_prompt_file(prompt: str) -> Path:
     return Path(path)
 
 
+def _muse_usage_bound(event: dict, session: object, command: object) -> bool:
+    """True when a ``run.usage`` status record belongs to the observed session, command and run."""
+    payload = event.get("payload")
+    return (
+        isinstance(payload, dict)
+        and event.get("stream") == {"kind": "exec.usage", "id": session}
+        and event.get("record_type") == "status"
+        and event.get("durability") == "ephemeral"
+        and event.get("causation_id") == command
+        and payload.get("kind") == "run_usage"
+        and payload.get("command_id") == command
+        and payload.get("run_stream") == {"kind": "run", "id": command}
+    )
+
+
+def muse_run_usage(jsonl: str) -> dict:
+    """Return the single ``run.usage`` payload of a ``muse exec --json`` stream, else ``{}``.
+
+    This is the provider's own meter: tokens per model and the subscription allowance (rolling
+    window and weekly ``used_percent`` with reset times). It is read apart from the run verdict so
+    a failed run still yields its reading. Absent, repeated or unbound records return ``{}``;
+    "no reading" must never be reported as a reading of zero.
+    """
+    command = session = None
+    found: list[dict] = []
+    for line in str(jsonl or "").splitlines():
+        try:
+            event = json.loads(line)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(event, dict) or not isinstance(event.get("payload"), dict):
+            continue
+        kind = event.get("payload_type")
+        if kind == "runtime.command.accepted" and command is None:
+            stream = event.get("stream")
+            command = event["payload"].get("command_id")
+            session = stream.get("id") if isinstance(stream, dict) else None
+        elif kind == "run.usage":
+            if not command or not session or not _muse_usage_bound(event, session, command):
+                return {}
+            found.append(event["payload"])
+    return found[0] if len(found) == 1 else {}
+
+
 def muse_terminal_text(jsonl: str) -> str:
     """Read the observed ``muse exec --json`` durable run-terminal protocol.
 
@@ -2773,6 +2817,7 @@ def muse_terminal_text(jsonl: str) -> str:
             "session.run.linked",
             "run.lifecycle.started",
             "run.terminal.completed",
+            "run.usage",
         }:
             return ""
         if kind == "runtime.command.accepted":
@@ -2793,6 +2838,14 @@ def muse_terminal_text(jsonl: str) -> str:
                 return ""
         if command is None:
             return ""
+        if kind == "run.usage":
+            # The CLI's own usage/allowance status for this run. It arrives on its own
+            # `exec.usage` stream just before the terminal, so the session-stream rule below
+            # does not apply; it must still be bound to this session, command and run. It is
+            # accounting only and never contributes to the run verdict.
+            if not _muse_usage_bound(event, session, command):
+                return ""
+            continue
         if (
             stream != {"kind": "session", "id": session}
             or event.get("causation_id") != command

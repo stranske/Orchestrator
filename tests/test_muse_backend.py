@@ -903,3 +903,120 @@ def test_muse_keychain_alias_is_macos_only(tmp_path, monkeypatch):
     runtime = tmp_path / "runtime"
     adapters.ensure_muse_keychain_link(tmp_path / "home", runtime)
     assert not runtime.exists()
+
+
+def _native_muse_usage_event(**payload_overrides):
+    """Sanitized ``run.usage`` status from native exec receipt offload:muse:1795527401268125000.
+
+    The CLI emits it once, on its own ``exec.usage`` stream, just before the run terminal.
+    """
+    payload = {
+        "kind": "run_usage",
+        "command_id": "c1",
+        "run_stream": {"kind": "run", "id": "c1"},
+        "models": [
+            {
+                "model": "muse-wonder-1.0",
+                "input_tokens": 349809,
+                "cached_tokens": 186832,
+                "output_tokens": 3638,
+                "reasoning_tokens": 1525,
+                "calls": 7,
+            }
+        ],
+        "calls": 7,
+        "allowance": {
+            "tier": None,
+            "window": {"used_percent": 2, "resets_at_ms": 1795534667000},
+            "weekly": {"used_percent": 0, "resets_at_ms": 1795996800000},
+            "as_of_ms": 1795527461384,
+            "source": "stream",
+        },
+    }
+    payload.update(payload_overrides)
+    return {
+        "schema_version": 1,
+        "payload_schema_version": 1,
+        "stream": {"kind": "exec.usage", "id": "s1"},
+        "sequence": 1,
+        "record_type": "status",
+        "durability": "ephemeral",
+        "causation_id": "c1",
+        "payload_type": "run.usage",
+        "payload": payload,
+    }
+
+
+def test_muse_run_usage_record_does_not_void_the_completed_run():
+    """Every native exec since CLI 1.4.x carries one ``run.usage`` status before the terminal.
+
+    Rejecting it as an unknown kind turned each completed Muse answer into "no stdout".
+    """
+    events = _native_muse_events()
+    usage = _native_muse_usage_event()
+    stream = "\n".join(json.dumps(e) for e in events[:-1] + [usage, events[-1]])
+    assert adapters.muse_terminal_text(stream) == "completed the bounded task"
+    assert adapters.muse_run_usage(stream)["allowance"]["window"]["used_percent"] == 2
+    # Usage is accounting, never a verdict: without the terminal the run is still incomplete.
+    assert (
+        adapters.muse_terminal_text("\n".join(json.dumps(e) for e in events[:-1] + [usage])) == ""
+    )
+    # ...and nothing may follow the terminal, the usage record included.
+    assert adapters.muse_terminal_text("\n".join(json.dumps(e) for e in events + [usage])) == ""
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda e: e.__setitem__("stream", {"kind": "exec.usage", "id": "another-session"}),
+        lambda e: e.__setitem__("stream", {"kind": "session", "id": "s1"}),
+        lambda e: e.__setitem__("causation_id", "another-run"),
+        lambda e: e.__setitem__("record_type", "event"),
+        lambda e: e.__setitem__("durability", "durable"),
+        lambda e: e["payload"].__setitem__("command_id", "another-run"),
+        lambda e: e["payload"].__setitem__("run_stream", {"kind": "run", "id": "another-run"}),
+        lambda e: e["payload"].__setitem__("kind", "run_terminal"),
+    ],
+)
+def test_muse_run_usage_record_must_be_bound_to_this_run(mutate):
+    events = _native_muse_events()
+    usage = _native_muse_usage_event()
+    mutate(usage)
+    stream = "\n".join(json.dumps(e) for e in events[:-1] + [usage, events[-1]])
+    assert adapters.muse_terminal_text(stream) == ""
+    assert adapters.muse_run_usage(stream) == {}
+
+
+def test_muse_run_usage_absent_or_repeated_is_no_reading():
+    events = _native_muse_events()
+    usage = _native_muse_usage_event()
+    assert adapters.muse_run_usage("\n".join(json.dumps(e) for e in events)) == {}
+    assert adapters.muse_run_usage(json.dumps(usage)) == {}  # no accepted command to bind to
+    twice = "\n".join(json.dumps(e) for e in events[:-1] + [usage, usage, events[-1]])
+    assert adapters.muse_run_usage(twice) == {}
+
+
+def test_muse_meter_row_is_appended_only_for_a_real_reading(tmp_path, monkeypatch):
+    log = tmp_path / "muse-usage.ndjson"
+    monkeypatch.setenv("ORCH_MUSE_METER_LOG", str(log))
+    dispatcher._record_muse_meter({}, 1795527461)
+    dispatcher._record_muse_meter({"allowance": {"window": {}, "weekly": None}}, 1795527461)
+    assert not log.exists(), "no reading must not be stored as a reading of zero"
+    dispatcher._record_muse_meter(_native_muse_usage_event()["payload"], 1795527461.9)
+    assert [json.loads(line) for line in log.read_text().splitlines()] == [
+        {
+            "ts": 1795527461,
+            "source": "muse exec --json:run.usage",
+            "weekly": {"used_percent": 0, "resets_at": 1795996800},
+            "five_hour": {"used_percent": 2, "resets_at": 1795534667},
+            "tokens": {
+                "input_tokens": 349809,
+                "cached_tokens": 186832,
+                "output_tokens": 3638,
+                "reasoning_tokens": 1525,
+            },
+            "calls": 7,
+        }
+    ]
+    monkeypatch.setenv("ORCH_MUSE_METER_LOG", str(tmp_path / "missing-dir" / "m.ndjson"))
+    dispatcher._record_muse_meter(_native_muse_usage_event()["payload"], 1795527461)  # no raise
