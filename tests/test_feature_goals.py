@@ -870,7 +870,7 @@ def test_closer_completion_reads_registered_observation_and_exact_remote_pin(tmp
     c.record_completion(output_root=tmp_path)
     captured_calls = len(calls)
     measured = fg.closer_campaign_completion(NOW)
-    assert measured.value == 1 and measured.as_of == NOW - 1
+    assert measured.value == 1 and measured.as_of == NOW and measured.inactive_since is None
     assert fg.closer_campaign_completion(NOW).value == 1
     assert len(calls) == captured_calls, "measurement must reuse the native publication snapshot"
     pr["headRefOid"] = "c" * 40
@@ -897,10 +897,20 @@ def test_closer_completion_reads_registered_observation_and_exact_remote_pin(tmp
     receipt.write_text(json.dumps(record))
     c.record_completion(output_root=tmp_path)
     assert fg.closer_campaign_completion(NOW).value is None
+    closer_goal = next(g for g in fg.FEATURES if g.feature == "closer-campaign")
+    # A completion older than measure()'s one-day freshness window stays measured.
+    record["completed_at"] = NOW - 2 * fg.DAY
+    receipt.write_text(json.dumps(record))
+    c.record_completion(output_root=tmp_path)
+    measured = fg.measure(closer_goal, NOW)
+    assert measured.value == 1.0 and measured.as_of == NOW and measured.inactive_since is None
     record["completed_at"] = NOW - 15 * fg.DAY
     receipt.write_text(json.dumps(record))
     c.record_completion(output_root=tmp_path)
     assert fg.closer_campaign_completion(NOW).value == 0
+    measured = fg.measure(closer_goal, NOW)
+    assert measured.value == 0.0 and measured.as_of == NOW
+    assert measured.inactive_since == NOW - 15 * fg.DAY
     assert worker_path.read_bytes() == raw
 
     # Every malformed receipt layer remains unmeasured for the public reader.
