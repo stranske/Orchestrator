@@ -1881,6 +1881,65 @@ def _collected_candidate_diffs(collected: dict) -> dict[str, str]:
     return out
 
 
+def _seatable_judge(agent: str) -> bool:
+    """Whether a producer judge seat may go to `agent`: capacity has not cut its seat (a shed marker that is
+    active, manual or unreadable, and not tier-scoped). Unreadable capacity keeps the static order (True).
+
+    2026-11-24 (Orchestrator#720): the seat order is static, and vibe, the second ready neutral judge
+    for every claude+codex experiment, has answered `402 Vibe budget exhausted` since 2026-11-11. It
+    failed 10 of 10 producer judge seats from 11-15 to 11-24, each experiment kept ONE evaluator, and
+    experiments/G1 and the producer's own route cells (both need >= 2 evaluators) could not move.
+    """
+    try:
+        import capacity  # noqa: PLC0415
+
+        marker = capacity.shed_marker(agent)
+    except Exception:  # noqa: BLE001
+        return True
+    return marker is None or marker.get("state") == "expired" or bool(marker.get("tier_scope"))
+
+
+def _record_judge_refusals(edir: Path, judges: list[str], verdicts: dict, target: str) -> list[str]:
+    """Record a judge's authoritative capacity or billing refusal as a rate-limit incident, the same
+    record `dispatcher.offload` writes, so capacity sheds the seat and the next producer evaluation
+    skips it. Judge runs did not feed the ledger, so vibe's shed lapsed after each 24 h bench and the
+    producer seated it again. Never raises: evaluation goes on whatever the ledger does."""
+    recorded = []
+    for judge in judges:
+        if verdicts.get(judge):
+            continue
+        try:
+            import rate_incidents  # noqa: PLC0415
+
+            text = (edir / f"eval-out-{_eval_artifact_token(judge)}.txt").read_text(
+                errors="replace"
+            )
+            run_id = f"producer-judge:{edir.name}:{judge}"
+            evidence = rate_incidents.get_structured_evidence(
+                error_text=text,
+                agent=judge,
+                surface="exp_abcd.producer_judge",
+                run_id=run_id,
+                target=target,
+            )
+            if not evidence.get("is_authoritative"):
+                continue
+            rate_incidents.record_incident(
+                agent=judge,
+                surface="exp_abcd.producer_judge",
+                category=evidence["category"],
+                status="recorded",
+                target=target,
+                run_id=run_id,
+                evidence=text,
+                extra={"subcategory": evidence["subcategory"], "experiment": edir.name},
+            )
+            recorded.append(judge)
+        except Exception as exc:  # noqa: BLE001
+            print(f"warn: judge refusal not recorded for {judge}: {exc}", file=sys.stderr)
+    return recorded
+
+
 def producer_followup(
     edir,
     meta,
@@ -1981,7 +2040,10 @@ def producer_followup(
             fleet_shapes.write_json_atomic(delivery_path, delivery)
             producer.release_lock(edir, target, delivery, gh_fn=gh_fn, now=now)
             return {**result, **delivery}
-        judges = [a for a in EVALUATOR_TOPUP_ORDER if a not in {m["agent"] for m in members}][:2]
+        members_agents = {m["agent"] for m in members}
+        judges = [
+            a for a in EVALUATOR_TOPUP_ORDER if a not in members_agents and _seatable_judge(a)
+        ][:2]
         if len(judges) < 2:
             return {**result, "status": "insufficient_neutral_judges"}
         opp = research_usage_guard.assess_and_record_opportunity(
@@ -2011,6 +2073,7 @@ def producer_followup(
                 )
                 for j in judges
             }
+            _record_judge_refusals(edir, judges, verdicts, target)
             maps = json.loads((edir / "eval-maps.json").read_text())
             harvest = _winner_and_harvest(verdicts, maps, fallback_exclude_judges=())
             scored = [

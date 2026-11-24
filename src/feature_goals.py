@@ -167,6 +167,7 @@ def multi_source_feedback(now: int) -> Measurement:
             (now - GOAL_SILENCE_DAYS * DAY, now),
         ).fetchall()
     # Share exp_abcd's override/layout resolution; runs.target is a display string.
+    import experiment_producer
     from exp_abcd import exp_paths
 
     qualifying = set()
@@ -211,9 +212,7 @@ def multi_source_feedback(now: int) -> Measurement:
             issue = json.loads(_gh(["api", f"repos/{repo}/issues/{number}"]))
             body = issue.get("body") or ""
             labels = {label["name"] for label in issue["labels"]}
-            if len(re.findall(r"(?m)^\s*[-*] \[[ xX]\]", body)) >= 9:
-                qualifying.add(experiment)
-            elif "experiment:forum" in labels:
+            if experiment_producer.sizable(body, labels):  # the producer's one definition
                 qualifying.add(experiment)
         except Exception:  # an unavailable/malformed issue cannot abort other experiments
             issue_failures.add(experiment)

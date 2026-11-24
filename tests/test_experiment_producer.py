@@ -1833,3 +1833,79 @@ def test_empty_feed_with_a_blocked_seat_reports_no_subject_not_pacing(monkeypatc
     item = {"target": "a/b#3", "task_type": "implement", "body": "`pytest tests/test_x.py`"}
     plan = producer.build_plan([item], cap, **kwargs)
     assert plan["skipped"][-1]["reason"].startswith("pacing "), plan["skipped"]
+
+
+VIBE_402 = (
+    "Error: API error from mistral (model: mistral-vibe-cli-latest): LLM backend error [mistral]\n"
+    "  status: 402 Payment Required\n  reason: Payment Required\n"
+    '  body_excerpt: {"object":"error","message":"Vibe budget exhausted.",'
+    '"type":"billing_vibe_budget_exhausted","code":"2304","raw_status_code":402}\n'
+)
+
+
+def _judged(tmp_path, monkeypatch, *, shed=(), refuse=()):
+    """One producer evaluation of the codex+claude fixture; returns (judges seated, incidents recorded)."""
+    import capacity
+    import rate_incidents
+
+    root, meta, _ = fixture_experiment(tmp_path, monkeypatch)
+    meta["launched_ts"] = time.time() - 10 * 3600
+    (root / "meta.json").write_text(json.dumps(meta))
+    monkeypatch.setattr(exp_abcd, "EXP_DIR", tmp_path)
+    for member in meta["members"]:
+        (root / exp_abcd.exp_log_path(member["agent"], member["member_id"])).write_text("done")
+    shed_dir = tmp_path / "capacity-shed"
+    shed_dir.mkdir()
+    for agent in shed:
+        (shed_dir / agent).write_text(json.dumps({"expires_at": time.time() + 86400}))
+    monkeypatch.setattr(capacity, "SHED_DIR", shed_dir)
+    monkeypatch.setattr(
+        exp_abcd.research_usage_guard,
+        "assess_and_record_opportunity",
+        lambda **kwargs: {"eligible": True, "opportunity_id": "test"},
+    )
+    monkeypatch.setattr(
+        exp_abcd.research_usage_guard, "update_opportunity_outcome", lambda *a, **k: None
+    )
+    monkeypatch.setattr(exp_abcd.judge_reliability, "summarize", lambda: {"judges": {}})
+    monkeypatch.setattr(exp_abcd, "assert_no_member_push", lambda *a: None)
+    monkeypatch.setattr(exp_abcd, "_collected_candidate_diffs", lambda *a: {"member": "diff"})
+    monkeypatch.setattr(
+        exp_abcd.synthesis_promotion,
+        "deliver_producer_winner",
+        lambda *a, **k: {"status": "delegated_or_pr"},
+    )
+    incidents = []
+    monkeypatch.setattr(rate_incidents, "record_incident", lambda **kw: incidents.append(kw) or {})
+    seated = []
+
+    def evaluate(repo, spec, exp_id, judges, **kwargs):
+        seated.extend(judges)
+        maps = {
+            j: {chr(65 + i): m["member_id"] for i, m in enumerate(meta["members"])} for j in judges
+        }
+        (root / "eval-maps.json").write_text(json.dumps(maps))
+        for j in judges:
+            out = VIBE_402 if j in refuse else json.dumps({"scores": {"A": 9, "B": 7}})
+            (root / f"eval-out-{j}.txt").write_text(out)
+        return {"evaluators": judges}
+
+    exp_abcd.followup(min_idle_s=0, collect_fn=lambda *a: {}, evaluate_fn=evaluate)
+    return seated, incidents
+
+
+def test_a_judge_capacity_has_cut_is_not_seated(tmp_path, monkeypatch):
+    """#720: vibe answered 402 on 10 of 10 producer judge seats (11-15..11-24) while shed; skip it."""
+    seated, _ = _judged(tmp_path, monkeypatch, shed=("vibe",))
+    assert seated == ["cursor", "gemini"]
+
+
+def test_a_judges_billing_refusal_is_recorded_so_capacity_sheds_it(tmp_path, monkeypatch):
+    """A producer judge's 402 never reached the incident ledger, so vibe's 24 h shed lapsed and it was
+    seated again. The refusal is now recorded like an offload's."""
+    seated, incidents = _judged(tmp_path, monkeypatch, refuse=("vibe",))
+    assert seated == ["cursor", "vibe"]
+    assert [(i["agent"], i["category"], i["surface"]) for i in incidents] == [
+        ("vibe", "quota", "exp_abcd.producer_judge")
+    ]
+    assert incidents[0]["extra"]["subcategory"] == "billing_exhausted"
