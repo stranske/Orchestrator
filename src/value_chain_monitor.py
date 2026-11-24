@@ -733,12 +733,56 @@ def _sync_core_situations(inputs: dict[str, Any]) -> int | None:
     return (inputs.get("sync_core") or {}).get("demand")
 
 
+ROUTE_WEIGHTS_EXPORT_CAPABILITY = "route-weights-export"
+ROUTE_WEIGHTS_DELEGATION_SOURCES = frozenset({"route_weights", "route_weights_exploration"})
+
+
+def _route_weights_export_situations(inputs: dict[str, Any]) -> int | None:
+    """Distinct PRs with any hosted `source='policy'` switch in the window; None when unread."""
+    switches = inputs.get("policy_switches")
+    if switches is None:
+        return None
+    return len({s["pr_ref"] for s in switches if s.get("pr_ref")})
+
+
+def _route_weights_export_outcomes(
+    switches: list[dict[str, Any]] | None,
+) -> dict[str, int | None]:
+    """Distinct PRs switched by the hosted policy from the export and their judged durability."""
+    fields = ("acted_on", *CLASS_FIELDS.values(), "outcome_success")
+    counts: dict[str, int | None] = {field: None for field in fields}
+    if switches is None:
+        return counts
+    acted_rows = [
+        s
+        for s in switches
+        if s.get("pr_ref") and s.get("delegation_source") in ROUTE_WEIGHTS_DELEGATION_SOURCES
+    ]
+    acted_prs = {s["pr_ref"] for s in acted_rows}
+    judged_prs = {
+        s["pr_ref"]
+        for s in acted_rows
+        if str(s.get("durability") or "").lower() in {"durable", "broke_later"}
+    }
+    broke_prs = {
+        s["pr_ref"] for s in acted_rows if str(s.get("durability") or "").lower() == "broke_later"
+    }
+    durable_prs = {
+        s["pr_ref"] for s in acted_rows if str(s.get("durability") or "").lower() == "durable"
+    } - broke_prs
+    counts["acted_on"] = len(acted_prs)
+    counts["outcome"] = len(judged_prs)
+    counts["outcome_success"] = len(durable_prs)
+    return counts
+
+
 # Callables can be replaced/extended without changing reporting or adding telemetry.
 SITUATION_QUERIES: dict[str, Callable[[dict[str, Any]], int | None]] = {
     "closer-core": _closer_core_situations,
     "local-loop": _local_loop_situations,
     "opener-core": _opener_core_situations,
     "sync-core": _sync_core_situations,
+    ROUTE_WEIGHTS_EXPORT_CAPABILITY: _route_weights_export_situations,
     "role-prompt": _prompt_batches,
     "role-decomposer": _large_issues,
     "role-triage": _open_issues,
@@ -884,7 +928,7 @@ def own_edges_of(edges: list[dict] | None, cid: str) -> list[dict] | None:
     return [e for e in edges if e.get("capability_id") == cid and not e.get("counterfactual")]
 
 
-def acted_on_index(db: Path, now: int, capability_ids) -> tuple[dict[str, int] | None, str]:
+def acted_on_index(db: Path, now: int, capability_ids) -> tuple[dict[str, int | None] | None, str]:
     """`acted_on` per capability over the window and edges the weekly report prints.
 
     ONE computation, consumed by `capability_admission.req_consumer_acts` (the tenth part): the
@@ -896,16 +940,18 @@ def acted_on_index(db: Path, now: int, capability_ids) -> tuple[dict[str, int] |
     edges = inputs.get("edges")
     if edges is None:
         return None, (inputs.get("errors") or ["Brain evidence unavailable"])[0]
-    index = {
-        cid: int(outcome_counts(cid, own_edges_of(edges, cid))["acted_on"] or 0)
-        for cid in capability_ids
-    }
+    index: dict[str, int | None] = {}
+    for cid in capability_ids:
+        if cid == ROUTE_WEIGHTS_EXPORT_CAPABILITY:
+            index[cid] = _route_weights_export_outcomes(inputs.get("policy_switches"))["acted_on"]
+        else:
+            index[cid] = int(outcome_counts(cid, own_edges_of(edges, cid))["acted_on"] or 0)
     return index, f"value-chain monitor, {WINDOW_DAYS}d window, {db.name}"
 
 
 def acted_on_window_index(
     db: Path, windows: dict[str, tuple[int, int]]
-) -> tuple[dict[str, int] | None, str]:
+) -> tuple[dict[str, int | None] | None, str]:
     """Count the monitor's accepted, non-counterfactual acts inside fixed per-capability windows.
 
     Admission deadlines are relative to first invocation, so a rolling report window cannot
@@ -920,8 +966,17 @@ def acted_on_window_index(
     edges = inputs.get("edges")
     if edges is None:
         return None, (inputs.get("errors") or ["Brain evidence unavailable"])[0]
-    index = {}
+    index: dict[str, int | None] = {}
     for cid, (start, end) in windows.items():
+        if cid == ROUTE_WEIGHTS_EXPORT_CAPABILITY:
+            switches = inputs.get("policy_switches")
+            bounded_switches = (
+                None
+                if switches is None
+                else [s for s in switches if start <= int(s.get("switched_ts") or 0) <= end]
+            )
+            index[cid] = _route_weights_export_outcomes(bounded_switches)["acted_on"]
+            continue
         own = own_edges_of(edges, cid)
         bounded = [e for e in (own or []) if start <= int(e.get("created_ts") or 0) <= end]
         index[cid] = int(outcome_counts(cid, bounded)["acted_on"] or 0)
@@ -1008,7 +1063,12 @@ def _brain(db: Path, since: int, now: int) -> dict[str, Any]:
     them: both verdicts, `merged`, `failure_class`, and the target's `runs.role_name`. An edge
     with no `outcomes` row has no outcome.
     """
-    result: dict[str, Any] = {"completion_events": None, "edges": None, "errors": []}
+    result: dict[str, Any] = {
+        "completion_events": None,
+        "edges": None,
+        "policy_switches": None,
+        "errors": [],
+    }
     try:
         with sqlite3.connect(db.resolve().as_uri() + "?mode=ro", uri=True) as con:
             con.row_factory = sqlite3.Row
@@ -1054,6 +1114,18 @@ def _brain(db: Path, since: int, now: int) -> dict[str, Any]:
                 edge["failure_class"] = edge.pop("outcome_failure_class")
                 edges.append(edge)
             result["edges"] = edges
+            try:
+                result["policy_switches"] = [
+                    dict(r)
+                    for r in con.execute(
+                        "SELECT pr_ref, delegation_source, durability, switched_ts "
+                        "FROM agent_switches "
+                        "WHERE source='policy' AND switched_ts BETWEEN ? AND ?",
+                        (since, now),
+                    )
+                ]
+            except sqlite3.Error as exc:
+                result["errors"].append(f"route-weights-export policy switches unavailable: {exc}")
     except (sqlite3.Error, OSError, ValueError) as exc:
         result["errors"].append(f"Brain evidence unavailable: {exc}")
     return result
@@ -1321,6 +1393,11 @@ def report(
                 ""
                 if sync is None
                 else f"; +{sync['delivered_unacted']} merged with no sync-core action, not counted"
+            )
+        if cid == ROUTE_WEIGHTS_EXPORT_CAPABILITY:
+            counts.update(_route_weights_export_outcomes(inputs.get("policy_switches")))
+            counts["success_scope"] = (
+                "PRs the hosted policy switched from the export, merged and judged durable"
             )
         if cid == feedback.RELAY_PACING_CAPABILITY:
             relay_usable = _relay_usable(inputs, now - WINDOW_DAYS * 86400, now)

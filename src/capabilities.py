@@ -232,7 +232,7 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
         "flags_defaults": {"ORCH_ROUTE_WEIGHTS_PUBLISH": "0"},
         "output_artifact": "$ORCH_STATE_DIR/route-weights-export.json",
         "downstream_consumer": "route_weights_export.py:publish_document hands the document to the Workflows config repository",
-        "learning_sink": "none — export-only capability; no learner outcome is claimed",
+        "learning_sink": "feedback.py agent_switches rows (source='policy', delegation_source in route_weights/route_weights_exploration) and their PR durability outcomes",
         "gate_reason": "write-only shadow export; remote publication requires --publish and ORCH_ROUTE_WEIGHTS_PUBLISH=1",
         "gate_evidence": "latest-version, thresholded fixture export preserves reserve-seat separation",
         "evidence_threshold": "each public ranking row has n_obs >= min_observations",
@@ -1684,7 +1684,10 @@ def acting_in_trailing_window(capability_id: str, *, now: int | None = None) -> 
         )
     except Exception:  # noqa: BLE001 — unmeasured is a word, never a zero
         return None
-    return None if index is None else int(index.get(capability_id, 0))
+    if index is None:
+        return None
+    val = index.get(capability_id, 0)
+    return None if val is None else int(val)
 
 
 def renew_command(capability_id: str) -> str:
@@ -2724,10 +2727,19 @@ def register(capability_id: str, record: dict[str, Any], path: Path = REG) -> No
 
 
 def adjudicator_live_policy(summary: dict) -> str:
-    """M2 qualification uses later-truth grades; a short pool never retires the role."""
+    """M2 qualification uses later-truth grades; a short pool never retires the role.
+
+    A pool graded on one truth class grades the base rate, not the judgment: a constant
+    `reject_blocker` scores ~0.9 on a mostly-PASS pool. Such a pool neither retires nor
+    qualifies. A summary without the truth-split keys (saved before it existed) keeps the
+    agreement-only rule so old reports still load.
+    """
     graded = summary["graded"]
     if graded < 20:
         return "insufficient_sample"
+    if "graded_truth_pass" in summary and "graded_truth_fail" in summary:
+        if not summary["graded_truth_pass"] or not summary["graded_truth_fail"]:
+            return "one_class_sample"
     return "retired" if summary["agree"] / graded < 0.75 else "qualified"
 
 

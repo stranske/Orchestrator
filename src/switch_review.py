@@ -1582,7 +1582,7 @@ def _expiry_row(cap_id: str, cap: dict, *, now: int, acting: int | None = None) 
     }
 
 
-def _acting_index(now: int, ids: list[str]) -> dict[str, int] | None:
+def _acting_index(now: int, ids: list[str]) -> dict[str, int | None] | None:
     """The monitor's rolling `acted_on` per row, read once; None when the Brain is unreadable."""
     try:
         import feedback
@@ -1591,7 +1591,9 @@ def _acting_index(now: int, ids: list[str]) -> dict[str, int] | None:
         index, _reason = monitor.acted_on_index(feedback.DB_PATH, now, ids)
     except Exception:  # noqa: BLE001 — unmeasured is a word, never a zero
         return None
-    return None if index is None else {cid: int(index.get(cid, 0)) for cid in ids}
+    if index is None:
+        return None
+    return {cid: (None if (val := index.get(cid, 0)) is None else int(val)) for cid in ids}
 
 
 def gate_expiry(*, now: int | None = None, path=None) -> dict:
