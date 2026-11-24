@@ -504,3 +504,100 @@ def test_orchestrate_sh_writes_the_readable_switch_review():
     assert text.count(needle) == 1, (needle, text.count(needle))
     line = next(ln for ln in text.splitlines() if needle in ln)
     assert line.strip().startswith("switch_args=(") and "switch-review.md" in line, line
+
+
+def test_route_weights_export_counts_policy_switches_as_acted_on(brain, tmp_path):
+    """Hosted delegation switches recorded in `agent_switches` are `route-weights-export`'s demand,
+    acted_on, outcome and outcome_success — read through the monitor's read-only Brain connection.
+    """
+    rows = capabilities.load(brain, create=False)
+    export_row = capabilities._blank_capability("route-weights-export")
+    export_row.update(
+        {
+            "status": "shadow",
+            "expiry": NOW + 5 * 86400,
+            "last_invocation": T0,
+            "event_history": [
+                {"timestamp": T0, "type": "invocation"},
+                {"timestamp": T0, "type": "success"},
+            ],
+        }
+    )
+    rows["route-weights-export"] = export_row
+    capabilities.save(rows, brain)
+
+    with feedback._conn() as c:
+        c.executemany(
+            "INSERT INTO agent_switches "
+            "(pr_ref, from_agent, to_agent, switched_ts, auto_label, commits_before, "
+            "commits_after, merged, durability, recorded_ts, source, delegation_source) "
+            "VALUES (?,?,?,?,0,1,1,?,?,?,?,?)",
+            [
+                # Three policy switches on two PRs from route_weights (one durable, one pending).
+                ("o/r#1", "codex", "claude", T0 - 20, 1, "durable", T0, "policy", "route_weights"),
+                ("o/r#1", "claude", "gemini", T0 - 10, 1, "durable", T0, "policy", "route_weights"),
+                ("o/r#2", "codex", "claude", T0 - 5, 0, "pending", T0, "policy", "route_weights"),
+                # One static policy switch (counts toward demand, not acted_on).
+                ("o/r#3", "codex", "claude", T0, 1, "durable", T0, "policy", "static"),
+                # One label switch (neither policy demand nor export acted_on).
+                ("o/r#4", "codex", "claude", T0, 1, "durable", T0, "label", None),
+            ],
+        )
+
+    row = _row(brain, "route-weights-export")
+    assert row["acted_on"] == 2, row
+    assert row["outcome"] == 1, row
+    assert row["outcome_success"] == 1, row
+    assert row["situation_count"] == 3, row
+    assert row["success_scope"] == (
+        "PRs the hosted policy switched from the export, merged and judged durable"
+    )
+    assert row["first_break"] == "works", row
+
+    # The gate-expiry renewal check shares the monitor's acted_on count via acted_on_index.
+    index, _ = monitor.acted_on_index(feedback.DB_PATH, NOW, ["route-weights-export"])
+    assert index == {"route-weights-export": 2}
+    expiry = switch_review.gate_expiry(now=NOW, path=brain)
+    expiring = {r["capability_id"]: r for r in expiry["expiring"]}
+    assert expiring["route-weights-export"]["acting_trailing_window"] == 2
+    assert expiring["route-weights-export"]["renewable"] is True
+    assert expiring["route-weights-export"]["blocker"] is None
+
+    # Exploration switches also count as acted_on; broke_later is a judged outcome, not durable.
+    with feedback._conn() as c:
+        c.execute(
+            "INSERT INTO agent_switches "
+            "(pr_ref, from_agent, to_agent, switched_ts, auto_label, commits_before, "
+            "commits_after, merged, durability, recorded_ts, source, delegation_source) "
+            "VALUES (?,?,?,?,0,1,1,?,?,?,?,?)",
+            (
+                "o/r#5",
+                "codex",
+                "gemini",
+                T0,
+                1,
+                "broke_later",
+                T0,
+                "policy",
+                "route_weights_exploration",
+            ),
+        )
+    row_with_exploration = _row(brain, "route-weights-export")
+    assert row_with_exploration["acted_on"] == 3, row_with_exploration
+    assert row_with_exploration["outcome"] == 2, row_with_exploration
+    assert row_with_exploration["outcome_success"] == 1, row_with_exploration
+    assert row_with_exploration["situation_count"] == 4, row_with_exploration
+
+    # Absent agent_switches table -> unmeasured (None), never 0.
+    missing = tmp_path / "no-agent-switches.db"
+    shutil.copy(feedback.DB_PATH, missing)
+    with sqlite3.connect(missing) as c:
+        c.execute("DROP TABLE agent_switches")
+    unreadable = _row(brain, "route-weights-export", missing)
+    assert unreadable["acted_on"] is None, unreadable
+    assert unreadable["outcome"] is None, unreadable
+    assert unreadable["outcome_success"] is None, unreadable
+    assert unreadable["situation_count"] is None, unreadable
+    assert unreadable["first_break"] is None, unreadable
+    missing_index, _ = monitor.acted_on_index(missing, NOW, ["route-weights-export"])
+    assert missing_index == {"route-weights-export": None}
