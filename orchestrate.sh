@@ -1270,35 +1270,6 @@ if _cadence_due keepalive-backfill && _attempt_ok keepalive-backfill; then
   else echo "  [cadence] keepalive backfill SKIPPED — gh search budget shed or gh deferred (stamp untouched; retry next tick)"; fi
 fi
 
-# Daily: download and validate new shadow consumer-sync evidence artifacts and compute drift
-if [[ "${mode}" == "active" ]] && _cadence_due consumer-sync-artifact-ingest && _attempt_ok consumer-sync-artifact-ingest; then
-  if _gh_gate core; then
-    consumer_sync_expiry="${ORCH_CONSUMER_SYNC_EVIDENCE_UNTIL:-2026-07-25}"
-    consumer_sync_mode="human-on-exception"
-    consumer_sync_phase="importer-20260718-20260725"
-    consumer_sync_phase_args=(--mode "$consumer_sync_mode" --expiry "$consumer_sync_expiry" --phase-id "$consumer_sync_phase")
-    if [[ "$(date +%Y-%m-%d)" > "$consumer_sync_expiry" ]]; then
-      consumer_sync_mode="shadow"
-      consumer_sync_phase="importer-shadow-after-20260725"
-      consumer_sync_phase_args=(--mode "$consumer_sync_mode" --phase-id "$consumer_sync_phase")
-    fi
-    echo "  [cadence] consumer-sync artifact ingestion bridge (daily; $consumer_sync_mode)"
-    if python3 "$ORCH/consumer_sync_artifact_ingest.py" ingest \
-         --state-dir "$STAMP_DIR" \
-         --max-artifacts 1 \
-         --max-repositories 5 \
-         "${consumer_sync_phase_args[@]}" \
-         --repository "stranske/Template" \
-         --repository "stranske/Ready" \
-         --repository "stranske/learning-management-system" \
-         --repository "stranske/Fine-Art-Archive" >> "$STAMP_DIR/consumer-sync-artifact-ingest.log" 2>&1; then
-      _mark_success consumer-sync-artifact-ingest
-    else
-      _mark_fail consumer-sync-artifact-ingest "see $STAMP_DIR/consumer-sync-artifact-ingest.log"
-    fi
-  else echo "  [cadence] consumer-sync artifact ingestion SKIPPED — gh core budget shed or gh deferred (stamp untouched; retry next tick)"; fi
-fi
-
 # ORCH-ANCHOR: completion-ping -------------------------------------------------------------------
 # EXTERNAL DEAD-MAN'S SWITCH, pinged on COMPLETION only. Every staleness monitor in this file
 # (capability-firing-monitor, switch-review, tick-evidence) runs INSIDE the tick, so a tick that

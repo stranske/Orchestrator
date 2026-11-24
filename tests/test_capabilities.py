@@ -542,6 +542,36 @@ def test_a_row_a_transition_left_below_its_declaration_is_lifted_to_it(tmp_path)
     assert reasons == ["below the declared status"], on_disk["event_history"][revived:]
 
 
+def test_health69_retirement_preserves_existing_evidence(tmp_path):
+    name = "capability:reference-sync-hygiene-test-gate"
+    ledger = tmp_path / "capabilities.json"
+    capabilities.save({}, ledger)
+    assert name not in capabilities.load(ledger)
+
+    capabilities.register(name, {"status": "shadow"}, path=ledger)
+    capabilities.heartbeat(name, "invocation", timestamp=100, path=ledger)
+    original = capabilities.load(ledger, create=False)[name]
+    before = ledger.read_bytes()
+
+    projected = capabilities.load_declared(ledger)[name]
+    assert projected["status"] == "retired"
+    assert ledger.read_bytes() == before
+
+    retired = capabilities.load(ledger)[name]
+    history = retired["event_history"]
+    assert history[: len(original["event_history"])] == original["event_history"]
+    transitions = [event for event in history if event["type"] == "transition"]
+    assert len(transitions) == 1
+    assert transitions[0]["from"] == "shadow"
+    assert transitions[0]["to"] == "retired"
+    assert transitions[0]["evidence_refs"] == ["github-actions:stranske/Workflows:45245061934:1"]
+    assert retired["last_invocation"] == original["last_invocation"]
+
+    persisted = ledger.read_bytes()
+    assert capabilities.load(ledger)[name] == retired
+    assert ledger.read_bytes() == persisted
+
+
 def test_liveness_classifications_use_capability_events():
     base = capabilities._blank_capability("fixture")
 

@@ -537,29 +537,9 @@ Live execution is observable only after the normal manual mirror sync.
   switch `ORCH_DISABLE_STEPS=agent-switches`.
   Deterministic candidates can then be dry-compiled by `capability_compiler.py`; its reference rail
   proves lifecycle consumption without granting an apply or arbitrary-shell path.
-  The same existing `capability:reference-sync-hygiene-test-gate` now accepts typed
-  `workflows.consumer-sync-plan/v1` evidence through `consumer_sync_shadow.py`. The classifier
-  emits only read-only create/update/remove/skip/no-change proposals, and
-  `runner_effect_bridge.py` validates provider-neutral runner effect evidence before recording
-  idempotent outcomes or counterexamples in the existing capability ledger. Run
-  `python3 src/consumer_sync_shadow.py dashboard` to see distinct effects, harms, reduced-supervision
-  evidence, expiry/kill-switch state, and explicit promotion blockers. The rail remains shadow-only;
-  no consumer writes, dispatch, merge, or promotion authority is exposed.
-  `consumer_sync_artifact_ingest.py preview` validates the latest successful producer artifact and
-  the consumers' default-branch content without writing state. It reads each consumer through ONE
-  recursive git-tree call plus per-blob fetches memoised on the content-addressed blob id (cached
-  in the ingest state file across runs) — never a whole-repo archive, which made a 122MB consumer
-  unreadable and cost ~171MB/day of transfer for ~4MB of signal. The same tree yields a read-only
-  `hygiene` section per repo in the ingest report, naming committed dependency/cache directories
-  with evidence-based dispositions (`untrack` only where no ecosystem-matched manifest vouches for
-  the directory; `review_vendored`/`review_owner` otherwise). Findings escalate through existing
-  surfaces only: machine-decidable ones become a digest line in `periodic_report.py`
-  (`consumer_sync_hygiene`), and material judgment calls become a single auto-expiring
-  `feedback.record_owner_question` whose default changes nothing — measured at ~0.17 questions per
-  month, so no backlog is possible. The active-only daily cadence uses
-  `ingest` for at most one artifact and five registered consumers, records only local evidence, and
-  runs a self-expiring human-on-exception phase through 2026-07-25. It has no consumer or GitHub
-  write path; exceptions fail the cadence and remain visible in the local report/state.
+  The scheduled Health 69 artifact consumer was retired on 2026-11-24. Sync-core
+  classifies generated sync PRs. The compiler's reference workflow and the
+  artifact validator are retained for exercises and historical evidence.
   For a concise check-in, run `python3 src/periodic_report.py --json --window-days 7` and inspect the
   `model_profile_trial`, `model_profile_transport_qualification`, `role_activation`, `pattern_miner`,
   and `dataset` sections alongside the

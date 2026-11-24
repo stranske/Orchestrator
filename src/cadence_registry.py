@@ -464,15 +464,6 @@ CADENCE_STEPS: tuple[dict[str, Any], ...] = (
         "next_transition": "retry resolved shadow backfill after backoff",
     },
     {
-        "key": "consumer-sync-artifact-ingest",
-        "success_stamp": ".last-consumer-sync-artifact-ingest",
-        "cadence_days": 0,
-        "artifact": "consumer-sync-artifact-ingest-report.json",
-        "log": "consumer-sync-artifact-ingest.log",
-        "gate": "GitHub core capacity and active tick",
-        "next_transition": "retry consumer sync artifact ingestion after backoff",
-    },
-    {
         # WEEKLY, and that is a deliberate ceiling rather than a shrug. The step decides whether a
         # repository's measured coverage buys test-writing; a coverage figure moves when a PR
         # merges, so a daily cadence would re-decide the same number six times out of seven. The
