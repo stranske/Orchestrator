@@ -1921,6 +1921,14 @@ lists already is graded. The monitor's declared population names the hold kinds 
 silence findings they exclude a row from, so this edit re-baselined the grader, while a hold declared
 or lifted later moves a graded finding exactly as a retirement does.
 
+**Health 69 consumer retirement (2026-11-24).** The local tick removes the
+Health 69 artifact-ingest cadence. The capability registry retires any existing
+`capability:reference-sync-hygiene-test-gate` row as a lifecycle transition
+while preserving its evidence. The bridge rejected ordinary producer changes
+and had no acting consumer. Sync-core classifies generated sync PRs, and
+Maint 68 still compiles its preview directly. The reference workflow continues
+as a fixture exercise. The periodic report can still read an archived ingest report.
+
 **Retired execution is a separate diagnostic.** `capabilities.invoked_after_retirement` reads the
 latest retirement with no later renewal or live transition and names subsequent non-fixture
 invocation events. The firing monitor and switch review's gate-expiry notice expose

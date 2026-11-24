@@ -287,13 +287,6 @@ cursor-agent live outside the default PATH):
   `cross-repo`/`multi-repo`/`coordinated-change`/`consumer-sync`/`sync-manifest`/`dependency-graph`/
   `contract-change` classify to `task_type=cross_repo`; route defaults avoid Claude and prioritize
   Gemini/AGY for this planning-heavy lane.
-- **Ingest consumer-sync evidence without consumer writes (NEW)** —
-  `python3 src/consumer_sync_artifact_ingest.py preview` validates the latest successful
-  `health-69-consumer-sync-shadow-evidence.yml` artifact, its run/attempt-bound handoff, and up to five
-  registered consumers' downloaded default-branch snapshots without writing state. `ingest` records
-  idempotent local capability evidence behind a lock. The active-only daily cadence runs a bounded
-  human-on-exception phase through 2026-07-25, then returns to shadow evidence. Neither mode has a
-  consumer/GitHub mutation path; inspect `consumer-sync-artifact-ingest-report.json` for exceptions.
 - **Build or validate a runtime AC verification plan (NEW)** — `python3 src/runtime_ac.py --goal "<goal>"
   [--repo owner/repo] [--target owner/repo#N] [--context-file brief.md]` emits a strict
   acceptance-criteria evidence-authoring prompt; `python3 src/runtime_ac.py --validate spec.json` validates

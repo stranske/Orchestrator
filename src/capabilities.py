@@ -2153,12 +2153,9 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
         "gate_reason": cadence_registry.declared_gate_reason("issue-readiness"),
     },
     "capability:reference-sync-hygiene-test-gate": {
-        "downstream_consumer": "capability_compiler.py:consume_workflow_output",
         "findability_category": "exercise_bound",
         "findability_rationale": (
-            "capability_compiler.run_reference_workflow is invoked only by "
-            "consumer_sync_shadow.record_shadow_result via the consumer-sync ingest cadence; same "
-            "shape as capability-admission-gate. "
+            "The retained reference workflow exercises compiler and ledger contracts on fixtures."
         ),
     },
     "research-scheduler": {
@@ -2265,6 +2262,18 @@ KNOWN_EXISTING_DECLARATIONS: dict[str, dict[str, Any]] = {
 }
 
 
+# Reviewed production retirements apply to existing rows and preserve their history.
+DECLARED_RETIREMENTS = {
+    "capability:reference-sync-hygiene-test-gate": {
+        "reason": (
+            "The Health 69 artifact bridge repeatedly rejected producer changes and had "
+            "no acting consumer. Sync-core classifies generated sync PRs."
+        ),
+        "evidence_ref": "github-actions:stranske/Workflows:45245061934:1",
+    },
+}
+
+
 def _status_set_by_transition(cap: dict[str, Any]) -> bool:
     """Whether a lifecycle TRANSITION, rather than a declaration, set this row's current status.
 
@@ -2299,9 +2308,9 @@ def _reconcile_known_declarations(capabilities: dict[str, dict[str, Any]], now: 
     The ledger must preserve accumulated evidence, but leaving old matcher,
     gate, or consumer text in place makes a newly wired feature look dormant.
     Reconciliation therefore updates declaration-owned fields and records the
-    change. It never invents match/invocation/outcome evidence, never moves an
-    active, retired, or superseded capability off that status, and never moves
-    a row back from a status a lifecycle transition carried it to.
+    change without inventing match, invocation or outcome evidence. A reviewed
+    retirement declaration can retire a live row. Ordinary declaration fields
+    preserve active, retired, superseded and lifecycle-evidenced status.
     """
     changed = False
     # `status` IS DECLARATION-OWNED BUT LIFECYCLE-GUARDED, so this loop skips it and the block below
@@ -2386,6 +2395,11 @@ def _reconcile_known_declarations(capabilities: dict[str, dict[str, Any]], now: 
                     "activation_inferred": False,
                 }
             )
+            changed = True
+    for name, retirement in DECLARED_RETIREMENTS.items():
+        cap = capabilities.get(name)
+        if cap is not None and cap["status"] not in NOT_LIVE_STATES:
+            _transition_in_place(cap, "retired", timestamp=now, **retirement)
             changed = True
     return changed
 
@@ -4099,7 +4113,7 @@ def _selftest() -> None:
         # The real 2026-08-21 shape: `shadow` on disk, `canary` in KNOWN_GATES, reconciled 08:04:50.
         drifted_gate.update({"status": "shadow", "event_history": []})
         assert KNOWN_GATES["redirect-apply-bootstrap"]["status"] == "canary", "fixture drifted"
-        # CONTROL: a compiled row is NOT in KNOWN_GATES, so reconciliation cannot touch it and its
+        # CONTROL: an undeclared compiled row is outside reconciliation and its
         # disk status must survive verbatim. This is why the `create=False` readers in
         # capability_compiler.py need no change — every id it registers is forced to the
         # `capability:` prefix (capability_compiler.py:275 and :1230), a namespace disjoint from
@@ -4107,13 +4121,13 @@ def _selftest() -> None:
         assert not any(
             k.startswith("capability:") for k in KNOWN_GATES
         ), "KNOWN_GATES took a compiled id; the compiler's create=False readers now need this fix"
-        compiled = _blank_capability("capability:reference-sync-hygiene-test-gate")
+        compiled = _blank_capability("capability:undeclared-compiler-control")
         compiled.update({"status": "shadow", "event_history": []})
         _write_ledger_unlocked(
             summary_path,
             {
                 "redirect-apply-bootstrap": drifted_gate,
-                "capability:reference-sync-hygiene-test-gate": compiled,
+                "capability:undeclared-compiler-control": compiled,
             },
         )
         summary_before = summary_path.read_bytes()
@@ -4131,7 +4145,7 @@ def _selftest() -> None:
         assert reported["matcher"] == KNOWN_GATES["redirect-apply-bootstrap"]["matcher"], reported
         assert reported["gate_reason"] == KNOWN_GATES["redirect-apply-bootstrap"]["gate_reason"]
         assert (
-            raw_counts["capabilities"]["capability:reference-sync-hygiene-test-gate"]["status"]
+            raw_counts["capabilities"]["capability:undeclared-compiler-control"]["status"]
             == "shadow"
         ), "control drifted"
         # ...and the writing path is unchanged: create=True still reconciles ON DISK. (It also

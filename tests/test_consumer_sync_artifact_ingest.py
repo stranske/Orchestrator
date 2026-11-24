@@ -1045,12 +1045,12 @@ def test_unregistered_cohort_repo_is_skipped_not_fatal(
     assert "stranske/collab-admin" not in subjects
 
 
-def test_orchestrate_sh_passes_only_registered_cohort_repos() -> None:
-    """The hardcoded ingest cohort in orchestrate.sh must not name the deregistered Collab-Admin."""
+def test_health69_is_outside_the_tick_cadence() -> None:
+    import cadence_registry
+
     script = (Path(__file__).resolve().parents[1] / "orchestrate.sh").read_text(encoding="utf-8")
-    start = script.index('consumer_sync_artifact_ingest.py" ingest')
-    end = script.index("consumer-sync-artifact-ingest.log", start)
-    assert "Collab-Admin" not in script[start:end]
+    assert "consumer_sync_artifact_ingest.py" not in script
+    assert "consumer-sync-artifact-ingest" not in cadence_registry.STEP_BY_KEY
 
 
 def test_module_selftests():

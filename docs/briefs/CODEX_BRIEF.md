@@ -368,10 +368,6 @@ weight. Scores (0–10) are human-facing context only, never the ship gate.
   readiness. `exp_abcd.py evaluate` and `runtime_ac_panel.py` prompt reviewers to return
   `cited_evidence_types`; known active citations increment `evidence_types.influence`, while unknown names
   are ignored.
-- `consumer_sync_artifact_ingest.py` closes the consumer-sync evidence seam: it validates a successful
-  Workflows artifact and run-bound handoff, hashes downloaded remote default-branch snapshots, and records
-  idempotent local outcomes for a capped registered cohort. The cadence is active-only and read-only with
-  respect to GitHub and consumers; its human-on-exception phase is explicitly dated and self-reverting.
 - **Integration seams (foundation exists, wiring pending):** richer task_type taxonomy; evidence-backed
   decision on whether Thompson-hybrid should become the default once outcome volume supports comparison.
 
