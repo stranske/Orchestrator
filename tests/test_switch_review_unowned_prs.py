@@ -489,3 +489,12 @@ def test_a_scan_that_raises_keeps_the_weekly_report(monkeypatch, capsys):
     section = json.loads(capsys.readouterr().out)["unowned_open_prs"]
     assert section["status"] == "unknown" and "backlog import failed" in section["measurement"]
     assert "unknown" in "\n".join(switch_review.format_unowned_open_prs(section))
+
+
+def test_template_is_in_the_fleet_the_closer_and_this_scan_read():
+    """Template#1082 sat open a month because Template was outside the fleet list (2026-11-24)."""
+    import backlog
+
+    lowered = [repo.lower() for repo in backlog.SUPPORTED_REPOS]
+    assert "stranske/template" in lowered
+    assert len(lowered) == len(set(lowered))  # one spelling per repo; case-only copies scan twice
