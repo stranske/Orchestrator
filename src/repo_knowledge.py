@@ -165,17 +165,17 @@ DOC_SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "dist", "build", ".nex
 DOC_SKIP_FILE_PREFIXES = ("BRIEF_",)
 DOC_SKIP_FILE_NAMES = {"docs/briefs/CODEX_BRIEF.md"}
 
-# v3 corrected Trend's branch. v4 moves the Workflows filename roster to one catalog.
-SEED_SCHEMA_VERSION = 4
+# v4 consolidated the Workflows catalog rule. v5 makes its two file references checkable.
+SEED_SCHEMA_VERSION = 5
 
 _OLD_WORKFLOWS_CATALOG_RULE = (
     "Workflow additions or renames must update docs/ci/WORKFLOWS.md, "
     "docs/ci/WORKFLOW_SYSTEM.md, and the workflow naming tests."
 )
 _WORKFLOWS_CATALOG_RULE = (
-    "For a workflow addition or rename, update the authoritative roster in docs/ci/WORKFLOWS.md "
+    "For a workflow addition or rename, update the authoritative roster in `docs/ci/WORKFLOWS.md` "
     "and the expected name in the workflow naming tests. Run the naming and catalog tests. "
-    "Update docs/ci/WORKFLOW_SYSTEM.md only when workflow relationships, operator procedures, "
+    "Update `docs/ci/WORKFLOW_SYSTEM.md` only when workflow relationships, operator procedures, "
     "or guardrails change."
 )
 
@@ -391,16 +391,22 @@ def _migrate(reg: dict) -> bool:
         return False
     repos = reg.setdefault("repos", {})
     seed = SEED["repos"]["stranske/Workflows"]
-    workflows = repos.setdefault("stranske/Workflows", deepcopy(seed))
+    workflows = repos.get("stranske/Workflows", {})
+    if version < 4:
+        workflows = repos.setdefault("stranske/Workflows", deepcopy(seed))
     rules = workflows.get("definition_of_done", [])
+    # The v4 wording differs from the current rule only by Markdown code delimiters.
+    superseded = (_OLD_WORKFLOWS_CATALOG_RULE, _WORKFLOWS_CATALOG_RULE.replace("`", ""))
     for index, rule in enumerate(rules):
-        if rule == _OLD_WORKFLOWS_CATALOG_RULE:
-            rules[index] = _WORKFLOWS_CATALOG_RULE
-        elif isinstance(rule, dict) and rule.get("text") == _OLD_WORKFLOWS_CATALOG_RULE:
-            rule["text"] = _WORKFLOWS_CATALOG_RULE
+        old_text = rule.get("text") if isinstance(rule, dict) else rule
+        if old_text in superseded:
+            if isinstance(rule, dict):
+                rule["text"] = _WORKFLOWS_CATALOG_RULE
+            else:
+                rules[index] = _WORKFLOWS_CATALOG_RULE
     if version < 3:
         _reseed_legacy_repos(repos)
-    else:
+    elif version < 4:
         # Fill gaps between the old registry and the published block without resetting
         # existing per-instance scope, provenance, or managed-rule metadata.
         for section in ("definition_of_done", "validation"):

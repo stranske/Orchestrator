@@ -99,9 +99,9 @@ def test_workflows_catalog_export_upgrades_only_the_old_rule(tmp_path, with_meta
     migrated = json.loads(saved)
     rule, preserved = migrated["repos"][repo]["definition_of_done"][:2]
     text = rule["text"] if with_metadata else rule
-    assert "authoritative roster in docs/ci/WORKFLOWS.md" in text
+    assert "authoritative roster in `docs/ci/WORKFLOWS.md`" in text
     assert "expected name in the workflow naming tests" in text
-    assert "Update docs/ci/WORKFLOW_SYSTEM.md only when" in text
+    assert "Update `docs/ci/WORKFLOW_SYSTEM.md` only when" in text
     assert text in fresh and text in exported
     for scope in ("(tasks: codemod)", "(tasks: epic, cross_repo)", "(tasks: testgen)"):
         assert fresh.count(scope) == exported.count(scope) == 1
@@ -111,3 +111,48 @@ def test_workflows_catalog_export_upgrades_only_the_old_rule(tmp_path, with_meta
     assert migrated["repos"]["test/other"] == other
     assert repo_knowledge.export_agents_md(repo, path=registry) == exported
     assert registry.read_bytes() == saved
+
+
+@pytest.mark.parametrize("with_metadata", [False, True])
+def test_v4_export_checks_both_catalog_files_without_reseeding(tmp_path, with_metadata):
+    repo = "stranske/Workflows"
+    original_text = (
+        "For a workflow addition or rename, update the authoritative roster in docs/ci/WORKFLOWS.md "
+        "and the expected name in the workflow naming tests. Run the naming and catalog tests. "
+        "Update docs/ci/WORKFLOW_SYSTEM.md only when workflow relationships, operator procedures, "
+        "or guardrails change."
+    )
+    original = {"text": original_text, "owner": "maintainer"} if with_metadata else original_text
+    custom = {"text": original_text + " Local exception.", "owner": "operator"}
+    path = tmp_path / "registry.json"
+    path.write_text(
+        json.dumps(
+            {"schema_version": 4, "repos": {repo: {"definition_of_done": [original, custom]}}}
+        )
+    )
+    refs = ("docs/ci/WORKFLOWS.md", "docs/ci/WORKFLOW_SYSTEM.md")
+    for ref in refs:
+        file = tmp_path / ref
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.touch()
+    repo_knowledge.update_agents_md(tmp_path, repo=repo, path=path, apply=True)
+    migrated = path.read_bytes()
+    entry = json.loads(migrated)["repos"][repo]
+    rule, retained = entry["definition_of_done"]
+    assert retained == custom and set(entry) == {"definition_of_done"}
+    if with_metadata:
+        assert rule["owner"] == "maintainer"
+    for ref in refs:
+        candidate = tmp_path / ref
+        candidate.unlink()
+        result = repo_knowledge.validate_agents_md_export(tmp_path, repo=repo, path=path)
+        assert result["missing_refs"] == [ref]
+        candidate.touch()
+    assert (
+        repo_knowledge.validate_agents_md_export(tmp_path, repo=repo, path=path)["missing_refs"]
+        == []
+    )
+    assert not repo_knowledge.update_agents_md(tmp_path, repo=repo, path=path, apply=True)[
+        "changed"
+    ]
+    assert path.read_bytes() == migrated
