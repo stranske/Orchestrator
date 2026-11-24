@@ -565,7 +565,8 @@ def poll_coverage(
 
 
 def observed_agents(snapshots: list[dict], ts: float) -> dict | None:
-    matches = [s for s in snapshots if 0 <= ts - s["ts"] <= pacing.STALE_AFTER_SECONDS]
+    """The latest snapshot's pool states at `ts`: snapshots are hourly (pacing.SNAPSHOT_STALE_AFTER_SECONDS)."""
+    matches = [s for s in snapshots if 0 <= ts - s["ts"] <= pacing.SNAPSHOT_STALE_AFTER_SECONDS]
     return max(matches, key=lambda s: s["ts"])["agents"] if matches else None
 
 
@@ -1659,7 +1660,6 @@ def period_results(handoff: Path, snapshots: list[dict], now: float) -> dict:
     relevant = [r for r in incidents if start <= (pacing.timestamp(r.get("ts")) or 0) < end]
     stats: dict = {}
     covered, expected = poll_coverage(start, end, now=now, snapshots=snapshots, stats=stats)
-    coverage = covered == expected
     coverage_text = (
         f"coverage={covered}/{expected} ticks (poll ticks={pacing.POLL_TICK_SECONDS}s); "
         f"longest poll gap={stats['longest_gap']:.0f}s/"
@@ -1718,7 +1718,10 @@ def period_results(handoff: Path, snapshots: list[dict], now: float) -> dict:
             continue
         groups[group][0] += int(event["agent"] != "codex")
         groups[group][1] += 1
-    if coverage and all(g[1] > 0 for g in groups.values()) and omitted == 0:
+    # Owner 2026-11-18's rule for pass 2, applied to dispatches: a gap matters only if a dispatch falls in it. The
+    # share is a ratio over dispatches, so once every dispatch is classified (omitted == 0) an uncovered slot held
+    # none and cannot move it (#1045: one 2220 s poll gap voided every period).
+    if all(g[1] > 0 for g in groups.values()) and omitted == 0:
         base = groups["ok"][0] / groups["ok"][1]
         constrained = groups["constrained"][0] / groups["constrained"][1]
         passed = constrained > 0 and constrained >= pacing.PASS_SHARE_MULTIPLIER * base

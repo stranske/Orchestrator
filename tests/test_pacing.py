@@ -941,7 +941,12 @@ def test_report_zero_share_and_missing_tick_are_unmeasured(
     (tmp_path / "rate-limit-incidents.ndjson").write_text("")
     text = pacing_usage.report(tmp_path, now=end)
     assert f"coverage={1007 if missing else 1008}/1008 ticks" in text
-    assert "3: unmeasured" in text or "unmeasured — no non-codex dispatches" in text
+    if missing:
+        # #1045: the missing tick held no dispatch and both dispatches are classified, so the share (a ratio over
+        # dispatches) is measured; slot coverage gates only pass 2's zero.
+        assert "3: non-codex share ok=0.000, warn/shed=1.000" in text
+    else:
+        assert "unmeasured — no non-codex dispatches" in text
     assert "counts=" in text
 
 
