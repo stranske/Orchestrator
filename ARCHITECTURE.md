@@ -198,6 +198,15 @@ The whole lane design (controller seats, opener-core, closer-core, sync-core, th
 model families) is described for the owner in `Audits/closer-lane-2026-11/design/lane-design.html` (and `.pdf`)
 in the owner's workspace, updated 2026-11-16. Change it with this diagram when a lane's design changes.
 
+**Hosted seat (owner decision 2026-11-24).** The system must run locally or hosted, independently, with the same
+work patterns. So the same lane code also runs as a fourth controller seat on GitHub Actions
+(`.github/workflows/lane-seat.yml`).
+- **Where the code comes from:** the private snapshot repo `stranske/lanes`, which the local seat republishes after every pass. The local lane repos stay the source.
+- **When it runs:** only when the last pass by any seat is older than 45 minutes (`stamp.json` on that repo's `state` branch).
+- **State:** the lanes' decision ledgers travel on the same branch, so a hosted pass decides from the same state as a local pass. A cold ledger was shown to change decisions.
+- **Imports:** the seat imports this repo's `src` as `ORCH_MIRROR`.
+- **Lanes:** each lane joins its schedule only after a parity check (the same decisions as the local seat at the same moment). Design: `Audits/closer-lane-2026-11/rebuild/HOSTED_SEAT_DESIGN.md`.
+
 **The Orchestrator's four real interfaces to that pipeline:**
 
 | Interface | Direction | What it is |
