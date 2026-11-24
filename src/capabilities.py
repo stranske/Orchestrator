@@ -232,7 +232,7 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
         "flags_defaults": {"ORCH_ROUTE_WEIGHTS_PUBLISH": "0"},
         "output_artifact": "$ORCH_STATE_DIR/route-weights-export.json",
         "downstream_consumer": "route_weights_export.py:publish_document hands the document to the Workflows config repository",
-        "learning_sink": "none — export-only capability; no learner outcome is claimed",
+        "learning_sink": "feedback.py agent_switches rows (source='policy', delegation_source in route_weights/route_weights_exploration) and their PR durability outcomes",
         "gate_reason": "write-only shadow export; remote publication requires --publish and ORCH_ROUTE_WEIGHTS_PUBLISH=1",
         "gate_evidence": "latest-version, thresholded fixture export preserves reserve-seat separation",
         "evidence_threshold": "each public ranking row has n_obs >= min_observations",
@@ -1684,7 +1684,10 @@ def acting_in_trailing_window(capability_id: str, *, now: int | None = None) -> 
         )
     except Exception:  # noqa: BLE001 — unmeasured is a word, never a zero
         return None
-    return None if index is None else int(index.get(capability_id, 0))
+    if index is None:
+        return None
+    val = index.get(capability_id, 0)
+    return None if val is None else int(val)
 
 
 def renew_command(capability_id: str) -> str:
