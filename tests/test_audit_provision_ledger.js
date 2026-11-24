@@ -997,3 +997,27 @@ test('a deployment that changes provision.py restarts the cohort at the new obse
   assert.equal(report.cohort.counts['ok/new-worktree'], 100);
   assert.equal(exit, 0);
 });
+
+// A short cohort with nothing else unmet is a wait (EX_TEMPFAIL 75), so a lane
+// re-runs later instead of filing a repair; any refusal or gap stays exit 1.
+for (const [label, rows, expected] of [
+  ['short', Array(99).fill(operation(0)), 75],
+  ['complete', Array(100).fill(operation(0)), 0],
+  ['refused', [...Array(98).fill(operation(0)), operation(1, { outcome: 'failed', cause: 'branch-held' })], 1],
+]) {
+  test(`the two-argument CLI exits ${expected} for a ${label} cohort`, (t) => {
+    const f = deploymentFixture(t, rows);
+    const cli = execute(process.execPath, ['-e', `
+      const audit = require(process.argv[1]);
+      // Pin the clock half an hour after the fixture observation (Date has
+      // millisecond precision, so the observation instant itself reads as future).
+      const fixed = new Date(process.argv[2]);
+      global.Date = class extends Date { constructor(...a) { super(...(a.length ? a : [fixed])); } };
+      process.exitCode = audit.main(process.argv.slice(3));
+    `, script, '2026-11-11T12:30:00Z', f.root, f.generation], {
+      cwd: f.checkout, env: { ...process.env, ORCH_PROVISION_EVENTS_PATH: f.active } });
+    assert.equal(cli.exit_code, expected, cli.stdout.toString() + cli.stderr.toString());
+    if (expected === 75) assert.match(cli.stdout.toString(), /pending = 1 more operations \(exit 75\)/);
+    else assert.doesNotMatch(cli.stdout.toString(), /pending =/);
+  });
+}

@@ -328,6 +328,7 @@ function formatReport(report) {
     `provision: failed(branch-held|branch-exists) = ${count} over 7d`,
     ...(report.cohort ? [
       `provision: first-100 = ${report.cohort.evaluated}/100 since ${report.cohort.since ?? 'UNKNOWN'}; failed(branch-held|branch-exists) = ${report.cohort.branch_refusals}; accepted = ${report.cohort.accepted}`,
+      ...(pending(report) ? [`provision: pending = ${100 - report.cohort.evaluated} more operations (exit ${PENDING}); nothing else is unmet`] : []),
     ] : []),
     `provision: ledger evidence = ${report.evidence_ready ? 'ready' : 'unmet acceptance'}`,
     ...report.continuity_failures.map((reason) => `provision: UNKNOWN: ${reason}`),
@@ -346,7 +347,16 @@ function main(args) {
     { observedAfter: mode === '--observed-after' ? args[3] : null, revision });
   console.log(formatReport(report));
   console.log(JSON.stringify(report, null, 2));
-  return report.evidence_ready ? 0 : 1;
+  return report.evidence_ready ? 0 : pending(report) ? PENDING : 1;
+}
+
+// EX_TEMPFAIL: every check passed and the cohort is short only of operations
+// that have not happened yet. A caller re-runs later; it is not a defect.
+const PENDING = 75;
+function pending(report) {
+  return Boolean(report.cohort) && report.coverage === 'continuous'
+    && !report.continuity_failures.length && report.cohort.branch_refusals === 0
+    && report.cohort.evaluated < 100;
 }
 
 if (require.main === module) {
@@ -357,4 +367,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { auditProvisionLedger, eligibleLines, formatReport, instant, main };
+module.exports = { auditProvisionLedger, eligibleLines, formatReport, instant, main, PENDING };
