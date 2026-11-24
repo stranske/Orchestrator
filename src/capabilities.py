@@ -2710,10 +2710,19 @@ def register(capability_id: str, record: dict[str, Any], path: Path = REG) -> No
 
 
 def adjudicator_live_policy(summary: dict) -> str:
-    """M2 qualification uses later-truth grades; a short pool never retires the role."""
+    """M2 qualification uses later-truth grades; a short pool never retires the role.
+
+    A pool graded on one truth class grades the base rate, not the judgment: a constant
+    `reject_blocker` scores ~0.9 on a mostly-PASS pool. Such a pool neither retires nor
+    qualifies. A summary without the truth-split keys (saved before it existed) keeps the
+    agreement-only rule so old reports still load.
+    """
     graded = summary["graded"]
     if graded < 20:
         return "insufficient_sample"
+    if "graded_truth_pass" in summary and "graded_truth_fail" in summary:
+        if not summary["graded_truth_pass"] or not summary["graded_truth_fail"]:
+            return "one_class_sample"
     return "retired" if summary["agree"] / graded < 0.75 else "qualified"
 
 

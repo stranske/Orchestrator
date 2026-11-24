@@ -1585,3 +1585,15 @@ def test_live_retirement_policy_stops_dispatch_and_keeps_truth_drain(
         assert live.reconcile_live(db=common["db"], path=common["path"])["agree"] == 20
         assert "qualification retired" in live.weekly_line(common["path"])
     assert capabilities.adjudicator_live_policy({"graded": 19, "agree": 0}) == "insufficient_sample"
+
+
+def test_live_policy_does_not_qualify_or_retire_on_one_truth_class():
+    # A constant reject_blocker on an all-PASS pool agrees 20/20; it must not qualify.
+    constant_reject = {"graded": 20, "agree": 20, "graded_truth_pass": 20, "graded_truth_fail": 0}
+    assert capabilities.adjudicator_live_policy(constant_reject) == "one_class_sample"
+    # A constant uphold_blocker on the same pool agrees 2/20; it must not retire on that alone.
+    mostly_uphold = {"graded": 20, "agree": 2, "graded_truth_pass": 20, "graded_truth_fail": 0}
+    assert capabilities.adjudicator_live_policy(mostly_uphold) == "one_class_sample"
+    # Both classes graded: the agreement rule decides.
+    mixed = {"graded": 20, "agree": 16, "graded_truth_pass": 15, "graded_truth_fail": 5}
+    assert capabilities.adjudicator_live_policy(mixed) == "qualified"
