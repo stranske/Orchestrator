@@ -846,6 +846,8 @@ def _grade_and_write(
             "graded": summary["graded"],
             "agreement": summary["agree"] / summary["graded"],
             "threshold": 0.75,
+            "graded_truth_pass": summary["graded_truth_pass"],
+            "graded_truth_fail": summary["graded_truth_fail"],
         }
     _write_report(
         path,
@@ -922,6 +924,18 @@ def live_summary(rows: list[dict]) -> dict:
         "graded": len(graded),
         "agree": agree,
         "disagree": len(graded) - agree,
+        "graded_truth_pass": sum(1 for r in graded if r["later_truth"] == "PASS"),
+        "graded_truth_fail": sum(1 for r in graded if r["later_truth"] == "FAIL"),
+        # A FAIL-truth case is the one that grades an upheld blocker; undecided ones are the gap.
+        "fail_truth_undecided": sum(
+            1
+            for r in rows
+            if r.get("later_truth") == "FAIL"
+            and not (
+                (r.get("certification") or {}).get("status") == "certified"
+                and r.get("decision") in {"uphold_blocker", "reject_blocker"}
+            )
+        ),
         "merge_rule_agree": rule,
         "cost_usd_measured": sum(1 for r in decided if isinstance(r.get("cost_usd"), (int, float))),
     }
@@ -993,8 +1007,14 @@ def weekly_line(path: Path | None = None) -> str:
             else ""
         )
         failed = f"; failed {summary['failed']}" if summary.get("failed") else ""
-        policy = (
-            "retired" if report.get("retirement") else capabilities.adjudicator_live_policy(summary)
+        live_policy = capabilities.adjudicator_live_policy(summary)
+        policy = "retired" if report.get("retirement") else live_policy
+        if policy == "retired" and live_policy == "one_class_sample":
+            # The retirement record stands; the line also says the pool is one truth class.
+            policy = "retired; current pool qualification one_class_sample"
+        truth = (
+            f"; truth PASS {summary['graded_truth_pass']}, FAIL {summary['graded_truth_fail']}; "
+            f"FAIL-truth undecided {summary['fail_truth_undecided']}"
         )
         agreement = (
             f"{summary['agree'] / summary['graded']:.3f}" if summary["graded"] else "UNKNOWN"
@@ -1011,7 +1031,7 @@ def weekly_line(path: Path | None = None) -> str:
             f"live: disputes {population}, "
             f"advised {summary['advised']}, uncertified {summary['uncertified']}, "
             f"graded {summary['graded']} (agree {summary['agree']}, disagree {summary['disagree']})"
-            f"{refused}{failed}{qualification}"
+            f"{truth}{refused}{failed}{qualification}"
         )
     except (OSError, ValueError, KeyError, TypeError, sqlite3.Error):
         return (
