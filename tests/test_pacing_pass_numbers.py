@@ -194,3 +194,66 @@ def test_judged_violations_fail_the_zero_target_even_with_unjudged_incidents(tmp
         result["reason"].count("2: at least 1 incidents while another pool ok (1 more could not")
         == 1
     )
+
+
+def _hourly_world(tmp_path, monkeypatch, *, poll_gap=None):
+    """Production's shape (Orchestrator#1045): 600-second polls, ONE pacing snapshot per hourly tick.
+
+    A 4-hour completed period; codex is ok in hours 0-1 and shed in hours 2-3; one dispatch 50 minutes
+    after each snapshot (past the 30-minute poll allowance, inside the tick), codex in ok hours and
+    claude in constrained hours. `poll_gap` drops codex polls over that (start, end) offset window.
+    """
+    polls = tmp_path / "polls"
+    polls.mkdir()
+    monkeypatch.setattr(pacing_usage, "POLL_DIR", polls)
+    start, end = NOW - 5 * 3600, NOW - 3600
+    tick = pacing.POLL_TICK_SECONDS
+    slots = range(int(start), int(end), tick)
+    gap = poll_gap or (0, 0)
+    codex = [t for t in slots if not start + gap[0] <= t < start + gap[1]]
+    (polls / "claude-usage.ndjson").write_text(
+        "\n".join(json.dumps(_poll_row("claude", t, 40, NOW + 86400)) for t in slots) + "\n"
+    )
+    (polls / "codex-usage.ndjson").write_text(
+        "\n".join(json.dumps(_poll_row("codex", t, 40, NOW + 86400)) for t in codex) + "\n"
+    )
+    rows = []
+    for hour, t in enumerate(range(int(start), int(end), pacing.SNAPSHOT_TICK_SECONDS)):
+        codex_state = "ok" if hour < 2 else "shed"
+        rows.append(
+            {
+                "event": "pacing_snapshot",
+                "ts": t,
+                "agents": {
+                    "claude": {
+                        "state": "ok",
+                        "pacing": {"period_start": start, "period_end": end},
+                    },
+                    "codex": {"state": codex_state},
+                },
+            }
+        )
+        agent = "codex" if codex_state == "ok" else "claude"
+        rows.append({"event": "start", "agent": agent, "count": 1, "ts": t + 50 * 60})
+    _write(tmp_path, rows)
+    (tmp_path / "rate-limit-incidents.ndjson").write_text("")
+    return start, end
+
+
+def test_hourly_snapshots_classify_every_dispatch_of_the_tick(tmp_path, monkeypatch):
+    """#1045: snapshots are hourly; a dispatch 50 min after one is classified by it, so G3 is measured."""
+    _hourly_world(tmp_path, monkeypatch)
+    result = pacing_usage.pass_numbers(tmp_path, NOW)["non_codex_share_at_least_double"]
+    assert result["value"] == 1.0, result["reason"]
+    assert "unclassified" not in result["reason"]
+    assert "ok=0.000, warn/shed=1.000" in result["reason"]
+
+
+def test_share_is_measured_through_a_poll_gap_when_every_dispatch_is_classified(
+    tmp_path, monkeypatch
+):
+    """A poll gap leaves slots uncovered, but G3 is a ratio over dispatches: all classified, so measured."""
+    _hourly_world(tmp_path, monkeypatch, poll_gap=(600, 3000))
+    result = pacing_usage.pass_numbers(tmp_path, NOW)["non_codex_share_at_least_double"]
+    assert "longest poll gap=3000s" in result["reason"]
+    assert result["value"] == 1.0, result["reason"]

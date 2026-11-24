@@ -565,7 +565,8 @@ def poll_coverage(
 
 
 def observed_agents(snapshots: list[dict], ts: float) -> dict | None:
-    matches = [s for s in snapshots if 0 <= ts - s["ts"] <= pacing.STALE_AFTER_SECONDS]
+    """The latest snapshot's pool states at `ts`: snapshots are hourly (pacing.SNAPSHOT_STALE_AFTER_SECONDS)."""
+    matches = [s for s in snapshots if 0 <= ts - s["ts"] <= pacing.SNAPSHOT_STALE_AFTER_SECONDS]
     return max(matches, key=lambda s: s["ts"])["agents"] if matches else None
 
 
@@ -1718,7 +1719,9 @@ def period_results(handoff: Path, snapshots: list[dict], now: float) -> dict:
             continue
         groups[group][0] += int(event["agent"] != "codex")
         groups[group][1] += 1
-    if coverage and all(g[1] > 0 for g in groups.values()) and omitted == 0:
+    # A ratio over dispatches: when every dispatch in the period is classified (omitted == 0), an uncovered slot held
+    # no dispatch and cannot move it, so slot coverage is not required here (it still gates pass 2's zero).
+    if all(g[1] > 0 for g in groups.values()) and omitted == 0:
         base = groups["ok"][0] / groups["ok"][1]
         constrained = groups["constrained"][0] / groups["constrained"][1]
         passed = constrained > 0 and constrained >= pacing.PASS_SHARE_MULTIPLIER * base

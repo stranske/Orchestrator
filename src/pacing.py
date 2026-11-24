@@ -22,6 +22,15 @@ TICK_SECONDS = 900  # Capacity recording cadence; distinct from scheduled usage 
 POLL_TICK_SECONDS = 600
 POLL_STALE_TICKS = 3
 STALE_AFTER_SECONDS = POLL_STALE_TICKS * POLL_TICK_SECONDS
+# A pacing_snapshot is written once per Orchestrator tick (capacity.py main -> build(record_pacing=True)), and the
+# tick is hourly (orchestrate.sh at :40). The pool state a snapshot records is the state routing used until the next
+# tick, so it stands for a slot up to one tick plus the poll allowance later. The pass-number measures read snapshots
+# through this ONE constant: with the 30-minute poll allowance applied to hourly snapshots, about half of every
+# period's 600-second slots had no snapshot (527/1008 on 2026-11-15..22), 791 dispatches went unclassified and
+# capacity-pacing/G3 stayed unmeasured for every period (Orchestrator#1045). Snapshots came 2-3 an hour until
+# 2026-11-03 only because the retired relay lane also recorded them.
+SNAPSHOT_TICK_SECONDS = 3600
+SNAPSHOT_STALE_AFTER_SECONDS = SNAPSHOT_TICK_SECONDS + STALE_AFTER_SECONDS
 SAMPLE_TICK_SECONDS = 3600  # Allowance for sparse sampling; observed p95 ≈ 26 min.
 BURN_ANCHOR_MAX_AGE_SECONDS = BURN_WINDOW_HOURS * 3600 + 2 * SAMPLE_TICK_SECONDS
 CLAUDE_USAGE_MAX_AGE_SECONDS = 7200
