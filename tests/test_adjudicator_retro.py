@@ -1575,6 +1575,10 @@ def test_live_retirement_policy_stops_dispatch_and_keeps_truth_drain(
     assert f"qualification {expected}" in line and "against 0.75" in line
     assert "drainable=durability grading" in line
     if expected == "retired":
+        saved = json.loads(common["path"].read_text())
+        retirement = saved.get("retirement") or {}
+        assert retirement.get("graded_truth_pass") == summary["graded_truth_pass"]
+        assert retirement.get("graded_truth_fail") == summary["graded_truth_fail"]
         count = len(live_shadow["calls"])
         result = live.run_live(**common)
         assert result["retired"] and result["attempted"] == 0
@@ -1597,3 +1601,81 @@ def test_live_policy_does_not_qualify_or_retire_on_one_truth_class():
     # Both classes graded: the agreement rule decides.
     mixed = {"graded": 20, "agree": 16, "graded_truth_pass": 15, "graded_truth_fail": 5}
     assert capabilities.adjudicator_live_policy(mixed) == "qualified"
+
+
+def test_live_summary_one_class_truth_split_and_weekly_line(live_shadow):
+    from copy import deepcopy
+
+    live, common = live_shadow["live"], live_shadow["common"]
+    first = live.run_live(**common)
+    template = first["rows"][0]
+    ts = feedback.DURABILITY_DETECTION_SINCE + 10
+    rows: list[dict] = []
+    with feedback._conn() as conn:
+        for index in range(20):
+            run_id = f"truth-pass-{index}"
+            conn.execute(
+                "INSERT INTO runs(run_id,ts,target) VALUES (?,?,?)",
+                (run_id, common["now"], f"owner/repo#{index + 20}"),
+            )
+            conn.execute(
+                "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged,"
+                "durability,durability_checked_ts) VALUES (?,'NON_PASS','PASS',1,'durable',?)",
+                (run_id, ts),
+            )
+            row = deepcopy(template)
+            row.update(
+                run_id=run_id,
+                case_id=run_id,
+                target=f"owner/repo#{index + 20}",
+                decision="reject_blocker",
+                later_truth="PASS",
+                proposal={"decision": "reject_blocker"},
+            )
+            rows.append(row)
+        for index in range(6):
+            rows.append(
+                {
+                    "case_id": f"fail-uncertified-{index}",
+                    "run_id": f"fail-uncertified-{index}",
+                    "target": f"owner/repo#{index + 40}",
+                    "later_truth": "FAIL",
+                    "certification": {
+                        "status": "uncertified",
+                        "reason": "no explicit acceptance criteria",
+                    },
+                }
+            )
+        certified_undecided = "fail-needs-more"
+        conn.execute(
+            "INSERT INTO runs(run_id,ts,target) VALUES (?,?,?)",
+            (certified_undecided, common["now"], "owner/repo#47"),
+        )
+        conn.execute(
+            "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged,"
+            "durability,durability_checked_ts) VALUES (?,'NON_PASS','PASS',1,'broke_later',?)",
+            (certified_undecided, ts),
+        )
+        rows.append(
+            {
+                **deepcopy(template),
+                "run_id": certified_undecided,
+                "case_id": certified_undecided,
+                "target": "owner/repo#47",
+                "decision": "needs_more_evidence",
+                "later_truth": "FAIL",
+                "certification": {"status": "certified", "evaluated_sha": "a" * 40, "paths": []},
+                "proposal": {"decision": "needs_more_evidence"},
+            }
+        )
+    report = json.loads(common["path"].read_text())
+    report["rows"] = rows
+    common["path"].write_text(json.dumps(report))
+    summary = live.reconcile_live(db=common["db"], path=common["path"])
+    assert summary["graded_truth_pass"] == 20
+    assert summary["graded_truth_fail"] == 0
+    assert summary["fail_truth_undecided"] == 7
+    assert capabilities.adjudicator_live_policy(summary) == "one_class_sample"
+    line = live.weekly_line(common["path"])
+    assert "truth PASS 20, FAIL 0; FAIL-truth undecided 7" in line
+    assert "qualification one_class_sample" in line
