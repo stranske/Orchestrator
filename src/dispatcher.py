@@ -1454,6 +1454,55 @@ def _record_muse_usage(started: float, lane: str, rc: object, seconds: float) ->
         return
 
 
+def _record_muse_meter(usage: dict, observed_ts: float) -> None:
+    """Append the provider's own allowance reading from one `muse exec` (its `run.usage` record).
+
+    One JSON row per reading, in the usage-poll shape the other seats use (`weekly` / `five_hour`
+    with `used_percent` and `resets_at`), plus the run's token counts. Nothing is written when the
+    run carried no reading, so an absent meter is never stored as zero. Like the exec-count row,
+    the measurement must never fail the run it measures.
+    """
+    allowance = usage.get("allowance") if isinstance(usage, dict) else None
+    if not isinstance(allowance, dict):
+        return
+
+    def window(name: str) -> dict | None:
+        raw = allowance.get(name)
+        if not isinstance(raw, dict) or type(raw.get("used_percent")) not in (int, float):
+            return None
+        resets = raw.get("resets_at_ms")
+        if isinstance(resets, bool) or not isinstance(resets, (int, float)):
+            return {"used_percent": raw["used_percent"], "resets_at": None}
+        return {"used_percent": raw["used_percent"], "resets_at": int(resets // 1000)}
+
+    five_hour, weekly = window("window"), window("weekly")
+    if five_hour is None and weekly is None:
+        return
+    models = [m for m in usage.get("models") or [] if isinstance(m, dict)]
+    row = {
+        "ts": int(observed_ts),
+        "source": "muse exec --json:run.usage",
+        "weekly": weekly,
+        "five_hour": five_hour,
+        "tokens": {
+            key: sum(m[key] for m in models if type(m.get(key)) is int)
+            for key in ("input_tokens", "cached_tokens", "output_tokens", "reasoning_tokens")
+        },
+        "calls": usage.get("calls") if type(usage.get("calls")) is int else None,
+    }
+    try:
+        log = Path(
+            os.environ.get("ORCH_MUSE_METER_LOG")
+            or (REAL_HOME / ".codex" / "orchestrator" / "usage-poll" / "muse-usage.ndjson")
+        )
+        with log.open("a") as fh:
+            fh.write(json.dumps(row, sort_keys=True) + "\n")
+    except OSError as exc:
+        print(
+            f"[orchestrator] muse meter not recorded ({type(exc).__name__}: {exc})", file=sys.stderr
+        )
+
+
 def _muse_observation_window(observed_start_ts: int) -> tuple[int, int]:
     """Return the rolling five-hour interval observed at invocation start.
 
@@ -4224,6 +4273,7 @@ def offload(
                 fh.write("[muse native JSONL]\n")
                 fh.write(proc.stdout or "")
                 fh.write("\n[end muse native JSONL]\n")
+            _record_muse_meter(adapters.muse_run_usage(proc.stdout or ""), time.time())
             proc = subprocess.CompletedProcess(
                 getattr(proc, "args", argv),
                 proc.returncode,
