@@ -89,6 +89,15 @@ function deploymentIdentity(root, sourceDirectory, revision) {
   return { generation, deployed_at: latest.ts, revision_prefix: latest.sha };
 }
 
+// The earliest normal deployment in the installer history. Before it the
+// generation lineage was not installed by the normal installer at all.
+function firstDeployment(root) {
+  const first = readRegular(path.join(root, 'mirror-sync-history.jsonl')).toString('utf8')
+    .trimEnd().split('\n').map((line) => JSON.parse(line))
+    .find((row) => row.outcome === 'deployed' && row.mode === 'ci-verdict');
+  return instant(first.ts);
+}
+
 function auditProvisionLedger(root, sourceDirectory, { now = new Date().toISOString(),
   observedAfter = null, revision = null,
   writerPath = process.env.ORCH_PROVISION_EVENTS_PATH ?? path.join(
@@ -113,6 +122,7 @@ function auditProvisionLedger(root, sourceDirectory, { now = new Date().toISOStr
     fail('collector receipt missing or malformed; collect with the existing hourly tick');
   }
   let deploymentStart = null;
+  let cohortStart = null;
   const postdeployment = [];
   if (revision !== null) {
     result.cohort = { revision, deployment: null, available: 0, evaluated: 0,
@@ -127,6 +137,19 @@ function auditProvisionLedger(root, sourceDirectory, { now = new Date().toISOStr
       }
       if (!packet || instant(packet.checked_at) <= deploymentStart) {
         fail('collector has not observed after deployment');
+      }
+      // The cohort belongs to the observed instrument, not to the latest
+      // publication. The collector restarts continuous_since whenever the
+      // installed provision.py (or the collector) changes, or observation
+      // lapses, so a deployment after continuous_since did not change the
+      // instrument. Restarting at every deployment let several deploys a day
+      // reset a 100-operation cohort that fills at ~15 operations a day.
+      const first = firstDeployment(root);
+      cohortStart = instant(packet.continuous_since);
+      result.cohort.since = packet.continuous_since;
+      if (first > cohortStart) {
+        cohortStart = first;
+        result.cohort.since = new Date(Number(first / 1000n)).toISOString();
       }
     } catch (error) {
       fail(`deployment provenance unavailable: ${error.message}`);
@@ -179,6 +202,8 @@ function auditProvisionLedger(root, sourceDirectory, { now = new Date().toISOStr
     fail('writer ledger is not included in the collector directory and observation');
   }
   const observed = [];
+  const claimed = new Set();
+  let unmatched = false;
   for (const name of names) {
     try {
       const raw = readRegular(path.join(root, name));
@@ -186,8 +211,37 @@ function auditProvisionLedger(root, sourceDirectory, { now = new Date().toISOStr
       const segment = { path: path.join(root, name), lines: lines.length,
         sha256: sha256(Buffer.concat(lines)) };
       observed.push(segment);
-      result.segments.push({ ...segment, bytes: raw.length, raw_sha256: sha256(raw) });
-      for (const line of lines) {
+      // The collector observed an intact prefix of each append-only segment.
+      // Evaluate exactly those bytes; rows appended after the observation
+      // belong to the next hourly tick and must all be timestamped after it.
+      // Without this, any operation between the tick and the audit made the
+      // audit UNKNOWN (2026-11-22 host run: 2329 lines vs 2327 observed).
+      const match = Array.isArray(packet?.segments) ? packet.segments.findIndex((old, index) =>
+        !claimed.has(index) && typeof old?.path === 'string'
+        && segmentPath(old.path) === segment.path && Number.isInteger(old.lines)
+        && old.lines >= 0 && old.lines <= lines.length
+        && sha256(Buffer.concat(lines.slice(0, old.lines))) === old.sha256) : -1;
+      let limit = lines.length;
+      if (match < 0) {
+        unmatched = true;
+      } else {
+        claimed.add(match);
+        limit = packet.segments[match].lines;
+        for (const line of lines.slice(limit)) {
+          try {
+            if (line.at(-1) !== 10 || instant(JSON.parse(line.toString('utf8')).ts) <= end) {
+              throw new Error('appended row is not after the observation');
+            }
+          } catch {
+            unmatched = true;
+            limit = lines.length;
+            break;
+          }
+        }
+      }
+      result.segments.push({ ...segment, observed_lines: limit,
+        bytes: raw.length, raw_sha256: sha256(raw) });
+      for (const line of lines.slice(0, limit)) {
         try {
           const event = JSON.parse(line.toString('utf8'));
           const ts = instant(event.ts);
@@ -197,7 +251,7 @@ function auditProvisionLedger(root, sourceDirectory, { now = new Date().toISOStr
             const key = `${event.outcome}/${event.cause}`;
             counts.set(key, (counts.get(key) || 0) + 1);
           }
-          if (deploymentStart !== null && deploymentStart < ts && ts <= end) {
+          if (cohortStart !== null && cohortStart < ts && ts <= end) {
             postdeployment.push({ ts, line, key: `${event.outcome}/${event.cause}` });
           }
         } catch {
@@ -215,9 +269,7 @@ function auditProvisionLedger(root, sourceDirectory, { now = new Date().toISOStr
   // Exact segment equality binds the counts to this receipt. Appended/rotated
   // data requires a fresh existing-collector observation, never a fabricated zero.
   if (!Array.isArray(packet?.segments) || packet.segments.length !== observed.length
-      || observed.some((row) => !packet.segments.some((old) => typeof old?.path === 'string'
-        && segmentPath(old.path) === row.path
-        && old.lines === row.lines && old.sha256 === row.sha256))) {
+      || unmatched || claimed.size !== observed.length) {
     fail('active/archive segments differ from the collector observation');
   }
   if (!packet?.counts || typeof packet.counts !== 'object' || Array.isArray(packet.counts)
@@ -275,7 +327,7 @@ function formatReport(report) {
     ...Object.entries(report.counts).map(([key, n]) => `provision: ${key} = ${n}`),
     `provision: failed(branch-held|branch-exists) = ${count} over 7d`,
     ...(report.cohort ? [
-      `provision: first-100 = ${report.cohort.evaluated}/100; failed(branch-held|branch-exists) = ${report.cohort.branch_refusals}; accepted = ${report.cohort.accepted}`,
+      `provision: first-100 = ${report.cohort.evaluated}/100 since ${report.cohort.since ?? 'UNKNOWN'}; failed(branch-held|branch-exists) = ${report.cohort.branch_refusals}; accepted = ${report.cohort.accepted}`,
     ] : []),
     `provision: ledger evidence = ${report.evidence_ready ? 'ready' : 'unmet acceptance'}`,
     ...report.continuity_failures.map((reason) => `provision: UNKNOWN: ${reason}`),

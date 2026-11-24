@@ -921,3 +921,79 @@ test('a collector starting after deployment cannot establish continuity retroact
   assert.equal(report.cohort.evaluated, 100);
   assert.match(report.continuity_failures.join('\n'), /no retained collector observation/);
 });
+
+// Orchestrator#1373: an operation between the hourly tick and the audit is the
+// next tick's data, not a rewrite. Only rows timestamped after the observation
+// may follow the observed prefix.
+test('rows appended after the observation leave the observed prefix continuous', (t) => {
+  const f = fixture(t, { '': ndjson([event()]) });
+  const ledger = path.join(f.root, 'provision-events.ndjson');
+  fs.appendFileSync(ledger, ndjson([event({ ts: '2026-11-11T12:00:00.123457+00:00' })]));
+  const result = f.audit();
+  assert.deepEqual(result.continuity_failures, []);
+  assert.equal(result.coverage, 'continuous');
+  assert.equal(result.branch_refusals, 1);
+  assert.equal(result.segments[0].lines, 2);
+  assert.equal(result.segments[0].observed_lines, 1);
+  // A later row may not hide an earlier-stamped or partial one behind it.
+  fs.appendFileSync(ledger, '{"ts":"2026-11-11T12:00:01Z"');
+  assert.equal(f.audit().coverage, 'UNKNOWN');
+});
+
+function redeploy(f, revisionDeployedAt, changeInstrument) {
+  const name = 'orchestrator-mirror.generation-' + 'b'.repeat(32);
+  const generation = path.join(f.root, name);
+  fs.cpSync(f.generation, generation, { recursive: true });
+  const git = (...args) => {
+    const result = execute('git', args, { cwd: f.checkout });
+    assert.equal(result.exit_code, 0, result.stderr.toString());
+    return result.stdout.toString().trim();
+  };
+  if (changeInstrument) {
+    for (const file of [path.join(generation, 'provision.py'),
+      path.join(f.checkout, 'src', 'provision.py')]) {
+      fs.appendFileSync(file, '\n# Changed provisioning instrument.\n');
+    }
+  }
+  git('-c', 'user.name=Test', '-c', 'user.email=test@example.org', '-c', 'commit.gpgsign=false',
+    '-c', 'core.hooksPath=/dev/null', 'commit', '-qam', 'Second deployment', '--allow-empty');
+  const revision = git('rev-parse', 'HEAD');
+  fs.appendFileSync(f.history, ndjson([{ ts: revisionDeployedAt, sha: revision.slice(0, 8),
+    mode: 'ci-verdict', outcome: 'deployed', detail: name }]));
+  return { generation, revision };
+}
+
+const later = (hour, position) => event({
+  ts: `2026-11-11T${hour}:31:00.${String(position).padStart(6, '0')}Z`,
+  outcome: 'ok', cause: 'new-worktree',
+});
+
+test('a deployment that keeps the observed instrument does not restart the cohort', (t) => {
+  const f = deploymentFixture(t, Array.from({ length: 60 }, (_, i) => operation(i)));
+  const second = redeploy(f, '2026-11-11T12:30:00Z', false);
+  fs.appendFileSync(f.active, ndjson(Array.from({ length: 40 }, (_, i) => later(12, i))));
+  f.observe('2026-11-11T13:00:00Z', second.generation);
+  const { exit, report } = f.audit(second.generation, second.revision, '2026-11-11T13:00:00Z');
+  assert.deepEqual(report.continuity_failures, []);
+  assert.equal(report.cohort.since, '2026-11-11T11:30:00.000Z');
+  assert.equal(report.cohort.evaluated, 100);
+  assert.equal(report.cohort.accepted, true);
+  assert.equal(exit, 0);
+});
+
+test('a deployment that changes provision.py restarts the cohort at the new observation', (t) => {
+  const f = deploymentFixture(t, Array.from({ length: 60 }, (_, i) => operation(i)));
+  const second = redeploy(f, '2026-11-11T12:30:00Z', true);
+  fs.appendFileSync(f.active, ndjson(Array.from({ length: 40 }, (_, i) => later(12, i))));
+  const restarted = f.observe('2026-11-11T13:00:00Z', second.generation);
+  assert.equal(instant(restarted.continuous_since), instant('2026-11-11T13:00:00Z'));
+  const first = f.audit(second.generation, second.revision, '2026-11-11T13:00:00Z');
+  assert.equal(first.report.cohort.evaluated, 0);
+  assert.equal(first.exit, 1);
+  fs.appendFileSync(f.active, ndjson(Array.from({ length: 100 }, (_, i) => later(13, i))));
+  f.observe('2026-11-11T14:00:00Z', second.generation);
+  const { exit, report } = f.audit(second.generation, second.revision, '2026-11-11T14:00:00Z');
+  assert.equal(report.cohort.evaluated, 100);
+  assert.equal(report.cohort.counts['ok/new-worktree'], 100);
+  assert.equal(exit, 0);
+});
