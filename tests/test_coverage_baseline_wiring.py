@@ -155,7 +155,10 @@ def _discovery_step_index(workflow_source: str) -> int:
 def _discovery_script(workflow_source: str) -> str:
     """Extract the executable prefix that selects and queries coverage workflows."""
     step_index = _discovery_step_index(workflow_source)
-    assert step_index >= 0, f"{MAINT_COVERAGE_GUARD}: missing marker {DISCOVERY_STEP!r}"
+    assert step_index >= 0, (
+        f"{MAINT_COVERAGE_GUARD}: missing discovery step marker "
+        f"(expected one of {DISCOVERY_STEP_MARKERS!r})"
+    )
     marker_index = workflow_source.find(SCRIPT_MARKER, step_index)
     assert marker_index >= 0, f"{MAINT_COVERAGE_GUARD}: missing marker {SCRIPT_MARKER!r}"
     script_index = marker_index + len(SCRIPT_MARKER)
@@ -287,19 +290,26 @@ def test_coverage_guard_discovery_uses_every_normalized_declared_workflow(baseli
 
 
 def test_coverage_guard_discovery_accepts_producer_run_step_header(baseline):
-    """Synced maint-coverage-guard.yml renames the discovery step to coverage producer run."""
+    """Synced maint-coverage-guard.yml may rename the discovery step while keeping id: discover."""
     env_prereq.require(env_prereq.repo_files_absent(".github/workflows"))
     raw_source = MAINT_COVERAGE_GUARD.read_text(encoding="utf-8")
     producer_source = raw_source.replace(LEGACY_DISCOVERY_STEP, DISCOVERY_STEP)
     legacy_source = producer_source.replace(DISCOVERY_STEP, LEGACY_DISCOVERY_STEP)
+    step_id_only_source = producer_source.replace(
+        DISCOVERY_STEP, "      - name: Locate latest coverage run\n"
+    )
     assert DISCOVERY_STEP in producer_source
     assert LEGACY_DISCOVERY_STEP not in producer_source
     assert LEGACY_DISCOVERY_STEP in legacy_source
     assert DISCOVERY_STEP not in legacy_source
+    assert DISCOVERY_STEP not in step_id_only_source
+    assert LEGACY_DISCOVERY_STEP not in step_id_only_source
+    assert DISCOVERY_STEP_ID in step_id_only_source
+    assert _discovery_step_index(step_id_only_source) == step_id_only_source.find(DISCOVERY_STEP_ID)
     declared = ["  .github/workflows/ci.yml  ", " .github/workflows/pr-00-gate.yml "]
     expected = [path.strip() for path in declared]
 
-    for candidate_source in (producer_source, legacy_source):
+    for candidate_source in (producer_source, legacy_source, step_id_only_source):
         result = _run_discovery(
             candidate_source,
             declared,
@@ -309,6 +319,14 @@ def test_coverage_guard_discovery_accepts_producer_run_step_header(baseline):
         assert result["requests"] == expected
         assert result["runIds"] == [f"run-{path}" for path in expected]
         assert result["failures"] == []
+        assert result["helperLoads"] == ["./.github/scripts/github-api-with-retry.js"]
+
+    missing_markers_source = step_id_only_source.replace(
+        DISCOVERY_STEP_ID, "        id: other_step\n"
+    )
+    assert DISCOVERY_STEP_ID not in missing_markers_source
+    with pytest.raises(AssertionError, match="missing discovery step marker"):
+        _discovery_script(missing_markers_source)
 
 
 def test_coverage_guard_exposes_an_unusable_declared_source_and_keeps_working(baseline):
