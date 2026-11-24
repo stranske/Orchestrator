@@ -80,7 +80,7 @@ const mockFs = {
     return {isFile: () => existingFiles.has(path)};
   },
 };
-const context = {repo: {owner: 'stranske', repo: 'Orchestrator'}};
+const context = {repo: {owner: 'stranske', repo: 'Orchestrator'}, payload: {}};
 const core = {
   warning(message) { warnings.push(String(message)); },
   info(message) { infos.push(String(message)); },
@@ -320,6 +320,39 @@ def test_coverage_guard_discovery_accepts_producer_run_step_header(baseline):
         assert result["runIds"] == [f"run-{path}" for path in expected]
         assert result["failures"] == []
         assert result["helperLoads"] == ["./.github/scripts/github-api-with-retry.js"]
+
+    missing = ".github/workflows/missing.yml"
+    usable = ".github/workflows/ci.yml"
+    directory = ".github/workflows/subdir"
+    for candidate_source in (producer_source, step_id_only_source):
+        unusable_result = _run_discovery(
+            candidate_source,
+            [missing, usable],
+            existing={usable},
+            unavailable={missing},
+        )
+        dir_result = _run_discovery(
+            candidate_source,
+            [directory],
+            existing=set(),
+            directories={directory},
+            unavailable={directory},
+        )
+        if unusable_result["requests"] == [FALLBACK_WORKFLOW]:
+            assert any("falling back" in warning.lower() for warning in unusable_result["warnings"])
+            assert unusable_result["runIds"] == [f"run-{FALLBACK_WORKFLOW}"]
+            assert dir_result["requests"] == [FALLBACK_WORKFLOW]
+            assert dir_result["runIds"] == [f"run-{FALLBACK_WORKFLOW}"]
+            assert any("falling back" in warning.lower() for warning in dir_result["warnings"])
+        else:
+            assert unusable_result["requests"] == [missing, usable]
+            assert unusable_result["runIds"] == [f"run-{usable}"]
+            _assert_rejection_is_recorded(unusable_result, missing)
+            assert dir_result["requests"] == [directory]
+            assert dir_result["runIds"] == []
+            _assert_rejection_is_recorded(dir_result, directory)
+        assert unusable_result["failures"] == []
+        assert dir_result["failures"] == []
 
     missing_markers_source = step_id_only_source.replace(
         DISCOVERY_STEP_ID, "        id: other_step\n"
