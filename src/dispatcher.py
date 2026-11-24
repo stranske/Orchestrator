@@ -1471,10 +1471,9 @@ def _record_muse_meter(usage: dict, observed_ts: float) -> None:
         if not isinstance(raw, dict) or type(raw.get("used_percent")) not in (int, float):
             return None
         resets = raw.get("resets_at_ms")
-        return {
-            "used_percent": raw["used_percent"],
-            "resets_at": int(resets // 1000) if type(resets) in (int, float) else None,
-        }
+        if isinstance(resets, bool) or not isinstance(resets, (int, float)):
+            return {"used_percent": raw["used_percent"], "resets_at": None}
+        return {"used_percent": raw["used_percent"], "resets_at": int(resets // 1000)}
 
     five_hour, weekly = window("window"), window("weekly")
     if five_hour is None and weekly is None:
