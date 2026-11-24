@@ -33,7 +33,14 @@ MAINT_COVERAGE_GUARD = REPO / ".github/workflows/maint-coverage-guard.yml"
 PAYLOAD_ARTIFACT = "gate-coverage"
 TREND_ARTIFACT = "gate-coverage-trend"
 FALLBACK_WORKFLOW = ".github/workflows/pr-00-gate.yml"
-DISCOVERY_STEP = "      - name: Locate latest Gate workflow run\n"
+DISCOVERY_STEP = "      - name: Locate latest coverage producer run\n"
+LEGACY_DISCOVERY_STEP = "      - name: Locate latest Gate workflow run\n"
+DISCOVERY_STEP_ID = "        id: discover\n"
+DISCOVERY_STEP_MARKERS = (
+    DISCOVERY_STEP,
+    LEGACY_DISCOVERY_STEP,
+    DISCOVERY_STEP_ID,
+)
 SCRIPT_MARKER = "          script: |\n"
 DISCOVERY_END = "\nif (!runs.length) {"
 
@@ -73,7 +80,7 @@ const mockFs = {
     return {isFile: () => existingFiles.has(path)};
   },
 };
-const context = {repo: {owner: 'stranske', repo: 'Orchestrator'}};
+const context = {repo: {owner: 'stranske', repo: 'Orchestrator'}, payload: {}};
 const core = {
   warning(message) { warnings.push(String(message)); },
   info(message) { infos.push(String(message)); },
@@ -137,10 +144,21 @@ vm.runInNewContext(
 """
 
 
+def _discovery_step_index(workflow_source: str) -> int:
+    for marker in DISCOVERY_STEP_MARKERS:
+        step_index = workflow_source.find(marker)
+        if step_index >= 0:
+            return step_index
+    return -1
+
+
 def _discovery_script(workflow_source: str) -> str:
     """Extract the executable prefix that selects and queries coverage workflows."""
-    step_index = workflow_source.find(DISCOVERY_STEP)
-    assert step_index >= 0, f"{MAINT_COVERAGE_GUARD}: missing marker {DISCOVERY_STEP!r}"
+    step_index = _discovery_step_index(workflow_source)
+    assert step_index >= 0, (
+        f"{MAINT_COVERAGE_GUARD}: missing discovery step marker "
+        f"(expected one of {DISCOVERY_STEP_MARKERS!r})"
+    )
     marker_index = workflow_source.find(SCRIPT_MARKER, step_index)
     assert marker_index >= 0, f"{MAINT_COVERAGE_GUARD}: missing marker {SCRIPT_MARKER!r}"
     script_index = marker_index + len(SCRIPT_MARKER)
@@ -269,6 +287,79 @@ def test_coverage_guard_discovery_uses_every_normalized_declared_workflow(baseli
     ]
     assert result["callTrace"] == expected_trace
     assert baseline["source_workflows"] != [FALLBACK_WORKFLOW]
+
+
+def test_coverage_guard_discovery_accepts_producer_run_step_header(baseline):
+    """Synced maint-coverage-guard.yml may rename the discovery step while keeping id: discover."""
+    env_prereq.require(env_prereq.repo_files_absent(".github/workflows"))
+    raw_source = MAINT_COVERAGE_GUARD.read_text(encoding="utf-8")
+    producer_source = raw_source.replace(LEGACY_DISCOVERY_STEP, DISCOVERY_STEP)
+    legacy_source = producer_source.replace(DISCOVERY_STEP, LEGACY_DISCOVERY_STEP)
+    step_id_only_source = producer_source.replace(
+        DISCOVERY_STEP, "      - name: Locate latest coverage run\n"
+    )
+    assert DISCOVERY_STEP in producer_source
+    assert LEGACY_DISCOVERY_STEP not in producer_source
+    assert LEGACY_DISCOVERY_STEP in legacy_source
+    assert DISCOVERY_STEP not in legacy_source
+    assert DISCOVERY_STEP not in step_id_only_source
+    assert LEGACY_DISCOVERY_STEP not in step_id_only_source
+    assert DISCOVERY_STEP_ID in step_id_only_source
+    assert _discovery_step_index(step_id_only_source) == step_id_only_source.find(DISCOVERY_STEP_ID)
+    declared = ["  .github/workflows/ci.yml  ", " .github/workflows/pr-00-gate.yml "]
+    expected = [path.strip() for path in declared]
+
+    for candidate_source in (producer_source, legacy_source, step_id_only_source):
+        result = _run_discovery(
+            candidate_source,
+            declared,
+            existing=set(expected),
+            use_retry_helper=True,
+        )
+        assert result["requests"] == expected
+        assert result["runIds"] == [f"run-{path}" for path in expected]
+        assert result["failures"] == []
+        assert result["helperLoads"] == ["./.github/scripts/github-api-with-retry.js"]
+
+    missing = ".github/workflows/missing.yml"
+    usable = ".github/workflows/ci.yml"
+    directory = ".github/workflows/subdir"
+    for candidate_source in (producer_source, step_id_only_source):
+        unusable_result = _run_discovery(
+            candidate_source,
+            [missing, usable],
+            existing={usable},
+            unavailable={missing},
+        )
+        dir_result = _run_discovery(
+            candidate_source,
+            [directory],
+            existing=set(),
+            directories={directory},
+            unavailable={directory},
+        )
+        if unusable_result["requests"] == [FALLBACK_WORKFLOW]:
+            assert any("falling back" in warning.lower() for warning in unusable_result["warnings"])
+            assert unusable_result["runIds"] == [f"run-{FALLBACK_WORKFLOW}"]
+            assert dir_result["requests"] == [FALLBACK_WORKFLOW]
+            assert dir_result["runIds"] == [f"run-{FALLBACK_WORKFLOW}"]
+            assert any("falling back" in warning.lower() for warning in dir_result["warnings"])
+        else:
+            assert unusable_result["requests"] == [missing, usable]
+            assert unusable_result["runIds"] == [f"run-{usable}"]
+            _assert_rejection_is_recorded(unusable_result, missing)
+            assert dir_result["requests"] == [directory]
+            assert dir_result["runIds"] == []
+            _assert_rejection_is_recorded(dir_result, directory)
+        assert unusable_result["failures"] == []
+        assert dir_result["failures"] == []
+
+    missing_markers_source = step_id_only_source.replace(
+        DISCOVERY_STEP_ID, "        id: other_step\n"
+    )
+    assert DISCOVERY_STEP_ID not in missing_markers_source
+    with pytest.raises(AssertionError, match="missing discovery step marker"):
+        _discovery_script(missing_markers_source)
 
 
 def test_coverage_guard_exposes_an_unusable_declared_source_and_keeps_working(baseline):
