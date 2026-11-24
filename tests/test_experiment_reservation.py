@@ -20,7 +20,12 @@ def state_dir(tmp_path, monkeypatch):
     return tmp_path
 
 
-def offer(target, now=NOW, body=BODY, cap=OK_CAP):
+# A sizable body (>= ep.FORUM_MIN_TASKS boxes): the token tests below test token arithmetic, which the
+# small-offer coin (2026-11-24, Orchestrator#720) would otherwise interleave with.
+SIZABLE = BODY + "".join(f"- [ ] task {n}\n" for n in range(ep.FORUM_MIN_TASKS))
+
+
+def offer(target, now=NOW, body=SIZABLE, cap=OK_CAP):
     return ep.reservation_offer(target, body, now=now, rate_per_day=2, cap=cap)
 
 
@@ -66,3 +71,26 @@ def test_choose_subject_prefers_the_reserved_issue():
         "subject": feed[1],
         "reason": "reserved",
     }
+
+
+def _small_targets(declined, n=2):
+    out = [f"o/s#{i}" for i in range(200) if ep._small_offer_declined(f"o/s#{i}") is declined]
+    return out[:n]
+
+
+def test_a_small_offer_is_declined_half_the_time_so_a_token_waits_for_a_sizable_one():
+    """#720: reserved subjects were all 3-8 task issues; G1 counts sizable features only."""
+    lose, win = _small_targets(True, 1)[0], _small_targets(False, 1)[0]
+    assert offer(lose, body=BODY) == {"take": False, "reason": "small_declined", "tokens": 1.0}
+    assert offer("o/r#9", NOW + 1)["take"] is True  # the kept token goes to the sizable offer
+    assert offer(win, NOW + 13 * 3600, body=BODY)["take"] is True  # the other half still take one
+    state = ep.read_state()
+    assert state["reserve_offers"] == {"small_declined": 1, "taken": 2}
+    assert state["reserve_sizable_taken"] == 1
+
+
+def test_sizable_is_one_definition_for_the_producer_and_the_goal():
+    assert ep.sizable(SIZABLE) and not ep.sizable(BODY)
+    assert ep.sizable(BODY, [ep.FORUM_LABEL])
+    assert ep.sizable("".join(f"* [x] t{n}\n" for n in range(ep.FORUM_MIN_TASKS)))
+    assert sum(ep._small_offer_declined(f"o/s#{i}") for i in range(400)) in range(160, 241)

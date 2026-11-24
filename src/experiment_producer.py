@@ -142,6 +142,30 @@ def cadence_draw(
         return result
 
 
+# ONE definition of a sizable feature, read by the producer's subject choice, its reservation intake and the
+# experiments/G1 measure (feature_goals.multi_source_feedback), so the population fed and the population
+# counted cannot drift apart.
+FORUM_MIN_TASKS = 9
+FORUM_LABEL = "experiment:forum"
+_TASK_BOX = re.compile(r"(?m)^\s*[-*] \[[ xX]\]")
+
+
+def sizable(body, labels=()):
+    """A sizable feature: at least FORUM_MIN_TASKS task boxes, or the experiment:forum label."""
+    return FORUM_LABEL in (labels or ()) or len(_TASK_BOX.findall(body or "")) >= FORUM_MIN_TASKS
+
+
+def _small_offer_declined(target):
+    """A stable coin for an offer that is not sizable: half are declined so a token is kept for a sizable one.
+
+    2026-11-24 (Orchestrator#720): the opener reservation (#1347) took whatever issue was offered first, so the
+    17 reserved subjects since 11-11 were the opener's ordinary 3-8 task issues, while 196 of 583 fleet issues
+    filed since 10-20 had >= 9 task boxes. experiments/G1 counts sizable features only and read zero for 36
+    days. Same preference choose_subject gives forum subjects (0.5); stable per issue, so a re-offer agrees.
+    """
+    return hashlib.sha256(str(target).encode()).digest()[0] < 128
+
+
 def reservation_offer(target, body, *, now=None, rate_per_day=None, cap=None):
     """The opener asks before starting an issue: should the producer take it instead?
 
@@ -187,16 +211,21 @@ def reservation_offer(target, body, *, now=None, rate_per_day=None, cap=None):
         if target in reservations:
             return {"take": True, "reason": "already_reserved", "tokens": tokens}
         take = tokens >= 1.0
+        small_declined = take and not sizable(body) and _small_offer_declined(target)
+        take = take and not small_declined
         if take:
             tokens -= 1.0
             reservations[target] = now
         state.update(reserve_tokens=tokens, reserve_ts=now, reservations=reservations)
         offers = state.setdefault("reserve_offers", {})
-        offers["taken" if take else "no_token"] = offers.get("taken" if take else "no_token", 0) + 1
+        key = "taken" if take else "small_declined" if small_declined else "no_token"
+        offers[key] = offers.get(key, 0) + 1
+        if take and sizable(body):  # beside reserve_offers, whose keys are the offer outcomes
+            state["reserve_sizable_taken"] = state.get("reserve_sizable_taken", 0) + 1
         save_state(state)
         return {
             "take": take,
-            "reason": "reserved" if take else "no_token",
+            "reason": "reserved" if take else key,
             "tokens": round(tokens, 3),
         }
 
@@ -498,12 +527,7 @@ def build_plan(
         if len({r["agent"] for r in candidate_cells if r["task_type"] == c["task_type"]}) >= 2
     }
     eligible = [i for i in eligible if i.get("task_type", "implement") in viable]
-    forum = [
-        i
-        for i in eligible
-        if "experiment:forum" in i.get("labels", [])
-        or len(re.findall(r"(?m)^\s*- \[[ xX]\]", i.get("body", ""))) >= 9
-    ]
+    forum = [i for i in eligible if sizable(i.get("body", ""), i.get("labels", []))]
     choice = choose_subject(eligible, forum, candidate_cells, rng)
     if not choice:
         return {
