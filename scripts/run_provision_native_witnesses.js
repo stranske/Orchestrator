@@ -50,7 +50,12 @@ function manifest(directory, prefix = '') {
     if (file === 'campaigns' && stat.isSymbolicLink()) {
       const backing = path.resolve(directory, fs.readlinkSync(path.join(directory, file)));
       const parent = path.dirname(backing);
-      if (path.basename(backing) === 'campaigns' && path.dirname(parent) === path.dirname(directory)
+      // The link's own shape is checked literally. Only its location is compared
+      // after resolving aliases (macOS /var -> /private/var), because `directory`
+      // is already a realpath; the backing tree itself is never read.
+      let siblings = null;
+      try { siblings = fs.realpathSync(path.dirname(parent)); } catch { /* absent: refused below */ }
+      if (path.basename(backing) === 'campaigns' && siblings === path.dirname(directory)
           && /^orchestrator-mirror\.(?:retired|generation)-[0-9a-f]{32}$/.test(path.basename(parent))) {
         continue;
       }
