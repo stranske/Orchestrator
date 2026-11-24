@@ -1,0 +1,81 @@
+name: Lane seat (hosted controller)
+
+# The hosted controller seat (owner decision 2026-11-24): the SAME lane code the local seats run, from the private
+# snapshot repo stranske/lanes, as a backstop. It runs a pass only when the last pass by ANY seat (stamp.json on the
+# lanes `state` branch) is older than lane_state.HOSTED_STALE_AFTER (45 min). Ledgers travel on that branch, so a
+# hosted pass decides from the same state a local pass would. Design and stop rules:
+# Audits/closer-lane-2026-11/rebuild/HOSTED_SEAT_DESIGN.md (owner workspace). Lanes so far: sync-core.
+#
+# pull_request: a read-only shadow round (never leases, never pushes state).
+# workflow_dispatch: mode shadow (default) or apply; force skips the staleness check (never a live lease).
+# schedule: decide, then an apply round only when the last pass is stale.
+
+on:
+  schedule:
+    - cron: '4,19,34,49 * * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: shadow (read-only) or apply
+        type: choice
+        options: [shadow, apply]
+        default: shadow
+      force:
+        description: run even when the last pass is fresh
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - '.github/workflows/lane-seat.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lane-seat
+  cancel-in-progress: false
+
+jobs:
+  seat:
+    name: Hosted controller seat
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      GH_TOKEN: ${{ secrets.OWNER_PR_PAT }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      LANE_SEAT_NAME: hosted-github
+      MODE: ${{ github.event_name == 'schedule' && 'apply' || github.event_name == 'pull_request' && 'shadow' || inputs.mode }}
+      FORCE: ${{ github.event_name == 'pull_request' && 'true' || github.event_name == 'workflow_dispatch' && inputs.force && 'true' || 'false' }}
+    steps:
+      - name: Check out the lane snapshot
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: stranske/lanes
+          ref: main
+          path: lanes
+          token: ${{ secrets.OWNER_PR_PAT }}
+          persist-credentials: false
+      - name: Check out Workflows config (consumer sync canaries)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: stranske/Workflows
+          path: workflows
+          sparse-checkout: config
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.14'
+      - name: Authenticate git for the lanes state branch
+        run: gh auth setup-git
+      - name: Decide
+        id: decide
+        run: |
+          args=()
+          [ "$FORCE" = "true" ] && args+=(--force)
+          python lanes/seat/hosted_seat.py decide "${args[@]}"
+      - name: Install the classifier CLI
+        if: steps.decide.outputs.run == 'true'
+        run: npm install -g @anthropic-ai/claude-code
+      - name: Run one pass
+        if: steps.decide.outputs.run == 'true'
+        run: python lanes/seat/hosted_seat.py run --mode "$MODE" --workflows "$GITHUB_WORKSPACE/workflows"
