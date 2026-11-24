@@ -1956,6 +1956,11 @@ def _ranked_source_line(module, source_lines, item):
         assert measured_statements[measured_line] == item["text"]
         assert source_lines.count(item["text"]) == 1
         return source_lines.index(item["text"]) + 1
+    if module is exp_abcd:
+        # 2026-11-24 (Orchestrator#720): the producer's judge-seat helpers moved the selftests down. Each measured
+        # statement is unique in the file, so it is bound by its text, as repo_knowledge's are above.
+        assert source_lines.count(item["text"]) == 1, item
+        return source_lines.index(item["text"]) + 1
     assert source_lines[measured_line - 1] == item["text"]
     return measured_line
 

@@ -1911,17 +1911,27 @@ def _record_judge_refusals(edir: Path, judges: list[str], verdicts: dict, target
         try:
             import rate_incidents  # noqa: PLC0415
 
-            text = (edir / f"eval-out-{_eval_artifact_token(judge)}.txt").read_text(errors="replace")
+            text = (edir / f"eval-out-{_eval_artifact_token(judge)}.txt").read_text(
+                errors="replace"
+            )
             run_id = f"producer-judge:{edir.name}:{judge}"
             evidence = rate_incidents.get_structured_evidence(
-                error_text=text, agent=judge, surface="exp_abcd.producer_judge", run_id=run_id,
+                error_text=text,
+                agent=judge,
+                surface="exp_abcd.producer_judge",
+                run_id=run_id,
                 target=target,
             )
             if not evidence.get("is_authoritative"):
                 continue
             rate_incidents.record_incident(
-                agent=judge, surface="exp_abcd.producer_judge", category=evidence["category"],
-                status="recorded", target=target, run_id=run_id, evidence=text,
+                agent=judge,
+                surface="exp_abcd.producer_judge",
+                category=evidence["category"],
+                status="recorded",
+                target=target,
+                run_id=run_id,
+                evidence=text,
                 extra={"subcategory": evidence["subcategory"], "experiment": edir.name},
             )
             recorded.append(judge)
