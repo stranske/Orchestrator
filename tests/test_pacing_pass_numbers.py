@@ -294,3 +294,29 @@ def test_a_pool_whose_share_does_not_fall_when_it_is_constrained_fails(tmp_path,
     assert (
         "claude both-ok 120/120, claude-constrained 120/120 = 1.000->1.000 FAIL" in result["reason"]
     )
+
+
+def test_a_pool_with_zero_share_on_both_sides_is_unmeasured_not_a_vacuous_pass(
+    tmp_path, monkeypatch
+):
+    """Review on #1487: claude 0/n beside 0/m must not record PASS; with no other measured pool, G3 is unmeasured."""
+    _hourly_world(tmp_path, monkeypatch)
+    rows = [
+        json.loads(line) for line in (tmp_path / "capacity-ledger.ndjson").read_text().splitlines()
+    ]
+    for row in rows:
+        if row["event"] == "pacing_snapshot":
+            row["agents"]["claude"]["state"], row["agents"]["codex"]["state"] = (
+                row["agents"]["codex"]["state"],
+                "ok",
+            )
+        elif row["event"] == "start":
+            row["agent"] = "codex"  # claude never dispatched, constrained or not
+    _write(tmp_path, rows)
+    result = pacing_usage.pass_numbers(tmp_path, NOW)["constrained_pool_share_halved"]
+    assert result["value"] is None, result["reason"]
+    assert (
+        "claude both-ok 0/120, claude-constrained 0/120 unmeasured (zero share on both sides)"
+        in (result["reason"])
+    )
+    assert "PASS" not in result["reason"]

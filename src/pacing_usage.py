@@ -1748,6 +1748,10 @@ def period_results(handoff: Path, snapshots: list[dict], now: float) -> dict:
         if n < floor or m < floor:
             parts.append(f"{text} unmeasured (fewer than {floor} on a side)")
             continue
+        if a == 0 and b == 0:
+            # zero share on both sides is never a vacuous PASS (docs/capacity-pacing.md)
+            parts.append(f"{text} unmeasured (zero share on both sides)")
+            continue
         base, constrained = a / n, b / m
         verdicts[pool] = constrained <= base / pacing.PASS_SHARE_MULTIPLIER
         parts.append(
