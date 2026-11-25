@@ -938,14 +938,18 @@ def ensure_shed(
                         return True  # a manual marker is the owner's; leave it
                     # otherwise a hold supersedes the timed cooldown: write it below
                 else:
-                    existing_expiry = existing.get("expires_at") if isinstance(existing, dict) else None
+                    existing_expiry = (
+                        existing.get("expires_at") if isinstance(existing, dict) else None
+                    )
                     if (
                         isinstance(existing_expiry, bool)
                         or not isinstance(existing_expiry, (int, float))
                         or not math.isfinite(existing_expiry)
                     ):
                         return True
-                    existing_scope = existing.get("tier_scope") if isinstance(existing, dict) else None
+                    existing_scope = (
+                        existing.get("tier_scope") if isinstance(existing, dict) else None
+                    )
                     if existing_expiry > time.time():
                         if existing_scope is None and tier_scope is not None:
                             return True  # an active whole-seat shed is never narrowed
@@ -1323,7 +1327,9 @@ def probe_billing_holds(*, now: float | None = None, offload=None) -> list[dict]
     now = time.time() if now is None else now
     results: list[dict] = []
     try:
-        markers = sorted(p for p in SHED_DIR.iterdir() if p.is_file() and not p.name.startswith("."))
+        markers = sorted(
+            p for p in SHED_DIR.iterdir() if p.is_file() and not p.name.startswith(".")
+        )
     except OSError:
         return results
     for marker in markers:
@@ -1342,8 +1348,16 @@ def probe_billing_holds(*, now: float | None = None, offload=None) -> list[dict]
                 import dispatcher  # noqa: PLC0415
 
                 offload = dispatcher.offload
-            out = offload(agent, BILLING_PROBE_PROMPT, timeout=180, task_type="review",
-                          subject_id=f"billing-probe:{agent}") or {}
+            out = (
+                offload(
+                    agent,
+                    BILLING_PROBE_PROMPT,
+                    timeout=180,
+                    task_type="review",
+                    subject_id=f"billing-probe:{agent}",
+                )
+                or {}
+            )
             text = f"{out.get('output') or ''}\n{out.get('error') or ''}"
             answered = out.get("exit") == 0 and not _contains_billing_refusal(text)
         except Exception as exc:  # noqa: BLE001
@@ -1360,7 +1374,9 @@ def probe_billing_holds(*, now: float | None = None, offload=None) -> list[dict]
                     marker.write_text(json.dumps(current, sort_keys=True) + "\n", encoding="utf-8")
             except (OSError, ValueError):
                 pass
-        results.append({"agent": agent, "probe": "still_refused", "evidence": _redact_bounded(text)[:200]})
+        results.append(
+            {"agent": agent, "probe": "still_refused", "evidence": _redact_bounded(text)[:200]}
+        )
     return results
 
 

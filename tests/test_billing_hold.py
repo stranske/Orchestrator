@@ -29,11 +29,18 @@ def ledger(tmp_path, monkeypatch):
 
 
 def _refuse(agent="vibe", run="r1"):
-    evidence = rate_incidents.get_structured_evidence(VIBE_402, agent, "dispatcher.offload", run_id=run)
+    evidence = rate_incidents.get_structured_evidence(
+        VIBE_402, agent, "dispatcher.offload", run_id=run
+    )
     assert evidence["subcategory"] == "billing_exhausted"
     return rate_incidents.record_incident(
-        agent=agent, surface="dispatcher.offload", category=evidence["category"], status="recorded",
-        run_id=run, evidence=VIBE_402, extra={"subcategory": evidence["subcategory"]},
+        agent=agent,
+        surface="dispatcher.offload",
+        category=evidence["category"],
+        status="recorded",
+        run_id=run,
+        evidence=VIBE_402,
+        extra={"subcategory": evidence["subcategory"]},
     )
 
 
@@ -49,8 +56,13 @@ def test_a_billing_refusal_holds_the_seat_with_no_expiry(ledger):
 
 def test_a_quota_refusal_keeps_its_timed_bench(ledger):
     rate_incidents.record_incident(
-        agent="codex", surface="dispatcher.offload", category="quota", status="recorded", run_id="q1",
-        evidence="429 usage limit", extra={"subcategory": "usage_limit"},
+        agent="codex",
+        surface="dispatcher.offload",
+        category="quota",
+        status="recorded",
+        run_id="q1",
+        evidence="429 usage limit",
+        extra={"subcategory": "usage_limit"},
     )
     payload = json.loads((ledger / "codex").read_text())
     assert "hold" not in payload and isinstance(payload["expires_at"], int)
