@@ -4,7 +4,8 @@ name: Lane seat (hosted controller)
 # snapshot repo stranske/lanes, as a backstop. It runs a pass only when the last pass by ANY seat (stamp.json on the
 # lanes `state` branch) is older than lane_state.HOSTED_STALE_AFTER (45 min). Ledgers travel on that branch, so a
 # hosted pass decides from the same state a local pass would. Design and stop rules:
-# Audits/closer-lane-2026-11/rebuild/HOSTED_SEAT_DESIGN.md (owner workspace). Scheduled lanes: sync-core; closer-core and opener-core join after their parity checks.
+# Audits/closer-lane-2026-11/rebuild/HOSTED_SEAT_DESIGN.md (owner workspace). Scheduled lanes: closer-core and sync-core (closer parity 2026-11-25, Orchestrator run 45544064284); opener-core joins
+# after its parity check (its cap and demand readers do not yet run on Linux).
 #
 # pull_request: a read-only shadow round (never leases, never pushes state).
 # workflow_dispatch: mode shadow (default) or apply; force skips the staleness check (never a live lease).
@@ -27,7 +28,7 @@ on:
       lanes:
         description: comma-separated lanes (always run in the controller's order closer, sync, opener)
         type: string
-        default: sync-core
+        default: closer-core,sync-core
   pull_request:
     paths:
       - '.github/workflows/lane-seat.yml'
@@ -53,7 +54,7 @@ jobs:
       ORCH_LOCAL_AGENT_CAP: '0'
       # A lane joins the scheduled list only after its parity check: the same decisions as the local seat on the
       # same state at the same moment (HOSTED_SEAT_DESIGN.md).
-      LANES: ${{ github.event_name == 'workflow_dispatch' && inputs.lanes || 'sync-core' }}
+      LANES: ${{ github.event_name == 'workflow_dispatch' && inputs.lanes || 'closer-core,sync-core' }}
       ORCH_MIRROR: ${{ github.workspace }}/orch/src
       MODE: ${{ github.event_name == 'schedule' && 'apply' || github.event_name == 'pull_request' && 'shadow' || inputs.mode }}
       FORCE: ${{ github.event_name == 'pull_request' && 'true' || github.event_name == 'workflow_dispatch' && inputs.force && 'true' || 'false' }}
