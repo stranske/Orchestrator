@@ -529,7 +529,8 @@ def test_report_measured_zero_is_not_unmeasured(tmp_path, poll_history):
     text = pacing_usage.report(tmp_path, now=end)
     assert "1 codex: u(T1)=0.800" in text
     assert "2: 0 incidents" in text
-    assert "3: non-codex share ok=0.000, warn/shed=1.000" in text
+    # Owner 2026-11-24 (#1045): two dispatches are under the per-side floor, so pass 3 is unmeasured, not a share.
+    assert "3: unmeasured — no pool reached the dispatch floor" in text
 
 
 def test_calibration_can_match_token_samples_without_existing_cap(tmp_path):
@@ -941,13 +942,10 @@ def test_report_zero_share_and_missing_tick_are_unmeasured(
     (tmp_path / "rate-limit-incidents.ndjson").write_text("")
     text = pacing_usage.report(tmp_path, now=end)
     assert f"coverage={1007 if missing else 1008}/1008 ticks" in text
-    if missing:
-        # #1045: the missing tick held no dispatch and both dispatches are classified, so the share (a ratio over
-        # dispatches) is measured; slot coverage gates only pass 2's zero.
-        assert "3: non-codex share ok=0.000, warn/shed=1.000" in text
-    else:
-        assert "unmeasured — no non-codex dispatches" in text
-    assert "counts=" in text
+    # Owner 2026-11-24 (#1045): with one or two dispatches every pool is under the per-side floor, gap or not;
+    # the gap case with enough dispatches is test_share_is_measured_through_a_poll_gap_when_every_dispatch_is_classified.
+    assert "3: unmeasured — no pool reached the dispatch floor" in text
+    assert "codex both-ok" in text  # the per-pool counts still print
 
 
 @pytest.mark.parametrize(
@@ -1183,9 +1181,12 @@ def test_report_zero_constrained_positive_baseline_is_fail(tmp_path, poll_histor
             )
             for t in range(int(START), int(end), pacing.TICK_SECONDS)
         ]
+        # Owner 2026-11-24 (#1045): enough dispatches on both sides to clear the floor; codex's own share RISES
+        # from 0 (both ok) to 1 (codex warn, claude ok), the wrong direction.
+        + [dict(ts=START + 10 + n, event="start", agent="claude", count=1) for n in range(100)]
         + [
-            dict(ts=START + 10, event="start", agent="claude", count=1),
-            dict(ts=START + 2 * pacing.DAY_SECONDS, event="start", agent="codex", count=1),
+            dict(ts=START + 2 * pacing.DAY_SECONDS + n, event="start", agent="codex", count=1)
+            for n in range(100)
         ],
     )
     line = next(
@@ -1193,8 +1194,11 @@ def test_report_zero_constrained_positive_baseline_is_fail(tmp_path, poll_histor
         for line in pacing_usage.report(tmp_path, now=end).splitlines()
         if line.startswith("3:")
     )
-    assert "ok=1.000, warn/shed=0.000" in line and "FAIL" in line
-    assert "unmeasured" not in line
+    assert (
+        "codex both-ok 0/100, codex-constrained 100/100 = 0.000->1.000 FAIL" in line
+        and line.count("FAIL") == 2
+    )
+    assert not line.startswith("3: unmeasured")  # claude alone is unmeasured (never constrained)
 
 
 def test_shed_to_warn_with_projection_prints_drain():

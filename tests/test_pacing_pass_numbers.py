@@ -49,7 +49,7 @@ def test_unmeasured_pass_numbers_are_none_never_zero(tmp_path):
     result = pacing_usage.pass_numbers(tmp_path, NOW)
     assert result["usage_in_target_band"]["value"] is None
     assert result["quota_incidents_while_other_ok"]["value"] is None
-    assert result["non_codex_share_at_least_double"]["value"] is None
+    assert result["constrained_pool_share_halved"]["value"] is None
     assert result["quota_incidents_while_other_ok"]["reason"].startswith("2: unmeasured")
 
 
@@ -61,7 +61,7 @@ def test_pacing_report_is_read_only(tmp_path, monkeypatch):
     assert set(data) == {
         "usage_in_target_band",
         "quota_incidents_while_other_ok",
-        "non_codex_share_at_least_double",
+        "constrained_pool_share_halved",
     }
     assert sorted(p.name for p in tmp_path.iterdir()) == before
 
@@ -234,7 +234,10 @@ def _hourly_world(tmp_path, monkeypatch, *, poll_gap=None):
             }
         )
         agent = "codex" if codex_state == "ok" else "claude"
-        rows.append({"event": "start", "agent": agent, "count": 1, "ts": t + 50 * 60})
+        # 60 a tick so each side clears pacing.SHARE_MIN_DISPATCHES (two ticks a side)
+        rows += [
+            {"event": "start", "agent": agent, "count": 1, "ts": t + 50 * 60 + n} for n in range(60)
+        ]
     _write(tmp_path, rows)
     (tmp_path / "rate-limit-incidents.ndjson").write_text("")
     return start, end
@@ -243,10 +246,11 @@ def _hourly_world(tmp_path, monkeypatch, *, poll_gap=None):
 def test_hourly_snapshots_classify_every_dispatch_of_the_tick(tmp_path, monkeypatch):
     """#1045: snapshots are hourly; a dispatch 50 min after one is classified by it, so G3 is measured."""
     _hourly_world(tmp_path, monkeypatch)
-    result = pacing_usage.pass_numbers(tmp_path, NOW)["non_codex_share_at_least_double"]
+    result = pacing_usage.pass_numbers(tmp_path, NOW)["constrained_pool_share_halved"]
     assert result["value"] == 1.0, result["reason"]
     assert "unclassified" not in result["reason"]
-    assert "ok=0.000, warn/shed=1.000" in result["reason"]
+    assert "codex both-ok 120/120, codex-constrained 0/120 = 1.000->0.000 PASS" in result["reason"]
+    assert "claude both-ok 0/120, claude-constrained 0/0 unmeasured" in result["reason"]
 
 
 def test_share_is_measured_through_a_poll_gap_when_every_dispatch_is_classified(
@@ -254,6 +258,65 @@ def test_share_is_measured_through_a_poll_gap_when_every_dispatch_is_classified(
 ):
     """A poll gap leaves slots uncovered, but G3 is a ratio over dispatches: all classified, so measured."""
     _hourly_world(tmp_path, monkeypatch, poll_gap=(600, 3000))
-    result = pacing_usage.pass_numbers(tmp_path, NOW)["non_codex_share_at_least_double"]
+    result = pacing_usage.pass_numbers(tmp_path, NOW)["constrained_pool_share_halved"]
     assert "longest poll gap=3000s" in result["reason"]
     assert result["value"] == 1.0, result["reason"]
+
+
+def test_pass_two_counts_only_the_pacing_pools(tmp_path, monkeypatch):
+    """Owner 2026-11-24 (#1045): all 23 incidents of 11-15..22 were vibe's 402 billing outage, none a pacing failure."""
+    start, _ = _hourly_world(tmp_path, monkeypatch)
+    (tmp_path / "rate-limit-incidents.ndjson").write_text(
+        "".join(json.dumps({"ts": start + 1800 + n, "agent": "vibe"}) + "\n" for n in range(3))
+    )
+    result = pacing_usage.pass_numbers(tmp_path, NOW)["quota_incidents_while_other_ok"]
+    assert result["value"] == 0, result["reason"]
+    assert "non-pacing incidents not counted: vibe 3" in result["reason"]
+
+
+def test_a_pool_whose_share_does_not_fall_when_it_is_constrained_fails(tmp_path, monkeypatch):
+    """Symmetric pass 3: a constrained pool must lose at least half its share; claude keeping it fails."""
+    start, end = _hourly_world(tmp_path, monkeypatch)
+    rows = [
+        json.loads(line) for line in (tmp_path / "capacity-ledger.ndjson").read_text().splitlines()
+    ]
+    for row in rows:
+        if row["event"] == "pacing_snapshot":
+            row["agents"]["claude"]["state"], row["agents"]["codex"]["state"] = (
+                row["agents"]["codex"]["state"],
+                "ok",
+            )
+        elif row["event"] == "start":
+            row["agent"] = "claude"  # claude keeps every dispatch whether or not it is shed
+    _write(tmp_path, rows)
+    result = pacing_usage.pass_numbers(tmp_path, NOW)["constrained_pool_share_halved"]
+    assert result["value"] == 0.0, result["reason"]
+    assert (
+        "claude both-ok 120/120, claude-constrained 120/120 = 1.000->1.000 FAIL" in result["reason"]
+    )
+
+
+def test_a_pool_with_zero_share_on_both_sides_is_unmeasured_not_a_vacuous_pass(
+    tmp_path, monkeypatch
+):
+    """Review on #1487: claude 0/n beside 0/m must not record PASS; with no other measured pool, G3 is unmeasured."""
+    _hourly_world(tmp_path, monkeypatch)
+    rows = [
+        json.loads(line) for line in (tmp_path / "capacity-ledger.ndjson").read_text().splitlines()
+    ]
+    for row in rows:
+        if row["event"] == "pacing_snapshot":
+            row["agents"]["claude"]["state"], row["agents"]["codex"]["state"] = (
+                row["agents"]["codex"]["state"],
+                "ok",
+            )
+        elif row["event"] == "start":
+            row["agent"] = "codex"  # claude never dispatched, constrained or not
+    _write(tmp_path, rows)
+    result = pacing_usage.pass_numbers(tmp_path, NOW)["constrained_pool_share_halved"]
+    assert result["value"] is None, result["reason"]
+    assert (
+        "claude both-ok 0/120, claude-constrained 0/120 unmeasured (zero share on both sides)"
+        in (result["reason"])
+    )
+    assert "PASS" not in result["reason"]
