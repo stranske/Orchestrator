@@ -98,3 +98,94 @@ def test_a_hold_is_suspect_only_when_its_probe_stops(ledger):
     assert fresh["suspect"] == 0
     stale = switch_review.capacity_shed(now=due + 3 * 86400, shed_dir=ledger)
     assert stale["suspect"] == 1 and "has not run since" in stale["markers"][0]["suspect"]
+
+
+def _timed_marker(ledger, agent="vibe", expires_at=None):
+    ledger.mkdir(parents=True, exist_ok=True)
+    (ledger / agent).write_text(
+        json.dumps(
+            {"category": "quota", "incident_id": "old", "expires_at": expires_at or NOW + 3600}
+        )
+        + "\n"
+    )
+
+
+def test_a_hold_supersedes_a_timed_cooldown(ledger):
+    _timed_marker(ledger)
+    _refuse()
+    payload = json.loads((ledger / "vibe").read_text())
+    assert payload["hold"] == rate_incidents.BILLING_HOLD and "expires_at" not in payload
+
+
+def test_a_second_refusal_keeps_the_existing_hold_schedule(ledger):
+    _refuse(run="r1")
+    first = json.loads((ledger / "vibe").read_text())
+    _refuse(run="r2")
+    assert json.loads((ledger / "vibe").read_text()) == first
+
+
+def test_a_hold_never_replaces_a_manual_marker(ledger):
+    ledger.mkdir(parents=True, exist_ok=True)
+    (ledger / "vibe").write_text("")
+    _refuse()
+    assert (ledger / "vibe").read_text() == ""
+
+
+def test_a_failed_hold_publication_is_repaired_on_retry(ledger, monkeypatch):
+    """Review on #1488: the row persists expires_at=None; the dedup path must republish the hold."""
+    real = rate_incidents.ensure_shed
+    monkeypatch.setattr(rate_incidents, "ensure_shed", lambda *a, **kw: False)
+    assert _refuse()["status"] == "shed_unfulfilled"
+    assert not (ledger / "vibe").exists()
+    monkeypatch.setattr(rate_incidents, "ensure_shed", real)
+    retry = _refuse()
+    assert retry["deduped"] is True and retry["shed"] is True
+    assert json.loads((ledger / "vibe").read_text())["hold"] == rate_incidents.BILLING_HOLD
+
+
+def _due(ledger, agent="vibe"):
+    return json.loads((ledger / agent).read_text())["probe_after"] + 1
+
+
+def test_a_claude_hold_is_probed_on_its_own_seat_and_not_cleared_by_a_substitute(ledger):
+    _refuse(agent="claude")
+    seen = []
+
+    def substitute(agent, prompt, **kw):
+        seen.append(kw.get("mode"))
+        return {"agent": "gemini", "exit": 0, "output": "OK"}
+
+    rows = rate_incidents.probe_billing_holds(now=_due(ledger, "claude"), offload=substitute)
+    assert seen and seen[0] is not None  # an explicit mode turns off offload's automatic backup
+    assert rows[0]["probe"] == "still_refused" and "substitute gemini" in rows[0]["evidence"]
+    assert (ledger / "claude").exists()
+
+
+def test_a_marker_replaced_during_the_probe_is_not_cleared(ledger):
+    _refuse()
+
+    def answered_while_owner_stands_down(agent, prompt, **kw):
+        (ledger / "vibe").write_text("")  # the owner's manual marker lands mid-probe
+        return {"agent": agent, "exit": 0, "output": "OK"}
+
+    rows = rate_incidents.probe_billing_holds(
+        now=_due(ledger), offload=answered_while_owner_stands_down
+    )
+    assert rows == [{"agent": "vibe", "probe": "marker_changed"}]
+    assert (ledger / "vibe").read_text() == ""
+
+
+def test_a_failed_reschedule_keeps_the_previous_hold(ledger, monkeypatch):
+    _refuse()
+    before = (ledger / "vibe").read_text()
+
+    def broken_replace(*a, **kw):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(rate_incidents.os, "replace", broken_replace)
+    rows = rate_incidents.probe_billing_holds(
+        now=_due(ledger), offload=lambda agent, prompt, **kw: {"exit": 1, "output": VIBE_402}
+    )
+    assert rows[0]["probe"] == "reschedule_failed"
+    assert (ledger / "vibe").read_text() == before
+    assert [p.name for p in ledger.iterdir()] == ["vibe"]  # no temporary left behind

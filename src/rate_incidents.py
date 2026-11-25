@@ -1110,6 +1110,27 @@ def _inspect_existing_hold(
     return "none"
 
 
+def _marker_is_manual(agent: str) -> bool:
+    """True when the seat's marker is the owner's: unreadable, not a dict, or neither timed nor a hold."""
+    marker = SHED_DIR / agent
+    if not marker.exists():
+        return False
+    try:
+        payload = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return True
+    if not isinstance(payload, dict):
+        return True
+    if payload.get("hold") == BILLING_HOLD:
+        return False
+    expiry = payload.get("expires_at")
+    return (
+        isinstance(expiry, bool)
+        or not isinstance(expiry, (int, float))
+        or not math.isfinite(expiry)
+    )
+
+
 def _repair_dedup_incident(
     *,
     existing_id: str,
@@ -1129,6 +1150,30 @@ def _repair_dedup_incident(
     )
     if not row_shed_requested or recovered or _is_incident_recovered(existing_row):
         return {"status": "ok", "deduped": True, "incident_id": existing_id, "shed": False}
+    row_extra = existing_row.get("extra")
+    if (
+        existing_row.get("expires_at") is None
+        and existing_row.get("reset_at") is None
+        and isinstance(row_extra, Mapping)
+        and row_extra.get("subcategory") == "billing_exhausted"
+    ):
+        # A billing hold persisted with no expiry; a failed first publication is repaired here, not dropped.
+        if _marker_is_manual(agent):
+            return {"status": "ok", "deduped": True, "incident_id": existing_id, "shed": False}
+        shed_created = ensure_shed(
+            agent,
+            category=row_category,
+            incident_id=existing_id,
+            model=existing_row.get("model"),
+            tier_scope=existing_row.get("tier_scope"),
+            hold=BILLING_HOLD,
+        )
+        return {
+            "status": "ok" if shed_created else "shed_unfulfilled",
+            "deduped": True,
+            "incident_id": existing_id,
+            "shed": shed_created,
+        }
     row_expires_at = existing_row.get("expires_at")
     if (
         isinstance(row_expires_at, bool)
@@ -1348,6 +1393,12 @@ def probe_billing_holds(*, now: float | None = None, offload=None) -> list[dict]
                 import dispatcher  # noqa: PLC0415
 
                 offload = dispatcher.offload
+            seat: dict[str, Any] = {}
+            if agent == "claude":
+                import adapters  # noqa: PLC0415
+
+                # an explicit mode turns off offload's automatic claude backup: the held seat must answer itself
+                seat["mode"] = adapters.DEFAULT_OFFLOAD_TIER
             out = (
                 offload(
                     agent,
@@ -1355,29 +1406,89 @@ def probe_billing_holds(*, now: float | None = None, offload=None) -> list[dict]
                     timeout=180,
                     task_type="review",
                     subject_id=f"billing-probe:{agent}",
+                    **seat,
                 )
                 or {}
             )
             text = f"{out.get('output') or ''}\n{out.get('error') or ''}"
-            answered = out.get("exit") == 0 and not _contains_billing_refusal(text)
+            answered_by = out.get("agent", agent)
+            answered = (
+                out.get("exit") == 0
+                and answered_by == agent
+                and not _contains_billing_refusal(text)
+            )
+            if out.get("exit") == 0 and answered_by != agent:
+                text = f"answered by substitute {answered_by}, not the held seat"
         except Exception as exc:  # noqa: BLE001
             answered, text = False, f"{type(exc).__name__}: {exc}"
+        probed_id = payload.get("incident_id")
         if answered:
-            clear_shed(agent)
-            results.append({"agent": agent, "probe": "cleared"})
+            cleared = _clear_hold_if_unchanged(agent, probed_id)
+            results.append({"agent": agent, "probe": "cleared" if cleared else "marker_changed"})
             continue
-        with incident_lock():
-            try:
-                current = json.loads(marker.read_text(encoding="utf-8"))
-                if isinstance(current, dict) and current.get("hold") == BILLING_HOLD:
-                    current["probe_after"] = int(now) + BILLING_PROBE_INTERVAL_S
-                    marker.write_text(json.dumps(current, sort_keys=True) + "\n", encoding="utf-8")
-            except (OSError, ValueError):
-                pass
+        rescheduled = _reschedule_hold(agent, probed_id, int(now) + BILLING_PROBE_INTERVAL_S)
         results.append(
-            {"agent": agent, "probe": "still_refused", "evidence": _redact_bounded(text)[:200]}
+            {
+                "agent": agent,
+                "probe": "still_refused" if rescheduled else "reschedule_failed",
+                "evidence": _redact_bounded(text)[:200],
+            }
         )
     return results
+
+
+def _held_marker_locked(agent: str, incident_id: Any) -> dict | None:
+    """Under incident_lock: the marker's payload if it is still the billing hold that was probed, else None."""
+    try:
+        current = json.loads((SHED_DIR / agent).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if (
+        isinstance(current, dict)
+        and current.get("hold") == BILLING_HOLD
+        and current.get("incident_id") == incident_id
+    ):
+        return current
+    return None
+
+
+def _clear_hold_if_unchanged(agent: str, incident_id: Any) -> bool:
+    """Clear the hold only if the marker is still the one probed; a replacement (e.g. manual) stays."""
+    with incident_lock():
+        if _held_marker_locked(agent, incident_id) is None:
+            return False
+        _mark_incident_recovered_locked(agent=agent)
+        try:
+            (SHED_DIR / agent).unlink()
+        except FileNotFoundError:
+            return False
+        return True
+
+
+def _reschedule_hold(agent: str, incident_id: Any, probe_after: int) -> bool:
+    """Move the probed hold's `probe_after` by atomic replacement; on failure the previous marker stands."""
+    temporary: Path | None = None
+    with incident_lock():
+        current = _held_marker_locked(agent, incident_id)
+        if current is None:
+            return False
+        current["probe_after"] = probe_after
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=SHED_DIR, prefix=f".{agent}.", delete=False
+            ) as handle:
+                temporary = Path(handle.name)
+                handle.write(json.dumps(current, sort_keys=True) + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, SHED_DIR / agent)
+            temporary = None
+            return True
+        except OSError:
+            return False
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
 
 
 def clear_shed(agent: str) -> bool:
