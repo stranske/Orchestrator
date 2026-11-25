@@ -48,6 +48,9 @@ jobs:
       GH_TOKEN: ${{ secrets.OWNER_PR_PAT }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       LANE_SEAT_NAME: hosted-github
+      # No local agents on a runner: the router offloads opener starts to hosted keepalive and the closer defers local
+      # repairs to a local seat (router.local_agent_cap). Without it the absent claims file fails toward LOCAL mode.
+      ORCH_LOCAL_AGENT_CAP: '0'
       # A lane joins the scheduled list only after its parity check: the same decisions as the local seat on the
       # same state at the same moment (HOSTED_SEAT_DESIGN.md).
       LANES: ${{ github.event_name == 'workflow_dispatch' && inputs.lanes || 'sync-core' }}
