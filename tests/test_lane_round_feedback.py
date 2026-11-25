@@ -175,3 +175,107 @@ def test_legacy_profile_decision_migrates_without_invented_lane_fields(tmp_path,
     assert row == ("profile_selection", "implement", 0.5, None)
     with feedback._conn() as conn:
         assert conn.execute("SELECT COUNT(*) FROM routing_decisions_v2").fetchone()[0] == 1
+
+
+# --- feedback journal: a hosted seat's writes reach the Mac's Brain (2026-11-25) ---------------------------
+
+
+def _journal_store(tmp_path, monkeypatch, name):
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / f"{name}.db")
+    return tmp_path / f"{name}.db"
+
+
+def _rows(db, sql):
+    with sqlite3.connect(db) as c:
+        return c.execute(sql).fetchall()
+
+
+def test_journal_is_off_unless_the_seat_sets_it(tmp_path, monkeypatch):
+    monkeypatch.delenv(feedback.JOURNAL_ENV, raising=False)
+    _journal_store(tmp_path, monkeypatch, "runner")
+    feedback.record_run(
+        "remote:o/r#5:codex", "o/r#5", "implement", "codex", mode="remote", pr_number=5
+    )
+    assert list(tmp_path.glob("*.jsonl")) == []
+
+
+def test_a_hosted_start_replays_into_another_store_with_its_original_time(tmp_path, monkeypatch):
+    journal = tmp_path / "hosted" / "run-1.jsonl"
+    runner = _journal_store(tmp_path, monkeypatch, "runner")
+    monkeypatch.setenv(feedback.JOURNAL_ENV, str(journal))
+    feedback.record_run(
+        "remote:o/r#5:codex",
+        "o/r#5",
+        "implement",
+        "codex",
+        mode="remote",
+        rationale="hosted start",
+        pr_number=5,
+    )
+    feedback.record_outcome("remote:o/r#5:codex", merged=1)
+    # ts given positionally must still bind once
+    feedback.record_run(
+        "offload:1", "o/r#6", "review", "claude", "offload", None, None, None, 6, None, 1700000000
+    )
+    monkeypatch.delenv(feedback.JOURNAL_ENV)
+    assert [json.loads(ln)["fn"] for ln in journal.read_text().splitlines()] == [
+        "record_run",
+        "record_outcome",
+        "record_run",
+    ]
+    original = _rows(runner, "SELECT run_id, ts, mode, rationale FROM runs ORDER BY run_id")
+
+    mac = _journal_store(tmp_path, monkeypatch, "mac")
+    first = feedback.replay_journal(journal)
+    again = feedback.replay_journal(journal)  # a retried replay merges instead of duplicating
+    assert (first["replayed"], first["rejected"], again["rejected"]) == (3, 0, 0)
+    assert _rows(mac, "SELECT run_id, ts, mode, rationale FROM runs ORDER BY run_id") == original
+    assert _rows(mac, "SELECT merged FROM outcomes WHERE run_id='remote:o/r#5:codex'") == [(1,)]
+    assert _rows(mac, "SELECT COUNT(*) FROM completion_events") == _rows(
+        runner, "SELECT COUNT(*) FROM completion_events"
+    )
+
+
+def test_a_bad_line_is_rejected_without_holding_back_the_rest(tmp_path, monkeypatch):
+    _journal_store(tmp_path, monkeypatch, "mac")
+    journal = tmp_path / "j.jsonl"
+    good = {
+        "fn": "record_run",
+        "at": 1,
+        "args": {
+            "run_id": "remote:o/r#7:gemini",
+            "target": "o/r#7",
+            "task_type": "implement",
+            "agent": "gemini",
+            "ts": 1,
+        },
+    }
+    journal.write_text(
+        "\n".join([json.dumps({"fn": "no_such_writer", "args": {}}), "{not json", json.dumps(good)])
+        + "\n"
+    )
+    report = feedback.replay_journal(journal)
+    assert (report["replayed"], report["rejected"]) == (1, 2)
+    assert [e["line"] for e in report["errors"]] == [1, 2]
+
+
+def test_coverage_names_a_table_written_outside_the_journal(tmp_path, monkeypatch):
+    journal = tmp_path / "j.jsonl"
+    runner = _journal_store(tmp_path, monkeypatch, "runner")
+    monkeypatch.setenv(feedback.JOURNAL_ENV, str(journal))
+    feedback.record_run(
+        "remote:o/r#8:codex", "o/r#8", "implement", "codex", mode="remote", pr_number=8
+    )
+    monkeypatch.delenv(feedback.JOURNAL_ENV)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    assert feedback.journal_coverage(journal, scratch)["uncovered"] == {}
+    with sqlite3.connect(runner) as c:  # a raw write no journaled writer made
+        c.execute(
+            "INSERT INTO costs (run_id, tokens_in, tokens_out, cost_usd, latency_s, source, pulled_ts) "
+            "VALUES ('x', 1, 1, 0, 0, 'raw', 0)"
+        )
+    (scratch / "journal-replay.db").unlink()
+    assert feedback.journal_coverage(journal, scratch)["uncovered"] == {
+        "costs": {"store": 1, "journal": 0}
+    }

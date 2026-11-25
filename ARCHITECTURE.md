@@ -260,6 +260,15 @@ offload to GitHub when local load would hurt performance. Two rails, no role:
   line prints `local agents 0/0, drainable 0 here` and names the setting, because nothing on that host drains
   it. Unset or unparseable keeps the measured cap of 3. Without it a runner's absent claims file read as
   unknown and failed toward LOCAL mode.
+  The same seat's Brain writes reach this host through a journal (`feedback.ORCH_FEEDBACK_JOURNAL`,
+  2026-11-25): a runner starts with an empty `orchestrator.db`, so its `remote:` start rows, role runs and
+  closer outcomes would die with it, and `keepalive_outcomes` joins keepalive results to exactly the
+  `remote:` row. With the variable set, each top-level call of a journaled writer (`record_run`,
+  `record_outcome`, `record_role_run`, ... — the `@_journaled` set) is appended as JSON; the seat carries
+  the file on the lanes `state` branch and the Mac's next catch-up runs `feedback.py journal-replay`, which
+  makes the same calls here (the writers merge with existing rows; a failing line is reported, never
+  blocking). `feedback.py journal-coverage` replays into an empty store and names every table whose rows
+  the journal does not reproduce, so a write outside the journaled writers is printed rather than lost.
 - **`local_loop.py tick`** (controller pass, ~15 min) — one GraphQL search per tick for open PRs labelled
   `agents:local-loop`; a PR whose head and check rollup were already acted on costs nothing more. When CI
   reports on the head the last round pushed: red -> re-run the agent on the PR's head branch (lane

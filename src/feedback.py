@@ -25,13 +25,16 @@ SQLite at ~/.codex/orchestrator/feedback/orchestrator.db. `--selftest` runs offl
 
 from __future__ import annotations
 
+import functools
 import hashlib
+import inspect
 import json
 import math
 import os
 import re
 import sqlite3
 import sys
+import threading
 import time
 from bisect import bisect_left, bisect_right
 from collections import Counter
@@ -104,6 +107,137 @@ def resolve_db_path(explicit: Path | None = None, state_dir: Path | None = None)
 # _conn keeps DB_PATH so existing in-process private-store monkeypatches still work.
 # Preserve the legacy spelling of explicit private-copy paths (e.g. /tmp aliases).
 DB_PATH = DB_PATH.expanduser() if os.environ.get(DB_PATH_ENV) else resolve_db_path()
+
+
+# FEEDBACK JOURNAL (2026-11-25). A hosted controller seat (GitHub Actions, stranske/lanes) starts with an empty
+# Brain, so the runs, outcomes and role runs its lane rounds record would die with the runner: a hosted opener's
+# `remote:` start row never reached the Mac, and keepalive_outcomes joins keepalive results to exactly that row.
+# With ORCH_FEEDBACK_JOURNAL set to a file, every top-level call of a writer below is appended to it as JSON
+# after it succeeds; `feedback.py journal-replay FILE` makes the same calls against this host's store (the
+# writers read the existing rows themselves, so a replay merges instead of overwriting), and
+# `feedback.py journal-coverage FILE` replays into an empty store and compares it with this one table by table,
+# so a write made outside these writers is printed instead of lost. `ts`/`timestamp` are fixed at the original
+# call so a replay keeps the original time. Unset (every local seat), the writers behave exactly as before.
+JOURNAL_ENV = "ORCH_FEEDBACK_JOURNAL"
+_JOURNAL_TIME_PARAMS = ("ts", "timestamp")
+_JOURNALED: dict[str, Callable] = {}
+_journal_state = threading.local()
+
+
+def _journal_call(
+    fn: Callable, sig: inspect.Signature, args: tuple, kwargs: dict
+) -> tuple[inspect.BoundArguments, str]:
+    """The bound call (time parameters fixed) and its journal line (an `unserializable` line replays as a
+    rejection)."""
+    bound = sig.bind(*args, **kwargs)
+    for name in _JOURNAL_TIME_PARAMS:
+        if name in sig.parameters and bound.arguments.get(name) is None:
+            bound.arguments[name] = int(time.time())
+    call: dict = {}
+    for name, value in bound.arguments.items():
+        kind = sig.parameters[name].kind
+        if kind is inspect.Parameter.VAR_KEYWORD:
+            call.update(value)
+        elif kind is inspect.Parameter.VAR_POSITIONAL:
+            call[f"*{name}"] = list(value)
+        elif name != "conn":
+            call[name] = value
+    entry = {"fn": fn.__name__, "at": time.time(), "args": call}
+    try:
+        line = json.dumps(entry, sort_keys=True)
+    except (TypeError, ValueError) as exc:
+        line = json.dumps({"fn": fn.__name__, "at": entry["at"], "unserializable": str(exc)[:300]})
+    return bound, line
+
+
+def _journaled(fn: Callable) -> Callable:
+    sig = inspect.signature(fn)
+    _JOURNALED[fn.__name__] = fn
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        path = os.environ.get(JOURNAL_ENV)
+        depth = getattr(_journal_state, "depth", 0)
+        if not path or depth:
+            return fn(*args, **kwargs)
+        bound, line = _journal_call(fn, sig, args, kwargs)
+        _journal_state.depth = depth + 1
+        try:
+            result = fn(*bound.args, **bound.kwargs)
+        finally:
+            _journal_state.depth = depth
+        journal = Path(path)
+        journal.parent.mkdir(parents=True, exist_ok=True)
+        with journal.open("a") as fh:
+            fh.write(line + "\n")
+        return result
+
+    return wrapper
+
+
+def replay_journal(path: Path) -> dict:
+    """Make every journaled call in `path` against this process's store. A line that fails is returned with its
+    error (and counted) instead of stopping the file, so one bad line can never hold the rest back.
+    """
+    replayed, errors = 0, []
+    _journal_state.depth = (
+        getattr(_journal_state, "depth", 0) + 1
+    )  # a replay is never journaled again
+    try:
+        for number, line in enumerate(Path(path).read_text().splitlines(), 1):
+            if not line.strip():
+                continue
+            try:
+                entry = json.loads(line)
+                if "unserializable" in entry:
+                    raise ValueError(
+                        f"journaled call was not serializable: {entry['unserializable']}"
+                    )
+                _JOURNALED[entry["fn"]](**entry["args"])
+                replayed += 1
+            except Exception as exc:  # noqa: BLE001 - reported per line, never raised
+                errors.append(
+                    {
+                        "line": number,
+                        "entry": line[:4000],
+                        "error": f"{type(exc).__name__}: {exc}"[:300],
+                    }
+                )
+    finally:
+        _journal_state.depth -= 1
+    return {"file": str(path), "replayed": replayed, "rejected": len(errors), "errors": errors}
+
+
+def _table_counts(db: Path) -> dict[str, int]:
+    if not Path(db).exists():
+        return {}
+    with closing(
+        sqlite3.connect(Path(db).resolve().as_uri() + "?mode=ro", uri=True, timeout=5)
+    ) as c:
+        names = [r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+        return {n: c.execute(f'SELECT COUNT(*) FROM "{n}"').fetchone()[0] for n in names}
+
+
+def journal_coverage(path: Path, scratch: Path) -> dict:
+    """Replay `path` into an empty store under `scratch` and compare row counts with this store, table by table.
+    Equal everywhere means the journal carries every row this process wrote; a table that differs was written
+    outside the journaled writers (or rejected on replay) and is listed."""
+    global DB_PATH
+    actual = _table_counts(DB_PATH)
+    original = DB_PATH
+    DB_PATH = Path(scratch) / "journal-replay.db"
+    try:
+        _conn().close()  # the same schema and seeds an empty store starts with
+        report = replay_journal(path)
+        replayed = _table_counts(DB_PATH)
+    finally:
+        DB_PATH = original
+    differ = {
+        t: {"store": actual.get(t, 0), "journal": replayed.get(t, 0)}
+        for t in sorted(set(actual) | set(replayed))
+        if actual.get(t, 0) != replayed.get(t, 0)
+    }
+    return {**report, "tables": len(set(actual) | set(replayed)), "uncovered": differ}
 
 
 # `agent_switches` holds two kinds of switch (2026-09-23): `source='label'` rows come from a PR's
@@ -2122,6 +2256,7 @@ def _record_completion_event_in_conn(
     }
 
 
+@_journaled
 def record_completion_event(
     run_id: str,
     *,
@@ -2503,6 +2638,7 @@ def _record_influence_edge_in_conn(
     return {"edge_id": edge_id, "accepted": bool(accepted), "counterfactual": not bool(accepted)}
 
 
+@_journaled
 def record_influence_edge(**kwargs) -> dict:
     with _conn() as c:
         edge = _record_influence_edge_in_conn(c, **kwargs)
@@ -3209,6 +3345,7 @@ def _latest_model_for_agent(c: sqlite3.Connection, agent: str) -> str | None:
     return identity.get("resolved_model") if identity else None
 
 
+@_journaled
 def record_run(
     run_id,
     target,
@@ -3675,6 +3812,7 @@ def ingest_profile_trial(
     }
 
 
+@_journaled
 def record_outcome(
     run_id,
     verifier_verdict=None,
@@ -3701,6 +3839,7 @@ def record_outcome(
         )
 
 
+@_journaled
 def mark_transient_infra(run_id: str, reason: str = "") -> bool:
     """Classify a NON-merged outcome as transient infrastructure failure (item 9 two-tier enum):
     the work never got a fair chance (agent signal-killed, environment broke), so the learners
@@ -4436,6 +4575,7 @@ def role_task_type(role_name: str) -> str:
     return f"role:{role}"
 
 
+@_journaled
 def record_role_run(
     run_id: str,
     role_name: str,
@@ -4630,6 +4770,7 @@ def role_cost_report(run_id: str | None, agent: str | None, db: Path | None = No
     return result
 
 
+@_journaled
 def record_role_selector_event(
     role_name: str,
     selector_status: str,
@@ -4755,6 +4896,7 @@ def role_activation_metrics(*, conn: sqlite3.Connection | None = None) -> dict:
             c.close()
 
 
+@_journaled
 def join_role_to_outcome(
     role_run_id: str,
     influenced_run_id: str,
@@ -5355,6 +5497,7 @@ def completion_event_episodes(
             c.close()
 
 
+@_journaled
 def record_cost(run_id, tokens_in=0, tokens_out=0, cost_usd=0.0, latency_s=0.0, source="ledger"):
     from adapters import CURSOR_CLI_COST_SOURCE, CURSOR_CLI_COST_SOURCES
 
@@ -5386,6 +5529,7 @@ def record_cost(run_id, tokens_in=0, tokens_out=0, cost_usd=0.0, latency_s=0.0, 
         )
 
 
+@_journaled
 def record_muse_subscription_cost(
     run_id: str,
     *,
@@ -5749,6 +5893,7 @@ def _record_execution_attempt_in_conn(
         )
 
 
+@_journaled
 def record_execution_attempt(
     run_id: str,
     *,
@@ -5905,6 +6050,7 @@ def complete_profile_attempt(
     return attempt_id
 
 
+@_journaled
 def complete_profile_attempt_unresolved(
     run_id: str,
     *,
@@ -6458,6 +6604,7 @@ def snapshot_json(path=None) -> dict:
     return {"path": str(path), "rows": {t: len(v) for t, v in dump.items()}}
 
 
+@_journaled
 def record_profile_decision(envelope: dict) -> str:
     """Persist one replayable profile-selection envelope in the additive v2 plane."""
     import execution_profiles
@@ -6791,6 +6938,7 @@ def ingest_relay_pacing(log: Path, *, now: int | None = None) -> dict:
     }
 
 
+@_journaled
 def attach_profile_attempt_to_decision(decision_id: str, attempt_id: str) -> list[str]:
     """Persist the real profile-attempt ID on its replayable route decision."""
     import execution_profiles
@@ -8958,6 +9106,16 @@ def _selftest():
 def main(argv):
     if "--selftest" in argv:
         _selftest()
+        return 0
+    if argv and argv[0] in ("journal-replay", "journal-coverage") and len(argv) >= 2:
+        if argv[0] == "journal-replay":
+            for name in argv[1:]:
+                print(json.dumps(replay_journal(Path(name)), sort_keys=True))
+            return 0
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as scratch:
+            print(json.dumps(journal_coverage(Path(argv[1]), Path(scratch)), sort_keys=True))
         return 0
     if argv and argv[0] == "migrate-execution-attempts":
         report = migrate_legacy_execution_attempts(apply="--apply" in argv[1:])
