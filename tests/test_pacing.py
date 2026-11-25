@@ -1194,7 +1194,10 @@ def test_report_zero_constrained_positive_baseline_is_fail(tmp_path, poll_histor
         for line in pacing_usage.report(tmp_path, now=end).splitlines()
         if line.startswith("3:")
     )
-    assert "codex both-ok 0/100, codex-constrained 100/100 = 0.000->1.000 FAIL" in line and line.count("FAIL") == 2
+    assert (
+        "codex both-ok 0/100, codex-constrained 100/100 = 0.000->1.000 FAIL" in line
+        and line.count("FAIL") == 2
+    )
     assert not line.startswith("3: unmeasured")  # claude alone is unmeasured (never constrained)
 
 

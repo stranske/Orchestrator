@@ -1732,21 +1732,27 @@ def period_results(handoff: Path, snapshots: list[dict], now: float) -> dict:
             continue
         for pool in pacing.PACING_POOLS:
             others_ok = all(states[o] == "ok" for o in pacing.PACING_POOLS if o != pool)
-            side = "both_ok" if states[pool] == "ok" and others_ok else "constrained" if others_ok else None
+            side = (
+                "both_ok"
+                if states[pool] == "ok" and others_ok
+                else "constrained" if others_ok else None
+            )
             if side:
                 sides[pool][side][0] += int(event["agent"] == pool)
                 sides[pool][side][1] += 1
     floor = pacing.SHARE_MIN_DISPATCHES
     parts, verdicts = [], {}
-    for pool, side in sides.items():
-        (a, n), (b, m) = side["both_ok"], side["constrained"]
+    for pool, counts in sides.items():
+        (a, n), (b, m) = counts["both_ok"], counts["constrained"]
         text = f"{pool} both-ok {a}/{n}, {pool}-constrained {b}/{m}"
         if n < floor or m < floor:
             parts.append(f"{text} unmeasured (fewer than {floor} on a side)")
             continue
         base, constrained = a / n, b / m
         verdicts[pool] = constrained <= base / pacing.PASS_SHARE_MULTIPLIER
-        parts.append(f"{text} = {base:.3f}->{constrained:.3f} {'PASS' if verdicts[pool] else 'FAIL'}")
+        parts.append(
+            f"{text} = {base:.3f}->{constrained:.3f} {'PASS' if verdicts[pool] else 'FAIL'}"
+        )
     # Owner 2026-11-18's rule for pass 2, applied to dispatches: a gap matters only if a dispatch falls in it, so the
     # pass is measured once every dispatch is classified (omitted == 0), whatever the slot coverage.
     if omitted == 0 and verdicts:

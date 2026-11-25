@@ -277,7 +277,9 @@ def test_pass_two_counts_only_the_pacing_pools(tmp_path, monkeypatch):
 def test_a_pool_whose_share_does_not_fall_when_it_is_constrained_fails(tmp_path, monkeypatch):
     """Symmetric pass 3: a constrained pool must lose at least half its share; claude keeping it fails."""
     start, end = _hourly_world(tmp_path, monkeypatch)
-    rows = [json.loads(line) for line in (tmp_path / "capacity-ledger.ndjson").read_text().splitlines()]
+    rows = [
+        json.loads(line) for line in (tmp_path / "capacity-ledger.ndjson").read_text().splitlines()
+    ]
     for row in rows:
         if row["event"] == "pacing_snapshot":
             row["agents"]["claude"]["state"], row["agents"]["codex"]["state"] = (
@@ -289,4 +291,6 @@ def test_a_pool_whose_share_does_not_fall_when_it_is_constrained_fails(tmp_path,
     _write(tmp_path, rows)
     result = pacing_usage.pass_numbers(tmp_path, NOW)["constrained_pool_share_halved"]
     assert result["value"] == 0.0, result["reason"]
-    assert "claude both-ok 120/120, claude-constrained 120/120 = 1.000->1.000 FAIL" in result["reason"]
+    assert (
+        "claude both-ok 120/120, claude-constrained 120/120 = 1.000->1.000 FAIL" in result["reason"]
+    )
