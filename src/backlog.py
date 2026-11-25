@@ -59,8 +59,11 @@ SUPPORTED_REPOS = [
     "stranske/Doc-Lineage",
     "stranske/Deliverable-Render",
     "stranske/Manager-Mosaic",
-]  # 16 repos; runtime authority is ~/.codex/bin/handoff.sh SUPPORTED_REPOS. `Ready` was absent
-# here until 2026-08-18, so its issues were invisible to the backlog entirely.
+    "stranske/Template",
+]  # 17 repos; runtime authority is ~/.codex/bin/handoff.sh SUPPORTED_REPOS. `Ready` was absent
+# here until 2026-08-18, so its issues were invisible to the backlog entirely. `Template` joined on
+# 2026-11-24 (owner decision): closer-core takes its PRs only from this list, so Template#1082
+# (a cursor/issue branch) sat open from 2026-10-26 with no lane naming it.
 
 READY_LABELS = {"status: ready", "status:ready", "agent-ready"}
 # label (lowercased) -> task_type; absent => "implement"

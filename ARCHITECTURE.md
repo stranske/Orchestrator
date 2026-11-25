@@ -730,8 +730,8 @@ initiates no action. The loop diagram records the same read-only journal connect
 **Open PRs no lane has named are reported by the weekly review (2026-11-18).** The stuck-target
 check above only sees what a lane already decided about. Four PRs sat idle 4 to 23 days because no
 lane ever adopted them: an `automation_run` branch no lane owns, a keepalive PR left after
-keepalive stood down, a Template PR (Template is outside `backlog.SUPPORTED_REPOS`) whose issue
-link is cross-repo, and a PR whose issue is paused. None of them entered a journal, so nothing
+keepalive stood down, a Template PR (Template was outside `backlog.SUPPORTED_REPOS` until it joined
+on 2026-11-24) whose issue link is cross-repo, and a PR whose issue is paused. None of them entered a journal, so nothing
 reported them. `switch_review.unowned_open_prs` collects every target the opener-core and
 closer-core journals named in the last 72 hours by streaming each complete journal without a line
 limit, lists open PRs in each supported repo, and flags
