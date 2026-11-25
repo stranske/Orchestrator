@@ -1301,6 +1301,27 @@ def select_remote_agent(
 # Dropbox I/O wait in load, so load alone is noisy and live claims are the direct measure).
 LOCAL_AGENT_CAP = 3
 LOCAL_LOAD_PER_CORE = 2
+# A host with no local agents says so (owner decision 2026-11-24: the hosted GitHub seat runs the SAME lane
+# code). lane-seat.yml sets ORCH_LOCAL_AGENT_CAP=0, so the opener offloads every start to hosted keepalive and
+# the closer defers local repairs to a local seat, instead of failing toward a local start that cannot run there
+# (on a runner the claims file is absent, which reads as "unknown", which fails toward motion: local).
+LOCAL_AGENT_CAP_ENV = "ORCH_LOCAL_AGENT_CAP"
+
+
+def local_agent_cap() -> tuple[int, str]:
+    """(cap, source). Unset or unparseable -> LOCAL_AGENT_CAP (an unreadable setting never closes the gate)."""
+    raw = os.environ.get(LOCAL_AGENT_CAP_ENV, "").strip()
+    if not raw:
+        return LOCAL_AGENT_CAP, ""
+    try:
+        value = int(raw)
+    except ValueError:
+        print(
+            f"router.local_agent_cap: {LOCAL_AGENT_CAP_ENV}={raw!r} is not an integer; using {LOCAL_AGENT_CAP}",
+            file=sys.stderr,
+        )
+        return LOCAL_AGENT_CAP, ""
+    return max(value, 0), f"{LOCAL_AGENT_CAP_ENV}={max(value, 0)}"
 
 
 def local_capacity(
@@ -1311,7 +1332,26 @@ def local_capacity(
     `running` = live local delegate claims (claims.active_claims: an agent's claim is released by its
     wrapper when it exits and a dead holder's claim is reaped), the SAME quantity that drains the gate,
     so the line always says how much is drainable. Unknown inputs never close the gate (fail toward
-    motion). Returns {ok, running, cap, drainable, load1, load_limit, reason}."""
+    motion). Returns {ok, running, cap, drainable, load1, load_limit, reason}.
+
+    A host configured with no local agents (ORCH_LOCAL_AGENT_CAP=0, the hosted seat) is closed by
+    configuration, not by load: nothing here drains it, so the line says drainable 0 and names the setting
+    and who runs local-only work instead (a seat with local agents)."""
+    cap, source = local_agent_cap()
+    if cap == 0:
+        return {
+            "ok": False,
+            "running": 0,
+            "cap": 0,
+            "drainable": 0,
+            "load1": None,
+            "load_limit": None,
+            "no_local_agents": True,
+            "reason": (
+                f"no local agents on this host ({source}): local agents 0/0, drainable 0 here; "
+                "a seat with local agents runs local-only work"
+            ),
+        }
     if running is None:
         try:
             running = len(claims.active_claims())
@@ -1329,9 +1369,9 @@ def local_capacity(
             load1 = None
     cores = cores or os.cpu_count() or 4
     limit = LOCAL_LOAD_PER_CORE * cores
-    full = running is not None and running >= LOCAL_AGENT_CAP
+    full = running is not None and running >= cap
     hot = load1 is not None and load1 >= limit
-    agents = f"local agents {'?' if running is None else running}/{LOCAL_AGENT_CAP}"
+    agents = f"local agents {'?' if running is None else running}/{cap}"
     load_txt = f"load {'?' if load1 is None else f'{load1:.1f}'}/{limit}"
     parts = []
     if full:
@@ -1341,7 +1381,7 @@ def local_capacity(
     return {
         "ok": not (full or hot),
         "running": running,
-        "cap": LOCAL_AGENT_CAP,
+        "cap": cap,
         "drainable": running or 0,
         "load1": load1,
         "load_limit": limit,

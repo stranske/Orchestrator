@@ -254,6 +254,12 @@ offload to GitHub when local load would hurt performance. Two rails, no role:
   `delegate_remote(rationale=)` record it on the run row, so durability compares by mode and by why.
   `local_capacity` prints blocking and drainable together (`local agents 3/3 (drainable 3)`); the claims
   it counts are the claims that drain it (released by each agent's wrapper on exit).
+  A host with no local agents says so with `ORCH_LOCAL_AGENT_CAP=0` (`router.local_agent_cap`; the hosted
+  GitHub seat, `lane-seat.yml`, owner decision 2026-11-24): every start offloads to hosted keepalive,
+  local-only work waits for a seat that has local agents, and closer-core defers its local repairs. That
+  line prints `local agents 0/0, drainable 0 here` and names the setting, because nothing on that host drains
+  it. Unset or unparseable keeps the measured cap of 3. Without it a runner's absent claims file read as
+  unknown and failed toward LOCAL mode.
 - **`local_loop.py tick`** (controller pass, ~15 min) — one GraphQL search per tick for open PRs labelled
   `agents:local-loop`; a PR whose head and check rollup were already acted on costs nothing more. When CI
   reports on the head the last round pushed: red -> re-run the agent on the PR's head branch (lane
