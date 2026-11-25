@@ -12,6 +12,7 @@ Mixed-agent ccusage totals are never silently attributed to Codex or Claude.
 from __future__ import annotations
 
 import bisect
+import collections
 import hashlib
 import json
 import math
@@ -1657,7 +1658,11 @@ def period_results(handoff: Path, snapshots: list[dict], now: float) -> dict:
         return out
     start, end = max(periods, key=lambda p: p[1])
     out["period"] = (start, end)
-    relevant = [r for r in incidents if start <= (pacing.timestamp(r.get("ts")) or 0) < end]
+    # Pass 2 is about the pacing pools (owner decision 2026-11-24): another agent's outage, such as vibe's spend cap,
+    # is not a pacing failure and is reported beside the line instead.
+    in_period = [r for r in incidents if start <= (pacing.timestamp(r.get("ts")) or 0) < end]
+    relevant = [r for r in in_period if r.get("agent") in pacing.PACING_POOLS]
+    excluded = collections.Counter(str(r.get("agent")) for r in in_period if r not in relevant)
     stats: dict = {}
     covered, expected = poll_coverage(start, end, now=now, snapshots=snapshots, stats=stats)
     coverage_text = (
@@ -1684,6 +1689,10 @@ def period_results(handoff: Path, snapshots: list[dict], now: float) -> dict:
     violations = sum(any(v == "ok" for v in states.values()) for states in judged)
     carried = sum(any(v == "exhausted" for v in states.values()) for states in judged)
     judged_text = f"incidents judged {len(judged)}/{len(relevant)} (other pool carried as exhausted in {carried})"
+    if excluded:
+        judged_text += " ; non-pacing incidents not counted: " + ", ".join(
+            f"{agent} {n}" for agent, n in sorted(excluded.items())
+        )
     ledger = (handoff / "rate-limit-incidents.ndjson").exists()
     if ledger and not unjudged:
         out["incidents"] = violations
@@ -1705,42 +1714,52 @@ def period_results(handoff: Path, snapshots: list[dict], now: float) -> dict:
             f"(poll missing while not exhausted); {judged_text}; observed violations={violations}; "
             f"{coverage_text} [usage store + rate-limit ledger]"
         )
-    groups = {"ok": [0, 0], "constrained": [0, 0]}
+    # Pass 3 (owner decision 2026-11-24, Orchestrator#1045), for EACH pacing pool: in hours when that pool is warn/shed
+    # and the other pacing pool is ok, its dispatch share falls to at most 1/PASS_SHARE_MULTIPLIER of its share in hours
+    # when both are ok. A side with fewer than SHARE_MIN_DISPATCHES dispatches leaves that pool unmeasured. The old
+    # codex-only form read 0.0 for 11-15..22 although routing moved 14x away from a shed claude: codex's warn hours
+    # were boundary ticks during which claude was shed (37 of 40).
+    sides = {pool: {"both_ok": [0, 0], "constrained": [0, 0]} for pool in pacing.PACING_POOLS}
     omitted = 0
     for event in starts:
         ts = pacing.timestamp(event.get("ts"))
         if ts is None or not start <= ts < end:
             continue
-        state = ((observed(ts) or {}).get("codex") or {}).get("state")
-        group = "ok" if state == "ok" else "constrained" if state in ("warn", "shed") else None
-        if group is None:
+        agents = observed(ts) or {}
+        states = {pool: (agents.get(pool) or {}).get("state") for pool in pacing.PACING_POOLS}
+        if any(state not in ("ok", "warn", "shed") for state in states.values()):
             omitted += 1
             continue
-        groups[group][0] += int(event["agent"] != "codex")
-        groups[group][1] += 1
-    # Owner 2026-11-18's rule for pass 2, applied to dispatches: a gap matters only if a dispatch falls in it. The
-    # share is a ratio over dispatches, so once every dispatch is classified (omitted == 0) an uncovered slot held
-    # none and cannot move it (#1045: one 2220 s poll gap voided every period).
-    if all(g[1] > 0 for g in groups.values()) and omitted == 0:
-        base = groups["ok"][0] / groups["ok"][1]
-        constrained = groups["constrained"][0] / groups["constrained"][1]
-        passed = constrained > 0 and constrained >= pacing.PASS_SHARE_MULTIPLIER * base
-        if constrained > 0 or base > 0:
-            out["share"] = {"ok": base, "constrained": constrained, "passed": passed}
-        verdict = (
-            ("PASS" if passed else "FAIL")
-            if constrained > 0 or base > 0
-            else "unmeasured — no non-codex dispatches"
-        )
+        for pool in pacing.PACING_POOLS:
+            others_ok = all(states[o] == "ok" for o in pacing.PACING_POOLS if o != pool)
+            side = "both_ok" if states[pool] == "ok" and others_ok else "constrained" if others_ok else None
+            if side:
+                sides[pool][side][0] += int(event["agent"] == pool)
+                sides[pool][side][1] += 1
+    floor = pacing.SHARE_MIN_DISPATCHES
+    parts, verdicts = [], {}
+    for pool, side in sides.items():
+        (a, n), (b, m) = side["both_ok"], side["constrained"]
+        text = f"{pool} both-ok {a}/{n}, {pool}-constrained {b}/{m}"
+        if n < floor or m < floor:
+            parts.append(f"{text} unmeasured (fewer than {floor} on a side)")
+            continue
+        base, constrained = a / n, b / m
+        verdicts[pool] = constrained <= base / pacing.PASS_SHARE_MULTIPLIER
+        parts.append(f"{text} = {base:.3f}->{constrained:.3f} {'PASS' if verdicts[pool] else 'FAIL'}")
+    # Owner 2026-11-18's rule for pass 2, applied to dispatches: a gap matters only if a dispatch falls in it, so the
+    # pass is measured once every dispatch is classified (omitted == 0), whatever the slot coverage.
+    if omitted == 0 and verdicts:
+        passed = all(verdicts.values())
+        out["share"] = {"pools": verdicts, "passed": passed}
         lines.append(
-            f"3: non-codex share ok={base:.3f}, warn/shed={constrained:.3f}; "
-            f"target ≥{pacing.PASS_SHARE_MULTIPLIER}×; {verdict}; {coverage_text}; "
-            f"counts={groups} [usage store + rate-limit ledger]"
+            f"3: constrained-pool share (target <=1/{pacing.PASS_SHARE_MULTIPLIER} of its both-ok share): "
+            f"{'; '.join(parts)}; {'PASS' if passed else 'FAIL'}; {coverage_text} [usage store + rate-limit ledger]"
         )
     else:
+        why = f"unclassified={omitted}" if omitted else "no pool reached the dispatch floor"
         lines.append(
-            f"3: unmeasured — would need dispatches in both codex ok and warn/shed hours; "
-            f"{coverage_text}; counts={groups}, unclassified={omitted} [usage store + rate-limit ledger]"
+            f"3: unmeasured — {why}; {'; '.join(parts)}; {coverage_text} [usage store + rate-limit ledger]"
         )
     return out
 
@@ -1785,7 +1804,7 @@ def pass_numbers(handoff: Path, now: float) -> dict:
             "as_of": as_of,
             "reason": line2[:400],
         },
-        "non_codex_share_at_least_double": {
+        "constrained_pool_share_halved": {
             "value": None if share is None else float(share["passed"]),
             "evidence_class": PASS_EVIDENCE,
             "as_of": as_of,

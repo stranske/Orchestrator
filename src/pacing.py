@@ -16,6 +16,12 @@ EARLY_SPEND_BAND = 0.10
 PASS_LOWER_MARGIN = 0.10
 PASS_UPPER_MARGIN = 0.05
 PASS_SHARE_MULTIPLIER = 2
+# The pools pacing steers between, and therefore the only pools whose quota incidents pass 2 counts (owner decision
+# 2026-11-24, Orchestrator#1045: all 23 incidents of 11-15..22 were vibe's 402 billing outage, none a pacing failure).
+PACING_POOLS = ("codex", "claude")
+# Pass 3 judges each pacing pool with fewer than this many dispatches on either side of its comparison as unmeasured
+# (owner decision 2026-11-24): 3 boundary hours of codex warn (50 dispatches) must not decide the goal.
+SHARE_MIN_DISPATCHES = 100
 DAY_SECONDS = 86400
 PERIOD_SECONDS = 7 * DAY_SECONDS
 TICK_SECONDS = 900  # Capacity recording cadence; distinct from scheduled usage polls.

@@ -78,7 +78,7 @@ FEATURES = (
     _goal(
         "capacity-pacing",
         "G3",
-        "non-codex warn/shed dispatch share at least twice ok share",
+        "constrained pacing pool dispatch share at most half its both-ok share",  # owner 2026-11-24 (#1045)
         "pacing_share",
     ),
     _goal(
@@ -309,7 +309,7 @@ def pacing_incidents(now: int) -> Measurement:
 
 
 def pacing_share(now: int) -> Measurement:
-    return _pacing(now, "non_codex_share_at_least_double")
+    return _pacing(now, "constrained_pool_share_halved")
 
 
 # The ledger is the ONLY owner of issues carrying this label: it opens, reopens and closes them on

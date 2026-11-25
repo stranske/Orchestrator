@@ -155,16 +155,26 @@ older events. This PR does not rewrite runtime inventory.
 `pacing-report` retains pass numbers **1–3** and the evidence classes:
 
 1. Usage at completed T1 within the fresh-source allowance and reserve bounds.
-2. Incidents while another pool was ok, with actual poll coverage and ledger evidence.
-3. Non-Codex dispatch share in Codex ok versus warn/shed hours (target ≥2×),
-   counting positive-count `event=start` records. Codex **warn** hours count as
-   constrained even when its routing weight remains high. That combination can
-   make pass 3 hard to satisfy; a high weight does not exempt warn hours.
+2. Incidents of a **pacing pool** (`pacing.PACING_POOLS`: codex, claude) while the other pool was ok, with
+   actual poll coverage and ledger evidence. Other agents' incidents (e.g. vibe's 402 spend-cap outage) are
+   printed as `non-pacing incidents not counted` and do not count (owner decision 2026-11-24, #1045: all 23
+   incidents of 11-15..22 were vibe billing refusals).
+3. For **each** pacing pool: its dispatch share in hours when it is warn/shed and the other pool is ok must be
+   at most half its share in hours when both are ok, counting positive-count `event=start` records. A side
+   with fewer than `pacing.SHARE_MIN_DISPATCHES` (100) dispatches leaves that pool unmeasured; the pass is
+   measured when at least one pool is, and passes when every measured pool does (owner decision 2026-11-24,
+   #1045). The earlier codex-only form ("non-Codex share in Codex warn/shed hours ≥2×") read FAIL for
+   11-15..22 because codex's warn hours were boundary ticks during which claude was shed (37 of 40), while
+   routing moved claude's share from 0.209 to 0.015 when claude was constrained.
 
 Passes 2 and 3 call **one shared coverage counter** for the same latest completed
 pool period: at each 600-second slot time, the poll in force for **each** provider
 must be no more than `STALE_AFTER_SECONDS` (1800 seconds) old. Fresh capacity-state
-evidence for both pools is also required. A pre-period poll may cover the first slot;
+evidence for both pools is also required: a `pacing_snapshot` is written once per hourly tick, so it stands
+for a slot up to `SNAPSHOT_STALE_AFTER_SECONDS` (one tick plus the poll allowance) later (#1475). With the
+1800-second rule applied to hourly snapshots, about half of every period's slots had no snapshot. Coverage
+gates a judgment only where an incident or dispatch falls in a gap: pass 2 judges each incident and pass 3
+is measured once every dispatch is classified. A pre-period poll may cover the first slot;
 a future poll cannot cover an earlier slot. Jitter and a healthy 650-second cadence
 therefore do not create artificial misses. The longest poll gap must also be no
 more than 1800 seconds: an outage over that allowance leaves at least one slot
