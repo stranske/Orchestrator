@@ -609,7 +609,10 @@ def test_unknown_exit_vibe_billing_refusal_sheds_the_seat(incident_paths, monkey
     marker = json.loads((rate_incidents.SHED_DIR / "vibe").read_text())
     assert marker["category"] == "quota"
     assert "tier_scope" not in marker  # the whole seat: the budget covers every vibe model
-    assert marker["expires_at"] > marker["created_at"]  # expires on its own; the next run re-tests
+    # Owner 2026-11-24 (#1045): a spend refusal with no reset is held until a probe run is answered, not benched
+    # until the next real job re-tests it (which cost vibe ~3 failed jobs a day from 2026-11-11).
+    assert marker["hold"] == rate_incidents.BILLING_HOLD and "expires_at" not in marker
+    assert marker["probe_after"] > marker["created_at"]
 
 
 # agy prints a Go time.Duration, which drops leading zero units (2026-11-12).

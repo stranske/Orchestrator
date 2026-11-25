@@ -2183,7 +2183,15 @@ def _shed_row(marker: dict, entry: Path, *, now: float) -> dict:
     age = row["age_days"]
     if not row["read_by_capacity"]:
         return row
-    if marker["state"] in ("manual", "unreadable") and age is not None:
+    if marker.get("hold") == "billing_probe":
+        # Drained by the daily probe, not by hand: suspect only when the probe has stopped running.
+        due = marker.get("probe_after")
+        if due is not None and now - due > 2 * 86400:
+            row["suspect"] = (
+                f"billing hold whose probe was due {capacity.utc_stamp(due)} and has not run since; "
+                "capacity.py's hourly run probes it (ORCH_BILLING_PROBE)"
+            )
+    elif marker["state"] in ("manual", "unreadable") and age is not None:
         if age > SHED_MANUAL_HORIZON_DAYS:
             row["suspect"] = (
                 f"held by hand for {age}d, past the {SHED_MANUAL_HORIZON_DAYS}d horizon; nothing "

@@ -98,6 +98,12 @@ def default_launch_check_off(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def default_billing_probe_off(monkeypatch):
+    """capacity.py's billing-hold probe sends a real model request; tests opt in explicitly."""
+    monkeypatch.setenv("ORCH_BILLING_PROBE", "0")
+
+
+@pytest.fixture(autouse=True)
 def default_unowned_pr_scan_off(monkeypatch):
     """The weekly unowned-PR scan reads this machine's lane journals and live GitHub; tests that
     exercise it call `switch_review.unowned_open_prs` with injected journals and a fake gh."""

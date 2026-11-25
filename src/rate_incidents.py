@@ -36,6 +36,14 @@ DEFAULT_COOLDOWN_S = 6 * 60 * 60
 ESCALATION_WINDOW_S = 72 * 60 * 60
 MAX_COOLDOWN_S = 72 * 60 * 60
 MAX_DEDUP_SCAN_BYTES = 1024 * 1024
+# A refusal for SPEND with no stated reset (HTTP 402, `billing_exhausted`) holds the seat until a probe run succeeds
+# (owner decision 2026-11-24, Orchestrator#1045). Before, the seat was benched 6-72 h and the next REAL job retried
+# it: vibe's Mistral budget has been exhausted since 2026-11-11, and every lapse of the bench cost a failed job and
+# a judge seat (23 incidents in 11-15..22). `probe_billing_holds` (run by capacity.py's hourly snapshot) sends one
+# one-line request per BILLING_PROBE_INTERVAL_S and clears the hold when it is answered.
+BILLING_HOLD = "billing_probe"
+BILLING_PROBE_INTERVAL_S = 24 * 60 * 60
+BILLING_PROBE_PROMPT = "Reply with the single word OK and nothing else."
 
 # codex `exec --json` events that mean the run DID something. An item whose own type is `error` is the
 # harness's warning (every run prints "Under-development features enabled"), not work.
@@ -895,8 +903,12 @@ def ensure_shed(
     reset_at: int | None = None,
     model: str | None = None,
     tier_scope: str | None = None,
+    hold: str | None = None,
 ) -> bool:
     """Write or extend one JSON marker without shortening or narrowing an active shed.
+
+    `hold=BILLING_HOLD` writes a marker with no expiry that `probe_billing_holds` clears. It supersedes a timed
+    cooldown, leaves an existing hold (and its probe schedule) as it is, and never replaces a manual marker.
 
     A whole-seat marker (no `tier_scope`) is never narrowed to one tier while it is active; a
     tier-scoped marker is widened to the whole seat when a whole-seat incident arrives.
@@ -914,22 +926,34 @@ def ensure_shed(
                 except (OSError, json.JSONDecodeError):
                     # Legacy empty or malformed markers remain manual, authoritative sheds.
                     return True
-                existing_expiry = existing.get("expires_at") if isinstance(existing, dict) else None
-                if (
-                    isinstance(existing_expiry, bool)
-                    or not isinstance(existing_expiry, (int, float))
-                    or not math.isfinite(existing_expiry)
-                ):
-                    return True
-                existing_scope = existing.get("tier_scope") if isinstance(existing, dict) else None
-                if existing_expiry > time.time():
-                    if existing_scope is None and tier_scope is not None:
-                        return True  # an active whole-seat shed is never narrowed
-                    widening = existing_scope is not None and tier_scope is None
-                    if not widening and (expires_at is None or expires_at <= existing_expiry):
+                if hold is not None:
+                    if isinstance(existing, dict) and existing.get("hold") == hold:
+                        return True  # already held; its probe schedule stands
+                    expiry = existing.get("expires_at") if isinstance(existing, dict) else None
+                    if (
+                        isinstance(expiry, bool)
+                        or not isinstance(expiry, (int, float))
+                        or not math.isfinite(expiry)
+                    ):
+                        return True  # a manual marker is the owner's; leave it
+                    # otherwise a hold supersedes the timed cooldown: write it below
+                else:
+                    existing_expiry = existing.get("expires_at") if isinstance(existing, dict) else None
+                    if (
+                        isinstance(existing_expiry, bool)
+                        or not isinstance(existing_expiry, (int, float))
+                        or not math.isfinite(existing_expiry)
+                    ):
                         return True
-                    if widening and (expires_at is None or expires_at < existing_expiry):
-                        expires_at = int(existing_expiry)
+                    existing_scope = existing.get("tier_scope") if isinstance(existing, dict) else None
+                    if existing_expiry > time.time():
+                        if existing_scope is None and tier_scope is not None:
+                            return True  # an active whole-seat shed is never narrowed
+                        widening = existing_scope is not None and tier_scope is None
+                        if not widening and (expires_at is None or expires_at <= existing_expiry):
+                            return True
+                        if widening and (expires_at is None or expires_at < existing_expiry):
+                            expires_at = int(existing_expiry)
             payload = {
                 "created_at": int(time.time()),
                 "category": category,
@@ -943,6 +967,9 @@ def ensure_shed(
                 payload["model"] = model
             if tier_scope is not None:
                 payload["tier_scope"] = tier_scope
+            if hold is not None:
+                payload["hold"] = hold
+                payload["probe_after"] = int(time.time()) + BILLING_PROBE_INTERVAL_S
             try:
                 with tempfile.NamedTemporaryFile(
                     mode="w", encoding="utf-8", dir=SHED_DIR, prefix=f".{agent}.", delete=False
@@ -1167,6 +1194,12 @@ def record_incident(
     model = failed_model(agent, evidence) or recorded_run_model(agent, run_id)
     tier_scope = tier_scope_for(agent, model) if category in ("quota", "rate_limit") else None
     shed_requested = bool(shed) and category != "model_rejected"
+    billing_hold = (
+        shed_requested
+        and reset_at is None
+        and isinstance(extra, dict)
+        and extra.get("subcategory") == "billing_exhausted"
+    )
     recovered = _is_recovered_fields(status=status, next_success_at=next_success_at, extra=extra)
     record: dict[str, Any] = {
         "schema": SCHEMA,
@@ -1223,6 +1256,8 @@ def record_incident(
             # Persist the escalated expiry before publication so dedup repair restores it exactly.
             cooldown = _cooldown_seconds(category, agent, timestamp, incident_id)
             expires_at = timestamp + cooldown if cooldown is not None else None
+            if billing_hold:
+                expires_at = None  # held until a probe run succeeds, not for a fixed bench
             if reset_at is not None and expires_at is not None:
                 expires_at = max(expires_at, reset_at)
             record["expires_at"] = expires_at
@@ -1260,6 +1295,7 @@ def record_incident(
             reset_at=reset_at,
             model=model,
             tier_scope=tier_scope,
+            hold=BILLING_HOLD if billing_hold else None,
         )
         if shed_requested and not recovered
         else False
@@ -1276,6 +1312,56 @@ def record_incident(
 
 def check_shed(agent: str) -> bool:
     return (SHED_DIR / agent).exists()
+
+
+def probe_billing_holds(*, now: float | None = None, offload=None) -> list[dict]:
+    """Probe each seat held for a billing refusal once its `probe_after` has passed; clear it when answered.
+
+    One one-line request per held seat per BILLING_PROBE_INTERVAL_S. A probe that is refused again (or cannot run)
+    moves `probe_after` on by the interval, so a held seat costs one tiny request a day and never a real job.
+    Never raises; returns one row per seat it looked at."""
+    now = time.time() if now is None else now
+    results: list[dict] = []
+    try:
+        markers = sorted(p for p in SHED_DIR.iterdir() if p.is_file() and not p.name.startswith("."))
+    except OSError:
+        return results
+    for marker in markers:
+        try:
+            payload = json.loads(marker.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(payload, dict) or payload.get("hold") != BILLING_HOLD:
+            continue
+        agent, due = marker.name, payload.get("probe_after")
+        if isinstance(due, (int, float)) and not isinstance(due, bool) and due > now:
+            results.append({"agent": agent, "probe": "not_due", "probe_after": int(due)})
+            continue
+        try:
+            if offload is None:
+                import dispatcher  # noqa: PLC0415
+
+                offload = dispatcher.offload
+            out = offload(agent, BILLING_PROBE_PROMPT, timeout=180, task_type="review",
+                          subject_id=f"billing-probe:{agent}") or {}
+            text = f"{out.get('output') or ''}\n{out.get('error') or ''}"
+            answered = out.get("exit") == 0 and not _contains_billing_refusal(text)
+        except Exception as exc:  # noqa: BLE001
+            answered, text = False, f"{type(exc).__name__}: {exc}"
+        if answered:
+            clear_shed(agent)
+            results.append({"agent": agent, "probe": "cleared"})
+            continue
+        with incident_lock():
+            try:
+                current = json.loads(marker.read_text(encoding="utf-8"))
+                if isinstance(current, dict) and current.get("hold") == BILLING_HOLD:
+                    current["probe_after"] = int(now) + BILLING_PROBE_INTERVAL_S
+                    marker.write_text(json.dumps(current, sort_keys=True) + "\n", encoding="utf-8")
+            except (OSError, ValueError):
+                pass
+        results.append({"agent": agent, "probe": "still_refused", "evidence": _redact_bounded(text)[:200]})
+    return results
 
 
 def clear_shed(agent: str) -> bool:

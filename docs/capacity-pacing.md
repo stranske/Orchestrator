@@ -454,3 +454,15 @@ until that UTC date. Cursor-top pick behavior is tracked separately in #891.
 includes `log_fields` (and `rate_incidents.py format-relay-pacing-fields` rebuilds them)
 from top-level `routing_weight` so a nested-only shell path cannot reintroduce
 `weights=*:unknown` after mirror sync.
+
+## Billing holds (owner decision 2026-11-24, #1045)
+
+A refusal for spend with no stated reset (`rate_incidents` subcategory `billing_exhausted`, e.g. HTTP 402 "Vibe
+budget exhausted") holds the seat with a shed marker that has no expiry and carries `hold: billing_probe` and
+`probe_after`. Before, such a seat was benched 6-72 h (#1418) and the next real job retried it; vibe's Mistral
+budget has been exhausted since 2026-11-11, so each lapse cost a failed job (23 incidents in 11-15..22). Now
+`capacity.py`'s hourly run calls `rate_incidents.probe_billing_holds()` after writing the snapshot: once per
+`BILLING_PROBE_INTERVAL_S` (24 h) it sends the held seat one one-line request, clears the hold when it is
+answered, and otherwise moves `probe_after` on. `ORCH_BILLING_PROBE=0` stops the probe (the hold then stays until
+the marker is removed by hand). The weekly sweep (`switch_review.capacity_shed`) marks a hold SUSPECT only when its
+probe is more than two days overdue, i.e. when nothing is draining it.
