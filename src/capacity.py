@@ -545,6 +545,11 @@ def shed_marker(
     found["reset_at"] = _finite_number(payload.get("reset_at"))
     found["created_at"] = _finite_number(payload.get("created_at"))
     expires_at = _finite_number(payload.get("expires_at"))
+    if expires_at is None and payload.get("hold") == "billing_probe":
+        # rate_incidents.BILLING_HOLD: no expiry by design; rate_incidents.probe_billing_holds clears it.
+        probe_after = _finite_number(payload.get("probe_after"))
+        found.update(hold="billing_probe", probe_after=probe_after)
+        return {**found, "why": "a billing refusal with no stated reset"}
     if expires_at is None:
         if "expires_at" not in payload:
             return {**found, "why": "no expires_at"}
@@ -808,6 +813,13 @@ def shed_reason(marker: dict) -> str:
     else:
         named = marker["incident_id"] is not None or marker["category"] is not None
         cause = f", from {_shed_cause(marker)}" if named else ""
+        if marker.get("hold") == "billing_probe":
+            due = marker.get("probe_after")
+            when = utc_stamp(due) if due is not None else "at the next capacity run"
+            return (
+                f"shed by a billing hold ({marker['why']}{cause}): the hourly capacity run probes it with "
+                f"one one-line request from {when} and clears it when answered; or remove {path}"
+            )
         held = f"a manual marker with no expiry ({marker['why']}{cause})"
     return f"shed by {held}: nothing clears it automatically; remove {path} to re-enable {agent}"
 
@@ -1772,6 +1784,16 @@ def main(argv):
     OUT.write_text(json.dumps(snap, indent=2) + "\n")
     for message in snap.get("pacing_fyi", []):
         print(message, file=sys.stderr)
+    if os.environ.get("ORCH_BILLING_PROBE", "1") != "0":
+        # A seat held for a billing refusal is probed here, after the snapshot is written (owner 2026-11-24).
+        try:
+            import rate_incidents
+
+            for row in rate_incidents.probe_billing_holds():
+                if row["probe"] != "not_due":
+                    print(f"billing hold probe: {json.dumps(row, sort_keys=True)}", file=sys.stderr)
+        except Exception as exc:  # noqa: BLE001  (a probe never fails the snapshot)
+            print(f"billing hold probe failed: {type(exc).__name__}: {exc}", file=sys.stderr)
     print(json.dumps(snap, indent=2))
     return 0
 

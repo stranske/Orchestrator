@@ -11,6 +11,7 @@
   "untimed_modules": [
     "tests/test_advisor_external_guard.py",
     "tests/test_advisor_hermetic.py",
+    "tests/test_billing_hold.py",
     "tests/test_capability_matcher_proposals.py",
     "tests/test_capability_opportunity.py",
     "tests/test_cursor_cost_source.py",
@@ -137,6 +138,7 @@
       "tests/test_outcomes_unanswered_lookup.py",
       "tests/test_prune_claude_keychain_slots.py",
       "tests/test_pushed_branch_attribution.py",
+      "tests/test_billing_hold.py",
       "tests/test_rate_incidents.py",
       "tests/test_redirect_decompose_calls_the_role.py",
       "tests/test_rejected_role_capability_edges.py",
