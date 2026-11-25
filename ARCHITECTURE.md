@@ -205,6 +205,7 @@ work patterns. So the same lane code also runs as a fourth controller seat on Gi
 - **When it runs:** only when the last pass by any seat is older than 45 minutes (`stamp.json` on that repo's `state` branch).
 - **State:** the lanes' decision ledgers travel on the same branch, so a hosted pass decides from the same state as a local pass. A cold ledger was shown to change decisions.
 - **Imports:** the seat imports this repo's `src` as `ORCH_MIRROR`.
+- **Brain writes:** a runner's Brain is thrown away, so the seat sets `ORCH_FEEDBACK_JOURNAL` and `feedback.py` journals every top-level call of its public writers (`@_journaled`: `record_run`, `record_outcome`, `record_role_run` and the rest). The file travels on the `state` branch; before every local pass the Mac replays it into its own Brain with `feedback.py journal-replay` (the same writers, so a replay merges) and deletes it. The seat prints `journal-coverage` each pass: the journal replayed into an empty store and compared with the runner's Brain table by table, so a write made outside those writers is named instead of lost. Without the journal, a hosted start's `remote:` row, which `keepalive_outcomes` joins keepalive results to, never reached the Mac.
 - **Lanes:** each lane joins its schedule only after a parity check (the same decisions as the local seat at the same moment). Design: `Audits/closer-lane-2026-11/rebuild/HOSTED_SEAT_DESIGN.md`.
 
 **The Orchestrator's four real interfaces to that pipeline:**
@@ -260,15 +261,6 @@ offload to GitHub when local load would hurt performance. Two rails, no role:
   line prints `local agents 0/0, drainable 0 here` and names the setting, because nothing on that host drains
   it. Unset or unparseable keeps the measured cap of 3. Without it a runner's absent claims file read as
   unknown and failed toward LOCAL mode.
-  The same seat's Brain writes reach this host through a journal (`feedback.ORCH_FEEDBACK_JOURNAL`,
-  2026-11-25): a runner starts with an empty `orchestrator.db`, so its `remote:` start rows, role runs and
-  closer outcomes would die with it, and `keepalive_outcomes` joins keepalive results to exactly the
-  `remote:` row. With the variable set, each top-level call of a journaled writer (`record_run`,
-  `record_outcome`, `record_role_run`, ... — the `@_journaled` set) is appended as JSON; the seat carries
-  the file on the lanes `state` branch and the Mac's next catch-up runs `feedback.py journal-replay`, which
-  makes the same calls here (the writers merge with existing rows; a failing line is reported, never
-  blocking). `feedback.py journal-coverage` replays into an empty store and names every table whose rows
-  the journal does not reproduce, so a write outside the journaled writers is printed rather than lost.
 - **`local_loop.py tick`** (controller pass, ~15 min) — one GraphQL search per tick for open PRs labelled
   `agents:local-loop`; a PR whose head and check rollup were already acted on costs nothing more. When CI
   reports on the head the last round pushed: red -> re-run the agent on the PR's head branch (lane
