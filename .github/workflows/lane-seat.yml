@@ -4,8 +4,12 @@ name: Lane seat (hosted controller)
 # snapshot repo stranske/lanes, as a backstop. It runs a pass only when the last pass by ANY seat (stamp.json on the
 # lanes `state` branch) is older than lane_state.HOSTED_STALE_AFTER (45 min). Ledgers travel on that branch, so a
 # hosted pass decides from the same state a local pass would. Design and stop rules:
-# Audits/closer-lane-2026-11/rebuild/HOSTED_SEAT_DESIGN.md (owner workspace). Scheduled lanes: closer-core and sync-core (closer parity 2026-11-25, Orchestrator run 45544064284); opener-core joins
-# after its parity check (its cap and demand readers do not yet run on Linux).
+# Audits/closer-lane-2026-11/rebuild/HOSTED_SEAT_DESIGN.md (owner workspace).
+# Scheduled lanes: closer-core and sync-core (closer parity 2026-11-25, Orchestrator run 45544064284).
+# Opener-core remains manual opt-in. The 2026-11-25 Linux shadow matched the Mac cap, demand, and all eight decisions:
+# https://github.com/stranske/Orchestrator/actions/runs/45601106673/job/139159949563
+# Before scheduling opener-core, verify five attributable hosted starts and their downstream receipts, plus retry
+# and concurrent-claim checks. The 2026-11-25 comparison had zero of five attributable hosted starts.
 #
 # pull_request: a read-only shadow round (never leases, never pushes state).
 # workflow_dispatch: mode shadow (default) or apply; force skips the staleness check (never a live lease).
