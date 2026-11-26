@@ -104,7 +104,7 @@ function auditProvisionLedger(root, sourceDirectory, { now = new Date().toISOStr
     process.env.ORCH_LOCAL_RUNTIME ?? path.join(os.homedir(), '.codex', 'orchestrator'),
     'provision-events.ndjson') } = {}) {
   root = fs.realpathSync(root);
-  const result = { schema_version: 1, deployment_acceptance_verified: false,
+  const result = { schema_version: 1,
     reporter_sha256: sha256(readRegular(__filename)),
     coverage: 'UNKNOWN', continuous_since: null, checked_at: null, observed_after: observedAfter,
     counts: {}, branch_refusals: 0, malformed_lines: 0, segments: [],
@@ -331,8 +331,7 @@ function formatReport(report) {
       ...(pending(report) ? [`provision: pending = ${100 - report.cohort.evaluated} more operations (exit ${PENDING}); nothing else is unmet`] : []),
     ] : []),
     `provision: ledger evidence = ${report.evidence_ready ? 'ready' : 'unmet acceptance'}`,
-    ...report.continuity_failures.map((reason) => `provision: UNKNOWN: ${reason}`),
-    'provision: native/full-verifier/mirror acceptance requires separate receipts'].join('\n');
+    ...report.continuity_failures.map((reason) => `provision: UNKNOWN: ${reason}`)].join('\n');
 }
 
 function main(args) {

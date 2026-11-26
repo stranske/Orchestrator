@@ -42,7 +42,7 @@ test('retains complete real Python streams, selected revision and both floor blo
   assert.equal(receipt.passed, true);
   assert.equal(receipt.revision, options.revision);
   assert.deepEqual(receipt.command, [python, 'src/verify.py']);
-  assert.equal(receipt.deployment_acceptance_verified, false);
+  assert.equal('deployment_acceptance_verified' in receipt, false);
   assert.equal(receipt.floor.comparison_exit_code, 0);
   assert.equal(receipt.floor.delivered_sha256, receipt.floor.origin_main_sha256);
   assert.deepEqual(fs.readFileSync(path.join(options.output, 'delivered-floor.json')),
@@ -94,7 +94,7 @@ test('the real verifier pytest stage preserves a missing-interpreter-prerequisit
   assert.equal(receipt.execution.exit_code, result.returncode);
   assert.equal(receipt.floor.matches, true);
   assert.equal(receipt.passed, false);
-  assert.equal(receipt.deployment_acceptance_verified, false);
+  assert.equal('deployment_acceptance_verified' in receipt, false);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(options.output, 'receipt.json'))), receipt);
 });
 

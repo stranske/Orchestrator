@@ -60,7 +60,7 @@ function runVerify({ root = path.resolve(__dirname, '..'), python, revision, out
     started_at: new Date().toISOString(), checkout_status_before: before,
     floor: { matches: floorMatches, comparison_exit_code: floorMatches ? 0 : 1,
       delivered_sha256: digest(deliveredFloor), origin_main_sha256: digest(mainFloor) },
-    passed: false, deployment_acceptance_verified: false };
+    passed: false };
   try {
     const env = { ...process.env, ORCH_STATE_DIR: path.join(state, 'state'),
       ORCH_LOCAL_RUNTIME: path.join(state, 'runtime'), HANDOFF_DIR: path.join(state, 'handoff'),

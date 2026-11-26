@@ -186,7 +186,7 @@ function runWitnesses({ root = path.resolve(__dirname, '..'), mirror, python, re
       mirror_manifest_after_sha256: null,
       floor_matches_origin_main: true, checks: [], source_unchanged: false,
       native_witnesses_passed: false, full_suites_requested: fullSuites, suites: [],
-      default_native_suites_passed: false, deployment_acceptance_verified: false };
+      default_native_suites_passed: false };
     const pytestArgs = ['-E', '-B', '-m', 'pytest', '-o', 'addopts=', '-p', 'no:cacheprovider',
       '-m', 'not slow', '-q'];
     function runCheck(name, args, environment, names) {
@@ -276,8 +276,7 @@ if (require.main === module) {
     const receipt = runWitnesses({ ...values, fullSuites: values['full-suites'],
       timeout: values.timeout === undefined ? 60000 : Number(values.timeout) });
     process.stdout.write(JSON.stringify({ native_witnesses_passed: receipt.native_witnesses_passed,
-      default_native_suites_passed: receipt.default_native_suites_passed,
-      deployment_acceptance_verified: false }) + '\n');
+      default_native_suites_passed: receipt.default_native_suites_passed }) + '\n');
     process.exitCode = receipt.native_witnesses_passed
       && (!receipt.full_suites_requested || receipt.default_native_suites_passed) ? 0 : 1;
   } catch (error) {
