@@ -1,0 +1,170 @@
+version: 1
+issue: 1499
+base: main
+branch: codex/issue-1499
+tasks:
+  - id: task-01
+    title: Fix the source failure affecting `tests/test_gate_commit_status_fork_tolerance.py`
+      in `verify.py aggregate + combined coverage`, using the linked evidence.
+    status: doing
+    started_at: '2026-11-26T07:10:39Z'
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-02
+    title: 'Identify which source module in stranske/Workflows emits the ''no matching
+      authored PR head'' warning (verify: confirm completion in repo)'
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-03
+    title: 'document the cause in the PR description. (verify: confirm completion
+      in repo)'
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-04
+    title: 'Reproduce the six failing tests locally with pytest (verify: tests pass)'
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-05
+    title: 'Reproduce the six failing tests locally with confirm they fail with the
+      same warning as the linked CI log. (verify: tests pass)'
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-06
+    title: 'Fix the head-matching logic or the shared test fixture so the gate summary
+      matches the authored PR head in all six cases. (verify: confirm completion in
+      repo)'
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-07
+    title: _(2 further sub-tasks elided; split this issue)_
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-08
+    title: Add or extend a regression test for the reported failure using `pytest`
+      or `node --test`, whichever the source uses.
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-09
+    title: 'Add a pytest case that builds a gate summary with a matching authored
+      PR head (verify: confirm completion in repo)'
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-10
+    title: 'Add a pytest case that builds a gate summary with asserts no ''no matching
+      authored PR head'' warning is produced. (verify: confirm completion in repo)'
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-11
+    title: 'Extend the fork-tolerance tests to assert that a gate summary with a non-matching
+      head still produces the skip-comment warning. (verify: tests pass)'
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-12
+    title: '`verify.py aggregate + combined coverage` passes on regenerated sync PR
+      stranske/Orchestrator#1497, verified with `gh run view <run-id>`, and the repository''s
+      test command passes locally.'
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-13
+    title: Reintroducing the reported behavior makes the regression test fail; reverting
+      that deliberate break makes it pass.
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-14
+    title: The next sync-core round classifies stranske/Orchestrator#1497 without
+      this finding.
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-15
+    title: Fix the failure named in the title (`verify.py aggregate + combined coverage`)
+      at its source; the failing check's log is linked under Evidence and the sync
+      PR is stranske/Orchestrator#1497.
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-16
+    title: Add or extend a test that reproduces the failure and passes after the fix
+      (`pytest` or `node --test`, whichever the source uses).
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-17
+    title: '`verify.py aggregate + combined coverage` passes on regenerated sync PR
+      stranske/Orchestrator#1497, verified with `gh run view <run-id>` (This depends
+      on the maint-68 sync workflow regenerating a PR in another repository (stranske/Orchestrator).
+      The agent cannot trigger or retry CI or sync runs, and cannot modify `.github/workflows/*.yml`.
+      It also cannot edit the consumer PR, which the Non-Goals forbid. | Limit the
+      agent-verifiable criterion to the local test command passing in stranske/Workflows.
+      Leave the Orchestrator#1497 run check to a human maintainer after merge and
+      sync.)'
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-18
+    title: The next sync-core round classifies stranske/Orchestrator#1497 without
+      this finding. (This is an external, asynchronous event outside the agent's control.
+      It cannot be checked inside the fixing PR. | Move it to a post-merge manual
+      verification step, or drop it from the agent's acceptance criteria.)
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
+  - id: task-19
+    title: Fix the source failure (possible hidden dependency) (If the root cause
+      is in `.github/workflows/maint-68-sync-consumer-repos.yml` or another protected
+      workflow file, the agent cannot make the edit. The issue does not say where
+      the source lives. | Add a note naming the likely source files (for example the
+      gate-summary script and its fixtures). If a workflow YAML change is required,
+      flag it for a human to make.)
+    status: todo
+    started_at: null
+    finished_at: null
+    commit: ''
+    notes: []
