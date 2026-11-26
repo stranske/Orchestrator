@@ -62,7 +62,7 @@ def test_codex_profiles_share_one_pool(codex_profile_registry):
         if profile["agent"] == "codex"
         and profile["profile_id"] not in execution_profiles.PROFILE_RETIREMENTS
     }
-    assert len(codex_only) == 9, sorted(codex_only)
+    assert len(codex_only) == 10, sorted(codex_only)
     events = [
         {"selected_profile_id": profile_id, "event": "start", "units": 1}
         for profile_id in codex_only
@@ -148,7 +148,13 @@ def test_exact_codex_profile_commands_preserve_permission_rails(monkeypatch):
         )
         assert assess[assess.index("--sandbox") + 1] == "read-only"
         assert "--json" not in assess
-    assert models == {"gpt-6.2-astra", "gpt-6.2-sol", "gpt-5.6-terra", "gpt-6-luna"}
+    assert models == {
+        "gpt-6.2-astra",
+        "gpt-6.2-sol",
+        "gpt-6.1-terra",
+        "gpt-5.6-terra",
+        "gpt-6-luna",
+    }
 
 
 def test_nested_sandbox_never_widens_read_only_profile(monkeypatch):
@@ -556,7 +562,7 @@ def test_profile_report_surfaces_cold_starts_propensity_and_shared_pool(tmp_path
         if profile["agent"] == "codex"
         and profile["profile_id"] not in execution_profiles.PROFILE_RETIREMENTS
     )
-    assert len(codex_candidates) == 9, codex_candidates
+    assert len(codex_candidates) == 10, codex_candidates
     all_codex_profiles = [
         profile
         for profile in execution_profiles.PROFILE_REGISTRY.values()
@@ -588,6 +594,7 @@ def test_profile_report_surfaces_cold_starts_propensity_and_shared_pool(tmp_path
         "gpt-6.2-astra",
         "gpt-6.2-sol",
         "gpt-5.6-terra",
+        "gpt-6.1-terra",
         "gpt-6-luna",
         "gpt-5.6-sol",
         "gpt-5.6-luna",

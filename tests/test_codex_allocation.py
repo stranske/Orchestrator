@@ -17,8 +17,8 @@ def test_task_routes_use_the_requested_effort_and_preserve_escalation(tmp_path, 
     cap = {"agents": {"codex": {"state": "ok"}}}
     expected = {
         "implement": ("codex-6.2-sol-high", "high"),
-        "testgen": ("codex-5.6-terra-medium", "medium"),
-        "review": ("codex-5.6-terra-medium", "medium"),
+        "testgen": ("codex-6.1-terra-medium", "medium"),
+        "review": ("codex-6.1-terra-medium", "medium"),
         "epic": ("codex-6.2-astra-medium", "medium"),
         "cross_repo": ("codex-6.2-astra-medium", "medium"),
     }
@@ -46,9 +46,9 @@ def test_explicit_astra_assessment_pins_model_effort_and_read_only_sandbox(tmp_p
 
 def test_offload_modes_select_bounded_profiles():
     for mode, profile_id in {
-        None: "codex-5.6-terra-medium",
+        None: "codex-6.1-terra-medium",
         "cheap": "codex-6-luna-low",
-        "mid": "codex-5.6-terra-medium",
+        "mid": "codex-6.1-terra-medium",
         "full": "codex-6.2-sol-high",
         "assess": "codex-6.2-sol-medium",
     }.items():
@@ -79,7 +79,7 @@ def test_operator_tier_pins_and_ceiling_override_automatic_profiles(monkeypatch,
     argv = adapters.build_command(
         "codex", "x", mode=routed["mode"], reasoning_effort=routed["reasoning_effort"]
     )
-    assert argv[argv.index("--model") + 1] == "gpt-5.6-terra"
+    assert argv[argv.index("--model") + 1] == "gpt-6.1-terra"
 
 
 def test_default_offload_honors_mid_override(monkeypatch):
@@ -93,7 +93,7 @@ def test_direct_delegate_honors_closer_lane_and_explicit_mode():
     choose = execution_profiles.default_codex_delegate_profile
     assert choose("implement", "opener") == "codex-6.2-sol-high"
     assert choose("implement", "closer") == "codex-6.2-sol-medium"
-    assert choose("implement", "closer", "mid") == "codex-5.6-terra-medium"
+    assert choose("implement", "closer", "mid") == "codex-6.1-terra-medium"
     assert choose("implement", "opener", "cheap") == "codex-6-luna-low"
 
 
