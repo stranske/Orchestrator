@@ -28,10 +28,32 @@ from paths import MODULE_DIR, runtime_state_path
 EXPERIMENT = "strategy434-20261006"
 EXCLUDED = "stranske/" + "Collab-Admin"
 MAX_COLLECTION_GAP = timedelta(hours=2)
+# The provisioning behaviour a cohort measures: provision.py plus the modules it
+# imports (worktree_git lazily for holder inspection, claims for the claim
+# check). scripts/audit_provision_ledger.js hashes the same list in this order.
+INSTRUMENT_FILES = ("provision.py", "worktree_git.py", "claims.py")
 
 
 def digest(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
+
+
+def instrument_digest(directory: Path, failures: list[str]) -> str | None:
+    """Hash each instrument file's name and bytes, in order; a missing file yields no digest."""
+    combined = hashlib.sha256()
+    missing = []
+    for name in INSTRUMENT_FILES:
+        try:
+            raw = (directory / name).read_bytes()
+        except OSError:
+            missing.append(name)
+            continue
+        combined.update(f"{name}\0{len(raw)}\0".encode())
+        combined.update(raw)
+    if missing:
+        failures.append(f"provision instrument file unavailable: {', '.join(missing)}")
+        return None
+    return combined.hexdigest()
 
 
 def document(value: object) -> bytes:
@@ -158,7 +180,7 @@ def provision_report(root: Path, state: dict, now: datetime, instrument: Path) -
                     key = item.get("target", "unknown")
                     if ts > when(latest.get(key, {"ts": cutoff.isoformat()})["ts"]):
                         latest[key] = item
-    source = digest(instrument.read_bytes())
+    source = instrument_digest(instrument.parent, failures)
     collector_source = digest((MODULE_DIR / "followup_evidence.py").read_bytes())
     if not files:
         failures.append("no ledger")
@@ -168,7 +190,7 @@ def provision_report(root: Path, state: dict, now: datetime, instrument: Path) -
             failures.append("collector continuity gap exceeds two hours")
         if collector_source != state.get("collector_sha256"):
             failures.append("collector implementation changed; new baseline required")
-        if source != state.get("instrument_sha256"):
+        if source is not None and source != state.get("instrument_sha256"):
             failures.append("provision instrument changed; new baseline required")
         # A rename is acceptable only if an intact prior prefix still exists in
         # an active/archive segment. Never deduplicate events from the count.

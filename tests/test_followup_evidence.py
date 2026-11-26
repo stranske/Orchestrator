@@ -24,9 +24,14 @@ def event(**changes):
     }
 
 
+def write_instrument(directory: Path, version: str = "v1") -> Path:
+    for name in evidence.INSTRUMENT_FILES:
+        (directory / name).write_text(f"{name}-{version}")
+    return directory / "provision.py"
+
+
 def test_intact_active_archive_and_continuity_are_distinct_from_zero(tmp_path):
-    instrument = tmp_path / "provision.py"
-    instrument.write_text("instrument-v1")
+    instrument = write_instrument(tmp_path)
     active = tmp_path / "provision-events.ndjson"
     active.write_text(json.dumps(event()) + "\n")
     archive = tmp_path / "provision-events.ndjson.old"
@@ -51,8 +56,7 @@ def test_intact_active_archive_and_continuity_are_distinct_from_zero(tmp_path):
 
 
 def test_rotation_keeps_prefixes_and_malformed_data_cannot_make_zero(tmp_path):
-    instrument = tmp_path / "provision.py"
-    instrument.write_text("instrument")
+    instrument = write_instrument(tmp_path)
     active = tmp_path / "provision-events.ndjson"
     active.write_text(json.dumps(event(outcome="ok", cause="new-worktree")) + "\n")
     _, state = evidence.provision_report(tmp_path, {}, NOW, instrument)
@@ -106,6 +110,45 @@ def receipt(tmp_path, index=1):
     export = tmp_path / f"run-{index}.receipt.json"
     export.write_text(json.dumps(raw))
     return expected, raw, export
+
+
+def test_a_change_to_worktree_git_or_claims_restarts_the_baseline(tmp_path):
+    # provision.py imports both modules; a change to either is a provisioning change.
+    instrument = write_instrument(tmp_path)
+    (tmp_path / "provision-events.ndjson").write_text(
+        json.dumps(event(outcome="ok", cause="new-worktree")) + "\n"
+    )
+    _, state = evidence.provision_report(tmp_path, {}, NOW, instrument)
+    baseline = NOW
+    hour = 0
+    for changed in ("worktree_git.py", "claims.py"):
+        hour += 1
+        kept, state = evidence.provision_report(
+            tmp_path, state, NOW + timedelta(hours=hour), instrument
+        )
+        assert kept["continuity_failures"] == []
+        assert kept["continuous_since"] == baseline.isoformat()
+        (tmp_path / changed).write_text(f"{changed}-edited")
+        hour += 1
+        baseline = NOW + timedelta(hours=hour)
+        restarted, state = evidence.provision_report(tmp_path, state, baseline, instrument)
+        assert restarted["continuous_since"] == baseline.isoformat()
+        assert (
+            "provision instrument changed; new baseline required"
+            in restarted["continuity_failures"]
+        )
+        assert restarted["instrument_sha256"] != kept["instrument_sha256"]
+
+
+def test_a_missing_instrument_file_is_a_continuity_failure_never_a_digest(tmp_path):
+    instrument = write_instrument(tmp_path)
+    (tmp_path / "provision-events.ndjson").write_text("")
+    _, state = evidence.provision_report(tmp_path, {}, NOW, instrument)
+    (tmp_path / "claims.py").unlink()
+    report, state = evidence.provision_report(tmp_path, state, NOW + timedelta(hours=1), instrument)
+    assert report["instrument_sha256"] is None
+    assert "provision instrument file unavailable: claims.py" in report["continuity_failures"]
+    assert report["coverage"] == "UNKNOWN"
 
 
 def test_original_export_requires_cache_prices_terminal_binding_and_raw_equality(tmp_path):
