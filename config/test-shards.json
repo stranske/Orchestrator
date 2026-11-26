@@ -14,6 +14,8 @@
     "tests/test_billing_hold.py",
     "tests/test_capability_matcher_proposals.py",
     "tests/test_capability_opportunity.py",
+    "tests/test_codex_family_update.py",
+    "tests/test_codex_subagent_setting.py",
     "tests/test_cursor_cost_source.py",
     "tests/test_followup_evidence.py",
     "tests/test_gate_dispatch_recovery.py",
@@ -308,7 +310,8 @@
       "tests/test_observability_dashboard.py",
       "tests/test_experiment_reservation.py",
       "tests/test_gemini_full_split.py",
-      "tests/test_router_comparative.py"
+      "tests/test_router_comparative.py",
+      "tests/test_codex_subagent_setting.py"
     ],
     [
       "tests/test_adjudicator_retry_history.py",
@@ -452,7 +455,8 @@
       "tests/test_gate_label_job.py",
       "tests/test_runtime_ac_pr_body_spec.py",
       "tests/test_switch_review_stuck_targets.py",
-      "tests/test_switch_review_unowned_prs.py"
+      "tests/test_switch_review_unowned_prs.py",
+      "tests/test_codex_family_update.py"
     ],
     [
       "tests/test_activation_audit_source_memo.py",

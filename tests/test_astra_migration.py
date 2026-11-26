@@ -4,7 +4,7 @@ import execution_profiles
 
 def test_full_tier_routes_sol_and_astra_remains_explicit():
     assert adapters.resolve_model("codex", "full") == "gpt-6.2-sol"
-    assert adapters.resolve_model("codex", "mid") == "gpt-5.6-terra"
+    assert adapters.resolve_model("codex", "mid") == "gpt-6.1-terra"
     assert adapters.resolve_model("codex", "cheap") == "gpt-6-luna"
     active = {p["requested_model"] for p in execution_profiles.profiles_for_agent("codex")}
     assert "gpt-6.2-astra" in active
