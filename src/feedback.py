@@ -134,6 +134,9 @@ _JOURNAL_SECRET_STANDIN = "sk-redacted-in-journal"
 _JOURNALED: dict[str, Callable] = {}
 _journal_state = threading.local()
 _real_time = time
+# Writers that generate their identity when the caller omits it: the journal records the identity the original
+# call returned, so a replay writes the runner's event instead of deriving another one.
+_JOURNAL_RESULT_IDENTITY = {"record_role_selector_event": ("role_run_id", "run_id")}
 
 
 class _ReplayClock:
@@ -245,6 +248,12 @@ def _journaled(fn: Callable) -> Callable:
             # Part of the caller's open transaction (ingest_profile_trial), which may still roll back: not
             # journaled, so journal-coverage names its table instead of a replay committing a row that never was.
             return result
+        param, key = _JOURNAL_RESULT_IDENTITY.get(fn.__name__, (None, None))
+        if param and isinstance(result, dict) and result.get(key):
+            entry = json.loads(line)
+            if "args" in entry and not entry["args"].get(param):
+                entry["args"][param] = result[key]
+                line = json.dumps(entry, sort_keys=True)
         journal = Path(path)
         journal.parent.mkdir(parents=True, exist_ok=True)
         with journal.open("a") as fh:

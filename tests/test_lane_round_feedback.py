@@ -319,12 +319,13 @@ def test_a_replay_keeps_every_clock_default_and_clock_derived_identity(tmp_path,
     journal.write_text("".join(json.dumps({**e, "at": at}) + "\n" for e in lines))
 
     events = "SELECT event_id FROM completion_events WHERE producer='roles'"
+    runner_events = _rows(tmp_path / "runner.db", events)
     first = _journal_store(tmp_path, monkeypatch, "mac")
     assert feedback.replay_journal(journal)["rejected"] == 0
     assert _rows(first, "SELECT pulled_ts FROM costs") == [(1_600_000_000,)]
     second = _journal_store(tmp_path, monkeypatch, "mac2")
     feedback.replay_journal(journal)
-    assert _rows(first, events) == _rows(second, events) != []
+    assert _rows(first, events) == _rows(second, events) == runner_events != []
 
 
 def test_a_retried_replay_does_not_write_old_values_over_newer_local_ones(tmp_path, monkeypatch):
