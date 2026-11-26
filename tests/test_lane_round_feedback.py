@@ -345,6 +345,11 @@ def test_a_completion_payload_is_journaled_redacted_and_replays_the_same_row(tmp
         },
         timestamp=1700000000,
     )
+    feedback.record_completion_event(
+        "remote:o/r#9i:codex",
+        payload={"retry_sequence": "string retry text"},
+        timestamp=1700000000,
+    )
     feedback.record_run("remote:o/r#9h:codex", "o/r#9h", "implement", "codex", mode="remote")
     feedback.record_influence_edge(
         target_run_id="remote:o/r#9h:codex",
@@ -352,7 +357,7 @@ def test_a_completion_payload_is_journaled_redacted_and_replays_the_same_row(tmp
         influence_id="role:needs-human",
         accepted=True,
         allow_unlinked=True,
-        metadata={"notes_hash": "edge metadata text", "status": "ok"},
+        metadata={"notes_hash": "edge metadata text", "status": "edge status text"},
     )
     monkeypatch.delenv(feedback.JOURNAL_ENV)
     text = journal.read_text()
@@ -377,6 +382,8 @@ def test_a_completion_payload_is_journaled_redacted_and_replays_the_same_row(tmp
         "single retry text",
         "nondict result text",
         "edge metadata text",
+        "edge status text",
+        "string retry text",
     ):
         assert private not in text
     sql = (

@@ -299,7 +299,7 @@ def _journal_scrub_payload(payload):
                         for k, v in row.items()
                     }
                     if isinstance(row, dict)
-                    else _journal_scrub(row, keys=True)
+                    else _JOURNAL_REDACTED  # a non-dict row is rejected as invalid_object, never stored
                 )
                 for row in value
             ]
@@ -374,6 +374,13 @@ def _journal_call(
         scrubbed = _journal_scrub_payload({"result": bound.arguments["kwargs"]["metadata"]})[
             "result"
         ]
+        if isinstance(
+            scrubbed, dict
+        ):  # only its hash is stored, so no text value need travel either
+            scrubbed = {
+                k: (_journal_hashed(v) if isinstance(v, str) and v else v)
+                for k, v in scrubbed.items()
+            }
         bound.arguments["kwargs"]["metadata"] = call["metadata"] = scrubbed
     if fn.__name__ == "record_completion_event" and "payload" in bound.arguments:
         # The writer gets the journal's payload too, so the runner's row and the replayed row come from the same
