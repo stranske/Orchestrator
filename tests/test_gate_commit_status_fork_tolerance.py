@@ -242,8 +242,10 @@ COMMENT_RUNNER = HARNESS_PRELUDE + textwrap.dedent("""
       );
       const record = newRecord();
       record.commentRequests = [];
+      record.commentUpdates = [];
       const error = makeError(spec.error);
-      const listComments = async () => ({ data: [] });
+      const comments = spec.existingComment ? [spec.existingComment] : [];
+      const listComments = async () => ({ data: comments });
       // `__testMock` is the marker the rate-limit wrapper honours, so the REAL comment-dedupe.js
       // drives this stub client directly.
       const github = {
@@ -256,6 +258,10 @@ COMMENT_RUNNER = HARNESS_PRELUDE + textwrap.dedent("""
               if (error) throw error;
               return { status: 201, data: { id: 1 } };
             },
+            updateComment: async (request) => {
+              record.commentUpdates.push(request);
+              return { status: 200 };
+            },
           },
           pulls: {
             get: async ({ pull_number }) => {
@@ -265,7 +271,7 @@ COMMENT_RUNNER = HARNESS_PRELUDE + textwrap.dedent("""
           },
         },
         paginate: async (method) => {
-          if (method === listComments) return [];
+          if (method === listComments) return comments;
           throw new Error('unexpected paginate');
         },
       };
@@ -426,6 +432,15 @@ def comment(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
             {"name": f"written_{head}", **FORK, "error": None, "headSha": head}
             for head in COMMENT_HEADS
         ),
+        {
+            "name": "updated",
+            **SAME_REPO,
+            "headSha": COMMENT_HEADS[1],
+            "existingComment": {
+                "id": 17,
+                "body": f"<!-- gate-summary: pr=1 head={COMMENT_HEADS[0][:12]} -->\nOLD SUMMARY",
+            },
+        },
     ]
     return _run(tmp_path_factory.mktemp("gate-comment"), COMMENT_RUNNER, COMMENT_STEP, cases)
 
@@ -641,6 +656,21 @@ def test_a_written_comment_is_silent(comment: dict) -> None:
                 "body": f"<!-- gate-summary: pr=1 head={head[:12]} -->\nGATE SUMMARY BODY",
             }
         ], case
+
+
+def test_a_matching_authored_head_updates_the_existing_comment(comment: dict) -> None:
+    case = comment["updated"]
+    assert case["threw"] is None and case["failures"] == [], case
+    assert case["warnings"] == [] and case["summaryWrites"] == 0, case
+    assert case["commentRequests"] == [], case
+    assert case["commentUpdates"] == [
+        {
+            "owner": "stranske",
+            "repo": "Orchestrator",
+            "comment_id": 17,
+            "body": f"<!-- gate-summary: pr=1 head={COMMENT_HEADS[1][:12]} -->\nGATE SUMMARY BODY",
+        }
+    ], case
 
 
 # ---- the one fork definition -------------------------------------------------------------------
