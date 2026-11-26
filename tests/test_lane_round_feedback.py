@@ -337,6 +337,23 @@ def test_a_completion_payload_is_journaled_redacted_and_replays_the_same_row(tmp
         payload={"artifact_refs": "scalar artifact text"},
         timestamp=1700000000,
     )
+    feedback.record_completion_event(  # single-row and non-dict shapes the sanitizer rejects
+        "remote:o/r#9g:codex",
+        payload={
+            "retry_sequence": {"unexpected": "single retry text"},
+            "result": "nondict result text",
+        },
+        timestamp=1700000000,
+    )
+    feedback.record_run("remote:o/r#9h:codex", "o/r#9h", "implement", "codex", mode="remote")
+    feedback.record_influence_edge(
+        target_run_id="remote:o/r#9h:codex",
+        influence_type="role",
+        influence_id="role:needs-human",
+        accepted=True,
+        allow_unlinked=True,
+        metadata={"notes_hash": "edge metadata text", "status": "ok"},
+    )
     monkeypatch.delenv(feedback.JOURNAL_ENV)
     text = journal.read_text()
     assert "unserializable" not in text
@@ -357,6 +374,9 @@ def test_a_completion_payload_is_journaled_redacted_and_replays_the_same_row(tmp
         "unexpected field text",
         "nested field text",
         "verification key text",
+        "single retry text",
+        "nondict result text",
+        "edge metadata text",
     ):
         assert private not in text
     sql = (
@@ -369,6 +389,8 @@ def test_a_completion_payload_is_journaled_redacted_and_replays_the_same_row(tmp
     mac = _journal_store(tmp_path, monkeypatch, "mac")
     assert feedback.replay_journal(journal)["rejected"] == 0
     assert _rows(mac, sql) == original
+    edges = "SELECT edge_id, metadata_hash FROM influence_edges ORDER BY edge_id"
+    assert _rows(mac, edges) == _rows(runner, edges) != []
 
 
 def test_a_replay_keeps_every_clock_default_and_clock_derived_identity(tmp_path, monkeypatch):
@@ -380,13 +402,20 @@ def test_a_replay_keeps_every_clock_default_and_clock_derived_identity(tmp_path,
         m.setattr(feedback._real_time, "time", lambda: float(next(ticks)))
         feedback.record_cost("remote:o/r#10:codex", 10, 20, 0.5, 3.0, "hosted")
         feedback.record_execution_attempt(
-            "remote:o/r#10:codex", attempt_id="a-10", operation_role="worker"
+            "remote:o/r#10:codex",
+            attempt_id="profile:remote:o/r#10:codex",
+            operation_role="worker",
+            profile_id="p1",
+        )
+        feedback.complete_profile_attempt_unresolved(
+            "remote:o/r#10:codex", selected_profile_id="p1"
         )
     clocks = (
-        "SELECT (SELECT pulled_ts FROM costs), "
-        "(SELECT recorded_ts FROM execution_attempts WHERE attempt_id='a-10')"
+        "SELECT (SELECT pulled_ts FROM costs), recorded_ts, completed_ts FROM execution_attempts "
+        "WHERE attempt_id='attempt:profile:remote:o/r#10:codex'"
     )
     runner_clocks = _rows(tmp_path / "runner.db", clocks)
+    assert len(runner_clocks) == 1 and None not in runner_clocks[0]
     mac0 = _journal_store(tmp_path, monkeypatch, "mac0")
     assert feedback.replay_journal(journal)["rejected"] == 0
     assert _rows(mac0, clocks) == runner_clocks  # the runner's own clock values, not the Mac's

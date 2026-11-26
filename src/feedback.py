@@ -281,7 +281,13 @@ def _journal_scrub_payload(payload):
                 )
                 for k, v in value.items()
             }
-        elif name == "retry_sequence" and isinstance(value, (list, tuple)):
+        elif (
+            name in COMPLETION_NESTED_FIELDS
+        ):  # not a dict: rejected as invalid_object, value never stored
+            clean[key] = _JOURNAL_REDACTED
+        elif name == "retry_sequence":
+            if not isinstance(value, (list, tuple)):
+                value = [value]  # the sanitizer reads a single row as a one-row list
             clean[key] = [
                 (
                     {
@@ -361,6 +367,14 @@ def _journal_call(
             call[f"*{name}"] = list(value)
         elif name != "conn":
             call[name] = value
+    if fn.__name__ == "record_influence_edge" and (bound.arguments.get("kwargs") or {}).get(
+        "metadata"
+    ):
+        # The Brain keeps only a hash of the sanitized metadata; the writer gets the journal's copy too.
+        scrubbed = _journal_scrub_payload({"result": bound.arguments["kwargs"]["metadata"]})[
+            "result"
+        ]
+        bound.arguments["kwargs"]["metadata"] = call["metadata"] = scrubbed
     if fn.__name__ == "record_completion_event" and "payload" in bound.arguments:
         # The writer gets the journal's payload too, so the runner's row and the replayed row come from the same
         # input: same set order, same pre-hashed values, nothing the journal holds that the Brain would not.
