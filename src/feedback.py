@@ -341,15 +341,21 @@ def _journal_hashed(value) -> str:
     return text if _JOURNAL_HASH_RE.fullmatch(text) else _completion_hash(value)
 
 
-def _journal_hash_strings(value):
-    """Every non-empty string at any depth replaced by its hash (dict keys are kept: they are field names)."""
+def _journal_hash_strings(value, *, top: bool = True):
+    """Every non-empty string at any depth replaced by its hash, nested dict keys included (only the top level's
+    keys are kept: they are the field names the sanitizer checks)."""
     if isinstance(value, str):
         return _journal_hashed(value) if value else value
     if isinstance(value, dict):
-        return {k: _journal_hash_strings(v) for k, v in value.items()}
+        return {
+            (
+                k if top or not isinstance(k, str) or not k else _journal_hashed(k)
+            ): _journal_hash_strings(v, top=False)
+            for k, v in value.items()
+        }
     if isinstance(value, (list, tuple, set, frozenset)):
         items = sorted(value, key=str) if isinstance(value, (set, frozenset)) else value
-        return [_journal_hash_strings(v) for v in items]
+        return [_journal_hash_strings(v, top=False) for v in items]
     return value
 
 
