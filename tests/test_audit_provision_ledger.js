@@ -368,7 +368,8 @@ for (const changed of ['provision.py', 'followup_evidence.py']) {
     assert.equal(f.audit().branch_refusals, 2);
     const installed = path.join(f.root, 'installed');
     fs.mkdirSync(installed);
-    for (const name of ['provision.py', 'followup_evidence.py', 'paths.py']) {
+    for (const name of ['provision.py', 'worktree_git.py', 'claims.py',
+      'followup_evidence.py', 'paths.py']) {
       fs.copyFileSync(path.join(source, name), path.join(installed, name));
     }
     // Change real installed bytes rather than altering hashes in a receipt.
@@ -377,7 +378,8 @@ for (const changed of ['provision.py', 'followup_evidence.py']) {
       { now: at, writerPath: path.join(f.root, 'provision-events.ndjson') });
     const stale = audit(now);
     assert.equal(stale.coverage, 'UNKNOWN');
-    assert.ok(stale.continuity_failures.includes(`${changed} differs from the observed implementation`));
+    const label = changed === 'provision.py' ? 'provision instrument' : changed;
+    assert.ok(stale.continuity_failures.includes(`${label} differs from the observed implementation`));
     const segments = ['provision-events.ndjson', 'provision-events.ndjson.old',
       'provision-events.ndjson.older'].map((name) => path.join(f.root, name));
     const before = segments.map((file) => fs.readFileSync(file));
@@ -785,6 +787,32 @@ for (const observedWriter of [false, true]) {
   });
 }
 
+test('the audit\'s instrument digest equals the collector\'s over all instrument files', (t) => {
+  const f = fixture(t);
+  const generation = path.join(f.root, 'generation');
+  fs.mkdirSync(generation);
+  for (const name of ['provision.py', 'worktree_git.py', 'claims.py',
+    'followup_evidence.py', 'paths.py']) {
+    fs.copyFileSync(path.join(source, name), path.join(generation, name));
+  }
+  // The real collector observes the fixture generation; the audit recomputes
+  // the same combined digest independently from that generation's bytes.
+  const observed = f.observe('2026-11-11T13:00:00.123456+00:00', generation);
+  const audit = () => auditProvisionLedger(f.root, generation,
+    { now: '2026-11-11T13:00:00.123456+00:00',
+      writerPath: path.join(f.root, 'provision-events.ndjson') });
+  const matched = audit();
+  assert.equal(matched.instrument_sha256, observed.instrument_sha256);
+  assert.doesNotMatch(matched.continuity_failures.join('\n'), /differs from the observed implementation/);
+  for (const changed of ['worktree_git.py', 'claims.py']) {
+    fs.appendFileSync(path.join(generation, changed), '\n# Changed provisioning dependency.\n');
+    assert.ok(audit().continuity_failures
+      .includes('provision instrument differs from the observed implementation'), changed);
+    fs.copyFileSync(path.join(source, changed), path.join(generation, changed));
+    assert.doesNotMatch(audit().continuity_failures.join('\n'), /differs from the observed implementation/);
+  }
+});
+
 function deploymentFixture(t, rows) {
   const deployedAt = '2026-11-11T11:30:00.000000Z';
   const before = '2026-11-11T11:00:00.000000Z';
@@ -796,7 +824,7 @@ function deploymentFixture(t, rows) {
     path.join(checkout, 'scripts')]) {
     fs.mkdirSync(directory, { recursive: true });
   }
-  for (const file of ['provision.py', 'followup_evidence.py']) {
+  for (const file of ['provision.py', 'worktree_git.py', 'claims.py', 'followup_evidence.py']) {
     fs.copyFileSync(path.join(source, file), path.join(generation, file));
     fs.copyFileSync(path.join(source, file), path.join(checkout, 'src', file));
   }

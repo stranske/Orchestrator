@@ -11,6 +11,18 @@ const { execFileSync } = require('node:child_process');
 const week = 7n * 24n * 3600n * 1000000n;
 const maxGap = 2n * 3600n * 1000000n;
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
+// Match followup_evidence.INSTRUMENT_FILES and instrument_digest byte for byte:
+// provision.py and the modules it imports, each hashed as name, length, bytes.
+const instrumentFiles = ['provision.py', 'worktree_git.py', 'claims.py'];
+function instrumentDigest(directory) {
+  const combined = createHash('sha256');
+  for (const name of instrumentFiles) {
+    const raw = readRegular(path.join(directory, name));
+    combined.update(Buffer.from(`${name}\0${raw.length}\0`));
+    combined.update(raw);
+  }
+  return combined.digest('hex');
+}
 // Match followup_evidence.eligible_lines: the existing owner exclusion applies
 // before parsing, hashing or reporting. Every other row retains its multiplicity.
 const excluded = Buffer.from('stranske/' + 'Collab-Admin'.toLowerCase());
@@ -77,8 +89,8 @@ function deploymentIdentity(root, sourceDirectory, revision) {
   if (installedRevision !== revision) throw new Error('installer SHA resolves to a different commit');
   // The installer history uses an abbreviated SHA. Bind the actual acceptance
   // inputs to the full delivered commit in the calling checkout.
-  for (const file of ['src/provision.py', 'src/followup_evidence.py',
-    'scripts/audit_provision_ledger.js']) {
+  for (const file of [...instrumentFiles.map((name) => `src/${name}`),
+    'src/followup_evidence.py', 'scripts/audit_provision_ledger.js']) {
     const installed = file.startsWith('src/') ? path.basename(file) : file;
     const committed = execFileSync('git', ['show', `${revision}:${file}`]);
     if (!committed.equals(readRegular(path.join(generation, installed)))
@@ -278,10 +290,12 @@ function auditProvisionLedger(root, sourceDirectory, { now = new Date().toISOStr
       || packet.branch_refusals !== result.branch_refusals) {
     fail('recount differs from the collector observation');
   }
-  for (const [name, field] of [['provision.py', 'instrument_sha256'],
-    ['followup_evidence.py', 'collector_sha256']]) {
+  for (const [name, field, measure] of [
+    ['provision instrument', 'instrument_sha256', instrumentDigest],
+    ['followup_evidence.py', 'collector_sha256',
+      (directory) => sha256(readRegular(path.join(directory, 'followup_evidence.py')))]]) {
     try {
-      const digest = sha256(readRegular(path.join(sourceDirectory, name)));
+      const digest = measure(sourceDirectory);
       result[field] = digest;
       if (packet?.[field] !== digest) fail(`${name} differs from the observed implementation`);
     } catch {
