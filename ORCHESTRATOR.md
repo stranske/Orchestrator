@@ -610,6 +610,13 @@ proposals without worker dispatch or queue actions.
 
 ## Priors for *who does what* (override freely)
 
+### Desktop sub-agent family updates
+
+The Mac's daily **Keep Codex sub-agent family defaults current** automation compares the active subscription catalog with the routine model in the Workflows agent table and its installed Orchestrator copy. To reproduce its read-only decision, save the exact Workflows default-branch `.github/agents/model-table.json` and run `python src/codex_family_update.py --workflows-table /path/to/model-table.json`. The output identifies the candidate, the reason it was selected, the configured effort and any announced fallback retirement.
+
+Qualify a new same-family version on an actual routine task at the existing effort. Merge the Workflows role change and its paired Orchestrator table/profile update through normal review. Once the installed mirror agrees, `python src/codex_subagent_setting.py --config ~/.codex/config.toml read` returns only the effective default, effort and file-bound version. Pass those exact values to its `set` command with the approved successor. A changed user setting interrupts the write. Confirm delivery by checking the recorded model, effort and task result of a fresh child spawned with neither override. Reuse the existing upgrade PRs and receipt on later checks. Keep explicit reviewer profiles, historical trials and fallbacks under their respective owners.
+
+
 For Codex local dispatch, normal `implement` work uses Sol High; bounded code,
 test generation, and ordinary review use Terra Medium. `epic`, `cross_repo`, and
 `runtime_ac` planning use Astra Medium when the design or diagnosis has wider
