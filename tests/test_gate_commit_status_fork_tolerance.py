@@ -232,7 +232,12 @@ STATUS_RUNNER = HARNESS_PRELUDE + textwrap.dedent("""
 COMMENT_RUNNER = HARNESS_PRELUDE + textwrap.dedent("""
 
     const dedupe = require(path.join(repoRoot, '.github/scripts/comment-dedupe.js'));
-    fs.writeFileSync('gate-summary.md', 'GATE SUMMARY BODY\\n<!-- gate-summary: pr=1 -->\\n');
+    const prNumber = 1;
+    const headSha = '0123456789abcdef0123456789abcdef01234567';
+    fs.writeFileSync(
+      'gate-summary.md',
+      `<!-- gate-summary: pr=${prNumber} head=${headSha.slice(0, 12)} -->\\nGATE SUMMARY BODY\\n`,
+    );
 
     main(async (spec) => {
       const record = newRecord();
@@ -252,6 +257,12 @@ COMMENT_RUNNER = HARNESS_PRELUDE + textwrap.dedent("""
               return { status: 201, data: { id: 1 } };
             },
           },
+          pulls: {
+            get: async ({ pull_number }) => {
+              if (pull_number !== prNumber) throw new Error(`unexpected PR: ${pull_number}`);
+              return { data: { head: { sha: headSha } } };
+            },
+          },
         },
         paginate: async (method) => {
           if (method === listComments) return [];
@@ -268,7 +279,12 @@ COMMENT_RUNNER = HARNESS_PRELUDE + textwrap.dedent("""
           throw new Error(`unexpected require: ${id}`);
         },
         core: makeCore(record),
-        context: { repo: { owner: 'stranske', repo: 'Orchestrator' }, payload: { pull_request: { number: 1 } } },
+        context: {
+          repo: { owner: 'stranske', repo: 'Orchestrator' },
+          eventName: 'pull_request',
+          sha: 'merge-sha',
+          payload: { pull_request: { number: prNumber, head: { sha: headSha } } },
+        },
         github,
       }, record);
     });
