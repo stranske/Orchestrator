@@ -58,6 +58,12 @@ def test_named_successor_promotes_in_source_before_mirror_and_desktop():
     )
 
 
+def test_current_model_must_still_support_the_saved_effort():
+    low_only = row(NEW, supported_reasoning_levels=[{"effort": "low"}])
+    with pytest.raises(family.CatalogIssue, match="configured reasoning effort"):
+        snapshot([low_only], desktop=NEW, primary=NEW)
+
+
 def test_numeric_family_order_recovers_a_retired_incumbent_without_changing_family():
     models = [row("gpt-10.1-terra"), row(NEW), row("gpt-11-terra-preview"), row("gpt-24-sol")]
     result = snapshot(models)

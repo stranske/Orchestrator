@@ -107,7 +107,7 @@ def report(config, catalog, source_text, now, mirror_text=None):
         status = "qualify_candidate"
     else:
         status = "current"
-    check = selected if status == "apply_approved_model" else target
+    check = selected if status in {"current", "apply_approved_model"} else target
     if check and effort not in {
         row["effort"] for row in models[check]["supported_reasoning_levels"]
     }:
