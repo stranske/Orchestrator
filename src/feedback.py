@@ -42,7 +42,7 @@ from collections.abc import Callable
 from contextlib import closing, nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import execution_profiles
 import paths
@@ -289,7 +289,8 @@ def replay_journal(path: Path) -> dict:
                     raise ValueError(
                         f"journaled call was not serializable: {entry['unserializable']}"
                     )
-                time = _ReplayClock(entry.get("at") or _real_time.time())
+                # Any: the writers only call time()/time_ns() and attributes it forwards to the real module.
+                time = cast(Any, _ReplayClock(entry.get("at") or _real_time.time()))
                 try:
                     _JOURNALED[entry["fn"]](**entry["args"])
                 finally:
