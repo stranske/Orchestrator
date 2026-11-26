@@ -233,15 +233,15 @@ COMMENT_RUNNER = HARNESS_PRELUDE + textwrap.dedent("""
 
     const dedupe = require(path.join(repoRoot, '.github/scripts/comment-dedupe.js'));
     const prNumber = 1;
-    const headSha = '0123456789abcdef0123456789abcdef01234567';
-    fs.writeFileSync(
-      'gate-summary.md',
-      `<!-- gate-summary: pr=${prNumber} head=${headSha.slice(0, 12)} -->\\nGATE SUMMARY BODY\\n`,
-    );
 
     main(async (spec) => {
+      const headSha = spec.headSha;
+      fs.writeFileSync(
+        'gate-summary.md',
+        `<!-- gate-summary: pr=${prNumber} head=${headSha.slice(0, 12)} -->\\nGATE SUMMARY BODY\\n`,
+      );
       const record = newRecord();
-      record.created = 0;
+      record.commentRequests = [];
       const error = makeError(spec.error);
       const listComments = async () => ({ data: [] });
       // `__testMock` is the marker the rate-limit wrapper honours, so the REAL comment-dedupe.js
@@ -251,8 +251,8 @@ COMMENT_RUNNER = HARNESS_PRELUDE + textwrap.dedent("""
         rest: {
           issues: {
             listComments,
-            createComment: async () => {
-              record.created += 1;
+            createComment: async (request) => {
+              record.commentRequests.push(request);
               if (error) throw error;
               return { status: 201, data: { id: 1 } };
             },
@@ -382,8 +382,11 @@ COMMENT_CASES: list[dict[str, Any]] = [
     {"name": "same_repo", **SAME_REPO, "error": REFUSED},
     {"name": "rate_limit", **FORK, "error": RATE_LIMITED},
     {"name": "server_error", **FORK, "error": {"status": 500, "message": "Internal error"}},
-    {"name": "written", **FORK, "error": None},
 ]
+COMMENT_HEADS = (
+    "0123456789abcdef0123456789abcdef01234567",
+    "fedcba9876543210fedcba9876543210fedcba98",
+)
 
 BASE = {"repo": {"full_name": "stranske/Orchestrator"}}
 ORIGIN_CASES: list[dict[str, Any]] = [
@@ -417,8 +420,15 @@ def status(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
 @pytest.fixture(scope="module")
 def comment(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
     _need_harness()
+    cases = [
+        *({**case, "headSha": COMMENT_HEADS[0]} for case in COMMENT_CASES),
+        *(
+            {"name": f"written_{head}", **FORK, "error": None, "headSha": head}
+            for head in COMMENT_HEADS
+        ),
+    ]
     return _run(
-        tmp_path_factory.mktemp("gate-comment"), COMMENT_RUNNER, COMMENT_STEP, COMMENT_CASES
+        tmp_path_factory.mktemp("gate-comment"), COMMENT_RUNNER, COMMENT_STEP, cases
     )
 
 
@@ -621,9 +631,18 @@ def test_other_comment_errors_stay_loud(comment: dict) -> None:
 
 
 def test_a_written_comment_is_silent(comment: dict) -> None:
-    case = comment["written"]
-    assert case["threw"] is None and case["warnings"] == [] and case["summaryWrites"] == 0, case
-    assert case["created"] == 1, case
+    for head in COMMENT_HEADS:
+        case = comment[f"written_{head}"]
+        assert case["threw"] is None and case["failures"] == [], case
+        assert case["warnings"] == [] and case["summaryWrites"] == 0, case
+        assert case["commentRequests"] == [
+            {
+                "owner": "stranske",
+                "repo": "Orchestrator",
+                "issue_number": 1,
+                "body": f"<!-- gate-summary: pr=1 head={head[:12]} -->\nGATE SUMMARY BODY",
+            }
+        ], case
 
 
 # ---- the one fork definition -------------------------------------------------------------------
