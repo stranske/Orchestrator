@@ -303,6 +303,16 @@ def test_a_completion_payload_is_journaled_redacted_and_replays_the_same_row(tmp
         },
         timestamp=1700000000,
     )
+    feedback.record_completion_event(  # shapes the Brain keeps only as hashes, and a multi-item set
+        "remote:o/r#9c:codex",
+        payload={
+            "capability_ids": {"cap-c", "cap-a", "cap-b", "cap-d"},
+            "artifact_refs": ["string artifact text"],
+            "result": {"proposal_hash": "proposal body text", "status": "ok"},
+            "verification": {"result_hashes": {"pytest": "verification body text"}},
+        },
+        timestamp=1700000000,
+    )
     feedback.record_completion_event(  # the single-value shapes the sanitizer also accepts
         "remote:o/r#9b:codex",
         payload={
@@ -322,9 +332,15 @@ def test_a_completion_payload_is_journaled_redacted_and_replays_the_same_row(tmp
         "plain result text",
         "single ref text",
         "scalar result text",
+        "string artifact text",
+        "proposal body text",
+        "verification body text",
     ):
         assert private not in text
-    sql = "SELECT event_id, payload_json, content_hash FROM completion_events ORDER BY event_id"
+    sql = (
+        "SELECT event_id, payload_json, content_hash, validation_status, redaction_count "
+        "FROM completion_events ORDER BY event_id"
+    )
     original = _rows(runner, sql)
     assert secret not in str(original)
 

@@ -196,8 +196,8 @@ def _journal_scrub_artifact_refs(value):
         return _journal_scrub(value, keys=False)
     rows = []
     for row in value:
-        if not isinstance(row, dict):
-            rows.append(_journal_scrub(row, keys=False))
+        if not isinstance(row, dict):  # the sanitizer keeps only its hash
+            rows.append({"artifact_id": _completion_hash(row), "kind": "reference"})
             continue
         clean = {}
         for key, item in row.items():
@@ -217,8 +217,8 @@ def _journal_scrub_payload(payload):
     sanitizer stores the same row. Top-level fields outside COMPLETION_PAYLOAD_FIELDS and nested sensitive-named
     fields are dropped by the sanitizer, so their values are dropped here; result_hashes and artifact_refs keep
     only hashes of plain text, so the journal holds those hashes (the sanitizer keeps a hash-shaped value as is).
-    A secret-shaped value in any other hashed field replays to a different hash: accepted, the alternative is a
-    secret in git history.
+    result.*_hash and verification.result_hashes likewise. On a journaling seat the writer receives this payload
+    too (_journal_call), so the runner's row and the replayed row are made from the same input.
     """
     if not isinstance(payload, dict):
         return payload
@@ -236,13 +236,44 @@ def _journal_scrub_payload(payload):
                 items = list(value)
             else:
                 items = [value]  # the sanitizer reads a scalar as a one-item list
-            clean[key] = [
-                (str(i or "") if _JOURNAL_HASH_RE.fullmatch(str(i or "")) else _completion_hash(i))
-                for i in items
-            ]
+            clean[key] = [_journal_hashed(i) for i in items]
+        elif name == "result" and isinstance(value, dict):
+            clean[key] = {
+                k: (
+                    _journal_hashed(v)
+                    if k in _JOURNAL_RESULT_HASH_KEYS and v
+                    else _journal_scrub(v, keys=True)
+                )
+                for k, v in value.items()
+            }
+        elif name == "verification" and isinstance(value, dict):
+            clean[key] = {
+                k: (
+                    _journal_scrub_result_hashes(v)
+                    if k == "result_hashes"
+                    else _journal_scrub(v, keys=True)
+                )
+                for k, v in value.items()
+            }
         else:
             clean[key] = _journal_scrub(value, keys=True)
     return clean
+
+
+_JOURNAL_RESULT_HASH_KEYS = ("trace_key_hash", "proposal_hash", "notes_hash", "version_hash")
+
+
+def _journal_hashed(value) -> str:
+    text = str(value or "")
+    return text if _JOURNAL_HASH_RE.fullmatch(text) else _completion_hash(value)
+
+
+def _journal_scrub_result_hashes(value):
+    """verification.result_hashes keeps only hashes: a dict's values are hashed, anything else becomes the
+    single-entry dict the sanitizer would store."""
+    if isinstance(value, dict):
+        return {k: _journal_hashed(v) for k, v in value.items()}
+    return {"result": _completion_hash(value)}
 
 
 def _journal_call(
@@ -263,8 +294,12 @@ def _journal_call(
             call[f"*{name}"] = list(value)
         elif name != "conn":
             call[name] = value
-    if "payload" in call and fn.__name__ == "record_completion_event":
-        call["payload"] = _journal_scrub_payload(call["payload"])
+    if fn.__name__ == "record_completion_event" and "payload" in bound.arguments:
+        # The writer gets the journal's payload too, so the runner's row and the replayed row come from the same
+        # input: same set order, same pre-hashed values, nothing the journal holds that the Brain would not.
+        bound.arguments["payload"] = call["payload"] = _journal_scrub_payload(
+            bound.arguments["payload"]
+        )
     entry = {"fn": fn.__name__, "at": time.time(), "args": call}
     try:
         line = json.dumps(entry, sort_keys=True, default=_journal_encode)
