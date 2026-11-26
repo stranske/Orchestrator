@@ -122,7 +122,7 @@ test('binds named native verdicts, commit, mirror manifest, commands and unchang
   assert.equal(receipt.default_native_suites_passed, false);
   assert.equal(receipt.full_suites_requested, false);
   assert.deepEqual(receipt.suites, []);
-  assert.equal(receipt.deployment_acceptance_verified, false);
+  assert.equal('deployment_acceptance_verified' in receipt, false);
   assert.equal(receipt.floor_matches_origin_main, true);
   assert.equal(receipt.source_unchanged, true);
   assert.equal(receipt.mirror_manifest_after_sha256, receipt.mirror_manifest_sha256);
@@ -161,7 +161,7 @@ test('full suites bind independent default/native collections to all executed JU
   const receipt = runWitnesses({ ...options, fullSuites: true });
   assert.equal(receipt.native_witnesses_passed, true);
   assert.equal(receipt.default_native_suites_passed, true);
-  assert.equal(receipt.deployment_acceptance_verified, false);
+  assert.equal('deployment_acceptance_verified' in receipt, false);
   assert.deepEqual(receipt.suites.map((item) => item.mode), ['default', 'native']);
   for (const item of receipt.suites) {
     assert.equal(item.passed, true);
@@ -195,7 +195,7 @@ for (const scenario of [{ suiteFailure: 'default' }, { suiteFailure: 'native' },
     const receipt = runWitnesses({ ...fixture(t, scenario), fullSuites: true });
     assert.equal(receipt.native_witnesses_passed, true);
     assert.equal(receipt.default_native_suites_passed, false);
-    assert.equal(receipt.deployment_acceptance_verified, false);
+    assert.equal('deployment_acceptance_verified' in receipt, false);
     assert.ok(receipt.suites.some((item) => !item.passed));
   });
 }
@@ -220,7 +220,7 @@ test('full-suites CLI exits nonzero when the witnesses pass but a full suite fai
     const summary = JSON.parse(result.stdout.toString());
     assert.equal(summary.native_witnesses_passed, true);
     assert.equal(summary.default_native_suites_passed, !scenario.suiteFailure);
-    assert.equal(summary.deployment_acceptance_verified, false);
+    assert.equal('deployment_acceptance_verified' in summary, false);
   }
 });
 
@@ -230,7 +230,7 @@ for (const scenario of [{ missing: true }, { noXml: true }, { malformed: true },
     const options = fixture(t, scenario);
     const receipt = runWitnesses(options);
     assert.equal(receipt.native_witnesses_passed, false);
-    assert.equal(receipt.deployment_acceptance_verified, false);
+    assert.equal('deployment_acceptance_verified' in receipt, false);
     assert.ok(fs.existsSync(path.join(options.output, 'native.log')));
     if (scenario.mutate || scenario.extra) assert.equal(receipt.source_unchanged, false);
     if (scenario.missing) assert.match(

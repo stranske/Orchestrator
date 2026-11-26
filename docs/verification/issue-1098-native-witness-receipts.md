@@ -25,7 +25,7 @@ uncommitted test inputs, and unexpected Python modules are refused. Receipts liv
 outside the mirror in a new private directory. The tested floor must match
 `origin/main` byte for byte. The resolved mirror generation, revision, host,
 interpreter, commands, log/XML hashes, and named verdicts are retained.
-`deployment_acceptance_verified` always remains false: passing these four cases
+The receipt carries no deployment-acceptance field: passing these four cases
 does not prove deployment identity, full verification or seven-day acceptance.
 
 The private tree omits the following runtime paths from the installed layout.
@@ -115,8 +115,8 @@ capability-admission and heartbeat-audit failures; this runner has no installed
 mirror, live scheduler/holder state or production ledgers. Installing pytest and
 Black into `/tmp` failed with no available distribution. No Python, workflow,
 verification-floor or process-safety code was changed. A same-holder native
-disable/restore cycle and deployment identity still require evidence;
-`deployment_acceptance_verified` remains false even if both suite flags pass.
+disable/restore cycle and deployment identity still require evidence, even if
+both suite flags pass.
 
 Local validation:
 

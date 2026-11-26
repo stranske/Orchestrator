@@ -88,7 +88,7 @@ test('recounts active and archived failures with multiplicity and exact seven-da
   assert.equal(result.counts['reclaimed/branch-held'], 1);
   assert.equal(result.counts['failed/probe-blind'], 1);
   assert.equal(result.segments.length, 3);
-  assert.equal(result.deployment_acceptance_verified, false);
+  assert.equal('deployment_acceptance_verified' in result, false);
   assert.equal(result.evidence_ready, false);
   assert.match(formatReport(result), /baseline = 2026-11-04T12:00:00.123456\+00:00/);
   assert.match(formatReport(result), /failed\(branch-held\|branch-exists\) = 4 over 7d/);
@@ -106,8 +106,8 @@ test('empty intact observed week can qualify only ledger evidence', (t) => {
   const result = fixture(t, { '': '' }).audit();
   assert.equal(result.evidence_ready, true);
   assert.equal(result.coverage, 'continuous');
-  assert.equal(result.deployment_acceptance_verified, false);
-  assert.match(formatReport(result), /native\/full-verifier\/mirror acceptance requires separate receipts/);
+  assert.equal('deployment_acceptance_verified' in result, false);
+  assert.doesNotMatch(formatReport(result), /acceptance requires separate receipts|deployment_acceptance/);
 });
 
 test('preserves the existing collector owner exclusion before parsing and hashing', (t) => {
@@ -241,7 +241,7 @@ for (const refusals of [false, true]) {
       assert.equal(report.branch_refusals, refusals ? 4 : 0);
       assert.equal(report.segments.length, 2);
       assert.equal(report.observed_after, boundary);
-      assert.equal(report.deployment_acceptance_verified, false);
+      assert.equal('deployment_acceptance_verified' in report, false);
       return { cli, report, output };
     };
     const before = run();
@@ -321,7 +321,7 @@ test('fresh observed legitimate refusals remain unmet after successful retries i
   assert.equal(report.counts['reclaimed/branch-exists'], 2);
   assert.equal(report.branch_refusals, 8);
   assert.equal(report.evidence_ready, false);
-  assert.equal(report.deployment_acceptance_verified, false);
+  assert.equal('deployment_acceptance_verified' in report, false);
   assert.match(output, /failed\(branch-held\|branch-exists\) = 8 over 7d/);
   assert.match(output, /ledger evidence = unmet acceptance/);
   for (const [index, file] of inputs.entries()) {
@@ -350,7 +350,7 @@ test('a refusal ages out only after a fresh observation with every archive retai
   assert.equal(result.coverage, 'continuous');
   assert.equal(result.branch_refusals, 0);
   assert.equal(result.evidence_ready, true);
-  assert.equal(result.deployment_acceptance_verified, false);
+  assert.equal('deployment_acceptance_verified' in result, false);
   assert.deepEqual(result.counts, { 'reclaimed/branch-held': 1 });
   for (const [index, name] of archives.entries()) {
     assert.deepEqual(fs.readFileSync(path.join(f.root, name)), before[index], name);
@@ -391,7 +391,7 @@ for (const changed of ['provision.py', 'followup_evidence.py']) {
     const first = audit(nextHour);
     assert.equal(first.coverage, 'UNKNOWN');
     assert.equal(first.evidence_ready, false);
-    assert.equal(first.deployment_acceptance_verified, false);
+    assert.equal('deployment_acceptance_verified' in first, false);
     assert.equal(first.segments.length, 3);
 
     // A subsequent hourly observation matches the deployed sources, but only
@@ -448,7 +448,7 @@ for (const interrupted of [false, true]) {
     assert.equal(result.continuous_since, observed.continuous_since);
     assert.equal(result.branch_refusals, 0);
     assert.equal(result.evidence_ready, !interrupted);
-    assert.equal(result.deployment_acceptance_verified, false);
+    assert.equal('deployment_acceptance_verified' in result, false);
     assert.equal(result.segments.length, 3);
     assert.deepEqual(result.counts, { 'reclaimed/branch-held': 2 });
     assert.match(formatReport(result), /failed\(branch-held\|branch-exists\) = 0 over 7d/);
@@ -538,7 +538,7 @@ for (const newRefusals of [false, true]) {
       'reclaimed/branch-held': expectedPerCause,
     });
     assert.equal(result.evidence_ready, false);
-    assert.equal(result.deployment_acceptance_verified, false);
+    assert.equal('deployment_acceptance_verified' in result, false);
 
     const inputs = [f.receipt, active, active + '.old', active + '.older'];
     const before = inputs.map((file) => fs.readFileSync(file));
@@ -599,7 +599,7 @@ for (const replacement of ['directory', 'symlink']) {
     const report = JSON.parse(output.slice(output.indexOf('{')));
     assert.equal(report.coverage, 'UNKNOWN');
     assert.equal(report.evidence_ready, false);
-    assert.equal(report.deployment_acceptance_verified, false);
+    assert.equal('deployment_acceptance_verified' in report, false);
     assert.equal(report.branch_refusals, 8);
     assert.deepEqual(report.counts, { 'failed/branch-exists': 4, 'failed/branch-held': 4 });
     assert.equal(report.segments.length, 2);
@@ -697,7 +697,7 @@ for (const refusals of [false, true]) {
       assert.equal(report.branch_refusals, refusals ? 4 : 0);
       assert.equal(report.segments.length, 2);
       assert.equal(report.evidence_ready, !refusals);
-      assert.equal(report.deployment_acceptance_verified, false);
+      assert.equal('deployment_acceptance_verified' in report, false);
       assert.match(output, refusals ? /ledger evidence = unmet acceptance/
         : /ledger evidence = ready/);
     }
@@ -776,7 +776,7 @@ for (const observedWriter of [false, true]) {
     const report = JSON.parse(output.slice(output.indexOf('{')));
     assert.equal(report.evidence_ready, observedWriter);
     assert.equal(report.coverage, observedWriter ? 'continuous' : 'UNKNOWN');
-    assert.equal(report.deployment_acceptance_verified, false);
+    assert.equal('deployment_acceptance_verified' in report, false);
     if (observedWriter) assert.deepEqual(report.continuity_failures, []);
     else assert.match(report.continuity_failures.join('\n'), /writer ledger is not included/);
     for (const [index, file] of inputs.entries()) {

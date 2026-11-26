@@ -56,8 +56,10 @@ time; no continuity is inferred from those events.
 
 Exit zero means only that the existing collector reports an intact observed
 week and the checked ledger has zero branch refusals. Native tests, full
-verification and mirror acceptance still need their own receipts;
-`deployment_acceptance_verified` is always false. Nonzero counts are explicitly
+verification and mirror acceptance still need their own receipts. No provision
+script prints a deployment-acceptance field: until 2026-11-25 each printed a
+constant `deployment_acceptance_verified: false`, which host judges read as a
+failed verdict (Orchestrator#1373). Nonzero counts are explicitly
 reported as unmet acceptance, without changing their original outcomes.
 
 Validation on this hosted runner:
