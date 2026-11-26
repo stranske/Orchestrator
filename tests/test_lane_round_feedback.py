@@ -303,10 +303,26 @@ def test_a_completion_payload_is_journaled_redacted_and_replays_the_same_row(tmp
         },
         timestamp=1700000000,
     )
+    feedback.record_completion_event(  # the single-value shapes the sanitizer also accepts
+        "remote:o/r#9b:codex",
+        payload={
+            "artifact_refs": {"artifact_id": "receipt", "raw_prompt": "single ref text"},
+            "result_hashes": "scalar result text",
+        },
+        timestamp=1700000000,
+    )
     monkeypatch.delenv(feedback.JOURNAL_ENV)
     text = journal.read_text()
     assert "unserializable" not in text
-    for private in (secret, "implement it", "private text", "plain body", "plain result text"):
+    for private in (
+        secret,
+        "implement it",
+        "private text",
+        "plain body",
+        "plain result text",
+        "single ref text",
+        "scalar result text",
+    ):
         assert private not in text
     sql = "SELECT event_id, payload_json, content_hash FROM completion_events ORDER BY event_id"
     original = _rows(runner, sql)

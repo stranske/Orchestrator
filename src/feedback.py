@@ -190,6 +190,8 @@ def _journal_scrub_artifact_refs(value):
     """artifact_refs as the journal may hold it: the sanitizer drops a row's keys outside its allowed set (so their
     values are dropped here) and keeps only the hash of a plain-text content_hash (so the hash is journaled).
     """
+    if isinstance(value, dict):
+        value = [value]  # the sanitizer reads a single ref as a one-row list
     if not isinstance(value, (list, tuple)):
         return _journal_scrub(value, keys=False)
     rows = []
@@ -227,8 +229,13 @@ def _journal_scrub_payload(payload):
             clean[key] = _JOURNAL_REDACTED
         elif name == "artifact_refs":
             clean[key] = _journal_scrub_artifact_refs(value)
-        elif name == "result_hashes" and isinstance(value, (list, tuple, set, frozenset)):
-            items = sorted(value, key=str) if isinstance(value, (set, frozenset)) else value
+        elif name == "result_hashes":
+            if isinstance(value, (set, frozenset)):
+                items = sorted(value, key=str)
+            elif isinstance(value, (list, tuple)):
+                items = list(value)
+            else:
+                items = [value]  # the sanitizer reads a scalar as a one-item list
             clean[key] = [
                 (str(i or "") if _JOURNAL_HASH_RE.fullmatch(str(i or "")) else _completion_hash(i))
                 for i in items
