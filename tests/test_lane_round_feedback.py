@@ -279,3 +279,78 @@ def test_coverage_names_a_table_written_outside_the_journal(tmp_path, monkeypatc
     assert feedback.journal_coverage(journal, scratch)["uncovered"] == {
         "costs": {"store": 1, "journal": 0}
     }
+
+
+def test_a_completion_payload_is_journaled_redacted_and_replays_the_same_row(tmp_path, monkeypatch):
+    journal = tmp_path / "j.jsonl"
+    runner = _journal_store(tmp_path, monkeypatch, "runner")
+    monkeypatch.setenv(feedback.JOURNAL_ENV, str(journal))
+    secret = "ghp_" + "a1b2c3d4e5f6g7h8"
+    feedback.record_completion_event(
+        "remote:o/r#9:codex",
+        payload={
+            "raw_prompt": "implement it, token " + secret,
+            "capability_ids": {"cap-a"},  # a set: the sanitizer accepts it, so the journal must too
+            "role_ids": [secret],
+        },
+        timestamp=1700000000,
+    )
+    monkeypatch.delenv(feedback.JOURNAL_ENV)
+    text = journal.read_text()
+    assert secret not in text and "implement it" not in text and "unserializable" not in text
+    sql = "SELECT event_id, payload_json, content_hash FROM completion_events ORDER BY event_id"
+    original = _rows(runner, sql)
+    assert secret not in str(original)
+
+    mac = _journal_store(tmp_path, monkeypatch, "mac")
+    assert feedback.replay_journal(journal)["rejected"] == 0
+    assert _rows(mac, sql) == original
+
+
+def test_a_replay_keeps_every_clock_default_and_clock_derived_identity(tmp_path, monkeypatch):
+    journal = tmp_path / "j.jsonl"
+    _journal_store(tmp_path, monkeypatch, "runner")
+    monkeypatch.setenv(feedback.JOURNAL_ENV, str(journal))
+    feedback.record_cost("remote:o/r#10:codex", 10, 20, 0.5, 3.0, "hosted")
+    feedback.record_role_selector_event("needs-human", "no_matching_work", reason="none")
+    monkeypatch.delenv(feedback.JOURNAL_ENV)
+    at = 1_600_000_000.25  # as if the Mac replays the pass long after the runner made it
+    lines = [json.loads(ln) for ln in journal.read_text().splitlines()]
+    journal.write_text("".join(json.dumps({**e, "at": at}) + "\n" for e in lines))
+
+    events = "SELECT event_id FROM completion_events WHERE producer='roles'"
+    first = _journal_store(tmp_path, monkeypatch, "mac")
+    assert feedback.replay_journal(journal)["rejected"] == 0
+    assert _rows(first, "SELECT pulled_ts FROM costs") == [(1_600_000_000,)]
+    second = _journal_store(tmp_path, monkeypatch, "mac2")
+    feedback.replay_journal(journal)
+    assert _rows(first, events) == _rows(second, events) != []
+
+
+def test_a_retried_replay_does_not_write_old_values_over_newer_local_ones(tmp_path, monkeypatch):
+    journal = tmp_path / "j.jsonl"
+    _journal_store(tmp_path, monkeypatch, "runner")
+    monkeypatch.setenv(feedback.JOURNAL_ENV, str(journal))
+    feedback.record_run("remote:o/r#11:codex", "o/r#11", "implement", "codex", mode="remote")
+    feedback.record_outcome("remote:o/r#11:codex", merged=0, durability="pending")
+    monkeypatch.delenv(feedback.JOURNAL_ENV)
+
+    mac = _journal_store(tmp_path, monkeypatch, "mac")
+    assert feedback.replay_journal(journal)["replayed"] == 2
+    feedback.record_outcome("remote:o/r#11:codex", merged=1, durability="durable")
+    again = feedback.replay_journal(journal)  # e.g. the branch delete failed and the file came back
+    assert (again["replayed"], again["skipped"], again["rejected"]) == (0, 2, 0)
+    assert _rows(mac, "SELECT merged, durability FROM outcomes") == [(1, "durable")]
+
+
+def test_a_write_inside_a_callers_transaction_is_not_journaled(tmp_path, monkeypatch):
+    journal = tmp_path / "j.jsonl"
+    _journal_store(tmp_path, monkeypatch, "runner")
+    monkeypatch.setenv(feedback.JOURNAL_ENV, str(journal))
+    c = feedback._conn()
+    try:
+        feedback.record_run("trial:1", "o/r#12", "implement", "codex", conn=c)
+        c.rollback()
+    finally:
+        c.close()
+    assert not journal.exists()

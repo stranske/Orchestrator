@@ -116,12 +116,85 @@ DB_PATH = DB_PATH.expanduser() if os.environ.get(DB_PATH_ENV) else resolve_db_pa
 # after it succeeds; `feedback.py journal-replay FILE` makes the same calls against this host's store (the
 # writers read the existing rows themselves, so a replay merges instead of overwriting), and
 # `feedback.py journal-coverage FILE` replays into an empty store and compares it with this one table by table,
-# so a write made outside these writers is printed instead of lost. `ts`/`timestamp` are fixed at the original
-# call so a replay keeps the original time. Unset (every local seat), the writers behave exactly as before.
+# so a table whose ROW COUNT differs is printed instead of lost (it compares counts, not row content).
+# `ts`/`timestamp` are fixed at the original call, and a replay runs each call under a clock frozen at the
+# call's journaled time (_ReplayClock), so every default a writer takes from the clock (pulled_ts, recorded_ts,
+# completed_ts, a time_ns-derived identity) comes out as it did on the runner, and a second replay of the same
+# call derives the same identity. Applied lines are recorded in `journal_applied`, so a retried replay skips
+# them instead of writing old values over newer local ones. Completion payloads are journaled with sensitive
+# fields and secret-shaped values replaced by stand-ins the sanitizer redacts the same way, so the journal (which
+# travels through the lanes repo's git history) never holds what the Brain would not.
+# Unset (every local seat), the writers behave exactly as before.
 JOURNAL_ENV = "ORCH_FEEDBACK_JOURNAL"
 _JOURNAL_TIME_PARAMS = ("ts", "timestamp")
+_JOURNAL_APPLIED_TABLE = "journal_applied"
+_JOURNAL_REDACTED = "[redacted in journal]"
+# Still matches SECRET_VALUE_RE, so the completion sanitizer redacts it exactly as it redacted the original.
+_JOURNAL_SECRET_STANDIN = "sk-redacted-in-journal"
 _JOURNALED: dict[str, Callable] = {}
 _journal_state = threading.local()
+_real_time = time
+
+
+class _ReplayClock:
+    """The `time` module as the writers see it while one journaled call is replayed: frozen at the call's time."""
+
+    def __init__(self, at: float):
+        self._at = float(at)
+
+    def time(self) -> float:
+        return self._at
+
+    def time_ns(self) -> int:
+        return int(self._at * 1_000_000_000)
+
+    def __getattr__(self, name):
+        return getattr(_real_time, name)
+
+
+def _journal_encode(value):
+    """json.dumps fallback: sets (which the completion sanitizer accepts) become sorted lists."""
+    if isinstance(value, (set, frozenset)):
+        return sorted(value, key=str)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def _journal_scrub(value, *, keys: bool):
+    """Secret-shaped strings become a stand-in; with `keys`, a sensitive-named field's value is dropped, as the
+    completion sanitizer drops it."""
+    if isinstance(value, str):
+        return _JOURNAL_SECRET_STANDIN if SECRET_VALUE_RE.search(value) else value
+    if isinstance(value, dict):
+        return {
+            k: (
+                _JOURNAL_REDACTED
+                if keys and SENSITIVE_COMPLETION_FIELD_RE.search(str(k))
+                else _journal_scrub(v, keys=keys)
+            )
+            for k, v in value.items()
+        }
+    if isinstance(value, (list, tuple, set, frozenset)):
+        items = sorted(value, key=str) if isinstance(value, (set, frozenset)) else value
+        return [_journal_scrub(v, keys=keys) for v in items]
+    return value
+
+
+def _journal_scrub_payload(payload):
+    """A completion payload as the journal may hold it. Top-level fields outside COMPLETION_PAYLOAD_FIELDS and
+    nested sensitive-named fields are dropped by the sanitizer, so their values are dropped here; artifact_refs
+    hashes its keys' values instead, so only secret-shaped values are replaced there. A secret-shaped value in a
+    hashed field replays to a different hash: accepted, the alternative is a secret in git history.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    clean = {}
+    for key, value in payload.items():
+        name = str(key)
+        if name not in COMPLETION_PAYLOAD_FIELDS and SENSITIVE_COMPLETION_FIELD_RE.search(name):
+            clean[key] = _JOURNAL_REDACTED
+        else:
+            clean[key] = _journal_scrub(value, keys=name != "artifact_refs")
+    return clean
 
 
 def _journal_call(
@@ -142,9 +215,11 @@ def _journal_call(
             call[f"*{name}"] = list(value)
         elif name != "conn":
             call[name] = value
+    if "payload" in call and fn.__name__ == "record_completion_event":
+        call["payload"] = _journal_scrub_payload(call["payload"])
     entry = {"fn": fn.__name__, "at": time.time(), "args": call}
     try:
-        line = json.dumps(entry, sort_keys=True)
+        line = json.dumps(entry, sort_keys=True, default=_journal_encode)
     except (TypeError, ValueError) as exc:
         line = json.dumps({"fn": fn.__name__, "at": entry["at"], "unserializable": str(exc)[:300]})
     return bound, line
@@ -166,6 +241,10 @@ def _journaled(fn: Callable) -> Callable:
             result = fn(*bound.args, **bound.kwargs)
         finally:
             _journal_state.depth = depth
+        if bound.arguments.get("conn") is not None:
+            # Part of the caller's open transaction (ingest_profile_trial), which may still roll back: not
+            # journaled, so journal-coverage names its table instead of a replay committing a row that never was.
+            return result
         journal = Path(path)
         journal.parent.mkdir(parents=True, exist_ok=True)
         with journal.open("a") as fh:
@@ -179,7 +258,21 @@ def replay_journal(path: Path) -> dict:
     """Make every journaled call in `path` against this process's store. A line that fails is returned with its
     error (and counted) instead of stopping the file, so one bad line can never hold the rest back.
     """
-    replayed, errors = 0, []
+    global time
+    replayed, skipped, errors = 0, 0, []
+    name = Path(
+        path
+    ).name  # hosted journals are named <run id>-<attempt>-<epoch>.jsonl, unique per pass
+    with closing(_conn()) as c:
+        c.execute(
+            f"CREATE TABLE IF NOT EXISTS {_JOURNAL_APPLIED_TABLE} "
+            "(file TEXT NOT NULL, line INTEGER NOT NULL, applied_ts INTEGER NOT NULL, PRIMARY KEY (file, line))"
+        )
+        c.commit()
+        applied = {
+            r[0]
+            for r in c.execute(f"SELECT line FROM {_JOURNAL_APPLIED_TABLE} WHERE file=?", (name,))
+        }
     _journal_state.depth = (
         getattr(_journal_state, "depth", 0) + 1
     )  # a replay is never journaled again
@@ -187,13 +280,26 @@ def replay_journal(path: Path) -> dict:
         for number, line in enumerate(Path(path).read_text().splitlines(), 1):
             if not line.strip():
                 continue
+            if number in applied:
+                skipped += 1
+                continue
             try:
                 entry = json.loads(line)
                 if "unserializable" in entry:
                     raise ValueError(
                         f"journaled call was not serializable: {entry['unserializable']}"
                     )
-                _JOURNALED[entry["fn"]](**entry["args"])
+                time = _ReplayClock(entry.get("at") or _real_time.time())
+                try:
+                    _JOURNALED[entry["fn"]](**entry["args"])
+                finally:
+                    time = _real_time
+                with closing(_conn()) as c:
+                    c.execute(
+                        f"INSERT OR IGNORE INTO {_JOURNAL_APPLIED_TABLE} VALUES (?, ?, ?)",
+                        (name, number, int(_real_time.time())),
+                    )
+                    c.commit()
                 replayed += 1
             except Exception as exc:  # noqa: BLE001 - reported per line, never raised
                 errors.append(
@@ -205,7 +311,13 @@ def replay_journal(path: Path) -> dict:
                 )
     finally:
         _journal_state.depth -= 1
-    return {"file": str(path), "replayed": replayed, "rejected": len(errors), "errors": errors}
+    return {
+        "file": str(path),
+        "replayed": replayed,
+        "skipped": skipped,
+        "rejected": len(errors),
+        "errors": errors,
+    }
 
 
 def _table_counts(db: Path) -> dict[str, int]:
@@ -235,7 +347,7 @@ def journal_coverage(path: Path, scratch: Path) -> dict:
     differ = {
         t: {"store": actual.get(t, 0), "journal": replayed.get(t, 0)}
         for t in sorted(set(actual) | set(replayed))
-        if actual.get(t, 0) != replayed.get(t, 0)
+        if t != _JOURNAL_APPLIED_TABLE and actual.get(t, 0) != replayed.get(t, 0)
     }
     return {**report, "tables": len(set(actual) | set(replayed)), "uncovered": differ}
 
